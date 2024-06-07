@@ -14,10 +14,8 @@ SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
 if (DSERV_HAVE_GPIO)
    add_compile_definitions(HAVE_GPIO=1)
-   add_executable(dserv src/dserv.cpp src/Base64.c src/Datapoint.c src/Dataserver.cpp src/Timer.cpp src/SendClient.cpp src/LogClient.cpp src/TclServer.cpp src/Mcp3204.cpp src/bus/BusDevice.cpp src/bus/SPIDevice.cpp)
-else()
-   add_executable(dserv src/dserv.cpp src/Base64.c src/Datapoint.c src/Dataserver.cpp src/Timer.cpp src/SendClient.cpp src/LogClient.cpp src/TclServer.cpp)
 endif()
+   add_executable(dserv src/dserv.cpp src/Base64.c src/Datapoint.c src/Dataserver.cpp src/Timer.cpp src/SendClient.cpp src/LogClient.cpp src/TclServer.cpp)
 
 # export symbols for shared objects loaded at runtime
 set_property(TARGET dserv PROPERTY ENABLE_EXPORTS ON)
