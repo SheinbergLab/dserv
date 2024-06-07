@@ -1,7 +1,0 @@
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/ain.dir
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/edit_cache.dir
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/rebuild_cache.dir
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/list_install_components.dir
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/install.dir
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/install/local.dir
-/home/sheinb/src/dserv/modules/ain/build_linuxarm/CMakeFiles/install/strip.dir

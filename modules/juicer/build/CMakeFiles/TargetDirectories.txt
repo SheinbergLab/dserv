@@ -1,7 +1,0 @@
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/juicer.dir
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/edit_cache.dir
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/rebuild_cache.dir
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/list_install_components.dir
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/install.dir
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/install/local.dir
-/Users/sheinb/src/dserv/modules/juicer/build/CMakeFiles/install/strip.dir

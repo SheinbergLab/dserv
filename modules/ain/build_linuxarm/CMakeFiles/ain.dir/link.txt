@@ -1,1 +1,0 @@
-/usr/bin/c++ -fPIC -O3 -DNDEBUG -shared -Wl,-soname,dserv_ain.so -o dserv_ain.so CMakeFiles/ain.dir/src/ain.cpp.o   -L/usr/local/lib  -Wl,-rpath,/usr/local/lib: -ltclstub8.6 -lpthread 

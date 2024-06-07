@@ -1,1 +1,0 @@
-/usr/bin/c++ -fPIC -O3 -DNDEBUG -shared -Wl,-soname,dserv_timer.so -o dserv_timer.so CMakeFiles/timer.dir/src/timer.cpp.o   -L/usr/local/lib  -Wl,-rpath,/usr/local/lib: -ltclstub8.6 -lpthread 
