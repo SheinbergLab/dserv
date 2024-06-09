@@ -841,10 +841,15 @@ Dataserver::Dataserver(int argc, char **argv, int port)
 	return TCL_ERROR;
       }
     }
+    ds_datapoint_t *out;
     ret = process_set_param(Tcl_GetString(objv[1]),
 			    Tcl_GetString(objv[2]),
 			    Tcl_GetString(objv[3]),
-			    index);
+			    index, now(), &out);
+    if (ret == DPOINT_PROCESS_DSERV) {
+      ds_datapoint_t *dp = dpoint_copy(out);
+      ds->set(dp);
+    }
     Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
     return TCL_OK;
   }

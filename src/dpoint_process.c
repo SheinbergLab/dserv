@@ -60,27 +60,6 @@ dpointProcessFunctionInfo_t *processFunctionTable = NULL;
 /* Table of process mappings */
 dpointProcessInfo_t *processTable = NULL;
 
-int process_dpoint(ds_datapoint_t *dpoint, ds_datapoint_t **out)
-{
-  dpointProcessInfo_t *p;
-
-  for (p = processTable; p != NULL; p = p->hh.next) {
-    if (!strcmp(p->varname, dpoint->varname)) {
-      dpoint_process_info_t pinfo;
-      pinfo.input_dpoint = dpoint;
-
-      int rc = p->process(&pinfo, p->process_params);
-      
-      if (rc == DPOINT_PROCESS_DSERV) {
-	*out = pinfo.dpoint;
-      }
-      return rc;
-    }
-  }
-
-  return DPOINT_PROCESS_IGNORE;
-}
-
 void add_process_function_info(char *name,
 			       void *handle,
 			       DPOINT_PROCESS_FUNC pfunc,
@@ -107,6 +86,27 @@ void add_process_function_info(char *name,
   p->getparamfunc = getparamfunc;
 }
 
+
+int process_dpoint(ds_datapoint_t *dpoint, ds_datapoint_t **out)
+{
+  dpointProcessInfo_t *p;
+
+  for (p = processTable; p != NULL; p = p->hh.next) {
+    if (!strcmp(p->varname, dpoint->varname)) {
+      dpoint_process_info_t pinfo;
+      pinfo.input_dpoint = dpoint;
+
+      int rc = p->process(&pinfo, p->process_params);
+      
+      if (rc == DPOINT_PROCESS_DSERV) {
+	*out = pinfo.dpoint;
+      }
+      return rc;
+    }
+  }
+
+  return DPOINT_PROCESS_IGNORE;
+}
 
 int process_attach(char *name,
 		   char *varname,
@@ -141,19 +141,27 @@ int process_attach(char *name,
   return 0;
 }
 
-int process_set_param(char *name, char *pname, char *pval, int index)
+int process_set_param(char *name, char *pname, char *pval, int index,
+		      uint64_t timestamp, ds_datapoint_t **out)
 {
   dpointProcessInfo_t *p;
   HASH_FIND_STR(processTable, name, p);
   if (p == NULL) return -1;
 
+  
   dpoint_process_param_setting_t psetting;
+  psetting.timestamp = timestamp;
   psetting.pval = &pval;
   psetting.index = index;
   psetting.params = (void *) p->process_params;
   psetting.pname = pname;
 
-  return p->set_param(&psetting);
+  int rc;
+  rc = p->set_param(&psetting);
+  if (rc == DPOINT_PROCESS_DSERV) {
+    *out = psetting.dpoint;
+  }
+  return rc;
 }
 
 char *process_get_param(char *name, char *pname, int index)

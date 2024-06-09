@@ -43,7 +43,8 @@ extern "C" {
   int process_attach(char *name,
 		     char *varname,
 		     char *processfuncname);
-  int process_set_param(char *name, char *pname, char *pval, int index);
+  int process_set_param(char *name, char *pname, char *pval, int index,
+			uint64_t timestamp, ds_datapoint_t **out);
   char *process_get_param(char *name, char *pname, int index);
   int process_dpoint(ds_datapoint_t *dpoint, ds_datapoint_t **out);
 #ifdef __cplusplus

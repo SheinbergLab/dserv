@@ -15,6 +15,8 @@ foreach f [glob [file join $dll_path *[info sharedlibextension]]] {
     load $f
 }
 
+proc ainSetIndexedParam { args } { processSetParam $args }
+
 # start analog input if available
 catch { ainStart 1 }
 
