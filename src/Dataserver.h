@@ -172,6 +172,17 @@ public:
   static int trigger_remove_all_command(ClientData data, Tcl_Interp * interp, int objc,
 					Tcl_Obj * const objv[]);
 
+  static int process_load_command(ClientData data, Tcl_Interp * interp, int objc,
+				  Tcl_Obj * const objv[]);
+  static int process_get_param_command(ClientData data, Tcl_Interp * interp, int objc,
+				       Tcl_Obj * const objv[]);
+  static int process_set_param_command(ClientData data, Tcl_Interp * interp, int objc,
+				       Tcl_Obj * const objv[]);
+  static int process_add_command(ClientData data, Tcl_Interp * interp, int objc,
+				 Tcl_Obj * const objv[]);
+  static int process_attach_command(ClientData data, Tcl_Interp * interp, int objc,
+				    Tcl_Obj * const objv[]);
+  
   void add_tcl_commands(Tcl_Interp *interp);
   int Tcl_StimAppInit(Tcl_Interp *interp);
   int setup_tcl(int argc, char **argv);

@@ -1,6 +1,7 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
-  
+#include "dpoint_process.h"
+
 Dataserver::Dataserver(int argc, char **argv, int port)
   {
     m_bDone = false;
@@ -112,6 +113,15 @@ Dataserver::Dataserver(int argc, char **argv, int port)
   
   void Dataserver::trigger(ds_datapoint_t *dpoint)
   {
+    ds_datapoint_t *out;
+
+    /* execute loaded processors for each datapoint */
+    if (process_dpoint(dpoint, &out) == DPOINT_PROCESS_DSERV) {
+      ds_datapoint_t *dp = dpoint_copy(out);
+      add_datapoint_to_table(dp->varname, dp);
+      add_to_notify_queue(dp);
+      add_to_logger_queue(dp);
+    }
     if (trigger_matches.is_match(dpoint->varname)) {
 
       std::string script;
@@ -744,6 +754,101 @@ Dataserver::Dataserver(int argc, char **argv, int port)
     return TCL_OK;
   }
 
+  int
+  Dataserver::process_load_command(ClientData data, Tcl_Interp * interp, int objc,
+				   Tcl_Obj * const objv[])
+  {
+    Dataserver *ds = (Dataserver *) data;
+    int ret;
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "processor_path name");
+      return TCL_ERROR;
+    }
+    ret = process_load(Tcl_GetString(objv[1]), Tcl_GetString(objv[2]));
+    if (ret < 0) {
+      std::string result_str;
+      result_str = "error loading processor (" + std::to_string(ret) + ")";
+      Tcl_AppendResult(interp, result_str.c_str(), NULL);
+      return TCL_ERROR;
+    }
+    else return TCL_OK;
+  }
+
+  int
+  Dataserver::process_attach_command(ClientData data, Tcl_Interp * interp, int objc,
+				   Tcl_Obj * const objv[])
+  {
+    Dataserver *ds = (Dataserver *) data;
+    int ret;
+    
+    if (objc < 4) {
+      Tcl_WrongNumArgs(interp, 1, objv, "name varname processor_name");
+      return TCL_ERROR;
+    }
+    ret = process_attach(Tcl_GetString(objv[1]),
+			 Tcl_GetString(objv[2]),
+			 Tcl_GetString(objv[3]));
+    if (ret < 0) {
+      std::string result_str;
+      result_str = "error attaching processor (" + std::to_string(ret) + ")";
+      Tcl_AppendResult(interp, result_str.c_str(), NULL);
+      return TCL_ERROR;
+    }
+    else return TCL_OK;
+  }
+
+  int
+  Dataserver::process_get_param_command(ClientData data, Tcl_Interp * interp, int objc,
+					Tcl_Obj * const objv[])
+  {
+    Dataserver *ds = (Dataserver *) data;
+    char *retstr;
+    int index = 0;
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "processor param [index]");
+      return TCL_ERROR;
+    }
+    if (objc > 3) {
+      if (Tcl_GetIntFromObj(interp, objv[3], &index) != TCL_OK) {
+	return TCL_ERROR;
+      }
+    }
+    retstr = process_get_param(Tcl_GetString(objv[1]),
+			    Tcl_GetString(objv[2]),
+			    index);
+    if (retstr) {
+      Tcl_SetObjResult(interp, Tcl_NewStringObj(retstr, strlen(retstr)));
+    }
+    return TCL_OK;
+  }
+
+  int
+  Dataserver::process_set_param_command(ClientData data, Tcl_Interp * interp, int objc,
+					Tcl_Obj * const objv[])
+  {
+    Dataserver *ds = (Dataserver *) data;
+    int ret;
+    int index = 0;
+    
+    if (objc < 4) {
+      Tcl_WrongNumArgs(interp, 1, objv, "processor param value [index]");
+      return TCL_ERROR;
+    }
+    if (objc > 4) {
+      if (Tcl_GetIntFromObj(interp, objv[4], &index) != TCL_OK) {
+	return TCL_ERROR;
+      }
+    }
+    ret = process_set_param(Tcl_GetString(objv[1]),
+			    Tcl_GetString(objv[2]),
+			    Tcl_GetString(objv[3]),
+			    index);
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
+    return TCL_OK;
+  }
+
   void Dataserver::add_tcl_commands(Tcl_Interp *interp)
   {
     Tcl_CreateObjCommand(interp, "now", now_command, this, NULL);
@@ -771,6 +876,21 @@ Dataserver::Dataserver(int argc, char **argv, int port)
 			 dserv_setdata64_command, this, NULL);
     Tcl_CreateObjCommand(interp, "dservClear",
 			 dserv_clear_command, this, NULL);
+
+    Tcl_CreateObjCommand(interp, "processLoad",
+			 process_load_command, this, NULL);
+    Tcl_CreateObjCommand(interp, "processAttach",
+			 process_attach_command, this, NULL);
+    /*
+     * For now we limit get/set to being called from TclServer
+     *  as these are not thread safe
+     */
+#if 0    
+    Tcl_CreateObjCommand(interp, "processGetParam",
+			 process_get_param_command, this, NULL);
+    Tcl_CreateObjCommand(interp, "processSetParam",
+			 process_set_param_command, this, NULL);
+#endif
     return;
   }
 

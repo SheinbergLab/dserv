@@ -974,7 +974,12 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
 		       Dataserver::dserv_clear_command, this->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservEval",
 		       Dataserver::dserv_eval_command, this->ds, NULL);
-  
+
+  Tcl_CreateObjCommand(interp, "processGetParam",
+		       Dataserver::process_get_param_command, this->ds, NULL);
+  Tcl_CreateObjCommand(interp, "processSetParam",
+		       Dataserver::process_set_param_command, this->ds, NULL);
+
   /* these are specific to TclServers */
   Tcl_CreateObjCommand(interp, "now",
 		       (Tcl_ObjCmdProc *) now_command,

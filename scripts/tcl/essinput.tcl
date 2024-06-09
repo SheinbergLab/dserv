@@ -3,7 +3,11 @@ package require qpcs
 
 proc update_eye_position { x y } {
     dl_local coords [dl_create short [expr {$y*16}] [expr {$x*16}]]
-    qpcs::dsSetData $::server ain/vals $coords
+    set ds [qpcs::dsSocketOpen $::server]
+    for { set i 0 } { $i < 20 } { incr i } { 
+	qpcs::dsSocketSetData $ds ain/vals $coords
+    }
+    close $ds
 }
 
 proc markerStash { w x y } {

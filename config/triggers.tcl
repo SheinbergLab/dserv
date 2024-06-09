@@ -99,4 +99,6 @@ triggerAdd ain/proc/windows/settings 1  update_ain_window_settings
 triggerAdd ain/proc/windows/status   1  update_ain_window_status
 triggerAdd eventlog/events           1  update_events
 
-
+	
+processLoad processors/up_down_left_right.so udlr
+processAttach udlr ain/vals udlr

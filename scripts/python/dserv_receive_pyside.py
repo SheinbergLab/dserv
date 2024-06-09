@@ -20,12 +20,20 @@ def register_with_dserv(ipaddr, port):
     result = sock.makefile().readline()
     #print(result)
     
-    
-    cmd = f"%match {sock.getsockname()[0]} {port} eventlog/events 1\r\n"
+    sock.close()
+    return
+
+def add_match(ipaddr, port, varname):
+    # Create a control socket for sending commands to VideoStream
+    dserv_address = (ipaddr, 4620)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect(dserv_address)
+
+    cmd = f"%match {sock.getsockname()[0]} {port} {varname} 1\r\n"
     sock.sendall(cmd.encode('UTF-8'))
     result = sock.makefile().readline()
     #print(result)
-    
+
     sock.close()
     return
 
@@ -86,5 +94,6 @@ if __name__ == "__main__":
     t.start()
     
     register_with_dserv('127.0.0.1', port)
+    add_match('127.0.0.1', port, "eventlog/events")
     run()
  
