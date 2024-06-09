@@ -190,7 +190,9 @@ Dataserver::Dataserver(int argc, char **argv, int port)
   int Dataserver::touch(char *varname)
   {
     ds_datapoint_t *dp = get_datapoint(varname);
+    int found = 0;
     if (dp) {
+      found = 1;
       auto newdp = trigger(dp);
       add_to_notify_queue(dp);
       add_to_logger_queue(dp);
@@ -200,7 +202,7 @@ Dataserver::Dataserver(int argc, char **argv, int port)
       // free the copy returned by get_datapoint()
       dpoint_free(dp);
     }
-    return (dp != nullptr);
+    return found;
   }
 
   /* get a copy of dpoint from the table */
