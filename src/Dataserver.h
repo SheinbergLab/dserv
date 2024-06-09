@@ -63,7 +63,7 @@ class Dataserver
   std::thread logger_thread;	// log to file
 
   std::mutex mutex;		        // ensure only one thread accesses table
-  std::condition_variable cond;		// conditino variable for sync
+  std::condition_variable cond;		// condition variable for sync
   
   std::mutex trigger_point_mutex;	// ensure only one thread accesses
 

@@ -1108,7 +1108,7 @@ int TclServer::setup_tcl(int argc, char **argv)
 
 int TclServer::timer_callback(int timerid)
 {
-  static client_request_t req;
+  client_request_t req;
   req.type = REQ_TIMER;
   req.timer_id = timerid;
   queue.push_back(req);
@@ -1118,7 +1118,7 @@ int TclServer::timer_callback(int timerid)
 /* queue up a point to be set from other threads */
 void TclServer::set_point(ds_datapoint_t *dp)
 {
-  static client_request_t req;
+  client_request_t req;
   req.type = REQ_DPOINT;
   req.dpoint = dp;
   queue.push_back(req);
