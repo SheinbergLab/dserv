@@ -84,7 +84,7 @@ namespace eval dh {
 	    qpcs/system { set dh::status(name) $val }
 	    qpcs/datafile { set dh::status(datafile) $val }
 
-	    qpcs/em_region_setting { update_em_region_setting {*}$val }
+	    qpcs/em_region_setting { dh::update_em_region_setting {*}$val }
 	    qpcs/em_region_status {
 		set dh::status(fixwin) [lindex $val 1]
 		update_fixwin_indicators

@@ -95,8 +95,8 @@ init_vars
 triggerAdd rpio/vals                 1  update_dio
 triggerAdd pca9538/vals              1  update_joystick
 triggerAdd ain/vals                  20 update_ain
-triggerAdd ain/proc/windows/settings 1  update_ain_window_settings
 triggerAdd ain/proc/windows/status   1  update_ain_window_status
+triggerAdd ain/proc/windows/settings 1  update_ain_window_settings
 triggerAdd eventlog/events           1  update_events
 
 # add window processor for eye movements

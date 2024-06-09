@@ -66,7 +66,7 @@ void *newProcessParams(void)
   // region updates
   p->status_dpoint.flags = 0;
   p->status_dpoint.varname = strdup("ain/proc/windows/status");
-  p->status_dpoint.varlen = strlen(p->status_dpoint.varname)+1;
+  p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
   p->status_dpoint.data.type = DSERV_SHORT;
   p->status_dpoint.data.len = 4*sizeof(uint16_t);
   p->status_dpoint.data.buf = malloc(p->status_dpoint.data.len);
@@ -74,7 +74,7 @@ void *newProcessParams(void)
   // parameter updates
   p->settings_dpoint.flags = 0;
   p->settings_dpoint.varname = strdup("ain/proc/windows/settings");
-  p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname)+1;
+  p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
   p->settings_dpoint.data.type = DSERV_SHORT;
   p->settings_dpoint.data.len = sizeof(window_settings_t);
   p->settings_dpoint.data.buf = malloc(p->settings_dpoint.data.len);
@@ -177,13 +177,13 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     if (p->status_dpoint.varname) free(p->status_dpoint.varname);
     p->status_dpoint.varname = malloc(strlen(vals[0])+2+strlen(status_str));
     sprintf(p->status_dpoint.varname, "%s/%s", vals[0], status_str);
-    p->status_dpoint.varlen = strlen(p->status_dpoint.varname)+1;
+    p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
 
     /* params */
     if (p->settings_dpoint.varname) free(p->settings_dpoint.varname);
     p->settings_dpoint.varname = malloc(strlen(vals[0])+2+strlen(params_str));
     sprintf(p->settings_dpoint.varname, "%s/%s", vals[0], params_str);
-    p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname)+1;
+    p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
     return DPOINT_PROCESS_IGNORE;
   }
 
@@ -254,10 +254,10 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
       pinfo->input_dpoint->data.len < 2*sizeof(uint16_t))
     return DPOINT_PROCESS_IGNORE;
 
-  uint16_t *vals = (uint16_t *) pinfo->input_dpoint->data.buf;
+  uint16_t *ain_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
   
-  int x = vals[1];
-  int y = vals[0];
+  int x = ain_vals[1];
+  int y = ain_vals[0];
   int dx, dy;
   int i;
   int inside;
@@ -330,8 +330,8 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     uint16_t *vals = (uint16_t *) p->status_dpoint.data.buf;
     vals[0] = changes;
     vals[1] = states;
-    vals[2] = vals[1];
-    vals[3] = vals[0];
+    vals[2] = ain_vals[1];
+    vals[3] = ain_vals[0];
     p->status_dpoint.timestamp = pinfo->input_dpoint->timestamp;
     pinfo->dpoint = &p->status_dpoint;
   }
