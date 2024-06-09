@@ -50,6 +50,8 @@ proc get_eye_coords {} {
 	set x [expr $x/16]
 	set y [expr $y/16]
     }
+    set ::marker(x) $x
+    set ::marker(y) $y
     return [list $x $y]
 }
 
@@ -78,7 +80,10 @@ proc setup {} {
     $f.c bind eyeMarker <ButtonRelease-1> { markerAccept %W }
     $f.c bind eyeMarker <Any-Enter> "$f.c itemconfig current -outline #aaaaaa"
     $f.c bind eyeMarker <Any-Leave> "$f.c itemconfig current -outline white"
-    
+
+    # update ain/vals on double click
+    bind $f.c <Double-1> { update_eye_position $::marker(x) $::marker(y) }
+
     pack $f.c
     pack $f
     pack .analog

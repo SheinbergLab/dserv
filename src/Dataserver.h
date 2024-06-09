@@ -112,10 +112,11 @@ public:
   ds_datapoint_t *get_datapoint(char *varname);
   int delete_datapoint(char *varname);
   ds_datapoint_t *new_trigger_point(ds_datapoint_t *dpoint);
-  void trigger(ds_datapoint_t *dpoint);
+  ds_datapoint_t *trigger(ds_datapoint_t *dpoint);
   void set(ds_datapoint_t &dpoint);
   void set(ds_datapoint_t *dpoint);
   void set(char *varname, char *value);
+  void set_no_retrigger(ds_datapoint_t *dpoint);
   void update(ds_datapoint_t *dpoint);
   int touch(char *varname);
   int get(char *varname, ds_datapoint_t **dpoint);

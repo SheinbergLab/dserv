@@ -12,9 +12,11 @@ option add *font myDefaultFont
 namespace eval dh {
     set connected 0
 
-    set datahub 100.0.0.40
+    set datahub 127.0.0.1
     set domain  qpcs/*
 
+    set ::qpcs::qnxport 2570
+    
     set status(state) Stopped
     set status(eye_hor) 0
     set status(eye_ver) 0
@@ -26,72 +28,6 @@ namespace eval dh {
     set status(dio_b)  0
     set status(fixwin) 0
     set status(joystick_info) None
-    
-    proc process_data { ev args } {
-	set name [lindex $args 0]
-	set val [lindex $args 4]
-	switch -glob $name {
-	    qpcs/em_pos {
-		set dh::status(eye_hor) [lindex $val 0]
-		set dh::status(eye_ver) [lindex $val 1]
-		update_eye_marker $dh::status(eye_hor) $dh::status(eye_ver)		
-	    }
-	    qpcs/state {
-		set dh::status(state) [string totitle $val]
-		set cmap { Running green Stopped red Inactive black }
-		$dh::widgets(status) configure -foreground \
-		    [dict get $cmap $::dh::status(state)]
-	    }
-	    qpcs/obs_id {
-		set dh::status(obs_id) [expr $val+1]
-		set dh::status(obs_info) \
-		    "$dh::status(obs_id)/$dh::status(obs_total)"
-	    }
-	    qpcs/obs_total {
-		set dh::status(obs_total) $val
-		set dh::status(obs_info) \
-		    "$dh::status(obs_id)/$dh::status(obs_total)"
-	    }
-	    qpcs/obs_active {
-		set dh::status(obs_active) $val
-		set bg [$dh::widgets(obstitle) cget -background]
-		set colors "$bg red"
-		$dh::widgets(obslabel) configure \
-		    -background [lindex $colors $dh::status(obs_active)]
-		
-		if { $dh::status(obs_active) == 0 } {
-		    set dh::status(cur_stimtype) {}
-		}
-	    }
-	    qpcs/joystick {
-		switch $val {
-		    0  { set dh::status(joystick_info) None }
-		    8  { set dh::status(joystick_info) Up }
-		    4  { set dh::status(joystick_info) Down }
-		    1  { set dh::status(joystick_info) Left }
-		    16 { set dh::status(joystick_info) Right }
-		    2  { set dh::status(joystick_info) Press }
-		}
-	    }
-	    qpcs/dio {
-		set levels [lindex $val 1]
-		set dh::status(dio_a) [expr {$levels>>16}]
-		set dh::status(dio_b) [expr {$levels>>24}]
-		update_dio_indicators
-	    }
-
-	    qpcs/subject { set dh::status(subject) $val }
-	    qpcs/system { set dh::status(name) $val }
-	    qpcs/datafile { set dh::status(datafile) $val }
-
-	    qpcs/em_region_setting { dh::update_em_region_setting {*}$val }
-	    qpcs/em_region_status {
-		set dh::status(fixwin) [lindex $val 1]
-		update_fixwin_indicators
-	    }
-	}
-    }
-
 
     proc initialize_vars { server } {
 	set stateinfo [qpcs::dsGet $server qpcs/state]
@@ -118,7 +54,8 @@ namespace eval dh {
 	    set dh::status(cur_stimtype) {}
 	}
 
-	set dh::status(fixwin) [lindex [lindex [qpcs::dsGet $server qpcs/em_region_status] 5] 1]
+	set dh::status(fixwin) \
+	    [lindex [lindex [qpcs::dsGet $server qpcs/em_region_status] 5] 1]
 	if { $dh::status(fixwin) == "" } { set dh::status(fixwin) 0 }
 	update_fixwin_indicators
 	
@@ -154,7 +91,7 @@ namespace eval dh {
 
     proc update_em_regions {} {
 	foreach reg "0 1 2 3 4 5 6 7" {
-	    ::qpcs::sendToQNX $dh::datahub essGetEyeRegion $reg
+	    ::qpcs::sendToQNX $dh::datahub ainGetRegionInfo $reg
 	}
     }
     
@@ -166,7 +103,8 @@ namespace eval dh {
 
     proc add_fixwin_indicators {} {
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(fixwin_canvas) create oval 0 0 1 1 -fill black -tag reg$i
+	    $dh::widgets(fixwin_canvas) \
+		create oval 0 0 1 1 -fill black -tag reg$i
 	}
 	position_fixwin_indicators
     }
@@ -330,6 +268,74 @@ namespace eval dh {
 
     }
 
+    
+    proc process_data { ev args } {
+	set name [lindex $args 0]
+	set val [lindex $args 4]
+	switch -glob $name {
+	    qpcs/em_pos {
+		set dh::status(eye_hor) [lindex $val 0]
+		set dh::status(eye_ver) [lindex $val 1]
+		update_eye_marker $dh::status(eye_hor) $dh::status(eye_ver)	
+	    }
+	    qpcs/state {
+		set dh::status(state) [string totitle $val]
+		set cmap { Running green Stopped red Inactive black }
+		$dh::widgets(status) configure -foreground \
+		    [dict get $cmap $::dh::status(state)]
+	    }
+	    qpcs/obs_id {
+		set dh::status(obs_id) [expr $val+1]
+		set dh::status(obs_info) \
+		    "$dh::status(obs_id)/$dh::status(obs_total)"
+	    }
+	    qpcs/obs_total {
+		set dh::status(obs_total) $val
+		set dh::status(obs_info) \
+		    "$dh::status(obs_id)/$dh::status(obs_total)"
+	    }
+	    qpcs/obs_active {
+		set dh::status(obs_active) $val
+		set bg [$dh::widgets(obstitle) cget -background]
+		set colors "$bg red"
+		$dh::widgets(obslabel) configure \
+		    -background [lindex $colors $dh::status(obs_active)]
+		
+		if { $dh::status(obs_active) == 0 } {
+		    set dh::status(cur_stimtype) {}
+		}
+	    }
+	    qpcs/joystick {
+		switch $val {
+		    0  { set dh::status(joystick_info) None }
+		    8  { set dh::status(joystick_info) Up }
+		    4  { set dh::status(joystick_info) Down }
+		    1  { set dh::status(joystick_info) Left }
+		    16 { set dh::status(joystick_info) Right }
+		    2  { set dh::status(joystick_info) Press }
+		}
+	    }
+	    qpcs/dio {
+		set levels [lindex $val 1]
+		set dh::status(dio_a) [expr {$levels>>16}]
+		set dh::status(dio_b) [expr {$levels>>24}]
+		update_dio_indicators
+	    }
+
+	    qpcs/subject { set dh::status(subject) $val }
+	    qpcs/system { set dh::status(name) $val }
+	    qpcs/datafile { set dh::status(datafile) $val }
+
+	    qpcs/em_region_setting {
+		update_em_region_setting {*}$val
+	    }
+	    qpcs/em_region_status {
+		set dh::status(fixwin) [lindex $val 1]
+		update_fixwin_indicators
+	    }
+	}
+    }
+    
     proc setup_view {} {
 	wm title . "QPCS Viewer"
 

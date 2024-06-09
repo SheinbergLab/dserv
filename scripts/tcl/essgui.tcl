@@ -76,13 +76,6 @@ proc process_data { ev args } {
 	qpcs/subject { set status(subject) $val }
 	qpcs/system { set status(name) $val }
 	qpcs/datafile { set status(datafile) $val }
-	
-	qpcs/em_region_setting { update_em_region_setting {*}$val }
-	qpcs/em_region_status {
-	    set status(fixwin) [lindex $val 1]
-	    update_fixwin_indicators
-	}
-	eventlog/* { terminal_output $val }
     }
 }
 
