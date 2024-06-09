@@ -118,9 +118,7 @@ Dataserver::Dataserver(int argc, char **argv, int port)
     /* execute loaded processors for each datapoint */
     if (process_dpoint(dpoint, &out) == DPOINT_PROCESS_DSERV) {
       ds_datapoint_t *dp = dpoint_copy(out);
-      add_datapoint_to_table(dp->varname, dp);
-      add_to_notify_queue(dp);
-      add_to_logger_queue(dp);
+      set(dp);
     }
     if (trigger_matches.is_match(dpoint->varname)) {
 
@@ -825,7 +823,8 @@ Dataserver::Dataserver(int argc, char **argv, int port)
   }
 
   int
-  Dataserver::process_set_param_command(ClientData data, Tcl_Interp * interp, int objc,
+  Dataserver::process_set_param_command(ClientData data,
+					Tcl_Interp * interp, int objc,
 					Tcl_Obj * const objv[])
   {
     Dataserver *ds = (Dataserver *) data;
