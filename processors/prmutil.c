@@ -62,7 +62,7 @@ int puSetParamEntry(PARAM_ENTRY *table, char *name, int nvals, char **vals)
   if (!nvals) return(0);
 
   while (p->type != PU_NULL) {
-#if defined(_linux_) || defined(__APPLE__) || defined(FREEBSD) || defined(__QNX__)
+#if defined(__linux__) || defined(__APPLE__) || defined(FREEBSD) || defined(__QNX__)
     if (!strcasecmp(name,p->name)) {
 #else
     if (!stricmp(name,p->name)) {
@@ -130,7 +130,7 @@ char *puGetParamEntry(PARAM_ENTRY *table, char *name)
 
   while (p->type != PU_NULL) {
 
-#if defined(_linux_) || defined(__APPLE__) || defined(FREEBSD) || defined(__QNX__)
+#if defined(__linux__) || defined(__APPLE__) || defined(FREEBSD) || defined(__QNX__)
     if (!strcasecmp(name,p->name)) {
 #else
     if (!stricmp(name,p->name)) {
