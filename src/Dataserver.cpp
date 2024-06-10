@@ -579,7 +579,7 @@ Dataserver::Dataserver(int argc, char **argv, int port)
     int len;
     int rc;
     char *datastr;
-    static unsigned char buf[2048];
+    unsigned char buf[256];
     unsigned int outlen = sizeof(buf);
     int datatype;
     Tcl_WideInt ts;
@@ -954,7 +954,7 @@ Dataserver::Dataserver(int argc, char **argv, int port)
   
   std::string Dataserver::eval(std::string script)
   {
-    static SharedQueue<std::string> rqueue;
+    SharedQueue<std::string> rqueue;
 
     client_request_t client_request;
     client_request.type = REQ_SCRIPT;
@@ -974,7 +974,7 @@ Dataserver::Dataserver(int argc, char **argv, int port)
 
   void Dataserver::eval_noreply(std::string script)
   {
-    static SharedQueue<std::string> rqueue;
+    SharedQueue<std::string> rqueue;
     
     client_request_t client_request;
     client_request.type = REQ_SCRIPT_NOREPLY;
@@ -1523,7 +1523,10 @@ int Dataserver::tcp_process_request(Dataserver *ds,
   int i;
   char *p;
   ds_datapoint_t *dpoint;
-  
+  /*
+   * NOTE: these static buffers should be replaced to ensure
+   *       this function is thread safe
+   */
   static char rep_buf[128], path[256], *dstring_buf;
   int dstring_size, dstring_bufsize;
   int status = -1;
