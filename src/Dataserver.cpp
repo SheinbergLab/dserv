@@ -103,7 +103,7 @@ Dataserver::Dataserver(int argc, char **argv, int port)
       return dpoint_copy(dpoint);
 
     /* repackage DSERV_EVT datapoints */
-    static char evt_namebuf[64];
+    char evt_namebuf[32];
     snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
 	     dpoint->data.e.type, dpoint->data.e.subtype);
     return dpoint_new(evt_namebuf, dpoint->timestamp,
