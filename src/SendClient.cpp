@@ -68,6 +68,12 @@ int SendClient::send_dpoint(ds_datapoint_t *dpoint)
   
   if (send_binary) {
     int bufsize = DPOINT_BINARY_FIXED_LENGTH - 1;
+
+    /*
+     *  NOTE: this static buffer below could be a concern
+     *        but this function should be called sequentially
+     *        during notification updates
+     */
     static unsigned char buf[DPOINT_BINARY_FIXED_LENGTH];
     buf[0] = DPOINT_BINARY_MSG_CHAR;
     if (dpoint_to_binary(dpoint, &buf[1], &bufsize)) {
