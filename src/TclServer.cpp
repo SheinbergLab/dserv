@@ -690,7 +690,7 @@ int TclServer::evt_put_command(ClientData data, Tcl_Interp * interp,
   int rc;
   
   int ptype = 0;
-  static char buf[256];
+  char buf[256];
   int buflen = 0;
   
   if (objc < 4)

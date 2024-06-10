@@ -1527,7 +1527,7 @@ int Dataserver::tcp_process_request(Dataserver *ds,
    * NOTE: these static buffers should be replaced to ensure
    *       this function is thread safe
    */
-  static char rep_buf[128], path[256], *dstring_buf;
+  char path[256], *dstring_buf;
   int dstring_size, dstring_bufsize;
   int status = -1;
 
@@ -1547,10 +1547,9 @@ int Dataserver::tcp_process_request(Dataserver *ds,
       if (buf[0] == '%') {
 	if (nbytes > 7 &&
 	    buf[1] == 'v' && !strcmp(&buf[1], "version")) {
-	  strcpy(rep_buf, "3.0");
-	  *repbuf = rep_buf;
-	  *repsize = strlen(rep_buf);
-	  *repalloc = 0;
+	  *repbuf = strdup("3.0");
+	  *repsize = strlen(*repbuf);
+	  *repalloc = 1;
 	  status = 1;
 	}
 
@@ -1705,22 +1704,16 @@ int Dataserver::tcp_process_request(Dataserver *ds,
 	  char *var = &buf[5];
 
 	  status = ds->get(var, &dpoint);
+
 	  if (status) {
 	    dstring_bufsize = dpoint_string_size(dpoint);
-	    if (dstring_bufsize < sizeof(rep_buf)) {
-	      dstring_size = dpoint_to_string(dpoint, rep_buf, sizeof(rep_buf));
-	      *repbuf = rep_buf;
-	      *repsize = dstring_size;
-	      *repalloc = 0;
-	    }
-	    else {
-	      dstring_buf = (char *) malloc(dstring_bufsize);
-	      dstring_size =
-		dpoint_to_string(dpoint, dstring_buf, dstring_bufsize);
-	      *repbuf = dstring_buf;
-	      *repsize = dstring_size;
-	      *repalloc = 1;
-	    }
+	    dstring_buf = (char *) malloc(dstring_bufsize);
+	    dstring_size =
+	      dpoint_to_string(dpoint, dstring_buf, dstring_bufsize);
+	    *repbuf = dstring_buf;
+	    *repsize = dstring_size;
+	    *repalloc = 1;
+
 	    dpoint_free(dpoint);
 	  }
 	  else {
@@ -1768,17 +1761,19 @@ int Dataserver::tcp_process_request(Dataserver *ds,
 	  status = ds->get(var, &dpoint);
 	  
 	  if (status) {
+	    char *rep_buf = (char *) malloc(32);
 	    snprintf(rep_buf, sizeof(rep_buf), "%d", dpoint->data.len);
 	    dpoint_free(dpoint);
 	    status = 1;
 	    *repbuf = rep_buf;
 	    *repsize = strlen(rep_buf);
+	    *repalloc = 1;
 	  }
 	  else {
 	    *repsize = 0;
 	    status = -1;
+	    *repalloc = 0;
 	  }
-	  *repalloc = 0;
 	}
 	
 	/* match */
