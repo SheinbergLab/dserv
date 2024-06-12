@@ -334,13 +334,14 @@ wm iconphoto . -default essicon
 setup
 
 proc connect { server } {
+    set ::dserv_server $server
     server_open $server
     connect_to_server $server
 }
 
 proc disconnect {} {
     disconnect_from_server
-    server close
+    server_close
 }
 
 if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
