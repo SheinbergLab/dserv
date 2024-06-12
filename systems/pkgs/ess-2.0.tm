@@ -560,7 +560,7 @@ namespace eval ess {
 	    set current(system) {}
 	}
     }
-    
+
     proc load_system { { system {} } { protocol {} } { variant {} } } {
 	variable current
 
@@ -620,6 +620,8 @@ namespace eval ess {
 
     proc start {} {
 	variable current
+	if { $current(system) == "" } { print "no system set"; return }
+	set current(state_system) [find_system $current(system)]
 	if { $current(state_system) != ""} {
 	    ess::evt_put USER START [now]
 	    $current(state_system) start
@@ -629,6 +631,8 @@ namespace eval ess {
     
     proc stop {} {
 	variable current
+	if { $current(system) == "" } { print "no system set"; return }
+	set current(state_system) [find_system $current(system)]
 	if { $current(state_system) != ""} {
 	    $current(state_system) stop
 	    ess::evt_put USER QUIT [now]
@@ -638,6 +642,8 @@ namespace eval ess {
     
     proc reset {} {
 	variable current
+	if { $current(system) == "" } { print "no system set"; return }
+	set current(state_system) [find_system $current(system)]
 	if { $current(state_system) != ""} {
 	    $current(state_system) reset
 	    ess::evt_put USER RESET [now]
@@ -925,6 +931,138 @@ namespace eval ess {
     }
 }
 
+namespace eval json {
+proc is_dict {d} {
+    try {
+        dict size $d
+    } on error {} {
+        return false
+    }
+}
+
+proc range {a {b ""}} {
+    if {$b eq ""} {
+        set b $a
+        set a 0
+    }
+    for {set r {}} {$a<$b} {incr a} {
+        lappend r $a
+    }
+    return $r
+}
+
+proc prefix_matches {prefix keys} {
+    lmap key $keys {
+        if {[string match $prefix* $key]} {
+            set key
+        } else {
+            continue
+        }
+    }
+}
+
+proc unique_prefix {prefix keys} {
+    set m [prefix_matches $prefix $keys]
+    if {[llength $m] == 1} {
+        lindex $m 0
+    } else {
+        return ""
+    }
+}
+
+proc dict_glob {dict key} {
+    set idx {}
+    foreach elem $key {
+        if {[dict exists $dict {*}$idx $elem]} {
+            lappend idx $elem
+        } elseif {[dict exists $dict {*}$idx *]} {
+            lappend idx *
+        } else {
+            return ""
+        }
+    }
+    return $idx
+}
+
+proc stringify_string {s} {
+    # FIXME: more quoting?
+    return "\"[string map {{"} {\"}} $s]\""
+    # "\" vim gets confused!
+}
+
+
+proc stringify {dict {schema {}} {key {}}} {
+    if {$key ne ""} {
+        if {![dict exists $dict {*}$key]} {
+            error "this can't happen"
+        }
+        set value [dict get $dict {*}$key]
+        if {[dict exists $schema {*}$key]} {
+            set type [dict get $schema {*}$key]
+        } else {
+            set realkey [dict_glob $schema $key]
+            if {$realkey ne ""} {
+                set type [dict get $schema {*}$realkey]
+            } else {
+                set type ""
+            }
+        }
+    } else {
+        set value $dict
+        set type $schema
+    }
+    if {$type ne ""} {
+        set type [unique_prefix $type {number string boolean null object array}]
+    }
+    if {$type eq ""} {
+        if {![is_dict $value]} {
+            if {[string is double -strict $value]} {
+                set type "number"
+            } else {
+                set type "string"
+            }
+        } else {
+            if {[dict keys $value] eq [range [dict size $value]]} {
+                set type "array"
+            } else {
+                set type "dict"
+            }
+        }
+    }
+
+    switch -exact $type {
+        "number" {
+            return "$value"
+        }
+        "null" {
+            return "null"
+        }
+        "boolean" {
+            return [expr {$value ? "true" : "false"}]
+        }
+        "string" {
+            # FIXME: quote quotes.  And maybe other things?
+            return [stringify_string $value]
+        }
+        "dict" {
+            set i 0
+            set body [lmap {k v} $value {
+                set res [stringify_string $k]
+                append res ":"
+                append res [stringify $dict $schema [list {*}$key $k]]
+            }]
+            return "{[join $body ,]}"
+        }
+        "array" {
+            set body {}
+            for {set i 0} {$i < [dict size $value]} {incr i} {
+                lappend body [dict get $value $i]
+            }
+            return "\[[join $body ,]\]"
+        }
+    }
+}
+}
 namespace eval ess {
     variable current
     set current(state_system) {}
@@ -1058,18 +1196,7 @@ namespace eval ess {
     }
     
     proc get_system_json {} {
-	variable current
-	package require rl_json
-	set d [rl_json::json object]
-	foreach s [get_systems] {
-	    set sjson [rl_json::json object]
-	    if { $s == $current(system) } {
-		set p $current(protocol)
-		rl_json::json set sjson $p [get_variants $s $p]
-	    }
-	    rl_json::json set d $s $sjson
-	}
-	return $d
+	return [json::stringify [get_system_dict]]
     }
 }
 
@@ -1284,6 +1411,6 @@ proc EM_INFO {} {
     return "0 2 128"
 }
 
-if { $::tcl_platform(os) == "QNX" } { ess::load_system }
+
 
 
