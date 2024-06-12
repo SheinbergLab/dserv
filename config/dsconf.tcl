@@ -10,8 +10,10 @@ tcl::tm::add [file dir $::env(ESS_SYSTEM_PATH)]/pkgs
 package require ess
 
 # load extra modules
-set dll_path modules/$tcl_platform(os)/$tcl_platform(machine)
-foreach f [glob [file join $dll_path *[info sharedlibextension]]] {
+
+set path [file dir [info nameofexecutable]]
+set dllspec modules/*/*[info sharedlibextension]
+foreach f [glob [file join $path $dllspec]] {
     load $f
 }
 
@@ -44,4 +46,5 @@ juicerSetPin 0 27
 
 dservSet rpio/levels/24 0
 dservSet rpio/levels/25 0
+
 
