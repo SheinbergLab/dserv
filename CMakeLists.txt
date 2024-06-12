@@ -12,6 +12,9 @@ find_library(LIBJANSSON NAMES "libjansson.a")
 find_library(LIBZ z)
 SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
+add_subdirectory(modules/juicer)
+add_subdirectory(processors)
+
 if (DSERV_HAVE_GPIO)
    add_compile_definitions(HAVE_GPIO=1)
 endif()
