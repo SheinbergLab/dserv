@@ -1,4 +1,4 @@
-source ess-2.0.tm
+package require ess
 set blinky [System new blinky]
 
 
@@ -77,6 +77,13 @@ $blinky set_start_callback {
     variable use_rmt
     variable rmt_ip
     if { $use_rmt } { rmtOpen $rmt_ip } { rmtClose }
+}
+
+$blinky set_quit_callback {
+    variable led_pin
+    variable use_rmt
+    rpioPinOff $led_pin
+    if { $use_rmt } { rmtSend "setBackground 0 0 0" }
 }
 
 $blinky set_init_callback {
