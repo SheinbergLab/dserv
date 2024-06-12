@@ -6,7 +6,7 @@
 
 #include <Datapoint.h>
 #include <dpoint_process.h>
-#include <prmutil.h>
+#include "prmutil.h"
 
 enum { WINDOW_UNDEFINED, WINDOW_IN, WINDOW_OUT };
 enum { WINDOW_INACTIVE, WINDOW_ACTIVE };

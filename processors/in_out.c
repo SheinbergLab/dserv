@@ -7,7 +7,7 @@
 
 #include <Datapoint.h>
 #include <dpoint_process.h>
-#include <prmutil.h>
+#include "prmutil.h"
 
 typedef struct process_params_s {
   int state;			/* are we > threshold */

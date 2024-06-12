@@ -6,7 +6,7 @@
 
 #include <Datapoint.h>
 #include <dpoint_process.h>
-#include <prmutil.h>
+#include "prmutil.h"
 
 enum { SIDE_NONE = 0, SIDE_RIGHT, SIDE_UP, SIDE_LEFT, SIDE_DOWN };
   
