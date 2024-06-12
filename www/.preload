@@ -1,0 +1,139 @@
+local dserv_server = "127.0.0.1"
+local dserv_port = 4620
+
+-- Setup connection to SMQ hub
+local smq = require("smq.hub").create()
+smq:create("eventlog")
+smq:create("ess")
+smq:create("qpcs")
+smq:create("action")
+smq:create("xterm_command")
+smq:create("error")
+smq:create("print")
+smq:create("motion")
+
+local function smqEntry(_ENV)
+   --trace("New SMQ client")
+   smq:connect(request)
+end
+
+local smqDir = ba.create.dir("QPCSBroker")
+smqDir:setfunc(smqEntry)
+smqDir:insert()
+print("Installing broker entry at:",smqDir:baseuri())
+
+if app.mySmqBrokerDir then
+   print"Removing old broker"
+   app.mySmqBrokerDir:unlink()
+end
+app.mySmqBrokerDir = smqDir
+
+-- Create a TCP/IP server listening socket object to receive events
+local server_sock=ba.socket.bind(0)
+
+-- Function running in the context of the Lua thread pool.
+-- sock is the blocking socket.
+local function dataServer(sock)
+   while true do
+      local data,err = sock:read()
+      -- get rid of the newline
+      for s in data:gmatch("[^\r\n]+") do
+	 if s:find("^evt:3:2") then
+            smq:publish("RESET", "qpcs")
+            smq:publish("RESET", "ess")
+            smq:publish("RESET", "eventlog")
+	 end
+         if s:find("^evt:") then
+            smq:publish(s, "eventlog")
+	 elseif s:find("^qpcs:") or s:find("^rpio") then
+            smq:publish(s, "qpcs")
+	 elseif s:find("^ess:") then
+            smq:publish(s, "ess")
+	 elseif s:find("^ess/") then
+            smq:publish(s, "ess")
+	 elseif s:find("^qpcsh:error") then
+            smq:publish(s, "error")
+	 elseif s:find("^print") then
+            smq:publish(s, "print")
+    elseif s:find("^BNO08x") then
+            smq:publish(s, "motion")
+         end
+      end
+      --print(str)
+   end
+   s:close()
+end
+
+-- Accept thread waiting asynchronously for client connections
+local function acceptCoroutine(sock)
+   while true do
+      -- Method accept yields and resumes when a client connects.
+      local s = sock:accept()
+      if not s then break end -- Server terminating
+      ba.thread.run(function() dataServer(s) end)
+   end
+end
+
+-- Run the socket "accept" function.
+server_sock:event(acceptCoroutine, "r")
+
+
+-- Create connection to dserv to register our receive server
+local dserv_sock,err = ba.socket.connect(dserv_server, dserv_port)
+
+-- helper functions for communicating with dserv tcpip service
+local function addmatch(addr, port, match)
+   dserv_sock:write("%match " .. addr .. " " .. port .. " " .. match .. " 1")
+   dserv_sock:read()
+end
+
+local function register(addr, port)
+   dserv_sock:write("%reg " .. addr .. " " .. port)
+   dserv_sock:read()
+end
+
+
+-- If connection succession send reg and match messages
+if dserv_sock then
+   local addr = dserv_sock:sockname()
+   local x, port = server_sock:sockname()
+   register(addr, port)
+   print("registering " .. addr .. " on port " .. port)
+   addmatch(addr, port, "rpio/*")
+   addmatch(addr, port, "qpcs:*")
+   addmatch(addr, port, "print")
+   addmatch(addr, port, "ess:*")
+   addmatch(addr, port, "ess/*")
+   addmatch(addr, port, "eventlog/*")
+   addmatch(addr, port, "BNO08x/*")
+   dserv_sock:close()
+end
+
+local ess_server = "127.0.0.1"
+local ess_port = 2570
+local ess_sock,err = ba.socket.connect(ess_server, ess_port)
+
+local function do_action(data, ptid, tid, subtid)
+   -- print(data)
+   ess_sock:write(data)
+   ess_sock:read()
+end
+
+local function do_cmd(cmd, ptid, tid, subtid)
+   -- ptid (publisher's tid) is the ephemeral topic ID
+   ess_sock:write(cmd)
+   local result,err = ess_sock:read()
+   smq:publish(result, "result")
+end
+
+local function do_ess_cmd(cmd, ptid, tid, subtid)
+   -- ptid (publisher's tid) is the ephemeral topic ID
+   ess_sock:write(cmd)
+   local result,err = ess_sock:read()
+   smq:publish("<cmd> "..cmd.." </cmd> "..result, "ess-result")
+end
+
+
+smq:subscribe("action", {onmsg=do_action})
+smq:subscribe("xterm_command", {onmsg=do_cmd})
+smq:subscribe("ess-cmd", {onmsg=do_ess_cmd})

@@ -1,0 +1,30 @@
+<html>
+  <head>
+    <script src="/rtl/jquery.js"></script>
+    <script src="/rtl/smq.js"></script>
+    <script>
+$(function() {
+    function print(txt) {
+        $("#console").append(txt+"\n");
+    };
+    var smq = SMQ.Client(SMQ.wsURL("/QPCSBroker/"));
+    function serverMessage(msg) {
+        if (!msg.startsWith('qpcs:em_pos')) {
+          print(msg);
+        }
+      else {
+        document.getElementById("eye-position").value = /\{(.+)\}/.exec(msg)[1].split(' ').slice(0,2).toString()
+      }
+    };
+    smq.subscribe("qpcs", {onmsg:serverMessage, datatype:"text"});
+});
+    </script>
+  </head>
+  <body>
+  <h1>QPCS Viewer</h1>
+  <form> <label for="eye-position">Eye Position</label>
+  <input name="eye-position" id="eye-position" size=55> </form>
+
+  <pre id="console"></pre>
+  </body>
+</html>
