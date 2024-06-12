@@ -1172,6 +1172,7 @@ int TclServer::process_requests(void) {
 	  }
 	}
       }
+
       break;
     case REQ_SCRIPT_NOREPLY:
       {
