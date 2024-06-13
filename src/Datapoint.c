@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "Datapoint.h"
+#include <jansson.h>		/* for JSON support */
 
 /*****************************************************************************/
 /*******************************dpoint helpers *******************************/

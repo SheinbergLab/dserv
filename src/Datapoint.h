@@ -2,7 +2,6 @@
 #define DATAPOINT_H
 
 #include <inttypes.h>
-#include <jansson.h>		/* for JSON support */
 #include "Base64.h"
 
 // dserv datapoints
