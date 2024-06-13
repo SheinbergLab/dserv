@@ -1,0 +1,3 @@
+/home/sheinb/src/dserv/modules/gpio_output/build/CMakeFiles/gpio_output.dir
+/home/sheinb/src/dserv/modules/gpio_output/build/CMakeFiles/edit_cache.dir
+/home/sheinb/src/dserv/modules/gpio_output/build/CMakeFiles/rebuild_cache.dir
