@@ -13,6 +13,7 @@ find_library(LIBZ z)
 SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
 add_subdirectory(modules/juicer)
+add_subdirectory(modules/eventlog)
 add_subdirectory(processors)
 
 if (DSERV_HAVE_GPIO)

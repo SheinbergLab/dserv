@@ -7,8 +7,6 @@ TclServer::TclServer(int argc, char **argv,
   tcpport = port;
   ds = dserv;
   
-  eventlog = new EventLog(ds);
-  
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
   
@@ -21,8 +19,6 @@ TclServer::TclServer(int argc, char **argv,
 
 TclServer::~TclServer()
 {
-  delete eventlog;
-  
   shutdown();
   net_thread.detach();
   process_thread.detach();
@@ -1045,11 +1041,6 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) timer_status_command,
 		       (ClientData) this,
 		       (Tcl_CmdDeleteProc *) NULL);
-  
-  Tcl_CreateObjCommand(interp, "evtPut",
-		       (Tcl_ObjCmdProc *) evt_put_command, this, NULL);
-  Tcl_CreateObjCommand(interp, "evtNameSet",
-		       (Tcl_ObjCmdProc *) evt_name_set_command, this, NULL);
   
   Tcl_CreateObjCommand(interp, "rmtOpen",
 		       (Tcl_ObjCmdProc *) rmt_open_command, this, NULL);

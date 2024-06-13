@@ -8,14 +8,24 @@
 #include "Daemonizer.hpp"
 #include "cxxopts.hpp"
 #include "dserv.h"
+#include "tclserver_api.h"
 
 // Provide hooks for loaded modules
 Dataserver *dserver;
-Dataserver *get_ds(void) { return dserver; }
-
 TclServer *tclserver;
+
+Dataserver *get_ds(void) { return dserver; }
 TclServer *get_tclserver(void) { return tclserver; }
 
+tclserver_t *tclserver_get(void) { return (tclserver_t *) tclserver; }
+void tclserver_set_point(tclserver_t *tclserver, ds_datapoint_t *dp)
+{
+  ((TclServer *) tclserver)->set_point(dp);
+}
+
+/*
+ * mainline
+ */
 int main(int argc, char *argv[])
 {
   bool verbose = false;
