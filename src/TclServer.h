@@ -29,10 +29,11 @@
 #include <sys/socket.h>
 #endif
 
-#include "Datapoint.h"
 #include <tcl.h>
-#include "EventLog.h"
-#include "Stimctrl.h"
+
+#include "Datapoint.h"
+#include "Dataserver.h"
+#include "Timer.h"
 
 class TTimer: public Timer {
 private:

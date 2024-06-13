@@ -1,6 +1,6 @@
 /*
  * NAME
- *   rmt.c
+ *   gpio_output.c
  *
  * DESCRIPTION
  *
@@ -35,7 +35,9 @@ typedef struct gpio_info_s
 {
   int fd;			/* chip fd */
   int nlines;
+#ifdef __linux__
   struct gpiohandle_request **line_requests;
+#endif
 } gpio_info_t;
 
 /* global to this module */
