@@ -29,11 +29,6 @@
 #include <sys/socket.h>
 #endif
 
-// for GPIO control
-#ifdef HAVE_GPIO
-#include <gpiod.h>
-#endif
-
 #include "Datapoint.h"
 #include <tcl.h>
 #include "EventLog.h"
@@ -101,7 +96,6 @@ class TclServer
   
   std::atomic<bool> m_bDone;
   
-  
   // number of timers
   const int ntimers = 8;
   std::vector<TTimer *> timers;
@@ -112,8 +106,6 @@ class TclServer
   // scripts attached to dpoints
   TimerDict timer_scripts;
 
-  Stimctrl rmt;
-
   std::mutex mutex;		        // ensure only one thread accesses table
   std::condition_variable cond;		// conditino variable for sync
   
@@ -123,11 +115,6 @@ public:
 
   const char *PRINT_DPOINT_NAME = "print";
 
-#ifdef HAVE_GPIO
-  std::unordered_map<std::string, struct gpiod_chip *> gpio_chips;
-  std::unordered_map<int, struct gpiod_line *> gpio_output_lines;
-#endif
-     
   static void
   tcp_client_process(int sock,
 		     SharedQueue<client_request_t> *queue);

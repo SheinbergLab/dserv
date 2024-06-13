@@ -28,8 +28,12 @@
 static char host[128];
 static int port;
 static const int STIM_PORT = 4610;
-static const int SOCK_BUF_SIZE = 65536;
 static int rmt_socket = -1;
+
+/* these buffers are allocated once */
+static char *rmt_socket_recv_buf = NULL;
+static char *rmt_socket_send_buf = NULL;
+static const int SOCK_BUF_SIZE = 65536;
 
 static void socket_flush()
   {
@@ -135,9 +139,11 @@ static int socket_write(char *message, int nbytes)
   /*****************************************************************************/
 static int socket_read(char **message, int *nbytes)
   {
-    static char buf[SOCK_BUF_SIZE];
+    char *buf = rmt_socket_recv_buf;
+    if (!buf) return 0;
+    
     int n;
-    if ((n = read(rmt_socket, buf, sizeof(buf))) < 0) {
+    if ((n = read(rmt_socket, buf, SOCK_BUF_SIZE)) < 0) {
       perror("reading stream socket");
       if (message) *message = NULL;
       if (nbytes) *nbytes = 0;
@@ -185,11 +191,11 @@ static  char *rmt_send(char *format, ...)
   {
     char *rbuf, *eol;
     int rbytes, status, l;
-    static char sbuf[SOCK_BUF_SIZE];
+    char *sbuf = rmt_socket_send_buf;
     
     va_list arglist;
     va_start(arglist, format);
-    vsnprintf(sbuf, sizeof(sbuf)-2, format, arglist);
+    vsnprintf(sbuf, SOCK_BUF_SIZE-2, format, arglist);
     va_end(arglist);
     
     if (rmt_socket == -1) return NULL;	/* Not connected */
@@ -261,7 +267,6 @@ static int rmt_init(char *stim_host, int stim_port)
 static int rmt_open_command(ClientData data, Tcl_Interp *interp,
 		     int objc, Tcl_Obj *objv[])
 {
-  char *host;
   int port = STIM_PORT;
   int rc;
   
@@ -275,7 +280,7 @@ static int rmt_open_command(ClientData data, Tcl_Interp *interp,
       return TCL_ERROR;
   }
   
-  host = Tcl_GetString(objv[1]);
+  strncpy(host, Tcl_GetString(objv[1]), sizeof(host));
   
   rc = rmt_init(host, port);
   
@@ -311,7 +316,7 @@ int rmt_send_command(ClientData data, Tcl_Interp *interp,
  *****************************************************************************/
 
 #ifdef WIN32
-EXPORT(int,Dserv_eventlog_Init) (Tcl_Interp *interp)
+EXPORT(int,Dserv_rmt_Init) (Tcl_Interp *interp)
 #else
 int Dserv_rmt_Init(Tcl_Interp *interp)
 #endif
@@ -327,12 +332,15 @@ int Dserv_rmt_Init(Tcl_Interp *interp)
   }
 
   tclserver_t *tclserver = tclserver_get();
-
+  rmt_socket_recv_buf = calloc(1, SOCK_BUF_SIZE);
+  rmt_socket_send_buf = calloc(1, SOCK_BUF_SIZE);
+  
   Tcl_CreateObjCommand(interp, "rmtOpen",
 		       (Tcl_ObjCmdProc *) rmt_open_command, tclserver, NULL);
   Tcl_CreateObjCommand(interp, "rmtClose",
 		       (Tcl_ObjCmdProc *) rmt_close_command, tclserver, NULL);
   Tcl_CreateObjCommand(interp, "rmtSend",
 		       (Tcl_ObjCmdProc *) rmt_send_command, tclserver, NULL);
+
   return TCL_OK;
 }

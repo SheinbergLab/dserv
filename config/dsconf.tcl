@@ -40,8 +40,10 @@ proc ainSetIndexedParams { win args } {
 proc ainGetRegionInfo { reg } { processSetParam windows settings 1 $reg }
 proc ainGetParam { p } { processGetParam "windows" $p }
 proc ainGetIndexedParam { i p } {  processGetParam "windows" $p $i }
-gpioLineRequestOutput gpiochip4 26
-gpioLineRequestOutput gpiochip4 27
+
+gpioLineRequestOutput 26 
+gpioLineRequestOutput 27
+
 juicerSetPin 0 27
 
 dservSet rpio/levels/24 0

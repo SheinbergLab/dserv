@@ -1,1 +1,0 @@
-/usr/bin/cc -fPIC -O3 -DNDEBUG -shared -Wl,-soname,dserv_gpio_output.so -o dserv_gpio_output.so CMakeFiles/gpio_output.dir/src/gpio_output.c.o   -L/usr/local/lib  -Wl,-rpath,/usr/local/lib -ltclstub8.6 -lpthread 
