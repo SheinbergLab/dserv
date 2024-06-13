@@ -39,9 +39,9 @@ typedef struct ain_info_s
 {
   tclserver_t *tclserver;
   int fd;			/* spidev fd */
+  int timer_fd;
 #ifdef __linux__
   pthread_t timer_thread_id;
-  int timer_fd;
 #endif
   int interval_ms;
   int nchan;
@@ -120,9 +120,6 @@ static int ain_start_command (ClientData data, Tcl_Interp *interp,
   ain_info_t *info = (ain_info_t *) data;
   int ms = 10;			/* default to 100Hz */
 
-  struct itimerspec new_value;
-  struct timespec now;
-
   if (objc > 1) {
     if (Tcl_GetIntFromObj(interp, objv[1], &ms) != TCL_OK)
       return TCL_ERROR;
@@ -130,6 +127,9 @@ static int ain_start_command (ClientData data, Tcl_Interp *interp,
   info->interval_ms = ms;
   
 #ifdef __linux__
+  struct itimerspec new_value;
+  struct timespec now;
+
   if (clock_gettime(CLOCK_REALTIME, &now) == -1)
     return TCL_ERROR;
   
@@ -218,7 +218,7 @@ int Dserv_ain_Init(Tcl_Interp *interp)
 		     (void *) &g_ainInfo)) {
     return TCL_ERROR;
   }
-  //  pthread_detach(g_ainInfo.timer_thread_id);
+  pthread_detach(g_ainInfo.timer_thread_id);
   
 #else
   g_ainInfo.fd = -1;
