@@ -5,7 +5,6 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
 #include "TclServer.h"
-#include "Daemonizer.hpp"
 #include "cxxopts.hpp"
 #include "dserv.h"
 #include "tclserver_api.h"
@@ -21,6 +20,11 @@ tclserver_t *tclserver_get(void) { return (tclserver_t *) tclserver; }
 void tclserver_set_point(tclserver_t *tclserver, ds_datapoint_t *dp)
 {
   ((TclServer *) tclserver)->set_point(dp);
+}
+
+uint64_t tclserver_now(tclserver_t *tclserver)
+{
+  return ((TclServer *) tclserver)->now();
 }
 
 /*
@@ -41,7 +45,6 @@ int main(int argc, char *argv[])
      cxxopts::value<std::string>(trigger_script))
     ("c,cscript", "Configuration script path",
      cxxopts::value<std::string>(configuration_script))
-    ("d,daemon", "Daemonize", cxxopts::value<bool>(daemonize))
     ("v,verbose", "Verbose", cxxopts::value<bool>(verbose));
   
   auto result = options.parse(argc, argv);
@@ -50,9 +53,6 @@ int main(int argc, char *argv[])
     std::cout << options.help({"", "Group"}) << std::endl;
     exit(0);
   }
-  
-  Daemonizer daemon;
-  if (daemonize) daemon.start();
   
   Dataserver dserv(argc, argv);
   dserver = &dserv;		// set the global variable used for modules

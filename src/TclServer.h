@@ -126,7 +126,8 @@ public:
   bool isDone();
   void start_tcp_server(void);
   int sourceFile(const char *filename);
-
+  uint64_t now(void) { return ds->now(); }
+  
 /********************************* now *********************************/
 
   static int now_command (ClientData data, Tcl_Interp *interp,

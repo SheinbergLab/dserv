@@ -16,6 +16,7 @@ add_subdirectory(modules/juicer)
 add_subdirectory(modules/eventlog)
 add_subdirectory(modules/rmt)
 add_subdirectory(modules/gpio_output)
+add_subdirectory(modules/ain)
 
 add_subdirectory(processors)
 
