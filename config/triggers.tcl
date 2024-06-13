@@ -101,5 +101,5 @@ triggerAdd eventlog/events           1  update_events
 
 # add windows processor for eye movements
 set path [file dir [info nameofexecutable]]
-processLoad [file join $path processors windows.so] windows
+processLoad [file join $path processors windows[info sharedlibextension]] windows
 processAttach windows ain/vals windows
