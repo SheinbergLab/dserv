@@ -207,19 +207,18 @@ int Dserv_ain_Init(Tcl_Interp *interp)
     static uint32_t speed = 1000000;
     status = ioctl(g_ainInfo.fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
     if (status == -1) return TCL_ERROR;
-  }
 
-  g_ainInfo.timer_fd = timerfd_create(CLOCK_REALTIME, 0);
-  if (g_ainInfo.timer_fd == -1) return TCL_ERROR;
-
-  g_ainInfo.nchan = 2;
-  
-  if (pthread_create(&g_ainInfo.timer_thread_id, NULL, acquire_thread,
-		     (void *) &g_ainInfo)) {
-    return TCL_ERROR;
+    g_ainInfo.timer_fd = timerfd_create(CLOCK_REALTIME, 0);
+    if (g_ainInfo.timer_fd == -1) return TCL_ERROR;
+    
+    g_ainInfo.nchan = 2;
+    
+    if (pthread_create(&g_ainInfo.timer_thread_id, NULL, acquire_thread,
+		       (void *) &g_ainInfo)) {
+      return TCL_ERROR;
+    }
+    pthread_detach(g_ainInfo.timer_thread_id);
   }
-  pthread_detach(g_ainInfo.timer_thread_id);
-  
 #else
   g_ainInfo.fd = -1;
   g_ainInfo.timer_fd = -1;
