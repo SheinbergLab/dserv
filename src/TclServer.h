@@ -98,7 +98,6 @@ class TclServer
   
   Tcl_Interp *interp;
   Dataserver *ds;
-  EventLog *eventlog;
   
   std::atomic<bool> m_bDone;
   
@@ -194,19 +193,6 @@ public:
   static int dpoint_remove_all_scripts_command (ClientData data,
 						Tcl_Interp *interp,
 						int objc, Tcl_Obj *objv[]);
-  static int add_params(Tcl_Interp *interp,
-			int type, int ptype,
-			int objc, Tcl_Obj *objv[], char *buf);
-  static int evt_name_set_command(ClientData data, Tcl_Interp *interp,
-				  int objc, Tcl_Obj *objv[]);
-  static int evt_put_command(ClientData data, Tcl_Interp * interp,
-			     int objc, Tcl_Obj *objv[]);
-  static int rmt_open_command(ClientData data, Tcl_Interp *interp,
-			      int objc, Tcl_Obj *objv[]);
-  static int rmt_close_command(ClientData data, Tcl_Interp *interp,
-			       int objc, Tcl_Obj *objv[]);
-  static int rmt_send_command(ClientData data, Tcl_Interp *interp,
-			      int objc, Tcl_Obj *objv[]);
   static int gpio_line_request_output_command(ClientData data,
 					      Tcl_Interp *interp,
 					      int objc, Tcl_Obj *objv[]);
