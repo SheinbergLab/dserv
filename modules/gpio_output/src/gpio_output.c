@@ -88,12 +88,14 @@ int gpio_line_request_output_command(ClientData data,
     req = info->line_requests[offset] = (struct gpiohandle_request *)
       calloc(1, sizeof(struct gpiohandle_request));
   }
+
   req->lineoffsets[0] = offset;
   req->flags = GPIOHANDLE_REQUEST_OUTPUT;
   req->default_values[0] = value;
   strncpy(req->consumer_label, "dserv output", sizeof(req->consumer_label));
-  
-  int ret = ioctl(info->fd, GPIO_GET_LINEHANDLE_IOCTL, &req);
+  req->lines = 1;
+    
+  int ret = ioctl(info->fd, GPIO_GET_LINEHANDLE_IOCTL, req);
 
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   return TCL_OK;
