@@ -42,8 +42,6 @@ proc ainGetParam { p } { processGetParam "windows" $p }
 proc ainGetIndexedParam { i p } {  processGetParam "windows" $p $i }
 
 gpioLineRequestOutput 26 
-gpioLineRequestOutput 27
-
 juicerSetPin 0 27
 
 dservSet rpio/levels/24 0
