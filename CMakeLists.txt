@@ -17,6 +17,7 @@ add_subdirectory(modules/eventlog)
 add_subdirectory(modules/rmt)
 add_subdirectory(modules/gpio_output)
 add_subdirectory(modules/ain)
+add_subdirectory(modules/gpio_input)
 
 add_subdirectory(processors)
 
