@@ -195,8 +195,9 @@ static int juicer_set_pin_command (ClientData data, Tcl_Interp *interp,
   req->flags = GPIOHANDLE_REQUEST_OUTPUT;
   req->default_values[0] = 0;
   strncpy(req->consumer_label, "juicer output", sizeof(req->consumer_label));
-  
-  int ret = ioctl(info->fd, GPIO_GET_LINEHANDLE_IOCTL, &req);  
+  req->lines = 1;
+
+  int ret = ioctl(info->fd, GPIO_GET_LINEHANDLE_IOCTL, req);  
 #endif
   info->juice_pin = pin;
   Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
@@ -239,8 +240,9 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
     if (ret >= 0) {
       g_juicerInfo.nlines = info.lines;
       g_juicerInfo.line_requests = 
-	(struct gpiohandle_request **) calloc(info.lines,
-					      sizeof(struct gpiohandle_request *));
+	(struct gpiohandle_request **)
+	calloc(info.lines,
+	       sizeof(struct gpiohandle_request *));
     }
     else {
       g_juicerInfo.nlines = 0;
