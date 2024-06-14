@@ -44,12 +44,10 @@ typedef struct juicer_info_s
   int juice_pin;
   int expired;
 #ifdef __linux__
-  timer_t timerid;
-  sigset_t           mask;
-  long long          freq_nanosecs;
-  struct sigevent    sev;
-  struct sigaction   sa;
-  struct itimerspec  its;
+  pthread_t timer_thread_id;
+  struct timespec juice_delay;
+  pthread_cond_t cond;
+  pthread_mutex_t mutex;
 #endif
 } juicer_info_t;
 
@@ -57,47 +55,27 @@ typedef struct juicer_info_s
 static juicer_info_t g_juicerInfo;
 
 #ifdef __linux__
-void timer_arm_ms(juicer_info_t *info, int start_ms, int interval_ms)
+void *timer_thread(void *arg)
 {
-  int ms, sec;
-  int loop = 0;
-  ms = start_ms%1000;
-  sec = start_ms/1000;
-  info->its.it_value.tv_sec = sec;
-  info->its.it_value.tv_nsec = ms*1000000;
-  
-  ms = interval_ms%1000;
-  sec = interval_ms/1000;
-  info->its.it_interval.tv_sec = sec;
-  info->its.it_interval.tv_nsec = ms*1000000;
-  info->expired = 0;
-}
+  juicer_info_t *info = (juicer_info_t *) arg;
+  while (1) {
+    pthread_mutex_lock(&info->mutex);
+    pthread_cond_wait(&info->cond, &info->mutex);
+    
+    /* sleep until time to turn juice off */
+    nanosleep(&info->juice_delay, NULL);
 
-void timer_fire(juicer_info_t *info)
-{
-  timer_settime(info->timerid, 0, &info->its, NULL);
-  sigprocmask(SIG_UNBLOCK, &info->mask, NULL);
-  info->expired = 0;
-}
-
-static void juicer_handler(int sig, siginfo_t *si, void *uc)
-{
-  juicer_info_t *info;
-  info = (juicer_info_t *) si->si_value.sival_ptr;
-  
-  info->expired = 1;
-  bzero(&info->its, sizeof(info->its));
-  timer_settime(info->timerid, 0, &info->its, NULL);
-
-  
-  /* set juice low */
-  if (info->fd != -1 &&
-      info->juice_pin >= 0 && info->juice_pin < info->nlines &&
-      info->line_requests[info->juice_pin]) {
-    struct gpiohandle_data datavals;
-    datavals.values[0] = 0;
-    int ret = ioctl(info->line_requests[info->juice_pin]->fd,
-		    GPIOHANDLE_SET_LINE_VALUES_IOCTL, &datavals);
+    /* set juice low */
+    if (info->fd != -1 &&
+	info->juice_pin >= 0 && info->juice_pin < info->nlines &&
+	info->line_requests[info->juice_pin]) {
+      struct gpiohandle_data datavals;
+      datavals.values[0] = 0;
+      int ret = ioctl(info->line_requests[info->juice_pin]->fd,
+		      GPIOHANDLE_SET_LINE_VALUES_IOCTL, &datavals);
+    }
+    pthread_mutex_unlock(&info->mutex);
+    //printf("juice off\n");
   }
 }
 #endif
@@ -128,8 +106,12 @@ static int juicer_juice_command (ClientData data, Tcl_Interp *interp,
   }
 
   if (ms <= 0) return TCL_OK;
-  
+
+  //printf("juice on\n");
 #ifdef __linux__
+  info->juice_delay.tv_sec = ms/1000;
+  info->juice_delay.tv_nsec = (ms%1000)*1000000;
+
   if (info->fd != -1 &&
       info->juice_pin >= 0 && info->juice_pin < info->nlines &&
       info->line_requests[info->juice_pin]) {
@@ -138,8 +120,11 @@ static int juicer_juice_command (ClientData data, Tcl_Interp *interp,
     int ret = ioctl(info->line_requests[info->juice_pin]->fd,
 		    GPIOHANDLE_SET_LINE_VALUES_IOCTL, &datavals);
   }
-  timer_arm_ms(info, ms, 0);
-  timer_fire(info);
+
+  if (pthread_cond_signal(&info->cond) != 0) {
+    perror("pthread_cond_signal() error");                                      
+    return TCL_ERROR;
+  }   
 #endif
   Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
   return TCL_OK;
@@ -253,22 +238,22 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
 
   
 #ifdef __linux__
-  g_juicerInfo.sa.sa_flags = SA_SIGINFO;
-  g_juicerInfo.sa.sa_sigaction = juicer_handler;
-  sigemptyset(&g_juicerInfo.sa.sa_mask);
-  sigaction(SIGRTMIN, &g_juicerInfo.sa, NULL);
+  if (pthread_mutex_init(&g_juicerInfo.mutex, NULL) != 0) {
+    perror("pthread_mutex_init() error");                                       
+    return TCL_ERROR;
+  }                                                                             
   
-  /* Block timer signal temporarily. */
-  //    printf("Blocking signal %d\n", SIGRTMIN);
-  sigemptyset(&g_juicerInfo.mask);
-  sigaddset(&g_juicerInfo.mask, SIGRTMIN);
-  sigprocmask(SIG_SETMASK, &g_juicerInfo.mask, NULL);
+  if (pthread_cond_init(&g_juicerInfo.cond, NULL) != 0) {
+    perror("pthread_cond_init() error");                                        
+    return TCL_ERROR;
+  }
   
-  /* Create the timer. */
-  g_juicerInfo.sev.sigev_notify = SIGEV_SIGNAL;
-  g_juicerInfo.sev.sigev_signo = SIGRTMIN;
-  g_juicerInfo.sev.sigev_value.sival_ptr =  &g_juicerInfo;
-  timer_create(CLOCK_REALTIME, &g_juicerInfo.sev, &g_juicerInfo.timerid);
+  if (pthread_create(&g_juicerInfo.timer_thread_id, NULL, timer_thread,
+		     (void *) &g_juicerInfo)) {
+    return TCL_ERROR;
+  }
+  pthread_detach(g_juicerInfo.timer_thread_id);
+  
 #endif
   
   Tcl_CreateObjCommand(interp, "juicerJuice",
