@@ -49,4 +49,10 @@ juicerSetPin 0 27
 dservSet rpio/levels/24 0
 dservSet rpio/levels/25 0
 
+if [file exists /dev/cu.usbserial-FTD1906W] {
+    soundOpen /dev/cu.usbserial-FTD1906W
+    soundSetVoice 81 0  0
+    soundSetVoice 57 17 1
+    soundVolume   127 1
+}
 
