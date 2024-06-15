@@ -76,14 +76,15 @@ void *input_thread(void *arg)
 
   char point_name[64];
   sprintf(point_name, "%s/%d", info->dpoint_prefix, info->line);
-  
+  int status;
+    
   while (1) {
     nfds = epoll_wait(info->epfd, &ev, 1, 20000);
     if (nfds != 0) {
       struct gpioevent_data edata;
       nread = read(info->req.fd, &edata, sizeof(edata));
 
-      int status = 1-(edata.id-1); /* verify this! */
+      status = (edata.id == GPIOEVENT_EVENT_RISING_EDGE) ? 1 : 0;
       
       ds_datapoint_t *dp = dpoint_new(point_name,
 				      tclserver_now(info->tclserver),

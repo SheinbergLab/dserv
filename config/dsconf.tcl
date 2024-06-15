@@ -41,6 +41,8 @@ proc ainGetRegionInfo { reg } { processSetParam windows settings 1 $reg }
 proc ainGetParam { p } { processGetParam "windows" $p }
 proc ainGetIndexedParam { i p } {  processGetParam "windows" $p $i }
 
+gpioLineRequestInput 24
+gpioLineRequestInput 25
 gpioLineRequestOutput 26
 juicerSetPin 0 27
 
