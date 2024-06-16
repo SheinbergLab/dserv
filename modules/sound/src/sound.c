@@ -48,6 +48,11 @@ typedef struct {
   sem_t *mutex;
   sem_t *slots;
   sem_t *items;
+#ifndef __APPLE__
+  sem_t unnamed_mutex;
+  sem_t unnamed_slots;
+  sem_t unnamed_items;
+#endif
 } queue;
 
 queue* queueCreate();
@@ -59,6 +64,7 @@ queue* queueCreate() {
     q->front = 0;
     q->back = 0;
 
+#ifdef __APPLE__
     q->mutex = sem_open ("qMutex", O_CREAT | O_EXCL, 0644, 1); 
     sem_unlink ("qMutex");      
 
@@ -67,7 +73,16 @@ queue* queueCreate() {
 
     q->items = sem_open ("qItems", O_CREAT | O_EXCL, 0644, 0); 
     sem_unlink ("qItems");      
-    
+#else
+    q->mutex = &q->unnamed_mutex;
+    sem_init(q->mutex, 0, 1);
+
+    q->slots = &q->unnamed_slots;
+    sem_init(q->slots, 0, QUEUE_SIZE);
+
+    q->items = &q->unnamed_items;
+    sem_init(q->items, 0, 0);
+#endif
     return q;
 }
 
@@ -189,12 +204,12 @@ static int snd_program(int midi_fd, char program, char bank, char ch_set)
   cmd[6] = 0xc0 | channel;
   cmd[7] = program-1;
   
-  write(midi_fd, cmd, sizeof(cmd));
+  int n = write(midi_fd, cmd, sizeof(cmd));
   
   /* Now set the volume to the middle */
   snd_control(midi_fd, MIDI_CTRL_VOLUME, 64, channel);
   
-  return 1;
+  return n;
 }
 
 /**************************************************************
@@ -231,8 +246,8 @@ static int snd_control(int midi_fd, char control, char data, char channel)
   cmd[1] = control;
   cmd[2] = data;
   
-  write(midi_fd, cmd, sizeof(cmd));
-  return 1;
+  int n = write(midi_fd, cmd, sizeof(cmd));
+  return n;
 }
 
 static int snd_reset(int midi_fd)
@@ -248,7 +263,7 @@ static int snd_reset(int midi_fd)
     0x7f, 0x7f,
     0xf7 };
   
-  write(midi_fd, xg_on, sizeof(xg_on));
+  int n = write(midi_fd, xg_on, sizeof(xg_on));
 
   /* according to the MU15 docs, the xg_on command takes approx 50ms */
   usleep(50000);
@@ -256,8 +271,8 @@ static int snd_reset(int midi_fd)
   write(midi_fd, velocity_sensitivity, sizeof(velocity_sensitivity));
 #endif
   
-  write(midi_fd, master_volume, sizeof(master_volume));
-  return 1;
+  n = write(midi_fd, master_volume, sizeof(master_volume));
+  return n;
 }
 
 
@@ -278,7 +293,6 @@ static int snd_reset(int midi_fd)
 
 static int snd_on(int midi_fd, char channel, char pitch)
 {
-  int i;
   static char vel = 127;
   char cmd[3];
 
@@ -286,12 +300,12 @@ static int snd_on(int midi_fd, char channel, char pitch)
   cmd[0] = 0x90 | channel;
   cmd[1] = pitch;
   cmd[2] = vel;
-  write(midi_fd, cmd, 3);
+  int n = write(midi_fd, cmd, 3);
   
   /* Turn on the sustain event */
   snd_control(midi_fd, MIDI_CTRL_SUSTENTO, MIDI_ON, channel);
 
-  return i;
+  return n;
 }
 
 
@@ -316,10 +330,10 @@ static int snd_off(int midi_fd, char channel, char pitch)
   cmd[0] = 0x80 | channel;
   cmd[1] = pitch;
   cmd[2] = vel;
-  write(midi_fd, cmd, 3);
+  int n = write(midi_fd, cmd, 3);
   
   //  printf("sound off %d %d %d\n", channel, pitch, vel);
-  return 0;
+  return n;
 }    
 
 
