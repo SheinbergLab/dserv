@@ -392,7 +392,10 @@ static int sound_open_command (ClientData data, Tcl_Interp *interp,
 		     Tcl_GetString(objv[1]), "\"", NULL);
     return TCL_ERROR;
   }
-  configure_serial_port(info->midi_fd);
+  int ret = configure_serial_port(info->midi_fd);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
+  
   return TCL_OK;
 }
 
