@@ -69,9 +69,6 @@ $search set_start start
 $search add_action start {
     variable timerID
     variable start_delay
-    variable n_obs
-
-    set n_obs [dl_length stimdg:stimtype]
 
     ess::evt_put SYSTEM_STATE RUNNING [now]	
     timerTick $timerID $start_delay
@@ -93,6 +90,9 @@ $search add_action inter_obs {
     variable targ_x
     variable targ_y
     variable targ_r
+
+    variable n_obs
+    set n_obs [dl_length stimdg:stimtype]
     
     if { !$first_time } {
 	timerTick $timerID $interblock_time
@@ -143,6 +143,7 @@ $search add_transition start_obs {
 $search add_action pre_stim {
     variable prestim_time
     variable timerID
+    soundPlay 1 70 200
     timerTick $timerID $prestim_time
 }
 $search add_transition pre_stim {
@@ -229,6 +230,7 @@ $search add_transition missed_target {
 #
 $search add_action reward {
     variable juice_time
+    soundPlay 3 70 70
     juicerJuice 0 $juice_time
     ess::evt_put REWARD DURATION [now] $juice_time
 }
@@ -273,15 +275,18 @@ $search add_transition finish {
 #
 $search add_action finale {
     variable timerID
-    timerTick $timerID 250
+    timerTick $timerID 500
 }
 
 $search add_transition finale {
     variable timerID
     if { [timerExpired $timerID] } {
-	return end
+	return finale_sound
     }
 }
+
+$search add_action finale_sound { soundPlay 6 60 400 }
+$search add_transition finale_sound { return end }
 
 #
 # end
@@ -316,6 +321,16 @@ $search set_init_callback {
     set scale_y [rmtSend "screen_set ScaleY"]
     set screen_w [expr [rmtSend "screen_set WinWidth"]/$scale_x]
     set screen_h [expr [rmtSend "screen_set WinHeight"]/$scale_y]
+
+    soundReset
+    soundSetVoice 81 0    0
+    soundSetVoice 57 17   1
+    soundSetVoice 60 0    2
+    soundSetVoice 42 0    3
+    soundSetVoice 21 0    4
+    soundSetVoice 8  0    5
+    soundSetVoice 113 100 6
+    foreach i "0 1 2 3 4 5 6" { soundVolume 127 $i }
 }
 
 $search set_deinit_callback {

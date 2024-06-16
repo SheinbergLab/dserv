@@ -26,7 +26,7 @@ namespace eval circles {
     # ---------------------------------------------------------------------
     # Default init and destroy procs (copy and edit to make variant specific)
     proc default_init { } {
-	 ess::set_param n_rep 100
+	 ess::set_param n_rep 10
 	 ess::set_param ndists 0
      }
     proc default_destroy { } {
@@ -42,7 +42,7 @@ namespace eval circles {
     }
     
     proc variable_init { } {
-	ess::set_param n_rep 30
+	ess::set_param n_rep 10
 	ess::set_param ndists "0 2 4 8"
     }
     proc variable_destroy { } {

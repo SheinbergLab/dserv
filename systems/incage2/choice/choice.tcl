@@ -75,9 +75,6 @@ $choice set_start start
 $choice add_action start {
     variable timerID
     variable start_delay
-    variable n_obs
-
-    set n_obs [dl_length stimdg:stimtype]
     
     ess::evt_put SYSTEM_STATE RUNNING [now]	
     timerTick $timerID $start_delay
@@ -100,6 +97,9 @@ $choice add_action inter_obs {
     variable targ_y
     variable targ_r
     
+    variable n_obs
+    set n_obs [dl_length stimdg:stimtype]
+
     if { !$first_time } {
 	timerTick $timerID $interblock_time
     } else {
@@ -154,6 +154,7 @@ $choice add_transition start_obs {
 $choice add_action pre_stim {
     variable prestim_time
     variable timerID
+    soundPlay 1 70 200
     timerTick $timerID $prestim_time
 }
 
@@ -276,6 +277,7 @@ $choice add_transition missed_target { return wait_for_response }
 #
 $choice add_action reward {
     variable juice_time
+    soundPlay 3 70 70
     juicerJuice 0 $juice_time
     ess::evt_put REWARD DURATION [now] $juice_time
 }
@@ -327,15 +329,18 @@ $choice add_transition finish { return inter_obs }
 #
 $choice add_action finale {
     variable timerID
-    timerTick $timerID 250
+    timerTick $timerID 500
 }
 
 $choice add_transition finale {
     variable timerID
     if { [timerExpired $timerID] } {
-	return end
+	return finale_sound
     }
 }
+
+$choice add_action finale_sound { soundPlay 6 60 400 }
+$choice add_transition finale_sound { return end }
 
 #
 # end
@@ -389,6 +394,17 @@ $choice set_init_callback {
 	set screen_w 1024
 	set screen_h 600
     }
+
+    soundReset
+    soundSetVoice 81 0    0
+    soundSetVoice 57 17   1
+    soundSetVoice 60 0    2
+    soundSetVoice 42 0    3
+    soundSetVoice 21 0    4
+    soundSetVoice 8  0    5
+    soundSetVoice 113 100 6
+    foreach i "0 1 2 3 4 5 6" { soundVolume 127 $i }
+
     return
 }
 

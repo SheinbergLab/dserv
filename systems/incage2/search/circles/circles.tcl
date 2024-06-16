@@ -73,6 +73,6 @@ $circles add_method basic_search { args } {
     return $g
 }
 
-ess::create_variant search circles single      basic_search { n_rep 100 ndists 0 }
-ess::create_variant search circles variable    basic_search { n_rep 100 ndists {0 2 4 8} }
+ess::create_variant search circles single      basic_search { n_rep 10 ndists 0 }
+ess::create_variant search circles variable    basic_search { n_rep 20 ndists {0 2 4 8} }
 ess::create_variant search circles distractors basic_search { n_rep 100 ndists 6 }
