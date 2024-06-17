@@ -204,13 +204,13 @@ $choice add_transition wait_for_response {
     
     if { $buttons_changed && $use_buttons } {
 	set buttons_changed 0
-	if [dpointGet rpio/levels/${left_button}] {
+	if [dpointGet gpio/input/${left_button}] {
 	    if { $targ_x < 0 } {
 		return touched_target
 	    } else {
 		return missed_target
 	    }
-	} elseif [dpointGet rpio/levels/${right_button}] {
+	} elseif [dpointGet gpio/input/${right_button}] {
 	    if { $targ_x > 0 } {
 		return touched_target
 	    } else {
