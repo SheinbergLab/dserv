@@ -243,7 +243,7 @@ $choice add_action touched_target {
     variable right_button
     
     if { $use_buttons } {
-	ess::evt_put RESP 1 [now] [dpointGet rpio/levels/$left_button] [dpointGet rpio/levels/$right_button]
+	ess::evt_put RESP 1 [now] [dpointGet gpio/input/$left_button] [dpointGet gpio/input/$right_button]
     } else {
 	ess::evt_put RESP 1 [now] $touch_x $touch_y
     }
@@ -264,7 +264,7 @@ $choice add_action missed_target {
     variable right_button
     
     if { $use_buttons } {
-	ess::evt_put RESP 0 [now] [dpointGet rpio/levels/$left_button] [dpointGet rpio/levels/$right_button]
+	ess::evt_put RESP 0 [now] [dpointGet gpio/input/$left_button] [dpointGet gpio/input/$right_button]
     } else {
 	ess::evt_put RESP 0 [now] $touch_x $touch_y
     }
@@ -369,9 +369,9 @@ $choice set_init_callback {
 
     if { $use_buttons } {
 	foreach b "$left_button $right_button" {
-	    dservAddExactMatch rpio/levels/$b
-	    dservTouch rpio/levels/$b
-	    dpointSetScript rpio/levels/$b "[namespace current] update_button $b"
+	    dservAddExactMatch gpio/input/$b
+	    dservTouch gpio/input/$b
+	    dpointSetScript gpio/input/$b "[namespace current] update_button $b"
 	}
     }
 
@@ -484,8 +484,8 @@ $choice add_method button_pressed {} {
     variable left_button
     variable right_button
     if { $use_buttons } {
-	if { [dpointGet rpio/levels/$left_button] ||
-	     [dpointGet rpio/levels/$right_button] } {
+	if { [dpointGet gpio/levels/$left_button] ||
+	     [dpointGet gpio/levels/$right_button] } {
 	    return 1
 	}
     }
