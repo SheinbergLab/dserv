@@ -1,19 +1,17 @@
 puts "initializing dataserver"
 
-if { [file exists /home/sheinb/src/dserv] } {
-    set env(ESS_SYSTEM_PATH) /home/sheinb/src/dserv/systems/incage2
-} else {
-    set env(ESS_SYSTEM_PATH) /Users/sheinb/src/dserv/systems/incage2
+set dspath [file dir [info nameofexecutable]]
+if { ![info var $::env(ESS_SYSTEM_PATH)] } {
+    set env(ESS_SYSTEM_PATH) $dspath [file join $dspath systems/incage2]
 }
 
-tcl::tm::add [file dir $::env(ESS_SYSTEM_PATH)]/pkgs
+tcl::tm::add $dspath/pkgs
 package require ess
 
 # load extra modules
 
-set path [file dir [info nameofexecutable]]
 set dllspec modules/*/*[info sharedlibextension]
-foreach f [glob [file join $path $dllspec]] {
+foreach f [glob [file join $dspath $dllspec]] {
     load $f
 }
 
@@ -46,17 +44,14 @@ gpioLineRequestInput 25
 gpioLineRequestOutput 26
 juicerSetPin 0 27
 
-dservSet rpio/levels/24 0
-dservSet rpio/levels/25 0
+dservSet gpio/input/24 0
+dservSet gpio/input/25 0
 
 set ports "/dev/ttyUSB0 /dev/cu.usbserial-FTD1906W"
 foreach p $ports {
     if [file exists $p] {
 	soundOpen $p 
 	soundReset
-	soundSetVoice 81 0  0
-	soundSetVoice 57 17 1
-	soundVolume   127 1
 	break
     }
 }
