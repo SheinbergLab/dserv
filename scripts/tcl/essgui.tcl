@@ -326,7 +326,7 @@ proc server_cmd { server cmd { add 0 } } {
 
 
 set dir [file dirname [info script]]
-set iconfile [file join $dir  0250-clapboard-play.png]
+set iconfile [file join $dir  play.png]
 image create photo essicon -file $iconfile
 wm title . "Experimental Control"
 wm iconphoto . -default essicon
