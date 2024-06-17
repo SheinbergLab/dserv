@@ -484,8 +484,8 @@ $choice add_method button_pressed {} {
     variable left_button
     variable right_button
     if { $use_buttons } {
-	if { [dpointGet gpio/levels/$left_button] ||
-	     [dpointGet gpio/levels/$right_button] } {
+	if { [dpointGet gpio/input/$left_button] ||
+	     [dpointGet gpio/input/$right_button] } {
 	    return 1
 	}
     }
