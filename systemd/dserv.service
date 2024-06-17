@@ -1,0 +1,14 @@
+[Unit]
+Description=Dataserver Service
+
+[Service]
+Type=simple
+User=sheinb
+ExecStart=/opt/dserv/dserv -c /opt/dserv/config/dsconf.tcl -t /opt/dserv/config/triggers.tcl
+Restart=on-failure
+RestartSec=10
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+
