@@ -160,7 +160,7 @@ static int ain_stop_command (ClientData data, Tcl_Interp *interp,
   new_value.it_value.tv_nsec = 0;
   new_value.it_interval.tv_sec = 0;
   new_value.it_interval.tv_nsec = 0;
-  timerfd_settime(info->fd, TFD_TIMER_ABSTIME, &new_value, NULL);
+  timerfd_settime(info->timer_fd, TFD_TIMER_ABSTIME, &new_value, NULL);
 #endif
   return TCL_OK;
 }
