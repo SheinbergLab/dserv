@@ -56,6 +56,10 @@ $choice add_variable targ_x
 $choice add_variable targ_y             
 $choice add_variable targ_r             
 
+$choice add_variable dist_x             
+$choice add_variable dist_y             
+$choice add_variable dist_r             
+
 $choice add_variable touch_count        0
 $choice add_variable touch_last         0
 $choice add_variable touch_x            
@@ -96,6 +100,9 @@ $choice add_action inter_obs {
     variable targ_x
     variable targ_y
     variable targ_r
+    variable dist_x
+    variable dist_y
+    variable dist_r
     
     variable n_obs
     set n_obs [dl_length stimdg:stimtype]
@@ -111,10 +118,13 @@ $choice add_action inter_obs {
 	set cur_id [dl_pickone $left_to_show]
 	set stimtype [dl_get stimdg:stimtype $cur_id]
 	
-	# set these touching_spot knows where target is
+	# set these touching_response knows where choices are
 	set targ_x [dl_get stimdg:match_x $stimtype]
 	set targ_y [dl_get stimdg:match_y $stimtype]
 	set targ_r [dl_get stimdg:match_r $stimtype]
+	set dist_x [dl_get stimdg:nonmatch_x $stimtype]
+	set dist_y [dl_get stimdg:nonmatch_y $stimtype]
+	set dist_r [dl_get stimdg:nonmatch_r $stimtype]
 	
 	rmtSend "nexttrial $stimtype"
     }
@@ -197,6 +207,9 @@ $choice add_transition wait_for_response {
     variable targ_x
     variable targ_y
     variable targ_r
+    variable dist_x
+    variable dist_y
+    variable dist_r
     variable use_buttons
     variable left_button
     variable right_button
@@ -223,8 +236,11 @@ $choice add_transition wait_for_response {
     
     if { $touch_count > $touch_last } {
 	set touch_last $touch_count
-	if [my touching_spot $touch_x $touch_y $targ_x $targ_y $targ_r] {
+	set resp [my touching_response $touch_x $touch_y $targ_x $targ_y $targ_r $dist_x $dist_y $dist_r]
+	if { $resp == "1" } {
 	    return touched_target
+	} elseif { $resp == "-1" } {
+	    return touched_dist
 	} else {
 	    return missed_target
 	}
@@ -252,6 +268,27 @@ $choice add_action touched_target {
 }
 
 $choice add_transition touched_target { return reward }
+
+#
+# touched_dist
+#
+$choice add_action touched_dist {
+    variable touch_x
+    variable touch_y
+    variable use_buttons
+    variable left_button
+    variable right_button
+    
+    if { $use_buttons } {
+	ess::evt_put RESP 2 [now] [dpointGet gpio/input/$left_button] [dpointGet gpio/input/$right_button]
+    } else {
+	ess::evt_put RESP 2 [now] $touch_x $touch_y
+    }
+    rmtSend "!stimoff"
+    ess::evt_put PATTERN OFF [now] 
+}
+
+$choice add_transition touched_dist { return noreward }
 
 #
 # missed_target
@@ -285,6 +322,15 @@ $choice add_action reward {
 $choice add_transition reward { return post_trial }
 
 #
+# noreward
+#
+$choice add_action noreward {
+    soundPlay 4 90 500
+}
+
+$choice add_transition noreward { return post_trial }
+
+#
 # post_trial
 #
 $choice add_action post_trial {}
@@ -302,8 +348,7 @@ $choice add_transition post_trial {
 #
 $choice add_action abort {
     rmtSend stimoff
-    ess::end_obs ABORT
-    
+    ess::end_obs ABORT    
 }
 $choice add_transition abort { return inter_obs }
 	
@@ -474,6 +519,34 @@ $choice add_method touching_spot { xpix ypix targ_x targ_y targ_r } {
 
     if { [expr {($x0*$x0+$y0*$y0)<($targ_r*$targ_r)}] } {
 	return 1
+    } else {
+	return 0
+    }
+}
+
+$choice add_method touching_response { xpix ypix targ_x targ_y targ_r dist_x dist_y dist_r } {
+    variable screen_w
+    variable screen_h
+    variable screen_halfx
+    variable screen_halfy
+
+    set halfx $screen_halfx
+    set halfy $screen_halfy
+    set halfw [expr {$screen_w/2}]
+    set h $screen_h
+    set halfh [expr {$h/2}]
+    set x [expr {($xpix-$halfw)*($halfx/$halfw)}]
+    set y [expr {(($h-$ypix)-$halfh)*($halfy/$halfh)}]
+    
+    set x_t [expr {$targ_x-$x}]
+    set y_t [expr {$targ_y-$y}]
+    set x_d [expr {$dist_x-$x}]
+    set y_d [expr {$dist_y-$y}]
+
+    if { [expr {($x_t*$x_t+$y_t*$y_t)<($targ_r*$targ_r)}] } {
+	return 1
+    } elseif {[expr {($x_d*$x_d+$y_d*$y_d)<($dist_r*$dist_r)}] } {
+	return -1
     } else {
 	return 0
     }
