@@ -1,0 +1,15 @@
+[Unit]
+Description=Dataserver Service
+Requires=dserv.service
+After=dserv.service
+
+[Service]
+Type=simple
+User=sheinb
+ExecStart=/usr/bin/sudo /usr/local/bin/mako -l::/opt/dserv/www
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
