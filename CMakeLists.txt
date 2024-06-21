@@ -12,14 +12,7 @@ find_library(LIBJANSSON NAMES "libjansson.a")
 find_library(LIBZ z)
 SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
-add_subdirectory(modules/juicer)
-add_subdirectory(modules/eventlog)
-add_subdirectory(modules/rmt)
-add_subdirectory(modules/gpio_output)
-add_subdirectory(modules/gpio_input)
-add_subdirectory(modules/ain)
-add_subdirectory(modules/sound)
-add_subdirectory(modules/touch)
+add_subdirectory(modules)
 
 add_subdirectory(processors)
 

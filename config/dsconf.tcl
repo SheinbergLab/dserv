@@ -10,7 +10,7 @@ package require ess
 
 # load extra modules
 
-set dllspec modules/*/*[info sharedlibextension]
+set dllspec modules/*[info sharedlibextension]
 foreach f [glob [file join $dspath $dllspec]] {
     load $f
 }
