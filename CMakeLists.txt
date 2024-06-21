@@ -19,6 +19,7 @@ add_subdirectory(modules/gpio_output)
 add_subdirectory(modules/gpio_input)
 add_subdirectory(modules/ain)
 add_subdirectory(modules/sound)
+add_subdirectory(modules/touch)
 
 add_subdirectory(processors)
 
