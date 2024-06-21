@@ -306,7 +306,9 @@ int Dserv_touch_Init(Tcl_Interp *interp)
   g_touchInfo.tclserver = tclserver_get();
   g_touchInfo.dpoint_prefix = "mtouch";
   g_touchInfo.fd = -1;
+#ifdef __linux__
   g_touchInfo.dev = NULL;
+#endif  
   g_touchInfo.input_thread_running = 0;
   
   Tcl_CreateObjCommand(interp, "touchOpen",
