@@ -153,6 +153,8 @@ static int ain_stop_command (ClientData data, Tcl_Interp *interp,
   ain_info_t *info = (ain_info_t *) data;
   info->interval_ms = 0;
 
+  /* printf("stopping analog acquisition\n"); */
+
 #ifdef __linux__
   struct itimerspec new_value;
   
