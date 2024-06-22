@@ -8,7 +8,8 @@ Type=simple
 User=sheinb
 ExecStart=/usr/bin/sudo /usr/local/bin/mako -l::/opt/dserv/www
 Restart=on-failure
-RestartSec=10
+RestartSec=5
+TimeoutStopSec=2
 
 [Install]
 WantedBy=multi-user.target
