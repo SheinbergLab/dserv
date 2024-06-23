@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 set(CMAKE_CXX_STANDARD 20)
 
+if(APPLE)
+set(CMAKE_SHARED_MODULE_SUFFIX .dylib)
+endif()
+
 set(PROCESSOR windows)
 project(${PROCESSOR})
 include_directories(-I.. -I. -I ../src)

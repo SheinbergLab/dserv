@@ -106,6 +106,7 @@ public:
   ~Dataserver();
 
   static int64_t now(void);
+  int port(void) { return tcpport; }
   int add_datapoint_to_table(char *varname,
 			     ds_datapoint_t *dpoint);
   int update_datapoint(ds_datapoint_t *dpoint);

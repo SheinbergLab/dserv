@@ -2,12 +2,15 @@
 #include <chrono>
 #include <future>
 
+#include <pthread.h>
+
 #include "sharedqueue.h"
 #include "Dataserver.h"
 #include "TclServer.h"
 #include "cxxopts.hpp"
 #include "dserv.h"
 #include "tclserver_api.h"
+#include "mdns_advertise.h"
 
 // Provide hooks for loaded modules
 Dataserver *dserver;
@@ -27,6 +30,7 @@ uint64_t tclserver_now(tclserver_t *tclserver)
   return ((TclServer *) tclserver)->now();
 }
 
+  
 /*
  * mainline
  */
@@ -68,7 +72,9 @@ int main(int argc, char *argv[])
     auto result = tcl.eval(std::string("source ")+configuration_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result << std::endl;
   }
+
+  /* use mdns to advertise services */
+  advertise_services(dserver->port(), tclserver->port());
   
-  std::promise<void>().get_future().wait();  
-  
+  std::promise<void>().get_future().wait();
 }

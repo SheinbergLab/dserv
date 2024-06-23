@@ -116,6 +116,8 @@ public:
 
   const char *PRINT_DPOINT_NAME = "print";
 
+  int port(void) { return tcpport; }
+
   static void
   tcp_client_process(int sock,
 		     SharedQueue<client_request_t> *queue);
