@@ -1,5 +1,6 @@
 package require Tk
 package require qpcs
+package require mdns
 
 set status(state) Stopped
 set status(eye_hor) 0
@@ -80,9 +81,20 @@ proc process_data { ev args } {
 }
 
 proc setup {} {
-    global status widgets
+    global status widgets esshosts
+
+    labelframe .server -text Server
+    set f [frame .server.f]
+    pack [label $f.text -text "ESS Host:" -width 10] \
+	-side left -padx 2 -anchor w
+    set widgets(esshost) [ttk::combobox $f.esshost -values $::esshosts -width 16]
+    bind $widgets(esshost) <<ComboboxSelected>> [list open_connection %W]
+    pack $widgets(esshost) -side left -padx 4 -pady 3
+    pack [button $f.refresh -bd 0 -image refreshicon -command refresh_esshosts] -side left -padx 4
+    pack $f -side top -pady 2
+    pack .server
     
-    labelframe .control -text ESS
+    labelframe .control -text "ESS Control"
     set f [frame .control.buttons]
     ttk::button $f.go -text "Go" -command [list server_cmd ess USER_START]
     ttk::button $f.stop -text "Stop" -command [list server_cmd ess USER_STOP]
@@ -325,13 +337,51 @@ proc server_cmd { server cmd { add 0 } } {
 }
 
 
+proc find_esshosts {} {
+    global esshosts esshostinfo
+    set esshosts {}
+    array set esshostinfo {}
+    
+    set hosts [mdns::find dserv 200]
+    foreach hinfo $hosts {
+	lassign $hinfo host info
+	lappend esshosts $host
+	set esshostinfo($host) $info
+    }
+}
+
+proc refresh_esshosts {} {
+    find_esshosts
+    if { $::dserv_server != {} } {
+	if { [lsearch $::esshosts $::dserv_server] == -1 } {
+	    disconnect
+	}
+	$::widgets(esshost) configure -values $::esshosts
+	$::widgets(esshost) set $::dserv_server
+    }
+}
+
 set dir [file dirname [info script]]
 set iconfile [file join $dir  play.png]
 image create photo essicon -file $iconfile
+
+set refreshfile [file join $dir refresh_small.png]
+image create photo refreshicon -file $refreshfile
+
 wm title . "Experimental Control"
 wm iconphoto . -default essicon
 
+# hold onto host information
+set esshosts {}
+array set esshostinfo {}
+
+find_esshosts
 setup
+
+proc open_connection { w } {
+    if { $::dserv_server != "" } { disconnect }
+    connect [$w get]
+}
 
 proc connect { server } {
     set ::dserv_server $server
@@ -340,9 +390,13 @@ proc connect { server } {
 }
 
 proc disconnect {} {
+    global dserv_server
     disconnect_from_server
     server_close
+    set dserv_server {}
 }
 
-if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
-connect $server
+set dserv_server {}
+
+#if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
+#connect $server
