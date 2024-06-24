@@ -352,12 +352,13 @@ proc find_esshosts {} {
 
 proc refresh_esshosts {} {
     find_esshosts
+    $::widgets(esshost) configure -values $::esshosts
     if { $::dserv_server != {} } {
 	if { [lsearch $::esshosts $::dserv_server] == -1 } {
 	    disconnect
+	} else {
+	    $::widgets(esshost) set $::dserv_server
 	}
-	$::widgets(esshost) configure -values $::esshosts
-	$::widgets(esshost) set $::dserv_server
     }
 }
 
