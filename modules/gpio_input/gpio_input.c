@@ -23,7 +23,6 @@
 
 #ifdef __linux__
 #include <linux/gpio.h>
-#define GPIO_CHIP "/dev/gpiochip4"
 #include <sys/epoll.h>
 #include <pthread.h>
 #endif
@@ -321,7 +320,15 @@ int Dserv_gpio_input_Init(Tcl_Interp *interp)
    */
   int ret;
   struct gpiochip_info info;
-  g_gpioInfo.fd = open(GPIO_CHIP, O_RDONLY);
+
+  /* try /dev/gpiochip4, which is is the 40-pin header on rpi5 */
+  g_gpioInfo.fd = open("/dev/gpiochip4", O_RDONLY);
+
+  /* if that fails, try /dev/gpiochip0 which works on rpi1-rpi4 */
+  if (g_gpioInfo.fd < 0) {
+    g_gpioInfo.fd = open("/dev/gpiochip0", O_RDONLY);
+  }
+
   if (g_gpioInfo.fd >= 0) {
     ret = ioctl(g_gpioInfo.fd, GPIO_GET_CHIPINFO_IOCTL, &info);
     
