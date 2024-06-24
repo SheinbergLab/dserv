@@ -1,5 +1,6 @@
 [Unit]
 Description=Dataserver Service
+After=network-online.target
 
 [Service]
 Type=simple
@@ -11,4 +12,5 @@ KillMode=process
 
 [Install]
 WantedBy=multi-user.target
+Wants=network-online.target
 

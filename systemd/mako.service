@@ -1,6 +1,5 @@
 [Unit]
 Description=Dataserver Service
-Requires=dserv.service
 After=dserv.service
 
 [Service]
@@ -12,5 +11,5 @@ RestartSec=5
 TimeoutStopSec=2
 
 [Install]
-WantedBy=multi-user.target
+Requires=dserv.service
 
