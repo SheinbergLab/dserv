@@ -21,12 +21,14 @@ void *advertise_service_thread(void *data)
   if (gethostname(hostname_buffer, hostname_size) == 0)
     hostname = hostname_buffer;
 
-  service_mdns(hostname, "dserv", args->ds_port, args->ess_port);
+  service_mdns(hostname, "_dserv._tcp",
+	       args->ds_port,
+	       args->ess_port);
 
   return NULL;
 }
 
-int advertise_services(int ds_port, int ess_port)
+int advertise_services(int ds_port, int ess_port, const char *id_str)
 {
   pthread_t mdns_thread_id;
   thread_args_t *args;

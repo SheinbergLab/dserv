@@ -35,7 +35,7 @@ static char addrbuffer[64];
 static char entrybuffer[256];
 static char namebuffer[256];
 static char sendbuffer[1024];
-static mdns_record_txt_t txtbuffer[128];
+static mdns_record_txt_t txtbuffer[512];
 
 static struct sockaddr_in service_address_ipv4;
 static struct sockaddr_in6 service_address_ipv6;
@@ -264,7 +264,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// "<hostname>.<_service-name>._tcp.local."
 			mdns_record_t answer = service->record_ptr;
 
-			mdns_record_t additional[5] = {0};
+			mdns_record_t additional[6] = {0};
 			size_t additional_count = 0;
 
 			// SRV record mapping "<hostname>.<_service-name>._tcp.local." to
@@ -281,6 +281,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// one record with both key-value pair strings by the library
 			additional[additional_count++] = service->txt_record[0];
 			additional[additional_count++] = service->txt_record[1];
+			//			additional[additional_count++] = service->txt_record[2];
 
 			// Send the answer, unicast or multicast depending on flag in query
 			uint16_t unicast = (rclass & MDNS_UNICAST_RESPONSE);
@@ -310,7 +311,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// "<hostname>.<_service-name>._tcp.local."
 			mdns_record_t answer = service->record_srv;
 
-			mdns_record_t additional[5] = {0};
+			mdns_record_t additional[6] = {0};
 			size_t additional_count = 0;
 
 			// A/AAAA records mapping "<hostname>.local." to IPv4/IPv6 addresses
@@ -323,6 +324,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// one record with both key-value pair strings by the library
 			additional[additional_count++] = service->txt_record[0];
 			additional[additional_count++] = service->txt_record[1];
+			//			additional[additional_count++] = service->txt_record[2];
 
 			// Send the answer, unicast or multicast depending on flag in query
 			uint16_t unicast = (rclass & MDNS_UNICAST_RESPONSE);
@@ -350,7 +352,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// Answer A records mapping "<hostname>.local." to IPv4 address
 			mdns_record_t answer = service->record_a;
 
-			mdns_record_t additional[5] = {0};
+			mdns_record_t additional[6] = {0};
 			size_t additional_count = 0;
 
 			// AAAA record mapping "<hostname>.local." to IPv6 addresses
@@ -361,6 +363,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// one record with both key-value pair strings by the library
 			additional[additional_count++] = service->txt_record[0];
 			additional[additional_count++] = service->txt_record[1];
+			//			additional[additional_count++] = service->txt_record[2];
 
 			// Send the answer, unicast or multicast depending on flag in query
 			uint16_t unicast = (rclass & MDNS_UNICAST_RESPONSE);
@@ -387,7 +390,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// Answer AAAA records mapping "<hostname>.local." to IPv6 address
 			mdns_record_t answer = service->record_aaaa;
 
-			mdns_record_t additional[5] = {0};
+			mdns_record_t additional[6] = {0};
 			size_t additional_count = 0;
 
 			// A record mapping "<hostname>.local." to IPv4 addresses
@@ -398,6 +401,7 @@ service_callback(int sock, const struct sockaddr* from, size_t addrlen, mdns_ent
 			// one record with both key-value pair strings by the library
 			additional[additional_count++] = service->txt_record[0];
 			additional[additional_count++] = service->txt_record[1];
+			//			additional[additional_count++] = service->txt_record[2];
 
 			// Send the answer, unicast or multicast depending on flag in query
 			uint16_t unicast = (rclass & MDNS_UNICAST_RESPONSE);
@@ -855,6 +859,7 @@ send_mdns_query(mdns_query_t* query, size_t count) {
 
 // Provide a mDNS service, answering incoming DNS-SD and mDNS queries
 int service_mdns(const char* hostname, const char* service_name, int ds_port, int ess_port) {
+
   int service_port = 0;
   int sockets[32];
   int num_sockets = open_service_sockets(sockets, sizeof(sockets) / sizeof(sockets[0]));
@@ -965,11 +970,19 @@ int service_mdns(const char* hostname, const char* service_name, int ds_port, in
 					  .data.txt.value = {MDNS_STRING_CONST(ess_port_str)},
 					  .rclass = 0,
 					  .ttl = 0};
+#if 0
+  service.txt_record[2] = (mdns_record_t){.name = service.service_instance,
+					  .type = MDNS_RECORDTYPE_TXT,
+					  .data.txt.key = {MDNS_STRING_CONST("serverid")},
+					  .data.txt.value = {MDNS_STRING_CONST(server_id_str)},
+					  .rclass = 0,
+					  .ttl = 0};  
+#endif
   
   // Send an announcement on startup of service
   {
     //		printf("Sending announce\n");
-    mdns_record_t additional[5] = {0};
+    mdns_record_t additional[6] = {0};
     size_t additional_count = 0;
     additional[additional_count++] = service.record_srv;
     if (service.address_ipv4.sin_family == AF_INET)
@@ -978,6 +991,7 @@ int service_mdns(const char* hostname, const char* service_name, int ds_port, in
       additional[additional_count++] = service.record_aaaa;
     additional[additional_count++] = service.txt_record[0];
     additional[additional_count++] = service.txt_record[1];
+    //    additional[additional_count++] = service.txt_record[2];
     
     for (int isock = 0; isock < num_sockets; ++isock)
       mdns_announce_multicast(sockets[isock], buffer, capacity, service.record_ptr, 0, 0,
@@ -1015,7 +1029,7 @@ int service_mdns(const char* hostname, const char* service_name, int ds_port, in
   // Send a goodbye on end of service
   {
     //		printf("Sending goodbye\n");
-    mdns_record_t additional[5] = {0};
+    mdns_record_t additional[6] = {0};
     size_t additional_count = 0;
     additional[additional_count++] = service.record_srv;
     if (service.address_ipv4.sin_family == AF_INET)
@@ -1024,6 +1038,7 @@ int service_mdns(const char* hostname, const char* service_name, int ds_port, in
       additional[additional_count++] = service.record_aaaa;
     additional[additional_count++] = service.txt_record[0];
     additional[additional_count++] = service.txt_record[1];
+    //    additional[additional_count++] = service.txt_record[2];
     
     for (int isock = 0; isock < num_sockets; ++isock)
       mdns_goodbye_multicast(sockets[isock], buffer, capacity, service.record_ptr, 0, 0,

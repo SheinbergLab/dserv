@@ -342,7 +342,7 @@ proc find_esshosts {} {
     set esshosts {}
     array set esshostinfo {}
     
-    set hosts [mdns::find dserv 200]
+    set hosts [mdns::find _dserv._tcp 200]
     foreach hinfo $hosts {
 	lassign $hinfo host info
 	lappend esshosts $host
