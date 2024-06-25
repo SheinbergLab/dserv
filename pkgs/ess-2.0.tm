@@ -1169,13 +1169,27 @@ namespace eval ess {
 
     # These getters could be changed to not re-source perhaps
     proc get_systems { } {
-	return [find_systems]
+	set systems {}
+	foreach f [glob $ess::system_path/*] {
+	    if  { [file isdirectory $f] &&
+		  [file exists $f/[file tail $f].tcl] } {
+		lappend systems [file tail $f]
+	    }
+	}
+	return $systems
     }
 
-    proc get_protocols { sysname } {
-	return [find_protocols $sysname]
+    proc get_protocols { system } {
+	set protocols {}
+	foreach f [glob [file join $ess::system_path $system]/*] {
+	    if { [file isdirectory $f] &&
+		 [file exists $f/[file tail $f].tcl] } {
+		lappend protocols [file tail $f]
+	    }
+	}
+	return $protocols	
     }
-
+    
     proc get_variants { sysname protocol } {
 	return [find_variants $sysname $protocol]
     }

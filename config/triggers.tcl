@@ -47,10 +47,12 @@ proc update_events {} {
 	  }
 	}
 	18 { switch $sub {
-	      0 { dservSet qpcs/system [triggerData] }
-	      1 { dservSet qpcs/subject [triggerData] }
-	     }
-	     dservSet qpcs/state Stopped
+	    0 { dservSet qpcs/system [triggerData] }
+	    1 { dservSet qpcs/subject [triggerData] }
+	    2 { dservSet qpcs/protocol [lindex [split [triggerData] :] 1] }
+	    3 { dservSet qpcs/variant [lindex [split [triggerData] :] 2] }
+	}
+	    dservSet qpcs/state Stopped
 	}
 	19 {
 	    dservSet qpcs/obs_active 1

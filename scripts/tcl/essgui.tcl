@@ -16,7 +16,7 @@ set status(joystick_info) None
 
 
 proc process_data { ev args } {
-    global widgets status
+    global widgets status current
     
     set name [lindex $args 0]
     set val [lindex $args 4]
@@ -73,15 +73,18 @@ proc process_data { ev args } {
 	    set status(dio_b) [expr {$levels>>24}]
 	    update_dio_indicators
 	}
+
+	qpcs/system { set current(system) $val; update_system_combos $current(server) }
+	qpcs/variant { set current(variant) $val }
+	qpcs/protocol { set current(protocol) $val }
 	
 	qpcs/subject { set status(subject) $val }
-	qpcs/system { set status(name) $val }
 	qpcs/datafile { set status(datafile) $val }
     }
 }
 
 proc setup {} {
-    global status widgets esshosts
+    global status widgets esshosts current
 
     labelframe .server -text Server
     set f [frame .server.f]
@@ -93,6 +96,23 @@ proc setup {} {
     pack [button $f.refresh -bd 0 -image refreshicon -command refresh_esshosts] -side left -padx 4
     pack $f -side top -pady 2
     pack .server
+
+    labelframe .ess -text "System"
+    set f [frame .ess.f -width 70]
+    foreach s { system protocol variant } {
+	frame $f.$s
+	pack [label $f.$s.text -text "[string totitle $s]:" -width 10 -anchor e] \
+	    -side left -padx 2 -anchor e
+	set widgets(${s}_combo) [ttk::combobox $f.$s.$s  \
+				     -width 16 -textvariable current($s)]
+	bind $widgets(${s}_combo) <<ComboboxSelected>> [list set_${s} %W]
+	pack $widgets(${s}_combo) -side left -padx 4 -pady 3
+	pack [button $f.$s.refresh_${s} -bd 0 -image refreshicon -command refresh_${s}] -side left -padx 4
+	pack $f.$s
+    }
+    pack $f -side top -pady 2
+    pack .ess
+
     
     labelframe .control -text "ESS Control"
     set f [frame .control.buttons]
@@ -100,7 +120,9 @@ proc setup {} {
     ttk::button $f.stop -text "Stop" -command [list server_cmd ess USER_STOP]
     ttk::button $f.reset -text "Reset" -command [list server_cmd ess USER_RESET]
     pack $f.go $f.stop $f.reset -side left -expand true -fill x
-    
+    pack $f -side bottom -pady 2
+    pack .control
+
     set lf [frame .control.info]
     label $lf.statuslabel -text Status: -anchor e -width 8
     label $lf.statusvalue -textvariable status(state) -anchor w -width 22
@@ -110,10 +132,6 @@ proc setup {} {
     label $lf.subjlabel -text Subject: -anchor e -width 8
     label $lf.subjvalue -textvariable status(subject) -anchor w -width 22
     grid $lf.subjlabel $lf.subjvalue -padx 3 
-    
-    label $lf.syslabel -text System: -anchor e -width 8
-    label $lf.sysvalue -textvariable status(name) -anchor w -width 22
-    grid $lf.syslabel $lf.sysvalue -padx 3 
     
     label $lf.filelabel -text Filename: -anchor e -width 8
     label $lf.filename -textvariable status(datafile) \
@@ -210,7 +228,13 @@ proc initialize_vars { server } {
     set status(datafile) [lindex [qpcs::dsGet $server qpcs/datafile] 5]
 }
 
+proc update_vars { server } {
+    foreach v { system protocol variant } { qpcs::dsTouch $server qpcs/$v }
+}
+
 proc connect_to_server { server } {
+    global current
+    
     initialize_vars $server
     if { [qpcs::dsRegister $server] != 1 } {
 	error "Unable to register with $server"
@@ -218,7 +242,54 @@ proc connect_to_server { server } {
     qpcs::dsAddCallback process_data
     qpcs::dsAddMatch $server qpcs/*
     qpcs::dsAddMatch $server print
+
+    set current(server) $server
+    update_vars $server
+    
     set connected 1
+}
+
+proc ess_cmd { args } {
+    global current
+    set sock [socket $current(server) 2570]
+    fconfigure $sock -buffering line
+    puts $sock $args
+    set result [gets $sock]
+    close $sock
+    return $result
+}
+
+proc set_system { w } { ess_cmd ess::load_system [$w get] }
+proc set_protocol { w } {
+    global current
+    ess_cmd ess::load_system $current(system) [$w get]
+}
+
+proc set_variant { w } {
+    global current
+    ess_cmd ess::load_system $current(system) $current(protocol) [$w get]
+}
+
+proc update_system_combos { server } {
+    global current widgets
+    set result [ess_cmd ess::get_system_dict]
+    foreach v "system protocol variant" { set current(${v}_list) {} }
+    dict for { sys prot_var } $result {
+	lappend current(system_list) $sys
+	if { $prot_var != "" } {
+	    dict for { prot var } $prot_var {
+		lappend current(protocol_list) $prot
+		if { $var != "" } {
+		    foreach v $var {
+			lappend current(variant_list) $v
+		    }
+		}
+	    }
+	}
+    }
+    $widgets(system_combo) configure -values $current(system_list)
+    $widgets(protocol_combo) configure -values $current(protocol_list)
+    $widgets(variant_combo) configure -values $current(variant_list)
 }
 
 proc disconnect_from_server {} {
@@ -327,7 +398,7 @@ proc server_cmd { server cmd { add 0 } } {
 	global sock
 	if { $sock != {} } { puts $sock $cmd }
     } else {
-	set result [eval $cmd]
+	set result [namespace inscope :: eval $cmd]
 	.guiterm.output configure -state normal
 	.guiterm.output insert end $result
 	.guiterm.output insert end \n
@@ -375,6 +446,11 @@ wm iconphoto . -default essicon
 # hold onto host information
 set esshosts {}
 array set esshostinfo {}
+
+foreach s "system protocol variant" {
+    set current(${s}) {}
+    set current(${s}_list) {}
+}
 
 find_esshosts
 setup
