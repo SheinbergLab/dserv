@@ -24,7 +24,6 @@
 
 #ifdef __linux__
 #include <linux/gpio.h>
-#define GPIO_CHIP "/dev/gpiochip4"
 #include <pthread.h>
 #include <sys/timerfd.h>
 #endif
@@ -218,7 +217,14 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
 #ifdef __linux__
   int ret;
   struct gpiochip_info info;
-  g_juicerInfo.fd = open(GPIO_CHIP, O_RDONLY);
+  /* try /dev/gpiochip4, which is is the 40-pin header on rpi5 */
+  g_juicerInfo.fd = open("/dev/gpiochip4", O_RDONLY);
+
+  /* if that fails, try /dev/gpiochip0 which works on rpi1-rpi4 */
+  if (g_juicerInfo.fd < 0) {
+    g_juicerInfo.fd = open("/dev/gpiochip0", O_RDONLY);
+  }
+
   if (g_juicerInfo.fd >= 0) {
     ret = ioctl(g_juicerInfo.fd, GPIO_GET_CHIPINFO_IOCTL, &info);
     
