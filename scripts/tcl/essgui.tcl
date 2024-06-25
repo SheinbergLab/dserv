@@ -1,6 +1,8 @@
 package require Tk
 package require qpcs
 package require mdns
+package require dlsh
+package require tablelist
 
 set status(state) Stopped
 set status(eye_hor) 0
@@ -80,6 +82,7 @@ proc process_data { ev args } {
 	
 	qpcs/subject { set status(subject) $val }
 	qpcs/datafile { set status(datafile) $val }
+	stimdg { dg_fromString64 $val }
     }
 }
 
@@ -242,6 +245,7 @@ proc connect_to_server { server } {
     qpcs::dsAddCallback process_data
     qpcs::dsAddMatch $server qpcs/*
     qpcs::dsAddMatch $server print
+    qpcs::dsAddMatch $server stimdg
 
     set current(server) $server
     update_vars $server
@@ -477,3 +481,117 @@ set dserv_server {}
 
 #if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
 #connect $server
+
+#########
+# dgview
+#########
+
+if {[tk windowingsystem] eq "x11"} {
+    #
+    # Create the font TkDefaultFont if not yet present
+    #
+    catch {font create TkDefaultFont -family Helvetica -size 9}
+    
+    option add *DgView*Font                        TkDefaultFont
+    option add *DgView*selectBackground            #5294e2
+    option add *DgView*selectForeground            white
+}
+option add *DgView.tf.borderWidth                  1
+option add *DgView.tf.relief                       sunken
+option add *DgView.tf.tbl.borderWidth              0
+option add *DgView.tf.tbl.highlightThickness       0
+option add *DgView.tf.tbl.background               white
+option add *DgView.tf.tbl.stripeBackground         #f0f0f0
+option add *DgView.tf.tbl.setGrid                  yes
+option add *DgView.tf.tbl*Entry.background         white
+option add *DgView.bf.Button.width                 10
+
+proc dg_view { dg } {
+    #
+    # Create a toplevel widget of the class DgView
+    #
+    set top .dgView
+    for {set n 2} {[winfo exists $top]} {incr n} {
+        set top .dgView$n
+    }
+    toplevel $top -class DgView
+    wm title $top $dg
+    #
+    # Create a vertically scrolled tablelist widget with dynamic-width
+    # columns and interactive sort capability within the toplevel
+    #
+    set tf $top.tf
+    frame $tf
+    set tbl $tf.tbl
+    set vsb $tf.vsb
+    set hsb $tf.hsb
+
+    set colinfo {}
+    set maxrows 0
+
+    #
+    # Create column list and determine lengths
+    #
+    set colnames [dg_tclListnames $dg]
+    foreach c $colnames {
+	set colinfo "$colinfo 0 $c left"
+	set collen [dl_length $dg:$c]
+	if { $collen > $maxrows } { set maxrows $collen }
+    }
+
+    set ncols [llength $colnames]
+    set nrows $maxrows
+
+    tablelist::tablelist $tbl \
+        -columns $colinfo \
+        -xscrollcommand [list $hsb set] -yscrollcommand [list $vsb set] \
+	-setgrid no -width 0
+    if {[$tbl cget -selectborderwidth] == 0} {
+        $tbl configure -spacing 1
+    }
+
+    scrollbar $vsb -orient vertical -command [list $tbl yview]    
+    scrollbar $hsb -orient horizontal -command [list $tbl xview]
+
+    for { set i 0 } { $i < $ncols } { incr i } {
+	$tbl columnconfigure $i -maxwidth 18
+    }
+    
+
+    #
+    # Manage the widgets
+    #
+    grid $tbl -row 0 -rowspan 2 -column 0 -sticky news
+    if {[tk windowingsystem] eq "win32"} {
+        grid $vsb -row 0 -rowspan 2 -column 1 -sticky ns
+    } else {
+        grid [$tbl cornerpath] -row 0 -column 1 -sticky ew
+        grid $vsb              -row 1 -column 1 -sticky ns
+    }
+    grid $hsb -row 2 -column 0 -sticky ew
+    grid rowconfigure    $tf 1 -weight 1
+    grid columnconfigure $tf 0 -weight 1
+    pack $tf -side top -expand yes -fill both
+
+
+    #
+    # Fill the table
+    #
+    for { set i 0 } { $i < $nrows } { incr i } {
+	set row {}
+	for { set j 0 } { $j < $ncols } { incr j } {
+	    set c [lindex $colnames $j]
+	    set clen [dl_length $dg:$c]
+	    if { $i < $clen } {  
+		set entry [dl_tcllist $dg:$c:$i]
+	    } else {
+		set entry {}
+	    }
+	    if { $entry != {} } { lappend row $entry } { lappend row {} }
+	}
+	$tbl insert end $row
+    }
+
+    return $tbl
+}
+
