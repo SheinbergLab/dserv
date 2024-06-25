@@ -95,7 +95,7 @@ proc setup {} {
     pack $widgets(esshost) -side left -padx 4 -pady 3
     pack [button $f.refresh -bd 0 -image refreshicon -command refresh_esshosts] -side left -padx 4
     pack $f -side top -pady 2
-    pack .server
+    pack .server -fill x -expand true -anchor n
 
     labelframe .ess -text "System"
     set f [frame .ess.f -width 70]
@@ -111,7 +111,7 @@ proc setup {} {
 	pack $f.$s
     }
     pack $f -side top -pady 2
-    pack .ess
+    pack .ess -fill x -expand true -anchor n
 
     
     labelframe .control -text "ESS Control"
