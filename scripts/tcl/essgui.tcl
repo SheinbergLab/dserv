@@ -1,3 +1,12 @@
+#
+# essgui.tcl
+#
+
+
+if {[tk windowingsystem] eq "aqua"} {
+    lappend auto_path /usr/local/lib /usr/local/lib/tcltk
+}
+
 package require Tk
 package require qpcs
 package require mdns
@@ -485,26 +494,6 @@ set dserv_server {}
 #########
 # dgview
 #########
-
-if {[tk windowingsystem] eq "x11"} {
-    #
-    # Create the font TkDefaultFont if not yet present
-    #
-    catch {font create TkDefaultFont -family Helvetica -size 9}
-    
-    option add *DgView*Font                        TkDefaultFont
-    option add *DgView*selectBackground            #5294e2
-    option add *DgView*selectForeground            white
-}
-option add *DgView.tf.borderWidth                  1
-option add *DgView.tf.relief                       sunken
-option add *DgView.tf.tbl.borderWidth              0
-option add *DgView.tf.tbl.highlightThickness       0
-option add *DgView.tf.tbl.background               white
-option add *DgView.tf.tbl.stripeBackground         #f0f0f0
-option add *DgView.tf.tbl.setGrid                  yes
-option add *DgView.tf.tbl*Entry.background         white
-option add *DgView.bf.Button.width                 10
 
 proc dg_view { dg } {
     #
