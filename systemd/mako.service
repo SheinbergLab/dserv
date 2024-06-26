@@ -1,6 +1,7 @@
 [Unit]
 Description=Dataserver Service
 After=dserv.service
+Requires=dserv.service
 
 [Service]
 Type=simple
@@ -11,5 +12,4 @@ RestartSec=5
 TimeoutStopSec=2
 
 [Install]
-Requires=dserv.service
 
