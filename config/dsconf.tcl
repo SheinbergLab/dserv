@@ -58,7 +58,8 @@ foreach p $ports {
 
 proc connect_touchscreen {} {
     set screens [dict create \
-		     /dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00 {1024 600} ]
+		     /dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00 {1024 600} \
+                     /dev/input/by-id/usb-ILITEK_ILITEK-TP-event-if00 {1280 800} ]
     dict for { dev res } $screens { 
 	if [file exists $dev] {
 	    touchOpen $dev {*}$res
