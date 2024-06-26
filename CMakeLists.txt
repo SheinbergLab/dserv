@@ -41,3 +41,8 @@ else()
 endif()
 
 
+install(TARGETS dserv DESTINATION dserv)
+install(DIRECTORY config DESTINATION dserv)
+install(DIRECTORY pkgs DESTINATION dserv)
+install(DIRECTORY systems DESTINATION dserv)
+install(DIRECTORY scripts DESTINATION dserv)

@@ -107,3 +107,7 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
 
+install(TARGETS
+	ain juicer gpio_input gpio_output touch
+	rmt eventlog sound
+	DESTINATION dserv/modules)
