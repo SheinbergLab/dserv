@@ -130,18 +130,19 @@ int socket_write(int sock, char *message, int nbytes)
 /*****************************************************************************/
 int socket_read(int sock, char **message, int *nbytes)
 {
-	static char buf[4096];
-	int n;
-	if ((n = read(sock, buf, sizeof(buf))) < 0) {
-	  perror("reading stream socket");
-	  if (message) *message = NULL;
-	  if (nbytes) *nbytes = 0;
-	  return 0;
-	}
-
-	if (message) *message = buf;
-	if (nbytes) *nbytes = n;
-	return 1;
+  static char buf[16384];
+  memset(buf, 0, sizeof(buf));
+  int n;
+  if ((n = read(sock, buf, sizeof(buf))) < 0) {
+    perror("reading stream socket");
+    if (message) *message = NULL;
+    if (nbytes) *nbytes = 0;
+    return 0;
+  }
+  
+  if (message) *message = buf;
+  if (nbytes) *nbytes = n;
+  return 1;
 }
 
 /*****************************************************************************/
