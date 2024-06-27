@@ -10,11 +10,11 @@ set(CMAKE_BUILD_TYPE Release)
 find_library(LIBTCL NAMES "libtcl8.6.a")
 find_library(LIBJANSSON NAMES "libjansson.a")
 find_library(LIBZ z)
-SET(CMAKE_CXX_FLAGS_DEBUG "-g")
+#SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
 add_subdirectory(modules)
-
 add_subdirectory(processors)
+add_subdirectory(tools/essctrl)
 
 if (DSERV_HAVE_GPIO)
    add_compile_definitions(HAVE_GPIO=1)
