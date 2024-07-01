@@ -164,6 +164,10 @@ oo::class create System {
 	return $_params
     }
 
+    method get_param { p } {
+	return [dict get $_params $p]
+    }
+
     method set_default_params {} {
 	foreach var [dict keys $_default_params] \
 	    val [dict values $_default_params] {
@@ -175,12 +179,13 @@ oo::class create System {
 	set t [dict get $ess::param_types [string toupper $type]]
 	dict set _params $pname [list $val $t $ptype]
 	dict set _default_params $pname $val
-	my variable $pname
-	set $pname $val
+#	oo::objdefine [self] variable $pname
+	#	set $pname $val
+	my add_variable $pname $val
     }
 
-    method add_parameters {} {
-	dict for { var vals } $_params { variable $var [lindex $vals 0] }
+    method set_parameters {} {
+	dict for { var vals } $_params { set $var [lindex $vals 0] }
     }
 
     method add_method { name params script } {
@@ -189,6 +194,7 @@ oo::class create System {
     
     method add_variable { var { val {} } } {
 	my variable $var
+	oo::objdefine [self] variable $var
 	if { $val != {} } {
 	    set $var $val
 	}
@@ -483,6 +489,14 @@ namespace eval ess {
 	return $s
     }
 
+    proc clear_systems { name } {
+	foreach s [info class instances System] {
+	    if { [$s name] == $name } {
+		$s destroy
+	    }
+	}
+    }
+    
     proc find_system { name } {
 	foreach s [info class instances System] {
 	    if { [$s name] == $name } {
@@ -602,6 +616,17 @@ namespace eval ess {
 	variant_init $current(system) $current(protocol) $current(variant)
     }
 
+    proc set_system { system } {
+	variable current
+	catch unload_system
+	set s [find_system $system]
+	if { $s == "" } {
+		error "system $system not found"
+	}
+	$s init
+	set current(system) $system
+	set current(state_system) $s
+    }
     
     proc init {} {
     	dservRemoveAllMatches
@@ -723,7 +748,12 @@ namespace eval ess {
 	variable current
 	$current(state_system) get_params
     }
-    
+
+    proc get_param { p } {
+	variable current
+	$current(state_system) get_param $p
+    }
+
     proc set_param { param val } {
 	variable current
 	$current(state_system) set_param $param $val
@@ -1424,7 +1454,6 @@ proc JUICE { duration } { essJuice 0 $duration }
 proc EM_INFO {} {
     return "0 2 128"
 }
-
 
 
 
