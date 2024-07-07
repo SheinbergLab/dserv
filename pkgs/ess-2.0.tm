@@ -18,7 +18,8 @@ oo::class create System {
     variable _current_state
     variable _states
     variable _params
-    variable _default_params
+    variable _vars
+    variable _default_param_vals
     variable _state_ms
     variable _callbacks
     variable _evt_info
@@ -41,6 +42,7 @@ oo::class create System {
 	set _evt_subtype_ids $ess::evt_subtype_ids
 	set _evt_subtype_names $ess::evt_subtype_names
 	set _evt_ptype_ids $ess::evt_ptype_ids
+	set _vars {}
     }
 
     destructor { my deinit }
@@ -168,9 +170,9 @@ oo::class create System {
 	return [dict get $_params $p]
     }
 
-    method set_default_params {} {
-	foreach var [dict keys $_default_params] \
-	    val [dict values $_default_params] {
+    method set_default_param_vals {} {
+	foreach var [dict keys $_default_param_vals] \
+	    val [dict values $_default_param_vals] {
 		my set_param $var $val
 	}
     }
@@ -178,10 +180,10 @@ oo::class create System {
     method add_param { pname val type ptype } {
 	set t [dict get $ess::param_types [string toupper $type]]
 	dict set _params $pname [list $val $t $ptype]
-	dict set _default_params $pname $val
-#	oo::objdefine [self] variable $pname
-	#	set $pname $val
-	my add_variable $pname $val
+	dict set _default_param_vals $pname $val
+	my variable $pname
+	oo::objdefine [self] variable $pname
+	set $pname $val
     }
 
     method set_parameters {} {
@@ -193,8 +195,12 @@ oo::class create System {
     }
     
     method add_variable { var { val {} } } {
-	my variable $var
-	oo::objdefine [self] variable $var
+	set pos [lsearch $_vars $var]
+	if { $pos < 0 } {
+	    my variable $var
+	    lappend _vars $var
+	    oo::objdefine [self] variable $var
+	}
 	if { $val != {} } {
 	    set $var $val
 	}
@@ -223,6 +229,7 @@ oo::class create System {
     method start {} {
         if { $_status == "running" } return
 	set _status running
+	ess::evt_put SYSTEM_STATE RUNNING [now]	
 	if { [info exists _callbacks(start)] } {
 	    my $_callbacks(start)
 	}
@@ -241,6 +248,7 @@ oo::class create System {
 
     method stop {} {
 	set _status stopped
+	ess::evt_put SYSTEM_STATE STOPPED [now]	
 	if { [info exists _callbacks(quit)] } {
 	    my $_callbacks(quit)
 	}
@@ -249,6 +257,7 @@ oo::class create System {
     
     method end {} {
 	set _status stopped
+	ess::evt_put SYSTEM_STATE STOPPED [now]	
 	if { [info exists _callbacks(end)] } {
 	    my $_callbacks(end)
 	}
@@ -1328,6 +1337,7 @@ namespace eval ess {
     dict set evt_info TARGET    [list 33 {Target}               long $subtypes]
     dict set evt_info DISTRACTOR [list 34 {Distractor}          long $subtypes]
     dict set evt_info SOUND     [list 35 {Sound Event}          long $subtypes]
+    dict set evt_info CHOICES   [list 49 {Choices}              long $subtypes]
     
     set subtypes [dict create OUT 0 IN 1 REFIXATE 2]
     dict set evt_info FIXATE    [list 36 {Fixation}             long $subtypes]
