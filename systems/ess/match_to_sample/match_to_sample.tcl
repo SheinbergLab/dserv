@@ -88,6 +88,7 @@ namespace eval match_to_sample {
 	#
 	$sys add_action pre_sample {
 	    timerTick $sample_pre_time
+	    my presample
 	}
 	
 	$sys add_transition pre_sample {
@@ -282,6 +283,7 @@ namespace eval match_to_sample {
 	
 	$sys add_method endobs {} { incr obs_count }
 	
+	$sys add_method presample {} { print sample_on }
 	$sys add_method sample_on {} { print sample_on }
 	$sys add_method sample_off {} { print sample_off }
 	$sys add_method choices_on {} { print choices_on }

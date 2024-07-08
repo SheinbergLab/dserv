@@ -208,6 +208,10 @@ namespace eval match_to_sample::colormatch {
 	    return [expr [dl_sum stimdg:remaining]==0]
 	}
 
+	$s add_method presample {} {
+	    soundPlay 1 70 200
+	}
+
 	$s add_method sample_on {} {
 	    set touch_count 0
 	    set touch_last 0
@@ -226,6 +230,20 @@ namespace eval match_to_sample::colormatch {
 	    rmtSend "!choices_off"
 	}
 
+	$s add_method reward {} {
+	    soundPlay 3 70 70
+	    juicerJuice 0 $juice_time
+	    ess::evt_put REWARD DURATION [now] $juice_time
+	}
+
+	$s add_method noreward {} {
+
+	}
+
+	$s add_method finale {} {
+	    soundPlay 6 60 400
+	}
+	
 	$s add_method responded {} {
 	    if { $use_buttons && $buttons_changed } {
 		return 1
