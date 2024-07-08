@@ -2,7 +2,7 @@ puts "initializing dataserver"
 
 set dspath [file dir [info nameofexecutable]]
 if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
-    set env(ESS_SYSTEM_PATH) [file join $dspath systems/incage2]
+    set env(ESS_SYSTEM_PATH) [file join $dspath systems/ess]
 }
 
 tcl::tm::add $dspath/pkgs

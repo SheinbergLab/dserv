@@ -145,7 +145,7 @@ proc server_close {} {
 
 proc update_button { side state } {
     set mappings "left 24 right 25"
-    qpcs::dsSet $::server rpio/levels/[dict get $mappings $side] $state
+    qpcs::dsSet $::server gpio/input/[dict get $mappings $side] $state
 }
 
 set dir [file dirname [info script]]

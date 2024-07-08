@@ -12,6 +12,8 @@ catch { Variant destroy }
 #
 oo::class create System {
     variable _systemname
+    variable _protocolname
+    variable _variantname
     variable _status
     variable _start_state
     variable _end_state
@@ -29,9 +31,12 @@ oo::class create System {
     variable _evt_subtype_names
     variable _evt_ptype_ids
     variable _state_time
-
+    variable _variants
+    
     constructor { name } {
         set _systemname $name
+	set _protocolname {}
+	set _variantname {}
         set _status stopped
 	set _start_state {}
 	set _end_state {}
@@ -43,12 +48,42 @@ oo::class create System {
 	set _evt_subtype_names $ess::evt_subtype_names
 	set _evt_ptype_ids $ess::evt_ptype_ids
 	set _vars {}
+	set _variants {}
     }
 
     destructor { my deinit }
     
     method name {} {
 	return $_systemname
+    }
+
+    method set_protocol { p } { set _protocolname $p }
+    method get_protocol { } { return $_protocolname }
+
+    method set_variant { v } { set _variantname $v }
+    method get_variant { } { return $_variantname }
+
+    method add_variant { name method params } {
+	dict set _variants $name [list $method $params]
+    }
+    
+    method configure_stim {} {
+	# source this protocol's stim functions
+	set stimfile [file join [set ess::system_path] \
+			  $_systemname $_protocolname ${_protocolname}_stim.tcl]
+	if { ![catch {set f [open $stimfile]}] } {
+	    set script [read $f]
+	    close $f
+	    rmtSend "set dservhost [dservGet qpcs/ipaddr]"
+	    rmtSend $script
+	}
+    }
+    
+    method update_stimdg {} {
+	if { [dg_exists stimdg] } {
+	    dg_toString stimdg s
+	    dservSetData stimdg [now] 6 $s
+	}	
     }
     
     method set_init_callback { cb } {
@@ -61,6 +96,16 @@ oo::class create System {
         set _callbacks(deinit) deinit_cb
     }
 
+    method set_protocol_init_callback { cb } {
+	oo::objdefine [self] method protocol_init_cb {} $cb
+	set _callbacks(protocol_init) protocol_init_cb
+    }
+		     
+    method set_protocol_deinit_callback { cb } {
+	oo::objdefine [self] method protocol_deinit_cb {} $cb
+        set _callbacks(protocol_deinit) protocol_deinit_cb
+    }
+    
     method set_start_callback { cb } {
 	oo::objdefine [self] method start_cb {} $cb
 	set _callbacks(start) start_cb
@@ -226,6 +271,18 @@ oo::class create System {
         }
     }
 
+    method protocol_init {} {
+	if { [info exists _callbacks(protocol_init)] } {
+	    my $_callbacks(protocol_init)
+        }
+    }
+
+    method protocol_deinit {} {
+	if { [info exists _callbacks(protocol_deinit)] } {
+	    my $_callbacks(protocol_deinit)
+        }
+    }
+
     method start {} {
         if { $_status == "running" } return
 	set _status running
@@ -341,11 +398,11 @@ oo::class create Protocol {
 	if { ![catch {set f [open $stimfile]}] } {
 	    set script [read $f]
 	    close $f
-	    rmtSend "set qnxhost [dservGet qpcs/ipaddr]"
+	    rmtSend "set dservhost [dservGet qpcs/ipaddr]"
 	    rmtSend $script
 	}
     }
-    
+
     method set_init_callback { cb } {
 	oo::objdefine [self] method init_cb {} $cb
 	set _callbacks(init) init_cb
@@ -419,6 +476,7 @@ oo::class create Variant {
     method name {} { return $_variantname }
     method protocolname {} { return $_protocolname }
     method systemname {} { return $_systemname }
+
     method update_stimdg {} {
 	if { [dg_exists stimdg] } {
 	    dg_toString stimdg s
@@ -515,6 +573,7 @@ namespace eval ess {
     }
 
     proc find_protocol { systemname name } {
+	
 	foreach p [info class instances Protocol] {
 	    if { [$p systemname] == $systemname &&
 		 [$p name] == $name } {
@@ -562,20 +621,6 @@ namespace eval ess {
     proc unload_system {} {
 	variable current
 	set sname $current(system)
-	set pname $current(protocol)
-	set vname $current(variant)
-	if { $current(open_variant) } {
-	    set v [find_variant $sname $pname $vname]
-	    $v deinit
-	    set current(open_variant) 0
-	    set current(variant) {}
-	}
-	if { $current(open_protocol) } {
-	    set p [find_protocol $sname $pname]
-	    $p deinit
-	    set current(open_protocol) 0
-	    set current(protocol) {}
-	}
 	if { $current(open_system) } {
 	    set s [find_system $sname]
 	    $s deinit
@@ -599,6 +644,10 @@ namespace eval ess {
 	    set current(system) $system
 	}
 
+	[set current(system)]::create
+	
+	system_init $current(system)
+
 	set protocols [find_protocols $current(system)]
 	if { $protocol == "" } {
 	    set current(protocol) [lindex $protocols 0]
@@ -608,6 +657,8 @@ namespace eval ess {
 	    }
 	    set current(protocol) $protocol
 	}
+
+	protocol_init $current(system) $current(protocol)
 
 	set variants [find_variants $current(system) $current(protocol)]
 	if { $variant == "" } {
@@ -620,8 +671,6 @@ namespace eval ess {
 	    set current(variant) $variant
 	}
 
-	system_init $current(system)
-	protocol_init $current(system) $current(protocol)
 	variant_init $current(system) $current(protocol) $current(variant)
     }
 
@@ -1152,9 +1201,16 @@ namespace eval ess {
 
     proc protocol_init { system protocol } {
 	variable current
+	set s [ess::find_system $system]
 
 	# initialize the protocol
-	[ess::find_protocol $system $protocol] init
+	ess::${system}::${protocol}::protocol_init $current(state_system)
+
+	# add this protocol's variants
+	set ${s}::_variants [set ${system}::${protocol}::variants]
+
+	${s} protocol_init
+	
 	ess::evt_put ID PROTOCOL [now] $current(system):$protocol
 	set current(protocol) $protocol
 	set current(open_protocol) 1
@@ -1162,8 +1218,14 @@ namespace eval ess {
         
     proc variant_init { system protocol variant } {
 	variable current
+	set s [ess::find_system $system]
 
-	[ess::find_variant $system $protocol $variant] init
+	# get loader info for this variant
+	set vinfo [dict get [set ${s}::_variants] $current(variant)]
+	$s [lindex $vinfo 0] [lindex $vinfo 1]
+
+	# update resulting stimdg
+	$s update_stimdg
 	
 	ess::evt_put ID VARIANT [now] $system:$protocol:$variant
 	set current(variant) $variant
@@ -1195,15 +1257,10 @@ namespace eval ess {
 	return $protocols	
     }
 
-    proc find_variants { systemname protocolname } {
-	set variants {}
-	foreach v [info class instances Variant] {
-	    if { [$v systemname] == $systemname &&
-		 [$v protocolname] == $protocolname } {
-		lappend variants [$v name]
-	    }
-	}
-	return $variants
+    proc find_variants { s p } {
+	set f [file join $ess::system_path $s ${p} ${p}_variants.tcl]
+	source $f
+	return [dict keys [set ::ess::${s}::${p}::variants]]
     }
 
     # These getters could be changed to not re-source perhaps

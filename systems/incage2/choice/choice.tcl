@@ -129,7 +129,7 @@ $choice add_transition inter_obs {
 # start_obs
 #
 $choice add_action start_obs {
-    set buttons_changes 0
+    set buttons_changed 0
     ess::begin_obs $n_obs $obs_count
 }	
 $choice add_transition start_obs {
