@@ -658,8 +658,6 @@ namespace eval ess {
 	    set current(protocol) $protocol
 	}
 
-	protocol_init $current(system) $current(protocol)
-
 	set variants [find_variants $current(system) $current(protocol)]
 	if { $variant == "" } {
 	    set current(variant) [lindex $variants 0]
@@ -671,6 +669,7 @@ namespace eval ess {
 	    set current(variant) $variant
 	}
 
+	protocol_init $current(system) $current(protocol)
 	variant_init $current(system) $current(protocol) $current(variant)
     }
 
@@ -1222,7 +1221,7 @@ namespace eval ess {
 
 	# get loader info for this variant
 	set vinfo [dict get [set ${s}::_variants] $current(variant)]
-	$s [lindex $vinfo 0] [lindex $vinfo 1]
+	$s [lindex $vinfo 0] {*}[lindex $vinfo 1]
 
 	# update resulting stimdg
 	$s update_stimdg

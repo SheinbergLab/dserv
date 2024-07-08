@@ -258,6 +258,8 @@ proc connect_to_server { server } {
 
     set current(server) $server
     update_vars $server
+
+    ess_cmd ess::load_system
     
     set connected 1
 }
