@@ -162,8 +162,8 @@ void Timer::arm_ms(int start_ms, int interval_ms, int loop)
     dispatch_suspend(timer);
     suspend_count++;
   }
-  dispatch_time_t start = dispatch_time(DISPATCH_TIME_NOW, start_ms*1000000);
-  dispatch_source_set_timer(timer, start, interval_ms*1000000, 0);
+  dispatch_time_t start = dispatch_time(DISPATCH_TIME_NOW, (uint64_t) start_ms*1000000);
+  dispatch_source_set_timer(timer, start, (uint64_t) interval_ms*1000000, 0);
   if (!interval_ms) nrepeats = 0;
   else nrepeats = loop;
   expired = true;
