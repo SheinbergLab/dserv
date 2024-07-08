@@ -17,7 +17,7 @@ namespace eval match_to_sample {
 	######################################################################
 	
 	$sys add_param n_rep             100      variable int
-	$sys add_param start_delay      1000      time int
+	$sys add_param start_delay         0      time int
 	$sys add_param interblock_time  1000      time int
 	$sys add_param sample_pre_time   250      time int
 	$sys add_param sample_time      1000      time int
@@ -47,11 +47,11 @@ namespace eval match_to_sample {
 	#
 	$sys add_action start {
 	    ess::evt_put SYSTEM_STATE RUNNING [now]	
-	    timerTick $start_delay
+	    if { $start_delay } { timerTick $start_delay }
 	    
 	}
 	$sys add_transition start {
-	    if { [timerExpired] } { return inter_obs }
+	    if { !$start_delay || [timerExpired] } { return inter_obs }
 	}
 	
 	#
@@ -98,9 +98,9 @@ namespace eval match_to_sample {
 	# sample_on
 	#
 	$sys add_action sample_on {
+	    my sample_on
 	    ess::evt_put SAMPLE ON [now] 
 	    ess::evt_put STIMTYPE STIMID [now] $stimtype	
-	    my sample_on
 	    timerTick $sample_time
 	}
 	
@@ -112,8 +112,8 @@ namespace eval match_to_sample {
 	# sample_off
 	#
 	$sys add_action sample_off {
-	    ess::evt_put SAMPLE OFF [now] 
 	    my sample_off
+	    ess::evt_put SAMPLE OFF [now] 
 	    timerTick $delay_time
 	}
 	

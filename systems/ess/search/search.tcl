@@ -30,7 +30,7 @@ namespace eval search {
 	$sys add_variable obs_count          0
 	$sys add_variable cur_id             0
 	
-	$sys add_variable start_delay        2000
+	$sys add_variable start_delay        0
 	$sys add_variable stimtype           0
 
 	$sys add_variable response           0
@@ -47,11 +47,11 @@ namespace eval search {
 	#
 	$sys add_action start {
 	    ess::evt_put SYSTEM_STATE RUNNING [now]	
-	    timerTick $start_delay
+	    if { $start_delay } { timerTick $start_delay }
 	}
 	
 	$sys add_transition start {
-	    if { [timerExpired] } { return inter_obs }
+	    if { !$start_delay || [timerExpired] } { return inter_obs }
 	}
 	
 	#
