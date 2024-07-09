@@ -4,8 +4,6 @@ package require dlsh
 package provide ess 2.0
 
 catch { System destroy }
-catch { Protocol destroy }
-catch { Variant destroy }
 
 #
 # System class
@@ -363,162 +361,6 @@ oo::class create System {
 }
 
 #
-# Protocol class
-#
-oo::class create Protocol {
-    variable _system
-    variable _systemname
-    variable _protocolname
-    variable _callbacks
-
-    constructor { systemname protocolname } {
-        set _systemname $systemname
-        set _protocolname $protocolname
-	set _system [ess::find_system $systemname]
-    }
-
-    destructor {}
-    
-    method name {} {
-	return $_protocolname
-    }
-
-    method systemname {} {
-	return $_systemname
-    }
-
-    method system {} {
-	return $_system
-    }
-
-    method configure_stim {} {
-	# source this protocol's stim functions
-	set stimfile [file join [set ess::system_path] \
-			  $_systemname $_protocolname ${_protocolname}_stim.tcl]
-	if { ![catch {set f [open $stimfile]}] } {
-	    set script [read $f]
-	    close $f
-	    rmtSend "set dservhost [dservGet qpcs/ipaddr]"
-	    rmtSend $script
-	}
-    }
-
-    method set_init_callback { cb } {
-	oo::objdefine [self] method init_cb {} $cb
-	set _callbacks(init) init_cb
-    }
-		     
-    method set_deinit_callback { cb } {
-	oo::objdefine [self] method deinit_cb {} $cb
-        set _callbacks(deinit) deinit_cb
-    }
-
-
-    method add_method { name params script } {
-	oo::objdefine [self] method $name $params $script
-    }
-    
-    method add_variable { var { val {} } } {
-	my variable $var
-	if { $val != {} } {
-	    set $var $val
-	}
-    }
-
-    method get_variable { var } {
-	return [set [self namespace]::$var]
-    }
-
-    method set_variable { var val } {
-	return [set [self namespace]::$var $val]
-    }
-
-    method init {} {
-	# upload protocol_stim.tcl to stim
-	my configure_stim
-	if { [info exists _callbacks(init)] } {
-	    my $_callbacks(init)
-        }
-    }
-
-    method deinit {} {
-	if { [info exists _callbacks(deinit)] } {
-	    catch { namespace eval [self] $_callbacks(deinit) } err
-        }
-    }
-}
-
-#
-# Variant class
-#
-oo::class create Variant {
-    variable _system
-    variable _systemname
-    variable _protocol
-    variable _protocolname
-    variable _variantname
-    variable _loadproc
-    variable _loaddict
-    variable _callbacks
-    
-    constructor { systemname protocolname variantname } {
-        set _systemname $systemname
-	set _system [ess::find_system $systemname]
-        set _protocolname $protocolname
-	set _protocol [ess::find_protocol $systemname $protocolname]
-	set _variantname $variantname
-	set _loadproc {}
-	set _loaddict {}
-    }
-
-    destructor {}
-
-    method name {} { return $_variantname }
-    method protocolname {} { return $_protocolname }
-    method systemname {} { return $_systemname }
-
-    method update_stimdg {} {
-	if { [dg_exists stimdg] } {
-	    dg_toString stimdg s
-	    dservSetData stimdg [now] 6 $s
-	}	
-    }
-
-    method set_loader { loadproc } { set _loadproc $loadproc }
-    method set_loader_dict { loaddict } { set _loaddict $loaddict }
-
-    method set_init_callback { cb } {
-	oo::objdefine [self] method init_cb {} $cb
-	set _callbacks(init) init_cb
-    }
-		     
-    method set_deinit_callback { cb } {
-	oo::objdefine [self] method deinit_cb {} $cb
-        set _callbacks(deinit) deinit_cb
-    }
-    
-    method init {} {
-	if { [info exists _callbacks(init)] } {
-	    catch { namespace eval $_protocol $_callbacks(init) } err
-        }
-
-	# run the loader function to setup trials
-	if { $_loadproc != {} } {
-	    $_protocol $_loadproc $_loaddict
-	}
-	my update_stimdg
-    }
-
-    method deinit {} {
-	if { [info exists _callbacks(deinit)] } {
-	    catch { namespace eval $_protocol $_callbacks(deinit) } err
-        }
-    }
-}
-
-
-
-#
 # ess namespace
 #
 namespace eval ess {
@@ -570,52 +412,6 @@ namespace eval ess {
 		return $s
 	    }
 	}
-    }
-
-    proc find_protocol { systemname name } {
-	
-	foreach p [info class instances Protocol] {
-	    if { [$p systemname] == $systemname &&
-		 [$p name] == $name } {
-		return $p
-	    }
-	}
-    }
-
-    proc find_variant { systemname protocolname name } {
-	foreach v [info class instances Variant] {
-	    if { [$v systemname] == $systemname &&
-		 [$v protocolname] == $protocolname &&
-		 [$v name] == $name } {
-		return $v
-	    }
-	}
-    }
-    
-    proc create_protocol { systemname protocolname } {
-	foreach p [info class instances Protocol] {
-	    if { [$p name] == $protocolname &&
-		 [$p systemname] == $systemname } {
-		$p destroy
-	    }
-	}
-	set p [Protocol new $systemname $protocolname]
-	return $p
-    }
-
-    proc create_variant { systemname protocolname variantname vproc vdict } {
-	foreach v [info class instances Variant] {
-	    if { [$v name] == $variantname &&
-		 [$v systemname] == $systemname &&
-		 [$v protocolname] == $protocolname } {
-		$v destroy
-	    }
-	}
-	set v [Variant new $systemname $protocolname $variantname]
-	$v set_loader $vproc
-	$v set_loader_dict $vdict
-	
-	return $v
     }
 
     proc unload_system {} {
@@ -1015,6 +811,88 @@ namespace eval ess {
     proc em_eye_in_region { win } {
 	variable em_windows
 	return [expr {($em_windows(states) & (1<<$win)) != 0}]
+    }
+}
+
+namespace eval ess {
+    variable touch_windows
+    set touch_windows(processor) "touch_windows"
+    set touch_windows(dpoint) "proc/touch_windows"
+
+    proc touch_update_setting { win } {
+	ainSetIndexedParam $win settings 0
+    }
+
+    proc touch_window_process { dpoint } {
+	variable touch_windows
+	lassign [dpointGet $dpoint] \
+	    touch_windows(changes) touch_windows(states) \
+	    touch_windows(hpos) touch_windows(vpos)
+	set touch_windows(timestamp) [dpointTimestamp $dpoint]
+	do_update
+    }
+    
+    proc touch_init {} {
+	variable touch_windows
+	ainSetProcessor $touch_windows(processor)
+	ainSetParam dpoint $touch_windows(dpoint)
+	dservAddExactMatch $touch_windows(dpoint)/status
+	dpointSetScript $touch_windows(dpoint)/status \
+	    [list ess::touch_window_process \
+		 $touch_windows(dpoint)/status]
+	for { set win 0 } { $win < 8 } { incr win } {
+	    ainSetIndexedParam $win active 0
+	}
+	set touch_windows(states) 0
+
+	variable touch_win_width 1024
+	variable touch_win_height 600
+    }
+
+    proc touch_check_state { win } {
+	variable touch_windows
+	set state [ainGetIndexedParam $win state]
+	if { $state } {
+	    set touch_windows(states) [expr $touch_windows(states) | (1<<$win)]
+	} else {
+	    set touch_windows(states) [expr $touch_windows(states) & ~(1<<$win)]
+	}
+	return $state
+    }
+    
+    proc touch_region_on { win } {
+	ainSetIndexedParam $win active 1
+	touch_check_state $win
+	touch_update_setting $win
+    }
+
+    proc touch_region_off { win } {
+	ainSetIndexedParam $win active 0
+	touch_check_state $win
+	touch_update_setting $win
+    }
+
+    proc touch_region_set { win type center_x center_y
+			 plusminus_x plusminus_y } {
+	ainSetIndexedParams $win type $type \
+	    center_x $center_x center_y $center_y \
+	    plusminus_x $plusminus_x plusminus_y $plusminus_y
+	touch_check_state $win
+	touch_update_setting $win
+    }
+
+    proc touch_fixwin_set { win cx cy r { type 1 } } {
+	## FIX THIS...
+	set x [expr {int($cx*$ess::em_scale_h)+2048}]
+	set y [expr {-1*int($cy*$ess::em_scale_v)+2048}]
+	set pm_x [expr {$r*$ess::em_scale_h}]
+	set pm_y [expr {$r*$ess::em_scale_v}]
+	touch_region_set $win 1 $x $y $pm_x $pm_y
+    }
+
+    proc touch_in_region { win } {
+	variable touch_windows
+	return [expr {($touch_windows(states) & (1<<$win)) != 0}]
     }
 }
 
