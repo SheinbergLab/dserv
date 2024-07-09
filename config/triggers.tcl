@@ -26,6 +26,10 @@ proc update_ain_window_settings {} {
     dservSet qpcs/em_region_setting [triggerData]
 }
 
+proc update_touch_window_settings {} {
+    dservSet qpcs/touch_region_setting [triggerData]
+}
+
 proc update_events {} {
 
     set einfo [split [triggerName] :]
@@ -69,6 +73,10 @@ proc update_ain_window_status {} {
     dservSet qpcs/em_region_status [triggerData]
 }
 
+proc update_touch_window_status {} {
+    dservSet qpcs/touch_region_status [triggerData]
+}
+
 proc init_vars { } {
     dservSet qpcs/time [now]
     dservSet qpcs/dio "0 0"
@@ -99,9 +107,15 @@ triggerAdd pca9538/vals              1  update_joystick
 triggerAdd ain/vals                  20 update_ain
 triggerAdd ain/proc/windows/status   1  update_ain_window_status
 triggerAdd ain/proc/windows/settings 1  update_ain_window_settings
+triggerAdd proc/touch_windows/status   1  update_touch_window_status
+triggerAdd proc/touch_windows/settings 1  update_touch_window_settings
 triggerAdd eventlog/events           1  update_events
 
 # add windows processor for eye movements
 set path [file dir [info nameofexecutable]]
 processLoad [file join $path processors windows[info sharedlibextension]] windows
 processAttach windows ain/vals windows
+
+# add touch_windows processor for touch regions
+processLoad [file join $path processors touch_windows[info sharedlibextension]] touch_windows
+processAttach touch_windows mtouch/touch touch_windows
