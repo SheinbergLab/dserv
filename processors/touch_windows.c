@@ -254,7 +254,9 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     return DPOINT_PROCESS_IGNORE;
 
   char buf[64];
-  strncpy(buf, pinfo->input_dpoint->data.buf, pinfo->input_dpoint->data.len);
+  strncpy(buf,
+	  (const char *) pinfo->input_dpoint->data.buf,
+	  pinfo->input_dpoint->data.len);
   if (sscanf(buf, "%d %d %d %d", &dx, &dy, &x, &y) != 4)
     return DPOINT_PROCESS_IGNORE;
 
