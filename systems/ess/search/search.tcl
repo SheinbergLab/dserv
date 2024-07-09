@@ -40,18 +40,23 @@ namespace eval search {
 	#                            System States                           #
 	######################################################################
 	
-	$sys set_start start	
-	
+	$sys set_start start
+
 	#
 	# start
 	#
-	$sys add_action start {
-	    ess::evt_put SYSTEM_STATE RUNNING [now]	
-	    if { $start_delay } { timerTick $start_delay }
-	}
+	$sys add_state start {} { return start_delay }
 	
-	$sys add_transition start {
-	    if { !$start_delay || [timerExpired] } { return inter_obs }
+	#
+	# start_delay
+	#
+	$sys add_action start_delay {
+	    ess::evt_put SYSTEM_STATE RUNNING [now]
+	    timerTick $start_delay
+	    
+	}
+	$sys add_transition start_delay {
+	    if { [timerExpired] } { return inter_obs }
 	}
 	
 	#
