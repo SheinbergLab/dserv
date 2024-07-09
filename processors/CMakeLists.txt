@@ -11,6 +11,12 @@ include_directories(-I.. -I. -I ../src)
 add_library(${PROCESSOR} MODULE ${PROCESSOR}.c prmutil.c)
 set_target_properties(${PROCESSOR} PROPERTIES PREFIX "")
 
+set(PROCESSOR touch_windows)
+project(${PROCESSOR})
+include_directories(-I.. -I. -I ../src)
+add_library(${PROCESSOR} MODULE ${PROCESSOR}.c prmutil.c)
+set_target_properties(${PROCESSOR} PROPERTIES PREFIX "")
+
 set(PROCESSOR up_down_left_right)
 project(${PROCESSOR})
 include_directories(-I.. -I. -I ../src)
@@ -23,7 +29,7 @@ include_directories(-I.. -I. -I ../src)
 add_library(${PROCESSOR} MODULE ${PROCESSOR}.c prmutil.c)
 set_target_properties(${PROCESSOR} PROPERTIES PREFIX "")
 
-install(TARGETS windows in_out up_down_left_right DESTINATION dserv/processors)
+install(TARGETS touch_windows windows in_out up_down_left_right DESTINATION dserv/processors)
 
 
 
