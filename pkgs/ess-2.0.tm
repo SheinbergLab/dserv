@@ -820,7 +820,7 @@ namespace eval ess {
     set touch_windows(dpoint) "proc/touch_windows"
 
     proc touch_update_setting { win } {
-	ainSetIndexedParam $win settings 0
+	touchSetIndexedParam $win settings 0
     }
 
     proc touch_window_process { dpoint } {
@@ -834,14 +834,14 @@ namespace eval ess {
     
     proc touch_init {} {
 	variable touch_windows
-	ainSetProcessor $touch_windows(processor)
-	ainSetParam dpoint $touch_windows(dpoint)
+	touchSetProcessor $touch_windows(processor)
+	touchSetParam dpoint $touch_windows(dpoint)
 	dservAddExactMatch $touch_windows(dpoint)/status
 	dpointSetScript $touch_windows(dpoint)/status \
 	    [list ess::touch_window_process \
 		 $touch_windows(dpoint)/status]
 	for { set win 0 } { $win < 8 } { incr win } {
-	    ainSetIndexedParam $win active 0
+	    touchSetIndexedParam $win active 0
 	}
 	set touch_windows(states) 0
 
@@ -851,7 +851,7 @@ namespace eval ess {
 
     proc touch_check_state { win } {
 	variable touch_windows
-	set state [ainGetIndexedParam $win state]
+	set state [touchGetIndexedParam $win state]
 	if { $state } {
 	    set touch_windows(states) [expr $touch_windows(states) | (1<<$win)]
 	} else {
@@ -861,20 +861,20 @@ namespace eval ess {
     }
     
     proc touch_region_on { win } {
-	ainSetIndexedParam $win active 1
+	touchSetIndexedParam $win active 1
 	touch_check_state $win
 	touch_update_setting $win
     }
 
     proc touch_region_off { win } {
-	ainSetIndexedParam $win active 0
+	touchSetIndexedParam $win active 0
 	touch_check_state $win
 	touch_update_setting $win
     }
 
     proc touch_region_set { win type center_x center_y
 			 plusminus_x plusminus_y } {
-	ainSetIndexedParams $win type $type \
+	touchSetIndexedParams $win type $type \
 	    center_x $center_x center_y $center_y \
 	    plusminus_x $plusminus_x plusminus_y $plusminus_y
 	touch_check_state $win

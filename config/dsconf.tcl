@@ -39,6 +39,22 @@ proc ainGetRegionInfo { reg } { processSetParam windows settings 1 $reg }
 proc ainGetParam { p } { processGetParam "windows" $p }
 proc ainGetIndexedParam { i p } {  processGetParam "windows" $p $i }
 
+proc touchSetProcessor { args } {}
+proc touchSetParam { p v } { processSetParam "touch_windows" $p $v }
+proc touchSetIndexedParam { i p v } {  processSetParam "touch_windows" $p $v $i }
+proc touchSetIndexedParams { win args } {
+    if { [expr {[llength $args]%2}] } {
+	error "wrong number of arguments"
+    }
+    for { set i 0 } { $i < [llength $args] } { incr i 2 } {
+	lassign [lrange $args $i [expr {$i+2}]] p v
+	processSetParam "touch_windows" $p $v $win
+    }
+}
+proc touchGetRegionInfo { reg } { processSetParam "touch_windows" settings 1 $reg }
+proc touchGetParam { p } { processGetParam "touch_windows" $p }
+proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
+
 gpioLineRequestInput 24
 gpioLineRequestInput 25
 gpioLineRequestOutput 26
