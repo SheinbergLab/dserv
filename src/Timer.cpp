@@ -105,7 +105,12 @@ void Timer::fire()
 {
   timer_settime(timerid, 0, &its, NULL);
   sigprocmask(SIG_UNBLOCK, &mask, NULL);
-  expired = false;
+  if (!its.it_value.tv_sec && !its.it_value.tv_nsec &&
+      !its.it_interval.tv_sec && !its.it_interval.tv_nsec) {
+    expired = true;
+  }
+  else
+    expired = false;
 }
 
 void Timer::reset()
