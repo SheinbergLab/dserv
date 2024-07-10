@@ -65,7 +65,7 @@ void *newProcessParams(void)
 
   // region updates
   p->status_dpoint.flags = 0;
-  p->status_dpoint.varname = strdup("ain/proc/windows/status");
+  p->status_dpoint.varname = strdup("proc/windows/status");
   p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
   p->status_dpoint.data.type = DSERV_SHORT;
   p->status_dpoint.data.len = 4*sizeof(uint16_t);
@@ -73,7 +73,7 @@ void *newProcessParams(void)
 
   // parameter updates
   p->settings_dpoint.flags = 0;
-  p->settings_dpoint.varname = strdup("ain/proc/windows/settings");
+  p->settings_dpoint.varname = strdup("proc/windows/settings");
   p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
   p->settings_dpoint.data.type = DSERV_SHORT;
   p->settings_dpoint.data.len = sizeof(window_settings_t);
