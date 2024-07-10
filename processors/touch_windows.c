@@ -237,20 +237,18 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 int onProcess(dpoint_process_info_t *pinfo, void *params)
 {
   process_params_t *p = (process_params_t *) params;
+    if (strcmp(pinfo->input_dpoint->varname, "mtouch/touchvals"))
+    return DPOINT_PROCESS_IGNORE;
+
+  if (pinfo->input_dpoint->data.type != DSERV_SHORT ||
+      pinfo->input_dpoint->data.len < 2*sizeof(uint16_t))
+    return DPOINT_PROCESS_IGNORE;
+
+  uint16_t *touch_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
+  
   int dx, dy, x, y;
-  if (strcmp(pinfo->input_dpoint->varname, "mtouch/touch"))
-    return DPOINT_PROCESS_IGNORE;
-
-  if (pinfo->input_dpoint->data.type != DSERV_STRING)
-    return DPOINT_PROCESS_IGNORE;
-
-  char buf[64];
-  strncpy(buf,
-	  (const char *) pinfo->input_dpoint->data.buf,
-	  pinfo->input_dpoint->data.len);
-  if (sscanf(buf, "%d %d %d %d", &dx, &dy, &x, &y) != 4)
-    return DPOINT_PROCESS_IGNORE;
-
+  x = touch_vals[0];
+  y = touch_vals[1];
   int i;
   int inside;
   int retval = DPOINT_PROCESS_IGNORE;
