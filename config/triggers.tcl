@@ -12,6 +12,11 @@ proc update_joystick {} {
     dservSet qpcs/joystick [expr {31-[triggerData]}]
 }
 
+proc update_touch {} {
+    set d [triggerData]
+    dservSet qpcs/touch "[lindex $d 2] [lindex $d 3]"
+}
+
 proc update_ain {} {
     set em_pnts_per_deg_x 200
     set em_pnts_per_deg_y 200
@@ -102,14 +107,19 @@ triggerRemoveAll
 
 init_vars
 
-triggerAdd rpio/vals                 1  update_dio
-triggerAdd pca9538/vals              1  update_joystick
-triggerAdd ain/vals                  20 update_ain
-triggerAdd ain/proc/windows/status   1  update_ain_window_status
-triggerAdd ain/proc/windows/settings 1  update_ain_window_settings
+triggerAdd rpio/vals                   1  update_dio
+triggerAdd pca9538/vals                1  update_joystick
+triggerAdd ain/vals                    20 update_ain
+triggerAdd mtouch/touch                1  update_touch
+triggerAdd proc/windows/status         1  update_ain_window_status
+triggerAdd proc/windows/settings       1  update_ain_window_settings
 triggerAdd proc/touch_windows/status   1  update_touch_window_status
 triggerAdd proc/touch_windows/settings 1  update_touch_window_settings
-triggerAdd eventlog/events           1  update_events
+triggerAdd eventlog/events             1  update_events
+
+# note that points associated with processes below (ain/vals, mtouch/touch)
+# must currently have a triggerAdd associated with them (done above)
+# (seems like a thread/mutex bug somewhere in Dataserver.cpp)
 
 # add windows processor for eye movements
 set path [file dir [info nameofexecutable]]
