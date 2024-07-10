@@ -26,8 +26,6 @@ typedef struct process_params_s {
   int center_y[NWIN];
   int plusminus_x[NWIN];
   int plusminus_y[NWIN];
-  int refractory_count[NWIN];
-  int refractory_countdown[NWIN];
   ds_datapoint_t status_dpoint;
   ds_datapoint_t settings_dpoint;
   uint16_t last_x, last_y;
@@ -41,9 +39,7 @@ typedef struct window_settings_s {
     center_x,
     center_y,
     plusminus_x,
-    plusminus_y,
-    refractory_count,
-    refractory_countdown;
+    plusminus_y;
 } window_settings_t;
 
 void *newProcessParams(void)
@@ -59,8 +55,6 @@ void *newProcessParams(void)
     p->center_y[i] = 320;
     p->plusminus_x[i] = 100;
     p->plusminus_y[i] = 100;
-    p->refractory_count[i] = 0;
-    p->refractory_countdown[i] = 0;
   }
 
   // region updates
@@ -138,7 +132,6 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
     { "center_y",    &p->center_y[win],    &dummyInt,   PU_INT },
     { "plusminus_x", &p->plusminus_x[win], &dummyInt,   PU_INT },
     { "plusminus_y", &p->plusminus_y[win], &dummyInt,   PU_INT },
-    { "refractory_count",  &p->refractory_count[win], &dummyInt,   PU_INT },
     { "", NULL, NULL, PU_NULL }
   };
 
@@ -173,6 +166,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 
   /* if the special dpoint param name is passed, changed the dpoint name */
   if (!strcmp(name, "dpoint")) {
+
     /* status */
     if (p->status_dpoint.varname) free(p->status_dpoint.varname);
     p->status_dpoint.varname = malloc(strlen(vals[0])+2+strlen(status_str));
@@ -184,6 +178,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     p->settings_dpoint.varname = malloc(strlen(vals[0])+2+strlen(params_str));
     sprintf(p->settings_dpoint.varname, "%s/%s", vals[0], params_str);
     p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
+
     return DPOINT_PROCESS_IGNORE;
   }
 
@@ -206,7 +201,6 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
       { "center_y",    &p->center_y[win],    &dummyInt,   PU_INT },
       { "plusminus_x", &p->plusminus_x[win], &dummyInt,   PU_INT },
       { "plusminus_y", &p->plusminus_y[win], &dummyInt,   PU_INT },
-      { "refractory_count",  &p->refractory_count[win], &dummyInt,   PU_INT },
       { "", NULL, NULL, PU_NULL }
     };
     
@@ -218,7 +212,6 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     if ( !was_active && p->active[win] ||
 	 was_active && !p->active[win] )  {
       p->state[win] = WINDOW_UNDEFINED;
-      p->refractory_countdown[win] = 0;
     }
   }
 
@@ -233,8 +226,6 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     settings.center_y = p->center_y[win];
     settings.plusminus_x = p->plusminus_x[win];
     settings.plusminus_y = p->plusminus_y[win];
-    settings.refractory_count = p->refractory_count[win];
-    settings.refractory_countdown = p->refractory_countdown[win];
 
     memcpy(p->settings_dpoint.data.buf, &settings, sizeof(window_settings_t));
     pinfo->dpoint = &p->settings_dpoint;
@@ -298,7 +289,6 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     if (inside) {
       if (p->state[i] != WINDOW_IN) {
 	p->state[i] = WINDOW_IN;
-	p->refractory_countdown[i] = 0;	
 
 	changes |= (1 << i);
 
@@ -308,17 +298,6 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     }
     else {
       if (p->state[i] != WINDOW_OUT) {
-	if (p->refractory_count[i]) {
-	  if (!p->refractory_countdown[i]) {
-	    p->refractory_countdown[i] = p->refractory_count[i];
-	    continue;
-	  }
-	  if (p->refractory_countdown[i] != 1) {
-	    p->refractory_countdown[i]--;
-	    continue;
-	  }
-	}
-	p->refractory_countdown[i] = 0;
 	p->state[i] = WINDOW_OUT;
 	changes |= (1 << i);
 	retval = DPOINT_PROCESS_DSERV;
@@ -326,13 +305,13 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
       states &= ~(1 << i);
     }
   }
-      
+
   if (retval == DPOINT_PROCESS_DSERV) {
     uint16_t *vals = (uint16_t *) p->status_dpoint.data.buf;
     vals[0] = changes;
     vals[1] = states;
-    vals[2] = y;
-    vals[3] = x;
+    vals[2] = x;
+    vals[3] = y;
     p->status_dpoint.timestamp = pinfo->input_dpoint->timestamp;
     pinfo->dpoint = &p->status_dpoint;
   }
