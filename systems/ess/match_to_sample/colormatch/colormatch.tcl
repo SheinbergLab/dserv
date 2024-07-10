@@ -52,7 +52,6 @@ namespace eval match_to_sample::colormatch {
 	    dservAddExactMatch mtouch/touch
 	    dpointSetScript mtouch/touch "[namespace current] update_touch"
 
-
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
 	    

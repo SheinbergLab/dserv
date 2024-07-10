@@ -51,20 +51,6 @@ namespace eval search::circles {
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
 	    
-	    rmtOpen $rmt_host
-	    set screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
-	    set screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
-	    set scale_x [rmtSend "screen_set ScaleX"]
-	    set scale_y [rmtSend "screen_set ScaleY"]
-	    set screen_w [expr [rmtSend "screen_set WinWidth"]/$scale_x]
-	    set screen_h [expr [rmtSend "screen_set WinHeight"]/$scale_y]
-	    if { $screen_halfx == "" } {
-		set screen_halfx 16.0
-		set screen_halfy 9.0
-		set screen_w 1024
-		set screen_h 600
-	    }
-	    
 	    soundReset
 	    soundSetVoice 81 0    0
 	    soundSetVoice 57 17   1
