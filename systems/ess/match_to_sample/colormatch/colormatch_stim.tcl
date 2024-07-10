@@ -29,7 +29,8 @@ set ::dsCmds(stimdg) readdg
 namespace inscope :: {
     proc onMousePress {} {
 	global dservhost
-	qpcs::dsSet $dservhost mtouch/touch "0 0 $::MouseXPos $::MouseYPos"
+	dl_local coords [dl_create short $::MouseXPos $::MouseYPos]
+	qpcs::dsSetData $dservhost mtouch/touchvals $coords
     }
 }
 
