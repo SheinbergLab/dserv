@@ -14,7 +14,7 @@ proc update_joystick {} {
 
 proc update_touch {} {
     set d [triggerData]
-    dservSet qpcs/touch "[lindex $d 2] [lindex $d 3]"
+    dservSet qpcs/touch "[lindex $d 0] [lindex $d 1]"
 }
 
 proc update_ain {} {
@@ -110,22 +110,19 @@ init_vars
 triggerAdd rpio/vals                   1  update_dio
 triggerAdd pca9538/vals                1  update_joystick
 triggerAdd ain/vals                    20 update_ain
-triggerAdd mtouch/touch                1  update_touch
+triggerAdd mtouch/touchvals            1  update_touch
 triggerAdd proc/windows/status         1  update_ain_window_status
 triggerAdd proc/windows/settings       1  update_ain_window_settings
 triggerAdd proc/touch_windows/status   1  update_touch_window_status
 triggerAdd proc/touch_windows/settings 1  update_touch_window_settings
 triggerAdd eventlog/events             1  update_events
 
-# note that points associated with processes below (ain/vals, mtouch/touch)
-# must currently have a triggerAdd associated with them (done above)
-# (seems like a thread/mutex bug somewhere in Dataserver.cpp)
+set path [file dir [info nameofexecutable]]
 
 # add windows processor for eye movements
-set path [file dir [info nameofexecutable]]
 processLoad [file join $path processors windows[info sharedlibextension]] windows
 processAttach windows ain/vals windows
 
 # add touch_windows processor for touch regions
 processLoad [file join $path processors touch_windows[info sharedlibextension]] touch_windows
-processAttach touch_windows mtouch/touch touch_windows
+processAttach touch_windows mtouch/touchvals touch_windows
