@@ -26,11 +26,6 @@ namespace eval search::circles {
 	$s add_param left_button       24       variable int
 	$s add_param right_button      25       variable int
 	
-	$s add_variable screen_w           
-	$s add_variable screen_h           
-	$s add_variable screen_halfx       
-	$s add_variable screen_halfy       
-	
 	$s add_variable targ_x             
 	$s add_variable targ_y             
 	$s add_variable targ_r             
@@ -53,8 +48,8 @@ namespace eval search::circles {
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
 	    
-	    # this uploads ${protocol}_stim.tcl to remote
-	    my configure_stim
+	    # open connection to rmt and upload ${protocol}_stim.tcl
+	    my configure_stim $rmt_host
 	    
 	    rmtOpen $rmt_host
 	    set screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]

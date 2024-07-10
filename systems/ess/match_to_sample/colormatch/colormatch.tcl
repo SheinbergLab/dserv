@@ -23,11 +23,6 @@ namespace eval match_to_sample::colormatch {
 	$s add_param left_button       24       variable int
 	$s add_param right_button      25       variable int
 	
-	$s add_variable screen_w           
-	$s add_variable screen_h           
-	$s add_variable screen_halfx       
-	$s add_variable screen_halfy       
-	
 	$s add_variable targ_x             
 	$s add_variable targ_y             
 	$s add_variable targ_r             
@@ -56,27 +51,14 @@ namespace eval match_to_sample::colormatch {
 	    
 	    dservAddExactMatch mtouch/touch
 	    dpointSetScript mtouch/touch "[namespace current] update_touch"
+
+
+	    # open connection to rmt and upload ${protocol}_stim.tcl
+	    my configure_stim $rmt_host
 	    
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
-	    
-	    # this uploads ${protocol}_stim.tcl to remote
-	    my configure_stim
-	    
-	    rmtOpen $rmt_host
-	    set screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
-	    set screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
-	    set scale_x [rmtSend "screen_set ScaleX"]
-	    set scale_y [rmtSend "screen_set ScaleY"]
-	    set screen_w [expr [rmtSend "screen_set WinWidth"]/$scale_x]
-	    set screen_h [expr [rmtSend "screen_set WinHeight"]/$scale_y]
-	    if { $screen_halfx == "" } {
-		set screen_halfx 16.0
-		set screen_halfy 9.0
-		set screen_w 1024
-		set screen_h 600
-	    }
-	    
+
 	    soundReset
 	    soundSetVoice 81 0    0
 	    soundSetVoice 57 17   1
@@ -258,7 +240,7 @@ namespace eval match_to_sample::colormatch {
 	}
 	
 	$s add_method setup_trials { color_choices } {
-	    
+
 	    # build our stimdg
 	    if { [dg_exists stimdg] } { dg_delete stimdg }
 	    set g [dg_create stimdg]

@@ -65,14 +65,34 @@ oo::class create System {
 	dict set _variants $name [list $method $params]
     }
     
-    method configure_stim {} {
+    method configure_stim { host } {
+
+	foreach var "screen_halfx screen_halfy screen_w screen_h" {
+	    oo::objdefine [self] variable $var
+	}
+	
+	rmtOpen $host
+	variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
+	variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
+	set scale_x [rmtSend "screen_set ScaleX"]
+	set scale_y [rmtSend "screen_set ScaleY"]
+	variable screen_w [expr [rmtSend "screen_set WinWidth"]/$scale_x]
+	variable screen_h [expr [rmtSend "screen_set WinHeight"]/$scale_y]
+	if { $screen_halfx == "" } {
+	    variable screen_halfx 16.0
+	    variable screen_halfy 9.0
+	    variable screen_w 1024
+	    variable screen_h 600
+	}
+	
+	rmtSend "set dservhost [dservGet qpcs/ipaddr]"
+	
 	# source this protocol's stim functions
 	set stimfile [file join [set ess::system_path] \
 			  $_systemname $_protocolname ${_protocolname}_stim.tcl]
 	if { ![catch {set f [open $stimfile]}] } {
 	    set script [read $f]
 	    close $f
-	    rmtSend "set dservhost [dservGet qpcs/ipaddr]"
 	    rmtSend $script
 	}
     }
@@ -994,7 +1014,7 @@ proc stringify {dict {schema {}} {key {}}} {
             }
         }
     }
-
+    
     switch -exact $type {
         "number" {
             return "$value"
@@ -1028,6 +1048,7 @@ proc stringify {dict {schema {}} {key {}}} {
     }
 }
 }
+
 namespace eval ess {
     variable current
     set current(state_system) {}
@@ -1101,7 +1122,7 @@ namespace eval ess {
 	set vinfo [dict get [set ${s}::_variants] $current(variant)]
 	$s [lindex $vinfo 0] {*}[lindex $vinfo 1]
 
-	# update resulting stimdg
+	# push new stimdg to dataserver
 	$s update_stimdg
 	
 	ess::evt_put ID VARIANT [now] $system:$protocol:$variant

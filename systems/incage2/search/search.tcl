@@ -41,11 +41,6 @@ $search add_variable cur_id             0
 $search add_variable start_delay        2000
 $search add_variable stimtype           0
 
-$search add_variable screen_w
-$search add_variable screen_h
-$search add_variable screen_halfx
-$search add_variable screen_halfy
-
 $search add_variable targ_x
 $search add_variable targ_y
 $search add_variable targ_r
