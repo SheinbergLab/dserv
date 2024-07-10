@@ -119,8 +119,13 @@ Dataserver::Dataserver(int argc, char **argv, int port)
     if (process_dpoint(dpoint, &out) == DPOINT_PROCESS_DSERV) {
       dp = out;
     }
-    if (trigger_matches.is_match(dpoint->varname)) {
 
+    /*
+     * NOTE: currently, any datapoint that is associated with a process that
+     *       causes a new process_dpoint to be generated must have a trigger
+     *       script associated with it
+     */
+    if (trigger_matches.is_match(dpoint->varname)) {
       std::string script;
       if (trigger_scripts.find(dpoint->varname, script)) {
 	client_request_t client_request;
@@ -159,8 +164,10 @@ Dataserver::Dataserver(int argc, char **argv, int port)
     auto newdp = trigger(dpoint);
     add_to_notify_queue(dpoint);
     add_to_logger_queue(dpoint);
-    
-    if (newdp) set_no_retrigger(newdp);
+
+    if (newdp) {
+      set_no_retrigger(newdp);
+    }
   }
 
   void Dataserver::set(char *varname, char *value)
