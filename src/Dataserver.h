@@ -67,7 +67,6 @@ class Dataserver
   
   std::mutex trigger_point_mutex;	// ensure only one thread accesses
 
-
   DatapointTable datapoint_table;
   SendTable send_table;
   LogTable log_table;
