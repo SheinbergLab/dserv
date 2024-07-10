@@ -755,7 +755,7 @@ namespace eval ess {
 namespace eval ess {
     variable em_windows
     set em_windows(processor) "windows"
-    set em_windows(dpoint) "ain/proc/windows"
+    set em_windows(dpoint) "proc/windows"
 
     proc em_update_setting { win } {
 	ainSetIndexedParam $win settings 0
