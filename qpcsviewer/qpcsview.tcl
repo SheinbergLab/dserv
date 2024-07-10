@@ -9,6 +9,15 @@ package require qpcs
 font create myDefaultFont -family {Helvetica} -size 11
 option add *font myDefaultFont
 
+proc server_cmd { server cmd } {
+    set sock [socket $server 2570]
+    fconfigure $sock -buffering line
+    puts $sock $cmd
+    set result [gets $sock]
+    close $sock
+    return $result
+}
+
 namespace eval dh {
     set connected 0
 
@@ -91,7 +100,7 @@ namespace eval dh {
 
     proc update_em_regions {} {
 	foreach reg "0 1 2 3 4 5 6 7" {
-	    ::qpcs::sendToQNX $dh::datahub ainGetRegionInfo $reg
+	    server_cmd $dh::datahub "ainGetRegionInfo $reg"
 	}
     }
     
