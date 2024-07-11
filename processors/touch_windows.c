@@ -138,7 +138,7 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   if (!strcmp(name, "state") && pinfo->pval) {
     inside = check_state(p, win);
     if (inside)
-      *pinfo->pval = "1";
+      *pinfo->pval = "0";	/* touches are one shot so always false */
     else
       *pinfo->pval = "0";
     return 1;
@@ -208,7 +208,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
       result = DPOINT_PROCESS_IGNORE;
     }
     
-    /* If window just activated/deactived set state to undefined to ensure update */
+    /* If window just activated/deactived set state to undefined */
     if ( !was_active && p->active[win] ||
 	 was_active && !p->active[win] )  {
       p->state[win] = WINDOW_UNDEFINED;
