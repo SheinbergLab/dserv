@@ -103,7 +103,7 @@ oo::class create System {
 	    dservSetData stimdg [now] 6 $s
 	}	
     }
-    
+
     method set_init_callback { cb } {
 	oo::objdefine [self] method init_cb {} $cb
 	set _callbacks(init) init_cb
@@ -763,10 +763,10 @@ namespace eval ess {
 
     proc em_window_process { dpoint } {
 	variable em_windows
-	lassign [dpointGet $dpoint] \
+	lassign [dservGet $dpoint] \
 	    em_windows(changes) em_windows(states) \
 	    em_windows(hpos) em_windows(vpos)
-	set em_windows(timestamp) [dpointTimestamp $dpoint]
+	set em_windows(timestamp) [dservTimestamp $dpoint]
 	do_update
     }
     
@@ -845,15 +845,20 @@ namespace eval ess {
 
     proc touch_window_process { dpoint } {
 	variable touch_windows
-	lassign [dpointGet $dpoint] \
+	lassign [dservGet $dpoint] \
 	    touch_windows(changes) touch_windows(states) \
 	    touch_windows(hpos) touch_windows(vpos)
-	set touch_windows(timestamp) [dpointTimestamp $dpoint]
+	set touch_windows(timestamp) [dservTimestamp $dpoint]
 	do_update
+    }
+
+    proc touch_reset {} {
+	dservTouch mtouch/touchvals
     }
     
     proc touch_init {} {
 	variable touch_windows
+	variable current
 	touchSetProcessor $touch_windows(processor)
 	touchSetParam dpoint $touch_windows(dpoint)
 	dservAddExactMatch $touch_windows(dpoint)/status
@@ -865,8 +870,20 @@ namespace eval ess {
 	}
 	set touch_windows(states) 0
 
-	variable touch_win_width 1024
-	variable touch_win_height 600
+	set s $current(state_system)
+
+	set w [set ${s}::screen_w]
+	set h [set ${s}::screen_h]
+	set w_deg [expr 2*[set ${s}::screen_halfx]]
+	set h_deg [expr 2*[set ${s}::screen_halfy]]
+	variable touch_win_w $w
+	variable touch_win_h $h
+	variable touch_win_half_w [expr $w/2]
+	variable touch_win_half_h [expr $h/2]
+	variable touch_win_deg_w $w_deg
+	variable touch_win_deg_h $h_deg
+	variable touch_win_scale_w [expr {$touch_win_w/$touch_win_deg_w}]
+	variable touch_win_scale_h [expr {$touch_win_h/$touch_win_deg_h}]
     }
 
     proc touch_check_state { win } {
@@ -879,7 +896,7 @@ namespace eval ess {
 	}
 	return $state
     }
-    
+
     proc touch_region_on { win } {
 	touchSetIndexedParam $win active 1
 	touch_check_state $win
@@ -901,18 +918,24 @@ namespace eval ess {
 	touch_update_setting $win
     }
 
-    proc touch_fixwin_set { win cx cy r { type 1 } } {
-	## FIX THIS...
-	set x [expr {int($cx*$ess::em_scale_h)+2048}]
-	set y [expr {-1*int($cy*$ess::em_scale_v)+2048}]
-	set pm_x [expr {$r*$ess::em_scale_h}]
-	set pm_y [expr {$r*$ess::em_scale_v}]
+    proc touch_win_set { win cx cy r { type 1 } } {
+	set x [expr {int($cx*$ess::touch_win_scale_w)+
+		     $ess::touch_win_half_w}]
+	set y [expr {-1*int($cy*$ess::touch_win_scale_h)+
+		     $ess::touch_win_half_h}]
+	set pm_x [expr {$r*$ess::touch_win_scale_w}]
+	set pm_y [expr {$r*$ess::touch_win_scale_h}]
 	touch_region_set $win 1 $x $y $pm_x $pm_y
     }
 
-    proc touch_in_region { win } {
+    proc touch_in_win { win } {
 	variable touch_windows
-	return [expr {($touch_windows(states) & (1<<$win)) != 0}]
+	set in [expr {($touch_windows(states) & (1<<$win)) != 0}]
+	return $in
+    }
+
+    proc touch_in_region { win } {
+	return [touch_in_win $win]
     }
 }
 

@@ -34,7 +34,7 @@ namespace eval match_to_sample {
 	$sys add_variable cur_id             0
 	$sys add_variable first_time         1
 	$sys add_variable stimtype           0
-	
+	$sys add_variable resp               0
 	
 	######################################################################
 	#                            System States                           #
@@ -147,20 +147,22 @@ namespace eval match_to_sample {
 	}
 	$sys add_transition wait_for_response {
 	    if [timerExpired] { return no_response }
-	    if [my responded] { return response }
+	    set resp [my responded]
+	    if { $resp != 0 } { return response }
 	}
 	
 	#
 	# response
 	#
 	$sys add_action response {
-	    ess::evt_put RESP 1 [now]
+	    if { $resp == 1 } { set r 1 } { set r 2 }
+	    ess::evt_put RESP $r [now]
 	    my choices_off
 	    ess::evt_put CHOICES OFF [now] 
 	}
 	
 	$sys add_transition response {
-	    if [my response_correct] {
+	    if { $resp == 1 } {
 		return correct
 	    } else {
 		return incorrect
@@ -196,7 +198,7 @@ namespace eval match_to_sample {
 	    my noreward
 	}
 	
-	$sys add_transition noreward { return post_trial }
+	$sys add_transition incorrect { return post_trial }
 	
 	#
 	# post_trial

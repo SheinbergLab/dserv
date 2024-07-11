@@ -42,15 +42,15 @@ namespace eval search::circles {
 	$s set_protocol_init_callback {
 	    ess::init
 
-	    dservAddExactMatch mtouch/touch
-	    dpointSetScript mtouch/touch "[namespace current] update_touch"
-	    
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
 	    
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
-	    
+
+	    # initialize touch processor
+	    ess::touch_init
+
 	    soundReset
 	    soundSetVoice 81 0    0
 	    soundSetVoice 57 17   1
@@ -107,38 +107,12 @@ namespace eval search::circles {
 	#                         Utility Methods                            #
 	######################################################################
 	
-
-	$s add_method touching_spot { xpix ypix targ_x targ_y targ_r } {
-	    set halfx $screen_halfx
-	    set halfy $screen_halfy
-	    set halfw [expr {$screen_w/2}]
-	    set h $screen_h
-	    set halfh [expr {$h/2}]
-	    set x [expr {($xpix-$halfw)*($halfx/$halfw)}]
-	    set y [expr {(($h-$ypix)-$halfh)*($halfy/$halfh)}]
-	    
-	    set x0 [expr {$targ_x-$x}]
-	    set y0 [expr {$targ_y-$y}]
-	    if { [expr {($x0*$x0+$y0*$y0)<($targ_r*$targ_r)}] } {
-		return 1
-	    } else {
-		return 0
-	    }
-	}
-
-	$s add_method update_touch { } {
-	    lassign [dservGet mtouch/touch] id c x y
-	    set touch_x $x
-	    set touch_y $y
-	    incr touch_count
-	    ess::do_update
-	}
-		
 	$s add_method start_obs_reset {} {
 	    set buttons_changed 0
 	}
 	
 	$s add_method n_obs {} { return [dl_length stimdg:stimtype] }
+
 	$s add_method nexttrial {} {
 	    if { [dl_sum stimdg:remaining] } {
 		dl_local left_to_show \
@@ -150,6 +124,10 @@ namespace eval search::circles {
 		foreach p "targ_x targ_y targ_r" {
 		    set $p [dl_get stimdg:$p $stimtype]
 		}
+
+		ess::touch_region_off 0
+		ess::touch_reset
+		ess::touch_win_set 0 $targ_x $targ_y $targ_r 0
 		
 		rmtSend "nexttrial $stimtype"
 	    }
@@ -163,8 +141,7 @@ namespace eval search::circles {
 	}
 	
 	$s add_method stim_on {} {
-	    set touch_count 0
-	    set touch_last 0
+	    ess::touch_region_on 0
 	    rmtSend "!stimon"
 	}
 
@@ -187,16 +164,11 @@ namespace eval search::circles {
 	}
 	
 	$s add_method responded {} {
-
-	    if { $touch_count > $touch_last } {
-		set touch_last $touch_count	
-		if [my touching_spot $touch_x $touch_y $targ_x $targ_y $targ_r] {
-		    return 1
-		} else {
-		    return -1
-		}
+	    if { [ess::touch_in_win 0] } {
+		return 1
+	    } else {
+		return 0
 	    }
-	    return 0
 	}
 
 	$s add_method basic_search { nr nd mindist } {
@@ -214,11 +186,16 @@ namespace eval search::circles {
 	    set maxy [expr $screen_halfy]
 	    
 	    dl_set $g:stimtype [dl_fromto 0 $n_obs]
-	    dl_set $g:targ_x [dl_mult 2 [dl_sub [dl_urand $n_obs] 0.5] $targ_range]
-	    dl_set $g:targ_y [dl_mult 2 [dl_sub [dl_urand $n_obs] 0.5] $targ_range]
-	    dl_set $g:targ_r [dl_repeat $targ_radius $n_obs]
-	    dl_set $g:targ_color [dl_repeat [dl_slist $targ_color] $n_obs]
-	    dl_set $g:targ_pos [dl_reshape [dl_interleave $g:targ_x $g:targ_y] - 2]
+	    dl_set $g:targ_x \
+		[dl_mult 2 [dl_sub [dl_urand $n_obs] 0.5] $targ_range]
+	    dl_set $g:targ_y \
+		[dl_mult 2 [dl_sub [dl_urand $n_obs] 0.5] $targ_range]
+	    dl_set $g:targ_r \
+		[dl_repeat $targ_radius $n_obs]
+	    dl_set $g:targ_color \
+		[dl_repeat [dl_slist $targ_color] $n_obs]
+	    dl_set $g:targ_pos \
+		[dl_reshape [dl_interleave $g:targ_x $g:targ_y] - 2]
 	    
 	    # add distractors
 	    # maxy is typically less than maxx
@@ -233,14 +210,17 @@ namespace eval search::circles {
 		     $min_dist $max_y $max_y]
 	    
 	    # pull out the xs and ys from the packed dists_pos list
-	    dl_set $g:dist_xs [dl_unpack [dl_choose $g:dists_pos [dl_llist [dl_llist 0]]]]
-	    dl_set $g:dist_ys [dl_unpack [dl_choose $g:dists_pos [dl_llist [dl_llist 1]]]]
+	    dl_set $g:dist_xs \
+		[dl_unpack [dl_choose $g:dists_pos [dl_llist [dl_llist 0]]]]
+	    dl_set $g:dist_ys \
+		[dl_unpack [dl_choose $g:dists_pos [dl_llist [dl_llist 1]]]]
 	    
 	    set dist_r [expr $scale*$dist_prop]
 	    set dist_color $targ_color
 	    
 	    dl_set $g:dist_rs [dl_repeat $dist_r [dl_llength $g:dist_xs]]
-	    dl_set $g:dist_colors [dl_repeat [dl_slist $dist_color] [dl_llength $g:dist_xs]]
+	    dl_set $g:dist_colors \
+		[dl_repeat [dl_slist $dist_color] [dl_llength $g:dist_xs]]
 	    
 	    dl_set $g:remaining [dl_ones $n_obs]
 	    

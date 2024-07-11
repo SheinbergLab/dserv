@@ -31,11 +31,6 @@ namespace eval match_to_sample::colormatch {
 	$s add_variable dist_y             
 	$s add_variable dist_r             
 	
-	$s add_variable touch_count        0
-	$s add_variable touch_last         0
-	$s add_variable touch_x            
-	$s add_variable touch_y            
-	
 	$s add_variable buttons_changed    0
 
 	$s set_protocol_init_callback {
@@ -49,11 +44,11 @@ namespace eval match_to_sample::colormatch {
 		}
 	    }
 	    
-	    dservAddExactMatch mtouch/touch
-	    dpointSetScript mtouch/touch "[namespace current] update_touch"
-
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
+
+	    # initialize touch processor
+	    ess::touch_init
 	    
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
@@ -114,35 +109,10 @@ namespace eval match_to_sample::colormatch {
 	#                         Utility Methods                            #
 	######################################################################
 	
-	$s add_method touching_response {
-	    xpix ypix targ_x targ_y targ_r \
-		dist_x dist_y dist_r } {
-		    set halfx $screen_halfx
-		    set halfy $screen_halfy
-		    set halfw [expr {$screen_w/2}]
-		    set h $screen_h
-		    set halfh [expr {$h/2}]
-		    set x [expr {($xpix-$halfw)*($halfx/$halfw)}]
-		    set y [expr {(($h-$ypix)-$halfh)*($halfy/$halfh)}]
-		    
-		    set x_t [expr {$targ_x-$x}]
-		    set y_t [expr {$targ_y-$y}]
-		    set x_d [expr {$dist_x-$x}]
-		    set y_d [expr {$dist_y-$y}]
-		    
-		    if { [expr {($x_t*$x_t+$y_t*$y_t)<($targ_r*$targ_r)}] } {
-			return 1
-		    } elseif {[expr {($x_d*$x_d+$y_d*$y_d)<($dist_r*$dist_r)}] } {
-			return -1
-		    } else {
-			return 0
-		    }
-		}
-	
 	$s add_method button_pressed {} {
 	    if { $use_buttons } {
-		if { [dpointGet gpio/input/$left_button] ||
-		     [dpointGet gpio/input/$right_button] } {
+		if { [dservGet gpio/input/$left_button] ||
+		     [dservGet gpio/input/$right_button] } {
 		    return 1
 		}
 	    }
@@ -150,23 +120,16 @@ namespace eval match_to_sample::colormatch {
 	}
 	
 	$s add_method update_button { b } {
-	    set buttons_changed 1
+#	    set buttons_changed 1
 	    ess::do_update
 	}
 	
-	$s add_method update_touch { } {
-	    lassign [dservGet mtouch/touch] id c x y
-	    set touch_x $x
-	    set touch_y $y
-	    incr touch_count
-	    ess::do_update
-	}
-		
 	$s add_method start_obs_reset {} {
 	    set buttons_changed 0
 	}
 	
 	$s add_method n_obs {} { return [dl_length stimdg:stimtype] }
+	
 	$s add_method nexttrial {} {
 	    if { [dl_sum stimdg:remaining] } {
 		dl_local left_to_show \
@@ -181,7 +144,14 @@ namespace eval match_to_sample::colormatch {
 		set dist_x [dl_get stimdg:nonmatch_x $stimtype]
 		set dist_y [dl_get stimdg:nonmatch_y $stimtype]
 		set dist_r [dl_get stimdg:nonmatch_r $stimtype]
+
+		ess::touch_region_off 0
+		ess::touch_region_off 1
+		ess::touch_reset
 		
+		ess::touch_win_set 0 $targ_x $targ_y $targ_r 0
+		ess::touch_win_set 1 $dist_x $dist_y $dist_r 0
+
 		rmtSend "nexttrial $stimtype"
 	    }
 	}
@@ -194,8 +164,6 @@ namespace eval match_to_sample::colormatch {
 	}
 
 	$s add_method sample_on {} {
-	    set touch_count 0
-	    set touch_last 0
 	    rmtSend "!sample_on"
 	}
 
@@ -205,6 +173,8 @@ namespace eval match_to_sample::colormatch {
 
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
+	    ess::touch_region_on 0
+	    ess::touch_region_on 1
 	}
 
 	$s add_method choices_off {} {
@@ -227,14 +197,15 @@ namespace eval match_to_sample::colormatch {
 	
 	$s add_method responded {} {
 	    if { $use_buttons && $buttons_changed } {
-		return 1
+		return 0
 	    }
 
-	    if { $touch_count > $touch_last } {
-		set touch_last $touch_count
-		set resp [my touching_response $touch_x $touch_y \
-			      $targ_x $targ_y $targ_r $dist_x $dist_y $dist_r]
-		return $resp
+	    if { [ess::touch_in_win 0] } {
+		return 1
+	    } elseif { [ess::touch_in_win 1] } {
+		return -1
+	    } else {
+		return 0
 	    }
 	}
 	
