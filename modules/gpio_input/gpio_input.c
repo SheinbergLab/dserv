@@ -105,6 +105,53 @@ static int shutdown_input_thread(gpio_input_t *ireq)
   return 0;
 }
 
+
+static int gpio_input_init_command(ClientData data,
+				   Tcl_Interp *interp,
+				   int objc, Tcl_Obj *objv[])
+{
+  int chipnum;
+  char *chipstr;
+  char chipstr_buf[128];
+  
+  gpio_info_t *info = (gpio_info_t *) data;
+  int ret;
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "chipnum|chipname");
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetIntFromObj(interp, objv[1], &chipnum) == TCL_OK) {
+    snprintf(chipstr_buf, sizeof(chipstr_buf), "/dev/gpiochip%d", chipnum);
+  }
+  else {
+    chipstr = Tcl_GetString(objv[1]);
+  }
+		 
+  /* try /dev/gpiochip4, which is is the 40-pin header on rpi5 */
+  g_gpioInfo.fd = open(chipstr, O_RDONLY);
+  if (g_gpioInfo.fd < 0) {
+    Tcl_AppendResult(interp, "error opening gpio chip", chipstr, NULL);
+    return TCL_ERROR;
+  }
+  
+  ret = ioctl(g_gpioInfo.fd, GPIO_GET_CHIPINFO_IOCTL, &info);
+    
+  if (ret >= 0) {
+    g_gpioInfo.nlines = info.lines;
+    g_gpioInfo.input_requests =
+      (gpio_input_t **) calloc(info.lines, sizeof(struct gpio_input_t *));
+  }
+  else {
+    g_gpioInfo.nlines = 0;
+    g_gpioInfo.input_requests = NULL;
+  }
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
+  return TCL_OK; 
+}
+
 static int gpio_line_request_input_command(ClientData data,
 				    Tcl_Interp *interp,
 				    int objc, Tcl_Obj *objv[])
@@ -242,8 +289,15 @@ static int gpio_line_release_all_inputs_command(ClientData data,
 }
 
 #else
-static int gpio_line_request_input_command(ClientData data,
+static int gpio_input_init_command(ClientData data,
 				    Tcl_Interp *interp,
+				    int objc, Tcl_Obj *objv[])
+{
+  return TCL_OK;
+}
+ 
+ static int gpio_line_request_input_command(ClientData data,
+					    Tcl_Interp *interp,
 				    int objc, Tcl_Obj *objv[])
 {
   int offset, value;
@@ -312,38 +366,10 @@ int Dserv_gpio_input_Init(Tcl_Interp *interp)
 
   g_gpioInfo.tclserver = tclserver_get();
   g_gpioInfo.dpoint_prefix = "gpio/input";
-    
-#ifdef __linux__
-  /*
-   * could do this in another function, but for now, just default to
-   * the GPIO_CHIP set above
-   */
-  int ret;
-  struct gpiochip_info info;
-
-  /* try /dev/gpiochip4, which is is the 40-pin header on rpi5 */
-  g_gpioInfo.fd = open("/dev/gpiochip4", O_RDONLY);
-
-  /* if that fails, try /dev/gpiochip0 which works on rpi1-rpi4 */
-  if (g_gpioInfo.fd < 0) {
-    g_gpioInfo.fd = open("/dev/gpiochip0", O_RDONLY);
-  }
-
-  if (g_gpioInfo.fd >= 0) {
-    ret = ioctl(g_gpioInfo.fd, GPIO_GET_CHIPINFO_IOCTL, &info);
-    
-    if (ret >= 0) {
-      g_gpioInfo.nlines = info.lines;
-      g_gpioInfo.input_requests =
-	(gpio_input_t **) calloc(info.lines, sizeof(struct gpio_input_t *));
-    }
-    else {
-      g_gpioInfo.nlines = 0;
-      g_gpioInfo.input_requests = NULL;
-    }
-  }
-#endif
-  
+      
+  Tcl_CreateObjCommand(interp, "gpioInputInit",
+		       (Tcl_ObjCmdProc *) gpio_input_init_command,
+		       &g_gpioInfo, NULL);
   Tcl_CreateObjCommand(interp, "gpioLineRequestInput",
 		       (Tcl_ObjCmdProc *) gpio_line_request_input_command,
 		       &g_gpioInfo, NULL);

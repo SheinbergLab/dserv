@@ -55,6 +55,8 @@ proc touchGetRegionInfo { reg } { processSetParam "touch_windows" settings 1 $re
 proc touchGetParam { p } { processGetParam "touch_windows" $p }
 proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
 
+gpioOutputInit
+gpioInputInit
 gpioLineRequestInput 24
 gpioLineRequestInput 25
 gpioLineRequestOutput 26
