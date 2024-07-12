@@ -129,23 +129,23 @@ static int gpio_input_init_command(ClientData data,
     chipstr = Tcl_GetString(objv[1]);
   }
 		 
-  /* try /dev/gpiochip4, which is is the 40-pin header on rpi5 */
-  g_gpioInfo.fd = open(chipstr, O_RDONLY);
-  if (g_gpioInfo.fd < 0) {
+  info->fd = open(chipstr, O_RDONLY);
+  if (info->fd < 0) {
     Tcl_AppendResult(interp, "error opening gpio chip", chipstr, NULL);
     return TCL_ERROR;
   }
-  
-  ret = ioctl(g_gpioInfo.fd, GPIO_GET_CHIPINFO_IOCTL, &info);
+
+  struct gpiochip_info gpioinfo;  
+  ret = ioctl(info->fd, GPIO_GET_CHIPINFO_IOCTL, &gpioinfo);
     
   if (ret >= 0) {
-    g_gpioInfo.nlines = info.lines;
-    g_gpioInfo.input_requests =
-      (gpio_input_t **) calloc(info.lines, sizeof(struct gpio_input_t *));
+    info->nlines = gpioinfo.lines;
+    info->input_requests =
+      (gpio_input_t **) calloc(gpioinfo.lines, sizeof(struct gpio_input_t *));
   }
   else {
-    g_gpioInfo.nlines = 0;
-    g_gpioInfo.input_requests = NULL;
+    info->nlines = 0;
+    info->input_requests = NULL;
   }
 
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
