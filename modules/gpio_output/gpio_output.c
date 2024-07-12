@@ -256,7 +256,7 @@ int Dserv_gpio_output_Init(Tcl_Interp *interp)
 
   tclserver_t *tclserver = tclserver_get();
   
-  Tcl_CreateObjCommand(interp, "gpioOutputtInit",
+  Tcl_CreateObjCommand(interp, "gpioOutputInit",
 		       (Tcl_ObjCmdProc *) gpio_output_init_command,
 		       &g_gpioInfo, NULL);
   Tcl_CreateObjCommand(interp, "gpioLineRequestOutput",
