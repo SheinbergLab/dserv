@@ -5,8 +5,7 @@ Requires=dserv.service
 
 [Service]
 Type=simple
-User=sheinb
-ExecStart=/usr/bin/sudo /usr/local/bin/mako -l::/usr/local/dserv/www
+ExecStart=/usr/local/bin/mako -l::/usr/local/dserv/www
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=2
