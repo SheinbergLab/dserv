@@ -55,8 +55,24 @@ proc touchGetRegionInfo { reg } { processSetParam "touch_windows" settings 1 $re
 proc touchGetParam { p } { processGetParam "touch_windows" $p }
 proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
 
-gpioOutputInit /dev/gpiochip4
-gpioInputInit /dev/gpiochip4
+# make an educated guess about which gpiochip to use
+if { $::tcl_platform(os) == "Linux" } {
+    if { $::tcl_platform(machine) == "x86_64" } {
+	set gpiochip /dev/gpiochip1
+    } else {
+	if { [file exists /dev/gpiochip4] } {
+	    set gpiochip /dev/gpiochip4
+	} else {
+	    set gpiochip /dev/gpiochip4
+	}
+    }
+} else {
+    set gpiochip {}
+}
+
+catch { gpioOutputInit $gpiochip }
+catch { gpioInputInit $gpiochip }
+
 gpioLineRequestInput 24
 gpioLineRequestInput 25
 gpioLineRequestOutput 26
