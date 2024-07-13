@@ -65,11 +65,14 @@ static int gpio_output_init_command(ClientData data,
 
   if (Tcl_GetIntFromObj(interp, objv[1], &chipnum) == TCL_OK) {
     snprintf(chipstr_buf, sizeof(chipstr_buf), "/dev/gpiochip%d", chipnum);
+    chipstr = &chipstr_buf;
   }
   else {
     chipstr = Tcl_GetString(objv[1]);
   }
-		 
+
+  if (info->fd >= 0) close(info->fd);
+  
   info->fd = open(chipstr, O_RDONLY);
   if (info->fd < 0) {
     Tcl_AppendResult(interp, "error opening gpio chip", chipstr, NULL);
@@ -255,6 +258,8 @@ int Dserv_gpio_output_Init(Tcl_Interp *interp)
   }
 
   tclserver_t *tclserver = tclserver_get();
+
+  g_gpioInfo.fd = -1;
   
   Tcl_CreateObjCommand(interp, "gpioOutputInit",
 		       (Tcl_ObjCmdProc *) gpio_output_init_command,
