@@ -51,43 +51,48 @@ static int gpio_output_init_command(ClientData data,
 				   Tcl_Interp *interp,
 				   int objc, Tcl_Obj *objv[])
 {
-  int chipnum;
-  char *chipstr;
-  char chipstr_buf[128];
-  
   gpio_info_t *info = (gpio_info_t *) data;
   int ret;
 
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "chipnum|chipname");
+    Tcl_WrongNumArgs(interp, 1, objv, "chipname");
     return TCL_ERROR;
   }
 
-  if (Tcl_GetIntFromObj(interp, objv[1], &chipnum) == TCL_OK) {
-    snprintf(chipstr_buf, sizeof(chipstr_buf), "/dev/gpiochip%d", chipnum);
-    chipstr = (char *) &chipstr_buf;
+  /* clean up if we already initialized */
+  if (info->fd >= 0) {
+    close(info->fd);
+    if (info->nlines) {
+      for (int i = 0; i < info->nlines; i++) {
+	struct gpiohandle_request *req = info->line_requests[i];
+	if (req) {		/* already opened, so close */
+	  close(req->fd);
+	}
+	free(info->line_requests);
+      }
+    }
   }
-  else {
-    Tcl_ResetResult(interp);
-    chipstr = Tcl_GetString(objv[1]);
-  }
-
-  if (info->fd >= 0) close(info->fd);
   
-  info->fd = open(chipstr, O_RDONLY);
+  info->fd = open(Tcl_GetString(objv[1]), O_RDONLY);
   if (info->fd < 0) {
-    Tcl_AppendResult(interp, "error opening gpio chip", chipstr, NULL);
+    Tcl_AppendResult(interp, "error opening gpio chip",
+		     Tcl_GetString(objv[1]), NULL);
     return TCL_ERROR;
   }
-
+  
   struct gpiochip_info gpioinfo;  
   ret = ioctl(info->fd, GPIO_GET_CHIPINFO_IOCTL, &gpioinfo);
-    
+  
   if (ret >= 0) {
     info->nlines = gpioinfo.lines;
+    info->line_requests = 
+      (struct gpiohandle_request **)
+      calloc(info->nlines,
+	     sizeof(struct gpiohandle_request *));
   }
   else {
     info->nlines = 0;
+    info->line_requests = NULL;
   }
 
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));

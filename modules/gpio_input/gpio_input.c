@@ -131,7 +131,7 @@ static int gpio_input_init_command(ClientData data,
     chipstr = Tcl_GetString(objv[1]);
   }
 
-  if (info->fd >= 0) close(info->fd);
+  if (info->fd >= 0) return TCL_OK; /* should clean up and allow to open */
   
   info->fd = open(chipstr, O_RDONLY);
   if (info->fd < 0) {

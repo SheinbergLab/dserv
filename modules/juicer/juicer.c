@@ -79,6 +79,61 @@ void *timer_thread(void *arg)
 }
 #endif
 
+static int juicer_init_command (ClientData data, Tcl_Interp *interp,
+				int objc, Tcl_Obj *objv[])
+{
+  juicer_info_t *jinfo = (juicer_info_t *) data;
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "chipname");
+    return TCL_ERROR;
+  }
+  
+#ifdef __linux__
+  if (jinfo->fd > 0) return TCL_OK; /* could reinitialize */
+  
+  int ret;
+  struct gpiochip_info info;
+  jinfo->fd = open(Tcl_GetString(objv[1]), O_RDONLY);
+  if (jinfo->fd >= 0) {
+    ret = ioctl(jinfo->fd, GPIO_GET_CHIPINFO_IOCTL, &info);
+    
+    if (ret >= 0) {
+      jinfo->nlines = info.lines;
+      jinfo->line_requests = 
+	(struct gpiohandle_request **)
+	calloc(info.lines,
+	       sizeof(struct gpiohandle_request *));
+    }
+    else {
+      jinfo->nlines = 0;
+      jinfo->line_requests = NULL;
+    }
+  }
+#endif
+  
+  
+#ifdef __linux__
+  if (pthread_mutex_init(&jinfo->mutex, NULL) != 0) {
+    perror("pthread_mutex_init() error");                                       
+    return TCL_ERROR;
+  }                                                                             
+  
+  if (pthread_cond_init(&jinfo->cond, NULL) != 0) {
+    perror("pthread_cond_init() error");                                        
+    return TCL_ERROR;
+  }
+  
+  if (pthread_create(&jinfo->timer_thread_id, NULL, timer_thread,
+		     (void *) jinfo)) {
+    return TCL_ERROR;
+  }
+  pthread_detach(jinfo->timer_thread_id);
+  
+#endif
+  return TCL_OK;
+}
+
 static int juicer_juice_command (ClientData data, Tcl_Interp *interp,
 				 int objc, Tcl_Obj *objv[])
 {
@@ -213,55 +268,12 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
 
   g_juicerInfo.njuicers = 1;
   g_juicerInfo.juice_pin = -1;	/* not set */
-    
-#ifdef __linux__
-  int ret;
-  struct gpiochip_info info;
-  /* try /dev/gpiochip4, which is is the 40-pin header on rpi5 */
-  g_juicerInfo.fd = open("/dev/gpiochip4", O_RDONLY);
-
-  /* if that fails, try /dev/gpiochip0 which works on rpi1-rpi4 */
-  if (g_juicerInfo.fd < 0) {
-    g_juicerInfo.fd = open("/dev/gpiochip0", O_RDONLY);
-  }
-
-  if (g_juicerInfo.fd >= 0) {
-    ret = ioctl(g_juicerInfo.fd, GPIO_GET_CHIPINFO_IOCTL, &info);
-    
-    if (ret >= 0) {
-      g_juicerInfo.nlines = info.lines;
-      g_juicerInfo.line_requests = 
-	(struct gpiohandle_request **)
-	calloc(info.lines,
-	       sizeof(struct gpiohandle_request *));
-    }
-    else {
-      g_juicerInfo.nlines = 0;
-      g_juicerInfo.line_requests = NULL;
-    }
-  }
-#endif
-
   
-#ifdef __linux__
-  if (pthread_mutex_init(&g_juicerInfo.mutex, NULL) != 0) {
-    perror("pthread_mutex_init() error");                                       
-    return TCL_ERROR;
-  }                                                                             
   
-  if (pthread_cond_init(&g_juicerInfo.cond, NULL) != 0) {
-    perror("pthread_cond_init() error");                                        
-    return TCL_ERROR;
-  }
-  
-  if (pthread_create(&g_juicerInfo.timer_thread_id, NULL, timer_thread,
-		     (void *) &g_juicerInfo)) {
-    return TCL_ERROR;
-  }
-  pthread_detach(g_juicerInfo.timer_thread_id);
-  
-#endif
-  
+  Tcl_CreateObjCommand(interp, "juicerInit",
+		       (Tcl_ObjCmdProc *) juicer_init_command,
+		       (ClientData) &g_juicerInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "juicerJuice",
 		       (Tcl_ObjCmdProc *) juicer_juice_command,
 		       (ClientData) &g_juicerInfo,

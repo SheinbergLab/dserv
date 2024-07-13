@@ -76,6 +76,8 @@ catch { gpioInputInit $gpiochip }
 gpioLineRequestInput 24
 gpioLineRequestInput 25
 gpioLineRequestOutput 26
+
+catch { juicerInit $gpiochip }
 juicerSetPin 0 27
 
 dservSet gpio/input/24 0
