@@ -65,9 +65,10 @@ static int gpio_output_init_command(ClientData data,
 
   if (Tcl_GetIntFromObj(interp, objv[1], &chipnum) == TCL_OK) {
     snprintf(chipstr_buf, sizeof(chipstr_buf), "/dev/gpiochip%d", chipnum);
-    chipstr = &chipstr_buf;
+    chipstr = (char *) &chipstr_buf;
   }
   else {
+    Tcl_ResetResult(interp);
     chipstr = Tcl_GetString(objv[1]);
   }
 
