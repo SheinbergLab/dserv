@@ -39,8 +39,7 @@ int main (int argc, char *argv[])
   char *prompt = "ess> ";
   
   if (argc < 2) {
-    printf("usage: %s server [options]\n", argv[0]);
-    exit(0);
+    server = "localhost";
   }
   else server = argv[1];
   
@@ -123,6 +122,8 @@ int main (int argc, char *argv[])
     }
     
     /* Do something with the string. */
+    if (!strcmp(line, "exit")) exit(0);
+    
     if (line[0] != '\0' && line[0] != '/') {
       resultstr = sock_send(server, tcpport, line, strlen(line));
       if (resultstr) {
