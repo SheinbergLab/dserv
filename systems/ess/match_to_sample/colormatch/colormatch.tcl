@@ -32,6 +32,8 @@ namespace eval match_to_sample::colormatch {
 	$s add_variable dist_r             
 	
 	$s add_variable buttons_changed    0
+	$s add_variable cur_id             0
+
 
 	$s set_protocol_init_callback {
 	    ess::init
@@ -155,6 +157,12 @@ namespace eval match_to_sample::colormatch {
 		rmtSend "nexttrial $stimtype"
 	    }
 	}
+
+	$s add_method endobs {} {
+	    dl_put stimdg:remaining $cur_id 0
+	    incr obs_count
+	}
+
 	$s add_method finished {} {
 	    return [expr [dl_sum stimdg:remaining]==0]
 	}
