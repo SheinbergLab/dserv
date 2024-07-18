@@ -459,7 +459,7 @@ namespace eval ess {
 	    }
 	    set current(system) $system
 	}
-
+	
 	[set current(system)]::create
 	
 	system_init $current(system)
@@ -925,7 +925,7 @@ namespace eval ess {
 		     $ess::touch_win_half_h}]
 	set pm_x [expr {$r*$ess::touch_win_scale_w}]
 	set pm_y [expr {$r*$ess::touch_win_scale_h}]
-	touch_region_set $win 1 $x $y $pm_x $pm_y
+	touch_region_set $win $type $x $y $pm_x $pm_y
     }
 
     proc touch_in_win { win } {
