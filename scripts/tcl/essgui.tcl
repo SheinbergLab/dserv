@@ -294,7 +294,7 @@ proc update_system_combos { server } {
 	if { $prot_var != "" } {
 	    dict for { prot var } $prot_var {
 		lappend current(protocol_list) $prot
-		if { $var != "" } {
+		if { $var != "" && $current(protocol) == $prot } {
 		    foreach v $var {
 			lappend current(variant_list) $v
 		    }
