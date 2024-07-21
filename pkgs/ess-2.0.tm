@@ -51,13 +51,15 @@ oo::class create System {
 
     destructor { my deinit }
     
-    method name {} {
-	return $_systemname
-    }
+    method name { } { return $_systemname }
+    method get_system { } { return $_systemname }
 
     method set_protocol { p } { set _protocolname $p }
     method get_protocol { } { return $_protocolname }
 
+    method set_variants { vdict } { set _variants $vdict }
+    method get_variants { } { return $_variants }
+    
     method set_variant { v } { set _variantname $v }
     method get_variant { } { return $_variantname }
 
@@ -486,6 +488,12 @@ namespace eval ess {
 	}
 
 	protocol_init $current(system) $current(protocol)
+
+	# set the variant for the current system
+	set s [find_system $current(system)]
+	$s set_variant $current(variant)
+
+	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
     }
 
@@ -1127,8 +1135,9 @@ namespace eval ess {
 	# initialize the protocol
 	ess::${system}::${protocol}::protocol_init $current(state_system)
 
-	# add this protocol's variants
-	set ${s}::_variants [set ${system}::${protocol}::variants]
+	# initialize this protocol's variants
+	${s} set_variants [set ${system}::${protocol}::variants]	
+	ess::${system}::${protocol}::variants_init $current(state_system)
 
 	${s} protocol_init
 	
@@ -1136,14 +1145,32 @@ namespace eval ess {
 	set current(protocol) $protocol
 	set current(open_protocol) 1
     }
-        
+
+    proc variant_loader_command { system protocol variant } {
+	set s [ess::find_system $system]
+	
+	set vinfo [dict get [$s get_variants] $variant]
+	set loader_proc [lindex $vinfo 0]
+	set variant_dict_name [lindex $vinfo 1]
+	set loader_default_args [set ${system}::${protocol}::${loader_proc}_defaults]
+	set loader_variant_args [set ${system}::${protocol}::${loader_proc}_${variant_dict_name}]
+	set loader_args_dict [dict merge $loader_default_args $loader_variant_args]
+
+	# now build list of args for this particular loader_proc
+	set loader_arg_names [lindex [info object definition $s $loader_proc] 0]
+	set loader_args {}
+	foreach a $loader_arg_names {
+	    lappend loader_args [dict get $loader_args_dict $a]
+	}
+	return "$loader_proc $loader_args"
+    }
+    
     proc variant_init { system protocol variant } {
 	variable current
 	set s [ess::find_system $system]
 
-	# get loader info for this variant
-	set vinfo [dict get [set ${s}::_variants] $current(variant)]
-	$s [lindex $vinfo 0] {*}[lindex $vinfo 1]
+	# get loader info for this variant and call
+	$s {*}[variant_loader_command $system $protocol $variant]
 
 	# push new stimdg to dataserver
 	$s update_stimdg
