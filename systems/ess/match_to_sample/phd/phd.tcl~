@@ -154,6 +154,7 @@ namespace eval match_to_sample::phd {
 	}
 
 	$s add_method noreward {} {
+
 	}
 
 	$s add_method finale {} {
