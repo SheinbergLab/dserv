@@ -7,7 +7,10 @@
 #
 
 namespace eval match_to_sample::phd {
-    variable setup_trials_defaults { dbfile /Users/sheinb/projects/graspomatic/Grasp3ShapesRyan.db trials_type VV }
+    variable setup_trials_defaults {
+	dbfile /Users/sheinb/projects/graspomatic/Grasp3ShapesRyan.db
+	trials_type VV
+    }
     variable setup_trials_vv { trial_type   VV }
     variable setup_trials_hv { trial_type   HV }
 

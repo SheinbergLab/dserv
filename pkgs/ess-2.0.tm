@@ -1185,6 +1185,7 @@ namespace eval ess {
 	foreach f [glob $ess::system_path/*] {
 	    if  { [file isdirectory $f] &&
 		  [file exists $f/[file tail $f].tcl] } {
+		catch { namespace delete ::ess::[file tail $f] }
 		source $f/[file tail $f].tcl
 		lappend systems [file tail $f]
 		
@@ -1198,6 +1199,7 @@ namespace eval ess {
 	foreach f [glob [file join $ess::system_path $s]/*] {
 	    if { [file isdirectory $f] &&
 		 [file exists $f/[file tail $f].tcl] } {
+		catch { namespace delete ::ess::${s}::[file tail $f] }
 		source $f/[file tail $f].tcl
 		lappend protocols [file tail $f]
 	    }
