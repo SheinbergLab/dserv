@@ -86,8 +86,8 @@ proc process_data { ev args } {
 	}
 
 	qpcs/system { set current(system) $val; update_system_combos $current(server) }
-	qpcs/variant { set current(variant) $val }
-	qpcs/protocol { set current(protocol) $val }
+	qpcs/protocol { set current(protocol) $val; update_system_combos $current(server) }
+	qpcs/variant { set current(variant) $val; update_system_combos $current(server) }
 	
 	qpcs/subject { set status(subject) $val }
 	qpcs/datafile { set status(datafile) $val }
