@@ -63,7 +63,7 @@ if { $::tcl_platform(os) == "Linux" } {
 	if { [file exists /dev/gpiochip4] } {
 	    set gpiochip /dev/gpiochip4
 	} else {
-	    set gpiochip /dev/gpiochip4
+	    set gpiochip /dev/gpiochip0
 	}
     }
 } else {
