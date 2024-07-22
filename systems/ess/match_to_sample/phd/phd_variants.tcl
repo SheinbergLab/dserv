@@ -10,6 +10,7 @@ namespace eval match_to_sample::phd {
     variable setup_trials_defaults {
 	dbfile /Users/sheinb/projects/graspomatic/Grasp3ShapesRyan.db
 	trials_type VV
+	filled 1
     }
     variable setup_trials_vv { trial_type   VV }
     variable setup_trials_hv { trial_type   HV }
@@ -23,7 +24,7 @@ namespace eval match_to_sample::phd {
 	#
 	# extract qrs representation for a given shape
 	#
-	$s add_method get_shape_qrs { db shapeID { displayID 51 } } {
+	$s add_method get_shape_qrs { db shapeID filled { displayID 51 } } {
     
 	    # extract qrs hex location for each pin
 	    set sqlcmd { SELECT q,r,s FROM pistonAddressesTable \
@@ -32,8 +33,13 @@ namespace eval match_to_sample::phd {
 	    dl_local qrs [dl_reshape [dl_ilist {*}$qrsvals] - 3]
 	    
 	    # get pin bit representation for this shape
-	    set sqlcmd {SELECT hex(shapeOutline) FROM shapeTable \
-			    WHERE shapeID=$shapeID and DisplayID=$displayID}
+	    if { $filled } {
+		set sqlcmd {SELECT hex(shapeFilled) FROM shapeTable \
+				WHERE shapeID=$shapeID and DisplayID=$displayID}
+	    } else {
+		set sqlcmd {SELECT hex(shapeOutline) FROM shapeTable \
+				WHERE shapeID=$shapeID and DisplayID=$displayID}
+	    }
 	    set h [$db eval $sqlcmd]
 	    
 	    # unpack blob into 32 bits words then converted to bits
@@ -51,6 +57,11 @@ namespace eval match_to_sample::phd {
 	    
 	    # pull qrs location for each pin that is on
 	    dl_local hexpos [dl_choose $qrs [dl_indices $pins]]
+
+	    # filled description is missing the center, so we add that here
+	    if { $filled } {
+		dl_append $hexpos [dl_ilist 0 0 0]
+	    }
 	    
 	    # return list of hex positions (in qrs notation)
 	    dl_return $hexpos
@@ -69,7 +80,7 @@ namespace eval match_to_sample::phd {
 	    return $shapes
 	}
 	
-	$s add_method setup_trials { dbfile trial_type } {
+	$s add_method setup_trials { dbfile trial_type filled } {
 
 	    # build our stimdg
 	    if { [dg_exists stimdg] } { dg_delete stimdg }
@@ -85,6 +96,7 @@ namespace eval match_to_sample::phd {
 	    dl_set stimdg:stimtype [dl_ilist]
 	    dl_set stimdg:family [dl_ilist]
 	    dl_set stimdg:distance [dl_ilist]
+	    dl_set stimdg:filled [dl_ilist]
 	    dl_set stimdg:sample_id [dl_ilist]
 	    dl_set stimdg:sample_slot [dl_ilist]
 	    dl_set stimdg:choice_ids [dl_llist]
@@ -102,7 +114,7 @@ namespace eval match_to_sample::phd {
 	    dl_local distance [dl_choose [dl_replicate [dl_shuffle "1 2 4 8"] $nrep] \
 				   [dl_fromto 0 $nfamilies]]
 	    dl_set stimdg:distance $distance
-	    
+
 	    foreach f $families d [dl_tcllist $distance] {
 		dl_local nex [dl_ilist]
 		set shape_id_list [my get_shape_family grasp_db $f add_pistons2 ${d}]
@@ -113,12 +125,12 @@ namespace eval match_to_sample::phd {
 		dl_append stimdg:sample_id $sample_id
 		
 		# add sample qrs
-		dl_append stimdg:sample_qrs [my get_shape_qrs grasp_db $sample_id]
+		dl_append stimdg:sample_qrs [my get_shape_qrs grasp_db $sample_id $filled]
 		
 		# add choice qrs
 		dl_local choice_qrs [dl_llist]
 		foreach choice_id [dl_tcllist $shape_ids] {
-		    dl_append $choice_qrs [my get_shape_qrs grasp_db $choice_id]
+		    dl_append $choice_qrs [my get_shape_qrs grasp_db $choice_id $filled]
 		}
 		dl_append stimdg:choice_qrs $choice_qrs
 	    }
@@ -127,6 +139,7 @@ namespace eval match_to_sample::phd {
 
 	    dl_set stimdg:stimtype [dl_fromto 0 $n_obs]
 	    dl_set stimdg:trial_type [dl_replicate [dl_slist $trial_type] $n_obs]
+	    dl_set stimdg:filled [dl_repeat $filled $n_obs]
 	    dl_set stimdg:sample_slot [dl_unpack \
 					   [dl_indices [dl_eq stimdg:choice_ids stimdg:sample_id]]]
 	    grasp_db close
