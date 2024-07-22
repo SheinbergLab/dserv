@@ -38,7 +38,7 @@ private:
   static void handler(int sig, siginfo_t *si, void *uc);
 
 public:
-  bool expired;
+  volatile sig_atomic_t expired;
 
   Timer(int id);
   ~Timer();
