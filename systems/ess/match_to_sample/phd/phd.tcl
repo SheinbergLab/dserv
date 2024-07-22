@@ -154,6 +154,7 @@ namespace eval match_to_sample::phd {
 	}
 
 	$s add_method noreward {} {
+	    soundPlay 4 90 300
 	}
 
 	$s add_method finale {} {

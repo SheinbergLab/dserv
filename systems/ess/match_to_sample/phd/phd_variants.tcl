@@ -8,9 +8,10 @@
 
 namespace eval match_to_sample::phd {
     variable setup_trials_defaults {
-	dbfile /Users/sheinb/projects/graspomatic/Grasp3ShapesRyan.db
+	dbfile /usr/local/dserv/systems/ess/match_to_sample/phd/data/Grasp3ShapesRyan.db
 	trials_type VV
 	filled 1
+	limit -1
     }
     variable setup_trials_vv { trial_type   VV }
     variable setup_trials_hv { trial_type   HV }
@@ -80,7 +81,7 @@ namespace eval match_to_sample::phd {
 	    return $shapes
 	}
 	
-	$s add_method setup_trials { dbfile trial_type filled } {
+	$s add_method setup_trials { dbfile trial_type filled limit } {
 
 	    # build our stimdg
 	    if { [dg_exists stimdg] } { dg_delete stimdg }
@@ -105,8 +106,12 @@ namespace eval match_to_sample::phd {
 	    dl_set stimdg:choice_qrs [dl_llist]
 	    dl_set stimdg:choice_centers [dl_llist]
 	    dl_set stimdg:choice_scale [dl_flist]
-	    
-	    set sqlcmd { SELECT shapeFamily from shapeTable WHERE familyAlgo="parent" and displayID=51}
+
+	    if { $limit > 0 } {
+		set sqlcmd { SELECT shapeFamily from shapeTable WHERE familyAlgo="parent" and displayID=51 ORDER BY RANDOM() LIMIT $limit }
+	    } else {
+		set sqlcmd { SELECT shapeFamily from shapeTable WHERE familyAlgo="parent" and displayID=51 ORDER BY RANDOM() }
+	    }
 	    set families [grasp_db eval $sqlcmd]
 	    dl_set stimdg:family [dl_ilist {*}$families]
 	    set nfamilies [dl_length stimdg:family]
