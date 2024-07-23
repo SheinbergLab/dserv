@@ -367,7 +367,7 @@ ds_datapoint_t *Dataserver::trigger(ds_datapoint_t *dpoint)
 
   int Dataserver::logger_client_start(std::string filename)
   {
-    return (add_new_log_client(filename));
+    return (start_log_client(filename));
   }
 
   int Dataserver::logger_add_match(char *path, char *match,
@@ -1423,7 +1423,8 @@ ds_datapoint_t *Dataserver::trigger(ds_datapoint_t *dpoint)
 		S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH );
     }
     else {
-      fd = open(filename.c_str(), O_WRONLY | O_TRUNC | O_CREAT,
+      fd = open(filename.c_str(),
+		O_WRONLY | O_TRUNC | O_CREAT,
 		S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH );
     }
     return fd;

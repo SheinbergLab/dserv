@@ -257,7 +257,7 @@ int TclServer::dserv_log_start_command(ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  status = ds->logger_client_pause(Tcl_GetString(objv[1]));
+  status = ds->logger_client_start(Tcl_GetString(objv[1]));
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 

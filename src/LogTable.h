@@ -44,17 +44,19 @@ public:
   void forward_dpoint(ds_datapoint_t *dpoint)
   {
     std::vector<LogClient *> close_vec;
-
+    
     std::lock_guard<std::mutex> mlock(mutex_);
     for (auto it : map_) {
       LogClient *log_client = it.second;
       ds_logger_buf_t *logbuf;
+      
       if (!log_client->active) {
 	close_vec.push_back(log_client);
       }
-
+      
       else if (log_client->state == LogClient::LOGGER_CLIENT_RUNNING ||
 	       log_client->obs_limited_matches) {
+
 	// if the client has obs limited matches, always log obs events
 	if (log_client->obs_limited_matches &&
 	    dpoint->data.e.dtype == DSERV_EVT &&
@@ -85,10 +87,10 @@ public:
 	    }
 	  }
 	}
-      }
-      else if (log_client->matches.is_match(dpoint->varname, &logbuf,
-					    log_client->in_obs)) {
-	log_client->log_point(dpoint, logbuf);
+	else if (log_client->matches.is_match(dpoint->varname, &logbuf,
+					      log_client->in_obs)) {
+	  log_client->log_point(dpoint, logbuf);
+	}
       }
     }
     
