@@ -23,6 +23,13 @@ dservSet qpcs/ipaddr 127.0.0.1
 proc dpointGet { d } { return [dservGet $d] }
 proc rpioPinOn { pin } { gpioLineSetValue $pin 1 }
 proc rpioPinOff { pin } { gpioLineSetValue $pin 0 }
+
+proc timerSetScript { id script } {
+    set dpoint timer/$id
+    dservAddExactMatch $dpoint
+    dpointSetScript $dpoint $script
+}
+
 proc ainSetProcessor { args } {}
 proc ainSetParam { p v } { processSetParam "windows" $p $v }
 proc ainSetIndexedParam { i p v } {  processSetParam "windows" $p $v $i }
