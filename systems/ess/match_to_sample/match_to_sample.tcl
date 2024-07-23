@@ -143,7 +143,7 @@ namespace eval match_to_sample {
 	# wait_for_response
 	#
 	$sys add_action wait_for_response {
-	    timerTick 10000
+	    timerTick $response_timeout
 	}
 	$sys add_transition wait_for_response {
 	    if [timerExpired] { return no_response }
