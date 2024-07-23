@@ -1,6 +1,9 @@
 #ifndef LOGCLIENT_H
 #define LOGCLIENT_H
 
+#include <mutex>
+#include <condition_variable>
+
 class LogClient {
  public:
   // These are special events that dserv can process
@@ -14,8 +17,13 @@ class LogClient {
   const int DSERV_LOG_HEADER_SIZE = 16;
   
   std::string filename;
-  std::atomic<int> active;			/* set to 0 if connection bad */
-  int fd;			/* file to write to           */
+  std::atomic<int> active;	/* set to 0 if closing      */
+  int fd;			/* file to write to         */
+
+  std::mutex mutex;		
+  std::condition_variable cond;
+  
+  std::atomic<int> initialized;	/* set to 1 when setup      */
 
   SharedQueue<ds_datapoint_t *> dpoint_queue;
     
@@ -28,9 +36,10 @@ class LogClient {
   ds_datapoint_t endobs_dpoint;   /* dpoint signal endobs   */
   
   LogMatchDict matches;
-  std::atomic<int> obs_limited_matches;
 
-  int state;
+  std::atomic<int> obs_limited_matches;
+  std::atomic<int> state;
+
   bool in_obs;
   
   const char *beginobs_varname = "logger:beginobs";
