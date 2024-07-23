@@ -288,11 +288,20 @@ void LogClient::log_client_process(LogClient *logclient)
       logclient->flush_dpoints();
     }
     else {
-      //      std::cout << "received dpoint " << dpoint->varname << std::endl;
-    
+      // actually write this point
       auto result = logclient->write_dpoint(dpoint);
-      if (!dpoint->flags & DSERV_DPOINT_DONTFREE_FLAG)
+
+      // free dpoints that were copied before queuing up
+      if (!(dpoint->flags & DSERV_DPOINT_DONTFREE_FLAG)) {
 	dpoint_free(dpoint);
+      }
+
+      // if there was a write error (result == 0) then shutdown this client
+      if (!result) {
+	logclient->state = LOGGER_CLIENT_SHUTDOWN;
+	logclient->active = 0;
+	done = true;
+      }
     }
   }
 
