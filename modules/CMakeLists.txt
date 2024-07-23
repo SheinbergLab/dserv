@@ -31,6 +31,15 @@ endif()
 include_directories(${TCL_INCLUDE_DIR} .)
 
 ##
+## timer
+##
+set(MODULE timer)
+project(${MODULE})
+add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
+set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
+
+##
 ## ain
 ##
 set(MODULE ain)
@@ -109,5 +118,5 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
 install(TARGETS
 	ain juicer gpio_input gpio_output touch
-	rmt eventlog sound
+	rmt eventlog sound timer
 	DESTINATION dserv/modules)
