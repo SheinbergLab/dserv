@@ -21,9 +21,9 @@ public:
 
 public:
 
-  LogMatchSpec(const char *str, int every, bool obs_limited, int bufsize):
-    MatchSpec(str, every) {
-    obs_limited = obs_limited;
+  LogMatchSpec(const char *str, int every, int obs_limited, int bufsize):
+    MatchSpec(str, every), obs_limited(obs_limited) {
+
     if (bufsize > 0) {
       logbuf = (ds_logger_buf_t *) calloc(1, sizeof (ds_logger_buf_t));
       logbuf->buf = malloc(bufsize);
@@ -31,7 +31,7 @@ public:
       logbuf->bufcount = 0;
       logbuf->dpoint.data.buf = NULL;
       logbuf->dpoint.varname = NULL;
-      logbuf->dpoint.flags |= DSERV_DPOINT_NOT_INITIALIZED;
+      logbuf->dpoint.flags |= DSERV_DPOINT_NOT_INITIALIZED_FLAG;
     }
     else {
       logbuf = nullptr;
