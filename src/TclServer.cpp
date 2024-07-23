@@ -646,7 +646,8 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
   Tcl_CreateObjCommand(interp, "dpointRemoveAllScripts",
 		       (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
 		       this, NULL);
-  
+
+#if 0
   Tcl_CreateObjCommand(interp, "timerTick",
 		       (Tcl_ObjCmdProc *) timer_tick_command,
 		       (ClientData) this,
@@ -675,6 +676,7 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) timer_status_command,
 		       (ClientData) this,
 		       (Tcl_CmdDeleteProc *) NULL);
+#endif
   
   Tcl_CreateObjCommand(interp, "print",
 		       (Tcl_ObjCmdProc *) print_command, this, NULL);
