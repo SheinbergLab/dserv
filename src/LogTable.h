@@ -49,8 +49,9 @@ public:
     for (auto it : map_) {
       LogClient *log_client = it.second;
       ds_logger_buf_t *logbuf;
-      
+
       if (!log_client->active) {
+	//	std::cout << "log client " << log_client->filename << " inactive" << std::endl;
 	close_vec.push_back(log_client);
       }
       
@@ -96,9 +97,8 @@ public:
     
     // for clients no longer active, shut them down and erase from table
     for (auto log_client : close_vec) {
-      log_client->dpoint_queue.push_back(&log_client->shutdown_dpoint);
       map_.erase (log_client->filename);
-      
+      delete log_client;
       //  std::cout << "inactive: " << key << std::endl;
     }
   }
