@@ -38,6 +38,7 @@ include <io.h>
 LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
 {
   active = 1;
+  initialized = 0;		/* set to 1 after process thread set */
   
   // use to track if any matches are obs limited (to track begin/end obs events)
   obs_limited_matches = 0;
@@ -70,7 +71,9 @@ LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
 LogClient::~LogClient()
 {
   if (fd >= 0) close(fd);
+  matches.clear();
 }
+
 
 uint64_t LogClient::now(void) {
   std::chrono::time_point<std::chrono::high_resolution_clock> now = 
@@ -113,16 +116,6 @@ void LogClient::flush_dpoints(void)
   return;
 }
 
-void LogClient::log_pause(void)
-{
-  write_dpoint(&pause_dpoint);
-}
-
-void LogClient::log_resume(void)
-{
-  write_dpoint(&start_dpoint);
-}
-  
 void LogClient::log_flush(ds_logger_buf_t *logbuf)
 {
   ds_datapoint_t *dpoint;
@@ -131,17 +124,11 @@ void LogClient::log_flush(ds_logger_buf_t *logbuf)
     dpoint->data.len = logbuf->bufcount;
     dpoint->data.buf = (unsigned char *) logbuf->buf;
     dpoint->flags = 0;
-    if (write_dpoint(dpoint) < 0) {
-      //	printf("dpoint write for %s returned -1\n", dpoint->varname);
-    }
-    
-#if 0
-    printf("%s(%d) %d %d %d\n", dpoint->varname, dpoint->varlen,
-	   dpoint->data.e.dtype, dpoint->flags, dpoint->data.len);
-#endif    
-    
+
+    dpoint_queue.push_back(dpoint_copy(dpoint));
+
     logbuf->bufcount = 0;
-    dpoint->flags |= DSERV_DPOINT_NOT_INITIALIZED;
+    dpoint->flags |= DSERV_DPOINT_NOT_INITIALIZED_FLAG;
   }
 }
 
@@ -150,29 +137,25 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
 {
   int would_overflow = 0;
   
-  if (fd < 0) return 0;
-  
   //    std::cout << "varname: " << dpoint->varname << " buf: " << logbuf << std::endl;
   
   // write every point to log individually
   if (!logbuf) {
-    if (write_dpoint(dpoint) < 0) {
-      //printf("dpoint write for %s returned -1\n", dpoint->varname);
-      state = LOGGER_CLIENT_SHUTDOWN;
-      return 0;
-    }
+    ds_datapoint_t *forwarded_dpoint = dpoint;
+    if (!dpoint->flags) forwarded_dpoint = dpoint_copy(dpoint);
+    dpoint_queue.push_back(forwarded_dpoint);
     return 1;
   }
   
   // first dpoint to be added to empty buffer so initialize
-  if (logbuf->dpoint.flags & DSERV_DPOINT_NOT_INITIALIZED) {
+  if (logbuf->dpoint.flags & DSERV_DPOINT_NOT_INITIALIZED_FLAG) {
     if (!logbuf->dpoint.varname) {
       logbuf->dpoint.varname = strdup(dpoint->varname);
       logbuf->dpoint.varlen = dpoint->varlen;
     }
     logbuf->dpoint.data.type = dpoint->data.type;
     logbuf->dpoint.timestamp = dpoint->timestamp;
-    logbuf->dpoint.flags &= ~DSERV_DPOINT_NOT_INITIALIZED;
+    logbuf->dpoint.flags &= ~DSERV_DPOINT_NOT_INITIALIZED_FLAG;
   }
   
   // if the data point type has changed (it shouldn't) just continue
@@ -182,10 +165,9 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
   
   // if the log buffer can't hold the current point just write out point
   if (logbuf->bufsize <= dpoint->data.len) {
-    if (write_dpoint(dpoint) < 0) {
-      state = LOGGER_CLIENT_SHUTDOWN;
-      return 0;
-    }
+    ds_datapoint_t *forwarded_dpoint = dpoint;
+    if (!dpoint->flags) forwarded_dpoint = dpoint_copy(dpoint);
+    dpoint_queue.push_back(forwarded_dpoint);
     return 1;
   }
   
@@ -203,15 +185,14 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
   if ((logbuf->bufcount == logbuf->bufsize) || would_overflow) {
     logbuf->dpoint.data.len = logbuf->bufcount;
     logbuf->dpoint.data.buf = (unsigned char *) logbuf->buf;
-    
-    if (write_dpoint(&logbuf->dpoint) < 0) {
-      state = LOGGER_CLIENT_SHUTDOWN;
-      return 0;
-    }
-    else {
-      logbuf->bufcount = 0;
-    }
-    
+
+    // send a copy of the logbuf datapoint (freed after written)
+    dpoint_queue.push_back(dpoint_copy(&logbuf->dpoint));
+
+    // reset buffer count
+    logbuf->bufcount = 0;
+
+    // move overflow into next buffer
     if (would_overflow) {
       memcpy(&((unsigned char *) logbuf->buf)[0],
 	     dpoint->data.buf, dpoint->data.len);
@@ -219,11 +200,20 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
       logbuf->dpoint.timestamp = dpoint->timestamp;
     }
     else {
-      logbuf->dpoint.flags |= DSERV_DPOINT_NOT_INITIALIZED;
+      // set flag to allow timestamp to be updated on next update
+      logbuf->dpoint.flags |= DSERV_DPOINT_NOT_INITIALIZED_FLAG;
     }
   }
-  return state != LOGGER_CLIENT_SHUTDOWN;
+  return 1;
 }
+
+/*
+ * write_dpoint
+ *
+ *  Actually write the dpoint to the open file descriptor.  This
+ * should be the only direct write to the fd - all clients should
+ * request this via the logclient's process thread
+ */
 
 int LogClient::write_dpoint(ds_datapoint_t *dpoint)
 {
@@ -269,6 +259,11 @@ void LogClient::log_client_process(LogClient *logclient)
 
   //  std::cout << "waiting to receive dpoints to log" << std::endl;
 
+  std::unique_lock<std::mutex> mlock(logclient->mutex);
+  logclient->initialized = 1;
+  logclient->cond.notify_one();
+  mlock.unlock();
+
   /* process until receive a message saying we are done */
   while (!done) {
     dpoint = logclient->dpoint_queue.front();
@@ -278,6 +273,7 @@ void LogClient::log_client_process(LogClient *logclient)
     if (dpoint->flags & DSERV_DPOINT_SHUTDOWN_FLAG) {
       logclient->flush_dpoints();
       logclient->state = LOGGER_CLIENT_SHUTDOWN;
+      logclient->active = 0;
       done = true;
     }
     else if (dpoint->flags & DSERV_DPOINT_LOGPAUSE_FLAG) {
@@ -285,19 +281,21 @@ void LogClient::log_client_process(LogClient *logclient)
       logclient->state = LOGGER_CLIENT_PAUSED;
     }
     else if (dpoint->flags & DSERV_DPOINT_LOGSTART_FLAG) {
+      //      std::cout << "starting logger" << std::endl;
       logclient->state = LOGGER_CLIENT_RUNNING;
     }
     else if (dpoint->flags & DSERV_DPOINT_LOGFLUSH_FLAG) {
       logclient->flush_dpoints();
     }
     else {
+      //      std::cout << "received dpoint " << dpoint->varname << std::endl;
+    
       auto result = logclient->write_dpoint(dpoint);
-      dpoint_free(dpoint);
+      if (!dpoint->flags & DSERV_DPOINT_DONTFREE_FLAG)
+	dpoint_free(dpoint);
     }
   }
 
   //  std::cout << "shutting down" << std::endl;
-
-  delete logclient;
 }
 
