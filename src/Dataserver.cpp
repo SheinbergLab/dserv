@@ -1447,7 +1447,14 @@ ds_datapoint_t *Dataserver::trigger(ds_datapoint_t *dpoint)
     log_client = new LogClient(filename, fd);
     log_thread_id = std::thread(&LogClient::log_client_process,
 				log_client);
+
+    // wait for new thread to signal it's opened the file
+    std::unique_lock<std::mutex> mlock(log_client->mutex);
+    while (!log_client->initialized) log_client->cond.wait(mlock);
+    mlock.unlock();
+    
     log_thread_id.detach();
+
     log_table.insert(filename, log_client);
 
     return 1;
@@ -1459,8 +1466,6 @@ ds_datapoint_t *Dataserver::trigger(ds_datapoint_t *dpoint)
     LogClient *log_client;
 
     if (log_table.find(filename, &log_client)) {
-      log_table.remove(filename);
-      log_client->active = 0;
       log_client->dpoint_queue.push_back(&log_client->shutdown_dpoint);
       return 1;
     }
@@ -1496,10 +1501,11 @@ ds_datapoint_t *Dataserver::trigger(ds_datapoint_t *dpoint)
   {
     LogClient *log_client;
     int rval = 0;
-    
+
     if (log_table.find(filename, &log_client)) {
       LogMatchSpec *match =
 	new LogMatchSpec(varname.c_str(), every, obs, buflen);
+
       log_client->matches.insert(match->matchstr, match);
       log_client->obs_limited_matches += match->obs_limited;
       rval = 1;
