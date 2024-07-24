@@ -297,7 +297,7 @@ void LogClient::log_client_process(LogClient *logclient)
       }
 
       // if there was a write error (result == 0) then shutdown this client
-      if (!result) {
+      if (result < 0) {
 	logclient->state = LOGGER_CLIENT_SHUTDOWN;
 	logclient->active = 0;
 	done = true;
