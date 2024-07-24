@@ -40,7 +40,6 @@ class Dataserver;		// defined below
 #include "MatchDict.h"
 #include "LogMatchDict.h"
 #include "TriggerDict.h"
-#include "Timer.h"
 #include "ClientRequest.h"
 #include "SendClient.h"
 #include "SendTable.h"

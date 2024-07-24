@@ -292,226 +292,6 @@ int TclServer::dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 
-
-
-  
-int TclServer::timer_tick_command (ClientData data, Tcl_Interp *interp,
-				   int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int id, ms;
-  
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "?timerid? start");
-    return TCL_ERROR;
-  }
-  
-  if (objc < 3) {		/* default to timer 0 */
-    id = 0;
-    if (Tcl_GetIntFromObj(interp, objv[1], &ms) != TCL_OK)
-      return TCL_ERROR;
-  }
-  
-  else {
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (id >= tclserver->ntimers) {
-      const char *msg = "invalid timer";
-      Tcl_SetResult(interp, (char *) msg, TCL_STATIC);
-      return TCL_ERROR;
-    }
-    if (Tcl_GetIntFromObj(interp, objv[2], &ms) != TCL_OK)
-      return TCL_ERROR;
-  }
-  
-  tclserver->timers[id]->arm_ms(ms);
-  tclserver->timers[id]->fire();
-  
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
-  return TCL_OK;
-}
-
-int TclServer::timer_reset_command (ClientData data, Tcl_Interp *interp,
-				    int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int id, ms;
-  
-  if (objc < 2) {		/* default to timer 0 */
-    id = 0;
-  }
-  
-  else {
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (id >= tclserver->ntimers) {
-      const char *msg = "invalid timer";
-      Tcl_SetResult(interp, (char *) msg, TCL_STATIC);
-      return TCL_ERROR;
-    }
-  }
-  
-  tclserver->timers[id]->reset();
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
-  return TCL_OK;
-}
-
-int TclServer::timer_tick_interval_command (ClientData data, Tcl_Interp *interp,
-					    int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int id, ms, interval_ms, nrepeats = -1;
-  
-  if (objc < 3) {
-    Tcl_WrongNumArgs(interp, 1, objv, "?timerid? start interval");
-    return TCL_ERROR;
-  }
-  
-  if (objc < 4) {
-    id = 0;
-    if (Tcl_GetIntFromObj(interp, objv[1], &ms) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (Tcl_GetIntFromObj(interp, objv[2], &interval_ms) != TCL_OK)
-      return TCL_ERROR;
-  }
-  else {
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (id >= tclserver->ntimers) {
-      const char *msg = "invalid timer";
-      Tcl_SetResult(interp, (char *) msg, TCL_STATIC);
-      return TCL_ERROR;
-    }
-    
-    if (Tcl_GetIntFromObj(interp, objv[2], &ms) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (Tcl_GetIntFromObj(interp, objv[3], &interval_ms) != TCL_OK)
-      return TCL_ERROR;
-  }
-  
-  if (objc > 4) {
-    if (Tcl_GetIntFromObj(interp, objv[4], &nrepeats) != TCL_OK)
-      return TCL_ERROR;
-  }
-  
-  tclserver->timers[id]->arm_ms(ms, interval_ms, nrepeats);
-  tclserver->timers[id]->fire();
-  
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
-  return TCL_OK;
-}
-
-int TclServer::timer_expired_command (ClientData data, Tcl_Interp *interp,
-				      int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int timer;
-  
-  if (objc < 2) {
-    timer = 0;
-  }
-  else {
-    if (Tcl_GetIntFromObj(interp, objv[1], &timer) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (timer >= tclserver->ntimers) {
-      const char *msg = "invalid timer";
-      Tcl_AppendResult(interp, (char *) msg, NULL);
-      return TCL_ERROR;
-    }
-  }
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(tclserver->timers[timer]->expired));
-  return TCL_OK;
-}
-
-int TclServer::timer_set_script_command (ClientData data, Tcl_Interp *interp,
-					 int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int id;
-  char *script;
-  
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "?timerid? script");
-    return TCL_ERROR;
-  }
-  
-  if (objc < 3) {
-    id = 0;
-    script = Tcl_GetString(objv[1]); 
-  }
-  else {
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (id >= tclserver->ntimers) {
-      const char *msg = "invalid timer";
-      Tcl_SetResult(interp, (char *) msg, TCL_STATIC);
-      return TCL_ERROR;
-    }
-    script = Tcl_GetString(objv[2]);
-  }
-  
-  tclserver->timer_scripts.insert(id,
-				  std::move(std::string(Tcl_GetString(objv[2]))));
-  return TCL_OK;
-}
-
-int TclServer::timer_remove_script_command (ClientData data, Tcl_Interp *interp,
-					    int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int id;
-  
-  if (objc < 1) {
-    id = 0;
-  }
-  else {
-    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK)
-      return TCL_ERROR;
-    
-    if (id >= tclserver->ntimers) {
-      const char *msg = "invalid timer";
-      Tcl_SetResult(interp, (char *) msg, TCL_STATIC);
-      return TCL_ERROR;
-    }
-  }
-  
-  tclserver->timer_scripts.remove(id);
-  
-  return TCL_OK;
-}
-  
-  
-int TclServer::timer_status_command (ClientData data, Tcl_Interp *interp,
-				     int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  Dataserver *ds = tclserver->ds;
-  int i, ntimers;
-  Tcl_Obj *elt;
-  Tcl_Obj *l = Tcl_NewListObj(0, NULL);
-  
-  for (i = 0; i < tclserver->ntimers; i++) {
-    elt = Tcl_NewIntObj(tclserver->timers[i]->expired);
-    Tcl_ListObjAppendElement(interp, l, elt);
-  }
-  
-  Tcl_SetObjResult(interp, l);
-  return TCL_OK;
-}
-
 int TclServer::dpoint_set_script_command (ClientData data, Tcl_Interp *interp,
 					  int objc, Tcl_Obj *objv[])
 {
@@ -647,45 +427,11 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
 		       this, NULL);
 
-#if 0
-  Tcl_CreateObjCommand(interp, "timerTick",
-		       (Tcl_ObjCmdProc *) timer_tick_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "timerReset",
-		       (Tcl_ObjCmdProc *) timer_reset_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "timerTickInterval",
-		       (Tcl_ObjCmdProc *) timer_tick_interval_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "timerExpired",
-		       (Tcl_ObjCmdProc *) timer_expired_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "timerSetScript",
-		       (Tcl_ObjCmdProc *) timer_set_script_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "timerRemoveScript",
-		       (Tcl_ObjCmdProc *) timer_remove_script_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "timerStatus",
-		       (Tcl_ObjCmdProc *) timer_status_command,
-		       (ClientData) this,
-		       (Tcl_CmdDeleteProc *) NULL);
-#endif
-  
   Tcl_CreateObjCommand(interp, "print",
 		       (Tcl_ObjCmdProc *) print_command, this, NULL);
   
   Tcl_LinkVar(interp, "tcpPort", (char *) &tcpport,
 	      TCL_LINK_INT | TCL_LINK_READ_ONLY);
-  Tcl_LinkVar(interp, "nTimers", (char *) &ntimers,
-              TCL_LINK_INT | TCL_LINK_READ_ONLY);
-  
   return;
 }
 
@@ -721,15 +467,6 @@ int TclServer::setup_tcl(int argc, char **argv)
   return TCL_OK;
 }
 
-int TclServer::timer_callback(int timerid)
-{
-  client_request_t req;
-  req.type = REQ_TIMER;
-  req.timer_id = timerid;
-  queue.push_back(req);
-  return 0;
-}
-
 /* queue up a point to be set from other threads */
 void TclServer::set_point(ds_datapoint_t *dp)
 {
@@ -744,12 +481,6 @@ int TclServer::process_requests(void) {
   
   int retcode;
   client_request_t req;
-  
-  for (auto i = 0; i < ntimers; i++) {
-    TTimer *timer = new TTimer(i);
-    timers.push_back(timer);
-    timer->add_callback(std::bind(&TclServer::timer_callback, this, _1));
-  }
   
   /* process until receive a message saying we are done */
   while (!m_bDone) {
@@ -798,18 +529,6 @@ int TclServer::process_requests(void) {
 	cond.notify_one(); // notify one waiting thread
       }
       break;
-    case REQ_TIMER:
-      {
-	// evaluate a timer script
-	std::string script;
-	if (timer_scripts.find(req.timer_id, script)) {
-	  std::unique_lock<std::mutex> mlock(mutex);
-	  retcode = Tcl_Eval(interp, script.c_str());
-	  mlock.unlock();
-	  cond.notify_one(); // notify one waiting thread
-	}
-      }
-      break;
     case REQ_DPOINT:
       {
 	ds->set(req.dpoint);
@@ -833,8 +552,6 @@ int TclServer::process_requests(void) {
       break;
     }
   }
-  
-  // should delete timers here...
   
   return 0;
 }

@@ -78,13 +78,13 @@ namespace eval match_to_sample::phd {
 	}
 	
 	$s set_file_close_callback {
-	    set name [file tail [file root $filename]]
+	    # set name [file tail [file root $filename]]
 	    #	    set path [string map {-rpi4- {}} [info hostname]]
-	    set path {}
-	    set output_name [file join /tmp $path $name.csv]
+	    #set path {}
+	    #set output_name [file join /tmp $path $name.csv]
 	    #	    set converted [save_data_as_csv $filename $output_name]
 	    #	    print "saved data to $output_name"
-	    print "closed $name"
+	    #print "closed $name"
 	}
 	
 

@@ -284,7 +284,11 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) timer_expired_command,
 		       (ClientData) &g_timerInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
- return TCL_OK;
+
+  Tcl_LinkVar(interp, "nTimers", (char *) &g_timerInfo.ntimers,
+              TCL_LINK_INT | TCL_LINK_READ_ONLY);
+  
+  return TCL_OK;
 }
 
 
