@@ -14,7 +14,7 @@ namespace eval match_to_sample::phd {
 	limit -1
     }
     variable setup_trials_VV { trial_type VV  }
-    variable params_VV { sample_time 3000 delay_time 100 }
+    variable params_VV { sample_time 2000 delay_time 100 }
 
     variable setup_trials_HV { trial_type HV  }
     variable params_HV { sample_time 10000 delay_time 100 }
