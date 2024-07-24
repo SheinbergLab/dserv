@@ -226,6 +226,16 @@ oo::class create System {
 	}
 	return
     }
+
+    method set_params { args } {
+	set nargs [llength $args]
+	if { [expr {$nargs%2}] } {
+	    error "invalid param/setting args"
+	}
+	for { set i 0 } { $i < $nargs } { incr i 2 } {
+	    my set_param [lindex $args $i] [lindex $args [expr {$i+1}]]
+	}
+    }
     
     method get_params {} {
 	return $_params
