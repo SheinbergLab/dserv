@@ -148,21 +148,20 @@ namespace eval match_to_sample {
 	$sys add_transition wait_for_response {
 	    if [timerExpired] { return no_response }
 	    set resp [my responded]
-	    if { $resp != 0 } { return response }
+	    if { $resp != -1 } { return response }
 	}
 	
 	#
 	# response
 	#
 	$sys add_action response {
-	    if { $resp == 1 } { set r 1 } { set r 2 }
-	    ess::evt_put RESP $r [now]
+	    ess::evt_put RESP $resp [now]
 	    my choices_off
 	    ess::evt_put CHOICES OFF [now] 
 	}
 	
 	$sys add_transition response {
-	    if { $resp == 1 } {
+	    if { [my response_correct] } {
 		return correct
 	    } else {
 		return incorrect
@@ -173,9 +172,10 @@ namespace eval match_to_sample {
 	# no_response
 	#
 	$sys add_action no_response {
-	    ess::evt_put RESP NONE [now]
 	    my choices_off
 	    ess::evt_put CHOICES OFF [now] 
+	    ess::evt_put ABORT NORESPONSE [now]
+	    ess::evt_put ENDTRIAL ABORT [now]
 	}
 	
 	$sys add_transition no_response {
@@ -186,6 +186,7 @@ namespace eval match_to_sample {
 	# correct
 	#
 	$sys add_action correct {
+	    ess::evt_put ENDTRIAL CORRECT [now]
 	    my reward
 	}
 	
@@ -195,6 +196,7 @@ namespace eval match_to_sample {
 	# incorrect
 	#
 	$sys add_action incorrect {
+	    ess::evt_put ENDTRIAL INCORRECT [now]
 	    my noreward
 	}
 	

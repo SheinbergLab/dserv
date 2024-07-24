@@ -25,6 +25,7 @@ namespace eval match_to_sample::phd {
 	$s add_variable target_slot       -1
 	$s add_variable trial_type         {}
 	$s add_variable sample_id          -1
+	$s add_variable correct           -1
 	
 	$s set_protocol_init_callback {
 	    ess::init
@@ -116,6 +117,8 @@ namespace eval match_to_sample::phd {
 		set trial_type [dl_get stimdg:trial_type $cur_id]
 		set sample_id [dl_get stimdg:sample_id $cur_id]
 		rmtSend "nexttrial $cur_id"
+
+		set correct -1
 	    }
 	}
 	$s add_method finished {} {
@@ -190,18 +193,21 @@ namespace eval match_to_sample::phd {
 	$s add_method finale {} {
 	    soundPlay 6 60 400
 	}
+
+	$s add_method response_correct {} {
+	    return $correct
+	}
 	
 	$s add_method responded {} {
-	    if { [ess::touch_in_win 0] || [ess::touch_in_win 1] ||
-		 [ess::touch_in_win 2] || [ess::touch_in_win 3] } {
-		if { [ess::touch_in_win $target_slot] } {
-		    return 1
-		} else {
-		    return -1
+	    set r -1
+	    foreach w "0 1 2 3" {
+		if { [ess::touch_in_win $w] } {
+		    set r $w
+		    break
 		}
-	    } else {
-		return 0
 	    }
+	    if { $r == $target_slot } { set correct 1 } { set correct 0 }
+	    return $r
 	}
 	
 	return
