@@ -119,7 +119,7 @@ namespace eval match_to_sample::phd {
 	    dl_set stimdg:family [dl_ilist {*}$families]
 	    set nfamilies [dl_length stimdg:family]
 	    set nrep [expr ($nfamilies+3)/4]
-	    dl_local distance [dl_choose [dl_replicate [dl_shuffle "1 2 4 8"] $nrep] \
+	    dl_local distance [dl_choose [dl_replicate [dl_shuffle "2 4 8 16"] $nrep] \
 				   [dl_fromto 0 $nfamilies]]
 	    dl_set stimdg:distance $distance
 
