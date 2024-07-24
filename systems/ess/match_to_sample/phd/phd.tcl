@@ -135,21 +135,21 @@ namespace eval match_to_sample::phd {
 	$s add_method haptic_show { id } {
 	    package require rest
 	    set ip 192.168.88.254
-	    #set ip 127.0.0.1
 	    set port 5000
+
+	    # this waits until the pistons are all in place
 	    set url http://${ip}:${port}/shape/$id
-	    print $url
 	    set res [rest::simple $url {}]
 	}
 	
 	$s add_method haptic_clear { } {
 	    package require rest
 	    set ip 192.168.88.254
-	    #set ip 127.0.0.1
 	    set port 5000
-	    set url http://${ip}:${port}/set_piston/51/-1/1
+
+	    # this returns immediately
+	    set url http://${ip}:${port}/suction_sequence/51
 	    set res [rest::simple $url {}]
-#	    print "rest::simple $url {}"
 	}
 	
 	$s add_method sample_on {} {
