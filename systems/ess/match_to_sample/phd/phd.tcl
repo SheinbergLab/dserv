@@ -23,6 +23,8 @@ namespace eval match_to_sample::phd {
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
+	$s add_variable trial_type         {}
+	$s add_variable sample_id          -1
 	
 	$s set_protocol_init_callback {
 	    ess::init
@@ -63,6 +65,7 @@ namespace eval match_to_sample::phd {
 	
 	$s set_quit_callback {
 	    rmtSend clearscreen
+	    if { $trial_type == "HV"} { my haptic_clear }
 	    ess::end_obs QUIT
 	}
 	
@@ -110,6 +113,8 @@ namespace eval match_to_sample::phd {
 		    ess::touch_win_set $i $choice_x $choice_y $choice_r 0
 		}
 		set target_slot [dl_get stimdg:sample_slot $cur_id]
+		set trial_type [dl_get stimdg:trial_type $cur_id]
+		set sample_id [dl_get stimdg:sample_id $cur_id]
 		rmtSend "nexttrial $cur_id"
 	    }
 	}
@@ -127,12 +132,40 @@ namespace eval match_to_sample::phd {
 	    soundPlay 1 70 200
 	}
 
+	$s add_method haptic_show { id } {
+	    package require rest
+	    set ip 192.168.88.254
+	    #set ip 127.0.0.1
+	    set port 5000
+	    set url http://${ip}:${port}/shape/$id
+	    print $url
+	    set res [rest::simple $url {}]
+	}
+	
+	$s add_method haptic_clear { } {
+	    package require rest
+	    set ip 192.168.88.254
+	    #set ip 127.0.0.1
+	    set port 5000
+	    set url http://${ip}:${port}/set_piston/51/-1/1
+	    set res [rest::simple $url {}]
+#	    print "rest::simple $url {}"
+	}
+	
 	$s add_method sample_on {} {
-	    rmtSend "!sample_on"
+	    if { $trial_type == "VV" } {
+		rmtSend "!sample_on"
+	    } elseif { $trial_type == "HV" } {
+		my haptic_show $sample_id
+	    }
 	}
 
 	$s add_method sample_off {} {
-	    rmtSend "!sample_off"
+	    if { $trial_type == "VV" } {
+		rmtSend "!sample_off"
+	    } elseif { $trial_type == "HV" } {
+		my haptic_clear
+	    }
 	}
 
 	$s add_method choices_on {} {

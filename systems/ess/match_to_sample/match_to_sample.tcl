@@ -19,8 +19,8 @@ namespace eval match_to_sample {
 	$sys add_param n_rep             100      variable int
 	$sys add_param start_delay         0      time int
 	$sys add_param interblock_time  1000      time int
-	$sys add_param sample_pre_time   250      time int
-	$sys add_param sample_time      1000      time int
+	$sys add_param sample_pre_time     0      time int
+	$sys add_param sample_time      15000      time int
 	$sys add_param delay_time       1000      time int
 	$sys add_param finale_delay      500      time int
 	
@@ -123,7 +123,7 @@ namespace eval match_to_sample {
 	    timerTick $delay_time
 	}
 	
-	$sys add_transition sample_on {
+	$sys add_transition sample_off {
 	    if { [timerExpired] } { return choices_on }
 	}
 	

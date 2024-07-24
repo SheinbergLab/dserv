@@ -13,8 +13,8 @@ namespace eval match_to_sample::phd {
 	filled 1
 	limit -1
     }
-    variable setup_trials_vv { trial_type   VV }
-    variable setup_trials_hv { trial_type   HV }
+    variable setup_trials_vv { trial_type   VV  }
+    variable setup_trials_hv { trial_type   HV  }
 
     variable variants {
 	VV     { setup_trials vv "visual visual shape MTS" }

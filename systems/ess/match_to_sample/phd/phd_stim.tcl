@@ -54,7 +54,10 @@ proc create_shape { qrs scale { pinsize 12 } } {
     polyverts $s $centers:0 $centers:1
     polytype $s points
     polypointsize $s $pinsize
-    polycolor $s 0 0 0 
+    polycolor $s 0 0 0
+
+    # the phd display has angle up
+    rotateObj $s -30 0 0 1
     return $s
 }
 
