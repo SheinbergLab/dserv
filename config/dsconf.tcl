@@ -8,6 +8,13 @@ if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
 tcl::tm::add $dspath/pkgs
 package require ess
 
+foreach d "/shared/qpcs/data/essdat /tmp" {
+    if { [file exists $d] } {
+	set ess::data_dir $d
+	break
+    }
+}
+
 # load extra modules
 
 set dllspec modules/*[info sharedlibextension]
