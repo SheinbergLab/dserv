@@ -645,7 +645,7 @@ namespace eval ess {
     proc set_params { args } {
 	set nargs [llength $args]
 	if { [expr {$nargs%2}] } {
-	    error "invalid param/setting args"
+	    error "invalid param/setting args ($args)"
 	}
 	for { set i 0 } { $i < $nargs } { incr i 2 } {
 	    set_param [lindex $args $i] [lindex $args [expr {$i+1}]]
@@ -1184,6 +1184,12 @@ namespace eval ess {
 
 	# push new stimdg to dataserver
 	$s update_stimdg
+
+	# adjust system parameters for this variant
+	set param_settings ${system}::${protocol}::params_${variant}
+	if { [info exists $param_settings] } {
+	    ess::set_params {*}[set $param_settings]
+	}
 	
 	ess::evt_put ID VARIANT [now] $system:$protocol:$variant
 	set current(variant) $variant
