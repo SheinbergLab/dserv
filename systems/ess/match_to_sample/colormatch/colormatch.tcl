@@ -87,9 +87,6 @@ namespace eval match_to_sample::colormatch {
 	
 	$s set_end_callback {
 	    ess::evt_put SYSTEM_STATE STOPPED [now]
-	    if { $ess::open_datafile != "" } {
-		ess::file_close
-	    }
 	}
 	
 	$s set_file_open_callback {
