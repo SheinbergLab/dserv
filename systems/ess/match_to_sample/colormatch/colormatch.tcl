@@ -33,7 +33,7 @@ namespace eval match_to_sample::colormatch {
 	
 	$s add_variable buttons_changed    0
 	$s add_variable cur_id             0
-
+	$s add_variable correct           -1
 
 	$s set_protocol_init_callback {
 	    ess::init
@@ -152,6 +152,8 @@ namespace eval match_to_sample::colormatch {
 		ess::touch_win_set 1 $dist_x $dist_y $dist_r 0
 
 		rmtSend "nexttrial $stimtype"
+
+		set correct -1
 	    }
 	}
 
@@ -199,18 +201,22 @@ namespace eval match_to_sample::colormatch {
 	$s add_method finale {} {
 	    soundPlay 6 60 400
 	}
+
+	$sys add_method response_correct {} { return $correct }
 	
 	$s add_method responded {} {
 	    if { $use_buttons && $buttons_changed } {
-		return 0
+		return -1
 	    }
 
 	    if { [ess::touch_in_win 0] } {
-		return 1
-	    } elseif { [ess::touch_in_win 1] } {
-		return -1
-	    } else {
+		set correct 1
 		return 0
+	    } elseif { [ess::touch_in_win 1] } {
+		set correct 0
+		return 1
+	    } else {
+		return -1
 	    }
 	}
 	
