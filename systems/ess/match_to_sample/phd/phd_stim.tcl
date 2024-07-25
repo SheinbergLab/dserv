@@ -47,7 +47,7 @@ namespace inscope :: {
 #
 proc create_shape { qrs scale { pinsize 12 } } {
     set scale 0.2
-    dl_local centers [dl_transpose [dl_unpack [::hex::to_pixel $qrs $scale]]]
+    dl_local centers [dl_transpose [dl_unpack [::hex::pointy_to_pixel $qrs $scale]]]
 
     set s [polygon]
     dl_set centers $centers
@@ -56,8 +56,6 @@ proc create_shape { qrs scale { pinsize 12 } } {
     polypointsize $s $pinsize
     polycolor $s 0 0 0
 
-    # the phd display has angle up
-    rotateObj $s -30 0 0 1
     return $s
 }
 
