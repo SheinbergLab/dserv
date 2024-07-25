@@ -9,6 +9,7 @@
 namespace eval match_to_sample::phd {
     variable setup_trials_defaults {
 	dbfile /usr/local/dserv/systems/ess/match_to_sample/phd/data/Grasp3ShapesRyan.db
+	#dbfile /shared/qpcs/stimuli/graspomatic/Grasp3ShapesRyan.db
 	trial_type VV
 	filled 1
 	limit -1
