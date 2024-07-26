@@ -95,6 +95,10 @@ public:
 					      int objc,
 					      Tcl_Obj * const objv[]);
   static
+  int dserv_logger_clients_command(ClientData data, Tcl_Interp *interp,
+				   int objc, Tcl_Obj * const objv[]);
+
+  static
   int dserv_log_open_command(ClientData data, Tcl_Interp *interp,
 			     int objc, Tcl_Obj * const objv[]);
   static

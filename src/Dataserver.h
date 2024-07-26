@@ -43,8 +43,8 @@ class Dataserver;		// defined below
 #include "ClientRequest.h"
 #include "SendClient.h"
 #include "SendTable.h"
-#include "LogClient.h"
 #include "LogTable.h"
+#include "LogClient.h"
 
 #include <tcl.h>
 
@@ -134,6 +134,7 @@ public:
   int client_remove_match(std::string key, char *match);
   int client_remove_all_matches(std::string key);
   std::string get_matches(char *host, int port);
+  std::string get_logger_clients(void);
   int logger_client_open(std::string filename, bool overwrite);
   int logger_client_close(std::string filename);
   int logger_client_pause(std::string filename);

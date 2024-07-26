@@ -36,7 +36,8 @@ class LogClient {
   ds_datapoint_t endobs_dpoint;   /* dpoint signal endobs   */
   
   LogMatchDict matches;
-
+  LogTable *log_table;
+  
   std::atomic<int> obs_limited_matches;
   std::atomic<int> state;
 
