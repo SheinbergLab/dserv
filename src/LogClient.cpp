@@ -32,8 +32,8 @@ include <io.h>
 #include "Datapoint.h"
 #include "sharedqueue.h"
 #include "LogMatchDict.h"
+#include "LogTable.h"
 #include "LogClient.h"
-
   
 LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
 {
@@ -305,6 +305,10 @@ void LogClient::log_client_process(LogClient *logclient)
     }
   }
 
+  // remove this client from the LogTable and free
+  logclient->log_table->remove(logclient->filename);
+  delete logclient;
+  
   //  std::cout << "shutting down" << std::endl;
 }
 
