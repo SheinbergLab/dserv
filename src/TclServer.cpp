@@ -189,6 +189,18 @@ int TclServer::dserv_remove_all_matches_command(ClientData data,
 }
 
 
+int TclServer::dserv_logger_clients_command(ClientData data, Tcl_Interp *interp,
+					    int objc, Tcl_Obj * const objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+  Dataserver *ds = tclserver->ds;
+  std::string clients;
+  
+  clients = ds->get_logger_clients();
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(clients.data(), clients.size()));
+    
+  return TCL_OK;
+}
 
 
 int TclServer::dserv_log_open_command(ClientData data, Tcl_Interp *interp,
@@ -404,6 +416,9 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
   Tcl_CreateObjCommand(interp, "dservRemoveAllMatches",
 		       dserv_remove_all_matches_command, this, NULL);
   
+  Tcl_CreateObjCommand(interp, "dservLoggerClients",
+		       dserv_logger_clients_command, this, NULL);
+
   Tcl_CreateObjCommand(interp, "dservLoggerOpen",
 		       dserv_log_open_command, this, NULL);
   Tcl_CreateObjCommand(interp, "dservLoggerClose",
