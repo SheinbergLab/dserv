@@ -700,23 +700,36 @@ namespace eval ess {
 	}
 	eval evtNameSet $type $name $ptype_id
     }
-	       
+
+    proc open_files {} {
+	# get all open files
+	set open_files [dservLoggerClients]
+	
+	# find any .ess files
+	set essfiles [lsearch -all -inline -glob $open_files *.ess]
+	
+	return $essfiles
+    }
+	
     proc file_open { f { overwrite 0 } } {
 	variable current
         variable open_datafile
 	variable subject_id
 	variable data_dir
 
-	if { $open_datafile != "" } {
-	    print "datafile $open_datafile not closed"
-	    return
+	# get all open files
+	set open_files [ess::open_files]
+
+	if { $open_files != "" } {
+	    print "$open_files open: call ess::file_close"
+	    return -1
 	}
 	
 	set filename [file join $data_dir $f.ess]
 	if { !$overwrite } {
 	    if [file exists $filename] {
 		print "file $f already exists in directory $data_dir"
-		return
+		return 0
 	    }
 	}
         dservLoggerOpen $filename 1
@@ -751,7 +764,7 @@ namespace eval ess {
 	$current(state_system) file_open $f
 	
 #	dservTouch em_coeffDG
-	return
+	return 1
     }
 
     proc file_close {} {
@@ -765,8 +778,10 @@ namespace eval ess {
 	    
 	    # call the system's specific file_close callback
 	    catch {$current(state_system) file_close $open_datafile} ioerror
+	    set open_datafile {}
+	    return 1
 	}
-	set open_datafile {}
+	return 0
     }
 }
 
