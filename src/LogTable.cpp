@@ -1,5 +1,6 @@
 #include <unordered_map>
 #include <mutex>
+#include <cstring>
 
 #include "Datapoint.h"
 #include "sharedqueue.h"
