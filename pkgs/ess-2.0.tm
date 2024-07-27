@@ -407,6 +407,8 @@ namespace eval ess {
     variable open_datafile {}
     variable subject_id {}
 
+    # for tracking begin/end obs and sync'ing with external systems
+    variable in_obs  0
     variable obs_pin 26
     
     proc create_system { name } {
@@ -563,15 +565,20 @@ namespace eval ess {
     }
 
     proc begin_obs { current total } {
+	variable in_obs
 	variable obs_pin
+	set in_obs 1
 	rpioPinOn $obs_pin
 	ess::evt_put BEGINOBS INFO [now] $current $total
     }
     
     proc end_obs { { status 1 } } {
+	variable in_obs
 	variable obs_pin
-	rpioPinOff $obs_pin
+	if { !$in_obs } { return }
 	ess::evt_put ENDOBS $status [now]
+	rpioPinOff $obs_pin
+	set in_obs 0
     }
     
     proc query_state {} {
