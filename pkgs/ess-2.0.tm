@@ -676,6 +676,24 @@ namespace eval ess {
 	eval evtPut $type_id $subtype_id $time $ptype $args
     }
 
+    proc evt_id { type { subtype {} } } {
+	variable current
+	if { [string is int $type] } {
+	    set type_id $type
+	} else {
+	    set type_id [dict get [set $current(state_system)::_evt_type_ids] $type]
+	}
+	if { $subtype == {} } { return $type_id }
+
+	if { [string is int $subtype] } {
+	    set subtype_id $subtype
+	} else {
+	    set subtype_id [dict get [set $current(state_system)::_evt_subtype_ids] \
+				$type $subtype]
+	}
+	return "$type_id $subtype_id"
+    }
+    
     proc store_evt_names {} {
 	variable current
 	
