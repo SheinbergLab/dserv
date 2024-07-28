@@ -202,7 +202,7 @@ namespace eval match_to_sample::colormatch {
 	    soundPlay 6 60 400
 	}
 
-	$sys add_method response_correct {} { return $correct }
+	$s add_method response_correct {} { return $correct }
 	
 	$s add_method responded {} {
 	    if { $use_buttons && $buttons_changed } {
