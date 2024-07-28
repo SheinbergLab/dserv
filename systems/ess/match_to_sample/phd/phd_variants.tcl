@@ -14,11 +14,13 @@ namespace eval match_to_sample::phd {
 	filled 1
 	limit -1
     }
+    variable params_defaults { delay_time 100 }
+
     variable setup_trials_VV { trial_type VV  }
-    variable params_VV { sample_time 2000 delay_time 100 }
+    variable params_VV { sample_time 2000 }
 
     variable setup_trials_HV { trial_type HV  }
-    variable params_HV { sample_time 10000 delay_time 100 }
+    variable params_HV { sample_time 10000 }
 
     variable variants {
 	VV     { setup_trials VV "visual visual shape MTS" }

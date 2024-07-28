@@ -1225,7 +1225,13 @@ namespace eval ess {
 	# push new stimdg to dataserver
 	$s update_stimdg
 
-	# adjust system parameters for this variant
+	# protocol defaults for system parameters
+	set param_default_settings ${system}::${protocol}::params_defaults
+	if { [info exists $param_default_settings] } {
+	    ess::set_params {*}[set $param_default_settings]
+	}
+	
+	# and update system parameters for this variant
 	set param_settings ${system}::${protocol}::params_${variant}
 	if { [info exists $param_settings] } {
 	    ess::set_params {*}[set $param_settings]

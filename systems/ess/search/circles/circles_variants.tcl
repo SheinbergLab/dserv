@@ -8,13 +8,15 @@
 
 namespace eval search::circles {
     variable basic_search_defaults    { nr 100  nd 0 mindist 1.5 }
+    variable params_defaults          { n_rep 50 }
+
     variable basic_search_single      { nr 10 }
     variable basic_search_variable    { nr 20  nd {0 2 4 6 8} }
     variable basic_search_distractors { nr 100 nd 6 mindist 2.0 }
     
     variable variants {
-	single      { basic_search single      "no distractors"}
-	variable    { basic_search variable    "variable number of distractors" }
+	single      { basic_search single    "no distractors"}
+	variable    { basic_search variable  "variable number of distractors" }
 	distractors { basic_search distractors "fixed number of distractors" }
     }	
 	
