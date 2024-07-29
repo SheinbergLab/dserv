@@ -7,13 +7,18 @@
 #
 
 namespace eval match_to_sample::phd {
-    variable setup_trials_defaults {
-	dbfile /usr/local/dserv/systems/ess/match_to_sample/phd/data/Grasp3ShapesRyan.db
-	#dbfile /shared/qpcs/stimuli/graspomatic/Grasp3ShapesRyan.db
-	trial_type VV
-	filled 1
-	limit -1
+
+    # find database
+    set db {}
+    set paths [list \
+		   /shared/qpcs/stimuli/graspomatic/Grasp3Shapes.db \
+		   ${ess::system_path}/match_to_sample/phd/data/Grasp3Shapes.db]
+    foreach p $paths {
+	if [file exists $p] { set db $p; break }
     }
+
+    variable setup_trials_defaults "dbfile $db trial_type VV filled 1 limit -1"
+
     variable params_defaults { delay_time 100 }
 
     variable setup_trials_VV { trial_type VV  }
@@ -86,6 +91,40 @@ namespace eval match_to_sample::phd {
 	    
 	    return $shapes
 	}
+
+	$s add_method open_grasp_db { dbname srcfile } {
+	    # create an in-memory database loaded with graspdb tables
+	    package require sqlite3
+	    
+	    sqlite3 src $srcfile -readonly true
+	    sqlite3 $dbname :memory:
+	    # get the schema from original table
+	    set cmd {
+		SELECT sql FROM sqlite_schema
+		WHERE type='table'
+		ORDER BY name;
+	    }
+	    
+	    # create all tables but sqlite_sequence in memory db
+	    set tables_cmd [src eval $cmd]
+	    src close
+	    set tables {}
+	    foreach t $tables_cmd {
+		set table_name [lindex $t 2]
+		if { $table_name != "sqlite_sequence(name,seq)" } {
+		    $dbname eval $t
+		    lappend tables $table_name
+		}
+		
+	    }
+	    
+	    $dbname eval {ATTACH DATABASE $srcfile AS grasp_db}
+	    foreach t $tables {
+		$dbname eval "INSERT INTO main.$t SELECT * FROM grasp_db.$t;"
+	    }
+	    
+	    return $dbname
+	}
 	
 	$s add_method setup_trials { dbfile trial_type filled limit } {
 
@@ -97,8 +136,8 @@ namespace eval match_to_sample::phd {
 	    set choice_scale   3.0
 	    set choice_spacing 4.0
 
-	    sqlite3 grasp_db $dbfile -readonly true
-	    grasp_db timeout 5000
+	    if {![file exists $dbfile]} { error "db file not found" }
+	    my open_grasp_db grasp_db $dbfile
 	    
 	    dl_set stimdg:stimtype [dl_ilist]
 	    dl_set stimdg:family [dl_ilist]
