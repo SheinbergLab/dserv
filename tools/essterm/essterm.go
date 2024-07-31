@@ -135,7 +135,6 @@ func main() {
 	defer f.Close()
 	*/
 	
-	host = arguments[1]
 	port = 2570
 	connect = fmt.Sprintf("%s:%d", host, port)
 
@@ -242,11 +241,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.table, tbCmd = m.table.Update(msg)
 
 	switch msg := msg.(type) {
+
 	case dservMsg:
 		words := strings.Fields(msg.varname)
 		rows = append(rows, table.Row{words[0], words[2], words[4]})
 		m.table.SetRows(rows)
-		
 		
 	case tea.KeyMsg:
 		switch msg.Type {
