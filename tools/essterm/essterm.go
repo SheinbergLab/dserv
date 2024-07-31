@@ -2,65 +2,190 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
-	"log"
-	"net"
-	"os"
-	"io"
-	"strings"
-	
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"io"
+	"log"
+	"net"
+	"os"
+	"strings"
 )
 
+const (
+	SendText   = 0
+	SendBinary = 1
+	SendJSON   = 2
+)
+
+const (
+	PtypeByte   = 0
+	PtypeString = 1
+	PtypeFloat  = 2
+	PtypeShort  = 4
+	PtypeInt    = 5
+)
+
+const (
+	SystemRunning = 1
+	SystemStopped = 0
+)
+
+var SystemState = SystemStopped
+
 var connect string
-var recv_host string
-var recv_port string
+var recvHost string
+var recvPort string
 var rows []table.Row
+
+// event type names (exactly 256)
+var evtTypeNames [256]string
+
+// event subtype names (specified by special events)
+var evtSubtypeNames map[string]string
+
+// debug here using fmt.Fprintf()
+var debugLog *os.File
 
 type history struct {
 	count int
 	index int
-	cmds []string
+	cmds  []string
 }
 
 func (h *history) append(cmd string) {
 	if cmd != "" {
 		h.cmds = append(h.cmds, cmd)
-		h.index = len(h.cmds)-1
+		h.index = len(h.cmds) - 1
 	}
 }
 
 func (h *history) previous() string {
-	if len(h.cmds) == 0 { return "" }
-	if h.index == -1 { h.index = len(h.cmds)-1 }
+	if len(h.cmds) == 0 {
+		return ""
+	}
+	if h.index < 0 || h.index >= len(h.cmds)-1 {
+		h.index = len(h.cmds) - 1
+	}
 	p := h.cmds[h.index]
 	h.index--
 	return p
 }
 
 func (h *history) next() string {
-	if len(h.cmds) == 0 { return "" }
-	if h.index == len(h.cmds) { h.index = 0 }
+	if len(h.cmds) == 0 {
+		return ""
+	}
+	if h.index >= len(h.cmds)-1 || h.index < 0 {
+		h.index = 0
+	}
 	p := h.cmds[h.index]
 	h.index++
 	return p
 }
 
-type dservMsg struct {
-	varname   string
-	timestamp uint64
+type Dpoint struct {
+	Name      string `json:"name"`
+	Timestamp uint64 `json:"timestamp"`
+	Dtype     uint32 `json:"dtype"`
+	B64data   string `json:"data"`
 }
 
-func (d dservMsg) String() string {
-	return fmt.Sprintf("%s", d.varname)
+type Evt struct {
+	Type      uint8           `json:"e_type"`
+	Subtype   uint8           `json:"e_subtype"`
+	Timestamp uint64          `json:"timestamp"`
+	Ptype     uint8           `json:"e_dtype"`
+	Params    json.RawMessage `json:"e_params,omitempty"`
+}
+
+type evtMsg struct {
+	evt *Evt
+}
+
+func systemReset(p *tea.Program) {
+}
+
+func initializeNames() {
+	for i := 0; i < 16; i++ {
+		evtTypeNames[i] = fmt.Sprintf("Reserved%d", i)
+	}
+	for i := 16; i < 128; i++ {
+		evtTypeNames[i] = fmt.Sprintf("System%d", i)
+	}
+	for i := 128; i < 256; i++ {
+		evtTypeNames[i] = fmt.Sprintf("User%d", i)
+	}
+	evtSubtypeNames = make(map[string]string)
+}
+
+func ProcessFileIO(e *Evt, p *tea.Program) {
+
+}
+
+func processEvent(e *Evt, p *tea.Program) {
+	switch e.Type {
+	case 3: // USER event
+		switch e.Subtype {
+		case 0:
+			SystemState = SystemRunning
+		case 1:
+			SystemState = SystemStopped
+		case 2:
+			systemReset(p)
+		}
+	case 2: // FILEIO
+		ProcessFileIO(e, p)
+	case 1: // NAMESET
+		evtTypeNames[e.Subtype] = string(e.Params)
+		return
+	case 6: // SUBTYPE NAMES
+		stypes := strings.Split(string(e.Params), " ")
+		for i := 0; i < len(stypes); i += 2 {
+			s := fmt.Sprintf("%d:%s", e.Subtype, stypes[i+1])
+			evtSubtypeNames[s] = stypes[i]
+		}
+		return
+	case 18: // SYSTEM CHANGES
+
+	case 19: // BEGINOBS
+	}
+
+	p.Send(evtMsg{e})
+	fmt.Fprintf(debugLog, "Event: %d %d %s\n", e.Type, e.Subtype, e.Params)
 }
 
 func processDatapoint(dpointStr string, p *tea.Program) {
-	p.Send(dservMsg{varname: dpointStr, timestamp: 100000})
+	var dpoint Dpoint
+
+	fmt.Fprintf(debugLog, "%s\n", dpointStr)
+
+	err := json.Unmarshal([]byte(dpointStr), &dpoint)
+	if err != nil {
+		return
+	}
+
+	switch dpoint.Name {
+	case "eventlog/events":
+		var evt Evt
+		err := json.Unmarshal([]byte(dpointStr), &evt)
+		if err != nil {
+			return
+		}
+		// peel off leading and trailing "" or []
+		if len(evt.Params) > 1 {
+			evt.Params = evt.Params[1 : len(evt.Params)-1]
+		}
+
+		processEvent(&evt, p)
+	default:
+
+	}
+
 }
 
 func handleConnection(c net.Conn, p *tea.Program) {
@@ -82,7 +207,7 @@ func handleConnection(c net.Conn, p *tea.Program) {
 
 func startTCPServer(l net.Listener, p *tea.Program) {
 	defer l.Close()
-	
+
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -107,13 +232,16 @@ func doCmd(connect string, cmd string) (error, string) {
 	return nil, message
 }
 
-func dservRegister(dserv_host string, dserv_port string) (error, string) {
-	return doCmd("localhost:4620", "%reg "+recv_host+" "+recv_port)
+func dservRegister(dserv_host string, dserv_port string, flags int) (error, string) {
+	cmd := fmt.Sprintf("%%reg %s %s %d", recvHost, recvPort, flags)
+	err, result := doCmd("localhost:4620", cmd)
+	//	fmt.Fprintf(debugLog, "%s -> %s\n", cmd, result)
+	return err, result
 }
 
 func dservAddMatch(dserv_host, dserv_port, varname string) (error, string) {
 	return doCmd("localhost:4620",
-		"%match "+recv_host+" "+recv_port+" "+varname+" 1")
+		"%match "+recvHost+" "+recvPort+" "+varname+" 1")
 }
 
 func main() {
@@ -126,17 +254,18 @@ func main() {
 		host = "localhost"
 	}
 
-	/*
-	f, err := tea.LogToFile("essterm.log", "debug")
+	var err error
+	debugLog, err = tea.LogToFile("essterm.log", "debug")
 	if err != nil {
 		fmt.Println("fatal:", err)
 		os.Exit(1)
 	}
-	defer f.Close()
-	*/
-	
+	defer debugLog.Close()
+
 	port = 2570
 	connect = fmt.Sprintf("%s:%d", host, port)
+
+	initializeNames()
 
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 
@@ -145,16 +274,16 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	
-	recv_host, recv_port, err = net.SplitHostPort(l.Addr().String())
-	
+
+	recvHost, recvPort, err = net.SplitHostPort(l.Addr().String())
+
 	go startTCPServer(l, p)
 
-	dservRegister(recv_host, recv_port)
-	dservAddMatch(recv_host, recv_port, "qpcs/*")
-	dservAddMatch(recv_host, recv_port, "eventlog/events")
-	dservAddMatch(recv_host, recv_port, "eventlog/names")
-	
+	dservRegister(recvHost, recvPort, SendJSON)
+	dservAddMatch(recvHost, recvPort, "qpcs/*")
+	dservAddMatch(recvHost, recvPort, "eventlog/events")
+	dservAddMatch(recvHost, recvPort, "eventlog/names")
+
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
 	}
@@ -165,10 +294,10 @@ type (
 )
 
 type model struct {
-	textinput textinput.Model
-	viewport  viewport.Model
-	table     table.Model
-	err       error
+	textinput   textinput.Model
+	viewport    viewport.Model
+	table       table.Model
+	err         error
 	cmd_history *history
 }
 
@@ -200,7 +329,7 @@ func initialModel() model {
 		table.WithHeight(7),
 	)
 	t.Blur()
-	
+
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -214,13 +343,13 @@ func initialModel() model {
 	t.SetStyles(s)
 
 	var h history
-	
+
 	return model{
-		textinput: ti,
-		viewport:  vp,
-		table:     t,
+		textinput:   ti,
+		viewport:    vp,
+		table:       t,
 		cmd_history: &h,
-		err:       nil,
+		err:         nil,
 	}
 }
 
@@ -241,20 +370,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.table, tbCmd = m.table.Update(msg)
 
 	switch msg := msg.(type) {
+	case evtMsg:
+		e_name := evtTypeNames[msg.evt.Type]
+		e_time := fmt.Sprintf("%d", msg.evt.Timestamp)
 
-	case dservMsg:
-		words := strings.Fields(msg.varname)
-		rows = append(rows, table.Row{words[0], words[2], words[4]})
+		rows = append(rows, table.Row{e_name, e_time, string(msg.evt.Params)})
 		m.table.SetRows(rows)
-		
+		m.table.GotoBottom()
 	case tea.KeyMsg:
 		switch msg.Type {
-			
+
 		case tea.KeyEnter:
-			if (m.textinput.Value() == "exit") {
+			if m.textinput.Value() == "exit" {
 				return m, tea.Quit
 			}
-			
+
 			err, result := doCmd(connect, m.textinput.Value()+"\n")
 			if err != nil {
 				m.err = err
@@ -274,24 +404,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.textinput.Focused() {
 				if cmd := m.cmd_history.previous(); cmd != "" {
 					m.textinput.SetValue(cmd)
-					m.textinput.SetCursor(len(cmd)+1)
+					m.textinput.SetCursor(len(cmd) + 1)
 				}
-				
+
 			}
 
 		case tea.KeyCtrlN, tea.KeyDown:
 			if m.textinput.Focused() {
 				if cmd := m.cmd_history.next(); cmd != "" {
 					m.textinput.SetValue(cmd)
-					m.textinput.SetCursor(len(cmd)+1)
+					m.textinput.SetCursor(len(cmd) + 1)
 				}
-				
+
 			}
 
 		case tea.KeyCtrlE:
 			m.table.Blur()
 			m.textinput.Focus()
-			
+
 		case tea.KeyCtrlD, tea.KeyEsc:
 			return m, tea.Quit
 		}
@@ -313,4 +443,3 @@ func (m model) View() string {
 		m.table.View(),
 	) + "\n"
 }
-
