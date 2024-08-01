@@ -48,6 +48,14 @@ var evtTypeNames [256]string
 // event subtype names (specified by special events)
 var evtSubtypeNames map[string]string
 
+type ObsInfo struct {
+	ObsStart uint64
+	ObsCount int
+	Events   [][]Evt
+}
+
+var obsInfo ObsInfo
+
 // debug here using fmt.Fprintf()
 var debugLog *os.File
 
@@ -104,10 +112,7 @@ type Evt struct {
 }
 
 type evtMsg struct {
-	evt *Evt
-}
-
-func systemReset(p *tea.Program) {
+	evt Evt
 }
 
 func initializeNames() {
@@ -123,11 +128,37 @@ func initializeNames() {
 	evtSubtypeNames = make(map[string]string)
 }
 
-func ProcessFileIO(e *Evt, p *tea.Program) {
+func ProcessFileIO(e Evt, p *tea.Program) {
 
 }
 
-func processEvent(e *Evt, p *tea.Program) {
+func ObsReset(o *ObsInfo) {
+	o.ObsCount = -1
+	o.Events = [][]Evt{}
+	rows = []table.Row{}
+}
+
+func ObsStart(o *ObsInfo, e Evt) {
+	o.ObsCount++
+	o.ObsStart = e.Timestamp
+	o.Events = append(o.Events, []Evt{e})
+	rows = []table.Row{}
+}
+
+func ObsAddEvent(o *ObsInfo, e Evt) {
+	if o.ObsCount == -1 {
+		return
+	}
+	e.Timestamp -= o.ObsStart
+	o.Events[o.ObsCount] =
+		append(o.Events[o.ObsCount], e)
+}
+
+func ObsEnd(o *ObsInfo, e Evt) {
+
+}
+
+func processEvent(e Evt, p *tea.Program) {
 	switch e.Type {
 	case 3: // USER event
 		switch e.Subtype {
@@ -136,7 +167,7 @@ func processEvent(e *Evt, p *tea.Program) {
 		case 1:
 			SystemState = SystemStopped
 		case 2:
-			systemReset(p)
+			ObsReset(&obsInfo)
 		}
 	case 2: // FILEIO
 		ProcessFileIO(e, p)
@@ -153,8 +184,14 @@ func processEvent(e *Evt, p *tea.Program) {
 	case 18: // SYSTEM CHANGES
 
 	case 19: // BEGINOBS
+		ObsStart(&obsInfo, e)
+	case 20: // ENDOBS
+		ObsEnd(&obsInfo, e)
 	}
-
+	if obsInfo.ObsCount >= 0 {
+		e.Timestamp -= obsInfo.ObsStart
+	}
+	ObsAddEvent(&obsInfo, e)
 	p.Send(evtMsg{e})
 	fmt.Fprintf(debugLog, "Event: %d %d %s\n", e.Type, e.Subtype, e.Params)
 }
@@ -181,7 +218,7 @@ func processDatapoint(dpointStr string, p *tea.Program) {
 			evt.Params = evt.Params[1 : len(evt.Params)-1]
 		}
 
-		processEvent(&evt, p)
+		processEvent(evt, p)
 	default:
 
 	}
@@ -232,15 +269,26 @@ func doCmd(connect string, cmd string) (error, string) {
 	return nil, message
 }
 
+func getHostIP(dserv_host, dserv_port string) (error, string) {
+	c, err := net.Dial("tcp", dserv_host+":"+dserv_port)
+	if err != nil {
+		return err, ""
+	}
+	addr := c.LocalAddr().String()
+	s := strings.Split(addr, ":")
+	c.Close()
+	return nil, s[0]
+}
+
 func dservRegister(dserv_host string, dserv_port string, flags int) (error, string) {
 	cmd := fmt.Sprintf("%%reg %s %s %d", recvHost, recvPort, flags)
-	err, result := doCmd("localhost:4620", cmd)
+	err, result := doCmd(dserv_host+":"+dserv_port, cmd)
 	//	fmt.Fprintf(debugLog, "%s -> %s\n", cmd, result)
 	return err, result
 }
 
 func dservAddMatch(dserv_host, dserv_port, varname string) (error, string) {
-	return doCmd("localhost:4620",
+	return doCmd(dserv_host+":"+dserv_port,
 		"%match "+recvHost+" "+recvPort+" "+varname+" 1")
 }
 
@@ -266,6 +314,7 @@ func main() {
 	connect = fmt.Sprintf("%s:%d", host, port)
 
 	initializeNames()
+	ObsReset(&obsInfo)
 
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 
@@ -276,13 +325,13 @@ func main() {
 	}
 
 	recvHost, recvPort, err = net.SplitHostPort(l.Addr().String())
-
+	_, recvHost = getHostIP(host, "4620")
 	go startTCPServer(l, p)
 
-	dservRegister(recvHost, recvPort, SendJSON)
-	dservAddMatch(recvHost, recvPort, "qpcs/*")
-	dservAddMatch(recvHost, recvPort, "eventlog/events")
-	dservAddMatch(recvHost, recvPort, "eventlog/names")
+	dservRegister(host, "4620", SendJSON)
+	dservAddMatch(host, "4620", "qpcs/*")
+	dservAddMatch(host, "4620", "eventlog/events")
+	dservAddMatch(host, "4620", "eventlog/names")
 
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
@@ -317,16 +366,17 @@ func initialModel() model {
 
 	// table
 	columns := []table.Column{
-		{Title: "Name", Width: 16},
-		{Title: "Timestamp", Width: 16},
-		{Title: "Vals", Width: 24},
+		{Title: "Timestamp", Width: 7},
+		{Title: "Type", Width: 11},
+		{Title: "Subtype", Width: 11},
+		{Title: "Vals", Width: 8},
 	}
 
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(7),
+		table.WithHeight(11),
 	)
 	t.Blur()
 
@@ -371,10 +421,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case evtMsg:
-		e_name := evtTypeNames[msg.evt.Type]
-		e_time := fmt.Sprintf("%d", msg.evt.Timestamp)
+		if obsInfo.ObsCount < 0 {
+			m.table.SetRows([]table.Row{})
+			return m, tbCmd
+		}
+		e_type := evtTypeNames[msg.evt.Type]
+		st := fmt.Sprintf("%d:%d", msg.evt.Type, msg.evt.Subtype)
+		e_subtype := evtSubtypeNames[st]
+		if e_subtype == "" {
+			e_subtype = fmt.Sprintf("%d", msg.evt.Subtype)
+		}
+		e_time := fmt.Sprintf("%d", msg.evt.Timestamp/1000)
 
-		rows = append(rows, table.Row{e_name, e_time, string(msg.evt.Params)})
+		rows = append(rows, table.Row{e_time, e_type, e_subtype, string(msg.evt.Params)})
 		m.table.SetRows(rows)
 		m.table.GotoBottom()
 	case tea.KeyMsg:
