@@ -10,6 +10,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -21,14 +22,16 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <signal.h>
-#include <termios.h>
 #include <pthread.h>
-#include <semaphore.h>
+
+#ifdef __linux__
+#include <sys/timerfd.h>
+#include <strings.h>
+#endif
 
 #ifdef __APPLE__
 #include <dispatch/dispatch.h>
 #endif
-
 
 #include <tcl.h>
 #include "Datapoint.h"
@@ -36,115 +39,34 @@
 
 const char *TIMER_DPOINT_PREFIX = "timer";
 
-/*************************************************************************/
-/***                   queues for timer tick requests                  ***/
-/*************************************************************************/
-
-/*
-  semaphore example:
-  http://www2.lawrence.edu/fast/GREGGJ/CMSC480/net/workerThreads.html
-*/
-#define QUEUE_SIZE 16
-
-struct tick_info_s;
-struct timer_info_s;
-
-typedef struct {
-  struct tick_info_s *d[QUEUE_SIZE];
-  int front;
-  int back;
-  sem_t *mutex;
-  sem_t *slots;
-  sem_t *items;
-#ifndef __APPLE__
-  sem_t unnamed_mutex;
-  sem_t unnamed_slots;
-  sem_t unnamed_items;
-#endif
-} queue;
-
-queue* queueCreate();
-void enqueue(queue* q, struct tick_info_s *tickinfo);
-struct tick_info_s *dequeue(queue* q);
-
-queue* queueCreate() {
-    queue *q = (queue*) malloc(sizeof(queue));
-    q->front = 0;
-    q->back = 0;
-
-#ifdef __APPLE__
-    q->mutex = sem_open ("qMutex", O_CREAT | O_EXCL, 0644, 1); 
-    sem_unlink ("qMutex");      
-
-    q->slots = sem_open ("qSlots", O_CREAT | O_EXCL, 0644, QUEUE_SIZE); 
-    sem_unlink ("qSlots");      
-
-    q->items = sem_open ("qItems", O_CREAT | O_EXCL, 0644, 0); 
-    sem_unlink ("qItems");      
-#else
-    q->mutex = &q->unnamed_mutex;
-    sem_init(q->mutex, 0, 1);
-
-    q->slots = &q->unnamed_slots;
-    sem_init(q->slots, 0, QUEUE_SIZE);
-
-    q->items = &q->unnamed_items;
-    sem_init(q->items, 0, 0);
-#endif
-    return q;
-}
-
-void enqueue(queue* q, struct tick_info_s *tickinfo) {
-    sem_wait(q->slots);
-    sem_wait(q->mutex);
-    q->d[q->back] = tickinfo;
-    q->back = (q->back+1)%QUEUE_SIZE;
-    sem_post(q->mutex);
-    sem_post(q->items);
-}
-
-struct tick_info_s *dequeue(queue* q) {
-  struct tick_info_s *tick_info;
-  sem_wait(q->items);
-  sem_wait(q->mutex);
-  tick_info = q->d[q->front];
-  q->front = (q->front+1)%QUEUE_SIZE;
-  sem_post(q->mutex);
-  sem_post(q->slots);
-  return tick_info;
-}
-
 typedef struct tick_info_s {
   struct timer_info_s *info;
   int timerid;			/* timer id */
   int ms;
 } tick_info_t;
 
-#ifdef __APPLE__
 typedef struct dserv_timer_s {
   tclserver_t *tclserver;
   int timer_id;
+  volatile sig_atomic_t expired;
+#ifdef __APPLE__
   dispatch_queue_t queue;
   dispatch_source_t timer;
+  volatile sig_atomic_t suspend_count;
+#else
+  int timer_fd;
+  struct itimerspec  its;
+#endif
   int nrepeats;
   int expirations;
-  volatile sig_atomic_t suspend_count;
-  int expired;
+  int timeout_ms;
 } dserv_timer_t;
-#endif
-
 
 typedef struct timer_info_s
 {
   tclserver_t *tclserver;
   int ntimers;
-#ifdef __APPLE__
   dserv_timer_t *timers;
-#else
-  queue* q;
-  int *expired;
-  tick_info_t **requests;
-#endif
 } timer_info_t;
 
 /* global to this module */
@@ -181,8 +103,9 @@ void timer_handler(dserv_timer_t *t, dispatch_source_t timer)
   t->expirations++;
 }
 
-int dserv_timer_init(dserv_timer_t *t, timer_info_t *info)
+int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
 {
+  t->timer_id = id;
   t->queue = dispatch_queue_create("timerQueue", 0);
   
   // Create dispatch timer source
@@ -222,6 +145,7 @@ void dserv_timer_arm_ms(dserv_timer_t *t, int start_ms, int interval_ms, int loo
   else t->nrepeats = loop;
   t->expired = true;
   t->expirations = 0;
+  t->timeout_ms = start_ms;
 }
 
 void dserv_timer_reset(dserv_timer_t *t)
@@ -239,54 +163,75 @@ void dserv_timer_fire(dserv_timer_t *t)
   t->suspend_count--;
 }
 
-#endif
+#else
 
-#ifndef __APPLE__
-int tickRequest(tick_info_t *tickinfo)
+int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
 {
-  struct timespec rqtp = { tickinfo->ms/1000, (tickinfo->ms%1000)*1000000 };
-  nanosleep(&rqtp, NULL);
-
-  /* ignore expiration if another timer request has been made */
-  if (tickinfo != g_timerInfo.requests[tickinfo->timerid]) return 0;
-  
-  tickinfo->info->expired[tickinfo->timerid] = 1;
-
-  /* notify system */
-  char dpoint_name[64];
-  snprintf(dpoint_name, sizeof(dpoint_name),
-	   "%s/%d", TIMER_DPOINT_PREFIX, tickinfo->timerid);
-	   
-  ds_datapoint_t *dp = dpoint_new(dpoint_name,
-				  tclserver_now(tickinfo->info->tclserver),
-				  DSERV_NONE, 0, NULL);
-  tclserver_set_point(tickinfo->info->tclserver, dp);
-  
-  /* free the request */
-  free(tickinfo);
+  t->timer_id = id;
+  t->timer_fd = timerfd_create(CLOCK_MONOTONIC, 0);
+  t->expirations = 0;
+  t->nrepeats = 0;
+  t->expired = true;
+  t->tclserver = info->tclserver;
   return 0;
 }
 
-void* workerThread(void *arg) {
-  timer_info_t *info = (timer_info_t *) arg;
+void dserv_timer_destroy(dserv_timer_t *t)
+{
+  close(t->timer_fd);
+}
 
-  ds_datapoint_t timer_dpoint;
+
+void dserv_timer_reset(dserv_timer_t *t)
+{
+  bzero(&t->its, sizeof(t->its));
+  timerfd_settime(t->timer_fd, TFD_TIMER_ABSTIME, &t->its, NULL);
+}
+
+void dserv_timer_arm_ms(dserv_timer_t *t, int start_ms,
+			int interval_ms, int loop)
+{
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  t->its.it_value.tv_sec = start_ms/1000;
+  t->its.it_value.tv_nsec = (start_ms%1000)*1000000;
   
-  while(1) {
-    tick_info_t *req = dequeue(info->q);
-    tickRequest(req);
+  t->its.it_interval.tv_sec = interval_ms/1000;
+  t->its.it_interval.tv_nsec = (interval_ms%1000)*1000000;
+
+  if (!interval_ms) t->nrepeats = 0;
+  else t->nrepeats = loop;
+  t->expired = true;
+  t->expirations = 0;
+  t->timeout_ms = start_ms;
+}
+  
+void dserv_timer_fire(dserv_timer_t *t)
+{
+  if (t->timeout_ms <= 0) return;
+  t->expired = false;
+  timerfd_settime(t->timer_fd, 0, &t->its, NULL);
+}
+
+void* timerWorkerThread(void *arg) {
+  dserv_timer_t *t = (dserv_timer_t *) arg;
+  
+  uint64_t exp;
+  ssize_t s;
+
+  /* if we read a 64bit int from t->timer_fd our timer expired */
+  while (1) {
+    s = read(t->timer_fd, &exp, sizeof(uint64_t));
+    if (s == sizeof(uint64_t)) {
+      t->expired = true;
+      timer_notify_dserv(t);
+    }
   }
+  
   return NULL;
 }
 
-static tick_info_t *new_tickinfo(timer_info_t *info, int timerid, int ms)
-{
-  tick_info_t *request = (tick_info_t *) malloc(sizeof(tick_info_t));
-  request->info = info;
-  request->timerid = timerid;
-  request->ms = ms;		/* when to turn off    */
-  return request;
-}
 #endif
 
 static int timer_tick_command (ClientData data, Tcl_Interp *interp,
@@ -317,18 +262,9 @@ static int timer_tick_command (ClientData data, Tcl_Interp *interp,
 		     Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
   }
-#ifdef __APPLE__
+
   dserv_timer_arm_ms(&info->timers[timerid], ms, 0, 0);
   dserv_timer_fire(&info->timers[timerid]);
-#else
-  if (ms > 0) {
-    tick_info_t *request = new_tickinfo(info, timerid, ms);
-    enqueue(info->q, request);
-    info->expired[timerid] = 0;
-    info->requests[timerid] = request;
-  }
-  else info->expired[timerid] = 1;
-#endif
   
   return TCL_OK;
 }
@@ -348,11 +284,8 @@ static int timer_expired_command (ClientData data, Tcl_Interp *interp,
 		     Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
   }
-#ifdef __APPLE__
   Tcl_SetObjResult(interp, Tcl_NewIntObj(info->timers[timerid].expired));
-#else
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(info->expired[timerid]));
-#endif
+
   return TCL_OK;
 }
 
@@ -378,35 +311,21 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
       == NULL) {
     return TCL_ERROR;
   }
-  const int nworkers = 6;
 
-#ifdef __APPLE__
   int ntimers = 8;
   g_timerInfo.tclserver = tclserver_get();
   g_timerInfo.ntimers = ntimers;
   g_timerInfo.timers =
     (dserv_timer_t *) calloc(ntimers, sizeof(dserv_timer_t));
   for (int i = 0; i < ntimers; i++) {
-    dserv_timer_init(&g_timerInfo.timers[i], &g_timerInfo);
-  }
-    
-#else
-  g_timerInfo.tclserver = tclserver_get();
-  g_timerInfo.q = queueCreate();
-  g_timerInfo.ntimers = 8;
-  g_timerInfo.expired =
-    (int *) calloc(g_timerInfo.ntimers, sizeof(int));
-  g_timerInfo.requests =
-    (tick_info_t **) calloc(g_timerInfo.ntimers, sizeof(tick_info_t *));
-
-  for (int i = 0; i < g_timerInfo.ntimers; i++) {
-    g_timerInfo.expired[i] = 1;
+    dserv_timer_init(&g_timerInfo.timers[i], &g_timerInfo, i);
   }
   
-  /* setup workers */
+#ifdef __linux__
+  /* setup a worker thread to listen for expirations on each timer */
   pthread_t w;
-  for (int i = 0; i < nworkers; i++) {
-    pthread_create(&w, NULL, workerThread, &g_timerInfo);
+  for (int i = 0; i < ntimers; i++) {
+    pthread_create(&w, NULL, timerWorkerThread, &g_timerInfo.timers[i]);
   }
 #endif
 
