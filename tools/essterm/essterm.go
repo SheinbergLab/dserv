@@ -115,6 +115,13 @@ type evtMsg struct {
 	evt Evt
 }
 
+type printMsg struct {
+	message string
+}
+
+// for storing output messages
+var Messages []string
+
 func initializeNames() {
 	for i := 0; i < 16; i++ {
 		evtTypeNames[i] = fmt.Sprintf("Reserved%d", i)
@@ -219,8 +226,12 @@ func processDatapoint(dpointStr string, p *tea.Program) {
 		}
 
 		processEvent(evt, p)
+	case "print":
+		if dpoint.Dtype == 1 {
+			Messages = append(Messages, string(dpoint.B64data))
+			p.Send(printMsg{})
+		}
 	default:
-
 	}
 
 }
@@ -331,7 +342,7 @@ func main() {
 	dservRegister(host, "4620", SendJSON)
 	dservAddMatch(host, "4620", "qpcs/*")
 	dservAddMatch(host, "4620", "eventlog/events")
-	dservAddMatch(host, "4620", "eventlog/names")
+	dservAddMatch(host, "4620", "print")
 
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
@@ -346,7 +357,9 @@ type model struct {
 	textinput   textinput.Model
 	viewport    viewport.Model
 	table       table.Model
+	output      viewport.Model
 	err         error
+	messages    *[]string
 	cmd_history *history
 }
 
@@ -394,11 +407,15 @@ func initialModel() model {
 
 	var h history
 
+	output := viewport.New(80, 8)
+	output.SetContent(``)
+
 	return model{
 		textinput:   ti,
 		viewport:    vp,
 		table:       t,
 		cmd_history: &h,
+		output:      output,
 		err:         nil,
 	}
 }
@@ -413,13 +430,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		tiCmd tea.Cmd
 		vpCmd tea.Cmd
 		tbCmd tea.Cmd
+		ouCmd tea.Cmd
 	)
 
 	m.textinput, tiCmd = m.textinput.Update(msg)
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	m.table, tbCmd = m.table.Update(msg)
+	m.output, ouCmd = m.output.Update(msg)
 
 	switch msg := msg.(type) {
+	case printMsg:
+		m.output.SetContent(strings.Join(Messages, "\n"))
+		m.output.GotoBottom()
 	case evtMsg:
 		if obsInfo.ObsCount < 0 {
 			m.table.SetRows([]table.Row{})
@@ -491,14 +513,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	return m, tea.Batch(tiCmd, vpCmd, tbCmd)
+	return m, tea.Batch(tiCmd, vpCmd, tbCmd, ouCmd)
 }
 
 func (m model) View() string {
 	return fmt.Sprintf(
-		"ess%s\n%s\n%s",
+		"ess%s\n%s\n%s\n%s",
 		m.textinput.View(),
 		m.viewport.View(),
 		m.table.View(),
+		m.output.View(),
 	) + "\n"
 }
