@@ -25,6 +25,11 @@
 #include <pthread.h>
 #include <semaphore.h>
 
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
+
+
 #include <tcl.h>
 #include "Datapoint.h"
 #include "tclserver_api.h"
@@ -115,19 +120,128 @@ typedef struct tick_info_s {
   int ms;
 } tick_info_t;
 
+#ifdef __APPLE__
+typedef struct dserv_timer_s {
+  tclserver_t *tclserver;
+  int timer_id;
+  dispatch_queue_t queue;
+  dispatch_source_t timer;
+  int nrepeats;
+  int expirations;
+  volatile sig_atomic_t suspend_count;
+  int expired;
+} dserv_timer_t;
+#endif
+
+
 typedef struct timer_info_s
 {
   tclserver_t *tclserver;
-  queue* q;
   int ntimers;
+#ifdef __APPLE__
+  dserv_timer_t *timers;
+#else
+  queue* q;
   int *expired;
   tick_info_t **requests;
+#endif
 } timer_info_t;
 
 /* global to this module */
 static timer_info_t g_timerInfo;
 
+void timer_notify_dserv(dserv_timer_t *t)
+{
+  /* notify dserv */
+  char dpoint_name[64];
+  snprintf(dpoint_name, sizeof(dpoint_name),
+	   "%s/%d", TIMER_DPOINT_PREFIX, t->timer_id);
+	   
+  ds_datapoint_t *dp = dpoint_new(dpoint_name,
+				  tclserver_now(t->tclserver),
+				  DSERV_NONE, 0, NULL);
+  tclserver_set_point(t->tclserver, dp);
+}
 
+#ifdef __APPLE__
+/*
+ * For MacOS we use the grand central dispatch system to manage timers
+ */
+
+void timer_handler(dserv_timer_t *t, dispatch_source_t timer)
+{
+  t->expired = true;
+  
+  timer_notify_dserv(t);
+
+  if (t->nrepeats != -1 && t->expirations >= t->nrepeats) {
+    dispatch_suspend(t->timer);
+    t->suspend_count++;
+  }
+  t->expirations++;
+}
+
+int dserv_timer_init(dserv_timer_t *t, timer_info_t *info)
+{
+  t->queue = dispatch_queue_create("timerQueue", 0);
+  
+  // Create dispatch timer source
+  t->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, t->queue);
+  
+  // Set block for dispatch source when catched events
+  dispatch_source_set_event_handler(t->timer, ^{timer_handler(t, t->timer);});
+  
+  // Set block for dispatch source when cancel source
+  dispatch_source_set_cancel_handler(t->timer, ^{
+      dispatch_release(t->timer);
+      dispatch_release(t->queue);
+    });
+  t->expirations = 0;
+  t->nrepeats = 0;
+  t->expired = true;
+  t->suspend_count = 1;
+
+  t->tclserver = info->tclserver;
+  return 0;
+}
+
+void dserv_timer_destroy(dserv_timer_t *t)
+{
+  dispatch_source_cancel(t->timer);
+}
+
+void dserv_timer_arm_ms(dserv_timer_t *t, int start_ms, int interval_ms, int loop)
+{
+  if (!t->suspend_count) {
+    dispatch_suspend(t->timer);
+    t->suspend_count++;
+  }
+  dispatch_time_t start = dispatch_time(DISPATCH_TIME_NOW, (uint64_t) start_ms*1000000);
+  dispatch_source_set_timer(t->timer, start, (uint64_t) interval_ms*1000000, 0);
+  if (!interval_ms) t->nrepeats = 0;
+  else t->nrepeats = loop;
+  t->expired = true;
+  t->expirations = 0;
+}
+
+void dserv_timer_reset(dserv_timer_t *t)
+{
+  if (!t->suspend_count) {
+    dispatch_suspend(t->timer);
+    t->suspend_count++;
+  }
+}
+  
+void dserv_timer_fire(dserv_timer_t *t)
+{
+  t->expired = false;
+  dispatch_resume(t->timer);
+  t->suspend_count--;
+}
+
+#endif
+
+#ifndef __APPLE__
 int tickRequest(tick_info_t *tickinfo)
 {
   struct timespec rqtp = { tickinfo->ms/1000, (tickinfo->ms%1000)*1000000 };
@@ -173,6 +287,7 @@ static tick_info_t *new_tickinfo(timer_info_t *info, int timerid, int ms)
   request->ms = ms;		/* when to turn off    */
   return request;
 }
+#endif
 
 static int timer_tick_command (ClientData data, Tcl_Interp *interp,
 			       int objc, Tcl_Obj *objv[])
@@ -202,7 +317,10 @@ static int timer_tick_command (ClientData data, Tcl_Interp *interp,
 		     Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
   }
-  
+#ifdef __APPLE__
+  dserv_timer_arm_ms(&info->timers[timerid], ms, 0, 0);
+  dserv_timer_fire(&info->timers[timerid]);
+#else
   if (ms > 0) {
     tick_info_t *request = new_tickinfo(info, timerid, ms);
     enqueue(info->q, request);
@@ -210,6 +328,7 @@ static int timer_tick_command (ClientData data, Tcl_Interp *interp,
     info->requests[timerid] = request;
   }
   else info->expired[timerid] = 1;
+#endif
   
   return TCL_OK;
 }
@@ -229,8 +348,11 @@ static int timer_expired_command (ClientData data, Tcl_Interp *interp,
 		     Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
   }
-
+#ifdef __APPLE__
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(info->timers[timerid].expired));
+#else
   Tcl_SetObjResult(interp, Tcl_NewIntObj(info->expired[timerid]));
+#endif
   return TCL_OK;
 }
 
@@ -257,7 +379,18 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
     return TCL_ERROR;
   }
   const int nworkers = 6;
-  
+
+#ifdef __APPLE__
+  int ntimers = 8;
+  g_timerInfo.tclserver = tclserver_get();
+  g_timerInfo.ntimers = ntimers;
+  g_timerInfo.timers =
+    (dserv_timer_t *) calloc(ntimers, sizeof(dserv_timer_t));
+  for (int i = 0; i < ntimers; i++) {
+    dserv_timer_init(&g_timerInfo.timers[i], &g_timerInfo);
+  }
+    
+#else
   g_timerInfo.tclserver = tclserver_get();
   g_timerInfo.q = queueCreate();
   g_timerInfo.ntimers = 8;
@@ -275,6 +408,7 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
   for (int i = 0; i < nworkers; i++) {
     pthread_create(&w, NULL, workerThread, &g_timerInfo);
   }
+#endif
 
   Tcl_CreateObjCommand(interp, "timerTick",
 		       (Tcl_ObjCmdProc *) timer_tick_command,
