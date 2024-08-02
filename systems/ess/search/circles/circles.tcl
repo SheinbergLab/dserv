@@ -129,6 +129,12 @@ namespace eval search::circles {
 		rmtSend "nexttrial $stimtype"
 	    }
 	}
+
+	$s add_method endobs {} {
+	    dl_put stimdg:remaining $cur_id 0
+	    incr obs_count
+	}
+	
 	$s add_method finished {} {
 	    return [expr [dl_sum stimdg:remaining]==0]
 	}

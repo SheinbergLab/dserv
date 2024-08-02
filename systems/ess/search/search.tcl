@@ -21,7 +21,7 @@ namespace eval search {
 	$sys add_param interblock_time  1000      time int
 	$sys add_param prestim_time      250      time int
 	
-	$sys add_param response_timeout 20000     time int
+	$sys add_param response_timeout 5000     time int
 	
 	##
 	## Local variables for this system
@@ -67,11 +67,13 @@ namespace eval search {
 	    set n_obs [my n_obs]
 	    
 	    if { !$first_time } {
-		timerTick $interblock_time
+		set delay $interblock_time
 	    } else {
 		set first_time 0
+		set delay 0
 	    }
 	    
+	    timerTick $delay
 	    my nexttrial
 	}
 	
