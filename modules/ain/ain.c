@@ -126,7 +126,7 @@ static sampler_t *sampler_create(int id, int nsamples, int nchan,
   return s;
 }
 
-static sampler_t *sampler_destroy(sampler_t *s)
+static void sampler_destroy(sampler_t *s)
 {
   if (s->sample_dpoint_name_vals) free(s->sample_dpoint_name_vals);
   if (s->sample_dpoint_name_set) free(s->sample_dpoint_name_set);
@@ -142,7 +142,7 @@ static int sampler_add(ain_info_t *info,
 
   if (slot < 0 || slot >= info->maxsamplers)
     return -1;
-
+  
   pthread_mutex_lock(&info->sampler_mutex);
   if (info->samplers[slot]) {
     sampler_destroy(info->samplers[slot]);
@@ -176,7 +176,7 @@ static void sampler_remove_all(ain_info_t *info)
 /*
  * set status in appropriate dserv variable
  */
-static int sampler_set_dserv_status(ain_info_t *info,
+static void sampler_set_dserv_status(ain_info_t *info,
 				    sampler_t *s,
 				    int status)
 {
@@ -235,6 +235,7 @@ static int sampler_new_sample(ain_info_t *info,
 			      sampler_t *s,
 			      uint16_t vals[])
 {
+  int result = 0;
   if (!s->active || s->current_count == s->sample_count) return 0;
 
   /* move new samples in */
@@ -248,7 +249,9 @@ static int sampler_new_sample(ain_info_t *info,
     sampler_do_op(info, s);
     s->current_count = 0;
     if (!s->loop) s->active = 0;
+    result = 1;
   }
+  return result;
 }
 
 static int sampler_process(ain_info_t *info, uint16_t vals[])
