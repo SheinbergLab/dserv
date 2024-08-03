@@ -200,13 +200,10 @@ func processEvent(e Evt, p *tea.Program) {
 	}
 	ObsAddEvent(&obsInfo, e)
 	p.Send(evtMsg{e})
-	fmt.Fprintf(debugLog, "Event: %d %d %s\n", e.Type, e.Subtype, e.Params)
 }
 
 func processDatapoint(dpointStr string, p *tea.Program) {
 	var dpoint Dpoint
-
-	fmt.Fprintf(debugLog, "%s\n", dpointStr)
 
 	err := json.Unmarshal([]byte(dpointStr), &dpoint)
 	if err != nil {
@@ -313,6 +310,7 @@ func main() {
 		host = "localhost"
 	}
 
+/*
 	var err error
 	debugLog, err = tea.LogToFile("essterm.log", "debug")
 	if err != nil {
@@ -320,7 +318,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer debugLog.Close()
-
+*/
 	port = 2570
 	connect = fmt.Sprintf("%s:%d", host, port)
 
@@ -503,7 +501,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.table.Blur()
 			m.textinput.Focus()
 
-		case tea.KeyCtrlD, tea.KeyEsc:
+		case tea.KeyEsc:
 			return m, tea.Quit
 		}
 
