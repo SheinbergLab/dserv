@@ -890,6 +890,26 @@ namespace eval ess {
 	variable em_windows
 	return [expr {($em_windows(states) & (1<<$win)) != 0}]
     }
+
+    proc em_sampler_enable { nsamps { nchan 2 } { slot 0 } } {
+	dservSet ain/samplers/$slot/vals [lrepeat $nchan 0]
+	dservSet ain/samplers/$slot/status 0
+	ainSamplerAdd $slot $nchan $nsamps
+	dservAddExactMatch ain/samplers/$slot/vals
+	dpointSetScript ain/samplers/$slot/vals do_update
+    }
+    
+    proc em_sampler_start { { slot 0 } } {
+	ainSamplerStart $slot
+    }
+
+    proc em_sampler_status { { slot 0 } } {
+	return [dservGet ain/samplers/$slot/status]
+    }
+
+    proc em_sampler_vals { { slot 0 } } {
+	return [dservGet ain/samplers/$slot/vals]
+    }
 }
 
 namespace eval ess {
