@@ -70,8 +70,8 @@ typedef struct sampler_s
   int sample_count;		/* number of samples to track */
   uint16_t *samples;		/* array of raw samples       */
   SamplerOp op;			/* computation done on sample */
-  char *sample_dpoint_name_vals;/* dserv vals for this sample */
-  char *sample_dpoint_name_set;	/* dserv set flags sample     */
+  char *sample_dpoint_name_vals;/* dserv sampler vals         */
+  char *sample_dpoint_name_status; /* dserv sampler status    */
 } sampler_t;
 
 typedef struct ain_info_s
@@ -119,9 +119,9 @@ static sampler_t *sampler_create(int id, int nsamples, int nchan,
   snprintf(s->sample_dpoint_name_vals, pointname_sz,
 	   "%s/samplers/%d/vals", prefix, id);
 
-  s->sample_dpoint_name_set = (char *) malloc(pointname_sz);
-  snprintf(s->sample_dpoint_name_set, pointname_sz,
-	   "%s/samplers/%d/set", prefix, id);
+  s->sample_dpoint_name_status = (char *) malloc(pointname_sz);
+  snprintf(s->sample_dpoint_name_status, pointname_sz,
+	   "%s/samplers/%d/status", prefix, id);
   
   return s;
 }
@@ -129,7 +129,7 @@ static sampler_t *sampler_create(int id, int nsamples, int nchan,
 static void sampler_destroy(sampler_t *s)
 {
   if (s->sample_dpoint_name_vals) free(s->sample_dpoint_name_vals);
-  if (s->sample_dpoint_name_set) free(s->sample_dpoint_name_set);
+  if (s->sample_dpoint_name_status) free(s->sample_dpoint_name_status);
   if (s->samples) free(s->samples);
   free(s);
 }
@@ -180,7 +180,7 @@ static void sampler_set_dserv_status(ain_info_t *info,
 				    sampler_t *s,
 				    int status)
 {
-  ds_datapoint_t *dp = dpoint_new(s->sample_dpoint_name_set,
+  ds_datapoint_t *dp = dpoint_new(s->sample_dpoint_name_status,
 				  tclserver_now(info->tclserver),
 				  DSERV_INT,
 				  sizeof(int), 
