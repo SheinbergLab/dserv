@@ -47,7 +47,7 @@
 #include "tclserver_api.h"
 
 const char *DEFAULT_ADC_DPOINT_PREFIX = "ain";
-
+#define MAX_CHAN 8
 
 typedef enum  {
   SampleMean,
@@ -84,6 +84,7 @@ typedef struct ain_info_s
 #endif
   int interval_ms;		/* how often to acq (ms)    */
   int nchan;			/* number of channels acqd  */
+  int invert_signals[MAX_CHAN];	/* invert 0 - 4095          */
   char *dpoint_prefix;		/* e.g. "ain" -> "ain/vals" */
   pthread_mutex_t sampler_mutex;/* avoid collisions         */
   int maxsamplers;		/* max samplers allowed     */
@@ -311,7 +312,8 @@ void *acquire_thread(void *arg)
   
   ds_datapoint_t adc_dpoint;
   uint16_t vals[4];
-
+  const int max_val = (1 << 12);
+  
   int name_sz = strlen(info->dpoint_prefix)+16;
   char *adc_point_name = (char *) malloc(name_sz);
   snprintf(adc_point_name, name_sz, "%s/vals", info->dpoint_prefix);
@@ -321,6 +323,9 @@ void *acquire_thread(void *arg)
     if (s == sizeof(uint64_t)) {
       
       mcp3204_read(info->fd, info->nchan, vals);
+      for (int i = 0; i < info->nchan; i++) {
+	if (info->invert_signals[i]) vals[i] = max_val-vals[i];
+      }
       
       /* fill the data point */
       ds_datapoint_t *dp = dpoint_new(adc_point_name,
@@ -406,6 +411,36 @@ static int ain_stop_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+static int ain_invert_signal_command (ClientData data, Tcl_Interp *interp,
+				      int objc, Tcl_Obj *objv[])
+{
+  ain_info_t *info = (ain_info_t *) data;
+  int chan, invert, old;
+  if (objc != 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "chan invert?");
+    return TCL_ERROR;
+  }
+  
+  if (Tcl_GetIntFromObj(interp, objv[1], &chan) != TCL_OK)
+    return TCL_ERROR;
+  if (chan < 0 || chan >= MAX_CHAN) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": channel out of range",
+		     NULL);
+    return TCL_ERROR;
+  }
+  if (Tcl_GetIntFromObj(interp, objv[2], &invert) != TCL_OK)
+    return TCL_ERROR;
+  invert = (invert != 0);
+
+  old = info->invert_signals[chan];
+  info->invert_signals[chan] = invert;
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(old));
+  
+  return TCL_OK;
+}
+
 static int ain_sampler_add_command (ClientData data, Tcl_Interp *interp,
 				    int objc, Tcl_Obj *objv[])
 {
@@ -435,6 +470,20 @@ static int ain_sampler_add_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
+  if (nchannels < 0 || nchannels > info->nchan) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": nchannels out of range",
+		     NULL);
+    return TCL_ERROR;
+  }
+  
+  if (nsamples <= 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": nsamples out of range",
+		     NULL);
+    return TCL_ERROR;
+  }
+  
   sampler_t *s = sampler_create(slot, nsamples, nchannels, loop, op,
 				info->dpoint_prefix);
   
@@ -595,7 +644,6 @@ int Dserv_ain_Init(Tcl_Interp *interp)
 					     sizeof(sampler_t *));
   pthread_mutex_init(&g_ainInfo.sampler_mutex, NULL);
     
-  
 #ifdef __linux__
   /*
    * could do this in another function, but for now, just default to
@@ -620,6 +668,7 @@ int Dserv_ain_Init(Tcl_Interp *interp)
     if (g_ainInfo.timer_fd == -1) return TCL_ERROR;
     
     g_ainInfo.nchan = 2;
+    for (int i = 0; i < MAX_CHAN; i++) g_ainInfo.invert_signals[i] = 0;
     
     if (pthread_create(&g_ainInfo.timer_thread_id, NULL, acquire_thread,
 		       (void *) &g_ainInfo)) {
@@ -638,6 +687,11 @@ int Dserv_ain_Init(Tcl_Interp *interp)
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "ainStop",
 		       (Tcl_ObjCmdProc *) ain_stop_command,
+		       (ClientData) &g_ainInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateObjCommand(interp, "ainInvertSignal",
+		       (Tcl_ObjCmdProc *) ain_invert_signal_command,
 		       (ClientData) &g_ainInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
 
