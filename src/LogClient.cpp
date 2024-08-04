@@ -41,6 +41,7 @@ LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
   initialized = 0;		/* set to 1 after process thread set */
   
   // use to track if any matches are obs limited (to track begin/end obs events)
+  in_obs = 0;
   obs_limited_matches = 0;
   
   // special begin/end obs datapoints for obslimited logging
@@ -177,6 +178,10 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
     memcpy(&((unsigned char *) logbuf->buf)[logbuf->bufcount],
 	   dpoint->data.buf, dpoint->data.len);
     logbuf->bufcount += dpoint->data.len;
+
+#if 0
+    printf("buffering %s [%d]\n", dpoint->varname, logbuf->bufcount);
+#endif
   }
   else {
     would_overflow = 1;
@@ -185,7 +190,9 @@ int LogClient::log_point(ds_datapoint_t *dpoint, ds_logger_buf_t *logbuf)
   if ((logbuf->bufcount == logbuf->bufsize) || would_overflow) {
     logbuf->dpoint.data.len = logbuf->bufcount;
     logbuf->dpoint.data.buf = (unsigned char *) logbuf->buf;
-
+#if 0
+    printf("writing %s [%d]\n", dpoint->varname, logbuf->bufcount);
+#endif
     // send a copy of the logbuf datapoint (freed after written)
     dpoint_queue.push_back(dpoint_copy(&logbuf->dpoint));
 
