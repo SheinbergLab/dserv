@@ -71,19 +71,21 @@ void LogTable::forward_dpoint(ds_datapoint_t *dpoint)
 	   dpoint->data.e.type == LogClient::DSERV_EVT_OBS_END)) {
 	
 	if (dpoint->data.e.type == LogClient::DSERV_EVT_OBS_END) {
-	  log_client->flush_dpoint.timestamp = dpoint->timestamp;
-	  log_client->log_point(&log_client->flush_dpoint, NULL);
+	  // flush any buffered matches before closing obs period
+	  log_client->flush_dpoints();
 	  
 	  // if the client wants the actual ENDOBS event logged
 	  if (log_client->matches.is_match(dpoint->varname,
 					   &logbuf, log_client->in_obs)) {
 	    log_client->log_point(dpoint, logbuf);
 	  }
-	  
+
 	  log_client->endobs_dpoint.timestamp = dpoint->timestamp;
 	  log_client->log_point(&log_client->endobs_dpoint, NULL);
+	  log_client->in_obs = false;
 	}
 	else {
+	  log_client->in_obs = true;
 	  log_client->beginobs_dpoint.timestamp = dpoint->timestamp;
 	  log_client->log_point(&log_client->beginobs_dpoint, NULL);
 	  
