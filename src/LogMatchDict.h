@@ -26,8 +26,8 @@ public:
 
     if (bufsize > 0) {
       logbuf = (ds_logger_buf_t *) calloc(1, sizeof (ds_logger_buf_t));
-      logbuf->buf = malloc(bufsize);
       logbuf->bufsize = bufsize;
+      logbuf->buf = malloc(bufsize);
       logbuf->bufcount = 0;
       logbuf->dpoint.data.buf = NULL;
       logbuf->dpoint.varname = NULL;
@@ -103,13 +103,13 @@ class LogMatchDict
   /*
    * is_match()
    *
-   *   Is this logger subscribed to this datpoint?
+   *   Is this logger subscribed to this datapoint?
    *
    * Returns:
    *   1 - yes
    *   0 - no
    *   if buffer_size != NULL, set to buffer count for this dpoint
-   *   if obs_only != NULL, set to indicate if storing only during obs periods
+   *   if obs_limited != NULL, indicates if storing only during obs periods
    */
   
   bool is_match(char *var, ds_logger_buf_t **logbuf, bool in_obs)
@@ -118,7 +118,6 @@ class LogMatchDict
     for (auto it : map_) {
       LogMatchSpec *match = it.second;
       if (!match->active) continue;
-
       switch (match->type) {
       case MatchSpec::MATCH_EXACT:
 	if (!strcmp(var, match->matchstr.c_str()) &&
