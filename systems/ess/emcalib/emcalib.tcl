@@ -209,7 +209,11 @@ namespace eval emcalib {
 	# finish
 	#
 	$sys add_action finish {
-	    ess::end_obs COMPLETE
+	    if { $complete } {
+         ess::end_obs COMPLETE
+      } else {
+         ess::end_obs INCOMPLETE
+      }
 	    my endobs
 	}
 	
