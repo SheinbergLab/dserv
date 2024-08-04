@@ -20,6 +20,7 @@ namespace eval emcalib {
 	$sys add_param n_rep             100      variable int
 	$sys add_param interblock_time  1000      time int
 	$sys add_param acquire_time     3000      time int
+	$sys add_param reacquire_time   3000      time int
 	$sys add_param fixhold_time      400      time int
 	$sys add_param pre_sample_time   500      time int
 	
