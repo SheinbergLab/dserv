@@ -284,7 +284,8 @@ int TclServer::dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
   int every = 1;
   
   if (objc < 3) {
-    Tcl_WrongNumArgs(interp, 1, objv, "path match [obs_limited buffer_size]");
+    Tcl_WrongNumArgs(interp, 1, objv,
+		     "path match [obs_limited buffer_size every]");
     return TCL_ERROR;
   }
   
@@ -298,6 +299,23 @@ int TclServer::dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
       return TCL_ERROR;
   }
   
+  if (objc > 5) {
+    if (Tcl_GetIntFromObj(interp, objv[5], &every) != TCL_OK)
+      return TCL_ERROR;
+  }
+
+  if (every <= 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": invalid \"every\" argument",
+		     NULL);
+    return TCL_ERROR;
+  }
+  if (buffer_size < 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": invalid buffer_size argument",
+		     NULL);
+    return TCL_ERROR;
+  }
   status = ds->logger_add_match(Tcl_GetString(objv[1]),
 				Tcl_GetString(objv[2]),
 				every, obs_limited, buffer_size);
