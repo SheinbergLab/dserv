@@ -14,6 +14,8 @@ namespace eval emcalib::9point {
 	
 	$s add_param juice_pin         27       variable int
 	$s add_param juice_time      1000       time int
+
+	$s add_param fix_radius        3.0      variable float
 	
 	$s add_variable fix_targ_x             
 	$s add_variable fix_targ_y             
@@ -101,8 +103,8 @@ namespace eval emcalib::9point {
 		
 		ess::em_region_off 0
 		ess::em_region_off 1
-		ess::em_fixwin_set 0 $fix_targ_x $fix_targ_y $fix_targ_r 0
-		ess::em_fixwin_set 1 $jump_targ_x $jump_targ_y $jump_targ_r 0
+		ess::em_fixwin_set 0 $fix_targ_x $fix_targ_y $fix_radius 0
+		ess::em_fixwin_set 1 $jump_targ_x $jump_targ_y $fix_radius 0
 		
 		rmtSend "nexttrial $stimtype"
 	    }
