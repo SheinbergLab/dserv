@@ -36,7 +36,7 @@ namespace eval emcalib::9point {
 
 	    # initialize eye movements
 	    ess::em_init
-	    ess::em_sampler_enable 0 $sample_count
+	    ess::em_sampler_enable $sample_count
 	    
 	    soundReset
 	    soundSetVoice 81 0    0
@@ -111,8 +111,10 @@ namespace eval emcalib::9point {
 	}
 
 	$s add_method endobs {} {
-	    dl_put stimdg:remaining $cur_id 0
-	    incr obs_count
+	    if { $complete } {
+		dl_put stimdg:remaining $cur_id 0
+		incr obs_count
+	    }
 	}
 	
 	$s add_method finished {} {
@@ -123,7 +125,8 @@ namespace eval emcalib::9point {
 	    soundPlay 1 70 200
 	    rmtSend "!fixon"
 	    ess::em_region_on 0
-	    ess::evt_put EMPARAMS CIRC [now] 0 $fix_targ_x $fix_targ_y $fix_targ_r
+	    ess::evt_put EMPARAMS CIRC [now] \
+		0 $fix_targ_x $fix_targ_y $fix_targ_r
 	}
 	
 	$s add_method acquired_fixspot {} {
@@ -134,7 +137,8 @@ namespace eval emcalib::9point {
 	    ess::em_region_off 0
 	    rmtSend "!fixjump"
 	    ess::em_region_on 1
-	    ess::evt_put EMPARAMS CIRC [now] 1 $jump_targ_x $jump_targ_y $jump_targ_r
+	    ess::evt_put EMPARAMS CIRC [now] \
+		1 $jump_targ_x $jump_targ_y $jump_targ_r
 	}
 
 	$s add_method acquired_fixjump {} {
@@ -150,7 +154,7 @@ namespace eval emcalib::9point {
 	}
 
 	$s add_method store_calibration {} {
-	    ess::evt_put 
+	    ess::evt_put EMPARAMS CALIB [now] {*}[ess::em_sampler_vals]
 	}
 	
 	$s add_method reward {} {
