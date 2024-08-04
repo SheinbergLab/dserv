@@ -894,8 +894,8 @@ namespace eval ess {
     proc em_sampler_enable { nsamps { nchan 2 } { slot 0 } } {
 	ainSamplerAdd $slot $nchan $nsamps
 	dservSet ain/samplers/$slot/status 0
-	dservAddExactMatch ain/samplers/$slot/vals
-	dpointSetScript ain/samplers/$slot/vals \
+	dservAddExactMatch ain/samplers/$slot/status
+	dpointSetScript ain/samplers/$slot/status \
 	    "[namespace current]::do_update"
     }
     
