@@ -36,6 +36,8 @@ namespace eval emcalib {
 	$sys add_variable start_delay        0
 	$sys add_variable stimtype           0
 
+	$sys add_variable complete           0
+	
 	$sys add_variable first_time         1
 	
 	######################################################################
@@ -74,7 +76,7 @@ namespace eval emcalib {
 		set first_time 0
 		set delay 0
 	    }
-	    
+	    set complete 0	    
 	    timerTick $delay
 	    my nexttrial
 	}
@@ -174,6 +176,7 @@ namespace eval emcalib {
 	# reward
 	#
 	$sys add_action reward {
+	    set complete 1
 	    my reward
 	    ess::evt_put ENDTRIAL CORRECT [now]
 	}
