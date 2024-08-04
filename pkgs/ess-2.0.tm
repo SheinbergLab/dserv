@@ -410,6 +410,8 @@ namespace eval ess {
     # for tracking begin/end obs and sync'ing with external systems
     variable in_obs  0
     variable obs_pin 26
+
+    variable em_active 0
     
     proc create_system { name } {
 	# only allow one instance of a system with this name
@@ -517,6 +519,9 @@ namespace eval ess {
 	for { set i 0 } { $i < $::nTimers } { incr i } {
 	    timerSetScript $i "[namespace current]::do_update"
 	}
+	# default to not tracking ems, but ess::em_init will turn on
+	variable em_active
+	set em_active 0
     }
 
     proc do_update { } {
@@ -763,8 +768,13 @@ namespace eval ess {
 	dservLoggerAddMatch $filename eventlog/events
 	dservLoggerAddMatch $filename eventlog/names
 	dservLoggerAddMatch $filename stimdg
-#	dservLoggerAddMatch $filename em_coeffDG
 
+	variable em_active
+	if { $em_active } {
+	    # record raw em data: obs_limited, 80 byte buffer, every 5 samples
+	    dservLoggerAddMatch $filename ain/vals 1 80 5
+	    dservLoggerAddMatch $filename em_coeffDG
+	}
 	dservLoggerResume $filename	
 
 	# reset system and output event names
@@ -829,6 +839,10 @@ namespace eval ess {
     }
     
     proc em_init {} {
+	# set flag to ensure em's are stored in data files
+	variable em_active
+	set em_active 1
+
 	variable em_windows
 	ainSetProcessor $em_windows(processor)
 	ainSetParam dpoint $em_windows(dpoint)
@@ -1176,7 +1190,7 @@ namespace eval ess {
     if { [info exists ::env(ESS_DATA_DIR)] } {
         variable data_dir $::env(ESS_DATA_DIR)
     } else {
-	variable data_dir /shared/qpcs/data/incage
+	variable data_dir /tmp
     }    
 
 
