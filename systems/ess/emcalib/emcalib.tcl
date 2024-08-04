@@ -125,7 +125,7 @@ namespace eval emcalib {
 	#
 	$sys add_action fixjump {
 	    my fixjump
-	    timerTick $reaquire_time
+	    timerTick $reacquire_time
 	}
 	
 	$sys add_transition fixjump {

@@ -47,7 +47,7 @@ proc nexttrial { id } {
     scaleObj $obj [expr 2*$fix_targ_r]; # diameter is 2r
     glistAddObject $obj 0
 
-    foreach p "fix_jump_x fix_jump_y fix_jump_r" {
+    foreach p "jump_targ_x jump_targ_y jump_targ_r" {
 	set $p [dl_get stimdg:$p $id]
     }
     
@@ -55,8 +55,8 @@ proc nexttrial { id } {
     set obj [polygon]
     polycirc $obj 1
     polycolor $obj {*}$fix_color
-    translateObj $obj $fix_jump_x $fix_jump_y
-    scaleObj $obj [expr 2*$fix_jump_r]; # diameter is 2r
+    translateObj $obj $jump_targ_x $jump_targ_y
+    scaleObj $obj [expr 2*$jump_targ_r]; # diameter is 2r
     glistAddObject $obj 1  
 
 }
