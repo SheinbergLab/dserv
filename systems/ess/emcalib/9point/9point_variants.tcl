@@ -27,8 +27,10 @@ namespace eval emcalib::9point {
 	    set targ_radius 0.3
 	    set jump_scale 5
 	    
-	    dl_local xlocs [dl_mult $jump_scale [dl_replicate [dl_ilist -1 1 1] 3]]
-	    dl_local ylocs [dl_mult $jump_scale [dl_repeat    [dl_ilist -1 1 1] 3]]
+	    dl_local xlocs \
+		[dl_mult $jump_scale [dl_replicate [dl_ilist -1 0 1] 3]]
+	    dl_local ylocs \
+		[dl_mult $jump_scale [dl_repeat    [dl_ilist -1 0 1] 3]]
 	    set npos [dl_length $xlocs]
 	    set n_obs [expr $npos*$n_rep]
 	    
