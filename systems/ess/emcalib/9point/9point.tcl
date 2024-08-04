@@ -65,6 +65,8 @@ namespace eval emcalib::9point {
 	
 	$s set_quit_callback {
 	    rmtSend clearscreen
+	    ess::em_region_off 0
+	    ess::em_region_off 1
 	    ess::end_obs QUIT
 	}
 	
