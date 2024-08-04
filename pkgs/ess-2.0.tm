@@ -893,8 +893,10 @@ namespace eval ess {
 
     proc em_sampler_enable { nsamps { nchan 2 } { slot 0 } } {
 	ainSamplerAdd $slot $nchan $nsamps
+	dservSet ain/samplers/$slot/status 0
 	dservAddExactMatch ain/samplers/$slot/vals
-	dpointSetScript ain/samplers/$slot/vals "[namespace current]::do_update"
+	dpointSetScript ain/samplers/$slot/vals \
+	    "[namespace current]::do_update"
     }
     
     proc em_sampler_start { { slot 0 } } {
@@ -1405,7 +1407,7 @@ namespace eval ess {
     set subtypes [dict create OFF 0 ON 1 SET 2]
     dict set evt_info FIXSPOT   [list 25 {Fixspot}              float $subtypes]
 
-    set subtypes [dict create SCALE 0 CIRC 1 RECT 2]
+    set subtypes [dict create SCALE 0 CIRC 1 RECT 2 CALIB 3]
     dict set evt_info EMPARAMS  [list 26 {EM Params}            float $subtypes]
     
     set subtypes [dict create OFF 0 ON 1 SET 2]
