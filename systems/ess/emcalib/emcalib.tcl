@@ -24,7 +24,7 @@ namespace eval emcalib {
 	$sys add_param fixhold_time      400      time int
 	$sys add_param pre_sample_time   500      time int
 	
-	$sys add_param sample_count      500      time int
+	$sys add_param sample_count      500      variable int
 
 	##
 	## Local variables for this system
