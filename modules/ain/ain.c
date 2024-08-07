@@ -470,16 +470,21 @@ static int ain_sampler_add_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  if (nchannels < 0 || nchannels > info->nchan) {
-    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
-		     ": nchannels out of range",
-		     NULL);
-    return TCL_ERROR;
-  }
-  
   if (nsamples <= 0) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
 		     ": nsamples out of range",
+		     NULL);
+    return TCL_ERROR;
+  }
+
+  /* quietly fail if we are on a system without ain running */
+  if (info->nchan == 0) {
+    return TCL_OK;
+  }
+    
+  if (nchannels < 0 || nchannels > info->nchan) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": nchannels out of range",
 		     NULL);
     return TCL_ERROR;
   }
