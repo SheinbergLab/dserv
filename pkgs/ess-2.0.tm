@@ -765,6 +765,8 @@ namespace eval ess {
         dservLoggerOpen $filename 1
 	set open_datafile $filename
 
+	dservSet qpcs/datafile $f
+
 	dservLoggerAddMatch $filename eventlog/events
 	dservLoggerAddMatch $filename eventlog/names
 	dservLoggerAddMatch $filename stimdg
@@ -786,8 +788,8 @@ namespace eval ess {
 	dservTouch stimdg
 	
 	ess::evt_put ID ESS      [now] $current(system)
-	ess::evt_put ID PROTOCOL [now] $current(protocol)
-	ess::evt_put ID VARIANT  [now] $current(variant)
+	ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
+	ess::evt_put ID VARIANT  [now] $current(system):$current(protocol):$current(variant)
 	ess::evt_put ID SUBJECT  [now] $subject_id
 	
 	dict for { pname pval } [ess::get_params] {
@@ -810,6 +812,9 @@ namespace eval ess {
 	    # could put pre_close callback here
 	    
     	    dservLoggerClose $open_datafile
+	    dservSet qpcs/lastfile [file tail [file root $open_datafile]]
+	    dservSet qpcs/datafile {}
+	    
 	    
 	    # call the system's specific file_close callback
 	    catch {$current(state_system) file_close $open_datafile} ioerror
