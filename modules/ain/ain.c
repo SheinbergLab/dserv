@@ -477,7 +477,7 @@ static int ain_sampler_add_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  /* quietly fail if we are on a system without ain running */
+  /* quietly fail if we are on a system without an ADC */
   if (info->nchan == 0) {
     return TCL_OK;
   }
@@ -558,6 +558,12 @@ static int ain_sampler_start_command (ClientData data, Tcl_Interp *interp,
 		     NULL);
     return TCL_ERROR;
   }
+
+  /* quietly fail if we are on a system without an ADC */
+  if (info->nchan == 0) {
+    return TCL_OK;
+  }
+    
   if (!info->samplers[slot]->active) {
     /* not active, so shouldn't need to be protected by mutex */
     info->samplers[slot]->current_count = 0;
