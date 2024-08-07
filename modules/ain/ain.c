@@ -552,16 +552,16 @@ static int ain_sampler_start_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
+  /* quietly fail if we are on a system without an ADC */
+  if (info->nchan == 0) {
+    return TCL_OK;
+  }
+  
   if (!info->samplers[slot]) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
 		     ": sampler slot not set",
 		     NULL);
     return TCL_ERROR;
-  }
-
-  /* quietly fail if we are on a system without an ADC */
-  if (info->nchan == 0) {
-    return TCL_OK;
   }
     
   if (!info->samplers[slot]->active) {
@@ -603,6 +603,11 @@ static int ain_sampler_stop_command (ClientData data, Tcl_Interp *interp,
 		     ": sampler slot out of range",
 		     NULL);
     return TCL_ERROR;
+  }
+
+  /* quietly fail if we are on a system without an ADC */
+  if (info->nchan == 0) {
+    return TCL_OK;
   }
   
   if (!info->samplers[slot]) {
