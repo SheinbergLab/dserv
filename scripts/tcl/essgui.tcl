@@ -91,7 +91,119 @@ proc process_data { ev args } {
 	
 	qpcs/subject { set status(subject) $val }
 	qpcs/datafile { set status(datafile) $val }
-	stimdg { dg_fromString64 $val }
+	stimdg { dg_fromString64 $val; if [winfo exists .stimdg] { dg_view stimdg .stimdg }  }
+    }
+}
+
+proc goCommand {} { server_cmd ess USER_START }
+proc stopCommand {} { server_cmd ess USER_STOP }
+proc resetCommand {} { server_cmd ess USER_RESET }
+
+
+# This is a helper procedure to check if the datafile exists when
+# opening it
+proc openWithCheck { overwrite } {
+
+    # TODO
+    # implement ess::file_exists for this...
+    
+    set exists [file exists $::workingDataFile]
+    if {$exists && $overwrite } {
+	overwriteDataFileDialog
+    } else {
+	# then we have opened a datafile
+	set ::currentDatafile $::workingDataFile
+	clipboard clear
+	clipboard append $::currentDatafile
+	
+	# Add to sqlite3 database
+#	add_current_file_to_database	    
+	
+	# update block counter
+	set this_block [string range $::currentDatafile \
+			    [expr [string length $::currentDatafile]-3] end]
+	set ::blockCounter [string trimleft $this_block 0]
+
+	server_cmd ess [list ess::file_open $::currentDatafile]
+    }
+    if [winfo exists .opendatafile] {
+	destroy .opendatafile
+    }
+    if {$overwrite == 0} {
+	destroy .overwritedatafile
+    }
+}
+
+# This procedure opens the dialog for a data file overwrite
+proc overwriteDataFileDialog { } {
+    set dfiletoplevel [toplevel .overwritedatafile]
+    wm resizable $dfiletoplevel 0 0
+    wm title $dfiletoplevel "Load Data File" 
+    
+    bind $dfiletoplevel <Escape> [list destroy $dfiletoplevel ]
+    bind $dfiletoplevel <Return> {openWithCheck 0}
+    
+    pack [label $dfiletoplevel.label -text "File Exists ($::workingDataFile): Overwrite?"] \
+	-side top -pady 3 -padx 3
+    pack [set buttonframe [frame $dfiletoplevel.buttonframe]] \
+	-side top -pady 3
+    pack [button $buttonframe.ok -text "Ok" -command \
+	      [list stimgui::openWithCheck 0] -width 8 -height 1 ] \
+	-side left 	
+    pack [button $buttonframe.cancel -text "Cancel" -command \
+	      [list destroy $dfiletoplevel] -width 8 -height 1 ] -side left
+    
+    shared::placeWin $dfiletoplevel 50 25
+    
+    focus $dfiletoplevel
+    grab $dfiletoplevel
+    tkwait window $dfiletoplevel
+}
+
+# This procedure opens the dialog for a data file openeing
+proc openDataFileDialog { } {
+    set dfiletoplevel [toplevel .opendatafile]
+    wm resizable $dfiletoplevel 0 0
+    wm title $dfiletoplevel "Open Data File" 
+    
+    bind $dfiletoplevel <Escape> [list destroy $dfiletoplevel ]
+    bind $dfiletoplevel <Return> {openWithCheck 1}
+    
+    set data_entry [entry $dfiletoplevel.filename \
+			-textvariable ::workingDataFile -width 30]
+
+    $data_entry icursor end
+    pack $data_entry -side left -padx 3 -pady 3
+    pack [button $dfiletoplevel.open -text "Open" -command \
+	      [list openWithCheck 1 ]] \
+	-side left -padx 3 -pady 3
+    pack [button $dfiletoplevel.cancel -text "Cancel" -command \
+	      [list destroy $dfiletoplevel]] -side left -padx 3 -pady 3
+    
+    pack [set suggest [button $dfiletoplevel.suggest -text "Suggest File" \
+			   -command stimgui::suggestDataFile]] \
+	-side left -padx 3 -pady 3
+    
+    set ::overwriteSuggestionButton \
+	[button $dfiletoplevel.overwrite -text "Overwrite Suggestion" \
+	     -command ::overwriteSuggestion -state disabled]
+    pack $::overwriteSuggestionButton -side left -padx 3 -pady 3
+    
+#    shared::placeWin $dfiletoplevel 25 25
+    
+    focus $dfiletoplevel.filename
+    grab $dfiletoplevel
+    tkwait window $dfiletoplevel
+}
+
+proc openDatafile {} {
+    openDataFileDialog
+}
+
+proc closeDatafile {} {
+    if { $::currentDatafile != {} } {
+	server_cmd ess [list ess::file_close]
+	set ::currentDatafile {}
     }
 }
 
@@ -103,8 +215,7 @@ proc setBindings { t} {
     
     if { $t == "" } { set t .}
     
-    # console only exists on Windows
-    if { $::tcl_platform(os) == "Windows NT" } { bind $t <Control-h> { console show } }
+    bind $t <Control-h> { if [winfo exists .cli] { wm deiconify .cli } { command_window } }
     
     append ::bindings "[format %-10s {Ctrl-h:}] open console\n"
     bind $t <Control-x> { exitCommand }
@@ -123,8 +234,8 @@ proc setBindings { t} {
     bind $t <g> { goCommand }
     bind $t <G> { goCommand }
     append ::bindings "[format %-10s {G or g:}] Go\n"
-    bind $t <q> { quitCommand }
-    bind $t <Q> { quitCommand }
+    bind $t <q> { stopCommand }
+    bind $t <Q> { stopCommand }
     append ::bindings "[format %-10s {Q or q:}] Quit\n"
     bind $t <r> { resetCommand }
     bind $t <R> { resetCommand }
@@ -135,11 +246,11 @@ proc setBindings { t} {
     append ::bindings "[format %-10s {J or j:}] Juice\n"
     
     # param file editing
-    bind $t <p> { if {$ESSConnectionExists && \
-			  !$systemRunning} {editParams} }
-    bind $t <P> { if {$ESSConnectionExists && \
-			  !$systemRunning} {editParams} }
-    append ::bindings "[format %-10s {P or p:}] open params editor\n"
+#    bind $t <p> { if {$ESSConnectionExists && \
+#			  !$systemRunning} {editParams} }
+#    bind $t <P> { if {$ESSConnectionExists && \
+#			  !$systemRunning} {editParams} }
+#    append ::bindings "[format %-10s {P or p:}] open params editor\n"
     
     #this commented code includes shortcuts taken from QNX Essgui, but
     #  they aren't as useful since P/p (params viewer) incorporates all
@@ -154,25 +265,25 @@ proc setBindings { t} {
     
     
     # data file commands
-    bind $t <Control-o> { if {$currentDataFile == ""} \
-			      { openDataFile } }
+    bind $t <Control-o> { if {$::currentDatafile == ""} \
+			      { openDatafile } }
     append ::bindings "[format %-10s {Ctrl-o:}] open data file\n"
-    bind $t <Control-c> { if {$currentDataFile != ""} \
-			      { closeDataFile } }
+    bind $t <Control-c> { if {$::currentDatafile != ""} \
+			      { closeDatafile } }
     append ::bindings "[format %-10s {Ctrl-c:}] close data file\n"
-    bind $t <Control-r> { if {$currentDataFile != ""} \
-			      { closeDataFileReload } }
+    bind $t <Control-r> { if {$::currentDatafile != ""} \
+			      { closeDatafileReload } }
     append ::bindings "[format %-10s {Ctrl-c:}] close data file\n"
     bind $t <Control-N> { quickNextFile }
     append ::bindings "[format %-10s {Ctrl-Shift-N:}] quick next file\n"
     
     
     # i/o settings
-    bind $t <e> { if {$ESSConnectionExists && \
-			  !$systemRunning} {buildIOMenu} }
-    bind $t <E> { if {$ESSConnectionExists && \
-			  !$systemRunning} {buildIOMenu} }
-    append ::bindings "[format %-10s {E or e:}] edit I/O options\n"
+#    bind $t <e> { if {$ESSConnectionExists && \
+#			  !$systemRunning} {buildIOMenu} }
+#    bind $t <E> { if {$ESSConnectionExists && \
+#			  !$systemRunning} {buildIOMenu} }
+#    append ::bindings "[format %-10s {E or e:}] edit I/O options\n"
 }
 
 proc exitCommand { } {
@@ -201,6 +312,9 @@ proc exitCommand { } {
 }
 
 proc viewStimdg { {action view} } {
+    if { ![dg_exists stimdg] } {
+	dg_rename [qpcs::dsGetDG $::current(server) stimdg] stimdg
+    }
     switch -exact $action {
 	info {
 	    set m ""
@@ -215,9 +329,49 @@ proc viewStimdg { {action view} } {
 	    stimgui::messageWin $m info "Stimdg - NObs"
 	}
 	view {
-	    dg_view stimdg
+	    dg_view stimdg .stimdg
 	}
     }
+}
+
+##################
+# command_window
+##################
+
+proc command_window {} {
+    if { [winfo exists .cli] } { wm deiconify .cli; return }
+    toplevel .cli
+    wm title .cli "Command Window"
+    wm geometry .cli 600x300
+    
+    labelframe .cli.essterm -text "Ess Command"
+    ttk::entry .cli.essterm.cmd -textvariable ess_command_txt
+    text .cli.essterm.output -width 30 -height 6 -takefocus 0 -state disabled
+    pack .cli.essterm.cmd -fill x -expand true 
+    pack .cli.essterm.output -fill both -expand true
+    pack .cli.essterm -fill x -expand true -anchor n
+    
+    bind .cli.essterm.cmd <Return> { send_cmd .cli.essterm.cmd }
+    bind .cli.essterm.cmd <Up> { previous_cmd .cli.essterm.cmd }
+    bind .cli.essterm.cmd <Down> { next_cmd cli.essterm.cmd }
+
+    labelframe .cli.guiterm -text "Essgui Command"
+    ttk::entry .cli.guiterm.cmd -textvariable gui_command_txt
+    text .cli.guiterm.output -width 30 -height 6 -takefocus 0 -state disabled
+    pack .cli.guiterm.cmd -fill x -expand true 
+    pack .cli.guiterm.output -fill both -expand true
+    pack .cli.guiterm -fill x -expand true -anchor n
+    
+    bind .cli.guiterm.cmd <Return> { send_cmd .cli.guiterm.cmd }
+    bind .cli.guiterm.cmd <Up> { previous_cmd .cli.guiterm.cmd }
+    bind .cli.guiterm.cmd <Down> { next_cmd .cli.guiterm.cmd }
+    
+    set ::ess_command_history {}
+    set ::ess_command_index -1
+    set ::gui_command_history {}
+    set ::gui_command_index -1
+
+    wm withdraw .cli
 }
 
 
@@ -228,7 +382,7 @@ proc setup {} {
     set widgets(Menu) [set menu [menu .menu \
 				     -tearoff 0]]
     . configure -menu $menu
-    foreach m {File Edit View Actions Tools Help} {
+    foreach m {File Edit View Actions Help} {
 	set $m [menu $menu.menu$m -tearoff 0]
 	$menu add cascade -label $m -menu $menu.menu$m
 	set widgets($m) .menu.menu$m
@@ -238,11 +392,11 @@ proc setup {} {
     set widgets(DataCascade) [set DataCascade \
 					   [menu $File.datacascade -tearoff 0]]
     $DataCascade add command -label "Open" -command \
-	openDataFile -accelerator (Ctrl-o)
+	openDatafile -accelerator (Ctrl-o)
     $DataCascade add command -label "Close" -command \
-	closeDataFile -accelerator (Ctrl-c)
+	closeDatafile -accelerator (Ctrl-c)
     $DataCascade add command -label "Close and reload stimdg" -command \
-	closeDataFileReload -accelerator (Ctrl-r)
+	closeDatafileReload -accelerator (Ctrl-r)
     
     $File add cascade -label "Param File" -menu $File.paramcascade
     set widgets(ParamCascade) [set ParamCascade \
@@ -263,13 +417,19 @@ proc setup {} {
     $View add command -label "Current stimdg" -command viewStimdg -accelerator (Ctrl-v)
     $View add command -label "Current stimdg Info" -command {stimgui::viewStimdg info} -accelerator (Ctrl-i)
     $View add separator
+
+    $View add command -label "QPCS Viewer" -command \
+	{exec wish8.6 /usr/local/dserv/scripts/tcl/qpcsview.tcl $::current(server) &}
+    
     $View add command -label "Event Viewer" -command \
-	{stimgui::openEventViewer}
+	{exec wish8.6 /usr/local/dserv/scripts/tcl/essview.tcl $::current(server) &}
+
     $View add command -label "Trace Viewer" -command \
-	{stimgui::openTraceViewer}
+	{openTraceViewer}
     $View add separator
-    $View add command -label "Protocol Runner" \
-	-command {stimgui::openProtocolRunner}
+    $View add command -label "Virtual Inputs" -command \
+	{exec wish8.6 /usr/local/dserv/scripts/tcl/essinput.tcl $::current(server) &}
+    
     $View add separator
     $View add command -label "Datafile Suggestion Database" \
 	-command {
@@ -285,7 +445,7 @@ proc setup {} {
     $View add command -label "Debugging Tools" -command \
 	stimgui::setupDebug -accelerator (Ctrl-d)
     $View add command -label "Console" -command \
-	{console show} -accelerator (Ctrl-h)
+	{ command_window } -accelerator (Ctrl-h)
     $View add check -label "Display Update Status Time?" \
 	-variable ::stimgui::showUpdateStatusEveryTime
     #	$View add command -label "Show Status" -command stimgui::toggleStatusFrame -accelerator (Ctrl-s)
@@ -304,7 +464,9 @@ proc setup {} {
     set f [frame .server.f]
     pack [label $f.text -text "ESS Host:" -width 10] \
 	-side left -padx 2 -anchor w
-    set widgets(esshost) [ttk::combobox $f.esshost -values $::esshosts -width 16]
+    set widgets(esshost) \
+	[ttk::combobox $f.esshost -state readonly \
+	     -values $::esshosts -width 16 -textvariable ::esshost]
     bind $widgets(esshost) <<ComboboxSelected>> [list open_connection %W]
     pack $widgets(esshost) -side left -padx 4 -pady 3
     pack [button $f.refresh -bd 0 -image refreshicon -command refresh_esshosts] -side left -padx 4
@@ -317,11 +479,11 @@ proc setup {} {
 	frame $f.$s
 	pack [label $f.$s.text -text "[string totitle $s]:" -width 10 -anchor e] \
 	    -side left -padx 2 -anchor e
-	set widgets(${s}_combo) [ttk::combobox $f.$s.$s  \
+	set widgets(${s}_combo) [ttk::combobox $f.$s.$s -state readonly \
 				     -width 16 -textvariable current($s)]
 	bind $widgets(${s}_combo) <<ComboboxSelected>> [list set_${s} %W]
 	pack $widgets(${s}_combo) -side left -padx 4 -pady 3
-	pack [button $f.$s.refresh_${s} -bd 0 -image refreshicon -command refresh_${s}] -side left -padx 4
+	pack [button $f.$s.refresh_${s} -bd 0 ] -side left -padx 4
 	pack $f.$s
     }
     pack $f -side top -pady 2
@@ -330,9 +492,9 @@ proc setup {} {
     
     labelframe .control -text "ESS Control"
     set f [frame .control.buttons]
-    ttk::button $f.go -text "Go" -command [list server_cmd ess USER_START]
-    ttk::button $f.stop -text "Stop" -command [list server_cmd ess USER_STOP]
-    ttk::button $f.reset -text "Reset" -command [list server_cmd ess USER_RESET]
+    ttk::button $f.go -text "Go" -command goCommand
+    ttk::button $f.stop -text "Stop" -command stopCommand
+    ttk::button $f.reset -text "Reset" -command resetCommand
     pack $f.go $f.stop $f.reset -side left -expand true -fill x
     pack $f -side bottom -pady 2
     pack .control
@@ -372,33 +534,9 @@ proc setup {} {
 
     
     pack .control .lfobs -fill x -expand true -anchor n
-    
-    labelframe .essterm -text "Ess Command"
-    ttk::entry .essterm.cmd -textvariable ess_command_txt
-    text .essterm.output -width 30 -height 6 -takefocus 0 -state disabled
-    pack .essterm.cmd -fill x -expand true 
-    pack .essterm.output -fill both -expand true
-    pack .essterm -fill x -expand true -anchor n
-    
-    bind .essterm.cmd <Return> { send_cmd .essterm.cmd }
-    bind .essterm.cmd <Up> { previous_cmd .essterm.cmd }
-    bind .essterm.cmd <Down> { next_cmd .essterm.cmd }
 
-    labelframe .guiterm -text "Essgui Command"
-    ttk::entry .guiterm.cmd -textvariable gui_command_txt
-    text .guiterm.output -width 30 -height 6 -takefocus 0 -state disabled
-    pack .guiterm.cmd -fill x -expand true 
-    pack .guiterm.output -fill both -expand true
-    pack .guiterm -fill x -expand true -anchor n
-    
-    bind .guiterm.cmd <Return> { send_cmd .guiterm.cmd }
-    bind .guiterm.cmd <Up> { previous_cmd .guiterm.cmd }
-    bind .guiterm.cmd <Down> { next_cmd .guiterm.cmd }
-    
-    set ::ess_command_history {}
-    set ::ess_command_index -1
-    set ::gui_command_history {}
-    set ::gui_command_index -1
+    # open the command window for sending commands to ess/stim/local
+    command_window
     
     setBindings {}
 }
@@ -463,7 +601,7 @@ proc connect_to_server { server } {
     set current(server) $server
     update_vars $server
 
-    ess_cmd ess::load_system
+    update_system_combos $server
     
     set connected 1
 }
@@ -531,7 +669,7 @@ proc add_to_history { server cmd } {
 }
 
 proc previous_cmd { w } {
-    if { $w == ".essterm.cmd" } {
+    if { $w == ".cli.essterm.cmd" } {
 	set command_history ::ess_command_history
 	set command_index ::ess_command_index
 	set command_txt ::ess_command_txt
@@ -549,7 +687,7 @@ proc previous_cmd { w } {
 }
 
 proc next_cmd { w } {
-    if { $w == ".essterm.cmd" } {
+    if { $w == ".cli.essterm.cmd" } {
 	set command_history ::ess_command_history
 	set command_index ::ess_command_index
 	set command_txt ::ess_command_txt
@@ -568,13 +706,13 @@ proc next_cmd { w } {
 
 proc send_cmd { w } {
     set new_command [$w get]
-    if { $w == ".essterm.cmd" } {
+    if { $w == ".cli.essterm.cmd" } {
 	set in ess_command_txt
-	set out .essterm.output
+	set out .cli.essterm.output
 	set server ess
     } else {
 	set in gui_command_txt
-	set out .guiterm.output
+	set out .cli.guiterm.output
 	set server gui
     }
 
@@ -589,10 +727,10 @@ proc send_cmd { w } {
 
 
 proc terminal_output { line } {
-    .essterm.output configure -state normal
-    .essterm.output insert end $line
-    .essterm.output insert end \n
-    .essterm.output configure -state disabled
+    .cli.essterm.output configure -state normal
+    .cli.essterm.output insert end $line
+    .cli.essterm.output insert end \n
+    .cli.essterm.output configure -state disabled
 }
 
 proc echo_line { s } {
@@ -618,10 +756,10 @@ proc server_cmd { server cmd { add 0 } } {
 	if { $sock != {} } { puts $sock $cmd }
     } else {
 	set result [namespace inscope :: eval $cmd]
-	.guiterm.output configure -state normal
-	.guiterm.output insert end $result
-	.guiterm.output insert end \n
-	.guiterm.output configure -state disabled	
+	.cli.guiterm.output configure -state normal
+	.cli.guiterm.output insert end $result
+	.cli.guiterm.output insert end \n
+	.cli.guiterm.output configure -state disabled	
     }
     if { $add } { add_to_history $server $cmd }
 }
@@ -629,7 +767,6 @@ proc server_cmd { server cmd { add 0 } } {
 
 proc find_esshosts {} {
     global esshosts esshostinfo
-    set esshosts {}
     array set esshostinfo {}
     
     set hosts [mdns::find _dserv._tcp 200]
@@ -665,17 +802,23 @@ wm iconphoto . -default essicon
 # hold onto host information
 set esshosts {}
 array set esshostinfo {}
+set esshost ""
+set currentDatafile {}
 
 foreach s "system protocol variant" {
     set current(${s}) {}
     set current(${s}_list) {}
 }
 
-find_esshosts
+#find_esshosts
 setup
 
 proc open_connection { w } {
-    if { $::dserv_server != "" } { disconnect }
+    if { $::dserv_server != "" } {
+	disconnect
+	if [dg_exists stimdg] { dg_delete stimdg }
+	if [winfo exists .stimdg] { destroy .stimdg }
+    }
     connect [$w get]
 }
 
@@ -692,25 +835,39 @@ proc disconnect {} {
     set dserv_server {}
 }
 
-set dserv_server {}
+if { [llength $argv] > 0 } {
+    set server [lindex $argv 0]
+    lappend ::esshosts $server    
+    set ::esshost $server
+    connect $server
+}
 
-#if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
-#connect $server
 
 #########
 # dgview
 #########
 
-proc dg_view { dg } {
+proc dg_view { dg { top {} } } {
     #
     # Create a toplevel widget of the class DgView
     #
-    set top .dgView
-    for {set n 2} {[winfo exists $top]} {incr n} {
-        set top .dgView$n
+    if { $top == "" } {
+	set top .dgView
+	for {set n 2} {[winfo exists $top]} {incr n} {
+	    set top .dgView$n
+	}
+	toplevel $top -class DgView
+	wm title $top $dg
+    } else {
+	if [winfo exists $top] {
+	    destroy $top.tf
+	} else {
+	    toplevel $top -class DgView
+	    wm title $top $dg
+	}
+
     }
-    toplevel $top -class DgView
-    wm title $top $dg
+    
     #
     # Create a vertically scrolled tablelist widget with dynamic-width
     # columns and interactive sort capability within the toplevel
