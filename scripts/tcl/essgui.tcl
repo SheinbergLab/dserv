@@ -95,8 +95,210 @@ proc process_data { ev args } {
     }
 }
 
+proc setBindings { t} {
+    #if you add a binding please update the stimgui::bindings variable
+    #  you can see examples below.
+    
+    set ::bindings ""
+    
+    if { $t == "" } { set t .}
+    
+    # console only exists on Windows
+    if { $::tcl_platform(os) == "Windows NT" } { bind $t <Control-h> { console show } }
+    
+    append ::bindings "[format %-10s {Ctrl-h:}] open console\n"
+    bind $t <Control-x> { exitCommand }
+    append ::bindings "[format %-10s {Ctrl-x:}] exit stimgui\n"
+    bind $t <Control-d> { setupDebug }
+    append ::bindings "[format %-10s {Ctrl-d:}] open debugging tools window\n"
+    #	bind $t <Control-s> { toggleStatusFrame }
+    append ::bindings "[format %-10s {Ctrl-s:}] toggle status frame\n"
+    
+    bind $t <Control-v> {viewStimdg }
+    append ::bindings "[format %-10s {Ctrl-v:}] view current stimdg\n"
+    bind $t <Control-i> {viewStimdg info}
+    append ::bindings "[format %-10s {Ctrl-i:}] info about current stimdg\n"
+    
+    # experimental controls
+    bind $t <g> { goCommand }
+    bind $t <G> { goCommand }
+    append ::bindings "[format %-10s {G or g:}] Go\n"
+    bind $t <q> { quitCommand }
+    bind $t <Q> { quitCommand }
+    append ::bindings "[format %-10s {Q or q:}] Quit\n"
+    bind $t <r> { resetCommand }
+    bind $t <R> { resetCommand }
+    append ::bindings "[format %-10s {R or r:}] Reset\n"
+    # this command is not valid yet; needs more testing to be implimented
+    bind $t <j> { juiceCommand }
+    bind $t <J> { juiceCommand }
+    append ::bindings "[format %-10s {J or j:}] Juice\n"
+    
+    # param file editing
+    bind $t <p> { if {$ESSConnectionExists && \
+			  !$systemRunning} {editParams} }
+    bind $t <P> { if {$ESSConnectionExists && \
+			  !$systemRunning} {editParams} }
+    append ::bindings "[format %-10s {P or p:}] open params editor\n"
+    
+    #this commented code includes shortcuts taken from QNX Essgui, but
+    #  they aren't as useful since P/p (params viewer) incorporates all
+    # 	bind $t <v> { if {$ESSConnectionExists && \
+	# 		!$systemRunning} {editParams} }
+    # 	bind $t <V> { if {$ESSConnectionExists && \
+	# 		!$systemRunning} {editParams} }
+    # 	bind $t <t> { if {$ESSConnectionExists && \
+	# 		!$systemRunning} {editParams} }
+    # 	bind $t <T> { if {$ESSConnectionExists && \
+	# 		!$systemRunning} {editParams} }
+    
+    
+    # data file commands
+    bind $t <Control-o> { if {$currentDataFile == ""} \
+			      { openDataFile } }
+    append ::bindings "[format %-10s {Ctrl-o:}] open data file\n"
+    bind $t <Control-c> { if {$currentDataFile != ""} \
+			      { closeDataFile } }
+    append ::bindings "[format %-10s {Ctrl-c:}] close data file\n"
+    bind $t <Control-r> { if {$currentDataFile != ""} \
+			      { closeDataFileReload } }
+    append ::bindings "[format %-10s {Ctrl-c:}] close data file\n"
+    bind $t <Control-N> { quickNextFile }
+    append ::bindings "[format %-10s {Ctrl-Shift-N:}] quick next file\n"
+    
+    
+    # i/o settings
+    bind $t <e> { if {$ESSConnectionExists && \
+			  !$systemRunning} {buildIOMenu} }
+    bind $t <E> { if {$ESSConnectionExists && \
+			  !$systemRunning} {buildIOMenu} }
+    append ::bindings "[format %-10s {E or e:}] edit I/O options\n"
+}
+
+proc exitCommand { } {
+    set top [toplevel .closedialouge]
+    wm resizable $top 0 0
+    wm title $top "Close essgui?" 
+    
+    bind $top <Escape> [list destroy $top]
+    bind $top <Return> { exit }
+    
+    pack [label $top.label -text "Close essgui?" -fg red] \
+	-side top -pady 3 -padx 3
+    pack [set buttonframe [frame $top.buttonframe]] \
+	-side top -pady 3 -padx 3
+    pack [button $buttonframe.ok -text "Ok" -command \
+	      exit -width 8 -height 1 ] \
+	-side left
+    pack [button $buttonframe.cancel -text "Cancel" -command \
+	      [list destroy $top] -width 8 -height 1 ] -side left
+    
+#    shared::placeWin $top 50 50
+    
+    focus $top
+    grab $top
+    tkwait window $top
+}
+
+proc viewStimdg { {action view} } {
+    switch -exact $action {
+	info {
+	    set m ""
+	    if [dl_exists stimdg:version] {
+		set m "$m [dl_tcllist stimdg:version]\n"
+	    }
+	    if [dl_exists stimdg:remaining] {
+		set m "$m NObs = [dl_length stimdg:remaining]\n"
+	    } elseif [dl_exists stimdg:id] {
+		set m "$m NObs = [dl_length stimdg:remaining]\n"
+	    }
+	    stimgui::messageWin $m info "Stimdg - NObs"
+	}
+	view {
+	    dg_view stimdg
+	}
+    }
+}
+
+
 proc setup {} {
     global status widgets esshosts current
+
+    # A menubar with some options (server info...etc)
+    set widgets(Menu) [set menu [menu .menu \
+				     -tearoff 0]]
+    . configure -menu $menu
+    foreach m {File Edit View Actions Tools Help} {
+	set $m [menu $menu.menu$m -tearoff 0]
+	$menu add cascade -label $m -menu $menu.menu$m
+	set widgets($m) .menu.menu$m
+    }
+    
+    $File add cascade -label "Data File" -menu $File.datacascade
+    set widgets(DataCascade) [set DataCascade \
+					   [menu $File.datacascade -tearoff 0]]
+    $DataCascade add command -label "Open" -command \
+	openDataFile -accelerator (Ctrl-o)
+    $DataCascade add command -label "Close" -command \
+	closeDataFile -accelerator (Ctrl-c)
+    $DataCascade add command -label "Close and reload stimdg" -command \
+	closeDataFileReload -accelerator (Ctrl-r)
+    
+    $File add cascade -label "Param File" -menu $File.paramcascade
+    set widgets(ParamCascade) [set ParamCascade \
+					    [menu $File.paramcascade -tearoff 0]]
+    $ParamCascade add command -label "Load" -command \
+	loadParamsFileWin
+    $ParamCascade add command -label "For Save, see edit menu" -command return -state disabled
+    $File add separator
+    
+    $File add command -label "Save Subject Defaults" \
+	-command updateDefaultsFile
+    
+    $File add separator
+    $File add command -label "Exit" -command exitCommand \
+	-accelerator (Ctrl-x)
+
+
+    $View add command -label "Current stimdg" -command viewStimdg -accelerator (Ctrl-v)
+    $View add command -label "Current stimdg Info" -command {stimgui::viewStimdg info} -accelerator (Ctrl-i)
+    $View add separator
+    $View add command -label "Event Viewer" -command \
+	{stimgui::openEventViewer}
+    $View add command -label "Trace Viewer" -command \
+	{stimgui::openTraceViewer}
+    $View add separator
+    $View add command -label "Protocol Runner" \
+	-command {stimgui::openProtocolRunner}
+    $View add separator
+    $View add command -label "Datafile Suggestion Database" \
+	-command {
+	    set g [dg_read interface/datafile_suggestions]
+	    dg_view [dg_sort $g system protocol variant]
+	    dg_delete $g
+	}
+    $View add separator
+    $View add check -label "Play Protocol Sound" \
+	-variable stimgui::playProtSound
+
+    $View add separator
+    $View add command -label "Debugging Tools" -command \
+	stimgui::setupDebug -accelerator (Ctrl-d)
+    $View add command -label "Console" -command \
+	{console show} -accelerator (Ctrl-h)
+    $View add check -label "Display Update Status Time?" \
+	-variable ::stimgui::showUpdateStatusEveryTime
+    #	$View add command -label "Show Status" -command stimgui::toggleStatusFrame -accelerator (Ctrl-s)
+    $Help add command -label "Shortcut Commands" -command \
+	stimgui::shortcutWin
+    $Help add command -label "Params File Sourcing" -command \
+	{stimgui::paramFileHelp .}
+    $Help add separator
+    $Help add command -label "About" \
+	-command {shared::aboutWin stimgui $stimgui::codeVersion \
+		      "REHBM, DLS" 2001-2021}
+    
+
 
     labelframe .server -text Server
     set f [frame .server.f]
@@ -197,6 +399,8 @@ proc setup {} {
     set ::ess_command_index -1
     set ::gui_command_history {}
     set ::gui_command_index -1
+    
+    setBindings {}
 }
 
 proc initialize_vars { server } {
