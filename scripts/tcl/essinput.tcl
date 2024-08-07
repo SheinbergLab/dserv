@@ -151,7 +151,7 @@ proc update_button { side state } {
 set dir [file dirname [info script]]
 set iconfile [file join $dir play.png]
 image create photo essicon -file $iconfile
-wm title . "Experimental Control"
+wm title . "ESS Input"
 wm iconphoto . -default essicon
 
 setup
