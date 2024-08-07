@@ -152,12 +152,14 @@ namespace eval emcalib {
 	#
 	$sys add_action sample_position {
 	    my sample_position
+	    timerTick [expr $sample_count+100]
 	}
 	
 	$sys add_transition sample_position {
 	    if { [my sample_position_complete] } {
 		return store_calibration
 	    }
+	    if [timerExpired] { return reward }
 	}
 	
 
