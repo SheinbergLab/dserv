@@ -41,7 +41,7 @@ proc markerAccept { w } {
 }
 
 proc get_eye_coords {} { 
-    if { [catch { dl_local curpos [qpcs::dsGetData localhost ain/vals] }] } {
+    if { [catch { dl_local curpos [qpcs::dsGetData $::server ain/vals] }] } {
 	set x 128
 	set y 128
     } else {
