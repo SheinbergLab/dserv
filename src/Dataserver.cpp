@@ -504,11 +504,8 @@ int Dataserver::dserv_get_command(ClientData data, Tcl_Interp * interp, int objc
 		     "\" not found", NULL);
     return TCL_ERROR;
   }
-
-  std::unique_lock<std::mutex> mlock(ds->mutex);
+    
   obj = dpoint_to_tclobj(interp, dpoint);
-  mlock.unlock();
-  
   if (obj)
     Tcl_SetObjResult(interp, obj);
     
@@ -734,8 +731,6 @@ Dataserver::trigger_data_command(ClientData data, Tcl_Interp * interp, int objc,
 
   if (!ds->last_trigger_point) return TCL_OK;
 
-  // protect the Tcl_Interp *
-  std::lock_guard<std::mutex> mlock(ds->mutex);
   auto obj = dpoint_to_tclobj(ds->interp, ds->last_trigger_point);
     
   Tcl_SetObjResult(interp, obj);
