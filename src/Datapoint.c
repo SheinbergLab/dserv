@@ -97,7 +97,7 @@ void dpoint_free(ds_datapoint_t *d)
 }
 
 // how big a buffer is needed for the b64 encoded data?
-inline int dpoint_b64_size(ds_datapoint_t *d)
+int dpoint_b64_size(ds_datapoint_t *d)
 {
   if (!d->data.len)
     return 0;
