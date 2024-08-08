@@ -1,14 +1,11 @@
 package require dlsh
 package require qpcs
 
-set server localhost
-proc update_eye_position { x y } {
+proc update_eye_position { ds x y } {
     dl_local coords [dl_create short $y $x]
-    set ds [qpcs::dsSocketOpen $::server]
     for { set i 0 } { $i < 20 } { incr i } {
 	qpcs::dsSocketSetData $ds ain/vals $coords
     }
-    close $ds
 }
 
 
@@ -19,11 +16,34 @@ proc touch_position { x y } {
     close $ds
 }
 
-proc do_test {} {
-    for { set x 0 } { $x < 4096 } { incr x } {
-	update_eye_position $x 2048
-	puts "$x 2048"
+proc do_test { ds n ms } {
+    for { set ::count 0 } { $::count < $n } { incr ::count } {
+	set x [expr int(rand()*4096)]
+	set y [expr int(rand()*4096)]
+	update_eye_position $ds $x $y
+	after $ms
+	update
     }
 }
-    
-do_test
+
+
+set server localhost
+set ds [qpcs::dsSocketOpen $::server]
+set n 100
+set pause 10
+set count 0
+
+frame .p
+label .p.nlabel -text "N: "
+spinbox .p.n -from 1 -to 10000 -textvariable n
+pack .p.nlabel .p.n -side left
+pack .p
+
+frame .c
+button .c.run -text "Run" -command { do_test $ds $::n $::pause }
+label .c.count -textvariable count -width 5
+pack .c.run .c.count -side left
+pack .c
+
+
+
