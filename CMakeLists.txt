@@ -7,10 +7,10 @@ option(DSERV_HAVE_GPIO "using libgpiod to manage gpio lines" OFF)
 
 set(CMAKE_BUILD_TYPE Release)
 #set(CMAKE_BUILD_TYPE Debug)
+#SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 find_library(LIBTCL NAMES "libtcl8.6.a")
 find_library(LIBJANSSON NAMES "libjansson.a")
 find_library(LIBZ z)
-#SET(CMAKE_CXX_FLAGS_DEBUG "-g")
 
 add_subdirectory(modules)
 add_subdirectory(processors)
