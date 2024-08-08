@@ -11,12 +11,25 @@ class DatapointTable
   std::mutex mutex_;
   
  public:
-  void insert(std::string key, ds_datapoint_t *d)
-    {
-      std::lock_guard<std::mutex> mlock(mutex_);
-      map_[key] = d;
+  int replace(std::string key, ds_datapoint_t *d)
+  {
+    int result = 0;
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    if (iter != map_.end()) {
+      dpoint_free(iter->second);
+      result = 1;
     }
-
+    map_[key] = d;
+    return result;
+  }
+  
+  void insert(std::string key, ds_datapoint_t *d)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    map_[key] = d;
+  }
+  
   void remove(std::string key)
   {
     std::lock_guard<std::mutex> mlock(mutex_);
