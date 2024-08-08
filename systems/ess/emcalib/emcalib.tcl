@@ -145,6 +145,7 @@ namespace eval emcalib {
 
 	$sys add_transition pre_sample {
 	    if [timerExpired] { return sample_position }
+	    if [my out_of_sample_win] { return abort }
 	}
 	
 	#
@@ -160,6 +161,7 @@ namespace eval emcalib {
 		return store_calibration
 	    }
 	    if [timerExpired] { return reward }
+	    if [my out_of_sample_win] { return abort }
 	}
 	
 
@@ -297,6 +299,7 @@ namespace eval emcalib {
 
 	$sys add_method sample_position {} {}
 	$sys add_method sample_position_complete {} { return 0 }
+	$sys add_method out_of_sample_win {} { return 0 }
 	$sys add_method store_calibration {} {}
 	$sys add_method fixation_off {} {}
 	$sys add_method reward {} {}

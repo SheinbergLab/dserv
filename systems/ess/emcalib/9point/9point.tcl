@@ -151,6 +151,10 @@ namespace eval emcalib::9point {
 	    ess::em_sampler_start 0
 	}
 
+	$s add_method out_of_sample_win {} {
+	    return [expr ![ess::em_eye_in_region 1]]
+	}
+
 	$s add_method sample_position_complete {} {
 	    return [ess::em_sampler_status]
 	}
