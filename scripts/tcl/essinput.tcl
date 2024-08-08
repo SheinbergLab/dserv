@@ -3,11 +3,10 @@ package require qpcs
 
 proc update_eye_position { x y } {
     dl_local coords [dl_create short [expr {$y*16}] [expr {$x*16}]]
-    set ds [qpcs::dsSocketOpen $::server]
+    global ds
     for { set i 0 } { $i < 20 } { incr i } { 
 	qpcs::dsSocketSetData $ds ain/vals $coords
     }
-    close $ds
 }
 
 proc markerStash { w x y } {
@@ -107,23 +106,8 @@ proc initialize_vars { server } {
     set status(state) [string totitle [lindex $stateinfo 5]]
 }
 
-proc connect_to_server { server } {
-    initialize_vars $server
-    set connected 1
-}
-
-proc disconnect_from_server {} {
-}
-
 proc left  { state } { update_button left $state  }
 proc right { state } { update_button right $state }
-
-proc terminal_output { line } {
-    .essterm.output configure -state normal
-    .essterm.output insert end $line
-    .essterm.output insert end \n
-    .essterm.output configure -state disabled
-}
 
 proc echo_line { s } {
     set line [gets $s]
@@ -157,4 +141,7 @@ wm iconphoto . -default essicon
 setup
 
 if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
+set ::ds [qpcs::dsSocketOpen $::server]
+
+
 
