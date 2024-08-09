@@ -30,7 +30,6 @@ uint64_t tclserver_now(tclserver_t *tclserver)
   return ((TclServer *) tclserver)->now();
 }
 
-  
 /*
  * mainline
  */
@@ -57,7 +56,7 @@ int main(int argc, char *argv[])
     std::cout << options.help({"", "Group"}) << std::endl;
     exit(0);
   }
-  
+
   Dataserver dserv(argc, argv);
   dserver = &dserv;		// set the global variable used for modules
 
