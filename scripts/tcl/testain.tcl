@@ -1,10 +1,37 @@
 package require dlsh
 package require qpcs
 
+proc test_tcl_eval { n } {
+    set s [socket localhost 2570]
+    fconfigure $s -buffering line
+    for { set i 0 } { $i < $n } { incr i } { 
+	set script {expr 5*5}
+	puts $s $script
+	gets $s
+    }
+    close $s
+}
+
+proc setup_window_processor {} {
+    set s [socket localhost 2570]
+    fconfigure $s -buffering line
+    set script { ainSetProcessor windows;
+	ainSetParam dpoint proc/windows;
+	dservAddExactMatch proc/windows/status;
+	#dpointSetScript proc/windows/status { set x [dservGet proc/windows/status] }
+	dpointSetScript proc/windows/status { set x 100 }
+    }
+    puts $s $script
+    gets $s
+    close $s
+}
+
+
 proc update_eye_position { ds x y } {
     dl_local coords [dl_create short $y $x]
     for { set i 0 } { $i < 20 } { incr i } {
 	qpcs::dsSocketSetData $ds ain/vals $coords
+	after 1
     }
 }
 
@@ -27,6 +54,8 @@ proc do_test { ds n ms } {
 }
 
 
+setup_window_processor
+
 set server localhost
 set ds [qpcs::dsSocketOpen $::server]
 set n 100
@@ -45,5 +74,5 @@ label .c.count -textvariable count -width 5
 pack .c.run .c.count -side left
 pack .c
 
-
-
+# send a bunch of script only
+#test_tcl_eval 100
