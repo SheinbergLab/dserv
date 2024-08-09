@@ -5,9 +5,10 @@ project(dserv)
 
 option(DSERV_HAVE_GPIO "using libgpiod to manage gpio lines" OFF)
 
-set(CMAKE_BUILD_TYPE Release)
-#set(CMAKE_BUILD_TYPE Debug)
-#SET(CMAKE_CXX_FLAGS_DEBUG "-g")
+#set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_C_FLAGS_DEBUG "-g")
 find_library(LIBTCL NAMES "libtcl8.6.a")
 find_library(LIBJANSSON NAMES "libjansson.a")
 find_library(LIBZ z)
