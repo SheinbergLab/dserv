@@ -27,14 +27,6 @@ proc update_ain {} {
     dservSet qpcs/em_pos "$v2 $v1 $v2a $v1a"
 }
 
-proc update_ain_window_settings {} {
-    dservSet qpcs/em_region_setting [triggerData]
-}
-
-proc update_touch_window_settings {} {
-    dservSet qpcs/touch_region_setting [triggerData]
-}
-
 proc update_events {} {
 
     set einfo [split [triggerName] :]
@@ -74,8 +66,16 @@ proc update_events {} {
     }
 }
 
+proc update_ain_window_settings {} {
+    dservSet qpcs/em_region_setting [triggerData]
+}
+
 proc update_ain_window_status {} {
     dservSet qpcs/em_region_status [triggerData]
+}
+
+proc update_touch_window_settings {} {
+    dservSet qpcs/touch_region_setting [triggerData]
 }
 
 proc update_touch_window_status {} {
