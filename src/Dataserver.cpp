@@ -117,7 +117,7 @@ ds_datapoint_t *Dataserver::trigger(ds_datapoint_t *dpoint)
     if (trigger_scripts.find(dpoint->varname, script)) {
       client_request_t client_request;
       client_request.type = REQ_TRIGGER;
-      client_request.script = std::move(script);
+      client_request.script = script;
       client_request.dpoint = new_trigger_point(dpoint);
 
       std::unique_lock<std::mutex> mlock(mutex);
@@ -1013,7 +1013,6 @@ int Dataserver::process_requests(void) {
 	retcode = Tcl_Eval(interp, script);
 	const char *rcstr = Tcl_GetStringResult(interp);
 	mlock.unlock();
-	cond.notify_one(); // notify one waiting thread
 	  
 	if (retcode == TCL_OK) {
 	  if (rcstr) {
