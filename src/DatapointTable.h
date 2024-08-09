@@ -48,6 +48,31 @@ class DatapointTable
     return false;
   }
 
+  ds_datapoint_t *get_dpoint(std::string key)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    if (iter != map_.end()) {
+      return dpoint_copy(iter->second);
+    }
+    else {
+      return nullptr;
+    }    
+  }
+  
+  int delete_dpoint(std::string key)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    if (iter != map_.end()) {
+      dpoint_free(iter->second);
+      map_.erase (key);
+      return 1;
+    }
+    else {
+      return 0;
+    }
+  }
   
   std::string get_keys(void)
   {
