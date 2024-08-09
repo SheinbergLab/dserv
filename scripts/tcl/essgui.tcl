@@ -462,8 +462,8 @@ proc setup {} {
 
     labelframe .server -text Server
     set f [frame .server.f]
-    pack [label $f.text -text "ESS Host:" -width 10] \
-	-side left -padx 2 -anchor w
+    pack [label $f.text -text "ESS Host:" -width 10 -anchor e] \
+	-side left -padx 2
     set widgets(esshost) \
 	[ttk::combobox $f.esshost -state readonly \
 	     -values $::esshosts -width 16 -textvariable ::esshost]
@@ -478,12 +478,12 @@ proc setup {} {
     foreach s { system protocol variant } {
 	frame $f.$s
 	pack [label $f.$s.text -text "[string totitle $s]:" -width 10 -anchor e] \
-	    -side left -padx 2 -anchor e
+	    -side left -padx 2
 	set widgets(${s}_combo) [ttk::combobox $f.$s.$s -state readonly \
 				     -width 16 -textvariable current($s)]
 	bind $widgets(${s}_combo) <<ComboboxSelected>> [list set_${s} %W]
 	pack $widgets(${s}_combo) -side left -padx 4 -pady 3
-	pack [button $f.$s.refresh_${s} -bd 0 ] -side left -padx 4
+	pack [button $f.$s.refresh_${s} -bd 0 -image refreshicon ] -side left -padx 4
 	pack $f.$s
     }
     pack $f -side top -pady 2
@@ -727,6 +727,7 @@ proc send_cmd { w } {
 
 
 proc terminal_output { line } {
+    if { ![winfo exists .cli] } { return }
     .cli.essterm.output configure -state normal
     .cli.essterm.output insert end $line
     .cli.essterm.output insert end \n
@@ -756,10 +757,12 @@ proc server_cmd { server cmd { add 0 } } {
 	if { $sock != {} } { puts $sock $cmd }
     } else {
 	set result [namespace inscope :: eval $cmd]
-	.cli.guiterm.output configure -state normal
-	.cli.guiterm.output insert end $result
-	.cli.guiterm.output insert end \n
-	.cli.guiterm.output configure -state disabled	
+	if [winfo exists .cli] {
+	    .cli.guiterm.output configure -state normal
+	    .cli.guiterm.output insert end $result
+	    .cli.guiterm.output insert end \n
+	    .cli.guiterm.output configure -state disabled	
+	}
     }
     if { $add } { add_to_history $server $cmd }
 }
