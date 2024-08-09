@@ -18,8 +18,7 @@ proc setup_window_processor {} {
     set script { ainSetProcessor windows;
 	ainSetParam dpoint proc/windows;
 	dservAddExactMatch proc/windows/status;
-	#dpointSetScript proc/windows/status { set x [dservGet proc/windows/status] }
-	dpointSetScript proc/windows/status { set x 100 }
+	dpointSetScript proc/windows/status { set vals [dservGet proc/windows/status] }
     }
     puts $s $script
     gets $s
@@ -31,7 +30,6 @@ proc update_eye_position { ds x y } {
     dl_local coords [dl_create short $y $x]
     for { set i 0 } { $i < 20 } { incr i } {
 	qpcs::dsSocketSetData $ds ain/vals $coords
-	after 1
     }
 }
 
