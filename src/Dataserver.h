@@ -57,6 +57,7 @@ class Dataserver
   int socket_fd;
 
   std::thread process_thread;	// internal trigger events
+  std::thread trigger_thread;	// manage trigger requests
   std::thread net_thread;	// tcpip communication
   std::thread send_thread;	// client subscriptions
   std::thread logger_thread;	// log to file
@@ -65,6 +66,8 @@ class Dataserver
   std::condition_variable cond;		// condition variable for sync
   
   std::mutex trigger_point_mutex;	// ensure only one thread accesses
+  std::mutex trigger_mutex;	        // to sync trigger calls
+  std::condition_variable trigger_cond;	// condition variable for sync
 
   DatapointTable datapoint_table;
   SendTable send_table;
@@ -76,6 +79,9 @@ class Dataserver
 
   // process requests
   SharedQueue<client_request_t> queue;
+
+  // process queue for triggers
+  SharedQueue<client_request_t> trigger_queue;
 
   // point queue for notifications
   SharedQueue<ds_datapoint_t *> notify_queue;
@@ -111,7 +117,10 @@ public:
   ds_datapoint_t *get_datapoint(char *varname);
   int delete_datapoint(char *varname);
   ds_datapoint_t *new_trigger_point(ds_datapoint_t *dpoint);
-  ds_datapoint_t *trigger(ds_datapoint_t *dpoint);
+  int trigger(ds_datapoint_t *dpoint);
+  void trigger_no_process(ds_datapoint_t *dpoint);
+  void queue_dpoint(ds_datapoint_t *dp);
+  void do_set(ds_datapoint_t *dpoint);
   void set(ds_datapoint_t &dpoint);
   void set(ds_datapoint_t *dpoint);
   void set(char *varname, char *value);
@@ -146,6 +155,10 @@ public:
 
   static int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
 			       Tcl_Obj * const objv[]);
+  static int dserv_get_event_command(ClientData data, Tcl_Interp * interp, int objc,
+				   Tcl_Obj * const objv[]);
+  static int dserv_get_event_data_command(ClientData data, Tcl_Interp * interp, int objc,
+				       Tcl_Obj * const objv[]);
   static int now_command(ClientData data, Tcl_Interp * interp, int objc,
 			 Tcl_Obj * const objv[]);
   static int dserv_setdata_command (ClientData data, Tcl_Interp *interp,
@@ -191,6 +204,9 @@ public:
   void eval_noreply(std::string script);
   int process_requests(void);
   void start_tcp_server(void);
+
+  int add_to_trigger_queue(ds_datapoint_t *dpoint);
+  int process_trigger_requests(void);
 
   int add_to_notify_queue(ds_datapoint_t *dpoint);
   int move_to_notify_queue(ds_datapoint_t *dpoint);
