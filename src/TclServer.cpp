@@ -526,11 +526,10 @@ int TclServer::process_requests(void) {
       {
 	const char *script = req.script.c_str();
 	
-	std::unique_lock<std::mutex> mlock(mutex);
+	//	std::unique_lock<std::mutex> mlock(mutex);
 	retcode = Tcl_Eval(interp, script);
 	const char *rcstr = Tcl_GetStringResult(interp);
-	mlock.unlock();
-	cond.notify_one(); // notify one waiting thread
+	//	mlock.unlock();
 	
 	if (retcode == TCL_OK) {
 	  if (rcstr) {
@@ -571,16 +570,17 @@ int TclServer::process_requests(void) {
       {
 	ds_datapoint_t *dpoint = req.dpoint;
 	std::string script;
-	
-	// evaluate a dpoint script
+
+	// evaluate a dpoint script if it exists
+	//	std::unique_lock<std::mutex> mlock(mutex);
 	if (dpoint_scripts.find(std::string(dpoint->varname), script)) {
-	  std::unique_lock<std::mutex> mlock(mutex);
-	  retcode = Tcl_Eval(interp, script.c_str());
-	  mlock.unlock();
-	  cond.notify_one(); // notify one waiting thread
+	  //	  std::cout << "REQ_DPOINT_SCRIPT: " << script.c_str() << " (" << queue.size() << ")" << std::endl;
+	  retcode = Tcl_EvalEx(interp, script.c_str(), -1, 0);
 	}
+	//	mlock.unlock();
 	dpoint_free(dpoint);
       }
+      break;
     default:
       break;
     }
@@ -602,17 +602,14 @@ std::string TclServer::eval(char *s)
 
 std::string TclServer::eval(std::string script)
 {
-  static SharedQueue<std::string> rqueue;
+  SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT;
   client_request.rqueue = &rqueue;
   client_request.script = script;
   
   // std::cout << "TCL Request: " << std::string(buf, n) << std::endl;
-  
   queue.push_back(client_request);
-  
-  //      queue->push_back(std::string(buf, n));
   
   /* rqueue will be available after command has been processed */
   std::string s(client_request.rqueue->front());
@@ -629,11 +626,11 @@ void TclServer::eval_noreply(char *s)
 
 void TclServer::eval_noreply(std::string script)
 {
-  static SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT_NOREPLY;
   client_request.script = script;
-  
+
+  /* don't ask for response, but do wait until it's been executed */
   queue.push_back(client_request);
   std::unique_lock<std::mutex> mlock(mutex);
   cond.wait(mlock);
@@ -651,6 +648,7 @@ void TclServer::tcp_client_process(int sockfd,
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.rqueue = &rqueue;
+  client_request.type = REQ_SCRIPT;
   
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
     client_request.script = std::string(buf, rval);
