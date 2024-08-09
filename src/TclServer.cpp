@@ -400,6 +400,8 @@ void TclServer::add_tcl_commands(Tcl_Interp *interp)
 		       Dataserver::dserv_get_command, this->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservGet",
 		       Dataserver::dserv_get_command, this->ds, NULL);
+  Tcl_CreateObjCommand(interp, "dservGetEvent",
+		       Dataserver::dserv_get_event_command, this->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSet",
 		       Dataserver::dserv_set_command, this->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTouch",
@@ -571,13 +573,9 @@ int TclServer::process_requests(void) {
 	ds_datapoint_t *dpoint = req.dpoint;
 	std::string script;
 
-	// evaluate a dpoint script if it exists
-	//	std::unique_lock<std::mutex> mlock(mutex);
 	if (dpoint_scripts.find(std::string(dpoint->varname), script)) {
-	  //	  std::cout << "REQ_DPOINT_SCRIPT: " << script.c_str() << " (" << queue.size() << ")" << std::endl;
 	  retcode = Tcl_EvalEx(interp, script.c_str(), -1, 0);
 	}
-	//	mlock.unlock();
 	dpoint_free(dpoint);
       }
       break;
