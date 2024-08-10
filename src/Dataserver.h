@@ -51,6 +51,8 @@ class Dataserver;		// defined below
 
 class Dataserver
 {
+  const char *KEYS_POINT_NAME = "@keys";
+  
   enum dserv_rc { DSERV_OK, DSERV_BadArgument };
 
   int socket_fd;
@@ -125,6 +127,7 @@ public:
   void clear(void);
   char *get_table_keys(void);
   char *get_dg_dir(void);
+  void set_key_dpoint(void);
   void add_trigger(char *match, int every, char *script) ;
   void remove_trigger(char *match);
   void remove_all_triggers(void);

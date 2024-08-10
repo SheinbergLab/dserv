@@ -28,6 +28,7 @@ class DatapointTable
   {
     int result = 0;
     std::lock_guard<std::mutex> mlock(mutex_);
+
     auto iter = map_.find(key);
     if (iter != map_.end()) {
       dpoint_free(iter->second);

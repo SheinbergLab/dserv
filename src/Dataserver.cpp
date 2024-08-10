@@ -119,6 +119,13 @@ void Dataserver::trigger(ds_datapoint_t *dpoint)
   }
 }
 
+void Dataserver::set_key_dpoint(void)
+{
+  std::string keys = datapoint_table.get_keys();
+  set((char *) Dataserver::KEYS_POINT_NAME,
+      (char *) keys.c_str());
+}
+
 void Dataserver::set(ds_datapoint_t &dpoint)
 {
   auto dp = dpoint_copy(&dpoint);
@@ -137,7 +144,13 @@ void Dataserver::set(ds_datapoint_t *dpoint)
 {
   ds_datapoint_t *processed_dpoint;
   
-  add_datapoint_to_table(dpoint->varname, dpoint);
+  int replaced = add_datapoint_to_table(dpoint->varname, dpoint);
+
+  // keep a string of keys as datapoint so clients can monitor
+  if (!replaced) {
+    set_key_dpoint();
+  }
+    
   if ((processed_dpoint = process(dpoint))) {
     set(processed_dpoint);
   }
