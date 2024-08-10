@@ -325,7 +325,7 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
       states &= ~(1 << i);
     }
   }
-  retval = DPOINT_PROCESS_DSERV;
+  
   if (retval == DPOINT_PROCESS_DSERV) {
     uint16_t *vals = (uint16_t *) p->status_dpoint.data.buf;
     vals[0] = changes;
