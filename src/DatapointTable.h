@@ -23,6 +23,35 @@ class DatapointTable
     map_[key] = d;
     return result;
   }
+
+  /*
+    update existing point in table
+    return 1 if point updated, 0 if new point added
+  */
+  int update(ds_datapoint_t *d)
+  {
+    ds_datapoint_t *old;
+    std::string key{d->varname};
+    
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    if (iter != map_.end()) {	// point is in table
+      ds_datapoint_t *old = iter->second;
+      if (old->data.type == d->data.type &&
+	  old->data.len == d->data.len) {
+	old->timestamp = d->timestamp;
+	memcpy(old->data.buf, d->data.buf, old->data.len);
+
+	/* done so can return without updating map_*/
+	return 1;
+      }
+      else {			// points didn't match
+	dpoint_free(old);	// so free old one
+      }
+    }
+    map_[key] = d;
+    return 0;
+  }
   
   void insert(std::string key, ds_datapoint_t *d)
   {
@@ -35,7 +64,41 @@ class DatapointTable
     std::lock_guard<std::mutex> mlock(mutex_);
     map_.erase (key);
   }
-  
+
+  /*
+   * getcopy
+   *
+   * Ensure that a valid copy of a point is returned, as the point
+   * in the table can change quickly, so cannot return the pointer
+   * and expect it to still be valid.
+   * 
+   */
+  ds_datapoint_t *getcopy(std::string key)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    
+    if (iter != map_.end()) {
+      return dpoint_copy(iter->second);
+    }
+    return nullptr;
+
+  }
+
+  int deletepoint(std::string key)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    
+    if (iter != map_.end()) {
+      dpoint_free(iter->second);
+      map_.erase (key);
+      return 1;
+    }
+
+    return 0;
+  }
+    
   bool find(std::string key, ds_datapoint_t **d)
   {
     std::lock_guard<std::mutex> mlock(mutex_);
