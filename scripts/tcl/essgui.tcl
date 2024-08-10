@@ -806,6 +806,7 @@ wm iconphoto . -default essicon
 set esshosts {}
 array set esshostinfo {}
 set esshost ""
+set dserv_server ""
 set currentDatafile {}
 
 foreach s "system protocol variant" {
