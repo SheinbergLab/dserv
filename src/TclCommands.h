@@ -3,6 +3,10 @@ int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
 		      Tcl_Obj * const objv[]);
 int now_command(ClientData data, Tcl_Interp * interp, int objc,
 		Tcl_Obj * const objv[]);
+int dserv_keys_command(ClientData data, Tcl_Interp * interp, int objc,
+		       Tcl_Obj * const objv[]);
+int dserv_dgdir_command(ClientData data, Tcl_Interp * interp, int objc,
+		       Tcl_Obj * const objv[]);
 int dserv_setdata_command (ClientData data, Tcl_Interp *interp,
 			   int objc, Tcl_Obj * const objv[]);
 int dserv_setdata64_command (ClientData data, Tcl_Interp *interp,

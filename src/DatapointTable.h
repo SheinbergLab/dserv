@@ -11,6 +11,19 @@ class DatapointTable
   std::mutex mutex_;
   
  public:
+  void clear()
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+
+    // free all points in the map
+    for (const auto & [ key, dpoint ] : map_) {
+      if (dpoint) dpoint_free(dpoint);
+    }
+
+    // clear the map
+    map_.clear ();
+  }
+
   int replace(std::string key, ds_datapoint_t *d)
   {
     int result = 0;
