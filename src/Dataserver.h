@@ -53,11 +53,9 @@ class Dataserver
 {
   enum dserv_rc { DSERV_OK, DSERV_BadArgument };
 
-  int tcpport;
   int socket_fd;
 
-  std::thread process_thread;	// internal trigger events
-  std::thread trigger_thread;	// manage trigger requests
+  std::thread process_thread;	// main process loop
   std::thread net_thread;	// tcpip communication
   std::thread send_thread;	// client subscriptions
   std::thread logger_thread;	// log to file
@@ -65,23 +63,9 @@ class Dataserver
   std::mutex mutex;		        // ensure only one thread accesses table
   std::condition_variable cond;		// condition variable for sync
   
-  std::mutex trigger_point_mutex;	// ensure only one thread accesses
-  std::mutex trigger_mutex;	        // to sync trigger calls
-  std::condition_variable trigger_cond;	// condition variable for sync
-
   DatapointTable datapoint_table;
   SendTable send_table;
   LogTable log_table;
-
-  Tcl_Interp *interp;
-  
-  std::atomic<bool> m_bDone;
-
-  // process requests
-  SharedQueue<client_request_t> queue;
-
-  // process queue for triggers
-  SharedQueue<client_request_t> trigger_queue;
 
   // point queue for notifications
   SharedQueue<ds_datapoint_t *> notify_queue;
@@ -89,13 +73,22 @@ class Dataserver
   // point queue for loggers
   SharedQueue<ds_datapoint_t *> logger_queue;
 
+public:
+  int argc;
+  char **argv;
+  
+  std::atomic<bool> m_bDone;
+
+  // process requests
+  SharedQueue<client_request_t> queue;
+
   // matches used to forward trigger scripts
   MatchDict trigger_matches;
   TriggerDict trigger_scripts;
   
-public:
   // last triggered point name
   ds_datapoint_t *last_trigger_point;
+  std::mutex trigger_point_mutex;	// ensure only one thread accesses
   
   static void
   tcp_client_process(Dataserver *ds, int sock);
@@ -110,17 +103,16 @@ public:
   ~Dataserver();
 
   static int64_t now(void);
+  int tcpport;
   int port(void) { return tcpport; }
+
   int add_datapoint_to_table(char *varname,
 			     ds_datapoint_t *dpoint);
   int update_datapoint(ds_datapoint_t *dpoint);
   ds_datapoint_t *get_datapoint(char *varname);
   int delete_datapoint(char *varname);
   ds_datapoint_t *new_trigger_point(ds_datapoint_t *dpoint);
-  int trigger(ds_datapoint_t *dpoint);
-  void trigger_no_process(ds_datapoint_t *dpoint);
-  void queue_dpoint(ds_datapoint_t *dp);
-  void do_set(ds_datapoint_t *dpoint);
+  ds_datapoint_t *trigger(ds_datapoint_t *dpoint);
   void set(ds_datapoint_t &dpoint);
   void set(ds_datapoint_t *dpoint);
   void set(char *varname, char *value);
@@ -152,61 +144,10 @@ public:
 		       int every, int obs, int bufsize);
   void shutdown(void);
   bool isDone();
-
-  static int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
-			       Tcl_Obj * const objv[]);
-  static int dserv_get_event_command(ClientData data, Tcl_Interp * interp, int objc,
-				   Tcl_Obj * const objv[]);
-  static int dserv_get_event_data_command(ClientData data, Tcl_Interp * interp, int objc,
-				       Tcl_Obj * const objv[]);
-  static int now_command(ClientData data, Tcl_Interp * interp, int objc,
-			 Tcl_Obj * const objv[]);
-  static int dserv_setdata_command (ClientData data, Tcl_Interp *interp,
-				    int objc, Tcl_Obj * const objv[]);
-  static int dserv_setdata64_command (ClientData data, Tcl_Interp *interp,
-				      int objc, Tcl_Obj * const objv[]);
-  static int dserv_timestamp_command(ClientData data, Tcl_Interp *interp,
-				     int objc, Tcl_Obj * const objv[]);
-  static int dserv_touch_command(ClientData data, Tcl_Interp * interp, int objc,
-				 Tcl_Obj * const objv[]);
-  static int dserv_set_command(ClientData data, Tcl_Interp * interp, int objc,
-			       Tcl_Obj * const objv[]);
-  static int dserv_clear_command(ClientData data, Tcl_Interp * interp, int objc,
-				 Tcl_Obj * const objv[]);
-  static int dserv_eval_command(ClientData data, Tcl_Interp * interp, int objc,
-				Tcl_Obj * const objv[]);
-  static int trigger_name_command(ClientData data, Tcl_Interp * interp,
-				  int objc, Tcl_Obj * const objv[]);
-  static int trigger_data_command(ClientData data, Tcl_Interp * interp, int objc,
-				  Tcl_Obj * const objv[]);
-  static int trigger_add_command(ClientData data, Tcl_Interp * interp, int objc,
-				 Tcl_Obj * const objv[]);
-  static int trigger_remove_command(ClientData data, Tcl_Interp * interp, int objc,
-				    Tcl_Obj * const objv[]);
-  static int trigger_remove_all_command(ClientData data, Tcl_Interp * interp, int objc,
-					Tcl_Obj * const objv[]);
-
-  static int process_load_command(ClientData data, Tcl_Interp * interp, int objc,
-				  Tcl_Obj * const objv[]);
-  static int process_get_param_command(ClientData data, Tcl_Interp * interp, int objc,
-				       Tcl_Obj * const objv[]);
-  static int process_set_param_command(ClientData data, Tcl_Interp * interp, int objc,
-				       Tcl_Obj * const objv[]);
-  static int process_add_command(ClientData data, Tcl_Interp * interp, int objc,
-				 Tcl_Obj * const objv[]);
-  static int process_attach_command(ClientData data, Tcl_Interp * interp, int objc,
-				    Tcl_Obj * const objv[]);
   
-  void add_tcl_commands(Tcl_Interp *interp);
-  int Tcl_StimAppInit(Tcl_Interp *interp);
-  int setup_tcl(int argc, char **argv);
   std::string eval(std::string script);
   void eval_noreply(std::string script);
-  int process_requests(void);
   void start_tcp_server(void);
-
-  int add_to_trigger_queue(ds_datapoint_t *dpoint);
-  int process_trigger_requests(void);
 
   int add_to_notify_queue(ds_datapoint_t *dpoint);
   int move_to_notify_queue(ds_datapoint_t *dpoint);
