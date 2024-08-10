@@ -143,7 +143,6 @@ setup
 
 if { [llength $argv] > 0 } { set server [lindex $argv 0] } { set server 127.0.0.1 }
 set ::ds [qpcs::dsSocketOpen $::server]
-fconfigure $::ds -buffering line
 
 
 
