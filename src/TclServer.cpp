@@ -1,7 +1,10 @@
 #include "TclServer.h"
+#include "TclCommands.h"
+
+static int process_requests(TclServer *tserv);
 
 TclServer::TclServer(int argc, char **argv,
-		     Dataserver *dserv, int port)
+		     Dataserver *dserv, int port): argc(argc), argv(argv)
 {
   m_bDone = false;
   tcpport = port;
@@ -10,11 +13,8 @@ TclServer::TclServer(int argc, char **argv,
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
   
-  // create Tcl interpreter for executing scripts
-  setup_tcl(argc, argv);
-  
   net_thread = std::thread(&TclServer::start_tcp_server, this);
-  process_thread = std::thread(&TclServer::process_requests, this);
+  process_thread = std::thread(&process_requests, this);
 }
 
 TclServer::~TclServer()
@@ -89,19 +89,9 @@ void TclServer::start_tcp_server(void)
   }
 }
 
-int TclServer::sourceFile(const char *filename)
-{
-  if (!interp) {
-    std::cerr << "no tcl interpreter" << std::endl;
-    return TCL_ERROR;
-  }
-  
-  return Tcl_EvalFile(interp, filename);
-}
-
 /********************************* now *********************************/
 
-int TclServer::now_command (ClientData data, Tcl_Interp *interp,
+static int now_command (ClientData data, Tcl_Interp *interp,
 			    int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -112,7 +102,7 @@ int TclServer::now_command (ClientData data, Tcl_Interp *interp,
 }
 
 
-int TclServer::dserv_add_match_command(ClientData data, Tcl_Interp * interp,
+static int dserv_add_match_command(ClientData data, Tcl_Interp * interp,
 				       int objc,
 				       Tcl_Obj * const objv[])
 {
@@ -136,7 +126,7 @@ int TclServer::dserv_add_match_command(ClientData data, Tcl_Interp * interp,
   return TCL_OK;
 }
 
-int TclServer::dserv_add_exact_match_command(ClientData data, Tcl_Interp * interp,
+static int dserv_add_exact_match_command(ClientData data, Tcl_Interp * interp,
 					     int objc,
 					     Tcl_Obj * const objv[])
 {
@@ -160,7 +150,7 @@ int TclServer::dserv_add_exact_match_command(ClientData data, Tcl_Interp * inter
   return TCL_OK;
 }
 
-int TclServer::dserv_remove_match_command(ClientData data, Tcl_Interp * interp,
+static int dserv_remove_match_command(ClientData data, Tcl_Interp * interp,
 					  int objc,
 					  Tcl_Obj * const objv[])
 {
@@ -177,7 +167,7 @@ int TclServer::dserv_remove_match_command(ClientData data, Tcl_Interp * interp,
   return TCL_OK;
 }
 
-int TclServer::dserv_remove_all_matches_command(ClientData data,
+static int dserv_remove_all_matches_command(ClientData data,
 						Tcl_Interp * interp,
 						int objc,
 						Tcl_Obj * const objv[])
@@ -189,7 +179,7 @@ int TclServer::dserv_remove_all_matches_command(ClientData data,
 }
 
 
-int TclServer::dserv_logger_clients_command(ClientData data, Tcl_Interp *interp,
+static int dserv_logger_clients_command(ClientData data, Tcl_Interp *interp,
 					    int objc, Tcl_Obj * const objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -203,7 +193,7 @@ int TclServer::dserv_logger_clients_command(ClientData data, Tcl_Interp *interp,
 }
 
 
-int TclServer::dserv_log_open_command(ClientData data, Tcl_Interp *interp,
+static int dserv_log_open_command(ClientData data, Tcl_Interp *interp,
 			     int objc, Tcl_Obj * const objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -225,7 +215,7 @@ int TclServer::dserv_log_open_command(ClientData data, Tcl_Interp *interp,
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 
-int TclServer::dserv_log_close_command(ClientData data, Tcl_Interp *interp,
+static int dserv_log_close_command(ClientData data, Tcl_Interp *interp,
 				       int objc, Tcl_Obj * const objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -241,7 +231,7 @@ int TclServer::dserv_log_close_command(ClientData data, Tcl_Interp *interp,
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 
-int TclServer::dserv_log_pause_command(ClientData data, Tcl_Interp *interp,
+static int dserv_log_pause_command(ClientData data, Tcl_Interp *interp,
 				       int objc, Tcl_Obj * const objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -257,7 +247,7 @@ int TclServer::dserv_log_pause_command(ClientData data, Tcl_Interp *interp,
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 
-int TclServer::dserv_log_start_command(ClientData data, Tcl_Interp *interp,
+static int dserv_log_start_command(ClientData data, Tcl_Interp *interp,
 				       int objc, Tcl_Obj * const objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -273,7 +263,7 @@ int TclServer::dserv_log_start_command(ClientData data, Tcl_Interp *interp,
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 
-int TclServer::dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
+static int dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
 					   int objc, Tcl_Obj * const objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -322,7 +312,7 @@ int TclServer::dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
   return (status > 0) ? TCL_OK : TCL_ERROR;
 }
 
-int TclServer::dpoint_set_script_command (ClientData data, Tcl_Interp *interp,
+static int dpoint_set_script_command (ClientData data, Tcl_Interp *interp,
 					  int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -339,7 +329,7 @@ int TclServer::dpoint_set_script_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
-int TclServer::dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
+static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
 					     int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
@@ -355,17 +345,17 @@ int TclServer::dpoint_remove_script_command (ClientData data, Tcl_Interp *interp
   return TCL_OK;
   }
 
-int TclServer::dpoint_remove_all_scripts_command (ClientData data,
-						  Tcl_Interp *interp,
-						  int objc, Tcl_Obj *objv[])
+static int dpoint_remove_all_scripts_command (ClientData data,
+					      Tcl_Interp *interp,
+					      int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
   tclserver->dpoint_scripts.clear();
   return TCL_OK;
 }
 
-int TclServer::print_command (ClientData data, Tcl_Interp *interp,
-			      int objc, Tcl_Obj *objv[])
+static int print_command (ClientData data, Tcl_Interp *interp,
+			  int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
   
@@ -392,106 +382,106 @@ int TclServer::print_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
-
-void TclServer::add_tcl_commands(Tcl_Interp *interp)
+static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
   Tcl_CreateObjCommand(interp, "dpointGet",
-		       Dataserver::dserv_get_command, this->ds, NULL);
+		       dserv_get_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservGet",
-		       Dataserver::dserv_get_command, this->ds, NULL);
-  Tcl_CreateObjCommand(interp, "dservGetEvent",
-		       Dataserver::dserv_get_event_command, this->ds, NULL);
+		       dserv_get_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSet",
-		       Dataserver::dserv_set_command, this->ds, NULL);
+		       dserv_set_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTouch",
-		       Dataserver::dserv_touch_command, this->ds, NULL);
+		       dserv_touch_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTimestamp",
-		       Dataserver::dserv_timestamp_command, this->ds, NULL);
+		       dserv_timestamp_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSetData",
-		       Dataserver::dserv_setdata_command, this->ds, NULL);
+		       dserv_setdata_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSetData64",
-		       Dataserver::dserv_setdata64_command, this->ds, NULL);
+		       dserv_setdata64_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservClear",
-		       Dataserver::dserv_clear_command, this->ds, NULL);
+		       dserv_clear_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservEval",
-		       Dataserver::dserv_eval_command, this->ds, NULL);
+		       dserv_eval_command, tserv->ds, NULL);
 
   Tcl_CreateObjCommand(interp, "processGetParam",
-		       Dataserver::process_get_param_command, this->ds, NULL);
+		       process_get_param_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "processSetParam",
-		       Dataserver::process_set_param_command, this->ds, NULL);
+		       process_set_param_command, tserv->ds, NULL);
 
   /* these are specific to TclServers */
   Tcl_CreateObjCommand(interp, "now",
 		       (Tcl_ObjCmdProc *) now_command,
-		       this, NULL);
+		       tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservAddMatch",
-		       dserv_add_match_command, this, NULL);
+		       dserv_add_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservAddExactMatch",
-		       dserv_add_exact_match_command, this, NULL);
+		       dserv_add_exact_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservRemoveMatch",
-		       dserv_remove_match_command, this, NULL);
+		       dserv_remove_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservRemoveAllMatches",
-		       dserv_remove_all_matches_command, this, NULL);
+		       dserv_remove_all_matches_command, tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservLoggerClients",
-		       dserv_logger_clients_command, this, NULL);
+		       dserv_logger_clients_command, tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "dservLoggerOpen",
-		       dserv_log_open_command, this, NULL);
+		       dserv_log_open_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservLoggerClose",
-		       dserv_log_close_command, this, NULL);
+		       dserv_log_close_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservLoggerPause",
-		       dserv_log_pause_command, this, NULL);
+		       dserv_log_pause_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservLoggerStart",
-		       dserv_log_start_command, this, NULL);
+		       dserv_log_start_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservLoggerResume",
-		       dserv_log_start_command, this, NULL);
+		       dserv_log_start_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservLoggerAddMatch",
-		       dserv_log_add_match_command, this, NULL);
+		       dserv_log_add_match_command, tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dpointSetScript",
 		       (Tcl_ObjCmdProc *) dpoint_set_script_command,
-		       this, NULL);
+		       tserv, NULL);
   Tcl_CreateObjCommand(interp, "dpointRemoveScript",
 		       (Tcl_ObjCmdProc *) dpoint_remove_script_command,
-		       this, NULL);
+		       tserv, NULL);
   Tcl_CreateObjCommand(interp, "dpointRemoveAllScripts",
 		       (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
-		       this, NULL);
+		       tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "print",
-		       (Tcl_ObjCmdProc *) print_command, this, NULL);
+		       (Tcl_ObjCmdProc *) print_command, tserv, NULL);
   
-  Tcl_LinkVar(interp, "tcpPort", (char *) &tcpport,
+  Tcl_LinkVar(interp, "tcpPort", (char *) &tserv->tcpport,
 	      TCL_LINK_INT | TCL_LINK_READ_ONLY);
   return;
 }
 
-int TclServer::Tcl_StimAppInit(Tcl_Interp *interp)
+static int Tcl_StimAppInit(Tcl_Interp *interp, TclServer *tserv)
 {
   if (Tcl_Init(interp) == TCL_ERROR) return TCL_ERROR;
   
-  add_tcl_commands(interp);
+  add_tcl_commands(interp, tserv);
   
   return TCL_OK;
 }
 
-int TclServer::setup_tcl(int argc, char **argv)
+static Tcl_Interp *setup_tcl(TclServer *tserv)
 {
-  Tcl_FindExecutable(argv[0]);
+  Tcl_Interp *interp;
+  
+  Tcl_FindExecutable(tserv->argv[0]);
   interp = Tcl_CreateInterp();
   if (!interp) {
     std::cerr << "Error initialializing tcl interpreter" << std::endl;
+    return interp;
   }
   
   /*
    * Invoke application-specific initialization.
    */
   
-  if (Tcl_StimAppInit(interp) != TCL_OK) {
+  if (Tcl_StimAppInit(interp, tserv) != TCL_OK) {
     std::cerr << "application-specific initialization failed: ";
     std::cerr << Tcl_GetStringResult(interp) << std::endl;
   }
@@ -499,7 +489,7 @@ int TclServer::setup_tcl(int argc, char **argv)
     Tcl_SourceRCFile(interp);
   }
   
-  return TCL_OK;
+  return interp;
 }
 
 /* queue up a point to be set from other threads */
@@ -511,27 +501,29 @@ void TclServer::set_point(ds_datapoint_t *dp)
   queue.push_back(req);
 }
 
-int TclServer::process_requests(void) {
-  using namespace std::placeholders;
+static int process_requests(TclServer *tserv)
+{
+  /*
+   * private interpreter
+   */
+  Tcl_Interp *interp = setup_tcl(tserv);
   
   int retcode;
   client_request_t req;
   
   /* process until receive a message saying we are done */
-  while (!m_bDone) {
+  while (!tserv->m_bDone) {
     
-    req = queue.front();
-    queue.pop_front();
+    req = tserv->queue.front();
+    tserv->queue.pop_front();
     
     switch (req.type) {
     case REQ_SCRIPT:
       {
 	const char *script = req.script.c_str();
-	
-	//	std::unique_lock<std::mutex> mlock(mutex);
+
 	retcode = Tcl_Eval(interp, script);
 	const char *rcstr = Tcl_GetStringResult(interp);
-	//	mlock.unlock();
 	
 	if (retcode == TCL_OK) {
 	  if (rcstr) {
@@ -557,28 +549,25 @@ int TclServer::process_requests(void) {
     case REQ_SCRIPT_NOREPLY:
       {
 	const char *script = req.script.c_str();
-	std::unique_lock<std::mutex> mlock(mutex);
 	retcode = Tcl_Eval(interp, script);
-	mlock.unlock();
-	cond.notify_one(); // notify one waiting thread
       }
       break;
     case REQ_DPOINT:
       {
-	ds->set(req.dpoint);
+	tserv->ds->set(req.dpoint);
       }
       break;
     case REQ_DPOINT_SCRIPT:
       {
 	ds_datapoint_t *dpoint = req.dpoint;
 	std::string script;
-
-	if (dpoint_scripts.find(std::string(dpoint->varname), script)) {
-	  retcode = Tcl_EvalEx(interp, script.c_str(), -1, 0);
+	
+	// evaluate a dpoint script
+	if (tserv->dpoint_scripts.find(std::string(dpoint->varname), script)) {
+	  retcode = Tcl_Eval(interp, script.c_str());
 	}
 	dpoint_free(dpoint);
       }
-      break;
     default:
       break;
     }
@@ -600,15 +589,14 @@ std::string TclServer::eval(char *s)
 
 std::string TclServer::eval(std::string script)
 {
-  SharedQueue<std::string> rqueue;
+  static SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT;
   client_request.rqueue = &rqueue;
   client_request.script = script;
   
-  // std::cout << "TCL Request: " << std::string(buf, n) << std::endl;
   queue.push_back(client_request);
-  
+
   /* rqueue will be available after command has been processed */
   std::string s(client_request.rqueue->front());
   client_request.rqueue->pop_front();
@@ -624,14 +612,12 @@ void TclServer::eval_noreply(char *s)
 
 void TclServer::eval_noreply(std::string script)
 {
+  static SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT_NOREPLY;
   client_request.script = script;
-
-  /* don't ask for response, but do wait until it's been executed */
+  
   queue.push_back(client_request);
-  std::unique_lock<std::mutex> mlock(mutex);
-  cond.wait(mlock);
 }
 
 void TclServer::tcp_client_process(int sockfd,
@@ -646,7 +632,6 @@ void TclServer::tcp_client_process(int sockfd,
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.rqueue = &rqueue;
-  client_request.type = REQ_SCRIPT;
   
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
     client_request.script = std::string(buf, rval);

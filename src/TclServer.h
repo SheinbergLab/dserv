@@ -39,29 +39,35 @@
 
 class TclServer
 {
-  std::string client_name;
   int socket_fd;
-  int tcpport;
   std::thread net_thread;
   std::thread process_thread;
   
-  Tcl_Interp *interp;
-  Dataserver *ds;
+  std::mutex mutex;	      // ensure only one thread accesses table
+  std::condition_variable cond;	// condition variable for sync
   
-  std::atomic<bool> m_bDone;
+public:
+  int argc;
+  char **argv;
+
+  std::atomic<bool> m_bDone;	// flag to close process loop
+  
+  // identify connection to send process
+  std::string client_name;
+
+  // our dataserver
+  Dataserver *ds;
   
   // scripts attached to dpoints
   TriggerDict dpoint_scripts;
   
-  std::mutex mutex;		        // ensure only one thread accesses table
-  std::condition_variable cond;		// conditino variable for sync
-  
-public:
   // for client requests
   SharedQueue<client_request_t> queue;
 
   const char *PRINT_DPOINT_NAME = "print";
 
+  // communication port setting (2570)
+  int tcpport;
   int port(void) { return tcpport; }
 
   static void
@@ -77,62 +83,7 @@ public:
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }
   
-/********************************* now *********************************/
-
-  static int now_command (ClientData data, Tcl_Interp *interp,
-			  int objc, Tcl_Obj *objv[]);
-  static int dserv_add_match_command(ClientData data, Tcl_Interp * interp,
-				     int objc,
-				     Tcl_Obj * const objv[]);
-  static int dserv_add_exact_match_command(ClientData data, Tcl_Interp * interp,
-					   int objc,
-					   Tcl_Obj * const objv[]);
-  static int dserv_remove_match_command(ClientData data, Tcl_Interp * interp,
-					int objc,
-					Tcl_Obj * const objv[]);
-  static int dserv_remove_all_matches_command(ClientData data,
-					      Tcl_Interp * interp,
-					      int objc,
-					      Tcl_Obj * const objv[]);
-  static
-  int dserv_logger_clients_command(ClientData data, Tcl_Interp *interp,
-				   int objc, Tcl_Obj * const objv[]);
-
-  static
-  int dserv_log_open_command(ClientData data, Tcl_Interp *interp,
-			     int objc, Tcl_Obj * const objv[]);
-  static
-  int dserv_log_close_command(ClientData data, Tcl_Interp *interp,
-			      int objc, Tcl_Obj * const objv[]);
-  static
-  int dserv_log_pause_command(ClientData data, Tcl_Interp *interp,
-			      int objc, Tcl_Obj * const objv[]);
-  static
-  int dserv_log_start_command(ClientData data, Tcl_Interp *interp,
-			      int objc, Tcl_Obj * const objv[]);
-  static
-  int dserv_log_add_match_command(ClientData data, Tcl_Interp *interp,
-				  int objc, Tcl_Obj * const objv[]);
-  static int dpoint_set_script_command (ClientData data, Tcl_Interp *interp,
-					int objc, Tcl_Obj *objv[]);
-  static int dpoint_remove_script_command (ClientData data, Tcl_Interp *interp,
-					   int objc, Tcl_Obj *objv[]);
-  static int dpoint_remove_all_scripts_command (ClientData data,
-						Tcl_Interp *interp,
-						int objc, Tcl_Obj *objv[]);
-  static int gpio_line_request_output_command(ClientData data,
-					      Tcl_Interp *interp,
-					      int objc, Tcl_Obj *objv[]);
-  static int gpio_line_set_value_command(ClientData data,
-					 Tcl_Interp *interp,
-					 int objc, Tcl_Obj *objv[]);
-  static int print_command (ClientData data, Tcl_Interp *interp,
-			    int objc, Tcl_Obj *objv[]);
-  void add_tcl_commands(Tcl_Interp *interp);
-  int Tcl_StimAppInit(Tcl_Interp *interp);
-  int setup_tcl(int argc, char **argv);
   void set_point(ds_datapoint_t *dp);
-  int process_requests(void);
   int queue_size(void);
   std::string eval(char *s);
   std::string eval(std::string script);
