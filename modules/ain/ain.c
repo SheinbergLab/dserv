@@ -311,7 +311,7 @@ void *acquire_thread(void *arg)
   ssize_t s;
   
   ds_datapoint_t adc_dpoint;
-  uint16_t vals[4];
+  uint16_t vals[4] = {};
   const int max_val = (1 << 12);
   
   int name_sz = strlen(info->dpoint_prefix)+16;
@@ -333,6 +333,8 @@ void *acquire_thread(void *arg)
 				      DSERV_SHORT,
 				      sizeof(uint16_t)*info->nchan,
 				      (unsigned char *) vals);
+
+      /* update would be better than set here (after the first set) */
       tclserver_set_point(info->tclserver, dp);
 
       /* handle any active sample processing requests */
