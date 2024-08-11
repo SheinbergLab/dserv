@@ -184,6 +184,7 @@ static int snd_program(int midi_fd, char program, char bank, char ch_set)
 {
   char set, channel;
   char cmd[8];
+  int n = 0;
   
   channel = ch_set & 0x0F;	/* Low nibble  */
   set = (ch_set & 0xF0) >> 4; /* High nibble */
@@ -203,8 +204,10 @@ static int snd_program(int midi_fd, char program, char bank, char ch_set)
   /* Here's the program change */
   cmd[6] = 0xc0 | channel;
   cmd[7] = program-1;
+
   
-  int n = write(midi_fd, cmd, sizeof(cmd));
+  if (midi_fd >= 0)
+    n = write(midi_fd, cmd, sizeof(cmd));
   
   /* Now set the volume to the middle */
   snd_control(midi_fd, MIDI_CTRL_VOLUME, 64, channel);
@@ -241,17 +244,19 @@ static int snd_volume(int midi_fd, char volume, char channel)
 static int snd_control(int midi_fd, char control, char data, char channel)
 {
   char cmd[3];
-  
+  int n = 0;
   cmd[0] = 0xb0 | channel;
   cmd[1] = control;
   cmd[2] = data;
   
-  int n = write(midi_fd, cmd, sizeof(cmd));
+  if (midi_fd >= 0)
+    n = write(midi_fd, cmd, sizeof(cmd));
   return n;
 }
 
 static int snd_reset(int midi_fd)
 {
+  int n = 0;
   static char xg_on[] = { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00,
     0x7e, 0x00, 0xf7 };
 #if 0
@@ -263,15 +268,19 @@ static int snd_reset(int midi_fd)
     0x7f, 0x7f,
     0xf7 };
   
-  int n = write(midi_fd, xg_on, sizeof(xg_on));
+  if (midi_fd >= 0)
+    write(midi_fd, xg_on, sizeof(xg_on));
 
   /* according to the MU15 docs, the xg_on command takes approx 50ms */
   usleep(50000);
-#if 0  
-  write(midi_fd, velocity_sensitivity, sizeof(velocity_sensitivity));
+#if 0
+  if (midi_fd >= 0)
+    write(midi_fd, velocity_sensitivity, sizeof(velocity_sensitivity));
 #endif
   
-  n = write(midi_fd, master_volume, sizeof(master_volume));
+  if (midi_fd >= 0)
+    n = write(midi_fd, master_volume, sizeof(master_volume));
+  
   return n;
 }
 
@@ -295,12 +304,13 @@ static int snd_on(int midi_fd, char channel, char pitch)
 {
   static char vel = 127;
   char cmd[3];
-
+  int n = 0;
   /* Do the actual note on */
   cmd[0] = 0x90 | channel;
   cmd[1] = pitch;
   cmd[2] = vel;
-  int n = write(midi_fd, cmd, 3);
+  if (midi_fd >= 0)
+    n = write(midi_fd, cmd, 3);
   
   /* Turn on the sustain event */
   snd_control(midi_fd, MIDI_CTRL_SUSTENTO, MIDI_ON, channel);
@@ -322,6 +332,7 @@ static int snd_off(int midi_fd, char channel, char pitch)
 {
   char cmd[3];
   static char vel = 127;
+  int n = 0;
   
   /* Turn off the sustain event */
   snd_control(midi_fd, MIDI_CTRL_SUSTENTO, MIDI_OFF, channel);
@@ -330,7 +341,8 @@ static int snd_off(int midi_fd, char channel, char pitch)
   cmd[0] = 0x80 | channel;
   cmd[1] = pitch;
   cmd[2] = vel;
-  int n = write(midi_fd, cmd, 3);
+  if (midi_fd >= 0)
+    n = write(midi_fd, cmd, 3);
   
   //  printf("sound off %d %d %d\n", channel, pitch, vel);
   return n;
