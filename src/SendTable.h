@@ -18,6 +18,9 @@ class SendTable
   std::mutex mutex_;
   
  public:
+  SendTable() {};
+  ~SendTable() { shutdown_clients(); }
+
   void insert(std::string key, SendClient *s)
     {
       std::lock_guard<std::mutex> mlock(mutex_);
@@ -48,6 +51,16 @@ class SendTable
     return false;
   }
 
+  void shutdown_clients(void)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    for (auto const& [key, send_client] : map_) {
+      if (send_client)
+	send_client->dpoint_queue.push_back(&send_client->shutdown_dpoint);
+    }
+    map_.clear();
+  }
+    
   void forward_dpoint(ds_datapoint_t *dpoint)
   {
     std::vector<SendClient *> close_vec;

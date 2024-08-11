@@ -21,12 +21,13 @@ TclServer::~TclServer()
 {
   shutdown();
   net_thread.detach();
-  process_thread.detach();
+  process_thread.join();
 }
 
 void TclServer::shutdown(void)
 {
   m_bDone = true;
+  shutdown_message(&queue);
 }
 
 bool TclServer::isDone()
@@ -577,12 +578,22 @@ static int process_requests(TclServer *tserv)
     }
   }
   
+  Tcl_DeleteInterp(interp);
+  //  std::cout << "TclServer process thread ended" << std::endl;
+  
   return 0;
 }
   
 int TclServer::queue_size(void)
 {
   return queue.size();
+}
+
+void TclServer::shutdown_message(SharedQueue<client_request_t> *q)
+{
+  client_request_t client_request;
+  client_request.type = REQ_SHUTDOWN;
+  q->push_back(client_request);
 }
 
 std::string TclServer::eval(char *s)

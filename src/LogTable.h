@@ -12,13 +12,18 @@ class LogTable
   std::unordered_map<std::string, LogClient *> map_;
   std::mutex mutex_;
   
-public:  
+public:
+  LogTable() {};
+  ~LogTable() { shutdown_clients(); }
+    
   void insert(std::string key, LogClient *s);
   void remove(std::string key);
   void clear(std::string key);
   bool find(std::string key, LogClient **s);
   std::string clients(void);
   void forward_dpoint(ds_datapoint_t *dpoint);
+  void shutdown_clients(void);
+
 };
 
 #endif

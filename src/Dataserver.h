@@ -148,6 +148,8 @@ public:
   int logger_add_match(char *path, char *match,
 		       int every, int obs, int bufsize);
   void shutdown(void);
+  void shutdown_message(SharedQueue<client_request_t> *q);
+
   bool isDone();
   
   std::string eval(std::string script);

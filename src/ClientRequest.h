@@ -12,11 +12,12 @@
  *     REQ_DPOINT_SCRIPT: datapoint for trigger processing
  *     REQ_TIMER: timer id
  *     REQ_REWARD_TIMER: timer pin
+ *     REQ_SHUTDOWN: shutdown message
  */
 
 enum request_t { REQ_SCRIPT, REQ_SCRIPT_NOREPLY,
 		 REQ_TRIGGER, REQ_DPOINT, REQ_DPOINT_SCRIPT, REQ_TIMER,
-		 REQ_REWARD_TIMER, REQ_ADC_TIMER };
+		 REQ_REWARD_TIMER, REQ_ADC_TIMER, REQ_SHUTDOWN };
 
 typedef struct client_request_s {
   request_t type;

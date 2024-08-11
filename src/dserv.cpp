@@ -1,7 +1,7 @@
 #include <iostream>
 #include <chrono>
 #include <future>
-
+#include <csignal>
 #include <pthread.h>
 
 #include "sharedqueue.h"
@@ -28,6 +28,13 @@ void tclserver_set_point(tclserver_t *tclserver, ds_datapoint_t *dp)
 uint64_t tclserver_now(tclserver_t *tclserver)
 {
   return ((TclServer *) tclserver)->now();
+}
+
+void signalHandler(int signum) {
+  //  std::cout << "Shutting down..." << std::endl;
+  delete dserver;
+  delete tclserver;
+  exit(0);
 }
 
 /*
@@ -57,18 +64,18 @@ int main(int argc, char *argv[])
     exit(0);
   }
 
-  Dataserver dserv(argc, argv);
-  dserver = &dserv;		// set the global variable used for modules
+  std::signal(SIGINT, signalHandler);
+  
+  dserver = new Dataserver(argc, argv);
+  tclserver = new TclServer(argc, argv, dserver);
 
-  TclServer tcl(argc, argv, &dserv);
-  tclserver = &tcl;
   
   if (!trigger_script.empty()) {
-    auto result = dserv.eval(std::string("source ")+trigger_script);
+    auto result = dserver->eval(std::string("source ")+trigger_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result;
   }
   if (!configuration_script.empty()) {
-    auto result = tcl.eval(std::string("source ")+configuration_script);
+    auto result = tclserver->eval(std::string("source ")+configuration_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result << std::endl;
   }
 

@@ -52,6 +52,18 @@ std::string LogTable::clients(void)
   return clients;
 }
 
+
+void LogTable::shutdown_clients(void)
+{
+  std::lock_guard<std::mutex> mlock(mutex_);
+  for (auto it : map_) {
+    LogClient *log_client = it.second;
+    if (log_client) {
+      log_client->dpoint_queue.push_back(&log_client->shutdown_dpoint);
+    }
+  }
+}
+
 void LogTable::forward_dpoint(ds_datapoint_t *dpoint)
 {
   std::lock_guard<std::mutex> mlock(mutex_);

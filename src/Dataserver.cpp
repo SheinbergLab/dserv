@@ -22,9 +22,9 @@ Dataserver::~Dataserver()
 {
   shutdown();
   net_thread.detach();
-  process_thread.detach();
-  send_thread.detach();
-  logger_thread.detach();
+  logger_thread.join();
+  send_thread.join();
+  process_thread.join();
   datapoint_table.clear();
 }
 
@@ -356,10 +356,23 @@ int Dataserver::logger_add_match(char *path, char *match,
   return (log_add_match(path, match, every, obs, bufsize));
 }
   
-  
+
+void Dataserver::shutdown_message(SharedQueue<client_request_t> *q)
+{
+  client_request_t client_request;
+  client_request.type = REQ_SHUTDOWN;
+  q->push_back(client_request);
+}
+
 void Dataserver::shutdown(void)
 {
+  static ds_datapoint_t shutdown_dpoint;
+  shutdown_dpoint.flags = DSERV_DPOINT_SHUTDOWN_FLAG;
+
   m_bDone = true;
+  shutdown_message(&queue);
+  notify_queue.push_back(&shutdown_dpoint);
+  logger_queue.push_back(&shutdown_dpoint);
 }
 
 bool Dataserver::isDone()
@@ -1052,6 +1065,10 @@ static int process_requests(Dataserver *dserv) {
       break;
     }
   }
+
+  Tcl_DeleteInterp(interp);
+  //  std::cout << "Dataserver process thread ended" << std::endl;
+
   return 0;
 }
   
@@ -1139,6 +1156,10 @@ int Dataserver::process_send_requests(void) {
     dpoint = notify_queue.front();
     notify_queue.pop_front();
 
+    if (dpoint->flags & DSERV_DPOINT_SHUTDOWN_FLAG) {
+      continue;
+    }
+    
     // loop through all send_clients and decide if inactive
     // or if point matches subscription
     send_table.forward_dpoint(dpoint);
@@ -1146,7 +1167,10 @@ int Dataserver::process_send_requests(void) {
     /* dpoints need to be freed after forwarding */
     dpoint_free(dpoint);
   }
-    
+
+  // send clients are all closed in the send_table destructor
+  
+  //  std::cout << "Notify process thread ended" << std::endl;
   return 0;
 }
 
@@ -1380,6 +1404,10 @@ int Dataserver::process_log_requests(void) {
     dpoint = logger_queue.front();
     logger_queue.pop_front();
 
+    if (dpoint->flags & DSERV_DPOINT_SHUTDOWN_FLAG) {
+      continue;
+    }
+	
     /*
      * loop through all logger_clients and forward if subscribed
      */
@@ -1391,7 +1419,11 @@ int Dataserver::process_log_requests(void) {
       //	std::cout << "dpoint: " << dpoint->varname << std::endl;
     }
   }
-    
+
+  // log clients are all closed in the log_table destructor
+  
+  //  std::cout << "Logger process thread ended" << std::endl;
+  
   return 0;
 }
   
