@@ -142,55 +142,69 @@ void Dataserver::set(char *varname, char *value)
   
 void Dataserver::set(ds_datapoint_t *dpoint)
 {
-  ds_datapoint_t *processed_dpoint;
+  // make a copy to share to other queue functions
+  ds_datapoint_t *dp = dpoint_copy(dpoint);
   
+  // add to datatable and note if replaced or new point name
   int replaced = add_datapoint_to_table(dpoint->varname, dpoint);
+  
+  // process the new point and store result if processor generates result
+  ds_datapoint_t *processed_dpoint = process(dp);
+  
+  // call trigger function and add to notify and logger scripts
+  trigger(dp);
+  add_to_notify_queue(dp);
+  add_to_logger_queue(dp);
 
   // keep a string of keys as datapoint so clients can monitor
-  if (!replaced) {
+  if (!replaced)
     set_key_dpoint();
-  }
-    
-  if ((processed_dpoint = process(dpoint))) {
+
+  if (processed_dpoint)
     set(processed_dpoint);
-  }
-  trigger(dpoint);
-  add_to_notify_queue(dpoint);
-  add_to_logger_queue(dpoint);
+  
+  // done with copy 
+  dpoint_free(dp);
+  
 }
 
 void Dataserver::update(ds_datapoint_t *dpoint)
 {
-  ds_datapoint_t *processed_dpoint;
   /*
    * if update_datapoint returns 1, then point needs to be freed
    *  because it was _not_ inserted into the table
    */
   int updated = update_datapoint(dpoint);
-  if ((processed_dpoint = process(dpoint))) {
-    set(processed_dpoint);
-  }
+  ds_datapoint_t *processed_dpoint = process(dpoint);
+
   trigger(dpoint);
   add_to_notify_queue(dpoint);
   add_to_logger_queue(dpoint);
 
+  // keep a string of keys as datapoint so clients can monitor
+  if (!updated)
+    set_key_dpoint();
+
+  if (processed_dpoint)
+    set(processed_dpoint);
+    
   /* free if update successful because original point not needed */
   if (updated) dpoint_free(dpoint);
 }
 
 int Dataserver::touch(char *varname)
 {
-  ds_datapoint_t *processed_dpoint;
   ds_datapoint_t *dp = get_datapoint(varname);
   int found = 0;
   if (dp) {
     found = 1;
-    if ((processed_dpoint = process(dp))) {
-      set(processed_dpoint);
-    }
+    ds_datapoint_t *processed_dpoint = process(dp);
     trigger(dp);
     add_to_notify_queue(dp);
     add_to_logger_queue(dp);
+
+    if (processed_dpoint)
+      set(processed_dpoint);
 
     // free the copy returned by get_datapoint()
     dpoint_free(dp);
