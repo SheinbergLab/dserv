@@ -88,10 +88,6 @@ public:
   MatchDict trigger_matches;
   TriggerDict trigger_scripts;
   
-  // last triggered point name
-  ds_datapoint_t *last_trigger_point;
-  std::mutex trigger_point_mutex;	// ensure only one thread accesses
-  
   static void
   tcp_client_process(Dataserver *ds, int sock);
 

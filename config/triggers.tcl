@@ -2,34 +2,32 @@
 
 puts "initializing qpcsvars"
 
-proc update_dio {} {
-    set eds [expr { [lindex [triggerData] 0] & 0xFFFFFFFF}]
-    set lev [expr { [lindex [triggerData] 1] & 0xFFFFFFFF}]
+proc update_dio { name data } {
+    set eds [expr { [lindex $data 0] & 0xFFFFFFFF}]
+    set lev [expr { [lindex $data 1] & 0xFFFFFFFF}]
     dservSet qpcs/dio "$eds $lev"
 }
 
-proc update_joystick {} {
-    dservSet qpcs/joystick [expr {31-[triggerData]}]
+proc update_joystick { name data } {
+    dservSet qpcs/joystick [expr {31-$data}]
 }
 
-proc update_touch {} {
-    set d [triggerData]
-    dservSet qpcs/touch "[lindex $d 0] [lindex $d 1]"
+proc update_touch { name data } {
+    dservSet qpcs/touch "[lindex $data 0] [lindex $data 1]"
 }
 
-proc update_ain {} {
+proc update_ain { name data } {
     set em_pnts_per_deg_x 200
     set em_pnts_per_deg_y 200
-    set v1 [expr { [lindex [triggerData] 0] & 0xFFFF}]
-    set v2 [expr { [lindex [triggerData] 1] & 0xFFFF}]
+    set v1 [expr { [lindex $data 0] & 0xFFFF}]
+    set v2 [expr { [lindex $data 1] & 0xFFFF}]
     set v2a [format %.3f [expr {(($v2-2048.)/$em_pnts_per_deg_y)}]]
     set v1a [format %.3f [expr {((2048.-$v1)/$em_pnts_per_deg_x)}]]
     dservSet qpcs/em_pos "$v2 $v1 $v2a $v1a"
 }
 
-proc update_events {} {
-
-    set einfo [split [triggerName] :]
+proc update_events { name data } {
+    set einfo [split $name :]
     set type [lindex $einfo 1]
     set sub [lindex $einfo 2]
 
@@ -48,17 +46,17 @@ proc update_events {} {
 	  }
 	}
 	18 { switch $sub {
-	    0 { dservSet qpcs/system [triggerData] }
-	    1 { dservSet qpcs/subject [triggerData] }
-	    2 { dservSet qpcs/protocol [lindex [split [triggerData] :] 1] }
-	    3 { dservSet qpcs/variant [lindex [split [triggerData] :] 2] }
+	    0 { dservSet qpcs/system $data }
+	    1 { dservSet qpcs/subject $data }
+	    2 { dservSet qpcs/protocol [lindex [split $data :] 1] }
+	    3 { dservSet qpcs/variant [lindex [split $data :] 2] }
 	}
 	    dservSet qpcs/state Stopped
 	}
 	19 {
 	    dservSet qpcs/obs_active 1
-	    dservSet qpcs/obs_id [lindex [triggerData] 0]
-	    dservSet qpcs/obs_total [lindex [triggerData] 1]
+	    dservSet qpcs/obs_id [lindex $data 0]
+	    dservSet qpcs/obs_total [lindex $data 1]
 	}
 	20 {
 	    dservSet qpcs/obs_active 0
@@ -66,20 +64,20 @@ proc update_events {} {
     }
 }
 
-proc update_ain_window_settings {} {
-    dservSet qpcs/em_region_setting [triggerData]
+proc update_ain_window_settings { name data } {
+    dservSet qpcs/em_region_setting $data
 }
 
-proc update_ain_window_status {} {
-    dservSet qpcs/em_region_status [triggerData]
+proc update_ain_window_status { name data } {
+    dservSet qpcs/em_region_status $data
 }
 
-proc update_touch_window_settings {} {
-    dservSet qpcs/touch_region_setting [triggerData]
+proc update_touch_window_settings { name data } {
+    dservSet qpcs/touch_region_setting $data
 }
 
-proc update_touch_window_status {} {
-    dservSet qpcs/touch_region_status [triggerData]
+proc update_touch_window_status { name data } {
+    dservSet qpcs/touch_region_status $data
 }
 
 proc init_vars { } {

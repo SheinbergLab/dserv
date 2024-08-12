@@ -9,9 +9,6 @@ Dataserver::Dataserver(int argc, char **argv, int port): argc(argc), argv(argv)
   m_bDone = false;
   tcpport = port;
 
-  // pointer to last trigger datapoint for use in trigger scripts
-  last_trigger_point = nullptr;
-
   process_thread = std::thread(&process_requests, this);
   net_thread = std::thread(&Dataserver::start_tcp_server, this);
   send_thread = std::thread(&Dataserver::process_send_requests, this);
@@ -79,21 +76,6 @@ void Dataserver::clear()
   datapoint_table.clear();
 }
 
-ds_datapoint_t *Dataserver::new_trigger_point(ds_datapoint_t *dpoint)
-{
-  /* just return copy for all dpoints except EVTs */
-  if (dpoint->data.e.dtype != DSERV_EVT)
-    return dpoint_copy(dpoint);
-
-  /* repackage DSERV_EVT datapoints */
-  char evt_namebuf[32];
-  snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
-	   dpoint->data.e.type, dpoint->data.e.subtype);
-  return dpoint_new(evt_namebuf, dpoint->timestamp,
-		    (ds_datatype_t) dpoint->data.e.puttype,
-		    dpoint->data.len, dpoint->data.buf);
-}
-
 ds_datapoint_t *Dataserver::process(ds_datapoint_t *dpoint)
 {
   ds_datapoint_t *dp;
@@ -112,8 +94,7 @@ void Dataserver::trigger(ds_datapoint_t *dpoint)
       client_request_t client_request;
       client_request.type = REQ_TRIGGER;
       client_request.script = std::move(script);
-      client_request.dpoint = new_trigger_point(dpoint);
-      
+      client_request.dpoint = dpoint_copy(dpoint);
       queue.push_back(client_request);
     }
   }
@@ -827,33 +808,6 @@ static int process_attach_command(ClientData data, Tcl_Interp * interp, int objc
   else return TCL_OK;
 }
 
-static int trigger_name_command(ClientData data, Tcl_Interp * interp, int objc,
-				Tcl_Obj * const objv[])
-{
-  Dataserver *ds = (Dataserver *) data;
-
-  std::unique_lock<std::mutex> tp_mlock(ds->trigger_point_mutex);    
-  if (!ds->last_trigger_point) return TCL_OK;
-  Tcl_SetObjResult(interp,
-		   Tcl_NewStringObj(ds->last_trigger_point->varname,
-				    ds->last_trigger_point->varlen));
-  tp_mlock.unlock();
-  return TCL_OK;
-}
-  
-static int trigger_data_command(ClientData data, Tcl_Interp * interp, int objc,
-				 Tcl_Obj * const objv[])
-{
-  Dataserver *ds = (Dataserver *) data;
-
-  if (!ds->last_trigger_point) return TCL_OK;
-
-  auto obj = dpoint_to_tclobj(interp, ds->last_trigger_point);
-    
-  Tcl_SetObjResult(interp, obj);
-  return TCL_OK;
-}
-  
 static int trigger_add_command(ClientData data, Tcl_Interp * interp, int objc,
 			       Tcl_Obj * const objv[])
 {
@@ -898,10 +852,6 @@ static int trigger_remove_all_command(ClientData data, Tcl_Interp * interp, int 
 static void add_tcl_commands(Tcl_Interp *interp, Dataserver *dserv)
 {
   Tcl_CreateObjCommand(interp, "now", now_command, dserv, NULL);
-  Tcl_CreateObjCommand(interp, "triggerName",
-		       trigger_name_command, dserv, NULL);
-  Tcl_CreateObjCommand(interp, "triggerData",
-		       trigger_data_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "triggerAdd",
 		       trigger_add_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "triggerRemove",
@@ -1065,14 +1015,46 @@ static int process_requests(Dataserver *dserv) {
     case REQ_TRIGGER:
       {
 	const char *script = req.script.c_str();
+	ds_datapoint_t *dpoint = req.dpoint;
+	
+	Tcl_Obj *command = Tcl_NewObj();
+	Tcl_IncrRefCount(command);
+	Tcl_ListObjAppendElement(interp, command,
+				 Tcl_NewStringObj(script, -1));
 
-	/* store this point as "last_trigger_point" and free previous */
-	std::unique_lock<std::mutex> tp_mlock(dserv->trigger_point_mutex);    
-	if (dserv->last_trigger_point) dpoint_free(dserv->last_trigger_point);
-	dserv->last_trigger_point = req.dpoint;
-	tp_mlock.unlock();
+	/* name of dpoint (special for DSERV_EVTs */
+	if (dpoint->data.e.dtype != DSERV_EVT) {
+	  Tcl_ListObjAppendElement(interp, command,
+				   Tcl_NewStringObj(dpoint->varname, dpoint->varlen));
+	  /* data as Tcl_Obj */
+	  Tcl_ListObjAppendElement(interp, command,
+				   dpoint_to_tclobj(interp, dpoint));
+	  
+	}
+	else {
+	    char evt_namebuf[32];
+	    
+	    snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
+		     dpoint->data.e.type, dpoint->data.e.subtype);
+	    Tcl_ListObjAppendElement(interp, command,
+				     Tcl_NewStringObj(evt_namebuf, -1));
 
-	retcode = Tcl_Eval(interp, script);
+	    /* create a placeholder for repackaged dpoint */
+	    ds_datapoint_t e_dpoint;
+	    e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
+	    e_dpoint.data.len = dpoint->data.len;
+	    e_dpoint.data.buf = dpoint->data.buf;
+
+	    /* data as Tcl_Obj */
+	    Tcl_ListObjAppendElement(interp, command,
+				     dpoint_to_tclobj(interp, &e_dpoint));
+	}
+
+	/* done with this point */
+	dpoint_free(dpoint);
+
+	retcode = Tcl_EvalObjEx(interp, command, TCL_EVAL_DIRECT);
+	Tcl_DecrRefCount(command);
       }
       break;
     default:
