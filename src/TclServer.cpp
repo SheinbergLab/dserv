@@ -569,7 +569,43 @@ static int process_requests(TclServer *tserv)
 	
 	// evaluate a dpoint script
 	if (tserv->dpoint_scripts.find(std::string(dpoint->varname), script)) {
-	  retcode = Tcl_Eval(interp, script.c_str());
+	  ds_datapoint_t *dpoint = req.dpoint;
+	  
+	  Tcl_Obj *command = Tcl_NewObj();
+	  Tcl_IncrRefCount(command);
+	  Tcl_ListObjAppendElement(interp, command,
+				   Tcl_NewStringObj(script.c_str(), -1));
+	  
+	  /* name of dpoint (special for DSERV_EVTs */
+	  if (dpoint->data.e.dtype != DSERV_EVT) {
+	    Tcl_ListObjAppendElement(interp, command,
+				     Tcl_NewStringObj(dpoint->varname, dpoint->varlen));
+	    /* data as Tcl_Obj */
+	    Tcl_ListObjAppendElement(interp, command,
+				     dpoint_to_tclobj(interp, dpoint));
+	    
+	  }
+	  else {
+	    char evt_namebuf[32];
+	    
+	    snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
+		     dpoint->data.e.type, dpoint->data.e.subtype);
+	    Tcl_ListObjAppendElement(interp, command,
+				     Tcl_NewStringObj(evt_namebuf, -1));
+	    
+	    /* create a placeholder for repackaged dpoint */
+	    ds_datapoint_t e_dpoint;
+	    e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
+	    e_dpoint.data.len = dpoint->data.len;
+	    e_dpoint.data.buf = dpoint->data.buf;
+	    
+	    /* data as Tcl_Obj */
+	    Tcl_ListObjAppendElement(interp, command,
+				     dpoint_to_tclobj(interp, &e_dpoint));
+	  }
+	  
+	  retcode = Tcl_EvalObjEx(interp, command, TCL_EVAL_DIRECT);
+	  Tcl_DecrRefCount(command);
 	}
 	dpoint_free(dpoint);
       }

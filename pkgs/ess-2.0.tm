@@ -524,7 +524,7 @@ namespace eval ess {
 	set em_active 0
     }
 
-    proc do_update { } {
+    proc do_update { args } {
 	variable current
 	if { $current(state_system) != ""} {
 	    $current(state_system) update
@@ -834,12 +834,11 @@ namespace eval ess {
 	ainSetIndexedParam $win settings 0
     }
 
-    proc em_window_process { dpoint } {
+    proc em_window_process { name data } {
 	variable em_windows
-	lassign [dservGet $dpoint] \
+	lassign $data \
 	    em_windows(changes) em_windows(states) \
 	    em_windows(hpos) em_windows(vpos)
-	set em_windows(timestamp) [dservTimestamp $dpoint]
 	do_update
     }
     
@@ -852,9 +851,8 @@ namespace eval ess {
 	ainSetProcessor $em_windows(processor)
 	ainSetParam dpoint $em_windows(dpoint)
 	dservAddExactMatch $em_windows(dpoint)/status
-	dpointSetScript $em_windows(dpoint)/status \
-	    [list ess::em_window_process \
-		 $em_windows(dpoint)/status]
+	dpointSetScript $em_windows(dpoint)/status ess::em_window_process
+
 	for { set win 0 } { $win < 8 } { incr win } {
 	    ainSetIndexedParam $win active 0
 	}
@@ -940,12 +938,11 @@ namespace eval ess {
 	touchSetIndexedParam $win settings 0
     }
 
-    proc touch_window_process { dpoint } {
+    proc touch_window_process { name data } {
 	variable touch_windows
-	lassign [dservGet $dpoint] \
+	lassign $data \
 	    touch_windows(changes) touch_windows(states) \
 	    touch_windows(hpos) touch_windows(vpos)
-	set touch_windows(timestamp) [dservTimestamp $dpoint]
 	do_update
     }
 
@@ -959,9 +956,7 @@ namespace eval ess {
 	touchSetProcessor $touch_windows(processor)
 	touchSetParam dpoint $touch_windows(dpoint)
 	dservAddExactMatch $touch_windows(dpoint)/status
-	dpointSetScript $touch_windows(dpoint)/status \
-	    [list ess::touch_window_process \
-		 $touch_windows(dpoint)/status]
+	dpointSetScript $touch_windows(dpoint)/status ess::touch_window_process
 	for { set win 0 } { $win < 8 } { incr win } {
 	    touchSetIndexedParam $win active 0
 	}

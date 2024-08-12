@@ -12,6 +12,7 @@ proc test_tcl_eval { n } {
     close $s
 }
 
+proc process_windows_status { name data } { return }
 proc setup_window_processor {} {
     set s [socket localhost 2570]
     fconfigure $s -buffering line
@@ -19,7 +20,7 @@ proc setup_window_processor {} {
 	ainSetProcessor windows;
 	ainSetParam dpoint proc/windows;
 	dservAddExactMatch proc/windows/status;
-	dpointSetScript proc/windows/status { set vals [dservGet proc/windows/status] }
+	dpointSetScript proc/windows/status process_windows_status
     }
     puts $s $script
     gets $s
