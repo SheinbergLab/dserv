@@ -682,23 +682,25 @@ void TclServer::tcp_client_process(int sockfd,
   // each client has its own request structure and reply queue
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
+  client_request.type = REQ_SCRIPT;
   client_request.rqueue = &rqueue;
-  
+
+  std::string s;
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
     client_request.script = std::string(buf, rval);
-    
-    //std::cout << "TCL Request: " << std::string(buf, res.value()) << std::endl;
-    
-    queue->push_back(client_request);
-    
-    //      queue->push_back(std::string(buf, n));
-    
-    /* rqueue will be available after command has been processed */
-    std::string s(client_request.rqueue->front());
-    client_request.rqueue->pop_front();
-    
-    //std::cout << "TCL Result: " << s << std::endl;
-    
+
+    // ignore certain commands, especially exit...
+    if (!client_request.script.compare(0, 4, "exit")) {
+      s = std::string("");
+    } else {
+      queue->push_back(client_request);
+      
+      /* rqueue will be available after command has been processed */
+      s = std::string(client_request.rqueue->front());
+      client_request.rqueue->pop_front();
+      
+      //std::cout << "TCL Result: " << s << std::endl;
+    }
     // Add a newline, and send the buffer including the null termination
     s = s+"\n";
     wrval = write(sockfd, s.c_str(), s.size());
