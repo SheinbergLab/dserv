@@ -120,7 +120,7 @@ int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
       dispatch_release(t->queue);
     });
   t->expirations = 0;
-  t->nrepeats = 0;
+  t->nrepeats = -1;
   t->expired = true;
   t->suspend_count = 1;
 
@@ -142,7 +142,7 @@ void dserv_timer_arm_ms(dserv_timer_t *t, int start_ms, int interval_ms, int loo
   dispatch_time_t start = dispatch_time(DISPATCH_TIME_NOW, (uint64_t) start_ms*1000000);
   dispatch_source_set_timer(t->timer, start, (uint64_t) interval_ms*1000000, 0);
   if (!interval_ms) t->nrepeats = 0;
-  else t->nrepeats = loop;
+  t->nrepeats = -1;		/* loop not yet implemented */
   t->expired = true;
   t->expirations = 0;
   t->timeout_ms = start_ms;
@@ -269,6 +269,45 @@ static int timer_tick_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+static int timer_tick_interval_command (ClientData data, Tcl_Interp *interp,
+					int objc, Tcl_Obj *objv[])
+{
+  timer_info_t *info = (timer_info_t *) data;
+  int timerid = 0;
+  int start_ms, interval_ms;
+  
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?id? ms interval");
+    return TCL_ERROR;
+  }
+
+  if (objc == 3) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &start_ms) != TCL_OK)
+      return TCL_ERROR;
+    if (Tcl_GetIntFromObj(interp, objv[2], &interval_ms) != TCL_OK)
+      return TCL_ERROR;
+  }
+  else {
+    if (Tcl_GetIntFromObj(interp, objv[1], &timerid) != TCL_OK)
+      return TCL_ERROR;
+    if (Tcl_GetIntFromObj(interp, objv[2], &start_ms) != TCL_OK)
+      return TCL_ERROR;
+    if (Tcl_GetIntFromObj(interp, objv[3], &interval_ms) != TCL_OK)
+      return TCL_ERROR;
+  }
+  
+  if (timerid > info->ntimers) {
+    Tcl_AppendResult(interp,
+		     Tcl_GetString(objv[0]), ": invalid timer", NULL);
+    return TCL_ERROR;
+  }
+
+  dserv_timer_arm_ms(&info->timers[timerid], start_ms, interval_ms, 0);
+  dserv_timer_fire(&info->timers[timerid]);
+  
+  return TCL_OK;
+}
+
 static int timer_expired_command (ClientData data, Tcl_Interp *interp,
 				  int objc, Tcl_Obj *objv[])
 {
@@ -331,6 +370,10 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
 
   Tcl_CreateObjCommand(interp, "timerTick",
 		       (Tcl_ObjCmdProc *) timer_tick_command,
+		       (ClientData) &g_timerInfo,
+		       (Tcl_CmdDeleteProc *) NULL); 
+  Tcl_CreateObjCommand(interp, "timerTickInterval",
+		       (Tcl_ObjCmdProc *) timer_tick_interval_command,
 		       (ClientData) &g_timerInfo,
 		       (Tcl_CmdDeleteProc *) NULL); 
   Tcl_CreateObjCommand(interp, "timerExpired",
