@@ -347,9 +347,9 @@ proc command_window {} {
     labelframe .cli.essterm -text "Ess Command"
     ttk::entry .cli.essterm.cmd -textvariable ess_command_txt
     text .cli.essterm.output -width 30 -height 6 -takefocus 0 -state disabled
-    pack .cli.essterm.cmd -fill x -expand true 
+    pack .cli.essterm.cmd -fill x -expand false
     pack .cli.essterm.output -fill both -expand true
-    pack .cli.essterm -fill x -expand true -anchor n
+    pack .cli.essterm -fill both -expand true -anchor n
     
     bind .cli.essterm.cmd <Return> { send_cmd .cli.essterm.cmd }
     bind .cli.essterm.cmd <Up> { previous_cmd .cli.essterm.cmd }
@@ -358,9 +358,9 @@ proc command_window {} {
     labelframe .cli.guiterm -text "Essgui Command"
     ttk::entry .cli.guiterm.cmd -textvariable gui_command_txt
     text .cli.guiterm.output -width 30 -height 6 -takefocus 0 -state disabled
-    pack .cli.guiterm.cmd -fill x -expand true 
+    pack .cli.guiterm.cmd -fill x -expand false
     pack .cli.guiterm.output -fill both -expand true
-    pack .cli.guiterm -fill x -expand true -anchor n
+    pack .cli.guiterm -fill both -expand true -anchor n
     
     bind .cli.guiterm.cmd <Return> { send_cmd .cli.guiterm.cmd }
     bind .cli.guiterm.cmd <Up> { previous_cmd .cli.guiterm.cmd }
