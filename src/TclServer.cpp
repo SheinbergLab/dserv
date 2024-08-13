@@ -571,27 +571,22 @@ static int process_requests(TclServer *tserv)
 	if (tserv->dpoint_scripts.find(std::string(dpoint->varname), script)) {
 	  ds_datapoint_t *dpoint = req.dpoint;
 	  
-	  Tcl_Obj *command = Tcl_NewObj();
-	  Tcl_IncrRefCount(command);
-	  Tcl_ListObjAppendElement(interp, command,
-				   Tcl_NewStringObj(script.c_str(), -1));
+	  Tcl_Obj *commandArray[3];
+	  commandArray[0] = Tcl_NewStringObj(script.c_str(), -1);
 	  
 	  /* name of dpoint (special for DSERV_EVTs */
 	  if (dpoint->data.e.dtype != DSERV_EVT) {
-	    Tcl_ListObjAppendElement(interp, command,
-				     Tcl_NewStringObj(dpoint->varname, dpoint->varlen));
+	    commandArray[1] = Tcl_NewStringObj(dpoint->varname,
+					       dpoint->varlen);
 	    /* data as Tcl_Obj */
-	    Tcl_ListObjAppendElement(interp, command,
-				     dpoint_to_tclobj(interp, dpoint));
-	    
+	    commandArray[2] = dpoint_to_tclobj(interp, dpoint);
 	  }
 	  else {
+	    /* convert eventlog/events -> evt:TYPE:SUBTYPE notation */
 	    char evt_namebuf[32];
-	    
 	    snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
 		     dpoint->data.e.type, dpoint->data.e.subtype);
-	    Tcl_ListObjAppendElement(interp, command,
-				     Tcl_NewStringObj(evt_namebuf, -1));
+	    commandArray[1] = Tcl_NewStringObj(evt_namebuf, -1);
 	    
 	    /* create a placeholder for repackaged dpoint */
 	    ds_datapoint_t e_dpoint;
@@ -600,12 +595,16 @@ static int process_requests(TclServer *tserv)
 	    e_dpoint.data.buf = dpoint->data.buf;
 	    
 	    /* data as Tcl_Obj */
-	    Tcl_ListObjAppendElement(interp, command,
-				     dpoint_to_tclobj(interp, &e_dpoint));
+	    commandArray[2] = dpoint_to_tclobj(interp, &e_dpoint);
 	  }
-	  
-	  retcode = Tcl_EvalObjEx(interp, command, TCL_EVAL_DIRECT);
-	  Tcl_DecrRefCount(command);
+	  /* incr ref count on command arguments */
+	  for (int i = 0; i < 3; i++) { Tcl_IncrRefCount(commandArray[i]); }
+
+	  /* call command */
+	  retcode = Tcl_EvalObjv(interp, 3, commandArray, 3);
+
+	  /* decr ref count on command arguments */
+	  for (int i = 0; i < 3; i++) { Tcl_DecrRefCount(commandArray[i]); }
 	}
 	dpoint_free(dpoint);
       }

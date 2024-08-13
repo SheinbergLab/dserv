@@ -1017,44 +1017,44 @@ static int process_requests(Dataserver *dserv) {
 	const char *script = req.script.c_str();
 	ds_datapoint_t *dpoint = req.dpoint;
 	
-	Tcl_Obj *command = Tcl_NewObj();
-	Tcl_IncrRefCount(command);
-	Tcl_ListObjAppendElement(interp, command,
-				 Tcl_NewStringObj(script, -1));
+	Tcl_Obj *commandArray[3];
+	commandArray[0] = Tcl_NewStringObj(script, -1);
 
 	/* name of dpoint (special for DSERV_EVTs */
 	if (dpoint->data.e.dtype != DSERV_EVT) {
-	  Tcl_ListObjAppendElement(interp, command,
-				   Tcl_NewStringObj(dpoint->varname, dpoint->varlen));
+	  /* point name */
+	  commandArray[1] = Tcl_NewStringObj(dpoint->varname, dpoint->varlen);
 	  /* data as Tcl_Obj */
-	  Tcl_ListObjAppendElement(interp, command,
-				   dpoint_to_tclobj(interp, dpoint));
-	  
+	  commandArray[2] = dpoint_to_tclobj(interp, dpoint);
 	}
 	else {
-	    char evt_namebuf[32];
-	    
-	    snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
-		     dpoint->data.e.type, dpoint->data.e.subtype);
-	    Tcl_ListObjAppendElement(interp, command,
-				     Tcl_NewStringObj(evt_namebuf, -1));
-
-	    /* create a placeholder for repackaged dpoint */
-	    ds_datapoint_t e_dpoint;
-	    e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
-	    e_dpoint.data.len = dpoint->data.len;
-	    e_dpoint.data.buf = dpoint->data.buf;
-
-	    /* data as Tcl_Obj */
-	    Tcl_ListObjAppendElement(interp, command,
-				     dpoint_to_tclobj(interp, &e_dpoint));
+	  /* convert eventlog/events -> evt:TYPE:SUBTYPE notation */
+	  char evt_namebuf[32];
+	  snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
+		   dpoint->data.e.type, dpoint->data.e.subtype);
+	  commandArray[1] = Tcl_NewStringObj(evt_namebuf, -1);
+	  
+	  /* create a repackaged dpoint to pass to dpoint_to_tclobj */
+	  ds_datapoint_t e_dpoint;
+	  e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
+	  e_dpoint.data.len = dpoint->data.len;
+	  e_dpoint.data.buf = dpoint->data.buf;
+	  
+	  /* data as Tcl_Obj */
+	  commandArray[2] = dpoint_to_tclobj(interp, &e_dpoint);
 	}
 
 	/* done with this point */
 	dpoint_free(dpoint);
 
-	retcode = Tcl_EvalObjEx(interp, command, TCL_EVAL_DIRECT);
-	Tcl_DecrRefCount(command);
+	/* incr ref count on command arguments */
+	for (int i = 0; i < 3; i++) { Tcl_IncrRefCount(commandArray[i]); }
+
+	/* call command */
+	retcode = Tcl_EvalObjv(interp, 3, commandArray, 0);
+
+	/* decr ref count on command arguments */
+	for (int i = 0; i < 3; i++) { Tcl_DecrRefCount(commandArray[i]); }
       }
       break;
     default:
