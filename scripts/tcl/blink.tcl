@@ -1,6 +1,6 @@
 set ledOn 0
 set count 0
-proc blink { pin } {
+proc blink { args } {
     if { [incr ::count] > 20 } {
 	timerRemoveScript 0
     }
@@ -12,6 +12,6 @@ proc blink { pin } {
     set ledOn [expr 1-$ledOn]
 }
 
-timerSetScript 0 {blink 26}
+timerSetScript 0 blink
 timerTickInterval 0 10 10
 set last [now]
