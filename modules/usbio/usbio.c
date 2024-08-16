@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <fcntl.h>
+#include <sys/uio.h>
 #include <sys/ioctl.h>
 #include <signal.h>
 #include <termios.h>
@@ -123,6 +124,44 @@ static int configure_serial_port(int fd)
   return 0;
 }
 
+
+static void iovSet(struct iovec *iov, char *buf, int n)
+{
+  iov->iov_base = buf;
+  iov->iov_len = n;
+}
+
+static int usbio_send_command (ClientData data, Tcl_Interp *interp,
+				   int objc, Tcl_Obj *objv[])
+{
+  usbio_info_t *info = (usbio_info_t *) data;
+  static char newline_buf[2] = "\n";
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "command");
+    return TCL_ERROR;
+  }
+  if (info->usbio_fd < 0) return TCL_OK;
+
+  char *cmd = Tcl_GetString(objv[1]);
+
+  struct iovec iovs[2];
+  int cmdsize = strlen(cmd);
+  iovSet(&iovs[0], cmd, cmdsize);
+  iovSet(&iovs[1], newline_buf, 1);
+  int bytes_to_send = cmdsize + 1;
+	  
+  int rval = writev(info->usbio_fd, iovs, 2);
+  if (rval != bytes_to_send) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": send error", NULL);
+    return TCL_ERROR;
+  }
+  else {
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(rval));
+    return TCL_OK;
+  }
+}
+
 static int usbio_open_command (ClientData data, Tcl_Interp *interp,
 				   int objc, Tcl_Obj *objv[])
 {
@@ -180,6 +219,10 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
   
   Tcl_CreateObjCommand(interp, "usbioOpen",
 		       (Tcl_ObjCmdProc *) usbio_open_command,
+		       (ClientData) &g_usbioInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "usbioSend",
+		       (Tcl_ObjCmdProc *) usbio_send_command,
 		       (ClientData) &g_usbioInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
   return TCL_OK;
