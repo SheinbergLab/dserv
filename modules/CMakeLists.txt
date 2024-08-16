@@ -103,6 +103,15 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
 
 ##
+## usb_input
+##
+set(MODULE usb_input)
+project(${MODULE})
+add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
+set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
+
+##
 ## touch
 ##
 set(MODULE touch)
@@ -118,5 +127,5 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
 install(TARGETS
 	ain juicer gpio_input gpio_output touch
-	rmt eventlog sound timer
+	rmt eventlog sound timer usb_input
 	DESTINATION dserv/modules)
