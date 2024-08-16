@@ -1,6 +1,6 @@
 /*
  * NAME
- *   sound.c
+ *   usbio.c
  *
  * DESCRIPTION
  *
@@ -28,16 +28,16 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
-typedef struct usb_input_info_s
+typedef struct usbio_info_s
 {
-  int usb_input_fd;
+  int usbio_fd;
   tclserver_t *tclserver;
-} usb_input_info_t;
+} usbio_info_t;
 
 /* global to this module */
-static usb_input_info_t g_usbInputInfo;
+static usbio_info_t g_usbioInfo;
 
-static void process_request(usb_input_info_t *info, char *buf, int nbytes)
+static void process_request(usbio_info_t *info, char *buf, int nbytes)
 {
   if (nbytes > 9 &&
       buf[1] == 's' && buf[2] == 'e' &&
@@ -57,10 +57,10 @@ static void process_request(usb_input_info_t *info, char *buf, int nbytes)
 }
 
 void* workerThread(void *arg) {
-  usb_input_info_t *info = (usb_input_info_t *) arg;
+  usbio_info_t *info = (usbio_info_t *) arg;
 
   char buf[16384];
-  int port = info->usb_input_fd;
+  int port = info->usbio_fd;
   long n;
   char output_buf[1024];
   int bufsize = sizeof(output_buf);
@@ -123,29 +123,30 @@ static int configure_serial_port(int fd)
   return 0;
 }
 
-static int usb_input_open_command (ClientData data, Tcl_Interp *interp,
+static int usbio_open_command (ClientData data, Tcl_Interp *interp,
 				   int objc, Tcl_Obj *objv[])
 {
-  usb_input_info_t *info = (usb_input_info_t *) data;
-  if (info->usb_input_fd >= 0) close(info->usb_input_fd);
+  usbio_info_t *info = (usbio_info_t *) data;
+  if (info->usbio_fd >= 0) close(info->usbio_fd);
 
   if (objc < 2) {
     Tcl_WrongNumArgs(interp, 1, objv, "port");
     return TCL_ERROR;
   }
 
-  info->usb_input_fd = open(Tcl_GetString(objv[1]), O_RDONLY);
+  /* open read only but don't become "controlling terminal" */
+  info->usbio_fd = open(Tcl_GetString(objv[1]), O_NOCTTY | O_RDWR);
   
-  if (info->usb_input_fd < 0) {
+  if (info->usbio_fd < 0) {
     Tcl_AppendResult(interp,
 		     Tcl_GetString(objv[0]), ": error opening port \"",
 		     Tcl_GetString(objv[1]), "\"", NULL);
     return TCL_ERROR;
   }
-  int ret = configure_serial_port(info->usb_input_fd);
+  int ret = configure_serial_port(info->usbio_fd);
 
   pthread_t id;
-  pthread_create(&id, NULL, workerThread, &g_usbInputInfo);
+  pthread_create(&id, NULL, workerThread, &g_usbioInfo);
   
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   
@@ -159,9 +160,9 @@ static int usb_input_open_command (ClientData data, Tcl_Interp *interp,
  *****************************************************************************/
 
 #ifdef WIN32
-EXPORT(int,Dserv_usb_input_Init) (Tcl_Interp *interp)
+EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
 #else
-  int Dserv_usb_input_Init(Tcl_Interp *interp)
+  int Dserv_usbio_Init(Tcl_Interp *interp)
 #endif
 {
   
@@ -174,12 +175,12 @@ EXPORT(int,Dserv_usb_input_Init) (Tcl_Interp *interp)
       == NULL) {
     return TCL_ERROR;
   }
-  g_usbInputInfo.usb_input_fd = -1;
-  g_usbInputInfo.tclserver = tclserver_get();
+  g_usbioInfo.usbio_fd = -1;
+  g_usbioInfo.tclserver = tclserver_get();
   
-  Tcl_CreateObjCommand(interp, "usbInputOpen",
-		       (Tcl_ObjCmdProc *) usb_input_open_command,
-		       (ClientData) &g_usbInputInfo,
+  Tcl_CreateObjCommand(interp, "usbioOpen",
+		       (Tcl_ObjCmdProc *) usbio_open_command,
+		       (ClientData) &g_usbioInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
   return TCL_OK;
 }
