@@ -192,6 +192,27 @@ static int usbio_open_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+static int usbio_close_command (ClientData data, Tcl_Interp *interp,
+				   int objc, Tcl_Obj *objv[])
+{
+  usbio_info_t *info = (usbio_info_t *) data;
+  if (info->usbio_fd >= 0) close(info->usbio_fd);
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "port");
+    return TCL_ERROR;
+  }
+
+  /* open read only but don't become "controlling terminal" */
+  if (info->usbio_fd < 0) return TCL_OK;
+  else {
+    close(info->usbio_fd);
+    info->usbio_fd = -1;
+  }
+
+  return TCL_OK;
+}
+
 /*****************************************************************************
  *
  * EXPORT
@@ -219,6 +240,10 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
   
   Tcl_CreateObjCommand(interp, "usbioOpen",
 		       (Tcl_ObjCmdProc *) usbio_open_command,
+		       (ClientData) &g_usbioInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "usbioClose",
+		       (Tcl_ObjCmdProc *) usbio_close_command,
 		       (ClientData) &g_usbioInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "usbioSend",
