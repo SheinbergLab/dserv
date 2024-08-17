@@ -49,12 +49,19 @@ int send_to_dserv_txt(char *var, int dtype, int n, void *data)
 
 void timer_alert(int id)
 {
-  static int status = 0;
   static char varname[32];
+#if 0
+  static int status = 0;
   status = !status;
   digitalWriteFast(id, status);
   snprintf_P(varname, sizeof(varname), "gpio/input/%d", id);
   send_to_dserv_txt(varname, DSERV_INT, 1, &status);
+#endif
+  uint16_t vals[2];
+  vals[0] = analogRead(A0);
+  vals[1] = analogRead(A2);
+  snprintf_P(varname, sizeof(varname), "ain/vals");
+  send_to_dserv_txt(varname, DSERV_SHORT, 2, vals);
 }
 
 void callback()
@@ -119,11 +126,13 @@ void setup()
   Serial.begin(115200);
   pinMode(LED_BUILTIN,OUTPUT);
 
+  analogReadResolution(12);
+
   pinMode(output_pin,OUTPUT);
   pinMode(acknowledge_pin,OUTPUT);
 
   digitalWriteFast(LED_BUILTIN, 1);
-  t1.begin(callback, 10'000); // 10ms
+  t1.begin(callback, 1'000); // 10ms
 }
 
 void loop() {
