@@ -506,6 +506,51 @@ void TclServer::set_point(ds_datapoint_t *dp)
   queue.push_back(req);
 }
 
+/*
+ * run a tcl script for give datapoint
+ */
+static int dpoint_tcl_script(Tcl_Interp *interp,
+			     const char *script,
+			     ds_datapoint_t *dpoint)
+{
+	  
+  Tcl_Obj *commandArray[3];
+  commandArray[0] = Tcl_NewStringObj(script, -1);
+	  
+  /* name of dpoint (special for DSERV_EVTs */
+  if (dpoint->data.e.dtype != DSERV_EVT) {
+    commandArray[1] = Tcl_NewStringObj(dpoint->varname,
+				       dpoint->varlen);
+    /* data as Tcl_Obj */
+    commandArray[2] = dpoint_to_tclobj(interp, dpoint);
+  }
+  else {
+    /* convert eventlog/events -> evt:TYPE:SUBTYPE notation */
+    char evt_namebuf[32];
+    snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
+	     dpoint->data.e.type, dpoint->data.e.subtype);
+    commandArray[1] = Tcl_NewStringObj(evt_namebuf, -1);
+    
+    /* create a placeholder for repackaged dpoint */
+    ds_datapoint_t e_dpoint;
+    e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
+    e_dpoint.data.len = dpoint->data.len;
+    e_dpoint.data.buf = dpoint->data.buf;
+    
+    /* data as Tcl_Obj */
+    commandArray[2] = dpoint_to_tclobj(interp, &e_dpoint);
+  }
+  /* incr ref count on command arguments */
+  for (int i = 0; i < 3; i++) { Tcl_IncrRefCount(commandArray[i]); }
+  
+  /* call command */
+  int retcode = Tcl_EvalObjv(interp, 3, commandArray, 3);
+  
+  /* decr ref count on command arguments */
+  for (int i = 0; i < 3; i++) { Tcl_DecrRefCount(commandArray[i]); }
+  return retcode;
+}
+
 static int process_requests(TclServer *tserv)
 {
   /*
@@ -566,45 +611,17 @@ static int process_requests(TclServer *tserv)
       {
 	ds_datapoint_t *dpoint = req.dpoint;
 	std::string script;
-	
+	std::string varname(dpoint->varname);
 	// evaluate a dpoint script
-	if (tserv->dpoint_scripts.find(std::string(dpoint->varname), script)) {
+	if (tserv->dpoint_scripts.find(varname, script)) {
 	  ds_datapoint_t *dpoint = req.dpoint;
-	  
-	  Tcl_Obj *commandArray[3];
-	  commandArray[0] = Tcl_NewStringObj(script.c_str(), -1);
-	  
-	  /* name of dpoint (special for DSERV_EVTs */
-	  if (dpoint->data.e.dtype != DSERV_EVT) {
-	    commandArray[1] = Tcl_NewStringObj(dpoint->varname,
-					       dpoint->varlen);
-	    /* data as Tcl_Obj */
-	    commandArray[2] = dpoint_to_tclobj(interp, dpoint);
-	  }
-	  else {
-	    /* convert eventlog/events -> evt:TYPE:SUBTYPE notation */
-	    char evt_namebuf[32];
-	    snprintf(evt_namebuf, sizeof(evt_namebuf), "evt:%d:%d",
-		     dpoint->data.e.type, dpoint->data.e.subtype);
-	    commandArray[1] = Tcl_NewStringObj(evt_namebuf, -1);
-	    
-	    /* create a placeholder for repackaged dpoint */
-	    ds_datapoint_t e_dpoint;
-	    e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
-	    e_dpoint.data.len = dpoint->data.len;
-	    e_dpoint.data.buf = dpoint->data.buf;
-	    
-	    /* data as Tcl_Obj */
-	    commandArray[2] = dpoint_to_tclobj(interp, &e_dpoint);
-	  }
-	  /* incr ref count on command arguments */
-	  for (int i = 0; i < 3; i++) { Tcl_IncrRefCount(commandArray[i]); }
-
-	  /* call command */
-	  retcode = Tcl_EvalObjv(interp, 3, commandArray, 3);
-
-	  /* decr ref count on command arguments */
-	  for (int i = 0; i < 3; i++) { Tcl_DecrRefCount(commandArray[i]); }
+	  const char *dpoint_script = script.c_str();
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	}
+	else if (tserv->dpoint_scripts.find_match(varname, script)) {
+	  ds_datapoint_t *dpoint = req.dpoint;
+	  const char *dpoint_script = script.c_str();
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
 	}
 	dpoint_free(dpoint);
       }

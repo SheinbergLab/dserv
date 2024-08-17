@@ -3,6 +3,7 @@
 
 #include <unordered_map>
 #include <mutex>
+#include "MatchDict.h"
 
 class TriggerDict
 {
@@ -37,6 +38,25 @@ class TriggerDict
     if (iter != map_.end()) {
       script = iter->second;
       return true;
+    }
+    return false;
+  }
+
+
+  /*
+   * is_match()
+   *
+   *   Does the datapoint match a script in the table
+   */
+  
+  bool find_match(std::string varname, std::string &script)
+  {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    for (auto const& [ key, value ] : map_) {
+      if (MatchDict::FastWildCompare((char *) key.c_str(), (char *) varname.c_str())) {
+	script = value;
+	return true;
+      }
     }
     return false;
   }
