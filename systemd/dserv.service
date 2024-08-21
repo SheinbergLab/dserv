@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=sheinb
-ExecStart=/usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+ExecStart=chrt 60 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 Restart=on-failure
 RestartSec=10
 KillMode=process
 
 [Install]
 WantedBy=multi-user.target
+
 
