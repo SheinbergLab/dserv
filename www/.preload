@@ -10,7 +10,6 @@ smq:create("action")
 smq:create("xterm_command")
 smq:create("error")
 smq:create("print")
-smq:create("motion")
 
 local function smqEntry(_ENV)
    --trace("New SMQ client")
@@ -45,18 +44,14 @@ local function dataServer(sock)
 	 end
          if s:find("^evt:") then
             smq:publish(s, "eventlog")
-	 elseif s:find("^qpcs:") or s:find("^rpio") then
+	 elseif s:find("^qpcs:") or s:find("^qpcs/") then
             smq:publish(s, "qpcs")
 	 elseif s:find("^ess:") then
             smq:publish(s, "ess")
 	 elseif s:find("^ess/") then
             smq:publish(s, "ess")
-	 elseif s:find("^qpcsh:error") then
-            smq:publish(s, "error")
 	 elseif s:find("^print") then
             smq:publish(s, "print")
-    elseif s:find("^BNO08x") then
-            smq:publish(s, "motion")
          end
       end
       --print(str)

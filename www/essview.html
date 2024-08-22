@@ -39,11 +39,22 @@
 
       var sysinfo;
 
+			function setEntries(id, entries) {
+			let entrylist = entries.split(' ')
+	      let select = document.getElementById(id);
+	      let options = select.getElementsByTagName('option');	      
+	      for (var i = options.length; i--; ) {
+		  select.removeChild(options[i]);
+			}
+	      for (var i = 0; i < entrylist.length; i++) {
+		 select.add(new Option(entrylist[i]));
+	      }
+	}
       function processEssResult(essresult) {
 	  let [cmd, result]  = essresult.match(/<cmd> (.*) <\/cmd> (.*)/).slice(1)
 	  let code = 0
 	  if (result[0] == '!') { code = 1 }
-	  console.log(cmd, code)
+//	  console.log(cmd, code)
 	  if (cmd == "ess::get_system_json" && code == 0) {
 	      sysinfo = JSON.parse(result);
 	      let sysSelect = document.getElementById('system-select');
@@ -73,64 +84,45 @@
 	      }
 
 	      sysSelect.value = curSys
-	      
-	      for (var prot in sysinfo[curSys]) {
-		  protSelect.add(new Option(prot));
+
+	      let s = sysinfo[curSys]	
+	      for (var i = 0; i < s.length; i++) {
+                 let pname = Object.keys(s[i])[0]
+ 		 protSelect.add(new Option(pname));
 	      }
 
-	      let vlist = sysinfo[curSys][protSelect.value].split(' ');
-	      for (var i = 0; i < vlist.length; i++) {
-		  varSelect.add(new Option(vlist[i]));
+              let curpname = Object.keys(s[0])[0]
+	      let vlist = s[0][curpname]
+	      for (var v in vlist) {
+		  varSelect.add(new Option(vlist[v]));
 	      }
 	      
-//	      setSystem(sysSelect)
 	  }
 	  if (cmd.match("ess::load_system") && code == 0) {	      
 //	      refreshSystems();
 	  }
-	  if (cmd.match("ess::get_variant_json") && code == 0) {
-	      varinfo = JSON.parse(result);
-	      let varSelect = document.getElementById('variant-select');
-	      let options = varSelect.getElementsByTagName('option');	      
-	      for (var i = options.length; i--; ) {
-		  varSelect.removeChild(options[i]);
-	      }
-	      for (var variant in varinfo ) {
-		  varSelect.add(new Option(variant));
-	      }
-	      setVariant(varSelect);
-	  }
       }
 
-      function setSystem(obj) {
-          let s = document.getElementById('system-select').value;
+      function setSystem() {
+	  let s = document.getElementById('system-select').value;
+          smq.publish("ess::load_system "+s, "ess-cmd");
+      }
+      function setProtocol() {
+	  let s = document.getElementById('system-select').value;
+	  let p = document.getElementById('protocol-select').value;
+          smq.publish("ess::load_system "+s+" "+p, "ess-cmd");
+      }
+      function setVariant() {
+	  let s = document.getElementById('system-select').value;
 	  let p = document.getElementById('protocol-select').value;
 	  let v = document.getElementById('variant-select').value;
           smq.publish("ess::load_system "+s+" "+p+" "+v, "ess-cmd");
       }
-
-
       function reloadSystem() {
 	  let curSys = document.getElementById('system-select').value;
           smq.publish("ess::load_system "+curSys, "ess-cmd");
       }
 				  
-      function setProtocol(obj) {
-	  let sysSelect = document.getElementById('system-select');
-	  let curSys = sysSelect.value	  
-          smq.publish("ess::protocol_init "+" "+curSys+" "+obj.value, "ess-cmd");
-      }
-
-      function loadVariant(obj) {
-	  let varSelect = document.getElementById('variant-select');
-	  let curVarID = varSelect.selectedIndex
-	  smq.publish("ess::load_variant "+curVarID, "ess-cmd");
-      }
-
-      function setVariant(obj) {
-	  smq.publish("ess::load_variant "+obj.selectedIndex, "ess-cmd");
-      }
-
       function refreshSystems() {
 	  smq.publish("ess::get_system_json", "ess-cmd");
       }
@@ -163,7 +155,7 @@
 
 function processFileIO(op, name) {
     console.log(op, name);
-				  }
+  }
 				  
       function initializeESS() {
 	  smq.publish("package require ess", "ess-cmd");
@@ -183,14 +175,34 @@ function processFileIO(op, name) {
 	  var evt_start_time;
 	  var evt_last_time;
 	  
-	  function addEssToTable(txt) {
-	      if  (txt.match("^RESET")) {
+	  function processEss(txt) {
+	     if  (txt.match("^RESET")) {
 		  ess_table.clearData();
-	      }
-	      else {
+	      } else if ( txt.match("^ess/systems") ) {
+	       // Use a regular expression to extract content inside braces
+	       const match = txt.match(/\{([^}]*)\}/);
+	       if (match) {
+		  const entries = match[1]; // Extracted content inside the braces
+				  setEntries('system-select', entries)
+		}
+				  
+		  } else if ( txt.match("^ess/protocols") ) {
+				  const match = txt.match(/\{([^}]*)\}/);
+				  if (match) {
+				  const entries = match[1]; // Extracted content inside the braces
+				  setEntries('protocol-select', entries)
+				  }
+				  } else if (txt.match("^ess/variants") ) {
+				  const match = txt.match(/\{([^}]*)\}/);
+				  if (match) {
+				  const entries = match[1]; // Extracted content inside the braces
+				  setEntries('variant-select', entries)
+				  }
+				  }
+  	     else if (txt.match("^ess/state")) {
 		  s = txt.split(' ');
 		  sname = s[4].replace(/[{}]/g, "");
-		  if ( sname.match("^start_t") ) {
+	          if ( sname.match("^start_t") ) {
 		      start_time = Number(s[2]);
 		  }
 		  if ( action_only && sname.match("_t$") ) {
@@ -217,7 +229,7 @@ function processFileIO(op, name) {
 	      }
 	      return bytes.buffer;
 	  }	  
-	  function addEvtToTable(txt) {
+	  function processEvt(txt) {
 	      if  (txt.match("^RESET")) {
 		  evt_table.clearData();
 	      }
@@ -257,12 +269,24 @@ function processFileIO(op, name) {
 		      }
 		      return;
 		  }
-		  if ( type == 18 ) {
-		      if ( subtype == 0 ) {
-			  let sysSelect = document.getElementById('system-select');
-			  sysSelect.value = paramstr;
-		      }
-		      /* process protocol and variant here too */
+				       if ( type == 18 ) {
+          let s = document.getElementById('system-select');
+	  let p = document.getElementById('protocol-select');
+					   let v = document.getElementById('variant-select');
+					   if ( subtype == "0" ) {
+					       s.value = paramstr;
+					   } else if ( subtype == "2" ) {
+					       let settings = paramstr.split(':')
+
+				       s.value = settings[0]
+				       p.value = settings[1]
+				       } else if ( subtype == "3" ) {
+				       let settings = paramstr.split(':')
+				       s.value = settings[0]
+				       p.value = settings[1]
+				       v.value = settings[2]
+				       }
+	              
 		  }
 		  if ( type == 19 ) {
    	              evt_start_time = Number(s[2]);
@@ -312,11 +336,11 @@ function processFileIO(op, name) {
 	  };
 	  
 	  function essMessage(msg) {
-	      addEssToTable(msg);
+	      processEss(msg);
 	  };
 	  
 	  function evtMessage(msg) {
-	      addEvtToTable(msg);
+	      processEvt(msg);
 	  };
 	  
 	  smq.subscribe("ess", {onmsg:essMessage, datatype:"text"});
@@ -332,17 +356,17 @@ function processFileIO(op, name) {
 	<div class="system-selector">
 	  <div>
 	    <label for="system-select">System:</label>
-	    <select name="System" id="system-select" onchange="setSystem(this);"></select>  
+	    <select name="System" id="system-select" onchange="setSystem();"></select>  
 	  </div>
 
 	  <div>
 	    <label for="protocol-select">Protocol:</label>
-	    <select name="Protocol" id="protocol-select" onchange="setSystem(this);"></select>  
+	    <select name="Protocol" id="protocol-select" onchange="setProtocol();"></select>  
 	  </div>
 	  
 	  <div>
 	    <label for="variant-select">Variant:</label>
-	    <select name="Variant" id="variant-select" onchange="setSystem(this);"></select>  
+	    <select name="Variant" id="variant-select" onchange="setVariant();"></select>  
 	  </div>
 
 	  <div class="small-btn-group">

@@ -457,6 +457,10 @@ namespace eval ess {
 	catch unload_system
 	
 	set systems [find_systems]
+
+	# store these so client interfaces can know what protocols we have
+	dservSet ess/systems $systems
+
 	if { $system == "" } {
 	    set current(system) [lindex $systems 0]
 	} else {
@@ -471,6 +475,10 @@ namespace eval ess {
 	system_init $current(system)
 
 	set protocols [find_protocols $current(system)]
+
+	# store these so client interfaces can know what protocols we have
+	dservSet ess/protocols $protocols
+	
 	if { $protocol == "" } {
 	    set current(protocol) [lindex $protocols 0]
 	} else {
@@ -481,6 +489,10 @@ namespace eval ess {
 	}
 
 	set variants [find_variants $current(system) $current(protocol)]
+
+	# store these so client interfaces can know what protocols we have
+	dservSet ess/variants $variants
+
 	if { $variant == "" } {
 	    set current(variant) [lindex $variants 0]
 	} else {
@@ -1350,9 +1362,28 @@ namespace eval ess {
 	}
 	return $d
     }
+
+    proc system_dict_to_json { d } {
+	package require yajltcl
+	set obj [yajl create #auto]
+	$obj map_open
+	dict for {sysname sysinfo} $d {
+	    $obj string $sysname array_open
+	    dict for {prot variants} $sysinfo {
+		$obj map_open string $prot array_open
+		foreach v $variants {
+		    $obj string $v
+		}
+		$obj array_close map_close
+	    }
+	    $obj array_close
+	}
+	$obj map_close
+	return [$obj get]
+    }
     
     proc get_system_json {} {
-	return [json::stringify [get_system_dict]]
+	return [system_dict_to_json [get_system_dict]]
     }
 }
 
