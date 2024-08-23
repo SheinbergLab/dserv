@@ -215,6 +215,10 @@ static int gpio_line_request_input_command(ClientData data,
       return TCL_ERROR;
     }
   }
+  else {			/* failed to get line */
+    free(ireq);
+    info->input_requests[offset] = NULL;
+  }
   
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   return TCL_OK;
