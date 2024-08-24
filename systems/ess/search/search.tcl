@@ -35,6 +35,8 @@ namespace eval search {
 
 	$sys add_variable response           0
 	$sys add_variable first_time         1
+
+	$sys add_variable correct           -1
 	
 	######################################################################
 	#                            System States                           #
@@ -72,7 +74,7 @@ namespace eval search {
 		set first_time 0
 		set delay 0
 	    }
-	    
+	    set correct -1
 	    timerTick $delay
 	    my nexttrial
 	}
@@ -165,6 +167,7 @@ namespace eval search {
 	# correct
 	#
 	$sys add_action correct {
+	    set correct 1
 	    my reward
 	}
 	
@@ -174,6 +177,7 @@ namespace eval search {
 	# incorrect
 	#
 	$sys add_action incorrect {
+	    set correct 0
 	    my noreward
 	}
 	

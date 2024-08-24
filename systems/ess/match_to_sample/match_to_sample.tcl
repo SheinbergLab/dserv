@@ -35,7 +35,7 @@ namespace eval match_to_sample {
 	$sys add_variable first_time         1
 	$sys add_variable stimtype           0
 	$sys add_variable resp               0
-	
+	$sys add_variable correct           -1
 	######################################################################
 	#                            System States                           #
 	######################################################################
@@ -68,6 +68,7 @@ namespace eval match_to_sample {
 	    } else {
 		set first_time 0
 	    }
+	    set correct -1
 	    my nexttrial
 	}
 	
@@ -186,6 +187,7 @@ namespace eval match_to_sample {
 	# correct
 	#
 	$sys add_action correct {
+	    set correct 1
 	    ess::evt_put ENDTRIAL CORRECT [now]
 	    my reward
 	}
@@ -196,6 +198,7 @@ namespace eval match_to_sample {
 	# incorrect
 	#
 	$sys add_action incorrect {
+	    set correct 0
 	    ess::evt_put ENDTRIAL INCORRECT [now]
 	    my noreward
 	}

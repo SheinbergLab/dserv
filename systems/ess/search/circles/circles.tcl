@@ -131,8 +131,10 @@ namespace eval search::circles {
 	}
 
 	$s add_method endobs {} {
-	    dl_put stimdg:remaining $cur_id 0
-	    incr obs_count
+	    if { $correct != -1 } {
+		dl_put stimdg:remaining $cur_id 0
+		incr obs_count
+	    }
 	}
 	
 	$s add_method finished {} {
