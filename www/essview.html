@@ -513,12 +513,12 @@
 
             function printResult(msg) {
                 console.log(msg)
-                if (msg.length > 3) {
+                if (msg.length > 0) {
                     let result = msg.replaceAll('\n', '\r\n');
-                    if (msg[0] == '1') // err
-                        term.write('\033[91m' + result.slice(2) +'\033[0m');
+                    if (msg[0] == '!') // err
+                        term.write('\033[91m' + result.slice(11) +'\033[0m');
                     else
-                        term.write(result.slice(2));
+                        term.write(result);
                 }
                 term.write('$ ');
             };
