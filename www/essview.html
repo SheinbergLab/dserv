@@ -362,17 +362,17 @@
             <div class="system-selector">
                 <div>
                     <label for="system-select">System:</label>
-                    <select name="System" id="system-select" onchange="setSystem();"></select>
+                    <select name="System" id="system-select" onchange="setSystem();" style="width: 100px;"></select>
                 </div>
 
                 <div>
                     <label for="protocol-select">Protocol:</label>
-                    <select name="Protocol" id="protocol-select" onchange="setProtocol();"></select>
+                    <select name="Protocol" id="protocol-select" onchange="setProtocol();"style="width: 100px;"></select>
                 </div>
 
                 <div>
                     <label for="variant-select">Variant:</label>
-                    <select name="Variant" id="variant-select" onchange="setVariant();"></select>
+                    <select name="Variant" id="variant-select" onchange="setVariant();" style="width: 100px;"></select>
                 </div>
 
                 <div class="small-btn-group">
@@ -382,7 +382,8 @@
                 <div class="small-btn-group">
                     <button onclick="refreshSystems()" id="refresh_button" name="refresh">Refresh</button>
                 </div>
-
+</div>
+<div>
                 <div>
                     <label for="filename">Filename:</label>
                     <input id="filename" type="text" name="filename" placeholder="Filename here">
@@ -412,15 +413,17 @@
                 <button onclick="user_func('USER_RESET')" id="reset_button" name="reset">Reset</button>
             </div>
         </div>
-        <div class="editor" id="my-editor"></div>
+<!--        <div class="editor" id="my-editor"></div> -->
         <div class="term" id="terminal"></div>
+        <div>
         <div class="box1">
             <h2>Ess Viewer</h2>
-            <div id="ess-table" ; max-width=800px></div>
+            <div id="ess-table" ; max-width=400px></div>
         </div>
         <div class="box2">
             <h2>Event Viewer</h2>
-            <div id="evt-table" ; max-width=800></div>
+            <div id="evt-table" ; max-width=400></div>
+        </div>
         </div>
     </div>
 
