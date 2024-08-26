@@ -19,8 +19,15 @@ namespace eval search::circles {
 	variable    { basic_search variable  "variable number of distractors" }
 	distractors { basic_search distractors "fixed number of distractors" }
     }	
-	
+
     proc variants_init { s } {
+	$s add_method single_init {} {
+	    rmtSend "setBackground 10 10 10"
+	}
+	$s add_method distractors_init {} {
+	    rmtSend "setBackground 200 200 200"
+	}
+	
 	$s add_method basic_search { nr nd mindist } {
 	    set n_rep $nr
 	    set ndists $nd

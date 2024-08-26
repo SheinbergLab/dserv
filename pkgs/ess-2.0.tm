@@ -1282,6 +1282,12 @@ namespace eval ess {
 	if { [info exists $param_settings] } {
 	    ess::set_params {*}[set $param_settings]
 	}
+
+	# call a specific init function for this variant
+	set vinit_method ${variant}_init
+	if { [lsearch [info object methods $s] $vinit_method] != -1 } {
+	    $s $vinit_method
+	}
 	
 	ess::evt_put ID VARIANT [now] $system:$protocol:$variant
 	set current(variant) $variant
