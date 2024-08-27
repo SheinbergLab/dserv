@@ -21,11 +21,14 @@ namespace eval search::circles {
     }	
 
     proc variants_init { s } {
+	
 	$s add_method single_init {} {
 	    rmtSend "setBackground 10 10 10"
 	}
+	$s add_method single_deinit {} {}
+	
 	$s add_method distractors_init {} {
-	    rmtSend "setBackground 200 200 200"
+	    rmtSend "setBackground 100 100 100"
 	}
 	
 	$s add_method basic_search { nr nd mindist } {

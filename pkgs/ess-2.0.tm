@@ -443,9 +443,23 @@ namespace eval ess {
     proc unload_system {} {
 	variable current
 	set sname $current(system)
+
 	if { $current(open_system) } {
 	    set s [find_system $sname]
+
+	    # call variant_deinit if exists
+	    set vdeinit_method $current(variant)_deinit
+	    
+	    if { [lsearch [info object methods $s] $vdeinit_method] != -1 } {
+		$s $vdeinit_method
+	    }
+	    
+	    # protocol deinit callback
+	    $s protocol_deinit
+
+	    # system deinit callback
 	    $s deinit
+	    
 	    set current(open_system) 0
 	    set current(system) {}
 	}
