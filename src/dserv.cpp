@@ -31,9 +31,9 @@ uint64_t tclserver_now(tclserver_t *tclserver)
 }
 
 void signalHandler(int signum) {
-  //  std::cout << "Shutting down..." << std::endl;
-  delete dserver;
+  std::cout << "Shutting down..." << std::endl;
   delete tclserver;
+  delete dserver;
   exit(0);
 }
 
