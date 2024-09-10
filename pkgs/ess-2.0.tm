@@ -1405,6 +1405,24 @@ namespace eval ess {
     proc get_system_json {} {
 	return [system_dict_to_json [get_system_dict]]
     }
+
+    proc get_system_status {} {
+	package require yajltcl
+	variable current
+	variable in_obs
+	
+	set s $current(state_system)
+	
+	set obj [yajl create #auto]
+	$obj map_open
+	$obj string system string $current(system)
+	$obj string protocol string $current(protocol)
+	$obj string variant string $current(variant)
+	$obj string state string [$s status]
+	$obj string in_obs string $in_obs
+	$obj map_close
+	return [$obj get]
+    }
 }
 
 namespace eval ess {
