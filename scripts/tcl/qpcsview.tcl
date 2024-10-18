@@ -40,43 +40,43 @@ namespace eval dh {
 
     proc initialize_vars { server } {
 	set stateinfo [qpcs::dsGet $server qpcs/state]
-	set dh::status(state) [string totitle [lindex $stateinfo 5]]
+	set ::dh::status(state) [string totitle [lindex $stateinfo 5]]
 	set cmap { Running green Stopped red Inactive black }
-	$dh::widgets(status) configure -foreground \
+	$::dh::widgets(status) configure -foreground \
 	    [dict get $cmap $::dh::status(state)]
 
 	set val [lindex [qpcs::dsGet $server qpcs/obs_id] 5]
-	set dh::status(obs_id) $val
+	set ::dh::status(obs_id) $val
 
 	set val [lindex [qpcs::dsGet $server qpcs/obs_total] 5]
-	set dh::status(obs_total) $val
-	set dh::status(obs_info) "$dh::status(obs_id)/$dh::status(obs_total)"
+	set ::dh::status(obs_total) $val
+	set ::dh::status(obs_info) "$::dh::status(obs_id)/$::dh::status(obs_total)"
 
 	set val [lindex [qpcs::dsGet $server qpcs/obs_active] 5]
-	set dh::status(obs_active) $val
-	set bg [$dh::widgets(obstitle) cget -background]
+	set ::dh::status(obs_active) $val
+	set bg [$::dh::widgets(obstitle) cget -background]
 	set colors "$bg red"
-	$dh::widgets(obslabel) configure \
-	    -background [lindex $colors $dh::status(obs_active)]
+	$::dh::widgets(obslabel) configure \
+	    -background [lindex $colors $::dh::status(obs_active)]
 		
-	if { $dh::status(obs_active) == 0 } {
-	    set dh::status(cur_stimtype) {}
+	if { $::dh::status(obs_active) == 0 } {
+	    set ::dh::status(cur_stimtype) {}
 	}
 
-	set dh::status(fixwin) \
+	set ::dh::status(fixwin) \
 	    [lindex [lindex [qpcs::dsGet $server qpcs/em_region_status] 5] 1]
-	if { $dh::status(fixwin) == "" } { set dh::status(fixwin) 0 }
+	if { $::dh::status(fixwin) == "" } { set ::dh::status(fixwin) 0 }
 	update_fixwin_indicators
 	
 	set dpoint [qpcs::dsGet $server qpcs/dio]
 	set levels [lindex [lindex $dpoint 5] 1]
-	set dh::status(dio_a) [expr {$levels>>16}]
-	set dh::status(dio_b) [expr {$levels>>24}]
+	set ::dh::status(dio_a) [expr {$levels>>16}]
+	set ::dh::status(dio_b) [expr {$levels>>24}]
 	update_dio_indicators
 	
-	set dh::status(subject) [lindex [qpcs::dsGet $server qpcs/subject] 5]
-	set dh::status(name) [lindex [qpcs::dsGet $server qpcs/name] 5]
-	set dh::status(datafile) [lindex [qpcs::dsGet $server qpcs/datafile] 5]
+	set ::dh::status(subject) [lindex [qpcs::dsGet $server qpcs/subject] 5]
+	set ::dh::status(name) [lindex [qpcs::dsGet $server qpcs/name] 5]
+	set ::dh::status(datafile) [lindex [qpcs::dsGet $server qpcs/datafile] 5]
     }
 
     proc connect_to_server { server ess } {
@@ -84,9 +84,9 @@ namespace eval dh {
 	if { [qpcs::dsRegister $server] != 1 } {
 	    error "Unable to register with $server"
 	}
-	qpcs::dsAddCallback dh::process_data
+	qpcs::dsAddCallback ::dh::process_data
 	qpcs::dsAddMatch $server qpcs/*
-	set dh::connected 1
+	set ::dh::connected 1
     }
 
     proc disconnect_from_server {} {
@@ -95,24 +95,24 @@ namespace eval dh {
 
     proc reconnect {} {
 	disconnect_from_server
-	connect_to_server $dh::datahub $dh::domain
+	connect_to_server $::dh::datahub $::dh::domain
     }
 
     proc update_em_regions {} {
 	foreach reg "0 1 2 3 4 5 6 7" {
-	    server_cmd $dh::datahub "ainGetRegionInfo $reg"
+	    server_cmd $::dh::datahub "ainGetRegionInfo $reg"
 	}
     }
     
     proc resize_disp_canvas { w h } {
-	set dh::status(disp_canvas_width) $w 
-	set dh::status(disp_canvas_height) $h
-	dh::update_eye_marker $dh::status(eye_hor) $dh::status(eye_ver)	
+	set ::dh::status(disp_canvas_width) $w 
+	set ::dh::status(disp_canvas_height) $h
+	::dh::update_eye_marker $::dh::status(eye_hor) $::dh::status(eye_ver)	
     }
 
     proc add_fixwin_indicators {} {
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(fixwin_canvas) \
+	    $::dh::widgets(fixwin_canvas) \
 		create oval 0 0 1 1 -fill black -tag reg$i
 	}
 	position_fixwin_indicators
@@ -126,7 +126,7 @@ namespace eval dh {
 	set x [expr {8+($hwidth+$msize)/2}]
 	set inc [expr ($hwidth-(2*(8-$msize)))/8.]
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(fixwin_canvas) coords reg[expr 7-$i] \
+	    $::dh::widgets(fixwin_canvas) coords reg[expr 7-$i] \
 		[expr $x-$msize] [expr $hheight-$msize] \
 		[expr $x+$msize] [expr $hheight+$msize]
 	    set x [expr $x+$inc]
@@ -136,10 +136,10 @@ namespace eval dh {
     
     proc update_fixwin_indicators {} {
 	for { set i 0 } { $i < 8 } { incr i } {
-	    if { [expr $dh::status(fixwin)&(1<<$i)] != 0 } {
-		$dh::widgets(fixwin_canvas) itemconfigure reg$i -fill yellow
+	    if { [expr $::dh::status(fixwin)&(1<<$i)] != 0 } {
+		$::dh::widgets(fixwin_canvas) itemconfigure reg$i -fill yellow
 	    } else {
-		$dh::widgets(fixwin_canvas) itemconfigure reg$i -fill black
+		$::dh::widgets(fixwin_canvas) itemconfigure reg$i -fill black
 	    }
 	}
     }
@@ -148,11 +148,11 @@ namespace eval dh {
     
     proc add_dio_indicators {} {
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(dio_canvas) create oval 0 0 1 1 -fill red -tag A$i
+	    $::dh::widgets(dio_canvas) create oval 0 0 1 1 -fill red -tag A$i
 	}
 
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(dio_canvas) create oval 0 0 1 1 -fill red -tag B$i
+	    $::dh::widgets(dio_canvas) create oval 0 0 1 1 -fill red -tag B$i
 	}
 	position_dio_indicators
     }
@@ -165,7 +165,7 @@ namespace eval dh {
 	set x 8
 	set inc [expr ($hwidth-(2*($x-$msize)))/8.]
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(dio_canvas) coords A[expr 7-$i] \
+	    $::dh::widgets(dio_canvas) coords A[expr 7-$i] \
 		[expr $x-$msize] [expr $hheight-$msize] \
 		[expr $x+$msize] [expr $hheight+$msize]
 	    set x [expr $x+$inc]
@@ -173,7 +173,7 @@ namespace eval dh {
 
 	set x [expr $hwidth+8]
 	for { set i 0 } { $i < 8 } { incr i } {
-	    $dh::widgets(dio_canvas) coords B[expr 7-$i] \
+	    $::dh::widgets(dio_canvas) coords B[expr 7-$i] \
 		[expr $x-$msize] [expr $hheight-$msize] \
 		[expr $x+$msize] [expr $hheight+$msize]
 	    set x [expr $x+$inc]
@@ -183,38 +183,38 @@ namespace eval dh {
 
     proc update_dio_indicators {} {
 	for { set i 0 } { $i < 8 } { incr i } {
-	    if { [expr $dh::status(dio_a)&(1<<$i)] != 0 } {
-		$dh::widgets(dio_canvas) itemconfigure A$i -fill green
+	    if { [expr $::dh::status(dio_a)&(1<<$i)] != 0 } {
+		$::dh::widgets(dio_canvas) itemconfigure A$i -fill green
 	    } else {
-		$dh::widgets(dio_canvas) itemconfigure A$i -fill red
+		$::dh::widgets(dio_canvas) itemconfigure A$i -fill red
 	    }
 	}
 	for { set i 0 } { $i < 8 } { incr i } {
-	    if { [expr $dh::status(dio_b)&(1<<$i)] != 0 } {
-		$dh::widgets(dio_canvas) itemconfigure B$i -fill green
+	    if { [expr $::dh::status(dio_b)&(1<<$i)] != 0 } {
+		$::dh::widgets(dio_canvas) itemconfigure B$i -fill green
 	    } else {
-		$dh::widgets(dio_canvas) itemconfigure B$i -fill red
+		$::dh::widgets(dio_canvas) itemconfigure B$i -fill red
 	    }
 	}
     }
 
     proc resize_fixwin_canvas { w h } {
-	set dh::status(fixwin_canvas_width) $w 
-	set dh::status(fixwin_canvas_height) $h
+	set ::dh::status(fixwin_canvas_width) $w 
+	set ::dh::status(fixwin_canvas_height) $h
 	position_fixwin_indicators
     }
 
     proc resize_dio_canvas { w h } {
-	set dh::status(dio_canvas_width) $w 
-	set dh::status(dio_canvas_height) $h
+	set ::dh::status(dio_canvas_width) $w 
+	set ::dh::status(dio_canvas_height) $h
 	position_dio_indicators
     }
     
     proc update_em_region_setting { reg active state type cx cy dx dy args } {
 	set sx [expr ($cx-2048)/200.]
 	set sy [expr -1*($cy-2048)/200.]
-	set w $dh::status(disp_canvas_width)
-	set h $dh::status(disp_canvas_height)
+	set w $::dh::status(disp_canvas_width)
+	set h $::dh::status(disp_canvas_height)
 	set aspect [expr {1.0*$h/$w}]
 	set range_h 20.0
 	set hrange_h [expr {0.5*$range_h}]
@@ -231,29 +231,29 @@ namespace eval dh {
 	set y0 [expr $hh-(($sy/$hrange_v)*$hh)]
 	if { $active == 1 } { set cstate normal } { set cstate hidden }
 	if  { $type == 1 } { 
-	    $dh::widgets(disp_canvas) \
-		coords $dh::widgets(em_reg_ellipse_$reg) \
+	    $::dh::widgets(disp_canvas) \
+		coords $::dh::widgets(em_reg_ellipse_$reg) \
 		[expr $x0-$msize_x] [expr $y0-$msize_y] \
 		[expr $x0+$msize_x] [expr $y0+$msize_y]
-	    $dh::widgets(disp_canvas) \
-		coords $dh::widgets(em_reg_center_$reg) \
+	    $::dh::widgets(disp_canvas) \
+		coords $::dh::widgets(em_reg_center_$reg) \
 		[expr $x0-$csize] [expr $y0-$csize] \
 		[expr $x0+$csize] [expr $y0+$csize]
-	    $dh::widgets(disp_canvas) itemconfigure regE$reg -state $cstate
-	    $dh::widgets(disp_canvas) itemconfigure regC$reg -state $cstate
-	    $dh::widgets(disp_canvas) itemconfigure regR$reg -state hidden
+	    $::dh::widgets(disp_canvas) itemconfigure regE$reg -state $cstate
+	    $::dh::widgets(disp_canvas) itemconfigure regC$reg -state $cstate
+	    $::dh::widgets(disp_canvas) itemconfigure regR$reg -state hidden
 	} else {
-	    $dh::widgets(disp_canvas) \
-		coords $dh::widgets(em_reg_rect_$reg) \
+	    $::dh::widgets(disp_canvas) \
+		coords $::dh::widgets(em_reg_rect_$reg) \
 		[expr $x0-$msize_x] [expr $y0-$msize_y] \
 		[expr $x0+$msize_x] [expr $y0+$msize_y]
-	    $dh::widgets(disp_canvas) \
-		coords $dh::widgets(em_reg_center_$reg) \
+	    $::dh::widgets(disp_canvas) \
+		coords $::dh::widgets(em_reg_center_$reg) \
 		[expr $x0-$csize] [expr $y0-$csize] \
 		[expr $x0+$csize] [expr $y0+$csize]
-	    $dh::widgets(disp_canvas) itemconfigure regR$reg -state $cstate
-	    $dh::widgets(disp_canvas) itemconfigure regC$reg -state $cstate
-	    $dh::widgets(disp_canvas) itemconfigure regE$reg -state hidden
+	    $::dh::widgets(disp_canvas) itemconfigure regR$reg -state $cstate
+	    $::dh::widgets(disp_canvas) itemconfigure regC$reg -state $cstate
+	    $::dh::widgets(disp_canvas) itemconfigure regE$reg -state hidden
 	}
     }
 
@@ -261,8 +261,8 @@ namespace eval dh {
 	set sx [expr ($x-2048)/200.]
 	set sy [expr -1*($y-2048)/200.]
 	set range 20.0
-	set w $dh::status(disp_canvas_width)
-	set h $dh::status(disp_canvas_height)
+	set w $::dh::status(disp_canvas_width)
+	set h $::dh::status(disp_canvas_height)
 	set aspect [expr {1.0*$h/$w}]
 	set hrange_h 10.0
 	set hrange_v [expr $hrange_h*$aspect]
@@ -271,8 +271,8 @@ namespace eval dh {
 	set hh [expr $h/2]
 	set x0 [expr (($sx/$hrange_h)*$hw)+$hw]
 	set y0 [expr $hh-(($sy/$hrange_v)*$hh)]
-	$dh::widgets(disp_canvas) \
-	    coords $dh::widgets(em_marker) [expr $x0-$msize] [expr $y0-$msize] \
+	$::dh::widgets(disp_canvas) \
+	    coords $::dh::widgets(em_marker) [expr $x0-$msize] [expr $y0-$msize] \
 	    [expr $x0+$msize] [expr $y0+$msize] 
 
     }
@@ -283,63 +283,63 @@ namespace eval dh {
 	set val [lindex $args 4]
 	switch -glob $name {
 	    qpcs/em_pos {
-		set dh::status(eye_hor) [lindex $val 0]
-		set dh::status(eye_ver) [lindex $val 1]
-		update_eye_marker $dh::status(eye_hor) $dh::status(eye_ver)	
+		set ::dh::status(eye_hor) [lindex $val 0]
+		set ::dh::status(eye_ver) [lindex $val 1]
+		update_eye_marker $::dh::status(eye_hor) $::dh::status(eye_ver)	
 	    }
 	    qpcs/state {
-		set dh::status(state) [string totitle $val]
+		set ::dh::status(state) [string totitle $val]
 		set cmap { Running green Stopped red Inactive black }
-		$dh::widgets(status) configure -foreground \
+		$::dh::widgets(status) configure -foreground \
 		    [dict get $cmap $::dh::status(state)]
 	    }
 	    qpcs/obs_id {
-		set dh::status(obs_id) [expr $val+1]
-		set dh::status(obs_info) \
-		    "$dh::status(obs_id)/$dh::status(obs_total)"
+		set ::dh::status(obs_id) [expr $val+1]
+		set ::dh::status(obs_info) \
+		    "$::dh::status(obs_id)/$::dh::status(obs_total)"
 	    }
 	    qpcs/obs_total {
-		set dh::status(obs_total) $val
-		set dh::status(obs_info) \
-		    "$dh::status(obs_id)/$dh::status(obs_total)"
+		set ::dh::status(obs_total) $val
+		set ::dh::status(obs_info) \
+		    "$::dh::status(obs_id)/$::dh::status(obs_total)"
 	    }
 	    qpcs/obs_active {
-		set dh::status(obs_active) $val
-		set bg [$dh::widgets(obstitle) cget -background]
+		set ::dh::status(obs_active) $val
+		set bg [$::dh::widgets(obstitle) cget -background]
 		set colors "$bg red"
-		$dh::widgets(obslabel) configure \
-		    -background [lindex $colors $dh::status(obs_active)]
+		$::dh::widgets(obslabel) configure \
+		    -background [lindex $colors $::dh::status(obs_active)]
 		
-		if { $dh::status(obs_active) == 0 } {
-		    set dh::status(cur_stimtype) {}
+		if { $::dh::status(obs_active) == 0 } {
+		    set ::dh::status(cur_stimtype) {}
 		}
 	    }
 	    qpcs/joystick {
 		switch $val {
-		    0  { set dh::status(joystick_info) None }
-		    8  { set dh::status(joystick_info) Up }
-		    4  { set dh::status(joystick_info) Down }
-		    1  { set dh::status(joystick_info) Left }
-		    16 { set dh::status(joystick_info) Right }
-		    2  { set dh::status(joystick_info) Press }
+		    0  { set ::dh::status(joystick_info) None }
+		    8  { set ::dh::status(joystick_info) Up }
+		    4  { set ::dh::status(joystick_info) Down }
+		    1  { set ::dh::status(joystick_info) Left }
+		    16 { set ::dh::status(joystick_info) Right }
+		    2  { set ::dh::status(joystick_info) Press }
 		}
 	    }
 	    qpcs/dio {
 		set levels [lindex $val 1]
-		set dh::status(dio_a) [expr {$levels>>16}]
-		set dh::status(dio_b) [expr {$levels>>24}]
+		set ::dh::status(dio_a) [expr {$levels>>16}]
+		set ::dh::status(dio_b) [expr {$levels>>24}]
 		update_dio_indicators
 	    }
 
-	    qpcs/subject { set dh::status(subject) $val }
-	    qpcs/system { set dh::status(name) $val }
-	    qpcs/datafile { set dh::status(datafile) $val }
+	    qpcs/subject { set ::dh::status(subject) $val }
+	    qpcs/system { set ::dh::status(name) $val }
+	    qpcs/datafile { set ::dh::status(datafile) $val }
 
 	    qpcs/em_region_setting {
 		update_em_region_setting {*}$val
 	    }
 	    qpcs/em_region_status {
-		set dh::status(fixwin) [lindex $val 1]
+		set ::dh::status(fixwin) [lindex $val 1]
 		update_fixwin_indicators
 	    }
 	}
@@ -351,37 +351,37 @@ namespace eval dh {
 	labelframe .lfconn -text "Connection"
 	set lf .lfconn
 	label $lf.datahublabel -text Datahub: -anchor e -width 8
-	ttk::combobox $lf.datahub -textvariable dh::datahub
+	ttk::combobox $lf.datahub -textvariable ::dh::datahub
 	$lf.datahub configure -values [list 127.0.0.1]
 	grid $lf.datahublabel $lf.datahub -padx 3
 	label $lf.domainlabel -text Domain: -anchor e -width 8
-	ttk::combobox $lf.domain -textvariable dh::domain
+	ttk::combobox $lf.domain -textvariable ::dh::domain
 	$lf.domain configure -values [list qpcs/*]
 	grid $lf.domainlabel $lf.domain -padx 3
 	grid $lf -sticky new
 
 
-	bind $lf.datahub <<ComboboxSelected>> { dh::reconnect }
-	bind $lf.domain <<ComboboxSelected>>  { dh::reconnect }
+	bind $lf.datahub <<ComboboxSelected>> { ::dh::reconnect }
+	bind $lf.domain <<ComboboxSelected>>  { ::dh::reconnect }
 
 
 	labelframe .lfess -text "ESS"
 	set lf .lfess
 	label $lf.statuslabel -text Status: -anchor e -width 8
-	label $lf.statusvalue -textvariable dh::status(state) -anchor w -width 22
+	label $lf.statusvalue -textvariable ::dh::status(state) -anchor w -width 22
 	grid $lf.statuslabel $lf.statusvalue -padx 3
 	set ::dh::widgets(status) $lf.statusvalue
 
 	label $lf.subjlabel -text Subject: -anchor e -width 8
-	label $lf.subjvalue -textvariable dh::status(subject) -anchor w -width 22
+	label $lf.subjvalue -textvariable ::dh::status(subject) -anchor w -width 22
 	grid $lf.subjlabel $lf.subjvalue -padx 3 
 
 	label $lf.syslabel -text System: -anchor e -width 8
-	label $lf.sysvalue -textvariable dh::status(name) -anchor w -width 22
+	label $lf.sysvalue -textvariable ::dh::status(name) -anchor w -width 22
 	grid $lf.syslabel $lf.sysvalue -padx 3 
 
 	label $lf.filelabel -text Filename: -anchor e -width 8
-	label $lf.filename -textvariable dh::status(datafile) \
+	label $lf.filename -textvariable ::dh::status(datafile) \
 	    -anchor w -width 22
 	grid $lf.filelabel $lf.filename -padx 3
 	bind $lf.filelabel <Double-1> {
@@ -396,68 +396,68 @@ namespace eval dh {
 
 	set ::dh::widgets(obslabel) $lf.obslabel
 	label $lf.obslabel -text Obs: -anchor e -width 8
-	label $lf.obsvalue -textvariable dh::status(obs_info) -anchor w -width 12
+	label $lf.obsvalue -textvariable ::dh::status(obs_info) -anchor w -width 12
 	grid $lf.obslabel $lf.obsvalue -padx 3 
 
 	label $lf.stimlabel -text StimID: -anchor e -width 8
-	label $lf.stimname -textvariable dh::status(cur_stimtype) -anchor w -width 12
+	label $lf.stimname -textvariable ::dh::status(cur_stimtype) -anchor w -width 12
 	grid $lf.stimlabel $lf.stimname -padx 3 
 
 	grid $lf -sticky new
 
-	set dh::status(disp_canvas_width) 200
-	set dh::status(disp_canvas_height) 200
-	set dh::widgets(disp_canvas) \
+	set ::dh::status(disp_canvas_width) 200
+	set ::dh::status(disp_canvas_height) 200
+	set ::dh::widgets(disp_canvas) \
 	    [canvas .dispc \
 		 -width $::dh::status(disp_canvas_width) \
-		 -height $dh::status(disp_canvas_height) -background black]
-	set dh::widgets(em_marker) \
+		 -height $::dh::status(disp_canvas_height) -background black]
+	set ::dh::widgets(em_marker) \
 	    [.dispc create oval 94 94 106 106 -outline white]
 
 	foreach reg "0 1 2 3 4 5 6 7" {
-	    set dh::widgets(em_reg_ellipse_$reg) \
+	    set ::dh::widgets(em_reg_ellipse_$reg) \
 		[.dispc create oval 90 90 110 110 -outline red -state hidden -tag regE$reg]
-	    set dh::widgets(em_reg_rect_$reg) \
+	    set ::dh::widgets(em_reg_rect_$reg) \
 		[.dispc create rect 90 90 110 110 -outline red -state hidden -tag regR$reg]
-	    set dh::widgets(em_reg_center_$reg) \
+	    set ::dh::widgets(em_reg_center_$reg) \
 		[.dispc create oval 90 90 110 110 -outline red -state hidden -tag regC$reg]
 	    
 	}
 	
-	bind .dispc <Configure> { dh::resize_disp_canvas %w %h } 
+	bind .dispc <Configure> { ::dh::resize_disp_canvas %w %h } 
 	grid .dispc -sticky nsew
 
 
-	set dh::status(fixwin_canvas_width) 200
-	set dh::status(fixwin_canvas_height) 35
+	set ::dh::status(fixwin_canvas_width) 200
+	set ::dh::status(fixwin_canvas_height) 35
 
-	set dh::widgets(fixwin_canvas) \
-	    [canvas .fixc -width $dh::status(fixwin_canvas_width) \
-		 -height $dh::status(fixwin_canvas_height) -background lightgray]
+	set ::dh::widgets(fixwin_canvas) \
+	    [canvas .fixc -width $::dh::status(fixwin_canvas_width) \
+		 -height $::dh::status(fixwin_canvas_height) -background lightgray]
 
 	add_fixwin_indicators
 
-	bind .fixc <Configure> { dh::resize_fixwin_canvas %w %h } 
+	bind .fixc <Configure> { ::dh::resize_fixwin_canvas %w %h } 
 	grid .fixc -sticky nsew
 
 	
-	set dh::status(dio_canvas_width) 200
-	set dh::status(dio_canvas_height) 35
+	set ::dh::status(dio_canvas_width) 200
+	set ::dh::status(dio_canvas_height) 35
 
-	set dh::widgets(dio_canvas) \
-	    [canvas .dioc -width $dh::status(dio_canvas_width) \
-		 -height $dh::status(dio_canvas_height) -background lightgray]
+	set ::dh::widgets(dio_canvas) \
+	    [canvas .dioc -width $::dh::status(dio_canvas_width) \
+		 -height $::dh::status(dio_canvas_height) -background lightgray]
 
 	add_dio_indicators
 
-	bind .dioc <Configure> { dh::resize_dio_canvas %w %h } 
+	bind .dioc <Configure> { ::dh::resize_dio_canvas %w %h } 
 	grid .dioc -sticky nsew
 
 	frame .lfjoy
 	set lf .lfjoy
 	
 	label $lf.joylabel -text Joystick: -anchor e -width 8
-	label $lf.joyvalue -textvariable dh::status(joystick_info) \
+	label $lf.joyvalue -textvariable ::dh::status(joystick_info) \
 	    -anchor w -width 12
 	grid $lf.joylabel $lf.joyvalue -padx 3 
 	grid $lf -sticky new
@@ -470,8 +470,8 @@ namespace eval dh {
 }
 
 if { $argc > 0 } { set ::dh::datahub [lindex $argv 0] }
-dh::setup_view
-dh::connect_to_server $dh::datahub $dh::domain
+::dh::setup_view
+::dh::connect_to_server $::dh::datahub $::dh::domain
 
-after 300 dh::update_em_regions
+after 300 ::dh::update_em_regions
 

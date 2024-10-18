@@ -105,7 +105,7 @@ proc resetCommand {} { server_cmd ess USER_RESET }
 proc openWithCheck { overwrite } {
 
     # TODO
-    # implement ess::file_exists for this...
+    # implement ::ess::file_exists for this...
     
     set exists [file exists $::workingDataFile]
     if {$exists && $overwrite } {
@@ -124,7 +124,7 @@ proc openWithCheck { overwrite } {
 			    [expr [string length $::currentDatafile]-3] end]
 	set ::blockCounter [string trimleft $this_block 0]
 
-	server_cmd ess [list ess::file_open $::currentDatafile]
+	server_cmd ess [list ::ess::file_open $::currentDatafile]
     }
     if [winfo exists .opendatafile] {
 	destroy .opendatafile
@@ -202,7 +202,7 @@ proc openDatafile {} {
 
 proc closeDatafile {} {
     if { $::currentDatafile != {} } {
-	server_cmd ess [list ess::file_close]
+	server_cmd ess [list ::ess::file_close]
 	set ::currentDatafile {}
     }
 }
@@ -419,16 +419,16 @@ proc setup {} {
     $View add separator
 
     $View add command -label "QPCS Viewer" -command \
-	{exec wish8.6 /usr/local/dserv/scripts/tcl/qpcsview.tcl $::current(server) &}
+	{exec wish /usr/local/dserv/scripts/tcl/qpcsview.tcl $::current(server) &}
     
     $View add command -label "Event Viewer" -command \
-	{exec wish8.6 /usr/local/dserv/scripts/tcl/essview.tcl $::current(server) &}
+	{exec wish /usr/local/dserv/scripts/tcl/essview.tcl $::current(server) &}
 
     $View add command -label "Trace Viewer" -command \
 	{openTraceViewer}
     $View add separator
     $View add command -label "Virtual Inputs" -command \
-	{exec wish8.6 /usr/local/dserv/scripts/tcl/essinput.tcl $::current(server) &}
+	{exec wish /usr/local/dserv/scripts/tcl/essinput.tcl $::current(server) &}
     
     $View add separator
     $View add command -label "Datafile Suggestion Database" \
@@ -616,20 +616,20 @@ proc ess_cmd { args } {
     return $result
 }
 
-proc set_system { w } { ess_cmd ess::load_system [$w get] }
+proc set_system { w } { ess_cmd ::ess::load_system [$w get] }
 proc set_protocol { w } {
     global current
-    ess_cmd ess::load_system $current(system) [$w get]
+    ess_cmd ::ess::load_system $current(system) [$w get]
 }
 
 proc set_variant { w } {
     global current
-    ess_cmd ess::load_system $current(system) $current(protocol) [$w get]
+    ess_cmd ::ess::load_system $current(system) $current(protocol) [$w get]
 }
 
 proc update_system_combos { server } {
     global current widgets
-    set result [ess_cmd ess::get_system_dict]
+    set result [ess_cmd ::ess::get_system_dict]
     foreach v "system protocol variant" { set current(${v}_list) {} }
     dict for { sys prot_var } $result {
 	lappend current(system_list) $sys
