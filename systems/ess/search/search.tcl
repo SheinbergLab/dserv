@@ -11,7 +11,7 @@ package require points
 
 namespace eval search {
     proc create {} {
-	set sys [ess::create_system [namespace tail [namespace current]]]
+	set sys [::ess::create_system [namespace tail [namespace current]]]
 	
 	######################################################################
 	#                          System Parameters                         #
@@ -53,7 +53,7 @@ namespace eval search {
 	# start_delay
 	#
 	$sys add_action start_delay {
-	    ess::evt_put SYSTEM_STATE RUNNING [now]
+	    ::ess::evt_put SYSTEM_STATE RUNNING [now]
 	    timerTick $start_delay
 	    
 	}
@@ -88,7 +88,7 @@ namespace eval search {
 	# start_obs
 	#
 	$sys add_action start_obs {
-	    ess::begin_obs $n_obs $obs_count
+	    ::ess::begin_obs $n_obs $obs_count
 	}	
 	$sys add_transition start_obs {
 	    return pre_stim
@@ -110,8 +110,8 @@ namespace eval search {
 	#
 	$sys add_action stim_on {
 	    my stim_on
-	    ess::evt_put PATTERN ON [now] 
-	    ess::evt_put STIMTYPE STIMID [now] $stimtype
+	    ::ess::evt_put PATTERN ON [now] 
+	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype
 	}
 	
 	$sys add_transition stim_on {
@@ -136,12 +136,12 @@ namespace eval search {
 	# response
 	#
 	$sys add_action response {
-	    ess::evt_put RESP 1 [now] 
+	    ::ess::evt_put RESP 1 [now] 
 	}
 
 	$sys add_transition response {
 	    my stim_off
-	    ess::evt_put PATTERN ON [now] 
+	    ::ess::evt_put PATTERN ON [now] 
 	    if { $response == 1 } {
 		return correct
 	    } else {
@@ -154,8 +154,8 @@ namespace eval search {
 	#
 	$sys add_action no_response {
 	    my stim_off
-	    ess::evt_put PATTERN ON [now] 
-	    ess::evt_put RESP NONE [now]
+	    ::ess::evt_put PATTERN ON [now] 
+	    ::ess::evt_put RESP NONE [now]
 	}
 	
 	$sys add_transition no_response {
@@ -196,7 +196,7 @@ namespace eval search {
 	# finish
 	#
 	$sys add_action finish {
-	    ess::end_obs COMPLETE
+	    ::ess::end_obs COMPLETE
 	    my endobs
 	}
 	
@@ -230,7 +230,7 @@ namespace eval search {
 	######################################################################
 	
 	$sys set_init_callback {
-	    ess::init
+	    ::ess::init
 	}
 	
 	$sys set_deinit_callback {}
@@ -245,7 +245,7 @@ namespace eval search {
 	}
 	
 	$sys set_quit_callback {
-	    ess::end_obs QUIT
+	    ::ess::end_obs QUIT
 	}
 	
 	$sys set_end_callback {}

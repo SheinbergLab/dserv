@@ -10,7 +10,7 @@ package require ess
 
 namespace eval match_to_sample {
     proc create {} {
-	set sys [ess::create_system [namespace tail [namespace current]]]
+	set sys [::ess::create_system [namespace tail [namespace current]]]
 	
 	######################################################################
 	#                          System Parameters                         #
@@ -51,7 +51,7 @@ namespace eval match_to_sample {
 	# start_delay
 	#
 	$sys add_action start_delay {
-	    ess::evt_put SYSTEM_STATE RUNNING [now]
+	    ::ess::evt_put SYSTEM_STATE RUNNING [now]
 	    timerTick $start_delay
 	    
 	}
@@ -82,7 +82,7 @@ namespace eval match_to_sample {
 	# start_obs
 	#
 	$sys add_action start_obs {
-	    ess::begin_obs $n_obs $obs_count
+	    ::ess::begin_obs $n_obs $obs_count
 	    my start_obs_reset
 	}
 	$sys add_transition start_obs {
@@ -106,8 +106,8 @@ namespace eval match_to_sample {
 	#
 	$sys add_action sample_on {
 	    my sample_on
-	    ess::evt_put SAMPLE ON [now] 
-	    ess::evt_put STIMTYPE STIMID [now] $stimtype	
+	    ::ess::evt_put SAMPLE ON [now] 
+	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype	
 	    timerTick $sample_time
 	}
 	
@@ -120,7 +120,7 @@ namespace eval match_to_sample {
 	#
 	$sys add_action sample_off {
 	    my sample_off
-	    ess::evt_put SAMPLE OFF [now] 
+	    ::ess::evt_put SAMPLE OFF [now] 
 	    timerTick $delay_time
 	}
 	
@@ -133,7 +133,7 @@ namespace eval match_to_sample {
 	#
 	$sys add_action choices_on {
 	    my choices_on
-	    ess::evt_put CHOICES ON [now] 
+	    ::ess::evt_put CHOICES ON [now] 
 	}
 	
 	$sys add_transition choices_on {
@@ -156,9 +156,9 @@ namespace eval match_to_sample {
 	# response
 	#
 	$sys add_action response {
-	    ess::evt_put RESP $resp [now]
+	    ::ess::evt_put RESP $resp [now]
 	    my choices_off
-	    ess::evt_put CHOICES OFF [now] 
+	    ::ess::evt_put CHOICES OFF [now] 
 	}
 	
 	$sys add_transition response {
@@ -174,9 +174,9 @@ namespace eval match_to_sample {
 	#
 	$sys add_action no_response {
 	    my choices_off
-	    ess::evt_put CHOICES OFF [now] 
-	    ess::evt_put ABORT NORESPONSE [now]
-	    ess::evt_put ENDTRIAL ABORT [now]
+	    ::ess::evt_put CHOICES OFF [now] 
+	    ::ess::evt_put ABORT NORESPONSE [now]
+	    ::ess::evt_put ENDTRIAL ABORT [now]
 	}
 	
 	$sys add_transition no_response {
@@ -188,7 +188,7 @@ namespace eval match_to_sample {
 	#
 	$sys add_action correct {
 	    set correct 1
-	    ess::evt_put ENDTRIAL CORRECT [now]
+	    ::ess::evt_put ENDTRIAL CORRECT [now]
 	    my reward
 	}
 	
@@ -199,7 +199,7 @@ namespace eval match_to_sample {
 	#
 	$sys add_action incorrect {
 	    set correct 0
-	    ess::evt_put ENDTRIAL INCORRECT [now]
+	    ::ess::evt_put ENDTRIAL INCORRECT [now]
 	    my noreward
 	}
 	
@@ -218,7 +218,7 @@ namespace eval match_to_sample {
 	# finish
 	#
 	$sys add_action finish {
-	    ess::end_obs COMPLETE
+	    ::ess::end_obs COMPLETE
 	    my endobs
 	}
 	
@@ -250,7 +250,7 @@ namespace eval match_to_sample {
 	######################################################################
 	
 	$sys set_init_callback {
-	    ess::init
+	    ::ess::init
 	}
 	
 	$sys set_deinit_callback {}
@@ -265,7 +265,7 @@ namespace eval match_to_sample {
 	}
 	
 	$sys set_quit_callback {
-	    ess::end_obs QUIT
+	    ::ess::end_obs QUIT
 	}
 	
 	$sys set_end_callback {}

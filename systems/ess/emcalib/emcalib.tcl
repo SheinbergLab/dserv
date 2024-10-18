@@ -11,7 +11,7 @@ package require points
 
 namespace eval emcalib {
     proc create {} {
-	set sys [ess::create_system [namespace tail [namespace current]]]
+	set sys [::ess::create_system [namespace tail [namespace current]]]
 	
 	######################################################################
 	#                          System Parameters                         #
@@ -55,7 +55,7 @@ namespace eval emcalib {
 	# start_delay
 	#
 	$sys add_action start_delay {
-	    ess::evt_put SYSTEM_STATE RUNNING [now]
+	    ::ess::evt_put SYSTEM_STATE RUNNING [now]
 	    timerTick $start_delay
 	    
 	}
@@ -90,7 +90,7 @@ namespace eval emcalib {
 	# start_obs
 	#
 	$sys add_action start_obs {
-	    ess::begin_obs $n_obs $obs_count
+	    ::ess::begin_obs $n_obs $obs_count
 	}	
 	$sys add_transition start_obs {
 	    return fixon
@@ -101,7 +101,7 @@ namespace eval emcalib {
 	#
 	$sys add_action fixon {
 	    my fixon
-	    ess::evt_put FIXSPOT ON [now] 
+	    ::ess::evt_put FIXSPOT ON [now] 
 	    timerTick $acquire_time
 	}
 	$sys add_transition fixon {
@@ -113,7 +113,7 @@ namespace eval emcalib {
 	# fixhold
 	#
 	$sys add_action fixhold {
-	    ess::evt_put FIXATE IN [now]
+	    ::ess::evt_put FIXATE IN [now]
 	    timerTick $fixhold_time
 	}
 	
@@ -139,7 +139,7 @@ namespace eval emcalib {
 	# pre_sample
 	#
 	$sys add_action pre_sample {
-	    ess::evt_put FIXATE REFIXATE [now]
+	    ::ess::evt_put FIXATE REFIXATE [now]
 	    timerTick $pre_sample_time
 	}
 
@@ -182,7 +182,7 @@ namespace eval emcalib {
 	$sys add_action reward {
 	    set complete 1
 	    my reward
-	    ess::evt_put ENDTRIAL CORRECT [now]
+	    ::ess::evt_put ENDTRIAL CORRECT [now]
 	}
 	
 	$sys add_transition reward { return post_trial }
@@ -192,7 +192,7 @@ namespace eval emcalib {
 	# abort
 	#
 	$sys add_action abort {
-	    ess::evt_put ENDTRIAL INCORRECT [now]
+	    ::ess::evt_put ENDTRIAL INCORRECT [now]
 	}
 	$sys add_transition abort {
 	    return post_trial
@@ -214,9 +214,9 @@ namespace eval emcalib {
 	#
 	$sys add_action finish {
 	    if { $complete } {
-         ess::end_obs COMPLETE
+         ::ess::end_obs COMPLETE
       } else {
-         ess::end_obs INCOMPLETE
+         ::ess::end_obs INCOMPLETE
       }
 	    my endobs
 	}
@@ -251,7 +251,7 @@ namespace eval emcalib {
 	######################################################################
 	
 	$sys set_init_callback {
-	    ess::init
+	    ::ess::init
 	}
 	
 	$sys set_deinit_callback {}
@@ -266,7 +266,7 @@ namespace eval emcalib {
 	}
 	
 	$sys set_quit_callback {
-	    ess::end_obs QUIT
+	    ::ess::end_obs QUIT
 	}
 	
 	$sys set_end_callback {}

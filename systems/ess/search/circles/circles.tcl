@@ -17,7 +17,7 @@ namespace eval search::circles {
 	$s add_param dist_prop          0.67    variable stim
 	$s add_param ndists              4      variable stim
 	
-	$s add_param rmt_host          $ess::rmt_host   stim ipaddr
+	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
 	
 	$s add_param juice_pin         27       variable int
 	$s add_param juice_time      1000       time int
@@ -40,7 +40,7 @@ namespace eval search::circles {
 	$s add_variable touch_y            
 
 	$s set_protocol_init_callback {
-	    ess::init
+	    ::ess::init
 
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
@@ -49,7 +49,7 @@ namespace eval search::circles {
 	    my configure_stim $rmt_host
 
 	    # initialize touch processor
-	    ess::touch_init
+	    ::ess::touch_init
 
 	    soundReset
 	    soundSetVoice 81 0    0
@@ -78,11 +78,11 @@ namespace eval search::circles {
 	
 	$s set_quit_callback {
 	    rmtSend clearscreen
-	    ess::end_obs QUIT
+	    ::ess::end_obs QUIT
 	}
 	
 	$s set_end_callback {
-	    ess::evt_put SYSTEM_STATE STOPPED [now]
+	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 	}
 	
 	$s set_file_open_callback {
@@ -122,9 +122,9 @@ namespace eval search::circles {
 		    set $p [dl_get stimdg:$p $stimtype]
 		}
 
-		ess::touch_region_off 0
-		ess::touch_reset
-		ess::touch_win_set 0 $targ_x $targ_y $targ_r 0
+		::ess::touch_region_off 0
+		::ess::touch_reset
+		::ess::touch_win_set 0 $targ_x $targ_y $targ_r 0
 		
 		rmtSend "nexttrial $stimtype"
 	    }
@@ -146,7 +146,7 @@ namespace eval search::circles {
 	}
 	
 	$s add_method stim_on {} {
-	    ess::touch_region_on 0
+	    ::ess::touch_region_on 0
 	    rmtSend "!stimon"
 	}
 
@@ -157,7 +157,7 @@ namespace eval search::circles {
 	$s add_method reward {} {
 	    soundPlay 3 70 70
 	    juicerJuice 0 $juice_time
-	    ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::evt_put REWARD DURATION [now] $juice_time
 	}
 
 	$s add_method noreward {} {
@@ -169,7 +169,7 @@ namespace eval search::circles {
 	}
 	
 	$s add_method responded {} {
-	    if { [ess::touch_in_win 0] } {
+	    if { [::ess::touch_in_win 0] } {
 		return 1
 	    } else {
 		return 0

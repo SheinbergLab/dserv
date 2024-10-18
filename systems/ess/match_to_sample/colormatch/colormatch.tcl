@@ -14,7 +14,7 @@ namespace eval match_to_sample::colormatch {
 	$s add_param targ_range          4      variable stim
 	$s add_param targ_color          ".2 .9 .9" variable stim
 	
-	$s add_param rmt_host          $ess::rmt_host   stim ipaddr
+	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
 	
 	$s add_param juice_pin         27       variable int
 	$s add_param juice_time      1000       time int
@@ -36,7 +36,7 @@ namespace eval match_to_sample::colormatch {
 	$s add_variable correct           -1
 
 	$s set_protocol_init_callback {
-	    ess::init
+	    ::ess::init
 
 	    if { $use_buttons } {
 		foreach b "$left_button $right_button" {
@@ -50,7 +50,7 @@ namespace eval match_to_sample::colormatch {
 	    my configure_stim $rmt_host
 
 	    # initialize touch processor
-	    ess::touch_init
+	    ::ess::touch_init
 	    
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
@@ -82,11 +82,11 @@ namespace eval match_to_sample::colormatch {
 	
 	$s set_quit_callback {
 	    rmtSend clearscreen
-	    ess::end_obs QUIT
+	    ::ess::end_obs QUIT
 	}
 	
 	$s set_end_callback {
-	    ess::evt_put SYSTEM_STATE STOPPED [now]
+	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 	}
 	
 	$s set_file_open_callback {
@@ -120,7 +120,7 @@ namespace eval match_to_sample::colormatch {
 	
 	$s add_method update_button { name data } {
 	    # should log which button was pressed based on name
-	    ess::do_update
+	    ::ess::do_update
 	}
 	
 	$s add_method start_obs_reset {} {
@@ -144,12 +144,12 @@ namespace eval match_to_sample::colormatch {
 		set dist_y [dl_get stimdg:nonmatch_y $stimtype]
 		set dist_r [dl_get stimdg:nonmatch_r $stimtype]
 
-		ess::touch_region_off 0
-		ess::touch_region_off 1
-		ess::touch_reset
+		::ess::touch_region_off 0
+		::ess::touch_region_off 1
+		::ess::touch_reset
 		
-		ess::touch_win_set 0 $targ_x $targ_y $targ_r 0
-		ess::touch_win_set 1 $dist_x $dist_y $dist_r 0
+		::ess::touch_win_set 0 $targ_x $targ_y $targ_r 0
+		::ess::touch_win_set 1 $dist_x $dist_y $dist_r 0
 
 		rmtSend "nexttrial $stimtype"
 
@@ -182,8 +182,8 @@ namespace eval match_to_sample::colormatch {
 
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
-	    ess::touch_region_on 0
-	    ess::touch_region_on 1
+	    ::ess::touch_region_on 0
+	    ::ess::touch_region_on 1
 	}
 
 	$s add_method choices_off {} {
@@ -193,7 +193,7 @@ namespace eval match_to_sample::colormatch {
 	$s add_method reward {} {
 	    soundPlay 3 70 70
 	    juicerJuice 0 $juice_time
-	    ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::evt_put REWARD DURATION [now] $juice_time
 	}
 
 	$s add_method noreward {} {
@@ -211,10 +211,10 @@ namespace eval match_to_sample::colormatch {
 		return -1
 	    }
 
-	    if { [ess::touch_in_win 0] } {
+	    if { [::ess::touch_in_win 0] } {
 		set correct 1
 		return 0
-	    } elseif { [ess::touch_in_win 1] } {
+	    } elseif { [::ess::touch_in_win 1] } {
 		set correct 0
 		return 1
 	    } else {

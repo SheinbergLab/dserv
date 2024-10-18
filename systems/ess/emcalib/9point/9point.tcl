@@ -10,7 +10,7 @@ namespace eval emcalib::9point {
     proc protocol_init { s } {
 	$s set_protocol [namespace tail [namespace current]]
 	
-	$s add_param rmt_host          $ess::rmt_host   stim ipaddr
+	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
 	
 	$s add_param juice_pin         27       variable int
 	$s add_param juice_time      1000       time int
@@ -26,7 +26,7 @@ namespace eval emcalib::9point {
 	$s add_variable jump_targ_r             
 
 	$s set_protocol_init_callback {
-	    ess::init
+	    ::ess::init
 
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
@@ -35,8 +35,8 @@ namespace eval emcalib::9point {
 	    my configure_stim $rmt_host
 
 	    # initialize eye movements
-	    ess::em_init
-	    ess::em_sampler_enable $sample_count
+	    ::ess::em_init
+	    ::ess::em_sampler_enable $sample_count
 	    
 	    soundReset
 	    soundSetVoice 81 0    0
@@ -65,13 +65,13 @@ namespace eval emcalib::9point {
 	
 	$s set_quit_callback {
 	    rmtSend clearscreen
-	    ess::em_region_off 0
-	    ess::em_region_off 1
-	    ess::end_obs QUIT
+	    ::ess::em_region_off 0
+	    ::ess::em_region_off 1
+	    ::ess::end_obs QUIT
 	}
 	
 	$s set_end_callback {
-	    ess::evt_put SYSTEM_STATE STOPPED [now]
+	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 	}
 	
 	$s set_file_open_callback {
@@ -103,10 +103,10 @@ namespace eval emcalib::9point {
 		    }
 		}
 		
-		ess::em_region_off 0
-		ess::em_region_off 1
-		ess::em_fixwin_set 0 $fix_targ_x $fix_targ_y $fix_radius 0
-		ess::em_fixwin_set 1 $jump_targ_x $jump_targ_y $fix_radius 0
+		::ess::em_region_off 0
+		::ess::em_region_off 1
+		::ess::em_fixwin_set 0 $fix_targ_x $fix_targ_y $fix_radius 0
+		::ess::em_fixwin_set 1 $jump_targ_x $jump_targ_y $fix_radius 0
 		
 		rmtSend "nexttrial $stimtype"
 	    }
@@ -126,53 +126,53 @@ namespace eval emcalib::9point {
 	$s add_method fixon {} {
 	    soundPlay 1 70 200
 	    rmtSend "!fixon"
-	    ess::em_region_on 0
-	    ess::evt_put EMPARAMS CIRC [now] \
+	    ::ess::em_region_on 0
+	    ::ess::evt_put EMPARAMS CIRC [now] \
 		0 $fix_targ_x $fix_targ_y $fix_targ_r
 	}
 	
 	$s add_method acquired_fixspot {} {
-	    return [ess::em_eye_in_region 0]
+	    return [::ess::em_eye_in_region 0]
 	}
 
 	$s add_method fixjump {} {
-	    ess::em_region_off 0
+	    ::ess::em_region_off 0
 	    rmtSend "!fixjump"
-	    ess::em_region_on 1
-	    ess::evt_put EMPARAMS CIRC [now] \
+	    ::ess::em_region_on 1
+	    ::ess::evt_put EMPARAMS CIRC [now] \
 		1 $jump_targ_x $jump_targ_y $jump_targ_r
 	}
 
 	$s add_method acquired_fixjump {} {
-	    return [ess::em_eye_in_region 1]
+	    return [::ess::em_eye_in_region 1]
 	}
 
 	$s add_method sample_position {} {
-	    ess::em_sampler_start 0
+	    ::ess::em_sampler_start 0
 	}
 
 	$s add_method out_of_sample_win {} {
-	    return [expr ![ess::em_eye_in_region 1]]
+	    return [expr ![::ess::em_eye_in_region 1]]
 	}
 
 	$s add_method sample_position_complete {} {
-	    return [ess::em_sampler_status]
+	    return [::ess::em_sampler_status]
 	}
 
 	$s add_method store_calibration {} {
-	    ess::evt_put EMPARAMS CALIB [now] {*}[ess::em_sampler_vals]
+	    ::ess::evt_put EMPARAMS CALIB [now] {*}[::ess::em_sampler_vals]
 	}
 	
 	$s add_method reward {} {
 	    soundPlay 3 70 70
 	    juicerJuice 0 $juice_time
-	    ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::evt_put REWARD DURATION [now] $juice_time
 	}
 
 	$s add_method fixation_off {} {
 	    rmtSend "!fixoff"
-	    ess::em_region_off 0
-	    ess::em_region_off 1
+	    ::ess::em_region_off 0
+	    ::ess::em_region_off 1
 	}
 	
 	$s add_method finale {} {

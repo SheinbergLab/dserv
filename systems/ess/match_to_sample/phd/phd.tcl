@@ -16,7 +16,7 @@ namespace eval match_to_sample::phd {
 	$s add_param targ_range          4      variable stim
 	$s add_param targ_color          ".2 .9 .9" variable stim
 	
-	$s add_param rmt_host          $ess::rmt_host   stim ipaddr
+	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
 	
 	$s add_param juice_pin         27       variable int
 	$s add_param juice_time      1000       time int
@@ -28,13 +28,13 @@ namespace eval match_to_sample::phd {
 	$s add_variable correct           -1
 	
 	$s set_protocol_init_callback {
-	    ess::init
+	    ::ess::init
 
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
 
 	    # initialize touch processor
-	    ess::touch_init
+	    ::ess::touch_init
 	    
 	    # configure juice channel pin
 	    juicerSetPin 0 $juice_pin
@@ -67,11 +67,11 @@ namespace eval match_to_sample::phd {
 	$s set_quit_callback {
 	    rmtSend clearscreen
 	    if { $trial_type == "HV"} { my haptic_clear }
-	    ess::end_obs QUIT
+	    ::ess::end_obs QUIT
 	}
 	
 	$s set_end_callback {
-	    ess::evt_put SYSTEM_STATE STOPPED [now]
+	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 	}
 	
 	$s set_file_open_callback {
@@ -105,8 +105,8 @@ namespace eval match_to_sample::phd {
 		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$i 0]
 		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$i 1]
 		    set choice_r [dl_get stimdg:choice_scale $cur_id]
-		    ess::touch_region_off $i
-		    ess::touch_win_set $i $choice_x $choice_y $choice_r 0
+		    ::ess::touch_region_off $i
+		    ::ess::touch_win_set $i $choice_x $choice_y $choice_r 0
 		}
 		set target_slot [dl_get stimdg:sample_slot $cur_id]
 		set trial_type [dl_get stimdg:trial_type $cur_id]
@@ -168,7 +168,7 @@ namespace eval match_to_sample::phd {
 
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
-	    foreach i "0 1 2 3" { ess::touch_region_on $i }
+	    foreach i "0 1 2 3" { ::ess::touch_region_on $i }
 	}
 
 	$s add_method choices_off {} {
@@ -178,7 +178,7 @@ namespace eval match_to_sample::phd {
 	$s add_method reward {} {
 	    soundPlay 3 70 70
 	    juicerJuice 0 $juice_time
-	    ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::evt_put REWARD DURATION [now] $juice_time
 	}
 
 	$s add_method noreward {} {
@@ -196,7 +196,7 @@ namespace eval match_to_sample::phd {
 	$s add_method responded {} {
 	    set r -1
 	    foreach w "0 1 2 3" {
-		if { [ess::touch_in_win $w] } {
+		if { [::ess::touch_in_win $w] } {
 		    set r $w
 		    break
 		}
@@ -224,11 +224,11 @@ namespace eval match_to_sample::phd {
 	    set g [::dslog::readESS $essfile]
 
 	    # get relevant event ids
-	    lassign [ess::evt_id ENDTRIAL ABORT]    endt_id     endt_abort 
-	    lassign [ess::evt_id ENDOBS   COMPLETE] endobs_id   endobs_complete 
-	    lassign [ess::evt_id CHOICES  ON]       choices_id  choices_on
-	    lassign [ess::evt_id RESP]              resp_id 
-	    lassign [ess::evt_id STIMTYPE]          stimtype_id 
+	    lassign [::ess::evt_id ENDTRIAL ABORT]    endt_id     endt_abort 
+	    lassign [::ess::evt_id ENDOBS   COMPLETE] endobs_id   endobs_complete 
+	    lassign [::ess::evt_id CHOICES  ON]       choices_id  choices_on
+	    lassign [::ess::evt_id RESP]              resp_id 
+	    lassign [::ess::evt_id STIMTYPE]          stimtype_id 
 	    
 	    # valid trials have an endtrial subtype which is 0 or 1
 	    dl_local endtrial [dl_select $g:e_subtypes \
