@@ -39,12 +39,12 @@ oo::class create System {
 	set _start_state {}
 	set _end_state {}
 	set _states [dict create]
-	set _evt_info $ess::evt_info
-	set _evt_type_ids $ess::evt_type_ids
-	set _evt_type_names $ess::evt_type_names
-	set _evt_subtype_ids $ess::evt_subtype_ids
-	set _evt_subtype_names $ess::evt_subtype_names
-	set _evt_ptype_ids $ess::evt_ptype_ids
+	set _evt_info $::ess::evt_info
+	set _evt_type_ids $::ess::evt_type_ids
+	set _evt_type_names $::ess::evt_type_names
+	set _evt_subtype_ids $::ess::evt_subtype_ids
+	set _evt_subtype_names $::ess::evt_subtype_names
+	set _evt_ptype_ids $::ess::evt_ptype_ids
 	set _vars {}
 	set _variants {}
     }
@@ -90,7 +90,7 @@ oo::class create System {
 	rmtSend "set dservhost [dservGet qpcs/ipaddr]"
 	
 	# source this protocol's stim functions
-	set stimfile [file join [set ess::system_path] \
+	set stimfile [file join [set ::ess::system_path] \
 			  $_systemname $_protocolname ${_protocolname}_stim.tcl]
 	if { ![catch {set f [open $stimfile]}] } {
 	    set script [read $f]
@@ -243,7 +243,7 @@ oo::class create System {
     }
     
     method add_param { pname val type ptype } {
-	set t [dict get $ess::param_types [string toupper $type]]
+	set t [dict get $::ess::param_types [string toupper $type]]
 	dict set _params $pname [list $val $t $ptype]
 	dict set _default_param_vals $pname $val
 	my variable $pname
@@ -306,7 +306,7 @@ oo::class create System {
     method start {} {
         if { $_status == "running" } return
 	set _status running
-	ess::evt_put SYSTEM_STATE RUNNING [now]	
+	::ess::evt_put SYSTEM_STATE RUNNING [now]	
 	if { [info exists _callbacks(start)] } {
 	    my $_callbacks(start)
 	}
@@ -325,7 +325,7 @@ oo::class create System {
 
     method stop {} {
 	set _status stopped
-	ess::evt_put SYSTEM_STATE STOPPED [now]	
+	::ess::evt_put SYSTEM_STATE STOPPED [now]	
 	if { [info exists _callbacks(quit)] } {
 	    my $_callbacks(quit)
 	}
@@ -334,7 +334,7 @@ oo::class create System {
     
     method end {} {
 	set _status stopped
-	ess::evt_put SYSTEM_STATE STOPPED [now]	
+	::ess::evt_put SYSTEM_STATE STOPPED [now]	
 	if { [info exists _callbacks(end)] } {
 	    my $_callbacks(end)
 	}
@@ -545,7 +545,7 @@ namespace eval ess {
 	for { set i 0 } { $i < $::nTimers } { incr i } {
 	    timerSetScript $i "[namespace current]::do_update"
 	}
-	# default to not tracking ems, but ess::em_init will turn on
+	# default to not tracking ems, but ::ess::em_init will turn on
 	variable em_active
 	set em_active 0
     }
@@ -562,7 +562,7 @@ namespace eval ess {
 	if { $current(system) == "" } { print "no system set"; return }
 	set current(state_system) [find_system $current(system)]
 	if { $current(state_system) != ""} {
-	    ess::evt_put USER START [now]
+	    ::ess::evt_put USER START [now]
 	    $current(state_system) start
 	}
 	return
@@ -574,7 +574,7 @@ namespace eval ess {
 	set current(state_system) [find_system $current(system)]
 	if { $current(state_system) != ""} {
 	    $current(state_system) stop
-	    ess::evt_put USER QUIT [now]
+	    ::ess::evt_put USER QUIT [now]
 	}
 	return
     }
@@ -585,7 +585,7 @@ namespace eval ess {
 	set current(state_system) [find_system $current(system)]
 	if { $current(state_system) != ""} {
 	    $current(state_system) reset
-	    ess::evt_put USER RESET [now]
+	    ::ess::evt_put USER RESET [now]
 	}
 	return
     }
@@ -600,14 +600,14 @@ namespace eval ess {
 	variable obs_pin
 	set in_obs 1
 	rpioPinOn $obs_pin
-	ess::evt_put BEGINOBS INFO [now] $current $total
+	::ess::evt_put BEGINOBS INFO [now] $current $total
     }
     
     proc end_obs { { status 1 } } {
 	variable in_obs
 	variable obs_pin
 	if { !$in_obs } { return }
-	ess::evt_put ENDOBS $status [now]
+	::ess::evt_put ENDOBS $status [now]
 	rpioPinOff $obs_pin
 	set in_obs 0
     }
@@ -676,8 +676,8 @@ namespace eval ess {
     proc set_param { param val } {
 	variable current
 	$current(state_system) set_param $param $val
-	ess::evt_put PARAM NAME [now] $param
-	ess::evt_put PARAM VAL  [now] $val
+	::ess::evt_put PARAM NAME [now] $param
+	::ess::evt_put PARAM VAL  [now] $val
     }
 
     proc set_params { args } {
@@ -736,13 +736,13 @@ namespace eval ess {
 	    } else {
 		set p 0
 	    }
-	    ess::evt_name_set $k $v $p
+	    ::ess::evt_name_set $k $v $p
 	}
 	dict for { k v } [set $current(state_system)::_evt_info] {
 	    set subinfo [lindex $v 3]
 	    if { $subinfo != "" } {
 		set id [lindex $v 0]
-		ess::evt_put SUBTYPES $id [now] $subinfo
+		::ess::evt_put SUBTYPES $id [now] $subinfo
 	    }
 	}
     }
@@ -774,10 +774,10 @@ namespace eval ess {
 	variable data_dir
 
 	# get all open files
-	set open_files [ess::open_files]
+	set open_files [::ess::open_files]
 
 	if { $open_files != "" } {
-	    print "$open_files open: call ess::file_close"
+	    print "$open_files open: call ::ess::file_close"
 	    return -1
 	}
 	
@@ -806,21 +806,21 @@ namespace eval ess {
 	dservLoggerResume $filename	
 
 	# reset system and output event names
-	ess::reset
+	::ess::reset
 
 	# output info for interpreting events
-	ess::store_evt_names
+	::ess::store_evt_names
 
 	dservTouch stimdg
 	
-	ess::evt_put ID ESS      [now] $current(system)
-	ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
-	ess::evt_put ID VARIANT  [now] $current(system):$current(protocol):$current(variant)
-	ess::evt_put ID SUBJECT  [now] $subject_id
+	::ess::evt_put ID ESS      [now] $current(system)
+	::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
+	::ess::evt_put ID VARIANT  [now] $current(system):$current(protocol):$current(variant)
+	::ess::evt_put ID SUBJECT  [now] $subject_id
 	
-	dict for { pname pval } [ess::get_params] {
-	    ess::evt_put PARAM NAME [now] $pname
-	    ess::evt_put PARAM VAL  [now] [lindex $pval 0]
+	dict for { pname pval } [::ess::get_params] {
+	    ::ess::evt_put PARAM NAME [now] $pname
+	    ::ess::evt_put PARAM VAL  [now] [lindex $pval 0]
 	}
 
 	# call the system's specific file_open callback
@@ -877,7 +877,7 @@ namespace eval ess {
 	ainSetProcessor $em_windows(processor)
 	ainSetParam dpoint $em_windows(dpoint)
 	dservAddExactMatch $em_windows(dpoint)/status
-	dpointSetScript $em_windows(dpoint)/status ess::em_window_process
+	dpointSetScript $em_windows(dpoint)/status ::ess::em_window_process
 
 	for { set win 0 } { $win < 8 } { incr win } {
 	    ainSetIndexedParam $win active 0
@@ -922,10 +922,10 @@ namespace eval ess {
     }
 
     proc em_fixwin_set { win cx cy r { type 1 } } {
-	set x [expr {int($cx*$ess::em_scale_h)+2048}]
-	set y [expr {-1*int($cy*$ess::em_scale_v)+2048}]
-	set pm_x [expr {$r*$ess::em_scale_h}]
-	set pm_y [expr {$r*$ess::em_scale_v}]
+	set x [expr {int($cx*$::ess::em_scale_h)+2048}]
+	set y [expr {-1*int($cy*$::ess::em_scale_v)+2048}]
+	set pm_x [expr {$r*$::ess::em_scale_h}]
+	set pm_y [expr {$r*$::ess::em_scale_v}]
 	em_region_set $win 1 $x $y $pm_x $pm_y
     }
 
@@ -982,7 +982,7 @@ namespace eval ess {
 	touchSetProcessor $touch_windows(processor)
 	touchSetParam dpoint $touch_windows(dpoint)
 	dservAddExactMatch $touch_windows(dpoint)/status
-	dpointSetScript $touch_windows(dpoint)/status ess::touch_window_process
+	dpointSetScript $touch_windows(dpoint)/status ::ess::touch_window_process
 	for { set win 0 } { $win < 8 } { incr win } {
 	    touchSetIndexedParam $win active 0
 	}
@@ -1037,12 +1037,12 @@ namespace eval ess {
     }
 
     proc touch_win_set { win cx cy r { type 1 } } {
-	set x [expr {int($cx*$ess::touch_win_scale_w)+
-		     $ess::touch_win_half_w}]
-	set y [expr {-1*int($cy*$ess::touch_win_scale_h)+
-		     $ess::touch_win_half_h}]
-	set pm_x [expr {$r*$ess::touch_win_scale_w}]
-	set pm_y [expr {$r*$ess::touch_win_scale_h}]
+	set x [expr {int($cx*$::ess::touch_win_scale_w)+
+		     $::ess::touch_win_half_w}]
+	set y [expr {-1*int($cy*$::ess::touch_win_scale_h)+
+		     $::ess::touch_win_half_h}]
+	set pm_x [expr {$r*$::ess::touch_win_scale_w}]
+	set pm_y [expr {$r*$::ess::touch_win_scale_h}]
 	touch_region_set $win $type $x $y $pm_x $pm_y
     }
 
@@ -1233,31 +1233,31 @@ namespace eval ess {
 	#::screen::init
 
 	# publish this system's event name table
-	ess::store_evt_names
-	ess::evt_put ID ESS [now] $system
+	::ess::store_evt_names
+	::ess::evt_put ID ESS [now] $system
 	set current(open_system) 1
     }
 
     proc protocol_init { system protocol } {
 	variable current
-	set s [ess::find_system $system]
+	set s [::ess::find_system $system]
 
 	# initialize the protocol
-	ess::${system}::${protocol}::protocol_init $current(state_system)
+	::ess::${system}::${protocol}::protocol_init $current(state_system)
 
 	# initialize this protocol's variants
 	${s} set_variants [set ${system}::${protocol}::variants]	
-	ess::${system}::${protocol}::variants_init $current(state_system)
+	::ess::${system}::${protocol}::variants_init $current(state_system)
 
 	${s} protocol_init
 	
-	ess::evt_put ID PROTOCOL [now] $current(system):$protocol
+	::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
 	set current(protocol) $protocol
 	set current(open_protocol) 1
     }
 
     proc variant_loader_command { system protocol variant } {
-	set s [ess::find_system $system]
+	set s [::ess::find_system $system]
 	
 	set vinfo [dict get [$s get_variants] $variant]
 	set loader_proc [lindex $vinfo 0]
@@ -1277,7 +1277,7 @@ namespace eval ess {
     
     proc variant_init { system protocol variant } {
 	variable current
-	set s [ess::find_system $system]
+	set s [::ess::find_system $system]
 
 	# get loader info for this variant and call
 	$s {*}[variant_loader_command $system $protocol $variant]
@@ -1288,13 +1288,13 @@ namespace eval ess {
 	# protocol defaults for system parameters
 	set param_default_settings ${system}::${protocol}::params_defaults
 	if { [info exists $param_default_settings] } {
-	    ess::set_params {*}[set $param_default_settings]
+	    ::ess::set_params {*}[set $param_default_settings]
 	}
 	
 	# and update system parameters for this variant
 	set param_settings ${system}::${protocol}::params_${variant}
 	if { [info exists $param_settings] } {
-	    ess::set_params {*}[set $param_settings]
+	    ::ess::set_params {*}[set $param_settings]
 	}
 
 	# call a specific init function for this variant
@@ -1303,14 +1303,14 @@ namespace eval ess {
 	    $s $vinit_method
 	}
 	
-	ess::evt_put ID VARIANT [now] $system:$protocol:$variant
+	::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
 	set current(variant) $variant
 	set current(open_variant) 1
     }
     
     proc find_systems {} {
 	set systems {}
-	foreach f [glob $ess::system_path/*] {
+	foreach f [glob $::ess::system_path/*] {
 	    if  { [file isdirectory $f] &&
 		  [file exists $f/[file tail $f].tcl] } {
 		catch { namespace delete ::ess::[file tail $f] }
@@ -1324,7 +1324,7 @@ namespace eval ess {
 
     proc find_protocols { s } {
 	set protocols {}
-	foreach f [glob [file join $ess::system_path $s]/*] {
+	foreach f [glob [file join $::ess::system_path $s]/*] {
 	    if { [file isdirectory $f] &&
 		 [file exists $f/[file tail $f].tcl] } {
 		catch { namespace delete ::ess::${s}::[file tail $f] }
@@ -1336,7 +1336,7 @@ namespace eval ess {
     }
 
     proc find_variants { s p } {
-	set f [file join $ess::system_path $s ${p} ${p}_variants.tcl]
+	set f [file join $::ess::system_path $s ${p} ${p}_variants.tcl]
 	source $f
 	return [dict keys [set ::ess::${s}::${p}::variants]]
     }
@@ -1344,7 +1344,7 @@ namespace eval ess {
     # These getters could be changed to not re-source perhaps
     proc get_systems { } {
 	set systems {}
-	foreach f [glob $ess::system_path/*] {
+	foreach f [glob $::ess::system_path/*] {
 	    if  { [file isdirectory $f] &&
 		  [file exists $f/[file tail $f].tcl] } {
 		lappend systems [file tail $f]
@@ -1355,7 +1355,7 @@ namespace eval ess {
 
     proc get_protocols { system } {
 	set protocols {}
-	foreach f [glob [file join $ess::system_path $system]/*] {
+	foreach f [glob [file join $::ess::system_path $system]/*] {
 	    if { [file isdirectory $f] &&
 		 [file exists $f/[file tail $f].tcl] } {
 		lappend protocols [file tail $f]
@@ -1602,28 +1602,28 @@ set ESS_QUERY(NAME_INDEX)  13
 
 # USER_funcs
 
-proc USER_START {} { ess::start }
-proc USER_STOP  {} { ess::stop }
-proc USER_RESET {} { ess::reset }
+proc USER_START {} { ::ess::start }
+proc USER_STOP  {} { ::ess::stop }
+proc USER_RESET {} { ::ess::reset }
 
-proc USER_SET_SYSTEM { s } { ess::set_system $s }
+proc USER_SET_SYSTEM { s } { ::ess::set_system $s }
 proc USER_SET_TRACE { l } { }
 
 # qpcs::sendToQNX $server USER_SET_EYES $arg1 $arg2 $arg2 $arg4
 # qpcs::sendToQNX $server USER_SET_LEVERS $arg1 $arg2
-proc USER_SET_PARAMS { name valstr } { ess::set_param $name $valstr }
+proc USER_SET_PARAMS { name valstr } { ::ess::set_param $name $valstr }
 
-proc USER_QUERY_STATE {} { return [ess::query_state] }
+proc USER_QUERY_STATE {} { return [::ess::query_state] }
 proc USER_QUERY_DETAILS {} { return "24 25 5" }
-proc USER_QUERY_NAME {} { return [ess::query_system_name] }
-proc USER_QUERY_NAME_INDEX { ndx } { return [ess::query_system_name_by_index $ndx] }
+proc USER_QUERY_NAME {} { return [::ess::query_system_name] }
+proc USER_QUERY_NAME_INDEX { ndx } { return [::ess::query_system_name_by_index $ndx] }
 
 proc USER_QUERY_DATAFILE  {} { return "" }
-proc USER_QUERY_REMOTE {} { return [ess::query_remote] }
+proc USER_QUERY_REMOTE {} { return [::ess::query_remote] }
 
 # qpcs::sendToQNX $server USER_QUERY_EXECNAME 
-proc USER_QUERY_PARAM { index type } { ess::query_param $index $type }
-proc USER_QUERY_PARAMS {} { ess::get_params } 
+proc USER_QUERY_PARAM { index type } { ::ess::query_param $index $type }
+proc USER_QUERY_PARAMS {} { ::ess::get_params } 
 
 # qpcs::sendToQNX $server USER_CHECK_DISKSPACE
 
