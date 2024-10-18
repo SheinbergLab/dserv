@@ -362,7 +362,7 @@ static int print_command (ClientData data, Tcl_Interp *interp,
   
   ds_datapoint_t dpoint;
   char *s;
-  int len;
+  Tcl_Size len;
   int rc;
   
   if (objc < 2) {
@@ -481,6 +481,17 @@ static Tcl_Interp *setup_tcl(TclServer *tserv)
     std::cerr << "Error initialializing tcl interpreter" << std::endl;
     return interp;
   }
+#if 0
+  if (TclZipfs_Mount(interp, "/usr/local/dserv/tclserver.zip", "app", NULL) != TCL_OK) {
+    //    std::cerr << "Tclserver: error mounting zipfs" << std::endl;
+  }
+  else {
+    //    std::cerr << "Mounted zipfs" << std::endl;
+  }
+#endif
+  
+  TclZipfs_AppHook(&tserv->argc, &tserv->argv);
+
   
   /*
    * Invoke application-specific initialization.

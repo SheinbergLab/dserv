@@ -558,7 +558,7 @@ int dserv_setdata_command (ClientData data, Tcl_Interp *interp,
 			   int objc, Tcl_Obj * const objv[])
 {
   Dataserver *ds = (Dataserver *) data;
-  int len;
+  Tcl_Size len;
   int rc;
   unsigned char *datastr;
   int datatype;
@@ -600,7 +600,7 @@ int dserv_setdata64_command (ClientData data, Tcl_Interp *interp,
 			     int objc, Tcl_Obj * const objv[])
 {
   Dataserver *ds = (Dataserver *) data;
-  int len;
+  Tcl_Size len;
   int rc;
   char *datastr;
   unsigned char buf[256];
@@ -914,7 +914,17 @@ static Tcl_Interp *setup_tcl(Dataserver *dserv)
     std::cerr << "Error initialializing tcl interpreter" << std::endl;
     return interp;
   }
-  
+#if 0
+  if (TclZipfs_Mount(interp, "/usr/local/dserv/dataserver.zip", "app", NULL) != TCL_OK) {
+    //    std::cerr << "Dataserver: error mounting zipfs" << std::endl;
+  }
+  else {
+    //    std::cerr << "Mounted zipfs" << std::endl;
+  }
+#endif
+
+  TclZipfs_AppHook(&dserv->argc, &dserv->argv);
+
   /*
    * Invoke application-specific initialization.
    */
