@@ -364,9 +364,9 @@ int Dserv_gpio_input_Init(Tcl_Interp *interp)
 {
   if (
 #ifdef USE_TCL_STUBS
-      Tcl_InitStubs(interp, "8.6", 0)
+      Tcl_InitStubs(interp, "8.6-", 0)
 #else
-      Tcl_PkgRequire(interp, "Tcl", "8.6", 0)
+      Tcl_PkgRequire(interp, "Tcl", "8.6-", 0)
 #endif
       == NULL) {
     return TCL_ERROR;
