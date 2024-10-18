@@ -24,7 +24,6 @@ else()
 	add_definitions(-DUSE_TCL_STUBS -DLINUX)
 	include_directories(../src /usr/local/include)
 	link_directories(/usr/local/lib)
-	set(TCL_INCLUDE_DIR /usr/include/tcl)
 	set(TCLLIB tclstub)
 endif()
 
