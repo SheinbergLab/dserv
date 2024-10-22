@@ -84,7 +84,9 @@ proc process_data { ev args } {
 	    set status(dio_b) [expr {$levels>>24}]
 	    update_dio_indicators
 	}
-
+	
+	qpcs/stimtype { set current(cur_stimtype) $val }
+	
 	qpcs/system { set current(system) $val; update_system_combos $current(server) }
 	qpcs/protocol { set current(protocol) $val; update_system_combos $current(server) }
 	qpcs/variant { set current(variant) $val; update_system_combos $current(server) }
@@ -492,11 +494,11 @@ proc setup {} {
     
     labelframe .control -text "ESS Control"
     set f [frame .control.buttons]
-    ttk::button $f.go -text "Go" -command goCommand
-    ttk::button $f.stop -text "Stop" -command stopCommand
-    ttk::button $f.reset -text "Reset" -command resetCommand
+    ttk::button $f.go -text "Go" -command goCommand -width 6
+    ttk::button $f.stop -text "Stop" -command stopCommand -width 6
+    ttk::button $f.reset -text "Reset" -command resetCommand -width 6
     pack $f.go $f.stop $f.reset -side left -expand true -fill x
-    pack $f -side bottom -pady 2
+    pack $f -side bottom -pady 2 -padx 3
     pack .control
 
     set lf [frame .control.info]

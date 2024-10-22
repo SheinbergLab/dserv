@@ -61,6 +61,11 @@ proc update_events { name data } {
 	20 {
 	    dservSet qpcs/obs_active 0
 	}
+	29 {
+	    if { $sub == 1 } {
+		dservSet qpcs/stimtype [lindex $data 0]
+	    }
+	}
     }
 }
 
