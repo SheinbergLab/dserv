@@ -68,6 +68,7 @@ proc process_data { ev args } {
 		set status(cur_stimtype) {}
 	    }
 	}
+
 	qpcs/joystick {
 	    switch $val {
 		0  { set status(joystick_info) None }
@@ -85,7 +86,7 @@ proc process_data { ev args } {
 	    update_dio_indicators
 	}
 	
-	qpcs/stimtype { set current(cur_stimtype) $val }
+	qpcs/stimtype { set status(cur_stimtype) $val }
 	
 	qpcs/system { set current(system) $val; update_system_combos $current(server) }
 	qpcs/protocol { set current(protocol) $val; update_system_combos $current(server) }
