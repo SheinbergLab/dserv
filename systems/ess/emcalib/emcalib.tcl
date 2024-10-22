@@ -91,6 +91,7 @@ namespace eval emcalib {
 	#
 	$sys add_action start_obs {
 	    ::ess::begin_obs $n_obs $obs_count
+	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype
 	}	
 	$sys add_transition start_obs {
 	    return fixon
