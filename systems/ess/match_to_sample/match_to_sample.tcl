@@ -36,6 +36,9 @@ namespace eval match_to_sample {
 	$sys add_variable stimtype           0
 	$sys add_variable resp               0
 	$sys add_variable correct           -1
+	$sys add_variable choice_on_time  
+	$sys add_variable rt
+	
 	######################################################################
 	#                            System States                           #
 	######################################################################
@@ -133,7 +136,8 @@ namespace eval match_to_sample {
 	#
 	$sys add_action choices_on {
 	    my choices_on
-	    ::ess::evt_put CHOICES ON [now] 
+	    set choice_on_time [now]
+	    ::ess::evt_put CHOICES ON $::choice_on_time
 	}
 	
 	$sys add_transition choices_on {
@@ -156,6 +160,8 @@ namespace eval match_to_sample {
 	# response
 	#
 	$sys add_action response {
+	    set response_time [now]
+	    set rt [expr {($response_time-$choice_on_time)/1000}]
 	    ::ess::evt_put RESP $resp [now]
 	    my choices_off
 	    ::ess::evt_put CHOICES OFF [now] 
@@ -208,7 +214,9 @@ namespace eval match_to_sample {
 	#
 	# post_trial
 	#
-	$sys add_action post_trial {}
+	$sys add_action post_trial {
+	    ::ess::save_trialdg $correct $rt $stimtype
+	}
 	
 	$sys add_transition post_trial {
 	    return finish

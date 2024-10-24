@@ -37,6 +37,8 @@ namespace eval search {
 	$sys add_variable first_time         1
 
 	$sys add_variable correct           -1
+	$sys add_variable stimon_time
+	$sys add_variable rt
 	
 	######################################################################
 	#                            System States                           #
@@ -110,8 +112,9 @@ namespace eval search {
 	#
 	$sys add_action stim_on {
 	    my stim_on
-	    ::ess::evt_put PATTERN ON [now] 
-	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype
+	    set stimon_time [now]
+	    ::ess::evt_put PATTERN ON $stimon_time
+	    ::ess::evt_put STIMTYPE STIMID $stimon_time $stimtype
 	}
 	
 	$sys add_transition stim_on {
@@ -136,7 +139,9 @@ namespace eval search {
 	# response
 	#
 	$sys add_action response {
-	    ::ess::evt_put RESP 1 [now] 
+	    set resp_time [now]
+	    ::ess::evt_put RESP 1 $resp_time
+	    set rt [expr {($resp_time-$stimon_time)/1000}]
 	}
 
 	$sys add_transition response {
@@ -186,7 +191,9 @@ namespace eval search {
 	#
 	# post_trial
 	#
-	$sys add_action post_trial {}
+	$sys add_action post_trial {
+	    ::ess::save_trialdg $correct $rt $stimtype
+	}
 	
 	$sys add_transition post_trial {
 	    return finish
@@ -196,8 +203,8 @@ namespace eval search {
 	# finish
 	#
 	$sys add_action finish {
-	    ::ess::end_obs COMPLETE
 	    my endobs
+	    ::ess::end_obs COMPLETE
 	}
 	
 	$sys add_transition finish { return inter_obs }

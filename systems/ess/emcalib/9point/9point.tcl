@@ -139,7 +139,7 @@ namespace eval emcalib::9point {
 	    ::ess::em_region_off 0
 	    rmtSend "!fixjump"
 	    ::ess::em_region_on 1
-	    ::ess::evt_put EMPARAMS CIRC [now] \
+	    ::ess::evt_put EMPARAMS CIRC $jump_time \
 		1 $jump_targ_x $jump_targ_y $jump_targ_r
 	}
 

@@ -2,6 +2,7 @@
 
 package require dlsh
 package provide ess 2.0
+package require yajltcl
 
 catch { System destroy }
 
@@ -602,13 +603,46 @@ namespace eval ess {
 	rpioPinOn $obs_pin
 	::ess::evt_put BEGINOBS INFO [now] $current $total
     }
+
+    proc create_trialdg { subject status rt { stimid {} } } {
+	variable current
+	set g [dg_create]
+	dl_set $g:system [dl_slist $current(system)] 
+	dl_set $g:protocol [dl_slist $current(protocol)] 
+	dl_set $g:variant [dl_slist $current(variant)] 
+	dl_set $g:subject [dl_slist $subject]
+	dl_set $g:status [dl_ilist $status]
+	dl_set $g:rt [dl_ilist $rt]
+
+	if { $stimid != {} } {
+	    dl_set $g:stimid [dl_ilist $stimid]
+	
+	    if { [dg_exists stimdg] } {
+		set rlen [dl_length stimdg:stimtype]
+		foreach l [dg_tclListnames stimdg] {
+		    if { $rlen == [dl_length stimdg:$l] } {
+			dl_set $g:$l [dl_choose stimdg:$l $stimid]
+		    }
+		}
+	    }
+	}
+	return $g
+    }
+
+    proc save_trialdg { status rt { stimid {} } } {
+	variable subject_id
+	set trialdg [create_trialdg $subject_id $status $rt $stimid]
+	dg_toString $trialdg s
+	dservSetData trialdg [now] 6 $s
+	dg_delete $trialdg
+    }
     
     proc end_obs { { status 1 } } {
 	variable in_obs
 	variable obs_pin
 	if { !$in_obs } { return }
-	::ess::evt_put ENDOBS $status [now]
 	rpioPinOff $obs_pin
+	::ess::evt_put ENDOBS $status [now]
 	set in_obs 0
     }
     
@@ -618,6 +652,7 @@ namespace eval ess {
     }
 
     proc query_system {} {
+        variable current
         return $current(system)
     } 
 
@@ -1384,7 +1419,6 @@ namespace eval ess {
     }
 
     proc system_dict_to_json { d } {
-	package require yajltcl
 	set obj [yajl create #auto]
 	$obj map_open
 	dict for {sysname sysinfo} $d {
@@ -1407,7 +1441,6 @@ namespace eval ess {
     }
 
     proc get_system_status {} {
-	package require yajltcl
 	variable current
 	variable in_obs
 	

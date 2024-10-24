@@ -39,6 +39,9 @@ namespace eval emcalib {
 	$sys add_variable complete           0
 	
 	$sys add_variable first_time         1
+
+	$sys add_variable jump_time
+	$sys add_variable rt
 	
 	######################################################################
 	#                            System States                           #
@@ -127,6 +130,7 @@ namespace eval emcalib {
 	# fixjump
 	#
 	$sys add_action fixjump {
+	    set jump_time [now]
 	    my fixjump
 	    timerTick $reacquire_time
 	}
@@ -140,7 +144,9 @@ namespace eval emcalib {
 	# pre_sample
 	#
 	$sys add_action pre_sample {
-	    ::ess::evt_put FIXATE REFIXATE [now]
+	    set jump_acquired [now]
+	    set rt [expr ($jump_acquired-$jump_time)/1000]
+	    ::ess::evt_put FIXATE REFIXATE $jump_acquired
 	    timerTick $pre_sample_time
 	}
 
@@ -184,6 +190,7 @@ namespace eval emcalib {
 	    set complete 1
 	    my reward
 	    ::ess::evt_put ENDTRIAL CORRECT [now]
+	    ::ess::save_trialdg 1 $rt $stimtype
 	}
 	
 	$sys add_transition reward { return post_trial }
