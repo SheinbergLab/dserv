@@ -407,6 +407,7 @@ namespace eval ess {
 				 long 4 float 5 double 6 }
     variable open_datafile {}
     variable subject_id {}
+    variable subject_ids {}
 
     # for tracking begin/end obs and sync'ing with external systems
     variable in_obs  0
@@ -539,6 +540,31 @@ namespace eval ess {
 	set current(system) $system
 	set current(state_system) $s
     }
+
+    proc set_subject { subj } {
+	variable subject_id
+	set subject_id $subj
+	::ess::evt_put ID SUBJECT  [now] $subject_id
+	dservSet ess/subject_id $subj
+    }
+
+    proc get_subject {} {
+	variable subject_id
+	dservTouch ess/subject_id $subj
+	return $subject_id
+    }
+
+    proc set_subjects { args } {
+	variable subject_ids
+	set subject_ids {*}$args
+	dservSet ess/subject_ids $args
+    }
+
+    proc get_subjects {} {
+	variable subject_ids
+	dservTouch ess/subject_ids
+	return $subject_ids
+    }
     
     proc init {} {
     	dservRemoveAllMatches
@@ -604,13 +630,14 @@ namespace eval ess {
 	::ess::evt_put BEGINOBS INFO [now] $current $total
     }
 
-    proc create_trialdg { subject status rt { stimid {} } } {
+    proc create_trialdg { status rt { stimid {} } } {
 	variable current
+	variable subject_id
 	set g [dg_create]
 	dl_set $g:system [dl_slist $current(system)] 
 	dl_set $g:protocol [dl_slist $current(protocol)] 
 	dl_set $g:variant [dl_slist $current(variant)] 
-	dl_set $g:subject [dl_slist $subject]
+	dl_set $g:subject [dl_slist $subject_id]
 	dl_set $g:status [dl_ilist $status]
 	dl_set $g:rt [dl_ilist $rt]
 
@@ -629,12 +656,61 @@ namespace eval ess {
 	return $g
     }
 
-    proc save_trialdg { status rt { stimid {} } } {
+    proc create_trial_json { status rt { stimid {} } } {
+	variable current
 	variable subject_id
-	set trialdg [create_trialdg $subject_id $status $rt $stimid]
+	set obj [yajl create #auto]
+	$obj map_open
+
+	# always include these
+	$obj string system   string $current(system)
+	$obj string protocol string $current(protocol)
+	$obj string variant  string $current(variant)
+	$obj string subject  string $subject_id
+	$obj string status   number $status
+	$obj string rt       number $rt
+
+	# if a trial id is supplied, add addition info
+	if { $stimid != {} } {
+	    $obj string stimid integer $stimid
+	    
+	    if { [dg_exists stimdg] } {
+		$obj map_key stiminfo
+
+		$obj map_open
+		set rlen [dl_length stimdg:stimtype]
+		foreach l [dg_tclListnames stimdg] {
+		    if { $rlen == [dl_length stimdg:$l] } {
+			set dtype [dl_datatype stimdg:$l]
+			if { $dtype == "list" } {
+			    $obj string $l array [dl_toJSON stimdg:$l:$stimid]
+			} elseif { $dtype == "long" || $dtype == "short" || $dtype == "char" } {
+			    $obj string $l integer [dl_get stimdg:$l $stimid]
+			} elseif { $dtype == "float" } {
+			    $obj string $l double [dl_get stimdg:$l $stimid]
+			} elseif { $dtype == "string" } {
+			    $obj string $l string [dl_get stimdg:$l $stimid]
+			}
+		    }
+		}
+		$obj map_close
+	    }
+	}
+	
+	$obj map_close
+	set result [$obj get]
+	$obj delete
+	return $result
+    }
+
+    proc save_trial_info { status rt { stimid {} } } {
+	set trialdg [create_trialdg $status $rt $stimid]
 	dg_toString $trialdg s
 	dservSetData trialdg [now] 6 $s
 	dg_delete $trialdg
+
+	set trial_json [create_trial_json $status $rt $stimid]
+	dservSetData ess/trialinfo [now] 11 $trial_json
     }
     
     proc end_obs { { status 1 } } {
@@ -1433,7 +1509,9 @@ namespace eval ess {
 	    $obj array_close
 	}
 	$obj map_close
-	return [$obj get]
+	set result [$obj get]
+	$obj delete
+	return $result
     }
     
     proc get_system_json {} {
