@@ -683,7 +683,7 @@ namespace eval ess {
 		    if { $rlen == [dl_length stimdg:$l] } {
 			set dtype [dl_datatype stimdg:$l]
 			if { $dtype == "list" } {
-			    $obj string $l array [dl_toJSON stimdg:$l:$stimid]
+			    $obj string $l array_open [dl_toJSON stimdg:$l:$stimid] array_close
 			} elseif { $dtype == "long" || $dtype == "short" || $dtype == "char" } {
 			    $obj string $l integer [dl_get stimdg:$l $stimid]
 			} elseif { $dtype == "float" } {
