@@ -192,7 +192,7 @@ namespace eval search {
 	# post_trial
 	#
 	$sys add_action post_trial {
-	    ::ess::save_trialdg $correct $rt $stimtype
+	    ::ess::save_trial_info $correct $rt $stimtype
 	}
 	
 	$sys add_transition post_trial {

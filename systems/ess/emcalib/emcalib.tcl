@@ -190,7 +190,7 @@ namespace eval emcalib {
 	    set complete 1
 	    my reward
 	    ::ess::evt_put ENDTRIAL CORRECT [now]
-	    ::ess::save_trialdg 1 $rt $stimtype
+	    ::ess::save_trial_info 1 $rt $stimtype
 	}
 	
 	$sys add_transition reward { return post_trial }
