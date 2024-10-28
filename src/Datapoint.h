@@ -8,16 +8,17 @@
 
 typedef enum {
   DSERV_BYTE = 0,
-  DSERV_STRING,
-  DSERV_FLOAT,
-  DSERV_DOUBLE,
-  DSERV_SHORT,
-  DSERV_INT,
-  DSERV_DG,
-  DSERV_SCRIPT,
-  DSERV_TRIGGER_SCRIPT,		/* will always be delivered to trigger thread */
-  DSERV_EVT,
-  DSERV_NONE,
+  DSERV_STRING = 1,
+  DSERV_FLOAT = 2,
+  DSERV_DOUBLE = 3,
+  DSERV_SHORT = 4,
+  DSERV_INT = 5,
+  DSERV_DG = 6,
+  DSERV_SCRIPT = 7,
+  DSERV_TRIGGER_SCRIPT = 8,		/* will always be delivered to trigger thread */
+  DSERV_EVT = 9,
+  DSERV_NONE = 10,
+  DSERV_JSON = 11,
   DSERV_UNKNOWN,
 } ds_datatype_t;
 
