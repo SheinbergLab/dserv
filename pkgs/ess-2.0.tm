@@ -660,6 +660,7 @@ namespace eval ess {
 	variable current
 	variable subject_id
 	set obj [yajl create #auto]
+	set parseobj [yajl create #auto]
 	$obj map_open
 
 	# always include these
@@ -680,10 +681,11 @@ namespace eval ess {
 		$obj map_open
 		set rlen [dl_length stimdg:stimtype]
 		foreach l [dg_tclListnames stimdg] {
+		    $parseobj reset
 		    if { $rlen == [dl_length stimdg:$l] } {
 			set dtype [dl_datatype stimdg:$l]
 			if { $dtype == "list" } {
-			    $obj string $l array_open [dl_toJSON stimdg:$l:$stimid] array_close
+			    $obj string $l {*}[$parseobj parse [dl_toJSON stimdg:$l:$stimid]]
 			} elseif { $dtype == "long" || $dtype == "short" || $dtype == "char" } {
 			    $obj string $l integer [dl_get stimdg:$l $stimid]
 			} elseif { $dtype == "float" } {
@@ -700,6 +702,7 @@ namespace eval ess {
 	$obj map_close
 	set result [$obj get]
 	$obj delete
+	$parseobj delete
 	return $result
     }
 
