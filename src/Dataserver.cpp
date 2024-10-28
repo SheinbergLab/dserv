@@ -402,6 +402,7 @@ Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,
     }
     break;
   case DSERV_STRING:
+  case DSERV_JSON:
     obj = Tcl_NewStringObj((char *) dpoint->data.buf, dpoint->data.len);
     break;
   case DSERV_FLOAT:
@@ -2094,7 +2095,7 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	      rval = write(sockfd, newline_buf, 1); 
 	  
 	     
-	      if (datatype == DSERV_STRING || datatype == DSERV_SCRIPT)
+	      if (datatype == DSERV_STRING || datatype == DSERV_SCRIPT || datatype == DSERV_JSON)
 		{
 		  databuf = (unsigned char *) malloc(datalen);
 		  doRead(sockfd, (char *)databuf, datalen);
