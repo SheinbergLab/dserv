@@ -108,7 +108,8 @@ int dpoint_b64_size(ds_datapoint_t *d)
 int dpoint_string_size(ds_datapoint_t *d)
 {
   if (d->data.type == DSERV_STRING ||
-      d->data.type == DSERV_SCRIPT)
+      d->data.type == DSERV_SCRIPT ||
+      d->data.type == DSERV_JSON)
     return d->varlen+64+d->data.len;
   else
     return d->varlen+64+dpoint_b64_size(d);
@@ -193,6 +194,7 @@ int dpoint_to_string(ds_datapoint_t *d, char *buf, int size)
   switch (datatype) {
   case DSERV_STRING:
   case DSERV_SCRIPT:
+  case DSERV_JSON:
     // check this!
     if ((n+d->data.len+3) > size) {
       memcpy(&buf[n], "...}", 4);
@@ -312,7 +314,7 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
   datalen = strtoul(starts[3], &stops[3], 0);
   inlen = stops[4]-starts[4];
 
-  if (datatype == DSERV_STRING || datatype == DSERV_SCRIPT) {
+  if (datatype == DSERV_STRING || datatype == DSERV_SCRIPT || datatype == DSERV_JSON) {
     databuf = (unsigned char *) malloc(datalen+1);
     memcpy(databuf, starts[4], datalen);
     databuf[datalen] = '\0';
@@ -520,9 +522,10 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
 	json_object_set_new(json_dpoint, "data", array);
       }
       break;
+    case DSERV_STRING:
     case DSERV_SCRIPT:
     case DSERV_TRIGGER_SCRIPT:
-    case DSERV_STRING:
+    case DSERV_JSON:
       {
 	json_object_set_new(json_dpoint, "data",
 			    json_stringn((const char *) dpoint->data.buf,
