@@ -398,6 +398,9 @@ namespace eval ess {
     set current(protocol) {}
     set current(variant) {}
     
+    set current(blockid) 0
+    set current(trialid) 0
+    
     variable param_types { ANY 0 TIME 1 VARIABLE 2 SUBJECT 3 STORAGE 4 STIM 5 }
     variable param_datatypes { null 0 char 1 short 2 long 3 \
 				   int 3 bool 3 float 4 \
@@ -527,6 +530,9 @@ namespace eval ess {
 
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
+
+	incr current(blockid)
+	set current(trialid) 0
     }
 
     proc set_system { system } {
@@ -545,19 +551,37 @@ namespace eval ess {
 	variable subject_id
 	set subject_id $subj
 	::ess::evt_put ID SUBJECT  [now] $subject_id
-	dservSet ess/subject_id $subj
-    }
-
-    proc get_subject {} {
-	variable subject_id
-	dservTouch ess/subject_id $subj
-	return $subject_id
+	dservSet ess/subject_id $subject_id
     }
 
     proc set_subjects { args } {
 	variable subject_ids
 	set subject_ids {*}$args
-	dservSet ess/subject_ids $args
+	dservSet ess/subject_ids $subject_ids
+    }
+
+    proc add_subject { subj } {
+	variable subject_ids
+	if { [lsearch $subject_ids $subj] < 0 } {
+	    lappend subject_ids $subj
+	}
+	dservSet ess/subject_ids $subject_ids
+    }
+    
+    proc add_subjects { args } {
+	variable subject_ids
+	foreach subj $args {
+	    if { [lsearch $subject_ids $subj] < 0 } {
+		lappend subject_ids $subj
+	    }
+	}
+	dservSet ess/subject_ids $subject_ids
+    }
+    
+    proc get_subject {} {
+	variable subject_id
+	dservTouch ess/subject_id $subj
+	return $subject_id
     }
 
     proc get_subjects {} {
@@ -634,6 +658,8 @@ namespace eval ess {
 	variable current
 	variable subject_id
 	set g [dg_create]
+	dl_set $g:blockid [dl_ilist $current(blockid)]
+	dl_set $g:trialid [dl_ilist $current(trialid)]
 	dl_set $g:system [dl_slist $current(system)] 
 	dl_set $g:protocol [dl_slist $current(protocol)] 
 	dl_set $g:variant [dl_slist $current(variant)] 
@@ -642,8 +668,6 @@ namespace eval ess {
 	dl_set $g:rt [dl_ilist $rt]
 
 	if { $stimid != {} } {
-	    dl_set $g:stimid [dl_ilist $stimid]
-	
 	    if { [dg_exists stimdg] } {
 		set rlen [dl_length stimdg:stimtype]
 		foreach l [dg_tclListnames stimdg] {
@@ -664,6 +688,8 @@ namespace eval ess {
 	$obj map_open
 
 	# always include these
+	$obj string blockid  number $current(blockid)
+	$obj string trialid  number $current(trialid)
 	$obj string system   string $current(system)
 	$obj string protocol string $current(protocol)
 	$obj string variant  string $current(variant)
@@ -673,8 +699,6 @@ namespace eval ess {
 
 	# if a trial id is supplied, add addition info
 	if { $stimid != {} } {
-	    $obj string stimid integer $stimid
-	    
 	    if { [dg_exists stimdg] } {
 		$obj map_key stiminfo
 
@@ -707,6 +731,7 @@ namespace eval ess {
     }
 
     proc save_trial_info { status rt { stimid {} } } {
+	variable current
 	set trialdg [create_trialdg $status $rt $stimid]
 	dg_toString $trialdg s
 	dservSetData trialdg [now] 6 $s
@@ -714,6 +739,7 @@ namespace eval ess {
 
 	set trial_json [create_trial_json $status $rt $stimid]
 	dservSetData ess/trialinfo [now] 11 $trial_json
+	incr current(trialid)
     }
     
     proc end_obs { { status 1 } } {
