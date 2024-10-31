@@ -35,6 +35,7 @@
 
 #ifdef __linux__
 #include <sys/timerfd.h>
+#include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 #endif
 
@@ -48,7 +49,7 @@ int i2cReadRegister(int i2cfd, uint8_t slaveaddr, uint8_t reg,
 {
 #ifdef __linux__
   struct i2c_msg msgs[2];
-  struct i2c_rdwr_ioctl_data msgget[1];
+  struct i2c_rdwr_ioctl_data msgset[1];
 
   msgs[0].addr = slaveaddr;
   msgs[0].flags = 0;
@@ -75,7 +76,7 @@ int i2cWriteRegister(int i2cfd, uint8_t slaveaddr, uint8_t reg,
 {
 #ifdef __linux__
   struct i2c_msg msgs[2];
-  struct i2c_rdwr_ioctl_data msgget[1];
+  struct i2c_rdwr_ioctl_data msgset[1];
 
   msgs[0].addr = slaveaddr;
   msgs[0].flags = 0;
@@ -159,7 +160,7 @@ typedef struct ina226_info_s
 /* global to this module */
 static ina226_info_t g_ina226Info;
 
-static int ina226_trigger(ina226_config_t *config)
+static int ina226_trigger_conversion(ina226_config_t *config)
 {  
   // Trigger a single-shot conversion by writing to the configuration register
   return i2cWriteRegister(config->fd, config->address, 0x00, config->config_bytes, 2);
@@ -279,16 +280,18 @@ void *acquire_thread(void *arg)
     if (s == sizeof(uint64_t)) {
       
       for (int i = 0; i < MAX_INA226_CONFIGS; i++) {
-	ina226_config_t *cfg = info->configs[i];
+	ina226_config_t *cfg = &info->configs[i];
 	if (cfg && cfg->active) {
 	  if (ina226_conversion_complete(cfg)) {
 	    val = ina226_read_voltage(cfg);
-	    snprintf(point_name, "%s-v", config->name);
-	    ina226_store_value(info->tclserver, point_name, val);
+	    snprintf(point_name, sizeof(point_name),
+		     "%s-v", cfg->name);
+	    ina226_store_value(info->tclserver, val, point_name);
 
 	    val = ina226_read_current(cfg);
-	    snprintf(point_name, "%s-a", config->name);
-	    ina226_store_value(info->tclserver, point_name, val);
+	    snprintf(point_name, sizeof(point_name),
+		     "%s-a", cfg->name);
+	    ina226_store_value(info->tclserver, val, point_name);
 
 	    // trigger next conversion
 	    ina226_trigger_conversion(cfg);
