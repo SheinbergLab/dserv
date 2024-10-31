@@ -5,7 +5,13 @@ if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
     set env(ESS_SYSTEM_PATH) [file join $dspath systems/ess]
 }
 
-tcl::tm::add $dspath/pkgs
+set dlshlib [file join [file dirname $dspath] dlsh dlsh.zip]
+if [file exists $dlshlib] {
+   zipfs mount $dlshlib dlsh 
+   set auto_path [linsert $auto_path [set auto_path 0] $dlshlib]
+}
+
+tcl::tm::add $dspath/lib
 package require ess
 
 foreach d "/shared/qpcs/data/essdat /tmp" {
