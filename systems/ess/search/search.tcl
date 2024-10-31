@@ -161,6 +161,8 @@ namespace eval search {
 	    my stim_off
 	    ::ess::evt_put PATTERN ON [now] 
 	    ::ess::evt_put RESP NONE [now]
+	    set correct -1
+	    
 	}
 	
 	$sys add_transition no_response {
