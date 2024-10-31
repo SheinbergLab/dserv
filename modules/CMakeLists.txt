@@ -111,6 +111,15 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
 
 ##
+## ina226
+##
+set(MODULE ina226)
+project(${MODULE})
+add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
+set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
+
+##
 ## touch
 ##
 set(MODULE touch)
@@ -126,5 +135,5 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
 install(TARGETS
 	ain juicer gpio_input gpio_output touch
-	rmt eventlog sound timer usbio
+	rmt eventlog sound timer usbio ina226
 	DESTINATION dserv/modules)
