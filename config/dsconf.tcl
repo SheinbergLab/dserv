@@ -7,8 +7,9 @@ if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
 
 set dlshlib [file join [file dirname $dspath] dlsh dlsh.zip]
 if [file exists $dlshlib] {
-   zipfs mount $dlshlib dlsh 
-   set auto_path [linsert $auto_path [set auto_path 0] $dlshlib]
+    set base [file join [zipfs root] dlsh]
+   zipfs mount $dlshlib $base
+   set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 }
 
 tcl::tm::add $dspath/lib
