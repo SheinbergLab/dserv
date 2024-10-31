@@ -333,9 +333,9 @@ static int ina226_add_command (ClientData data, Tcl_Interp *interp,
  *****************************************************************************/
 
 #ifdef WIN32
-EXPORT(int,Dserv_ina226_Init) (Tcl_Interp *interp)
+EXPORT(int,Dserv_ina_Init) (Tcl_Interp *interp)
 #else
-  int Dserv_ina226_Init(Tcl_Interp *interp)
+  int Dserv_ina_Init(Tcl_Interp *interp)
 #endif
 {
   if (
