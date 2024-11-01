@@ -127,7 +127,7 @@ typedef struct ina226_config_s {
 
   float shunt_ohms;
   float max_expected_amps;
-  uint8_t current_lsb;
+  float current_lsb;
   uint16_t calibration_value;
   uint8_t config_bytes[2];
   
