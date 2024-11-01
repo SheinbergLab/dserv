@@ -366,8 +366,8 @@ EXPORT(int,Dserv_ina_Init) (Tcl_Interp *interp)
   snprintf(i2cpath, sizeof(i2cpath), "/dev/i2c-%d",
 	   g_ina226Info.bus_number);
 
-  // wake up every two seconds
-  g_ina226Info.interval_sec = 2;
+  // wake up and update every five seconds
+  g_ina226Info.interval_sec = 5;
 
   // initialize slots to inactive
   for (int i = 0; i < MAX_INA226_CONFIGS; i++) {
