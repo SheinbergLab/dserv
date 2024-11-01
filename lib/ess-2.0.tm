@@ -1644,6 +1644,3 @@ proc EM_INFO {} {
     return "0 2 128"
 }
 
-# Set a default system and subject
-ess::load_system
-ess::set_subject human

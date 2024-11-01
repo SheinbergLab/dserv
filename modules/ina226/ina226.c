@@ -161,13 +161,18 @@ typedef struct ina226_info_s
 static ina226_info_t g_ina226Info;
 
 static int ina226_trigger_conversion(ina226_config_t *config)
-{  
+{
+  if (config->fd < 0) return -1;
+
   // Trigger a single-shot conversion by writing to the configuration register
-  return i2cWriteRegister(config->fd, config->address, 0x00, config->config_bytes, 2);
+  return i2cWriteRegister(config->fd, config->address,
+			  0x00, config->config_bytes, 2);
 }
 
 static int ina226_conversion_complete(ina226_config_t *config)
 {
+  if (config->fd < 0) return 0;
+
   uint16_t mask_enable_reg = i2cReadWord16(config->fd, config->address, 0x06);
   return (mask_enable_reg & 0x0008);
 }
@@ -176,7 +181,7 @@ static int ina226_initialize(ina226_info_t *ina226info,
 			     uint8_t address, char *name, char *prefix)
 {
   ina226_config_t *config = NULL;
-  if (ina226info->fd < 0) return -1;
+  //  if (ina226info->fd < 0) return -1;
 
   int slot;
   
@@ -236,6 +241,9 @@ static int ina226_initialize(ina226_info_t *ina226info,
 
 static float ina226_read_voltage(ina226_config_t *config)
 {
+  // I2C bus not connected
+  if (config->fd < 0) return 0.0;
+
   // Read bus voltage and current
   uint16_t bus_voltage_raw = i2cReadWord16(config->fd, config->address, 0x02);
   float bus_voltage = bus_voltage_raw * 1.25 / 1000.0;  // LSB is 1.25mV
@@ -244,6 +252,9 @@ static float ina226_read_voltage(ina226_config_t *config)
 
 static float ina226_read_current(ina226_config_t *config)
 {
+  // I2C bus not connected
+  if (config->fd < 0) return 0.0;
+
   uint16_t current_raw = i2cReadWord16(config->fd, config->address, 0x04);
   if (current_raw > 32767)
     current_raw -= 65536;
@@ -295,6 +306,10 @@ void *acquire_thread(void *arg)
 
 	    // trigger next conversion
 	    ina226_trigger_conversion(cfg);
+	    printf("ina226: conversion complete [%d]\n", i);
+	  }
+	  else {
+	    printf("ina226: conversion not ready [%d]\n", i);
 	  }
 	}
       }
