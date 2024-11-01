@@ -56,10 +56,10 @@ int i2cReadRegister(int i2cfd, uint8_t slaveaddr, uint8_t reg,
   msgs[0].len = 1;
   msgs[0].buf = &reg;
 
-  msgs[0].addr = slaveaddr;
-  msgs[0].flags = I2C_M_RD;
-  msgs[0].len = len;
-  msgs[0].buf = buf;
+  msgs[1].addr = slaveaddr;
+  msgs[1].flags = I2C_M_RD;
+  msgs[1].len = len;
+  msgs[1].buf = buf;
 
   msgset[0].msgs = msgs;
   msgset[0].nmsgs = 2;
@@ -83,10 +83,10 @@ int i2cWriteRegister(int i2cfd, uint8_t slaveaddr, uint8_t reg,
   msgs[0].len = 1;
   msgs[0].buf = &reg;
 
-  msgs[0].addr = slaveaddr;
-  msgs[0].flags = 0;
-  msgs[0].len = len;
-  msgs[0].buf = buf;
+  msgs[1].addr = slaveaddr;
+  msgs[1].flags = 0;
+  msgs[1].len = len;
+  msgs[1].buf = buf;
 
   msgset[0].msgs = msgs;
   msgset[0].nmsgs = 2;
@@ -178,7 +178,7 @@ static int ina226_conversion_complete(ina226_config_t *config)
 }
 
 static int ina226_initialize(ina226_info_t *ina226info,
-			     uint8_t address, char *name, char *prefix)
+			     uint8_t address, char *prefix, char *name)
 {
   ina226_config_t *config = NULL;
   //  if (ina226info->fd < 0) return -1;
@@ -228,7 +228,7 @@ static int ina226_initialize(ina226_info_t *ina226info,
   config->config_bytes[1] = 0xFB;
   
   // I2C addresses for INA226 devices
-  config->address = address; 	/* 0x44 pi_power, 0x45 battery_charging */
+  config->address = address; 	/* 0x45 pi_power, 0x44 battery_charging */
   snprintf(config->name, sizeof(config->name), "%s/%s", prefix, name);
 
 #ifdef __linux__
@@ -306,10 +306,6 @@ void *acquire_thread(void *arg)
 
 	    // trigger next conversion
 	    ina226_trigger_conversion(cfg);
-	    printf("ina226: conversion complete [%d]\n", i);
-	  }
-	  else {
-	    printf("ina226: conversion not ready [%d]\n", i);
 	  }
 	}
       }
