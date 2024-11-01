@@ -169,6 +169,15 @@ static int ina226_trigger_conversion(ina226_config_t *config)
 			  0x00, config->config_bytes, 2);
 }
 
+static int ina226_write_calibration(ina226_config_t *config)
+{
+  if (config->fd < 0) return -1;
+
+  // Trigger a single-shot conversion by writing to the configuration register
+  return i2cWriteWord16(config->fd, config->address,
+			0x05, config->calibration_value);
+}
+
 static int ina226_conversion_complete(ina226_config_t *config)
 {
   if (config->fd < 0) return 0;
@@ -233,6 +242,7 @@ static int ina226_initialize(ina226_info_t *ina226info,
 
 #ifdef __linux__
   // trigger first conversion
+  ina226_write_calibration(config);
   ina226_trigger_conversion(config);
   config->active = 1;
 #endif
@@ -255,7 +265,7 @@ static float ina226_read_current(ina226_config_t *config)
   // I2C bus not connected
   if (config->fd < 0) return 0.0;
 
-  uint16_t current_raw = i2cReadWord16(config->fd, config->address, 0x04);
+  int16_t current_raw = i2cReadWord16(config->fd, config->address, 0x04);
   if (current_raw > 32767)
     current_raw -= 65536;
   float current = current_raw * config->current_lsb;
