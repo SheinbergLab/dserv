@@ -177,7 +177,7 @@ static int ina226_trigger_conversion(ina226_config_t *config)
 
   uint16_t val = i2cReadWord16(config->fd, config->address, INA226_MASK_EN_REG); // clears CNVR (Conversion Ready) Flag
   val = i2cReadWord16(config->fd, config->address, INA226_CONF_REG);
-  return i2cWriteWord16(config->fd, config->address, INA226_CONF_REG, val);
+  i2cWriteWord16(config->fd, config->address, INA226_CONF_REG, val);
 }
 
 static int ina226_conversion_complete(ina226_config_t *config)
@@ -186,6 +186,13 @@ static int ina226_conversion_complete(ina226_config_t *config)
 
   uint16_t mask_enable_reg = i2cReadWord16(config->fd, config->address, 0x06);
   return (mask_enable_reg & 0x0008);
+}
+
+static int ina226_write_configuration(ina226_config_t *config)
+{
+  if (config->fd < 0) return 0;
+  return i2cWriteRegister(config->fd, config->address,
+			  INA226_CONF_REG, config->config_bytes, 2);
 }
 
 static int ina226_write_calibration(ina226_config_t *config)
@@ -252,8 +259,10 @@ static int ina226_initialize(ina226_info_t *ina226info,
   snprintf(config->name, sizeof(config->name), "%s/%s", prefix, name);
 
 #ifdef __linux__
-  // trigger first conversion
+  ina226_write_configuration(config);
   ina226_write_calibration(config);
+
+  // trigger first conversion
   ina226_trigger_conversion(config);
   config->active = 1;
 #endif
@@ -281,14 +290,6 @@ static float ina226_read_current(ina226_config_t *config)
     current_raw -= 65536;
   float current = current_raw * config->current_lsb;
 
-  //#define DEBUG
-#ifdef DEBUG
-  for (int i = 0; i < 8; i++) {
-    printf("Reg: %02x = 0x%04x\n",
-	   i,
-	   i2cReadWord16(config->fd, config->address, i));
-  }
-#endif
   return current;
 }
 
@@ -334,6 +335,17 @@ void *acquire_thread(void *arg)
 		     "%s-a", cfg->name);
 	    ina226_store_value(info->tclserver, val, point_name);
 
+#undef DEBUG
+#ifdef DEBUG
+	    printf("%s (0x%02x)\n", cfg->name, cfg->address);
+	    for (int i = 0; i < 8; i++) {
+	      printf("Reg: %02x = 0x%04x\n",
+		     i,
+		     i2cReadWord16(cfg->fd, cfg->address, i));
+	    }
+	    printf("\n");
+#endif
+	    
 	    // trigger next conversion
 	    ina226_trigger_conversion(cfg);
 	  }
