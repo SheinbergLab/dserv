@@ -142,7 +142,7 @@ void dserv_timer_arm_ms(dserv_timer_t *t, int start_ms, int interval_ms, int loo
   dispatch_time_t start = dispatch_time(DISPATCH_TIME_NOW, (uint64_t) start_ms*1000000);
   dispatch_source_set_timer(t->timer, start, (uint64_t) interval_ms*1000000, 0);
   if (!interval_ms) t->nrepeats = 0;
-  t->nrepeats = -1;		/* loop not yet implemented */
+  else t->nrepeats = -1;
   t->expired = true;
   t->expirations = 0;
   t->timeout_ms = start_ms;
