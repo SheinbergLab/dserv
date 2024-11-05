@@ -150,8 +150,9 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/stim", 5)) {
       tcpport = STIM_PORT;
       prompt = STIM_PROMPT;
-    } else if (!strncmp(line, "/unmask", 7)) {
-      linenoiseMaskModeDisable();
+    } else if (!strncmp(line, "/:", 2)) {
+      tcpport = 2571;
+      prompt = ESS_PROMPT;
     } else if (line[0] == '/') {
       printf("Unreconized command: %s\n", line);
     }
