@@ -43,7 +43,7 @@ void TclServer::start_tcp_server(void)
   int new_socket_fd;		// client socket
   int on = 1;
   
-  //    std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
+  //  std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
   
   /* Initialise IPv4 address. */
   memset(&address, 0, sizeof(struct sockaddr_in));
@@ -57,7 +57,7 @@ void TclServer::start_tcp_server(void)
     perror("socket");
     return;
   }
-  
+
   /* Allow this server to reuse the port immediately */
   setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
   
@@ -73,7 +73,9 @@ void TclServer::start_tcp_server(void)
     perror("listen");
     return;
   }
-  
+
+  //  std::cout << "listen socket: " << std::to_string(socket_fd) << std::endl;
+
   while (1) {
     /* Accept connection to client. */
     new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
@@ -97,8 +99,44 @@ static int now_command (ClientData data, Tcl_Interp *interp,
 {
   TclServer *tclserver = (TclServer *) data;
   Dataserver *ds = tclserver->ds;
+
   
   Tcl_SetObjResult(interp, Tcl_NewWideIntObj(ds->now()));
+  return TCL_OK;
+}
+
+/******************************** spawn ********************************/
+
+static int spawn_command (ClientData data, Tcl_Interp *interp,
+			    int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+  int port;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "port [startup_script]");
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetIntFromObj(interp, objv[1], &port) != TCL_OK) {
+      return TCL_ERROR;
+  }
+
+  TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
+				   tclserver->ds, port);
+
+  if (objc > 2) {
+    std::string script = std::string(Tcl_GetString(objv[2]));
+    auto result = child->eval(std::string("source ")+script);
+    if (result.starts_with("!TCL_ERROR ")) {
+      Tcl_AppendResult(interp, result.c_str(), NULL);
+      delete child;
+      return TCL_ERROR;
+    }
+  }
+  
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(child->client_name.c_str(), -1));
+  
   return TCL_OK;
 }
 
@@ -359,7 +397,7 @@ static int print_command (ClientData data, Tcl_Interp *interp,
 			  int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
-  
+
   ds_datapoint_t dpoint;
   char *s;
   Tcl_Size len;
@@ -417,6 +455,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   /* these are specific to TclServers */
   Tcl_CreateObjCommand(interp, "now",
 		       (Tcl_ObjCmdProc *) now_command,
+		       tserv, NULL);
+
+  Tcl_CreateObjCommand(interp, "spawn",
+		       (Tcl_ObjCmdProc *) spawn_command,
 		       tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservAddMatch",
@@ -571,13 +613,13 @@ static int process_requests(TclServer *tserv)
   
   int retcode;
   client_request_t req;
-  
+
   /* process until receive a message saying we are done */
   while (!tserv->m_bDone) {
     
     req = tserv->queue.front();
     tserv->queue.pop_front();
-    
+
     switch (req.type) {
     case REQ_SCRIPT:
       {
@@ -667,7 +709,7 @@ std::string TclServer::eval(char *s)
 
 std::string TclServer::eval(std::string script)
 {
-  static SharedQueue<std::string> rqueue;
+  SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT;
   client_request.rqueue = &rqueue;
@@ -690,7 +732,7 @@ void TclServer::eval_noreply(char *s)
 
 void TclServer::eval_noreply(std::string script)
 {
-  static SharedQueue<std::string> rqueue;
+  SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT_NOREPLY;
   client_request.script = script;
@@ -705,6 +747,8 @@ void TclServer::tcp_client_process(int sockfd,
   char buf[16384];
   double start;
   int rval, wrval;
+
+  //  std::cout << "starting tcp_client_process: " << std::to_string(sockfd) << std::endl;
   
   // each client has its own request structure and reply queue
   SharedQueue<std::string> rqueue;
