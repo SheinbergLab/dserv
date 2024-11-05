@@ -79,6 +79,7 @@ namespace eval emcalib {
 		set first_time 0
 		set delay 0
 	    }
+	    set rt -1
 	    set complete 0	    
 	    timerTick $delay
 	    my nexttrial

@@ -71,6 +71,7 @@ namespace eval match_to_sample {
 	    } else {
 		set first_time 0
 	    }
+	    set rt -1
 	    set correct -1
 	    my nexttrial
 	}

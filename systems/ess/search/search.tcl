@@ -76,6 +76,7 @@ namespace eval search {
 		set first_time 0
 		set delay 0
 	    }
+	    set rt -1
 	    set correct -1
 	    timerTick $delay
 	    my nexttrial
