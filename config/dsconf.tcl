@@ -131,3 +131,6 @@ connect_touchscreen
 # connect to battery power circuits
 ina226Add 0x45 system/battery 12v
 ina226Add 0x44 system/battery 24v
+
+# and finally load a default system
+ess::load_system
