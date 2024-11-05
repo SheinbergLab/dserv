@@ -580,7 +580,7 @@ namespace eval ess {
     
     proc get_subject {} {
 	variable subject_id
-	dservTouch ess/subject_id $subj
+	dservTouch ess/subject_id
 	return $subject_id
     }
 
