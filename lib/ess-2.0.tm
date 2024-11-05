@@ -1419,6 +1419,7 @@ namespace eval ess {
 	variable in_obs
 	
 	set s $current(state_system)
+	if { $s == "" } { return }
 	
 	set obj [yajl create #auto]
 	$obj map_open
