@@ -90,20 +90,23 @@ int i2cWriteRegister(int i2cfd, uint8_t slaveaddr, uint8_t reg,
   struct i2c_msg msgs[1];
   struct i2c_rdwr_ioctl_data msgset[1];
 
-  uint8_t data[256];
-  data[0] = reg;
-  memcpy(&data[1], buf, len);
-  
-  msgs[0].addr = slaveaddr;
-  msgs[0].flags = 0;
-  msgs[0].len = 1+len;
-  msgs[0].buf = data;
-
-  msgset[0].msgs = msgs;
-  msgset[0].nmsgs = 1;
-  
-  if (ioctl(i2cfd, I2C_RDWR, &msgset) < 0) {
-    return -1;
+  /* large i2c transfers aren't supported by this device */
+  if (len <= 32) {
+    uint8_t data[33];
+    data[0] = reg;
+    memcpy(&data[1], buf, len);
+    
+    msgs[0].addr = slaveaddr;
+    msgs[0].flags = 0;
+    msgs[0].len = 1+len;
+    msgs[0].buf = data;
+    
+    msgset[0].msgs = msgs;
+    msgset[0].nmsgs = 1;
+    
+    if (ioctl(i2cfd, I2C_RDWR, &msgset) < 0) {
+      return -1;
+    }
   }
 #endif
   return 0;
@@ -177,7 +180,7 @@ static int ina226_trigger_conversion(ina226_config_t *config)
 
   uint16_t val = i2cReadWord16(config->fd, config->address, INA226_MASK_EN_REG); // clears CNVR (Conversion Ready) Flag
   val = i2cReadWord16(config->fd, config->address, INA226_CONF_REG);
-  i2cWriteWord16(config->fd, config->address, INA226_CONF_REG, val);
+  return i2cWriteWord16(config->fd, config->address, INA226_CONF_REG, val);
 }
 
 static int ina226_conversion_complete(ina226_config_t *config)
