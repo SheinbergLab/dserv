@@ -71,7 +71,8 @@ public:
   int port(void) { return tcpport; }
 
   static void
-  tcp_client_process(int sock,
+  tcp_client_process(TclServer *tserv,
+		     int sock,
 		     SharedQueue<client_request_t> *queue);
   
   TclServer(int argc, char **argv,
