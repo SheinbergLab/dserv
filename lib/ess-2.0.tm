@@ -74,7 +74,15 @@ oo::class create System {
 	    oo::objdefine [self] variable $var
 	}
 	
-	rmtOpen $host
+	if { ![rmtOpen $host] } {
+	    # not connected but set some defaults
+	    variable screen_halfx 16.0
+	    variable screen_halfy 9.0
+	    variable screen_w 1024
+	    variable screen_h 600
+	    return 0
+	}
+	
 	variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
 	variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
 	set scale_x [rmtSend "screen_set ScaleX"]
@@ -98,6 +106,7 @@ oo::class create System {
 	    close $f
 	    rmtSend $script
 	}
+	return 1
     }
     
     method update_stimdg {} {
