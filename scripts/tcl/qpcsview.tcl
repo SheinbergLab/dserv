@@ -2,7 +2,14 @@
 # Procs for interacting with a datahub
 #
 
-lappend auto_path /usr/local/lib
+
+set dlshlib [file join /usr/local dlsh dlsh.zip]
+if [file exists $dlshlib] {
+    set base [file join [zipfs root] dlsh]
+   zipfs mount $dlshlib $base
+   set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+}
+
 package require Tk
 package require qpcs
 
