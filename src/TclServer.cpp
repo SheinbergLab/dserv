@@ -76,7 +76,7 @@ void TclServer::start_tcp_server(void)
 
   //  std::cout << "listen socket: " << std::to_string(socket_fd) << std::endl;
 
-  while (1) {
+  while (!m_bDone) {
     /* Accept connection to client. */
     new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
     if (new_socket_fd == -1) {
@@ -87,9 +87,11 @@ void TclServer::start_tcp_server(void)
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     
     // Create a thread and transfer the new stream to it.
-    std::thread thr(tcp_client_process, new_socket_fd, &queue);
+    std::thread thr(tcp_client_process, this, new_socket_fd, &queue);
     thr.detach();
   }
+  
+  close(socket_fd);
 }
 
 /********************************* now *********************************/
@@ -105,10 +107,10 @@ static int now_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
-/******************************** spawn ********************************/
+/******************************* process *******************************/
 
-static int spawn_command (ClientData data, Tcl_Interp *interp,
-			    int objc, Tcl_Obj *objv[])
+static int subprocess_command (ClientData data, Tcl_Interp *interp,
+			       int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
   int port;
@@ -117,9 +119,9 @@ static int spawn_command (ClientData data, Tcl_Interp *interp,
     Tcl_WrongNumArgs(interp, 1, objv, "port [startup_script]");
     return TCL_ERROR;
   }
-
+  
   if (Tcl_GetIntFromObj(interp, objv[1], &port) != TCL_OK) {
-      return TCL_ERROR;
+    return TCL_ERROR;
   }
 
   TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
@@ -457,8 +459,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 		       (Tcl_ObjCmdProc *) now_command,
 		       tserv, NULL);
 
-  Tcl_CreateObjCommand(interp, "spawn",
-		       (Tcl_ObjCmdProc *) spawn_command,
+  Tcl_CreateObjCommand(interp, "subprocess",
+		       (Tcl_ObjCmdProc *) subprocess_command,
 		       tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservAddMatch",
@@ -740,7 +742,8 @@ void TclServer::eval_noreply(std::string script)
   queue.push_back(client_request);
 }
 
-void TclServer::tcp_client_process(int sockfd,
+void TclServer::tcp_client_process(TclServer *tserv,
+				   int sockfd,
 				   SharedQueue<client_request_t> *queue)
 {
   // fix this...
@@ -758,6 +761,10 @@ void TclServer::tcp_client_process(int sockfd,
 
   std::string s;
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
+
+    // shutdown if main server has shutdown
+    if (tserv->m_bDone) break;
+    
     client_request.script = std::string(buf, rval);
 
     // ignore certain commands, especially exit...
