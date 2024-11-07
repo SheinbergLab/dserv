@@ -132,5 +132,8 @@ connect_touchscreen
 ina226Add 0x45 system/battery 12v
 ina226Add 0x44 system/battery 24v
 
+# start up subprocess to store trials in sqlite3 db
+subprocess 2571 [file join $dspath config/dbconf.tcl]
+
 # and finally load a default system
 ess::load_system
