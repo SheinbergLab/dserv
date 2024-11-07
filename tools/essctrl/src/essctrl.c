@@ -7,6 +7,8 @@
 
 #define ESS_PROMPT "ess> "
 #define ESS_PORT 2570
+#define DB_PROMPT "db> "
+#define DB_PORT 2571
 #define DSERV_PROMPT "dserv> "
 #define DSERV_PORT 4620
 #define STIM_PROMPT "stim> "
@@ -150,9 +152,9 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/stim", 5)) {
       tcpport = STIM_PORT;
       prompt = STIM_PROMPT;
-    } else if (!strncmp(line, "/:", 2)) {
-      tcpport = 2571;
-      prompt = ESS_PROMPT;
+    } else if (!strncmp(line, "/db", 2)) {
+      tcpport = DB_PORT;
+      prompt = DB_PROMPT;
     } else if (line[0] == '/') {
       printf("Unreconized command: %s\n", line);
     }
