@@ -1,41 +1,31 @@
-puts "initializing dbserver"
+set dlshlib [file join /usr/local dlsh dlsh.zip]
+if [file exists $dlshlib] {
+    set base [file join [zipfs root] dlsh]
+   zipfs mount $dlshlib $base
+   set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+}
 
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
-
-package require dlsh
 package require qpcs
-package require sqlite3
+package require postgres
 package require yajltcl
 
-set db_path "/tmp/trialinfo.db"
+set conn -1;		       # connection to our postgresql server
+set dbname mydb;	       # name of database to write to
+set insert_cmd "insert_value"; # this is prepared ahead of time to call repeatedly
 
 # Function to handle database setup and corruption detection
-proc setup_database {db_path} {
-    set dir_path [file dirname $db_path]
-    if {![file exists $dir_path]} {
-        file mkdir $dir_path
+proc setup_database { db } {
+    global conn dbname insert_cmd
+    set conninfo "dbname=$db user=postgres password=postgres host=localhost port=5432"
+    if { [catch { set conn [postgres::connect $conninfo] } error] } {
+	puts $error
+	set conn -1
     }
-    if {[file exists $db_path]} {
-        # Attempt to open the database to check for corruption
-        set open_status [catch {
-            sqlite3 db $db_path
-            set result [db eval {PRAGMA integrity_check;}]
-        } errMsg]
-        if {$open_status || $result ne "ok"} {
-            puts "Database is corrupted, renaming and recreating."
-            file rename -force $db_path "$db_path.corrupt"
-            sqlite3 db $db_path
-        }
-    } else {
-        sqlite3 db $db_path
-    }
-
+    
     # Create the 'trial' table if it does not exist
-    db eval {
+    set stmt {
         CREATE TABLE IF NOT EXISTS trial (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+  	    id INTEGER primary key generated always as identity,
             blockid INTEGER,
             trialid INTEGER,
             system TEXT,
@@ -45,22 +35,18 @@ proc setup_database {db_path} {
 	    status INTEGER,
 	    rt INTEGER,
 	    stiminfo TEXT,
-            sys_time TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+	    sys_time timestamp default current_timestamp	    
         );
     }
+    postgres::exec $conn $stmt
 
-    # Create indices for faster lookup
-    db eval {
-        CREATE INDEX IF NOT EXISTS idx_trial_id ON trial (id);
-        CREATE INDEX IF NOT EXISTS idx_trial_subject ON trial (subject);
+    # Create prepared insert statement to make updates more efficient
+    set stmt {
+	INSERT INTO trial (blockid, trialid, system, protocol, variant, subject, status, rt, stiminfo) \
+	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9))
     }
-
-    # Adjust PRAGMA settings to improve performance
-    db eval {
-        PRAGMA synchronous = OFF;
-        PRAGMA journal_mode = WAL;
-        PRAGMA temp_store = MEMORY;
-    }
+    postgres::prepare $conn $insert_cmd $stmt 1
+    
 }
 
 proc process_trial { dpoint trialinfo } {
@@ -71,19 +57,14 @@ proc process_trial { dpoint trialinfo } {
     foreach v "blockid trialid system protocol variant subject status rt" {
 	set $v [dict get $d $v]
     }
-    
-    db eval {
-	INSERT INTO trial (blockid, trialid, system, protocol, variant, subject, status, rt, stiminfo) \
-	    VALUES ($blockid, $trialid, $system, $protocol, $variant, $subject, $status, $rt, $trialinfo)
-    }
+
+    postgres::exec_prepared $conn $::insert_cmd \
+	$blockid $trialid $system $protocol $variant $subject $status $rt $trialinfo
 }
 
 
-setup_database $db_path
-puts "SQLite DB ready at $db_path"
+setup_database $dbname
+puts "PostgreSQL DB ready"
 
 dservAddExactMatch ess/trialinfo
 dpointSetScript    ess/trialinfo process_trial
-
-
-
