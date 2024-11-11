@@ -46,7 +46,7 @@ proc setup_database { db } {
 }
 
 proc process_trial { dpoint trialinfo } {
-    global db
+    global conn insert_cmd
 
     set d [::yajl::json2dict $trialinfo]
 
@@ -54,10 +54,9 @@ proc process_trial { dpoint trialinfo } {
 	set $v [dict get $d $v]
     }
 
-    postgres::exec_prepared $conn $::insert_cmd \
+    postgres::exec_prepared $conn $insert_cmd \
 	$blockid $trialid $system $protocol $variant $subject $status $rt $trialinfo
 }
-
 
 setup_database $dbname
 puts "PostgreSQL DB ready"
