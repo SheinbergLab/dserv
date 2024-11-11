@@ -30,7 +30,7 @@ proc setup_database { db } {
 	    subject TEXT,
 	    status INTEGER,
 	    rt INTEGER,
-	    stiminfo TEXT,
+	    trialinfo JSONB,
 	    sys_time timestamp default current_timestamp	    
         );
     }
@@ -38,7 +38,7 @@ proc setup_database { db } {
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO trial (blockid, trialid, system, protocol, variant, subject, status, rt, stiminfo) \
+	INSERT INTO trial (blockid, trialid, system, protocol, variant, subject, status, rt, trialinfo) \
 	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9))
     }
     postgres::prepare $conn $insert_cmd $stmt 1
