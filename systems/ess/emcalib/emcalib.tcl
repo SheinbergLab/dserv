@@ -12,6 +12,8 @@ package require points
 namespace eval emcalib {
     proc create {} {
 	set sys [::ess::create_system [namespace tail [namespace current]]]
+
+	$sys set_version 1.0
 	
 	######################################################################
 	#                          System Parameters                         #
