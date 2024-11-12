@@ -30,6 +30,19 @@ char *hints(const char *buf, int *color, int *bold) {
     return NULL;
 }
 
+char *do_command(char *server, int tcpport, char *line, int n)
+{
+  char *resultstr = sock_send(server, tcpport, line, strlen(line));
+  if (resultstr) {
+    if (strlen(resultstr)) {
+      linenoiseHistoryAdd(line); /* Add to the history. */
+      linenoiseHistorySave("history.txt"); /* Save the history on disk. */
+    }
+   }
+  return resultstr;
+}
+
+
 int main (int argc, char *argv[])
 {
   char *line;
@@ -144,17 +157,41 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/unmask", 7)) {
       linenoiseMaskModeDisable();
     } else if (!strncmp(line, "/ess", 4)) {
-      tcpport = ESS_PORT;
-      prompt = ESS_PROMPT;
+      if (strlen(line) > 4) {
+	resultstr = do_command(server, ESS_PORT, &line[5], strlen(line)-5);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = ESS_PORT;
+	prompt = ESS_PROMPT;
+      }
     } else if (!strncmp(line, "/dserv", 6)) {
-      tcpport = DSERV_PORT;
-      prompt = DSERV_PROMPT;
+      if (strlen(line) > 6) {
+	resultstr = do_command(server, DSERV_PORT, &line[7], strlen(line)-7);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = DSERV_PORT;
+	prompt = DSERV_PROMPT;
+      }
     } else if (!strncmp(line, "/stim", 5)) {
-      tcpport = STIM_PORT;
-      prompt = STIM_PROMPT;
-    } else if (!strncmp(line, "/db", 2)) {
-      tcpport = DB_PORT;
-      prompt = DB_PROMPT;
+      if (strlen(line) > 5) {
+	resultstr = do_command(server, STIM_PORT, &line[6], strlen(line)-6);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = STIM_PORT;
+	prompt = STIM_PROMPT;
+      }
+    } else if (!strncmp(line, "/db", 3)) {
+      if (strlen(line) > 3) {
+	resultstr = do_command(server, DB_PORT, &line[4], strlen(line)-4);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = DB_PORT;
+	prompt = DB_PROMPT;
+      }
     } else if (line[0] == '/') {
       printf("Unreconized command: %s\n", line);
     }
