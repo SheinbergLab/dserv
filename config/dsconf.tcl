@@ -32,7 +32,7 @@ foreach f [glob [file join $dspath $dllspec]] {
 # start analog input if available
 catch { ainStart 1 }
 
-dservSet qpcs/ipaddr 127.0.0.1
+dservSet ess/ipaddr 127.0.0.1
 
 proc dpointGet { d } { return [dservGet $d] }
 proc rpioPinOn { pin } { gpioLineSetValue $pin 1 }
