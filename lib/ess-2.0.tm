@@ -31,6 +31,7 @@ oo::class create System {
     variable _evt_ptype_ids
     variable _state_time
     variable _variants
+    variable _version
     
     constructor { name } {
         set _systemname $name
@@ -48,6 +49,7 @@ oo::class create System {
 	set _evt_ptype_ids $::ess::evt_ptype_ids
 	set _vars {}
 	set _variants {}
+	set _version 0.0
     }
 
     destructor { my deinit }
@@ -55,6 +57,9 @@ oo::class create System {
     method name { } { return $_systemname }
     method get_system { } { return $_systemname }
 
+    method set_version { v } { set _version $v }
+    method get_version { } { return $_version }
+    
     method set_protocol { p } { set _protocolname $p }
     method get_protocol { } { return $_protocolname }
 
@@ -96,7 +101,7 @@ oo::class create System {
 	    variable screen_h 600
 	}
 	
-	rmtSend "set dservhost [dservGet qpcs/ipaddr]"
+	rmtSend "set dservhost [dservGet ess/ipaddr]"
 	
 	# source this protocol's stim functions
 	set stimfile [file join [set ::ess::system_path] \
@@ -218,7 +223,6 @@ oo::class create System {
 	dservSet ess/state [dict get $_current_state name]_t
 	my [dict get $_current_state name]_t
     }
-
     
     method set_params { p } {
 	set _params $p
@@ -316,7 +320,10 @@ oo::class create System {
     method start {} {
         if { $_status == "running" } return
 	set _status running
-	::ess::evt_put SYSTEM_STATE RUNNING [now]	
+
+	::ess::evt_put SYSTEM_STATE RUNNING [now]
+	dservSet ess/system_state $_status
+	
 	if { [info exists _callbacks(start)] } {
 	    my $_callbacks(start)
 	}
@@ -336,6 +343,7 @@ oo::class create System {
     method stop {} {
 	set _status stopped
 	::ess::evt_put SYSTEM_STATE STOPPED [now]	
+	dservSet ess/system_state $_status
 	if { [info exists _callbacks(quit)] } {
 	    my $_callbacks(quit)
 	}
@@ -345,6 +353,7 @@ oo::class create System {
     method end {} {
 	set _status stopped
 	::ess::evt_put SYSTEM_STATE STOPPED [now]	
+	dservSet ess/system_state $_status
 	if { [info exists _callbacks(end)] } {
 	    my $_callbacks(end)
 	}
@@ -454,6 +463,15 @@ namespace eval ess {
 	}
     }
 
+    proc system_version {} {
+	variable current
+	if { $current(state_system) != "" } {
+	    return [$current(state_system) get_version]
+	} else {
+	    return ""
+	}
+    }
+    
     proc unload_system {} {
 	variable current
 	set sname $current(system)
@@ -539,6 +557,10 @@ namespace eval ess {
 
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
+
+	dservSet ess/system   $current(system)
+	dservSet ess/protocol $current(protocol)
+	dservSet ess/variant  $current(variant)
 
 	incr current(blockid)
 	set current(trialid) 0
@@ -667,14 +689,15 @@ namespace eval ess {
 	variable current
 	variable subject_id
 	set g [dg_create]
-	dl_set $g:blockid [dl_ilist $current(blockid)]
-	dl_set $g:trialid [dl_ilist $current(trialid)]
-	dl_set $g:system [dl_slist $current(system)] 
+	dl_set $g:blockid  [dl_ilist $current(blockid)]
+	dl_set $g:trialid  [dl_ilist $current(trialid)]
+	dl_set $g:system   [dl_slist $current(system)] 
 	dl_set $g:protocol [dl_slist $current(protocol)] 
-	dl_set $g:variant [dl_slist $current(variant)] 
-	dl_set $g:subject [dl_slist $subject_id]
-	dl_set $g:status [dl_ilist $status]
-	dl_set $g:rt [dl_ilist $rt]
+	dl_set $g:variant  [dl_slist $current(variant)] 
+	dl_set $g:version  [dl_slist [$current(state_system) get_version]]
+	dl_set $g:subject  [dl_slist $subject_id]
+	dl_set $g:status   [dl_ilist $status]
+	dl_set $g:rt       [dl_ilist $rt]
 
 	if { $stimid != {} } {
 	    if { [dg_exists stimdg] } {
@@ -702,6 +725,7 @@ namespace eval ess {
 	$obj string system   string $current(system)
 	$obj string protocol string $current(protocol)
 	$obj string variant  string $current(variant)
+	$obj string version  string [$current(state_system) get_version]
 	$obj string subject  string $subject_id
 	$obj string status   number $status
 	$obj string rt       number $rt
@@ -940,7 +964,7 @@ namespace eval ess {
         dservLoggerOpen $filename 1
 	set open_datafile $filename
 
-	dservSet qpcs/datafile $f
+	dservSet ess/datafile $f
 
 	dservLoggerAddMatch $filename eventlog/events
 	dservLoggerAddMatch $filename eventlog/names
@@ -987,8 +1011,8 @@ namespace eval ess {
 	    # could put pre_close callback here
 	    
     	    dservLoggerClose $open_datafile
-	    dservSet qpcs/lastfile [file tail [file root $open_datafile]]
-	    dservSet qpcs/datafile {}
+	    dservSet ess/lastfile [file tail [file root $open_datafile]]
+	    dservSet ess/datafile {}
 	    
 	    
 	    # call the system's specific file_close callback
@@ -1235,6 +1259,9 @@ namespace eval ess {
 	variable data_dir /tmp
     }    
 
+    foreach v "system_path rmt_host data_dir" {
+	dservSet ess/$v [set $v]
+    }
 
     proc system_init { system } {
 	variable current
