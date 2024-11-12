@@ -7,11 +7,12 @@ package require yajltcl
 
 set conn -1;		       # connection to our postgresql server
 set dbname mydb;	       # name of database to write to
-set insert_cmd "insert_value"; # this is prepared ahead of time to call repeatedly
+set insert_trialinfo_cmd    "insert_trialinfo"
+set insert_ess_setting_cmd  "insert_ess_setting"
 
 # Function to handle database setup and corruption detection
-proc setup_database { db } {
-    global conn dbname insert_cmd
+proc setup_database { db { overwrite 0 } } {
+    global conn dbname insert_trialinfo_cmd insert_ess_setting_cmd
     set conninfo "dbname=$db user=postgres password=postgres host=localhost port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
@@ -27,6 +28,7 @@ proc setup_database { db } {
             system TEXT,
             protocol TEXT,
 	    variant TEXT,
+	    version TEXT,
 	    subject TEXT,
 	    status INTEGER,
 	    rt INTEGER,
@@ -38,28 +40,52 @@ proc setup_database { db } {
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO trial (blockid, trialid, system, protocol, variant, subject, status, rt, trialinfo) \
-	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9))
+	INSERT INTO trial (blockid, trialid, system, protocol, variant, version, subject, status, rt, trialinfo) \
+	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10))
     }
-    postgres::prepare $conn $insert_cmd $stmt 1
+    postgres::prepare $conn $insert_trialinfo_cmd $stmt 1
+
+    
+    # Create the 'essvars' table if it does not exist
+    set stmt {
+        CREATE TABLE IF NOT EXISTS ess (
+            key TEXT PRIMARY KEY UNIQUE,
+            value TEXT,
+	    sys_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP	    
+        );
+    }
+    postgres::exec $conn $stmt
+
+    # Create prepared insert statement to make updates more efficient
+    set stmt {
+	INSERT INTO ess (key, value) VALUES(($1), ($2))
+	ON CONFLICT (key)
+	DO UPDATE SET key = ($1), value = ($2); 
+    }
+    postgres::prepare $conn $insert_ess_setting_cmd $stmt 1
     
 }
 
-proc process_trial { dpoint trialinfo } {
-    global conn insert_cmd
-
-    set d [::yajl::json2dict $trialinfo]
-
-    foreach v "blockid trialid system protocol variant subject status rt" {
-	set $v [dict get $d $v]
+proc process_ess { dpoint data } {
+    global conn insert_trialinfo_cmd insert_ess_setting_cmd
+    
+    if { [string equal $dpoint ess/trialinfo] } {
+	set d [::yajl::json2dict $data]
+	
+	foreach v "blockid trialid system protocol variant version subject status rt" {
+	    set $v [dict get $d $v]
+	}
+	
+	postgres::exec_prepared $conn $insert_trialinfo_cmd \
+	    $blockid $trialid $system $protocol $variant $version $subject $status $rt $data
+    } else {
+	set key [string range $dpoint 4 end]
+	postgres::exec_prepared $conn $insert_ess_setting_cmd $key $data
     }
-
-    postgres::exec_prepared $conn $insert_cmd \
-	$blockid $trialid $system $protocol $variant $subject $status $rt $trialinfo
 }
 
 setup_database $dbname
 puts "PostgreSQL DB ready"
 
-dservAddExactMatch ess/trialinfo
-dpointSetScript    ess/trialinfo process_trial
+dservAddMatch   ess/*
+dpointSetScript ess/* process_ess
