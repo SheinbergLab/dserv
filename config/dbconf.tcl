@@ -64,7 +64,7 @@ proc setup_database { db { overwrite 0 } } {
     set stmt {
 	INSERT INTO setting (host, domain, key, value) VALUES(($1), ($2), ($3), ($4))
 	ON CONFLICT (key)
-	DO UPDATE SET host = ($1), domain = ($2), key = ($3), value = ($4);
+	DO UPDATE SET host = ($1), domain = ($2), key = ($3), value = ($4), sys_time = current_timestamp;
     }
     postgres::prepare $conn $insert_setting_cmd $stmt 1
 }
