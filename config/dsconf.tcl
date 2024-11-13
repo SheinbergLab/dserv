@@ -32,8 +32,6 @@ foreach f [glob [file join $dspath $dllspec]] {
 # start analog input if available
 catch { ainStart 1 }
 
-dservSet ess/ipaddr 127.0.0.1
-
 proc dpointGet { d } { return [dservGet $d] }
 proc rpioPinOn { pin } { gpioLineSetValue $pin 1 }
 proc rpioPinOff { pin } { gpioLineSetValue $pin 0 }
@@ -126,8 +124,20 @@ proc connect_touchscreen {} {
     }
 }
 
+proc set_ip_address {} {
+    # target_host allows us to connect using NIC
+    set target_host google.com
+    
+    # set IP addresses and host address
+    dservSet ess/ipaddr 127.0.0.1
+    set s [socket $target_host 80]
+    dservSet ess/hostaddr [lindex [fconfigure $s -sockname] 0]
+    close $s
+}
+
 connect_touchscreen
-   
+set_ip_address
+
 # connect to battery power circuits
 ina226Add 0x45 system/battery 12v
 ina226Add 0x44 system/battery 24v
@@ -137,3 +147,7 @@ subprocess 2571 [file join $dspath config/dbconf.tcl]
 
 # and finally load a default system
 ess::load_system
+
+# set initial subject
+ess::set_subject human
+
