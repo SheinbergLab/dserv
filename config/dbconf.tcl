@@ -23,6 +23,7 @@ proc setup_database { db { overwrite 0 } } {
     set stmt {
         CREATE TABLE IF NOT EXISTS trial (
   	    id INTEGER primary key generated always as identity,
+	    host VARCHAR(256),
             blockid INTEGER,
             trialid INTEGER,
             system TEXT,
@@ -40,8 +41,8 @@ proc setup_database { db { overwrite 0 } } {
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO trial (blockid, trialid, system, protocol, variant, version, subject, status, rt, trialinfo) \
-	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10))
+	INSERT INTO trial (host, blockid, trialid, system, protocol, variant, version, subject, status, rt, trialinfo) \
+	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10), ($11))
     }
     postgres::prepare $conn $insert_trialinfo_cmd $stmt 1
 
@@ -49,25 +50,28 @@ proc setup_database { db { overwrite 0 } } {
     # Create the 'essvars' table if it does not exist
     set stmt {
         CREATE TABLE IF NOT EXISTS ess (
-            key TEXT PRIMARY KEY UNIQUE,
+	    host VARCHAR(256),
+            key TEXT UNIQUE,
             value TEXT,
-	    sys_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP	    
+	    sys_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	    primary key (host, key)
         );
     }
     postgres::exec $conn $stmt
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO ess (key, value) VALUES(($1), ($2))
+	INSERT INTO ess (host, key, value) VALUES(($1), ($2), ($3))
 	ON CONFLICT (key)
-	DO UPDATE SET key = ($1), value = ($2); 
+	DO UPDATE SET host = ($1), key = ($2), value = ($3);
     }
     postgres::prepare $conn $insert_ess_setting_cmd $stmt 1
-    
 }
 
 proc process_ess { dpoint data } {
     global conn insert_trialinfo_cmd insert_ess_setting_cmd
+
+    set host [dservGet ess/hostaddr]
     
     if { [string equal $dpoint ess/trialinfo] } {
 	set d [::yajl::json2dict $data]
@@ -77,14 +81,19 @@ proc process_ess { dpoint data } {
 	}
 	
 	postgres::exec_prepared $conn $insert_trialinfo_cmd \
-	    $blockid $trialid $system $protocol $variant $version $subject $status $rt $data
+	    $host $blockid $trialid $system $protocol $variant $version $subject $status $rt $data
     } else {
 	set key [string range $dpoint 4 end]
-	postgres::exec_prepared $conn $insert_ess_setting_cmd $key $data
+	postgres::exec_prepared $conn $insert_ess_setting_cmd $host $key $data
     }
 }
 
 setup_database $dbname
+
+# insert initial settings into the ESS table
+dservTouch ess/ipaddr
+dservTouch ess/hostaddr
+
 puts "PostgreSQL DB ready"
 
 dservAddMatch   ess/*
