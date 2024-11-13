@@ -103,14 +103,14 @@ proc process_system { dpoint data } {
 
 setup_database $dbname
 
-# insert initial settings into the ESS table
-dservTouch ess/ipaddr
-dservTouch system/hostaddr
-
 dservAddMatch   ess/*
 dpointSetScript ess/* process_ess
 
 dservAddMatch   system/*
 dpointSetScript system/* process_system
+
+# insert initial settings into the ESS table
+dservTouch ess/ipaddr
+dservTouch system/hostaddr
 
 puts "PostgreSQL DB ready"
