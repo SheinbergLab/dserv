@@ -8,11 +8,11 @@ package require yajltcl
 set conn -1;		       # connection to our postgresql server
 set dbname mydb;	       # name of database to write to
 set insert_trialinfo_cmd    "insert_trialinfo"
-set insert_ess_setting_cmd  "insert_ess_setting"
+set insert_setting_cmd  "insert_setting"
 
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
-    global conn dbname insert_trialinfo_cmd insert_ess_setting_cmd
+    global conn dbname insert_trialinfo_cmd insert_setting_cmd
     set conninfo "dbname=$db user=postgres password=postgres host=localhost port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
@@ -49,29 +49,31 @@ proc setup_database { db { overwrite 0 } } {
     
     # Create the 'essvars' table if it does not exist
     set stmt {
-        CREATE TABLE IF NOT EXISTS ess (
+        CREATE TABLE IF NOT EXISTS setting (
 	    host VARCHAR(256),
+	    domain TEXT,
             key TEXT UNIQUE,
             value TEXT,
 	    sys_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-	    primary key (host, key)
+	    primary key (host, domain, key)
         );
     }
     postgres::exec $conn $stmt
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO ess (host, key, value) VALUES(($1), ($2), ($3))
+	INSERT INTO setting (host, domain, key, value) VALUES(($1), ($2), ($3), ($4))
 	ON CONFLICT (key)
-	DO UPDATE SET host = ($1), key = ($2), value = ($3);
+	DO UPDATE SET host = ($1), domain = ($2), key = ($3), value = ($4);
     }
-    postgres::prepare $conn $insert_ess_setting_cmd $stmt 1
+    postgres::prepare $conn $insert_setting_cmd $stmt 1
 }
 
 proc process_ess { dpoint data } {
-    global conn insert_trialinfo_cmd insert_ess_setting_cmd
+    global conn insert_trialinfo_cmd insert_setting_cmd
 
-    set host [dservGet ess/hostaddr]
+    set host [dservGet system/hostaddr]
+    set domain ess
     
     if { [string equal $dpoint ess/trialinfo] } {
 	set d [::yajl::json2dict $data]
@@ -83,18 +85,32 @@ proc process_ess { dpoint data } {
 	postgres::exec_prepared $conn $insert_trialinfo_cmd \
 	    $host $blockid $trialid $system $protocol $variant $version $subject $status $rt $data
     } else {
-	set key [string range $dpoint 4 end]
-	postgres::exec_prepared $conn $insert_ess_setting_cmd $host $key $data
+	set key [file tail $dpoint]
+	postgres::exec_prepared $conn $insert_setting_cmd $host $domain $key $data
     }
 }
+
+proc process_system { dpoint data } {
+    global conn insert_setting_cmd
+
+    set host [dservGet system/hostaddr]
+    set domain system
+    
+    set key [file tail $dpoint]
+    postgres::exec_prepared $conn $insert_setting_cmd $host $domain $key $data
+}
+
 
 setup_database $dbname
 
 # insert initial settings into the ESS table
 dservTouch ess/ipaddr
-dservTouch ess/hostaddr
-
-puts "PostgreSQL DB ready"
+dservTouch system/hostaddr
 
 dservAddMatch   ess/*
 dpointSetScript ess/* process_ess
+
+dservAddMatch   system/*
+dpointSetScript system/* process_system
+
+puts "PostgreSQL DB ready"
