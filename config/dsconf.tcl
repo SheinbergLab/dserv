@@ -128,10 +128,12 @@ proc set_ip_address {} {
     # target_host allows us to connect using NIC
     set target_host google.com
     
-    # set IP addresses and host address
+    # set IP addresses for use in stim communication
     dservSet ess/ipaddr 127.0.0.1
+
+    # set host address to identify this machine
     set s [socket $target_host 80]
-    dservSet ess/hostaddr [lindex [fconfigure $s -sockname] 0]
+    dservSet system/hostaddr [lindex [fconfigure $s -sockname] 0]
     close $s
 }
 
@@ -139,8 +141,8 @@ connect_touchscreen
 set_ip_address
 
 # connect to battery power circuits
-ina226Add 0x45 system/battery 12v
-ina226Add 0x44 system/battery 24v
+ina226Add 0x45 system 12v
+ina226Add 0x44 system 24v
 
 # start up subprocess to store trials in sqlite3 db
 subprocess 2571 [file join $dspath config/dbconf.tcl]
