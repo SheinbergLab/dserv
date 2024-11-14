@@ -214,13 +214,13 @@ oo::class create System {
     }
     
     method do_action {} {
-	dservSet ess/state [dict get $_current_state name]_a
+	dservSet ess/action_state [dict get $_current_state name]_a
     	set state_time [now]
 	my [dict get $_current_state name]_a
     }
     
     method do_transition {} {
-	dservSet ess/state [dict get $_current_state name]_t
+	dservSet ess/transition_state [dict get $_current_state name]_t
 	my [dict get $_current_state name]_t
     }
     
@@ -322,8 +322,6 @@ oo::class create System {
 	set _status running
 
 	::ess::evt_put SYSTEM_STATE RUNNING [now]
-	dservSet ess/system_state $_status
-	dservSet ess/running 1
 	
 	if { [info exists _callbacks(start)] } {
 	    my $_callbacks(start)
@@ -344,8 +342,6 @@ oo::class create System {
     method stop {} {
 	set _status stopped
 	::ess::evt_put SYSTEM_STATE STOPPED [now]	
-	dservSet ess/system_state $_status
-	dservSet ess/running 0
 	if { [info exists _callbacks(quit)] } {
 	    my $_callbacks(quit)
 	}
@@ -355,8 +351,6 @@ oo::class create System {
     method end {} {
 	set _status stopped
 	::ess::evt_put SYSTEM_STATE STOPPED [now]	
-	dservSet ess/system_state $_status
-	dservSet ess/running 0
 	if { [info exists _callbacks(end)] } {
 	    my $_callbacks(end)
 	}
@@ -561,10 +555,6 @@ namespace eval ess {
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 
-	dservSet ess/system   $current(system)
-	dservSet ess/protocol $current(protocol)
-	dservSet ess/variant  $current(variant)
-
 	incr current(blockid)
 	set current(trialid) 0
     }
@@ -585,7 +575,6 @@ namespace eval ess {
 	variable subject_id
 	set subject_id $subj
 	::ess::evt_put ID SUBJECT  [now] $subject_id
-	dservSet ess/subject_id $subject_id
     }
 
     proc set_subjects { args } {
@@ -685,8 +674,6 @@ namespace eval ess {
 	variable obs_pin
 	rpioPinOn $obs_pin
 	::ess::evt_put BEGINOBS INFO [now] $current $total
-	dservSet ess/trials_in_block $total
-	dservSet ess/trials_complete $current
 	set in_obs 1
 	dservSet ess/in_obs 1
     }
