@@ -93,7 +93,7 @@ namespace eval search {
 	# start_obs
 	#
 	$sys add_action start_obs {
-	    ::ess::begin_obs $n_obs $obs_count
+	    ::ess::begin_obs $obs_count $n_obs
 	}	
 	$sys add_transition start_obs {
 	    return pre_stim
