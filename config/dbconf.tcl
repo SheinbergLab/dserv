@@ -6,7 +6,7 @@ package require postgres
 package require yajltcl
 
 set conn -1;		       # connection to our postgresql server
-set dbname mydb;	       # name of database to write to
+set dbname base;	       # name of database to write to
 set insert_trialinfo_cmd    "insert_trialinfo"
 set insert_setting_cmd  "insert_setting"
 
@@ -34,7 +34,7 @@ proc setup_database { db { overwrite 0 } } {
 	    status INTEGER,
 	    rt INTEGER,
 	    trialinfo JSONB,
-	    sys_time timestamp default current_timestamp	    
+	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP	    
         );
     }
     postgres::exec $conn $stmt
@@ -47,14 +47,14 @@ proc setup_database { db { overwrite 0 } } {
     postgres::prepare $conn $insert_trialinfo_cmd $stmt 1
 
     
-    # Create the 'essvars' table if it does not exist
+    # Create the 'setting' table if it does not exist
     set stmt {
         CREATE TABLE IF NOT EXISTS setting (
 	    host VARCHAR(256),
 	    domain TEXT,
             key TEXT UNIQUE,
             value TEXT,
-	    sys_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
 	    primary key (host, domain, key)
         );
     }
@@ -74,14 +74,21 @@ proc process_ess { dpoint data } {
 
     set host [dservGet system/hostaddr]
     set domain ess
+
+    # if the system has changed, update the blockid
+    if { [string equal $dpoint ess/system] } {
+	set maxblockid [postgres::query $conn { SELECT max(blockid) from trial; }]
+	dservSet ess/blockid [expr $maxblockid+1]
+    }
     
     if { [string equal $dpoint ess/trialinfo] } {
 	set d [::yajl::json2dict $data]
 	
-	foreach v "blockid trialid system protocol variant version subject status rt" {
+	foreach v "trialid system protocol variant version subject status rt" {
 	    set $v [dict get $d $v]
 	}
-	
+
+	set blockid [dservGet ess/blockid]
 	postgres::exec_prepared $conn $insert_trialinfo_cmd \
 	    $host $blockid $trialid $system $protocol $variant $version $subject $status $rt $data
     } else {
