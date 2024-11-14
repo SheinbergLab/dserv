@@ -88,7 +88,7 @@ namespace eval match_to_sample {
 	# start_obs
 	#
 	$sys add_action start_obs {
-	    ::ess::begin_obs $n_obs $obs_count
+	    ::ess::begin_obs $obs_count $n_obs
 	    my start_obs_reset
 	}
 	$sys add_transition start_obs {
