@@ -119,7 +119,6 @@ static int add_params(Tcl_Interp *interp,
   float farg;
   double darg;
   char *work = buf;
-  int ndx = objc;
   
   switch (ptype)
     {
@@ -127,8 +126,8 @@ static int add_params(Tcl_Interp *interp,
       len = 0;
       break;
     case PUT_string:
-      while (ndx--) {
-	strarg = Tcl_GetString(objv[ndx]);
+      for (int i = 0; i < objc; i++) {
+	strarg = Tcl_GetString(objv[i]);
 	l = strlen(strarg);
 	len += l;
 	if (len > 256) return -1;
@@ -137,8 +136,8 @@ static int add_params(Tcl_Interp *interp,
       }
       break;
     case PUT_short:
-      while (ndx--) {
-	if (Tcl_GetIntFromObj(interp, objv[ndx], &iarg) != TCL_OK)
+      for (int i = 0; i < objc; i++) {
+	if (Tcl_GetIntFromObj(interp, objv[i], &iarg) != TCL_OK)
 	  return -1;
 	sarg = (short) iarg;
 	if (( len += sizeof(short) ) > 256) return -1;
@@ -147,8 +146,8 @@ static int add_params(Tcl_Interp *interp,
       }
       break;
     case PUT_long:
-      while (ndx--) {
-	if (Tcl_GetIntFromObj(interp, objv[ndx], &larg) != TCL_OK)
+      for (int i = 0; i < objc; i++) {
+	if (Tcl_GetIntFromObj(interp, objv[i], &larg) != TCL_OK)
 	  return -1;
 	if (( len += sizeof(int) ) > 256) return -1;
 	memcpy(work, &larg, sizeof(int));
@@ -156,8 +155,8 @@ static int add_params(Tcl_Interp *interp,
       }
       break;
     case PUT_float:
-      while (ndx--) {
-	if (Tcl_GetDoubleFromObj(interp, objv[ndx], &darg) != TCL_OK)
+      for (int i = 0; i < objc; i++) {
+	if (Tcl_GetDoubleFromObj(interp, objv[i], &darg) != TCL_OK)
 	  return -1;
 	farg = (float) darg;
 	if (( len += sizeof(float) ) > 256) return -1;
@@ -166,14 +165,13 @@ static int add_params(Tcl_Interp *interp,
       }
       break;
     case PUT_double:
-      while (ndx--)
-	{
-	  if (Tcl_GetDoubleFromObj(interp, objv[ndx], &darg) != TCL_OK)
-	    return -1;
-	  if (( len += sizeof(double) ) > 256) return -1;
-	  memcpy(work, &darg, sizeof(double));
-	  work += sizeof(double);
-	}			
+      for (int i = 0; i < objc; i++) {
+	if (Tcl_GetDoubleFromObj(interp, objv[i], &darg) != TCL_OK)
+	  return -1;
+	if (( len += sizeof(double) ) > 256) return -1;
+	memcpy(work, &darg, sizeof(double));
+	work += sizeof(double);
+      }			
       break;
     case PUT_unknown:
     default:
