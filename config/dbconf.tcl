@@ -117,7 +117,10 @@ dservAddMatch   system/*
 dpointSetScript system/* process_system
 
 # insert initial settings into the ESS table
-dservTouch ess/ipaddr
+foreach v "time dio state name executable remote ipaddr \
+	   obs_active obs_id obs_total datafile lastfile" {
+    dservTouch ess/$v
+}
 dservTouch system/hostaddr
 
 puts "PostgreSQL DB ready"
