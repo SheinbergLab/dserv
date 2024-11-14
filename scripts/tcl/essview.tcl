@@ -43,23 +43,23 @@ proc process_events { args } {
     lassign $args t varname dtype ts dlen dbuf
 
     switch -glob $varname {
-	qpcs/state {
+	ess/state {
 	    set essinfo(state) [string totitle $dbuf]
 	    set cmap { Running green Stopped red Inactive black }
 	    $widgets(status) configure -foreground \
 		[dict get $cmap $::essinfo(state)]
 	}
-	qpcs/obs_id {
+	ess/obs_id {
 	    set essinfo(obs_id) [expr $dbuf+1]
 	    set essinfo(obs_info) \
 		"$essinfo(obs_id)/$essinfo(obs_total)"
 	}
-	qpcs/obs_total {
+	ess/obs_total {
 	    set essinfo(obs_total) $dbuf
 	    set essinfo(obs_info) \
 		"$essinfo(obs_id)/$essinfo(obs_total)"
 	}
-	qpcs/obs_active {
+	ess/obs_active {
 	    set essinfo(obs_active) $dbuf
 	    set bg [$widgets(obstitle) cget -background]
 	    set colors "$bg red"
@@ -118,7 +118,7 @@ proc connect_to_server { server } {
     qpcs::dsRegister $server
     qpcs::dsAddCallback process_events
     qpcs::dsAddMatch $server eventlog/events
-    qpcs::dsAddMatch $server qpcs/state
+    qpcs::dsAddMatch $server ess/state
 }
 
 set ::last_obst [clock microseconds]
@@ -211,7 +211,7 @@ proc initialize { server } {
     array set subtype_names {}
     array set essinfo {}
 
-    set stateinfo [qpcs::dsGet $server qpcs/state]
+    set stateinfo [qpcs::dsGet $server ess/state]
     set essinfo(state) [string totitle [lindex $stateinfo 5]]
     set cmap { Running green Stopped red Inactive black }
     $widgets(status) configure -foreground \

@@ -29,7 +29,7 @@ namespace eval dh {
     set connected 0
 
     set datahub 127.0.0.1
-    set domain  qpcs/*
+    set domain  ess/*
 
     set ::qpcs::qnxport 2570
     
@@ -46,20 +46,20 @@ namespace eval dh {
     set status(joystick_info) None
 
     proc initialize_vars { server } {
-	set stateinfo [qpcs::dsGet $server qpcs/state]
+	set stateinfo [qpcs::dsGet $server ess/state]
 	set ::dh::status(state) [string totitle [lindex $stateinfo 5]]
 	set cmap { Running green Stopped red Inactive black }
 	$::dh::widgets(status) configure -foreground \
 	    [dict get $cmap $::dh::status(state)]
 
-	set val [lindex [qpcs::dsGet $server qpcs/obs_id] 5]
+	set val [lindex [qpcs::dsGet $server ess/obs_id] 5]
 	set ::dh::status(obs_id) $val
 
-	set val [lindex [qpcs::dsGet $server qpcs/obs_total] 5]
+	set val [lindex [qpcs::dsGet $server ess/obs_total] 5]
 	set ::dh::status(obs_total) $val
 	set ::dh::status(obs_info) "$::dh::status(obs_id)/$::dh::status(obs_total)"
 
-	set val [lindex [qpcs::dsGet $server qpcs/obs_active] 5]
+	set val [lindex [qpcs::dsGet $server ess/obs_active] 5]
 	set ::dh::status(obs_active) $val
 	set bg [$::dh::widgets(obstitle) cget -background]
 	set colors "$bg red"
@@ -71,19 +71,19 @@ namespace eval dh {
 	}
 
 	set ::dh::status(fixwin) \
-	    [lindex [lindex [qpcs::dsGet $server qpcs/em_region_status] 5] 1]
+	    [lindex [lindex [qpcs::dsGet $server ess/em_region_status] 5] 1]
 	if { $::dh::status(fixwin) == "" } { set ::dh::status(fixwin) 0 }
 	update_fixwin_indicators
 	
-	set dpoint [qpcs::dsGet $server qpcs/dio]
+	set dpoint [qpcs::dsGet $server ess/dio]
 	set levels [lindex [lindex $dpoint 5] 1]
 	set ::dh::status(dio_a) [expr {$levels>>16}]
 	set ::dh::status(dio_b) [expr {$levels>>24}]
 	update_dio_indicators
 	
-	set ::dh::status(subject) [lindex [qpcs::dsGet $server qpcs/subject] 5]
-	set ::dh::status(name) [lindex [qpcs::dsGet $server qpcs/name] 5]
-	set ::dh::status(datafile) [lindex [qpcs::dsGet $server qpcs/datafile] 5]
+	set ::dh::status(subject) [lindex [qpcs::dsGet $server ess/subject] 5]
+	set ::dh::status(name) [lindex [qpcs::dsGet $server ess/name] 5]
+	set ::dh::status(datafile) [lindex [qpcs::dsGet $server ess/datafile] 5]
     }
 
     proc connect_to_server { server ess } {
@@ -92,7 +92,7 @@ namespace eval dh {
 	    error "Unable to register with $server"
 	}
 	qpcs::dsAddCallback ::dh::process_data
-	qpcs::dsAddMatch $server qpcs/*
+	qpcs::dsAddMatch $server ess/*
 	set ::dh::connected 1
     }
 
@@ -289,28 +289,28 @@ namespace eval dh {
 	set name [lindex $args 0]
 	set val [lindex $args 4]
 	switch -glob $name {
-	    qpcs/em_pos {
+	    ess/em_pos {
 		set ::dh::status(eye_hor) [lindex $val 0]
 		set ::dh::status(eye_ver) [lindex $val 1]
 		update_eye_marker $::dh::status(eye_hor) $::dh::status(eye_ver)	
 	    }
-	    qpcs/state {
+	    ess/state {
 		set ::dh::status(state) [string totitle $val]
 		set cmap { Running green Stopped red Inactive black }
 		$::dh::widgets(status) configure -foreground \
 		    [dict get $cmap $::dh::status(state)]
 	    }
-	    qpcs/obs_id {
+	    ess/obs_id {
 		set ::dh::status(obs_id) [expr $val+1]
 		set ::dh::status(obs_info) \
 		    "$::dh::status(obs_id)/$::dh::status(obs_total)"
 	    }
-	    qpcs/obs_total {
+	    ess/obs_total {
 		set ::dh::status(obs_total) $val
 		set ::dh::status(obs_info) \
 		    "$::dh::status(obs_id)/$::dh::status(obs_total)"
 	    }
-	    qpcs/obs_active {
+	    ess/obs_active {
 		set ::dh::status(obs_active) $val
 		set bg [$::dh::widgets(obstitle) cget -background]
 		set colors "$bg red"
@@ -321,7 +321,7 @@ namespace eval dh {
 		    set ::dh::status(cur_stimtype) {}
 		}
 	    }
-	    qpcs/joystick {
+	    ess/joystick {
 		switch $val {
 		    0  { set ::dh::status(joystick_info) None }
 		    8  { set ::dh::status(joystick_info) Up }
@@ -331,21 +331,21 @@ namespace eval dh {
 		    2  { set ::dh::status(joystick_info) Press }
 		}
 	    }
-	    qpcs/dio {
+	    ess/dio {
 		set levels [lindex $val 1]
 		set ::dh::status(dio_a) [expr {$levels>>16}]
 		set ::dh::status(dio_b) [expr {$levels>>24}]
 		update_dio_indicators
 	    }
 
-	    qpcs/subject { set ::dh::status(subject) $val }
-	    qpcs/system { set ::dh::status(name) $val }
-	    qpcs/datafile { set ::dh::status(datafile) $val }
+	    ess/subject { set ::dh::status(subject) $val }
+	    ess/system { set ::dh::status(name) $val }
+	    ess/datafile { set ::dh::status(datafile) $val }
 
-	    qpcs/em_region_setting {
+	    ess/em_region_setting {
 		update_em_region_setting {*}$val
 	    }
-	    qpcs/em_region_status {
+	    ess/em_region_status {
 		set ::dh::status(fixwin) [lindex $val 1]
 		update_fixwin_indicators
 	    }
@@ -363,7 +363,7 @@ namespace eval dh {
 	grid $lf.datahublabel $lf.datahub -padx 3
 	label $lf.domainlabel -text Domain: -anchor e -width 8
 	ttk::combobox $lf.domain -textvariable ::dh::domain
-	$lf.domain configure -values [list qpcs/*]
+	$lf.domain configure -values [list ess/*]
 	grid $lf.domainlabel $lf.domain -padx 3
 	grid $lf -sticky new
 

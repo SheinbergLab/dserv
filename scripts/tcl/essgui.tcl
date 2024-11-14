@@ -20,6 +20,8 @@ package require mdns
 package require dlsh
 package require tablelist
 
+set wishexec /usr/local/bin/wish
+
 set status(state) Stopped
 set status(eye_hor) 0
 set status(eye_ver) 0
@@ -40,31 +42,31 @@ proc process_data { ev args } {
     set val [lindex $args 4]
     switch -glob $name {
 	print { terminal_output $val }
-	qpcs/em_pos {
+	ess/em_pos {
 	    set status(eye_hor) [lindex $val 0]
 	    set status(eye_ver) [lindex $val 1]
 	}
-	qpcs/state {
+	ess/state {
 	    set status(state) [string totitle $val]
 	    set cmap { Running green Stopped red Inactive black }
 	    $widgets(status) configure -foreground \
 		[dict get $cmap $::status(state)]
 	}
-	qpcs/obs_id {
+	ess/obs_id {
 	    set status(obs_id) [expr $val+1]
 	    set status(obs_info) \
 		"$status(obs_id)/$status(obs_total)"
 	}
-	qpcs/reset {
+	ess/reset {
 	    set status(obs_info) {}
 	}
 	
-	qpcs/obs_total {
+	ess/obs_total {
 	    set status(obs_total) $val
 	    set status(obs_info) \
 		"$status(obs_id)/$status(obs_total)"
 	}
-	qpcs/obs_active {
+	ess/obs_active {
 	    set status(obs_active) $val
 	    set bg [$widgets(obstitle) cget -background]
 	    set colors "$bg red"
@@ -76,7 +78,7 @@ proc process_data { ev args } {
 	    }
 	}
 
-	qpcs/joystick {
+	ess/joystick {
 	    switch $val {
 		0  { set status(joystick_info) None }
 		8  { set status(joystick_info) Up }
@@ -86,21 +88,21 @@ proc process_data { ev args } {
 		2  { set status(joystick_info) Press }
 	    }
 	}
-	qpcs/dio {
+	ess/dio {
 	    set levels [lindex $val 1]
 	    set status(dio_a) [expr {$levels>>16}]
 	    set status(dio_b) [expr {$levels>>24}]
 	    update_dio_indicators
 	}
 	
-	qpcs/stimtype { set status(cur_stimtype) $val }
+	ess/stimtype { set status(cur_stimtype) $val }
 	
-	qpcs/system { set current(system) $val; update_system_combos $current(server) }
-	qpcs/protocol { set current(protocol) $val; update_system_combos $current(server) }
-	qpcs/variant { set current(variant) $val; update_system_combos $current(server) }
+	ess/system { set current(system) $val; update_system_combos $current(server) }
+	ess/protocol { set current(protocol) $val; update_system_combos $current(server) }
+	ess/variant { set current(variant) $val; update_system_combos $current(server) }
 	
-	qpcs/subject { set status(subject) $val }
-	qpcs/datafile { set status(datafile) $val }
+	ess/subject { set status(subject) $val }
+	ess/datafile { set status(datafile) $val }
 	stimdg { dg_fromString64 $val; if [winfo exists .stimdg] { dg_view stimdg .stimdg }  }
     }
 }
@@ -429,16 +431,16 @@ proc setup {} {
     $View add separator
 
     $View add command -label "QPCS Viewer" -command \
-	{exec wish /usr/local/dserv/scripts/tcl/qpcsview.tcl $::current(server) &}
+	{exec $::wishexec /usr/local/dserv/scripts/tcl/qpcsview.tcl $::current(server) &}
     
     $View add command -label "Event Viewer" -command \
-	{exec wish /usr/local/dserv/scripts/tcl/essview.tcl $::current(server) &}
+	{exec $::wishexec /usr/local/dserv/scripts/tcl/essview.tcl $::current(server) &}
 
     $View add command -label "Trace Viewer" -command \
 	{openTraceViewer}
     $View add separator
     $View add command -label "Virtual Inputs" -command \
-	{exec wish /usr/local/dserv/scripts/tcl/essinput.tcl $::current(server) &}
+	{exec $::wishexec /usr/local/dserv/scripts/tcl/essinput.tcl $::current(server) &}
     
     $View add separator
     $View add command -label "Datafile Suggestion Database" \
@@ -553,20 +555,20 @@ proc setup {} {
 
 proc initialize_vars { server } {
     global widgets status
-    set stateinfo [qpcs::dsGet $server qpcs/state]
+    set stateinfo [qpcs::dsGet $server ess/state]
     set status(state) [string totitle [lindex $stateinfo 5]]
     set cmap { Running green Stopped red Inactive black }
     $widgets(status) configure -foreground \
 	[dict get $cmap $::status(state)]
     
-    set val [lindex [qpcs::dsGet $server qpcs/obs_id] 5]
+    set val [lindex [qpcs::dsGet $server ess/obs_id] 5]
     set status(obs_id) $val
     
-    set val [lindex [qpcs::dsGet $server qpcs/obs_total] 5]
+    set val [lindex [qpcs::dsGet $server ess/obs_total] 5]
     set status(obs_total) $val
     set status(obs_info) "$status(obs_id)/$status(obs_total)"
     
-    set val [lindex [qpcs::dsGet $server qpcs/obs_active] 5]
+    set val [lindex [qpcs::dsGet $server ess/obs_active] 5]
     set status(obs_active) $val
     set bg [$widgets(obstitle) cget -background]
     set colors "$bg red"
@@ -577,23 +579,23 @@ proc initialize_vars { server } {
 	set status(cur_stimtype) {}
     }
     
-    set status(fixwin) [lindex [lindex [qpcs::dsGet $server qpcs/em_region_status] 5] 1]
+    set status(fixwin) [lindex [lindex [qpcs::dsGet $server ess/em_region_status] 5] 1]
     if { $status(fixwin) == "" } { set status(fixwin) 0 }
 #    update_fixwin_indicators
     
-    set dpoint [qpcs::dsGet $server qpcs/dio]
+    set dpoint [qpcs::dsGet $server ess/dio]
     set levels [lindex [lindex $dpoint 5] 1]
     set status(dio_a) [expr {$levels>>16}]
     set status(dio_b) [expr {$levels>>24}]
 #    update_dio_indicators
     
-    set status(subject) [lindex [qpcs::dsGet $server qpcs/subject] 5]
-    set status(name) [lindex [qpcs::dsGet $server qpcs/name] 5]
-    set status(datafile) [lindex [qpcs::dsGet $server qpcs/datafile] 5]
+    set status(subject) [lindex [qpcs::dsGet $server ess/subject] 5]
+    set status(name) [lindex [qpcs::dsGet $server ess/name] 5]
+    set status(datafile) [lindex [qpcs::dsGet $server ess/datafile] 5]
 }
 
 proc update_vars { server } {
-    foreach v { system protocol variant } { qpcs::dsTouch $server qpcs/$v }
+    foreach v { system protocol variant } { qpcs::dsTouch $server ess/$v }
 }
 
 proc connect_to_server { server } {
@@ -604,7 +606,7 @@ proc connect_to_server { server } {
 	error "Unable to register with $server"
     }
     qpcs::dsAddCallback process_data
-    qpcs::dsAddMatch $server qpcs/*
+    qpcs::dsAddMatch $server ess/*
     qpcs::dsAddMatch $server print
     qpcs::dsAddMatch $server stimdg
 
@@ -851,11 +853,13 @@ proc disconnect {} {
 
 if { [llength $argv] > 0 } {
     set server [lindex $argv 0]
-    lappend ::esshosts $server    
-    set ::esshost $server
-    connect $server
+} else {
+    set server localhost
 }
 
+lappend ::esshosts $server    
+set ::esshost $server
+connect $server
 
 #########
 # dgview
@@ -960,4 +964,3 @@ proc dg_view { dg { top {} } } {
 
     return $tbl
 }
-

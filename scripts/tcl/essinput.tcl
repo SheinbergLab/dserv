@@ -111,7 +111,7 @@ proc setup {} {
 
 proc initialize_vars { server } {
     global widgets status
-    set stateinfo [qpcs::dsGet $server qpcs/state]
+    set stateinfo [qpcs::dsGet $server ess/state]
     set status(state) [string totitle [lindex $stateinfo 5]]
 }
 
