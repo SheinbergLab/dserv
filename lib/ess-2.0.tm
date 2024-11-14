@@ -323,6 +323,7 @@ oo::class create System {
 
 	::ess::evt_put SYSTEM_STATE RUNNING [now]
 	dservSet ess/system_state $_status
+	dservSet ess/running 1
 	
 	if { [info exists _callbacks(start)] } {
 	    my $_callbacks(start)
@@ -344,6 +345,7 @@ oo::class create System {
 	set _status stopped
 	::ess::evt_put SYSTEM_STATE STOPPED [now]	
 	dservSet ess/system_state $_status
+	dservSet ess/running 0
 	if { [info exists _callbacks(quit)] } {
 	    my $_callbacks(quit)
 	}
@@ -354,6 +356,7 @@ oo::class create System {
 	set _status stopped
 	::ess::evt_put SYSTEM_STATE STOPPED [now]	
 	dservSet ess/system_state $_status
+	dservSet ess/running 0
 	if { [info exists _callbacks(end)] } {
 	    my $_callbacks(end)
 	}
@@ -680,9 +683,12 @@ namespace eval ess {
     proc begin_obs { current total } {
 	variable in_obs
 	variable obs_pin
-	set in_obs 1
 	rpioPinOn $obs_pin
 	::ess::evt_put BEGINOBS INFO [now] $current $total
+	dservSet ess/trials_in_block $total
+	dservSet ess/trials_complete $current
+	set in_obs 1
+	dservSet ess/in_obs 1
     }
 
     proc create_trialdg { status rt { stimid {} } } {
@@ -782,6 +788,7 @@ namespace eval ess {
 	rpioPinOff $obs_pin
 	::ess::evt_put ENDOBS $status [now]
 	set in_obs 0
+	dservSet ess/in_obs 0
     }
     
     proc query_state {} {
