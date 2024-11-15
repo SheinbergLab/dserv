@@ -2,7 +2,7 @@ puts "initializing dataserver"
 
 set dspath [file dir [info nameofexecutable]]
 if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
-    set env(ESS_SYSTEM_PATH) [file join $dspath systems/ess]
+    set env(ESS_SYSTEM_PATH) [file join $dspath systems]
 }
 
 set dlshlib [file join [file dirname $dspath] dlsh dlsh.zip]

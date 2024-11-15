@@ -8,11 +8,11 @@ package require yajltcl
 set conn -1;		       # connection to our postgresql server
 set dbname base;	       # name of database to write to
 set insert_trialinfo_cmd    "insert_trialinfo"
-set insert_setting_cmd  "insert_setting"
+set insert_status_cmd  "insert_status"
 
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
-    global conn dbname insert_trialinfo_cmd insert_setting_cmd
+    global conn dbname insert_trialinfo_cmd insert_status_cmd
     set conninfo "dbname=$db user=postgres password=postgres host=localhost port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
@@ -22,11 +22,12 @@ proc setup_database { db { overwrite 0 } } {
     # Create the 'trial' table if it does not exist
     set stmt {
         CREATE TABLE IF NOT EXISTS trial (
-  	    id INTEGER primary key generated always as identity,
+  	    base_trial_id INTEGER primary key generated always as identity,
 	    host VARCHAR(256),
-            blockid INTEGER,
-            trialid INTEGER,
-            system TEXT,
+            block_id INTEGER,
+            trial_id INTEGER,
+	    project TEXT,
+            state_system TEXT,
             protocol TEXT,
 	    variant TEXT,
 	    version TEXT,
@@ -41,36 +42,36 @@ proc setup_database { db { overwrite 0 } } {
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO trial (host, blockid, trialid, system, protocol, variant, version, subject, status, rt, trialinfo) \
-	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10), ($11))
+	INSERT INTO trial (host, block_id, trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo) \
+	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10), ($11), ($12))
     }
     postgres::prepare $conn $insert_trialinfo_cmd $stmt 1
 
     
-    # Create the 'setting' table if it does not exist
+    # Create the 'status' table if it does not exist
     set stmt {
-        CREATE TABLE IF NOT EXISTS setting (
+        CREATE TABLE IF NOT EXISTS status (
 	    host VARCHAR(256),
-	    domain TEXT,
-            key TEXT UNIQUE,
-            value TEXT,
+	    status_source TEXT,
+            status_type TEXT UNIQUE,
+            status_value TEXT,
 	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-	    primary key (host, domain, key)
+	    primary key (host, status_source, status_type)
         );
     }
     postgres::exec $conn $stmt
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO setting (host, domain, key, value) VALUES(($1), ($2), ($3), ($4))
-	ON CONFLICT (key)
-	DO UPDATE SET host = ($1), domain = ($2), key = ($3), value = ($4), sys_time = current_timestamp;
+	INSERT INTO status (host, status_source, status_type, status_value) VALUES(($1), ($2), ($3), ($4))
+	ON CONFLICT (status_type)
+	DO UPDATE SET host = ($1), status_source = ($2), status_type = ($3), status_value = ($4), sys_time = current_timestamp;
     }
-    postgres::prepare $conn $insert_setting_cmd $stmt 1
+    postgres::prepare $conn $insert_status_cmd $stmt 1
 }
 
 proc process_ess { dpoint data } {
-    global conn insert_trialinfo_cmd insert_setting_cmd
+    global conn insert_trialinfo_cmd insert_status_cmd
 
     set host [dservGet system/hostaddr]
     set domain ess
@@ -84,27 +85,27 @@ proc process_ess { dpoint data } {
     if { [string equal $dpoint ess/trialinfo] } {
 	set d [::yajl::json2dict $data]
 	
-	foreach v "trialid system protocol variant version subject status rt" {
+	foreach v "trialid project system protocol variant version subject status rt" {
 	    set $v [dict get $d $v]
 	}
 
 	set blockid [dservGet ess/blockid]
 	postgres::exec_prepared $conn $insert_trialinfo_cmd \
-	    $host $blockid $trialid $system $protocol $variant $version $subject $status $rt $data
+	    $host $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data
     } else {
 	set key [file tail $dpoint]
-	postgres::exec_prepared $conn $insert_setting_cmd $host $domain $key $data
+	postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
     }
 }
 
 proc process_system { dpoint data } {
-    global conn insert_setting_cmd
+    global conn insert_status_cmd
 
     set host [dservGet system/hostaddr]
     set domain system
     
     set key [file tail $dpoint]
-    postgres::exec_prepared $conn $insert_setting_cmd $host $domain $key $data
+    postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
 }
 
 

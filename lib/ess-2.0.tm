@@ -74,7 +74,7 @@ oo::class create System {
     }
     
     method configure_stim { host } {
-
+	variable current
 	foreach var "screen_halfx screen_halfy screen_w screen_h" {
 	    oo::objdefine [self] variable $var
 	}
@@ -104,7 +104,7 @@ oo::class create System {
 	rmtSend "set dservhost [dservGet ess/ipaddr]"
 	
 	# source this protocol's stim functions
-	set stimfile [file join [set ::ess::system_path] \
+	set stimfile [file join [set ::ess::system_path] [set ::ess::project] \
 			  $_systemname $_protocolname ${_protocolname}_stim.tcl]
 	if { ![catch {set f [open $stimfile]}] } {
 	    set script [read $f]
@@ -409,6 +409,7 @@ namespace eval ess {
     set current(open_protocol) 0
     set current(open_variant)  0
 
+    set current(project) {}
     set current(system) {}
     set current(protocol) {}
     set current(variant) {}
@@ -684,6 +685,7 @@ namespace eval ess {
 	set g [dg_create]
 	dl_set $g:blockid  [dl_ilist $current(blockid)]
 	dl_set $g:trialid  [dl_ilist $current(trialid)]
+	dl_set $g:project  [dl_slist $current(project)] 
 	dl_set $g:system   [dl_slist $current(system)] 
 	dl_set $g:protocol [dl_slist $current(protocol)] 
 	dl_set $g:variant  [dl_slist $current(variant)] 
@@ -715,6 +717,7 @@ namespace eval ess {
 	# always include these
 	$obj string blockid  number $current(blockid)
 	$obj string trialid  number $current(trialid)
+	$obj string project  string $current(project)
 	$obj string system   string $current(system)
 	$obj string protocol string $current(protocol)
 	$obj string variant  string $current(variant)
@@ -1238,7 +1241,7 @@ namespace eval ess {
     if { [info exists ::env(ESS_SYSTEM_PATH)] } {
         variable system_path $::env(ESS_SYSTEM_PATH)
     } else {
-        variable system_path /usr/local/share/systems
+        variable system_path /usr/local/dserv/systems
     }
 
     if { [info exists ::env(ESS_RMT_HOST)] } {
@@ -1253,7 +1256,10 @@ namespace eval ess {
 	variable data_dir /tmp
     }    
 
-    foreach v "system_path rmt_host data_dir" {
+    variable project ess
+    set current(project) $project
+    
+    foreach v "system_path rmt_host data_dir project" {
 	dservSet ess/$v [set $v]
     }
 
@@ -1346,8 +1352,9 @@ namespace eval ess {
     }
     
     proc find_systems {} {
+	variable current
 	set systems {}
-	foreach f [glob $::ess::system_path/*] {
+	foreach f [glob [file join $::ess::system_path $current(project) *]] {
 	    if  { [file isdirectory $f] &&
 		  [file exists $f/[file tail $f].tcl] } {
 		catch { namespace delete ::ess::[file tail $f] }
@@ -1358,10 +1365,11 @@ namespace eval ess {
 	}
 	return $systems
     }
-
+    
     proc find_protocols { s } {
+	variable current
 	set protocols {}
-	foreach f [glob [file join $::ess::system_path $s]/*] {
+	foreach f [glob [file join $::ess::system_path $current(project) $s *]] {
 	    if { [file isdirectory $f] &&
 		 [file exists $f/[file tail $f].tcl] } {
 		catch { namespace delete ::ess::${s}::[file tail $f] }
@@ -1373,15 +1381,17 @@ namespace eval ess {
     }
 
     proc find_variants { s p } {
-	set f [file join $::ess::system_path $s ${p} ${p}_variants.tcl]
+	variable current
+	set f [file join $::ess::system_path $current(project) $s ${p} ${p}_variants.tcl]
 	source $f
 	return [dict keys [set ::ess::${s}::${p}::variants]]
     }
 
     # These getters could be changed to not re-source perhaps
     proc get_systems { } {
+	variable current
 	set systems {}
-	foreach f [glob $::ess::system_path/*] {
+	foreach f [glob [file join $::ess::system_path $current(project) *]] {
 	    if  { [file isdirectory $f] &&
 		  [file exists $f/[file tail $f].tcl] } {
 		lappend systems [file tail $f]
@@ -1391,8 +1401,9 @@ namespace eval ess {
     }
 
     proc get_protocols { system } {
+	variable current
 	set protocols {}
-	foreach f [glob [file join $::ess::system_path $system]/*] {
+	foreach f [glob [file join $::ess::system_path $current(project) $system *]] {
 	    if { [file isdirectory $f] &&
 		 [file exists $f/[file tail $f].tcl] } {
 		lappend protocols [file tail $f]
