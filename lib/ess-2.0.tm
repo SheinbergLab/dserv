@@ -414,7 +414,6 @@ namespace eval ess {
     set current(protocol) {}
     set current(variant) {}
     
-    set current(blockid) 0
     set current(trialid) 0
     
     variable param_types { ANY 0 TIME 1 VARIABLE 2 SUBJECT 3 STORAGE 4 STIM 5 }
@@ -556,7 +555,6 @@ namespace eval ess {
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 
-	incr current(blockid)
 	set current(trialid) 0
     }
 
@@ -683,7 +681,6 @@ namespace eval ess {
 	variable current
 	variable subject_id
 	set g [dg_create]
-	dl_set $g:blockid  [dl_ilist $current(blockid)]
 	dl_set $g:trialid  [dl_ilist $current(trialid)]
 	dl_set $g:project  [dl_slist $current(project)] 
 	dl_set $g:system   [dl_slist $current(system)] 
@@ -715,7 +712,6 @@ namespace eval ess {
 	$obj map_open
 
 	# always include these
-	$obj string blockid  number $current(blockid)
 	$obj string trialid  number $current(trialid)
 	$obj string project  string $current(project)
 	$obj string system   string $current(system)
@@ -1262,7 +1258,8 @@ namespace eval ess {
     foreach v "system_path rmt_host data_dir project" {
 	dservSet ess/$v [set $v]
     }
-
+    dservSet ess/block_id 0
+    
     proc system_init { system } {
 	variable current
 
