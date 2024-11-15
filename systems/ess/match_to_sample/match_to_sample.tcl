@@ -140,7 +140,7 @@ namespace eval match_to_sample {
 	$sys add_action choices_on {
 	    my choices_on
 	    set choice_on_time [now]
-	    ::ess::evt_put CHOICES ON $::choice_on_time
+	    ::ess::evt_put CHOICES ON $choice_on_time
 	}
 	
 	$sys add_transition choices_on {
