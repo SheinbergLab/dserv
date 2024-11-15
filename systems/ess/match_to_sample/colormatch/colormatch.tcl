@@ -42,7 +42,7 @@ namespace eval match_to_sample::colormatch {
 		foreach b "$left_button $right_button" {
 		    dservAddExactMatch gpio/input/$b
 		    dservTouch gpio/input/$b
-		    dpointSetScript gpio/input/$b "[namespace current] update_button"
+		    dpointSetScript gpio/input/$b ess::do_update
 		}
 	    }
 	    
@@ -116,11 +116,6 @@ namespace eval match_to_sample::colormatch {
 		}
 	    }
 	    return 0
-	}
-	
-	$s add_method update_button { name data } {
-	    # should log which button was pressed based on name
-	    ::ess::do_update
 	}
 	
 	$s add_method start_obs_reset {} {
