@@ -89,7 +89,7 @@ proc process_ess { dpoint data } {
 	    set $v [dict get $d $v]
 	}
 
-	set blockid [dservGet ess/blockid]
+	set blockid [dservGet ess/block_id]
 	postgres::exec_prepared $conn $insert_trialinfo_cmd \
 	    $host $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data
     } else {
