@@ -79,7 +79,7 @@ proc process_ess { dpoint data } {
     # if the system has changed, update the blockid
     if { [string equal $dpoint ess/system] } {
 	set maxblockid [postgres::query $conn { SELECT max(blockid) from trial; }]
-	dservSet ess/blockid [expr $maxblockid+1]
+	dservSet ess/block_id [expr $maxblockid+1]
     }
     
     if { [string equal $dpoint ess/trialinfo] } {
