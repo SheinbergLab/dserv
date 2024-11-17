@@ -1225,8 +1225,18 @@ namespace eval ess {
 
 namespace eval ess {
     variable current
+    
     set current(state_system) {}
 
+    proc set_project { p } {
+	# could remove current project/lib from module path...
+	variable project
+	variable current
+	variable system_path
+	set current(project) $p
+	tcl::tm::add [file join $system_path $p lib]
+    }
+    
     #
     # system variables
     #
@@ -1252,9 +1262,9 @@ namespace eval ess {
 	variable data_dir /tmp
     }    
 
-    variable project ess
-    set current(project) $project
-    
+    set project "ess"
+    set_project $project
+
     foreach v "system_path rmt_host data_dir project" {
 	dservSet ess/$v [set $v]
     }
