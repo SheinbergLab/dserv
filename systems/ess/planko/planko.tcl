@@ -165,10 +165,29 @@ namespace eval planko {
 
 	$sys add_transition feedback {
 	    if { [timerExpired] || [my feedback_complete] } {
-		return post_feedback
+		if { $correct } { return correct } { return incorrect }
 	    }
 	}
 
+
+	#
+	# correct
+	#
+	$sys add_action correct {
+	}
+	
+	$sys add_transition correct { return post_feedback }
+	
+	#
+	# incorrect
+	#
+	$sys add_action incorrect {
+	    set correct 0
+	    my noreward
+	}
+	
+	$sys add_transition incorrect { return post_feedback }
+	
 	#
 	# post_feedback
 	#
@@ -192,33 +211,8 @@ namespace eval planko {
 	}
 
 	$sys add_transition stimoff {
-	    if { $correct == 1 } {
-		return correct
-	    } else {
-		return incorrect
-	    }
-	}
-
-	#
-	# correct
-	#
-	$sys add_action correct {
-	    set correct 1
-	    my reward
-	}
-	
-	$sys add_transition correct { return post_trial }
-	
-	#
-	# incorrect
-	#
-	$sys add_action incorrect {
-	    set correct 0
-	    my noreward
-	}
-	
-	$sys add_transition incorrect { return post_trial }
-	
+	    return post_trial
+	}	
 	
 	#
 	# no_response
