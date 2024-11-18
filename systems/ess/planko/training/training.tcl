@@ -38,6 +38,10 @@ namespace eval planko::training {
 	    # initialize touch processor
 	    ::ess::touch_init
 
+	    # listen for planko/complete event
+	    dservAddExactMatch planko/complete
+	    dpointSetScript planko/complete ess::do_update
+	    
 	    soundReset
 	    soundSetVoice 81 0    0
 	    soundSetVoice 57 17   1
@@ -116,6 +120,8 @@ namespace eval planko::training {
 		::ess::touch_win_set 0 $lcatcher_x $lcatcher_y 2 0
 		::ess::touch_win_set 1 $rcatcher_x $rcatcher_y 2 0
 
+		dservSet planko/complete waiting
+		
 		rmtSend "nexttrial $stimtype"
 	    }
 	}
@@ -147,6 +153,10 @@ namespace eval planko::training {
 
 	$s add_method feedback { resp correct } {
 	    rmtSend "!show_feedback [expr $resp-1] $correct"
+	}
+
+	$s add_method feedback_complete {} {
+	    if { [dservGet planko/complete] != "waiting" } { return 1 } { return 0 }
 	}
 
 	$s add_method reward {} {

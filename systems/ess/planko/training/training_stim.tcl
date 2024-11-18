@@ -38,7 +38,27 @@ namespace inscope :: {
 
 
 ##############################################################
-##                      Show Worlds                        ###
+###                    check_contacts                      ###
+##############################################################
+
+proc check_contacts { w } {
+    if { [setObjProp $w complete] } { return }
+    if { [Box2D_getContactBeginEventCount $w] > 0 } {
+	set contacts [Box2D_getContactBeginEvents $w]
+	foreach c $contacts {
+	    if { [lsearch $c catchl_b] >= 0 } {
+		qpcs::dsSet $::dservhost planko/complete left
+		setObjProp $w complete 1
+	    } elseif { [lsearch $c catchr_b] >= 0 } {
+		qpcs::dsSet $::dservhost planko/complete right
+		setObjProp $w complete 1
+	    }
+	}
+    }
+}
+
+##############################################################
+###                     Show Worlds                        ###
 ##############################################################
 
 proc make_stims { trial } {
@@ -50,6 +70,7 @@ proc make_stims { trial } {
     
     set bworld [Box2D]
     glistAddObject $bworld 0
+    setObjProp $bworld complete 0
 
     set ::left_catcher {}
     set ::right_catcher {}
@@ -76,6 +97,8 @@ proc make_stims { trial } {
 	if { [string match catchr* $name] } { lappend ::right_catcher $body }
     }
 
+    addPostScript $bworld [list check_contacts $bworld]
+    
     glistSetDynamic 0 1
     return $bworld
 }
