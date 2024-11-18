@@ -35,7 +35,8 @@ namespace eval planko {
 	set b2_staticBody 0
 	
 	set g [dg_create]
-	
+
+	dl_set $g:id [dl_ilist]
 	dl_set $g:name [dl_slist ball]
 	dl_set $g:shape [dl_slist Circle]
 	dl_set $g:type $b2_staticBody
@@ -56,6 +57,7 @@ namespace eval planko {
 
 	set g [dg_create]
 
+	dl_set $g:id [dl_ilist]
 	dl_set $g:name [dl_slist ${name}_b ${name}_r ${name}_l]
 	dl_set $g:shape [dl_repeat [dl_slist Box] 3]
 	dl_set $g:type [dl_repeat $b2_staticBody 3]
@@ -81,6 +83,7 @@ namespace eval planko {
 	
 	set g [dg_create]
 	
+	dl_set $g:id [dl_ilist]
 	dl_set $g:name [dl_paste [dl_repeat [dl_slist plank] $n] [dl_fromto 0 $n]]
 	dl_set $g:shape [dl_repeat [dl_slist Box] $n]
 	dl_set $g:type [dl_repeat $b2_staticBody $n]
@@ -244,7 +247,7 @@ namespace eval planko {
 		dl_set $new_world:lcatcher_x [dl_flist $params(lcatcher_x)]
 		dl_set $new_world:lcatcher_y [dl_flist $params(lcatcher_y)]
 		dl_set $new_world:rcatcher_x [dl_flist $params(rcatcher_x)]
-		dl_set $new_world:rcatcher_y [dl_flist $params(rcatcher_x)]
+		dl_set $new_world:rcatcher_y [dl_flist $params(rcatcher_y)]
 		dl_set $new_world:ball_t $sim_dg:t				 
 		dl_set $new_world:ball_x $sim_dg:x
 		dl_set $new_world:ball_y $sim_dg:y
@@ -289,6 +292,10 @@ namespace eval planko {
 		error "unable to generate desired world type"
 	    }
 	}
+	
+	# first column is id - set to unique ids between 0 and n
+	dl_set $worlds:id [dl_fromto 0 $n]
+
 	return $worlds
     }
 }
