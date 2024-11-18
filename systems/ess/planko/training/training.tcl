@@ -145,6 +145,10 @@ namespace eval planko::training {
 	    rmtSend "!stimoff"
 	}
 
+	$s add_method feedback { resp correct } {
+	    rmtSend "!show_feedback [expr $resp-1] $correct"
+	}
+
 	$s add_method reward {} {
 	    soundPlay 3 70 70
 	    juicerJuice 0 $juice_time
@@ -163,11 +167,9 @@ namespace eval planko::training {
 	    if { [::ess::touch_in_win 0] } {
 		if { $side == 0 } { set correct 1 } { set correct 0 }
 		set resp 1
-		print "left ($correct)"
 		return 1
 	    } elseif { [::ess::touch_in_win 1] } {
 		if { $side == 1 } { set correct 1 } { set correct 0 }
-		print "right ($correct)"
 		set resp 2
 		return 1
 	    } else {

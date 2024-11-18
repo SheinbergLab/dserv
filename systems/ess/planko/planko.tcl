@@ -150,31 +150,39 @@ namespace eval planko {
 	}
 
 	$sys add_transition response {
+	    return feedback
+	}
+	
+	#
+	# feedback
+	#
+	$sys add_action feedback {
+	    my feedback $resp $correct
+	    timerTick 5000
+	}
+
+	$sys add_transition feedback {
+	    if { [timerExpired] || [my feedback_complete] } {
+		return stimoff
+	    }
+	}
+
+	#
+	# stimoff
+	#
+	$sys add_action stimoff {
 	    my stim_off
-	    ::ess::evt_put PATTERN ON [now] 
+	    ::ess::evt_put PATTERN OFF [now] 
+	}
+
+	$sys add_transition stimoff {
 	    if { $correct == 1 } {
 		return correct
 	    } else {
 		return incorrect
 	    }
 	}
-	
-	#
-	# no_response
-	#
-	$sys add_action no_response {
-	    my stim_off
-	    ::ess::evt_put PATTERN ON [now] 
-	    ::ess::evt_put RESP NONE [now]
-	    set correct -1
-	    
-	}
-	
-	$sys add_transition no_response {
-	    return post_trial
-	}
-	
-	
+
 	#
 	# correct
 	#
@@ -194,6 +202,22 @@ namespace eval planko {
 	}
 	
 	$sys add_transition incorrect { return post_trial }
+	
+	
+	#
+	# no_response
+	#
+	$sys add_action no_response {
+	    my stim_off
+	    ::ess::evt_put PATTERN ON [now] 
+	    ::ess::evt_put RESP NONE [now]
+	    set correct -1
+	    
+	}
+	
+	$sys add_transition no_response {
+	    return post_trial
+	}
 	
 	#
 	# post_trial
@@ -288,6 +312,8 @@ namespace eval planko {
 	$sys add_method prestim {} {}
 	$sys add_method stim_on {} {}
 	$sys add_method stim_off {} {}
+	$sys add_method feedback { resp correct } { print $resp/$correct }
+	$sys add_method feedback_complete {} { return 0 }
 	$sys add_method reward {} {}
 	$sys add_method noreward {} {}
 	$sys add_method finale {} {}

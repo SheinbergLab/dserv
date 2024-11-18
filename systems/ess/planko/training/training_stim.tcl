@@ -50,14 +50,17 @@ proc make_stims { trial } {
     
     set bworld [Box2D]
     glistAddObject $bworld 0
- 
+
+    set ::left_catcher {}
+    set ::right_catcher {}
+    
     set n [dl_length $dg:name:$trial]
     for { set i 0 } { $i < $n } { incr i } {
 	foreach v "name shape type tx ty sx sy angle restitution" {
 	    set $v [dl_get $dg:$v:$trial $i]
 	} 
 	if { $shape == "Box" } {
-	    set body [create_box $bworld $name $type $tx $ty $sx $sy $angle { 9. 9. 9. 0.8 }]
+	    set body [create_box $bworld $name $type $tx $ty $sx $sy $angle { 9. 9. 9. 1.0 }]
 	} elseif { $shape == "Circle" } {
 	    set body [create_circle $bworld $name $type $tx $ty $sx $angle { 0 1 1 }]
 	}
@@ -67,6 +70,10 @@ proc make_stims { trial } {
 
 	# track this so we can set in motion
 	if { $name == "ball" } { set ::ball $body }
+
+	# track catcher bodies so we can give feedback
+	if { [string match catchl* $name] } { lappend ::left_catcher $body }
+	if { [string match catchr* $name] } { lappend ::right_catcher $body }
     }
 
     glistSetDynamic 0 1
@@ -138,7 +145,19 @@ proc nexttrial { id } {
     resetObjList
     set ::world [make_stims $id]
 }
-    
+
+proc show_feedback { resp correct } {
+    set body [setObjProp $::ball body]
+    Box2D_setBodyType $::world $body 2
+    if { $resp == 0 } { set c $::left_catcher } { set c $::right_catcher }
+    set green   "0.2 .9 .3"
+    set red     "1.0 .2 .2"
+    foreach p $c {
+	if { $correct } { set color $green } { set color $red }
+	polycolor $p {*}$color
+    }
+}
+
 proc stimon {} {
     glistSetCurGroup 0
     glistSetVisible 1
