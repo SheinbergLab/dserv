@@ -103,12 +103,18 @@ namespace eval planko::training {
 		    [dl_select stimdg:stimtype [dl_gt stimdg:remaining 0]]
 		set cur_id [dl_pickone $left_to_show]
 		set stimtype [dl_get stimdg:stimtype $cur_id]
-		
+
+		set side [dl_get stimdg:side $cur_id]
+
+		foreach v "lcatcher_x lcatcher_y rcatcher_x rcatcher_y" {
+		    set $v [dl_get stimdg:$v $cur_id]
+		}
+
 		::ess::touch_region_off 0
 		::ess::touch_region_off 1
 		::ess::touch_reset
-		::ess::touch_win_set 0 3  -7.5 2 0
-		::ess::touch_win_set 1 -3 -7.5 2 0
+		::ess::touch_win_set 0 $lcatcher_x $lcatcher_y 2 0
+		::ess::touch_win_set 1 $rcatcher_x $rcatcher_y 2 0
 
 		rmtSend "nexttrial $stimtype"
 	    }
@@ -154,7 +160,15 @@ namespace eval planko::training {
 	}
 	
 	$s add_method responded {} {
-	    if { [::ess::touch_in_win 0] || [::ess::touch_in_win 1] } {
+	    if { [::ess::touch_in_win 0] } {
+		if { $side == 0 } { set correct 1 } { set correct 0 }
+		set resp 1
+		print "left ($correct)"
+		return 1
+	    } elseif { [::ess::touch_in_win 1] } {
+		if { $side == 1 } { set correct 1 } { set correct 0 }
+		print "right ($correct)"
+		set resp 2
 		return 1
 	    } else {
 		return 0

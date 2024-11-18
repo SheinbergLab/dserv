@@ -37,9 +37,11 @@ namespace eval planko {
 	$sys add_variable response           0
 	$sys add_variable first_time         1
 
+	$sys add_variable side              -1             
+	$sys add_variable resp              -1             
 	$sys add_variable correct           -1
-	$sys add_variable stimon_time
-	$sys add_variable rt
+	$sys add_variable stimon_time        0
+	$sys add_variable rt                 0
 	
 	######################################################################
 	#                            System States                           #
@@ -79,6 +81,7 @@ namespace eval planko {
 	    }
 	    set rt -1
 	    set correct -1
+	    set resp -1
 	    timerTick $delay
 	    my nexttrial
 	}
@@ -142,14 +145,14 @@ namespace eval planko {
 	#
 	$sys add_action response {
 	    set resp_time [now]
-	    ::ess::evt_put RESP 1 $resp_time
+	    ::ess::evt_put RESP $resp $resp_time
 	    set rt [expr {($resp_time-$stimon_time)/1000}]
 	}
 
 	$sys add_transition response {
 	    my stim_off
 	    ::ess::evt_put PATTERN ON [now] 
-	    if { $response == 1 } {
+	    if { $correct == 1 } {
 		return correct
 	    } else {
 		return incorrect
@@ -290,8 +293,6 @@ namespace eval planko {
 	$sys add_method finale {} {}
 	
 	$sys add_method responded {} { return 0 }
-	$sys add_method response_correct {} { return 1 }
-	
 	
 	return $sys
     }
