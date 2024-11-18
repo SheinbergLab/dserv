@@ -116,6 +116,7 @@ proc create_box { bworld name type tx ty sx sy { angle 0 } { color { 1 1 1 } } }
     polycolor $box {*}$color
 
     # create object matrix for updating
+    set degrees [expr $angle*(180./$::pi)]
     set m [dl_tcllist [mat4_createTranslationAngle $tx $ty $angle]]
     setObjMatrix $box {*}$m
     
