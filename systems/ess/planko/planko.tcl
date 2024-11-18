@@ -174,6 +174,8 @@ namespace eval planko {
 	# correct
 	#
 	$sys add_action correct {
+	    set correct 1
+	    my reward
 	}
 	
 	$sys add_transition correct { return post_feedback }
