@@ -21,6 +21,8 @@ namespace eval planko {
 	set params(rcatcher_y)      -7.5; # y location of right catcher
 	set params(ball_start_x)       0; # x location of ball start
 	set params(ball_start_y)     8.0; # y location of ball start
+	set params(ball_jitter_x)      0; # x jitter for ball start
+	set params(ball_jitter_y)      0; # y jitter for ball start
 	set params(ball_radius)      0.5; # radius of ball
 	set params(nplanks)           10; # number of planks in world
 	set params(minplanks)          1; # mininum number of planks hit
@@ -40,8 +42,8 @@ namespace eval planko {
 	dl_set $g:name [dl_slist ball]
 	dl_set $g:shape [dl_slist Circle]
 	dl_set $g:type $b2_staticBody
-	dl_set $g:tx [dl_flist $params(ball_start_x)]
-	dl_set $g:ty [dl_flist $params(ball_start_y)]
+	dl_set $g:tx [dl_flist $params(ball_xpos)]
+	dl_set $g:ty [dl_flist $params(ball_ypos)]
 	dl_set $g:sx [dl_flist $params(ball_radius)]
 	dl_set $g:sy [dl_flist $params(ball_radius)]
 	dl_set $g:angle [dl_flist 0.0]
@@ -224,6 +226,14 @@ namespace eval planko {
 	set done 0
 	while { !$done } {
 	    box2d::destroy all
+
+	    # allow jitter for ball start before making world
+	    set params(ball_xpos) [expr { $params(ball_start_x) +
+				     rand()*$params(ball_jitter_x) -
+				     0.5*$params(ball_jitter_x) } ]
+	    set params(ball_ypos) [expr { $params(ball_start_y) +
+				     rand()*$params(ball_jitter_y) -
+				     0.5*$params(ball_jitter_y) } ]
 	    
 	    set new_world [make_world]
 	    
@@ -231,15 +241,15 @@ namespace eval planko {
 
 	    set sim_dg [test_simulation $world $ball]
 	    lassign [$accept_proc $sim_dg] result nhit
-	    
+
 	    if { $result != -1 } {
 		dl_set $new_world:side     [dl_ilist $result]
 		dl_set $new_world:nhit     [dl_ilist $nhit]
 		dl_set $new_world:nplanks  [dl_ilist $params(nplanks)]
 		dl_set $new_world:ball_start_x \
-		    [dl_flist $params(ball_start_x)]
+		    [dl_flist $params(ball_xpos)]
 		dl_set $new_world:ball_start_y \
-		    [dl_flist $params(ball_start_y)]
+		    [dl_flist $params(ball_ypos)]
 		dl_set $new_world:ball_radius \
 		    [dl_flist $params(ball_radius)]
 		dl_set $new_world:ball_restitution \
