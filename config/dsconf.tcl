@@ -144,8 +144,14 @@ set_ip_address
 ina226Add 0x45 system 12v
 ina226Add 0x44 system 24v
 
-# start up subprocess to store trials in sqlite3 db
-subprocess 2571 [file join $dspath config/dbconf.tcl]
+# start up subprocess to store trials in either postgresql or sqlite3 db
+set host [dservGet system/hostaddr]
+set hbs "192.168.4.100 192.168.4.101 192.168.5.30"
+if { [lsearch $hbs $host] } {
+    subprocess 2571 [file join $dspath config/postgresconf.tcl]
+} else {
+    subprocess 2571 [file join $dspath config/sqliteconf.tcl]
+}
 
 # and finally load a default system
 ess::load_system
