@@ -815,7 +815,7 @@ wm title . "Experimental Control"
 wm iconphoto . -default essicon
 
 # hold onto host information
-set esshosts {}
+set esshosts { localhost 192.168.4.100 192.168.4.101 192.168.5.30 192.168.88.30 }
 array set esshostinfo {}
 set esshost ""
 set dserv_server ""
@@ -952,8 +952,18 @@ proc dg_view { dg { top {} } } {
 	for { set j 0 } { $j < $ncols } { incr j } {
 	    set c [lindex $colnames $j]
 	    set clen [dl_length $dg:$c]
-	    if { $i < $clen } {  
-		set entry [dl_tcllist $dg:$c:$i]
+	    if { $i < $clen } {
+		set dtype [dl_datatype $dg:$c]
+		if { $dtype == "list" } {
+		    set entry "[dl_datatype $dg:$c:$i] ([dl_length $dg:$c:$i])"
+		} else {
+		    set val [dl_tcllist $dg:$c:$i]
+		    if { $dtype == "float" && [string length $val] > 6 } {
+			set entry [format %.4f $val]
+		    } else {
+			set entry $val
+		    }
+		}
 	    } else {
 		set entry {}
 	    }
