@@ -1,3 +1,5 @@
+set dspath [file dir [info nameofexecutable]]
+
 set base [file join [zipfs root] dlsh]
 set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 
@@ -6,7 +8,7 @@ package require qpcs
 package require sqlite3
 package require yajltcl
 
-set db_path "/tmp/trialinfo.db"
+set db_path "$dspath/db/dserv.db"
 
 # Function to handle database setup and corruption detection
 proc setup_database {db_path} {
