@@ -102,11 +102,11 @@ proc process_ess { dpoint data } {
 	db eval {
 	    INSERT into trial (host, block_id, trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo)
 	    VALUES($host, $blockid, $trialid, $project, $system, $protocol, $variant, $version, $subject, $status, $rt, $data)
-	} else {
-	    set key [file tail $dpoint]
-	    db eval { INSERT INTO status (host, status_source, status_type, status_value)
-		VALUES($host, $domain, $key, $data, current_timestamp);
-	    }
+	}
+    } else {
+	set key [file tail $dpoint]
+	db eval { INSERT INTO status (host, status_source, status_type, status_value, sys_time)
+	    VALUES($host, $domain, $key, $data, current_timestamp);
 	}
     }
 }
@@ -117,7 +117,7 @@ proc process_system { dpoint data } {
     set domain system
     
     set key [file tail $dpoint]
-    db eval { INSERT INTO status (host, status_source, status_type, status_value)
+    db eval { INSERT INTO status (host, status_source, status_type, status_value, sys_time)
 	VALUES($host, $domain, $key, $data, current_timestamp);
     }
 }
