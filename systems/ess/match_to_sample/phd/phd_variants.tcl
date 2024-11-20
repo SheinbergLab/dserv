@@ -12,7 +12,7 @@ namespace eval match_to_sample::phd {
     set db {}
     set paths [list \
 		   /shared/qpcs/stimuli/graspomatic/Grasp3Shapes.db \
-		   ${::ess::system_path}/match_to_sample/phd/data/Grasp3Shapes.db]
+		   ${::ess::system_path}/$::ess::current(project)/match_to_sample/phd/data/Grasp3Shapes.db]
     foreach p $paths {
 	if [file exists $p] { set db $p; break }
     }
