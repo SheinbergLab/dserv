@@ -556,6 +556,7 @@ namespace eval ess {
 	variant_init $current(system) $current(protocol) $current(variant)
 
 	set current(trialid) 0
+	if [dg_exists trialdg] { dg_delete trialdg }
     }
 
     proc set_system { system } {
@@ -680,7 +681,11 @@ namespace eval ess {
     proc create_trialdg { status rt { stimid {} } } {
 	variable current
 	variable subject_id
-	set g [dg_create]
+
+	if [dg_exists trialdg] { dg_delete trialdg }
+	dg_create trialdg
+	set g trialdg
+	
 	dl_set $g:trialid  [dl_ilist $current(trialid)]
 	dl_set $g:project  [dl_slist $current(project)] 
 	dl_set $g:system   [dl_slist $current(system)] 
@@ -697,6 +702,33 @@ namespace eval ess {
 		foreach l [dg_tclListnames stimdg] {
 		    if { $rlen == [dl_length stimdg:$l] } {
 			dl_set $g:$l [dl_choose stimdg:$l $stimid]
+		    }
+		}
+	    }
+	}
+	return $g
+    }
+    
+    proc append_trialdg { status rt { stimid {} } } {
+	variable current
+	variable subject_id
+	set g trialdg
+	dl_append $g:trialid  $current(trialid)
+	dl_append $g:project  $current(project)
+	dl_append $g:system   $current(system) 
+	dl_append $g:protocol $current(protocol)
+	dl_append $g:variant  $current(variant)
+	dl_append $g:version  [$current(state_system) get_version]
+	dl_append $g:subject  $subject_id
+	dl_append $g:status   $status
+	dl_append $g:rt       $rt
+
+	if { $stimid != {} } {
+	    if { [dg_exists stimdg] } {
+		set rlen [dl_length stimdg:stimtype]
+		foreach l [dg_tclListnames stimdg] {
+		    if { $rlen == [dl_length stimdg:$l] } {
+			dl_append $g:$l [dl_get stimdg:$l $stimid]
 		    }
 		}
 	    }
@@ -757,10 +789,13 @@ namespace eval ess {
 
     proc save_trial_info { status rt { stimid {} } } {
 	variable current
-	set trialdg [create_trialdg $status $rt $stimid]
-	dg_toString $trialdg s
+	if { ![dg_exists trialdg] } {
+	    create_trialdg $status $rt $stimid
+	} else {
+	    append_trialdg $status $rt $stimid
+	}
+	dg_toString trialdg s
 	dservSetData trialdg [now] 6 $s
-	dg_delete $trialdg
 
 	set trial_json [create_trial_json $status $rt $stimid]
 	dservSetData ess/trialinfo [now] 11 $trial_json
