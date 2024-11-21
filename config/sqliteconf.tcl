@@ -31,31 +31,21 @@ proc setup_database {db_path} {
         sqlite3 db $db_path
     }
 
-    # Create the 'trial' table if it does not exist
+    # Create the 'trials' table if it does not exist
     db eval {
-        CREATE TABLE IF NOT EXISTS trial (
-					  base_trial_id INTEGER PRIMARY KEY AUTOINCREMENT,
-					  host TEXT,
-					  block_id INTEGER,
-					  trial_id INTEGER,
+        CREATE TABLE IF NOT EXISTS trials (
+					  block_id INTEGER PRIMARY KEY,
+					  subject TEXT,
 					  project TEXT,
 					  state_system TEXT,
 					  protocol TEXT,
 					  variant TEXT,
-					  version TEXT,
-					  subject TEXT,
-					  status INTEGER,
-					  rt INTEGER,
-					  trialinfo BLOB,
-					  sys_time TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
-					  );
-    }
-
-        # Create the 'trial' table if it does not exist
-    db eval {
-        CREATE TABLE IF NOT EXISTS trials (
-					  block_id INTEGER PRIMARY KEY,
+					  n_trials INTEGER,
+					  n_complete INTEGER,
+					  pct_complete REAL,
+					  pct_correct REAL,
 					  trialdg BLOB,
+					  date TEXT DEFAULT (date()),
 					  sys_time TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
 					  );
     }
@@ -74,8 +64,8 @@ proc setup_database {db_path} {
     
     # Create indices for faster lookup
     db eval {
-        CREATE INDEX IF NOT EXISTS idx_trial_base_trial_id ON trial (base_trial_id);
-        CREATE INDEX IF NOT EXISTS idx_trial_subject ON trial (subject);
+        CREATE INDEX IF NOT EXISTS idx_trials_subject ON trials (subject);
+        CREATE INDEX IF NOT EXISTS idx_trials_date ON trials (date);
     }
 
     # Adjust PRAGMA settings to improve performance
@@ -87,32 +77,22 @@ proc setup_database {db_path} {
 }
 
 proc process_trialdg { dpoint data } {
-    set block_id [dservGet ess/block_id]
-    db eval { INSERT INTO trials (block_id, trialdg, sys_time)
-	VALUES($block_id, $data, current_timestamp)
+    set system       [dservGet ess/system]
+    set protocol     [dservGet ess/protocol]
+    set variant      [dservGet ess/variant]
+    set subject      [dservGet ess/subject]
+    set project      [dservGet ess/project]
+    set block_id     [dservGet ess/block_id]
+    set n_trials     [dservGet ess/block_n_trials]
+    set n_complete   [dservGet ess/block_n_complete]
+    set pct_complete [dservGet ess/block_pct_complete]
+    set pct_correct  [dservGet ess/block_pct_correct]
+    
+    db eval { INSERT INTO trials (block_id, subject, project, state_system, protocol, variant, trialdg, sys_time)
+	VALUES($block_id, $subject, $project, $system, $protocol, $variant, $data, current_timestamp)
 	ON CONFLICT(block_id) DO UPDATE SET
-	block_id=$block_id, trialdg=$data, sys_time=current_timestamp;
+	trialdg=$data, n_complete=$n_complete, n_trials=$n_trials, pct_complete=$pct_complete, pct_correct=$pct_correct, sys_time=current_timestamp;
     }
-}
-
-proc process_trial { dpoint data } {
-    
-    set trialdg [dg_fromString $data]
-
-    set host [dservGet system/hostaddr]
-    set domain ess
-
-    foreach v "trialid project system protocol variant version subject status rt" {
-	set $v [dl_tcllist $trialdg:$v]
-    }
-    
-    set blockid [dservGet ess/block_id]
-    db eval {
-	INSERT into trial (host, block_id, trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo)
-	VALUES($host, $blockid, $trialid, $project, $system, $protocol, $variant, $version, $subject, $status, $rt, $data)
-    }
-    
-    dg_delete $trialdg
 }
 
 proc process_ess { dpoint data } {
@@ -186,13 +166,16 @@ proc get_trials { block_id } {
 proc get_stats_by { block_id args } {
     set g [get_trials $block_id ]
     set categs [dl_tcllist [dl_paste [dl_slist $g] [dl_slist :] [dl_slist {*}$args]]]
-    dl_local pc [dl_sortedFunc $g:status $categs]
-    dl_local rts [dl_sortedFunc $g:rt $categs]
-    dl_local counts [dl_sortedFunc $g:status $categs dl_lengths]
-    set result [list\
+    dl_local c [dl_uniqueCross {*}$categs]
+    dl_local pc [dl_means [dl_sortByLists $g:status {*}$categs]]
+    dl_local rts [dl_means [dl_sortByLists $g:rt {*}$categs]]
+    dl_local counts [dl_lengths [dl_sortByLists $g:status {*}$categs]]
+    set result [list \
+		    vars   $args \
+		    levels [dl_tcllist $c] \
 		    status [dl_tcllist $pc] \
-	            rt     [dl_tcllist $rts] \
-		    count [dl_tcllist $counts]]
+		    rt     [dl_tcllist $rts] \
+		    count  [dl_tcllist $counts]]
     dg_delete $g
     return $result
 }

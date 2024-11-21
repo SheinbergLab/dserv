@@ -794,6 +794,19 @@ namespace eval ess {
 	} else {
 	    append_trialdg $status $rt $stimid
 	}
+
+	# save some basic block info
+	set n_trials [dl_length trialdg:status]
+	dservSet ess/block_n_trials $n_trials
+
+	dl_local completed_status [dl_select trialdg:status [dl_noteq trialdg:status -1]]
+	set n_complete [dl_length $completed_status]
+	dservSet ess/block_n_complete $n_complete
+	
+	dservSet ess/block_pct_complete [expr $n_complete/$n_trials]
+	dservSet ess/block_pct_correct [dl_mean $completed_status]
+
+	# store trialdg in dserv
 	dg_toString trialdg s
 	dservSetData trialdg [now] 6 $s
 
