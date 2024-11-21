@@ -803,7 +803,7 @@ namespace eval ess {
 	set n_complete [dl_length $completed_status]
 	dservSet ess/block_n_complete $n_complete
 	
-	dservSet ess/block_pct_complete [expr $n_complete/$n_trials]
+	dservSet ess/block_pct_complete [expr double($n_complete)/$n_trials]
 	dservSet ess/block_pct_correct [dl_mean $completed_status]
 
 	# store trialdg in dserv
