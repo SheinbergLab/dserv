@@ -815,7 +815,7 @@ wm title . "Experimental Control"
 wm iconphoto . -default essicon
 
 # hold onto host information
-set esshosts { localhost 192.168.4.100 192.168.4.101 192.168.5.30 192.168.88.30 }
+set esshosts { localhost 192.168.4.100 192.168.4.101 192.168.4.102 192.168.5.30 192.168.88.30 }
 array set esshostinfo {}
 set esshost ""
 set dserv_server ""
