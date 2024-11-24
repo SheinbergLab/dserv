@@ -857,9 +857,11 @@ if { [llength $argv] > 0 } {
     set server localhost
 }
 
-lappend ::esshosts $server    
-set ::esshost $server
-connect $server
+if { $server != {} } {
+    lappend ::esshosts $server
+    set ::esshost $server
+    connect $server
+}
 
 #########
 # dgview
