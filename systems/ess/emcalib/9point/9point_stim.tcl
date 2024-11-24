@@ -12,22 +12,6 @@
 #   DLS
 #
 
-# connect to data server receive stimdg updates
-package require qpcs
-qpcs::dsStimRegister $dservhost
-qpcs::dsStimAddMatch $dservhost stimdg
-
-# to stimdg is sent as b64 encoded string, this proc unpacks into stim
-proc readdg { args } {
-    dg_fromString64 [lindex $args 4]
-}
-
-# this sets the callback upon receipt of stimdg
-set ::dsCmds(stimdg) readdg
-
-namespace inscope :: {
-    proc onMousePress {} {}
-}
 
 proc nexttrial { id } {
     glistInit 2

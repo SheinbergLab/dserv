@@ -100,8 +100,33 @@ oo::class create System {
 	    variable screen_w 1024
 	    variable screen_h 600
 	}
-	
+
 	rmtSend "set dservhost [dservGet ess/ipaddr]"
+
+	set rmtcmd {
+	    # connect to data server receive stimdg updates
+	    package require qpcs
+	    qpcs::dsStimRegister $dservhost
+	    qpcs::dsStimAddMatch $dservhost stimdg
+	    
+	    # to stimdg is sent as b64 encoded string, this proc unpacks into stim
+	    proc readdg { args } {
+		dg_fromString64 [lindex $args 4]
+	    }
+	    
+	    # this sets the callback upon receipt of stimdg
+	    set ::dsCmds(stimdg) readdg
+	    
+	    namespace inscope :: {
+		proc onMousePress {} {
+		    global dservhost
+		    dl_local coords [dl_create short $::MouseXPos $::MouseYPos]
+		    qpcs::dsSetData $dservhost mtouch/touchvals $coords
+		}
+	    }
+	}
+
+	rmtSend $rmtcmd
 	
 	# source this protocol's stim functions
 	set stimfile [file join [set ::ess::system_path] [set ::ess::project] \

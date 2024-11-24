@@ -12,28 +12,6 @@
 #   DLS
 #
 
-# connect to data server receive stimdg updates
-package require qpcs
-qpcs::dsStimRegister $dservhost
-qpcs::dsStimAddMatch $dservhost stimdg
-
-# to stimdg is sent as b64 encoded string, this proc unpacks into stim
-proc readdg { args } {
-    dg_fromString64 [lindex $args 4]
-}
-
-# this sets the callback upon receipt of stimdg
-set ::dsCmds(stimdg) readdg
-
-# simulate touchscreen using  mouse from stim2 (don't need Release)
-namespace inscope :: {
-    proc onMousePress {} {
-	global dservhost
-	dl_local coords [dl_create short $::MouseXPos $::MouseYPos]
-	qpcs::dsSetData $dservhost mtouch/touchvals $coords
-    }
-}
-
 #
 # nexttrial
 #    create a triad of stimuli with sample on top and choices below
