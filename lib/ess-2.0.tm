@@ -663,6 +663,7 @@ namespace eval ess {
 	if { $current(state_system) != ""} {
 	    ::ess::evt_put USER START [now]
 	    $current(state_system) start
+	    dservSet ess/user_start 1
 	}
 	return
     }
@@ -674,6 +675,7 @@ namespace eval ess {
 	if { $current(state_system) != ""} {
 	    $current(state_system) stop
 	    ::ess::evt_put USER QUIT [now]
+	    dservSet ess/user_quit 1
 	}
 	return
     }
@@ -685,6 +687,7 @@ namespace eval ess {
 	if { $current(state_system) != ""} {
 	    $current(state_system) reset
 	    ::ess::evt_put USER RESET [now]
+	    dservSet ess/user_reset 1
 	}
 	return
     }
