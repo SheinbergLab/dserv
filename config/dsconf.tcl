@@ -124,7 +124,7 @@ proc connect_touchscreen {} {
     }
 }
 
-proc set_ip_address {} {
+proc set_hostinfo {} {
     # target_host allows us to connect using NIC
     set target_host google.com
     
@@ -135,10 +135,19 @@ proc set_ip_address {} {
     set s [socket $target_host 80]
     dservSet system/hostaddr [lindex [fconfigure $s -sockname] 0]
     close $s
+
+    if { $::tcl_platform(os) == "Darwin" } {
+	set name [exec scutil --get ComputerName]
+    } elseif { $::tcl_platform(os) == "Linux" } {
+	set name [exec hostname]
+    } else {
+	set name $::env(COMPUTERNAME)
+    }
+    dservSet system/hostname $name
 }
 
 connect_touchscreen
-set_ip_address
+set_hostinfo
 
 # connect to battery power circuits
 ina226Add 0x45 system 12v
