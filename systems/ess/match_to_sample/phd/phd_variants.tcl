@@ -33,6 +33,14 @@ namespace eval match_to_sample::phd {
     }
 
     proc variants_init { s } {
+        $s add_method VV_init {} {
+            rmtSend "setBackground 100 100 100"
+        }
+
+        $s add_method HH_init {} {
+            rmtSend "setBackground 100 100 100"
+        }
+
 	#
 	# extract qrs representation for a given shape
 	#
