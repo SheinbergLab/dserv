@@ -13,7 +13,7 @@ set insert_status_cmd  "insert_status"
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
     global conn dbname insert_trialinfo_cmd insert_status_cmd
-    set conninfo "dbname=$db user=postgres password=postgres host=localhost port=5432"
+    set conninfo "dbname=$db user=postgres password=postgres host=hb-server.local port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
 	set conn -1
@@ -22,27 +22,28 @@ proc setup_database { db { overwrite 0 } } {
     # Create the 'trial' table if it does not exist
     set stmt {
         CREATE TABLE IF NOT EXISTS trial (
-  	    base_trial_id INTEGER primary key generated always as identity,
-	    host VARCHAR(256),
-            block_id INTEGER,
-            trial_id INTEGER,
-	    project TEXT,
-            state_system TEXT,
-            protocol TEXT,
-	    variant TEXT,
-	    version TEXT,
-	    subject TEXT,
-	    status INTEGER,
-	    rt INTEGER,
-	    trialinfo JSONB,
-	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP	    
-        );
-    }
+					  server_trial_id INTEGER primary key generated always as identity,
+					  host VARCHAR(256),
+					  base_block_id INTEGER,
+					  base_trial_id INTEGER,
+					  project TEXT,
+					  state_system TEXT,
+					  protocol TEXT,
+					  variant TEXT,
+					  version TEXT,
+					  subject TEXT,
+					  status INTEGER,
+					  rt INTEGER,
+					  trialinfo JSONB,
+					  server_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP	   
+					  );
+    }    
+    
     postgres::exec $conn $stmt
-
+    
     # Create prepared insert statement to make updates more efficient
     set stmt {
-	INSERT INTO trial (host, block_id, trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo) \
+	INSERT INTO trial (host, base_block_id, base_trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo) \
 	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10), ($11), ($12))
     }
     postgres::prepare $conn $insert_trialinfo_cmd $stmt 1
@@ -51,21 +52,21 @@ proc setup_database { db { overwrite 0 } } {
     # Create the 'status' table if it does not exist
     set stmt {
         CREATE TABLE IF NOT EXISTS status (
-	    host VARCHAR(256),
-	    status_source TEXT,
-            status_type TEXT UNIQUE,
-            status_value TEXT,
-	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-	    primary key (host, status_source, status_type)
-        );
-    }
+					   host VARCHAR(256),
+					   status_source TEXT,
+					   status_type TEXT UNIQUE,
+					   status_value TEXT,
+					   server_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+					   primary key (host, status_source, status_type)
+					   );
+    }    
     postgres::exec $conn $stmt
-
+    
     # Create prepared insert statement to make updates more efficient
     set stmt {
 	INSERT INTO status (host, status_source, status_type, status_value) VALUES(($1), ($2), ($3), ($4))
 	ON CONFLICT (status_type)
-	DO UPDATE SET host = ($1), status_source = ($2), status_type = ($3), status_value = ($4), sys_time = current_timestamp;
+	DO UPDATE SET host = ($1), status_source = ($2), status_type = ($3), status_value = ($4), server_time = current_timestamp;
     }
     postgres::prepare $conn $insert_status_cmd $stmt 1
 }
