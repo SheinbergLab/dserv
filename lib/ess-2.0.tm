@@ -296,6 +296,9 @@ oo::class create System {
 
     method add_method { name params script } {
 	oo::objdefine [self] method $name $params $script
+
+	# export method (even if starts with upper case)
+	oo::objdefine [self] export $name
     }
     
     method add_variable { var { val {} } } {
