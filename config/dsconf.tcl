@@ -144,6 +144,7 @@ proc set_hostinfo {} {
 	set name $::env(COMPUTERNAME)
     }
     dservSet system/hostname $name
+    dservSet system/os $::tcl_platform(os)
 }
 
 connect_touchscreen
