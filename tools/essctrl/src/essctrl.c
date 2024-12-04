@@ -13,6 +13,8 @@
 #define DSERV_PORT 4620
 #define STIM_PROMPT "stim> "
 #define STIM_PORT 4610
+#define PG_PROMPT "pg> "
+#define PG_PORT 2572
 
 void completion(const char *buf, linenoiseCompletions *lc) {
     if (buf[0] == 'h') {
@@ -191,6 +193,15 @@ int main (int argc, char *argv[])
       else {
 	tcpport = DB_PORT;
 	prompt = DB_PROMPT;
+      }
+    } else if (!strncmp(line, "/pg", 3)) {
+      if (strlen(line) > 3) {
+	resultstr = do_command(server, PG_PORT, &line[4], strlen(line)-4);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = PG_PORT;
+	prompt =PG_PROMPT;
       }
     } else if (line[0] == '/') {
       printf("Unreconized command: %s\n", line);
