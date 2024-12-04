@@ -77,12 +77,6 @@ proc process_ess { dpoint data } {
     set host [dservGet system/hostaddr]
     set domain ess
 
-    # if the system has changed, update the blockid
-    if { [string equal $dpoint ess/system] } {
-	set maxblockid [postgres::query $conn { SELECT max(block_id) from trial; }]
-	dservSet ess/block_id [expr $maxblockid+1]
-    }
-    
     if { [string equal $dpoint ess/trialinfo] } {
 	set d [::yajl::json2dict $data]
 	
