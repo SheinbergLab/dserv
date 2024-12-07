@@ -2272,8 +2272,8 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	  dpoint_set(dpoint, varname, timestamp ? timestamp : now(), 
 		     (ds_datatype_t) datatype,
 		     datalen, (unsigned char *) databuf);
+	  // set new dpoint, memory managed by ds
 	  ds->set(dpoint);
-	  dpoint_free(dpoint);
 	}
 
       else
