@@ -93,7 +93,9 @@ void dpoint_free(ds_datapoint_t *d);
 
 int dpoint_binary_size(ds_datapoint_t *dpoint);
 int dpoint_to_binary(ds_datapoint_t *dpoint, unsigned char *buf, int *size);
+ds_datapoint_t *dpoint_from_binary(char *buf, int buflen);
 
+  
 int dpoint_string_size(ds_datapoint_t *d);
 int dpoint_to_string(ds_datapoint_t *d, char *buf, int size);
 ds_datapoint_t *dpoint_from_string(char *str, int len);
