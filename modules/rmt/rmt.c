@@ -120,7 +120,8 @@ static int socket_write(char *message, int nbytes)
 {
   if (rmt_socket < 0) return 0;
   if (write(rmt_socket, message, nbytes) < 0) {
-    perror("writing socket");
+    close(rmt_socket);
+    rmt_socket = -1;
     return 0;
   }
   return 1;
@@ -144,9 +145,10 @@ static int socket_read(char **message, int *nbytes)
   
   int n;
   if ((n = read(rmt_socket, buf, SOCK_BUF_SIZE)) < 0) {
-    perror("reading stream socket");
     if (message) *message = NULL;
     if (nbytes) *nbytes = 0;
+    close(rmt_socket);
+    rmt_socket = -1;
     return 0;
     }
   
