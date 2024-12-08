@@ -12,8 +12,30 @@
  *
  ************************************************************************/
 
+/************************************************************************
+ *
+ * FUNCTIONS
+ *    base64encode/base64decode
+ *
+ * DESCRIPTION
+ *    Move to/from b64 encoding
+ *
+ * SOURCE
+ *    http://en.wikibooks.org/wiki/Algorithm_Implementation/Miscellaneous/Base64
+ *
+ ************************************************************************/
 
-int base64encode(const void* data_buf, int dataLength, char* result, int resultSize)
+// how big a buffer is needed for the b64 encoded data?
+int base64size(int len)
+{
+  if (!len)
+    return 0;
+  else
+    return ((4 * len / 3) + 3) & ~3;
+}
+
+int base64encode(const void* data_buf, int dataLength, char* result,
+		 int resultSize)
 {
    const char base64chars[] =
      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
