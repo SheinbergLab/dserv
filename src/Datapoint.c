@@ -163,6 +163,37 @@ int dpoint_to_binary(ds_datapoint_t *dpoint, unsigned char *buf, int *maxsize)
   return bufidx;
 }
 
+ds_datapoint_t *dpoint_from_binary(char *buf, int buflen)
+{
+  ds_datapoint_t *dpoint =
+    (ds_datapoint_t *) calloc(1, sizeof(ds_datapoint_t));
+
+  int bufidx = 0;
+
+  memcpy(&dpoint->varlen, &buf[bufidx], sizeof(uint16_t));
+  bufidx+=sizeof(uint16_t);
+
+  dpoint->varname = malloc(dpoint->varlen+1);
+  memcpy(dpoint->varname, &buf[bufidx], dpoint->varlen);
+  dpoint->varname[dpoint->varlen] = '\0';
+  bufidx += dpoint->varlen;
+
+  memcpy(&dpoint->timestamp, &buf[bufidx], sizeof(uint64_t));
+  bufidx += sizeof(uint64_t);
+
+  memcpy(&dpoint->data.type, &buf[bufidx], sizeof(uint32_t));
+  bufidx += sizeof(uint32_t);
+
+  memcpy(&dpoint->data.len, &buf[bufidx], sizeof(uint32_t));
+  bufidx += sizeof(uint32_t);
+
+  dpoint->data.buf = (unsigned char *) malloc(dpoint->data.len);
+  memcpy(dpoint->data.buf, &buf[bufidx], dpoint->data.len);
+  bufidx += dpoint->data.len;
+
+  return dpoint;
+}
+
 int dpoint_to_string(ds_datapoint_t *d, char *buf, int size)
 {
   int needed, b64_need;
