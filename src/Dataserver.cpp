@@ -1766,7 +1766,7 @@ int Dataserver::tcp_process_request(Dataserver *ds,
 	    status = -1;
 	  }
 	}
-
+	
 	/* dserv_touch */
 	else if (nbytes > 7 &&
 		 buf[1] == 't' && buf[2] == 'o' &&
@@ -2221,7 +2221,52 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	      goto close_up;
 	    }
 	}
+      
+      else if (buf[0] == '<') {
+	ds_datapoint_t *dpoint;
+	uint16_t varlen;
+	char *varname;
 
+	/* next 2 bytes are length of varname */
+	rval = read(sockfd, &varlen, sizeof(uint16_t));
+	if (rval < sizeof(uint16_t)) goto close_up;
+
+	/* next varlen bytes are varname */
+	varname = (char *) malloc(varlen+1);
+	if (varlen) read(sockfd, varname, varlen);
+
+	/* null terminate the varname string */
+	varname[varlen] = '\0';
+
+	/* lookup the varname */
+	int status = ds->get(varname, &dpoint);
+	free(varname);
+
+	if (status) {	  
+	  int point_bufsize = dpoint_binary_size(dpoint);
+	  unsigned char *point_buf = (unsigned char *) malloc(point_bufsize);
+	  int bsize = dpoint_to_binary(dpoint, point_buf, &point_bufsize);
+
+	  /* we return the size of the dpoint (int) and dpoint buffer */
+	  iovs[0].iov_base = &point_bufsize;
+	  iovs[0].iov_len = sizeof(int);
+	  iovs[1].iov_base = point_buf;
+	  iovs[1].iov_len = point_bufsize;
+	  
+	  bytes_to_send = sizeof(uint32_t)+point_bufsize;
+	  
+	  rval = writev(sockfd, iovs, 2);
+
+	  free(point_buf);
+	  
+	  dpoint_free(dpoint);
+	}
+	else {
+	  int point_bufsize = 0;
+	  write(sockfd, &point_bufsize, sizeof(int));
+	}
+      }
+      
       else if (buf[0] == DPOINT_BINARY_MSG_CHAR)
 	{
 	  uint16_t varlen;
