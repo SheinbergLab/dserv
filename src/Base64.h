@@ -5,10 +5,11 @@
 extern "C" {
 #endif
 
-int base64encode(const void* data_buf, int dataLength,
-		 char* result, int resultSize);
-int base64decode (char *in, unsigned int inLen,
-		  unsigned char *out, unsigned int *outLen);
+  int base64encode(const void* data_buf, int dataLength,
+		   char* result, int resultSize);
+  int base64decode (char *in, unsigned int inLen,
+		    unsigned char *out, unsigned int *outLen);
+  int base64size(int len);
 
 #ifdef __cplusplus
 }
