@@ -170,5 +170,5 @@ if { [lsearch $hbs $host] >= 0 } {
 ess::load_system
 
 # set initial subject
-ess::set_subject human
+ess::set_subject Human
 
