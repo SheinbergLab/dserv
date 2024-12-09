@@ -92,9 +92,25 @@ public:
     
     return 1;
   }
+
+  /*
+   * send command to ess server to "touch" region setting info for each window
+   */
+  void update_em_regions(void)
+  {
+    int result;
+    std::string rstr;
+    std::string cmd("for {set i 0} {$i < 8} {incr i} {ainGetRegionInfo $i}");
+    
+    if (!host.empty()) {
+      result = ds_sock->esscmd(host, cmd, rstr);
+    }
+  }
+
   
   int connect_to_host(std::string hoststr)
   {
+    host = hoststr;
     ds_sock->reg(hoststr.c_str());
     ds_sock->add_match(hoststr.c_str(), "ess/*");
     ds_sock->add_match(hoststr.c_str(), "system/*");
@@ -105,8 +121,9 @@ public:
     std::string rstr;
     ds_sock->esscmd(hoststr,
 		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total ess/block_pct_complete ess/block_pct_correct stimdg trialdg system/hostname system/os} { dservTouch $v }"), rstr);
-    
-    host = hoststr;
+
+    update_em_regions();
+
     return 1;
   }
     
@@ -463,9 +480,11 @@ void virtual_eye_cb (VirtualEye *w, void *data)
 {
   int result;
   std::string rstr;
-  std::string cmd("for {set i 0} {$i < 20} {incr i} {dservSet ess/em_pos {");
-  cmd += std::to_string(w->adc[0])+" "+std::to_string(w->adc[1])+" ";
-  cmd += std::to_string(w->em_pos[0])+" "+std::to_string(w->em_pos[1])+"}}";
+  
+  std::string cmd("set d [binary format s2 {");
+  cmd += std::to_string(w->adc[1])+" "+std::to_string(w->adc[0])+"}];";
+  cmd += "for {set i 0} {$i < 20} {incr i} {dservSetData ain/vals 0 4 $d};";
+  cmd += "unset d";
 
   //  std::cout << cmd << std::endl;
 
@@ -749,6 +768,23 @@ void process_dpoint_cb(void *cbdata) {
     snprintf(buf, sizeof(buf), "%d", (int) (atof(json_string_value(data))*100));
     pctcorrect_widget->value(buf);
     pctcorrect_widget->redraw_label();
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/em_region_setting")) {
+    int settings[8];
+    if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
+	       &settings[0], &settings[1], &settings[2], &settings[3],
+	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
+      eyetouch_widget->region_set(settings);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/em_region_status")) {
+    int status[4];
+    if (sscanf(json_string_value(data), "%d %d %d %d",
+	       &status[0], &status[1], &status[2], &status[3]) == 4) {
+      eyetouch_widget->status_set(status);
+    }
   }
   
   else if (!strcmp(json_string_value(name), "ess/system")) {

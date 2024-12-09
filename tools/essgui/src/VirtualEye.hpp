@@ -48,7 +48,7 @@ protected:
 public:
   VirtualEye(int X, int Y, int W, int H, const char *l=NULL) : MoveableCircle(X,Y,W,H,l) {
     xextent = 10.0*2;
-    deg_per_adc_point = xextent/4096.;
+    deg_per_adc_point = 1/200.;
     set_em_pos(0, 0);
   }
 
@@ -61,7 +61,7 @@ public:
     em_pos[0] = ((x()+w()/2)-parent()->x())*deg_per_pix_x-(xextent/2);
     em_pos[1] = -1.0*(((y()+h()/2)-parent()->y())*deg_per_pix_y-(yextent/2));
     adc[0] = em_pos[0]/deg_per_adc_point+2048;
-    adc[1] = em_pos[1]/deg_per_adc_point+2048;
+    adc[1] = -em_pos[1]/deg_per_adc_point+2048;
   }
 
   /* set the location of the virtual eye to (x,y) (degrees) */
@@ -76,7 +76,7 @@ public:
     em_pos[0] = x;
     em_pos[1] = y;
     adc[0] = em_pos[0]/deg_per_adc_point+2048;
-    adc[1] = em_pos[1]/deg_per_adc_point+2048;
+    adc[1] = -em_pos[1]/deg_per_adc_point+2048;
 
     /* move the circle and redraw */
     position(xpos, ypos);

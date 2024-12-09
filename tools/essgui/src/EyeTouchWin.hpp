@@ -13,12 +13,30 @@
 #include <string.h>
 #include <stdlib.h>
 
+typedef enum { WINDOW_IN, WINDOW_OUT } WINDOW_STATE;
+typedef enum { WINDOW_RECTANGLE, WINDOW_ELLIPSE } WINDOW_TYPE;
+enum { WINDOW_NOT_INITIALIZED, WINDOW_INITIALIZED };
+
+class EyeRegion {
+
+public:
+  int reg;
+  bool active;
+  WINDOW_STATE state;
+  WINDOW_TYPE type;
+  int center_x;
+  int center_y;
+  int plusminus_x;
+  int plusminus_y;
+};
+  
 class EyeTouchWin : public Fl_Box {
 private:
   float deg_per_pix_x;
   float deg_per_pix_y;
   float xextent;			/* extent in degrees */
   float yextent;			/* extent in degrees */
+
   float em_pos_x;
   float em_pos_y;
   float em_radius;
@@ -26,9 +44,41 @@ private:
   float yextent_2;
   bool flipx;
   bool flipy;
+
+  static const int nregions = 8;
+  EyeRegion regions[nregions];
   
 public:
 
+  void region_set(int settings[8]) {
+    if (settings[0] >= 0 && settings[0] < nregions) {
+      regions[settings[0]].reg         = settings[0];
+      regions[settings[0]].active      = settings[1];
+      regions[settings[0]].state       = (WINDOW_STATE) settings[2];
+      regions[settings[0]].type        = (WINDOW_TYPE) settings[3];
+      regions[settings[0]].center_x    = settings[4];
+      regions[settings[0]].center_y    = settings[5];
+      regions[settings[0]].plusminus_x = settings[6];
+      regions[settings[0]].plusminus_y = settings[7];
+    }
+  }
+
+  void status_set(int status[4]) {
+    int changes = status[0];
+    int states = status[1];
+    int adc_x = status[2];
+    int adc_y = status[3];
+
+    for (int i = 0; i < nregions; i++) {
+      if (changes & (1 << i)) {
+	regions[i].state = (WINDOW_STATE) ((states & (1 << i)) != 0);
+	//	printf("set region %d -> %d\n", i, regions[i].state); 
+      }
+    }
+    //    printf("region status: changes=%02x states=%02x adc_x=%d adc_y=%d\n",
+    //	   status[0], status[1], status[2], status[3]);
+  }
+  
   void draw() FL_OVERRIDE {
     /* clear background */
     fl_color(FL_BLACK);
