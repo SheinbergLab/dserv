@@ -27,7 +27,7 @@ include_directories(.)
 ###############################
 # dserv
 ###############################
-add_library(dserv SHARED tcl_dserv.c dservapi.c ../src/Datapoint.c ../src/Base64.c)
+add_library(dserv SHARED tcl_dserv.c dservapi.c dpoint_tclobj.c ../src/Datapoint.c ../src/Base64.c)
 
 if(WIN32)
 
