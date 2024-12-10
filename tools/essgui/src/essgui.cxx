@@ -740,7 +740,7 @@ void process_dpoint_cb(void *cbdata) {
 
   else if (!strcmp(json_string_value(name), "ess/obs_total")) {
     char buf[32];
-    snprintf(buf, sizeof(buf), "%d/%s", obs_id, json_string_value(data));
+    snprintf(buf, sizeof(buf), "%d/%s", obs_id+1, json_string_value(data));
     obscount_widget->value(buf);
     obscount_widget->redraw_label();
   }
@@ -775,7 +775,7 @@ void process_dpoint_cb(void *cbdata) {
     if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
 	       &settings[0], &settings[1], &settings[2], &settings[3],
 	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
-      eyetouch_widget->region_set(settings);
+      eyetouch_widget->eye_region_set(settings);
     }
   }
 
@@ -783,7 +783,24 @@ void process_dpoint_cb(void *cbdata) {
     int status[4];
     if (sscanf(json_string_value(data), "%d %d %d %d",
 	       &status[0], &status[1], &status[2], &status[3]) == 4) {
-      eyetouch_widget->status_set(status);
+      eyetouch_widget->eye_status_set(status);
+    }
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/touch_region_setting")) {
+    int settings[8];
+    if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
+	       &settings[0], &settings[1], &settings[2], &settings[3],
+	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
+      eyetouch_widget->touch_region_set(settings);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/touch_region_status")) {
+    int status[4];
+    if (sscanf(json_string_value(data), "%d %d %d %d",
+	       &status[0], &status[1], &status[2], &status[3]) == 4) {
+      eyetouch_widget->touch_status_set(status);
     }
   }
   
