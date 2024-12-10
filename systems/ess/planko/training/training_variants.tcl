@@ -16,7 +16,7 @@ namespace eval planko::training {
     variable basic_planko_jitter      { nr 50 nplanks 1 params \
 					    { ball_jitter_x 8 ball_start_y 5 ball_jitter_y 1 } }
     variable basic_planko_zero_one    { nr 50 nplanks 1 params \
-					    { ball_jitter_x 10 ball_start_y 2 ball_jitter_y 4 minplanks 0 } }
+					    { ball_jitter_x 10 ball_start_y 0 ball_jitter_y 3 minplanks 0 } }
     
     variable variants {
 	single      { basic_planko single    "one plank"}
