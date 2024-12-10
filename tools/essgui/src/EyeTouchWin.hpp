@@ -64,6 +64,11 @@ private:
 
   int touch_pix_x;
   int touch_pix_y;
+
+  int _screen_w;		/* width of remote display in pixels  */
+  int _screen_h;		/* height of remote display in pixels */
+  float _screen_halfx;		/* degrees in half width of screen    */
+  float _screen_halfy;          /* degrees in half height of screen   */
   
   static const int n_eye_regions = 8;
   EyeRegion eye_regions[n_eye_regions];
@@ -73,6 +78,16 @@ private:
 
 public:
 
+  int screen_w(void) { return _screen_w; }
+  int screen_h(void) { return _screen_h; }
+  float screen_halfx(void) { return _screen_halfx; }
+  float screen_halfy(void) { return _screen_halfy; }
+  
+  void screen_w(int w) { _screen_w = w; }
+  void screen_h(int h) { _screen_h = h; }
+  void screen_halfx(float halfx) { _screen_halfx = halfx; }
+  void screen_halfy(float halfy) { _screen_halfy = halfy; }
+  
   void eye_region_set(int settings[8]) {
     if (settings[0] >= 0 && settings[0] < n_eye_regions) {
       eye_regions[settings[0]].set(settings);
@@ -137,7 +152,7 @@ public:
 
     /* draw touch regions */
     for (int i = 0; i < n_touch_regions; i++) {
-      //      draw_touch_region(&touch_regions[i]);
+      draw_touch_region(&touch_regions[i]);
     }
     
     fl_pop_clip();
@@ -177,7 +192,30 @@ public:
       fl_rect(xpos-w, ypos-h, 2*w, 2*h);
   }
 
-  
+  void draw_touch_region(EyeRegion *region)
+  {
+    if (!region->active) return;
+
+    fl_color(FL_CYAN);
+    float screen_pix_per_deg_x = screen_w()/(2*screen_halfx());
+    float screen_pix_per_deg_y = screen_h()/(2*screen_halfy());
+    float cx_deg = (region->center_x-screen_w()/2)/screen_pix_per_deg_x;
+    float cy_deg = (region->center_y-screen_h()/2)/screen_pix_per_deg_y;
+    float w_deg = region->plusminus_x/screen_pix_per_deg_x;
+    float h_deg = region->plusminus_y/screen_pix_per_deg_y;
+    
+    float xpos = x()+w()/2+(cx_deg)/deg_per_pix_x;
+    float ypos = y()+h()/2+(cy_deg)/deg_per_pix_y;
+    float w = w_deg/deg_per_pix_x;
+    float h = h_deg/deg_per_pix_y;
+    if (region->type == WINDOW_ELLIPSE) {
+      fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+      fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
+    }
+    else
+      fl_rect(xpos-w, ypos-h, 2*w, 2*h);
+  }
+
   void em_pos(float x, float y)
   {
     bool do_redraw = false;
