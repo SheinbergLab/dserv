@@ -77,6 +77,7 @@ namespace eval search::circles {
 	}
 	
 	$s set_quit_callback {
+	    ::ess::touch_region_off 0
 	    rmtSend clearscreen
 	    ::ess::end_obs QUIT
 	}

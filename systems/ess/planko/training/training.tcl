@@ -68,6 +68,8 @@ namespace eval planko::training {
 	}
 	
 	$s set_quit_callback {
+	    ::ess::touch_region_off 0
+	    ::ess::touch_region_off 1
 	    rmtSend clearscreen
 	    ::ess::end_obs QUIT
 	}

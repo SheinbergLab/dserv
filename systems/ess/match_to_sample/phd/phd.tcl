@@ -65,6 +65,7 @@ namespace eval match_to_sample::phd {
 	}
 	
 	$s set_quit_callback {
+	    foreach i "0 1 2 3" { ::ess::touch_region_off $i }
 	    rmtSend clearscreen
 	    if { $trial_type == "HV"} { my haptic_clear }
 	    ::ess::end_obs QUIT
