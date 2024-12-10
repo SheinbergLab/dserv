@@ -53,14 +53,26 @@ proc make_stims { trial } {
     set ::right_catcher {}
     
     set n [dl_length $dg:name:$trial]
+
+    # get side and show_only_correct_side flag for this trial
+    foreach v "side show_only_correct_side" {
+	set $v [dl_get $dg:$v $trial]
+    }
+    
     for { set i 0 } { $i < $n } { incr i } {
 	foreach v "name shape type tx ty sx sy angle restitution" {
 	    set $v [dl_get $dg:$v:$trial $i]
-	} 
+	}
 	if { $shape == "Box" } {
-	    set body [create_box $bworld $name $type $tx $ty $sx $sy $angle { 9. 9. 9. 1.0 }]
+	    if { $show_only_correct_side } {
+		if { $side == "0" } { set hide_name catchr_* } { set hide_name catchl_* }
+		if { [string match $hide_name $name] } { set alpha 0.0 } { set alpha 1.0 }
+	    } else {
+		set alpha 1.0
+	    }
+	    set body [create_box $bworld $name $type $tx $ty $sx $sy $angle [list 9. 9. 9. $alpha ]]
 	} elseif { $shape == "Circle" } {
-	    set body [create_circle $bworld $name $type $tx $ty $sx $angle { 0 1 1 }]
+	    set body [create_circle $bworld $name $type $tx $ty $sx $angle { 0 1 1 1 }]
 	}
 	Box2D_setRestitution $bworld [setObjProp $body body] $restitution
 	
