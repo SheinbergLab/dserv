@@ -92,8 +92,8 @@ oo::class create System {
 	variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
 	set scale_x [rmtSend "screen_set ScaleX"]
 	set scale_y [rmtSend "screen_set ScaleY"]
-	variable screen_w [expr [rmtSend "screen_set WinWidth"]/$scale_x]
-	variable screen_h [expr [rmtSend "screen_set WinHeight"]/$scale_y]
+	variable screen_w [expr int([rmtSend "screen_set WinWidth"]/$scale_x)]
+	variable screen_h [expr int([rmtSend "screen_set WinHeight"]/$scale_y)]
 	if { $screen_halfx == "" } {
 	    variable screen_halfx 16.0
 	    variable screen_halfy 9.0
@@ -101,6 +101,8 @@ oo::class create System {
 	    variable screen_h 600
 	}
 
+	foreach v "halfx halfy w h" { dservSet ess/screen_${v} [set screen_${v}] }
+	
 	rmtSend "set dservhost [dservGet ess/ipaddr]"
 
 	set rmtcmd {
