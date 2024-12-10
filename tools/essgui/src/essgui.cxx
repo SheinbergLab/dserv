@@ -803,7 +803,28 @@ void process_dpoint_cb(void *cbdata) {
       eyetouch_widget->touch_status_set(status);
     }
   }
-  
+
+  else if (!strcmp(json_string_value(name), "ess/screen_w")) {
+    int w;
+    if (sscanf(json_string_value(data), "%d", &w) == 1)
+      eyetouch_widget->screen_w(w);
+  }
+  else if (!strcmp(json_string_value(name), "ess/screen_h")) {
+    int h;
+    if (sscanf(json_string_value(data), "%d", &h) == 1)
+      eyetouch_widget->screen_h(h);
+  }
+  else if (!strcmp(json_string_value(name), "ess/screen_halfx")) {
+    float halfx;
+    if (sscanf(json_string_value(data), "%f", &halfx) == 1)
+      eyetouch_widget->screen_halfx(halfx);
+  }
+  else if (!strcmp(json_string_value(name), "ess/screen_halfy")) {
+    float halfy;
+    if (sscanf(json_string_value(data), "%f", &halfy) == 1)
+      eyetouch_widget->screen_halfy(halfy);
+  }
+
   else if (!strcmp(json_string_value(name), "ess/system")) {
     system_widget->value(system_widget->find_index(json_string_value(data)));
     clear_counter_widgets();
