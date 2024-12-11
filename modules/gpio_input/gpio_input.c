@@ -43,6 +43,7 @@ typedef struct gpio_input_s
 #endif
   tclserver_t *tclserver;
   char *dpoint_prefix;
+  int debounce_period_us;
 } gpio_input_t;
   
 typedef struct gpio_info_s
@@ -76,7 +77,7 @@ void *input_thread(void *arg)
   char point_name[64];
   sprintf(point_name, "%s/%d", info->dpoint_prefix, info->line);
   int status;
-    
+  
   while (1) {
     nfds = epoll_wait(info->epfd, &ev, 1, 20000);
     if (nfds != 0) {
@@ -162,13 +163,14 @@ static int gpio_line_request_input_command(ClientData data,
 {
   gpio_info_t *info = (gpio_info_t *) data;
   int offset = 0;
+  int lockout = 0;
 
   if (info->fd < 0) {
     return TCL_OK;
   }
   
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "offset [RISING|FALLING|BOTH] ...");
+    Tcl_WrongNumArgs(interp, 1, objv, "offset [RISING|FALLING|BOTH] [debounce_us]");
     return TCL_ERROR;
   }
 
@@ -185,6 +187,12 @@ static int gpio_line_request_input_command(ClientData data,
 
   if (objc > 2) {
     // allow specification of event type
+  }
+
+  if (objc > 3) {
+    if (Tcl_GetIntFromObj(interp, objv[2], &lockout) != TCL_OK) {
+      return TCL_ERROR;
+    }
   }
   
   gpio_input_t *ireq = info->input_requests[offset];
@@ -207,6 +215,9 @@ static int gpio_line_request_input_command(ClientData data,
   ireq->tclserver = info->tclserver;
   ireq->dpoint_prefix = info->dpoint_prefix; /* belongs to global */
   ireq->line = offset;
+  if (lockout >= 0) {
+    ireq->debounce_period_us = lockout;
+  }
   
   int ret = ioctl(info->fd, GPIO_GET_LINEEVENT_IOCTL, &ireq->req);
   if (ret != -1) {
