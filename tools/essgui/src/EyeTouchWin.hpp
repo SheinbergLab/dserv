@@ -12,7 +12,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-typedef enum { WINDOW_IN, WINDOW_OUT } WINDOW_STATE;
+typedef enum { WINDOW_OUT, WINDOW_IN } WINDOW_STATE;
 typedef enum { WINDOW_RECTANGLE, WINDOW_ELLIPSE } WINDOW_TYPE;
 enum { WINDOW_NOT_INITIALIZED, WINDOW_INITIALIZED };
 
@@ -109,10 +109,8 @@ public:
     int adc_y = status[3];
 
     for (int i = 0; i < n_eye_regions; i++) {
-      if (changes & (1 << i)) {
-	eye_regions[i].state = (WINDOW_STATE) ((states & (1 << i)) != 0);
+      eye_regions[i].state = (WINDOW_STATE) (((states & (1 << i)) != 0) && eye_regions[i].active);
 	//	printf("set region %d -> %d\n", i, eye_regions[i].state); 
-      }
     }
     //    printf("region status: changes=%02x states=%02x adc_x=%d adc_y=%d\n",
     //	   status[0], status[1], status[2], status[3]);
@@ -123,11 +121,10 @@ public:
     int states = status[1];
 
     for (int i = 0; i < n_touch_regions; i++) {
-      if (changes & (1 << i)) {
-	touch_regions[i].state = (WINDOW_STATE) ((states & (1 << i)) != 0);
-	printf("set touch region %d -> %d\n", i, touch_regions[i].state); 
-      }
+      touch_regions[i].state = (WINDOW_STATE) (((states & (1 << i)) != 0) && touch_regions[i].active);
+      //      	printf("set touch region %d -> %d\n", i, touch_regions[i].state); 
     }
+    redraw();
   }
   
   void draw() FL_OVERRIDE {
@@ -150,11 +147,17 @@ public:
       draw_eye_region(&eye_regions[i]);
     }
 
+    /* draw eye status */
+    draw_eye_status();
+    
     /* draw touch regions */
     for (int i = 0; i < n_touch_regions; i++) {
       draw_touch_region(&touch_regions[i]);
     }
-    
+
+    /* draw touch status */
+    draw_touch_status();
+        
     fl_pop_clip();
 
     redraw();
@@ -192,6 +195,27 @@ public:
       fl_rect(xpos-w, ypos-h, 2*w, 2*h);
   }
 
+  void draw_eye_status()
+  {
+    fl_color(FL_RED);
+    float radius = 8;
+    float xoffset = 8;
+    float yoffset =14;
+    float xpos;
+    float ypos = y()+h()-yoffset;
+    
+    for (int i = 0; i < n_eye_regions; i++) {
+      xpos = x()+xoffset+i*radius*1.4;
+      if (eye_regions[i].active && eye_regions[i].state == WINDOW_IN) {
+	fl_pie(xpos, ypos, radius, radius, 0.0, 360.0);
+      }
+      else {
+	fl_arc(xpos, ypos, radius, radius, 0.0, 360.0);
+      }
+    }
+  }
+
+  
   void draw_touch_region(EyeRegion *region)
   {
     if (!region->active) return;
@@ -216,6 +240,26 @@ public:
       fl_rect(xpos-w, ypos-h, 2*w, 2*h);
   }
 
+  void draw_touch_status()
+  {
+    fl_color(FL_CYAN);
+    float radius = 8;
+    float xoffset = w()-(n_touch_regions*1.4*radius);
+    float yoffset =14;
+    float xpos;
+    float ypos = y()+h()-yoffset;
+    
+    for (int i = 0; i < n_touch_regions; i++) {
+      xpos = x()+xoffset+i*radius*1.4;
+      if (touch_regions[i].active && touch_regions[i].state == WINDOW_IN) {
+	fl_pie(xpos, ypos, radius, radius, 0.0, 360.0);
+      }
+      else {
+	fl_arc(xpos, ypos, radius, radius, 0.0, 360.0);
+      }
+    }
+  }
+  
   void em_pos(float x, float y)
   {
     bool do_redraw = false;
