@@ -1113,11 +1113,11 @@ int add_tcl_commands(Tcl_Interp *interp)
 
 void initialize_subjects(void)
 {
-  subject_widget->add("Sally");
-  subject_widget->add("Momo");
-  subject_widget->add("Riker");
-  subject_widget->add("Glenn");
-  subject_widget->add("Human");
+  subject_widget->add("sally");
+  subject_widget->add("momo");
+  subject_widget->add("riker");
+  subject_widget->add("glenn");
+  subject_widget->add("human");
 }
 
 

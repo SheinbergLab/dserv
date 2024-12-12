@@ -603,13 +603,13 @@ namespace eval ess {
 
     proc set_subject { subj } {
 	variable subject_id
-	set subject_id $subj
+	set subject_id [string tolower $subj]
 	::ess::evt_put ID SUBJECT  [now] $subject_id
     }
 
     proc set_subjects { args } {
 	variable subject_ids
-	set subject_ids {*}$args
+	set subject_ids {*}[string tolower $args]
 	dservSet ess/subject_ids $subject_ids
     }
 
