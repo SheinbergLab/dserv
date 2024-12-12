@@ -12,10 +12,9 @@ int TclInterp::DlshAppInit(Tcl_Interp *interp) {
 
   if (Tcl_Init(interp) == TCL_ERROR) return TCL_ERROR;
   if (Dlsh_Init(interp) == TCL_ERROR) return(TCL_ERROR);
-  Tcl_VarEval(interp, "lappend auto_path [file dir [info nameofexecutable]]/../lib", NULL);
-  Tcl_VarEval(interp, "set dlshroot [file join [zipfs root] dlsh]");
+  Tcl_VarEval(interp, "set dlshroot [file join [zipfs root] dlsh]", NULL);
   Tcl_VarEval(interp, "zipfs mount /usr/local/dlsh/dlsh.zip $dlshroot", NULL);
-  Tcl_VarEval(interp, "set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]");
+  Tcl_VarEval(interp, "set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]", NULL);
   Tcl_VarEval(interp, "source $dlshroot/lib/dlsh/dlsh.tcl", NULL);
   return TCL_OK;
 }
