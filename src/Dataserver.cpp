@@ -1236,7 +1236,7 @@ std::string Dataserver::add_new_send_client(SharedQueue<client_request_t> *queue
   snprintf(client_id, sizeof(client_id), "%p", (void *) queue);
   std::string client_name = std::string(client_id);
   const char *key = client_name.c_str();
-    
+  
   // remove existing table;
   if (send_table.find(key, &send_client)) {
     send_table.remove(key);
