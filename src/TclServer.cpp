@@ -17,7 +17,8 @@ TclServer::TclServer(int argc, char **argv,
   /*
    * private interpreter for this TclServer object
    */
-  interp = setup_tcl(this);
+  //  interp = setup_tcl(this);
+  
   net_thread = std::thread(&TclServer::start_tcp_server, this);
   process_thread = std::thread(&process_requests, this);
 }
@@ -31,7 +32,7 @@ TclServer::~TclServer()
   /*
    * delete our private interpreter
    */
-  Tcl_DeleteInterp(interp);
+  //  Tcl_DeleteInterp(interp);
 }
 
 void TclServer::shutdown(void)
@@ -579,7 +580,6 @@ static int dpoint_tcl_script(Tcl_Interp *interp,
 			     const char *script,
 			     ds_datapoint_t *dpoint)
 {
-	  
   Tcl_Obj *commandArray[3];
   commandArray[0] = Tcl_NewStringObj(script, -1);
 	  
@@ -622,6 +622,9 @@ static int process_requests(TclServer *tserv)
   int retcode;
   client_request_t req;
 
+  /* create a unique interpreter for this process queue */
+  Tcl_Interp *interp = setup_tcl(tserv);
+  
   /* process until receive a message saying we are done */
   while (!tserv->m_bDone) {
     
@@ -633,8 +636,8 @@ static int process_requests(TclServer *tserv)
       {
 	const char *script = req.script.c_str();
 
-	retcode = Tcl_Eval(tserv->interp, script);
-	const char *rcstr = Tcl_GetStringResult(tserv->interp);
+	retcode = Tcl_Eval(interp, script);
+	const char *rcstr = Tcl_GetStringResult(interp);
 	
 	if (retcode == TCL_OK) {
 	  if (rcstr) {
@@ -660,7 +663,7 @@ static int process_requests(TclServer *tserv)
     case REQ_SCRIPT_NOREPLY:
       {
 	const char *script = req.script.c_str();
-	retcode = Tcl_Eval(tserv->interp, script);
+	retcode = Tcl_Eval(interp, script);
       }
       break;
     case REQ_DPOINT:
@@ -674,22 +677,27 @@ static int process_requests(TclServer *tserv)
 	std::string script;
 	std::string varname(dpoint->varname);
 	// evaluate a dpoint script
+
 	if (tserv->dpoint_scripts.find(varname, script)) {
 	  ds_datapoint_t *dpoint = req.dpoint;
 	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(tserv->interp, dpoint_script, dpoint);
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
 	}
 	else if (tserv->dpoint_scripts.find_match(varname, script)) {
 	  ds_datapoint_t *dpoint = req.dpoint;
 	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(tserv->interp, dpoint_script, dpoint);
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
 	}
+
 	dpoint_free(dpoint);
       }
     default:
       break;
     }
   }
+
+  Tcl_DeleteInterp(interp);
+//  std::cout << "TclServer process thread ended" << std::endl;
   
   return 0;
 }

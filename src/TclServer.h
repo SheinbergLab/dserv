@@ -70,9 +70,6 @@ public:
   int tcpport;
   int port(void) { return tcpport; }
 
-  // our interpreter
-  Tcl_Interp *interp;
-  
   static void
   tcp_client_process(TclServer *tserv,
 		     int sock,
