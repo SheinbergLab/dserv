@@ -1223,16 +1223,7 @@ int Dataserver::add_new_send_client(char *host, int port, uint8_t flags)
 
 /*
  * add_new_send_client (queue)
- *
- * create client thread to manage send requests for TCP/IP notifications
  */
-std::string Dataserver::send_client_id(void)
-{
-  std::ostringstream ss;
-  ss << std::this_thread::get_id();    
-  return ss.str();
-}
-  
 std::string Dataserver::add_new_send_client(SharedQueue<client_request_t> *queue)
 			  
 {
@@ -1240,7 +1231,10 @@ std::string Dataserver::add_new_send_client(SharedQueue<client_request_t> *queue
   std::thread send_thread_id;
   SendClient *send_client;
 
-  std::string client_name = send_client_id();
+  // use the queue address to identify this client for matching purposes
+  char client_id[32];
+  snprintf(client_id, sizeof(client_id), "%p", (void *) queue);
+  std::string client_name = std::string(client_id);
   const char *key = client_name.c_str();
     
   // remove existing table;
