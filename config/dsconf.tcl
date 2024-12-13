@@ -158,12 +158,12 @@ ina226Add 0x44 system 24v
 set host [dservGet system/hostaddr]
 
 # start sqlite local db
-subprocess 2571 [file join $dspath config/sqliteconf.tcl]
+subprocess 2571 "source [file join $dspath config/sqliteconf.tcl]"
 
 # homebase computers use postgresql
 set hbs "192.168.4.100 192.168.4.101 192.168.4.102"
 if { [lsearch $hbs $host] >= 0 } {
-    subprocess 2572 [file join $dspath config/postgresconf.tcl]
+    subprocess 2572 "source [file join $dspath config/postgresconf.tcl]"
 }
 
 # and finally load a default system
