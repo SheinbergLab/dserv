@@ -2,6 +2,7 @@
 #include "TclCommands.h"
 
 static int process_requests(TclServer *tserv);
+static Tcl_Interp *setup_tcl(TclServer *tserv);
 
 TclServer::TclServer(int argc, char **argv,
 		     Dataserver *dserv, int port): argc(argc), argv(argv)
@@ -12,7 +13,11 @@ TclServer::TclServer(int argc, char **argv,
   
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
-  
+
+  /*
+   * private interpreter for this TclServer object
+   */
+  interp = setup_tcl(this);
   net_thread = std::thread(&TclServer::start_tcp_server, this);
   process_thread = std::thread(&process_requests, this);
 }
@@ -22,6 +27,11 @@ TclServer::~TclServer()
   shutdown();
   net_thread.detach();
   process_thread.join();
+
+  /*
+   * delete our private interpreter
+   */
+  Tcl_DeleteInterp(interp);
 }
 
 void TclServer::shutdown(void)
@@ -129,7 +139,7 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
 
   if (objc > 2) {
     std::string script = std::string(Tcl_GetString(objv[2]));
-    auto result = child->eval(std::string("source ")+script);
+    auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
       Tcl_AppendResult(interp, result.c_str(), NULL);
       delete child;
@@ -162,7 +172,7 @@ static int dserv_add_match_command(ClientData data, Tcl_Interp * interp,
       return TCL_ERROR;
     }
   }
-  
+
   ds->client_add_match(tclserver->client_name, Tcl_GetString(objv[1]), every);
   return TCL_OK;
 }
@@ -188,6 +198,7 @@ static int dserv_add_exact_match_command(ClientData data, Tcl_Interp * interp,
   }
   
   ds->client_add_exact_match(tclserver->client_name, Tcl_GetString(objv[1]), every);
+
   return TCL_OK;
 }
 
@@ -608,11 +619,6 @@ static int dpoint_tcl_script(Tcl_Interp *interp,
 
 static int process_requests(TclServer *tserv)
 {
-  /*
-   * private interpreter
-   */
-  Tcl_Interp *interp = setup_tcl(tserv);
-  
   int retcode;
   client_request_t req;
 
@@ -621,14 +627,14 @@ static int process_requests(TclServer *tserv)
     
     req = tserv->queue.front();
     tserv->queue.pop_front();
-
+    
     switch (req.type) {
     case REQ_SCRIPT:
       {
 	const char *script = req.script.c_str();
 
-	retcode = Tcl_Eval(interp, script);
-	const char *rcstr = Tcl_GetStringResult(interp);
+	retcode = Tcl_Eval(tserv->interp, script);
+	const char *rcstr = Tcl_GetStringResult(tserv->interp);
 	
 	if (retcode == TCL_OK) {
 	  if (rcstr) {
@@ -654,7 +660,7 @@ static int process_requests(TclServer *tserv)
     case REQ_SCRIPT_NOREPLY:
       {
 	const char *script = req.script.c_str();
-	retcode = Tcl_Eval(interp, script);
+	retcode = Tcl_Eval(tserv->interp, script);
       }
       break;
     case REQ_DPOINT:
@@ -671,12 +677,12 @@ static int process_requests(TclServer *tserv)
 	if (tserv->dpoint_scripts.find(varname, script)) {
 	  ds_datapoint_t *dpoint = req.dpoint;
 	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  int retcode = dpoint_tcl_script(tserv->interp, dpoint_script, dpoint);
 	}
 	else if (tserv->dpoint_scripts.find_match(varname, script)) {
 	  ds_datapoint_t *dpoint = req.dpoint;
 	  const char *dpoint_script = script.c_str();
-	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	  int retcode = dpoint_tcl_script(tserv->interp, dpoint_script, dpoint);
 	}
 	dpoint_free(dpoint);
       }
@@ -684,9 +690,6 @@ static int process_requests(TclServer *tserv)
       break;
     }
   }
-  
-  Tcl_DeleteInterp(interp);
-  //  std::cout << "TclServer process thread ended" << std::endl;
   
   return 0;
 }
