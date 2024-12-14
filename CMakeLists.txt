@@ -41,7 +41,7 @@ elseif(WIN32)
   target_link_libraries(dserv ${LIBTCL} ${LIBJANSSON} ${LIBZ})
 else()
   include_directories("/usr/local/include")
-  target_link_libraries(dserv ${LIBTCL} ${LIBJANSSON} ${LIBZ} pthread gpiod rt dl)
+  target_link_libraries(dserv ${LIBTCL} ${LIBJANSSON} ${LIBZ} pthread rt dl)
 endif()
 
 
