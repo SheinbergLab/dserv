@@ -63,13 +63,24 @@ public:
   
   DservSocket()
   {
+#ifdef _MSC_VER
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (iResult != 0) {
+        printf("WSAStartup failed with error: %d\n", iResult);
+        return;
+    }
+#endif
+
     m_bDone = false;
     dsport = 0;
   }
 
   ~DservSocket()
   {
-
+#ifdef _MSC_VER
+    WSACleanup();
+#endif
   }
 
   void shutdown(void)
@@ -82,6 +93,16 @@ public:
     return m_bDone;
   }
 
+  void close_socket(int sock)
+  {
+#ifndef _MSC_VER
+    close(sock);
+#else
+    closesocket(sock);
+#endif
+  }
+
+  
   std::thread start_server(void)
   {
     std::unique_lock<std::mutex> mlock(mutex);
@@ -99,7 +120,11 @@ public:
     struct sockaddr_in address;
     struct sockaddr client_address;
     socklen_t client_address_len = sizeof(client_address);
+#ifdef _MSC_VER
+    SOCKET socket_fd, new_socket_fd;
+#else
     int socket_fd, new_socket_fd;
+#endif
     int on = 1;
     
     /* Initialise IPv4 address. */
@@ -157,7 +182,7 @@ public:
       thr.detach();
     }
     
-    close(socket_fd);
+    close_socket(socket_fd);
   }
 
   int
@@ -173,7 +198,7 @@ public:
     int n = 0;
     return n;
   }
-
+#ifndef _MSC_VER
   int client_socket(const char *host, int port)
   {
     int client_fd;
@@ -198,7 +223,61 @@ public:
 
     return client_fd;
   }
+#else
+  SOCKET client_socket(const char *host, int port)
+  {
+    struct addrinfo *result = NULL,
+      *ptr = NULL,
+      hints;
+    int iResult;
+    char portstr[16];
+    
+    SOCKET ConnectSocket = INVALID_SOCKET;    
+    ZeroMemory( &hints, sizeof(hints) );
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    
+    // Resolve the server address and port
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    iResult = getaddrinfo(host, portstr, &hints, &result);
+    if ( iResult != 0 ) {
+        printf("getaddrinfo failed with error: %d\n", iResult);
+        return -1;
+    }
 
+    // Attempt to connect to an address until one succeeds
+    for(ptr=result; ptr != NULL ;ptr=ptr->ai_next) {
+
+        // Create a SOCKET for connecting to server
+        ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, 
+            ptr->ai_protocol);
+        if (ConnectSocket == INVALID_SOCKET) {
+            printf("socket failed with error: %ld\n", WSAGetLastError());
+            return -1;
+        }
+
+        // Connect to server.
+        iResult = connect( ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
+        if (iResult == SOCKET_ERROR) {
+            closesocket(ConnectSocket);
+            ConnectSocket = INVALID_SOCKET;
+            continue;
+        }
+        break;
+    }
+
+    freeaddrinfo(result);
+
+    if (ConnectSocket == INVALID_SOCKET) {
+        printf("Unable to connect to server!\n");
+        return -1;
+    }
+
+    return ConnectSocket;
+  }
+#endif
+  
   int ds_command(int sock, std::string cmd, std::string &retstr)
   {
     int len = cmd.length();
@@ -210,10 +289,8 @@ public:
     ssize_t n = read(sock, &retstr[0], retstr.length());
   #else
     char recvbuf[4096];
-    std::cout << "waiting for response:" << std::endl;
      ssize_t n = recv(sock, recvbuf, sizeof(recvbuf), 0);
      if (n) retstr = std::string(recvbuf, n);   
-         std::cout << "ds_cmd: " << cmd << " = " << std::to_string(n) << std::endl;
   #endif
 
     if (!n) {
@@ -229,7 +306,7 @@ public:
 
     std::string s("%getkeys");
     ds_command(sock, s, keys);
-    close(sock);
+    close_socket(sock);
 
     int result = std::stoi(keys.substr(0,2));
     keys = keys.substr(2,keys.length());
@@ -248,7 +325,7 @@ public:
 
     ds_command(sock, s+key, value);
 
-    close(sock);
+    close_socket(sock);
     return 1;
   }
   
@@ -273,7 +350,7 @@ public:
 
     //std::cout << "reg: " << s << " -> " << retstr;
 
-    close(sock);
+    close_socket(sock);
   
     return (stoi(retstr));
   }
@@ -299,7 +376,7 @@ public:
     std::string retstr;
     ds_command(sock, s, retstr);
     
-    close(sock);
+    close_socket(sock);
     
     return (stoi(retstr));
   }
@@ -323,7 +400,7 @@ public:
     ds_command(sock, s, retstr);
     //    std::cout << "addmatch: " << s << " -> " << retstr;
     
-    close(sock);
+    close_socket(sock);
     return 1;
   }
   
@@ -343,7 +420,7 @@ public:
     ds_command(sock, s, retstr);
     //    std::cout << "unmatch: " << s << " -> " << retstr;
     
-    close(sock);
+    close_socket(sock);
     return 1;
   }
 
@@ -359,7 +436,7 @@ public:
     ds_command(sock, s, retstr);
     //std::cout << "touch: " << s << " -> " << retstr;
     
-    close(sock);
+    close_socket(sock);
     return 1;
   }
 
@@ -373,7 +450,7 @@ public:
 
     rstr.erase(std::remove(rstr.begin(), rstr.end(), '\n'), rstr.cend());
     
-    close(sock);
+    close_socket(sock);
     return result;
   }
 
@@ -400,8 +477,12 @@ DservSocket::ds_client_process(int sockfd)
 
   //  std::cout << "starting tcp_client_process: " << std::to_string(sockfd) << std::endl;
 
-  std::string dpoint_str;  
+  std::string dpoint_str;
+#ifndef _MSC_VER  
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
+#else
+    while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+#endif
     for (int i = 0; i < rval; i++) {
       char c = buf[i];
       if (c == '\n') {
@@ -421,5 +502,9 @@ DservSocket::ds_client_process(int sockfd)
     }
   }
   // std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+#ifndef _MSC_VER
   close(sockfd);
+#else
+  closesocket(sockfd);
+#endif
 }
