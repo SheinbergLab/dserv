@@ -1194,6 +1194,16 @@ proc do_sortby { args } {
 }
 
 int main(int argc, char *argv[]) {
+
+#ifdef _MSC_VER
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (iResult != 0) {
+        printf("WSAStartup failed with error: %d\n", iResult);
+        return 1;
+    }
+#endif
+
   App app(argc, argv);
 
   add_tcl_code();

@@ -3,6 +3,19 @@
 #include <tcl.h>
 #include "TclInterp.h"
 
+#ifdef _MSC_VER
+int setenv(const char *name, const char *value, int overwrite)
+{
+    int errcode = 0;
+    if(!overwrite) {
+        size_t envsize = 0;
+        errcode = getenv_s(&envsize, NULL, 0, name);
+        if(errcode || envsize) return errcode;
+    }
+    return _putenv_s(name, value);
+}
+#endif
+
 extern "C" {
 int Dlsh_Init(Tcl_Interp *interp);
 }
@@ -22,8 +35,11 @@ int TclInterp::DlshAppInit(Tcl_Interp *interp) {
 TclInterp::TclInterp(int argc, char *argv[]) {
   _interp = Tcl_CreateInterp();
   assert(_interp != NULL);
+#ifdef _MSC_VER
+  TclZipfs_AppHook(&argc, (wchar_t ***) &argv);
+#else
   TclZipfs_AppHook(&argc, &argv);
-
+#endif
   /*
    * Invoke application-specific initialization.
    */

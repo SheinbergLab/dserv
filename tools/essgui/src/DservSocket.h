@@ -18,12 +18,26 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#endif
-
-#include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <sys/select.h>
+#else
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <stdio.h>
+#include <io.h>
+
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+
+#include <sys/types.h>
+
 #include <fcntl.h>
 
 void process_dpoint_cb(void *cbdata);
@@ -133,9 +147,11 @@ public:
 	perror("accept");
 	continue;
       }
-      
+      #ifndef _MSC_VER
       setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-      
+      #else
+      setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, (const char *) &on, sizeof(on));
+      #endif
       // Create a thread and transfer the new stream to it.
       std::thread thr(ds_client_process, std::move(new_socket_fd));
       thr.detach();
@@ -174,11 +190,12 @@ public:
     if (inet_pton(AF_INET, host, &serv_addr.sin_addr) <= 0) {
       return -1;
     }
- 
+
     if ((status = connect(client_fd, (struct sockaddr*) &serv_addr,
 			  sizeof(serv_addr))) < 0) {
       return -1;
     }
+
     return client_fd;
   }
 
@@ -187,9 +204,18 @@ public:
     int len = cmd.length();
     int nwritten = send(sock, cmd.c_str(), cmd.length(), 0);
     if (len != nwritten) return 0;
-
+    
+  #ifndef _MSC_VER
     retstr.resize(4096);
     ssize_t n = read(sock, &retstr[0], retstr.length());
+  #else
+    char recvbuf[4096];
+    std::cout << "waiting for response:" << std::endl;
+     ssize_t n = recv(sock, recvbuf, sizeof(recvbuf), 0);
+     if (n) retstr = std::string(recvbuf, n);   
+         std::cout << "ds_cmd: " << cmd << " = " << std::to_string(n) << std::endl;
+  #endif
+
     if (!n) {
       return 0;
     }
@@ -242,14 +268,13 @@ public:
     myPort = ntohs(local_sin.sin_port);
  
     std::string s = std::string("%reg ") + myIP + " " + std::to_string(dsport) + " 2";
-
     std::string retstr;
     ds_command(sock, s, retstr);
 
-    //    std::cout << "reg: " << s << " -> " << retstr;
+    //std::cout << "reg: " << s << " -> " << retstr;
 
     close(sock);
-    
+  
     return (stoi(retstr));
   }
   
@@ -376,7 +401,6 @@ DservSocket::ds_client_process(int sockfd)
   //  std::cout << "starting tcp_client_process: " << std::to_string(sockfd) << std::endl;
 
   std::string dpoint_str;  
-
   while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
     for (int i = 0; i < rval; i++) {
       char c = buf[i];

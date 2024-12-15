@@ -26,7 +26,9 @@
 #pragma comment(lib, "Ws2_32.lib")
 #include <iphlpapi.h>
 #pragma comment(lib, "IPHLPAPI.lib")
+#ifndef strncasecmp
 #define strncasecmp _strnicmp
+#endif
 #else
 #include <unistd.h>
 #include <sys/socket.h>
