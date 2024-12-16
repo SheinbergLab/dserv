@@ -12,8 +12,8 @@ jobs:
 
       - name: Install package dependencies
         run: |
-          apt install -y build-essential cmake
-          apt install -y libgpiod-dev libevdev-dev
+          sudo apt install -y build-essential cmake
+          sudo apt install -y libgpiod-dev libevdev-dev
 
       - name: Build and install tcl 9
         run: |
@@ -21,8 +21,8 @@ jobs:
           cd tcl/unix/
           ./configure
           make
-          make install
-          ldconfig
+          sudo make install
+          sudo ldconfig
 
       - name: Build and install jansson static lib
         run: |
@@ -33,7 +33,7 @@ jobs:
           cd build/
           cmake ..
           make
-          make install
+          sudo make install
 
       - name: Check out our code
         uses: actions/checkout@v4
