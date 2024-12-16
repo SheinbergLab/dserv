@@ -15,7 +15,7 @@ namespace eval planko::training {
     variable basic_planko_single      { nr 100 nplanks 1 wrong_catcher_alpha 1. }
     variable basic_planko_jitter      { nr 50 nplanks 1 wrong_catcher_alpha 1. params \
 					    { ball_jitter_x 8 ball_start_y 5 ball_jitter_y 1 } }
-    variable basic_planko_zero_one    { nr 50 nplanks 1 wrong_catcher_alpha 0.05 params \
+    variable basic_planko_zero_one    { nr 50 nplanks 1 wrong_catcher_alpha 0.15 params \
 					    { ball_jitter_x 10 ball_start_y 0 ball_jitter_y 3 minplanks 0 } }
     
     variable variants {
