@@ -171,6 +171,6 @@ ess::load_system
 ess::set_subject human
 
 # look for any .tcl configs in local/*.tcl
-foreach f [glob [file join [file dirname $dspath] local *.tcl]] {
+foreach f [glob [file join $dspath local *.tcl]] {
     source $f
 }
