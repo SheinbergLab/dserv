@@ -80,6 +80,7 @@ typedef struct gpio_input_s
   tclserver_t *tclserver;
   char *dpoint_prefix;
   int debounce_period_us;
+  int val;
 } gpio_input_t;
   
 typedef struct gpio_info_s
@@ -102,8 +103,9 @@ static gpio_info_t g_gpioInfo;
 void *input_thread(void *arg)
 {
   gpio_input_t *info = (gpio_input_t *) arg;
-
+  struct gpio_v2_line_values lv;
   struct epoll_event ev;
+  
   ev.events = EPOLLIN;
   ev.data.fd = info->req.fd;
   info->epfd = epoll_create(1);
@@ -112,8 +114,21 @@ void *input_thread(void *arg)
 
   char point_name[64];
   sprintf(point_name, "%s/%d", info->dpoint_prefix, info->line);
-  int status;
+  int status, ret, val;
+  ds_datapoint_t *dp;
 
+  /* get initial value and set in dataserver */
+  gpiotools_set_bit(&lv.mask, 0); /* 0 -> only one line */
+  ret = ioctl(info->req.fd, GPIO_V2_LINE_GET_VALUES_IOCTL, &lv);
+  if (ret != -1) {
+    val = gpiotools_test_bit(lv.bits, 0);
+
+    /* create a new datapoint, memory managed by Dataserver */
+    dp = dpoint_new(point_name, tclserver_now(info->tclserver),
+		    DSERV_INT, sizeof(int), (unsigned char *) &val);
+    tclserver_set_point(info->tclserver, dp);
+  }
+  
   while (1) {
     nfds = epoll_wait(info->epfd, &ev, 1, 20000);
     if (nfds != 0) {
@@ -139,10 +154,10 @@ void *input_thread(void *arg)
       
       status = (event.id == GPIO_V2_LINE_EVENT_RISING_EDGE) ? 1 : 0;
       
-      ds_datapoint_t *dp = dpoint_new(point_name,
-				      tclserver_now(info->tclserver),
-				      DSERV_INT, sizeof(int),
-				      (unsigned char *) &status);
+      dp = dpoint_new(point_name,
+		      tclserver_now(info->tclserver),
+		      DSERV_INT, sizeof(int),
+		      (unsigned char *) &status);
       tclserver_set_point(info->tclserver, dp);
 
       // fprintf(stdout, "GPIO EVENT at %" PRIu64 " on line %d (%d|%d) ",
@@ -219,7 +234,8 @@ static int gpio_line_request_input_command(ClientData data,
   int offset = 0;
   int debounce_period_us = 0;
   int attr;
-
+  int ret, val;  
+  
   /* default to both edges */
   uint32_t edge_type =
     GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING;
@@ -260,7 +276,7 @@ static int gpio_line_request_input_command(ClientData data,
       return TCL_ERROR;
     }
   }
-  
+
   gpio_input_t *ireq = info->input_requests[offset];
   if (ireq) {		/* already opened, so close */
     shutdown_input_thread(ireq);
@@ -278,7 +294,6 @@ static int gpio_line_request_input_command(ClientData data,
   ireq->req.num_lines = 1;
   
   /* setup config for this request */
-
   memset(&ireq->req.config, 0, sizeof(ireq->req.config));
   ireq->req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
   ireq->req.config.flags |= edge_type;
@@ -303,7 +318,7 @@ static int gpio_line_request_input_command(ClientData data,
     ireq->debounce_period_us = debounce_period_us;
   }
   
-  int ret = ioctl(info->fd, GPIO_V2_GET_LINE_IOCTL, &ireq->req);
+  ret = ioctl(info->fd, GPIO_V2_GET_LINE_IOCTL, &ireq->req);
   if (ret == -1) {
     printf("ioctl GPIO_V2_GET_LINE_IOCTL error: %d\n", errno);
   }
@@ -317,7 +332,7 @@ static int gpio_line_request_input_command(ClientData data,
     free(ireq);
     info->input_requests[offset] = NULL;
   }
-  
+
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   return TCL_OK;
 }
