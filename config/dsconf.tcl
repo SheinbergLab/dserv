@@ -91,16 +91,14 @@ if { $::tcl_platform(os) == "Linux" } {
 
 catch { gpioOutputInit $gpiochip }
 catch { gpioInputInit $gpiochip }
-
-gpioLineRequestInput 24
-gpioLineRequestInput 25
-gpioLineRequestOutput 26
-
 catch { juicerInit $gpiochip }
-juicerSetPin 0 27
 
-dservSet gpio/input/24 0
-dservSet gpio/input/25 0
+# can put lines like these in local/pins.tcl, e.g.
+#gpioLineRequestInput 24
+#gpioLineRequestInput 25
+#gpioLineRequestOutput 26
+
+#juicerSetPin 0 27
 
 set ports "/dev/ttyUSB0 /dev/cu.usbserial-FTD1906W"
 foreach p $ports {
@@ -172,3 +170,7 @@ ess::load_system
 # set initial subject
 ess::set_subject human
 
+# look for any .tcl configs in local/*.tcl
+foreach f [glob [file join [file dirname $dspath] local *.tcl]] {
+    source $f
+}
