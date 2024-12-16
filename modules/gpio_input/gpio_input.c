@@ -1,6 +1,6 @@
 /*
  * NAME
- *   gpio_input.c
+ *   gpio_input.c (V2)
  *
  * DESCRIPTION
  *
@@ -22,9 +22,13 @@
 #include <sys/ioctl.h>
 
 #ifdef __linux__
+#include <stdbool.h>
+#include <linux/types.h>
 #include <linux/gpio.h>
 #include <sys/epoll.h>
 #include <pthread.h>
+#include <error.h>
+#include <errno.h>
 #endif
 
 #include <tcl.h>
@@ -32,11 +36,43 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
+#ifdef __linux__
+/* helper functions for gpio_v2_line_values bits */
+static inline void gpiotools_set_bit(__u64 *b, int n)
+{
+  *b |= _BITULL(n);
+}
+
+static inline void gpiotools_change_bit(__u64 *b, int n)
+{
+  *b ^= _BITULL(n);
+}
+
+static inline void gpiotools_clear_bit(__u64 *b, int n)
+{
+  *b &= ~_BITULL(n);
+}
+
+static inline int gpiotools_test_bit(__u64 b, int n)
+{
+  return !!(b & _BITULL(n));
+}
+
+static inline void gpiotools_assign_bit(__u64 *b, int n, bool value)
+{
+  if (value)
+    gpiotools_set_bit(b, n);
+  else
+    gpiotools_clear_bit(b, n);
+}
+#endif
+
 typedef struct gpio_input_s
 {
   int line;
 #ifdef __linux__  
-  struct gpioevent_request req;
+  //  struct gpioevent_request req;
+  struct gpio_v2_line_request req;
   struct epoll_event ev;
   pthread_t input_thread_id;
   int epfd;			/* epoll fd */
@@ -81,19 +117,37 @@ void *input_thread(void *arg)
   while (1) {
     nfds = epoll_wait(info->epfd, &ev, 1, 20000);
     if (nfds != 0) {
-      struct gpioevent_data edata;
-      nread = read(info->req.fd, &edata, sizeof(edata));
+      struct gpio_v2_line_event event;
+      nread = read(info->req.fd, &event, sizeof(event));
 
-      status = (edata.id == GPIOEVENT_EVENT_RISING_EDGE) ? 1 : 0;
+      if (nread == -1) {
+	if (errno == -EAGAIN) {
+	  //	  fprintf(stderr, "nothing available\n");
+	  continue;
+	} else {
+	  //	  ret = -errno;
+	  //	  fprintf(stderr, "Failed to read event (%d)\n", ret);
+	  break;
+	}
+      }
+      
+      if (nread != sizeof(event)) {
+	// fprintf(stderr, "Reading event failed\n");
+	//ret = -EIO;
+	break;
+      }
+      
+      status = (event.id == GPIO_V2_LINE_EVENT_RISING_EDGE) ? 1 : 0;
       
       ds_datapoint_t *dp = dpoint_new(point_name,
 				      tclserver_now(info->tclserver),
 				      DSERV_INT, sizeof(int),
 				      (unsigned char *) &status);
       tclserver_set_point(info->tclserver, dp);
-      
-      //      printf("%s: %u,%llu [%llu]\n", point_name,
-      //	     edata.id, edata.timestamp, tclserver_now(info->tclserver));
+
+      // fprintf(stdout, "GPIO EVENT at %" PRIu64 " on line %d (%d|%d) ",
+      //        (uint64_t)event.timestamp_ns, event.offset, event.line_seqno,
+      //		event.seqno);
     }
   }
 }
@@ -163,14 +217,17 @@ static int gpio_line_request_input_command(ClientData data,
 {
   gpio_info_t *info = (gpio_info_t *) data;
   int offset = 0;
-  int lockout = 0;
-
+  int debounce_period_us = 0;
+  struct gpio_v2_line_config config;
+  int attr;
+  
   if (info->fd < 0) {
     return TCL_OK;
   }
   
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "offset [RISING|FALLING|BOTH] [debounce_us]");
+    Tcl_WrongNumArgs(interp, 1, objv,
+		     "offset [RISING|FALLING|BOTH] [debounce_us]");
     return TCL_ERROR;
   }
 
@@ -190,7 +247,7 @@ static int gpio_line_request_input_command(ClientData data,
   }
 
   if (objc > 3) {
-    if (Tcl_GetIntFromObj(interp, objv[2], &lockout) != TCL_OK) {
+    if (Tcl_GetIntFromObj(interp, objv[2], &debounce_period_us) != TCL_OK) {
       return TCL_ERROR;
     }
   }
@@ -206,20 +263,38 @@ static int gpio_line_request_input_command(ClientData data,
       calloc(1, sizeof(gpio_input_t));
   }
 
-  ireq->req.lineoffset = offset;
-  ireq->req.handleflags = GPIOHANDLE_REQUEST_INPUT;
-  ireq->req.eventflags = GPIOEVENT_REQUEST_BOTH_EDGES;
-  strncpy(ireq->req.consumer_label, "dserv input",
-	  sizeof(ireq->req.consumer_label));
+  /* clear request and configure for desired line */
+  memset(&ireq->req, 0, sizeof(ireq->req));
+  ireq->req.offsets[0] = offset;
 
+  /* setup config for this request */
+
+  memset(&ireq->req.config, 0, sizeof(config));
+  ireq->req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
+  ireq->req.config.flags |= GPIO_V2_LINE_FLAG_EDGE_RISING;
+  ireq->req.config.flags |= GPIO_V2_LINE_FLAG_EDGE_FALLING;
+
+  /* add an attribute for debounce */
+  if (debounce_period_us) {
+    attr = config.num_attrs;
+    ireq->req.config.num_attrs++;
+    gpiotools_set_bit(&ireq->req.config.attrs[attr].mask, 0);
+    ireq->req.config.attrs[attr].attr.id = GPIO_V2_LINE_ATTR_ID_DEBOUNCE;
+    ireq->req.config.attrs[attr].attr.debounce_period_us = debounce_period_us;
+  }
+
+  /* set consumer name */
+  strncpy(ireq->req.consumer, "dserv input",
+	  sizeof(ireq->req.consumer));
+  
   ireq->tclserver = info->tclserver;
   ireq->dpoint_prefix = info->dpoint_prefix; /* belongs to global */
   ireq->line = offset;
-  if (lockout >= 0) {
-    ireq->debounce_period_us = lockout;
+  if (debounce_period_us >= 0) {
+    ireq->debounce_period_us = debounce_period_us;
   }
   
-  int ret = ioctl(info->fd, GPIO_GET_LINEEVENT_IOCTL, &ireq->req);
+  int ret = ioctl(info->fd, GPIO_V2_GET_LINE_IOCTL, &ireq->req);
   if (ret != -1) {
     if (pthread_create(&ireq->input_thread_id, NULL, input_thread,
 		       (void *) ireq)) {
