@@ -14,10 +14,10 @@ Install `cmake` and ther build tools:
 sudo apt install build-essential cmake
 ```
 
-Install `dserv` dependencies for [General-Purpose IO](https://packages.debian.org/sid/libgpiod-dev) and [low-level event handling](https://packages.debian.org/buster/libevdev-dev):
+Install `dserv` dependencies for [low-level event handling](https://packages.debian.org/buster/libevdev-dev):
 
 ```
-sudo apt install libgpiod-dev libevdev-dev
+sudo apt install libevdev-dev
 ```
 
 To make commands concrete, this guide assumes we're workign in directory `~/code/`.

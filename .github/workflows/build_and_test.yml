@@ -13,7 +13,7 @@ jobs:
       - name: Install package dependencies
         run: |
           sudo apt install -y build-essential cmake
-          sudo apt install -y libgpiod-dev libevdev-dev
+          sudo apt install -y libevdev-dev
 
       - name: Build and install tcl 9
         run: |
