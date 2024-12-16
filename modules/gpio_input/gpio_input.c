@@ -113,7 +113,7 @@ void *input_thread(void *arg)
   char point_name[64];
   sprintf(point_name, "%s/%d", info->dpoint_prefix, info->line);
   int status;
-  
+
   while (1) {
     nfds = epoll_wait(info->epfd, &ev, 1, 20000);
     if (nfds != 0) {
@@ -218,9 +218,12 @@ static int gpio_line_request_input_command(ClientData data,
   gpio_info_t *info = (gpio_info_t *) data;
   int offset = 0;
   int debounce_period_us = 0;
-  struct gpio_v2_line_config config;
   int attr;
-  
+
+  /* default to both edges */
+  uint32_t edge_type =
+    GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING;
+    
   if (info->fd < 0) {
     return TCL_OK;
   }
@@ -243,11 +246,17 @@ static int gpio_line_request_input_command(ClientData data,
   }
 
   if (objc > 2) {
-    // allow specification of event type
+    if (!strcmp(Tcl_GetString(objv[2]), "BOTH"))
+      edge_type = GPIO_V2_LINE_FLAG_EDGE_RISING |
+	GPIO_V2_LINE_FLAG_EDGE_FALLING;
+    else if (!strcmp(Tcl_GetString(objv[2]), "FALLING"))
+      edge_type = GPIO_V2_LINE_FLAG_EDGE_FALLING;
+    else if (!strcmp(Tcl_GetString(objv[2]), "RISING"))
+      edge_type = GPIO_V2_LINE_FLAG_EDGE_RISING;
   }
 
   if (objc > 3) {
-    if (Tcl_GetIntFromObj(interp, objv[2], &debounce_period_us) != TCL_OK) {
+    if (Tcl_GetIntFromObj(interp, objv[3], &debounce_period_us) != TCL_OK) {
       return TCL_ERROR;
     }
   }
@@ -266,17 +275,17 @@ static int gpio_line_request_input_command(ClientData data,
   /* clear request and configure for desired line */
   memset(&ireq->req, 0, sizeof(ireq->req));
   ireq->req.offsets[0] = offset;
-
+  ireq->req.num_lines = 1;
+  
   /* setup config for this request */
 
-  memset(&ireq->req.config, 0, sizeof(config));
+  memset(&ireq->req.config, 0, sizeof(ireq->req.config));
   ireq->req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
-  ireq->req.config.flags |= GPIO_V2_LINE_FLAG_EDGE_RISING;
-  ireq->req.config.flags |= GPIO_V2_LINE_FLAG_EDGE_FALLING;
+  ireq->req.config.flags |= edge_type;
 
   /* add an attribute for debounce */
   if (debounce_period_us) {
-    attr = config.num_attrs;
+    attr = ireq->req.config.num_attrs;
     ireq->req.config.num_attrs++;
     gpiotools_set_bit(&ireq->req.config.attrs[attr].mask, 0);
     ireq->req.config.attrs[attr].attr.id = GPIO_V2_LINE_ATTR_ID_DEBOUNCE;
@@ -295,6 +304,9 @@ static int gpio_line_request_input_command(ClientData data,
   }
   
   int ret = ioctl(info->fd, GPIO_V2_GET_LINE_IOCTL, &ireq->req);
+  if (ret == -1) {
+    printf("ioctl GPIO_V2_GET_LINE_IOCTL error: %d\n", errno);
+  }
   if (ret != -1) {
     if (pthread_create(&ireq->input_thread_id, NULL, input_thread,
 		       (void *) ireq)) {
