@@ -1,0 +1,51 @@
+name: Build and Test
+
+on: [push]
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Install package dependencies
+        run: |
+          apt install -y build-essential cmake
+          apt install -y libgpiod-dev libevdev-dev
+
+      - name: Build and install tcl 9
+        run: |
+          git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git
+          cd tcl/unix/
+          ./configure
+          make
+          make install
+          ldconfig
+
+      - name: Build and install jansson static lib
+        run: |
+          git clone https://github.com/akheron/jansson.git
+          cd jansson/
+          git checkout v2.14
+          mkdir build/
+          cd build/
+          cmake ..
+          make
+          make install
+
+      - name: Check out our code
+        uses: actions/checkout@v4
+  
+      - name: cmake and make
+        run: |
+          mkdir build/
+          cd build/
+          cmake ..
+          make
+
+      - name: ctest
+        run: |
+          cd build/
+          ctest -VV ..
