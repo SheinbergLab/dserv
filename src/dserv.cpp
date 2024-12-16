@@ -47,7 +47,7 @@ int main(int argc, char *argv[])
   bool help = false;
   std::string trigger_script;
   std::string configuration_script;
-  
+
   cxxopts::Options options("dserv", "Data server");
   options.add_options()
     ("h,help", "Print help", cxxopts::value<bool>(help))
@@ -56,20 +56,25 @@ int main(int argc, char *argv[])
     ("c,cscript", "Configuration script path",
      cxxopts::value<std::string>(configuration_script))
     ("v,verbose", "Verbose", cxxopts::value<bool>(verbose));
-  
-  auto result = options.parse(argc, argv);
-  
+
+  try {
+    auto result = options.parse(argc, argv);
+  } catch (const cxxopts::exceptions::parsing& e) {
+    std::cerr << "Error parsing options: " << e.what() << std::endl;
+    // Explicit exit, rather than abort, for testing with ctest.
+    exit(-1);
+  }
+
   if (help) {
     std::cout << options.help({"", "Group"}) << std::endl;
     exit(0);
   }
 
   std::signal(SIGINT, signalHandler);
-  
+
   dserver = new Dataserver(argc, argv);
   tclserver = new TclServer(argc, argv, dserver);
 
-  
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result;
@@ -81,6 +86,6 @@ int main(int argc, char *argv[])
 
   /* use mdns to advertise services */
   advertise_services(dserver->port(), tclserver->port());
-  
+
   std::promise<void>().get_future().wait();
 }

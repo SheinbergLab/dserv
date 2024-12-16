@@ -54,3 +54,6 @@ install(DIRECTORY systems DESTINATION dserv)
 install(DIRECTORY systemd DESTINATION dserv)
 install(DIRECTORY scripts DESTINATION dserv)
 install(DIRECTORY www DESTINATION dserv)
+
+enable_testing()
+add_subdirectory("tests")
