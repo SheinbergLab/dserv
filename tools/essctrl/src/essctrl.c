@@ -4,7 +4,7 @@
 #include <unistd.h>
 #endif
 #include <string.h>
-#include <linenoise.h>
+#include "linenoise.h"
 #include "sockapi.h"
 
 #define ESS_PROMPT "ess> "
