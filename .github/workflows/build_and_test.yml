@@ -42,7 +42,7 @@ jobs:
           mkdir build
           cd build
           cmake ..
-          make sudo make install
+          sudo make install
 
       - name: Check out our code
         uses: actions/checkout@v4
