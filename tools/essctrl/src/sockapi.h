@@ -17,3 +17,8 @@ int socket_read(int sock, char **message, int *nbytes);
 int socket_send(int sock, char *sbuf, int sbytes, char **rbuf, int *rbytes);
 char *sock_send(char *server, int port, char *buf, int bufsize);
 
+
+#ifdef _MSC_VER
+void init_w32_socket(void);
+void cleanup_w32_socket(void);
+#endif

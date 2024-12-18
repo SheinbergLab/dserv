@@ -7,20 +7,41 @@ Author		David Sheinberg
 Description	API functions for sending commands using TCP/IP sockets
 *******************************************************************************
 #endif
-#include <sys/types.h>
-#include <sys/socket.h>
+
+
+#ifndef _WIN32
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <sys/select.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#else
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <stdio.h>
+#include <io.h>
+
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <stdarg.h>
-#include <sys/ioctl.h>
+
 
 #include "sockapi.h"
-	
-static void socket_flush(int sock);
 
 /*****************************************************************************/
 /********************************* SOCKET_OPEN *******************************/
@@ -58,28 +79,8 @@ int socket_open(char *name, int port)
 		return -3;
 	}
 	param = 1;
-	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &param, sizeof(param));
-	socket_flush(sock);
+	setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &param, sizeof(param));
 	return sock;
-}
-
-static void socket_flush(int sock)
-{
-	static char buf[64];
-	int flag = 1;
-	int n;
-	
-	if (ioctl(sock, FIONBIO, &flag) < 0) {
-		return;
-	}
-	do {
-		n = read(sock, buf, sizeof(buf));
-	} while (n >= 0);
-	
-	flag = 0;
-	if (ioctl(sock, FIONBIO, &flag) < 0) {
-		return;
-	}
 }
 
 /*****************************************************************************/
@@ -94,7 +95,11 @@ static void socket_flush(int sock)
 /*****************************************************************************/
 int socket_close(int sock)
 {
+#ifdef _MSC_VER
+	closesocket(sock);
+#else	
 	close(sock);
+#endif	
 	return 1;
 }
 
@@ -110,7 +115,7 @@ int socket_close(int sock)
 /*****************************************************************************/
 int socket_write(int sock, char *message, int nbytes)
 {
-	if (write(sock, message, nbytes) < 0) {
+	if (send(sock, message, nbytes, 0) < 0) {
 		perror("writing socket");
 		return 0;
 	}
@@ -133,7 +138,7 @@ int socket_read(int sock, char **message, int *nbytes)
   static char buf[16384];
   memset(buf, 0, sizeof(buf));
   int n;
-  if ((n = read(sock, buf, sizeof(buf))) < 0) {
+  if ((n = recv(sock, buf, sizeof(buf), 0)) < 0) {
     perror("reading stream socket");
     if (message) *message = NULL;
     if (nbytes) *nbytes = 0;
@@ -186,3 +191,19 @@ char *sock_send(char *server, int port, char *buf, int len)
 }
 
 
+#ifdef _MSC_VER
+void init_w32_socket(void)
+{
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (iResult != 0) {
+        printf("WSAStartup failed with error: %d\n", iResult);
+        return;
+    }
+}
+
+void cleanup_w32_socket(void)
+{
+	WSACleanup();
+}
+#endif
