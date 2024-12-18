@@ -38,7 +38,7 @@ jobs:
       - name: Build and install linenoise-ng static lib
         run: |
           git clone https://github.com/arangodb/linenoise-ng.git
-          cd linenoise/
+          cd linenoise-ng/
           mkdir build
           cd build
           cmake ..
