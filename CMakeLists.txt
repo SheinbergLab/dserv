@@ -16,7 +16,7 @@ find_library(LIBZ z)
 
 add_subdirectory(modules)
 add_subdirectory(processors)
-add_subdirectory(tools/essctrl)
+#add_subdirectory(tools/essctrl)
 
 add_executable(dserv src/dserv.cpp src/Base64.c src/Datapoint.c src/Dataserver.cpp src/SendClient.cpp src/LogClient.cpp src/LogTable.cpp src/TclServer.cpp src/dpoint_process.c src/mdns.c src/mdns_advertise.c)
 
