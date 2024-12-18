@@ -35,15 +35,6 @@ jobs:
           make
           sudo make install
 
-      - name: Build and install linenoise-ng static lib
-        run: |
-          git clone https://github.com/arangodb/linenoise-ng.git
-          cd linenoise-ng/
-          mkdir build
-          cd build
-          cmake ..
-          sudo make install
-
       - name: Check out our code
         uses: actions/checkout@v4
   
