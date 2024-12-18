@@ -2,7 +2,9 @@
 #include <chrono>
 #include <future>
 #include <csignal>
+#ifndef _MSC_VER
 #include <pthread.h>
+#endif
 
 #include "sharedqueue.h"
 #include "Dataserver.h"

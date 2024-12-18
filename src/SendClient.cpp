@@ -23,7 +23,18 @@
 #include <unistd.h>
 #include <sys/select.h>
 #else
-include <io.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <stdio.h>
+#include <io.h>
+
+#pragma comment(lib, "Ws2_32.lib")
 #endif
 
 #include <sys/types.h>
@@ -56,7 +67,11 @@ SendClient::SendClient(SharedQueue<client_request_t> *client_queue):
 SendClient::~SendClient()
 {
   if (type == SOCKET_CLIENT) {
+#ifndef _MSC_VER
     if (fd >= 0) close(fd);
+#else
+    if (fd >= 0) closesocket(fd);
+#endif
     free(host);
   }
   //    std::cout << "SendClient shutdown" << std::endl;
@@ -72,7 +87,11 @@ int SendClient::send_dpoint(ds_datapoint_t *dpoint)
     unsigned char buf[DPOINT_BINARY_FIXED_LENGTH];
     buf[0] = DPOINT_BINARY_MSG_CHAR;
     if (dpoint_to_binary(dpoint, &buf[1], &bufsize)) {
+#ifndef _MSC_VER
       nwritten = write(fd, buf, DPOINT_BINARY_FIXED_LENGTH);
+#else
+      nwritten = send(fd, (const char *) buf, DPOINT_BINARY_FIXED_LENGTH, 0);
+#endif
       if (nwritten != DPOINT_BINARY_FIXED_LENGTH) {
 	if (nwritten == -1)
 	  {

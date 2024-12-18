@@ -5,10 +5,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+#ifndef _MSC_VER
 #include <sched.h>
+#include <unistd.h>
+#endif
+
 #include <string.h>
 #include <stdint.h>
-#include <unistd.h>
 #include <inttypes.h>
 #include <fcntl.h>
 #include <errno.h>
