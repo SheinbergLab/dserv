@@ -79,6 +79,12 @@ class DatapointTable
     map_.erase (key);
   }
 
+  int exists(std::string key) {
+    std::lock_guard<std::mutex> mlock(mutex_);
+    auto iter = map_.find(key);
+    return (iter != map_.end());
+  }
+  
   /*
    * getcopy
    *
