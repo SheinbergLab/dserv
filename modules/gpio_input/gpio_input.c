@@ -330,11 +330,19 @@ static int gpio_line_request_input_command(ClientData data,
   ireq->req.offsets[0] = offset;
   ireq->req.num_lines = 1;
   
-  /* setup config for this request */
+  /* setup config for this request (overridden by LINE_ATTR_ID_FLAGS) */
   memset(&ireq->req.config, 0, sizeof(ireq->req.config));
   ireq->req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
   ireq->req.config.flags |= edge_flag;
 
+  /* add attributes for BIAS (pull up / pull down ) and ACTIVE state */
+  attr = ireq->req.config.num_attrs;
+  ireq->req.config.num_attrs++;
+  gpiotools_set_bit(&ireq->req.config.attrs[attr].mask, 0);
+  ireq->req.config.attrs[attr].attr.id = GPIO_V2_LINE_ATTR_ID_FLAGS;
+  ireq->req.config.attrs[attr].attr.flags =
+    bias_flag | active_flag | edge_flag | GPIO_V2_LINE_FLAG_INPUT;
+  
   /* add an attribute for debounce */
   if (debounce_period_us) {
     attr = ireq->req.config.num_attrs;
@@ -344,13 +352,6 @@ static int gpio_line_request_input_command(ClientData data,
     ireq->req.config.attrs[attr].attr.debounce_period_us = debounce_period_us;
   }
 
-  /* add attributes for BIAS (pull up / pull down ) and ACTIVE state */
-  attr = ireq->req.config.num_attrs;
-  ireq->req.config.num_attrs++;
-  gpiotools_set_bit(&ireq->req.config.attrs[attr].mask, 0);
-  ireq->req.config.attrs[attr].attr.id = GPIO_V2_LINE_ATTR_ID_FLAGS;
-  ireq->req.config.attrs[attr].attr.flags = bias_flag | active_flag;
-  
   /* set consumer name */
   strncpy(ireq->req.consumer, "dserv input",
 	  sizeof(ireq->req.consumer));
