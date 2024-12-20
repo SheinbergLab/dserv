@@ -233,12 +233,11 @@ static int gpio_line_request_input_command(ClientData data,
   gpio_info_t *info = (gpio_info_t *) data;
   int offset = 0;
   int debounce_period_us = 0;
+  uint32_t bias_flag   = GPIO_V2_LINE_FLAG_BIAS_PULL_UP;
+  uint32_t active_flag = GPIO_V2_LINE_FLAG_ACTIVE_LOW;
+  uint32_t edge_flag = GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING;
   int attr;
-  int ret, val;  
-  
-  /* default to both edges */
-  uint32_t edge_type =
-    GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING;
+  int ret, val;
     
   if (info->fd < 0) {
     return TCL_OK;
@@ -246,7 +245,7 @@ static int gpio_line_request_input_command(ClientData data,
   
   if (objc < 2) {
     Tcl_WrongNumArgs(interp, 1, objv,
-		     "offset [RISING|FALLING|BOTH] [debounce_us]");
+		     "offset [RISING|FALLING|BOTH] [debounce_us] [PULL_UP|PULL_DOWN] [ACTIVE_LOW]");
     return TCL_ERROR;
   }
 
@@ -263,12 +262,12 @@ static int gpio_line_request_input_command(ClientData data,
 
   if (objc > 2) {
     if (!strcmp(Tcl_GetString(objv[2]), "BOTH"))
-      edge_type = GPIO_V2_LINE_FLAG_EDGE_RISING |
+      edge_flag = GPIO_V2_LINE_FLAG_EDGE_RISING |
 	GPIO_V2_LINE_FLAG_EDGE_FALLING;
     else if (!strcmp(Tcl_GetString(objv[2]), "FALLING"))
-      edge_type = GPIO_V2_LINE_FLAG_EDGE_FALLING;
+      edge_flag = GPIO_V2_LINE_FLAG_EDGE_FALLING;
     else if (!strcmp(Tcl_GetString(objv[2]), "RISING"))
-      edge_type = GPIO_V2_LINE_FLAG_EDGE_RISING;
+      edge_flag = GPIO_V2_LINE_FLAG_EDGE_RISING;
   }
 
   if (objc > 3) {
@@ -276,6 +275,44 @@ static int gpio_line_request_input_command(ClientData data,
       return TCL_ERROR;
     }
   }
+
+  if (objc > 4) {
+    if (!strcmp(Tcl_GetString(objv[4]), "PULL_UP") ||
+	!strcmp(Tcl_GetString(objv[4]), "pull_up")) {
+      bias_flag = GPIO_V2_LINE_FLAG_BIAS_PULL_UP;
+    }
+    else if (!strcmp(Tcl_GetString(objv[4]), "PULL_DOWN") ||
+	!strcmp(Tcl_GetString(objv[4]), "pull_down")) {
+      bias_flag = GPIO_V2_LINE_FLAG_BIAS_PULL_DOWN;
+    }
+    else if (!strcmp(Tcl_GetString(objv[4]), "PULL_NONE") ||
+	!strcmp(Tcl_GetString(objv[4]), "pull_none")) {
+      bias_flag = GPIO_V2_LINE_FLAG_BIAS_DISABLED;
+    }
+    else {
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		       ": bias must be PULL_UP|PULL_DOWN|PULL_NONE", NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  if (objc > 5) {
+    if (!strcmp(Tcl_GetString(objv[5]), "ACTIVE_LOW") ||
+	!strcmp(Tcl_GetString(objv[5]), "active_low")) {
+      active_flag = GPIO_V2_LINE_FLAG_ACTIVE_LOW;
+    }
+    else if (!strcmp(Tcl_GetString(objv[5]), "ACTIVE_HIGH") ||
+	!strcmp(Tcl_GetString(objv[5]), "ACTIVE_HIGH")) {
+      active_flag = 0;
+    }
+    else {
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		       ": active_flag be ACTIVE_HIGH|ACTIVE_LOW", NULL);
+      return TCL_ERROR;
+    }
+  }
+
+
 
   gpio_input_t *ireq = info->input_requests[offset];
   if (ireq) {		/* already opened, so close */
@@ -296,7 +333,7 @@ static int gpio_line_request_input_command(ClientData data,
   /* setup config for this request */
   memset(&ireq->req.config, 0, sizeof(ireq->req.config));
   ireq->req.config.flags = GPIO_V2_LINE_FLAG_INPUT;
-  ireq->req.config.flags |= edge_type;
+  ireq->req.config.flags |= edge_flag;
 
   /* add an attribute for debounce */
   if (debounce_period_us) {
@@ -307,6 +344,12 @@ static int gpio_line_request_input_command(ClientData data,
     ireq->req.config.attrs[attr].attr.debounce_period_us = debounce_period_us;
   }
 
+  /* add attributes for BIAS (pull up / pull down ) and ACTIVE state */
+  attr = ireq->req.config.num_attrs;
+  ireq->req.config.num_attrs++;
+  ireq->req.config.attrs[attr].attr.id = GPIO_V2_LINE_ATTR_ID_FLAGS;
+  ireq->req.config.attrs[attr].attr.flags = bias_flag | active_flag;
+  
   /* set consumer name */
   strncpy(ireq->req.consumer, "dserv input",
 	  sizeof(ireq->req.consumer));
