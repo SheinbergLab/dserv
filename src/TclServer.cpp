@@ -438,6 +438,10 @@ static int print_command (ClientData data, Tcl_Interp *interp,
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
+  Tcl_CreateObjCommand(interp, "dpointExists",
+		       dserv_exists_command, tserv->ds, NULL);
+  Tcl_CreateObjCommand(interp, "dservExists",
+		       dserv_exists_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dpointGet",
 		       dserv_get_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservGet",
