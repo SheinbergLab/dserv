@@ -1,4 +1,6 @@
 Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,  ds_datapoint_t *dpoint);
+int dserv_exists_command(ClientData data, Tcl_Interp * interp, int objc,
+		      Tcl_Obj * const objv[]);
 int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
 		      Tcl_Obj * const objv[]);
 int now_command(ClientData data, Tcl_Interp * interp, int objc,
