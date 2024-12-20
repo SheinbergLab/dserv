@@ -17,14 +17,8 @@ namespace eval match_to_sample::phd {
 	if [file exists $p] { set db $p; break }
     }
 
-    variable setup_trials_defaults "dbfile $db trial_type VV filled 1 limit -1"
-
     variable params_defaults { delay_time 100 }
-
-    variable setup_trials_VV { trial_type VV  }
     variable params_VV { sample_time 2000 }
-
-    variable setup_trials_HV { trial_type HV  }
     variable params_HV { sample_time 10000 }
 
     variable variants {
@@ -32,6 +26,11 @@ namespace eval match_to_sample::phd {
 	HV     { setup_trials HV "haptic visual shape MTS" }
     }
 
+    variable variant_args \
+	[dict create \
+	     VV  "dbfile $db trial_type VV filled 1 limit -1" \
+	     HV  "dbfile $db trial_type HV filled 1 limit -1"]
+    
     proc variants_init { s } {
 
         $s add_method VV_init {} {

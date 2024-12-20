@@ -7,18 +7,18 @@
 #
 
 namespace eval match_to_sample::colormatch {
-    # default protocol settings for system params and loader
-    variable setup_trials_defaults { color_choices redgreen }
     variable params_defaults { sample_time 500 delay_time 500 }
 
-    variable setup_trials_easy     { color_choices easy }
-    variable setup_trials_random   { color_choices random }
-    variable setup_trials_redgreen { color_choices redgreen }
-    
     variable variants {
 	easy     { setup_trials easy     "easy comparisons" }
 	random   { setup_trials random   "random comparisons" }
 	redgreen { setup_trials redgreen "red/green MTS" }
+    }
+
+    variable variant_args {
+	easy     { color_choices easy }
+	random   { color_choices random }
+	redgreen { color_choices redgreen }
     }
     
     proc variants_init { s } {
