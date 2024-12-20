@@ -31,6 +31,7 @@ oo::class create System {
     variable _evt_ptype_ids
     variable _state_time
     variable _variants
+    variable _variant_args
     variable _version
     
     constructor { name } {
@@ -49,6 +50,7 @@ oo::class create System {
 	set _evt_ptype_ids $::ess::evt_ptype_ids
 	set _vars {}
 	set _variants {}
+	set _variant_args {}
 	set _version 0.0
     }
 
@@ -69,6 +71,9 @@ oo::class create System {
     method set_variant { v } { set _variantname $v }
     method get_variant { } { return $_variantname }
 
+    method set_variant_args { vdict } { set _variant_args $vdict }
+    method get_variant_args { } { return $_variant_args }
+    
     method add_variant { name method params } {
 	dict set _variants $name [list $method $params]
     }
@@ -1098,6 +1103,28 @@ namespace eval ess {
     }
 }
 
+###############################################################################
+################################### joystick ##################################
+###############################################################################
+namespace eval ess {
+    # if joystick status changes update ess/joystick/value and wake up ESS
+    proc joystick_process { dpoint data } {
+	dservSet ess/joystick/value $data
+	do_update
+    }
+
+    # call generic joystick initialization (dsconf.tcl) and add callback 
+    proc joystick_init {} {
+	::joystick_init
+	dservAddExactMatch joystick/value
+	dpointSetScript joystick/value ::ess::joystick_process
+    }
+}
+
+###############################################################################
+################################## em_windows #################################
+###############################################################################
+
 namespace eval ess {
     variable em_windows
     set em_windows(processor) "windows"
@@ -1201,6 +1228,10 @@ namespace eval ess {
 	return [dservGet ain/samplers/$slot/vals]
     }
 }
+
+###############################################################################
+################################ touch_windows ################################
+###############################################################################
 
 namespace eval ess {
     variable touch_windows
@@ -1387,25 +1418,43 @@ namespace eval ess {
 	set current(open_protocol) 1
     }
 
-    proc variant_loader_command { system protocol variant } {
+    proc variant_loader_args { system protocol variant } {
 	set s [::ess::find_system $system]
-	
 	set vinfo [dict get [$s get_variants] $variant]
 	set loader_proc [lindex $vinfo 0]
 	set variant_dict_name [lindex $vinfo 1]
-	set loader_default_args [set ${system}::${protocol}::${loader_proc}_defaults]
-	set loader_variant_args [set ${system}::${protocol}::${loader_proc}_${variant_dict_name}]
-	set loader_args_dict [dict merge $loader_default_args $loader_variant_args]
 
+	set loader_variant_args \
+	    [dict get [set ${system}::${protocol}::variant_args] $variant]
+	#	set loader_args_dict [dict merge $loader_default_args $loader_variant_args]
+	set loader_args_dict $loader_variant_args
+	
 	# now build list of args for this particular loader_proc
 	set loader_arg_names [lindex [info object definition $s $loader_proc] 0]
 	set loader_args {}
 	foreach a $loader_arg_names {
 	    lappend loader_args [dict get $loader_args_dict $a]
 	}
-	return "$loader_proc $loader_args"
+	return [list $loader_proc $loader_args $loader_arg_names]
     }
     
+    proc variant_loader_command { system protocol variant } {
+	lassign [variant_loader_args $system $protocol $variant] \
+	    loader_proc loader_args loader_names
+	return "$loader_proc $loader_args"
+    }
+
+    proc variant_loader_options { system protocol variant } {
+	return [variant_loader_args $system $protocol $variant]
+    }
+
+    proc set_variant_args { vargs } {
+	variable current
+	if { $current(system) == {} } { return }
+	set s [::ess::find_system $current(system)]
+	return [$s set_variant_args $vargs]
+    }
+
     proc variant_init { system protocol variant } {
 	variable current
 	set s [::ess::find_system $system]
