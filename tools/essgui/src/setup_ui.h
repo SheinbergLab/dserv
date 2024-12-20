@@ -22,15 +22,16 @@ extern Fl_Output *sysos_widget;
 #include <FL/Fl_Tree.H>
 extern void host_cb(Fl_Tree*, void*);
 extern Fl_Tree *host_widget;
+extern Fl_Output *system_status_widget;
+extern Fl_Output *obscount_widget;
+extern Fl_Output *stimid_widget;
 #include <FL/Fl_Choice.H>
 extern Fl_Choice *subject_widget;
 extern Fl_Choice *system_widget;
 extern Fl_Choice *protocol_widget;
 extern Fl_Choice *variant_widget;
-extern Fl_Output *system_status_widget;
-extern Fl_Output *obscount_widget;
-extern Fl_Output *stimid_widget;
 #include <FL/Fl_Scroll.H>
+extern Fl_Scroll *options_widget;
 #include <FL/Fl_Tabs.H>
 extern EyeTouchWin *eyetouch_widget;
 #include <FL/Fl_Terminal.H>
