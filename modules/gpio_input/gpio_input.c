@@ -245,7 +245,7 @@ static int gpio_line_request_input_command(ClientData data,
   
   if (objc < 2) {
     Tcl_WrongNumArgs(interp, 1, objv,
-		     "offset [RISING|FALLING|BOTH] [debounce_us] [PULL_UP|PULL_DOWN] [ACTIVE_LOW]");
+		     "offset [RISING|FALLING|BOTH] [debounce_us] [PULL_UP|PULL_DOWN] [ACTIVE_LOW|ACTIVE_HIGH]");
     return TCL_ERROR;
   }
 
@@ -347,6 +347,7 @@ static int gpio_line_request_input_command(ClientData data,
   /* add attributes for BIAS (pull up / pull down ) and ACTIVE state */
   attr = ireq->req.config.num_attrs;
   ireq->req.config.num_attrs++;
+  gpiotools_set_bit(&ireq->req.config.attrs[attr].mask, 0);
   ireq->req.config.attrs[attr].attr.id = GPIO_V2_LINE_ATTR_ID_FLAGS;
   ireq->req.config.attrs[attr].attr.flags = bias_flag | active_flag;
   
