@@ -93,12 +93,47 @@ catch { gpioOutputInit $gpiochip }
 catch { gpioInputInit $gpiochip }
 catch { juicerInit $gpiochip }
 
-# can put lines like these in local/pins.tcl, e.g.
-#gpioLineRequestInput 24
-#gpioLineRequestInput 25
-#gpioLineRequestOutput 26
+############################### GPIO ##############################
+###
+### can put lines like these in local/pins.tcl, e.g.
+###   gpioLineRequestInput  24
+###   gpioLineRequestInput  25
+###   gpioLineRequestOutput 26
 
-#juicerSetPin 0 27
+###   juicerSetPin 0 27
+
+###
+### joystick support through 4 GPIO lines
+###
+
+### in pins.tcl select lines that are used by, e.g.:
+###    dservSet ess/joystick/lines { 1 12 2 13 4 18 8 17 }
+### which would set 12->1 (up)
+###                 13->2 (down)
+###                 18->4 (left)
+###                 17->8 (right)
+### If:
+###    ess/joystick/value == 2 then joystick is down
+###    ess/joystick/value == 9 then joystick is up-right
+
+proc joystick_callback { dpoint data } {
+    set jlines [dservGet ess/joystick/lines]
+    set jval 0
+    dict for { k v } $jlines {
+	set jval [expr $jval | $k*[dservGet gpio/input/$v]]
+    }
+    dservSet ess/joystick/value $jval
+}
+
+proc joystick_init { } {
+    dict for { k p } [dservGet ess/joystick/lines] {
+	gpioLineRequestInput $p BOTH 2500 PULL_UP ACTIVE_LOW
+	dservAddMatch gpio/input/$p
+	dpointSetScript gpio/input/$p joystick_callback
+    }
+    joystick_callback init 0
+}
+
 
 set ports "/dev/ttyUSB0 /dev/cu.usbserial-FTD1906W"
 foreach p $ports {
