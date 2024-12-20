@@ -49,7 +49,12 @@ int Dataserver::update_datapoint(ds_datapoint_t *dpoint)
 {
   return datapoint_table.update(dpoint);
 }
-  
+
+int Dataserver::find_datapoint(char *varname)
+{
+  return datapoint_table.exists(varname);
+}
+
 ds_datapoint_t *Dataserver::get_datapoint(char *varname)
 {
   return datapoint_table.getcopy(varname);
@@ -191,6 +196,12 @@ int Dataserver::touch(char *varname)
     dpoint_free(dp);
   }
   return found;
+}
+
+/* see if point exists */
+int Dataserver::exists(char *varname)
+{
+  return find_datapoint(varname);
 }
 
 /* get a copy of dpoint from the table */
@@ -524,6 +535,25 @@ int dserv_clear_command(ClientData data, Tcl_Interp * interp, int objc,
   }
   return result;
 }
+
+int dserv_exists_command(ClientData data, Tcl_Interp * interp, int objc,
+		      Tcl_Obj * const objv[])
+{
+  Dataserver *ds = (Dataserver *) data;
+  Tcl_Obj *obj;
+  int exists;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "varname");
+    return TCL_ERROR;
+  }
+  
+  exists = ds->find_datapoint(Tcl_GetString(objv[1]));
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(exists));
+
+  return TCL_OK;
+}
+
 
 int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
 		      Tcl_Obj * const objv[])
@@ -859,6 +889,8 @@ static void add_tcl_commands(Tcl_Interp *interp, Dataserver *dserv)
 		       trigger_remove_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "triggerRemoveAll",
 		       trigger_remove_all_command, dserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservExists",
+		       dserv_exists_command, dserv, NULL); 
   Tcl_CreateObjCommand(interp, "dservGet",
 		       dserv_get_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservTouch",
