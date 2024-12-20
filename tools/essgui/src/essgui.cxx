@@ -1,4 +1,6 @@
 #include <FL/Fl.H>
+#include <FL/Fl_Choice.H>
+#include <FL/fl_string_functions.h>
 
 #include <iostream>
 #include <cassert>
@@ -1080,6 +1082,39 @@ int cgwinFlushwinCmd(ClientData data, Tcl_Interp *interp,
 }
 
 
+int addOptionsCmd(ClientData data, Tcl_Interp *interp,
+		     int objc, Tcl_Obj * const objv[])
+{
+  options_widget->clear();
+  
+  char label[64];
+  int height = 30;
+  int xoff = options_widget->x();
+  int yoff = options_widget->y();
+
+  options_widget->begin();
+
+  int label_width = 110;
+  for (int i = 0; i < 20; i++) {
+    snprintf(label, sizeof(label), "Option %d", i);
+    Fl_Choice *choice = new Fl_Choice(xoff+label_width,
+				      yoff+10+i*height,
+				      options_widget->w()-(label_width+20), height, 0);
+    choice->copy_label(label);
+    choice->align(Fl_Align(FL_ALIGN_LEFT));
+    choice->labeltype(FL_NORMAL_LABEL);
+    choice->add("Red");
+    choice->add("Orange");
+    choice->add("Yellow");
+    choice->value(0);
+  }
+
+  options_widget->end();
+
+  options_widget->redraw();
+  return TCL_OK;
+}
+
 int add_tcl_commands(Tcl_Interp *interp)
 {
 
@@ -1099,6 +1134,11 @@ int add_tcl_commands(Tcl_Interp *interp)
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "createTable",
 		       (Tcl_ObjCmdProc *) createTableCmd,
+		       (ClientData) NULL,
+		       (Tcl_CmdDeleteProc *) NULL);
+
+  Tcl_CreateObjCommand(interp, "addOptions",
+		       (Tcl_ObjCmdProc *) addOptionsCmd,
 		       (ClientData) NULL,
 		       (Tcl_CmdDeleteProc *) NULL);
 
