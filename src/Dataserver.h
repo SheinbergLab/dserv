@@ -107,6 +107,7 @@ public:
   int add_datapoint_to_table(char *varname,
 			     ds_datapoint_t *dpoint);
   int update_datapoint(ds_datapoint_t *dpoint);
+  int find_datapoint(char *varname);
   ds_datapoint_t *get_datapoint(char *varname);
   int delete_datapoint(char *varname);
   ds_datapoint_t *new_trigger_point(ds_datapoint_t *dpoint);
@@ -119,6 +120,7 @@ public:
   void update(ds_datapoint_t *dpoint);
   int touch(char *varname);
   int get(char *varname, ds_datapoint_t **dpoint);
+  int exists(char *varname);
   int clear(char *varname);
   void clear(void);
   char *get_table_keys(void);
