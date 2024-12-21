@@ -71,7 +71,10 @@ oo::class create System {
     method set_variant { v } { set _variantname $v }
     method get_variant { } { return $_variantname }
 
-    method set_variant_args { vdict } { set _variant_args $vdict }
+    method reset_variant_args {} { set _variant_args {} }
+    method set_variant_args { vdict } {
+	set _variant_args [dict merge  $_variant_args $vdict]
+    }
     method get_variant_args { } { return $_variant_args }
     
     method add_variant { name method params } {
@@ -587,6 +590,9 @@ namespace eval ess {
 	set s [find_system $current(system)]
 	$s set_variant $current(variant)
 
+	# this resets any unsaved variant args
+	$s reset_variant_args
+	
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 
@@ -1418,16 +1424,21 @@ namespace eval ess {
 	set current(open_protocol) 1
     }
 
-    proc variant_loader_args { system protocol variant } {
+    #
+    # using variants, variants_defaults, variants_options to discover and share loader options
+    #
+    proc variant_loader_info { system protocol variant } {
 	set s [::ess::find_system $system]
 	set vinfo [dict get [$s get_variants] $variant]
 	set loader_proc [lindex $vinfo 0]
 	set variant_dict_name [lindex $vinfo 1]
 
-	set loader_variant_args \
-	    [dict get [set ${system}::${protocol}::variant_args] $variant]
-	#	set loader_args_dict [dict merge $loader_default_args $loader_variant_args]
-	set loader_args_dict $loader_variant_args
+	set loader_variant_defaults \
+	    [dict get [set ${system}::${protocol}::variant_defaults] $variant]
+
+	# merge the default and override args
+	set loader_args_dict \
+	    [dict merge $loader_variant_defaults [$s get_variant_args]]
 	
 	# now build list of args for this particular loader_proc
 	set loader_arg_names [lindex [info object definition $s $loader_proc] 0]
@@ -1435,19 +1446,40 @@ namespace eval ess {
 	foreach a $loader_arg_names {
 	    lappend loader_args [dict get $loader_args_dict $a]
 	}
-	return [list $loader_proc $loader_args $loader_arg_names]
+
+	# find settings if they exist
+	set loader_arg_options \
+	    [dict get [set ${system}::${protocol}::variant_options] $variant]    
+
+	# standardize options in new dict "d"
+	set d [dict create]
+	foreach a $loader_arg_names {
+	    set opts [dict get $loader_arg_options $a]
+	    set olist {}
+	    foreach o $opts {
+		# if there are two elements, we have name/value, otherwise just copy
+		if { [llength $o] == 2 } {
+		    lappend olist $o
+		} elseif { [llength $o] == 1 } {
+		    lappend olist [list $o $o]
+		}
+	    }
+	    dict set d $a $olist
+	}
+		
+	return [dict create \
+		    loader_proc $loader_proc \
+		    loader_args $loader_args \
+		    loader_arg_names $loader_arg_names \
+		    loader_arg_options $d
+		   ]
     }
     
     proc variant_loader_command { system protocol variant } {
-	lassign [variant_loader_args $system $protocol $variant] \
-	    loader_proc loader_args loader_names
-	return "$loader_proc $loader_args"
+	set d [variant_loader_info $system $protocol $variant]
+	return "[dict get $d loader_proc] [dict get $d loader_args]"
     }
-
-    proc variant_loader_options { system protocol variant } {
-	return [variant_loader_args $system $protocol $variant]
-    }
-
+    
     proc set_variant_args { vargs } {
 	variable current
 	if { $current(system) == {} } { return }
@@ -1465,6 +1497,9 @@ namespace eval ess {
 	# push new stimdg to dataserver
 	$s update_stimdg
 
+	# share new variant options to dataserver and other programs
+	dservSet ess/variant_info [variant_loader_info $system $protocol $variant]
+				   
 	# protocol defaults for system parameters
 	set param_default_settings ${system}::${protocol}::params_defaults
 	if { [info exists $param_default_settings] } {
