@@ -7,6 +7,7 @@
 #include <algorithm> 
 #include <cctype>
 #include <locale>
+#include <vector>
 
 #include <tcl.h>
 #include <df.h>
@@ -672,6 +673,97 @@ static DYN_GROUP *decode_dg(const char *data, int length)
   return dg;
 }
 
+class VariantSettingUserData: public Fl_Callback_User_Data
+{
+private:
+  std::string _arg;
+  std::vector<std::string> _settings;
+
+public:
+  VariantSettingUserData(const char *arg)
+  {
+    _arg      = std::string(arg);
+  }
+
+  const char *arg(void)      { return _arg.c_str(); }
+  const char *setting(int i)  { return _settings[i].c_str(); }
+  std::vector<std::string> *settings(void)  { return &_settings; }
+  void add_setting(const char *s) { _settings.push_back(std::string(s)); }
+};
+
+
+void variant_setting_callback(Fl_Widget* o, void* data) {
+  Fl_Choice *c = (Fl_Choice *) o;
+  VariantSettingUserData *setting_info = (VariantSettingUserData *) data;
+
+  std::string cmd("ess::set_variant_args {");
+  cmd += std::string(setting_info->arg());
+  cmd += " ";
+  cmd += setting_info->settings()->at(c->value());
+  cmd += "}";
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+}
+
+int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
+{
+  Tcl_DictSearch search;
+  Tcl_Obj *key, *value;
+  int done;
+
+  options_widget->clear();
+  options_widget->begin();
+
+  int row = 0;
+  int height = 30;
+  int xoff = options_widget->x();
+  int yoff = options_widget->y();
+  int label_width = 170;
+  
+  if (Tcl_DictObjFirst(g_App->interp(), loader_options, &search,
+		       &key, &value, &done) != TCL_OK) {
+    return TCL_ERROR;
+  }
+  
+  for (; !done ; row++, Tcl_DictObjNext(&search, &key, &value, &done)) {
+    Fl_Choice *choice = new Fl_Choice(xoff+label_width,
+				      yoff+10+row*height,
+				      options_widget->w()-(label_width+20), height, 0);
+    choice->copy_label(Tcl_GetString(key));
+    choice->align(Fl_Align(FL_ALIGN_LEFT));
+    choice->labeltype(FL_NORMAL_LABEL);
+
+    /* now add menu items */
+    Tcl_Size argc, argcc;
+    char *string;
+    const char **argv, **argvv;
+    if (Tcl_SplitList(g_App->interp(), Tcl_GetString(value),
+		      &argc, &argv) == TCL_OK) {
+      VariantSettingUserData *userdata = new VariantSettingUserData(Tcl_GetString(key));
+      for (int i = 0; i < argc; i++) {
+	if (Tcl_SplitList(g_App->interp(), argv[i],
+			  &argcc, &argvv) == TCL_OK) {
+	  if (argcc == 2) {
+	    choice->add(argvv[0]);
+	    userdata->add_setting(argvv[1]);
+	  }
+	  Tcl_Free((char *) argvv);
+	}
+      }
+      choice->callback(variant_setting_callback, userdata, true);
+      choice->when(FL_WHEN_RELEASE_ALWAYS);
+      Tcl_Free((char *) argv);
+    }
+    choice->value(0);
+  }
+  Tcl_DictObjDone(&search);  
+
+  options_widget->end();
+  options_widget->redraw();
+
+  return TCL_OK;
+}
+
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
   // JSON parsing variables
@@ -840,6 +932,23 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "ess/stimtype")) {
     stimid_widget->value(json_string_value(data));
     stimid_widget->redraw_label();
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/variant_info")) {
+    Tcl_Obj *options_key = Tcl_NewStringObj("loader_arg_options", -1);
+    Tcl_Obj *args_key = Tcl_NewStringObj("loader_args", -1);
+    Tcl_Obj *dict = Tcl_NewStringObj(json_string_value(data), -1);
+    Tcl_Obj *loader_arg_options, *loader_args;
+    if (Tcl_DictObjGet(g_App->interp(), dict, options_key, &loader_arg_options) == TCL_OK) {
+      if (Tcl_DictObjGet(g_App->interp(), dict, args_key, &loader_args) == TCL_OK) {
+	if (loader_arg_options && loader_args) {
+	  set_variant_options(loader_args, loader_arg_options);
+	}
+      }
+    }
+    Tcl_DecrRefCount(dict);
+    Tcl_DecrRefCount(args_key);
+    Tcl_DecrRefCount(options_key);
   }
 
   else if (!strcmp(json_string_value(name), "ess/systems")) {
@@ -1082,38 +1191,6 @@ int cgwinFlushwinCmd(ClientData data, Tcl_Interp *interp,
 }
 
 
-int addOptionsCmd(ClientData data, Tcl_Interp *interp,
-		     int objc, Tcl_Obj * const objv[])
-{
-  options_widget->clear();
-  
-  char label[64];
-  int height = 30;
-  int xoff = options_widget->x();
-  int yoff = options_widget->y();
-
-  options_widget->begin();
-
-  int label_width = 110;
-  for (int i = 0; i < 20; i++) {
-    snprintf(label, sizeof(label), "Option %d", i);
-    Fl_Choice *choice = new Fl_Choice(xoff+label_width,
-				      yoff+10+i*height,
-				      options_widget->w()-(label_width+20), height, 0);
-    choice->copy_label(label);
-    choice->align(Fl_Align(FL_ALIGN_LEFT));
-    choice->labeltype(FL_NORMAL_LABEL);
-    choice->add("Red");
-    choice->add("Orange");
-    choice->add("Yellow");
-    choice->value(0);
-  }
-
-  options_widget->end();
-
-  options_widget->redraw();
-  return TCL_OK;
-}
 
 int add_tcl_commands(Tcl_Interp *interp)
 {
@@ -1134,11 +1211,6 @@ int add_tcl_commands(Tcl_Interp *interp)
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "createTable",
 		       (Tcl_ObjCmdProc *) createTableCmd,
-		       (ClientData) NULL,
-		       (Tcl_CmdDeleteProc *) NULL);
-
-  Tcl_CreateObjCommand(interp, "addOptions",
-		       (Tcl_ObjCmdProc *) addOptionsCmd,
 		       (ClientData) NULL,
 		       (Tcl_CmdDeleteProc *) NULL);
 
