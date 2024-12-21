@@ -13,8 +13,14 @@ namespace eval emcalib::9point {
 	spots       { basic_calib spots    "standard 9 point"}
     }	
 
-    variable variant_args {
+    variable variant_defaults {
 	spots { nr 2 }
+    }
+
+    variable variant_options {
+	spots {
+	    nr { 2 4 }
+	}
     }
     
     proc variants_init { s } {

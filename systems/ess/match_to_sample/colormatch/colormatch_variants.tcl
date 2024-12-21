@@ -15,12 +15,18 @@ namespace eval match_to_sample::colormatch {
 	redgreen { setup_trials redgreen "red/green MTS" }
     }
 
-    variable variant_args {
+    variable variant_defaults {
 	easy     { color_choices easy }
 	random   { color_choices random }
 	redgreen { color_choices redgreen }
     }
-    
+
+    variable variant_options {
+	easy     { color_choices easy }
+	random   { color_choices random }
+	redgreen { color_choices redgreen }
+    }
+
     proc variants_init { s } {
 
 	$s add_method setup_trials { color_choices } {

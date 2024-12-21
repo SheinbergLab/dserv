@@ -26,10 +26,15 @@ namespace eval match_to_sample::phd {
 	HV     { setup_trials HV "haptic visual shape MTS" }
     }
 
-    variable variant_args \
+    variable variant_defaults \
 	[dict create \
 	     VV  "dbfile $db trial_type VV filled 1 limit -1" \
 	     HV  "dbfile $db trial_type HV filled 1 limit -1"]
+
+    variable variant_options \
+	[dict create \
+	     VV  "dbfile [list [list [list Grasp3Shapes.db $db]]] trial_type VV filled 1 limit -1" \
+	     HV  "dbfile [list [list [list Grasp3Shapes.db $db]]] trial_type HV filled 1 limit -1"]
     
     proc variants_init { s } {
 
