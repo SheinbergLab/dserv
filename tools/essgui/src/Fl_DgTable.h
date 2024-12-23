@@ -1,5 +1,5 @@
-#ifndef __DGTABLE_H
-#define __DGTABLE_H
+#ifndef _DGTABLE_H
+#define _DGTABLE_H
 
 #include <FL/Fl.H>
 #include <FL/Fl_Tabs.H>
@@ -20,11 +20,11 @@ protected:
 
   void draw_cell(TableContext context,  		// table cell drawing
 		 int R=0, int C=0, int X=0, int Y=0, int W=0, int H=0);
+  DYN_GROUP *dg;
   //    void callback(TableContext context, 		// callback for table events
   //    		   int R, int C);
  
 public:
-  DYN_GROUP *dg;
 
   static void table_cb(Fl_Widget* o, void* data)
   {
