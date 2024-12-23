@@ -6,6 +6,7 @@
 #include "Fl_Console.h"
 #include "Fl_DgFile.h"
 #include "Fl_DgTable.h"
+#include "Fl_PerfTable.h"
 #include "essgui.h"
 #include "Cgwin.hpp"
 #include "EyeTouchWin.hpp"
@@ -22,26 +23,23 @@ extern Fl_Output *sysos_widget;
 #include <FL/Fl_Tree.H>
 extern void host_cb(Fl_Tree*, void*);
 extern Fl_Tree *host_widget;
-extern Fl_Output *system_status_widget;
-extern Fl_Output *obscount_widget;
-extern Fl_Output *stimid_widget;
 #include <FL/Fl_Choice.H>
 extern Fl_Choice *subject_widget;
+extern Fl_Output *system_status_widget;
+extern Fl_Output *obscount_widget;
 extern Fl_Choice *system_widget;
 extern Fl_Choice *protocol_widget;
 extern Fl_Choice *variant_widget;
 #include <FL/Fl_Scroll.H>
 extern Fl_Scroll *options_widget;
+extern Fl_Scroll *settings_widget;
 #include <FL/Fl_Tabs.H>
 extern EyeTouchWin *eyetouch_widget;
-#include <FL/Fl_Terminal.H>
-extern Fl_Terminal *behavior_terminal;
 extern void sortby_cb(Fl_Choice*, void*);
 extern Fl_Choice *sortby_1;
 extern Fl_Choice *sortby_2;
-extern Fl_Output *pctcomplete_widget;
-extern Fl_Output *pctcorrect_widget;
-extern Fl_Output *reward_widget;
+extern PerfTable *perftable_widget;
+extern PerfTable *general_perf_widget;
 extern CGWin *cgwin_widget;
 extern void virtual_eye_cb(VirtualEye*, void*);
 extern VirtualEye *virtual_eye_widget;
