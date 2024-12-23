@@ -10,21 +10,27 @@ namespace eval match_to_sample::colormatch {
     variable params_defaults { sample_time 500 delay_time 500 }
 
     variable variants {
-	easy     { setup_trials easy     "easy comparisons" }
-	random   { setup_trials random   "random comparisons" }
-	redgreen { setup_trials redgreen "red/green MTS" }
-    }
-
-    variable variant_defaults {
-	easy     { color_choices easy }
-	random   { color_choices random }
-	redgreen { color_choices redgreen }
-    }
-
-    variable variant_options {
-	easy     { color_choices easy }
-	random   { color_choices random }
-	redgreen { color_choices redgreen }
+	easy     {
+	    description "easy comparisons"
+	    loader_proc setup_trials
+	    loader_options {
+		color_choices easy
+	    }
+	}
+	random   {
+	    description "random comparisons"
+	    loader_proc setup_trials
+	    loader_options {
+		color_choices random
+	    }
+	}
+	redgreen {
+	    description "red/green MTS"
+	    loader_proc setup_trials
+	    loader_options {
+		color_choices redgreen
+	    }
+	}
     }
 
     proc variants_init { s } {

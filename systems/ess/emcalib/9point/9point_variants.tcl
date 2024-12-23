@@ -3,25 +3,21 @@
 #   emcalib 9point
 #
 # DESCRIPTION
-#   variant dictionary
+#   variants/loaders for 9point version of emcalib
 #
 
 namespace eval emcalib::9point {
     variable params_defaults         {}
 
     variable variants {
-	spots       { basic_calib spots    "standard 9 point"}
-    }	
-
-    variable variant_defaults {
-	spots { nr 2 }
-    }
-
-    variable variant_options {
 	spots {
-	    nr { 2 4 }
+	    description "standard 9 point"
+	    loader_proc basic_calib
+	    loader_options {
+		nr { 2 4 }
+	    }
 	}
-    }
+    }	
     
     proc variants_init { s } {
 	$s add_method basic_calib { nr } {

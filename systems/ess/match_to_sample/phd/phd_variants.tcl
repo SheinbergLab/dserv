@@ -8,6 +8,13 @@
 
 namespace eval match_to_sample::phd {
 
+    # state system parameters
+    variable params_defaults { delay_time 100 }
+    variable params_VV { sample_time 2000 }
+    variable params_HV { sample_time 10000 }
+
+    
+    # variant description
     # find database
     set db {}
     set paths [list \
@@ -17,24 +24,30 @@ namespace eval match_to_sample::phd {
 	if [file exists $p] { set db $p; break }
     }
 
-    variable params_defaults { delay_time 100 }
-    variable params_VV { sample_time 2000 }
-    variable params_HV { sample_time 10000 }
-
     variable variants {
-	VV     { setup_trials VV "visual visual shape MTS" }
-	HV     { setup_trials HV "haptic visual shape MTS" }
+	VV {
+	    description "visual visual shape MTS"	    
+	    loader_proc setup_trials
+	    loader_options {
+		dbfile { { Grasp3Shapes.db $db } }
+		trial_type VV
+		filled 1
+		limit -1
+	    }
+	}
+	HV {
+	    description "haptic visual shape MTS"	    
+	    loader_proc setup_trials {
+		dbfile { { Grasp3Shapes.db $db } }
+		trial_type HV
+		filled 1
+		limit -1
+	    }
+	}
     }
 
-    variable variant_defaults \
-	[dict create \
-	     VV  "dbfile $db trial_type VV filled 1 limit -1" \
-	     HV  "dbfile $db trial_type HV filled 1 limit -1"]
-
-    variable variant_options \
-	[dict create \
-	     VV  "dbfile [list [list [list Grasp3Shapes.db $db]]] trial_type VV filled 1 limit -1" \
-	     HV  "dbfile [list [list [list Grasp3Shapes.db $db]]] trial_type HV filled 1 limit -1"]
+    # substitute variables ($db) in variant description above
+    set variants [subst $variants]
     
     proc variants_init { s } {
 

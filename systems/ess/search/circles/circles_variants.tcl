@@ -10,38 +10,40 @@ namespace eval search::circles {
     variable params_defaults          { n_rep 50 }
 
     variable variants {
-	single      { basic_search single    "no distractors"}
-	variable    { basic_search variable  "variable number of distractors" }
-	distractors { basic_search distractors "fixed number of distractors" }
-    }	
-
-    variable variant_defaults {
-	single      { nr 200 nd 0 mindist 1.5 }
-	variable    { nr 40  nd {0 2 4 6 8} mindist 1.5}
-	distractors { nr 200 nd 6 mindist 2.0 }
-    }
-
-    variable variant_options {
 	single {
-	    nr { 200 100 50 }
-	    nd { 0 }
-	    mindist { 1.5 }
+	    description "no distractors"
+	    loader_proc basic_search
+	    loader_options {
+		nr { 200 100 50 }
+		nd { 0 }
+		mindist { 1.5 }
+	    }
 	}
 	variable {
-	    nr { 40 60 100 }
-	    nd {
-		{ 0,2,4,6,8 {0 2 4 6 8} }
-		{ 0,5,10    {0 5 10} }
+	    description "variable number of distractors"
+	    loader_proc basic_search
+	    loader_options {
+		nr { 40 60 100 }
+		nd {
+		    { 0,2,4,6,8 { [dl_tcllist [dl_series 0 8 2]] } }
+		    { 0,5,10    { 0 5 10 } }
+		}
+		mindist {1.5 2.0}
 	    }
-	    mindist {1.5 2.0}
 	}
 	distractors {
-	    nr { 100 200 }
-	    nd { 4 6 8 }
-	    mindist { 2.0 3.0 }
+	    description "fixed number of distractors"
+	    loader_proc basic_search
+	    loader_options {
+		nr { 100 200 }
+		nd { 4 6 8 }
+		mindist { 2.0 3.0 }
+	    }
 	}
     }
-
+    # use subst to replace variables in variant definition above
+    set variants [subst $variants]
+    
     proc variants_init { s } {
 	
 	$s add_method single_init {} {

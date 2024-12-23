@@ -12,36 +12,37 @@ namespace eval planko::training {
     variable params_defaults          { n_rep 50 }
 
     variable variants {
-	single      { basic_planko single    "one plank"}
-	jitter      { basic_planko jitter    "jitter ball start"}
-	zero_one    { basic_planko zero_one  "hit zero or one plank"}
-    }	
-
-    # specific arguments to variant loader procs
-    variable variant_defaults {
-	single  { nr 100 nplanks 1 wrong_catcher_alpha 1 params {} }
-	jitter   { nr 50 nplanks 1 wrong_catcher_alpha 1 params
-	    { ball_jitter_x 8 ball_start_y 5 ball_jitter_y 1 } }
-	zero_one { nr 50 nplanks 1 wrong_catcher_alpha 0.15 params 
-	    { ball_jitter_x 10 ball_start_y 0 ball_jitter_y 3 minplanks 0 } }
-    }
-
-    variable variant_options {
-	single { nr { 100 200 } nplanks { 1 } wrong_catcher_alpha 1 params { { defaults {} } } }
+	single {
+	    description "one plank"
+	    loader_proc basic_planko
+	    loader_options {
+		nr { 100 200 }
+		nplanks { 1 }
+		wrong_catcher_alpha 1
+		params { { defaults {} } }
+	    }
+	}
 	jitter {
-	    nr { 50 100 200 }
-	    nplanks { 1 }
-	    wrong_catcher_alpha { 1 0.5 }
-	    params { { jittered { ball_jitter_x 8 ball_start_y 5 ball_jitter_y 1 } } }
+	    description "jitter ball start"
+	    loader_proc basic_planko
+	    loader_options {
+		nr { 50 100 200 }
+		nplanks { 1 }
+		wrong_catcher_alpha { 1 0.5 }
+		params { { jittered { ball_jitter_x 8 ball_start_y 5 ball_jitter_y 1 } } }
+	    }
 	}
 	zero_one {
-	    nr { 50 100 200 }
-	    nplanks { 1 }
-	    wrong_catcher_alpha { 0.1 0.7 0.8 0.9 1.0 }
-	    params { { jittered { ball_jitter_x 10 ball_start_y 0 ball_jitter_y 3 minplanks 0 } } }
+	    description "hit zero or one plank"
+	    loader_proc basic_planko
+	    loader_options {
+		nr { 50 100 200 }
+		nplanks { 1 }
+		wrong_catcher_alpha { 0.1 0.7 0.8 0.9 1.0 }
+		params { { jittered { ball_jitter_x 10 ball_start_y 0 ball_jitter_y 3 minplanks 0 } } }
+	    }
 	}
-
-    }
+    }	
     
     proc variants_init { s } {
 	$s add_method single_init {} {
