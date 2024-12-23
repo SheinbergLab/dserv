@@ -10,6 +10,12 @@ Fl_Output *sysos_widget=(Fl_Output *)0;
 
 Fl_Tree *host_widget=(Fl_Tree *)0;
 
+Fl_Choice *subject_widget=(Fl_Choice *)0;
+
+static void cb_subject_widget(Fl_Choice*, void*) {
+  set_subject();
+}
+
 static void cb_Go(Fl_Button*, void*) {
   esscmd("ess::start");
 }
@@ -25,14 +31,6 @@ static void cb_Reset(Fl_Button*, void*) {
 Fl_Output *system_status_widget=(Fl_Output *)0;
 
 Fl_Output *obscount_widget=(Fl_Output *)0;
-
-Fl_Output *stimid_widget=(Fl_Output *)0;
-
-Fl_Choice *subject_widget=(Fl_Choice *)0;
-
-static void cb_subject_widget(Fl_Choice*, void*) {
-  set_subject();
-}
 
 Fl_Choice *system_widget=(Fl_Choice *)0;
 
@@ -54,19 +52,17 @@ static void cb_variant_widget(Fl_Choice*, void*) {
 
 Fl_Scroll *options_widget=(Fl_Scroll *)0;
 
-EyeTouchWin *eyetouch_widget=(EyeTouchWin *)0;
+Fl_Scroll *settings_widget=(Fl_Scroll *)0;
 
-Fl_Terminal *behavior_terminal=(Fl_Terminal *)0;
+EyeTouchWin *eyetouch_widget=(EyeTouchWin *)0;
 
 Fl_Choice *sortby_1=(Fl_Choice *)0;
 
 Fl_Choice *sortby_2=(Fl_Choice *)0;
 
-Fl_Output *pctcomplete_widget=(Fl_Output *)0;
+PerfTable *perftable_widget=(PerfTable *)0;
 
-Fl_Output *pctcorrect_widget=(Fl_Output *)0;
-
-Fl_Output *reward_widget=(Fl_Output *)0;
+PerfTable *general_perf_widget=(PerfTable *)0;
 
 CGWin *cgwin_widget=(CGWin *)0;
 
@@ -112,86 +108,81 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         { host_widget = new Fl_Tree(4, 152, 198, 212);
           host_widget->callback((Fl_Callback*)host_cb);
         } // Fl_Tree* host_widget
-        { Fl_Group* o = new Fl_Group(4, 372, 206, 136);
-          o->box(FL_THIN_UP_BOX);
-          { Fl_Flex* o = new Fl_Flex(8, 377, 196, 32);
-            o->type(1);
-            { Fl_Button* o = new Fl_Button(8, 377, 66, 32, "Go");
-              o->labelsize(18);
-              o->callback((Fl_Callback*)cb_Go);
-            } // Fl_Button* o
-            { Fl_Button* o = new Fl_Button(74, 377, 65, 32, "Stop");
-              o->labelsize(18);
-              o->callback((Fl_Callback*)cb_Stop);
-            } // Fl_Button* o
-            { Fl_Button* o = new Fl_Button(139, 377, 65, 32, "Reset");
-              o->labelsize(18);
-              o->callback((Fl_Callback*)cb_Reset);
-            } // Fl_Button* o
-            o->end();
-          } // Fl_Flex* o
-          { Fl_Flex* o = new Fl_Flex(80, 419, 95, 80);
-            { system_status_widget = new Fl_Output(80, 419, 95, 27, "Status:");
-              system_status_widget->box(FL_NO_BOX);
-              system_status_widget->labelsize(16);
-              system_status_widget->textsize(16);
-            } // Fl_Output* system_status_widget
-            { obscount_widget = new Fl_Output(80, 446, 95, 27, "Obs:");
-              obscount_widget->box(FL_FLAT_BOX);
-              obscount_widget->color(FL_BACKGROUND_COLOR);
-              obscount_widget->labelsize(16);
-              obscount_widget->textsize(16);
-            } // Fl_Output* obscount_widget
-            { stimid_widget = new Fl_Output(80, 473, 95, 26, "Stim ID:");
-              stimid_widget->box(FL_NO_BOX);
-              stimid_widget->labelsize(16);
-              stimid_widget->textsize(16);
-              stimid_widget->readonly(1); stimid_widget->set_output();
-            } // Fl_Output* stimid_widget
-            o->end();
-          } // Fl_Flex* o
-          o->end();
-        } // Fl_Group* o
         o->end();
       } // Fl_Group* o
-      { Fl_Group* o = new Fl_Group(214, 28, 315, 640, "Control");
+      { Fl_Group* o = new Fl_Group(214, 28, 315, 644, "Control");
         o->box(FL_GTK_DOWN_BOX);
         o->color(FL_DARK1);
         o->labelsize(18);
         o->vertical_label_margin(4);
-        { Fl_Group* o = new Fl_Group(214, 29, 305, 202);
-          { Fl_Group* o = new Fl_Group(223, 31, 288, 51);
+        { Fl_Group* o = new Fl_Group(214, 29, 315, 283);
+          { Fl_Group* o = new Fl_Group(220, 34, 306, 36);
             o->box(FL_THIN_UP_BOX);
-            { Fl_Flex* o = new Fl_Flex(292, 43, 210, 30);
-              { subject_widget = new Fl_Choice(292, 43, 210, 30, "Subject:");
+            { Fl_Flex* o = new Fl_Flex(295, 38, 210, 28);
+              { subject_widget = new Fl_Choice(295, 38, 210, 28, "Subject:");
                 subject_widget->down_box(FL_BORDER_BOX);
                 subject_widget->labelsize(16);
                 subject_widget->textsize(16);
                 subject_widget->callback((Fl_Callback*)cb_subject_widget);
               } // Fl_Choice* subject_widget
+              o->fixed(o->child(0), 28);
               o->end();
             } // Fl_Flex* o
             o->end();
           } // Fl_Group* o
-          { Fl_Group* o = new Fl_Group(221, 86, 288, 145);
+          { Fl_Group* o = new Fl_Group(220, 72, 306, 106);
+            o->box(FL_THIN_UP_BOX);
+            { Fl_Flex* o = new Fl_Flex(259, 79, 240, 40);
+              o->type(1);
+              { Fl_Button* o = new Fl_Button(259, 79, 80, 40, "Go");
+                o->labelsize(18);
+                o->callback((Fl_Callback*)cb_Go);
+              } // Fl_Button* o
+              { Fl_Button* o = new Fl_Button(339, 79, 80, 40, "Stop");
+                o->labelsize(18);
+                o->callback((Fl_Callback*)cb_Stop);
+              } // Fl_Button* o
+              { Fl_Button* o = new Fl_Button(419, 79, 80, 40, "Reset");
+                o->labelsize(18);
+                o->callback((Fl_Callback*)cb_Reset);
+              } // Fl_Button* o
+              o->end();
+            } // Fl_Flex* o
+            { Fl_Flex* o = new Fl_Flex(341, 125, 95, 48);
+              { system_status_widget = new Fl_Output(341, 125, 95, 24, "Status:");
+                system_status_widget->box(FL_NO_BOX);
+                system_status_widget->labelsize(16);
+                system_status_widget->textsize(16);
+              } // Fl_Output* system_status_widget
+              { obscount_widget = new Fl_Output(341, 149, 95, 24, "Obs:");
+                obscount_widget->box(FL_FLAT_BOX);
+                obscount_widget->color(FL_BACKGROUND_COLOR);
+                obscount_widget->labelsize(16);
+                obscount_widget->textsize(16);
+              } // Fl_Output* obscount_widget
+              o->end();
+            } // Fl_Flex* o
+            o->end();
+          } // Fl_Group* o
+          { Fl_Group* o = new Fl_Group(220, 181, 306, 128);
             o->box(FL_THIN_UP_BOX);
             o->labelsize(20);
-            { Fl_Flex* o = new Fl_Flex(290, 107, 210, 102);
-              { system_widget = new Fl_Choice(290, 107, 210, 28, "System:");
+            { Fl_Flex* o = new Fl_Flex(292, 193, 210, 102);
+              { system_widget = new Fl_Choice(292, 193, 210, 28, "System:");
                 system_widget->down_box(FL_BORDER_BOX);
                 system_widget->labelsize(16);
                 system_widget->textsize(16);
                 system_widget->callback((Fl_Callback*)cb_system_widget);
                 system_widget->when(FL_WHEN_RELEASE_ALWAYS);
               } // Fl_Choice* system_widget
-              { protocol_widget = new Fl_Choice(290, 145, 210, 27, "Protocol:");
+              { protocol_widget = new Fl_Choice(292, 231, 210, 27, "Protocol:");
                 protocol_widget->down_box(FL_BORDER_BOX);
                 protocol_widget->labelsize(16);
                 protocol_widget->textsize(16);
                 protocol_widget->callback((Fl_Callback*)cb_protocol_widget);
                 protocol_widget->when(FL_WHEN_RELEASE_ALWAYS);
               } // Fl_Choice* protocol_widget
-              { variant_widget = new Fl_Choice(290, 182, 210, 27, "Variant:");
+              { variant_widget = new Fl_Choice(292, 268, 210, 27, "Variant:");
                 variant_widget->down_box(FL_BORDER_BOX);
                 variant_widget->labelsize(16);
                 variant_widget->textsize(16);
@@ -205,13 +196,22 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           } // Fl_Group* o
           o->end();
         } // Fl_Group* o
-        { options_widget = new Fl_Scroll(220, 255, 305, 408, "Options");
-          options_widget->type(7);
-          options_widget->vertical_label_margin(3);
-          options_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
-          options_widget->end();
-          Fl_Group::current()->resizable(options_widget);
-        } // Fl_Scroll* options_widget
+        { Fl_Group* o = new Fl_Group(220, 312, 306, 360);
+          { options_widget = new Fl_Scroll(220, 335, 306, 160, "Options");
+            options_widget->type(7);
+            options_widget->vertical_label_margin(3);
+            options_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
+            options_widget->end();
+          } // Fl_Scroll* options_widget
+          { settings_widget = new Fl_Scroll(220, 516, 306, 150, "System Settings");
+            settings_widget->type(7);
+            settings_widget->vertical_label_margin(3);
+            settings_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
+            settings_widget->end();
+          } // Fl_Scroll* settings_widget
+          o->end();
+          Fl_Group::current()->resizable(o);
+        } // Fl_Group* o
         o->end();
       } // Fl_Group* o
       { Fl_Group* o = new Fl_Group(531, 28, 748, 645, "Info");
@@ -243,38 +243,42 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
             { Fl_Group* o = new Fl_Group(791, 420, 451, 248, "Performance");
               o->box(FL_UP_BOX);
               o->vertical_label_margin(3);
-              { behavior_terminal = new Fl_Terminal(798, 430, 430, 156);
-                behavior_terminal->cursorbgcolor(FL_BLACK);
-              } // Fl_Terminal* behavior_terminal
-              { Fl_Flex* o = new Fl_Flex(1064, 598, 166, 60);
-                { sortby_1 = new Fl_Choice(1064, 598, 166, 25, "Sort by:");
+              { Fl_Flex* o = new Fl_Flex(1064, 574, 166, 60);
+                { sortby_1 = new Fl_Choice(1064, 574, 166, 25, "Sort by:");
                   sortby_1->down_box(FL_BORDER_BOX);
                   sortby_1->callback((Fl_Callback*)sortby_cb);
                 } // Fl_Choice* sortby_1
-                { sortby_2 = new Fl_Choice(1064, 633, 166, 25, "Sort by:");
+                { sortby_2 = new Fl_Choice(1064, 609, 166, 25, "Sort by:");
                   sortby_2->down_box(FL_BORDER_BOX);
                   sortby_2->callback((Fl_Callback*)sortby_cb);
                 } // Fl_Choice* sortby_2
                 o->gap(10);
                 o->end();
               } // Fl_Flex* o
-              { Fl_Group* o = new Fl_Group(884, 588, 89, 80);
-                { Fl_Flex* o = new Fl_Flex(923, 593, 50, 68);
-                  { pctcomplete_widget = new Fl_Output(938, 593, 35, 19, "% Completed:");
-                    pctcomplete_widget->box(FL_NO_BOX);
-                  } // Fl_Output* pctcomplete_widget
-                  { pctcorrect_widget = new Fl_Output(938, 612, 35, 30, "% Correct:");
-                    pctcorrect_widget->box(FL_NO_BOX);
-                  } // Fl_Output* pctcorrect_widget
-                  { reward_widget = new Fl_Output(938, 642, 35, 19, "Reward:");
-                    reward_widget->box(FL_NO_BOX);
-                  } // Fl_Output* reward_widget
-                  o->margin(15, 0, 0, 0);
-                  o->fixed(o->child(1), 30);
-                  o->end();
-                } // Fl_Flex* o
-                o->end();
-              } // Fl_Group* o
+              { perftable_widget = new PerfTable(811, 439, 410, 120);
+                perftable_widget->box(FL_NO_BOX);
+                perftable_widget->color(FL_BACKGROUND_COLOR);
+                perftable_widget->selection_color(FL_BACKGROUND_COLOR);
+                perftable_widget->labeltype(FL_NORMAL_LABEL);
+                perftable_widget->labelfont(0);
+                perftable_widget->labelsize(14);
+                perftable_widget->labelcolor(FL_FOREGROUND_COLOR);
+                perftable_widget->align(Fl_Align(FL_ALIGN_TOP));
+                perftable_widget->when(FL_WHEN_RELEASE);
+                perftable_widget->end();
+              } // PerfTable* perftable_widget
+              { general_perf_widget = new PerfTable(811, 574, 190, 80);
+                general_perf_widget->box(FL_NO_BOX);
+                general_perf_widget->color(FL_BACKGROUND_COLOR);
+                general_perf_widget->selection_color(FL_BACKGROUND_COLOR);
+                general_perf_widget->labeltype(FL_NORMAL_LABEL);
+                general_perf_widget->labelfont(0);
+                general_perf_widget->labelsize(14);
+                general_perf_widget->labelcolor(FL_FOREGROUND_COLOR);
+                general_perf_widget->align(Fl_Align(FL_ALIGN_TOP));
+                general_perf_widget->when(FL_WHEN_RELEASE);
+                general_perf_widget->end();
+              } // PerfTable* general_perf_widget
               o->end();
             } // Fl_Group* o
             { Fl_Group* o = new Fl_Group(795, 84, 456, 316, "Plot Window");
