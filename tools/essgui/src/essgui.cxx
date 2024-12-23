@@ -183,10 +183,12 @@ static void clear_widgets(void) {
   const char *l = "stimdg";
   stimdg_widget->clear(l);
 
-#if 0
-  behavior_terminal->reset_terminal();
-  behavior_terminal->redraw();
-#endif
+  sysname_widget->value("");
+  sysname_widget->redraw_label();
+
+  sysos_widget->value("");
+  sysos_widget->redraw_label();
+
   general_perf_widget->clear("");
   general_perf_widget->redraw();
 
