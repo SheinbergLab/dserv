@@ -18,7 +18,7 @@
 #include "Fl_Console.h"
 #include "Fl_DgFile.h"
 #include "Fl_DgTable.h"
-#include "Fl_DataTable.h"
+#include "Fl_PerfTable.h"
 
 #include "Cgwin.hpp"
 #include "EyeTouchWin.hpp"
@@ -44,6 +44,7 @@ class App
 private:
     TclInterp *_interp;
 public:
+  bool auto_reload = true;		// reload variant immediately upon setting change
   std::thread dsnet_thread;
   DservSocket *ds_sock;
   Fl_Double_Window *win;
@@ -68,7 +69,7 @@ public:
     Fl::lock(); /* "start" the FLTK lock mechanism */
     
     _interp = new TclInterp(argc, argv);
-    
+
     ds_sock = new DservSocket();
     dsnet_thread = ds_sock->start_server();
     
@@ -123,7 +124,7 @@ public:
     /* touch variables to update interface */
     std::string rstr;
     ds_sock->esscmd(hoststr,
-		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total ess/block_pct_complete ess/block_pct_correct stimdg trialdg system/hostname system/os} { dservTouch $v }"), rstr);
+		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total ess/block_pct_complete ess/block_pct_correct ess/variant_info stimdg trialdg system/hostname system/os} { dservTouch $v }"), rstr);
 
     update_em_regions();
 
@@ -160,11 +161,7 @@ void linenoise_write(const char *buf, size_t n) {
 
   
 static void clear_counter_widgets(void) {
-  pctcomplete_widget->value("");
-  pctcorrect_widget->value("");
   obscount_widget->value("");
-  pctcomplete_widget->redraw_label();
-  pctcorrect_widget->redraw_label();
   obscount_widget->redraw();
 }
 
@@ -186,10 +183,21 @@ static void clear_widgets(void) {
   const char *l = "stimdg";
   stimdg_widget->clear(l);
 
+#if 0
   behavior_terminal->reset_terminal();
   behavior_terminal->redraw();
+#endif
+  general_perf_widget->clear("");
+  general_perf_widget->redraw();
+
+  perftable_widget->clear("");
+  perftable_widget->redraw();
+  Tcl_VarEval(g_App->interp(), "if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
 
   virtual_eye_widget->initialized = false;
+
+  options_widget->clear();
+  options_widget->redraw();
 }  
 
 
@@ -414,7 +422,7 @@ void refresh_cb(Fl_Button *, void *)
 void do_sortby(void)
 {
   Tcl_VarEval(g_App->interp(),
-	      "behaviorReset; behaviorPrint [do_sortby ",
+	      "setPerfTable {*}[do_sortby ",	      
 	      sortby_1->text() ? sortby_1->text() : "", " ",
 	      sortby_2->text() ? sortby_2->text() : "", "]", NULL);
 }  
@@ -446,6 +454,11 @@ void configure_sorters(DYN_GROUP *dg)
   
   if (!stimtype) return;
   int n = DYN_LIST_N(stimtype);
+
+  // blanks for "unselecting" sortby
+  sortby_1->add(" ");
+  sortby_2->add(" ");
+
   for (int i = 0; i < DYN_GROUP_NLISTS(dg); i++) {
     if (DYN_LIST_N(DYN_GROUP_LIST(dg,i)) == n) {
       DYN_LIST *dl = DYN_GROUP_LIST(dg,i);
@@ -457,9 +470,10 @@ void configure_sorters(DYN_GROUP *dg)
 	DYN_LIST *u = dynListUniqueList(dl);
 	int nunique = DYN_LIST_N(u);
 	dfuFreeDynList(u);
-	if (nunique <= max_unique)
+	if (nunique <= max_unique) {
 	  sortby_1->add(name);
 	  sortby_2->add(name);
+	}
       }
     }    
   }
@@ -689,6 +703,13 @@ public:
   const char *setting(int i)  { return _settings[i].c_str(); }
   std::vector<std::string> *settings(void)  { return &_settings; }
   void add_setting(const char *s) { _settings.push_back(std::string(s)); }
+  int find(const char *s)
+  {
+    for(std::vector<std::string>::size_type i = 0; i != _settings.size(); i++) {
+      if (!strcmp(s, _settings[i].c_str())) return i;
+    }
+    return -1;
+  }
 };
 
 
@@ -696,13 +717,28 @@ void variant_setting_callback(Fl_Widget* o, void* data) {
   Fl_Choice *c = (Fl_Choice *) o;
   VariantSettingUserData *setting_info = (VariantSettingUserData *) data;
 
+  clear_counter_widgets();
+  
+  /* clear performance widgets */
+  perftable_widget->clear("");
+  perftable_widget->redraw();
+
+  general_perf_widget->clear("");
+  general_perf_widget->redraw();
+  
   std::string cmd("ess::set_variant_args {");
   cmd += std::string(setting_info->arg());
-  cmd += " ";
+  cmd += " {";
   cmd += setting_info->settings()->at(c->value());
-  cmd += "}";
+  cmd += "} }; ";
+
+  if (g_App->auto_reload) {
+    cmd += "ess::reload_variant";
+  }
+
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+
 }
 
 int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
@@ -724,7 +760,13 @@ int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
 		       &key, &value, &done) != TCL_OK) {
     return TCL_ERROR;
   }
-  
+
+  /* split loader args to use below */
+  Tcl_Size la_argc;
+  const char **la_argv;
+  Tcl_SplitList(g_App->interp(), Tcl_GetString(loader_args),
+		&la_argc, &la_argv);
+    
   for (; !done ; row++, Tcl_DictObjNext(&search, &key, &value, &done)) {
     Fl_Choice *choice = new Fl_Choice(xoff+label_width,
 				      yoff+10+row*height,
@@ -734,12 +776,13 @@ int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
     choice->labeltype(FL_NORMAL_LABEL);
 
     /* now add menu items */
+    VariantSettingUserData *userdata;
     Tcl_Size argc, argcc;
     char *string;
     const char **argv, **argvv;
     if (Tcl_SplitList(g_App->interp(), Tcl_GetString(value),
 		      &argc, &argv) == TCL_OK) {
-      VariantSettingUserData *userdata = new VariantSettingUserData(Tcl_GetString(key));
+      userdata = new VariantSettingUserData(Tcl_GetString(key));
       for (int i = 0; i < argc; i++) {
 	if (Tcl_SplitList(g_App->interp(), argv[i],
 			  &argcc, &argvv) == TCL_OK) {
@@ -754,8 +797,18 @@ int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
       choice->when(FL_WHEN_RELEASE_ALWAYS);
       Tcl_Free((char *) argv);
     }
-    choice->value(0);
+
+    /* now set the input choice to match the current setting */
+    if (la_argc > row) {
+      int val = userdata->find(la_argv[row]);
+      if (val > 0) choice->value(val);
+      else choice->value(0);
+    }
+    else choice->value(0);
   }
+  
+  Tcl_Free((char *) la_argv);
+  
   Tcl_DictObjDone(&search);  
 
   options_widget->end();
@@ -764,12 +817,24 @@ int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
   return TCL_OK;
 }
 
+void update_general_perf_widget(int complete, int correct)
+{
+  std::string cmd = "setGeneralPerfTable {";
+  cmd += std::to_string(correct);
+  cmd += " ";
+  cmd += std::to_string(complete);
+  cmd += "} {{% correct} {% complete}}";
+
+  Tcl_VarEval(g_App->interp(), cmd.c_str(), NULL);
+}
+
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
   // JSON parsing variables
 
   static int obs_id = 0, obs_total;
-
+  static int block_percent_correct, block_percent_complete;
+  
   json_error_t error;
   json_t *root;
 
@@ -792,8 +857,8 @@ void process_dpoint_cb(void *cbdata) {
   if (!strcmp(json_string_value(name), "ess/obs_active")) {
    if (!strcmp(json_string_value(data), "0")) {
    	obscount_widget->textcolor(FL_FOREGROUND_COLOR);
-	stimid_widget->value("");
-	stimid_widget->redraw_label();
+	//	stimid_widget->value("");
+	//	stimid_widget->redraw_label();
    } else {
    	obscount_widget->textcolor(FL_FOREGROUND_COLOR);
 	obscount_widget->redraw();
@@ -851,17 +916,13 @@ void process_dpoint_cb(void *cbdata) {
   }
 
   else if (!strcmp(json_string_value(name), "ess/block_pct_complete")) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", (int) (atof(json_string_value(data))*100));
-    pctcomplete_widget->value(buf);
-    pctcomplete_widget->redraw_label();
+    block_percent_complete = (int) (atof(json_string_value(data))*100);
+    update_general_perf_widget(block_percent_complete, block_percent_correct);
   }
-
+  
   else if (!strcmp(json_string_value(name), "ess/block_pct_correct")) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", (int) (atof(json_string_value(data))*100));
-    pctcorrect_widget->value(buf);
-    pctcorrect_widget->redraw_label();
+    block_percent_correct = (int) (atof(json_string_value(data))*100);
+    update_general_perf_widget(block_percent_complete, block_percent_correct);
   }
 
   else if (!strcmp(json_string_value(name), "ess/em_region_setting")) {
@@ -922,6 +983,14 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "ess/system")) {
     system_widget->value(system_widget->find_index(json_string_value(data)));
     clear_counter_widgets();
+
+    /* clear performance widget */
+    perftable_widget->clear("");
+    perftable_widget->redraw();
+
+    /* clear performance widget */
+    general_perf_widget->clear("");
+    general_perf_widget->redraw();
   }
   else if (!strcmp(json_string_value(name), "ess/protocol")) {
     protocol_widget->value(protocol_widget->find_index(json_string_value(data)));
@@ -930,8 +999,8 @@ void process_dpoint_cb(void *cbdata) {
     variant_widget->value(variant_widget->find_index(json_string_value(data)));
   }
   else if (!strcmp(json_string_value(name), "ess/stimtype")) {
-    stimid_widget->value(json_string_value(data));
-    stimid_widget->redraw_label();
+    //    stimid_widget->value(json_string_value(data));
+    //    stimid_widget->redraw_label();
   }
 
   else if (!strcmp(json_string_value(name), "ess/variant_info")) {
@@ -1005,6 +1074,10 @@ void process_dpoint_cb(void *cbdata) {
     tclPutGroup(g_App->interp(), dg);
     stimdg_widget->set(dg);
     configure_sorters(dg);
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/trialinfo")) {
+    // use trialdg instead
   }
   
   else if (!strcmp(json_string_value(name), "trialdg")) {
@@ -1106,18 +1179,23 @@ int terminalResetCmd(ClientData data, Tcl_Interp *interp,
 int createTableCmd(ClientData data, Tcl_Interp *interp,
 		   int objc, Tcl_Obj * const objv[])
 {
+  PerfTable *table = (PerfTable *) data;
+  
   Tcl_Size lcount;		// number of sublists
   Tcl_Size hcount;		// number of header elements
   Tcl_Size nrows;		// length of each sublist
   Tcl_Obj **sublists;		// array of sublists
   bool have_header = false;
+
+  std::vector<std::string> header;
+  std::vector<std::vector<std::string>> rows;
   
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "table_values [header_row]");
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "table_values header_row");
     return TCL_ERROR;
   }
 
-  if (objc > 2) have_header = true;
+  have_header = true;
 		  
   /* ensure lists are all of same length */
   if (Tcl_ListObjGetElements(interp, objv[1], &lcount, &sublists) == TCL_OK) {
@@ -1143,43 +1221,28 @@ int createTableCmd(ClientData data, Tcl_Interp *interp,
       return TCL_ERROR;
     }
   }
-  
-  ft_table_t *table = ft_create_table();
+
   Tcl_Obj *o;
   
-  ft_set_border_style(table, FT_NICE_STYLE);
-  
-  const char **elts = (const char **) calloc(lcount, sizeof(char *));
-
   /* add header if specified */
   if (have_header) {
-    ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
-    ft_set_cell_prop(table, 0, FT_ANY_COLUMN,
-		     FT_CPROP_CONT_TEXT_STYLE, FT_TSTYLE_BOLD);
     for (int i = 0; i < hcount; i++) {
       Tcl_ListObjIndex(interp, objv[2], i, &o);  
-      elts[i] = Tcl_GetString(o);
+      header.push_back(Tcl_GetString(o));
     }
-    ft_row_write_ln(table, hcount, elts);
   }
 
   /* fill table with data */
+  rows.resize(nrows);
   for (int i = 0; i < nrows; i++) {
     for (int j = 0; j < lcount; j++) {
       Tcl_ListObjIndex(interp, sublists[j], i, &o);  
-      elts[j] = Tcl_GetString(o);
+      rows[i].push_back(Tcl_GetString(o));
     }
-    ft_row_write_ln(table, lcount, elts);
   }
 
-  free(elts);
-
-  /* Move table to the center of the screen */
-  ft_set_tbl_prop(table, FT_TPROP_LEFT_MARGIN, 1);
+  table->set("", header, rows);
   
-  const char *table_str = (const char *) ft_to_string(table);
-  Tcl_SetObjResult(interp, Tcl_NewStringObj(table_str, -1));
-  ft_destroy_table(table);
   return TCL_OK;
 }
 
@@ -1201,6 +1264,7 @@ int add_tcl_commands(Tcl_Interp *interp)
   Tcl_CreateObjCommand(interp, "esscmd",
 		       (Tcl_ObjCmdProc *) esscmdCmd,
 		       (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+#if 0
   Tcl_CreateObjCommand(interp, "behaviorPrint",
 		       (Tcl_ObjCmdProc *) terminalOutCmd,
 		       (ClientData) behavior_terminal,
@@ -1209,9 +1273,14 @@ int add_tcl_commands(Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) terminalResetCmd,
 		       (ClientData) behavior_terminal,
 		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "createTable",
+#endif  
+  Tcl_CreateObjCommand(interp, "setPerfTable",
 		       (Tcl_ObjCmdProc *) createTableCmd,
-		       (ClientData) NULL,
+		       (ClientData) perftable_widget,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "setGeneralPerfTable",
+		       (Tcl_ObjCmdProc *) createTableCmd,
+		       (ClientData) general_perf_widget,
 		       (Tcl_CmdDeleteProc *) NULL);
 
   /* override the cgraph flushwin to call CGWin::draw */
@@ -1243,12 +1312,12 @@ proc do_sortby { args } {
     if { $nargs > 2 } return
     set curdg [dg_copySelected trialdg [dl_oneof trialdg:status [dl_ilist 0 1]]]
     if { $nargs == 0 } {
-	set pc [format %.2f [dl_mean $curdg:status]]
+	set pc [format %d [expr int(100*[dl_mean $curdg:status])]]
 	set rt [format %.2f [dl_mean $curdg:rt]]
 	set  n [dl_length $curdg:status]
 	set headers "{% correct} rt n"
         dg_delete $curdg
-	return [createTable [list $pc $rt $n] $headers]
+	return [list [list $pc $rt $n] $headers]
     } elseif { $nargs == 1 } {
 	set sortby $args
 	dl_local pc [dl_selectSortedFunc $curdg:status \
@@ -1264,7 +1333,8 @@ proc do_sortby { args } {
 			"stimdg:$sortby" \
 			dl_lengths]
 	dl_local result [dl_llist [dl_unique stimdg:$sortby]]
-	dl_local pc [dl_slist {*}[lmap v [dl_tcllist $pc:1] {format %.2f $v}]]
+	dl_local pc [dl_slist \
+                        {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:1]]] {format %d $v}]]
 	dl_local rt [dl_slist {*}[lmap v [dl_tcllist $rt:1] {format %.2f $v}]]
 	dl_append $result $pc
 	dl_append $result $rt
@@ -1272,7 +1342,7 @@ proc do_sortby { args } {
 	
 	set headers "$sortby {% correct} rt n"
         dg_delete $curdg
-	return [createTable [dl_tcllist $result] $headers]
+	return [list [dl_tcllist $result] $headers]
     } else {
 	lassign $args s1 s2
 	dl_local pc [dl_selectSortedFunc $curdg:status \
@@ -1289,7 +1359,8 @@ proc do_sortby { args } {
 			 dl_lengths]
 	dl_local result [dl_uniqueCross stimdg:$s1 stimdg:$s2]
 
-	dl_local pc [dl_slist {*}[lmap v [dl_tcllist $pc:2] {format %.2f $v}]]
+	dl_local pc [dl_slist \
+                         {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:2]]] {format %d $v}]]
 	dl_local rt [dl_slist {*}[lmap v [dl_tcllist $rt:2] {format %.2f $v}]]
 	dl_append $result $pc
 	dl_append $result $rt
@@ -1297,7 +1368,7 @@ proc do_sortby { args } {
 
 	set headers "$s1 $s2 {% correct} rt n"
         dg_delete $curdg
-	return [createTable [dl_tcllist $result] $headers]
+	return [list [dl_tcllist $result] $headers]
     }
 }
 )delim";
