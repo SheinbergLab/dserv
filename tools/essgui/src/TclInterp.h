@@ -1,6 +1,9 @@
 #ifndef TclInterp_H
 #define TclInterp_H
 
+#include <df.h>
+#include <dynio.h>
+
 class TclInterp {
   Tcl_Interp *_interp;
 public:
@@ -10,6 +13,8 @@ public:
   Tcl_Interp * interp(void);
   int eval(const char *command, std::string &resultstr);
   std::string eval(const char *command);
+  int TclInterp::tclPutGroup(DYN_GROUP *dg); 
+  DYN_LIST *TclInterp::findDynList(DYN_GROUP *dg, char *); 
 };
 
 #endif
