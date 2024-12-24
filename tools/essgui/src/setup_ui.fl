@@ -6,17 +6,17 @@ decl {\#include "Fl_Console.h"
 \#include "Fl_DgFile.h"
 \#include "Fl_DgTable.h"
 \#include "Fl_PerfTable.h"
-\#include "CGwin.hpp"
+\#include "Cgwin.hpp"
 \#include "essgui.h"
 \#include "EyeTouchWin.hpp"
-\#include "VirtualEye.hpp"} {public global
+\#include "VirtualEye.hpp"} {selected public global
 }
 
 Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window *}
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {171 157 1280 800} type Double resizable visible
+    xywh {171 106 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -204,7 +204,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               xywh {795 84 456 304}
             } {
               Fl_Box cgwin_widget {
-                label cgwin selected
+                label cgwin
                 xywh {795 84 456 300}
                 class CGWin
               }
