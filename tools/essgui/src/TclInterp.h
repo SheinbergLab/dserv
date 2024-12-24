@@ -13,8 +13,8 @@ public:
   Tcl_Interp * interp(void);
   int eval(const char *command, std::string &resultstr);
   std::string eval(const char *command);
-  int TclInterp::tclPutGroup(DYN_GROUP *dg); 
-  DYN_LIST *TclInterp::findDynList(DYN_GROUP *dg, char *); 
+  int tclPutGroup(DYN_GROUP *dg); 
+  DYN_LIST *findDynList(DYN_GROUP *dg, char *); 
 };
 
 #endif
