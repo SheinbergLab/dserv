@@ -11,14 +11,16 @@ message("using FLTK libs: ${FLTK_LIBRARIES}")
 include_directories( ${FLTK_INCLUDE_DIR} src ../include ../../../dlsh/src ../../../dlsh/src/lablib  )
 
 if(WIN32)
-  link_directories( c:/usr/local/lib )
+  link_directories( c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH} )
   set(LIBFLTK fltk.lib)
   set(LIBTCL tcl90.lib)
   set(LIBDLSH dlsh-static.lib)
+#  set(LIBDLSH libdlsh.lib)  
+#  set(LIBDG dg.lib)
   set(LIBJANSSON jansson.lib)
-  set(TCLLIB tclstub.lib)
+  set(LIBTCLSTUB tclstub.lib)
   set(ZLIB zlibstatic.lib)
-  set(LZ4LIB liblz4_static64.lib)
+  set(LZ4LIB liblz4_static.lib)
   set(PDFLIB hpdf.lib)
   set(LIBJANSSON jansson.lib)
 else()
@@ -41,7 +43,7 @@ add_executable( essgui src/essgui.cxx src/setup_ui.cxx src/TclInterp.cxx src/Fl_
 
 if(WIN32)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt gdiplus.lib  comctl32.lib  ws2_32.lib  gdiplus.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib")
-  target_link_libraries( essgui ${LIBFLTK} ${LIBFLTK_Z} ${PDFLIB} ${LZ4LIB} ${LIBTCL} ${LIBDLSH} ${ZLIB} ${TCLLIB} ${LIBJANSSON})
+  target_link_libraries( essgui ${LIBFLTK} ${LIBFLTK_Z} ${PDFLIB} ${LZ4LIB} ${LIBTCL} ${LIBDLSH} ${ZLIB} ${TCLLIB} ${LIBTCLSTUB} ${LIBJANSSON} ${LIBDG} )
 elseif(APPLE)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework Cocoa -weak_framework UniformTypeIdentifiers -weak_framework ScreenCaptureKit")
  target_link_libraries( essgui ${LIBFLTK} ${LIBFLTK_Z} ${LIBDLSH} ${LIBLAB} ${LIBPDF} ${LIBZ} ${LIBLZ4} ${LIBTCL} ${LIBTCLSTUB} ${LIBJANSSON})
@@ -58,3 +60,4 @@ INSTALL(TARGETS essgui
         ARCHIVE DESTINATION /usr/local/lib
 )
 endif()
+
