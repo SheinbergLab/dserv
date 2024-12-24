@@ -20,7 +20,6 @@
 #include "Fl_DgTable.h"
 #include "Fl_PerfTable.h"
 
-#include "Cgwin.hpp"
 #include "EyeTouchWin.hpp"
 
 #include "DservSocket.h"
@@ -42,7 +41,10 @@ class App *g_App;
 class App
 {
 private:
-    TclInterp *_interp;
+  TclInterp *_interp;
+  Tcl_HashTable widget_table;
+  const char *WidgetKey = "widgets";
+  
 public:
   bool auto_reload = true;		// reload variant immediately upon setting change
   std::thread dsnet_thread;
@@ -51,7 +53,7 @@ public:
   int initfull = 0;
   const char *inithost = NULL;
   std::string host = std::string();
-  CGWin *drawable = nullptr;
+  void *drawable = nullptr;
   
 public:
   App (int argc, char *argv[]) {
@@ -75,9 +77,10 @@ public:
     
     win = setup_ui(argc, argv);
 
-    drawable = cgwin_widget;	// from setup_ui
-    
     add_tcl_commands(interp());
+
+    Tcl_InitHashTable(&widget_table, TCL_STRING_KEYS);
+    Tcl_SetAssocData(interp(), WidgetKey, NULL, &widget_table);
 
     if (initfull) win->fullscreen();
     win->show(argc, argv);
@@ -145,8 +148,18 @@ public:
     }
     return 2;
   }
+
+  void add_widget(char *name, Fl_Widget *o)
+  {
+    Tcl_HashEntry *entryPtr;
+    int newentry;
+    entryPtr = Tcl_CreateHashEntry(&widget_table, name, &newentry);
+    Tcl_SetHashValue(entryPtr, o);
+  }
   
   Tcl_Interp *interp(void) { return _interp->interp(); }
+  int putGroup(DYN_GROUP *dg) { return _interp->tclPutGroup(dg); }
+  DYN_LIST *findDynList(DYN_GROUP *dg, char *name) { return _interp->findDynList(dg, name); }
 };
 
 void linenoise_write(const char *buf, size_t n);
@@ -422,7 +435,7 @@ void refresh_cb(Fl_Button *, void *)
 }
 
 void do_sortby(void)
-{
+{  
   Tcl_VarEval(g_App->interp(),
 	      "setPerfTable {*}[do_sortby ",	      
 	      sortby_1->text() ? sortby_1->text() : "", " ",
@@ -438,7 +451,7 @@ void configure_sorters(DYN_GROUP *dg)
 {
   const char *reflistname = "stimtype";
   const char *remaining = "remaining";
-  DYN_LIST *stimtype = dynGroupFindList(dg, (char *) reflistname);
+  DYN_LIST *stimtype = g_App->findDynList(dg, (char *) reflistname);
   const int max_unique = 6;
   bool sortby1_set = false, sortby2_set = false;
 
@@ -1067,13 +1080,13 @@ void process_dpoint_cb(void *cbdata) {
     sysname_widget->value(json_string_value(data));
     sysname_widget->redraw_label();
   }
-  
+
   else if (!strcmp(json_string_value(name), "stimdg")) {
     const char *dgdata = json_string_value(data);
     DYN_GROUP *dg = decode_dg(dgdata, strlen(dgdata));
     Tcl_VarEval(g_App->interp(),
 		"if [dg_exists stimdg] { dg_delete stimdg; }", NULL);
-    tclPutGroup(g_App->interp(), dg);
+    g_App->putGroup(dg);
     stimdg_widget->set(dg);
     configure_sorters(dg);
   }
@@ -1085,8 +1098,9 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "trialdg")) {
     const char *dgdata = json_string_value(data);
     DYN_GROUP *dg = decode_dg(dgdata, strlen(dgdata));
-    Tcl_VarEval(g_App->interp(), "if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
-    tclPutGroup(g_App->interp(), dg);
+    Tcl_VarEval(g_App->interp(),
+		"if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
+    g_App->putGroup(dg);
     do_sortby();
   }
   
@@ -1254,7 +1268,6 @@ int cgwinFlushwinCmd(ClientData data, Tcl_Interp *interp,
   cgwin_widget->redraw();
   return TCL_OK;
 }
-
 
 
 int add_tcl_commands(Tcl_Interp *interp)
