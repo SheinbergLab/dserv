@@ -7,8 +7,8 @@
 #include "Fl_DgFile.h"
 #include "Fl_DgTable.h"
 #include "Fl_PerfTable.h"
+#include "CGwin.hpp"
 #include "essgui.h"
-#include "Cgwin.hpp"
 #include "EyeTouchWin.hpp"
 #include "VirtualEye.hpp"
 #include <FL/Fl_Double_Window.H>
@@ -40,6 +40,7 @@ extern Fl_Choice *sortby_1;
 extern Fl_Choice *sortby_2;
 extern PerfTable *perftable_widget;
 extern PerfTable *general_perf_widget;
+extern Fl_Group *plot_widget;
 extern CGWin *cgwin_widget;
 extern void virtual_eye_cb(VirtualEye*, void*);
 extern VirtualEye *virtual_eye_widget;

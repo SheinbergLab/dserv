@@ -64,6 +64,8 @@ PerfTable *perftable_widget=(PerfTable *)0;
 
 PerfTable *general_perf_widget=(PerfTable *)0;
 
+Fl_Group *plot_widget=(Fl_Group *)0;
+
 CGWin *cgwin_widget=(CGWin *)0;
 
 VirtualEye *virtual_eye_widget=(VirtualEye *)0;
@@ -281,8 +283,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // PerfTable* general_perf_widget
               o->end();
             } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(795, 84, 456, 316, "Plot Window");
-              { cgwin_widget = new CGWin(795, 87, 440, 298, "label");
+            { plot_widget = new Fl_Group(795, 84, 456, 304, "Plot Window");
+              { cgwin_widget = new CGWin(795, 84, 456, 300, "cgwin");
                 cgwin_widget->box(FL_NO_BOX);
                 cgwin_widget->color(FL_BACKGROUND_COLOR);
                 cgwin_widget->selection_color(FL_BACKGROUND_COLOR);
@@ -293,8 +295,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 cgwin_widget->align(Fl_Align(FL_ALIGN_CENTER));
                 cgwin_widget->when(FL_WHEN_RELEASE);
               } // CGWin* cgwin_widget
-              o->end();
-            } // Fl_Group* o
+              plot_widget->end();
+            } // Fl_Group* plot_widget
             { Fl_Group* o = new Fl_Group(546, 420, 245, 248, "Virtual Input");
               o->color(FL_BLACK);
               o->vertical_label_margin(3);

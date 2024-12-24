@@ -6,8 +6,8 @@ decl {\#include "Fl_Console.h"
 \#include "Fl_DgFile.h"
 \#include "Fl_DgTable.h"
 \#include "Fl_PerfTable.h"
+\#include "CGwin.hpp"
 \#include "essgui.h"
-\#include "Cgwin.hpp"
 \#include "EyeTouchWin.hpp"
 \#include "VirtualEye.hpp"} {public global
 }
@@ -16,13 +16,13 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {90 107 1280 800} type Double resizable visible
+    xywh {171 157 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
     } {
       Fl_Group {} {
-        label Systems open
+        label Systems
         xywh {0 28 210 640} labelsize 18 v_label_margin 4
       } {
         Fl_Flex {} {open
@@ -142,13 +142,13 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             xywh {220 335 306 160} type BOTH_ALWAYS align 5 v_label_margin 3
           } {}
           Fl_Scroll settings_widget {
-            label {System Settings} open selected
+            label {System Settings} open
             xywh {220 516 306 150} type BOTH_ALWAYS align 5 v_label_margin 3
           } {}
         }
       }
       Fl_Group {} {
-        label Info
+        label Info open
         xywh {531 28 748 645} labelsize 18 v_label_margin 4 resizable
       } {
         Fl_Tabs {} {open
@@ -199,13 +199,13 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 class PerfTable
               } {}
             }
-            Fl_Group {} {
+            Fl_Group plot_widget {
               label {Plot Window} open
-              xywh {795 84 456 316}
+              xywh {795 84 456 304}
             } {
               Fl_Box cgwin_widget {
-                label label
-                xywh {795 87 440 298}
+                label cgwin selected
+                xywh {795 84 456 300}
                 class CGWin
               }
             }
@@ -237,7 +237,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           } {}
         }
       }
-      Fl_Group {} {open
+      Fl_Group {} {
         xywh {0 674 1279 88}
       } {
         Fl_Terminal output_term {
