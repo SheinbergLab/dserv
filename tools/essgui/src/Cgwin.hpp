@@ -72,7 +72,6 @@ public:
   FRAME *getFrame(void) { return frame; }
   
   static int Clearwin(void) {
-    //    currentCG->window()->make_current();
     fl_color(FL_WHITE);// should be background color
     fl_rectf(currentCG->x(), currentCG->y(), currentCG->w(), currentCG->h());
     return 0;
@@ -80,7 +79,6 @@ public:
   
   static int Line(float x0, float y0, float x1, float y1) 
   {
-    //    currentCG->window()->make_current();
     fl_line(currentCG->x()+x0, currentCG->y()+currentCG->h()-y0,
 	    currentCG->x()+x1, currentCG->y()+currentCG->h()-y1);
     return 0;
@@ -88,7 +86,6 @@ public:
 
   static int Point(float x, float y)
   {
-    //    currentCG->window()->make_current();
     fl_point(currentCG->x()+x, currentCG->y()+y);
     return 0;
   }
@@ -238,10 +235,10 @@ public:
   
   CGWin(int X, int Y, int W, int H, const char*L=0) : Fl_Box(X,Y,W,H,L) {
     currentCG = this;
-    
+
     frame = (FRAME *) calloc(1, sizeof(FRAME));
     gbuf = (GBUF_DATA *) calloc(1, sizeof(GBUF_DATA));
-    
+
     gbDisableGevents();				  /* valid data */
     gbInitGeventBuffer(gbuf);
     gbSetGeventBuffer(gbuf);
