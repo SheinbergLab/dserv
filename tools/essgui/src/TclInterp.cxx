@@ -113,11 +113,8 @@ TclInterp::TclInterp(int argc, char *argv[]) {
     Tcl_SourceRCFile(_interp);
   }
 
-#ifdef _MSC_VER
   Tcl_VarEval(_interp,
 	      "source [file join [zipfs root] dlsh lib dlsh dlsh.tcl]", NULL);
-#endif
-  
 }
 
 TclInterp::~TclInterp(void) {
