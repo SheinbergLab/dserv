@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cassert>
+#include <cstring>
 #include <tcl.h>
 #include "TclInterp.h"
 
