@@ -7,7 +7,7 @@
 #include "Fl_DgFile.h"
 #include "Fl_DgTable.h"
 #include "Fl_PerfTable.h"
-#include "CGwin.hpp"
+#include "Cgwin.hpp"
 #include "essgui.h"
 #include "EyeTouchWin.hpp"
 #include "VirtualEye.hpp"
