@@ -833,6 +833,37 @@ void update_general_perf_widget(int complete, int correct)
   Tcl_VarEval(g_App->interp(), cmd.c_str(), NULL);
 }
 
+void update_system_layout(void)
+{
+  
+  const int deskw = 15000;
+  const int deskh = 15000;
+  Fl_OpDesk *opdesk = opdesk_widget;
+  opdesk->clear();
+  opdesk->begin();
+  {
+    printf("Creating %d boxes\n", (deskw/200)*(deskh/200));
+    for ( int x=30; x<deskw; x+=200 ) {
+      for ( int y=30; y<deskh; y+=200 ) {
+	char s[80];
+	snprintf(s, sizeof(s), "Box %d/%d",x,y);
+	Fl_OpBox *opbox = new Fl_OpBox(x,y,180,120,strdup(s));
+	opbox->begin();
+	{
+	  /*Fl_OpButton *a =*/ new Fl_OpButton("A", FL_OP_INPUT_BUTTON);
+	  /*Fl_OpButton *b =*/ new Fl_OpButton("B", FL_OP_INPUT_BUTTON);
+	  /*Fl_OpButton *c =*/ new Fl_OpButton("CCC", FL_OP_INPUT_BUTTON);
+	  /*Fl_OpButton *d =*/ new Fl_OpButton("OUT1", FL_OP_OUTPUT_BUTTON);
+	  /*Fl_OpButton *e =*/ new Fl_OpButton("OUT2", FL_OP_OUTPUT_BUTTON);
+	}
+	opbox->end();
+      }
+    }
+  }
+  opdesk->end();
+}
+
+
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
   // JSON parsing variables
@@ -1027,6 +1058,9 @@ void process_dpoint_cb(void *cbdata) {
 
   else if (!strcmp(json_string_value(name), "ess/param_settings")) {
     add_params(json_string_value(data));
+
+    /* placeholder for state definitions */
+    update_system_layout();
   }
 
   else if (!strcmp(json_string_value(name), "ess/param")) {
