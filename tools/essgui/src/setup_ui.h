@@ -35,6 +35,7 @@ extern Fl_Scroll *options_widget;
 extern Fl_Scroll *settings_widget;
 #include <FL/Fl_Tabs.H>
 extern EyeTouchWin *eyetouch_widget;
+extern Fl_Flex *sorters_widget;
 extern void sortby_cb(Fl_Choice*, void*);
 extern Fl_Choice *sortby_1;
 extern Fl_Choice *sortby_2;

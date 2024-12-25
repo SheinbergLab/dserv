@@ -9,218 +9,218 @@ decl {\#include "Fl_Console.h"
 \#include "Cgwin.hpp"
 \#include "essgui.h"
 \#include "EyeTouchWin.hpp"
-\#include "VirtualEye.hpp"} {selected public global
+\#include "VirtualEye.hpp"} {public global
 }
 
 Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window *}
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {171 106 1280 800} type Double resizable visible
+    xywh {147 344 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
     } {
       Fl_Group {} {
-        label Systems
-        xywh {0 28 210 640} labelsize 18 v_label_margin 4
+        label Systems open
+        xywh {0 28 180 640} labelsize 18 v_label_margin 4
       } {
         Fl_Flex {} {open
-          xywh {27 117 150 32} type HORIZONTAL
+          xywh {16 117 150 32} type HORIZONTAL
         } {
           Fl_Button {} {
             label Refresh
             callback refresh_cb
-            xywh {27 117 150 32} labelsize 16
+            xywh {16 117 150 32} labelsize 16
           }
         }
         Fl_Group {} {open
-          xywh {2 28 198 80}
+          xywh {2 28 178 80}
         } {
           Fl_Flex {} {open
-            xywh {70 46 130 56} fixed_size_tuples {1  0 30 }
+            xywh {70 46 110 56} fixed_size_tuples {1  0 30 }
           } {
             Fl_Output sysname_widget {
               label {Name:}
-              xywh {70 46 130 30} box NO_BOX labelsize 16 textsize 16
+              xywh {70 46 110 30} box NO_BOX labelsize 16 textsize 16
             }
             Fl_Output sysos_widget {
               label {OS:}
-              xywh {70 76 130 26} box NO_BOX labelsize 16 textsize 16
+              xywh {70 76 110 26} box NO_BOX labelsize 16 textsize 16
             }
           }
         }
         Fl_Tree host_widget {
           callback host_cb
-          xywh {4 152 198 212}
+          xywh {4 152 173 212}
         }
       }
       Fl_Group {} {
-        label Control open
-        xywh {214 28 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
+        label Control
+        xywh {180 28 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
       } {
         Fl_Group {} {open
-          xywh {214 29 315 283}
+          xywh {180 29 315 283}
         } {
           Fl_Group {} {
-            xywh {220 34 306 36} box THIN_UP_BOX
+            xywh {186 34 306 36} box THIN_UP_BOX
           } {
             Fl_Flex {} {open
-              xywh {295 38 210 28} fixed_size_tuples {1  0 28 }
+              xywh {261 38 210 28} fixed_size_tuples {1  0 28 }
             } {
               Fl_Choice subject_widget {
                 label {Subject:}
                 callback {set_subject()} open
-                xywh {295 38 210 28} down_box BORDER_BOX labelsize 16 textsize 16
+                xywh {261 38 210 28} down_box BORDER_BOX labelsize 16 textsize 16
               } {}
             }
           }
           Fl_Group {} {
-            xywh {220 72 306 106} box THIN_UP_BOX
+            xywh {186 72 306 106} box THIN_UP_BOX
           } {
             Fl_Flex {} {open
-              xywh {259 79 240 40} type HORIZONTAL
+              xywh {225 79 240 40} type HORIZONTAL
             } {
               Fl_Button {} {
                 label Go
                 callback {esscmd("ess::start")}
-                xywh {259 79 80 40} labelsize 18
+                xywh {225 79 80 40} labelsize 18
               }
               Fl_Button {} {
                 label Stop
                 callback {esscmd("ess::stop")}
-                xywh {339 79 80 40} labelsize 18
+                xywh {305 79 80 40} labelsize 18
               }
               Fl_Button {} {
                 label Reset
                 callback {esscmd("ess::reset")}
-                xywh {419 79 80 40} labelsize 18
+                xywh {385 79 80 40} labelsize 18
               }
             }
             Fl_Flex {} {open
-              xywh {341 125 95 48}
+              xywh {307 125 95 48}
             } {
               Fl_Output system_status_widget {
                 label {Status:}
-                xywh {341 125 95 24} box NO_BOX labelsize 16 textsize 16
+                xywh {307 125 95 24} box NO_BOX labelsize 16 textsize 16
               }
               Fl_Output obscount_widget {
                 label {Obs:}
-                xywh {341 149 95 24} box FLAT_BOX color 49 labelsize 16 textsize 16
+                xywh {307 149 95 24} box FLAT_BOX color 49 labelsize 16 textsize 16
               }
             }
           }
           Fl_Group {} {
-            xywh {220 181 306 128} box THIN_UP_BOX labelsize 20
+            xywh {186 181 306 128} box THIN_UP_BOX labelsize 20
           } {
             Fl_Flex {} {open
-              xywh {292 193 210 102} gap 10
+              xywh {258 193 210 102} gap 10
             } {
               Fl_Choice system_widget {
                 label {System:}
                 callback {set_system()} open
-                xywh {292 193 210 28} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+                xywh {258 193 210 28} down_box BORDER_BOX labelsize 16 when 6 textsize 16
               } {}
               Fl_Choice protocol_widget {
                 label {Protocol:}
                 callback {set_protocol()} open
-                xywh {292 231 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+                xywh {258 231 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
               } {}
               Fl_Choice variant_widget {
                 label {Variant:}
                 callback {set_variant()} open
-                xywh {292 268 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+                xywh {258 268 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
               } {}
             }
           }
         }
         Fl_Group {} {open
-          xywh {220 312 306 360} resizable
+          xywh {186 312 306 360} resizable
         } {
           Fl_Scroll options_widget {
-            label Options open
-            xywh {220 335 306 160} type BOTH_ALWAYS align 5 v_label_margin 3
+            label {Variant Options} open
+            xywh {186 335 306 160} type BOTH_ALWAYS align 5 v_label_margin 3
           } {}
           Fl_Scroll settings_widget {
             label {System Settings} open
-            xywh {220 516 306 150} type BOTH_ALWAYS align 5 v_label_margin 3
+            xywh {186 516 306 150} type BOTH_ALWAYS align 5 v_label_margin 3
           } {}
         }
       }
       Fl_Group {} {
         label Info open
-        xywh {531 28 748 645} labelsize 18 v_label_margin 4 resizable
+        xywh {499 28 766 645} labelsize 18 v_label_margin 4 resizable
       } {
         Fl_Tabs {} {open
-          xywh {535 32 744 641}
+          xywh {503 32 762 641}
         } {
           Fl_Group {} {
             label behavior open
-            xywh {536 56 730 615} labelsize 16
+            xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
-              xywh {546 84 245 300} box DOWN_BOX
+              xywh {514 84 245 300} box DOWN_BOX
             } {
               Fl_Box eyetouch_widget {
                 label EyeWindow
-                xywh {553 91 232 232} box DOWN_FRAME
+                xywh {521 91 232 232} box DOWN_FRAME
                 class EyeTouchWin
               }
               Fl_Group {} {
                 label {window status} open
-                xywh {546 325 245 58} box THIN_DOWN_FRAME labeltype NO_LABEL
+                xywh {514 325 245 58} box THIN_DOWN_FRAME labeltype NO_LABEL
               } {}
             }
             Fl_Group {} {
               label Performance open
-              xywh {791 420 451 248} box UP_BOX v_label_margin 3
+              xywh {759 420 492 248} box UP_BOX v_label_margin 3
             } {
-              Fl_Flex {} {open
-                xywh {1064 574 166 60} gap 10
+              Fl_Flex sorters_widget {open selected
+                xywh {1070 567 166 60} hide gap 10
               } {
                 Fl_Choice sortby_1 {
                   label {Sort by:}
                   callback sortby_cb open
-                  xywh {1064 574 166 25} down_box BORDER_BOX
+                  xywh {1070 567 166 25} down_box BORDER_BOX
                 } {}
                 Fl_Choice sortby_2 {
                   label {Sort by:}
                   callback sortby_cb open
-                  xywh {1064 609 166 25} down_box BORDER_BOX
+                  xywh {1070 602 166 25} down_box BORDER_BOX
                 } {}
               }
               Fl_Table perftable_widget {open
-                xywh {811 439 410 120} box NO_BOX
+                xywh {779 439 456 120} box NO_BOX
                 class PerfTable
               } {}
               Fl_Table general_perf_widget {open
-                xywh {811 574 190 80} box NO_BOX
+                xywh {779 574 190 80} box NO_BOX
                 class PerfTable
               } {}
             }
             Fl_Group plot_widget {
               label {Plot Window} open
-              xywh {795 84 456 304}
+              xywh {763 84 488 304} labeltype NO_LABEL
             } {
               Fl_Box cgwin_widget {
                 label cgwin
-                xywh {795 84 456 300}
+                xywh {763 84 488 300}
                 class CGWin
               }
             }
             Fl_Group {} {
               label {Virtual Input} open
-              xywh {546 420 245 248} color 56 v_label_margin 3
+              xywh {514 420 245 248} color 56 v_label_margin 3
             } {
               Fl_Group {} {
                 label {Eye Window} open
-                xywh {564 421 208 204} box FLAT_BOX color 8 labeltype NO_LABEL
+                xywh {532 421 208 204} box FLAT_BOX color 8 labeltype NO_LABEL
               } {
                 Fl_Box virtual_eye_widget {
                   label label
                   callback virtual_eye_cb
-                  xywh {652 511 15 15} when 7
+                  xywh {620 511 15 15} when 7
                   class VirtualEye
                 }
               }
@@ -228,12 +228,12 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
           Fl_Table stimdg_widget {
             label stimdg
-            xywh {537 56 729 608} labelsize 16 hide
+            xywh {505 56 729 608} labelsize 16 hide
             class DGTable
           } {}
           Fl_Group {} {
             label stim
-            xywh {535 56 710 612} labelsize 16 hide
+            xywh {503 56 710 612} labelsize 16 hide
           } {}
         }
       }
