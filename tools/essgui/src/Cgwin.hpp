@@ -62,7 +62,7 @@ public:
     setresol (currentCG->w(), currentCG->h());
     setfviewport(0,0,1,1);
     setwindow(0, 0, currentCG->w()-1, currentCG->h()-1);
-    fl_color(FL_WHITE);
+    fl_color(FL_BLACK);
     fl_rectf(currentCG->x(),currentCG->y(),currentCG->w(),currentCG->h());
 
     gbPlaybackGevents();
@@ -229,6 +229,7 @@ public:
     setresol(w(), h());
     setwindow(0, 0, w()-1, h()-1);
     setfviewport(0, 0, 1, 1) ;
+    setcolor(16);		// bright white
     gbInitGevents();
     initialized = true;
   }
