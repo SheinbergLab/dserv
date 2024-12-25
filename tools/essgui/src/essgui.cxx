@@ -1,5 +1,7 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Choice.H>
+#include <FL/Fl_Int_Input.H>
+#include <FL/Fl_Float_Input.H>
 #include <FL/fl_string_functions.h>
 
 #include <iostream>
@@ -8,12 +10,15 @@
 #include <cctype>
 #include <locale>
 #include <vector>
+#include <unordered_map>
 
 #include <tcl.h>
 #include <df.h>
 #include <dfana.h>
 #include <dynio.h>
 #include <tcl_dl.h>
+
+#include "b64.h"
 
 #include "Fl_Console.h"
 #include "Fl_DgFile.h"
@@ -44,6 +49,7 @@ private:
   TclInterp *_interp;
   Tcl_HashTable widget_table;
   const char *WidgetKey = "widgets";
+  std::unordered_map<std::string, Fl_Widget *> params;
   
 public:
   bool auto_reload = true;		// reload variant immediately upon setting change
@@ -91,6 +97,14 @@ public:
     delete _interp;
   }
 
+  void clear_params(void) { params.clear(); }
+  void add_param(std::string key, Fl_Object *o) { params[key] = o; }
+  Fl_Widget *find_param(std::string key)
+  {
+    if (params.find(key) == params.end()) return NULL;
+    return params[key];
+  }
+  
   int disconnect_from_host(std::string hoststr)
   {
     ds_sock->unreg(host.c_str());
@@ -127,7 +141,11 @@ public:
     /* touch variables to update interface */
     std::string rstr;
     ds_sock->esscmd(hoststr,
-		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total ess/block_pct_complete ess/block_pct_correct ess/variant_info stimdg trialdg system/hostname system/os} { dservTouch $v }"), rstr);
+		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol "
+				"ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total "
+				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
+				"ess/param_settings ess/params stimdg trialdg system/hostname "
+				"system/os} { dservTouch $v }"), rstr);
 
     update_em_regions();
 
@@ -196,6 +214,9 @@ static void clear_widgets(void) {
   const char *l = "stimdg";
   stimdg_widget->clear(l);
 
+  /* hide sorters */
+  sorters_widget->hide();
+  
   sysname_widget->value("");
   sysname_widget->redraw_label();
 
@@ -455,6 +476,9 @@ void configure_sorters(DYN_GROUP *dg)
   const int max_unique = 6;
   bool sortby1_set = false, sortby2_set = false;
 
+  /* show them! */
+  sorters_widget->show();
+  
   std::string sortby_1_selection;
   std::string sortby_2_selection;
   
@@ -523,155 +547,6 @@ void virtual_eye_cb (VirtualEye *w, void *data)
   if (!g_App->host.empty()) {
     result = g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
   }
-}
-
-/*****************************************************************************
- *
- * FUNCTIONS
- *    base64encode/base64decode
- *
- * DESCRIPTION
- *    Move to/from b64 encoding
- *
- * SOURCE
- *    http://en.wikibooks.org/wiki/Algorithm_Implementation/Miscellaneous/Base64
- *
- *****************************************************************************/
-
-
-static int base64encode(const void* data_buf, int dataLength, char* result, int resultSize)
-{
-   const char base64chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-   const unsigned char *data = (const unsigned char *)data_buf;
-   int resultIndex = 0;
-   int x;
-   unsigned int n = 0;
-   int padCount = dataLength % 3;
-   unsigned char n0, n1, n2, n3;
- 
-   /* increment over the length of the string, three characters at a time */
-   for (x = 0; x < dataLength; x += 3) 
-   {
-      /* these three 8-bit (ASCII) characters become one 24-bit number */
-      n = data[x] << 16;
- 
-      if((x+1) < dataLength)
-         n += data[x+1] << 8;
- 
-      if((x+2) < dataLength)
-         n += data[x+2];
- 
-      /* this 24-bit number gets separated into four 6-bit numbers */
-      n0 = (unsigned char)(n >> 18) & 63;
-      n1 = (unsigned char)(n >> 12) & 63;
-      n2 = (unsigned char)(n >> 6) & 63;
-      n3 = (unsigned char)n & 63;
- 
-      /*
-       * if we have one byte available, then its encoding is spread
-       * out over two characters
-       */
-      if(resultIndex >= resultSize) return 0;   /* indicate failure: buffer too small */
-      result[resultIndex++] = base64chars[n0];
-      if(resultIndex >= resultSize) return 0;   /* indicate failure: buffer too small */
-      result[resultIndex++] = base64chars[n1];
- 
-      /*
-       * if we have only two bytes available, then their encoding is
-       * spread out over three chars
-       */
-      if((x+1) < dataLength)
-      {
-         if(resultIndex >= resultSize) return 0;   /* indicate failure: buffer too small */
-         result[resultIndex++] = base64chars[n2];
-      }
- 
-      /*
-       * if we have all three bytes available, then their encoding is spread
-       * out over four characters
-       */
-      if((x+2) < dataLength)
-      {
-         if(resultIndex >= resultSize) return 0;   /* indicate failure: buffer too small */
-         result[resultIndex++] = base64chars[n3];
-      }
-   }  
- 
-   /*
-    * create and add padding that is required if we did not have a multiple of 3
-    * number of characters available
-    */
-   if (padCount > 0) 
-   { 
-      for (; padCount < 3; padCount++) 
-      { 
-         if(resultIndex >= resultSize) return 0;   /* indicate failure: buffer too small */
-         result[resultIndex++] = '=';
-      } 
-   }
-   if(resultIndex >= resultSize) return 0;   /* indicate failure: buffer too small */
-   result[resultIndex] = 0;
-   return 1;   /* indicate success */
-}
-
-#define B64_WHITESPACE 64
-#define B64_EQUALS     65
-#define B64_INVALID    66
- 
-static const unsigned char d[] = {
-    66,66,66,66,66,66,66,66,66,64,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,
-    66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,62,66,66,66,63,52,53,
-    54,55,56,57,58,59,60,61,66,66,66,65,66,66,66, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
-    10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,66,66,66,66,66,66,26,27,28,
-    29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,66,66,
-    66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,
-    66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,
-    66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,
-    66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,
-    66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,
-    66,66,66,66,66,66
-};
- 
-static int base64decode (char *in, unsigned int inLen, unsigned char *out, unsigned int *outLen) { 
-  char *end = in + inLen;
-  int buf = 1;
-  unsigned int len = 0;
-  
-  while (in < end) {
-    unsigned char c = d[*in++];
-    
-    switch (c) {
-    case B64_WHITESPACE: continue;   /* skip whitespace */
-    case B64_INVALID:    return 1;   /* invalid input, return error */
-    case B64_EQUALS:                 /* pad character, end of data */
-      in = end;
-      continue;
-    default:
-      buf = buf << 6 | c;
-      
-      /* If the buffer is full, split it into bytes */
-      if (buf & 0x1000000) {
-	if ((len += 3) > *outLen) return 1; /* buffer overflow */
-	*out++ = buf >> 16;
-	*out++ = buf >> 8;
-	*out++ = buf;
-	buf = 1;
-      }   
-        }
-  }
-  
-  if (buf & 0x40000) {
-    if ((len += 2) > *outLen) return 1; /* buffer overflow */
-    *out++ = buf >> 10;
-    *out++ = buf >> 2;
-  }
-  else if (buf & 0x1000) {
-    if (++len > *outLen) return 1; /* buffer overflow */
-    *out++ = buf >> 4;
-    }
-  
-  *outLen = len; /* modify to reflect the actual output size */
-  return 0;
 }
 
 static DYN_GROUP *decode_dg(const char *data, int length)
@@ -830,6 +705,121 @@ int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
   options_widget->redraw();
 
   return TCL_OK;
+}
+
+void param_setting_callback(Fl_Widget *o, void *data)
+{
+  Fl_Input *input = (Fl_Input *) o;
+  std::string cmd = "::ess::set_param ";
+  cmd += input->label();
+  cmd += " ";
+  cmd += input->value();
+
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+}
+
+int add_params(const char *param_list)
+{
+  Tcl_Interp *interp = g_App->interp();
+  Tcl_DictSearch search;
+  Tcl_Obj *key, *value;
+  int done;
+
+  g_App->clear_params();
+  
+  settings_widget->clear();
+  settings_widget->begin();
+
+  int row = 0;
+  int height = 30;
+  int xoff = settings_widget->x();
+  int yoff = settings_widget->y();
+  int label_width = 170;
+    
+  Tcl_Obj *dict = Tcl_NewStringObj(param_list, -1);
+  if (Tcl_DictObjFirst(g_App->interp(), dict, &search,
+		       &key, &value, &done) != TCL_OK) {
+    Tcl_DecrRefCount(dict);
+    return -1;
+  }
+  for (; !done ; Tcl_DictObjNext(&search, &key, &value, &done), row++) {
+   Tcl_Size argc, argcc;
+   char *string;
+   const char **argv, **argvv;
+   if (Tcl_SplitList(g_App->interp(), Tcl_GetString(value),
+		     &argc, &argv) == TCL_OK) {
+     Fl_Widget *input;
+     /*
+      * argv[0] = value
+      * argv[1] = variable_type (1=time,2=variable)
+      * argv[2] = datatype
+     */
+     if (!strcmp(argv[2],"int")) {
+       input = (Fl_Widget *) new Fl_Int_Input(xoff+label_width,
+					      yoff+10+row*height,
+					      options_widget->w()-(label_width+20), height, 0);
+     }
+     else if (!strcmp(argv[2],"float")) {
+       input = (Fl_Widget *) new Fl_Float_Input(xoff+label_width,
+						yoff+10+row*height,
+						options_widget->w()-(label_width+20), height, 0);
+     }
+     else {
+       input = (Fl_Widget *) new Fl_Input(xoff+label_width,
+					  yoff+10+row*height,
+					  options_widget->w()-(label_width+20), height, 0);
+     }
+     g_App->add_param(Tcl_GetString(key), input);
+     
+     input->copy_label(Tcl_GetString(key));
+     input->align(Fl_Align(FL_ALIGN_LEFT));
+     input->labeltype(FL_NORMAL_LABEL);
+
+     /* differentiate time from variable settings by color */
+     if (!strcmp(argv[1], "1")) input->labelcolor(fl_rgb_color(60, 50, 30));
+     else input->labelcolor(fl_rgb_color(0, 0, 0));
+     
+     ((Fl_Input *) input)->value(argv[0]);
+     input->callback(param_setting_callback);
+     input->when(FL_WHEN_ENTER_KEY);
+     Tcl_Free((char *) argv);
+   }
+  }
+  Tcl_DictObjDone(&search);
+  
+  Tcl_DecrRefCount(dict);
+
+  settings_widget->end();
+  settings_widget->redraw();
+
+  return TCL_OK;
+  
+}
+
+int update_param(const char *pstr)
+{
+  int retval = -21;
+  Fl_Input *o;
+  Tcl_Size argc;
+  const char **argv;
+  if (Tcl_SplitList(g_App->interp(), pstr, &argc, &argv) == TCL_OK) {
+    if (argc != 2) {
+      retval = -1;
+      goto clean_and_return;
+    }
+    o = (Fl_Input *) g_App->find_param(argv[0]);
+    if (!o) {
+      retval = 0;
+      goto clean_and_return;
+    }
+    o->value(argv[1]);
+    retval = 1;
+    
+  clean_and_return:
+    Tcl_Free((char *) argv);
+  }
+  return retval;
 }
 
 void update_general_perf_widget(int complete, int correct)
@@ -1035,6 +1025,18 @@ void process_dpoint_cb(void *cbdata) {
     Tcl_DecrRefCount(options_key);
   }
 
+  else if (!strcmp(json_string_value(name), "ess/param_settings")) {
+    add_params(json_string_value(data));
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/param")) {
+    update_param(json_string_value(data));
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/params")) {
+    update_param(json_string_value(data));
+  }
+
   else if (!strcmp(json_string_value(name), "ess/systems")) {
     Tcl_Size argc;
     char *string;
@@ -1042,7 +1044,9 @@ void process_dpoint_cb(void *cbdata) {
     if (Tcl_SplitList(g_App->interp(),
 		      json_string_value(data), &argc, &argv) == TCL_OK) {
       system_widget->clear();
-      for (int i = 0; i < argc; i++) system_widget->add(argv[i]);
+      for (int i = 0; i < argc; i++) {
+	system_widget->add(argv[i]);
+      }
       Tcl_Free((char *) argv);
     }
   }
@@ -1372,7 +1376,7 @@ proc do_sortby { args } {
 			 "$curdg:$s2 $curdg:$s1" \
 			 "stimdg:$s2 stimdg:$s1" \
 			 dl_lengths]
-	dl_local result [dl_uniqueCross stimdg:$s1 stimdg:$s2]
+	dl_local result [dl_reverse [dl_uniqueCross stimdg:$s1 stimdg:$s2]]
 
 	dl_local pc [dl_slist \
                          {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:2]]] {format %d $v}]]
