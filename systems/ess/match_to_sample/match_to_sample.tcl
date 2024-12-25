@@ -18,7 +18,6 @@ namespace eval match_to_sample {
 	#                          System Parameters                         #
 	######################################################################
 	
-	$sys add_param n_rep             100      variable int
 	$sys add_param start_delay         0      time int
 	$sys add_param interblock_time  1000      time int
 	$sys add_param sample_pre_time     0      time int

@@ -19,7 +19,6 @@ namespace eval emcalib {
 	#                          System Parameters                         #
 	######################################################################
 	
-	$sys add_param n_rep             100      variable int
 	$sys add_param interblock_time  1000      time int
 	$sys add_param acquire_time     3000      time int
 	$sys add_param reacquire_time   3000      time int

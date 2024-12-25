@@ -12,12 +12,7 @@ namespace eval match_to_sample::phd {
 	
 	$s set_protocol [namespace tail [namespace current]]
 	
-	$s add_param targ_radius         1.5    variable stim
-	$s add_param targ_range          4      variable stim
-	$s add_param targ_color          ".2 .9 .9" variable stim
-	
 	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
-	
 	$s add_param juice_pin         27       variable int
 	$s add_param juice_time      1000       time int
 	

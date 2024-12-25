@@ -107,7 +107,7 @@ namespace eval emcalib::9point {
 		::ess::em_region_off 1
 		::ess::em_fixwin_set 0 $fix_targ_x $fix_targ_y $fix_radius 0
 		::ess::em_fixwin_set 1 $jump_targ_x $jump_targ_y $fix_radius 0
-		
+
 		rmtSend "nexttrial $stimtype"
 	    }
 	}

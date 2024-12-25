@@ -19,11 +19,9 @@ namespace eval search {
 	#                          System Parameters                         #
 	######################################################################
 	
-	$sys add_param n_rep             100      variable int
 	$sys add_param interblock_time  1000      time int
 	$sys add_param prestim_time      250      time int
-	
-	$sys add_param response_timeout 5000     time int
+	$sys add_param response_timeout 5000      time int
 	
 	##
 	## Local variables for this system
