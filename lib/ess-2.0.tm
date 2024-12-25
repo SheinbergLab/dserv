@@ -285,9 +285,8 @@ oo::class create System {
     }
 
     method set_default_param_vals {} {
-	foreach var [dict keys $_default_param_vals] \
-	    val [dict values $_default_param_vals] {
-		my set_param $var $val
+	dict for { var val } $_default_param_vals {
+	    my set_param $var $val
 	}
     }
     
@@ -319,7 +318,7 @@ oo::class create System {
 	    oo::objdefine [self] variable $var
 	}
 	if { $val != {} } {
-	    set $var $val
+	    variable $var $val
 	}
     }
 
@@ -953,6 +952,16 @@ namespace eval ess {
 	$current(state_system) get_params
     }
 
+    proc get_param_vals {} {
+	variable current
+	set params [$current(state_system) get_params]
+	set param_vals [dict create]
+	dict for {k v} $params {
+	    dict set param_vals $k [lindex $v 0]
+	}
+	return $param_vals
+    }
+    
     proc get_param { p } {
 	variable current
 	$current(state_system) get_param $p
@@ -963,6 +972,9 @@ namespace eval ess {
 	$current(state_system) set_param $param $val
 	::ess::evt_put PARAM NAME [now] $param
 	::ess::evt_put PARAM VAL  [now] $val
+
+	# set param datapoint for clients
+	dservSet ess/params [get_param_vals]
     }
 
     proc set_params { args } {
@@ -1554,6 +1566,8 @@ namespace eval ess {
 	if { [lsearch [info object methods $s] $vinit_method] != -1 } {
 	    $s $vinit_method
 	}
+
+	dservSet ess/param_settings [ess::get_params]
 	
 	::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
 	set current(variant) $variant
