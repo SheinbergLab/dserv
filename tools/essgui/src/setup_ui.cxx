@@ -74,6 +74,8 @@ VirtualEye *virtual_eye_widget=(VirtualEye *)0;
 
 DGTable *stimdg_widget=(DGTable *)0;
 
+Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
+
 Fl_Console *output_term=(Fl_Console *)0;
 
 Fl_Output *status_widget=(Fl_Output *)0;
@@ -344,6 +346,23 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
             o->hide();
             o->end();
           } // Fl_Group* o
+          { Fl_Group* o = new Fl_Group(503, 57, 762, 616, "system");
+            o->labelsize(16);
+            o->hide();
+            { opdesk_widget = new Fl_OpDesk(528, 82, 712, 404, "State System");
+              opdesk_widget->box(FL_NO_BOX);
+              opdesk_widget->color(FL_BACKGROUND_COLOR);
+              opdesk_widget->selection_color(FL_BACKGROUND_COLOR);
+              opdesk_widget->labeltype(FL_NORMAL_LABEL);
+              opdesk_widget->labelfont(0);
+              opdesk_widget->labelsize(14);
+              opdesk_widget->labelcolor(FL_FOREGROUND_COLOR);
+              opdesk_widget->align(Fl_Align(FL_ALIGN_TOP));
+              opdesk_widget->when(FL_WHEN_RELEASE);
+              opdesk_widget->end();
+            } // Fl_OpDesk* opdesk_widget
+            o->end();
+          } // Fl_Group* o
           o->end();
         } // Fl_Tabs* o
         o->end();
@@ -351,8 +370,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       } // Fl_Group* o
       { Fl_Group* o = new Fl_Group(0, 674, 1279, 88);
         { output_term = new Fl_Console(0, 674, 1279, 88);
-          output_term->box(FL_DOWN_BOX);
-          output_term->color(FL_FOREGROUND_COLOR);
+          output_term->box(FL_DOWN_FRAME);
+          output_term->color(FL_BLACK);
           output_term->selection_color(FL_BACKGROUND_COLOR);
           output_term->labeltype(FL_NORMAL_LABEL);
           output_term->labelfont(0);

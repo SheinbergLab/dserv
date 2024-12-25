@@ -11,6 +11,7 @@
 #include "essgui.h"
 #include "EyeTouchWin.hpp"
 #include "VirtualEye.hpp"
+#include "Fl_OpDesk.h"
 #include <FL/Fl_Double_Window.H>
 extern Fl_Double_Window *main_window;
 #include <FL/Fl_Group.H>
@@ -46,6 +47,7 @@ extern CGWin *cgwin_widget;
 extern void virtual_eye_cb(VirtualEye*, void*);
 extern VirtualEye *virtual_eye_widget;
 extern DGTable *stimdg_widget;
+extern Fl_OpDesk *opdesk_widget;
 extern Fl_Console *output_term;
 extern Fl_Output *status_widget;
 Fl_Double_Window * setup_ui(int argc, char *argv[]);

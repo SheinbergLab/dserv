@@ -9,14 +9,15 @@ decl {\#include "Fl_Console.h"
 \#include "Cgwin.hpp"
 \#include "essgui.h"
 \#include "EyeTouchWin.hpp"
-\#include "VirtualEye.hpp"} {public global
+\#include "VirtualEye.hpp"
+\#include "Fl_OpDesk.h"} {public global
 }
 
 Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window *}
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {147 344 1280 800} type Double resizable visible
+    xywh {1 105 1280 800} type Double hide resizable
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -155,7 +156,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 641}
         } {
           Fl_Group {} {
-            label behavior open
+            label behavior open selected
             xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
@@ -176,7 +177,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               label Performance open
               xywh {759 420 492 248} box UP_BOX v_label_margin 3
             } {
-              Fl_Flex sorters_widget {open selected
+              Fl_Flex sorters_widget {open
                 xywh {1070 567 166 60} hide gap 10
               } {
                 Fl_Choice sortby_1 {
@@ -235,6 +236,16 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             label stim
             xywh {503 56 710 612} labelsize 16 hide
           } {}
+          Fl_Group {} {
+            label system open
+            xywh {503 57 762 616} labelsize 16 hide
+          } {
+            Fl_Scroll opdesk_widget {
+              label {State System} open
+              xywh {528 82 712 404}
+              class Fl_OpDesk
+            } {}
+          }
         }
       }
       Fl_Group {} {
