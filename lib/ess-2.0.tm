@@ -211,6 +211,10 @@ oo::class create System {
         set _callbacks(subject) subject_cb
     }
 
+    method get_states {} {
+	return [dict keys $_states]
+    }
+    
     method add_state { name args } {
 	if { [llength $args] > 0 } {
 	    oo::objdefine [self] method ${name}_a {} [lindex $args 0]
@@ -599,6 +603,9 @@ namespace eval ess {
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 
+	# dictionary of states and associated transition states
+	dservSet ess/state_table [get_state_transitions]
+	
 	set current(trialid) 0
 	if [dg_exists trialdg] { dg_delete trialdg }
 	reset_trial_info
@@ -1379,6 +1386,48 @@ namespace eval ess {
 	return [touch_in_win $win]
     }
 }
+
+###############################################################################
+################################### states ####################################
+###############################################################################
+
+
+namespace eval ess {
+    proc get_states {} {
+	variable current
+	if { $current(state_system) != "" } { 
+	    return [$current(state_system) get_states]
+	} else {
+	    return
+	}
+    }
+
+    proc find_transitions { def states } {
+	set returns [regexp -inline -all {return\s+\S+[^ \}]} $def]
+	set matches [lmap a $returns { lindex $a 1 }]
+	return [lmap m $matches {expr {[lsearch $states $m] != -1 ? $m : [continue]}} ]
+    }
+    
+    proc get_state_transitions {} {
+	variable current
+	set s $current(state_system)
+	if { $s == "" } { return }
+
+	# store states+transitions in t
+	set t [dict create]
+	
+	set states [$s get_states]
+	set methods [info object methods $s]
+	foreach state $states {
+	    set t_name ${state}_t
+	    if { [lsearch $methods $t_name] != -1 } {
+		dict set t $state [find_transitions [lindex [info object definition $s $t_name] 1] $states]
+	    }
+	}
+	return $t
+    }
+}
+
 
 namespace eval ess {
     variable current
