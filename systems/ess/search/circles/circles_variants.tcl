@@ -16,7 +16,14 @@ namespace eval search::circles {
 	    loader_options {
 		nr { 200 100 50 }
 		nd { 0 }
+		targ_r { 1.5 2.0 }
+		dist_prop { 1 }
 		mindist { 1.5 }
+		targ_range { 8 9 10 }
+		targ_color {
+		    { cyan { 0 1 1 } }
+		    { red { 1 0 0 } }
+		}
 	    }
 	}
 	variable {
@@ -28,7 +35,14 @@ namespace eval search::circles {
 		    { 0,2,4,6,8 { [dl_tcllist [dl_series 0 8 2]] } }
 		    { 0,5,10    { 0 5 10 } }
 		}
+		targ_r { 1.5 2.0 }
+		dist_prop { 1.2 1.1 0.9 0.8 }
 		mindist {1.5 2.0}
+		targ_range { 8 9 10 }
+		targ_color {
+		    { cyan { 0 1 1 } }
+		    { red { 1 0 0 } }
+		}
 	    }
 	}
 	distractors {
@@ -37,7 +51,14 @@ namespace eval search::circles {
 	    loader_options {
 		nr { 100 200 }
 		nd { 4 6 8 }
+		targ_r { 1.5 2.0 }
+		dist_prop { 1.2 1.1 0.9 0.8 }
 		mindist { 2.0 3.0 }
+		targ_range { 8 9 10 }
+		targ_color {
+		    { cyan { 0 1 1 } }
+		    { red { 1 0 0 } }
+		}
 	    }
 	}
     }
@@ -55,7 +76,7 @@ namespace eval search::circles {
 	    rmtSend "setBackground 100 100 100"
 	}
 	
-	$s add_method basic_search { nr nd mindist } {
+	$s add_method basic_search { nr nd targ_r dist_prop mindist targ_range targ_color } {
 	    set n_rep $nr
 	    set ndists $nd
 	    
@@ -65,7 +86,7 @@ namespace eval search::circles {
 	    
 	    set n_obs [expr [llength $ndists]*$n_rep]
 	    
-	    set scale $targ_radius
+	    set scale $targ_r
 	    set maxx [expr $screen_halfx]
 	    set maxy [expr $screen_halfy]
 	    
@@ -75,7 +96,7 @@ namespace eval search::circles {
 	    dl_set $g:targ_y \
 		[dl_mult 2 [dl_sub [dl_urand $n_obs] 0.5] $targ_range]
 	    dl_set $g:targ_r \
-		[dl_repeat $targ_radius $n_obs]
+		[dl_repeat $targ_r $n_obs]
 	    dl_set $g:targ_color \
 		[dl_repeat [dl_slist $targ_color] $n_obs]
 	    dl_set $g:targ_pos \
