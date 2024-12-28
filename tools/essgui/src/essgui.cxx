@@ -50,6 +50,7 @@ private:
   Tcl_HashTable widget_table;
   const char *WidgetKey = "widgets";
   std::unordered_map<std::string, Fl_Widget *> params;
+  std::unordered_map<std::string, Fl_Widget *> states;
   
 public:
   bool auto_reload = true;		// reload variant immediately upon setting change
@@ -104,7 +105,45 @@ public:
     if (params.find(key) == params.end()) return NULL;
     return params[key];
   }
+
+  void clear_states(void) { states.clear(); }
+  void add_state(std::string key, Fl_Object *o) { states[key] = o; }
+  Fl_Widget *find_state(std::string key)
+  {
+    if (states.find(key) == states.end()) return NULL;
+    return states[key];
+  }
+  void select_action_state(std::string a_statename) {
+    std::string statename = a_statename.substr(0, a_statename.length() - 2);
+    for (auto it : states) {
+      std::string key = it.first;
+      Fl_OpBox *b = (Fl_OpBox *) it.second;
+      if (key == statename) {
+	if (!b->GetSelected()) { b->SetSelected(1); b->redraw(); }
+      }
+      else {
+	if (b->GetSelected()) { b->SetSelected(0); b->redraw(); }
+      }
+    }
+  };
   
+  void select_transition_state(std::string t_statename) {
+    std::string statename = t_statename.substr(0, t_statename.length() - 2);
+    for (auto it : states) {
+      std::string key = it.first;
+      Fl_OpBox *b = (Fl_OpBox *) it.second;
+      if (key == statename) {
+	if (!b->GetSelected()) { b->SetSelected(1); b->redraw(); }
+      }
+      else {
+	if (b->GetSelected()) { b->SetSelected(0); b->redraw(); }
+      }
+    }
+  };
+
+  void obs_on(void) { obs_widget->color(FL_RED); obs_widget->redraw(); }
+  void obs_off(void) { obs_widget->color(FL_BACKGROUND_COLOR); obs_widget->redraw(); }
+
   int disconnect_from_host(std::string hoststr)
   {
     ds_sock->unreg(host.c_str());
@@ -128,6 +167,20 @@ public:
     }
   }
 
+  /*
+   * send command to ess server to "touch" region setting info for each touch window
+   */
+  void update_touch_regions(void)
+  {
+    int result;
+    std::string rstr;
+    std::string cmd("for {set i 0} {$i < 8} {incr i} {touchGetRegionInfo $i}");
+
+    if (!host.empty()) {
+      result = ds_sock->esscmd(host, cmd, rstr);
+    }
+  }
+  
   
   int connect_to_host(std::string hoststr)
   {
@@ -144,10 +197,13 @@ public:
 		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol "
 				"ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total "
 				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
-				"ess/param_settings ess/params stimdg trialdg system/hostname "
+				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
+				"ess/state_table "
+				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
 				"system/os} { dservTouch $v }"), rstr);
 
     update_em_regions();
+    update_touch_regions();
 
     return 1;
   }
@@ -833,35 +889,71 @@ void update_general_perf_widget(int complete, int correct)
   Tcl_VarEval(g_App->interp(), cmd.c_str(), NULL);
 }
 
-void update_system_layout(void)
+void update_system_layout(const char *system_dict)
 {
-  
-  const int deskw = 15000;
-  const int deskh = 15000;
   Fl_OpDesk *opdesk = opdesk_widget;
+  Tcl_DictSearch search;
+  Tcl_Obj *key, *value;
+  int done;
+  
+  int item;
+  int xoff = opdesk->x()+20;
+  int yoff = opdesk->y()+10;
+  int height = 60;		// height of each item
+  int width = 120;		// width of each item
+  int row = 0;			// current row
+  int col = 0;			// current col
+  int ncols = 3;		// number of cols
+  float space_factor = 1.25;
+
+  g_App->clear_states();
+  
   opdesk->clear();
   opdesk->begin();
-  {
-    printf("Creating %d boxes\n", (deskw/200)*(deskh/200));
-    for ( int x=30; x<deskw; x+=200 ) {
-      for ( int y=30; y<deskh; y+=200 ) {
-	char s[80];
-	snprintf(s, sizeof(s), "Box %d/%d",x,y);
-	Fl_OpBox *opbox = new Fl_OpBox(x,y,180,120,strdup(s));
-	opbox->begin();
-	{
-	  /*Fl_OpButton *a =*/ new Fl_OpButton("A", FL_OP_INPUT_BUTTON);
-	  /*Fl_OpButton *b =*/ new Fl_OpButton("B", FL_OP_INPUT_BUTTON);
-	  /*Fl_OpButton *c =*/ new Fl_OpButton("CCC", FL_OP_INPUT_BUTTON);
-	  /*Fl_OpButton *d =*/ new Fl_OpButton("OUT1", FL_OP_OUTPUT_BUTTON);
-	  /*Fl_OpButton *e =*/ new Fl_OpButton("OUT2", FL_OP_OUTPUT_BUTTON);
-	}
-	opbox->end();
-      }
-    }
+
+  Tcl_Obj *dict = Tcl_NewStringObj(system_dict, -1);
+  if (Tcl_DictObjFirst(g_App->interp(), dict, &search,
+		       &key, &value, &done) != TCL_OK) {
+    Tcl_DecrRefCount(dict);
+    return;
   }
+  
+  for (; !done ; item++, Tcl_DictObjNext(&search, &key, &value, &done)) {    
+    Tcl_Size argc;
+    const char **argv;
+
+    /* connections from to */
+    Tcl_SplitList(g_App->interp(), Tcl_GetString(value), &argc, &argv);
+
+    row = item/ncols;
+    col = item%ncols;
+    
+    char s[80];
+    
+    Fl_OpBox *opbox = new Fl_OpBox(xoff+space_factor*col*width,
+				   yoff+space_factor*row*height,
+				   width, height, 0);
+    opbox->copy_label(Tcl_GetString(key));
+    g_App->add_state(Tcl_GetString(key), opbox);
+
+    opbox->begin();
+    {
+      /*Fl_OpButton *a =*/ new Fl_OpButton("In", FL_OP_INPUT_BUTTON);
+      /*Fl_OpButton *b =*/ new Fl_OpButton("Out", FL_OP_OUTPUT_BUTTON);
+    }
+    opbox->end();
+
+    Tcl_Free((char *) argv);
+  }
+  
+  
+  Tcl_DictObjDone(&search);  
+  Tcl_DecrRefCount(dict);
+
   opdesk->end();
+  opdesk->redraw();
 }
+
 
 
 void process_dpoint_cb(void *cbdata) {
@@ -914,9 +1006,28 @@ void process_dpoint_cb(void *cbdata) {
     }
   }
 
+  else if (!strcmp(json_string_value(name), "ess/transition_state")) {
+    g_App->select_transition_state(json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/action_state")) {
+    g_App->select_action_state(json_string_value(data));
+  }
+  
   else if (!strcmp(json_string_value(name), "ess/reset")) {
     clear_counter_widgets();
   }
+
+  else if (!strcmp(json_string_value(name), "ess/in_obs")) {
+    if (!strcmp(json_string_value(data), "1")) g_App->obs_on();
+    else g_App->obs_off();
+  }
+
+  /* not yet connected to any actions...*/
+  else if (!strcmp(json_string_value(name), "ess/running")) { }
+  else if (!strncmp(json_string_value(name), "ess/user_", 9)) { }
+  else if (!strcmp(json_string_value(name), "ess/block_id")) { }
+  else if (!strcmp(json_string_value(name), "ess/touch")) { }
+  else if (!strncmp(json_string_value(name), "ess/block_n", 11)) { }
   
   else if (!strcmp(json_string_value(name), "ess/state")) {
    if (!strcmp(json_string_value(data), "Stopped")) {
@@ -1058,11 +1169,12 @@ void process_dpoint_cb(void *cbdata) {
 
   else if (!strcmp(json_string_value(name), "ess/param_settings")) {
     add_params(json_string_value(data));
-
-    /* placeholder for state definitions */
-    update_system_layout();
   }
-
+  
+  else if (!strcmp(json_string_value(name), "ess/state_table")) {
+    update_system_layout(json_string_value(data));
+  }
+    
   else if (!strcmp(json_string_value(name), "ess/param")) {
     update_param(json_string_value(data));
   }
