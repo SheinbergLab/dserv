@@ -17,7 +17,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {1 105 1280 800} type Double hide resizable
+    xywh {1 105 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -57,13 +57,13 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         }
       }
       Fl_Group {} {
-        label Control
+        label Control open
         xywh {180 28 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
       } {
         Fl_Group {} {open
           xywh {180 29 315 283}
         } {
-          Fl_Group {} {
+          Fl_Group {} {open
             xywh {186 34 306 36} box THIN_UP_BOX
           } {
             Fl_Flex {} {open
@@ -76,7 +76,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
             }
           }
-          Fl_Group {} {
+          Fl_Group {} {open
             xywh {186 72 306 106} box THIN_UP_BOX
           } {
             Fl_Flex {} {open
@@ -109,6 +109,10 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 label {Obs:}
                 xywh {307 149 95 24} box FLAT_BOX color 49 labelsize 16 textsize 16
               }
+            }
+            Fl_Box obs_widget {
+              label obs_indicator selected
+              xywh {231 128 16 16} box FLAT_BOX selection_color 88 labeltype NO_LABEL
             }
           }
           Fl_Group {} {
@@ -156,7 +160,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 641}
         } {
           Fl_Group {} {
-            label behavior open selected
+            label behavior open
             xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
@@ -242,7 +246,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           } {
             Fl_Scroll opdesk_widget {
               label {State System} open
-              xywh {528 82 712 404}
+              xywh {513 86 466 580} box THIN_DOWN_BOX
               class Fl_OpDesk
             } {}
           }

@@ -32,6 +32,8 @@ Fl_Output *system_status_widget=(Fl_Output *)0;
 
 Fl_Output *obscount_widget=(Fl_Output *)0;
 
+Fl_Box *obs_widget=(Fl_Box *)0;
+
 Fl_Choice *system_widget=(Fl_Choice *)0;
 
 static void cb_system_widget(Fl_Choice*, void*) {
@@ -168,6 +170,11 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Output* obscount_widget
               o->end();
             } // Fl_Flex* o
+            { obs_widget = new Fl_Box(231, 128, 16, 16, "obs_indicator");
+              obs_widget->box(FL_FLAT_BOX);
+              obs_widget->selection_color(FL_RED);
+              obs_widget->labeltype(FL_NO_LABEL);
+            } // Fl_Box* obs_widget
             o->end();
           } // Fl_Group* o
           { Fl_Group* o = new Fl_Group(186, 181, 306, 128);
@@ -349,8 +356,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           { Fl_Group* o = new Fl_Group(503, 57, 762, 616, "system");
             o->labelsize(16);
             o->hide();
-            { opdesk_widget = new Fl_OpDesk(528, 82, 712, 404, "State System");
-              opdesk_widget->box(FL_NO_BOX);
+            { opdesk_widget = new Fl_OpDesk(513, 86, 466, 580, "State System");
+              opdesk_widget->box(FL_THIN_DOWN_BOX);
               opdesk_widget->color(FL_BACKGROUND_COLOR);
               opdesk_widget->selection_color(FL_BACKGROUND_COLOR);
               opdesk_widget->labeltype(FL_NORMAL_LABEL);

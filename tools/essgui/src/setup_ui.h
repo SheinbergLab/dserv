@@ -28,6 +28,8 @@ extern Fl_Tree *host_widget;
 extern Fl_Choice *subject_widget;
 extern Fl_Output *system_status_widget;
 extern Fl_Output *obscount_widget;
+#include <FL/Fl_Box.H>
+extern Fl_Box *obs_widget;
 extern Fl_Choice *system_widget;
 extern Fl_Choice *protocol_widget;
 extern Fl_Choice *variant_widget;
