@@ -1,0 +1,182 @@
+# data file for the Fltk User Interface Designer (fluid)
+version 1.0400
+header_name {.h}
+code_name {.cxx}
+decl {\#include "Fl_Console.h"
+\#include "Fl_DgFile.h"
+\#include "Fl_DgTable.h"
+\#include "essgui.h"} {public global
+}
+
+Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window *}
+} {
+  Fl_Window main_window {
+    label EssGUI open
+    xywh {237 251 1024 600} type Double resizable visible
+  } {
+    Fl_Tile {} {open
+      xywh {0 0 1024 570} v_label_margin 4 resizable
+    } {
+      Fl_Group {} {
+        label Systems open
+        xywh {0 26 222 452} labelsize 16
+      } {
+        Fl_Flex {} {open
+          xywh {0 32 222 36} type HORIZONTAL
+        } {
+          Fl_Button {} {
+            label Refresh
+            callback refresh_cb
+            xywh {0 32 222 36}
+          }
+        }
+        Fl_Group {} {open
+          xywh {0 321 218 152}
+        } {
+          Fl_Flex {} {open
+            xywh {10 334 198 80}
+          } {}
+        }
+        Fl_Tree host_widget {
+          callback host_cb
+          xywh {0 73 218 244}
+        }
+      }
+      Fl_Group {} {
+        label Control open
+        xywh {222 26 338 452} box GTK_DOWN_BOX color 47 labelsize 16 v_label_margin 4
+      } {
+        Fl_Group {} {open
+          xywh {233 33 317 51} box THIN_UP_BOX
+        } {
+          Fl_Flex {} {open
+            xywh {316 45 210 30}
+          } {
+            Fl_Choice subject_widget {
+              label {Subject:}
+              callback {set_subject()} open
+              xywh {316 45 210 30} down_box BORDER_BOX labelsize 16 textsize 16
+            } {}
+          }
+        }
+        Fl_Group {} {open selected
+          xywh {233 88 317 150} box THIN_UP_BOX labelsize 20
+        } {
+          Fl_Flex {} {open
+            xywh {316 109 210 102} gap 10
+          } {
+            Fl_Choice system_widget {
+              label {System:}
+              callback {set_system()} open
+              xywh {316 109 210 28} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+            } {}
+            Fl_Choice protocol_widget {
+              label {Protocol:}
+              callback {set_protocol()} open
+              xywh {316 147 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+            } {}
+            Fl_Choice variant_widget {
+              label {Variant:}
+              callback {set_variant()} open
+              xywh {316 184 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+            } {}
+          }
+        }
+        Fl_Group {} {open
+          xywh {233 242 317 164} box THIN_UP_BOX
+        } {
+          Fl_Flex {} {open
+            xywh {265 268 250 29} type HORIZONTAL
+          } {
+            Fl_Button {} {
+              label Go
+              callback {esscmd("ess::start")}
+              xywh {265 268 84 29} labelsize 18
+            }
+            Fl_Button {} {
+              label Stop
+              callback {esscmd("ess::stop")}
+              xywh {349 268 83 29} labelsize 18
+            }
+            Fl_Button {} {
+              label Reset
+              callback {esscmd("ess::reset")}
+              xywh {432 268 83 29} labelsize 18
+            }
+          }
+          Fl_Flex {} {open
+            xywh {354 312 190 83}
+          } {
+            Fl_Output system_status_widget {
+              label {Status:}
+              xywh {354 312 190 28} box NO_BOX labelsize 16 textsize 16
+            }
+            Fl_Output obscount_widget {
+              label {Obs:}
+              xywh {354 340 190 28} box FLAT_BOX color 49 labelsize 16 textsize 16
+            }
+            Fl_Output stimid_widget {
+              label {Stimulus ID:}
+              xywh {354 368 190 27} box NO_BOX labelsize 16 textsize 16
+              code0 {stimid_widget->readonly(1); stimid_widget->set_output();}
+            }
+          }
+        }
+        Fl_Group {} {open
+          xywh {233 411 317 60} box THIN_UP_BOX
+        } {
+          Fl_Flex {} {open
+            xywh {354 415 196 52} fixed_size_tuples {1  0 30 }
+          } {
+            Fl_Output pctcomplete_widget {
+              label {% Completed:}
+              xywh {354 415 196 30} box NO_BOX labelsize 16 textsize 16
+            }
+            Fl_Output pctcorrect_widget {
+              label {% Correct:}
+              xywh {354 445 196 22} box NO_BOX labelsize 16 textsize 16
+            }
+          }
+        }
+      }
+      Fl_Group {} {
+        label Info open
+        xywh {560 26 464 452} labelsize 16 v_label_margin 4 resizable
+      } {
+        Fl_Tabs {} {open
+          xywh {570 31 444 437}
+        } {
+          Fl_Table stimdg_widget {
+            label stimdg open
+            xywh {570 56 444 412}
+            class DGTable
+          } {}
+          Fl_Group {} {
+            label stim open
+            xywh {570 56 444 412} hide
+          } {}
+        }
+      }
+      Fl_Group {} {open
+        xywh {0 478 1024 92}
+      } {
+        Fl_Terminal output_term {
+          xywh {0 478 1024 92}
+          class Fl_Console
+        }
+      }
+    }
+    Fl_Group {} {open
+      xywh {0 570 1024 30} labeltype NO_LABEL
+    } {
+      Fl_Output status_widget {
+        xywh {0 570 1024 30} labeltype NO_LABEL resizable
+      }
+    }
+  }
+  code {output_term->init_linenoise();
+output_term->set_callback(eval, NULL);
+
+
+return main_window;} {}
+}

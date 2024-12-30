@@ -8,7 +8,8 @@ Fl_Console::Fl_Console(int X,int Y,int W,int H, const char *L):
   lastkey = -1;
   buflen = 4096;
   buf = new char[buflen];
-  prompt = std::string("hb> ");
+  l_state.prompt = NULL;
+  prompt("essgui> ");
   process_cb = nullptr;
   process_cb_data = nullptr;
 }
@@ -49,7 +50,7 @@ int Fl_Console::handle(int e) {
 	    linenoiseHistorySave(&l_state, "history.txt"); /* Save the history on disk. */
 	    do_callback(buf);
 	  }
-	  lnInitState(&l_state, buf, buflen, prompt.c_str());
+	  lnInitState(&l_state, buf, buflen, prompt().c_str());
 	  return 1;
 	}
 	break;

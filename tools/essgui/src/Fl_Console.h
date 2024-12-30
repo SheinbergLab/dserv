@@ -15,7 +15,7 @@ private:
   struct linenoiseState l_state;
   char *buf;
   int buflen;
-  std::string prompt;
+  std::string _prompt;
   PROCESS_CB process_cb;
   void *process_cb_data;
   
@@ -23,6 +23,9 @@ public:
   Fl_Console(int X,int Y,int W,int H, const char *L=0);
   ~Fl_Console(void);
 
+  std::string prompt(void) { return _prompt; }
+  void prompt(std::string p) { _prompt = p; }
+  
   int handle(int e) FL_OVERRIDE;
 
   void resize(int X,int Y,int W,int H) FL_OVERRIDE {
@@ -47,7 +50,7 @@ public:
   
   int init_linenoise(void)
   {
-    lnInitState(&l_state, buf, buflen, prompt.c_str());
+    lnInitState(&l_state, buf, buflen, _prompt.c_str());
     l_state.cols = display_columns();
     l_state.mode = linenoiseState::ln_read_regular;
     linenoiseHistoryLoad(&l_state, "history.txt"); /* Load the history at startup */

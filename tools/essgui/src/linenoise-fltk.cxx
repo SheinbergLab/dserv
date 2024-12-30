@@ -717,7 +717,8 @@ void lnInitState(struct linenoiseState *l, char *buf, size_t buflen, const char 
     * specific editing functionalities. */
     l->buf = buf;
     l->buflen = buflen;
-    l->prompt = prompt;
+    if (l->prompt) free(l->prompt);
+    l->prompt = strdup(prompt);
     l->plen = strlen(prompt);
     l->oldpos = l->pos = 0;
     l->len = 0;
@@ -1026,9 +1027,10 @@ void linenoiseRefreshEditor(struct linenoiseState *l_state)
 
 void linenoiseUpdatePrompt(struct linenoiseState *l_state, const char *prompt)
 {
-    l_state->prompt = prompt;
-    l_state->plen = strlen(prompt);
-    linenoiseRefreshEditor(l_state);
+  if (l_state->prompt) free(l_state->prompt);
+  l_state->prompt = strdup(prompt);
+  l_state->plen = strlen(prompt);
+  linenoiseRefreshEditor(l_state);
 }
 
 /* This special mode is used by linenoise in order to print scan codes

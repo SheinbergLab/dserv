@@ -89,7 +89,7 @@ struct linenoiseState {
   
   char *buf;          /* Edited line buffer. */
   size_t buflen;      /* Edited line buffer size. */
-  const char *prompt; /* Prompt to display. */
+  char *prompt;       /* Prompt to display. */
   size_t plen;        /* Prompt length. */
   size_t pos;         /* Current cursor position. */
   size_t oldpos;      /* Previous refresh cursor position. */

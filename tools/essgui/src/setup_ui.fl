@@ -1,5 +1,5 @@
 # data file for the Fltk User Interface Designer (fluid)
-version 1.0400
+version 1.0401
 header_name {.h}
 code_name {.cxx}
 decl {\#include "Fl_Console.h"
@@ -17,7 +17,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {1 105 1280 800} type Double resizable visible
+    xywh {0 107 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -111,7 +111,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               }
             }
             Fl_Box obs_widget {
-              label obs_indicator selected
+              label obs_indicator
               xywh {231 128 16 16} box FLAT_BOX selection_color 88 labeltype NO_LABEL
             }
           }
@@ -160,7 +160,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 641}
         } {
           Fl_Group {} {
-            label behavior open
+            label behavior open selected
             xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
@@ -237,8 +237,8 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             class DGTable
           } {}
           Fl_Group {} {
-            label stim
-            xywh {503 56 710 612} labelsize 16 hide
+            label stim open
+            xywh {503 56 740 612} labelsize 16 hide
           } {}
           Fl_Group {} {
             label system open
@@ -252,7 +252,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
         }
       }
-      Fl_Group {} {
+      Fl_Group {} {open
         xywh {0 674 1279 88}
       } {
         Fl_Terminal output_term {
@@ -271,7 +271,6 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
   }
   code {output_term->init_linenoise();
 output_term->set_callback(eval, NULL);
-
 
 return main_window;} {}
 }
