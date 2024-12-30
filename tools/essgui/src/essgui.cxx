@@ -53,7 +53,8 @@ private:
   std::unordered_map<std::string, Fl_Widget *> states;
   
 public:
-  bool auto_reload = true;		// reload variant immediately upon setting change
+  typedef enum { TERM_LOCAL, TERM_STIM, TERM_ESS } TerminalMode;
+  bool auto_reload = true; // reload variant immediately upon setting change
   std::thread dsnet_thread;
   DservSocket *ds_sock;
   Fl_Double_Window *win;
@@ -61,13 +62,15 @@ public:
   const char *inithost = NULL;
   std::string host = std::string();
   void *drawable = nullptr;
+  TerminalMode terminal_mode = TERM_LOCAL;
+  std::string stim_host;
   
 public:
   App (int argc, char *argv[]) {
     // set the global app pointer
     g_App = this;
     int i=0;
-
+    
 #if 1
     if (Fl::args(argc, argv, i, argparse) < argc)
       Fl::fatal("Options are:\n -f = startup fullscreen\n\n -h = initial host\n%s", Fl::help);
@@ -191,14 +194,14 @@ public:
     ds_sock->add_match(hoststr.c_str(), "stimdg");
     ds_sock->add_match(hoststr.c_str(), "trialdg");
 
-    /* touch variables to update interface */
+    /* touch variables to update interface (check spaces at EOL!) */
     std::string rstr;
     ds_sock->esscmd(hoststr,
 		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol "
 				"ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total "
 				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
 				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
-				"ess/state_table "
+				"ess/state_table ess/remote_host "
 				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
 				"system/os} { dservTouch $v }"), rstr);
 
@@ -211,6 +214,22 @@ public:
   int eval(const char *command, std::string &resultstr)
   {
     return _interp->eval(command, resultstr);
+  }
+
+  int ess_eval(const char *command, std::string &resultstr)
+  {
+    int retval = ds_sock->esscmd(g_App->host,
+					std::string(command),
+					resultstr);
+    return retval;
+  }
+
+  int stim_eval(const char *command, std::string &resultstr)
+  {
+    int retval = ds_sock->stimcmd(stim_host,
+				  std::string(command),
+				  resultstr);
+    return retval;
   }
 
   static int argparse(int argc, char **argv, int &i) {
@@ -354,20 +373,69 @@ void host_cb(Fl_Tree*, void*) {
   host_widget->clear_changed();
 }
 
+
 int eval(char *command, void *cbdata) {
   std::string resultstr;
-  auto result = g_App->eval(command, resultstr);
+  int result;
 
-  if (resultstr.length()) {
-    if (result != TCL_OK) output_term->append_ascii("\033[31m");
-    output_term->append(resultstr.c_str());
-    if (result != TCL_OK) output_term->append_ascii("\033[0m");
-    output_term->append("\n");
+  Fl_Console *term = output_term;
+
+  if (!strcmp(command, "exit")) g_App->eval(command, resultstr);
+  
+  else if (!strcmp(command, "/ess")) {
+    output_term->prompt("ess> ");
+    g_App->terminal_mode = App::TERM_ESS;
   }
+  
+  else if (!strcmp(command, "/stim")) {
+    output_term->prompt("stim> ");
+    g_App->terminal_mode = App::TERM_STIM;
+  }
+  
+  else if (!strcmp(command, "/essgui")) {
+    output_term->prompt("essgui> ");
+    g_App->terminal_mode = App::TERM_LOCAL;
+  }
+  
+  else {
+    switch (g_App->terminal_mode) {
+    case App::TERM_LOCAL:
+      result = g_App->eval(command, resultstr);
+      break;
+    case App::TERM_ESS:
+      result = g_App->ess_eval(command, resultstr);
+      if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
+	resultstr = resultstr.substr(11);
+	result = TCL_ERROR;
+      }
+      else {
+	result = TCL_OK;
+      }
+      break;
+    case App::TERM_STIM:
+      result = g_App->stim_eval(command, resultstr);
+      if (resultstr.empty()) result = TCL_OK;
+      else if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
+	resultstr = resultstr.substr(11);
+	result = TCL_ERROR;
+      }
+      else {
+	result = TCL_OK;
+      }
+      break;
+    }
+  
+    if (strlen(resultstr.c_str())) {
+      if (result != TCL_OK) output_term->append_ascii("\033[31m");
+      output_term->append(resultstr.c_str());
+      if (result != TCL_OK) output_term->append_ascii("\033[0m");
+      output_term->append("\n");
+    }
+  }
+  
   output_term->redraw();
   return result;
 }
-
 
 int esscmd(char *cmd, std::string &rstr) {
   
@@ -1106,6 +1174,10 @@ void process_dpoint_cb(void *cbdata) {
     }
   }
 
+  else if (!strcmp(json_string_value(name), "ess/remote_host")) {
+    g_App->stim_host = std::string(json_string_value(data));
+  }
+  
   else if (!strcmp(json_string_value(name), "ess/screen_w")) {
     int w;
     if (sscanf(json_string_value(data), "%d", &w) == 1)
@@ -1318,6 +1390,7 @@ int esscmdCmd(ClientData data, Tcl_Interp *interp,
   
   return TCL_OK;
 }
+
 
 int terminalOutCmd(ClientData data, Tcl_Interp *interp,
 		 int objc, Tcl_Obj * const objv[])
