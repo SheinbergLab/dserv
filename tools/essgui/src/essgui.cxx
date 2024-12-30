@@ -51,6 +51,7 @@ private:
   const char *WidgetKey = "widgets";
   std::unordered_map<std::string, Fl_Widget *> params;
   std::unordered_map<std::string, Fl_Widget *> states;
+  std::unordered_map<std::string, std::vector<Fl_Widget *>> stim_params;
   
 public:
   typedef enum { TERM_LOCAL, TERM_STIM, TERM_ESS } TerminalMode;
@@ -108,6 +109,14 @@ public:
     return params[key];
   }
 
+  void clear_stim_params(void) { stim_params.clear(); }
+  void add_stim_param(std::string key, Fl_Object *o) { stim_params[key].push_back(o); }
+  std::vector<Fl_Widget *> find_stim_params(std::string key)
+  {
+    if (stim_params.find(key) == stim_params.end()) return std::vector<Fl_Widget *>();
+    return stim_params[key];
+  }
+  
   void clear_states(void) { states.clear(); }
   void add_state(std::string key, Fl_Object *o) { states[key] = o; }
   Fl_Widget *find_state(std::string key)
@@ -200,7 +209,7 @@ public:
 				"ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total "
 				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
 				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
-				"ess/state_table "
+				"ess/state_table ess/rmt_cmds "
 				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
 				"system/os} { dservTouch $v }"), rstr);
 
@@ -1022,6 +1031,85 @@ void update_system_layout(const char *system_dict)
 
 
 
+void rmt_button_callback(Fl_Widget *o, void *data)
+{
+  Fl_Input *button = (Fl_Input *) o;
+  std::string cmd = o->label();
+  std::vector<Fl_Widget *> params = g_App->find_stim_params(cmd);
+
+  if (params.size()) {
+    for (Fl_Widget *p : params) {
+      Fl_Input *input = (Fl_Input *) p;
+      cmd += " ";
+      cmd += input->value();
+    }
+  }
+  std::string rstr;
+  g_App->ds_sock->stimcmd(g_App->host, cmd, rstr);
+}
+
+int update_remote_commands(const char *rmt_cmds)
+{
+  Tcl_Interp *interp = g_App->interp();
+  Tcl_DictSearch search;
+  Tcl_Obj *key, *value;
+  int done;
+
+  g_App->clear_stim_params();
+  
+  rmt_commands_widget->clear();
+  rmt_commands_widget->begin();
+
+  int row = 0;
+  int height = 30;
+  int xoff = rmt_commands_widget->x()+4;
+  int yoff = rmt_commands_widget->y();
+  int label_width = 155;
+    
+  Tcl_Obj *dict = Tcl_NewStringObj(rmt_cmds, -1);
+  if (Tcl_DictObjFirst(g_App->interp(), dict, &search,
+		       &key, &value, &done) != TCL_OK) {
+    Tcl_DecrRefCount(dict);
+    return -1;
+  }
+  for (; !done ; Tcl_DictObjNext(&search, &key, &value, &done), row++) {
+   Tcl_Size argc, argcc;
+   const char **argv, **argvv;
+   if (Tcl_SplitList(g_App->interp(), Tcl_GetString(value),
+		     &argc, &argv) == TCL_OK) {
+     Fl_Button *button = new Fl_Button(xoff,
+				       yoff+10+row*height,
+				       label_width, height, 0);
+     button->copy_label(Tcl_GetString(key));     
+     button->callback(rmt_button_callback);
+
+     int option_width = 40;
+     int option_padx = 3;
+     for (int i = 0; i < argc; i++) {
+       Fl_Input *input = new Fl_Input(xoff+label_width+option_padx+i*(option_width+option_padx),
+				      yoff+10+row*height,
+				      option_width, height, 0);
+       input->copy_tooltip(argv[i]);
+       g_App->add_stim_param(Tcl_GetString(key), input);
+     }
+     
+     Tcl_Free((char *) argv);
+   }
+  }
+  Tcl_DictObjDone(&search);
+  
+  Tcl_DecrRefCount(dict);
+
+  rmt_commands_widget->end();
+  rmt_commands_widget->redraw();
+
+  return TCL_OK;
+  
+}
+
+
+
+
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
   // JSON parsing variables
@@ -1239,6 +1327,10 @@ void process_dpoint_cb(void *cbdata) {
   
   else if (!strcmp(json_string_value(name), "ess/state_table")) {
     update_system_layout(json_string_value(data));
+  }
+    
+  else if (!strcmp(json_string_value(name), "ess/rmt_cmds")) {
+    update_remote_commands(json_string_value(data));
   }
     
   else if (!strcmp(json_string_value(name), "ess/param")) {
