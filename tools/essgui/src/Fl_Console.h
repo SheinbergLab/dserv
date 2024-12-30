@@ -23,6 +23,8 @@ public:
   Fl_Console(int X,int Y,int W,int H, const char *L=0);
   ~Fl_Console(void);
 
+  std::string get_current_selection(void);
+  
   std::string prompt(void) { return _prompt; }
   void prompt(std::string p) { _prompt = p; }
   

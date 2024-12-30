@@ -18,9 +18,37 @@ Fl_Console::~Fl_Console(void) {
   delete[] buf;
 }
 
+std::string Fl_Console::get_current_selection(void)
+{
+  // Get selection
+  int srow,scol,erow,ecol;
+  std::string sel;
+  if (get_selection(srow,scol,erow,ecol)) {                // mouse selection exists?
+    // Walk entire selection from start to end
+    for (int row=srow; row<=erow; row++) {                 // walk rows of selection
+      const Utf8Char *u8c = u8c_ring_row(row);             // ptr to first character in row
+      int col_start = (row==srow) ? scol : 0;              // start row? start at scol
+      int col_end   = (row==erow) ? ecol : ring_cols();    // end row?   end at ecol
+      u8c += col_start;                                    // include col offset (if any)
+      for (int col=col_start; col<=col_end; col++,u8c++) { // walk columns
+	sel += u8c->text_utf8();
+      }
+    }
+  }
+  return sel;
+}
+
 int Fl_Console::handle(int e) {
   
   switch (e) {
+  case FL_PUSH:
+    {
+      if (Fl::event_button3()) {
+	std::string sel = get_current_selection();
+	Fl::copy(sel.c_str(), strlen(sel.c_str()), 1);
+      }
+    }
+    break;
   case FL_KEYDOWN:
     {
       const char *keybuf = Fl::event_text();
@@ -28,6 +56,11 @@ int Fl_Console::handle(int e) {
       //      std::cout << "keydown: " << Fl::event_key() << " alt_status (" << Fl::event_alt() << ")" << std::endl;
 
       if (Fl::event_alt()) return 0;
+
+      if (Fl::event_ctrl() && Fl::event_key() == 'c') {
+	std::string sel = get_current_selection();
+	Fl::copy(sel.c_str(), strlen(sel.c_str()), 1);
+      }
       
       switch (Fl::event_key()) {
       case FL_Meta_L:
@@ -39,8 +72,8 @@ int Fl_Console::handle(int e) {
       case FL_Control_L:
       case FL_Control_R:
       case FL_Caps_Lock:
-
 	return 0;
+
       case FL_Enter:
 	{
 	  int final_len = lnHandleCharacter(&l_state, (char) lastkey);
