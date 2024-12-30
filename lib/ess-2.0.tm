@@ -605,6 +605,9 @@ namespace eval ess {
 
 	# dictionary of states and associated transition states
 	dservSet ess/state_table [get_state_transitions]
+
+	# set list of rmtSend commands used by this protocol
+	dservSet ess/rmt_cmds [get_rmt_cmds]
 	
 	set current(trialid) 0
 	if [dg_exists trialdg] { dg_delete trialdg }
@@ -1428,6 +1431,51 @@ namespace eval ess {
     }
 }
 
+
+namespace eval ess {
+    # not sure this gets all rmtSend's !!!
+    proc find_rmt_cmds { def } {
+	set pat {rmtSend\s+(\S+)[ \}\;]}
+	set pat {rmtSend\s+(\S+)[ \}";\n]}
+	set rmtcmds [regexp -inline -all $pat $def]
+	set rmtcmds [regsub -all \" $rmtcmds ""]
+	set rmtcmds [lmap a $rmtcmds { lindex $a 1 }]
+	set matches {}
+	for { set i 0 } { $i < [expr {[llength $rmtcmds]/2}] } { incr i 2 } {
+	    set cmd [string trimleft [lindex $rmtcmds $i] !]
+	    if { [lsearch $matches $cmd] == -1 } { lappend matches $cmd }
+	}
+	return $matches
+    }
+    
+    proc get_rmt_cmds {} {
+	variable current
+	set s $current(state_system)
+	if { $s == "" } { return }
+	
+	# store cmds in a list
+	set cmds {}
+	
+	set states [$s get_states]
+	set methods [info object methods $s]
+	foreach m $methods {
+	    set matches [find_rmt_cmds [lindex [info object definition $s $m] 1]]
+	    foreach m $matches {
+		if { [lsearch $cmds $m] == -1 } { lappend cmds $m }
+	    } 
+	}
+	set cmds [lsort $cmds]
+	set d [dict create]
+
+	foreach c $cmds {
+	    set isproc [rmtSend [list info proc $c]]
+	    if { $isproc != "" } {
+		dict set d $c [rmtSend [list info args $c]]
+	    }
+	}
+	return $d
+    }
+}
 
 namespace eval ess {
     variable current
