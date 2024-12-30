@@ -74,6 +74,8 @@ CGWin *cgwin_widget=(CGWin *)0;
 
 VirtualEye *virtual_eye_widget=(VirtualEye *)0;
 
+Fl_Scroll *rmt_commands_widget=(Fl_Scroll *)0;
+
 DGTable *stimdg_widget=(DGTable *)0;
 
 Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
@@ -335,22 +337,25 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
             } // Fl_Group* o
             o->end();
           } // Fl_Group* o
-          { stimdg_widget = new DGTable(505, 56, 729, 608, "stimdg");
-            stimdg_widget->box(FL_THIN_DOWN_FRAME);
-            stimdg_widget->color(FL_BACKGROUND_COLOR);
-            stimdg_widget->selection_color(FL_BACKGROUND_COLOR);
-            stimdg_widget->labeltype(FL_NORMAL_LABEL);
-            stimdg_widget->labelfont(0);
-            stimdg_widget->labelsize(16);
-            stimdg_widget->labelcolor(FL_FOREGROUND_COLOR);
-            stimdg_widget->align(Fl_Align(FL_ALIGN_TOP));
-            stimdg_widget->when(FL_WHEN_RELEASE);
-            stimdg_widget->hide();
-            stimdg_widget->end();
-          } // DGTable* stimdg_widget
-          { Fl_Group* o = new Fl_Group(503, 56, 740, 612, "stim");
+          { Fl_Group* o = new Fl_Group(503, 57, 762, 611, "stim");
             o->labelsize(16);
             o->hide();
+            { rmt_commands_widget = new Fl_Scroll(507, 85, 252, 360, "Stim Commands");
+              rmt_commands_widget->box(FL_THIN_DOWN_BOX);
+              rmt_commands_widget->end();
+            } // Fl_Scroll* rmt_commands_widget
+            { stimdg_widget = new DGTable(763, 85, 502, 583, "stimdg");
+              stimdg_widget->box(FL_THIN_DOWN_FRAME);
+              stimdg_widget->color(FL_BACKGROUND_COLOR);
+              stimdg_widget->selection_color(FL_BACKGROUND_COLOR);
+              stimdg_widget->labeltype(FL_NORMAL_LABEL);
+              stimdg_widget->labelfont(0);
+              stimdg_widget->labelsize(14);
+              stimdg_widget->labelcolor(FL_FOREGROUND_COLOR);
+              stimdg_widget->align(Fl_Align(FL_ALIGN_TOP));
+              stimdg_widget->when(FL_WHEN_RELEASE);
+              stimdg_widget->end();
+            } // DGTable* stimdg_widget
             o->end();
           } // Fl_Group* o
           { Fl_Group* o = new Fl_Group(503, 57, 762, 616, "system");

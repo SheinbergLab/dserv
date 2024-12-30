@@ -17,7 +17,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {0 107 1280 800} type Double resizable visible
+    xywh {352 217 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -160,7 +160,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 641}
         } {
           Fl_Group {} {
-            label behavior open selected
+            label behavior selected
             xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
@@ -231,15 +231,20 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               }
             }
           }
-          Fl_Table stimdg_widget {
-            label stimdg
-            xywh {505 56 729 608} labelsize 16 hide
-            class DGTable
-          } {}
           Fl_Group {} {
             label stim open
-            xywh {503 56 740 612} labelsize 16 hide
-          } {}
+            xywh {503 57 762 611} labelsize 16 hide
+          } {
+            Fl_Scroll rmt_commands_widget {
+              label {Stim Commands} open
+              xywh {507 85 252 360} box THIN_DOWN_BOX
+            } {}
+            Fl_Table stimdg_widget {
+              label stimdg open
+              xywh {763 85 502 583}
+              class DGTable
+            } {}
+          }
           Fl_Group {} {
             label system open
             xywh {503 57 762 616} labelsize 16 hide

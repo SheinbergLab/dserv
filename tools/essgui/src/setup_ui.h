@@ -48,6 +48,7 @@ extern Fl_Group *plot_widget;
 extern CGWin *cgwin_widget;
 extern void virtual_eye_cb(VirtualEye*, void*);
 extern VirtualEye *virtual_eye_widget;
+extern Fl_Scroll *rmt_commands_widget;
 extern DGTable *stimdg_widget;
 extern Fl_OpDesk *opdesk_widget;
 extern Fl_Console *output_term;
