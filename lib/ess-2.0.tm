@@ -109,6 +109,7 @@ oo::class create System {
 	    variable screen_h 600
 	}
 
+	dservSet ess/remote_host $host
 	foreach v "halfx halfy w h" { dservSet ess/screen_${v} [set screen_${v}] }
 	
 	rmtSend "set dservhost [dservGet ess/ipaddr]"
