@@ -278,6 +278,14 @@ int rmt_send_command(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+char *rmt_host_command(ClientData data, Tcl_Interp *interp,
+		       int objc, Tcl_Obj *objv[])
+{
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(host, strlen(host)));
+  return TCL_OK;
+}
+
+
 /*****************************************************************************
  * EXPORT
  *****************************************************************************/
@@ -308,6 +316,8 @@ int Dserv_rmt_Init(Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) rmt_close_command, tclserver, NULL);
   Tcl_CreateObjCommand(interp, "rmtSend",
 		       (Tcl_ObjCmdProc *) rmt_send_command, tclserver, NULL);
+  Tcl_CreateObjCommand(interp, "rmtHost",
+		       (Tcl_ObjCmdProc *) rmt_host_command, tclserver, NULL);
 
   return TCL_OK;
 }
