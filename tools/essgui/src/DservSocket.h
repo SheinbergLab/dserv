@@ -440,8 +440,15 @@ public:
     return 1;
   }
 
-  int dscmd(std::string host, std::string cmd, std::string &rstr, int port=2570)
+  int dscmd(std::string h, std::string cmd, std::string &rstr, int port=2570)
   {
+    std::string host;
+    if (h == "localhost")
+      host = std::string("127.0.0.1");
+    else
+      host = h;
+
+    if (host.empty()) return -1;
     int sock = client_socket(host.c_str(), port);
     if (sock <= 0) return sock;
 
@@ -449,6 +456,7 @@ public:
     int result = ds_command(sock, cmd, rstr);
 
     rstr.erase(std::remove(rstr.begin(), rstr.end(), '\n'), rstr.cend());
+    rstr.erase(std::remove(rstr.begin(), rstr.end(), '\r'), rstr.cend());
     
     close_socket(sock);
     return result;
@@ -462,6 +470,9 @@ public:
   }
   int dservcmd(std::string host, std::string cmd, std::string &rstr) {
     return dscmd(host, cmd, rstr, 4620);
+  }
+  int stimcmd(std::string host, std::string cmd, std::string &rstr) {
+    return dscmd(host, cmd+"\n", rstr, 4610);
   }
   
 
