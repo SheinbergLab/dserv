@@ -63,7 +63,6 @@ public:
   std::string host = std::string();
   void *drawable = nullptr;
   TerminalMode terminal_mode = TERM_LOCAL;
-  std::string stim_host;
   
 public:
   App (int argc, char *argv[]) {
@@ -201,7 +200,7 @@ public:
 				"ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total "
 				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
 				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
-				"ess/state_table ess/remote_host "
+				"ess/state_table "
 				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
 				"system/os} { dservTouch $v }"), rstr);
 
@@ -226,7 +225,7 @@ public:
 
   int stim_eval(const char *command, std::string &resultstr)
   {
-    int retval = ds_sock->stimcmd(stim_host,
+    int retval = ds_sock->stimcmd(g_App->host,
 				  std::string(command),
 				  resultstr);
     return retval;
@@ -1173,10 +1172,6 @@ void process_dpoint_cb(void *cbdata) {
     }
   }
 
-  else if (!strcmp(json_string_value(name), "ess/remote_host")) {
-    g_App->stim_host = std::string(json_string_value(data));
-  }
-  
   else if (!strcmp(json_string_value(name), "ess/screen_w")) {
     int w;
     if (sscanf(json_string_value(data), "%d", &w) == 1)
