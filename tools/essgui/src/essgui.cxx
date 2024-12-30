@@ -964,7 +964,6 @@ void update_system_layout(const char *system_dict)
   Tcl_Obj *key, *value;
   int done;
   
-  int item;
   int xoff = opdesk->x()+20;
   int yoff = opdesk->y()+10;
   int height = 60;		// height of each item
@@ -986,7 +985,7 @@ void update_system_layout(const char *system_dict)
     return;
   }
   
-  for (; !done ; item++, Tcl_DictObjNext(&search, &key, &value, &done)) {    
+  for (int item = 0; !done ; item++, Tcl_DictObjNext(&search, &key, &value, &done)) {    
     Tcl_Size argc;
     const char **argv;
 
