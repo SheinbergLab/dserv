@@ -690,6 +690,9 @@ namespace eval ess {
 	# initialize the variant by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 
+	# reset counters
+	reset
+	
 	set current(trialid) 0
 	if [dg_exists trialdg] { dg_delete trialdg }
 	reset_trial_info
