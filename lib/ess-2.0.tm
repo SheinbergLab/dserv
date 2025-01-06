@@ -509,6 +509,67 @@ namespace eval ess {
 	    return ""
 	}
     }
+
+    proc system_script {} {
+	variable current
+	if { $current(system) != "" } {
+	    set f [file join $::ess::system_path $current(project) $current(system)]
+	    if  { [file isdirectory $f] &&
+		  [file exists $f/[file tail $f].tcl] } {
+		set fname [file join $f [file tail $f].tcl]
+		set script_file [open $fname r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }
+
+    proc protocol_script {} {
+	variable current
+	if { $current(system) != "" && $current(protocol) != "" } {
+	    set f [file join $::ess::system_path $current(project) $current(system) $current(protocol)]
+	    if  { [file isdirectory $f] &&
+		  [file exists $f/[file tail $f].tcl] } {
+		set fname [file join $f [file tail $f].tcl]
+		set script_file [open $fname r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }
+
+
+    proc variant_script {} {
+	variable current
+	if { $current(system) != "" && $current(protocol) != ""  && $current(variant) != "" } {
+	    set f [file join $::ess::system_path $current(project) \
+		       $current(system) $current(protocol) $current(protocol)_variants.tcl]
+	    if  { [file exists $f] } {
+		set script_file [open $f r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }    
+
+    
+    proc stim_script {} {
+	variable current
+	if { $current(system) != "" && $current(protocol) != ""  && $current(variant) != "" } {
+	    set f [file join $::ess::system_path $current(project) \
+		       $current(system) $current(protocol) $current(protocol)_stim.tcl]
+	    if  { [file exists $f] } {
+		set script_file [open $f r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }    
+
     
     proc unload_system {} {
 	variable current
@@ -608,6 +669,11 @@ namespace eval ess {
 
 	# set list of rmtSend commands used by this protocol
 	dservSet ess/rmt_cmds [get_rmt_cmds]
+
+	# update current scripts in dserv
+	foreach t "system protocol variant stim" {
+	    dservSet ess/${t}_script [${t}_script]
+	}
 	
 	set current(trialid) 0
 	if [dg_exists trialdg] { dg_delete trialdg }
@@ -1678,9 +1744,9 @@ namespace eval ess {
 	    if  { [file isdirectory $f] &&
 		  [file exists $f/[file tail $f].tcl] } {
 		catch { namespace delete ::ess::[file tail $f] }
-		source $f/[file tail $f].tcl
+		set fname [file join $f [file tail $f].tcl]
+		source $fname
 		lappend systems [file tail $f]
-		
 	    }
 	}
 	return $systems
@@ -1707,7 +1773,7 @@ namespace eval ess {
 	return [dict keys [set ::ess::${s}::${p}::variants]]
     }
 
-    # These getters could be changed to not re-source perhaps
+    # The system and protocol getters don't re-"source"
     proc get_systems { } {
 	variable current
 	set systems {}
