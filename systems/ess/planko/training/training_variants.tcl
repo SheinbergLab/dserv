@@ -38,7 +38,7 @@ namespace eval planko::training {
 	    loader_options {
 		nr { 50 100 200 }
 		nplanks { 1 }
-		wrong_catcher_alpha { 0.1 0.7 0.8 0.9 1.0 }
+		wrong_catcher_alpha { 1.0 0.7 0.8 0.9 }
 		params { { jittered { ball_jitter_x 10 ball_start_y 0 ball_jitter_y 3 minplanks 0 } } }
 	    }
 	}
