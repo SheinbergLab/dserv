@@ -17,7 +17,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {352 217 1280 800} type Double resizable visible
+    xywh {252 125 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -154,14 +154,14 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
       }
       Fl_Group {} {
         label Info open
-        xywh {499 28 766 645} labelsize 18 v_label_margin 4 resizable
+        xywh {499 28 766 646} labelsize 18 v_label_margin 4 resizable
       } {
         Fl_Tabs {} {open
-          xywh {503 32 762 641}
+          xywh {503 32 762 642}
         } {
           Fl_Group {} {
-            label behavior selected
-            xywh {504 56 747 615} labelsize 16
+            label behavior
+            xywh {504 56 747 615} labelsize 16 hide
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
@@ -254,6 +254,31 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               xywh {513 86 466 580} box THIN_DOWN_BOX
               class Fl_OpDesk
             } {}
+          }
+          Fl_Group {} {
+            label scripts open
+            xywh {503 57 762 617} labelsize 16
+          } {
+            Fl_Tabs editor_tabs {open selected
+              xywh {503 79 758 595}
+            } {
+              Fl_Text_Editor system_editor {
+                label system
+                xywh {503 114 747 560} selection_color 31
+              }
+              Fl_Text_Editor protocol_editor {
+                label protocol
+                xywh {503 114 747 560} selection_color 31 hide
+              }
+              Fl_Text_Editor variant_editor {
+                label variant
+                xywh {503 114 747 550} selection_color 31 hide
+              }
+              Fl_Text_Editor stim_editor {
+                label stim
+                xywh {503 114 747 550} selection_color 31 hide
+              }
+            }
           }
         }
       }

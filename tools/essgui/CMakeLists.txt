@@ -53,11 +53,17 @@ endif()
 
 if(WIN32)
 
-else()
+elseif(APPLE)
 
 INSTALL(TARGETS essgui
-        RUNTIME DESTINATION /usr/local/bin
-        ARCHIVE DESTINATION /usr/local/lib
+        RUNTIME DESTINATION . COMPONENT essgui
 )
-endif()
+include(InstallRequiredSystemLibraries)
+set(CPACK_COMPONENTS_ALL essgui)
+set(CPACK_PACKAGE_VERSION_MAJOR "${dserv_VERSION_MAJOR}")
+set(CPACK_PACKAGE_VERSION_MINOR "${dserv_VERSION_MINOR}")
+set(CPACK_GENERATOR "DragNDrop")
+include(CPack)
+else()
 
+endif()

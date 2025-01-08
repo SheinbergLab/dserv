@@ -51,6 +51,12 @@ extern VirtualEye *virtual_eye_widget;
 extern Fl_Scroll *rmt_commands_widget;
 extern DGTable *stimdg_widget;
 extern Fl_OpDesk *opdesk_widget;
+extern Fl_Tabs *editor_tabs;
+#include <FL/Fl_Text_Editor.H>
+extern Fl_Text_Editor *system_editor;
+extern Fl_Text_Editor *protocol_editor;
+extern Fl_Text_Editor *variant_editor;
+extern Fl_Text_Editor *stim_editor;
 extern Fl_Console *output_term;
 extern Fl_Output *status_widget;
 Fl_Double_Window * setup_ui(int argc, char *argv[]);

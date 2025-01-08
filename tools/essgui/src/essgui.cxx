@@ -2,6 +2,7 @@
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Int_Input.H>
 #include <FL/Fl_Float_Input.H>
+#include <FL/Fl_Text_Buffer.H>
 #include <FL/fl_string_functions.h>
 
 #include <iostream>
@@ -52,6 +53,7 @@ private:
   std::unordered_map<std::string, Fl_Widget *> params;
   std::unordered_map<std::string, Fl_Widget *> states;
   std::unordered_map<std::string, std::vector<Fl_Widget *>> stim_params;
+  std::unordered_map<std::string, Fl_Text_Buffer *> text_buffers;
   
 public:
   typedef enum { TERM_LOCAL, TERM_STIM, TERM_ESS } TerminalMode;
@@ -89,6 +91,8 @@ public:
 
     add_tcl_commands(interp());
 
+    init_text_widgets();
+    
     Tcl_InitHashTable(&widget_table, TCL_STRING_KEYS);
     Tcl_SetAssocData(interp(), WidgetKey, NULL, &widget_table);
 
@@ -101,6 +105,43 @@ public:
     delete _interp;
   }
 
+  void init_text_widgets(void)
+  {
+    text_buffers["system"] = new Fl_Text_Buffer();
+    system_editor->buffer(text_buffers["system"]);
+    system_editor->textfont(FL_COURIER);
+    
+    text_buffers["protocol"] = new Fl_Text_Buffer();
+    protocol_editor->buffer(text_buffers["protocol"]);
+    protocol_editor->textfont(FL_COURIER);
+
+    text_buffers["variant"] = new Fl_Text_Buffer();
+    variant_editor->buffer(text_buffers["variant"]);
+    variant_editor->textfont(FL_COURIER);
+
+    text_buffers["stim"] = new Fl_Text_Buffer();
+    stim_editor->buffer(text_buffers["stim"]);
+    stim_editor->textfont(FL_COURIER);
+  }
+
+  void reset_text_widgets(void)
+  {
+    clear_editor_buffer("system");
+    clear_editor_buffer("protocol");
+    clear_editor_buffer("variant");
+    clear_editor_buffer("stim");
+  }
+  
+  void set_editor_buffer(const char *name, const char *buf)
+  {
+    text_buffers[name]->text(buf);
+  }
+  
+  void clear_editor_buffer(const char *name)
+  {
+    text_buffers[name]->text("");
+  }
+  
   void clear_params(void) { params.clear(); }
   void add_param(std::string key, Fl_Object *o) { params[key] = o; }
   Fl_Widget *find_param(std::string key)
@@ -210,6 +251,7 @@ public:
 				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
 				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
 				"ess/state_table ess/rmt_cmds "
+				"ess/system_script ess/protocol_script ess/variant_script ess/stim_script "
 				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
 				"system/os} { dservTouch $v }"), rstr);
 
@@ -317,6 +359,8 @@ static void clear_widgets(void) {
 
   options_widget->clear();
   options_widget->redraw();
+
+  g_App->reset_text_widgets();
 }  
 
 
@@ -1304,6 +1348,22 @@ void process_dpoint_cb(void *cbdata) {
     //    stimid_widget->redraw_label();
   }
 
+
+  /* script files for this system */
+  else if (!strcmp(json_string_value(name), "ess/system_script")) {
+    g_App->set_editor_buffer("system", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/protocol_script")) {
+    g_App->set_editor_buffer("protocol", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/variant_script")) {
+    g_App->set_editor_buffer("variant", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/stim_script")) {
+    g_App->set_editor_buffer("stim", json_string_value(data));
+  }
+
+  
   else if (!strcmp(json_string_value(name), "ess/variant_info")) {
     Tcl_Obj *options_key = Tcl_NewStringObj("loader_arg_options", -1);
     Tcl_Obj *args_key = Tcl_NewStringObj("loader_args", -1);

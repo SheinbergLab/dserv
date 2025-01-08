@@ -80,6 +80,16 @@ DGTable *stimdg_widget=(DGTable *)0;
 
 Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
 
+Fl_Tabs *editor_tabs=(Fl_Tabs *)0;
+
+Fl_Text_Editor *system_editor=(Fl_Text_Editor *)0;
+
+Fl_Text_Editor *protocol_editor=(Fl_Text_Editor *)0;
+
+Fl_Text_Editor *variant_editor=(Fl_Text_Editor *)0;
+
+Fl_Text_Editor *stim_editor=(Fl_Text_Editor *)0;
+
 Fl_Console *output_term=(Fl_Console *)0;
 
 Fl_Output *status_widget=(Fl_Output *)0;
@@ -229,12 +239,13 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         } // Fl_Group* o
         o->end();
       } // Fl_Group* o
-      { Fl_Group* o = new Fl_Group(499, 28, 766, 645, "Info");
+      { Fl_Group* o = new Fl_Group(499, 28, 766, 646, "Info");
         o->labelsize(18);
         o->vertical_label_margin(4);
-        { Fl_Tabs* o = new Fl_Tabs(503, 32, 762, 641);
+        { Fl_Tabs* o = new Fl_Tabs(503, 32, 762, 642);
           { Fl_Group* o = new Fl_Group(504, 56, 747, 615, "behavior");
             o->labelsize(16);
+            o->hide();
             { Fl_Group* o = new Fl_Group(514, 84, 245, 300, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
               { eyetouch_widget = new EyeTouchWin(521, 91, 232, 232, "EyeWindow");
@@ -375,6 +386,28 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
             } // Fl_OpDesk* opdesk_widget
             o->end();
           } // Fl_Group* o
+          { Fl_Group* o = new Fl_Group(503, 57, 762, 617, "scripts");
+            o->labelsize(16);
+            { editor_tabs = new Fl_Tabs(503, 79, 758, 595);
+              { system_editor = new Fl_Text_Editor(503, 114, 747, 560, "system");
+                system_editor->selection_color((Fl_Color)31);
+              } // Fl_Text_Editor* system_editor
+              { protocol_editor = new Fl_Text_Editor(503, 114, 747, 560, "protocol");
+                protocol_editor->selection_color((Fl_Color)31);
+                protocol_editor->hide();
+              } // Fl_Text_Editor* protocol_editor
+              { variant_editor = new Fl_Text_Editor(503, 114, 747, 550, "variant");
+                variant_editor->selection_color((Fl_Color)31);
+                variant_editor->hide();
+              } // Fl_Text_Editor* variant_editor
+              { stim_editor = new Fl_Text_Editor(503, 114, 747, 550, "stim");
+                stim_editor->selection_color((Fl_Color)31);
+                stim_editor->hide();
+              } // Fl_Text_Editor* stim_editor
+              editor_tabs->end();
+            } // Fl_Tabs* editor_tabs
+            o->end();
+          } // Fl_Group* o
           o->end();
         } // Fl_Tabs* o
         o->end();
@@ -382,8 +415,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       } // Fl_Group* o
       { Fl_Group* o = new Fl_Group(0, 674, 1279, 88);
         { output_term = new Fl_Console(0, 674, 1279, 88);
-          output_term->box(FL_DOWN_FRAME);
-          output_term->color(FL_BLACK);
+          output_term->box(FL_DOWN_BOX);
+          output_term->color(FL_FOREGROUND_COLOR);
           output_term->selection_color(FL_BACKGROUND_COLOR);
           output_term->labeltype(FL_NORMAL_LABEL);
           output_term->labelfont(0);
