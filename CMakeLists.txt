@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 set(CMAKE_CXX_STANDARD 20)
 
-project(dserv)
+project(dserv VERSION 1.3)
 
 link_directories(/usr/local/lib)
 
@@ -24,6 +24,8 @@ endif()
 add_subdirectory(modules)
 add_subdirectory(processors)
 add_subdirectory(tools/essctrl)
+
+configure_file(src/dservConfig.h.in ../src/dservConfig.h)
 
 add_executable(dserv src/dserv.cpp src/Base64.c src/Datapoint.c src/Dataserver.cpp src/SendClient.cpp src/LogClient.cpp src/LogTable.cpp src/TclServer.cpp src/dpoint_process.c src/mdns.c src/mdns_advertise.c)
 
@@ -59,3 +61,4 @@ install(DIRECTORY www DESTINATION dserv)
 
 enable_testing()
 add_subdirectory("tests")
+
