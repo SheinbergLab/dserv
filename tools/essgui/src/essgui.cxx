@@ -1760,6 +1760,11 @@ proc do_sortby { args } {
  return;
 }
 
+// On windows, make this a windows, not console, app
+#ifdef _MSC_VER
+# pragma comment(linker, "/subsystem:windows /ENTRY:mainCRTStartup")
+#endif
+
 int main(int argc, char *argv[]) {
 
   App app(argc, argv);
