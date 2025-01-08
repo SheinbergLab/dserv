@@ -1,128 +1,93 @@
-; Based on example from 
-; 12 06 2005: Luis Wong
+;NSIS Modern User Interface
+;Basic Example Script
+;Written by Joost Verburg
 
+;--------------------------------
+;Include Modern UI
 
-; -------------------------------
-; Start
- 
-  !define Name "ESSGui"
-  !define MUI_VERSION "1.0"
-  !define MUI_BRANDINGTEXT "ESSGui"
-  !define MUI_SYSTEM 
-  CRCCheck On
- 
-  ; We should test if we must use an absolute path 
-  !include "${NSISDIR}\Contrib\Modern UI\System.nsh"
- 
- 
-;---------------------------------
+  !include "MUI2.nsh"
+
+;--------------------------------
 ;General
+
+  ;Name and file
+  Name "Essgui"
+  OutFile "essgui-win.exe"
+  Unicode True
+
+  ;Default installation folder
+  InstallDir "$LOCALAPPDATA\Essgui"
   
-  Name "EssGUI"
-  OutFile "install_essgui.exe"
-  ShowInstDetails "nevershow"
-  ShowUninstDetails "nevershow"
-  ;SetCompressor "bzip2"
- 
-  ;!define MUI_ICON "icon.ico"
-  ;!define MUI_UNICON "icon.ico"
-  ;!define MUI_SPECIALBITMAP "Bitmap.bmp"
- 
- 
+  ;Get installation folder from registry if available
+  InstallDirRegKey HKCU "Software\Essgui" ""
+
+  ;Request application privileges for Windows Vista
+  RequestExecutionLevel user
+
 ;--------------------------------
-;Folder selection page
- 
-  InstallDir "$PROGRAMFILES\${Name}"
- 
- 
-;--------------------------------
-;Modern UI Configuration
- 
-  !define MUI_WELCOMEPAGE  
-  !define MUI_LICENSEPAGE
-  !define MUI_DIRECTORYPAGE
+;Interface Settings
+
   !define MUI_ABORTWARNING
-  !define MUI_UNINSTALLER
-  !define MUI_UNCONFIRMPAGE
-  !define MUI_FINISHPAGE  
- 
- 
+
 ;--------------------------------
-;Language
+;Pages
+
+  !insertmacro MUI_PAGE_LICENSE "${NSISDIR}\Docs\Modern UI\License.txt"
+  !insertmacro MUI_PAGE_COMPONENTS
+  !insertmacro MUI_PAGE_DIRECTORY
+  !insertmacro MUI_PAGE_INSTFILES
+  
+  !insertmacro MUI_UNPAGE_CONFIRM
+  !insertmacro MUI_UNPAGE_INSTFILES
+  
+;--------------------------------
+;Languages
  
   !insertmacro MUI_LANGUAGE "English"
-  
+
 ;--------------------------------
-;Data
- 
-  ;LicenseData "Readme.txt"
- 
- 
-;-------------------------------- 
-;Installer Sections     
-Section "install" 
- 
-;Add files
+;Installer Sections
+
+Section "Essgui" SecEssgui
+
   SetOutPath "$INSTDIR"
- 
+  
   File "essgui.exe"
   File "tcl90.dll"
   File "dlsh.zip"
   File "zlib1.dll"
   File "libtommath.dll"
-  ;File "readme.txt"
- 
-;create desktop shortcut
-  CreateShortCut "$DESKTOP\${Name}.lnk" "$INSTDIR\${Name}.exe" ""
- 
-;create start-menu items
-  CreateDirectory "$SMPROGRAMS\${Name}"
-  CreateShortCut "$SMPROGRAMS\${Name}\Uninstall.lnk" "$INSTDIR\Uninstall.exe" "" "$INSTDIR\Uninstall.exe" 0
-  CreateShortCut "$SMPROGRAMS\${Name}\${Name}.lnk" "$INSTDIR\${Name}.exe" "" "$INSTDIR\${Name}.exe" 0
- 
-;write uninstall information to the registry
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${Name}" "DisplayName" "${Name} (remove only)"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${Name}" "UninstallString" "$INSTDIR\Uninstall.exe"
- 
+  
+  ;Store installation folder
+  WriteRegStr HKCU "Software\Essgui" "" $INSTDIR
+  
+  ;Create uninstaller
   WriteUninstaller "$INSTDIR\Uninstall.exe"
- 
+
 SectionEnd
- 
- 
-;--------------------------------    
-;Uninstaller Section  
+
+Section "Desktop Shortcut" SectionX
+    SetShellVarContext current
+    CreateShortCut "$DESKTOP\Essgui.lnk" "$INSTDIR\essgui.exe"
+SectionEnd
+
+
+;--------------------------------
+;Uninstaller Section
+
 Section "Uninstall"
- 
-;Delete Files 
-  RMDir /r "$INSTDIR\*.*"    
- 
-;Remove the installation directory
+
+  Delete "$INSTDIR\essgui.exe"
+  Delete "$INSTDIR\tcl90.dll"
+  Delete "$INSTDIR\dlsh.zip"
+  Delete "$INSTDIR\zlib1.dll"
+  Delete "$INSTDIR\libtommath.dll"
+  
+  Delete "$INSTDIR\Uninstall.exe"
+
   RMDir "$INSTDIR"
- 
-;Delete Start Menu Shortcuts
-  Delete "$DESKTOP\${Name}.lnk"
-  Delete "$SMPROGRAMS\${Name}\*.*"
-  RmDir  "$SMPROGRAMS\${Name}"
- 
-;Delete Uninstaller And Unistall Registry Entries
-  DeleteRegKey HKEY_LOCAL_MACHINE "SOFTWARE\${Name}"
-  DeleteRegKey HKEY_LOCAL_MACHINE "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\${Name}"  
- 
+
+  DeleteRegKey /ifempty HKCU "Software\Essgui"
+
 SectionEnd
  
- 
-;--------------------------------    
-;MessageBox Section
- 
- 
-;Function that calls a messagebox when installation finished correctly
-Function .onInstSuccess
-  MessageBox MB_OK "You have successfully installed ${Name}. Use the desktop icon to start the program."
-FunctionEnd
- 
-Function un.onUninstSuccess
-  MessageBox MB_OK "You have successfully uninstalled ${Name}."
-FunctionEnd
- 
- 
-;eof
