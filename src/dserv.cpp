@@ -14,6 +14,8 @@
 #include "tclserver_api.h"
 #include "mdns_advertise.h"
 
+#include "dservConfig.h"
+
 // Provide hooks for loaded modules
 Dataserver *dserver;
 TclServer *tclserver;
@@ -44,8 +46,7 @@ void signalHandler(int signum) {
  */
 int main(int argc, char *argv[])
 {
-  bool verbose = false;
-  bool daemonize = false;
+  bool version = false;
   bool help = false;
   std::string trigger_script;
   std::string configuration_script;
@@ -57,7 +58,7 @@ int main(int argc, char *argv[])
      cxxopts::value<std::string>(trigger_script))
     ("c,cscript", "Configuration script path",
      cxxopts::value<std::string>(configuration_script))
-    ("v,verbose", "Verbose", cxxopts::value<bool>(verbose));
+    ("v,version", "Version", cxxopts::value<bool>(version));
 
   try {
     auto result = options.parse(argc, argv);
@@ -67,6 +68,11 @@ int main(int argc, char *argv[])
     exit(-1);
   }
 
+  if (version) {
+    std::cout << dserv_VERSION_MAJOR << "." << dserv_VERSION_MINOR << std::endl;
+    exit(0);
+  }
+  
   if (help) {
     std::cout << options.help({"", "Group"}) << std::endl;
     exit(0);
