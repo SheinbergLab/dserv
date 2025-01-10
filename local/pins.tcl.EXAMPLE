@@ -3,8 +3,8 @@
 #
 
 # these are hardware debounced input buttons
-gpioLinRequestInput 24
-gpioLinRequestInput 25
+gpioLineRequestInput 24
+gpioLineRequestInput 25
 
 # obs sync output
 gpioLineRequestOutput 26
