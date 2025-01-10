@@ -20,7 +20,12 @@ Install `dserv` dependencies for [low-level event handling](https://packages.deb
 sudo apt install libevdev-dev
 ```
 
-To make commands concrete, this guide assumes we're workign in directory `~/code/`.
+Install dependencies for [postgres C library](https://www.postgresql.org/docs/9.5/libpq.html):
+```
+sudo apt install libpq-dev
+```
+
+To make commands concrete, this guide assumes we're workign in directory `~/code/` but feel free to use any directory name you like.
 
 ```
 mkdir ~/code
