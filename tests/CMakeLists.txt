@@ -9,3 +9,16 @@ add_test(
     COMMAND dserv --help
 )
 set_property(TEST help PROPERTY PASS_REGULAR_EXPRESSION "Data server")
+
+add_test(
+    NAME trigger_script_foo
+    COMMAND dserv --exit --tscript ../../tests/test_triggers.tcl
+)
+set_property(TEST trigger_script_foo PROPERTY PASS_REGULAR_EXPRESSION "Handle test/foo: event = 42, latest = 42")
+
+
+add_test(
+    NAME trigger_script_bar
+    COMMAND dserv --exit --tscript ../../tests/test_triggers.tcl
+)
+set_property(TEST trigger_script_bar PROPERTY PASS_REGULAR_EXPRESSION "Handle test/bar: event = 43, latest = 44")

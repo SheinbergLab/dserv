@@ -50,14 +50,14 @@ int main(int argc, char *argv[])
   bool help = false;
   std::string trigger_script;
   std::string configuration_script;
+  bool exit_after_scripts = false;
 
   cxxopts::Options options("dserv", "Data server");
   options.add_options()
     ("h,help", "Print help", cxxopts::value<bool>(help))
-    ("t,tscript", "Trigger script path",
-     cxxopts::value<std::string>(trigger_script))
-    ("c,cscript", "Configuration script path",
-     cxxopts::value<std::string>(configuration_script))
+    ("t,tscript", "Trigger script path", cxxopts::value<std::string>(trigger_script))
+    ("c,cscript", "Configuration script path", cxxopts::value<std::string>(configuration_script))
+    ("x,exit", "Exit after running trigger and configuration scripts", cxxopts::value<bool>(exit_after_scripts))
     ("v,version", "Version", cxxopts::value<bool>(version));
 
   try {
@@ -85,7 +85,7 @@ int main(int argc, char *argv[])
 
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
-    if (result.starts_with("!TCL_ERROR ")) std::cerr << result;
+    if (result.starts_with("!TCL_ERROR ")) std::cerr << result << std::endl;
   }
   if (!configuration_script.empty()) {
     auto result = tclserver->eval(std::string("source ")+configuration_script);
@@ -94,6 +94,11 @@ int main(int argc, char *argv[])
 
   /* use mdns to advertise services */
   advertise_services(dserver->port(), tclserver->port());
+
+  if (exit_after_scripts) {
+    std::cout << "Exiting dserv instead of waiting for messages." << std::endl;
+    raise(SIGINT);
+  }
 
   std::promise<void>().get_future().wait();
 }
