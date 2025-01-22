@@ -89,6 +89,21 @@ oo::class create Juicer {
 	set _fd [open $_path RDWR]
 	fconfigure $_fd -buffering line
     }
+
+    method find {} {
+	set model_name juicer
+	set devices [glob /dev/ttyACM* /dev/ttyUSB*]
+	foreach dev $devices {
+	    if {[file exists $dev]} {
+		set info [exec udevadm info --query=all --name=$dev 2>/dev/null]
+		if {[string match *ID_MODEL=${model_name}* $info]} {
+		    return $dev
+		}
+	    }
+	}
+	return ""
+    }
+    
     method close {} {
 	if { $_fd != -1 } {
 	    close $_fd
@@ -145,7 +160,7 @@ oo::class create Juicer {
 
     method calibrate { n on off } {
 	set o [yajl create #auto]
-	$o map_open map_key do map_open map_key calibrate
+	$o map_open map_key do map_open map_key calibration
 	$o map_open map_key n number $n map_key on number $on map_key off number $off map_close
 	$o map_close map_close
 	set cmd [$o get]
