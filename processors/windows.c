@@ -66,7 +66,7 @@ void *newProcessParams(void)
   // region updates
   p->status_dpoint.flags = 0;
   p->status_dpoint.varname = strdup("proc/windows/status");
-  p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
+  p->status_dpoint.varlen = strlen(p->status_dpoint.varname) + 1;
   p->status_dpoint.data.type = DSERV_SHORT;
   p->status_dpoint.data.len = 4*sizeof(uint16_t);
   p->status_dpoint.data.buf = malloc(p->status_dpoint.data.len);
@@ -74,7 +74,7 @@ void *newProcessParams(void)
   // parameter updates
   p->settings_dpoint.flags = 0;
   p->settings_dpoint.varname = strdup("proc/windows/settings");
-  p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
+  p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname) + 1;
   p->settings_dpoint.data.type = DSERV_SHORT;
   p->settings_dpoint.data.len = sizeof(window_settings_t);
   p->settings_dpoint.data.buf = malloc(p->settings_dpoint.data.len);
@@ -177,13 +177,13 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     if (p->status_dpoint.varname) free(p->status_dpoint.varname);
     p->status_dpoint.varname = malloc(strlen(vals[0])+2+strlen(status_str));
     sprintf(p->status_dpoint.varname, "%s/%s", vals[0], status_str);
-    p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
+    p->status_dpoint.varlen = strlen(p->status_dpoint.varname) + 1;
 
     /* params */
     if (p->settings_dpoint.varname) free(p->settings_dpoint.varname);
     p->settings_dpoint.varname = malloc(strlen(vals[0])+2+strlen(params_str));
     sprintf(p->settings_dpoint.varname, "%s/%s", vals[0], params_str);
-    p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
+    p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname) + 1;
     return DPOINT_PROCESS_IGNORE;
   }
 

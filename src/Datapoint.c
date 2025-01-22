@@ -124,11 +124,12 @@ int dpoint_to_binary(ds_datapoint_t *dpoint, unsigned char *buf, int *maxsize)
 {
   int total_bytes = 0;
   int bufidx = 0;
-  uint16_t varlen = strlen(dpoint->varname);
+
+  uint16_t varlen = strlen(dpoint->varname) + 1;
 
   // Start by seeing how much space we need
   total_bytes += sizeof(uint16_t); // varlen
-  total_bytes += varlen;           // strlen(varname)
+  total_bytes += varlen;           // strlen(varname) + 1
   total_bytes += sizeof(uint64_t); // timestamp
   total_bytes += sizeof(uint32_t); // datatype
   total_bytes += sizeof(uint32_t); // datalen
@@ -173,9 +174,11 @@ ds_datapoint_t *dpoint_from_binary(char *buf, int buflen)
   memcpy(&dpoint->varlen, &buf[bufidx], sizeof(uint16_t));
   bufidx+=sizeof(uint16_t);
 
-  dpoint->varname = malloc(dpoint->varlen+1);
+  // varlen is strlen(varname) + 1 -- it should already include the null terminator of varname.
+  // We also explicitly set a null terminator for safety.
+  dpoint->varname = malloc(dpoint->varlen);
   memcpy(dpoint->varname, &buf[bufidx], dpoint->varlen);
-  dpoint->varname[dpoint->varlen] = '\0';
+  dpoint->varname[dpoint->varlen - 1] = '\0';
   bufidx += dpoint->varlen;
 
   memcpy(&dpoint->timestamp, &buf[bufidx], sizeof(uint64_t));
@@ -269,7 +272,7 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
 {
   ds_datapoint_t *d = NULL;
   char *varname;
-  int varlen;
+  int name_length;
   ds_datatype_t datatype;
   uint64_t timestamp;
   unsigned int inlen, outlen, datalen;
@@ -334,11 +337,11 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
   if (nstarts != 5 || nstops != 5)
     return NULL;
     
-  varlen = stops[0]-starts[0];
 
-  varname = (char *) malloc(varlen+1);
-  memcpy(varname, starts[0], varlen);
-  varname[varlen] = '\0';
+  name_length = stops[0]-starts[0];
+  varname = (char *) malloc(name_length+1);
+  memcpy(varname, starts[0], name_length);
+  varname[name_length] = '\0';
 
   datatype = (ds_datatype_t) strtoul(starts[1], &stops[1], 0);
   timestamp = strtoull(starts[2], &stops[2], 0);
