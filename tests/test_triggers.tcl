@@ -5,7 +5,7 @@ proc test_handler { name data } {
     # Confirm we see expected values at the time of set and at the time of handling.
     # TODO: there's an unexpeted, non-printing character at the end of $name.
     # shell ignores this but ctest treats this like newline, breaking regex tests.
-    puts "Handle [string trim $name]: event = $data, latest = [dservGet $name]"
+    puts "Handle $name: event = $data, latest = [dservGet $name]"
 }
 
 triggerRemoveAll

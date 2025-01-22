@@ -1066,7 +1066,7 @@ static int process_requests(Dataserver *dserv) {
 	/* name of dpoint (special for DSERV_EVTs */
 	if (dpoint->data.e.dtype != DSERV_EVT) {
 	  /* point name */
-	  commandArray[1] = Tcl_NewStringObj(dpoint->varname, dpoint->varlen);
+	  commandArray[1] = Tcl_NewStringObj(dpoint->varname, strlen(dpoint->varname));
 	  /* data as Tcl_Obj */
 	  commandArray[2] = dpoint_to_tclobj(interp, dpoint);
 	}
