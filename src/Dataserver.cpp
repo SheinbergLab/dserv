@@ -93,9 +93,12 @@ ds_datapoint_t *Dataserver::process(ds_datapoint_t *dpoint)
 
 void Dataserver::trigger(ds_datapoint_t *dpoint)
 {
-  if (trigger_matches.is_match(dpoint->varname)) {
+  // Datapoint names can match patterns exactly or via wildcards like * or ?.
+  MatchSpec *match = trigger_matches.find_match(dpoint->varname);
+  if (match) {
     std::string script;
-    if (trigger_scripts.find(dpoint->varname, script)) {
+    // Scripts are keyed by pattern -- use the matching pattern for the datapoint name.
+    if (trigger_scripts.find(match->matchstr.c_str(), script)) {
       client_request_t client_request;
       client_request.type = REQ_TRIGGER;
       client_request.script = std::move(script);

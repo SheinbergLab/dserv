@@ -71,7 +71,7 @@ class SendTable
       if (!send_client->active) {
 	close_vec.push_back(send_client);
       }
-      else if (send_client->matches.is_match(dpoint->varname)) {
+      else if (send_client->matches.find_match(dpoint->varname)) {
 	ds_datapoint_t *dp = dpoint_copy(dpoint);
 	send_client->dpoint_queue.push_back(dp);
       }

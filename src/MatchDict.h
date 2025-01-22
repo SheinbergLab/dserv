@@ -255,10 +255,11 @@ class MatchDict
   }
 
   // check all match specs for a match
+  // return the last match, if any
   // need to check all of them to ensure alert_every counter is updated
-  bool is_match(char *var)
+  MatchSpec *find_match(char *var)
   {
-    bool ret = false;
+    MatchSpec *ret = NULL;
     for (auto&& it : map_) {
       MatchSpec *match = &it.second;
       if (!match->active) continue;
@@ -267,12 +268,12 @@ class MatchDict
       case MatchSpec::MATCH_EXACT:
 	if (!strcmp(var, match->matchstr.c_str()) &&
 	    !(match->count++ % match->alert_every))
-	  ret = true;
+	  ret = match;
 	break;
       case MatchSpec::MATCH_KRAUSS:
 	if (FastWildCompare((char *) match->matchstr.c_str(), var) &&
 	    !(match->count++ % match->alert_every))
-	  ret = true;
+	  ret = match;
 	break;
       case MatchSpec::MATCH_BEGIN:
       case MatchSpec::MATCH_END:

@@ -14,9 +14,7 @@ add_test(
     NAME trigger_script
     COMMAND dserv --exit --tscript "${CMAKE_SOURCE_DIR}/tests/test_triggers.tcl"
 )
-set_property(
-    TEST trigger_script
-    PROPERTY PASS_REGULAR_EXPRESSION "\
+set_property(TEST trigger_script PROPERTY PASS_REGULAR_EXPRESSION "\
 Start trigger test.
 End trigger test.
 Handle test/foo: event = 42, latest = 42
