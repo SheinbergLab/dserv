@@ -24,8 +24,20 @@ Exiting dserv instead of waiting for messages.
 Shutting down..."
 )
 
+# Obtain GoogleTest for testing C++ code.
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+)
+# For Windows: Prevent overriding the parent project's compiler/linker settings
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
 # Run a unit test for datapoint serialization and deserialization.
 include_directories("${CMAKE_SOURCE_DIR}/src")
 add_executable(datapoint_serialization "datapoint_serialization.cpp" "${CMAKE_SOURCE_DIR}/src/Datapoint.c" "${CMAKE_SOURCE_DIR}/src/Base64.c")
-target_link_libraries(datapoint_serialization ${LIBJANSSON})
-add_test(datapoint_serialization datapoint_serialization)
+target_link_libraries(datapoint_serialization ${LIBJANSSON} GTest::gtest_main)
+
+include(GoogleTest)
+gtest_discover_tests(datapoint_serialization)
