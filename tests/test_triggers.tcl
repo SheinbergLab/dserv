@@ -11,7 +11,8 @@ triggerRemoveAll
 dservSet test/foo 0
 dservSet test/bar 0
 
-# Bind our handler script to the value name test/foo and test/bar, to alert on "every 1" call ie always.
+# Register our handler script to match datapoint names like test/foo and test/bar.
+# Register to alert on "every 1" change -- ie always.
 triggerAdd test/* 1 test_handler
 
 # Expect sets 42 and 43 to trigger our test_handler.
