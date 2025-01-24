@@ -24,6 +24,29 @@ Exiting dserv instead of waiting for messages.
 Shutting down..."
 )
 
+# Write datapoints to dsserv.log.
+add_test(
+    NAME logger_script
+    COMMAND dserv --exit --cscript "${CMAKE_SOURCE_DIR}/tests/test_logger.tcl"
+)
+set_property(TEST logger_script PROPERTY PASS_REGULAR_EXPRESSION "\
+Start logger test.
+End logger test.
+Exiting dserv instead of waiting for messages.
+Shutting down..."
+)
+
+# Expect in dsserv.log:
+# - starts with dslog
+# - datapont test/foo with timestamp "B" (ASCII 66) and value 66
+# - datapont test/foo with timestamp "D" (ASCII 68) and value 68
+add_test(
+    NAME logger_output
+    COMMAND xxd -c 100 dserv.log
+)
+set_property(TEST logger_output PROPERTY DEPENDS logger_script)
+set_property(TEST logger_output PROPERTY PASS_REGULAR_EXPRESSION "dslog.*test/fooB.*66..test/fooD.*68")
+
 # Obtain GoogleTest for testing C++ code.
 include(FetchContent)
 FetchContent_Declare(
