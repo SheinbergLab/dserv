@@ -71,12 +71,13 @@ dservapi_get_from_dataserver(int fd,
   char cmd[] = "<";
   int bufsize;
   int rval;
-  uint16_t varlen = strlen(varname);
+
+  uint16_t name_length = strlen(varname);
   
   struct iovec iov[3];
   iov[0].iov_base = cmd;
   iov[0].iov_len = strlen(cmd);
-  iov[1].iov_base = (void *) &varlen;
+  iov[1].iov_base = (void *) &name_length;
   iov[1].iov_len = sizeof(uint16_t);
   iov[2].iov_base = (void *) varname;
   iov[2].iov_len = strlen(varname);
@@ -117,18 +118,18 @@ int dservapi_write_to_dataserver(int fd,
   uint8_t cmd = DPOINT_BINARY_MSG_CHAR;
   static char buf[DPOINT_BINARY_FIXED_LENGTH];
  
-  uint16_t varlen;
+  uint16_t name_length;
   uint64_t timestamp = 0;
   uint32_t datatype = dtype,  datalen = len;
 
   uint16_t bufidx = 0;
   uint16_t total_bytes = 0;
 
-  varlen = strlen(varname);
+  name_length = strlen(varname);
 
   // Start by seeing how much space we need
-  total_bytes += sizeof(uint16_t); // varlen
-  total_bytes += varlen;           // strlen(varname)
+  total_bytes += sizeof(uint16_t); // name_length
+  total_bytes += name_length;      // strlen(varname)
   total_bytes += sizeof(uint64_t); // timestamp
   total_bytes += sizeof(uint32_t); // datatype
   total_bytes += sizeof(uint32_t); // datalen
@@ -142,11 +143,11 @@ int dservapi_write_to_dataserver(int fd,
   memcpy(&buf[bufidx], &cmd, sizeof(uint8_t));
   bufidx += sizeof(uint8_t);
 
-  memcpy(&buf[bufidx], &varlen, sizeof(uint16_t));
+  memcpy(&buf[bufidx], &name_length, sizeof(uint16_t));
   bufidx += sizeof(uint16_t);
 
-  memcpy(&buf[bufidx], varname, varlen);
-  bufidx += varlen;
+  memcpy(&buf[bufidx], varname, name_length);
+  bufidx += name_length;
 
   memcpy(&buf[bufidx], &timestamp, sizeof(uint64_t));
   bufidx += sizeof(uint64_t);

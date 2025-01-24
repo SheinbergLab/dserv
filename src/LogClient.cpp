@@ -229,11 +229,12 @@ int LogClient::write_dpoint(ds_datapoint_t *dpoint)
 	 dpoint->data.e.dtype, dpoint->flags, dpoint->data.len);
 #endif
   
-  if (write(fd, &dpoint->varlen, sizeof(uint16_t)) != sizeof(uint16_t))
+  // datapoint varlen includes the NULL terminator, write only the characters before that.
+  uint16_t name_length = dpoint->varlen - 1;
+  if (write(fd, &name_length, sizeof(uint16_t)) != sizeof(uint16_t))
     goto write_error;
-  
-  if (write(fd, dpoint->varname, (int) dpoint->varlen) !=
-      (int) dpoint->varlen)
+
+  if (write(fd, dpoint->varname, (int) name_length) != (int) name_length)
     goto write_error;
   
   if (write(fd, &dpoint->timestamp, sizeof(uint64_t)) != sizeof(uint64_t))

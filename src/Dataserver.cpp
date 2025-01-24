@@ -2106,6 +2106,8 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	      buf[1] == 's' && buf[2] == 'e' &&
 	      buf[3] == 't' && buf[4] == ' ')
 	    {
+        // set varlen datatype datalen
+        // The client should send varlen as strlen(varname) + 1;
 	      if (sscanf(&buf[5], "%d %d %d", &varlen,
 			 &datatype, &datalen) != 3)
 		goto close_up;
@@ -2114,8 +2116,11 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	      // Acknowledge to prevent buffering on sender side
 	      rval = write(sockfd, newline_buf, 1); 
 
+        // varlen should be strlen(varname) + 1;
 	      varname = (char *) malloc(varlen);
+        // TODO: should we read (varlen - 1) bytes rather than varlen bytes?
 	      doRead(sockfd, varname, varlen);
+        // TODO; should we set the null terminator at index varlen - 1?
 	      varname[varlen - 2] = '\0';
 	      
 	      //	      std::cerr << "point name: " << varname << std::endl;
@@ -2187,14 +2192,19 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 		   buf[3] == 't' && buf[4] == ' ')
 	    {
 
+        // get varlen
+        // The client should send varlen as strlen(varname) + 1;
 	      if (sscanf(&buf[5], "%d", &varlen) != 1)
 		goto close_up;
 	      
 	      // Acknowledge to prevent buffering on sender side
 	      rval = write(sockfd, newline_buf, 1);
 
+        // varlen should be strlen(varname) + 1;
 	      varname = (char *) malloc(varlen);
+        // TODO: should we read (varlen - 1) bytes rather than varlen bytes?
 	      doRead(sockfd, varname, varlen);
+        // TODO; should we set the null terminator at index varlen - 1?
 	      varname[varlen - 2] = '\0';
 	      
 	      rc = ds->get(varname, &dpoint);

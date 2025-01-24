@@ -105,6 +105,7 @@ int dpoint_b64_size(ds_datapoint_t *d)
     return ((4 * d->data.len / 3) + 3) & ~3;
 }
 
+// datapoint varlen includes a null-terminator, so this string_size includes one, too.
 int dpoint_string_size(ds_datapoint_t *d)
 {
   if (d->data.type == DSERV_STRING ||
@@ -125,11 +126,11 @@ int dpoint_to_binary(ds_datapoint_t *dpoint, unsigned char *buf, int *maxsize)
   int total_bytes = 0;
   int bufidx = 0;
 
-  uint16_t varlen = strlen(dpoint->varname) + 1;
+  uint16_t name_length = strlen(dpoint->varname);
 
   // Start by seeing how much space we need
-  total_bytes += sizeof(uint16_t); // varlen
-  total_bytes += varlen;           // strlen(varname) + 1
+  total_bytes += sizeof(uint16_t); // name_length
+  total_bytes += name_length;      // strlen(varname)
   total_bytes += sizeof(uint64_t); // timestamp
   total_bytes += sizeof(uint32_t); // datatype
   total_bytes += sizeof(uint32_t); // datalen
@@ -143,11 +144,11 @@ int dpoint_to_binary(ds_datapoint_t *dpoint, unsigned char *buf, int *maxsize)
   if (total_bytes > *maxsize)
     return 0;
 
-  memcpy(&buf[bufidx], &varlen, sizeof(uint16_t));
+  memcpy(&buf[bufidx], &name_length, sizeof(uint16_t));
   bufidx += sizeof(uint16_t);
 
-  memcpy(&buf[bufidx], dpoint->varname, varlen);
-  bufidx += varlen;
+  memcpy(&buf[bufidx], dpoint->varname, name_length);
+  bufidx += name_length;
 
   memcpy(&buf[bufidx], &dpoint->timestamp, sizeof(uint64_t));
   bufidx += sizeof(uint64_t);
@@ -171,15 +172,17 @@ ds_datapoint_t *dpoint_from_binary(char *buf, int buflen)
 
   int bufidx = 0;
 
-  memcpy(&dpoint->varlen, &buf[bufidx], sizeof(uint16_t));
+  // name_length is strlen of the datapoint name.
+  uint16_t name_length;
+  memcpy(&name_length, &buf[bufidx], sizeof(uint16_t));
   bufidx+=sizeof(uint16_t);
 
-  // varlen is strlen(varname) + 1 -- it should already include the null terminator of varname.
-  // We also explicitly set a null terminator for safety.
+  // datapoint varlen is name_length + 1, to include a NULL terminator.
+  dpoint->varlen = name_length + 1;
   dpoint->varname = malloc(dpoint->varlen);
-  memcpy(dpoint->varname, &buf[bufidx], dpoint->varlen);
-  dpoint->varname[dpoint->varlen - 1] = '\0';
-  bufidx += dpoint->varlen;
+  memcpy(dpoint->varname, &buf[bufidx], name_length);
+  dpoint->varname[name_length] = '\0';
+  bufidx += name_length;
 
   memcpy(&dpoint->timestamp, &buf[bufidx], sizeof(uint64_t));
   bufidx += sizeof(uint64_t);
