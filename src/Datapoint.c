@@ -14,7 +14,7 @@ ds_datapoint_t *dpoint_set(ds_datapoint_t *dp,
 			   uint32_t len,
 			   unsigned char *data)
 {
-  dp->varlen = strlen(varname)+1;
+  dp->varlen = strlen(varname);
   dp->flags = 0x00;
   dp->timestamp = timestamp;
   dp->varname = varname;
@@ -32,7 +32,7 @@ ds_datapoint_t *dpoint_new_nocopy(char *varname,
 {
   ds_datapoint_t *new_dp = NULL;
   new_dp = (ds_datapoint_t *) malloc(sizeof(ds_datapoint_t));
-  new_dp->varlen = strlen(varname)+1;
+  new_dp->varlen = strlen(varname);
   new_dp->flags = 0x00;
   new_dp->timestamp = timestamp;
   new_dp->varname = varname;
@@ -51,7 +51,7 @@ ds_datapoint_t *dpoint_new(char *varname,
 {
   ds_datapoint_t *new_dp = NULL;
   new_dp = (ds_datapoint_t *) malloc(sizeof(ds_datapoint_t));
-  new_dp->varlen = strlen(varname)+1;
+  new_dp->varlen = strlen(varname);
   new_dp->flags = 0x00;
   new_dp->timestamp = timestamp;
   new_dp->varname = strdup(varname);
