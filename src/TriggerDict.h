@@ -44,9 +44,9 @@ class TriggerDict
 
 
   /*
-   * is_match()
+   * find_match()
    *
-   *   Does the datapoint match a script in the table
+   *   If datapoint is a match return true and set script
    */
   
   bool find_match(std::string varname, std::string &script)
