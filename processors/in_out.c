@@ -27,7 +27,7 @@ void *newProcessParams(void)
   p->dpoint = calloc(1, sizeof(ds_datapoint_t));
   p->dpoint->flags = 0;
   p->dpoint->varname = strdup("ain/proc/in_out");
-  p->dpoint->varlen = strlen(p->dpoint->varname)+1;
+  p->dpoint->varlen = strlen(p->dpoint->varname);
   p->dpoint->data.type = DSERV_SHORT;
   p->dpoint->data.len = 3*sizeof(uint16_t);
   p->dpoint->data.buf = malloc(p->dpoint->data.len);
@@ -87,7 +87,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
   if (!strcmp(name, "dpoint")) {
     if (p->dpoint->varname) free(p->dpoint->varname);
     p->dpoint->varname = strdup(vals[0]);
-    p->dpoint->varlen = strlen(p->dpoint->varname)+1;
+    p->dpoint->varlen = strlen(p->dpoint->varname);
   }
   else {
     puSetParamEntry(&params[0], name, 1, vals);
