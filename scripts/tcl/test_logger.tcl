@@ -4,7 +4,7 @@
 #  Open log, write test points, close log, read back and convert to json
 #
 #  Can be run as:
-#     /usr/local/dserv/dserv -c ./testlog.tcl
+#     /usr/local/dserv/dserv -c ./test_logger.tcl
 #
 #   Note that because the logger runs in its own thread, it is difficult
 #  to have this script directly close and process after writing out dpoints
