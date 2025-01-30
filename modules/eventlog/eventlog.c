@@ -308,7 +308,7 @@ int Dserv_eventlog_Init(Tcl_Interp *interp)
   
   // initialize generic datapoint to use for events
   dpoint.varname = (char *) dpoint_name;
-  dpoint.varlen = strlen(dpoint_name)+1;
+  dpoint.varlen = strlen(dpoint_name);
   dpoint.data.e.dtype = DSERV_EVT;
   dpoint.data.buf = &dpoint_buf[0];
   

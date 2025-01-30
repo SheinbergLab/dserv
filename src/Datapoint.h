@@ -58,7 +58,7 @@ typedef struct ds_datapoint
 {
   uint64_t timestamp;
   uint32_t flags;
-  uint16_t varlen;                  // len of string + 1 (for NULL term)
+  uint16_t varlen;                  // strlen(varname) - used to aid serialization
   char *varname;
   ds_data_t data;
 } ds_datapoint_t;

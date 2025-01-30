@@ -46,12 +46,12 @@ LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
   
   // special begin/end obs datapoints for obslimited logging
   beginobs_dpoint.varname = (char *) beginobs_varname;
-  beginobs_dpoint.varlen = strlen(beginobs_dpoint.varname)+1;
+  beginobs_dpoint.varlen = strlen(beginobs_dpoint.varname);
   beginobs_dpoint.data.type = DSERV_NONE;
   beginobs_dpoint.data.len = 0;
   
   endobs_dpoint.varname = (char *) endobs_varname;
-  endobs_dpoint.varlen = strlen(endobs_dpoint.varname)+1;
+  endobs_dpoint.varlen = strlen(endobs_dpoint.varname);
   endobs_dpoint.data.type = DSERV_NONE;
   endobs_dpoint.data.len = 0;
   

@@ -590,7 +590,7 @@ static int dpoint_tcl_script(Tcl_Interp *interp,
   /* name of dpoint (special for DSERV_EVTs */
   if (dpoint->data.e.dtype != DSERV_EVT) {
     commandArray[1] = Tcl_NewStringObj(dpoint->varname,
-				       dpoint->varlen-1);
+				       dpoint->varlen);
     /* data as Tcl_Obj */
     commandArray[2] = dpoint_to_tclobj(interp, dpoint);
   }
