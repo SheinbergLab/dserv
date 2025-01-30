@@ -24,5 +24,5 @@ Done processing datapoints."
 
 add_test(
     NAME logger_script
-    COMMAND dserv --tscript "${CMAKE_SOURCE_DIR}/scripts/test_logger.tcl"
+    COMMAND dserv --cscript "${CMAKE_SOURCE_DIR}/scripts/tcl/test_logger.tcl"
 )
