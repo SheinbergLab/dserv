@@ -54,4 +54,4 @@ jobs:
       - name: ctest
         run: |
           cd build/
-          ctest -VV ..
+          ctest -VV --timeout 10 ..
