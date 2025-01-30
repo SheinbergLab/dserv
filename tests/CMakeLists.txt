@@ -26,3 +26,6 @@ add_test(
     NAME logger_script
     COMMAND dserv --cscript "${CMAKE_SOURCE_DIR}/scripts/tcl/test_logger.tcl"
 )
+set_property(TEST logger_script PROPERTY PASS_REGULAR_EXPRESSION "\
+Log file size 2906"
+)

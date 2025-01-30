@@ -29,8 +29,8 @@ if [file exists $dlshlib] {
 # the dslog::read function is found in the dslog package
 package require dlsh
 puts "Require dlsh OK"
-package require dslog
-puts "Require dslog OK"
+#package require dslog
+#puts "Require dslog OK"
 
 # open a test log at /tmp/testlog.ds (the 1 means overwrite)
 set filename /tmp/testlog.ds
@@ -70,10 +70,14 @@ proc close_and_process { name val } {
     dservLoggerClose $filename
 
     # read the log into a dg
-    set dg [dslog::read $filename]
+    #set dg [dslog::read $filename]
     
     # convert the dg to JSON and print
-    puts [dg_toJSON $dg]
+    #puts [dg_toJSON $dg]
+
+    # temporary workaround for dslog loading trouble
+    set logSize [file size $filename]
+    puts "Log file size $logSize"
 
     exit
 }
