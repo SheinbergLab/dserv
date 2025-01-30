@@ -21,3 +21,8 @@ Handle test/foo: event = 42, latest = 42
 Handle test/bar: event = 43, latest = 44
 Done processing datapoints."
 )
+
+add_test(
+    NAME logger_script
+    COMMAND dserv --tscript "${CMAKE_SOURCE_DIR}/scripts/test_logger.tcl"
+)

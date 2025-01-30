@@ -45,6 +45,12 @@ jobs:
           cmake ..
           make
 
+      - name: Obtain dlsh (for test scripts to use)
+        run: |
+          mkdir dlsh/
+          cd dlsh/
+          wget https://sheinberglab.org/dserv/dlsh.zip
+
       - name: ctest
         run: |
           cd build/
