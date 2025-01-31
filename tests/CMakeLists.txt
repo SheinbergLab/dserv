@@ -28,10 +28,10 @@ add_test(
 )
 set_property(TEST logger_script PROPERTY PASS_REGULAR_EXPRESSION "\
 Checking log contents.
-Log contains 101 varnames (expecting 101)
-varname 0 is logger:open (expecting logger:open)
-Checked 101 varnames
-Log contains 101 vals (expecting 101)
-vals 0 is 3 (expecting 3)
-Checked 101 vals"
+Log contains 101 varnames \\(expecting 101\\)
+varname 0 is logger:open \\(expecting logger:open\\)
+Checked 101 varnames.
+Log contains 101 vals \\(expecting 101\\)
+vals 0 is 3 \\(expecting 3\\)
+Checked 101 vals."
 )

@@ -86,7 +86,7 @@ proc close_and_process { name val } {
             puts "!!varname $i is $varname but expected $expected_varname"
         }
     }
-    puts "Checked $varname_count varnames"
+    puts "Checked $varname_count varnames."
 
     # we pushed in values like n
     set vals_count [dl_length $dg:vals]
@@ -99,7 +99,7 @@ proc close_and_process { name val } {
             puts "!!val $i is $val but expected $expected_val"
         }
     }
-    puts "Checked $vals_count vals"
+    puts "Checked $vals_count vals."
 
     exit
 }
