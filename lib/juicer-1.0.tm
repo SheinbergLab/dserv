@@ -77,7 +77,7 @@ oo::class create Juicer {
     variable _fd 
     variable _path /dev/ttyACM0
 
-    constructor { path } {
+    constructor { { path {} } } {
 	set _fd -1
 	set _path $path
     }
