@@ -76,10 +76,12 @@ catch { Juicer destroy }
 oo::class create Juicer {
     variable _fd 
     variable _path /dev/ttyACM0
-
+    variable _use_gpio
+    
     constructor { { path {} } } {
 	set _fd -1
 	set _path $path
+	set _use_gpio 0
     }
     
     destructor { my close }
@@ -90,6 +92,8 @@ oo::class create Juicer {
 	fconfigure $_fd -buffering line
     }
 
+    method use_gpio {} { set _use_gpio 1 }
+    
     method find {} {
 	set model_name juicer
 	set devices [glob /dev/ttyACM* /dev/ttyUSB*]
