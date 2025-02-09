@@ -12,20 +12,59 @@
 #   DLS
 #
 
-proc create_shape { id } {
+# find the shader dir
+set stimdir [file dir [info nameofexecutable]]
+set paths {
+    /usr/local/stim2/shaders/
+    /Applications/stim2.app/Contents/Resources/shaders/    
+}
+
+foreach dir $paths {
+    if [file exists $dir] { shaderSetPath $dir; break }
+}
+
+# for creating images using CImg and other image processing tools
+package require impro
+
+proc create_shape { shader id } {
+    
     set scale [dl_get stimdg:shape_scale $id]
     set rotation [dl_get stimdg:shape_rot_deg_cw $id]
-    set s [polygon]
+    set filled [dl_get stimdg:shape_filled $id]
+    
+    # target image sampler size should be set in stimdg
+    set width 512; set width_2 [expr $width/2]
+    set height 512; set height_2 [expr $height/2]
+    set depth 4
 
-    polyverts $s stimdg:shape_coord_x:$id stimdg:shape_coord_y:$id
-    polytype $s lines
-    polycolor $s 1 1 1
-    scaleObj $s $scale
+    # shapes are stored in a coordinate system that doesn't fill a unit square
+    #  this scale is designed to convert shapes to degrees visual angle 
+    set shape_scale 2.5
+    dl_local x [dl_mult stimdg:shape_coord_x:$id $shape_scale]
+    dl_local y [dl_mult stimdg:shape_coord_y:$id $shape_scale]
+    
+    dl_local xscaled [dl_add [dl_mult $x $width] $width_2]
+    dl_local yscaled [dl_add [dl_mult [dl_negate $y] $height] $height_2]
+    set img [img_create -width $width -height $height -depth $depth]
+    if { $filled } {
+	set poly [img_fillPolygonOutside $img $xscaled $yscaled 255 255 255 255]
+	img_invert $poly
+    } else {
+	set poly [img_drawPolyline $img $xscaled $yscaled 255 255 255 255]
+    }
+    dl_local pix [img_imgtolist $poly]
+    img_delete $poly $img
+
+    set sobj [shaderObj $shader]
+    set img [shaderImageCreate $pix $width $height linear]
+    shaderObjSetSampler $sobj [shaderImageID $img] 0
+
+    scaleObj $sobj $scale
 
     # verify if z should be 1 or -1...
-    rotateObj $s $rotation 0 0 1
+    rotateObj $sobj $rotation 0 0 1
     
-    return $s
+    return $sobj
 }
 
 proc create_circle { r g b { a 1 } } {
@@ -36,15 +75,20 @@ proc create_circle { r g b { a 1 } } {
 }
 
 proc nexttrial { id } {
+    resetObjList		 ;# unload existing objects
+    shaderImageReset;		 ;# free any shader textures
+    shaderDeleteAll;		 ;# reset any shader objects
     glistInit 2
-    resetObjList
 
+    set shader_file image	 ;# shader file is image.glsl
+    set shader [shaderBuild $shader_file]
+    
     set trialtype [dl_get stimdg:trial_type $id]
     set scale [dl_get stimdg:choice_scale $id]
     set nchoices [dl_get stimdg:n_choices $id]
     # add the visual sample for VV trials, no visual sample for HV trials
     if { $trialtype == "visual" } {
-	set sample [create_shape $id]
+	set sample [create_shape $shader $id]
 	glistAddObject $sample 0
     } else {
 
