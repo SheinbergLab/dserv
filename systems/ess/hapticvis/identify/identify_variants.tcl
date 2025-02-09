@@ -33,7 +33,7 @@ namespace eval hapticvis::identify {
 		trial_type visual
 		subject_id { $subject_ids }
 	        subject_set { $subject_sets }
-		shape_scale { 2 4 6 8 }
+		shape_scale { 3 4 5 6 }
 		n_rep { 2 4 6 8 10 }
 		rotations { {single {0}} {three {-120 0 120}} {four {0 90 180 270}} } 
 	    }
@@ -124,7 +124,7 @@ namespace eval hapticvis::identify {
 	    set n_obs [expr {$n_rep * $n_rotations * $n_shapes}]
 
 	    set is_cued      0
-	    set shape_filled 0
+	    set shape_filled 1
 	    
 	    set shape_reps [expr {$n_rep*$n_rotations}]
 	    dl_local shape_id [dl_repeat [dl_ilist {*}$shape_ids] $shape_reps]
