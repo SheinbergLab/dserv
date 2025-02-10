@@ -1382,7 +1382,7 @@ namespace eval ess {
 	variable current
 	set j $current(juicer)
 	if { $j == "" } { return }
-	if { [$j use_gpio] } {
+	if { [$j using_gpio] } {
 	    # currently assume only a single juicer is configured
 	    juicerJuiceAmount 0 $ml
 	} else {
