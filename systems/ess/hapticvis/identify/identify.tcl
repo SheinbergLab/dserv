@@ -11,8 +11,7 @@ namespace eval hapticvis::identify {
 	$s set_protocol [namespace tail [namespace current]]
 	
 	$s add_param rmt_host     $::ess::rmt_host   stim ipaddr
-	$s add_param juice_pin             0        variable int
-	$s add_param juice_time          1000       time int
+	$s add_param juice_ml             0.6       variable float
 	$s add_param use_joystick           0       variable bool
 	
 	$s add_variable cur_id            -1
@@ -38,10 +37,7 @@ namespace eval hapticvis::identify {
 		::ess::touch_init
 	    }
 	    
-	    # configure juice channel pin
-	    if { $juice_pin >= 0 } {
-		juicerSetPin 0 $juice_pin
-	    }
+	    ::ess::juicer_init
 
 	    soundReset
 	    soundSetVoice 81 0    0
@@ -183,8 +179,8 @@ namespace eval hapticvis::identify {
 
 	$s add_method reward {} {
 	    soundPlay 3 70 70
-	    juicerJuice 0 $juice_time
-	    ::ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::reward $juice_ml
+	    ::ess::evt_put REWARD MICROLITERS [now] [expr {int($juice_ml*1000)}]
 	}
 
 	$s add_method noreward {} {
