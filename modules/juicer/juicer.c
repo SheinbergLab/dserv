@@ -353,7 +353,7 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
 
   g_juicerInfo.njuicers = 1;
   g_juicerInfo.juice_pin = -1;	/* not set */
-  g_juicerInfo.ms_per_ml = 1250; 
+  g_juicerInfo.ms_per_ml = 1667;/* based on current pump */ 
   g_juicerInfo.max_ml = 5;
   
   Tcl_CreateObjCommand(interp, "juicerInit",
