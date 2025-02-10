@@ -93,7 +93,7 @@ oo::class create Juicer {
     }
 
     method use_gpio {} { set _use_gpio 1 }
-    method using_gpio {} { return $use_gpio }
+    method using_gpio {} { return $_use_gpio }
     
     method find {} {
 	set model_name juicer
