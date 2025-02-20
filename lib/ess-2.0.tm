@@ -600,7 +600,7 @@ namespace eval ess {
 
 	variable current
 
-	if { $current(system) != {} } {
+	if { $current(system) != {} && [info exists $current(system)] } {
 	    if { [query_state] == "running" } { return } 
 	    catch unload_system
 	}
