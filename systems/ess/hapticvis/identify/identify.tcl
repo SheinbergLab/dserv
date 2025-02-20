@@ -210,7 +210,7 @@ namespace eval hapticvis::identify {
 		    break
 		}
 	    }
-	    if { $r == $target_slot } {
+	    if { $r == [expr {$target_slot-1}] } {
 		rmtSend "feedback_on correct 0 0"
 		set correct 1
 	    } elseif { $r != -1 } {
