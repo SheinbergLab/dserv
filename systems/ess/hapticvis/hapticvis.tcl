@@ -20,18 +20,25 @@ namespace eval hapticvis {
 	
 	$sys add_param start_delay          0      time int
 	$sys add_param interblock_time   1000      time int
-	$sys add_param post_start_time    250      time int
-	$sys add_param pre_cue_time         0      time int
-	$sys add_param cue_on_time          0      time int
-	$sys add_param post_cue_time        0      time int
+	$sys add_param pre_stim_time      250      time int
 
-	$sys add_param pre_sample_time      0      time int
-	$sys add_param sample_on_time   15000      time int
-	$sys add_param delay_time        1000      time int
+	$sys add_param stim_duration    10000      time int
+
+	$sys add_param have_cue             0      variable bool
+	$sys add_param cue_delay            0      time int
+	$sys add_param cue_duration         0      time int
+
+	$sys add_param have_choices         1      variable bool
+	$sys add_param choice_delay       500      time int
+	$sys add_param choice_duration   9500      time int
+	
+	$sys add_param sample_delay         0      time int
+	$sys add_param sample_duration   2000      time int
+
+	$sys add_param post_response_time 1000     time int
+
 	$sys add_param finale_delay       500      time int
-	
-	$sys add_param response_timeout 10000      time int
-	
+
 	##
 	## Local variables for the hapticvis base system
 	##
@@ -40,11 +47,25 @@ namespace eval hapticvis {
 	$sys add_variable cur_id             0
 	$sys add_variable first_time         1
 	$sys add_variable stimtype           0
+
+	## track status of cue, sample, choices
+	$sys add_variable sample_up          0
+	$sys add_variable cue_up             0
+	$sys add_variable choices_up         0
+
+	## timer ids
+	$sys add_variable sample_timer       1
+	$sys add_variable cue_timer          2
+	$sys add_variable choice_timer       3
+
+	## info for each trial
 	$sys add_variable resp               0
 	$sys add_variable correct           -1
-	$sys add_variable choice_on_time  
 	$sys add_variable rt
-	
+	$sys add_variable sample_on_time
+	$sys add_variable choice_on_time  
+
+
 	######################################################################
 	#                            System States                           #
 	######################################################################
@@ -93,120 +114,148 @@ namespace eval hapticvis {
 	#
 	$sys add_action start_obs {
 	    ::ess::begin_obs $obs_count $n_obs
-	    timerTick $post_start_time
+	    timerTick $pre_stim_time
 	    my start_obs_reset
 	}
 	$sys add_transition start_obs {
 	    if { [timerExpired] } {
-		if { $cue_time > 0 }
-		return pre_cue
-	    } else {
-		return pre_sample
+		return stim_on
 	    }
 	}
 
 	#
-	# pre_cue: things to do before cue appears
+	# stim_on
 	#
-	$sys add_action pre_cue {
-	    timerTick $pre_cue_time
-	    my pre_cue
+	$sys add_action stim_on {
+	    set sample_up  0
+	    set cue_up     0
+	    set choices_up 0
+	    set sample_on_time -1
+	    set choice_on_time -1
+	    timerTick $stim_duration
+	    timerTick $sample_timer $sample_delay
+	    timerTick $choice_timer $choice_delay
+	    timerTick $cue_timer $cue_delay
+	    my stim_on
+	    ::ess::evt_put STIMULUS ON [now] 
 	}
 	
-	$sys add_transition pre_cue {
-	    if { [timerExpired] } { return cue_on }
+	$sys add_transition stim_on {
+	    return stim_wait
 	}
 
+	#
+	# stim_wait: stimulus is "up"
+	#
+	$sys add_action stim_wait {
+	}
+	
+	$sys add_transition stim_wait {
+	    if { [timerExpired $sample_timer] } {
+		if { $sample_up == 0 } {
+		    return sample_on
+		} elseif { $sample_up == 1 } {
+		    return sample_off
+		}
+	    }
+	    if { [timerExpired $choice_timer] } {
+		if { $choices_up == 0 } {
+		    return choices_on
+		} elseif { $choices_up == 1 } {
+		    return choices_off
+		}
+	    }
+	    if { [timerExpired $cue_timer] } {
+		if { $cue_up == 0 } {
+		    return cue_on
+		} elseif { $cue_up == 1 } {
+		    return cue_off
+		}
+	    }
+	    if { [timerExpired] } {
+		return no_response
+	    }
+	    set resp [my responded]
+	    if { $resp != -1 } { return response }
+	}
+
+	
 	#
 	# cue_on: show cue (if cue_time > 0)
 	#
 	$sys add_action cue_on {
-	    timerTick $cue_time
 	    my cue_on
+	    set cue_up 1
+	    timerTick $cue_timer $cue_duration
 	    ::ess::evt_put CUE ON [now] 
 	}
 	
-	$sys add_transition cue_on {
-	    if { [timerExpired] } { return cue_off }
-	}
+	$sys add_transition cue_on { return stim_wait }
 
 	
 	#
 	# cue_off: show cue if desired
 	#
 	$sys add_action cue_off {
-	    timerTick $post_cue_time
 	    my cue_off
+	    ::ess::evt_put CUE OFF [now]
+	    set cue_up -1
 	}
 	
-	$sys add_transition cue_off {
-	    if { [timerExpired] } { return pre_sample }
-	}
-
-	
-	#
-	# pre_sample: things to do before sample appears
-	#
-	$sys add_action pre_sample {
-	    timerTick $pre_sample_time
-	    my pre_sample
-	}
-	
-	$sys add_transition pre_sample {
-	    if { [timerExpired] } { return sample_on }
-	}
+	$sys add_transition cue_off { return stim_wait }
 	
 	#
-	# sample_on: show actual sample
+	# sample_on: show sample
 	#
 	$sys add_action sample_on {
 	    my sample_on
-	    ::ess::evt_put SAMPLE ON [now] 
+	    set sample_up 1
+	    timerTick $sample_timer $sample_duration
+	    set sample_on_time [now]
+	    ::ess::evt_put SAMPLE ON $sample_on_time
 	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype	
-	    timerTick $sample_on_time
 	}
 	
-	$sys add_transition sample_on {
-	    if { [timerExpired] } { return sample_off }
-	}
+	$sys add_transition sample_on { return stim_wait }
+
 	
 	#
-	# sample_off
+	# sample_off: turn sample off
 	#
 	$sys add_action sample_off {
 	    my sample_off
-	    ::ess::evt_put SAMPLE OFF [now] 
-	    timerTick $delay_time
+	    ::ess::evt_put SAMPLE OFF [now]
+	    set sample_up -1
 	}
 	
-	$sys add_transition sample_off {
-	    if { [timerExpired] } { return choices_on }
-	}
+	$sys add_transition sample_off { return stim_wait }
+
 	
 	#
-	# choices_on
+	# choices_on: show choices
 	#
 	$sys add_action choices_on {
 	    my choices_on
+	    set choices_up 1
+	    timerTick $choice_timer $choice_duration
 	    set choice_on_time [now]
 	    ::ess::evt_put CHOICES ON $choice_on_time
 	}
 	
-	$sys add_transition choices_on {
-	    return wait_for_response
-	}
+	$sys add_transition choices_on { return stim_wait }
+
 	
 	#
-	# wait_for_response
+	# choices_off: turn off choices
 	#
-	$sys add_action wait_for_response {
-	    timerTick $response_timeout
+	$sys add_action choices_off {
+	    my choices_off
+	    ::ess::evt_put CHOICES OFF [now]
+	    set choices_up -1
 	}
-	$sys add_transition wait_for_response {
-	    if [timerExpired] { return no_response }
-	    set resp [my responded]
-	    if { $resp != -1 } { return response }
-	}
+	
+	$sys add_transition choices_off { return stim_wait }
+	
 	
 	#
 	# response
@@ -215,8 +264,6 @@ namespace eval hapticvis {
 	    set response_time [now]
 	    set rt [expr {($response_time-$choice_on_time)/1000}]
 	    ::ess::evt_put RESP $resp [now]
-	    my choices_off
-	    ::ess::evt_put CHOICES OFF [now] 
 	}
 	
 	$sys add_transition response {
@@ -231,8 +278,7 @@ namespace eval hapticvis {
 	# no_response
 	#
 	$sys add_action no_response {
-	    my choices_off
-	    ::ess::evt_put CHOICES OFF [now] 
+	    ::ess::evt_put STIMULUS OFF [now] 
 	    ::ess::evt_put ABORT NORESPONSE [now]
 	    ::ess::evt_put ENDTRIAL ABORT [now]
 	}
@@ -267,10 +313,24 @@ namespace eval hapticvis {
 	# post_trial
 	#
 	$sys add_action post_trial {
-	    ::ess::save_trial_info $correct $rt $stimtype
+	    timerTick $post_response_time
 	}
 	
 	$sys add_transition post_trial {
+	    if { [timerExpired] } { return stim_off }
+	}
+
+
+	#
+	# stim_off
+	#
+	$sys add_action stim_off {
+	    my stim_off
+	    ::ess::evt_put STIMULUS OFF [now] 
+	    ::ess::save_trial_info $correct $rt $stimtype
+	}
+
+	$sys add_transition stim_off {
 	    return finish
 	}
 	
@@ -355,18 +415,16 @@ namespace eval hapticvis {
 	
 	$sys add_method endobs {} { incr obs_count }
 
-	$sys add_method pre_cue {} { print pre_cue }
+        $sys add_method stim_on {} { print stim_on }
+	$sys add_method stim_off {} { print stim_off }
+	    
 	$sys add_method cue_on {} { print cue_on }
 	$sys add_method cue_off {} { print cue_off }
-	
-	$sys add_method pre_sample {} { print sample_on }
-	    
-        $sys add_method sample_on {} { print sample_on }
-	$sys add_method sample_off {} { print sample_off }
         $sys add_method sample_on {} { print sample_on }
 	$sys add_method sample_off {} { print sample_off }
 	$sys add_method choices_on {} { print choices_on }
 	$sys add_method choices_off {} { print choices_off }
+
 	$sys add_method reward {} { print reward }
 	$sys add_method noreward {} { print noreward }
 	$sys add_method finale {} { print finale }
