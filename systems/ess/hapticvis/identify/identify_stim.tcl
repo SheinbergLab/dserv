@@ -86,10 +86,12 @@ proc nexttrial { id } {
     set trialtype [dl_get stimdg:trial_type $id]
     set scale [dl_get stimdg:choice_scale $id]
     set nchoices [dl_get stimdg:n_choices $id]
+
     # add the visual sample for VV trials, no visual sample for HV trials
     if { $trialtype == "visual" } {
-	set sample [create_shape $shader $id]
-	glistAddObject $sample 0
+	set ::sample [create_shape $shader $id]
+	glistAddObject $::sample 0
+	setVisible $::sample 0
     } else {
 
     }
@@ -103,27 +105,76 @@ proc nexttrial { id } {
 	metagroupAdd $mg $s
     }
     glistAddObject $mg 0
-}
+    setVisible $mg 0
+    set ::choice_array $mg
     
-proc sample_on {} {
+    # gray selecting circle
+    set s [create_circle .6 .6 .6 0.9]
+    scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
+    setVisible $s 0
+    glistAddObject $s 0
+    set ::feedback(selecting) $s
+
+    # green correct circle
+    set s [create_circle .1 .8 0 0.9]
+    scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
+    setVisible $s 0
+    glistAddObject $s 0
+    set ::feedback(correct) $s
+
+    # red incorrect circle
+    set s [create_circle .9 .1 .1 0.9]
+    scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
+    setVisible $s 0
+    glistAddObject $s 0
+    set ::feedback(incorrect) $s
+}
+
+proc feedback_on { type x y } {
+    translateObj $::feedback($type) $x $y
+    setVisible $::feedback($type) 1
+    redraw
+}
+
+proc feedback_off { type } {
+    if { $type == "all" } {
+	foreach t [array names ::feedback] {
+	    setVisible $::feedback($t) 0
+	}
+    } else {
+	setVisible $::feedback($type) 0
+    }
+    redraw
+}
+
+proc stim_on {} {
     glistSetCurGroup 0
     glistSetVisible 1
     redraw
 }
 
-proc sample_off {} {
+proc stim_off {} {
     glistSetVisible 0
+    redraw
+}
+
+proc sample_on {} {
+    setVisible $::sample 1
+    redraw
+}
+
+proc sample_off {} {
+    setVisible $::sample 0
     redraw
 }
 
 proc choices_on {} {
-    glistSetCurGroup 1
-    glistSetVisible 1
+    setVisible $::choice_array 1
     redraw
 }
 
 proc choices_off {} {
-    glistSetVisible 0
+    setVisible $::choice_array 0
     redraw
 }
 
