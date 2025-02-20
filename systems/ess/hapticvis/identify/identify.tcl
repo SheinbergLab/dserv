@@ -127,9 +127,13 @@ namespace eval hapticvis::identify {
 	    incr obs_count
 	}
 
-	
-	$s add_method presample {} {
+	$s add_method stim_on {} {
 	    soundPlay 1 70 200
+	    rmtSend "!stim_on"
+	}
+
+	$s add_method stim_off {} {
+	    rmtSend "!stim_off"
 	}
 
 	$s add_method haptic_show { id } {
@@ -170,11 +174,14 @@ namespace eval hapticvis::identify {
 
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
-	    foreach i { ::ess::touch_region_on $i }
+	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
+	    foreach i $cs { ::ess::touch_region_on $i }
 	}
 
 	$s add_method choices_off {} {
 	    rmtSend "!choices_off"
+	    foreach i $cs { ::ess::touch_region_off $i }
+	    rmtSend "!feedback_off all"
 	}
 
 	$s add_method reward {} {
@@ -203,7 +210,13 @@ namespace eval hapticvis::identify {
 		    break
 		}
 	    }
-	    if { $r == $target_slot } { set correct 1 } { set correct 0 }
+	    if { $r == $target_slot } {
+		rmtSend "feedback_on correct 0 0"
+		set correct 1
+	    } elseif { $r != -1 } {
+		rmtSend "feedback_on incorrect 0 0"
+		set correct 0
+	    }
 	    return $r
 	}
 
