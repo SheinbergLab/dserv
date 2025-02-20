@@ -18,7 +18,7 @@ namespace eval haptic {
     proc get_shape_indices { shape_list shape_ids } {
 	dl_local search_for [dl_pack $shape_ids]
 	dl_local finds [dl_findAll $shape_list $search_for]
-	if { $ft == "" } { return }
+	if { $finds == "" } { return }
 	dl_local ft [dl_transpose $finds]
 	dl_local inds [dl_choose $ft:1 $ft:0]
 	if { [dl_length $inds] != [dl_length $search_for] } {

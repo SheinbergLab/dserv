@@ -18,10 +18,6 @@ namespace eval hapticvis::identify {
     set subject_ids [dl_tcllist [dl_fromto 0 30]]
     set subject_sets [dl_tcllist [dl_fromto 0 4]]
 
-    # could be options...
-    variable n_per_set 4
-    variable n_sets    4
-    
     variable variants {
         visual {
             description "learn visual objects"      
@@ -29,6 +25,7 @@ namespace eval hapticvis::identify {
             loader_options {
 		subject_id { $subject_ids }
 		subject_set { $subject_sets }
+	        n_per_set { 4 8 }
 		trial_type visual
 		shape_scale { 3 4 5 6 }
 		n_rep { 2 4 6 8 10 }
@@ -53,13 +50,16 @@ namespace eval hapticvis::identify {
 	    if { $row >= 0 } { return }
 	}
 			 
-        $s add_method setup_trials { subject_id subject_set trial_type shape_scale n_rep rotations } {
+        $s add_method setup_trials { subject_id subject_set n_per_set trial_type shape_scale n_rep rotations } {
 	    # find database
 	    set db {}
 	    set p ${::ess::system_path}/$::ess::current(project)/hapticvis/db
 	    variable shapedb_file [file join $p shape_db]
-	    variable trialdb_file [file join $p trial_db]
 
+	    set total 16
+	    set n_sets [expr $total/$n_per_set]
+
+	    variable trialdb_file [file join $p trial_db_${n_per_set}_${n_sets}]
 
             # build our stimdg
             if { [dg_exists stimdg] } { dg_delete stimdg }
@@ -72,9 +72,12 @@ namespace eval hapticvis::identify {
 	    dg_rename [dg_read $shapedb_file] shape_db
 
 	    # trial info in trialdb_file
+	    # trialdb contains columns: subject target_ids dist_ids
 	    if { [dg_exists trialdb] } { dg_delete trialdb }
 	    dg_rename [dg_read $trialdb_file] trialdb
 
+	    set row [dl_find trialdb:subject $subject_id]
+	    if { $row < 0 } { error "subject not in database \"$trialdb_file\"" }
 	    set targets trialdb:target_ids:$row:$subject_set
 	    set dists   trialdb:dist_ids:$row:$subject_set
 
