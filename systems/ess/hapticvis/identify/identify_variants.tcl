@@ -72,14 +72,18 @@ namespace eval hapticvis::identify {
 	    dg_rename [dg_read $shapedb_file] shape_db
 
 	    # trial info in trialdb_file
-	    # trialdb contains columns: subject target_ids dist_ids
-	    if { [dg_exists trialdb] } { dg_delete trialdb }
-	    dg_rename [dg_read $trialdb_file] trialdb
+	    # trial_db contains columns: subject target_ids dist_ids
+	    if { [dg_exists trial_db] } { dg_delete trial_db }
+	    dg_rename [dg_read $trialdb_file] trial_db
 
-	    set row [dl_find trialdb:subject $subject_id]
+	    set row [dl_find trial_db:subject $subject_id]
 	    if { $row < 0 } { error "subject not in database \"$trialdb_file\"" }
-	    set targets trialdb:target_ids:$row:$subject_set
-	    set dists   trialdb:dist_ids:$row:$subject_set
+	    set targets trial_db:target_ids:$row:$subject_set
+	    set dists   trial_db:dist_ids:$row:$subject_set
+
+	    if { ![dl_exists $targets] || ![dl_exists $dists] } {
+		error "subject set does not exist"
+	    }
 
             dl_set stimdg:stimtype         [dl_ilist]
 
@@ -111,6 +115,10 @@ namespace eval hapticvis::identify {
 	    dl_local shape_inds [haptic::get_shape_indices shape_db:id $shape_ids]
 	    dl_local coord_x [dl_choose shape_db:x $shape_inds]
 	    dl_local coord_y [dl_choose shape_db:y $shape_inds]
+
+            # close the shape_db and trial_db
+	    dg_delete shape_db
+	    dg_delete trial_db
 	    
             # total number of trials
             set n_rotations [llength $rotations]
@@ -162,9 +170,6 @@ namespace eval hapticvis::identify {
             dl_set stimdg:cued_choices   [dl_repeat [dl_llist] $n_obs]
             dl_set stimdg:feedback_type  [dl_repeat [dl_slist color] $n_obs]
             dl_set $g:remaining [dl_ones $n_obs]
-
-            # close the db
-	    dg_delete shape_db
 
             return $g
         }
