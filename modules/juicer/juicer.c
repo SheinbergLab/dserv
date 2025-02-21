@@ -42,6 +42,8 @@ typedef struct juicer_info_s
   int njuicers;
   int juice_pin;
   int expired;
+  float ms_per_ml;
+  float max_ml;
 #ifdef __linux__
   pthread_t timer_thread_id;
   struct timespec juice_delay;
@@ -184,6 +186,63 @@ static int juicer_juice_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+
+static int juicer_juice_amount_command (ClientData data, Tcl_Interp *interp,
+					int objc, Tcl_Obj *objv[])
+{
+  juicer_info_t *info = (juicer_info_t *) data;
+  
+  int id;
+  double ml;
+  int ms;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?juicerid? ml");
+    return TCL_ERROR;
+  }
+  
+  if (objc < 3) {		/* default to timer 0 */
+    id = 0;
+    if (Tcl_GetDoubleFromObj(interp, objv[1], &ml) != TCL_OK)
+      return TCL_ERROR;
+  }
+  
+  else {
+    if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK)
+      return TCL_ERROR;
+    if (Tcl_GetDoubleFromObj(interp, objv[2], &ml) != TCL_OK)
+      return TCL_ERROR;
+  }
+
+  /* check for error conditions here, including large requests */
+  if (ml <= 0 || ml > info->max_ml) return TCL_OK;
+
+  ms = (int) (info->ms_per_ml*ml);
+  
+  //printf("juice on\n");
+#ifdef __linux__
+  info->juice_delay.tv_sec = ms/1000;
+  info->juice_delay.tv_nsec = (ms%1000)*1000000;
+
+  if (info->fd != -1 &&
+      info->juice_pin >= 0 && info->juice_pin < info->nlines &&
+      info->line_requests[info->juice_pin]) {
+    struct gpiohandle_data datavals;
+    datavals.values[0] = 1;
+    int ret = ioctl(info->line_requests[info->juice_pin]->fd,
+		    GPIOHANDLE_SET_LINE_VALUES_IOCTL, &datavals);
+  }
+
+  if (pthread_cond_signal(&info->cond) != 0) {
+    perror("pthread_cond_signal() error");                                      
+    return TCL_ERROR;
+  }   
+#endif
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+  return TCL_OK;
+}
+
+
 static int juicer_set_pin_command (ClientData data, Tcl_Interp *interp,
 				   int objc, Tcl_Obj *objv[])
 {
@@ -243,6 +302,32 @@ static int juicer_set_pin_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+
+static int juicer_set_ms_to_ml_command (ClientData data, Tcl_Interp *interp,
+					int objc, Tcl_Obj *objv[])
+{
+  juicer_info_t *info = (juicer_info_t *) data;
+  const int max = 5000;		/* what should this be? */
+  int ms, old;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "ms");
+    return TCL_ERROR;
+  }
+  
+  if (Tcl_GetIntFromObj(interp, objv[1], &ms) != TCL_OK)
+    return TCL_ERROR;
+
+  if (ms >= 0 && ms < max) {
+    old = (int) info->ms_per_ml;
+    info->ms_per_ml = ms;
+  }
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(old));
+  return TCL_OK;
+}
+
+
 /*****************************************************************************
  *
  * EXPORT
@@ -268,7 +353,8 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
 
   g_juicerInfo.njuicers = 1;
   g_juicerInfo.juice_pin = -1;	/* not set */
-  
+  g_juicerInfo.ms_per_ml = 1667;/* based on current pump */ 
+  g_juicerInfo.max_ml = 5;
   
   Tcl_CreateObjCommand(interp, "juicerInit",
 		       (Tcl_ObjCmdProc *) juicer_init_command,
@@ -278,8 +364,20 @@ EXPORT(int,Dserv_juicer_Init) (Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) juicer_juice_command,
 		       (ClientData) &g_juicerInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "juicerJuiceDuration",
+		       (Tcl_ObjCmdProc *) juicer_juice_command,
+		       (ClientData) &g_juicerInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "juicerJuiceAmount",
+		       (Tcl_ObjCmdProc *) juicer_juice_amount_command,
+		       (ClientData) &g_juicerInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "juicerSetPin",
 		       (Tcl_ObjCmdProc *) juicer_set_pin_command,
+		       (ClientData) &g_juicerInfo,
+		       (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "juicerSetMsToMl",
+		       (Tcl_ObjCmdProc *) juicer_set_ms_to_ml_command,
 		       (ClientData) &g_juicerInfo,
 		       (Tcl_CmdDeleteProc *) NULL);
   return TCL_OK;

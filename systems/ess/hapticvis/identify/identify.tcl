@@ -1,25 +1,26 @@
-#
-# PROTOCOL
-#   match_to_sample phd
-#
-# DESCRIPTION
-#   Present a target color and two choices
-#
+##
+## PROTOCOL
+##   hapticvis identify
+##
+## DESCRIPTION
+##   Present a shape and subject selects matching spatial location
+##
 
-namespace eval match_to_sample::phd {
+namespace eval hapticvis::identify {
     proc protocol_init { s } {
-	package require sqlite3
-	
 	$s set_protocol [namespace tail [namespace current]]
 	
-	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
-	$s add_param juice_ml            0.6      variable float
+	$s add_param rmt_host     $::ess::rmt_host   stim ipaddr
+	$s add_param juice_ml             0.6       variable float
+	$s add_param use_joystick           0       variable bool
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
-	$s add_variable trial_type         {}
-	$s add_variable sample_id          -1
+	$s add_variable trial_type        {}
+	$s add_variable shape_id          -1
 	$s add_variable correct           -1
+	$s add_variable n_choices          0
+	$s add_variable choices           {}
 	
 	$s set_protocol_init_callback {
 	    ::ess::init
@@ -27,10 +28,15 @@ namespace eval match_to_sample::phd {
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
 
-	    # initialize touch processor
-	    ::ess::touch_init
+	    if { $use_joystick } {
+		# initialize joystick here
+		::ess::joystick_init
+
+	    } else {
+		# initialize touch processor
+		::ess::touch_init
+	    }
 	    
-	    # configure juice channel pin
 	    ::ess::juicer_init
 
 	    soundReset
@@ -59,9 +65,8 @@ namespace eval match_to_sample::phd {
 	}
 	
 	$s set_quit_callback {
-	    foreach i "0 1 2 3" { ::ess::touch_region_off $i }
+	    foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
 	    rmtSend clearscreen
-	    if { $trial_type == "HV"} { my haptic_clear }
 	    ::ess::end_obs QUIT
 	}
 	
@@ -94,8 +99,10 @@ namespace eval match_to_sample::phd {
 		    [dl_select stimdg:stimtype [dl_gt stimdg:remaining 0]]
 		set cur_id [dl_pickone $left_to_show]
 		set stimtype [dl_get stimdg:stimtype $cur_id]
-
-		foreach i "0 1 2 3" {
+		set n_choices [dl_get stimdg:n_choices $cur_id]
+		set choices [dl_tcllist [dl_fromto 0 $n_choices]]
+		
+		foreach i $choices {
 		    # set these touching_response knows where choices are
 		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$i 0]
 		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$i 1]
@@ -103,9 +110,9 @@ namespace eval match_to_sample::phd {
 		    ::ess::touch_region_off $i
 		    ::ess::touch_win_set $i $choice_x $choice_y $choice_r 0
 		}
-		set target_slot [dl_get stimdg:sample_slot $cur_id]
+		set target_slot [dl_get stimdg:correct_choice $cur_id]
 		set trial_type [dl_get stimdg:trial_type $cur_id]
-		set sample_id [dl_get stimdg:sample_id $cur_id]
+		set shape_id [dl_get stimdg:shape_id $cur_id]
 		rmtSend "nexttrial $cur_id"
 
 		set correct -1
@@ -120,9 +127,13 @@ namespace eval match_to_sample::phd {
 	    incr obs_count
 	}
 
-	
-	$s add_method presample {} {
+	$s add_method stim_on {} {
 	    soundPlay 1 70 200
+	    rmtSend "!stim_on"
+	}
+
+	$s add_method stim_off {} {
+	    rmtSend "!stim_off"
 	}
 
 	$s add_method haptic_show { id } {
@@ -146,28 +157,31 @@ namespace eval match_to_sample::phd {
 	}
 	
 	$s add_method sample_on {} {
-	    if { $trial_type == "VV" } {
+	    if { $trial_type == "visual" } {
 		rmtSend "!sample_on"
-	    } elseif { $trial_type == "HV" } {
-		my haptic_show $sample_id
+	    } elseif { $trial_type == "haptic" } {
+		my haptic_show $shape_id
 	    }
 	}
 
 	$s add_method sample_off {} {
-	    if { $trial_type == "VV" } {
+	    if { $trial_type == "visual" } {
 		rmtSend "!sample_off"
-	    } elseif { $trial_type == "HV" } {
+	    } elseif { $trial_type == "haptic" } {
 		my haptic_clear
 	    }
 	}
 
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
-	    foreach i "0 1 2 3" { ::ess::touch_region_on $i }
+	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
+	    foreach i $cs { ::ess::touch_region_on $i }
 	}
 
 	$s add_method choices_off {} {
 	    rmtSend "!choices_off"
+	    foreach i $cs { ::ess::touch_region_off $i }
+	    rmtSend "!feedback_off all"
 	}
 
 	$s add_method reward {} {
@@ -190,13 +204,19 @@ namespace eval match_to_sample::phd {
 	
 	$s add_method responded {} {
 	    set r -1
-	    foreach w "0 1 2 3" {
+	    foreach w $choices {
 		if { [::ess::touch_in_win $w] } {
 		    set r $w
 		    break
 		}
 	    }
-	    if { $r == $target_slot } { set correct 1 } { set correct 0 }
+	    if { $r == [expr {$target_slot-1}] } {
+		rmtSend "feedback_on correct 0 0"
+		set correct 1
+	    } elseif { $r != -1 } {
+		rmtSend "feedback_on incorrect 0 0"
+		set correct 0
+	    }
 	    return $r
 	}
 

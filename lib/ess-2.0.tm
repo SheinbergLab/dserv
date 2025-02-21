@@ -600,7 +600,7 @@ namespace eval ess {
 
 	variable current
 
-	if { $current(system) != {} } {
+	if { $current(system) != {} && [info exists $current(system)] } {
 	    if { [query_state] == "running" } { return } 
 	    catch unload_system
 	}
@@ -1353,6 +1353,45 @@ namespace eval ess {
     }
 }
 
+
+###############################################################################
+########################## juicer/reward _support #############################
+###############################################################################
+
+namespace eval ess {
+
+    # initially no juicer is connected
+    variable current
+    package require juicer
+    set current(juicer) {}
+    
+    proc juicer_init {} {
+	variable current
+	if  { $current(juicer) != {} } { $current(juicer) destroy } 
+	set j [Juicer new]
+	if { [set jpath [$j find]] != {} } {
+	    $j set_path $jpath
+	    $j open
+	} else {
+	    $j use_gpio
+	}
+	set current(juicer) $j
+    }
+
+    proc reward { ml } {
+	variable current
+	set j $current(juicer)
+	if { $j == "" } { return }
+	if { [$j using_gpio] } {
+	    # currently assume only a single juicer is configured
+	    juicerJuiceAmount 0 $ml
+	} else {
+	    $j reward $ml
+	}
+
+    }
+
+}
 ###############################################################################
 ################################ touch_windows ################################
 ###############################################################################
@@ -1963,7 +2002,7 @@ namespace eval ess {
     set subtypes [dict create EYE 0 LEVER 1 NORESPONSE 2 STIM 3]
     dict set evt_info ABORT     [list 41 {Abort}                long $subtypes]
 
-    set subtypes [dict create DURATION 0 TYPE 1]
+    set subtypes [dict create DURATION 0 TYPE 1 MICROLITERS 2]
     dict set evt_info REWARD    [list 42 {Reward}               long $subtypes]
     
     dict set evt_info DELAY     [list 43 {Delay}                long]

@@ -200,7 +200,7 @@ set host [dservGet system/hostaddr]
 subprocess 2571 "source [file join $dspath config/sqliteconf.tcl]"
 
 # homebase computers use postgresql
-set hbs "192.168.4.100 192.168.4.101 192.168.4.102"
+set hbs "192.168.4.100 192.168.4.101 192.168.4.102 192.168.4.201"
 if { [lsearch $hbs $host] >= 0 } {
     subprocess 2572 "source [file join $dspath config/postgresconf.tcl]"
 }

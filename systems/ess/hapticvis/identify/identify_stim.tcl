@@ -1,0 +1,189 @@
+# NAME
+#   hapticvis_stim.tcl
+#
+# DESCRIPTION
+#   match_to_sample with visual and graspomatic generated shapes
+#
+# REQUIRES
+#   polygon
+#   metagroup
+#
+# AUTHOR
+#   DLS
+#
+
+# find the shader dir
+set stimdir [file dir [info nameofexecutable]]
+set paths {
+    /usr/local/stim2/shaders/
+    /Applications/stim2.app/Contents/Resources/shaders/    
+}
+
+foreach dir $paths {
+    if [file exists $dir] { shaderSetPath $dir; break }
+}
+
+# for creating images using CImg and other image processing tools
+package require impro
+
+proc create_shape { shader id } {
+    
+    set scale [dl_get stimdg:shape_scale $id]
+    set rotation [dl_get stimdg:shape_rot_deg_cw $id]
+    set filled [dl_get stimdg:shape_filled $id]
+    
+    # target image sampler size should be set in stimdg
+    set width 512; set width_2 [expr $width/2]
+    set height 512; set height_2 [expr $height/2]
+    set depth 4
+
+    # shapes are stored in a coordinate system that doesn't fill a unit square
+    #  this scale is designed to convert shapes to degrees visual angle 
+    set shape_scale 2.5
+    dl_local x [dl_mult stimdg:shape_coord_x:$id $shape_scale]
+    dl_local y [dl_mult stimdg:shape_coord_y:$id $shape_scale]
+    
+    dl_local xscaled [dl_add [dl_mult $x $width] $width_2]
+    dl_local yscaled [dl_add [dl_mult [dl_negate $y] $height] $height_2]
+    set img [img_create -width $width -height $height -depth $depth]
+    if { $filled } {
+	set poly [img_fillPolygonOutside $img $xscaled $yscaled 255 255 255 255]
+	img_invert $poly
+    } else {
+	set poly [img_drawPolyline $img $xscaled $yscaled 255 255 255 255]
+    }
+    dl_local pix [img_imgtolist $poly]
+    img_delete $poly $img
+
+    set sobj [shaderObj $shader]
+    set img [shaderImageCreate $pix $width $height linear]
+    shaderObjSetSampler $sobj [shaderImageID $img] 0
+
+    scaleObj $sobj $scale
+
+    # verify if z should be 1 or -1...
+    rotateObj $sobj $rotation 0 0 1
+    
+    return $sobj
+}
+
+proc create_circle { r g b { a 1 } } {
+    set c [polygon]
+    polycirc $c 1
+    polycolor $c $r $g $b $a
+    return $c
+}
+
+proc nexttrial { id } {
+    resetObjList		 ;# unload existing objects
+    shaderImageReset;		 ;# free any shader textures
+    shaderDeleteAll;		 ;# reset any shader objects
+    glistInit 2
+
+    set shader_file image	 ;# shader file is image.glsl
+    set shader [shaderBuild $shader_file]
+    
+    set trialtype [dl_get stimdg:trial_type $id]
+    set scale [dl_get stimdg:choice_scale $id]
+    set nchoices [dl_get stimdg:n_choices $id]
+
+    # add the visual sample for VV trials, no visual sample for HV trials
+    if { $trialtype == "visual" } {
+	set ::sample [create_shape $shader $id]
+	glistAddObject $::sample 0
+	setVisible $::sample 0
+    } else {
+
+    }
+    
+    # choice circles
+    set mg [metagroup]
+    for { set i 0 } { $i < $nchoices } { incr i } {
+	set s [create_circle 1 1 1 0.3]
+	translateObj $s {*}[dl_tcllist stimdg:choice_centers:$id:$i]
+	scaleObj $s [dl_get stimdg:choice_scale $id]
+	metagroupAdd $mg $s
+    }
+    glistAddObject $mg 0
+    setVisible $mg 0
+    set ::choice_array $mg
+    
+    # gray selecting circle
+    set s [create_circle .6 .6 .6 0.9]
+    scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
+    setVisible $s 0
+    glistAddObject $s 0
+    set ::feedback(selecting) $s
+
+    # green correct circle
+    set s [create_circle .1 .8 0 0.9]
+    scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
+    setVisible $s 0
+    glistAddObject $s 0
+    set ::feedback(correct) $s
+
+    # red incorrect circle
+    set s [create_circle .9 .1 .1 0.9]
+    scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
+    setVisible $s 0
+    glistAddObject $s 0
+    set ::feedback(incorrect) $s
+}
+
+proc feedback_on { type x y } {
+    translateObj $::feedback($type) $x $y
+    setVisible $::feedback($type) 1
+    redraw
+}
+
+proc feedback_off { type } {
+    if { $type == "all" } {
+	foreach t [array names ::feedback] {
+	    setVisible $::feedback($t) 0
+	}
+    } else {
+	setVisible $::feedback($type) 0
+    }
+    redraw
+}
+
+proc stim_on {} {
+    glistSetCurGroup 0
+    glistSetVisible 1
+    redraw
+}
+
+proc stim_off {} {
+    glistSetVisible 0
+    redraw
+}
+
+proc sample_on {} {
+    setVisible $::sample 1
+    redraw
+}
+
+proc sample_off {} {
+    setVisible $::sample 0
+    redraw
+}
+
+proc choices_on {} {
+    setVisible $::choice_array 1
+    redraw
+}
+
+proc choices_off {} {
+    setVisible $::choice_array 0
+    redraw
+}
+
+proc reset { } {
+    glistSetVisible 0; redraw;
+}
+
+proc clearscreen { } {
+    glistSetVisible 0; redraw;
+}
+
+

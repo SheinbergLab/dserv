@@ -11,10 +11,7 @@ namespace eval emcalib::9point {
 	$s set_protocol [namespace tail [namespace current]]
 	
 	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
-	
-	$s add_param juice_pin         27       variable int
-	$s add_param juice_time      1000       time int
-
+	$s add_param juice_ml           .5      variable float
 	$s add_param fix_radius        3.0      variable float
 	
 	$s add_variable fix_targ_x             
@@ -28,8 +25,8 @@ namespace eval emcalib::9point {
 	$s set_protocol_init_callback {
 	    ::ess::init
 
-	    # configure juice channel pin
-	    juicerSetPin 0 $juice_pin
+	    # configure juice subsystem
+	    ::ess::juicer_init
 	    
 	    # open connection to rmt and upload ${protocol}_stim.tcl
 	    my configure_stim $rmt_host
@@ -165,8 +162,8 @@ namespace eval emcalib::9point {
 	
 	$s add_method reward {} {
 	    soundPlay 3 70 70
-	    juicerJuice 0 $juice_time
-	    ::ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::reward $juice_ml
+	    ::ess::evt_put REWARD MICROLITERS [now] [expr {int($juice_ml*1000)}]
 	}
 
 	$s add_method fixation_off {} {

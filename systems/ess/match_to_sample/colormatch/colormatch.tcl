@@ -12,8 +12,7 @@ namespace eval match_to_sample::colormatch {
 	
 	$s add_param rmt_host          $::ess::rmt_host   stim ipaddr
 	
-	$s add_param juice_pin         27       variable int
-	$s add_param juice_time      1000       time int
+	$s add_param juice_ml         0.8       variable float
 	
 	$s add_param use_buttons        1       variable int
 	$s add_param left_button       24       variable int
@@ -48,8 +47,8 @@ namespace eval match_to_sample::colormatch {
 	    # initialize touch processor
 	    ::ess::touch_init
 	    
-	    # configure juice channel pin
-	    juicerSetPin 0 $juice_pin
+	    # configure juicer subsystem
+	    ::ess::juicer_init
 
 	    soundReset
 	    soundSetVoice 81 0    0
@@ -185,8 +184,8 @@ namespace eval match_to_sample::colormatch {
 
 	$s add_method reward {} {
 	    soundPlay 3 70 70
-	    juicerJuice 0 $juice_time
-	    ::ess::evt_put REWARD DURATION [now] $juice_time
+	    ::ess::reward $juice_ml
+	    ::ess::evt_put REWARD MICROLITERS [now] [expr {int($juice_ml*1000)}]
 	}
 
 	$s add_method noreward {} {
