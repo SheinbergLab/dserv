@@ -356,6 +356,7 @@ static void clear_widgets(void) {
   Tcl_VarEval(g_App->interp(), "if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
 
   virtual_eye_widget->initialized = false;
+  virtual_joystick_widget->initialized = false;
 
   options_widget->clear();
   options_widget->redraw();
@@ -722,6 +723,25 @@ void virtual_eye_cb (VirtualEye *w, void *data)
 
   if (!g_App->host.empty()) {
     result = g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+  }
+}
+
+
+void virtual_joystick_cb (VirtualJoystick *w, void *data)
+{
+  int result;
+  std::string rstr;
+  
+  /*
+    std::string cmd("set d [binary format s2 {");
+  cmd += std::to_string(w->adc[1])+" "+std::to_string(w->adc[0])+"}];";
+  cmd += "for {set i 0} {$i < 20} {incr i} {dservSetData ain/vals 0 4 $d};";
+  cmd += "unset d";
+  */
+  //  std::cout << cmd << std::endl;
+
+  if (!g_App->host.empty()) {
+    //    result = g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
   }
 }
 

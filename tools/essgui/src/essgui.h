@@ -19,5 +19,7 @@ int set_variant(void);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);
+class VirtualJoystick;
+void virtual_joystick_cb(VirtualJoystick *w, void *data);
 
 #endif
