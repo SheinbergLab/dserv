@@ -71,6 +71,7 @@ namespace eval hapticvis::identify {
 	}
 	
 	$s set_end_callback {
+	    foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
 	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 	}
 	
@@ -211,10 +212,24 @@ namespace eval hapticvis::identify {
 		}
 	    }
 	    if { $r == [expr {$target_slot-1}] } {
-		rmtSend "feedback_on correct 0 0"
+		set slot [expr $target_slot-1]
+		set choice_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
+		set choice_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
+		
+		rmtSend "feedback_on correct $choice_x $choice_y"
 		set correct 1
 	    } elseif { $r != -1 } {
-		rmtSend "feedback_on incorrect 0 0"
+		set slot [expr $target_slot-1]
+		set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
+		set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
+
+		set choice_x [dl_get stimdg:choice_centers:$cur_id:$r 0]
+		set choice_y [dl_get stimdg:choice_centers:$cur_id:$r 1]
+
+		set correct_fb "feedback_on correct $target_x $target_y"
+		set incorrect_fb "feedback_on incorrect $choice_x $choice_y"
+		rmtSend "${correct_fb}; ${incorrect_fb}"
+
 		set correct 0
 	    }
 	    return $r

@@ -3,7 +3,7 @@
 #   hapticvis identify
 #
 # DESCRIPTION
-#   variant dictionary
+#   variant dictionary for visual and haptic identity learning
 #
 
 package require haptic
@@ -11,7 +11,10 @@ package require haptic
 namespace eval hapticvis::identify {
 
     # state system parameters
+
     variable params_defaults { delay_time 100 }
+    variable params_visual { sample_duration 1000 \
+                              choice_delay 1500 choice_duration 8500 }
 
     # variant description
 
@@ -20,17 +23,16 @@ namespace eval hapticvis::identify {
 
     variable variants {
         visual {
-            description "learn visual objects"      
-            loader_proc setup_trials
+            description "learn visual objects"
+            loader_proc setup_visual
             loader_options {
-		subject_id { $subject_ids }
-		subject_set { $subject_sets }
-	        n_per_set { 4 8 }
-		trial_type visual
-		shape_scale { 3 4 5 6 }
-		n_rep { 2 4 6 8 10 }
-		rotations {
-		    {single {0}} {three {-120 0 120}} {four {0 90 180 270}}
+              subject_id { $subject_ids }
+              subject_set { $subject_sets }
+              n_per_set { 4 8 }
+              shape_scale { 3 4 5 6 }
+              n_rep { 2 4 6 8 10 }
+              rotations {
+                  {single {0}} {three {-120 0 120}} {four {0 90 180 270}}
                 }
             }
         }
@@ -40,50 +42,57 @@ namespace eval hapticvis::identify {
     set variants [subst $variants]
 
     proc variants_init { s } {
-	
+
         $s add_method visual_init {} {
             rmtSend "setBackground 100 100 100"
         }
 
-	$s add_method add_subject_blocks { subject_id block_id dbfile shapedb } {
-	    set row [dl_find [trialdb:subject $subject_id]]
-	    if { $row >= 0 } { return }
-	}
-			 
-        $s add_method setup_trials { subject_id subject_set n_per_set trial_type shape_scale n_rep rotations } {
-	    # find database
-	    set db {}
-	    set p ${::ess::system_path}/$::ess::current(project)/hapticvis/db
-	    variable shapedb_file [file join $p shape_db]
+    $s add_method add_subject_blocks { subject_id block_id dbfile shapedb } {
+        set row [dl_find [trialdb:subject $subject_id]]
+        if { $row >= 0 } { return }
+    }
 
-	    set total 16
-	    set n_sets [expr $total/$n_per_set]
+    $s add_method setup_visual { subject_id subject_set n_per_set \
+                     shape_scale n_rep rotations } {
+        my setup_trials $subject_id $subject_set $n_per_set visual \
+        $shape_scale $n_rep $rotations
+    }
 
-	    variable trialdb_file [file join $p trial_db_${n_per_set}_${n_sets}]
+    $s add_method setup_trials { subject_id subject_set n_per_set \
+           trial_type shape_scale n_rep rotations } {
+        # find database
+        set db {}
+        set p ${::ess::system_path}/$::ess::current(project)/hapticvis/db
+        variable shapedb_file [file join $p shape_db]
+
+        set total 16
+        set n_sets [expr $total/$n_per_set]
+
+        variable trialdb_file [file join $p trial_db_${n_per_set}_${n_sets}]
 
             # build our stimdg
             if { [dg_exists stimdg] } { dg_delete stimdg }
             set g [dg_create stimdg]
             dg_rename $g stimdg
 
-	    # shape coords are in shapedb_file
+        # shape coords are in shapedb_file
             if {![file exists $shapedb_file]} { error "db file not found" }
-	    if { [dg_exists shape_db] } { dg_delete shape_db }
-	    dg_rename [dg_read $shapedb_file] shape_db
+        if { [dg_exists shape_db] } { dg_delete shape_db }
+        dg_rename [dg_read $shapedb_file] shape_db
 
-	    # trial info in trialdb_file
-	    # trial_db contains columns: subject target_ids dist_ids
-	    if { [dg_exists trial_db] } { dg_delete trial_db }
-	    dg_rename [dg_read $trialdb_file] trial_db
+        # trial info in trialdb_file
+        # trial_db contains columns: subject target_ids dist_ids
+        if { [dg_exists trial_db] } { dg_delete trial_db }
+        dg_rename [dg_read $trialdb_file] trial_db
 
-	    set row [dl_find trial_db:subject $subject_id]
-	    if { $row < 0 } { error "subject not in database \"$trialdb_file\"" }
-	    set targets trial_db:target_ids:$row:$subject_set
-	    set dists   trial_db:dist_ids:$row:$subject_set
+        set row [dl_find trial_db:subject $subject_id]
+        if { $row < 0 } { error "subject not in database \"$trialdb_file\"" }
+        set targets trial_db:target_ids:$row:$subject_set
+        set dists   trial_db:dist_ids:$row:$subject_set
 
-	    if { ![dl_exists $targets] || ![dl_exists $dists] } {
-		error "subject set does not exist"
-	    }
+        if { ![dl_exists $targets] || ![dl_exists $dists] } {
+        error "subject set does not exist"
+        }
 
             dl_set stimdg:stimtype         [dl_ilist]
 
@@ -109,17 +118,17 @@ namespace eval hapticvis::identify {
             dl_set stimdg:feedback_type    [dl_slist]
 
             # go into table and find info about sets/subject
-	    set shape_ids [dl_tcllist $targets]
+        set shape_ids [dl_tcllist $targets]
 
             # get coords for each shape
-	    dl_local shape_inds [haptic::get_shape_indices shape_db:id $shape_ids]
-	    dl_local coord_x [dl_choose shape_db:x $shape_inds]
-	    dl_local coord_y [dl_choose shape_db:y $shape_inds]
+        dl_local shape_inds [haptic::get_shape_indices shape_db:id $shape_ids]
+        dl_local coord_x [dl_choose shape_db:x $shape_inds]
+        dl_local coord_y [dl_choose shape_db:y $shape_inds]
 
             # close the shape_db and trial_db
-	    dg_delete shape_db
-	    dg_delete trial_db
-	    
+        dg_delete shape_db
+        dg_delete trial_db
+
             # total number of trials
             set n_rotations [llength $rotations]
             set n_shapes [llength $shape_ids]
@@ -135,7 +144,7 @@ namespace eval hapticvis::identify {
             set choice_scale 1.5
             set n_choices $n_shapes
             dl_local choice_angles \
-            [dl_mult [expr (2*$::pi)/$n_choices] [dl_fromto 0 $n_choices]]
+              [dl_mult [expr (2*$::pi)/$n_choices] [dl_fromto 0 $n_choices]]
 
             dl_local choice_center_x \
               [dl_mult [dl_cos $choice_angles] $choice_ecc]
