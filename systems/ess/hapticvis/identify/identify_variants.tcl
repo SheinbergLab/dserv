@@ -30,6 +30,7 @@ namespace eval hapticvis::identify {
               subject_set { $subject_sets }
               n_per_set { 4 8 }
               shape_scale { 3 4 5 6 }
+              noise_type { none circles }
               n_rep { 2 4 6 8 10 }
               rotations {
                   {single {0}} {three {-120 0 120}} {four {0 90 180 270}}
@@ -53,13 +54,13 @@ namespace eval hapticvis::identify {
     }
 
     $s add_method setup_visual { subject_id subject_set n_per_set \
-                     shape_scale n_rep rotations } {
+                     shape_scale noise_type n_rep rotations } {
         my setup_trials $subject_id $subject_set $n_per_set visual \
-        $shape_scale $n_rep $rotations
+        $shape_scale $noise_type $n_rep $rotations
     }
 
     $s add_method setup_trials { subject_id subject_set n_per_set \
-           trial_type shape_scale n_rep rotations } {
+           trial_type shape_scale noise_type n_rep rotations } {
         # find database
         set db {}
         set p ${::ess::system_path}/$::ess::current(project)/hapticvis/db
@@ -109,6 +110,7 @@ namespace eval hapticvis::identify {
             dl_set stimdg:shape_rot_deg_cw [dl_flist]
             dl_set stimdg:shape_scale      [dl_flist]
             dl_set stimdg:shape_filled     [dl_ilist]
+            dl_set stimdg:noise_elements   [dl_llist]
             dl_set stimdg:correct_choice   [dl_ilist]
             dl_set stimdg:n_choices        [dl_ilist]
             dl_set stimdg:choice_centers   [dl_llist]
@@ -154,6 +156,27 @@ namespace eval hapticvis::identify {
               [dl_llist \
                 [dl_transpose [dl_llist $choice_center_x $choice_center_y]]]
 
+            if { $noise_type == "none"} {
+                dl_local noise_elements [dl_replicate [dl_llist [dl_llist]] $n_obs]
+            } elseif { $noise_type == "circles"} {
+                set nelements 10
+                set nprop 0.25; # proportion of scale for radii
+                set njprop 0.2; # jitter proportion
+                set total_elements [expr {${n_obs}*$nelements}]
+                set hscale [expr {${shape_scale}/2.0}]
+                dl_local xs [dl_sub \
+                    [dl_mult [dl_urand $total_elements] $shape_scale] $hscale]
+                dl_local ys [dl_sub \
+                    [dl_mult [dl_urand $total_elements] $shape_scale] $hscale]
+                set rscale [expr {${shape_scale}*${nprop}}]
+                dl_local rjitter [dl_sub \
+                    [dl_mult [dl_urand $total_elements] [expr $rscale*${njprop}]] \
+                    [expr $rscale*.1]]
+                dl_local rs [dl_add $rjitter $rscale]
+                dl_local noise_elements \
+                    [dl_reshape [dl_transpose [dl_llist $xs $ys $rs]] $n_obs $nelements]
+            }
+
             dl_set stimdg:stimtype     [dl_fromto 0 $n_obs]
             dl_set stimdg:trial_type   [dl_repeat [dl_slist $trial_type] $n_obs]
             dl_set stimdg:subject_id   [dl_repeat $subject_id $n_obs]
@@ -170,6 +193,7 @@ namespace eval hapticvis::identify {
               [dl_replicate [dl_flist {*}$rotations] [expr $n_rep*$n_shapes]]
             dl_set stimdg:shape_scale    [dl_repeat $shape_scale $n_obs]
             dl_set stimdg:shape_filled   [dl_repeat $shape_filled $n_obs]
+            dl_set stimdg:noise_elements $noise_elements
             dl_set stimdg:correct_choice \
               [dl_repeat [dl_series 1 $n_shapes] $shape_reps]
             dl_set stimdg:n_choices      [dl_repeat $n_choices $n_obs]
