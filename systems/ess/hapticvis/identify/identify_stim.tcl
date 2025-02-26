@@ -78,7 +78,7 @@ proc create_noise { id } {
     set noise_mg [metagroup]
     for { set i 0 } { $i < [dl_length stimdg:noise_elements:$id] } { incr i } {
         lassign [dl_tcllist [dl_get stimdg:noise_elements:$id $i]] x y r
-        set c [create_circle 0.5 0.5 0.5]
+        set c [create_circle 0.4 0.4 0.4]
         translateObj $c $x $y
         scaleObj $c $r
         metagroupAdd $noise_mg $c
