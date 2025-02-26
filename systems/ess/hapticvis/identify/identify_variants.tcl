@@ -159,7 +159,7 @@ namespace eval hapticvis::identify {
             if { $noise_type == "none"} {
                 dl_local noise_elements [dl_replicate [dl_llist [dl_llist]] $n_obs]
             } elseif { $noise_type == "circles"} {
-                set nelements 10
+                set nelements 16
                 set nprop 0.25; # proportion of scale for radii
                 set njprop 0.2; # jitter proportion
                 set total_elements [expr {${n_obs}*$nelements}]
