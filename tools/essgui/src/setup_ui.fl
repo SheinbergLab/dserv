@@ -1,5 +1,5 @@
 # data file for the Fltk User Interface Designer (fluid)
-version 1.0401
+version 1.0402
 header_name {.h}
 code_name {.cxx}
 decl {\#include "Fl_Console.h"
@@ -10,6 +10,7 @@ decl {\#include "Fl_Console.h"
 \#include "essgui.h"
 \#include "EyeTouchWin.hpp"
 \#include "VirtualEye.hpp"
+\#include "VirtualJoystick.hpp"
 \#include "Fl_OpDesk.h"} {public global
 }
 
@@ -17,7 +18,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {252 125 1280 800} type Double resizable visible
+    xywh {190 88 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -160,12 +161,12 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 642}
         } {
           Fl_Group {} {
-            label behavior
-            xywh {504 56 747 615} labelsize 16 hide
+            label behavior open
+            xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
-              xywh {514 84 245 300} box DOWN_BOX
+              xywh {514 84 241 264} box DOWN_BOX
             } {
               Fl_Box eyetouch_widget {
                 label EyeWindow
@@ -174,7 +175,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               }
               Fl_Group {} {
                 label {window status} open
-                xywh {514 325 245 58} box THIN_DOWN_FRAME labeltype NO_LABEL
+                xywh {514 325 241 20} box THIN_DOWN_FRAME labeltype NO_LABEL
               } {}
             }
             Fl_Group {} {
@@ -209,24 +210,35 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               xywh {763 84 488 304} labeltype NO_LABEL
             } {
               Fl_Box cgwin_widget {
-                label cgwin
+                label cgwin selected
                 xywh {763 84 488 300}
                 class CGWin
               }
             }
             Fl_Group {} {
               label {Virtual Input} open
-              xywh {514 420 245 248} color 56 v_label_margin 3
+              xywh {514 372 245 296} color 56 v_label_margin 3
             } {
               Fl_Group {} {
                 label {Eye Window} open
-                xywh {532 421 208 204} box FLAT_BOX color 8 labeltype NO_LABEL
+                xywh {531 372 208 204} box FLAT_BOX color 8 labeltype NO_LABEL
               } {
                 Fl_Box virtual_eye_widget {
                   label label
                   callback virtual_eye_cb
-                  xywh {620 511 15 15} when 7
+                  xywh {619 462 15 15} when 7
                   class VirtualEye
+                }
+              }
+              Fl_Group {} {
+                label Joystick open
+                xywh {531 584 80 76} box FLAT_BOX color 39 labeltype NO_LABEL
+              } {
+                Fl_Box virtual_joystick_widget {
+                  label label
+                  callback virtual_joystick_cb
+                  xywh {559 606 22 22} when 7
+                  class VirtualJoystick
                 }
               }
             }
@@ -257,9 +269,9 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
           Fl_Group {} {
             label scripts open
-            xywh {503 57 762 617} labelsize 16
+            xywh {503 57 762 617} labelsize 16 hide
           } {
-            Fl_Tabs editor_tabs {open selected
+            Fl_Tabs editor_tabs {open
               xywh {503 79 758 595}
             } {
               Fl_Text_Editor system_editor {

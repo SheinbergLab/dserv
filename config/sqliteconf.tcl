@@ -100,7 +100,7 @@ proc process_ess { dpoint data } {
     set domain ess
 
     # if the system has changed, update the blockid
-    if { [string equal $dpoint ess/system] } {
+    if { [string equal $dpoint ess/variant_info] } {
 	set maxblockid [db eval { SELECT max(block_id) from trials; }]
 	if { $maxblockid == "{}" } {
 	    dservSet ess/block_id 0

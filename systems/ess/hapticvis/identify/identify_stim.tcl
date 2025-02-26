@@ -16,25 +16,25 @@
 set stimdir [file dir [info nameofexecutable]]
 set paths {
     /usr/local/stim2/shaders/
-    /Applications/stim2.app/Contents/Resources/shaders/    
+    /Applications/stim2.app/Contents/Resources/shaders/
 }
 
 foreach dir $paths {
-    if [file exists $dir] { shaderSetPath $dir; break }
+    if { [file exists $dir] } { shaderSetPath $dir; break }
 }
 
 # for creating images using CImg and other image processing tools
 package require impro
 
 proc create_shape { shader id } {
-    
+
     set scale [dl_get stimdg:shape_scale $id]
     set rotation [dl_get stimdg:shape_rot_deg_cw $id]
     set filled [dl_get stimdg:shape_filled $id]
-    
+
     # target image sampler size should be set in stimdg
-    set width 512; set width_2 [expr $width/2]
-    set height 512; set height_2 [expr $height/2]
+    set width 512; set width_2 [expr ${width}/2]
+    set height 512; set height_2 [expr ${height}/2]
     set depth 4
 
     # shapes are stored in a coordinate system that doesn't fill a unit square
@@ -42,15 +42,15 @@ proc create_shape { shader id } {
     set shape_scale 2.5
     dl_local x [dl_mult stimdg:shape_coord_x:$id $shape_scale]
     dl_local y [dl_mult stimdg:shape_coord_y:$id $shape_scale]
-    
+
     dl_local xscaled [dl_add [dl_mult $x $width] $width_2]
     dl_local yscaled [dl_add [dl_mult [dl_negate $y] $height] $height_2]
     set img [img_create -width $width -height $height -depth $depth]
     if { $filled } {
-	set poly [img_fillPolygonOutside $img $xscaled $yscaled 255 255 255 255]
-	img_invert $poly
+        set poly [img_fillPolygonOutside $img $xscaled $yscaled 255 255 255 255]
+        img_invert $poly
     } else {
-	set poly [img_drawPolyline $img $xscaled $yscaled 255 255 255 255]
+        set poly [img_drawPolyline $img $xscaled $yscaled 255 255 255 255]
     }
     dl_local pix [img_imgtolist $poly]
     img_delete $poly $img
@@ -63,7 +63,7 @@ proc create_shape { shader id } {
 
     # verify if z should be 1 or -1...
     rotateObj $sobj $rotation 0 0 1
-    
+
     return $sobj
 }
 
@@ -74,40 +74,61 @@ proc create_circle { r g b { a 1 } } {
     return $c
 }
 
+proc create_noise { id } {
+    set noise_mg [metagroup]
+    for { set i 0 } { $i < [dl_length stimdg:noise_elements:$id] } { incr i } {
+        lassign [dl_tcllist [dl_get stimdg:noise_elements:$id $i]] x y r
+        set c [create_circle 0 0 0]
+        translateObj $c $x $y
+        scaleObj $c $r
+        metagroupAdd $noise_mg $c
+    }
+    return $noise_mg
+}
+
 proc nexttrial { id } {
-    resetObjList		 ;# unload existing objects
-    shaderImageReset;		 ;# free any shader textures
-    shaderDeleteAll;		 ;# reset any shader objects
+    resetObjList         ;# unload existing objects
+    shaderImageReset;        ;# free any shader textures
+    shaderDeleteAll;         ;# reset any shader objects
     glistInit 2
 
-    set shader_file image	 ;# shader file is image.glsl
+    set shader_file image    ;# shader file is image.glsl
     set shader [shaderBuild $shader_file]
-    
+
     set trialtype [dl_get stimdg:trial_type $id]
     set scale [dl_get stimdg:choice_scale $id]
     set nchoices [dl_get stimdg:n_choices $id]
 
     # add the visual sample for VV trials, no visual sample for HV trials
     if { $trialtype == "visual" } {
-	set ::sample [create_shape $shader $id]
-	glistAddObject $::sample 0
-	setVisible $::sample 0
+        set ::sample [metagroup]
+        set shape [create_shape $shader $id]
+        metagroupAdd $::sample $shape
+
+        # add noise to metagroup if specified
+        if { [dl_length stimdg:noise_elements:$id] } {
+            set noise [create_noise $id]
+            metagroupAdd $::sample $noise
+        }
+
+        glistAddObject $::sample 0
+        setVisible $::sample 0
     } else {
 
     }
-    
+
     # choice circles
     set mg [metagroup]
     for { set i 0 } { $i < $nchoices } { incr i } {
-	set s [create_circle 1 1 1 0.3]
-	translateObj $s {*}[dl_tcllist stimdg:choice_centers:$id:$i]
-	scaleObj $s [dl_get stimdg:choice_scale $id]
-	metagroupAdd $mg $s
+        set s [create_circle 1 1 1 0.3]
+        translateObj $s {*}[dl_tcllist stimdg:choice_centers:$id:$i]
+        scaleObj $s [dl_get stimdg:choice_scale $id]
+        metagroupAdd $mg $s
     }
     glistAddObject $mg 0
     setVisible $mg 0
     set ::choice_array $mg
-    
+
     # gray selecting circle
     set s [create_circle .6 .6 .6 0.9]
     scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
@@ -138,11 +159,11 @@ proc feedback_on { type x y } {
 
 proc feedback_off { type } {
     if { $type == "all" } {
-	foreach t [array names ::feedback] {
-	    setVisible $::feedback($t) 0
-	}
+        foreach t [array names ::feedback] {
+            setVisible $::feedback($t) 0
+        }
     } else {
-	setVisible $::feedback($type) 0
+        setVisible $::feedback($type) 0
     }
     redraw
 }
