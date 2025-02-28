@@ -18,6 +18,7 @@ namespace eval hapticvis::identify {
 	$s add_variable target_slot       -1
 	$s add_variable trial_type        {}
 	$s add_variable shape_id          -1
+	$s add_variable shape_angle       -1
 	$s add_variable correct           -1
 	$s add_variable n_choices          0
 	$s add_variable choices           {}
@@ -67,6 +68,11 @@ namespace eval hapticvis::identify {
 	$s set_quit_callback {
 	    foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
 	    rmtSend clearscreen
+
+	    if { $trial_type == "haptic" } {
+		my haptic_clear
+	    }
+
 	    ::ess::end_obs QUIT
 	}
 	
@@ -114,6 +120,7 @@ namespace eval hapticvis::identify {
 		set target_slot [dl_get stimdg:correct_choice $cur_id]
 		set trial_type [dl_get stimdg:trial_type $cur_id]
 		set shape_id [dl_get stimdg:shape_id $cur_id]
+		set shape_angle [dl_get stimdg:shape_rot_deg_cw $cur_id]
 		rmtSend "nexttrial $cur_id"
 
 		set correct -1
@@ -137,31 +144,32 @@ namespace eval hapticvis::identify {
 	    rmtSend "!stim_off"
 	}
 
-	$s add_method haptic_show { id } {
+	$s add_method haptic_show { shape_id a } {
 	    package require rest
-	    set ip 192.168.88.254
-	    set port 5000
+	    set ip 192.168.88.84
+	    set port 8888
 
-	    # this waits until the pistons are all in place
-	    set url http://${ip}:${port}/shape/$id
-	    set res [rest::simple $url {}]
+	    set angle [expr {$a+180%360}]
+	    set url http://${ip}:${port}
+	    set res [rest::get $url \
+			 [list function pick_and_place \
+			      hand 1 left_id $shape_id left_angle $angle]]
 	}
 	
 	$s add_method haptic_clear { } {
 	    package require rest
-	    set ip 192.168.88.254
-	    set port 5000
+	    set ip 192.168.88.84
+	    set port 8888
 
-	    # this returns immediately
-	    set url http://${ip}:${port}/suction_sequence/51
-	    set res [rest::simple $url {}]
+	    set url http://${ip}:${port}
+	    set res [rest::get $url [list function put_away side 2]]
 	}
 	
 	$s add_method sample_on {} {
 	    if { $trial_type == "visual" } {
 		rmtSend "!sample_on"
 	    } elseif { $trial_type == "haptic" } {
-		my haptic_show $shape_id
+		my haptic_show $shape_id $shape_angle
 	    }
 	}
 
@@ -181,6 +189,7 @@ namespace eval hapticvis::identify {
 
 	$s add_method choices_off {} {
 	    rmtSend "!choices_off"
+	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
 	    foreach i $cs { ::ess::touch_region_off $i }
 	    rmtSend "!feedback_off all"
 	}

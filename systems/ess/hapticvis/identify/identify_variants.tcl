@@ -15,6 +15,8 @@ namespace eval hapticvis::identify {
     variable params_defaults { delay_time 100 }
     variable params_visual { sample_duration 1000 \
                               choice_delay 1500 choice_duration 8500 }
+    variable params_haptic { sample_duration 8000 \
+                              choice_delay 1000 choice_duration 8500 }
 
     # variant description
 
@@ -37,28 +39,49 @@ namespace eval hapticvis::identify {
                 }
             }
         }
+        haptic {
+            description "learn haptic objects"
+            loader_proc setup_haptic
+            loader_options {
+              subject_id { $subject_ids }
+              subject_set { $subject_sets }
+              n_per_set { 4 8 }
+              n_rep { 2 4 6 8 10 20 }
+		rotations {
+                  {single {0}} {three {-120 0 120}} {four {0 90 180 270}}
+                }
+            }
+        }
     }
 
     # substitute variables in variant description above
     set variants [subst $variants]
-
+    
     proc variants_init { s } {
-
+	
         $s add_method visual_init {} {
             rmtSend "setBackground 100 100 100"
         }
-
-    $s add_method add_subject_blocks { subject_id block_id dbfile shapedb } {
-        set row [dl_find [trialdb:subject $subject_id]]
-        if { $row >= 0 } { return }
+	
+	$s add_method add_subject_blocks { subject_id block_id dbfile shapedb } {
+	    set row [dl_find [trialdb:subject $subject_id]]
+	    if { $row >= 0 } { return }
+	}
+	
+	$s add_method setup_visual { subject_id subject_set n_per_set \
+					 shape_scale noise_type n_rep rotations } {
+					     my setup_trials $subject_id $subject_set $n_per_set visual \
+						 $shape_scale $noise_type $n_rep $rotations
+					 }
+	
+	$s add_method setup_haptic { subject_id subject_set n_per_set \
+					 n_rep rotations } {
+					     set shape_scale 1
+					     set noise_type none
+					     my setup_trials $subject_id $subject_set $n_per_set haptic \
+						 $shape_scale $noise_type $n_rep $rotations
     }
-
-    $s add_method setup_visual { subject_id subject_set n_per_set \
-                     shape_scale noise_type n_rep rotations } {
-        my setup_trials $subject_id $subject_set $n_per_set visual \
-        $shape_scale $noise_type $n_rep $rotations
-    }
-
+	
     $s add_method setup_trials { subject_id subject_set n_per_set \
            trial_type shape_scale noise_type n_rep rotations } {
         # find database
