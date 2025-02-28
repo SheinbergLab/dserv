@@ -35,7 +35,7 @@ namespace eval hapticvis::identify {
               noise_type { none circles }
               n_rep { 2 4 6 8 10 20 }
               rotations {
-                  {single {0}} {three {-120 0 120}} {four {0 90 180 270}}
+                  {single {180}} {three {60 180 300}}
                 }
             }
         }
@@ -48,7 +48,7 @@ namespace eval hapticvis::identify {
               n_per_set { 4 8 }
               n_rep { 2 4 6 8 10 20 }
 		rotations {
-                  {single {0}} {three {-120 0 120}} {four {0 90 180 270}}
+                  {single {180}} {three {60 180 300}}
                 }
             }
         }
