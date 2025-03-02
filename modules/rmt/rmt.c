@@ -142,7 +142,8 @@ static int socket_read(char **message, int *nbytes)
 {
   char *buf = rmt_socket_recv_buf;
   if (!buf) return 0;
-  
+
+  memset(buf, 0, SOCK_BUF_SIZE);
   int n;
   if ((n = read(rmt_socket, buf, SOCK_BUF_SIZE)) < 0) {
     if (message) *message = NULL;
@@ -207,7 +208,7 @@ static  char *rmt_send(char *format, ...)
     sbuf[l+1] = '\n';
     sbuf[l+2] = '\0';
   }
-  
+
   status = socket_send(sbuf, strlen(sbuf), &rbuf, &rbytes);
   if (status == 0) return NULL;
   if ((eol = strrchr(rbuf, '\n'))) *eol = 0;
