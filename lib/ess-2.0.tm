@@ -1232,16 +1232,22 @@ namespace eval ess {
 ###############################################################################
 namespace eval ess {
     # if joystick status changes update ess/joystick/value and wake up ESS
-    proc joystick_process { dpoint data } {
-    dservSet ess/joystick/value $data
-    do_update
+    proc joystick_process_value { dpoint data } {
+	dservSet ess/joystick/value $data
+	do_update
     }
 
+    proc joystick_process_button { dpoint data } {
+	dservSet ess/joystick/button $data
+	do_update
+    }
+    
     # call generic joystick initialization (dsconf.tcl) and add callback 
     proc joystick_init {} {
-    ::joystick_init
-    dservAddExactMatch joystick/value
-    dpointSetScript joystick/value ::ess::joystick_process
+	::joystick_init
+	dservAddExactMatch joystick/value
+	dpointSetScript joystick/value ::ess::joystick_process_value
+	dpointSetScript joystick/button ::ess::joystick_process_button
     }
 }
 

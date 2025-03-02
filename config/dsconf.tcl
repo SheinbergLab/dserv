@@ -125,6 +125,10 @@ proc joystick_callback { dpoint data } {
     dservSet joystick/value $jval
 }
 
+proc joystick_button_callback { dpoint data } {
+    dservSet joystick/button $data
+}
+
 proc joystick_init { } {
     if { ![dservExists joystick/lines] } { return }
     
@@ -138,6 +142,14 @@ proc joystick_init { } {
     }
 
     joystick_callback init 0
+
+    if { [dservExists joystick/button_line] } {
+	set pin [dservGet joystick/button_line]
+	gpioLineRequestInput $pin BOTH 2500 PULL_UP ACTIVE_LOW
+	dservAddMatch gpio/input/$pin
+	dpointSetScript gpio/input/$pin joystick_button_callback
+	joystick_button_callback init 0
+    }
 }
 
 
