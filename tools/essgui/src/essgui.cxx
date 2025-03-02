@@ -736,12 +736,12 @@ void virtual_joystick_cb (VirtualJoystick *w, void *data)
 
   if (w->button_has_changed()) {
     int button = w->get_button_state();
-    cmd+= "dservSet ess/joystick/button " + std::to_string(button) + ";";
+    cmd+= "dservSet joystick/button " + std::to_string(button) + ";";
   }
 
   if (w->state_has_changed()) {
     int state = w->get_state();
-    cmd+= "dservSet ess/joystick/value " + std::to_string(state) + ";";
+    cmd+= "dservSet joystick/value " + std::to_string(state) + ";";
   }
   
   //  if (!cmd.empty()) { std::cout << cmd << std::endl; }
