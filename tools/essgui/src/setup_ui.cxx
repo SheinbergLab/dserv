@@ -349,7 +349,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 o->box(FL_FLAT_BOX);
                 o->color(FL_DARK3);
                 o->labeltype(FL_NO_LABEL);
-                { virtual_joystick_widget = new VirtualJoystick(559, 606, 22, 22, "label");
+                { virtual_joystick_widget = new VirtualJoystick(565, 614, 12, 12, "label");
                   virtual_joystick_widget->box(FL_NO_BOX);
                   virtual_joystick_widget->color(FL_BACKGROUND_COLOR);
                   virtual_joystick_widget->selection_color(FL_BACKGROUND_COLOR);
