@@ -148,7 +148,7 @@ proc joystick_init { } {
 	gpioLineRequestInput $pin BOTH 2500 PULL_UP ACTIVE_LOW
 	dservAddMatch gpio/input/$pin
 	dpointSetScript gpio/input/$pin joystick_button_callback
-	joystick_button_callback init 0
+	dservSet joystick/button 0
     }
 }
 
