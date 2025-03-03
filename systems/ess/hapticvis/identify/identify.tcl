@@ -12,7 +12,7 @@ namespace eval hapticvis::identify {
 	
 	$s add_param rmt_host     $::ess::rmt_host   stim ipaddr
 	$s add_param juice_ml             0.6       variable float
-	$s add_param use_joystick           0       variable bool
+	$s add_param use_joystick           1       variable bool
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
