@@ -1245,8 +1245,11 @@ namespace eval ess {
     # call generic joystick initialization (dsconf.tcl) and add callback 
     proc joystick_init {} {
 	::joystick_init
+	
 	dservAddExactMatch joystick/value
 	dpointSetScript joystick/value ::ess::joystick_process_value
+
+	dservAddExactMatch joystick/button
 	dpointSetScript joystick/button ::ess::joystick_process_button
     }
 }
