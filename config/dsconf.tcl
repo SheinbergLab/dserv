@@ -140,8 +140,7 @@ proc joystick_init { } {
 	dservAddMatch gpio/input/$p
 	dpointSetScript gpio/input/$p joystick_callback
     }
-
-    joystick_callback init 0
+    dservSet joystick/value 0
 
     if { [dservExists joystick/button_line] } {
 	set pin [dservGet joystick/button_line]
