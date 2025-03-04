@@ -157,7 +157,7 @@ namespace eval hapticvis::identify {
 	    set ip 192.168.88.84
 	    set port 8888
 
-	    set angle [expr {$a+180%360}]
+	    set angle [expr {int($a)%360}]
 	    set url http://${ip}:${port}
 	    set res [rest::get $url \
 			 [list function pick_and_place \
