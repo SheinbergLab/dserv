@@ -61,8 +61,8 @@ proc create_shape { shader id } {
 
     scaleObj $sobj $scale
 
-    # verify if z should be 1 or -1...
-    rotateObj $sobj $rotation 0 0 1
+    # clockwise rotation
+    rotateObj $sobj $rotation 0 0 -1
 
     return $sobj
 }
