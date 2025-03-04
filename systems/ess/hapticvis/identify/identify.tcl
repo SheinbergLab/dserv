@@ -11,8 +11,9 @@ namespace eval hapticvis::identify {
 	$s set_protocol [namespace tail [namespace current]]
 	
 	$s add_param rmt_host     $::ess::rmt_host   stim ipaddr
-	$s add_param juice_ml             0.6       variable float
-	$s add_param use_joystick           1       variable bool
+	$s add_param juice_ml            0.6       variable float
+	$s add_param use_joystick          1       variable bool
+	$s add_param use_touchscreen       1       variable bool
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
@@ -33,7 +34,8 @@ namespace eval hapticvis::identify {
 		# initialize joystick here
 		::ess::joystick_init
 
-	    } else {
+	    }
+	    if { $use_touchscreen } {
 		# initialize touch processor
 		::ess::touch_init
 	    }
@@ -66,7 +68,9 @@ namespace eval hapticvis::identify {
 	}
 	
 	$s set_quit_callback {
-	    foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
+	    if { $use_touchscreen } {
+		foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
+	    }
 	    rmtSend clearscreen
 
 	    if { $trial_type == "haptic" } {
@@ -77,7 +81,9 @@ namespace eval hapticvis::identify {
 	}
 	
 	$s set_end_callback {
-	    foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
+	    if { $use_touchscreen } {
+		foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
+	    }
 	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 	}
 	
@@ -114,8 +120,10 @@ namespace eval hapticvis::identify {
 		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$i 0]
 		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$i 1]
 		    set choice_r [dl_get stimdg:choice_scale $cur_id]
-		    ::ess::touch_region_off $i
-		    ::ess::touch_win_set $i $choice_x $choice_y $choice_r 0
+		    if { $use_touchscreen } {
+			::ess::touch_region_off $i
+			::ess::touch_win_set $i $choice_x $choice_y $choice_r 0
+		    }
 		}
 		set target_slot [dl_get stimdg:correct_choice $cur_id]
 		set trial_type [dl_get stimdg:trial_type $cur_id]
@@ -184,13 +192,17 @@ namespace eval hapticvis::identify {
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
 	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
-	    foreach i $cs { ::ess::touch_region_on $i }
+	    if { $use_touchscreen } {
+		foreach i $cs { ::ess::touch_region_on $i }
+	    }
 	}
 
 	$s add_method choices_off {} {
 	    rmtSend "!choices_off"
 	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
-	    foreach i $cs { ::ess::touch_region_off $i }
+	    if { $use_touchscreen } {
+		foreach i $cs { ::ess::touch_region_off $i }
+	    }
 	    rmtSend "!feedback_off all"
 	}
 
@@ -213,33 +225,53 @@ namespace eval hapticvis::identify {
 	}
 	
 	$s add_method responded {} {
+	    # if no response to report, return -1
 	    set r -1
-	    foreach w $choices {
-		if { [::ess::touch_in_win $w] } {
-		    set r $w
-		    break
+	    if { $use_joystick } {
+		if { [dservGet ess/joystick/button] } {
+		    if { $n_choices == 4 } {
+			# up=1(1)   down=2(3)  left=4(2)   right=8(0)
+			set mapdict { 0 -1 1 1 2 3 4 2 8 0 }
+		    } else {
+			# up=1(2)   down=2(6)  left=4(4)   right=8(0)
+			# up-left=5(3) up-right=9(1) down-left=6(5) down-right=10(7)
+			set mapdict { 0 -1 1 2 2 6 4 4 8 0 5 3 9 1 6 5 10 7 }
+		    }
+		    set r [dict get $mapdict [dservGet ess/joystick/value]]
+		    set made_selection 1
 		}
 	    }
-	    if { $r == [expr {$target_slot-1}] } {
-		set slot [expr $target_slot-1]
-		set choice_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
-		set choice_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
-		
-		rmtSend "feedback_on correct $choice_x $choice_y"
-		set correct 1
-	    } elseif { $r != -1 } {
-		set slot [expr $target_slot-1]
-		set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
-		set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
-
-		set choice_x [dl_get stimdg:choice_centers:$cur_id:$r 0]
-		set choice_y [dl_get stimdg:choice_centers:$cur_id:$r 1]
-
-		set correct_fb "feedback_on correct $target_x $target_y"
-		set incorrect_fb "feedback_on incorrect $choice_x $choice_y"
-		rmtSend "${correct_fb}; ${incorrect_fb}"
-
-		set correct 0
+	    if { $use_touchscreen } {
+		foreach w $choices {
+		    if { [::ess::touch_in_win $w] } {
+			set r $w
+			break
+		    }
+		}
+		set made_selection 1
+	    }
+	    if { $made_selection } {
+		if { $r == [expr {$target_slot-1}] } {
+		    set slot [expr $target_slot-1]
+		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
+		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
+		    
+		    rmtSend "feedback_on correct $choice_x $choice_y"
+		    set correct 1
+		} elseif { $r != -1 } {
+		    set slot [expr $target_slot-1]
+		    set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
+		    set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
+		    
+		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$r 0]
+		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$r 1]
+		    
+		    set correct_fb "feedback_on correct $target_x $target_y"
+		    set incorrect_fb "feedback_on incorrect $choice_x $choice_y"
+		    rmtSend "${correct_fb}; ${incorrect_fb}"
+		    
+		    set correct 0
+		}
 	    }
 	    return $r
 	}

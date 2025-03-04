@@ -1248,9 +1248,11 @@ namespace eval ess {
 	
 	dservAddExactMatch joystick/value
 	dpointSetScript joystick/value ::ess::joystick_process_value
+	dservSet ess/joystick/value 0
 
 	dservAddExactMatch joystick/button
 	dpointSetScript joystick/button ::ess::joystick_process_button
+	dservSet ess/joystick/button 0
     }
 }
 
