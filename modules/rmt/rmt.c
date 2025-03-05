@@ -259,14 +259,17 @@ static  char *rmt_send(char *format, ...)
   return rbuf;
 }
 #else
-static  char *rmt_send(char *msg, int size)
+/* allocates it's return buffer, so caller needs to free */
+static int rmt_send(char *msg, int size, char **buffer)
 {
   char *buf;
-  if (rmt_socket == -1) return NULL;	/* Not connected */
+  int rsize;
+  if (rmt_socket == -1) return 0;	/* Not connected */
   if (size < 0) size = strlen(msg);
-  if (!sendMessage(rmt_socket, msg, size)) return NULL;
-  if (!receiveMessage(rmt_socket, &buf)) return NULL;
-  return buf;
+  if (!sendMessage(rmt_socket, msg, size)) return 0;
+  if (!(rsize = receiveMessage(rmt_socket, &buf))) return 0;
+  *buffer = buf;
+  return rsize;
 }
 #endif
 
@@ -328,10 +331,11 @@ int rmt_send_command(ClientData data, Tcl_Interp *interp,
 
   Tcl_Size len;
   char *cmd = Tcl_GetStringFromObj(objv[1], &len);
-  char *result = rmt_send(cmd, len);
+  char *result;
+  Tcl_Size result_len = rmt_send(cmd, len, &result);
   
-  if (result) {
-    Tcl_SetObjResult(interp, Tcl_NewStringObj(result, strlen(result)));
+  if (result_len) {
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result, result_len));
     free(result);
   }
   return TCL_OK;
