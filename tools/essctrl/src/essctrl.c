@@ -14,7 +14,7 @@
 #define DSERV_PROMPT "dserv> "
 #define DSERV_PORT 4620
 #define STIM_PROMPT "stim> "
-#define STIM_PORT 4610
+#define STIM_PORT 4612
 #define PG_PROMPT "pg> "
 #define PG_PORT 2572
 
@@ -24,6 +24,7 @@ void completion(const char *buf, linenoiseCompletions *lc) {
         linenoiseAddCompletion(lc,"hello there");
     }
 }
+
 
 char *do_command(char *server, int tcpport, char *line, int n)
 {
@@ -35,6 +36,25 @@ char *do_command(char *server, int tcpport, char *line, int n)
     }
    }
   return resultstr;
+}
+
+
+char *do_msg_command(char *server, int port, char *line, int n)
+{
+  char *buf;
+  int sock = socket_open(server, port);
+  
+  if (sock < 0) return NULL;
+
+  if (!sendMessage(sock, line, n)) return NULL;
+  if (!receiveMessage(sock, &buf)) return NULL;
+  if (buf) {
+    if (strlen(buf)) {
+      linenoiseHistoryAdd(line); /* Add to the history. */
+      linenoiseHistorySave("history.txt"); /* Save the history on disk. */
+    }
+  }
+  return buf;
 }
 
 
@@ -75,20 +95,30 @@ int main (int argc, char *argv[])
    * linenoise, so the user needs to free() it. */
   
   while(1) {
-      line = linenoise(prompt);
-      if (line == NULL) break;
-    /* Do something with the string. */
+    line = linenoise(prompt);
+    if (line == NULL) break;
+
     if (!strcmp(line, "exit")) exit(0);
     
     if (line[0] != '\0' && line[0] != '/') {
-      resultstr = sock_send(server, tcpport, line, strlen(line));
-      if (resultstr) {
-      	if (strlen(resultstr)) {
-	       printf("%s\n", resultstr);
-      	}
+
+      if (tcpport == STIM_PORT) {
+	resultstr = do_msg_command(server, tcpport, line, strlen(line));
+	if (resultstr) {
+	  if (strlen(resultstr)) printf("%s\n", resultstr);
+	  free(resultstr);
+	}
       }
-      linenoiseHistoryAdd(line); /* Add to the history. */
-      linenoiseHistorySave("history.txt"); /* Save the history on disk. */
+      else {
+	resultstr = sock_send(server, tcpport, line, strlen(line));
+	if (resultstr) {
+	  if (strlen(resultstr)) {
+	    printf("%s\n", resultstr);
+	  }
+	}
+	linenoiseHistoryAdd(line);
+	linenoiseHistorySave("history.txt");
+      }
     } else if (!strncmp(line,"/historylen",11)) {
       /* The "/historylen" command will change the history len. */
       int len = atoi(line+11);
@@ -113,8 +143,11 @@ int main (int argc, char *argv[])
       }
     } else if (!strncmp(line, "/stim", 5)) {
       if (strlen(line) > 5) {
-	resultstr = do_command(server, STIM_PORT, &line[6], strlen(line)-6);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	resultstr = do_msg_command(server, STIM_PORT, &line[6], strlen(line)-6);
+	if (resultstr) {
+	  if (strlen(resultstr)) printf("%s\n", resultstr);
+	  free(resultstr);
+	}
       }
       else {
 	tcpport = STIM_PORT;

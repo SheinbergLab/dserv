@@ -169,7 +169,6 @@ int socket_send(int sock, char *sbuf, int sbytes, char **rbuf, int *rbytes)
 	return status;
 }
 
-
 char *sock_send(char *server, int port, char *buf, int len)
 {
   int i, ntries = 32;
@@ -190,7 +189,6 @@ char *sock_send(char *server, int port, char *buf, int len)
   return rbuf;
 }
 
-
 #ifdef _MSC_VER
 void init_w32_socket(void)
 {
@@ -206,4 +204,43 @@ void cleanup_w32_socket(void)
 {
 	WSACleanup();
 }
+
 #endif
+
+int sendMessage(int socket, char *message, int nbytes)
+{
+  unsigned int msgSize = htonl(nbytes);
+  if (send(socket, &msgSize, sizeof(msgSize), 0) != sizeof(msgSize)) return 0;
+  if (send(socket, message, nbytes, 0) != nbytes) return 0;
+  return 1;
+}
+
+int receiveMessage(int socket, char **rbuf)
+{
+  unsigned int msgSize;
+  
+  // Receive the size of the message
+  ssize_t bytesReceived = recv(socket, &msgSize, sizeof(msgSize), 0);
+  if (bytesReceived <= 0) {
+    *rbuf = NULL;
+    return 0;
+  }
+  
+  msgSize = ntohl(msgSize);
+  
+  // Allocate buffer for the message
+  char* buffer = (char *) malloc(msgSize);
+  size_t totalBytesReceived = 0;
+  while (totalBytesReceived < msgSize) {
+    bytesReceived = recv(socket, buffer + totalBytesReceived, msgSize - totalBytesReceived, 0);
+    if (bytesReceived <= 0) {
+      free(buffer);
+      *rbuf = NULL;
+      return 0;
+    }
+    totalBytesReceived += bytesReceived;
+  }
+  *rbuf = buffer;
+  return msgSize;
+}
+
