@@ -142,7 +142,7 @@ oo::class create System {
         set stimfile [file join [set ::ess::system_path] [set ::ess::project] \
                 $_systemname $_protocolname ${_protocolname}_stim.tcl]
         if { ![catch {set f [open $stimfile]}] } {
-            set script ![read $f]
+            set script [read $f]
             close $f
             rmtSend $script
         }
