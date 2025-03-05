@@ -27,13 +27,55 @@
 
 static char host[128];
 static int port;
-static const int STIM_PORT = 4610;
+static const int STIM_PORT = 4612;
 static int rmt_socket = -1;
 
 /* these buffers are allocated once */
 static char *rmt_socket_recv_buf = NULL;
 static char *rmt_socket_send_buf = NULL;
 static const int SOCK_BUF_SIZE = 65536;
+
+
+
+static int sendMessage(int socket, char *message, int nbytes)
+{
+  unsigned int msgSize = htonl(nbytes);
+  if (send(socket, &msgSize, sizeof(msgSize), 0) != sizeof(msgSize))
+    return 0;
+  if (send(socket, message, nbytes, 0) != nbytes) return 0;
+  return 1;
+}
+
+static int receiveMessage(int socket, char **rbuf)
+{
+  unsigned int msgSize;
+  
+  // Receive the size of the message
+  ssize_t bytesReceived = recv(socket, &msgSize, sizeof(msgSize), 0);
+  if (bytesReceived <= 0) {
+    *rbuf = NULL;
+    return 0;
+  }
+  
+  msgSize = ntohl(msgSize);
+  
+  // Allocate buffer for the message
+  char* buffer = (char *) malloc(msgSize);
+  size_t totalBytesReceived = 0;
+  while (totalBytesReceived < msgSize) {
+    bytesReceived = recv(socket, buffer + totalBytesReceived,
+			 msgSize - totalBytesReceived, 0);
+    if (bytesReceived <= 0) {
+      free(buffer);
+      *rbuf = NULL;
+      return 0;
+    }
+    totalBytesReceived += bytesReceived;
+  }
+  *rbuf = buffer;
+  return msgSize;
+}
+
 
 static void socket_flush()
   {
@@ -190,6 +232,7 @@ static  int rmt_close(void)
   return 1;
 }
 
+#if 0
 static  char *rmt_send(char *format, ...)
 {
   char *rbuf, *eol;
@@ -215,6 +258,17 @@ static  char *rmt_send(char *format, ...)
   if ((eol = strrchr(rbuf, '\r'))) *eol = 0;
   return rbuf;
 }
+#else
+static  char *rmt_send(char *msg, int size)
+{
+  char *buf;
+  if (rmt_socket == -1) return NULL;	/* Not connected */
+  if (size < 0) size = strlen(msg);
+  if (!sendMessage(rmt_socket, msg, size)) return NULL;
+  if (!receiveMessage(rmt_socket, &buf)) return NULL;
+  return buf;
+}
+#endif
 
 static int rmt_init(char *stim_host, int stim_port)
 {
@@ -271,11 +325,15 @@ int rmt_send_command(ClientData data, Tcl_Interp *interp,
     Tcl_WrongNumArgs(interp, 1, objv, "rmt_cmd");
     return TCL_ERROR;
   }
+
+  Tcl_Size len;
+  char *cmd = Tcl_GetStringFromObj(objv[1], &len);
+  char *result = rmt_send(cmd, len);
   
-  char *cmd = Tcl_GetString(objv[1]);
-  char *result = rmt_send(cmd);
-  if (result)
+  if (result) {
     Tcl_SetObjResult(interp, Tcl_NewStringObj(result, strlen(result)));
+    free(result);
+  }
   return TCL_OK;
 }
 
