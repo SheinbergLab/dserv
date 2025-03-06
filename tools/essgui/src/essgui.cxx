@@ -984,7 +984,7 @@ int add_params(const char *param_list)
      
      ((Fl_Input *) input)->value(argv[0]);
      input->callback(param_setting_callback);
-     input->when(FL_WHEN_ENTER_KEY);
+     input->when(FL_WHEN_ENTER_KEY | FL_UNFOCUS);
      Tcl_Free((char *) argv);
    }
   }
@@ -1001,23 +1001,24 @@ int add_params(const char *param_list)
 
 int update_param(const char *pstr)
 {
-  int retval = -21;
+  int retval = -2;
   Fl_Input *o;
   Tcl_Size argc;
   const char **argv;
   if (Tcl_SplitList(g_App->interp(), pstr, &argc, &argv) == TCL_OK) {
-    if (argc != 2) {
+    if (argc % 2 != 0) {
       retval = -1;
       goto clean_and_return;
     }
-    o = (Fl_Input *) g_App->find_param(argv[0]);
-    if (!o) {
-      retval = 0;
-      goto clean_and_return;
+    for (int i = 0; i < argc; i+=2) {
+      o = (Fl_Input *) g_App->find_param(argv[i]);
+      if (!o) {
+	retval = 0;
+	goto clean_and_return;
+      }
+      o->value(argv[i+1]);
+      retval = 1;
     }
-    o->value(argv[1]);
-    retval = 1;
-    
   clean_and_return:
     Tcl_Free((char *) argv);
   }
