@@ -1047,23 +1047,23 @@ namespace eval ess {
     }
 
     proc set_param { param val } {
-    variable current
-    $current(state_system) set_param $param $val
-    ::ess::evt_put PARAM NAME [now] $param
-    ::ess::evt_put PARAM VAL  [now] $val
-
-    # set param datapoint for clients
-    dservSet ess/params [get_param_vals]
+	variable current
+	$current(state_system) set_param $param $val
+	::ess::evt_put PARAM NAME [now] $param
+	::ess::evt_put PARAM VAL  [now] $val
+	
+	# set param datapoint for clients
+	dservSet ess/params [get_param_vals]
     }
-
+    
     proc set_params { args } {
-    set nargs [llength $args]
-    if { [expr {$nargs%2}] } {
-        error "invalid param/setting args ($args)"
-    }
-    for { set i 0 } { $i < $nargs } { incr i 2 } {
-        set_param [lindex $args $i] [lindex $args [expr {$i+1}]]
-    }
+	set nargs [llength $args]
+	if { [expr {$nargs%2}] } {
+	    error "invalid param/setting args ($args)"
+	}
+	for { set i 0 } { $i < $nargs } { incr i 2 } {
+	    set_param [lindex $args $i] [lindex $args [expr {$i+1}]]
+	}
     }
     
     proc evt_put { type subtype time args } {
