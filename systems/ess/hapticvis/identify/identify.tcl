@@ -150,6 +150,9 @@ namespace eval hapticvis::identify {
 
 	$s add_method stim_off {} {
 	    rmtSend "!stim_off"
+	    if { $trial_type == "haptic" && $sample_up == 1 } {
+		my haptic_clear
+	    }
 	}
 
 	$s add_method haptic_show { shape_id a } {
@@ -171,6 +174,19 @@ namespace eval hapticvis::identify {
 
 	    set url http://${ip}:${port}
 	    set res [rest::get $url [list function put_away side 2]]
+	}
+
+	$s add_method haptic_prep { } {
+	    package require rest
+	    set ip 192.168.88.84
+	    set port 8888
+
+	    set url http://${ip}:${port}
+	    set res [rest::get $url \
+			 [list \
+			      function set_dxl_positions \
+			      side 0 \
+			      position prep_pick]]
 	}
 	
 	$s add_method sample_on {} {
