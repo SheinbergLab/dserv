@@ -6,14 +6,15 @@ package require postgres
 package require yajltcl
 
 set conn -1;		       # connection to our postgresql server
-set dbname base;	       # name of database to write to
+set dbname qpcs;	       # name of database to write to
 set insert_trialinfo_cmd    "insert_trialinfo"
 set insert_status_cmd  "insert_status"
+set host "10.2.145.91"
 
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
     global conn dbname insert_trialinfo_cmd insert_status_cmd
-    set conninfo "dbname=$db user=postgres password=postgres host=localhost port=5432"
+    set conninfo "dbname=$db user=postgres password=postgres host=$host port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
 	set conn -1
