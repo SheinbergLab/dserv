@@ -25,7 +25,6 @@ if(WIN32)
   set(LIBJANSSON jansson.lib)
 else()
   link_directories( /usr/local/lib )
-  set (CMAKE_INSTALL_PREFIX /usr/local)
   find_library(LIBZ z)
   find_library(LIBLZ4 NAMES "liblz4.a")
   find_library(LIBFLTK NAMES "libfltk.a")
@@ -54,16 +53,15 @@ endif()
 if(WIN32)
 
 elseif(APPLE)
-
-INSTALL(TARGETS essgui
-        RUNTIME DESTINATION . COMPONENT essgui
-)
-include(InstallRequiredSystemLibraries)
-set(CPACK_COMPONENTS_ALL essgui)
-set(CPACK_PACKAGE_VERSION_MAJOR "${dserv_VERSION_MAJOR}")
-set(CPACK_PACKAGE_VERSION_MINOR "${dserv_VERSION_MINOR}")
-set(CPACK_GENERATOR "DragNDrop")
-include(CPack)
+  INSTALL(TARGETS essgui
+          RUNTIME DESTINATION . COMPONENT essgui
+  )
+  include(InstallRequiredSystemLibraries)
+  set(CPACK_COMPONENTS_ALL essgui)
+  set(CPACK_PACKAGE_VERSION_MAJOR "${dserv_VERSION_MAJOR}")
+  set(CPACK_PACKAGE_VERSION_MINOR "${dserv_VERSION_MINOR}")
+  set(CPACK_GENERATOR "DragNDrop")
+  include(CPack)
 else()
-
+  INSTALL(TARGETS essgui RUNTIME)
 endif()

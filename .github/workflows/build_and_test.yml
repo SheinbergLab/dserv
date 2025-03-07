@@ -6,12 +6,17 @@ jobs:
 
   build:
 
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
 
-      - name: Install package dependencies
+      - name: Install build dependencies
         run: |
+          sudo apt update
           sudo apt install -y build-essential cmake
           sudo apt install -y libevdev-dev
 
@@ -37,7 +42,7 @@ jobs:
 
       - name: Check out our code
         uses: actions/checkout@v4
-  
+
       - name: cmake and make
         run: |
           mkdir build/
@@ -49,7 +54,7 @@ jobs:
         run: |
           mkdir dlsh/
           cd dlsh/
-          wget https://sheinberglab.org/dserv/dlsh.zip
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
 
       - name: ctest
         run: |

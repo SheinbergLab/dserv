@@ -1,0 +1,151 @@
+name: Package and Release
+
+on:
+  push:
+    tags:        
+      - '*'
+
+jobs:
+
+  release:
+
+    strategy:
+      matrix:
+        # Build on not-the-latest to keep dependency versions modest.
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+
+      - name: Set up a build environment.
+        run: |
+          sudo apt update
+          sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
+          sudo apt install -y libevdev-dev zlib1g-dev
+          sudo apt install -y libpango1.0-dev libwayland-dev wayland-protocols libxkbcommon-dev libxinerama-dev libdbus-1-dev libglew-dev  libdecor-0-dev libgtk-3-dev liblz4-dev
+
+      - name: Install TCL 9 to the build environment.
+        run: |
+          git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git
+          cd tcl/unix/
+          ./configure
+          make
+          sudo make install
+
+      - name: Install TCL 9 into the packaging dir.
+        run: |
+          cd tcl/unix/
+          ./configure --prefix=/tmp/package/usr/local/
+          make
+          make install
+
+      - name: Install Jansson to the build environment.
+        run: |
+          git clone https://github.com/akheron/jansson.git
+          cd jansson/
+          git checkout v2.14
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Install FLTK GUI framework into the build environment.
+        run: |
+          git clone https://github.com/fltk/fltk.git
+          cd fltk/
+          git checkout release-1.4.2
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Install libharu PDF library into the build environment.
+        run: |
+          git clone https://github.com/libharu/libharu.git
+          cd libharu/
+          git checkout v2.4.4
+          cmake -DBUILD_SHARED_LIBS=OFF -B build
+          cmake --build build
+          sudo cmake --install build
+
+      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
+      - name: Install our dlsh libs and headers into the build environment.
+        run: |
+          DLSH_VERSION=0.0.13
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/$DLSH_VERSION/dlsh-Linux-$(dpkg --print-architecture)-$DLSH_VERSION.zip
+          unzip dlsh-Linux-$(dpkg --print-architecture)-$DLSH_VERSION.zip
+          sudo cp ./lib/*.a /usr/local/lib
+          sudo cp ./lib/*.so /usr/local/lib
+          sudo cp ./include/*.h /usr/local/include
+
+      # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
+      - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.
+        run: |
+          mkdir -p /tmp/package/usr/local/dlsh
+          cd /tmp/package/usr/local/dlsh
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Install dserv into the packaging dir.
+        run: |
+          cmake -DCMAKE_INSTALL_PREFIX=/tmp/package/usr/local/ -B build
+          cmake --build build
+          cmake --install build
+
+      - name: Install essgui into the packaging dir.
+        run: |
+          cd tools/essgui
+          cmake -DCMAKE_INSTALL_PREFIX=/tmp/package/usr/local -B build
+          cmake --build build
+          cmake --install build
+
+      - name: Add metadata and scripts for the .deb package.
+        run: |
+          mkdir -p /tmp/package/DEBIAN
+          cp dpkg/control /tmp/package/DEBIAN/
+          echo "Version: ${{ github.ref_name }}" >> /tmp/package/DEBIAN/control
+          echo "Architecture: $(dpkg --print-architecture)" >> /tmp/package/DEBIAN/control
+          cp dpkg/postinst /tmp/package/DEBIAN/
+          chmod +x /tmp/package/DEBIAN/postinst
+          cp dpkg/install-dserv-service.sh /tmp/package/usr/local/bin/
+          chmod +x /tmp/package/usr/local/bin/install-dserv-service.sh
+
+      - name: Build the .deb package including dserv, essgui, and TCL 9.
+        run: |
+          dpkg-deb --build /tmp/package dserv-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+
+      - name: Create a GitHub release for the current tag and package.
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ./*.deb
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
+  check:
+
+    needs: release
+
+    strategy:
+      matrix:
+        # Check on latest to confirm compatibility.
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+        
+      - name: Install the package we just released.
+        run: |
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+          sudo apt install --yes ./dserv-${{ runner.os }}-$(dpkg --print-architecture)-${{ github.ref_name }}.deb
+          sudo ldconfig
+
+      - name: Sanity check the installed package.
+        run: |
+          ls -alth /usr/local/bin
+          ls -alth /usr/local/dserv/db
+          echo "test-123" | essctrl && cat history.txt
+          /usr/local/dserv/dserv --help
+          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl

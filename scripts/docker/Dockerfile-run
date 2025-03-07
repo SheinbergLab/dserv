@@ -1,0 +1,49 @@
+# This Dockerfile was helpful for testing packaged dserv, essctrl, and essgui.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# This assumes we already have a .deb package containing dserv, essctrl, and essgui.
+# You can make this locally using scripts/docker/Dockerfile-package.
+# Or, you can get a package from a GitHub release:
+#
+#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.31/dserv-Linux-amd64-0.0.31.deb
+#   mv dserv-Linux-amd64-0.0.31.deb dserv-test.deb
+#
+# To run install the package in a fresh Docker image:
+#
+#   docker build . --no-cache -f scripts/docker/Dockerfile-run -t dserv-run:local
+#
+# To test the installed dserv:
+#
+#   docker run --rm -ti dserv-run:local /usr/local/dserv/dserv --help
+#   docker run --rm -ti dserv-run:local timeout --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+#
+# To test the installed essctrl:
+#
+#   docker run --rm -ti dserv-run:local /bin/sh -c 'echo "test" | essctrl && cat history.txt'
+#
+# To sanity check some installed / configured directories:
+#
+#   docker run --rm -ti dserv-run:local ls -alth /usr/local/bin
+#   docker run --rm -ti dserv-run:local ls -alth /usr/local/dserv/db
+#
+# Testing essgui is also possible, with some additional Docker container configuration.
+# This example gives a Docker container access to the X server on the Docker host:
+#
+#   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti dserv-run:local essgui
+
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Install the .deb package from scripts/docker/Dockerfile-package.
+# Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
+WORKDIR /opt
+ADD dserv-test.deb .
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes ca-certificates /opt/dserv-test.deb \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*

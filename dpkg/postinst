@@ -1,0 +1,10 @@
+#!/bin/sh
+
+set -e
+
+# Refresh dynamic lib cache for libs installed with package.
+ldconfig
+
+# Let non-root user access default dserv database file.
+mkdir -p /usr/local/dserv/db
+chmod a+w /usr/local/dserv/db
