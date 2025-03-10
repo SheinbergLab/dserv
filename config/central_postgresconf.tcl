@@ -5,16 +5,19 @@ package require qpcs
 package require postgres
 package require yajltcl
 
-set conn -1;		       # connection to our postgresql server
-set dbname qpcs;	       # name of database to write to
+set conn -1;		       	# connection to our postgresql server
+set pg_host "10.2.145.91";	# address of postgresql server
+set dbname qpcs;	       	# name of database to write to
+set rig "psychophysics";	# name of this rig that will be attached to every trial entered into the database
+
 set insert_trialinfo_cmd    "insert_trialinfo"
 set insert_status_cmd  "insert_status"
-set host "10.2.145.91"
+
 
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
     global conn dbname insert_trialinfo_cmd insert_status_cmd
-    set conninfo "dbname=$db user=postgres password=postgres host=$host port=5432"
+    set conninfo "dbname=$db user=postgres password=postgres host=$pg_host port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
 	set conn -1
@@ -24,7 +27,7 @@ proc setup_database { db { overwrite 0 } } {
     set stmt {
         CREATE TABLE IF NOT EXISTS trial (
   	    base_trial_id INTEGER primary key generated always as identity,
-	    host VARCHAR(256),
+	     VARCHAR(256),
             block_id INTEGER,
             trial_id INTEGER,
 	    project TEXT,
@@ -74,7 +77,7 @@ proc setup_database { db { overwrite 0 } } {
 proc process_ess { dpoint data } {
     global conn insert_trialinfo_cmd insert_status_cmd
 
-    set host [dservGet system/hostaddr]
+    # set host [dservGet system/hostaddr]
     set domain ess
 
     # if the system has changed, update the blockid
@@ -92,22 +95,24 @@ proc process_ess { dpoint data } {
 
 	set blockid [dservGet ess/block_id]
 	postgres::exec_prepared $conn $insert_trialinfo_cmd \
-	    $host $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data
-    } else {
-	set key [file tail $dpoint]
-	postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
+	    $rig $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data
     }
+    # dont insert status updates on the rigs
+    #else {
+    #	set key [file tail $dpoint]
+    #	postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
+    #}
 }
 
-proc process_system { dpoint data } {
-    global conn insert_status_cmd
+# proc process_system { dpoint data } {
+#     global conn insert_status_cmd
 
-    set host [dservGet system/hostaddr]
-    set domain system
+#     set host [dservGet system/hostaddr]
+#     set domain system
     
-    set key [file tail $dpoint]
-    postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
-}
+#     set key [file tail $dpoint]
+#     postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
+# }
 
 
 setup_database $dbname
@@ -115,8 +120,8 @@ setup_database $dbname
 dservAddMatch   ess/*
 dpointSetScript ess/* process_ess
 
-dservAddMatch   system/*
-dpointSetScript system/* process_system
+# dservAddMatch   system/*
+# dpointSetScript system/* process_system
 
 # insert initial settings into the ESS table
 foreach v "time dio state name executable remote ipaddr \
