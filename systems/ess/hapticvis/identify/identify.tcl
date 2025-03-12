@@ -151,7 +151,7 @@ namespace eval hapticvis::identify {
 	$s add_method stim_off {} {
 	    rmtSend "!stim_off"
 	    if { $trial_type == "haptic" && $sample_up == 1 } {
-		my haptic_clear
+		my haptic_prep
 	    }
 	}
 
@@ -212,7 +212,7 @@ namespace eval hapticvis::identify {
 	    if { $trial_type == "visual" } {
 		rmtSend "!sample_off"
 	    } elseif { $trial_type == "haptic" } {
-		my haptic_clear
+		my haptic_prep
 	    }
 	}
 
