@@ -1,31 +1,30 @@
-# This Dockerfile was helpful for building and packaging dserv, essctrl, essgui, and TCL 9.
+# This Dockerfile was helpful for building and packaging essgui.
 # Docker gives a clean environment, meaning the steps below must account for all dependencies.
 # Docker also gives us a local environment that's easy to iterate on.
 # Getting this working was the basis for the automated CI builds, over in .github/workflows/.
 #
 # To run this docker build and produce a Docker image, cd to the dserv repo root and:
 #
-#   docker build . -f scripts/docker/Dockerfile-package -t dserv-package:local
+#   docker build . -f scripts/docker/Dockerfile-essgui-package -t essgui-package:local
 #
 # To sanity check the packaged artifact:
 #
-#   docker run --rm -ti dserv-package:local dpkg-deb --info dserv_0.0.0_amd64.deb
-#   docker run --rm -ti dserv-package:local dpkg-deb --contents dserv_0.0.0_amd64.deb
+#   docker run --rm -ti essgui-package:local dpkg-deb --info essgui_0.0.0_amd64.deb
+#   docker run --rm -ti essgui-package:local dpkg-deb --contents essgui_0.0.0_amd64.deb
 #
 # To grab the generated .deb package out of a container from this image:
 #
-#   docker run --rm -ti -v $PWD:$PWD dserv-package:local cp dserv_0.0.0_amd64.deb $PWD
+#   docker run --rm -ti -v $PWD:$PWD essgui-package:local cp essgui_0.0.0_amd64.deb $PWD
 #
-# To test package installation and running programs, see scripts/docker/Dockerfile-run.
+# To test package installation and running programs, see scripts/docker/Dockerfile-essgui-run.
 
 # Start with a fresh Ubuntu environment.
 FROM ubuntu:22.04
 
-# Install build tools, dserv build dependencies, and essgui build dependencies.
+# Install build tools and essgui build dependencies.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \
     && apt install --no-install-recommends --yes git wget ca-certificates build-essential cmake zip unzip \
-    libevdev-dev zlib1g-dev \
     libpango1.0-dev libwayland-dev wayland-protocols libxkbcommon-dev libxinerama-dev libdbus-1-dev libglew-dev  libdecor-0-dev libgtk-3-dev liblz4-dev \
     && apt-get clean \
     && apt-get autoremove \
@@ -74,27 +73,7 @@ RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSIO
 
 # Build dserv itself and package it for release.
 ADD . /work/dserv
-WORKDIR /work/dserv/
+WORKDIR /work/dserv/tools/essgui
 RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
   && cmake --build build \
   && cpack -G DEB --config build/CPackConfig.cmake
-
-# # Build essgui itself and install to the packaging dir.
-# WORKDIR /work/dserv/tools/essgui
-# RUN cmake -DCMAKE_INSTALL_PREFIX=/work/package/usr/local -B build \
-#   && cmake --build build \
-#   && cmake --install build
-
-# # Add metadata and scripts for the .deb package.
-# WORKDIR /work/package/DEBIAN
-# RUN cp /work/dserv/dpkg/control . \
-#   && echo "Version: 0.0.test" >> ./control \
-#   && echo "Architecture: $(dpkg --print-architecture)" >> ./control \
-#   && cp /work/dserv/dpkg/postinst . \
-#   && chmod +x ./postinst \
-#   && cp /work/dserv/dpkg/install-dserv-service.sh . \
-#   && chmod +x ./install-dserv-service.sh
-
-# # Build the .deb package.
-# WORKDIR /work
-# RUN dpkg-deb --build /work/package dserv-test.deb

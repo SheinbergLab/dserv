@@ -4,7 +4,7 @@
 # Getting this working was the basis for the automated CI builds, over in .github/workflows/.
 #
 # This assumes we already have a .deb package containing dserv, essctrl, and essgui.
-# You can make this locally using scripts/docker/Dockerfile-package.
+# You can make this locally using scripts/docker/Dockerfile-dserv-package.
 # Or, you can get a package from a GitHub release:
 #
 #   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.33/dserv-Linux-amd64-0.0.33.deb
@@ -12,7 +12,7 @@
 #
 # To install the package in a fresh Docker image:
 #
-#   docker build . --no-cache -f scripts/docker/Dockerfile-run -t dserv-run:local
+#   docker build . --no-cache -f scripts/docker/Dockerfile-dserv-run -t dserv-run:local
 #
 # To test the installed dserv:
 #
@@ -37,7 +37,7 @@
 # Start with a fresh Ubuntu environment.
 FROM ubuntu:22.04
 
-# Install the .deb package from scripts/docker/Dockerfile-package.
+# Install the .deb package build elsewhere into this fresh environment.
 # Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
 WORKDIR /opt
 ADD dserv_0.0.0_amd64.deb .

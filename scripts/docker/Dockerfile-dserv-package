@@ -1,0 +1,62 @@
+# This Dockerfile was helpful for building and packaging dserv, essctrl, and TCL 9.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# To run this docker build and produce a Docker image, cd to the dserv repo root and:
+#
+#   docker build . -f scripts/docker/Dockerfile-dserv-package -t dserv-package:local
+#
+# To sanity check the packaged artifact:
+#
+#   docker run --rm -ti dserv-package:local dpkg-deb --info dserv_0.0.0_amd64.deb
+#   docker run --rm -ti dserv-package:local dpkg-deb --contents dserv_0.0.0_amd64.deb
+#
+# To grab the generated .deb package out of a container from this image:
+#
+#   docker run --rm -ti -v $PWD:$PWD dserv-package:local cp dserv_0.0.0_amd64.deb $PWD
+#
+# To test package installation and running programs, see scripts/docker/Dockerfile-dserv-run.
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Install build tools, dserv build dependencies, and essgui build dependencies.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes git wget ca-certificates build-essential cmake zip unzip \
+    libevdev-dev zlib1g-dev \
+    libpango1.0-dev libwayland-dev wayland-protocols libxkbcommon-dev libxinerama-dev libdbus-1-dev libglew-dev  libdecor-0-dev libgtk-3-dev liblz4-dev \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install TLC 9 into the build environment.
+WORKDIR /work
+RUN git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git \
+  && cd tcl/unix/ \
+  && ./configure \
+  && make \
+  && make install
+
+# Install Jansson JSON library into the build environment.
+WORKDIR /work
+RUN git clone https://github.com/akheron/jansson.git \
+  && cd jansson/ \
+  && git checkout v2.14 \
+  && cmake -B build \
+  && cmake --build build \
+  && cmake --install build
+
+# Install our dlsh libs and headers into the build environment.
+ENV DLSH_VERSION=0.0.15
+WORKDIR /work/dlsh
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_amd64.deb \
+  && dpkg --install dlsh_${DLSH_VERSION}_amd64.deb
+
+# Build dserv itself and package it for release.
+ADD . /work/dserv
+WORKDIR /work/dserv/
+RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
+  && cmake --build build \
+  && cpack -G DEB --config build/CPackConfig.cmake

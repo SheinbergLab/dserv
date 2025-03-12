@@ -1,3 +1,5 @@
 build/
 src/dservConfig.h
 dlsh/
+
+*.deb

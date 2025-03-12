@@ -1,0 +1,44 @@
+# This Dockerfile was helpful for testing packaged essgui.
+# Docker gives a clean environment, meaning the steps below must account for all dependencies.
+# Docker also gives us a local environment that's easy to iterate on.
+# Getting this working was the basis for the automated CI builds, over in .github/workflows/.
+#
+# This assumes we already have a .deb package containing essgui.
+# You can make this locally using scripts/docker/Dockerfile-essgui-package.
+# Or, you can get a package from a GitHub release:
+#
+#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.33/essgui-Linux-amd64-0.0.33.deb
+#   mv essgui-Linux-amd64-0.0.33.deb essgui_0.0.0_amd64.deb
+#
+# To install the package in a fresh Docker image:
+#
+#   docker build . --no-cache -f scripts/docker/Dockerfile-essgui-run -t essgui-run:local
+#
+# To sanity check some installed / configured directories:
+#
+#   docker run --rm -ti essgui-run:local ls -alth /usr/local/bin
+#   docker run --rm -ti essgui-run:local ls -alth /usr/local/lib
+#
+# Testing essgui itself is possible, with some additional Docker container configuration.
+# This example gives a Docker container access to the X server on the Docker host:
+#
+#   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti essgui-run:local essgui
+
+
+# Start with a fresh Ubuntu environment.
+FROM ubuntu:22.04
+
+# Install the .deb package build elsewhere into this fresh environment.
+# Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
+WORKDIR /opt
+ADD essgui_0.0.0_amd64.deb .
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt update \
+    && apt install --no-install-recommends --yes wget ca-certificates /opt/essgui_0.0.0_amd64.deb \
+    && apt-get clean \
+    && apt-get autoremove \
+    && rm -rf /var/lib/apt/lists/*
+
+# # Install our dlsh TCL utils and their dependencies.
+# WORKDIR /usr/local/dlsh
+# RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
