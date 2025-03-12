@@ -133,7 +133,7 @@ jobs:
       - name: Create a GitHub release for the current tag and package.
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "./*.deb"
+          artifacts: "./tools/essgui/*.deb"
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
