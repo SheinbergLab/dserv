@@ -8,9 +8,9 @@
 # Or, you can get a package from a GitHub release:
 #
 #   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.33/dserv-Linux-amd64-0.0.33.deb
-#   mv dserv-Linux-amd64-0.0.33.deb dserv-test.deb
+#   mv dserv-Linux-amd64-0.0.33.deb dserv_0.0.0_amd64.deb
 #
-# To run install the package in a fresh Docker image:
+# To install the package in a fresh Docker image:
 #
 #   docker build . --no-cache -f scripts/docker/Dockerfile-run -t dserv-run:local
 #
@@ -40,10 +40,14 @@ FROM ubuntu:22.04
 # Install the .deb package from scripts/docker/Dockerfile-package.
 # Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
 WORKDIR /opt
-ADD dserv-test.deb .
+ADD dserv_0.0.0_amd64.deb .
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \
-    && apt install --no-install-recommends --yes ca-certificates /opt/dserv-test.deb \
+    && apt install --no-install-recommends --yes wget ca-certificates /opt/dserv_0.0.0_amd64.deb \
     && apt-get clean \
     && apt-get autoremove \
     && rm -rf /var/lib/apt/lists/*
+
+# Install our dlsh TCL utils and their dependencies.
+WORKDIR /usr/local/dlsh
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip

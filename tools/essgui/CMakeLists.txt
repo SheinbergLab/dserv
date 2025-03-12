@@ -65,3 +65,5 @@ elseif(APPLE)
 else()
   INSTALL(TARGETS essgui RUNTIME)
 endif()
+
+# Depends: libevdev2, libpq5, zlib1g, yajl-tools, libx11-6, libxinerama1, libxfixes3, libxcursor1, libpango-1.0-0, libpangocairo-1.0-0, libgtk-3-0
