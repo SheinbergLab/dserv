@@ -215,7 +215,7 @@ set hbs "192.168.4.100 192.168.4.101 192.168.4.102 192.168.4.201"
 set rigs "192.168.88.40"
 if { [lsearch $hbs $host] >= 0 } {
     subprocess 2572 "source [file join $dspath config/postgresconf.tcl]"
-} elseif { [lsearch $hbs $host] >= 0 } {
+} elseif { [lsearch $rigs $host] >= 0 } {
     subprocess 2572 "source [file join $dspath config/central_postgresconf.tcl]"
 }
 
