@@ -50,6 +50,7 @@ namespace eval hapticvis {
 
 	## track status of cue, sample, choices
 	$sys add_variable sample_up          0
+	$sys add_variable sample_presented   0
 	$sys add_variable cue_up             0
 	$sys add_variable choices_up         0
 
@@ -128,6 +129,7 @@ namespace eval hapticvis {
 	#
 	$sys add_action stim_on {
 	    set sample_up  0
+	    set sample_presented 0
 	    set cue_up     0
 	    set choices_up 0
 	    set sample_on_time -1
@@ -137,6 +139,7 @@ namespace eval hapticvis {
 	    timerTick $choice_timer $choice_delay
 	    timerTick $cue_timer $cue_delay
 	    my stim_on
+	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype	
 	    ::ess::evt_put STIMULUS ON [now] 
 	}
 	
@@ -151,6 +154,9 @@ namespace eval hapticvis {
 	}
 	
 	$sys add_transition stim_wait {
+	    if { $sample_presented == 1 } {
+		return sample_presented
+	    }
 	    if { [timerExpired $sample_timer] } {
 		if { $sample_up == 0 } {
 		    return sample_on
@@ -205,19 +211,28 @@ namespace eval hapticvis {
 	$sys add_transition cue_off { return stim_wait }
 	
 	#
-	# sample_on: show sample
+	# sample_on: request sample on
 	#
 	$sys add_action sample_on {
 	    my sample_on
-	    set sample_up 1
-	    timerTick $sample_timer $sample_duration
-	    set sample_on_time [now]
-	    ::ess::evt_put SAMPLE ON $sample_on_time
-	    ::ess::evt_put STIMTYPE STIMID [now] $stimtype	
+	    if { $trial_type == "visual" } {
+		set sample_presented 1
+	    }
 	}
 	
 	$sys add_transition sample_on { return stim_wait }
-
+	
+	#
+	# sample_presented: now that sample is up, tick timer
+	#
+	$sys add_action sample_presented {
+	    set sample_presented -1; # don't do this again
+	    set sample_up 1;	     # sample is now up
+	    timerTick $sample_timer $sample_duration
+	    set sample_on_time [now]
+	    ::ess::evt_put SAMPLE ON $sample_on_time
+	}
+	$sys add_transition sample_presented { return stim_wait }
 	
 	#
 	# sample_off: turn sample off
