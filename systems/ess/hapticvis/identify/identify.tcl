@@ -14,6 +14,7 @@ namespace eval hapticvis::identify {
 	$s add_param juice_ml            0.6       variable float
 	$s add_param use_joystick          1       variable bool
 	$s add_param use_touchscreen       1       variable bool
+	$s add_param simulate_grasp        0       variable bool
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
@@ -159,6 +160,7 @@ namespace eval hapticvis::identify {
 	}
 
 	$s add_method haptic_show { shape_id a } {
+	    if { $simulate_grasp } { return }
 	    package require rest
 	    set ip 192.168.88.84
 	    set port 8888
@@ -182,6 +184,7 @@ namespace eval hapticvis::identify {
 	}
 	
 	$s add_method haptic_clear { } {
+	    if { $simulate_grasp } { return }
 	    package require rest
 	    set ip 192.168.88.84
 	    set port 8888
@@ -191,6 +194,7 @@ namespace eval hapticvis::identify {
 	}
 
 	$s add_method haptic_prep { } {
+	    if { $simulate_grasp } { return }
 	    package require rest
 	    set ip 192.168.88.84
 	    set port 8888
@@ -211,6 +215,18 @@ namespace eval hapticvis::identify {
 	    }
 	}
 
+	$s add_method sample_presented {} {
+	    if { $trial_type == "visual" } {
+		if { $sample_up == 1 } { return 1 } { return 0 }
+	    } else {
+		if { [dservGet ess/grasp/available] } {
+		    return 1
+		} else {
+		    return 0
+		}
+	    }
+	}
+	
 	$s add_method sample_off {} {
 	    if { $trial_type == "visual" } {
 		rmtSend "!sample_off"

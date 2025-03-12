@@ -154,6 +154,12 @@ namespace eval hapticvis {
 	}
 	
 	$sys add_transition stim_wait {
+	    # haptic is waiting for available signal
+	    if { $sample_up == -2 } { 
+		if { [my sample_presented] } {
+		    set sample_presented 1
+		}
+	    }
 	    if { $sample_presented == 1 } {
 		return sample_presented
 	    }
@@ -221,7 +227,7 @@ namespace eval hapticvis {
 		# this is important, because it will signal
 		# that we are not ready yet but also that
 		# we don't want to call sample_on again!
-		set sample_up -1
+		set sample_up -2
 	    }
 	}
 	
@@ -440,6 +446,7 @@ namespace eval hapticvis {
 	    
 	$sys add_method cue_on {} { print cue_on }
 	$sys add_method cue_off {} { print cue_off }
+        $sys add_method sample_presented {} { return 1 }
         $sys add_method sample_on {} { print sample_on }
 	$sys add_method sample_off {} { print sample_off }
 	$sys add_method choices_on {} { print choices_on }
