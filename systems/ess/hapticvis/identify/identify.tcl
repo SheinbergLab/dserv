@@ -160,11 +160,22 @@ namespace eval hapticvis::identify {
 	    set ip 192.168.88.84
 	    set port 8888
 
+	    set follow_dial 0; # this would be 1 if you want to have the shape rotate along with the dial
 	    set angle [expr {int($a)%360}]
 	    set url http://${ip}:${port}
 	    set res [rest::get $url \
 			 [list function pick_and_place \
-			      hand 1 left_id $shape_id left_angle $angle]]
+			      	hand 1 \
+	 			left_id $shape_id \
+     				left_angle $angle \
+	 			return_duplicates 0 \
+     				dont_present 1 \
+	 			use_dummy 1 \
+     				dummy_ids 2020,2001 \
+	 			reset_dial $follow_dial \
+     				dial_following $follow_dial
+	 		 ]
+     		    ]
 	}
 	
 	$s add_method haptic_clear { } {
