@@ -14,10 +14,11 @@
 #
 #   docker build . --no-cache -f scripts/docker/Dockerfile-essgui-run -t essgui-run:local
 #
-# To sanity check some installed / configured directories:
+# To sanity check what got installed:
 #
 #   docker run --rm -ti essgui-run:local ls -alth /usr/local/bin
 #   docker run --rm -ti essgui-run:local ls -alth /usr/local/lib
+#   docker run --rm -ti essgui-run:local essgui || echo "OK"
 #
 # Testing essgui itself is possible, with some additional Docker container configuration.
 # This example gives a Docker container access to the X server on the Docker host:

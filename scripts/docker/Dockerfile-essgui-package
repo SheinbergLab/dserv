@@ -71,7 +71,7 @@ WORKDIR /work/dlsh
 RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_amd64.deb \
   && dpkg --install dlsh_${DLSH_VERSION}_amd64.deb
 
-# Build dserv itself and package it for release.
+# Build essgui itself and package it for release.
 ADD . /work/dserv
 WORKDIR /work/dserv/tools/essgui
 RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
