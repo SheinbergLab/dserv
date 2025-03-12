@@ -73,12 +73,9 @@ jobs:
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.13
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/$DLSH_VERSION/dlsh-Linux-$(dpkg --print-architecture)-$DLSH_VERSION.zip
-          unzip dlsh-Linux-$(dpkg --print-architecture)-$DLSH_VERSION.zip
-          sudo cp ./lib/*.a /usr/local/lib
-          sudo cp ./lib/*.so /usr/local/lib
-          sudo cp ./include/*.h /usr/local/include
+          DLSH_VERSION=0.0.15
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
 
       # TODO: obtain dlsh from SheinbergLab with a version, not from benjamin-heasly with "initial"
       - name: Install our dlsh TCL utils and thier dependencies into the packaging dir.

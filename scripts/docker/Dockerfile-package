@@ -65,15 +65,12 @@ RUN git clone https://github.com/libharu/libharu.git \
   && cmake --install build
 
 # Install our dlsh libs and headers into the build environment.
-ENV DLSH_VERSION=0.0.13
+ENV DLSH_VERSION=0.0.15
 WORKDIR /work/dlsh
-RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/$DLSH_VERSION/dlsh-Linux-$(dpkg --print-architecture)-$DLSH_VERSION.zip \
-  && unzip dlsh-Linux-$(dpkg --print-architecture)-$DLSH_VERSION.zip \
-  && cp ./lib/*.a /usr/local/lib \
-  && cp ./lib/*.so /usr/local/lib \
-  && cp ./include/*.h /usr/local/include
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_amd64.deb \
+  && dpkg --install dlsh_${DLSH_VERSION}_amd64.deb
 
-# Install our dlsh TCL utils and thier dependencies into the packaging dir.
+# Install our dlsh TCL utils and their dependencies into the packaging dir.
 WORKDIR /work/package/usr/local/dlsh
 RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
 
