@@ -218,6 +218,12 @@ namespace eval hapticvis {
 	    if { $trial_type == "visual" } {
 		set sample_presented 1
 	    }
+	    else {
+		# this is important, because it will signal
+		# that we are not ready yet but also that
+		# we don't want to call sample_on again!
+		set sample_up -1
+	    }
 	}
 	
 	$sys add_transition sample_on { return stim_wait }
