@@ -27,7 +27,7 @@ proc setup_database { db { overwrite 0 } } {
     set stmt {
         CREATE TABLE IF NOT EXISTS trial (
   	    base_trial_id INTEGER primary key generated always as identity,
-	     VARCHAR(256),
+	    host VARCHAR(256),
             block_id INTEGER,
             trial_id INTEGER,
 	    project TEXT,
