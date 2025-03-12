@@ -217,8 +217,7 @@ namespace eval hapticvis {
 	    my sample_on
 	    if { $trial_type == "visual" } {
 		set sample_presented 1
-	    }
-	    else {
+	    } else {
 		# this is important, because it will signal
 		# that we are not ready yet but also that
 		# we don't want to call sample_on again!
