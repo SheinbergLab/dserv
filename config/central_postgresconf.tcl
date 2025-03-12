@@ -75,7 +75,7 @@ proc setup_database { db { overwrite 0 } } {
 }
 
 proc process_ess { dpoint data } {
-    global conn insert_trialinfo_cmd insert_status_cmd
+    global conn insert_trialinfo_cmd insert_status_cmd rig
 
     # set host [dservGet system/hostaddr]
     set domain ess
@@ -94,8 +94,11 @@ proc process_ess { dpoint data } {
 	}
 
 	set blockid [dservGet ess/block_id]
-	postgres::exec_prepared $conn $insert_trialinfo_cmd \
-	    $rig $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data
+
+	if { [catch { postgres::exec_prepared $conn $insert_trialinfo_cmd \
+	    $rig $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data } error] } {
+	puts $error
+    	}     
     }
     # dont insert status updates on the rigs
     #else {
