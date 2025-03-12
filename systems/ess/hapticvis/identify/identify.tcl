@@ -43,7 +43,7 @@ namespace eval hapticvis::identify {
 	    ::ess::juicer_init
 
 	    # register to listen for haptic events
-	    ::ess::haptic::init
+	    ::haptic::init
 	    
 	    soundReset
 	    soundSetVoice 81 0    0

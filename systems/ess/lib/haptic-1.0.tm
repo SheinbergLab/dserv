@@ -110,7 +110,7 @@ namespace eval haptic {
     # listen for available message and trigger update
     proc init {} {
 	dservAddExactMatch grasp/available
-	dpointSetScript grasp/available ::ess::haptic::haptic_process_available
+	dpointSetScript grasp/available ::haptic::haptic_process_available
 	dservSet ess/grasp/available 0
     }
     
