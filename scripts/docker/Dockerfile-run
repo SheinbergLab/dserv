@@ -7,8 +7,8 @@
 # You can make this locally using scripts/docker/Dockerfile-package.
 # Or, you can get a package from a GitHub release:
 #
-#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.31/dserv-Linux-amd64-0.0.31.deb
-#   mv dserv-Linux-amd64-0.0.31.deb dserv-test.deb
+#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.33/dserv-Linux-amd64-0.0.33.deb
+#   mv dserv-Linux-amd64-0.0.33.deb dserv-test.deb
 #
 # To run install the package in a fresh Docker image:
 #
