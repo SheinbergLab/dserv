@@ -17,7 +17,7 @@ set insert_status_cmd  "insert_status"
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
     global conn dbname insert_trialinfo_cmd insert_status_cmd
-    set conninfo "dbname=$db user=postgres password=postgres host=$pg_host port=5432"
+    set conninfo "dbname=$db user=qpcs_insert password=qpcs_insert host=$pg_host port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
 	set conn -1
@@ -53,25 +53,25 @@ proc setup_database { db { overwrite 0 } } {
 
     
     # Create the 'status' table if it does not exist
-    set stmt {
-        CREATE TABLE IF NOT EXISTS status (
-	    host VARCHAR(256),
-	    status_source TEXT,
-            status_type TEXT UNIQUE,
-            status_value TEXT,
-	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-	    primary key (host, status_source, status_type)
-        );
-    }
-    postgres::exec $conn $stmt
+    # set stmt {
+    #     CREATE TABLE IF NOT EXISTS status (
+	   #  host VARCHAR(256),
+	   #  status_source TEXT,
+    #         status_type TEXT UNIQUE,
+    #         status_value TEXT,
+	   #  sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+	   #  primary key (host, status_source, status_type)
+    #     );
+    # }
+    # postgres::exec $conn $stmt
 
     # Create prepared insert statement to make updates more efficient
-    set stmt {
-	INSERT INTO status (host, status_source, status_type, status_value) VALUES(($1), ($2), ($3), ($4))
-	ON CONFLICT (status_type)
-	DO UPDATE SET host = ($1), status_source = ($2), status_type = ($3), status_value = ($4), sys_time = current_timestamp;
-    }
-    postgres::prepare $conn $insert_status_cmd $stmt 1
+ #    set stmt {
+	# INSERT INTO status (host, status_source, status_type, status_value) VALUES(($1), ($2), ($3), ($4))
+	# ON CONFLICT (status_type)
+	# DO UPDATE SET host = ($1), status_source = ($2), status_type = ($3), status_value = ($4), sys_time = current_timestamp;
+ #    }
+ #    postgres::prepare $conn $insert_status_cmd $stmt 1
 }
 
 proc process_ess { dpoint data } {
