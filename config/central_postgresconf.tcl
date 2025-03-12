@@ -16,7 +16,7 @@ set insert_status_cmd  "insert_status"
 
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
-    global conn dbname insert_trialinfo_cmd insert_status_cmd
+    global conn dbname insert_trialinfo_cmd insert_status_cmd pg_host
     set conninfo "dbname=$db user=qpcs_insert password=qpcs_insert host=$pg_host port=5432"
     if { [catch { set conn [postgres::connect $conninfo] } error] } {
 	puts $error
