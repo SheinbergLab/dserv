@@ -100,6 +100,20 @@ namespace eval haptic {
 	dg_write trialdb $trialdb_file
 	dg_delete trialdb
     }
+
+
+    proc haptic_process_available { dpoint data } {
+	dservSet ess/grasp/available $data
+	::ess::do_update
+    }
+
+    # listen for available message and trigger update
+    proc init {} {
+	dservAddExactMatch grasp/available
+	dpointSetScript grasp/available ::ess::haptic::haptic_process_available
+	dservSet ess/grasp/available 0
+    }
+    
 }
 
 
