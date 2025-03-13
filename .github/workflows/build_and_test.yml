@@ -54,7 +54,7 @@ jobs:
         run: |
           mkdir dlsh/
           cd dlsh/
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
 
       - name: ctest
         run: |
