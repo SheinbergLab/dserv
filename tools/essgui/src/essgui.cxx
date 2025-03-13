@@ -1017,6 +1017,7 @@ int update_param(const char *pstr)
 	goto clean_and_return;
       }
       o->value(argv[i+1]);
+      o->redraw();
       retval = 1;
     }
   clean_and_return:
