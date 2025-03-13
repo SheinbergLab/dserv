@@ -17,6 +17,7 @@ git clone --recurse-submodules https://github.com/SheinbergLab/dserv.git
 If you already have this repo and you want to clone or update the submodules:
 
 ```
+git submodule update --init --recursive
 git pull --recurse-submodules
 ```
 
