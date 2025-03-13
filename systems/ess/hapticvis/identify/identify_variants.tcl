@@ -21,6 +21,7 @@ namespace eval hapticvis::identify {
 	sample_delay 500
 	choice_duration 30000
 	stim_duration 30000
+	post_response_time 500
     }
     variable params_haptic {
 	interblock_time 500
@@ -30,6 +31,7 @@ namespace eval hapticvis::identify {
 	choice_duration 30000
 	choice_delay 0
 	stim_duration 30000
+	post_response_time 500
     }
     variable params_haptic_follow               $params_haptic
     variable params_haptic_constrained_locked   $params_haptic
