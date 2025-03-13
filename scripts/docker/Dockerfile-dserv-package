@@ -24,31 +24,28 @@ FROM ubuntu:22.04
 # Install build tools, dserv build dependencies, and essgui build dependencies.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \
-    && apt install --no-install-recommends --yes git wget ca-certificates build-essential cmake zip unzip \
+    && apt install --no-install-recommends --yes ca-certificates build-essential cmake \
     libevdev-dev zlib1g-dev \
     && apt-get clean \
     && apt-get autoremove \
     && rm -rf /var/lib/apt/lists/*
 
+# Add this repo and submodules.
+ADD . /work/dserv/
+
 # Install TLC 9 into the build environment.
-WORKDIR /work
-RUN git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git \
-  && cd tcl/unix/ \
-  && ./configure \
+WORKDIR /work/dserv/deps/tcl/unix/
+RUN ./configure \
   && make \
   && make install
 
 # Install Jansson JSON library into the build environment.
-WORKDIR /work
-RUN git clone https://github.com/akheron/jansson.git \
-  && cd jansson/ \
-  && git checkout v2.14 \
-  && cmake -B build \
+WORKDIR /work/dserv/deps/jansson/
+RUN cmake -B build \
   && cmake --build build \
   && cmake --install build
 
 # Build dserv itself and package it for release.
-ADD . /work/dserv
 WORKDIR /work/dserv/
 RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
   && cmake --build build \

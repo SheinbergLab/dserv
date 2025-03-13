@@ -27,17 +27,11 @@
 #
 #   docker run --rm -ti dserv-run:local ls -alth /usr/local/bin
 #   docker run --rm -ti dserv-run:local ls -alth /usr/local/dserv/db
-#
-# Testing essgui is also possible, with some additional Docker container configuration.
-# This example gives a Docker container access to the X server on the Docker host:
-#
-#   docker run -u $UID -e DISPLAY -v $HOME/.Xauthority:/.Xauthoruty -e XAUTHORITY=/.Xauthority -v /tmp/.X11-unix:/tmp/.X11-unix --rm -ti dserv-run:local essgui
-
 
 # Start with a fresh Ubuntu environment.
 FROM ubuntu:22.04
 
-# Install the .deb package build elsewhere into this fresh environment.
+# Install the .deb package built elsewhere into this fresh environment.
 # Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
 WORKDIR /opt
 ADD dserv_0.0.0_amd64.deb .

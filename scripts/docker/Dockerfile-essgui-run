@@ -29,7 +29,7 @@
 # Start with a fresh Ubuntu environment.
 FROM ubuntu:22.04
 
-# Install the .deb package build elsewhere into this fresh environment.
+# Install the .deb package built elsewhere into this fresh environment.
 # Using apt to install it means we'll also install runtime dependencies declared in the dpkg/control file.
 WORKDIR /opt
 ADD essgui_0.0.0_amd64.deb .

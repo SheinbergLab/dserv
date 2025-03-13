@@ -20,10 +20,14 @@ jobs:
           sudo apt install -y build-essential cmake
           sudo apt install -y libevdev-dev
 
+      - name: Check out our code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
       - name: Build and install tcl 9
         run: |
-          git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git
-          cd tcl/unix/
+          cd deps/tcl/unix/
           ./configure
           make
           sudo make install
@@ -31,24 +35,17 @@ jobs:
 
       - name: Build and install jansson static lib
         run: |
-          git clone https://github.com/akheron/jansson.git
-          cd jansson/
-          git checkout v2.14
+          cd deps/jansson/
           mkdir build/
           cd build/
           cmake ..
           make
           sudo make install
 
-      - name: Check out our code
-        uses: actions/checkout@v4
-
-      - name: cmake and make
+      - name: cmake and make dserv itself
         run: |
-          mkdir build/
-          cd build/
-          cmake ..
-          make
+          cmake -B build
+          cmake --build build
 
       - name: Obtain dlsh (for test scripts to use)
         run: |
@@ -58,5 +55,4 @@ jobs:
 
       - name: ctest
         run: |
-          cd build/
-          ctest -VV --timeout 10 ..
+          ctest -VV --timeout 10
