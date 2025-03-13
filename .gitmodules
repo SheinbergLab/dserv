@@ -7,3 +7,6 @@
 [submodule "deps/fltk"]
 	path = deps/fltk
 	url = https://github.com/fltk/fltk.git
+[submodule "deps/libharu"]
+	path = deps/libharu
+	url = https://github.com/libharu/libharu.git

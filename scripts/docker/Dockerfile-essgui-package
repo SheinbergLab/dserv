@@ -52,22 +52,18 @@ RUN cmake -B build \
   && cmake --install build  
 
 # Install libharu PDF library into the build environment.
-WORKDIR /work
-RUN git clone https://github.com/libharu/libharu.git \
-  && cd libharu \
-  && git checkout v2.4.4 \
-  && cmake -DBUILD_SHARED_LIBS=OFF -B build \
+WORKDIR /work/deps/libharu/
+RUN cmake -DBUILD_SHARED_LIBS=OFF -B build \
   && cmake --build build \
   && cmake --install build
 
 # Install our dlsh libs and headers into the build environment.
-ENV DLSH_VERSION=0.0.15
+ENV DLSH_VERSION=0.0.16
 WORKDIR /work/dlsh
 RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_amd64.deb \
   && dpkg --install dlsh_${DLSH_VERSION}_amd64.deb
 
 # Build essgui itself and package it for release.
-ADD . /work/dserv
 WORKDIR /work/dserv/tools/essgui
 RUN cmake -D PROJECT_VERSION=0.0.0 -B build \
   && cmake --build build \
