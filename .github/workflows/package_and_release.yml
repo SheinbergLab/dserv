@@ -16,6 +16,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    permissions:
+      contents: write
+      
     steps:
 
       - name: Set up a build environment.
