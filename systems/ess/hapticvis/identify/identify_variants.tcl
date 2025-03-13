@@ -13,10 +13,21 @@ namespace eval hapticvis::identify {
     # state system parameters
 
     variable params_defaults { delay_time 100 }
-    variable params_visual { sample_duration 1000 \
-                              choice_delay 1500 choice_duration 8500 }
-    variable params_haptic { sample_duration 8000 \
-                              choice_delay 1000 choice_duration 8500 }
+    variable params_visual {
+	sample_duration 1500
+	choice_delay 0
+	sample_delay 500
+	choice_duration 30000
+	stim_duration 30000
+    }
+    variable params_haptic {
+	sample_delay 0
+	sample_duration 5000
+	choice_duration 30000
+	choice_delay 0
+	stim_duration 30000
+    }
+    
 
     # variant description
 
