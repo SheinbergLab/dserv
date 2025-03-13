@@ -24,6 +24,7 @@ namespace eval hapticvis::identify {
 	$s add_variable correct           -1
 	$s add_variable n_choices          0
 	$s add_variable choices           {}
+	$s add_variable follow_dial        0
 	
 	$s set_protocol_init_callback {
 	    ::ess::init
@@ -118,6 +119,7 @@ namespace eval hapticvis::identify {
 		set stimtype [dl_get stimdg:stimtype $cur_id]
 		set n_choices [dl_get stimdg:n_choices $cur_id]
 		set choices [dl_tcllist [dl_fromto 0 $n_choices]]
+		set follow_dial [dl_get stimdg:follow_dial $cur_id]
 		
 		foreach i $choices {
 		    # set these touching_response knows where choices are
@@ -165,7 +167,6 @@ namespace eval hapticvis::identify {
 	    set ip 192.168.88.84
 	    set port 8888
 
-	    set follow_dial 0; # this would be 1 if you want to have the shape rotate along with the dial
 	    set angle [expr {int($a)%360}]
 	    set url http://${ip}:${port}
 	    set res [rest::get $url \
