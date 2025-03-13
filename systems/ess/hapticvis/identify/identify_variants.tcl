@@ -14,6 +14,8 @@ namespace eval hapticvis::identify {
     
     variable params_defaults { delay_time 100 }
     variable params_visual {
+	interblock_time 500
+	pre_stim_time 100
 	sample_duration 1500
 	choice_delay 0
 	sample_delay 500
@@ -21,6 +23,8 @@ namespace eval hapticvis::identify {
 	stim_duration 30000
     }
     variable params_haptic {
+	interblock_time 500
+	pre_stim_time 100
 	sample_delay 0
 	sample_duration 15000
 	choice_duration 30000

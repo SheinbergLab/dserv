@@ -187,8 +187,12 @@ namespace eval hapticvis {
 	    if { [timerExpired] } {
 		return no_response
 	    }
-	    set resp [my responded]
-	    if { $resp != -1 } { return response }
+
+	    # allow responses after sample has appeared
+	    if { $sample_on_time >= 0 } {
+		set resp [my responded]
+		if { $resp != -1 } { return response }
+	    }
 	}
 
 	
@@ -288,8 +292,13 @@ namespace eval hapticvis {
 	#
 	$sys add_action response {
 	    set response_time [now]
-	    set rt [expr {($response_time-$choice_on_time)/1000}]
+	    set rt [expr {($response_time-$sample_on_time)/1000}]
 	    ::ess::evt_put RESP $resp [now]
+	    if { $sample_up == 1 } {
+		my sample_off
+		::ess::evt_put SAMPLE OFF [now]
+		set sample_up -1
+	    }
 	}
 	
 	$sys add_transition response {
