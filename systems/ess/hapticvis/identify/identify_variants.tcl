@@ -22,13 +22,14 @@ namespace eval hapticvis::identify {
     }
     variable params_haptic {
 	sample_delay 0
-	sample_duration 5000
+	sample_duration 15000
 	choice_duration 30000
 	choice_delay 0
 	stim_duration 30000
     }
-    variable params_haptic_follow      $params_haptic
-    variable params_haptic_constrained $params_haptic
+    variable params_haptic_follow               $params_haptic
+    variable params_haptic_constrained_locked   $params_haptic
+    variable params_haptic_constrained_unlocked $params_haptic
 
     # variant description
 
