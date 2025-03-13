@@ -40,11 +40,8 @@ RUN ./configure \
   && make install
 
 # Install Jansson JSON library into the build environment.
-WORKDIR /work
-RUN git clone https://github.com/akheron/jansson.git \
-  && cd jansson/ \
-  && git checkout v2.14 \
-  && cmake -B build \
+WORKDIR /work/dserv/deps/jansson/
+RUN cmake -B build \
   && cmake --build build \
   && cmake --install build
 
