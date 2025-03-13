@@ -24,17 +24,18 @@ FROM ubuntu:22.04
 # Install build tools and essgui build dependencies.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt update \
-    && apt install --no-install-recommends --yes git wget ca-certificates build-essential cmake zip unzip \
+    && apt install --no-install-recommends --yes wget ca-certificates build-essential cmake zip unzip \
     libpango1.0-dev libwayland-dev wayland-protocols libxkbcommon-dev libxinerama-dev libdbus-1-dev libglew-dev  libdecor-0-dev libgtk-3-dev liblz4-dev \
     && apt-get clean \
     && apt-get autoremove \
     && rm -rf /var/lib/apt/lists/*
 
+# Add this repo and submodules.
+ADD . /work/dserv/
+
 # Install TLC 9 into the build environment.
-WORKDIR /work
-RUN git clone --depth=1 --branch core-9-0-1-rc https://github.com/tcltk/tcl.git \
-  && cd tcl/unix/ \
-  && ./configure \
+WORKDIR /work/dserv/deps/tcl/unix
+RUN ./configure \
   && make \
   && make install
 
