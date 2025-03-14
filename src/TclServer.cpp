@@ -775,8 +775,10 @@ void TclServer::tcp_client_process(TclServer *tserv,
   client_request.rqueue = &rqueue;
 
   std::string s;
-  while ((rval = read(sockfd, buf, sizeof(buf))) > 0) {
-
+  while ((rval = read(sockfd, buf, sizeof(buf)-1)) > 0) {
+    // null terminate
+    buf[rval] = '\0';
+      
     // shutdown if main server has shutdown
     if (tserv->m_bDone) break;
     
