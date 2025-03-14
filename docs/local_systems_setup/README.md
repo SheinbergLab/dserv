@@ -8,10 +8,14 @@ I expect these to change as we make the CI better and find/fix issues!
 
 # Clean
 
+If not on a fresh system, this might prevent surprises.
+
 ```
 sudo systemctl stop dserv
 systemctl disable dserv
 sudo rm /etc/systemd/system/dserv.service
+sudo rm /etc/systemd/system/multi-user.target.wants/dserv.service
+
 sudo systemctl daemon-reload
 sudo systemctl reset-failed
 
@@ -40,24 +44,33 @@ sudo cp dlsh.zip /usr/local/dlsh/
 wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.37/dserv_0.0.37_arm64.deb
 sudo apt install -y ./dserv_0.0.37_arm64.deb
 
+# This seems to be just a warning:
+# N: Download is performed unsandboxed as root as file '/home/ninjaben/dserv_0.0.37_arm64.deb' couldn't be accessed by user '_apt'. - pkgAcquire::Run (13: Permission denied)
+
 ls -alth /usr/local/bin
 ls -alth /usr/local/lib
 ls -alth /usr/local/dserv/db
-
-essctrl
 
 /usr/local/dserv/dserv --help
 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 
 sudo install-dserv-service.sh
 sudo systemctl status dserv
+
+essctrl
+# ess> ess::query_state
+# stopped
+# ess> exit
 ```
 
 ## essgui
 
+
 ```
-https://github.com/benjamin-heasly/dserv/releases/download/0.0.37/essgui_0.0.37_arm64.deb
-sudo apt install -y ./essgui_0.0.37_arm64.deb
+wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.37/essgui_0.0.37_arm64.deb
+
+# TODO: we'll need to install /usr/local/lib/libtcl9.0.so once, not in every package.
+sudo apt install -o DPkg::options::="--force-overwrite" -y ./essgui_0.0.37_arm64.deb
 
 ls -alth /usr/local/bin
 ls -alth /usr/local/lib
@@ -68,8 +81,8 @@ essgui
 ## stim2
 
 ```
-wget https://github.com/benjamin-heasly/stim2/releases/download/0.0.10/stim2_0.0.10_amd64.deb
-sudo apt install -y ./stim2_0.0.10_amd64.deb
+wget https://github.com/benjamin-heasly/stim2/releases/download/0.0.10/stim2_0.0.10_arm64.deb
+sudo apt install -o DPkg::options::="--force-overwrite" -y ./stim2_0.0.10_arm64.deb
 
 ls -alth /usr/local/bin
 ls -alth /usr/local/lib

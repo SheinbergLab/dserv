@@ -218,7 +218,7 @@ This might take several minutes to complete.
 
 Now you can install the kernel to the bootable SD card we created above.
 
-Insert teh SD card into your build machine.
+Insert the SD card into your build machine.
 Verity that the `bootfs` and `rootfs` partitions are present and mounted.
 Some distributions automatically mount these on insert, in which which case `lsblk` would show something like:
 
