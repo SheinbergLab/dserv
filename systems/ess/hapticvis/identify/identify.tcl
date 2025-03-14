@@ -177,7 +177,7 @@ namespace eval hapticvis::identify {
 	 			return_duplicates 0 \
      				dont_present 1 \
 	 			use_dummy 1 \
-     				dummy_ids 2020,2001 \
+     				dummy_ids 20302,2001 \
 	 			reset_dial $follow_dial \
      				dial_following $follow_dial
 	 		 ]
