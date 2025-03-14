@@ -1,0 +1,12 @@
+[submodule "deps/tcl"]
+	path = deps/tcl
+	url = https://github.com/tcltk/tcl.git
+[submodule "deps/jansson"]
+	path = deps/jansson
+	url = https://github.com/akheron/jansson.git
+[submodule "deps/fltk"]
+	path = deps/fltk
+	url = https://github.com/fltk/fltk.git
+[submodule "deps/libharu"]
+	path = deps/libharu
+	url = https://github.com/libharu/libharu.git
