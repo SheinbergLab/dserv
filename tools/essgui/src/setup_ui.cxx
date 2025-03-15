@@ -200,21 +200,21 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 system_widget->labelsize(16);
                 system_widget->textsize(16);
                 system_widget->callback((Fl_Callback*)cb_system_widget);
-                system_widget->when(FL_WHEN_RELEASE_ALWAYS);
+                system_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
               } // Fl_Choice* system_widget
               { protocol_widget = new Fl_Choice(258, 231, 210, 27, "Protocol:");
                 protocol_widget->down_box(FL_BORDER_BOX);
                 protocol_widget->labelsize(16);
                 protocol_widget->textsize(16);
                 protocol_widget->callback((Fl_Callback*)cb_protocol_widget);
-                protocol_widget->when(FL_WHEN_RELEASE_ALWAYS);
+                protocol_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
               } // Fl_Choice* protocol_widget
               { variant_widget = new Fl_Choice(258, 268, 210, 27, "Variant:");
                 variant_widget->down_box(FL_BORDER_BOX);
                 variant_widget->labelsize(16);
                 variant_widget->textsize(16);
                 variant_widget->callback((Fl_Callback*)cb_variant_widget);
-                variant_widget->when(FL_WHEN_RELEASE_ALWAYS);
+                variant_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
               } // Fl_Choice* variant_widget
               o->gap(10);
               o->end();

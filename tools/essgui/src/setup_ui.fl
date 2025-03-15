@@ -18,7 +18,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {190 88 1280 800} type Double resizable visible
+    xywh {477 103 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -116,7 +116,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               xywh {231 128 16 16} box FLAT_BOX selection_color 88 labeltype NO_LABEL
             }
           }
-          Fl_Group {} {
+          Fl_Group {} {open
             xywh {186 181 306 128} box THIN_UP_BOX labelsize 20
           } {
             Fl_Flex {} {open
@@ -125,17 +125,17 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               Fl_Choice system_widget {
                 label {System:}
                 callback {set_system()} open
-                xywh {258 193 210 28} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+                xywh {258 193 210 28} down_box BORDER_BOX labelsize 16 when 3 textsize 16
               } {}
               Fl_Choice protocol_widget {
                 label {Protocol:}
                 callback {set_protocol()} open
-                xywh {258 231 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+                xywh {258 231 210 27} down_box BORDER_BOX labelsize 16 when 3 textsize 16
               } {}
               Fl_Choice variant_widget {
                 label {Variant:}
-                callback {set_variant()} open
-                xywh {258 268 210 27} down_box BORDER_BOX labelsize 16 when 6 textsize 16
+                callback {set_variant()} open selected
+                xywh {258 268 210 27} down_box BORDER_BOX labelsize 16 when 3 textsize 16
               } {}
             }
           }
@@ -236,7 +236,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {
                 Fl_Box virtual_joystick_widget {
                   label label
-                  callback virtual_joystick_cb selected
+                  callback virtual_joystick_cb
                   xywh {565 614 12 12} when 7
                   class VirtualJoystick
                 }
