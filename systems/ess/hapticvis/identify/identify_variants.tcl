@@ -33,7 +33,8 @@ namespace eval hapticvis::identify {
 	stim_duration 30000
 	post_response_time 500
     }
-    variable params_haptic_follow               $params_haptic
+    variable params_haptic_follow_dial          $params_haptic
+    variable params_haptic_follow_pattern       $params_haptic
     variable params_haptic_constrained_locked   $params_haptic
     variable params_haptic_constrained_unlocked $params_haptic
 
@@ -71,9 +72,9 @@ namespace eval hapticvis::identify {
                 }
             }
         }
-        haptic_follow {
+        haptic_follow_dial {
             description "learn haptic using dial"
-            loader_proc setup_haptic_follow
+            loader_proc setup_haptic_follow_dial
             loader_options {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
@@ -84,7 +85,20 @@ namespace eval hapticvis::identify {
                 }
             }
         }
-        haptic_constrained_locked {
+        haptic_follow_pattern {
+            description "learn haptic with passive following"
+            loader_proc setup_haptic_follow_pattern
+            loader_options {
+              subject_id { $subject_ids }
+              subject_set { $subject_sets }
+              n_per_set { 4 8 }
+              n_rep { 2 4 6 8 10 20 }
+		rotations {
+                  {single {180}} {three {60 180 300}}
+                }
+            }
+        }
+	haptic_constrained_locked {
             description "learn haptic with constraint (locked)"
             loader_proc setup_haptic_constrained_locked
             loader_options {
@@ -155,10 +169,17 @@ namespace eval hapticvis::identify {
             dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
 	}
 	
-	$s add_method setup_haptic_follow { subject_id subject_set n_per_set \
-					 n_rep rotations } {
+	$s add_method setup_haptic_follow_dial { subject_id subject_set n_per_set \
+						     n_rep rotations } {
 	    my setup_haptic $subject_id $subject_set $n_per_set $n_rep $rotations
             dl_set stimdg:follow_dial [dl_ones [dl_length stimdg:stimtype]]
+            dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
+        }
+	
+	$s add_method setup_haptic_follow_pattern { subject_id subject_set n_per_set \
+							n_rep rotations } {
+	    my setup_haptic $subject_id $subject_set $n_per_set $n_rep $rotations
+	    dl_set stimdg:follow_pattern [dl_replicate [dl_slist sine] [dl_length stimdg:stimtype]]
             dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
 	}
 	
@@ -222,6 +243,7 @@ namespace eval hapticvis::identify {
 	     dl_set stimdg:cued_choices     [dl_llist]
 	     dl_set stimdg:feedback_type    [dl_slist]
 	     dl_set stimdg:follow_dial      [dl_ilist]
+	     dl_set stimdg:follow_pattern   [dl_slist]
 	     dl_set stimdg:constrained      [dl_ilist]
 	     dl_set stimdg:constraint_locked [dl_ilist]
 	     
@@ -311,6 +333,7 @@ namespace eval hapticvis::identify {
 	     dl_set stimdg:feedback_type  [dl_repeat [dl_slist color] $n_obs]
 
 	     dl_set stimdg:follow_dial    [dl_zeros $n_obs]
+	     dl_set stimdg:follow_pattern [dl_replicate [dl_slist 0] $n_obs]
 	     dl_set stimdg:constrained    [dl_zeros $n_obs]
 	     dl_set stimdg:constraint_locked [dl_zeros $n_obs]
 	     

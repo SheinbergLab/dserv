@@ -25,6 +25,7 @@ namespace eval hapticvis::identify {
 	$s add_variable n_choices          0
 	$s add_variable choices           {}
 	$s add_variable follow_dial        0
+	$s add_variable follow_pattern     0
 	
 	$s set_protocol_init_callback {
 	    ::ess::init
@@ -120,6 +121,9 @@ namespace eval hapticvis::identify {
 		set n_choices [dl_get stimdg:n_choices $cur_id]
 		set choices [dl_tcllist [dl_fromto 0 $n_choices]]
 		set follow_dial [dl_get stimdg:follow_dial $cur_id]
+		set follow_pattern {
+		    string equal [dl_get stimdg:follow_pattern $cur_id] 0
+		}
 		
 		foreach i $choices {
 		    # set these touching_response knows where choices are
@@ -171,15 +175,17 @@ namespace eval hapticvis::identify {
 	    set url http://${ip}:${port}
 	    set res [rest::get $url \
 			 [list function pick_and_place \
-			      	hand 1 \
-	 			left_id $shape_id \
-     				left_angle $angle \
-	 			return_duplicates 0 \
-     				dont_present 1 \
-	 			use_dummy 1 \
-     				dummy_ids 20302,2001 \
-	 			reset_dial $follow_dial \
-     				dial_following $follow_dial
+			      hand 1 \
+			      left_id $shape_id \
+			      left_angle $angle \
+			      return_duplicates 0 \
+			      dont_present 1 \
+			      use_dummy 1 \
+			      dummy_ids 20302,2001 \
+			      reset_dial $follow_dial \
+			      dial_following $follow_dial \
+			      pattern_following $follow_pattern
+			      
 	 		 ]
      		    ]
 	}
