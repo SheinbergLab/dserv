@@ -1184,7 +1184,7 @@ namespace eval ess {
 	    dservLoggerAddMatch $filename ain/vals 1 80 5
 	    dservLoggerAddMatch $filename em_coeffDG
 	}
-	variable em_active
+	variable touch_active
 	if { $touch_active } {
 	    dservLoggerAddMatch $filename mtouch/touchvals
 	}
