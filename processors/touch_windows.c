@@ -245,7 +245,7 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     return DPOINT_PROCESS_IGNORE;
 
   uint16_t *touch_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
-  
+
   int dx, dy, x, y;
   x = touch_vals[0];
   y = touch_vals[1];
