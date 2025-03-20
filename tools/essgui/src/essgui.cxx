@@ -1206,8 +1206,6 @@ void process_dpoint_cb(void *cbdata) {
   json_t *timestamp = json_object_get(root, "timestamp");
   json_t *data = json_object_get(root, "data");
 
-  //  std::cout << dpoint << std::endl;
-  
   if (!strcmp(json_string_value(name), "ess/obs_active")) {
    if (!strcmp(json_string_value(data), "0")) {
    	obscount_widget->textcolor(FL_FOREGROUND_COLOR);
@@ -1278,6 +1276,10 @@ void process_dpoint_cb(void *cbdata) {
   }
 
   else if (!strcmp(json_string_value(name), "ess/subject")) {
+
+    // has happened, not sure why...
+    if (!data) return;
+    
     int idx;
     if ((idx = subject_widget->find_index(json_string_value(data))) >= 0) {
       subject_widget->value(idx);

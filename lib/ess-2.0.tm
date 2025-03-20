@@ -473,6 +473,7 @@ namespace eval ess {
     variable obs_pin 26
 
     variable em_active 0
+    variable touch_active 0
 
     proc create_system { name } {
         # only allow one instance of a system with this name
@@ -755,19 +756,23 @@ namespace eval ess {
     proc init {} {
         dservRemoveAllMatches
         dpointRemoveAllScripts
-    for { set i 0 } { $i < $::nTimers } { incr i } {
-        timerSetScript $i "[namespace current]::do_update"
-    }
-    # default to not tracking ems, but ::ess::em_init will turn on
-    variable em_active
-    set em_active 0
+	for { set i 0 } { $i < $::nTimers } { incr i } {
+	    timerSetScript $i "[namespace current]::do_update"
+	}
+	# default to not tracking ems, but ::ess::em_init will turn on
+	variable em_active
+	set em_active 0
+
+	# default to not tracking touch, but ::ess::touch_init will turn on
+	variable touch_active
+	set touch_active 0
     }
 
     proc do_update { args } {
     variable current
-    if { $current(state_system) != ""} {
-        $current(state_system) update
-    }
+	if { $current(state_system) != ""} {
+	    $current(state_system) update
+	}
     }
 
     proc start {} {
@@ -1144,66 +1149,69 @@ namespace eval ess {
     }
     
     proc file_open { f { overwrite 0 } } {
-    variable current
+	variable current
         variable open_datafile
-    variable subject_id
-    variable data_dir
-
-    # get all open files
-    set open_files [::ess::open_files]
-
-    if { $open_files != "" } {
-        print "$open_files open: call ::ess::file_close"
-        return -1
-    }
-    
-    set filename [file join $data_dir $f.ess]
-    if { !$overwrite } {
-        if [file exists $filename] {
-        print "file $f already exists in directory $data_dir"
-        return 0
-        }
-    }
+	variable subject_id
+	variable data_dir
+	
+	# get all open files
+	set open_files [::ess::open_files]
+	
+	if { $open_files != "" } {
+	    print "$open_files open: call ::ess::file_close"
+	    return -1
+	}
+	
+	set filename [file join $data_dir $f.ess]
+	if { !$overwrite } {
+	    if [file exists $filename] {
+		print "file $f already exists in directory $data_dir"
+		return 0
+	    }
+	}
         dservLoggerOpen $filename 1
-    set open_datafile $filename
-
-    dservSet ess/datafile $f
-
-    dservLoggerAddMatch $filename eventlog/events
-    dservLoggerAddMatch $filename eventlog/names
-    dservLoggerAddMatch $filename stimdg
-
-    variable em_active
-    if { $em_active } {
-        # record raw em data: obs_limited, 80 byte buffer, every 5 samples
-        dservLoggerAddMatch $filename ain/vals 1 80 5
-        dservLoggerAddMatch $filename em_coeffDG
-    }
-    dservLoggerResume $filename 
-
-    # reset system and output event names
-    ::ess::reset
-
-    # output info for interpreting events
-    ::ess::store_evt_names
-
-    dservTouch stimdg
-    
-    ::ess::evt_put ID ESS      [now] $current(system)
-    ::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
-    ::ess::evt_put ID VARIANT  [now] $current(system):$current(protocol):$current(variant)
-    ::ess::evt_put ID SUBJECT  [now] $subject_id
-    
-    dict for { pname pval } [::ess::get_params] {
-        ::ess::evt_put PARAM NAME [now] $pname
-        ::ess::evt_put PARAM VAL  [now] [lindex $pval 0]
-    }
-
-    # call the system's specific file_open callback
-    $current(state_system) file_open $f
-    
-#   dservTouch em_coeffDG
-    return 1
+	set open_datafile $filename
+	
+	dservSet ess/datafile $f
+	
+	dservLoggerAddMatch $filename eventlog/events
+	dservLoggerAddMatch $filename eventlog/names
+	dservLoggerAddMatch $filename stimdg
+	
+	variable em_active
+	if { $em_active } {
+	    # record raw em data: obs_limited, 80 byte buffer, every 5 samples
+	    dservLoggerAddMatch $filename ain/vals 1 80 5
+	    dservLoggerAddMatch $filename em_coeffDG
+	}
+	if { $touch_active } {
+	    dservLoggerAddMatch $filename mtouch/touchvals
+	}
+	dservLoggerResume $filename 
+	
+	# reset system and output event names
+	::ess::reset
+	
+	# output info for interpreting events
+	::ess::store_evt_names
+	
+	dservTouch stimdg
+	
+	::ess::evt_put ID ESS      [now] $current(system)
+	::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
+	::ess::evt_put ID VARIANT  [now] $current(system):$current(protocol):$current(variant)
+	::ess::evt_put ID SUBJECT  [now] $subject_id
+	
+	dict for { pname pval } [::ess::get_params] {
+	    ::ess::evt_put PARAM NAME [now] $pname
+	    ::ess::evt_put PARAM VAL  [now] [lindex $pval 0]
+	}
+	
+	# call the system's specific file_open callback
+	$current(state_system) file_open $f
+	
+	#   dservTouch em_coeffDG
+	return 1
     }
 
     proc file_close {} {
@@ -1430,7 +1438,11 @@ namespace eval ess {
     
     proc touch_init {} {
     variable touch_windows
-    variable current
+	variable current
+
+    variable touch_active
+    set touch_active 1
+	
     touchSetProcessor $touch_windows(processor)
     touchSetParam dpoint $touch_windows(dpoint)
     dservAddExactMatch $touch_windows(dpoint)/status

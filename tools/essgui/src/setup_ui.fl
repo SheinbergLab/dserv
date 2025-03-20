@@ -24,7 +24,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
       xywh {0 1 1280 762} resizable
     } {
       Fl_Group {} {
-        label Systems open
+        label Systems
         xywh {0 28 180 640} labelsize 18 v_label_margin 4
       } {
         Fl_Flex {} {open
@@ -58,7 +58,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         }
       }
       Fl_Group {} {
-        label Control open
+        label Control
         xywh {180 28 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
       } {
         Fl_Group {} {open
@@ -134,7 +134,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
               Fl_Choice variant_widget {
                 label {Variant:}
-                callback {set_variant()} open selected
+                callback {set_variant()} open
                 xywh {258 268 210 27} down_box BORDER_BOX labelsize 16 when 3 textsize 16
               } {}
             }
@@ -162,7 +162,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         } {
           Fl_Group {} {
             label behavior open
-            xywh {504 56 747 615} labelsize 16
+            xywh {504 56 747 615} labelsize 16 hide
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
@@ -289,6 +289,28 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               Fl_Text_Editor stim_editor {
                 label stim
                 xywh {503 114 747 550} selection_color 31 hide
+              }
+            }
+          }
+          Fl_Group {} {
+            label data open selected
+            xywh {503 57 762 617} labelsize 16
+          } {
+            Fl_Group {} {
+              label Datafile open
+              xywh {513 78 381 308}
+            } {
+              Fl_Group {} {open
+                xywh {523 88 371 48} box UP_FRAME
+              } {
+                Fl_Button FileOpenClose {
+                  label Open
+                  xywh {532 99 68 26} type Toggle
+                }
+                Fl_Input data_filename {
+                  label {Filename:}
+                  xywh {677 99 210 26}
+                }
               }
             }
           }
