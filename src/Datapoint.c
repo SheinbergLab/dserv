@@ -558,9 +558,13 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
     case DSERV_TRIGGER_SCRIPT:
     case DSERV_JSON:
       {
-	json_object_set_new(json_dpoint, "data",
-			    json_stringn((const char *) dpoint->data.buf,
-					 dpoint->data.len));
+	if (!dpoint->data.len) {
+	  json_object_set_new(json_dpoint, "data", json_string(""));
+	} else {
+	  json_object_set_new(json_dpoint, "data",
+			      json_stringn((const char *) dpoint->data.buf,
+					   dpoint->data.len));
+	}
       }
       break;
     case DSERV_DG:
