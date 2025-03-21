@@ -22,7 +22,7 @@ proc setup_database { db { overwrite 0 } } {
 	puts $error
 	set conn -1
     }
-    
+
     # Create the 'trial' table if it does not exist
     set stmt {
         CREATE TABLE IF NOT EXISTS trial (
@@ -39,19 +39,26 @@ proc setup_database { db { overwrite 0 } } {
 	    status INTEGER,
 	    rt INTEGER,
 	    trialinfo JSONB,
-	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP	    
+	    sys_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         );
     }
-    postgres::exec $conn $stmt
+    if { [ catch { postgres::exec $conn $stmt } error]} {
+	puts $error
+    }
 
     # Create prepared insert statement to make updates more efficient
     set stmt {
 	INSERT INTO trial (host, block_id, trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo) \
 	    VALUES (($1), ($2), ($3), ($4), ($5), ($6), ($7), ($8), ($9), ($10), ($11), ($12))
     }
-    postgres::prepare $conn $insert_trialinfo_cmd $stmt 1
 
-    
+    if { [ catch { postgres::prepare $conn $insert_trialinfo_cmd $stmt 1 } error]} {
+	puts $error
+    } else {
+#	puts "created $insert_trialinfo_cmd"
+    }
+}
+
     # Create the 'status' table if it does not exist
     # set stmt {
     #     CREATE TABLE IF NOT EXISTS status (
@@ -70,14 +77,12 @@ proc setup_database { db { overwrite 0 } } {
 	# INSERT INTO status (host, status_source, status_type, status_value) VALUES(($1), ($2), ($3), ($4))
 	# ON CONFLICT (status_type)
 	# DO UPDATE SET host = ($1), status_source = ($2), status_type = ($3), status_value = ($4), sys_time = current_timestamp;
- #    }
- #    postgres::prepare $conn $insert_status_cmd $stmt 1
-}
+ #    }  postgres::prepare $conn $insert_status_cmd $stmt 1
+
 
 proc process_ess { dpoint data } {
     global conn insert_trialinfo_cmd insert_status_cmd rig
 
-    # set host [dservGet system/hostaddr]
     set domain ess
 
     # if the system has changed, update the blockid
@@ -85,27 +90,30 @@ proc process_ess { dpoint data } {
 	set maxblockid [postgres::query $conn { SELECT max(block_id) from trial; }]
 	dservSet ess/block_id [expr $maxblockid+1]
     }
-    
+
     if { [string equal $dpoint ess/trialinfo] } {
+#        puts "attempting to insert a trial..."
 	set d [::yajl::json2dict $data]
-	
-	foreach v "trialid project system protocol variant version subject status rt" {
-	    set $v [dict get $d $v]
-	}
 
-	set blockid [dservGet ess/block_id]
+        foreach v "trialid project system protocol variant version subject status rt" {
+            set $v [dict get $d $v]
+        }
 
-	if { [catch { postgres::exec_prepared $conn $insert_trialinfo_cmd \
-	    $rig $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data } error] } {
-	puts $error
-    	}     
+        set blockid [dservGet ess/block_id]
+
+        if { [catch { postgres::exec_prepared $conn $insert_trialinfo_cmd \
+            $rig $blockid $trialid $project $system $protocol $variant $version $subject $status $rt $data } error] } {
+	    puts $error
+        }
+#        puts "inserted a trial"
     }
+}
     # dont insert status updates on the rigs
     #else {
     #	set key [file tail $dpoint]
     #	postgres::exec_prepared $conn $insert_status_cmd $host $domain $key $data
     #}
-}
+
 
 # proc process_system { dpoint data } {
 #     global conn insert_status_cmd
