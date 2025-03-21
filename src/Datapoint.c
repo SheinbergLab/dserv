@@ -20,7 +20,7 @@ ds_datapoint_t *dpoint_set(ds_datapoint_t *dp,
   dp->varname = varname;
   dp->data.len = len;
   dp->data.type = type;
-  dp->data.buf = data;
+  dp->data.buf = len ? data : NULL;
   return dp;
 }
 
@@ -38,7 +38,7 @@ ds_datapoint_t *dpoint_new_nocopy(char *varname,
   new_dp->varname = varname;
   new_dp->data.len = len;
   new_dp->data.type = type;
-  new_dp->data.buf = data;
+  new_dp->data.buf = len ? data : NULL;
   return new_dp;
 }
 
