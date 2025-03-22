@@ -1,9 +1,6 @@
 puts "initializing dataserver"
 
 set dspath [file dir [info nameofexecutable]]
-if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
-    set env(ESS_SYSTEM_PATH) [file join $dspath systems]
-}
 
 set dlshlib [file join [file dirname $dspath] dlsh dlsh.zip]
 if [file exists $dlshlib] {
@@ -13,6 +10,24 @@ if [file exists $dlshlib] {
 }
 
 tcl::tm::add $dspath/lib
+
+# load extra modules
+
+set dllspec modules/*[info sharedlibextension]
+foreach f [glob [file join $dspath $dllspec]] {
+    load $f
+}
+
+# look for any .tcl configs in local/*.tcl
+foreach f [glob [file join $dspath local pre-*.tcl]] {
+    source $f
+}
+
+# now ready to start ess
+if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
+    set env(ESS_SYSTEM_PATH) [file join $dspath systems]
+}
+
 package require ess
 
 foreach d "/shared/qpcs/data/essdat /tmp" {
@@ -22,12 +37,32 @@ foreach d "/shared/qpcs/data/essdat /tmp" {
     }
 }
 
-# load extra modules
+proc set_hostinfo {} {
+    # target_host allows us to connect using NIC
+    set target_host google.com
+    
+    # set IP addresses for use in stim communication
+    if { [dservGet ess/ipaddr] == "" } {
+	dservSet ess/ipaddr 127.0.0.1
+    }
+    
+    # set host address to identify this machine
+    set s [socket $target_host 80]
+    dservSet system/hostaddr [lindex [fconfigure $s -sockname] 0]
+    close $s
 
-set dllspec modules/*[info sharedlibextension]
-foreach f [glob [file join $dspath $dllspec]] {
-    load $f
+    if { $::tcl_platform(os) == "Darwin" } {
+	set name [exec scutil --get ComputerName]
+    } elseif { $::tcl_platform(os) == "Linux" } {
+	set name [exec hostname]
+    } else {
+	set name $::env(COMPUTERNAME)
+    }
+    dservSet system/hostname $name
+    dservSet system/os $::tcl_platform(os)
 }
+
+set_hostinfo
 
 # start analog input if available
 catch { ainStart 1 }
@@ -174,31 +209,8 @@ proc connect_touchscreen {} {
     }
 }
 
-proc set_hostinfo {} {
-    # target_host allows us to connect using NIC
-    set target_host google.com
-    
-    # set IP addresses for use in stim communication
-    dservSet ess/ipaddr 127.0.0.1
-
-    # set host address to identify this machine
-    set s [socket $target_host 80]
-    dservSet system/hostaddr [lindex [fconfigure $s -sockname] 0]
-    close $s
-
-    if { $::tcl_platform(os) == "Darwin" } {
-	set name [exec scutil --get ComputerName]
-    } elseif { $::tcl_platform(os) == "Linux" } {
-	set name [exec hostname]
-    } else {
-	set name $::env(COMPUTERNAME)
-    }
-    dservSet system/hostname $name
-    dservSet system/os $::tcl_platform(os)
-}
 
 connect_touchscreen
-set_hostinfo
 
 # connect to battery power circuits
 ina226Add 0x45 system 12v
@@ -226,6 +238,6 @@ ess::load_system
 ess::set_subject human
 
 # look for any .tcl configs in local/*.tcl
-foreach f [glob [file join $dspath local *.tcl]] {
+foreach f [glob [file join $dspath local post-*.tcl]] {
     source $f
 }
