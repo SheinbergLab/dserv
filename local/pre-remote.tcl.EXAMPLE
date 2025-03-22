@@ -1,0 +1,2 @@
+set env(ESS_RMT_HOST) 192.168.88.50
+dservSet ess/ipaddr 192.168.88.29
