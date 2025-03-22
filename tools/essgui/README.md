@@ -5,27 +5,9 @@
 ### linux dependencies
 
 ```
-  sudo apt-get install g++
-  sudo apt-get install gdb
-  sudo apt-get install git
-  sudo apt-get install make
-  sudo apt-get install cmake     
-  sudo apt-get install autoconf   
-  sudo apt-get install libx11-dev
-  sudo apt-get install libglu1-mesa-dev
-  sudo apt-get install libxft-dev
-  sudo apt-get install libxcursor-dev
-```
+  sudo apt-get install g++ gdb git make cmake      autoconf    libx11-dev libglu1-mesa-dev libxft-dev libxcursor-dev libxkbcommon-dev 
 
-#### These packages are optional but recommended:
-```
-  sudo apt-get install libasound2-dev
-  sudo apt-get install freeglut3-dev
-  sudo apt-get install libcairo2-dev
-  sudo apt-get install libfontconfig1-dev
-  sudo apt-get install libglew-dev
-  sudo apt-get install libjpeg-dev
-  sudo apt-get install libpng-dev
-  sudo apt-get install libpango1.0-dev
-  sudo apt-get install libxinerama-dev
+  sudo apt-get install libasound2-dev freeglut3-dev libcairo2-dev libfontconfig1-dev libglew-dev libjpeg-dev libpng-dev libpango1.0-dev libxinerama-dev
+  
+  sudo apt-get install libgtk-3-dev libwayland-dev libfreetype6-dev
 ```
