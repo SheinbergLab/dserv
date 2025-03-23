@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <string.h>
@@ -125,7 +126,9 @@ static int socket_open(void)
   param = 1;
   setsockopt(rmt_socket, SOL_SOCKET, SO_REUSEADDR, &param, sizeof(param));
   socket_flush();
-  
+
+  setsockopt(rmt_socket, IPPROTO_TCP, TCP_NODELAY, &param, sizeof(param));
+
   return rmt_socket;
 }
   
