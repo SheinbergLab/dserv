@@ -11,6 +11,9 @@ if [file exists $dlshlib] {
 
 tcl::tm::add $dspath/lib
 
+# initialize ip addr datapoint
+dservSet ess/ipaddr ""
+
 # load extra modules
 
 set dllspec modules/*[info sharedlibextension]
