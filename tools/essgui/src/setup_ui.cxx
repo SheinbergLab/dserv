@@ -92,6 +92,10 @@ Fl_Text_Editor *variant_editor=(Fl_Text_Editor *)0;
 
 Fl_Text_Editor *stim_editor=(Fl_Text_Editor *)0;
 
+Fl_Button *FileOpenClose=(Fl_Button *)0;
+
+Fl_Input *data_filename=(Fl_Input *)0;
+
 Fl_Console *output_term=(Fl_Console *)0;
 
 Fl_Output *status_widget=(Fl_Output *)0;
@@ -247,6 +251,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         { Fl_Tabs* o = new Fl_Tabs(503, 32, 762, 642);
           { Fl_Group* o = new Fl_Group(504, 56, 747, 615, "behavior");
             o->labelsize(16);
+            o->hide();
             { Fl_Group* o = new Fl_Group(514, 84, 241, 264, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
               { eyetouch_widget = new EyeTouchWin(521, 91, 232, 232, "EyeWindow");
@@ -426,6 +431,22 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Text_Editor* stim_editor
               editor_tabs->end();
             } // Fl_Tabs* editor_tabs
+            o->end();
+          } // Fl_Group* o
+          { Fl_Group* o = new Fl_Group(503, 57, 762, 617, "data");
+            o->labelsize(16);
+            { Fl_Group* o = new Fl_Group(513, 78, 381, 308, "Datafile");
+              { Fl_Group* o = new Fl_Group(523, 88, 371, 48);
+                o->box(FL_UP_FRAME);
+                { FileOpenClose = new Fl_Button(532, 99, 68, 26, "Open");
+                  FileOpenClose->type(1);
+                } // Fl_Button* FileOpenClose
+                { data_filename = new Fl_Input(677, 99, 210, 26, "Filename:");
+                } // Fl_Input* data_filename
+                o->end();
+              } // Fl_Group* o
+              o->end();
+            } // Fl_Group* o
             o->end();
           } // Fl_Group* o
           o->end();

@@ -50,7 +50,7 @@ namespace eval hapticvis::identify {
             loader_options {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
-              n_per_set { 4 8 }
+              n_per_set { 6 4 8 }
               shape_scale { 3 4 5 6 }
               noise_type { none circles }
               n_rep { 2 4 6 8 10 20 }
@@ -65,7 +65,7 @@ namespace eval hapticvis::identify {
             loader_options {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
-              n_per_set { 4 8 }
+              n_per_set { 6 4 8 }
               n_rep { 2 4 6 8 10 20 }
 		rotations {
                   {single {180}} {three {60 180 300}}
@@ -189,11 +189,12 @@ namespace eval hapticvis::identify {
 	     set db {}
 	     set p ${::ess::system_path}/$::ess::current(project)/hapticvis/db
 	     variable shapedb_file [file join $p shape_db]
+
+	     # the number of sets depends on set size (4->4, 8->2, 6->3)
+	     set n_sets [dict get {4 4 8 2 6 3} $n_per_set]
 	     
-	     set total 16
-	     set n_sets [expr $total/$n_per_set]
-	     
-	     variable trialdb_file [file join $p trial_db_${n_per_set}_${n_sets}]
+	     variable trialdb_file \
+		 [file join $p trial_db_${n_per_set}_${n_sets}]
 	     
 	     # build our stimdg
 	     if { [dg_exists stimdg] } { dg_delete stimdg }

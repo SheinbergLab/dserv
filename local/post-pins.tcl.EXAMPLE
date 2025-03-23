@@ -9,12 +9,9 @@ gpioLineRequestInput 25
 # obs sync output
 gpioLineRequestOutput 26
 
-# juicer line0 set to pin 27
-juicerSetPin 0 27
-
 # set joystick/lines to dictionary with "pinval pin" key/values
 # joystick_init will use these to setup the joystick
-dservSet joystick/lines { 1 12 2 13 4 18 8 17 }
+#dservSet joystick/lines { 1 12 2 13 4 18 8 17 }
 
 # if joystick has a button, add line for that
-dservSet joystick/button_line 25
+#dservSet joystick/button_line 25

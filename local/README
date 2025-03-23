@@ -1,1 +1,5 @@
 folder for local configurations that do not get overwritten with updates
+
+pre-*.tcl will be sourced early in dsconf.tcl (before ess is initialized)
+
+post-*.tcl will be sourced at end of dsconf.tcl (after ess is initialized)

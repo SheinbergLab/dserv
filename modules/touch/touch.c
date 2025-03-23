@@ -58,7 +58,7 @@ void *input_thread(void *arg)
   touch_info_t *info = (touch_info_t *) arg;
 
   char point_name[64];
-  sprintf(point_name, "%s/touch", info->dpoint_prefix);
+  sprintf(point_name, "%s/touchvals", info->dpoint_prefix);
   int status;
 
   struct input_event ev;
@@ -94,10 +94,14 @@ void *input_thread(void *arg)
 	      (int) (info->screen_height*((ev.value-info->miny)/info->rangey));
 	    if (begin_touch) {
 	      begin_touch = 0;
-	      snprintf(buf, sizeof(buf), "0 0 %d %d", x, y);
+	      uint16_t vals[2];
+	      vals[0] = x;
+	      vals[1] = y;
 	      ds_datapoint_t *dp = dpoint_new(point_name,
 					      tclserver_now(info->tclserver),
-					      DSERV_STRING, strlen(buf), buf);
+					      DSERV_SHORT,
+					      sizeof(vals),
+					      (unsigned char *) vals);
 	      tclserver_set_point(info->tclserver, dp);
 	    }
 	    else {
