@@ -95,6 +95,7 @@ proc nexttrial { id } {
     set shader_file image    ;# shader file is image.glsl
     set shader [shaderBuild $shader_file]
 
+    set ::current_trial $id
     set trialtype [dl_get stimdg:trial_type $id]
     set scale [dl_get stimdg:choice_scale $id]
     set nchoices [dl_get stimdg:n_choices $id]
@@ -119,6 +120,7 @@ proc nexttrial { id } {
 
     # choice circles
     set mg [metagroup]
+
     for { set i 0 } { $i < $nchoices } { incr i } {
         set s [create_circle 1 1 1 0.3]
         translateObj $s {*}[dl_tcllist stimdg:choice_centers:$id:$i]
@@ -130,7 +132,7 @@ proc nexttrial { id } {
     set ::choice_array $mg
 
     # gray selecting circle
-    set s [create_circle .6 .6 .6 0.9]
+    set s [create_circle .9 .9 .9 0.9]
     scaleObj $s [expr {0.8*[dl_get stimdg:choice_scale $id]}]
     setVisible $s 0
     glistAddObject $s 0
@@ -149,6 +151,39 @@ proc nexttrial { id } {
     setVisible $s 0
     glistAddObject $s 0
     set ::feedback(incorrect) $s
+}
+
+proc highlight_response { p } {
+    set id $::current_trial
+    set n_choices [dl_get stimdg:n_choices $id]
+    if { $n_choices == 4 } {
+	# up=1(1)   down=2(3)  left=4(2)   right=8(0)
+	set mapdict { 0 -1 1 1 2 3 4 2 8 0 }
+    } elseif { $n_choices == 6 } {
+	# u=1(1)  d=2(4) u-l=5(2) u-r=9(0) d-l=6(3) d-r=10(5)
+	set mapdict { 0 -1 1 1 2 4 5 2 9 0 6 3 10 5}
+    } else {
+	# up=1(2)   down=2(6)  left=4(4)   right=8(0)
+	# up-left=5(3) up-right=9(1) d-l=6(5) d-r=10(7)
+	set mapdict { 0 -1 1 2 2 6 4 4 8 0 5 3 9 1 6 5 10 7 }
+    }
+    # if this is not an allowable position return
+    if { ![dict exists $mapdict $p] } {
+	return -1
+    }
+    
+    # map joy_position to slot
+    set slot [dict get $mapdict $p]
+    set s $::feedback(selecting)
+
+    if { $slot == -1 } { 
+	setVisible $s 0
+	redraw
+    } else {
+	translateObj $s {*}[dl_tcllist stimdg:choice_centers:$id:$slot]
+	setVisible $s 1
+	redraw
+    }
 }
 
 proc feedback_on { type x y } {

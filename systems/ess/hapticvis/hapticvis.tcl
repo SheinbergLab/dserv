@@ -191,11 +191,24 @@ namespace eval hapticvis {
 	    # allow responses after sample has appeared
 	    if { $sample_on_time >= 0 } {
 		set resp [my responded]
-		if { $resp != -1 } { return response }
+		if { $resp >= 0 } { return response }
+		if { $resp == -2 } { return highlight_response }
 	    }
 	}
 
 	
+	#
+	# highlight_response - show current selection
+	#
+	$sys add_action highlight_response {
+	    my highlight_response
+	}
+	
+	$sys add_transition highlight_response {
+	    return stim_wait
+	}
+	
+
 	#
 	# cue_on: show cue (if cue_time > 0)
 	#
@@ -285,7 +298,6 @@ namespace eval hapticvis {
 	}
 	
 	$sys add_transition choices_off { return stim_wait }
-	
 	
 	#
 	# response
@@ -452,7 +464,9 @@ namespace eval hapticvis {
 
         $sys add_method stim_on {} { print stim_on }
 	$sys add_method stim_off {} { print stim_off }
-	    
+
+	$sys add_method highlight_response {} { print highlight_response }
+
 	$sys add_method cue_on {} { print cue_on }
 	$sys add_method cue_off {} { print cue_off }
         $sys add_method sample_presented {} { return 1 }

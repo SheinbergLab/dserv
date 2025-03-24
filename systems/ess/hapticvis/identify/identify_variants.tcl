@@ -6,6 +6,12 @@
 #   variant dictionary for visual and haptic identity learning
 #
 
+
+#
+# Currently only supports 4, 6, 8 choices properly
+#   The "correct_choice" is numbered 1-n_choices
+#    but the centers differ depending on the number of choices so
+#
 package require haptic
 
 namespace eval hapticvis::identify {
@@ -237,6 +243,7 @@ namespace eval hapticvis::identify {
 	     dl_set stimdg:shape_filled     [dl_ilist]
 	     dl_set stimdg:noise_elements   [dl_llist]
 	     dl_set stimdg:correct_choice   [dl_ilist]
+	     dl_set stimdg:correct_location [dl_slist]
 	     dl_set stimdg:n_choices        [dl_ilist]
 	     dl_set stimdg:choice_centers   [dl_llist]
 	     dl_set stimdg:choice_scale     [dl_flist]
@@ -275,8 +282,20 @@ namespace eval hapticvis::identify {
 	     set choice_ecc 5
 	     set choice_scale 1.5
 	     set n_choices $n_shapes
+	     
+	     if { $n_choices == 4 } {
+		 dl_local slots [dl_ilist 1 3 5 7]
+		 dl_local choice_locs [dl_slist UR UL DL DR]
+	     } elseif { $n_choices == 6 } {
+		 dl_local slots [dl_ilist 1 2 3 5 6 7]
+		 dl_local choice_locs [dl_slist UR U UL DL D DR]
+	     } else {
+		 dl_local slots [dl_ilist 0 1 2 3 4 5 6 7]
+		 dl_local choice_locs [dl_slist R UR U UL L DL D DR]
+	     }
+	     
 	     dl_local choice_angles \
-		 [dl_mult [expr (2*$::pi)/$n_choices] [dl_fromto 0 $n_choices]]
+		 [dl_mult [expr (2*$::pi)/8.] $slots]
 	     
 	     dl_local choice_center_x \
 		 [dl_mult [dl_cos $choice_angles] $choice_ecc]
@@ -284,10 +303,12 @@ namespace eval hapticvis::identify {
 		 [dl_mult [dl_sin $choice_angles] $choice_ecc]
 	     dl_local choice_centers \
 		 [dl_llist \
-		      [dl_transpose [dl_llist $choice_center_x $choice_center_y]]]
+		      [dl_transpose \
+			   [dl_llist $choice_center_x $choice_center_y]]]
 	     
 	     if { $noise_type == "none"} {
-		 dl_local noise_elements [dl_replicate [dl_llist [dl_llist]] $n_obs]
+		 dl_local noise_elements \
+		     [dl_replicate [dl_llist [dl_llist]] $n_obs]
 	     } elseif { $noise_type == "circles"} {
 		 set nelements 50
 		 set nprop 0.18; # proportion of scale for radii
@@ -295,20 +316,25 @@ namespace eval hapticvis::identify {
 		 set total_elements [expr {${n_obs}*$nelements}]
 		 set hscale [expr {${shape_scale}/2.0}]
 		 dl_local xs [dl_sub \
-				  [dl_mult [dl_urand $total_elements] $shape_scale] $hscale]
+				  [dl_mult [dl_urand $total_elements] \
+				       $shape_scale] $hscale]
 		 dl_local ys [dl_sub \
-				  [dl_mult [dl_urand $total_elements] $shape_scale] $hscale]
+				  [dl_mult [dl_urand $total_elements] \
+				       $shape_scale] $hscale]
 		 set rscale [expr {${shape_scale}*${nprop}}]
 		 dl_local rjitter [dl_sub \
-				       [dl_mult [dl_urand $total_elements] [expr $rscale*${njprop}]] \
+				       [dl_mult [dl_urand $total_elements] \
+					    [expr $rscale*${njprop}]] \
 				       [expr $rscale*.1]]
 		 dl_local rs [dl_add $rjitter $rscale]
 		 dl_local noise_elements \
-		     [dl_reshape [dl_transpose [dl_llist $xs $ys $rs]] $n_obs $nelements]
+		     [dl_reshape [dl_transpose \
+				      [dl_llist $xs $ys $rs]] $n_obs $nelements]
 	     }
 	     
 	     dl_set stimdg:stimtype     [dl_fromto 0 $n_obs]
-	     dl_set stimdg:trial_type   [dl_repeat [dl_slist $trial_type] $n_obs]
+	     dl_set stimdg:trial_type   [dl_repeat [dl_slist $trial_type] \
+					     $n_obs]
 	     dl_set stimdg:subject_id   [dl_repeat $subject_id $n_obs]
 	     dl_set stimdg:subject_set  [dl_repeat $subject_set $n_obs]
 	     
@@ -325,7 +351,9 @@ namespace eval hapticvis::identify {
 	     dl_set stimdg:shape_filled   [dl_repeat $shape_filled $n_obs]
 	     dl_set stimdg:noise_elements $noise_elements
 	     dl_set stimdg:correct_choice \
-		 [dl_repeat [dl_series 1 $n_shapes] $shape_reps]
+		 [dl_repeat [dl_add 1 [dl_fromto 0 $n_choices]] $shape_reps]
+	     dl_set stimdg:correct_location \
+		 [dl_repeat $choice_locs $shape_reps]
 	     dl_set stimdg:n_choices      [dl_repeat $n_choices $n_obs]
 	     dl_set stimdg:choice_centers [dl_repeat $choice_centers $n_obs]
 	     dl_set stimdg:choice_scale   [dl_repeat $choice_scale $n_obs]

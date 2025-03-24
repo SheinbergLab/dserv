@@ -18,7 +18,7 @@ namespace eval hapticvis::identify {
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
-	$s add_variable trial_type        {}
+	$s add_variable trial_type        visual
 	$s add_variable shape_id          -1
 	$s add_variable shape_angle       -1
 	$s add_variable correct           -1
@@ -36,7 +36,6 @@ namespace eval hapticvis::identify {
 	    if { $use_joystick } {
 		# initialize joystick here
 		::ess::joystick_init
-
 	    }
 	    if { $use_touchscreen } {
 		# initialize touch processor
@@ -119,22 +118,25 @@ namespace eval hapticvis::identify {
 		set cur_id [dl_pickone $left_to_show]
 		set stimtype [dl_get stimdg:stimtype $cur_id]
 		set n_choices [dl_get stimdg:n_choices $cur_id]
-		set choices [dl_tcllist [dl_fromto 0 $n_choices]]
+		set choices [my get_choices $n_choices]
 		set follow_dial [dl_get stimdg:follow_dial $cur_id]
 		set follow_pattern {
 		    string equal [dl_get stimdg:follow_pattern $cur_id] 0
 		}
 		
-		foreach i $choices {
+		for { set i 0 } { $i < $n_choices } { incr i } {
+		    set slot [lindex $choices $i]
 		    # set these touching_response knows where choices are
 		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$i 0]
 		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$i 1]
 		    set choice_r [dl_get stimdg:choice_scale $cur_id]
 		    if { $use_touchscreen } {
-			::ess::touch_region_off $i
-			::ess::touch_win_set $i $choice_x $choice_y $choice_r 0
+			::ess::touch_region_off $slot
+			::ess::touch_win_set $slot \
+			    $choice_x $choice_y $choice_r 0
 		    }
 		}
+		
 		set target_slot [dl_get stimdg:correct_choice $cur_id]
 		set trial_type [dl_get stimdg:trial_type $cur_id]
 		set shape_id [dl_get stimdg:shape_id $cur_id]
@@ -242,9 +244,19 @@ namespace eval hapticvis::identify {
 	    }
 	}
 
+	$s add_method get_choices { n } {
+	    if { $n == 4 } {
+		return "1 3 5 7"
+	    } elseif { $n == 6 } {
+		return "1 2 3 5 6 7"
+	    } else {
+		return "0 1 2 3 4 5 6 7"
+	    }
+	}
+	
 	$s add_method choices_on {} {
 	    rmtSend "!choices_on"
-	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
+	    set cs [my get_choices $n_choices]
 	    if { $use_touchscreen } {
 		foreach i $cs { ::ess::touch_region_on $i }
 	    }
@@ -252,7 +264,7 @@ namespace eval hapticvis::identify {
 
 	$s add_method choices_off {} {
 	    rmtSend "!choices_off"
-	    set cs [dl_tcllist [dl_fromto 0 $n_choices]]
+	    set cs [my get_choices $n_choices]
 	    if { $use_touchscreen } {
 		foreach i $cs { ::ess::touch_region_off $i }
 	    }
@@ -277,21 +289,55 @@ namespace eval hapticvis::identify {
 	    return $correct
 	}
 	
+	$s add_method highlight_response {} {
+	    set p [dservGet ess/joystick/position]
+	    rmtSend "highlight_response $p"
+	}
+	
 	$s add_method responded {} {
 	    # if no response to report, return -1
 	    set r -1
+	    set made_selection 0
+	    set updated_position 0
+	    
 	    if { $use_joystick } {
+		if { $n_choices == 4 } {
+		    # up=1(1)   down=2(3)  left=4(2)   right=8(0)
+		    set mapdict { 0 -1 1 1 2 3 4 2 8 0 }
+		} elseif { $n_choices == 6 } {
+		    # u=1(1)  d=2(4) u-l=5(2) u-r=9(0) d-l=6(3) d-r=10(5)
+		    set mapdict { 0 -1 1 1 2 4 5 2 9 0 6 3 10 5}
+		} else {
+		    # up=1(2)   down=2(6)  left=4(4)   right=8(0)
+		    # up-left=5(3) up-right=9(1) d-l=6(5) d-r=10(7)
+		    set mapdict { 0 -1 1 2 2 6 4 4 8 0 5 3 9 1 6 5 10 7 }
+		}
+		set joy_position [dservGet ess/joystick/value]
+
+		# if this is not an allowable position return
+		if { ![dict exists $mapdict $joy_position] } {
+		    return -1
+		}
+
+		# map actual position to slot
+		set r [dict get $mapdict $joy_position]
+
+		# note which position has been activated
+		if { [dservExists ess/joystick/position] } {
+		    set cur_position [dservGet ess/joystick/position]
+		} else {
+		    set cur_position -1
+		}
+		if { $joy_position != $cur_position } {
+		    dservSet ess/joystick/position $joy_position
+		    set updated_position 1
+		}
+
+		# only if the button is pressed should we count as response
 		if { [dservGet ess/joystick/button] } {
-		    if { $n_choices == 4 } {
-			# up=1(1)   down=2(3)  left=4(2)   right=8(0)
-			set mapdict { 0 -1 1 1 2 3 4 2 8 0 }
-		    } else {
-			# up=1(2)   down=2(6)  left=4(4)   right=8(0)
-			# up-left=5(3) up-right=9(1) down-left=6(5) down-right=10(7)
-			set mapdict { 0 -1 1 2 2 6 4 4 8 0 5 3 9 1 6 5 10 7 }
-		    }
-		    set r [dict get $mapdict [dservGet ess/joystick/value]]
 		    set made_selection 1
+		} else {
+		    if { $updated_position } { set r -2 } { set r -1 }
 		}
 	    }
 	    if { $use_touchscreen } {
@@ -303,6 +349,7 @@ namespace eval hapticvis::identify {
 		}
 		set made_selection 1
 	    }
+	    
 	    if { $made_selection } {
 		if { $r == [expr {$target_slot-1}] } {
 		    set slot [expr $target_slot-1]
@@ -311,7 +358,7 @@ namespace eval hapticvis::identify {
 		    
 		    rmtSend "feedback_on correct $choice_x $choice_y"
 		    set correct 1
-		} elseif { $r != -1 } {
+		} elseif { $r >= 0 } {
 		    set slot [expr $target_slot-1]
 		    set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
 		    set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
