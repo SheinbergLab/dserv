@@ -242,6 +242,7 @@ public:
     ds_sock->add_match(hoststr.c_str(), "system/*");
     ds_sock->add_match(hoststr.c_str(), "stimdg");
     ds_sock->add_match(hoststr.c_str(), "trialdg");
+    ds_sock->add_match(hoststr.c_str(), "print");
 
     /* touch variables to update interface (check spaces at EOL!) */
     std::string rstr;
@@ -1180,8 +1181,6 @@ int update_remote_commands(const char *rmt_cmds)
 }
 
 
-
-
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
   // JSON parsing variables
@@ -1500,6 +1499,12 @@ void process_dpoint_cb(void *cbdata) {
 		"if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
     g_App->putGroup(dg);
     do_sortby();
+  }
+
+  else if (!strcmp(json_string_value(name), "print")) {
+    const char *msg = json_string_value(data);
+    output_term->append(msg);
+    output_term->append("\n");
   }
   
   else {
