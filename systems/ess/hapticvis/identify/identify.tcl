@@ -314,7 +314,8 @@ namespace eval hapticvis::identify {
 
 		# if this is not an allowable position return
 		if { ![dict exists $mapdict $joy_position] } {
-		    return -1
+		    dservSet ess/joystick/position 0
+		    return -2
 		}
 
 		# map actual position to slot
