@@ -121,7 +121,8 @@ namespace eval hapticvis::identify {
 		set choices [my get_choices $n_choices]
 		set follow_dial [dl_get stimdg:follow_dial $cur_id]
 		set follow_pattern {
-		    string equal [dl_get stimdg:follow_pattern $cur_id] 0
+		    set curp [dl_get stimdg:follow_pattern $cur_id]
+		    return [expr {![string equal $curp 0]}]
 		}
 		
 		for { set i 0 } { $i < $n_choices } { incr i } {
