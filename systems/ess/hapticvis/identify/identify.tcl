@@ -101,10 +101,9 @@ namespace eval hapticvis::identify {
 	    #
 	    # log grasp related events
 	    #                             pointname obs bufsize every
-	    set f $::ess::open_datafile
-	    dservLoggerAddMatch $f grasp/sensor0/vals    1 240 1
-	    dservLoggerAddMatch $f grasp/sensor0/touched 1 
-	    dservLoggerAddMatch $f grasp/left_angle      1 
+	    dservLoggerAddMatch $filename grasp/sensor0/vals    1 240 1
+	    dservLoggerAddMatch $filename grasp/sensor0/touched 1 
+	    dservLoggerAddMatch $filename grasp/left_angle      1 
 	    print "logging grasp events"
 	}
 	

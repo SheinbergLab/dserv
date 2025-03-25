@@ -58,7 +58,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         }
       }
       Fl_Group {} {
-        label Control
+        label Control open
         xywh {180 28 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
       } {
         Fl_Group {} {open
@@ -73,7 +73,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               Fl_Choice subject_widget {
                 label {Subject:}
                 callback {set_subject()} open
-                xywh {261 38 210 28} down_box BORDER_BOX labelsize 16 textsize 16
+                xywh {261 38 210 28} down_box BORDER_BOX labelsize 16 when 3 textsize 16
               } {}
             }
           }

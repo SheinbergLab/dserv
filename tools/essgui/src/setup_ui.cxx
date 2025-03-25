@@ -154,6 +154,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 subject_widget->labelsize(16);
                 subject_widget->textsize(16);
                 subject_widget->callback((Fl_Callback*)cb_subject_widget);
+                subject_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
               } // Fl_Choice* subject_widget
               o->fixed(o->child(0), 28);
               o->end();

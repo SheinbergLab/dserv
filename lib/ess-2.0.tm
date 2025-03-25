@@ -1213,6 +1213,11 @@ namespace eval ess {
 	if { $touch_active } {
 	    dservLoggerAddMatch $filename mtouch/touchvals
 	}
+
+	# call the system's specific file_open callback
+	#  to add matches
+	$current(state_system) file_open $filename
+
 	dservLoggerResume $filename 
 	
 	# reset system and output event names
@@ -1232,9 +1237,6 @@ namespace eval ess {
 	    ::ess::evt_put PARAM NAME [now] $pname
 	    ::ess::evt_put PARAM VAL  [now] [lindex $pval 0]
 	}
-	
-	# call the system's specific file_open callback
-	$current(state_system) file_open $f
 	
 	#   dservTouch em_coeffDG
 	return 1

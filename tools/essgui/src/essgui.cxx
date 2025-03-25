@@ -42,6 +42,8 @@
 
 int add_tcl_commands(Tcl_Interp *interp);
 
+int esscmd(char *cmd, std::string &rstr);
+
 class App *g_App;
 
 class App
@@ -394,13 +396,19 @@ void file_open_cb(Fl_Button*, void*)
 {
 
 }
+
 void file_close_cb(Fl_Button*, void*)
 {
 
 }
+
 void file_suggest_cb(Fl_Button*, void*)
 {
-
+  std::string rstr;
+  const char *cmd = "ess::file_suggest";
+  auto result = esscmd((char *) cmd, rstr);
+  if (!rstr.empty() && rstr[0] == '!') return;  
+  FileEntry->value(rstr.c_str());
 }
 		  
 void host_cb(Fl_Tree*, void*) {
