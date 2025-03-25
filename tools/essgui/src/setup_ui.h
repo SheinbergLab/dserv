@@ -60,9 +60,15 @@ extern Fl_Text_Editor *system_editor;
 extern Fl_Text_Editor *protocol_editor;
 extern Fl_Text_Editor *variant_editor;
 extern Fl_Text_Editor *stim_editor;
-extern Fl_Button *FileOpenClose;
 #include <FL/Fl_Input.H>
-extern Fl_Input *data_filename;
+extern Fl_Input *FileEntry;
+#include <FL/Fl_Pack.H>
+extern void file_open_cb(Fl_Button*, void*);
+extern Fl_Button *FileOpen;
+extern void file_close_cb(Fl_Button*, void*);
+extern Fl_Button *FileClose;
+extern void file_suggest_cb(Fl_Button*, void*);
+extern Fl_Button *FileSuggest;
 extern Fl_Console *output_term;
 extern Fl_Output *status_widget;
 Fl_Double_Window * setup_ui(int argc, char *argv[]);

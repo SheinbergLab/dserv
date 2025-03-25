@@ -161,8 +161,8 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 642}
         } {
           Fl_Group {} {
-            label behavior open
-            xywh {504 56 747 615} labelsize 16 hide
+            label behavior open selected
+            xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
@@ -293,23 +293,38 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             }
           }
           Fl_Group {} {
-            label data open selected
-            xywh {503 57 762 617} labelsize 16
+            label data open
+            xywh {503 57 762 617} labelsize 16 hide
           } {
             Fl_Group {} {
               label Datafile open
-              xywh {513 78 381 308}
+              xywh {513 78 387 116}
             } {
               Fl_Group {} {open
-                xywh {523 88 371 48} box UP_FRAME
+                xywh {524 88 376 92} box UP_FRAME
               } {
-                Fl_Button FileOpenClose {
-                  label Open
-                  xywh {532 99 68 26} type Toggle
-                }
-                Fl_Input data_filename {
+                Fl_Input FileEntry {
                   label {Filename:}
-                  xywh {677 99 210 26}
+                  xywh {606 98 278 24}
+                }
+                Fl_Pack {} {open
+                  xywh {606 136 226 32} type HORIZONTAL
+                } {
+                  Fl_Button FileOpen {
+                    label Open
+                    callback file_open_cb
+                    xywh {613 136 68 32}
+                  }
+                  Fl_Button FileClose {
+                    label Close
+                    callback file_close_cb
+                    xywh {685 136 68 32}
+                  }
+                  Fl_Button FileSuggest {
+                    label Suggest
+                    callback file_suggest_cb
+                    xywh {757 136 68 32}
+                  }
                 }
               }
             }

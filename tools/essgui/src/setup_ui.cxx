@@ -92,9 +92,13 @@ Fl_Text_Editor *variant_editor=(Fl_Text_Editor *)0;
 
 Fl_Text_Editor *stim_editor=(Fl_Text_Editor *)0;
 
-Fl_Button *FileOpenClose=(Fl_Button *)0;
+Fl_Input *FileEntry=(Fl_Input *)0;
 
-Fl_Input *data_filename=(Fl_Input *)0;
+Fl_Button *FileOpen=(Fl_Button *)0;
+
+Fl_Button *FileClose=(Fl_Button *)0;
+
+Fl_Button *FileSuggest=(Fl_Button *)0;
 
 Fl_Console *output_term=(Fl_Console *)0;
 
@@ -251,7 +255,6 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         { Fl_Tabs* o = new Fl_Tabs(503, 32, 762, 642);
           { Fl_Group* o = new Fl_Group(504, 56, 747, 615, "behavior");
             o->labelsize(16);
-            o->hide();
             { Fl_Group* o = new Fl_Group(514, 84, 241, 264, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
               { eyetouch_widget = new EyeTouchWin(521, 91, 232, 232, "EyeWindow");
@@ -435,14 +438,25 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           } // Fl_Group* o
           { Fl_Group* o = new Fl_Group(503, 57, 762, 617, "data");
             o->labelsize(16);
-            { Fl_Group* o = new Fl_Group(513, 78, 381, 308, "Datafile");
-              { Fl_Group* o = new Fl_Group(523, 88, 371, 48);
+            o->hide();
+            { Fl_Group* o = new Fl_Group(513, 78, 387, 116, "Datafile");
+              { Fl_Group* o = new Fl_Group(524, 88, 376, 92);
                 o->box(FL_UP_FRAME);
-                { FileOpenClose = new Fl_Button(532, 99, 68, 26, "Open");
-                  FileOpenClose->type(1);
-                } // Fl_Button* FileOpenClose
-                { data_filename = new Fl_Input(677, 99, 210, 26, "Filename:");
-                } // Fl_Input* data_filename
+                { FileEntry = new Fl_Input(606, 98, 278, 24, "Filename:");
+                } // Fl_Input* FileEntry
+                { Fl_Pack* o = new Fl_Pack(606, 136, 226, 32);
+                  o->type(1);
+                  { FileOpen = new Fl_Button(613, 136, 68, 32, "Open");
+                    FileOpen->callback((Fl_Callback*)file_open_cb);
+                  } // Fl_Button* FileOpen
+                  { FileClose = new Fl_Button(685, 136, 68, 32, "Close");
+                    FileClose->callback((Fl_Callback*)file_close_cb);
+                  } // Fl_Button* FileClose
+                  { FileSuggest = new Fl_Button(757, 136, 68, 32, "Suggest");
+                    FileSuggest->callback((Fl_Callback*)file_suggest_cb);
+                  } // Fl_Button* FileSuggest
+                  o->end();
+                } // Fl_Pack* o
                 o->end();
               } // Fl_Group* o
               o->end();

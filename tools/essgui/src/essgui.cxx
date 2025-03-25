@@ -390,6 +390,19 @@ std::string get_system_name(const char *host)
   return hostname;
 }
 
+void file_open_cb(Fl_Button*, void*)
+{
+
+}
+void file_close_cb(Fl_Button*, void*)
+{
+
+}
+void file_suggest_cb(Fl_Button*, void*)
+{
+
+}
+		  
 void host_cb(Fl_Tree*, void*) {
   Fl_Tree_Item *item = host_widget->callback_item();
   if ( item ) {
