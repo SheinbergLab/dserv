@@ -196,6 +196,11 @@ oo::class create System {
         set _callbacks(quit) quit_cb
     }
 
+    method set_file_suggest_callback { cb } {
+        oo::objdefine [self] method file_suggest_cb { filename } $cb
+        set _callbacks(file_suggest) file_suggest_cb
+    }
+
     method set_file_open_callback { cb } {
         oo::objdefine [self] method file_open_cb { filename } $cb
         set _callbacks(file_open) file_open_cb
@@ -394,6 +399,14 @@ oo::class create System {
         ::ess::evt_put SYSTEM_STATE STOPPED [now]
         if { [info exists _callbacks(end)] } {
             my $_callbacks(end)
+        }
+        return
+    }
+
+    method file_suggest {} {
+        if { $_status == "running" } return
+        if { [info exists _callbacks(file_suggest)] } {
+            return [my $_callbacks(file_suggest)]
         }
         return
     }
@@ -884,54 +897,56 @@ namespace eval ess {
     }
 
     proc create_trial_json { status rt { stimid {} } } {
-    variable current
-    variable subject_id
-    set obj [yajl create #auto]
-    set parseobj [yajl create #auto]
-    $obj map_open
-
-    # always include these
-    $obj string trialid  number $current(trialid)
-    $obj string project  string $current(project)
-    $obj string system   string $current(system)
-    $obj string protocol string $current(protocol)
-    $obj string variant  string $current(variant)
-    $obj string version  string [$current(state_system) get_version]
-    $obj string subject  string $subject_id
-    $obj string status   number $status
-    $obj string rt       number $rt
-
-    # if a trial id is supplied, add addition info
-    if { $stimid != {} } {
-        if { [dg_exists stimdg] } {
-        $obj map_key stiminfo
-
-        $obj map_open
-        set rlen [dl_length stimdg:stimtype]
-        foreach l [dg_tclListnames stimdg] {
-            $parseobj reset
-            if { $rlen == [dl_length stimdg:$l] } {
-            set dtype [dl_datatype stimdg:$l]
-            if { $dtype == "list" } {
-                $obj string $l {*}[$parseobj parse [dl_toJSON stimdg:$l:$stimid]]
-            } elseif { $dtype == "long" || $dtype == "short" || $dtype == "char" } {
-                $obj string $l integer [dl_get stimdg:$l $stimid]
-            } elseif { $dtype == "float" } {
-                $obj string $l double [dl_get stimdg:$l $stimid]
-            } elseif { $dtype == "string" } {
-                $obj string $l string [dl_get stimdg:$l $stimid]
-            }
-            }
-        }
-        $obj map_close
-        }
-    }
-    
-    $obj map_close
-    set result [$obj get]
-    $obj delete
-    $parseobj delete
-    return $result
+	variable current
+	variable subject_id
+	variable open_datafile
+	set obj [yajl create #auto]
+	set parseobj [yajl create #auto]
+	$obj map_open
+	
+	# always include these
+	$obj string trialid  number $current(trialid)
+	$obj string project  string $current(project)
+	$obj string system   string $current(system)
+	$obj string protocol string $current(protocol)
+	$obj string variant  string $current(variant)
+	$obj string version  string [$current(state_system) get_version]
+	$obj string subject  string $subject_id
+	$obj string status   number $status
+	$obj string rt       number $rt
+	$obj string filename string $open_datafile	
+	
+	# if a trial id is supplied, add addition info
+	if { $stimid != {} } {
+	    if { [dg_exists stimdg] } {
+		$obj map_key stiminfo
+		
+		$obj map_open
+		set rlen [dl_length stimdg:stimtype]
+		foreach l [dg_tclListnames stimdg] {
+		    $parseobj reset
+		    if { $rlen == [dl_length stimdg:$l] } {
+			set dtype [dl_datatype stimdg:$l]
+			if { $dtype == "list" } {
+			    $obj string $l {*}[$parseobj parse [dl_toJSON stimdg:$l:$stimid]]
+			} elseif { $dtype == "long" || $dtype == "short" || $dtype == "char" } {
+			    $obj string $l integer [dl_get stimdg:$l $stimid]
+			} elseif { $dtype == "float" } {
+			    $obj string $l double [dl_get stimdg:$l $stimid]
+			} elseif { $dtype == "string" } {
+			    $obj string $l string [dl_get stimdg:$l $stimid]
+			}
+		    }
+		}
+		$obj map_close
+	    }
+	}
+	
+	$obj map_close
+	set result [$obj get]
+	$obj delete
+	$parseobj delete
+	return $result
     }
 
     proc reset_trial_info {} {
@@ -1147,6 +1162,16 @@ namespace eval ess {
     
     return $essfiles
     }
+
+    proc file_suggest {} {
+	variable current
+	variable subject_id
+	set suggestion [$current(state_system) file_suggest]
+	if { $suggestion == "" } {
+	    set ts [clock format [clock seconds] -format {%y%m%d%H%M}]
+	    return "${subject_id}_$current(system)-$current(protocol)-$current(variant)_${ts}"
+	}
+    }
     
     proc file_open { f { overwrite 0 } } {
 	variable current
@@ -1216,23 +1241,23 @@ namespace eval ess {
     }
 
     proc file_close {} {
-    variable current
+	variable current
         variable open_datafile
-    if { $open_datafile != "" } {
-        
-        # could put pre_close callback here
-        
-	dservLoggerClose $open_datafile
-        dservSet ess/lastfile [file tail [file root $open_datafile]]
-        dservSet ess/datafile {}
-        
-        
-        # call the system's specific file_close callback
-        catch {$current(state_system) file_close $open_datafile} ioerror
-        set open_datafile {}
-        return 1
-    }
-    return 0
+	if { $open_datafile != "" } {
+	    
+	    # could put pre_close callback here
+	    
+	    dservLoggerClose $open_datafile
+	    dservSet ess/lastfile [file tail [file root $open_datafile]]
+	    dservSet ess/datafile {}
+	    
+	    
+	    # call the system's specific file_close callback
+	    catch {$current(state_system) file_close $open_datafile} ioerror
+	    set open_datafile {}
+	    return 1
+	}
+	return 0
     }
 }
 
