@@ -85,7 +85,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 6 }
+              n_rep { 8 10 }
 		rotations {
 		    {three {60 180 300}} {single {180}}
                 }
@@ -98,7 +98,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 6 }
+              n_rep { 8 10 }
 		rotations {
 		    {three {60 180 300}} {single {180}}
                 }
@@ -111,7 +111,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 6 }
+              n_rep { 8 10 }
 		rotations {
                   {three {60 180 300}} {single {180} }
                 }
@@ -124,7 +124,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 6 }
+              n_rep { 8 10 }
 		rotations {
                   {three {60 180 300}} {single {180}}
                 }
