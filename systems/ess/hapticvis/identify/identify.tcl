@@ -90,6 +90,11 @@ namespace eval hapticvis::identify {
 		foreach i "0 1 2 3 4 5 6 7" { ::ess::touch_region_off $i }
 	    }
 	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
+
+	    # automatically close open files at end of run
+	    if { $filename != "" } {
+		::ess::file_close
+	    }
 	}
 	
 	$s set_file_open_callback {
