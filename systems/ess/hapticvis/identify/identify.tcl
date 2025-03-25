@@ -103,12 +103,12 @@ namespace eval hapticvis::identify {
 	    #                             pointname obs bufsize every
 	    dservLoggerAddMatch $filename grasp/sensor0/vals    1 240 1
 	    dservLoggerAddMatch $filename grasp/sensor0/touched 1 
-	    dservLoggerAddMatch $filename grasp/left_angle      1 
+	    dservLoggerAddMatch $filename grasp/left_angle      1 16 1
 	    print "logging grasp events"
 	}
 	
 	$s set_file_close_callback {
-	    my process_data $filename [file root $filename].json
+#	    my process_data $filename [file root $filename].json
 	    print "closed $filename"
 	}
 	
