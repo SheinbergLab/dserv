@@ -101,9 +101,10 @@ namespace eval hapticvis::identify {
 	    #
 	    # log grasp related events
 	    #                             pointname obs bufsize every
-	    dservLoggerAddMatch $filename grasp/sensor0/vals    1 240 1
-	    dservLoggerAddMatch $filename grasp/sensor0/touched 1 
-	    dservLoggerAddMatch $filename grasp/left_angle      1 
+	    set f $::ess::open_datafile
+	    dservLoggerAddMatch $f grasp/sensor0/vals    1 240 1
+	    dservLoggerAddMatch $f grasp/sensor0/touched 1 
+	    dservLoggerAddMatch $f grasp/left_angle      1 
 	    print "logging grasp events"
 	}
 	
@@ -471,7 +472,7 @@ namespace eval hapticvis::identify {
 	    # find all ds columns and their names without <ds>
 	    set ds_cols \
 		[lsearch -inline -all -glob [dg_tclListnames $g] "<ds>*"]
-	    set cols [regsub -all <stimdg> $ds_cols {}]
+	    set cols [regsub -all <ds> $ds_cols {}]
 	    foreach c $cols {
 		dl_set $out:$c [dl_choose $g:<ds>${c} $stimtype]
 	    }
