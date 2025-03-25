@@ -33,7 +33,7 @@ namespace eval hapticvis::identify {
 	interblock_time 500
 	pre_stim_time 100
 	sample_delay 0
-	sample_duration 15000
+	sample_duration 8000
 	choice_duration 30000
 	choice_delay 0
 	stim_duration 30000
@@ -47,7 +47,7 @@ namespace eval hapticvis::identify {
     # variant description
 
     set subject_ids [dl_tcllist [dl_fromto 0 30]]
-    set subject_sets [dl_tcllist [dl_fromto 0 4]]
+    set subject_sets [dl_tcllist [dl_fromto 0 5]]
 
     variable variants {
         visual {
@@ -148,6 +148,8 @@ namespace eval hapticvis::identify {
 	
 	$s add_method setup_visual { subject_id subject_set n_per_set \
 					 shape_scale noise_type n_rep rotations } {
+             variable trialdb_file \
+		 [file join $p trial_db_${n_per_set}_${n_sets}]
 	     my setup_trials $subject_id $subject_set $n_per_set visual \
 		 $shape_scale $noise_type $n_rep $rotations
 	}
@@ -156,6 +158,8 @@ namespace eval hapticvis::identify {
 					 n_rep rotations } {
 	     set shape_scale 1
 	     set noise_type none
+             variable trialdb_file \
+		 [file join $p trial_db_${n_per_set}_${n_sets}]
 	     my setup_trials $subject_id $subject_set $n_per_set haptic \
 		 $shape_scale $noise_type $n_rep $rotations
 	}
@@ -163,6 +167,8 @@ namespace eval hapticvis::identify {
 	$s add_method setup_haptic_constrained_locked { \
 					 subject_id subject_set n_per_set \
 					 n_rep rotations } {
+            variable trialdb_file \
+		 [file join $p contour_db_${n_per_set}_${n_sets}]
 	    my setup_haptic $subject_id $subject_set $n_per_set $n_rep $rotations
             dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
             dl_set stimdg:constraint_locked [dl_ones [dl_length stimdg:stimtype]]
@@ -171,12 +177,16 @@ namespace eval hapticvis::identify {
 	$s add_method setup_haptic_constrained_unlocked { \
 					 subject_id subject_set n_per_set \
 					 n_rep rotations } {
+            variable trialdb_file \
+		 [file join $p contour_db_${n_per_set}_${n_sets}]
 	    my setup_haptic $subject_id $subject_set $n_per_set $n_rep $rotations
             dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
 	}
 	
 	$s add_method setup_haptic_follow_dial { subject_id subject_set n_per_set \
 						     n_rep rotations } {
+            variable trialdb_file \
+		 [file join $p contour_db_${n_per_set}_${n_sets}]
 	    my setup_haptic $subject_id $subject_set $n_per_set $n_rep $rotations
             dl_set stimdg:follow_dial [dl_ones [dl_length stimdg:stimtype]]
             dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
@@ -184,12 +194,14 @@ namespace eval hapticvis::identify {
 	
 	$s add_method setup_haptic_follow_pattern { subject_id subject_set n_per_set \
 							n_rep rotations } {
+            variable trialdb_file \
+		 [file join $p contour_db_${n_per_set}_${n_sets}]
 	    my setup_haptic $subject_id $subject_set $n_per_set $n_rep $rotations
 	    dl_set stimdg:follow_pattern [dl_replicate [dl_slist sine] [dl_length stimdg:stimtype]]
             dl_set stimdg:constrained [dl_ones [dl_length stimdg:stimtype]]
 	}
 	
-	$s add_method setup_trials { subject_id subject_set n_per_set \
+	$s add_method setup_trials { trial_db subject_id subject_set n_per_set \
 		 trial_type shape_scale noise_type n_rep rotations } {
 	     # find database
 	     set db {}
@@ -198,9 +210,6 @@ namespace eval hapticvis::identify {
 
 	     # the number of sets depends on set size (4->4, 8->2, 6->3)
 	     set n_sets [dict get {4 4 8 2 6 3} $n_per_set]
-	     
-	     variable trialdb_file \
-		 [file join $p trial_db_${n_per_set}_${n_sets}]
 	     
 	     # build our stimdg
 	     if { [dg_exists stimdg] } { dg_delete stimdg }

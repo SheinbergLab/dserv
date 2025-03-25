@@ -101,6 +101,43 @@ namespace eval haptic {
 	dg_delete trialdb
     }
 
+    # create persistent contour trials for subjects
+    proc add_contour_trials { shapedb_file trialdb_file n { n_per_set 4 } { n_sets 8 } } {
+
+	# shape coords are in shapedb_file
+	if {![file exists $shapedb_file]} { error "db file not found" }
+	if { [dg_exists shapedb] } { dg_delete shapedb }
+	dg_rename [dg_read $shapedb_file] shapedb
+	
+	# trial info in trialdb_file
+	if { [dg_exists trialdb] } { dg_delete trialdb }
+	if {![file exists $trialdb_file]} {
+	    dg_rename [dg_create] trialdb
+	    dl_set trialdb:subject    [dl_ilist]
+	    dl_set trialdb:target_ids [dl_llist]
+	} else {
+	    dg_rename [dg_read $trialdb_file] trialdb
+	}
+	
+	for { set subject_id 0 } { $subject_id < $n } { incr subject_id } {
+	    set row [dl_find trialdb:subject $subject_id]
+	    
+	    # only add if row not in table
+	    if { $row < 0 } {
+		dl_local shuffled [dl_shuffle shapedb:id]
+		set ntargs [expr $n_per_set*$n_sets]
+		if { [expr {$ntargs>[dl_length shapedb:id]}] } {
+		    error "not enough shapes in db"
+		}
+		dl_local ts [dl_choose $shuffled [dl_fromto 0 $ntargs]]
+		dl_append trialdb:subject $subject_id
+		dl_append trialdb:target_ids [dl_reshape $ts $n_sets $n_per_set]
+	    }
+	}
+	dg_write trialdb $trialdb_file
+	dg_delete trialdb
+    }
+    
 
     proc haptic_process_available { dpoint data } {
 	dservSet ess/grasp/available $data

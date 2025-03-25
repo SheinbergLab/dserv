@@ -93,12 +93,18 @@ namespace eval hapticvis::identify {
 	}
 	
 	$s set_file_open_callback {
-	    print "opened datafile $filename"
+	    #
+	    # log grasp related events
+	    #                             pointname obs bufsize every
+	    dservLoggerAddMatch $filename grasp/sensor0/vals    1 240 1
+	    dservLoggerAddMatch $filename grasp/sensor0/touched 1 
+	    dservLoggerAddMatch $filename grasp/left_angle      1 
+	    print "logging grasp events"
 	}
 	
 	$s set_file_close_callback {
 	    my process_data $filename [file root $filename].json
-	    print "closed and converted $name"
+	    print "closed $filename"
 	}
 	
 
@@ -289,7 +295,6 @@ namespace eval hapticvis::identify {
 	
 	$s add_method highlight_response {} {
 	    set p [dservGet ess/joystick/position]
-	    print "highlight $p"
 	    rmtSend "highlight_response $p"
 	}
 	
@@ -407,6 +412,7 @@ namespace eval hapticvis::identify {
 	    lassign [::ess::evt_id ENDTRIAL ABORT]    endt_id     endt_abort 
 	    lassign [::ess::evt_id ENDOBS   COMPLETE] endobs_id   endobs_complete 
 	    lassign [::ess::evt_id CHOICES  ON]       choices_id  choices_on
+	    lassign [::ess::evt_id SAMPLE   ON]       sample_id   sample_on
 	    lassign [::ess::evt_id RESP]              resp_id 
 	    lassign [::ess::evt_id STIMTYPE]          stimtype_id 
 	    
@@ -432,8 +438,8 @@ namespace eval hapticvis::identify {
 	    dl_local stimon_t  \
 		[dl_unpack [dl_select $times \
 				[dl_and \
-				     [dl_eq $types $choices_id] \
-				     [dl_eq $subtypes $choices_on]]]]
+				     [dl_eq $types $sample_id] \
+				     [dl_eq $subtypes $sample_on]]]]
 	    dl_local response_t \
 		[dl_unpack [dl_select $times [dl_eq $types $resp_id]]]
 	    dl_local response \
@@ -457,6 +463,14 @@ namespace eval hapticvis::identify {
 		dl_set $out:$c [dl_choose $g:<stimdg>${c} $stimtype]
 	    }
 
+	    # find all ds columns and their names without <ds>
+	    set ds_cols \
+		[lsearch -inline -all -glob [dg_tclListnames $g] "<ds>*"]
+	    set cols [regsub -all <stimdg> $ds_cols {}]
+	    foreach c $cols {
+		dl_set $out:$c [dl_choose $g:<ds>${c} $stimtype]
+	    }
+	    
 	    # close original ESS dg
 	    dg_delete $g
 	    

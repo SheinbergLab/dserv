@@ -1222,7 +1222,7 @@ namespace eval ess {
         
         # could put pre_close callback here
         
-            dservLoggerClose $open_datafile
+	dservLoggerClose $open_datafile
         dservSet ess/lastfile [file tail [file root $open_datafile]]
         dservSet ess/datafile {}
         
