@@ -289,6 +289,7 @@ namespace eval hapticvis::identify {
 	
 	$s add_method highlight_response {} {
 	    set p [dservGet ess/joystick/position]
+	    print "highlight $p"
 	    rmtSend "highlight_response $p"
 	}
 	
@@ -300,26 +301,25 @@ namespace eval hapticvis::identify {
 	    
 	    if { $use_joystick } {
 		if { $n_choices == 4 } {
-		    # up=1(1)   down=2(3)  left=4(2)   right=8(0)
-		    set mapdict { 0 -1 1 1 2 3 4 2 8 0 }
+		    # ur=9(0) ul=5(1) dl=6(2) dr=10(3)
+		    set mapdict { 0 -1 9 0 5 1 6 2 10 3 }
 		} elseif { $n_choices == 6 } {
-		    # u=1(1)  d=2(4) u-l=5(2) u-r=9(0) d-l=6(3) d-r=10(5)
+		    # u=1(1)  d=2(4) ul=5(2) ur=9(0) d-=6(3) dr=10(5)
 		    set mapdict { 0 -1 1 1 2 4 5 2 9 0 6 3 10 5}
 		} else {
 		    # up=1(2)   down=2(6)  left=4(4)   right=8(0)
-		    # up-left=5(3) up-right=9(1) d-l=6(5) d-r=10(7)
+		    # ul=5(3) ur=9(1) dl=6(5) dr=10(7)
 		    set mapdict { 0 -1 1 2 2 6 4 4 8 0 5 3 9 1 6 5 10 7 }
 		}
 		set joy_position [dservGet ess/joystick/value]
-
+		
 		# if this is not an allowable position reset to 0
 		if { ![dict exists $mapdict $joy_position] } {
 		    if { [dservExists ess/joystick/position] } {
 			if { [dservGet ess/joystick/position] != 0 } {
 			    dservSet ess/joystick/position 0
 			    return -2
-			}
-			else {
+			} else {
 			    return -1
 			}
 		    } else {
@@ -327,10 +327,10 @@ namespace eval hapticvis::identify {
 			return -2
 		    }
 		}
-
+		
 		# map actual position to slot
 		set r [dict get $mapdict $joy_position]
-
+		
 		# note which position has been activated
 		if { [dservExists ess/joystick/position] } {
 		    set cur_position [dservGet ess/joystick/position]
@@ -341,7 +341,7 @@ namespace eval hapticvis::identify {
 		    dservSet ess/joystick/position $joy_position
 		    set updated_position 1
 		}
-
+		
 		# only if the button is pressed should we count as response
 		if { [dservGet ess/joystick/button] } {
 		    set made_selection 1
