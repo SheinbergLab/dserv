@@ -384,7 +384,7 @@ namespace eval hapticvis::identify {
 	     dl_set stimdg:choice_centers [dl_repeat $choice_centers $n_obs]
 	     dl_set stimdg:choice_scale   [dl_repeat $choice_scale $n_obs]
 	     dl_set stimdg:is_cued        [dl_repeat $is_cued $n_obs]
-	     dl_set stimdg:cued_choices   [dl_repeat [dl_llist] $n_obs]
+	     dl_set stimdg:cued_choices   [dl_repeat [dl_llist [dl_llist]] $n_obs]
 	     dl_set stimdg:feedback_type  [dl_repeat [dl_slist color] $n_obs]
 
 	     dl_set stimdg:follow_dial    [dl_zeros $n_obs]
