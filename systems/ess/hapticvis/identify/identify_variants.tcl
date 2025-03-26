@@ -33,7 +33,7 @@ namespace eval hapticvis::identify {
 	interblock_time 500
 	pre_stim_time 100
 	sample_delay 0
-	sample_duration 8000
+	sample_duration 6000
 	choice_duration 30000
 	choice_delay 0
 	stim_duration 30000
