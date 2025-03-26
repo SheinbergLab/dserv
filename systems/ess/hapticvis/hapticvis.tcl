@@ -38,6 +38,7 @@ namespace eval hapticvis {
 	$sys add_param post_response_time 1000     time int
 
 	$sys add_param finale_delay       500      time int
+	$sys add_param simulate_grasp       0      variable bool
 
 	##
 	## Local variables for the hapticvis base system
@@ -238,7 +239,7 @@ namespace eval hapticvis {
 	#
 	$sys add_action sample_on {
 	    my sample_on
-	    if { $trial_type == "visual" } {
+	    if { $trial_type == "visual" || $simulate_grasp } {
 		set sample_presented 1
 	    } else {
 		# this is important, because it will signal
