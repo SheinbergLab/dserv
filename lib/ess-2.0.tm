@@ -1202,7 +1202,7 @@ namespace eval ess {
 	dservLoggerAddMatch $filename eventlog/events
 	dservLoggerAddMatch $filename eventlog/names
 	dservLoggerAddMatch $filename stimdg
-	
+
 	variable em_active
 	if { $em_active } {
 	    # record raw em data: obs_limited, 80 byte buffer, every 5 samples

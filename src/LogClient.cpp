@@ -49,11 +49,13 @@ LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
   beginobs_dpoint.varlen = strlen(beginobs_dpoint.varname);
   beginobs_dpoint.data.type = DSERV_NONE;
   beginobs_dpoint.data.len = 0;
+  beginobs_dpoint.flags = 0;
   
   endobs_dpoint.varname = (char *) endobs_varname;
   endobs_dpoint.varlen = strlen(endobs_dpoint.varname);
   endobs_dpoint.data.type = DSERV_NONE;
   endobs_dpoint.data.len = 0;
+  endobs_dpoint.flags = 0;
   
   shutdown_dpoint.flags =
     DSERV_DPOINT_SHUTDOWN_FLAG | DSERV_DPOINT_DONTFREE_FLAG;
@@ -278,6 +280,9 @@ void LogClient::log_client_process(LogClient *logclient)
 
     /* check for shutdown */
     if (dpoint->flags & DSERV_DPOINT_SHUTDOWN_FLAG) {
+
+      //      std::cout << "shutdown dpoint received" << std::endl;
+
       logclient->flush_dpoints();
       logclient->state = LOGGER_CLIENT_SHUTDOWN;
       logclient->active = 0;
@@ -316,6 +321,6 @@ void LogClient::log_client_process(LogClient *logclient)
   logclient->log_table->remove(logclient->filename);
   delete logclient;
   
-  //  std::cout << "shutting down" << std::endl;
+  //  std::cout << "shutting down logger client" << std::endl;
 }
 
