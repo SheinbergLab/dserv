@@ -7,12 +7,13 @@ package require dlsh
 package require qpcs
 
 proc send_grasp { ds ms } {
-    dl_local coords [dl_short [dl_ones 6]]
+    dl_local coords [dl_short [dl_mult [dl_ones 6] [incr ::count]]]
     qpcs::dsSocketSetData $ds grasp/sensor0/vals $coords
     after $ms "send_grasp $ds $ms"
 }
 
-set ms 10
+set count 0
+set ms 5 
 set server localhost
 set ds [qpcs::dsSocketOpen $::server]
 send_grasp $ds $ms
