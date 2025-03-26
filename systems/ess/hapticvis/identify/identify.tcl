@@ -224,7 +224,7 @@ namespace eval hapticvis::identify {
 			 [list \
 			      function set_dxl_positions \
 			      side 0 \
-			      position prep_pick]]
+			      position prep_present]]
 	}
 	
 	$s add_method sample_on {} {
