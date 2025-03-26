@@ -60,12 +60,12 @@ class LogMatchDict
   
   void insert(std::string key, LogMatchSpec *m)
   {
-    LogMatchSpec *old;
-    if (find(key, &old)) {
-      delete old;
-    }
     std::lock_guard<std::mutex> mlock(mutex_);
-      map_[key] = m;
+    auto iter = map_.find(key);
+    if (iter != map_.end()) {
+      delete iter->second;
+    }
+    map_[key] = m;
   }
   
   void remove(std::string key)
