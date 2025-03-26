@@ -176,7 +176,10 @@ namespace eval hapticvis::identify {
 	}
 
 	$s add_method haptic_show { shape_id a } {
-	    if { $simulate_grasp } { return }
+	    if { $simulate_grasp } {
+		dservSet ess/grasp/available 1
+		return
+	    }
 	    package require rest
 	    set ip 192.168.88.84
 	    set port 8888
@@ -233,7 +236,7 @@ namespace eval hapticvis::identify {
 	}
 
 	$s add_method sample_presented {} {
-	    if { $trial_type == "visual" || $simulate_grasp } {
+	    if { $trial_type == "visual" } {
 		if { $sample_up == 1 } { return 1 } { return 0 }
 	    } else {
 		if { [dservGet ess/grasp/available] } {
