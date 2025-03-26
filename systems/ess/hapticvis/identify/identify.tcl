@@ -234,7 +234,7 @@ namespace eval hapticvis::identify {
 	}
 
 	$s add_method sample_presented {} {
-	    if { $trial_type == "visual" } {
+	    if { $trial_type == "visual" || $simulate_grasp } {
 		if { $sample_up == 1 } { return 1 } { return 0 }
 	    } else {
 		if { [dservGet ess/grasp/available] } {
