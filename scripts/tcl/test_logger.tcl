@@ -6,11 +6,9 @@
 #  Can be run as:
 #     /usr/local/dserv/dserv -c ./test_logger.tcl
 #
-#   Note that because the logger runs in its own thread, it is difficult
-#  to have this script directly close and process after writing out dpoints
+#  To have this script directly close and process after writing out dpoints
+#    we set a datapoint called "done" that triggers the close_and_process step
 #
-#   We use the timer module, to attach a script to run after 500ms, which
-#  closes the log, processes it, and then exits dserv
 #
 
 # add dlsh.zip to library path, so packages can be loaded into dserv
@@ -38,24 +36,19 @@ dservLoggerResume $filename
 
 # push out 100 dpoints that should match
 set dpoint_count 100
-for { set i 0 } { $i < $dpoint_count } { incr i } { dservSet foo/[expr $i/10] $i }
+proc do_test {} {
+    global dpoint_count
+    for { set i 0 } { $i < $dpoint_count } { incr i } {
+	dservSet foo/[expr $i/10] $i
+    }
+    dservSet done 1
+}
 
-#######################################################
-#  use timer callback to trigger close log and process
-#######################################################
-
-# load timer module for timerTick function
-load [file join $dspath modules dserv_timer[info sharedlibextension]]
-
-# user timer 0, expiration will set dpoint named timer/0
-set dpoint timer/0
+set dpoint done
 
 # attach callback script to timer dpoint
 dservAddExactMatch $dpoint
 dpointSetScript $dpoint close_and_process
-
-# wait 500ms, which should be plenty to allow log to be flushed
-timerTick 0 500
 
 # proc to close the logger and process result
 proc close_and_process { name val } {
@@ -103,3 +96,6 @@ proc close_and_process { name val } {
 
     exit
 }
+
+do_test
+
