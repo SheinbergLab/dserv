@@ -33,7 +33,7 @@ namespace eval hapticvis::identify {
 	interblock_time 500
 	pre_stim_time 100
 	sample_delay 0
-	sample_duration 6000
+	sample_duration 5000
 	choice_duration 30000
 	choice_delay 0
 	stim_duration 30000
@@ -85,7 +85,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 8 10 }
+              n_rep { 10 8 }
 		rotations {
 		    {three {60 180 300}} {single {180}}
                 }
@@ -98,7 +98,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 8 10 }
+              n_rep { 10 8 }
 		rotations {
 		    {three {60 180 300}} {single {180}}
                 }
@@ -111,7 +111,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 8 10 }
+              n_rep { 10 8 }
 		rotations {
                   {three {60 180 300}} {single {180} }
                 }
@@ -124,7 +124,7 @@ namespace eval hapticvis::identify {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 4 }
-              n_rep { 8 10 }
+              n_rep { 10 8 }
 		rotations {
                   {three {60 180 300}} {single {180}}
                 }
