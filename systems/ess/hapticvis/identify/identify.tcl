@@ -103,6 +103,7 @@ namespace eval hapticvis::identify {
 	    dservLoggerAddMatch $filename grasp/sensor0/vals    1 240 1
 	    dservLoggerAddMatch $filename grasp/sensor0/touched 1 
 	    dservLoggerAddMatch $filename grasp/left_angle      1 16 1
+	    dservLoggerAddMatch $filename grasp/available       1
 	    print "logging grasp events"
 	}
 	
