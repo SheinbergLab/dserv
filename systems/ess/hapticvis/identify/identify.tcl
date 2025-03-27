@@ -91,7 +91,7 @@ namespace eval hapticvis::identify {
 	    ::ess::evt_put SYSTEM_STATE STOPPED [now]
 
 	    # automatically close open files at end of run
-	    if { $filename != "" } {
+	    if { $::ess::open_datafile != "" } {
 		::ess::file_close
 	    }
 	}
