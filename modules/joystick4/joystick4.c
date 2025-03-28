@@ -6,8 +6,6 @@
  *   This module reads joystick/button info from the Mikroe Joystick4 (6279)
  *  values to dserv.
  *
- * DPOINTS
- *   joystick4/val
  *
  * AUTHOR
  *   DLS, 03/25
@@ -55,26 +53,9 @@
 #define JOYSTICK4_PIN_STATE_LOW             0
 #define JOYSTICK4_PIN_STATE_HIGH            1
 
-/* Joystick 4 position values */
-#define JOYSTICK4_POSITION_IDLE             0
-#define JOYSTICK4_POSITION_CENTER           1
-#define JOYSTICK4_POSITION_CENTER_UP        2
-#define JOYSTICK4_POSITION_CENTER_RIGHT     3
-#define JOYSTICK4_POSITION_CENTER_DOWN      4
-#define JOYSTICK4_POSITION_CENTER_LEFT      5
-#define JOYSTICK4_POSITION_UP               6
-#define JOYSTICK4_POSITION_UPPER_RIGHT      7
-#define JOYSTICK4_POSITION_RIGHT            8
-#define JOYSTICK4_POSITION_LOWER_RIGHT      9
-#define JOYSTICK4_POSITION_DOWN             10
-#define JOYSTICK4_POSITION_LOWER_LEFT       11
-#define JOYSTICK4_POSITION_LEFT             12
-#define JOYSTICK4_POSITION_UPPER_LEFT       13
-
 /* Joystick 4 device address setting */
 #define JOYSTICK4_DEVICE_ADDRESS_0          0x20
 #define JOYSTICK4_DEVICE_ADDRESS_1          0x21
-
 
 #include <tcl.h>
 
@@ -231,76 +212,24 @@ int joystick4_get_pins(joystick4_config_t *config, uint8_t *pin_mask)
   return joystick4_read_reg(config, JOYSTICK4_REG_INPUT, pin_mask);
 }
 
-uint8_t joystick4_get_position ( uint8_t pin_mask )
+int joystick4_get_position ( uint8_t pin_mask, uint8_t *pos, uint8_t *button )
 {
-  uint8_t position = JOYSTICK4_POSITION_IDLE;
-  if ( JOYSTICK4_PIN_CE != ( pin_mask & JOYSTICK4_PIN_CE ) )
-    {
-      if ( JOYSTICK4_PIN_A != ( pin_mask & JOYSTICK4_PIN_A ) )
-        {
-	  position = JOYSTICK4_POSITION_CENTER_UP;
-        }
-      else if ( JOYSTICK4_PIN_B != ( pin_mask & JOYSTICK4_PIN_B ) )
-        {
-	  position = JOYSTICK4_POSITION_CENTER_RIGHT;
-        }
-      else if ( JOYSTICK4_PIN_C != ( pin_mask & JOYSTICK4_PIN_C ) )
-        {
-	  position = JOYSTICK4_POSITION_CENTER_LEFT;
-        }
-      else if ( JOYSTICK4_PIN_D != ( pin_mask & JOYSTICK4_PIN_D ) )
-        {
-	  position = JOYSTICK4_POSITION_CENTER_DOWN;
-        }
-      else
-        {
-	  position = JOYSTICK4_POSITION_CENTER;
-        }
-    }
-  else if ( JOYSTICK4_PIN_A != ( pin_mask & JOYSTICK4_PIN_A ) )
-    {
-      if ( JOYSTICK4_PIN_B != ( pin_mask & JOYSTICK4_PIN_B ) )
-        {
-	  position = JOYSTICK4_POSITION_UPPER_RIGHT;
-        }
-      else if ( JOYSTICK4_PIN_C != ( pin_mask & JOYSTICK4_PIN_C ) )
-        {
-	  position = JOYSTICK4_POSITION_UPPER_LEFT;
-        }
-      else
-        {
-	  position = JOYSTICK4_POSITION_UP;
-        }
-    }
-  else if ( JOYSTICK4_PIN_B != ( pin_mask & JOYSTICK4_PIN_B ) )
-    {
-      if ( JOYSTICK4_PIN_D != ( pin_mask & JOYSTICK4_PIN_D ) )
-        {
-	  position = JOYSTICK4_POSITION_LOWER_RIGHT;
-        }
-      else
-        {
-	  position = JOYSTICK4_POSITION_RIGHT;
-        }
-    }
-  else if ( JOYSTICK4_PIN_C != ( pin_mask & JOYSTICK4_PIN_C ) )
-    {
-      if ( JOYSTICK4_PIN_D != ( pin_mask & JOYSTICK4_PIN_D ) )
-        {
-	  position = JOYSTICK4_POSITION_LOWER_LEFT;
-        }
-      else
-        {
-	  position = JOYSTICK4_POSITION_LEFT;
-        }
-    }
-  else if ( JOYSTICK4_PIN_D != ( pin_mask & JOYSTICK4_PIN_D ) )
-    {
-      position = JOYSTICK4_POSITION_DOWN;
-    }
-  return position;
-}
+  uint8_t val = ~pin_mask;
+  uint8_t b = (val & 0x40) != 0;
+  uint8_t u, d, l, r;
+  val &= ~0x40;
 
+  // up=1   down=2 left=4  right=8
+  u = (val & 0x20) ? 0x01 : 0x00;
+  d = (val & 0x10) ? 0x02 : 0x00;
+  l = (val & 0x80) ? 0x04 : 0x00;
+  r = (val & 0x08) ? 0x08 : 0x00;
+  uint8_t position = u | d | l | r;
+
+  if (button) *button = b;
+  if (pos) *pos = position;
+  return 0;
+}  
 
 static int joystick4_initialize(joystick4_info_t *joystick4info,
 				uint8_t address)
@@ -340,17 +269,29 @@ static int joystick4_read_command(ClientData data,
     return TCL_OK;
   }
 
-  uint8_t pin_mask, position;
+  uint8_t pin_mask, position, button;
   int result = joystick4_get_pins(&info->config, &pin_mask);
-  if (!result) {
+  if (result == -1) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
 		     ": error reading joystick4", NULL);
     return TCL_ERROR;
   }
-  position = joystick4_get_position(pin_mask);
+  joystick4_get_position(pin_mask, &position, &button);
   
-  
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(position));
+  // Create Tcl objects for the integers
+  Tcl_Obj *p = Tcl_NewIntObj(position);
+  Tcl_Obj *b = Tcl_NewIntObj(button);
+
+  // Create a list Tcl object
+  Tcl_Obj *listObj = Tcl_NewListObj(0, NULL);
+
+  // Append the integers to the list
+  Tcl_ListObjAppendElement(interp, listObj, p);
+  Tcl_ListObjAppendElement(interp, listObj, b);
+
+  // Set the list object as the result of the function
+  Tcl_SetObjResult(interp, listObj);
+    
   return TCL_OK;
 }
 
