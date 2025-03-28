@@ -1,6 +1,8 @@
-# qpcsvars.tcl
+# triggers.tcl
 
-puts "initializing qpcsvars"
+puts "initializing triggers"
+
+set dspath [file dir [info nameofexecutable]]
 
 proc update_dio { name data } {
     set eds [expr { [lindex $data 0] & 0xFFFFFFFF}]
@@ -132,9 +134,17 @@ triggerAdd ess/state                   1  update_state
 set path [file dir [info nameofexecutable]]
 
 # add windows processor for eye movements
-processLoad [file join $path processors windows[info sharedlibextension]] windows
+processLoad [file join \
+		 $path processors windows[info sharedlibextension]] windows
 processAttach windows ain/vals windows
 
 # add touch_windows processor for touch regions
-processLoad [file join $path processors touch_windows[info sharedlibextension]] touch_windows
+processLoad [file join \
+		 $path processors touch_windows[info sharedlibextension]] \
+    touch_windows
 processAttach touch_windows mtouch/touchvals touch_windows
+
+# look for any .tcl configs in local/*.tcl
+foreach f [glob [file join $dspath local trigger-*.tcl]] {
+    source $f
+}
