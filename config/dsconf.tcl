@@ -167,25 +167,51 @@ proc joystick_button_callback { dpoint data } {
     dservSet joystick/button $data
 }
 
-proc joystick_init { } {
-    if { ![dservExists joystick/lines] } { return }
-    
-    dict for { k p } [dservGet joystick/lines] {
-	gpioLineRequestInput $p BOTH 2500 PULL_UP ACTIVE_LOW
-    }
-    
-    dict for { k p } [dservGet joystick/lines] {
-	dservAddMatch gpio/input/$p
-	dpointSetScript gpio/input/$p joystick_callback
-    }
-    dservSet joystick/value 0
 
-    if { [dservExists joystick/button_line] } {
-	set pin [dservGet joystick/button_line]
-	gpioLineRequestInput $pin BOTH 2500 PULL_UP ACTIVE_LOW
-	dservAddMatch gpio/input/$pin
-	dpointSetScript gpio/input/$pin joystick_button_callback
+#
+# callback for Mikroe Joystick4 click
+#
+proc joystick4_callback { dpoint data } {
+    if { $data } {
+	# reading clears the interrupt and pin falls
+	# up=1   down=2 left=4  right=8
+	# ul=5   ur=9   dl=6    dr=10
+	lassign [joystick4Read] position button
+    	dservSet joystick/value $position
+    	dservSet joystick/button $button
+    }
+}
+
+proc joystick_init { } {
+    if { [dservExists joystick4/interrupt] } {
+	set p [dservGet joystick4/interrupt]
+
+	# the mikroe joystick 4 signals change on rising edge
+	gpioLineRequestInput $p RISING
+	dservAddMatch gpio/input/$p
+	dpointSetScript gpio/input/$p joystick4_callback
+	dservSet joystick/value 0
 	dservSet joystick/button 0
+    }
+    
+    if { [dservExists joystick/lines] } { 
+	dict for { k p } [dservGet joystick/lines] {
+	    gpioLineRequestInput $p BOTH 2500 PULL_UP ACTIVE_LOW
+	}
+	
+	dict for { k p } [dservGet joystick/lines] {
+	    dservAddMatch gpio/input/$p
+	    dpointSetScript gpio/input/$p joystick_callback
+	}
+	dservSet joystick/value 0
+	
+	if { [dservExists joystick/button_line] } {
+	    set pin [dservGet joystick/button_line]
+	    gpioLineRequestInput $pin BOTH 2500 PULL_UP ACTIVE_LOW
+	    dservAddMatch gpio/input/$pin
+	    dpointSetScript gpio/input/$pin joystick_button_callback
+	    dservSet joystick/button 0
+	}
     }
 }
 
