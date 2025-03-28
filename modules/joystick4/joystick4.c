@@ -303,7 +303,7 @@ uint8_t joystick4_get_position ( uint8_t pin_mask )
 
 
 static int joystick4_initialize(joystick4_info_t *joystick4info,
-				uint8_t address, char *prefix, char *name)
+				uint8_t address)
 {
   joystick4_config_t *config = NULL;
   if (joystick4info->fd < 0) return -1;
@@ -316,12 +316,8 @@ static int joystick4_initialize(joystick4_info_t *joystick4info,
   /* copy tclserver so we can use to store datapoints */
   config->tclserver = joystick4info->tclserver;
   
-  const char *DEFAULT_DPOINT_PREFIX = "joystick4/vals";
-  if (!prefix) prefix = (char *) DEFAULT_DPOINT_PREFIX;
-  
   // I2C addresses for joystick4 devices
   config->address = address; 	/* 0x20, 0x21 */
-  snprintf(config->name, sizeof(config->name), "%s/%s", prefix, name);
   
 #ifdef __linux__
   // Configure all pins as INPUT
