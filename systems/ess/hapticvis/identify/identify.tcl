@@ -369,7 +369,21 @@ namespace eval hapticvis::identify {
 			break
 		    }
 		}
-		set made_selection 1
+
+		if { $n_choices == 4 } {
+		    # 4 skip cardinal
+		    set mapdict { 0 -1 1 0 2 -1 3 1 4 -1 5 2 6 -1 7 3 }
+		} elseif { $n_choices == 6 } {
+		    # 6 skip right and left
+		    set mapdict { 0 -1 1 0 2 1 3 2 4 -1 5 3 6 4 7 5 }
+		} else {
+		    # 8 is identity
+		    set mapdict { 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 }
+		}
+		set r [dict get $mapdict $r]
+		if { $r != -1 } {
+		    set made_selection 1
+		}
 	    }
 	    
 	    if { $made_selection } {
