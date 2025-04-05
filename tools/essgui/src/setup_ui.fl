@@ -1,5 +1,5 @@
 # data file for the Fltk User Interface Designer (fluid)
-version 1.0402
+version 1.0500
 header_name {.h}
 code_name {.cxx}
 decl {\#include "Fl_Console.h"
@@ -18,7 +18,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {477 103 1280 800} type Double resizable visible
+    xywh {190 103 1280 800} type Double resizable visible
   } {
     Fl_Group {} {open
       xywh {0 1 1280 762} resizable
@@ -161,7 +161,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 32 762 642}
         } {
           Fl_Group {} {
-            label behavior open selected
+            label behavior open
             xywh {504 56 747 615} labelsize 16
           } {
             Fl_Group {} {
@@ -206,15 +206,9 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
             }
             Fl_Group plot_widget {
-              label {Plot Window} open
+              label {Plot Window} open selected
               xywh {763 84 488 304} labeltype NO_LABEL
-            } {
-              Fl_Box cgwin_widget {
-                label cgwin
-                xywh {763 84 488 300}
-                class CGWin
-              }
-            }
+            } {}
             Fl_Group {} {
               label {Virtual Input} open
               xywh {514 372 245 296} color 56 v_label_margin 3
