@@ -67,12 +67,7 @@ int Dlsh_Init(Tcl_Interp *interp);
 }
 
 int TclInterp::DlshAppInit(Tcl_Interp *interp) {
-  setenv("TCLLIBPATH", "", 1);
-
   if (Tcl_Init(interp) == TCL_ERROR) return TCL_ERROR;
-  if (Dlsh_Init(interp) == TCL_ERROR) return(TCL_ERROR);
-  Tcl_StaticPackage(interp, "dlsh", Dlsh_Init, NULL);
-
   Tcl_VarEval(interp, 
         "proc load_local_packages {} {\n"
         " global auto_path\n"
@@ -87,7 +82,7 @@ int TclInterp::DlshAppInit(Tcl_Interp *interp) {
         " zipfs unmount $dlshroot\n"
         " zipfs mount $dlshzip $dlshroot\n"
 	" set auto_path [linsert $auto_path [set auto_path 0] $dlshroot/lib]\n"
-	" package require dlsh\n"
+	" package require dlsh; package require flcgwin\n"
         "}\n"
         "load_local_packages\n",
         NULL);
