@@ -1687,14 +1687,6 @@ int createTableCmd(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
-int cgwinFlushwinCmd(ClientData data, Tcl_Interp *interp,
-		     int objc, Tcl_Obj * const objv[])
-{
-  cgwin_widget->redraw();
-  return TCL_OK;
-}
-
-
 int add_tcl_commands(Tcl_Interp *interp)
 {
 
@@ -1723,12 +1715,6 @@ int add_tcl_commands(Tcl_Interp *interp)
 		       (ClientData) general_perf_widget,
 		       (Tcl_CmdDeleteProc *) NULL);
 
-  /* override the cgraph flushwin to call CGWin::draw */
-  Tcl_CreateObjCommand(interp, "flushwin",
-		       (Tcl_ObjCmdProc *) cgwinFlushwinCmd,
-		       (ClientData) NULL,
-		       (Tcl_CmdDeleteProc *) NULL);  
-  
   return TCL_OK;
 }
 
@@ -1813,6 +1799,11 @@ proc do_sortby { args } {
 }
 )delim";
  Tcl_Eval(g_App->interp(), tclcode);
+
+ Tcl_SetAssocData(g_App->interp(), "cgwin", NULL,
+		  static_cast<ClientData>(plot_widget));
+ Tcl_Eval(g_App->interp(), "cgAddGroup cgwin");
+ 
  return;
 }
 
