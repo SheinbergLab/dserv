@@ -15,6 +15,8 @@
 #include "Fl_OpDesk.h"
 #include <FL/Fl_Double_Window.H>
 extern Fl_Double_Window *main_window;
+#include <FL/Fl_Menu_Bar.H>
+extern Fl_Menu_Bar *menu_bar;
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Flex.H>
 #include <FL/Fl_Button.H>
@@ -69,6 +71,5 @@ extern Fl_Button *FileClose;
 extern void file_suggest_cb(Fl_Button*, void*);
 extern Fl_Button *FileSuggest;
 extern Fl_Console *output_term;
-extern Fl_Output *status_widget;
 Fl_Double_Window * setup_ui(int argc, char *argv[]);
 #endif

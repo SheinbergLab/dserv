@@ -3,6 +3,7 @@
 #include <FL/Fl_Int_Input.H>
 #include <FL/Fl_Float_Input.H>
 #include <FL/Fl_Text_Buffer.H>
+#include <FL/Fl_Menu_Bar.H>
 #include <FL/fl_string_functions.h>
 
 #include <iostream>
@@ -39,6 +40,45 @@
 
 #include "essgui.h"
 #include "mdns.h"
+
+
+void menu_cb(Fl_Widget*, void*) {
+}
+
+void exit_cb(Fl_Widget*, void*) {
+  exit(0);
+}
+
+Fl_Menu_Item menuitems[] = {
+  { "&File",              0, 0, 0, FL_SUBMENU },
+  { "&New File",        0, (Fl_Callback *) menu_cb },
+    { "&Open File...",    FL_COMMAND + 'o', (Fl_Callback *)menu_cb },
+    { "&Insert File...",  FL_COMMAND + 'i', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
+    { "&Save File",       FL_COMMAND + 's', (Fl_Callback *)menu_cb },
+    { "Save File &As...", FL_COMMAND + FL_SHIFT + 's', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
+    { "New &View",        FL_ALT
+#ifdef __APPLE__
+      + FL_COMMAND
+#endif
+      + 'v', (Fl_Callback *)menu_cb, 0 },
+    { "&Close View",      FL_COMMAND + 'w', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
+    { "E&xit",            FL_COMMAND + 'q', (Fl_Callback *)exit_cb, 0 },
+    { 0 },
+
+  { "&Edit", 0, 0, 0, FL_SUBMENU },
+    { "Cu&t",             FL_COMMAND + 'x', (Fl_Callback *)menu_cb },
+    { "&Copy",            FL_COMMAND + 'c', (Fl_Callback *)menu_cb },
+    { "&Paste",           FL_COMMAND + 'v', (Fl_Callback *)menu_cb },
+    { "&Delete",          0, (Fl_Callback *)menu_cb },
+    { "Preferences",      0, 0, 0, FL_SUBMENU },
+      { "Line Numbers",   FL_COMMAND + 'l', (Fl_Callback *)menu_cb, 0, FL_MENU_TOGGLE },
+      { "Word Wrap",      0,                (Fl_Callback *)menu_cb, 0, FL_MENU_TOGGLE },
+      { 0 },
+    { 0 },
+  { 0 }
+};
+
+
 
 int add_tcl_commands(Tcl_Interp *interp);
 
@@ -1816,6 +1856,9 @@ int main(int argc, char *argv[]) {
 
   App app(argc, argv);
 
+  int w;
+  menu_bar->copy(menuitems, &w);
+  
   add_tcl_code();
 
   initialize_subjects();
