@@ -24,6 +24,8 @@ public:
   ~Fl_Console(void);
 
   std::string get_current_selection(void);
+  void handle_paste(const char* text);
+  void paste_from_clipboard(void);
   
   std::string prompt(void) { return _prompt; }
   void prompt(std::string p) { _prompt = p; }

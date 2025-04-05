@@ -18,6 +18,24 @@ Fl_Console::~Fl_Console(void) {
   delete[] buf;
 }
 
+// Paste from clipboard at current cursor position
+void Fl_Console::paste_from_clipboard(void) {
+  Fl::paste(*this, 1);
+}
+
+// Handle paste event
+void Fl_Console::handle_paste(const char* text) {
+  if (!text) return;
+  
+  // Insert each character from the pasted text
+  for (const char* p = text; *p; p++) {
+    if (*p != '\r' && *p != '\n') { // Skip newlines in pasted text
+      lnHandleCharacter(&l_state, *p);
+    }
+  }
+  redraw();
+}
+
 std::string Fl_Console::get_current_selection(void)
 {
   // Get selection
@@ -41,6 +59,10 @@ std::string Fl_Console::get_current_selection(void)
 int Fl_Console::handle(int e) {
   
   switch (e) {
+  case FL_PASTE:
+    handle_paste(Fl::event_text());
+    return 1;
+    
   case FL_PUSH:
     {
       if (Fl::event_button3()) {
@@ -57,9 +79,19 @@ int Fl_Console::handle(int e) {
 
       if (Fl::event_alt()) return 0;
 
-      if (Fl::event_ctrl() && Fl::event_key() == 'c') {
+      if ((Fl::event_ctrl() && Fl::event_key() == 'c') ||
+	  (Fl::event_state(FL_COMMAND) && Fl::event_key() == 'c')) {
 	std::string sel = get_current_selection();
 	Fl::copy(sel.c_str(), strlen(sel.c_str()), 1);
+	clear_mouse_selection();
+	redraw();
+	return 1;
+      }
+
+      if ((Fl::event_ctrl() && Fl::event_key() == 'v') ||
+	  (Fl::event_state(FL_COMMAND) && Fl::event_key() == 'v')) {
+          paste_from_clipboard();
+          return 1;
       }
       
       switch (Fl::event_key()) {
