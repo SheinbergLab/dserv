@@ -38,7 +38,11 @@ endif()
 
 include_directories( ../src ../../dlsh/src ../../dlsh/src/lablib )
 link_directories( .. )
+
 add_executable( essgui src/essgui.cxx src/setup_ui.cxx src/TclInterp.cxx src/Fl_Console.cxx src/Fl_DgTable.cxx src/linenoise-fltk.cxx src/mdns.c src/mdns_query.c src/fort.c src/b64.c src/Fl_OpDesk.cxx src/Fl_OpBox.cxx src/Fl_OpButton.cxx)
+
+# expose functions in executable to loaded libs
+set_property(TARGET essgui PROPERTY ENABLE_EXPORTS ON)
 
 if(WIN32)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt gdiplus.lib  comctl32.lib  ws2_32.lib  gdiplus.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib")
