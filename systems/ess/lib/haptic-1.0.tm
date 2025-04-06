@@ -16,6 +16,7 @@ namespace eval haptic {
 
     # Given a source shape_list and target shape_ids, return indices of targets
     proc get_shape_indices { shape_list shape_ids } {
+#	dl_return [dl_findIndices $shape_list $shape_ids]
 	dl_local inds [dl_ilist]
 	foreach s [dl_tcllist $shape_ids] {
 	    dl_append $inds [dl_find $shape_list $s]
