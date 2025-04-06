@@ -95,7 +95,7 @@ To support experiments specifically, we can install a set of extensions called `
 
 ```
 cd ~/code/
-wget https://sheinberglab.org/dserv/dlsh.zip
+wget https://github.com/sheinberglab/dlsh/releases/dlsh.zip
 sudo mkdir /usr/local/dlsh
 sudo cp dlsh.zip /usr/local/dlsh/
 ```
