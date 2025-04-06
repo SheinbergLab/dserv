@@ -362,7 +362,7 @@ namespace eval hapticvis::identify {
 		    if { $updated_position } { set r -2 } { set r -1 }
 		}
 	    }
-	    if { $use_touchscreen } {
+	    if { $use_touchscreen && $r == -1 } {
 		foreach w $choices {
 		    if { [::ess::touch_in_win $w] } {
 			set r $w
