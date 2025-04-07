@@ -190,15 +190,16 @@ namespace eval hapticvis::identify {
 	    set res [rest::get $url \
 			 [list function pick_and_place \
 			      hand 1 \
-			      left_id $shape_id \
-			      left_angle $angle \
+			      right_id $shape_id \
+			      right_angle $angle \
 			      return_duplicates 0 \
 			      dont_present 1 \
 			      use_dummy 1 \
 			      dummy_ids 20302,2001 \
 			      reset_dial $follow_dial \
 			      dial_following $follow_dial \
-			      pattern_following $follow_pattern
+			      pattern_following $follow_pattern \ 
+	 		      x_offset -50
 			      
 	 		 ]
      		    ]
