@@ -66,6 +66,7 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           INSTALLLER_CERT_ID: ${{ secrets.APPLE_INSTALLLER_CERT_ID }}
         run: |
+          security list-keychain -d user
           security find-identity -p basic -v
 
           cmake -B build -G Xcode -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTIT="Developer ID Application" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE="Manual"
