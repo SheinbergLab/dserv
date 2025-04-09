@@ -1,0 +1,84 @@
+name: macos testing
+
+on: [push]
+
+jobs:
+
+  build-macos:
+
+    runs-on: macos-14
+
+    steps:
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install cmake
+
+      - name: Check out our code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build and install tcl 9
+        run: |
+          cd deps/tcl/unix/
+          ./configure
+          make
+          sudo make install
+
+      - name: Build and install jansson static lib
+        run: |
+          cd deps/jansson/
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: configure keychain for signing
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
+          INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
+        run: |
+          APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.cer
+          INSTALLER_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_installer.cer
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
+          echo -n "$INSTALLER_CERTIFICATE_BASE64" | base64 --decode -o $INSTALLER_CERTIFICATE_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          security import $APP_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security import $INSTALLER_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+
+          xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dserv-signing"
+
+      - name: build dserv itself
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          INSTALLLER_CERT_ID: ${{ secrets.APPLE_INSTALLLER_CERT_ID }}
+        run: |
+          sudo xcode-select --reset
+          cmake -B build -G Xcode -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTIT="Developer ID Application" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE="Manual"
+          cmake --build build --config Release
+          cpack -G productbuild --config build/CPackConfig.cmake
+          codesign -dv --verbose=2 build/Release/dserv
+          codesign -dv --verbose=2 build/tools/essctrl/Release/essctrl
+          productsign --sign "$INSTALLLER_CERT_ID" dserv-1.3-Darwin.pkg dserv-1.3-Darwin-signed.pkg
+          xcrun notarytool submit dserv-1.3-Darwin-signed.pkg --keychain-profile "dserv-signing" --wait
+          xcrun stapler staple dserv-1.3-Darwin-signed.pkg
+
+      - name: upload packge for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: dserv-1.3-Darwin-signed.pkg
+          path: dserv-1.3-Darwin-signed.pkg
+          retention-days: 7
