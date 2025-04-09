@@ -1,5 +1,10 @@
+.DS_Store
+
 build/
 src/dservConfig.h
 dlsh/
 
 *.deb
+_CPack_Packages/
+*.dmg
+*.pkg

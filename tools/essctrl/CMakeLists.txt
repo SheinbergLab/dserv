@@ -13,5 +13,4 @@ elseif(APPLE)
 else()
 endif()
 
-install(TARGETS essctrl DESTINATION bin)
-
+install(TARGETS essctrl DESTINATION bin COMPONENT essctrl)
