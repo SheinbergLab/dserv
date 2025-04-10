@@ -56,7 +56,7 @@ jobs:
           cd deps/tcl/unix/
           ./configure
           make
-          codesign --force --timestamp --strict --options runtime --sign "$APP_CERT_ID" libtcl9.0.dylib
+          #codesign --force --timestamp --strict --options runtime --sign "$APP_CERT_ID" libtcl9.0.dylib
           codesign -dv --strict --verbose=2 libtcl9.0.dylib
           sudo make install
 
