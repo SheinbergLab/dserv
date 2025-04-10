@@ -20,21 +20,7 @@ jobs:
         with:
           submodules: true
 
-      - name: Build and install tcl 9
-        run: |
-          cd deps/tcl/unix/
-          ./configure
-          make
-          sudo make install
-
-      - name: Build and install jansson static lib
-        run: |
-          cd deps/jansson/
-          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
-          cmake --build build
-          sudo cmake --install build
-
-      - name: configure keychain for signing
+      - name: configure keychain for code signing
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -44,8 +30,8 @@ jobs:
           APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
           INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
         run: |
-          APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.cer
-          INSTALLER_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_installer.cer
+          APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.p12
+          INSTALLER_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_installer.p12
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
 
           echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
@@ -54,27 +40,45 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import $APP_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import $INSTALLER_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
-          security import $APP_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
-          security import $INSTALLER_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
-
           xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dserv-signing"
+
+      - name: Build and install tcl 9
+        env:
+          APP_CERT_ID: ${{ secrets.APPLE_APP_CERT_ID }}
+        run: |
+          cd deps/tcl/unix/
+          ./configure
+          make
+          codesign --force --timestamp --strict --options runtime --sign "$APP_CERT_ID" libtcl9.0.dylib
+          codesign -dv --strict --verbose=2 libtcl9.0.dylib
+          sudo make install
+
+      - name: Build and install jansson static lib
+        run: |
+          cd deps/jansson/
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
 
       - name: build dserv itself
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           INSTALLLER_CERT_ID: ${{ secrets.APPLE_INSTALLLER_CERT_ID }}
         run: |
-          security list-keychain -d user
-          security find-identity -p basic -v
-
-          cmake -B build -G Xcode -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTIT="Developer ID Application" -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE="Manual"
+          cmake -B build -G Xcode -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID"
           cmake --build build --config Release
           cpack -G productbuild --config build/CPackConfig.cmake
-          codesign -dv --verbose=2 build/Release/dserv
-          codesign -dv --verbose=2 build/tools/essctrl/Release/essctrl
+          codesign -dv --strict --verbose=2 build/Release/dserv
+          codesign -dv --strict --verbose=2 build/tools/essctrl/Release/essctrl
           productsign --sign "$INSTALLLER_CERT_ID" dserv-1.3-Darwin.pkg dserv-1.3-Darwin-signed.pkg
+          pkgutil --check-signature dserv-1.3-Darwin-signed.pkg
           xcrun notarytool submit dserv-1.3-Darwin-signed.pkg --keychain-profile "dserv-signing" --wait
           xcrun stapler staple dserv-1.3-Darwin-signed.pkg
 
