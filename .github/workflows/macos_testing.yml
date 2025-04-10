@@ -13,7 +13,7 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install cmake
+          brew install cmake tcl-tk
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -48,17 +48,6 @@ jobs:
           security list-keychain -d user -s $KEYCHAIN_PATH
 
           xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dserv-signing"
-
-      - name: Build and install tcl 9
-        env:
-          APP_CERT_ID: ${{ secrets.APPLE_APP_CERT_ID }}
-        run: |
-          cd deps/tcl/unix/
-          ./configure
-          make
-          #codesign --force --timestamp --strict --options runtime --sign "$APP_CERT_ID" libtcl9.0.dylib
-          codesign -dv --strict --verbose=2 libtcl9.0.dylib
-          sudo make install
 
       - name: Build and install jansson static lib
         run: |

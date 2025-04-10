@@ -6,7 +6,8 @@ if(NOT DEFINED PROJECT_VERSION)
 endif()
 project(dserv VERSION ${PROJECT_VERSION})
 
-link_directories(/usr/local/lib)
+link_directories("/usr/local/lib" "/opt/homebrew/lib")
+include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
 
 set(CMAKE_BUILD_TYPE Release)
 #set(CMAKE_BUILD_TYPE Debug)
@@ -36,7 +37,7 @@ add_executable(dserv src/dserv.cpp src/Base64.c src/Datapoint.c src/Dataserver.c
 set_property(TARGET dserv PROPERTY ENABLE_EXPORTS ON)
 
 if(APPLE)
-    include_directories("/usr/local/include")
+    include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
     target_link_libraries(dserv PRIVATE "-framework CoreFoundation" ${LIBTCL} ${LIBJANSSON} ${LIBZ})
 elseif(WIN32)
     include_directories("/usr/local/include")
@@ -72,7 +73,6 @@ include(InstallRequiredSystemLibraries)
 if(WIN32)
     # TODO
 elseif(APPLE)
-    install(FILES ${LIBTCL} DESTINATION lib COMPONENT dserv)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_COMPONENTS_ALL dserv essctrl)
 
