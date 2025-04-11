@@ -54,6 +54,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
+          # Log info about this keychain for debuging.
           security find-identity -p basic -v
 
       - name: Build, sign, package, and notarize dserv.
@@ -72,9 +73,19 @@ jobs:
           xcrun notarytool submit dserv-1.3-Darwin-signed.pkg --keychain-profile "dserv-signing" --wait
           xcrun stapler staple dserv-1.3-Darwin-signed.pkg
 
-      - name: upload packge for testing
+      - name: Upload package for testing.
         uses: actions/upload-artifact@v4
         with:
           name: dserv-1.3-Darwin-signed.pkg
           path: dserv-1.3-Darwin-signed.pkg
           retention-days: 7
+
+      - name: Sanity check installing the package.
+        run: |
+          sudo mkdir /usr/local/dlsh
+          cd /usr/local/dlsh
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
+
+          sudo installer -pkg dserv-1.3-Darwin-signed.pkg -target /
+          /usr/local/dserv/dserv --help
+          /usr/local/dserv/dserv --cscript scripts/tcl/test_logger.tcl
