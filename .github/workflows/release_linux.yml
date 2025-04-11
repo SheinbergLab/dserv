@@ -1,8 +1,8 @@
-name: Package and Release
+name: Release for Linux
 
 on:
   push:
-    tags:        
+    tags:
       - '*'
 
 jobs:

@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
 
-  build:
+  build-linux:
 
     strategy:
       matrix:
@@ -36,11 +36,9 @@ jobs:
       - name: Build and install jansson static lib
         run: |
           cd deps/jansson/
-          mkdir build/
-          cd build/
-          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
-          make
-          sudo make install
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
 
       - name: cmake and make dserv itself
         run: |
@@ -55,4 +53,54 @@ jobs:
 
       - name: ctest
         run: |
+          ctest -VV --timeout 10
+
+  build-macos:
+
+    strategy:
+      matrix:
+        os: [macos-14, macos-15]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install cmake
+
+      - name: Check out our code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build and install tcl 9
+        run: |
+          cd deps/tcl/unix/
+          ./configure
+          make
+          sudo make install
+
+      - name: Build and install jansson static lib
+        run: |
+          cd deps/jansson/
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: cmake and make dserv itself
+        run: |
+          cmake -B build
+          cmake --build build
+
+      - name: Obtain dlsh (for test scripts to use)
+        run: |
+          mkdir dlsh/
+          cd dlsh/
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
+
+      - name: ctest
+        run: |
+          cd build/
           ctest -VV --timeout 10

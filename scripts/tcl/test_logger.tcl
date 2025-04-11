@@ -39,8 +39,12 @@ set dpoint_count 100
 proc do_test {} {
     global dpoint_count
     for { set i 0 } { $i < $dpoint_count } { incr i } {
-	dservSet foo/[expr $i/10] $i
+        dservSet foo/[expr $i/10] $i
     }
+    # BSH: On macOS it seemed like we had a race here.
+    # A variable number (but not all) of log entries were being processed below.
+    # Adding this delay allowed the test to pass.
+    after 10
     dservSet done 1
 }
 
