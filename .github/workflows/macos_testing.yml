@@ -34,10 +34,10 @@ jobs:
           APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
           INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPLE_INSTALLER_CERTIFICATE_BASE64 }}
         run: |
-          # Reconstitute texte-encoded secrets as binary .p12 files.
+          # Reconstitute text-encoded secrets as binary .p12 files.
           APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.p12
-          INSTALLER_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_installer.p12
           echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
+          INSTALLER_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_installer.p12
           echo -n "$INSTALLER_CERTIFICATE_BASE64" | base64 --decode -o $INSTALLER_CERTIFICATE_PATH
 
           # Create a new keychain for use in CI.
@@ -52,6 +52,8 @@ jobs:
 
           # Alow codesign to use this keychain for signing.
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security find-identity -p basic -v
 
       - name: Build, sign, package, and notarize dserv.
         env:
