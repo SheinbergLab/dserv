@@ -84,8 +84,11 @@ elseif(APPLE)
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
         set(CMAKE_SKIP_RPATH TRUE)
-        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/dserv.entitlements)
-        set(CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/dserv.entitlements)
+
+        # These entitlements paths seem redundant.
+        # It seems cmake uses the first for building, and cpack uses the second for packaging.
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/macos/dserv.entitlements)
+        set(CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/macos/dserv.entitlements)
     endif()
 else()
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
