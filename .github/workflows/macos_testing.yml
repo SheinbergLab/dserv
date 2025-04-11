@@ -82,9 +82,9 @@ jobs:
 
       - name: Sanity check installing the package.
         run: |
-          sudo mkdir /usr/local/dlsh
-          cd /usr/local/dlsh
           wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
+          sudo mkdir /usr/local/dlsh
+          sudo cp dlsh.zip /usr/local/dlsh
 
           sudo installer -pkg dserv-1.3-Darwin-signed.pkg -target /
           /usr/local/dserv/dserv --help
