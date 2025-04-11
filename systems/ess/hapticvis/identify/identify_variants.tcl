@@ -46,7 +46,7 @@ namespace eval hapticvis::identify {
 
     # variant description
 
-    set subject_ids [dl_tcllist [dl_fromto 0 30]]
+    set subject_ids [dl_tcllist [dl_fromto 0 36]]
     set subject_sets [dl_tcllist [dl_fromto 0 5]]
 
     variable variants {
