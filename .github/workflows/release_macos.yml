@@ -1,12 +1,19 @@
-name: macos testing
+name: Release for macOS
 
-on: [push]
+on:
+  push:
+    tags:
+      - '*'
 
 jobs:
 
-  build-macos:
+  release-dserv:
 
+    # Build on not-the-latest to keep dependency versions modest.
     runs-on: macos-14
+
+    permissions:
+      contents: write
 
     steps:
 
@@ -27,7 +34,7 @@ jobs:
           cmake --build build
           sudo cmake --install build
 
-      - name: Set up a keychain for code signing.
+      - name: Set up a keychain for Apple code signing.
         env:
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
@@ -64,28 +71,52 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           INSTALLLER_CERT_ID: ${{ secrets.APPLE_INSTALLLER_CERT_ID }}
         run: |
-          cmake -B build -G Xcode -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID"
+          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }}
           cmake --build build --config Release
           cpack -G productbuild --config build/CPackConfig.cmake
-          productsign --sign "$INSTALLLER_CERT_ID" dserv-1.3-Darwin.pkg dserv-1.3-Darwin-signed.pkg
+          productsign --sign "$INSTALLLER_CERT_ID" dserv-${{ github.ref_name }}-Darwin.pkg dserv-${{ github.ref_name }}-Darwin-signed.pkg
 
           xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dserv-signing"
-          xcrun notarytool submit dserv-1.3-Darwin-signed.pkg --keychain-profile "dserv-signing" --wait
-          xcrun stapler staple dserv-1.3-Darwin-signed.pkg
+          xcrun notarytool submit dserv-${{ github.ref_name }}-Darwin-signed.pkg --keychain-profile "dserv-signing" --wait
+          xcrun stapler staple dserv-${{ github.ref_name }}-Darwin-signed.pkg
 
-      - name: Upload package for testing.
-        uses: actions/upload-artifact@v4
+      - name: Create a GitHub release for the current tag and package.
+        uses: ncipollo/release-action@v1
         with:
-          name: dserv-1.3-Darwin-signed.pkg
-          path: dserv-1.3-Darwin-signed.pkg
-          retention-days: 7
+          artifacts: "./*-signed.pkg"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
 
-      - name: Sanity check installing the package.
+  check-dserv:
+
+    needs: release-dserv
+
+    # Check on latest to confirm compatibility.
+    runs-on: macos-14
+
+    steps:
+
+      - name: Install runtime dependencies and coreutils with timeout util.
+        run: |
+          brew update
+          brew install tcl-tk@9 yajl coreutils
+
+      - name: Install the dserv package we just released.
+        run: |
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv-${{ github.ref_name }}-Darwin-signed.pkg
+          sudo installer -pkg dserv-${{ github.ref_name }}-Darwin-signed.pkg -target /
+
+      - name: Install dlsh libs and dependencies.
         run: |
           wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
           sudo mkdir /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
-          sudo installer -pkg dserv-1.3-Darwin-signed.pkg -target /
+      - name: Sanity check the installed dserv.
+        run: |
+          ls -alth /usr/local/bin
+          ls -alth /usr/local/dserv
+          echo "test-123" | essctrl && cat history.txt
           /usr/local/dserv/dserv --help
-          /usr/local/dserv/dserv --cscript scripts/tcl/test_logger.tcl
+          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript scripts/tcl/test_logger.tcl
