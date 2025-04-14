@@ -134,7 +134,6 @@ namespace eval haptic {
 	dg_write trialdb $trialdb_file
 	dg_delete trialdb
     }
-    
 
     proc haptic_process_available { dpoint data } {
 	dservSet ess/grasp/available $data
