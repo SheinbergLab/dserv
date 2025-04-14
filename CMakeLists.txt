@@ -66,6 +66,7 @@ install(DIRECTORY www DESTINATION dserv COMPONENT dserv)
 set(CPACK_PACKAGE_NAME dserv)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Data server system for data acquisition and control")
 set(CPACK_PACKAGE_CONTACT SheinbergLab)
+set(CPACK_PACKAGE_VENDOR SheinbergLab)
 
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${LIBTCL})
 include(InstallRequiredSystemLibraries)
@@ -89,6 +90,10 @@ elseif(APPLE)
         # It seems cmake uses the first for building, and cpack uses the second for packaging.
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/macos/dserv.entitlements)
         set(CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/macos/dserv.entitlements)
+
+        # Set up .pkg metadata.
+        set(CPACK_PRODUCTBUILD_IDENTIFIER "org.sheinberglab")
+
     endif()
 else()
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")

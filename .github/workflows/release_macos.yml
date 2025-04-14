@@ -104,6 +104,10 @@ jobs:
 
       - name: Install the dserv package we just released.
         run: |
+          # Is Rosetta installed on the runner?
+          ls /usr/libexec/rosetta
+          ls /Library/Apple/usr/libexec/oah/
+
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv-${{ github.ref_name }}-Darwin-signed.pkg
           sudo installer -pkg dserv-${{ github.ref_name }}-Darwin-signed.pkg -target /
 
