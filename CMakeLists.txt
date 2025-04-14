@@ -92,8 +92,11 @@ elseif(APPLE)
         set(CODE_SIGN_ENTITLEMENTS ${CMAKE_CURRENT_SOURCE_DIR}/macos/dserv.entitlements)
 
         # Set up .pkg metadata.
+        list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/macos)
         set(CPACK_PRODUCTBUILD_IDENTIFIER "org.sheinberglab")
-
+        set(CPACK_RESOURCE_FILE_WELCOME ${CMAKE_SOURCE_DIR}/macos/welcome.txt)
+        set(CPACK_RESOURCE_FILE_README ${CMAKE_SOURCE_DIR}/macos/readme.txt)
+        set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_SOURCE_DIR}/macos/license.txt)
     endif()
 else()
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
