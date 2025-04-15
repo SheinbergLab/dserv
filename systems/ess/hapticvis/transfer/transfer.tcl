@@ -417,6 +417,9 @@ namespace eval hapticvis::transfer {
 		    }
 		    set correct 0
 		}
+		if { $task == "learning" && $r == -1 } {
+		    set r 0
+		}
 	    }
 	    return $r
 	}
