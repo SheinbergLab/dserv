@@ -2045,7 +2045,9 @@ namespace eval ess {
     set subtypes [dict create NONE 0 LEFT 1 RIGHT 2 BOTH 3]
     dict set evt_info RESP      [list 37 {Response}             long $subtypes]
     dict set evt_info SACCADE   [list 38 {Saccade}              long]
-    dict set evt_info DECIDE    [list 39 {Decide}               long]
+
+    set subtypes [dict create NONE 0 SELECT 1]
+    dict set evt_info DECIDE    [list 39 {Decide}               long $subtypes]
 
     set subtypes [dict create INCORRECT 0 CORRECT 1 ABORT 2]
     dict set evt_info ENDTRIAL  [list 40 {EOT}                  long $subtypes]
