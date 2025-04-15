@@ -124,9 +124,12 @@ namespace eval hapticvis::identify {
 	
 	$s add_method nexttrial {} {
 	    if { [dl_sum stimdg:remaining] } {
-		dl_local left_to_show \
-		    [dl_select stimdg:stimtype [dl_gt stimdg:remaining 0]]
-		set cur_id [dl_pickone $left_to_show]
+		dl_local rem [dl_gt stimdg:remaining 0]
+		set curgroup [dl_min [dl_select stimdg:group $rem]]
+		dl_local in_curgroup \
+		    [dl_select stimdg:stimtype \
+			 [dl_and [dl_eq stimdg:group $curgroup] $rem]]
+		set cur_id [dl_pickone $in_curgroup]
 		set stimtype [dl_get stimdg:stimtype $cur_id]
 		set n_choices [dl_get stimdg:n_choices $cur_id]
 		set choices [my get_choices $n_choices]
@@ -303,6 +306,7 @@ namespace eval hapticvis::identify {
 	
 	$s add_method highlight_response {} {
 	    set p [dservGet ess/joystick/position]
+	    ::ess::evt_put DECIDE SELECT [now] $p
 	    rmtSend "highlight_response $p"
 	}
 	
