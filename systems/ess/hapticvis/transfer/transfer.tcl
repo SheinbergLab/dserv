@@ -382,9 +382,11 @@ namespace eval hapticvis::transfer {
 		    # 8 is identity
 		    set mapdict { 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 }
 		}
-		set r [dict get $mapdict $r]
-		if { $r != -1 } {
-		    set made_selection 1
+		if { $task == "learning" } {
+		    set r [dict get $mapdict $r]
+		    if { $r != -1 } {
+			set made_selection 1
+		    }
 		}
 	    }
 	    
