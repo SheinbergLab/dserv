@@ -17,6 +17,7 @@ namespace eval hapticvis::transfer {
 	
 	$s add_variable cur_id            -1
 	$s add_variable target_slot       -1
+	$s add_variable task              {}
 	$s add_variable trial_type        visual
 	$s add_variable shape_id          -1
 	$s add_variable shape_angle       -1
@@ -145,7 +146,8 @@ namespace eval hapticvis::transfer {
 			    $choice_x $choice_y $choice_r 0
 		    }
 		}
-		
+
+		set task [dl_get stimdg:task $cur_id]
 		set target_slot [dl_get stimdg:correct_choice $cur_id]
 		set trial_type [dl_get stimdg:trial_type $cur_id]
 		set shape_id [dl_get stimdg:shape_id $cur_id]
@@ -311,7 +313,7 @@ namespace eval hapticvis::transfer {
 	    set r -1
 	    set made_selection 0
 	    set updated_position 0
-	    
+
 	    if { $use_joystick } {
 		if { $n_choices == 4 } {
 		    # ur=9(0) ul=5(1) dl=6(2) dr=10(3)
@@ -362,36 +364,55 @@ namespace eval hapticvis::transfer {
 		    if { $updated_position } { set r -2 } { set r -1 }
 		}
 	    }
-	    if { $use_touchscreen } {
+	    if { $use_touchscreen && $r == -1 } {
 		foreach w $choices {
 		    if { [::ess::touch_in_win $w] } {
 			set r $w
 			break
 		    }
 		}
-		set made_selection 1
+
+		if { $n_choices == 4 } {
+		    # 4 skip cardinal
+		    set mapdict { 0 -1 1 0 2 -1 3 1 4 -1 5 2 6 -1 7 3 }
+		} elseif { $n_choices == 6 } {
+		    # 6 skip right and left
+		    set mapdict { 0 -1 1 0 2 1 3 2 4 -1 5 3 6 4 7 5 }
+		} else {
+		    # 8 is identity
+		    set mapdict { 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 }
+		}
+		set r [dict get $mapdict $r]
+		if { $r != -1 } {
+		    set made_selection 1
+		}
 	    }
 	    
 	    if { $made_selection } {
 		if { $r == [expr {$target_slot-1}] } {
-		    set slot [expr $target_slot-1]
-		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
-		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
-		    
-		    rmtSend "feedback_on correct $choice_x $choice_y"
+		    if { $task == "learning" } { 
+			set slot [expr $target_slot-1]
+			set choice_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
+			set choice_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
+			rmtSend "feedback_on correct $choice_x $choice_y"
+		    } else {
+			rmtSend "choices_off"
+		    }
 		    set correct 1
 		} elseif { $r >= 0 } {
-		    set slot [expr $target_slot-1]
-		    set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
-		    set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
-		    
-		    set choice_x [dl_get stimdg:choice_centers:$cur_id:$r 0]
-		    set choice_y [dl_get stimdg:choice_centers:$cur_id:$r 1]
-		    
-		    set correct_fb "feedback_on correct $target_x $target_y"
-		    set incorrect_fb "feedback_on incorrect $choice_x $choice_y"
-		    rmtSend "${correct_fb}; ${incorrect_fb}"
-		    
+		    if { $task == "learning" } {
+			set slot [expr $target_slot-1]
+			set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
+			set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
+			
+			set choice_x [dl_get stimdg:choice_centers:$cur_id:$r 0]
+			set choice_y [dl_get stimdg:choice_centers:$cur_id:$r 1]
+			set correct_fb "feedback_on correct $target_x $target_y"
+			set incorrect_fb "feedback_on incorrect $choice_x $choice_y"
+			rmtSend "${correct_fb}; ${incorrect_fb}"
+		    } else {
+			rmtSend "choices_off"
+		    }
 		    set correct 0
 		}
 	    }

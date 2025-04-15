@@ -19,17 +19,17 @@ namespace eval hapticvis::transfer {
     # state system parameters
     
     variable params_defaults { delay_time 100 }
-    variable params_visual {
+    variable params_visual_learn {
 	interblock_time 500
 	pre_stim_time 100
-	sample_duration 1500
+	sample_duration 3000
 	choice_delay 0
 	sample_delay 500
 	choice_duration 30000
 	stim_duration 30000
 	post_response_time 500
     }
-    variable params_haptic {
+    variable params_haptic_learn {
 	interblock_time 500
 	pre_stim_time 100
 	sample_delay 0
@@ -46,7 +46,7 @@ namespace eval hapticvis::transfer {
     set subject_sets [dl_tcllist [dl_fromto 0 5]]
 
     variable variants {
-        visual {
+        visual_learn {
             description "learn visual objects"
             loader_proc setup_visual
             loader_options {
@@ -54,22 +54,50 @@ namespace eval hapticvis::transfer {
               subject_set { $subject_sets }
               n_per_set { 6 }
               shape_scale { 3 4 5 6 }
-              noise_type { none circles }
-              n_rep { 2 4 6 8 10 20 }
+              noise_type { circles none }
+              n_rep { 6 2 4 8 10 20 }
               rotations {
                   {three {60 180 300}} {single {180}} 
                 }
             }
         }
-        haptic {
+        haptic_learn {
             description "learn haptic objects"
             loader_proc setup_haptic
             loader_options {
               subject_id { $subject_ids }
               subject_set { $subject_sets }
               n_per_set { 6 }
-              n_rep { 2 4 6 8 10 20 }
+              n_rep { 6 2 4 8 10 20 }
 		rotations {
+                  {three {60 180 300}} {single {180}} 
+                }
+            }
+        }
+        visual_to_haptic {
+            description "learn visual transfer to haptic"
+            loader_proc setup_visual_transfer
+            loader_options {
+              subject_id { $subject_ids }
+              subject_set { $subject_sets }
+              n_per_set { 6 }
+              n_rep { 3 6 2 4 8 10 20 }
+              rotations {
+                  {three {60 180 300}} {single {180}} 
+                }
+            }
+        }
+        haptic_to_visual {
+            description "learn haptic transfer to visual"
+            loader_proc setup_haptic_transfer
+            loader_options {
+              subject_id { $subject_ids }
+              subject_set { $subject_sets }
+              n_per_set { 6 }
+              shape_scale { 3 4 5 6 }
+              noise_type { circles none }
+              n_rep { 3 6 2 4 8 10 20 }
+              rotations {
                   {three {60 180 300}} {single {180}} 
                 }
             }
@@ -104,8 +132,23 @@ namespace eval hapticvis::transfer {
 		 $shape_scale $noise_type $n_rep $rotations
 	}
 
+	$s add_method setup_visual_transfer { subject_id subject_set n_per_set \
+						  n_rep rotations } {
+	     set shape_scale 1
+	     set noise_type none
+	     my setup_trials identity $subject_id $subject_set $n_per_set haptic \
+		 $shape_scale $noise_type $n_rep $rotations 1
+	}
+	
+	$s add_method setup_haptic_transfer { subject_id subject_set n_per_set \
+						  shape_scale noise_type n_rep rotations } {
+   	         my setup_trials identity $subject_id $subject_set $n_per_set visual \
+		 $shape_scale $noise_type $n_rep $rotations 1
+	}
+	
 	$s add_method setup_trials { db_prefix subject_id subject_set n_per_set \
-		 trial_type shape_scale noise_type n_rep rotations } {
+					 trial_type shape_scale noise_type \
+					 n_rep rotations { use_dists 0 } } {
 	     # find database
 	     set db {}
 	     set p ${::ess::system_path}/$::ess::current(project)/hapticvis/db
@@ -142,7 +185,7 @@ namespace eval hapticvis::transfer {
 	     set row [dl_find trial_db:subject $subject_id]
 	     if { $row < 0 } { error "subject not in database \"$trialdb_file\"" }
 	     set targets trial_db:target_ids:$row:$subject_set
-
+	     
 	     if { $db_prefix == "identity" } {
 		 set dists   trial_db:dist_ids:$row:$subject_set
 		 
@@ -154,9 +197,12 @@ namespace eval hapticvis::transfer {
 		     error "subject set does not exist"
 		 }
 	     }
+
+	     if { $use_dists } { set task transfer } { set task learning }
 	     
 	     dl_set stimdg:stimtype         [dl_ilist]
-	     
+	     dl_set stimdg:group            [dl_ilist]
+	     dl_set stimdg:task             [dl_slist]
 	     dl_set stimdg:trial_type       [dl_slist]
 	     dl_set stimdg:subject_id       [dl_ilist]
 	     dl_set stimdg:subject_set      [dl_ilist]
@@ -170,6 +216,7 @@ namespace eval hapticvis::transfer {
 	     dl_set stimdg:shape_rot_deg_cw [dl_flist]
 	     dl_set stimdg:shape_scale      [dl_flist]
 	     dl_set stimdg:shape_filled     [dl_ilist]
+	     dl_set stimdg:shape_learned    [dl_ilist]
 	     dl_set stimdg:noise_elements   [dl_llist]
 	     dl_set stimdg:correct_choice   [dl_ilist]
 	     dl_set stimdg:correct_location [dl_slist]
@@ -186,31 +233,63 @@ namespace eval hapticvis::transfer {
 	     
 	     
 	     # go into table and find info about sets/subject
-	     set shape_ids [dl_tcllist $targets]
+	     if { $use_dists } {
+		 set shape_ids "[dl_tcllist $targets] [dl_tcllist $dists]"
+	     } else {
+		 set shape_ids [dl_tcllist $targets]
+	     }
 	     
 	     # get coords for each shape
 	     dl_local shape_inds [haptic::get_shape_indices shape_db:id $shape_ids]
 	     dl_local coord_x [dl_choose shape_db:x $shape_inds]
 	     dl_local coord_y [dl_choose shape_db:y $shape_inds]
 	     
+	     # total number of trials
+	     set n_rotations [llength $rotations]
+	     if { $use_dists } {
+		 set n_targ_trials [expr {[dl_length $targets]*$n_rep*$n_rotations}]
+		 set n_dist_trials [expr {[dl_length $dists]*$n_rep*$n_rotations}]
+	     } else {
+		 set n_targ_trials [expr {[dl_length $targets]*$n_rep*$n_rotations}]
+		 set n_dist_trials 0
+	     }
+	     set n_shapes [dl_length $shape_ids]
+	     set n_targets [dl_length $targets]
+	     if { $use_dists } {
+		 set n_dists [dl_length $dists]
+	     } else {
+		 set n_dists 0
+	     }
+
 	     # close the shape_db and trial_db
 	     dg_delete shape_db
 	     dg_delete trial_db
 	     
-	     # total number of trials
-	     set n_rotations [llength $rotations]
-	     set n_shapes [llength $shape_ids]
 	     set n_obs [expr {$n_rep * $n_rotations * $n_shapes}]
 	     
 	     set is_cued      0
 	     set shape_filled 1
-	     
-	     set shape_reps [expr {$n_rep*$n_rotations}]
-	     dl_local shape_id [dl_repeat [dl_ilist {*}$shape_ids] $shape_reps]
-	     
+	     set n_choices $n_targets
 	     set choice_ecc 5
 	     set choice_scale 1.5
-	     set n_choices $n_shapes
+	     	     
+	     set shape_reps [expr {$n_rep*$n_rotations}]
+	     dl_local shape_id [dl_repeat [dl_ilist {*}$shape_ids] $shape_reps]
+
+	     if { $use_dists } {
+		 dl_local learned [dl_repeat "1 0" "$n_targ_trials $n_dist_trials"]
+	     } else {
+		 dl_local learned [dl_ones $n_obs]
+	     }
+
+	     if { $use_dists } {
+		 dl_local correct_choice \
+		     [dl_combine \
+			  [dl_repeat [dl_add 1 [dl_fromto 0 $n_choices]] $shape_reps] \
+			  [dl_zeros [expr {$n_dists*$shape_reps}]]]
+	     } else {
+		 dl_local correct_choice [dl_repeat [dl_add 1 [dl_fromto 0 $n_choices]] $shape_reps]
+	     }
 	     
 	     if { $n_choices == 4 } {
 		 dl_local slots [dl_ilist 1 3 5 7]
@@ -221,6 +300,21 @@ namespace eval hapticvis::transfer {
 	     } else {
 		 dl_local slots [dl_ilist 0 1 2 3 4 5 6 7]
 		 dl_local choice_locs [dl_slist R UR U UL L DL D DR]
+	     }
+
+	     dl_local correct_locations \
+		 [dl_combine \
+		      [dl_repeat $choice_locs $shape_reps] \
+		      [dl_repeat [dl_slist NONE] [expr {$n_dists*$shape_reps}]]]
+		      
+
+	     if { $use_dists } {
+		 dl_local group_id \
+		     [dl_collapse [dl_shuffleLists \
+				      [dl_replicate \
+					   [dl_llist [dl_fromto 0 $shape_reps]] $n_shapes]]]
+	     } else {
+		 dl_local group_id [dl_zeros $n_obs]
 	     }
 	     
 	     dl_local choice_angles \
@@ -239,7 +333,7 @@ namespace eval hapticvis::transfer {
 		 dl_local noise_elements \
 		     [dl_replicate [dl_llist [dl_llist]] $n_obs]
 	     } elseif { $noise_type == "circles"} {
-		 set nelements 50
+		 set nelements 30
 		 set nprop 0.18; # proportion of scale for radii
 		 set njprop 0.2; # jitter proportion
 		 set total_elements [expr {${n_obs}*$nelements}]
@@ -262,13 +356,15 @@ namespace eval hapticvis::transfer {
 	     }
 	     
 	     dl_set stimdg:stimtype     [dl_fromto 0 $n_obs]
+	     dl_set stimdg:group        $group_id
+	     dl_set stimdg:task         [dl_repeat [dl_slist $task]  $n_obs]
 	     dl_set stimdg:trial_type   [dl_repeat [dl_slist $trial_type] \
 					     $n_obs]
 	     dl_set stimdg:subject_id   [dl_repeat $subject_id $n_obs]
 	     dl_set stimdg:subject_set  [dl_repeat $subject_set $n_obs]
 	     
 	     dl_set stimdg:shape_set      [dl_repeat [dl_ilist -1] $n_obs]
-	     dl_set stimdg:shape_set_size [dl_repeat $n_shapes $n_obs]
+	     dl_set stimdg:shape_set_size [dl_repeat $n_targets $n_obs]
 	     dl_set stimdg:shape_id       $shape_id
 	     dl_set stimdg:shape_coord_x  [dl_repeat $coord_x $shape_reps]
 	     dl_set stimdg:shape_coord_y  [dl_repeat $coord_y $shape_reps]
@@ -278,11 +374,10 @@ namespace eval hapticvis::transfer {
 		 [dl_replicate [dl_flist {*}$rotations] [expr $n_rep*$n_shapes]]
 	     dl_set stimdg:shape_scale    [dl_repeat $shape_scale $n_obs]
 	     dl_set stimdg:shape_filled   [dl_repeat $shape_filled $n_obs]
+	     dl_set stimdg:shape_learned  $learned
 	     dl_set stimdg:noise_elements $noise_elements
-	     dl_set stimdg:correct_choice \
-		 [dl_repeat [dl_add 1 [dl_fromto 0 $n_choices]] $shape_reps]
-	     dl_set stimdg:correct_location \
-		 [dl_repeat $choice_locs $shape_reps]
+	     dl_set stimdg:correct_choice $correct_choice
+	     dl_set stimdg:correct_location $correct_locations
 	     dl_set stimdg:n_choices      [dl_repeat $n_choices $n_obs]
 	     dl_set stimdg:choice_centers [dl_repeat $choice_centers $n_obs]
 	     dl_set stimdg:choice_scale   [dl_repeat $choice_scale $n_obs]
