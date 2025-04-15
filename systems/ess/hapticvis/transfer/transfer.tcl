@@ -327,7 +327,7 @@ namespace eval hapticvis::transfer {
 		    set mapdict { 0 -1 1 2 2 6 4 4 8 0 5 3 9 1 6 5 10 7 }
 		}
 		set joy_position [dservGet ess/joystick/value]
-		
+
 		# if this is not an allowable position reset to 0
 		if { ![dict exists $mapdict $joy_position] } {
 		    if { [dservExists ess/joystick/position] } {
@@ -342,7 +342,7 @@ namespace eval hapticvis::transfer {
 			return -2
 		    }
 		}
-		
+
 		# map actual position to slot
 		set r [dict get $mapdict $joy_position]
 		
@@ -356,7 +356,7 @@ namespace eval hapticvis::transfer {
 		    dservSet ess/joystick/position $joy_position
 		    set updated_position 1
 		}
-		
+
 		# only if the button is pressed should we count as response
 		if { [dservGet ess/joystick/button] } {
 		    set made_selection 1
@@ -391,18 +391,14 @@ namespace eval hapticvis::transfer {
 	    }
 	    
 	    if { $made_selection } {
-		if { $r == [expr {$target_slot-1}] } {
-		    if { $task == "learning" } { 
+		if { $task == "learning" } { 
+		    if { $r == [expr {$target_slot-1}] } {
 			set slot [expr $target_slot-1]
 			set choice_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
 			set choice_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
 			rmtSend "feedback_on correct $choice_x $choice_y"
-		    } else {
-			rmtSend "choices_off"
-		    }
-		    set correct 1
-		} elseif { $r >= 0 } {
-		    if { $task == "learning" } {
+			set correct 1
+		    } elseif { $r >= 0 } {
 			set slot [expr $target_slot-1]
 			set target_x [dl_get stimdg:choice_centers:$cur_id:$slot 0]
 			set target_y [dl_get stimdg:choice_centers:$cur_id:$slot 1]
@@ -412,16 +408,15 @@ namespace eval hapticvis::transfer {
 			set correct_fb "feedback_on correct $target_x $target_y"
 			set incorrect_fb "feedback_on incorrect $choice_x $choice_y"
 			rmtSend "${correct_fb}; ${incorrect_fb}"
-		    } else {
-			rmtSend "choices_off"
+			set correct 0
 		    }
-		    set correct 0
-		}
-		if { $task == "learning" && $r == -1 } {
-		    puts "center response"
+		} else {
+		    rmtSend "choices_off; feedback_off all"
+		    set correct [expr {$r == $target_slot-1}]
 		    set r 0
 		}
 	    }
+	    
 	    return $r
 	}
 
