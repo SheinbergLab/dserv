@@ -418,6 +418,7 @@ namespace eval hapticvis::transfer {
 		    set correct 0
 		}
 		if { $task == "learning" && $r == -1 } {
+		    puts "center response"
 		    set r 0
 		}
 	    }
