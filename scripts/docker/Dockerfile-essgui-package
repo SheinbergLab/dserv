@@ -58,7 +58,7 @@ RUN cmake -DBUILD_SHARED_LIBS=OFF -B build \
   && cmake --install build
 
 # Install our dlsh libs and headers into the build environment.
-ENV DLSH_VERSION=0.0.16
+ENV DLSH_VERSION=0.0.18
 WORKDIR /work/dlsh
 RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_amd64.deb \
   && dpkg --install dlsh_${DLSH_VERSION}_amd64.deb
