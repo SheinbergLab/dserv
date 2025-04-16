@@ -120,3 +120,4 @@ jobs:
           echo "test-123" | essctrl && cat history.txt
           /usr/local/dserv/dserv --help
           timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript scripts/tcl/test_logger.tcl
+          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
