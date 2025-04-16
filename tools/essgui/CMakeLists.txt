@@ -33,6 +33,7 @@ else()
     find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
     find_library(LIBTCL "tcl9.0")
     set(LIBTCLSTUB "/usr/local/lib/libtclstub.a")
+    find_library(LIBJANSSON NAMES "libjansson.a")
     set(LIBDLSH "dg")
 endif()
 
