@@ -309,10 +309,17 @@ namespace eval hapticvis::transfer {
 		      
 
 	     if { $use_dists } {
+		 # create a shuffled list of indices
+		 # moving through each unique stim/rotation before repeating
+		 dl_local r \
+		     [dl_replicate \
+			  [dl_reshape [dl_fromto 0 $shape_reps] \
+			       $n_rep $n_rotations] $n_shapes]
+		 dl_local shuffle_ids \
+		     [dl_randfill [dl_replicate [dl_llist 3] \
+				       [expr {$n_shapes*$n_rep}]]]
 		 dl_local group_id \
-		     [dl_collapse [dl_shuffleLists \
-				      [dl_replicate \
-					   [dl_llist [dl_fromto 0 $shape_reps]] $n_shapes]]]
+		     [dl_collapse [dl_collapse [dl_choose $r $shuffle_ids]]]
 	     } else {
 		 dl_local group_id [dl_zeros $n_obs]
 	     }
