@@ -159,6 +159,7 @@ namespace eval hapticvis::transfer {
 		rmtSend "nexttrial $cur_id"
 
 		set correct -1
+		return $cur_id
 	    }
 	}
 	$s add_method finished {} {
