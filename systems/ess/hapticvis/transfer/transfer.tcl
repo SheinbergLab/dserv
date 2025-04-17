@@ -159,6 +159,7 @@ namespace eval hapticvis::transfer {
 		rmtSend "nexttrial $cur_id"
 
 		set correct -1
+		return $cur_id
 	    }
 	}
 	$s add_method finished {} {
@@ -290,13 +291,18 @@ namespace eval hapticvis::transfer {
 	}
 
 	$s add_method reward {} {
-	    soundPlay 3 70 70
-	    ::ess::reward $juice_ml
-	    ::ess::evt_put REWARD MICROLITERS [now] [expr {int($juice_ml*1000)}]
+	    if { $task == "learning" } {
+		soundPlay 3 70 70
+		::ess::reward $juice_ml
+		::ess::evt_put REWARD MICROLITERS [now] \
+		    [expr {int($juice_ml*1000)}]
+	    }
 	}
 
 	$s add_method noreward {} {
-	    soundPlay 4 90 300
+	    if { $task == "learning" } {
+		soundPlay 4 90 300
+	    }
 	}
 
 	$s add_method finale {} {
