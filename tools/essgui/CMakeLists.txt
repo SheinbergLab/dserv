@@ -71,13 +71,12 @@ set(CPACK_PACKAGE_NAME essgui)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GUI app to go with dserv and related tools.")
 set(CPACK_PACKAGE_CONTACT SheinbergLab)
 set(CPACK_PACKAGE_VENDOR SheinbergLab)
+set(CPACK_COMPONENTS_ALL essgui)
 
 if(WIN32)
     # TODO
 elseif(APPLE)
-    set(CPACK_COMPONENTS_ALL essgui)
-    set(CMAKE_SKIP_RPATH TRUE)
-
+    # Wrap the essgui executable in an essgui.app bundle.
     set_target_properties(essgui PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME essgui
@@ -85,9 +84,14 @@ elseif(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER org.sheinberglab.essgui
         MACOSX_BUNDLE_ICON_FILE essgui
     )
+
+    # Copy the app icon that will show in finder, dock, etc.
     target_sources(essgui PRIVATE ${CMAKE_SOURCE_DIR}/macos/essgui.icns)
     set_source_files_properties(${CMAKE_SOURCE_DIR}/macos/essgui.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
+    # "Fix up" the app bundle to make it relocatable.
+    # Copy dylib dependencies into the bundle.
+    # Configure the executable and dylibs to load dylibs from within the bundle.
     set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/essgui.app)
     install(
         CODE "include(BundleUtilities)
@@ -104,6 +108,8 @@ elseif(APPLE)
         set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
 
+        # "Fixing up" the app bundle invalidates previously signed binaries.
+        # Go back and sign things again: the executable, any relocated dylibs, and the bundle itself.
         set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
         install(
             CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
@@ -114,8 +120,8 @@ elseif(APPLE)
         )
     endif()
 
+    # We want to install the "Fixed up" and re-signed bundle, so this instruction goes last.
     install(TARGETS essgui BUNDLE DESTINATION . COMPONENT essgui)
-
 else()
     INSTALL(TARGETS essgui RUNTIME)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
