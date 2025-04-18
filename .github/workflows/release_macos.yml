@@ -228,6 +228,11 @@ jobs:
 
     steps:
 
+      - name: Install coreutils with the timeout util.
+        run: |
+          brew update
+          brew install coreutils
+
       - name: Install the essgui package we just released.
         run: |
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/essgui-${{ github.ref_name }}-Darwin.dmg
