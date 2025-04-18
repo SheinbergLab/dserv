@@ -15,6 +15,16 @@ elseif(APPLE)
 	set(CMAKE_MODULE_LINKER_FLAGS "-undefined dynamic_lookup")
 	set(TCLLIB tclstub)
 	set(CMAKE_SHARED_MODULE_SUFFIX .dylib)
+
+	if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
+		# Configure for apple code signing and notarization.
+		set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
+		set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
+		set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
+		set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
+		set(CMAKE_SKIP_RPATH TRUE)
+	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "QNX")
 	add_definitions(-DUSE_TCL_STUBS)
 	include_directories(../local/include)
@@ -145,4 +155,4 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 install(TARGETS
 	ain juicer gpio_input gpio_output touch
 	rmt eventlog sound timer usbio ina226 joystick4
-	DESTINATION dserv/modules)
+	DESTINATION dserv/modules COMPONENT dserv)

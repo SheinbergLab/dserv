@@ -1,0 +1,8 @@
+#!/bin/sh
+
+set -e
+
+# Let non-root user access default dserv database file.
+# The script argument $2 is the installation destination.
+mkdir -p "$2"/usr/local/dserv/db
+chmod a+w "$2"/usr/local/dserv/db

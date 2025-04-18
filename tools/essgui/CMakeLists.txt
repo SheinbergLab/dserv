@@ -25,6 +25,22 @@ if(WIN32)
     set(LZ4LIB liblz4_static.lib)
     set(PDFLIB hpdf.lib)
     set(LIBJANSSON jansson.lib)
+elseif(APPLE)
+    # libtcl9.0 may be installed from source or by homebrew.
+    include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
+    link_directories("/usr/local/lib" "/opt/homebrew/lib")
+    find_library(LIBZ z)
+    find_library(LIBLZ4 NAMES "liblz4.a")
+    find_library(LIBFLTK NAMES "libfltk.a")
+    find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
+    find_library(LIBTCL "tcl9.0")
+    set(LIBTCLSTUB "libtclstub.a")
+    find_library(LIBJANSSON NAMES "libjansson.a")
+    set(LIBDLSH "dg")
+
+    # Locate TCL library files, as installed by homebrew.
+    get_filename_component(LIBTCL_ACTUAL ${LIBTCL} REALPATH)
+    get_filename_component(LIBTCL_DIR ${LIBTCL_ACTUAL} DIRECTORY)
 else()
     link_directories( /usr/local/lib )
     find_library(LIBZ z)
@@ -33,6 +49,7 @@ else()
     find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
     find_library(LIBTCL "tcl9.0")
     set(LIBTCLSTUB "/usr/local/lib/libtclstub.a")
+    find_library(LIBJANSSON NAMES "libjansson.a")
     set(LIBDLSH "dg")
 endif()
 
@@ -57,18 +74,68 @@ endif()
 set(CPACK_PACKAGE_NAME essgui)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GUI app to go with dserv and related tools.")
 set(CPACK_PACKAGE_CONTACT SheinbergLab)
-
-set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${LIBTCL})
-include(InstallRequiredSystemLibraries)
+set(CPACK_PACKAGE_VENDOR SheinbergLab)
+set(CPACK_COMPONENTS_ALL essgui)
 
 if(WIN32)
     # TODO
 elseif(APPLE)
-    INSTALL(TARGETS essgui RUNTIME DESTINATION . COMPONENT essgui)
-    set(CPACK_COMPONENTS_ALL essgui)
-    set(CPACK_PACKAGE_VERSION_MAJOR "${dserv_VERSION_MAJOR}")
-    set(CPACK_PACKAGE_VERSION_MINOR "${dserv_VERSION_MINOR}")
-    set(CPACK_GENERATOR "DragNDrop")
+    # Wrap the essgui executable in an essgui.app bundle.
+    set_target_properties(essgui PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME essgui
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_GUI_IDENTIFIER org.sheinberglab.essgui
+        MACOSX_BUNDLE_ICON_FILE essgui
+    )
+
+    # Copy the app icon that will show in finder, dock, etc.
+    target_sources(essgui PRIVATE ${CMAKE_SOURCE_DIR}/macos/essgui.icns)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/macos/essgui.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
+    # "Fix up" the app bundle to make it relocatable.
+    # Copy dylib dependencies into the bundle.
+    # Configure the executable and dylibs to load dylibs from within the bundle.
+    set(CMAKE_SKIP_RPATH TRUE)
+    set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/essgui.app)
+    install(
+        CODE "include(BundleUtilities)
+        set(BU_CHMOD_BUNDLE_ITEMS ON)
+        fixup_bundle(\"${APP_BUNDLE}\" \"\" \"\")"
+        COMPONENT essgui
+    )
+
+    if(LIBTCL_DIR)
+        # Copy TCL library files into the bundle as well.
+        install(
+            DIRECTORY ${LIBTCL_DIR}/tcl9.0/
+            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
+            COMPONENT essgui
+        )
+    endif()
+
+    if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
+        # Configure for apple code signing and notarization.
+        set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
+
+        # "Fixing up" the app bundle invalidates previously signed binaries.
+        # Go back and sign things again: the executable, any relocated dylibs, and the bundle itself.
+        set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
+        install(
+            CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/essgui)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
+            COMPONENT essgui
+        )
+    endif()
+
+    # We want to install the "Fixed up" and re-signed bundle, so this instruction goes last.
+    install(TARGETS essgui BUNDLE DESTINATION . COMPONENT essgui)
 else()
     INSTALL(TARGETS essgui RUNTIME)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
@@ -77,3 +144,4 @@ else()
 endif()
 
 include(CPack)
+cpack_add_component(essgui REQUIRED)

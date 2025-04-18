@@ -7,8 +7,8 @@
 # You can make this locally using scripts/docker/Dockerfile-essgui-package.
 # Or, you can get a package from a GitHub release:
 #
-#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.33/essgui-Linux-amd64-0.0.33.deb
-#   mv essgui-Linux-amd64-0.0.33.deb essgui_0.0.0_amd64.deb
+#   wget https://github.com/benjamin-heasly/dserv/releases/download/0.0.43/essgui_0.0.43_amd64.deb
+#   mv essgui_0.0.43_amd64.deb essgui_0.0.0_amd64.deb
 #
 # To install the package in a fresh Docker image:
 #

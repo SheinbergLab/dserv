@@ -2,7 +2,16 @@ cmake_minimum_required(VERSION 3.15)
 set(CMAKE_CXX_STANDARD 20)
 
 if(APPLE)
-set(CMAKE_SHARED_MODULE_SUFFIX .dylib)
+    set(CMAKE_SHARED_MODULE_SUFFIX .dylib)
+    if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
+        # Configure for apple code signing and notarization.
+        set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
+        set(CMAKE_SKIP_RPATH TRUE)
+    endif()
 endif()
 
 set(PROCESSOR windows)
@@ -29,8 +38,4 @@ include_directories(-I.. -I. -I ../src)
 add_library(${PROCESSOR} MODULE ${PROCESSOR}.c prmutil.c)
 set_target_properties(${PROCESSOR} PROPERTIES PREFIX "")
 
-install(TARGETS touch_windows windows in_out up_down_left_right DESTINATION dserv/processors)
-
-
-
-
+install(TARGETS touch_windows windows in_out up_down_left_right DESTINATION dserv/processors COMPONENT dserv)
