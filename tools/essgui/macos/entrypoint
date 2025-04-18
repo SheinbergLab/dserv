@@ -1,0 +1,10 @@
+#!/bin/sh
+
+set -e
+
+# Locate the Contents subdir within this bundle.
+MACOS=$(dirname "$0")
+CONTENTS=$(dirname "$MACOS")
+
+# Run essgui in installed bin subdir.
+"$CONTENTS"/Resources/bin/essgui

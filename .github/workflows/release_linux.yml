@@ -144,7 +144,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-        
+
       - name: Install the dserv package we just released.
         run: |
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.21)
 set(CMAKE_CXX_STANDARD 14)
 
 set(CMAKE_BUILD_TYPE Release)
@@ -25,6 +25,18 @@ if(WIN32)
     set(LZ4LIB liblz4_static.lib)
     set(PDFLIB hpdf.lib)
     set(LIBJANSSON jansson.lib)
+elseif(APPLE)
+    # libtcl9.0 may be installed from source or by homebrew.
+    include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
+    link_directories("/usr/local/lib" "/opt/homebrew/lib")
+    find_library(LIBZ z)
+    find_library(LIBLZ4 NAMES "liblz4.a")
+    find_library(LIBFLTK NAMES "libfltk.a")
+    find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
+    find_library(LIBTCL "tcl9.0")
+    set(LIBTCLSTUB "libtclstub.a")
+    find_library(LIBJANSSON NAMES "libjansson.a")
+    set(LIBDLSH "dg")
 else()
     link_directories( /usr/local/lib )
     find_library(LIBZ z)
@@ -59,17 +71,36 @@ set(CPACK_PACKAGE_NAME essgui)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GUI app to go with dserv and related tools.")
 set(CPACK_PACKAGE_CONTACT SheinbergLab)
 
-set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${LIBTCL})
-include(InstallRequiredSystemLibraries)
-
 if(WIN32)
     # TODO
 elseif(APPLE)
-    INSTALL(TARGETS essgui RUNTIME DESTINATION . COMPONENT essgui)
+    set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
+    install(TARGETS essgui RUNTIME COMPONENT essgui)
     set(CPACK_COMPONENTS_ALL essgui)
-    set(CPACK_PACKAGE_VERSION_MAJOR "${dserv_VERSION_MAJOR}")
-    set(CPACK_PACKAGE_VERSION_MINOR "${dserv_VERSION_MINOR}")
-    set(CPACK_GENERATOR "DragNDrop")
+    set(CPACK_BUNDLE_NAME essgui)
+    set(CPACK_BUNDLE_PLIST ${CMAKE_SOURCE_DIR}/macos/essgui.plist)
+    set(CPACK_BUNDLE_ICON ${CMAKE_SOURCE_DIR}/macos/essgui.icns)
+    set(CPACK_BUNDLE_STARTUP_COMMAND ${CMAKE_SOURCE_DIR}/macos/entrypoint)
+
+    install(CODE [[
+        include(BundleUtilities)
+        fixup_bundle("/Users/benjaminheasly/codin/dserv/tools/essgui/_CPack_Packages/Darwin/Bundle/essgui-0.95-Darwin/essgui.app" "" "")
+    ]]
+        COMPONENT essgui
+    )
+
+if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
+        # Configure for apple code signing and notarization.
+        set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
+
+        # These certificate identifiers seem redundant.
+        # It seems cmake uses the first for building, and cpack uses the second for packaging.
+        set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
+        set(CPACK_BUNDLE_APPLE_CERT_APP "Developer ID Application")
+    endif()
 else()
     INSTALL(TARGETS essgui RUNTIME)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
@@ -78,3 +109,4 @@ else()
 endif()
 
 include(CPack)
+cpack_add_component(essgui REQUIRED)
