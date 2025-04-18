@@ -54,7 +54,8 @@ namespace eval hapticvis {
 	$sys add_variable sample_presented   0
 	$sys add_variable cue_up             0
 	$sys add_variable choices_up         0
-
+	$sys add_variable stim_update        0
+	
 	## timer ids
 	$sys add_variable sample_timer       1
 	$sys add_variable cue_timer          2
@@ -164,6 +165,11 @@ namespace eval hapticvis {
 	    if { $sample_presented == 1 } {
 		return sample_presented
 	    }
+
+	    if { $stim_update } {
+		return stim_update
+	    }
+	    
 	    if { [timerExpired $sample_timer] } {
 		if { $sample_up == 0 } {
 		    return sample_on
@@ -234,6 +240,16 @@ namespace eval hapticvis {
 	
 	$sys add_transition cue_off { return stim_wait }
 	
+	#
+	# stim_update: request stimulus update
+	#
+	$sys add_action stim_update {
+	    my stim_update
+	    set stim_update 0;	# reset
+	}
+	
+	$sys add_transition stim_update { return stim_wait }
+
 	#
 	# sample_on: request sample on
 	#
@@ -475,7 +491,8 @@ namespace eval hapticvis {
 	$sys add_method sample_off {} { print sample_off }
 	$sys add_method choices_on {} { print choices_on }
 	$sys add_method choices_off {} { print choices_off }
-
+	$sys add_method stim_update {} { print stim_update }
+	
 	$sys add_method reward {} { print reward }
 	$sys add_method noreward {} { print noreward }
 	$sys add_method finale {} { print finale }

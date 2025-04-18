@@ -86,6 +86,8 @@ proc create_noise { id } {
     return $noise_mg
 }
 
+proc rotate_noise { angle } { rotateObj $::noise $angle 0 0 -1; redraw }
+    
 proc nexttrial { id } {
     resetObjList         ;# unload existing objects
     shaderImageReset;        ;# free any shader textures
@@ -108,8 +110,8 @@ proc nexttrial { id } {
 
         # add noise to metagroup if specified
         if { [dl_length stimdg:noise_elements:$id] } {
-            set noise [create_noise $id]
-            metagroupAdd $::sample $noise
+            set ::noise [create_noise $id]
+            metagroupAdd $::sample $::noise
         }
 
         glistAddObject $::sample 0

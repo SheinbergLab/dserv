@@ -46,6 +46,11 @@ namespace eval hapticvis::transfer {
 
 	    # register to listen for haptic events
 	    ::haptic::init
+
+	    # this protocol sets stim_update on changes to grasp/dial_angle
+	    dservAddExactMatch grasp/dial_angle
+	    dpointSetScript grasp/dial_angle ::ess::hapticvis::transfer::process_dial
+	    dservSet grasp/dial_angle 0
 	    
 	    soundReset
 	    soundSetVoice 81 0    0
@@ -103,7 +108,7 @@ namespace eval hapticvis::transfer {
 	    #                             pointname obs bufsize every
 	    dservLoggerAddMatch $filename grasp/sensor0/vals    1 240 1
 	    dservLoggerAddMatch $filename grasp/sensor0/touched 1 
-	    dservLoggerAddMatch $filename grasp/left_angle      1 16 1
+	    dservLoggerAddMatch $filename grasp/dial_angle      1 16 1
 	    dservLoggerAddMatch $filename grasp/available       1
 	    print "logging grasp events"
 	}
@@ -181,8 +186,41 @@ namespace eval hapticvis::transfer {
 	    if { $trial_type == "haptic" && $sample_up == 1 } {
 		my haptic_prep
 	    }
+	    if { !$simulate_grasp && $follow_dial } { my dial_reset }
 	}
 
+	$s add_method dial_reset {} {
+	    if { $simulate_grasp } { return }
+	    package require rest
+	    set ip 192.168.88.84
+	    set port 8888
+
+	    set url http://${ip}:${port}
+	    set res [rest::get $url [list function reset_dial]]
+	}
+
+	$s add_method dial_follow {} {
+	    if { $simulate_grasp } { return }
+	    package require rest
+	    set ip 192.168.88.84
+	    set port 8888
+
+	    set url http://${ip}:${port}
+	    set res [rest::get $url [list function follow_dial_or_pattern \
+					 follow true mode report_only]
+	}	
+	
+	$s add_method dial_unfollow {} {
+	    if { $simulate_grasp } { return }
+	    package require rest
+	    set ip 192.168.88.84
+	    set port 8888
+
+	    set url http://${ip}:${port}
+	    set res [rest::get $url [list function follow_dial_or_pattern \
+					 follow false]
+	}	
+	
 	$s add_method haptic_show { shape_id a } {
 	    if { $simulate_grasp } {
 		dservSet ess/grasp/available 1
@@ -238,6 +276,7 @@ namespace eval hapticvis::transfer {
 	$s add_method sample_on {} {
 	    if { $trial_type == "visual" } {
 		rmtSend "!sample_on"
+		if { !$simulate_grasp && $follow_dial } { my dial_follow }
 	    } elseif { $trial_type == "haptic" } {
 		my haptic_show $shape_id $shape_angle
 	    }
@@ -254,10 +293,18 @@ namespace eval hapticvis::transfer {
 		}
 	    }
 	}
+
+	$s add_method stim_update {} {
+	    if { $trial_type == "visual" && $sample_up } {
+		set noise_angle [dservGet grasp/dial_angle]
+		rmtSend "!rotate_noise $noise_angle"
+	    }
+	}
 	
 	$s add_method sample_off {} {
 	    if { $trial_type == "visual" } {
 		rmtSend "!sample_off"
+		if { !$simulate_grasp && $follow_dial } { my dial_unfollow }
 	    } elseif { $trial_type == "haptic" } {
 		my haptic_prep
 	    }
@@ -353,7 +400,7 @@ namespace eval hapticvis::transfer {
 			return -2
 		    }
 		}
-
+		
 		# map actual position to slot
 		set r [dict get $mapdict $joy_position]
 		
@@ -367,7 +414,7 @@ namespace eval hapticvis::transfer {
 		    dservSet ess/joystick/position $joy_position
 		    set updated_position 1
 		}
-
+		
 		# only if the button is pressed should we count as response
 		if { [dservGet ess/joystick/button] } {
 		    set made_selection 1
@@ -529,5 +576,11 @@ namespace eval hapticvis::transfer {
 	    
 	return
     }
+
+    proc process_dial { dpoint data } {
+	$::ess::current(state_system) set_variable stim_update 1
+	::ess::do_update
+    }
+
 }
 
