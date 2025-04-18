@@ -74,32 +74,33 @@ set(CPACK_PACKAGE_CONTACT SheinbergLab)
 if(WIN32)
     # TODO
 elseif(APPLE)
-    set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
-    install(TARGETS essgui RUNTIME COMPONENT essgui)
     set(CPACK_COMPONENTS_ALL essgui)
-    set(CPACK_BUNDLE_NAME essgui)
-    set(CPACK_BUNDLE_PLIST ${CMAKE_SOURCE_DIR}/macos/essgui.plist)
-    set(CPACK_BUNDLE_ICON ${CMAKE_SOURCE_DIR}/macos/essgui.icns)
-    set(CPACK_BUNDLE_STARTUP_COMMAND ${CMAKE_SOURCE_DIR}/macos/entrypoint)
 
+    set_target_properties(essgui PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME essgui
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_GUI_IDENTIFIER org.sheinberglab.essgui
+        MACOSX_BUNDLE_ICON_FILE essgui
+    )
+    target_sources(essgui PRIVATE ${CMAKE_SOURCE_DIR}/macos/essgui.icns)
+    set_source_files_properties(${CMAKE_SOURCE_DIR}/macos/essgui.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
+    install(TARGETS essgui BUNDLE DESTINATION . COMPONENT essgui)
     install(CODE [[
         include(BundleUtilities)
-        fixup_bundle("/Users/benjaminheasly/codin/dserv/tools/essgui/_CPack_Packages/Darwin/Bundle/essgui-0.95-Darwin/essgui.app" "" "")
-    ]]
-        COMPONENT essgui
-    )
+        set(BU_CHMOD_BUNDLE_ITEMS ON)
+        fixup_bundle("${CMAKE_BINARY_DIR}/Release/essgui.app" "" "")
+    ]] COMPONENT essgui)
 
-if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
+    if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
         # Configure for apple code signing and notarization.
         set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS "NO")
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
-
-        # These certificate identifiers seem redundant.
-        # It seems cmake uses the first for building, and cpack uses the second for packaging.
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
-        set(CPACK_BUNDLE_APPLE_CERT_APP "Developer ID Application")
+        set(CPACK_APPLE_CERT_APP "Developer ID Application")
     endif()
 else()
     INSTALL(TARGETS essgui RUNTIME)
