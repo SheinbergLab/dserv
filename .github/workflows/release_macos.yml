@@ -93,7 +93,7 @@ jobs:
     needs: release-dserv
 
     # Check on latest to confirm compatibility.
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
 
@@ -121,3 +121,120 @@ jobs:
           /usr/local/dserv/dserv --help
           timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl
           timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+
+  release-essgui:
+
+    # Build on not-the-latest to keep dependency versions modest.
+    runs-on: macos-14
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Install cmake build tool and tcl9.0 dependency.
+        run: |
+          brew update
+          brew install cmake tcl-tk@9
+
+      - name: Check out our code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build and install jansson static lib.
+        run: |
+          cd deps/jansson/
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Install FLTK GUI framework into the build environment.
+        run: |
+          cd deps/fltk/
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Install libharu PDF library into the build environment.
+        run: |
+          cd deps/libharu/
+          cmake -DBUILD_SHARED_LIBS=OFF -B build
+          cmake --build build
+          sudo cmake --install build
+
+      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
+      - name: Install our dlsh libs and headers into the build environment.
+        run: |
+          DLSH_VERSION=0.0.19
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
+
+      - name: Set up a keychain for Apple code signing.
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
+        run: |
+          # Reconstitute text-encoded secrets as binary .p12 files.
+          APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.p12
+          echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
+
+          # Create a new keychain for use in CI.
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add our certificates to the keychain.
+          security import $APP_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          # Alow codesign util and the current user to use this keychain for signing.
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Log info about this keychain for debuging.
+          security find-identity -p basic -v
+
+      - name: Build, sign, package, and notarize dserv.
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cd tools/essgui
+          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }}
+          cmake --build build --config Release
+          cpack -G DragNDrop --config build/CPackConfig.cmake
+
+          xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "essgui-signing"
+          xcrun notarytool submit essgui-${{ github.ref_name }}-Darwin.dmg --keychain-profile "essgui-signing" --wait
+          xcrun stapler staple essgui-${{ github.ref_name }}-Darwin.dmg
+
+      - name: Create a GitHub release for the current tag and package.
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "tools/essgui/*.dmg"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
+  check-essgui:
+
+    needs: release-essgui
+
+    # Check on latest to confirm compatibility.
+    runs-on: macos-15
+
+    steps:
+
+      - name: Install the essgui package we just released.
+        run: |
+          wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/essgui-${{ github.ref_name }}-Darwin.dmg
+          hdiutil attach essgui-${{ github.ref_name }}-Darwin.dmg
+          cp -R /Volumes/essgui-${{ github.ref_name }}-Darwin/essgui.app /Applications
+          hdiutil unmount /Volumes/essgui-${{ github.ref_name }}-Darwin
+
+      - name: Sanity check the installed essgui.
+        run: |
+          /Applications/essgui.app/Contents/MacOS/essgui || echo "OK"

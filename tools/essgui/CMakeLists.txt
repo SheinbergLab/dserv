@@ -70,11 +70,13 @@ endif()
 set(CPACK_PACKAGE_NAME essgui)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GUI app to go with dserv and related tools.")
 set(CPACK_PACKAGE_CONTACT SheinbergLab)
+set(CPACK_PACKAGE_VENDOR SheinbergLab)
 
 if(WIN32)
     # TODO
 elseif(APPLE)
     set(CPACK_COMPONENTS_ALL essgui)
+    set(CMAKE_SKIP_RPATH TRUE)
 
     set_target_properties(essgui PROPERTIES
         MACOSX_BUNDLE TRUE
@@ -86,12 +88,13 @@ elseif(APPLE)
     target_sources(essgui PRIVATE ${CMAKE_SOURCE_DIR}/macos/essgui.icns)
     set_source_files_properties(${CMAKE_SOURCE_DIR}/macos/essgui.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
-    install(TARGETS essgui BUNDLE DESTINATION . COMPONENT essgui)
-    install(CODE [[
-        include(BundleUtilities)
+    set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/essgui.app)
+    install(
+        CODE "include(BundleUtilities)
         set(BU_CHMOD_BUNDLE_ITEMS ON)
-        fixup_bundle("${CMAKE_BINARY_DIR}/Release/essgui.app" "" "")
-    ]] COMPONENT essgui)
+        fixup_bundle(\"${APP_BUNDLE}\" \"\" \"\")"
+        COMPONENT essgui
+    )
 
     if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
         # Configure for apple code signing and notarization.
@@ -103,13 +106,16 @@ elseif(APPLE)
 
         set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
         install(
-            CODE "file(GLOB BUNDLE_DYLIBS ${CMAKE_BINARY_DIR}/Release/essgui.app/Contents/Frameworks/*.dylib)"
+            CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\} COMMAND_ECHO STDOUT)"
-            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${CMAKE_BINARY_DIR}/Release/essgui.app)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/essgui)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
             COMPONENT essgui
         )
-
     endif()
+
+    install(TARGETS essgui BUNDLE DESTINATION . COMPONENT essgui)
+
 else()
     INSTALL(TARGETS essgui RUNTIME)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
