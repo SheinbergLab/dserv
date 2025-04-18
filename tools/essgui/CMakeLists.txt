@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.15)
 set(CMAKE_CXX_STANDARD 14)
 
 set(CMAKE_BUILD_TYPE Release)
@@ -100,7 +100,15 @@ elseif(APPLE)
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Manual")
         set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0")
         set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "Developer ID Application")
-        set(CPACK_APPLE_CERT_APP "Developer ID Application")
+
+        set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
+        install(
+            CODE "file(GLOB BUNDLE_DYLIBS ${CMAKE_BINARY_DIR}/Release/essgui.app/Contents/Frameworks/*.dylib)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\} COMMAND_ECHO STDOUT)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${CMAKE_BINARY_DIR}/Release/essgui.app)"
+            COMPONENT essgui
+        )
+
     endif()
 else()
     INSTALL(TARGETS essgui RUNTIME)
