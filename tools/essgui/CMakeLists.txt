@@ -37,6 +37,10 @@ elseif(APPLE)
     set(LIBTCLSTUB "libtclstub.a")
     find_library(LIBJANSSON NAMES "libjansson.a")
     set(LIBDLSH "dg")
+
+    # Locate TCL library files, as installed by homebrew.
+    get_filename_component(LIBTCL_ACTUAL ${LIBTCL} REALPATH)
+    get_filename_component(LIBTCL_DIR ${LIBTCL_ACTUAL} DIRECTORY)
 else()
     link_directories( /usr/local/lib )
     find_library(LIBZ z)
@@ -92,6 +96,7 @@ elseif(APPLE)
     # "Fix up" the app bundle to make it relocatable.
     # Copy dylib dependencies into the bundle.
     # Configure the executable and dylibs to load dylibs from within the bundle.
+    set(CMAKE_SKIP_RPATH TRUE)
     set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/essgui.app)
     install(
         CODE "include(BundleUtilities)
@@ -99,6 +104,15 @@ elseif(APPLE)
         fixup_bundle(\"${APP_BUNDLE}\" \"\" \"\")"
         COMPONENT essgui
     )
+
+    if(LIBTCL_DIR)
+        # Copy TCL library files into the bundle as well.
+        install(
+            DIRECTORY ${LIBTCL_DIR}/tcl9.0/
+            DESTINATION ${APP_BUNDLE}/Contents/lib/tcl9.0
+            COMPONENT essgui
+        )
+    endif()
 
     if(DEFINED "CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM")
         # Configure for apple code signing and notarization.
@@ -113,7 +127,7 @@ elseif(APPLE)
         set(CODESIGN_COMMAND /usr/bin/codesign --force --verify ${CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS} --sign)
         install(
             CODE "file(GLOB BUNDLE_DYLIBS ${APP_BUNDLE}/Contents/Frameworks/*.dylib)"
-            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\} COMMAND_ECHO STDOUT)"
+            CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" \$\{BUNDLE_DYLIBS\})"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE}/Contents/MacOS/essgui)"
             CODE "execute_process(COMMAND ${CODESIGN_COMMAND} \"${CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY}\" ${APP_BUNDLE})"
             COMPONENT essgui

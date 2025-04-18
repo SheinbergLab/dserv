@@ -237,4 +237,4 @@ jobs:
 
       - name: Sanity check the installed essgui.
         run: |
-          /Applications/essgui.app/Contents/MacOS/essgui || echo "OK"
+          timeout --preserve-status --signal SIGINT 2 /Applications/essgui.app/Contents/MacOS/essgui || echo "$?"
