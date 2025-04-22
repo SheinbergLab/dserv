@@ -207,7 +207,7 @@ namespace eval hapticvis::transfer {
 
 	    set url http://${ip}:${port}
 	    set res [rest::get $url [list function follow_dial_or_pattern \
-					 follow true mode report_only]
+					 follow true mode report_only]]
 	}	
 	
 	$s add_method dial_unfollow {} {
@@ -218,7 +218,7 @@ namespace eval hapticvis::transfer {
 
 	    set url http://${ip}:${port}
 	    set res [rest::get $url [list function follow_dial_or_pattern \
-					 follow false]
+					 follow false]]
 	}	
 	
 	$s add_method haptic_show { shape_id a } {
@@ -441,9 +441,11 @@ namespace eval hapticvis::transfer {
 		    set mapdict { 0 0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 }
 		}
 		if { $task == "learning" } {
-		    set r [dict get $mapdict $r]
 		    if { $r != -1 } {
-			set made_selection 1
+			set r [dict get $mapdict $r]
+			if { $r != -1 } {
+			    set made_selection 1
+			}
 		    }
 		}
 	    }
