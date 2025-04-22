@@ -392,7 +392,11 @@ namespace eval hapticvis::transfer {
 	     dl_set stimdg:cued_choices   [dl_repeat [dl_llist [dl_llist]] $n_obs]
 	     dl_set stimdg:feedback_type  [dl_repeat [dl_slist color] $n_obs]
 
-	     dl_set stimdg:follow_dial    [dl_zeros $n_obs]
+	     if { $noise_type == "none" } {
+		 dl_set stimdg:follow_dial    [dl_zeros $n_obs]
+	     } else {
+		 dl_set stimdg:follow_dial    [dl_ones $n_obs]
+	     }
 	     dl_set stimdg:follow_pattern [dl_replicate [dl_slist 0] $n_obs]
 	     dl_set stimdg:constrained    [dl_zeros $n_obs]
 	     dl_set stimdg:constraint_locked [dl_zeros $n_obs]
