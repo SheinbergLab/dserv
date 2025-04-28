@@ -74,6 +74,21 @@ namespace eval hapticvis::transfer {
                 }
             }
         }
+        visual_cued {
+            description "respond to cued visual objects"
+            loader_proc setup_visual_cued
+            loader_options {
+		subject_id { $subject_ids }
+		subject_set { $subject_sets }
+		n_per_set { 4 }
+		shape_scale { 3 4 5 6 }
+		noise_type { none }
+		n_rep { 6 2 4 8 10 20 }
+		rotations {
+		    {three {60 180 300}} {single {180}} 
+		}
+            }
+        }
         visual_to_haptic {
             description "learn visual transfer to haptic"
             loader_proc setup_visual_transfer
@@ -119,19 +134,63 @@ namespace eval hapticvis::transfer {
 	}
 	
 	$s add_method setup_visual { subject_id subject_set n_per_set \
-					 shape_scale noise_type n_rep rotations } {
-	     my setup_trials identity $subject_id $subject_set $n_per_set visual \
-		 $shape_scale $noise_type $n_rep $rotations
-	}
+					 shape_scale noise_type n_rep \
+					 rotations } \
+	    {
+		my setup_trials identity $subject_id $subject_set $n_per_set visual \
+		    $shape_scale $noise_type $n_rep $rotations
+	    }
 	
 	$s add_method setup_haptic { subject_id subject_set n_per_set \
-					 n_rep rotations } {
-	     set shape_scale 1
-	     set noise_type none
-	     my setup_trials identity $subject_id $subject_set $n_per_set haptic \
-		 $shape_scale $noise_type $n_rep $rotations
-	}
+					 n_rep rotations } \
+	    {
+		set shape_scale 1
+		set noise_type none
+		my setup_trials identity $subject_id \
+		    $subject_set $n_per_set haptic \
+		    $shape_scale $noise_type $n_rep $rotations
+	    }
+	
+	$s add_method setup_visual_cued { subject_id subject_set n_per_set \
+					      shape_scale noise_type \
+					      n_rep rotations } \
+	    {
+		my setup_trials identity $subject_id \
+		    $subject_set $n_per_set visual \
+		    $shape_scale $noise_type $n_rep $rotations
 
+		# now create a column for cue centers
+		# for half the trials, the cue center matches the target
+		# for the other half, the cue center is from another loc
+		set n [dl_length stimdg:stimtype]
+		dl_set stimdg:is_cued [dl_ones $n]
+		dl_local target_loc [dl_sub stimdg:correct_choice 1]
+		dl_local target_choice_center [dl_choose stimdg:choice_centers \
+						   [dl_pack $target_loc]]
+		dl_local choice_loc_ids [dl_fromto 0 [dl_repeat $n_choices $n]]
+		dl_local dist_locs [dl_select $choice_loc_ids \
+					[dl_noteq $choice_loc_ids $target_loc]]
+		# pull out all non-target choice locations
+		dl_local dist_choice_centers \
+		    [dl_choose stimdg:choice_centers $dist_locs]
+
+		# choose random index to select dist center randomly
+		dl_local dist_id [dl_irand $n [expr $n_choices-1]]
+		dl_local dist_choice_center \
+		    [dl_choose $dist_choice_centers [dl_pack $dist_id]]
+
+		# for half presentations show actual location for other half not
+		set valid_per_target [expr {($n_rep/2)*[llength $rotations]}]
+		dl_local use_dist \
+		    [dl_replicate [dl_repeat "0 1" $valid_per_target] \
+			 $n_per_set]
+		dl_local cue_center \
+		    [dl_replace $target_choice_center \
+			 $use_dist $dist_choice_center]	  
+		dl_set stimdg:cue_valid [dl_not $use_dist]
+		dl_set stimdg:cued_choices $cue_center
+	    }
+	
 	$s add_method setup_visual_transfer { subject_id subject_set n_per_set \
 						  n_rep rotations } {
 	     set shape_scale 1
@@ -224,6 +283,7 @@ namespace eval hapticvis::transfer {
 	     dl_set stimdg:choice_centers   [dl_llist]
 	     dl_set stimdg:choice_scale     [dl_flist]
 	     dl_set stimdg:is_cued          [dl_ilist]
+	     dl_set stimdg:cue_valid        [dl_ilist]
 	     dl_set stimdg:cued_choices     [dl_llist]
 	     dl_set stimdg:feedback_type    [dl_slist]
 	     dl_set stimdg:follow_dial      [dl_ilist]
@@ -268,6 +328,7 @@ namespace eval hapticvis::transfer {
 	     set n_obs [expr {$n_rep * $n_rotations * $n_shapes}]
 	     
 	     set is_cued      0
+	     set cue_valid   -1
 	     set shape_filled 1
 	     set n_choices $n_targets
 	     set choice_ecc 5
@@ -389,9 +450,12 @@ namespace eval hapticvis::transfer {
 	     dl_set stimdg:choice_centers [dl_repeat $choice_centers $n_obs]
 	     dl_set stimdg:choice_scale   [dl_repeat $choice_scale $n_obs]
 	     dl_set stimdg:is_cued        [dl_repeat $is_cued $n_obs]
-	     dl_set stimdg:cued_choices   [dl_repeat [dl_llist [dl_llist]] $n_obs]
+	     dl_set stimdg:cue_valid      [dl_repeat [dl_ilist $cue_valid] \
+					       $n_obs]
+	     dl_set stimdg:cued_choices   [dl_repeat [dl_llist [dl_llist]] \
+					       $n_obs]
 	     dl_set stimdg:feedback_type  [dl_repeat [dl_slist color] $n_obs]
-
+	     
 	     if { $noise_type == "none" } {
 		 dl_set stimdg:follow_dial    [dl_zeros $n_obs]
 	     } else {
