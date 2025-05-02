@@ -2167,3 +2167,20 @@ proc EM_INFO {} {
     return "0 2 128"
 }
 
+###############################################################################
+################################# git support #################################
+###############################################################################
+
+namespace eval ess {
+    proc select_branch {branch} {
+	variable system_path
+	
+	if {[catch {cd $system_path} err]} {
+	    error "cd error: $err"
+	}
+	catch {exec git switch $branch > /dev/null 2>&1}
+	catch {exec git pull   > /dev/null 2>&1}
+	set rawTag [exec git describe --tags --abbrev=0]
+	return [string trim $rawTag]
+    }
+}
