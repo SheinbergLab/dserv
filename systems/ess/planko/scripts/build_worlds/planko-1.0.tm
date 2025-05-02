@@ -7,6 +7,7 @@
 
 package require box2d
 package require dlsh
+package require points
 
 namespace eval planko {
     variable params
@@ -15,6 +16,13 @@ namespace eval planko {
 	variable params
 	set params(xrange)          12.0; # x range for selecting plank locations
 	set params(yrange)          12.0; # y range for selecting plank locations
+	set params(planks_min_dist)  1.0; # minimum distance between planks
+	set params(planks_max_x)     9.0; # maximum x position
+	set params(planks_max_y)     6.0; # maximum y position
+	set params(planks_offset_y)  2.0; # offset y value away from catchers
+	set params(planks_min_len)   2.0; # all planks at least this long
+	set params(planks_max_len)   3.2; # no planks longer than this
+	set params(floor_only)         0; # floor in place of catchers
 	set params(lcatcher_x)        -3; # x location of left catcher
 	set params(lcatcher_y)      -7.5; # y location of left catcher
 	set params(rcatcher_x)         3; # x location of right catcher
@@ -72,7 +80,28 @@ namespace eval planko {
 	
 	return $g
     }
-    
+
+    proc create_floor_dg { tx ty name } {
+	set b2_staticBody 0
+
+	set w 16
+	set y [expr $ty-(0.5+0.5/2)]
+
+	set g [dg_create]
+
+	dl_set $g:id [dl_ilist]
+	dl_set $g:name [dl_slist ${name}]
+	dl_set $g:shape [dl_slist Box]
+	dl_set $g:type $b2_staticBody
+	dl_set $g:tx [dl_flist $tx]
+	dl_set $g:ty [dl_flist $y]
+	dl_set $g:sx [dl_flist $w]
+	dl_set $g:sy [dl_flist 0.5]
+	dl_set $g:angle [dl_zeros 1.]
+	dl_set $g:restitution [dl_zeros 1.]
+	
+	return $g
+    }    
     proc create_plank_dg {}  {
 	variable params
 	set b2_staticBody 0
@@ -84,14 +113,37 @@ namespace eval planko {
 	set yrange_2 [expr {$yrange/2}]
 	
 	set g [dg_create]
+
+	# These params control spacing of plank centers (they must be floats)
+	set min_dist $params(planks_min_dist)
+	set max_x    $params(planks_max_x)
+	set max_y    $params(planks_max_y)
+	set offset_y $params(planks_offset_y)
+	dl_local ecc    4.0
+	dl_local anchor [dl_llist [dl_flist $params(ball_xpos) $params(ball_ypos)]]
+	
+	# Randomly pick points for centers with above constraints
+	dl_local plank_pos \
+	    [::points::pickpointsAwayFrom $n \
+		 [dl_llist [dl_pack [dl_flist]]] $min_dist $max_x $max_y $ecc $anchor]
+    
+	# pull out the tx and ty from the packed dists_pos list
+	dl_local tx [dl_first \
+			 [dl_unpack [dl_choose $plank_pos [dl_llist [dl_llist 0]]]]]
+	dl_local ty [dl_first \
+			 [dl_unpack [dl_choose $plank_pos [dl_llist [dl_llist 1]]]]]  
+	dl_local ty [dl_add $offset_y $ty]
 	
 	dl_set $g:id [dl_ilist]
 	dl_set $g:name [dl_paste [dl_repeat [dl_slist plank] $n] [dl_fromto 0 $n]]
 	dl_set $g:shape [dl_repeat [dl_slist Box] $n]
 	dl_set $g:type [dl_repeat $b2_staticBody $n]
-	dl_set $g:tx [dl_sub [dl_mult $xrange [dl_urand $n]] $xrange_2]
-	dl_set $g:ty [dl_sub [dl_mult $yrange [dl_urand $n]] $yrange_2]
-	dl_set $g:sx [dl_repeat 3. $n]
+	dl_set $g:tx $tx
+	dl_set $g:ty $ty
+
+	set range [expr $params(planks_max_len)-$params(planks_min_len)]
+	dl_local plank_lengths [dl_add $params(planks_min_len) [dl_mult $range [dl_urand $n]]]
+	dl_set $g:sx $plank_lengths
 	dl_set $g:sy [dl_repeat .5 $n]
 	dl_set $g:angle [dl_mult 2 $::pi [dl_urand $n]]
 	dl_set $g:restitution [dl_zeros $n.]
@@ -104,18 +156,23 @@ namespace eval planko {
 	variable params
 	set planks [create_plank_dg]
 
-	set params(lcatcher_x) -3.0
-	set params(lcatcher_y) -7.5
-	set left_catcher \
-	    [create_catcher_dg $params(lcatcher_x) $params(lcatcher_y) catchl]
-	set params(rcatcher_x) 3.0
-	set params(rcatcher_y) -7.5
-	set right_catcher \
-	    [create_catcher_dg $params(rcatcher_x) $params(rcatcher_y) catchr]
-
 	set ball [create_ball_dg]
 
-	foreach p "$ball $left_catcher $right_catcher" {
+	if { !$params(floor_only) } {
+	    set params(lcatcher_x) -3.0
+	    set params(lcatcher_y) -7.5
+	    set left_catcher \
+		[create_catcher_dg $params(lcatcher_x) $params(lcatcher_y) catchl]
+	    set params(rcatcher_x) 3.0
+	    set params(rcatcher_y) -7.5
+	    set right_catcher \
+		[create_catcher_dg $params(rcatcher_x) $params(rcatcher_y) catchr]
+	    set parts "$ball $left_catcher $right_catcher"
+	} else {
+	    set floor [create_floor_dg 0 $params(rcatcher_y) floor]
+	    set parts "$ball $floor"
+	}
+	foreach p $parts {
 	    dg_append $planks $p
 	    dg_delete $p
 	}
@@ -289,6 +346,7 @@ namespace eval planko {
 	variable params
 	default_params
 
+	set params(floor_only) 1
 	dict for { k v } $d { set params($k) $v }
 	
 	set acc accept_board
