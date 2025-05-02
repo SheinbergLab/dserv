@@ -2175,7 +2175,7 @@ namespace eval ess {
     proc select_branch {branch} {
 	variable system_path
 	
-	if {[catch {cd $system_path} err]} {
+	if {[catch {cd [file join $system_path ess]} err]} {
 	    error "cd error: $err"
 	}
 	catch {exec git switch $branch > /dev/null 2>&1}
