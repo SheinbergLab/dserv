@@ -383,13 +383,6 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
   json_t *json_dpoint, *json_list;
   char *json_str;
 
-
-  json_dpoint = json_object();
-
-  json_object_set_new(json_dpoint, "name", json_string(dpoint->varname));
-  json_object_set_new(json_dpoint, "timestamp", json_integer(dpoint->timestamp));
-  json_object_set_new(json_dpoint, "datatype", json_integer(dpoint->data.type));
-
   /* DSERV_EVTs are special */
   if (dpoint->data.e.dtype == DSERV_EVT) {
     json_dpoint = json_object();
@@ -584,7 +577,6 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
       break;
     }
   }
-
   
   json_str = json_dumps(json_dpoint, json_flags);
   json_decref(json_dpoint);
