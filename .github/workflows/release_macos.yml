@@ -196,7 +196,7 @@ jobs:
           # Log info about this keychain for debuging.
           security find-identity -p basic -v
 
-      - name: Build, sign, package, and notarize dserv.
+      - name: Build, sign, package, and notarize essgui.
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}

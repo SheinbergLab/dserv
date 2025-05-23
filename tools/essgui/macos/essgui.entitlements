@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Library validation would prevent dserv from loading libtcl at runtime. -->
+    <!-- Library validation would prevent essgui from loading dylibs from dlsh.zip. -->
     <!-- We can still pass the Apple notarization checks without library validation. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
