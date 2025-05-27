@@ -3,6 +3,7 @@
 package require dlsh
 package provide ess 2.0
 package require yajltcl
+package require git
 
 catch { System destroy }
 
@@ -694,11 +695,29 @@ namespace eval ess {
     reset_trial_info
     }
 
+    proc reload_system {} {
+	variable current
+	if { $current(system) == {} || $current(protocol) == {} || $current(variant) == {} } {
+	    if { [query_state] == "running" } { return } 
+	    return;
+	}
+	load_system $current(system) $current(protocol) $current(variant)
+    }
+
+    proc reload_protocol {} {
+	variable current
+	if { $current(system) == {} || $current(protocol) == {} } {
+	    if { [query_state] == "running" } { return } 
+	    return;
+	}
+	load_system $current(system) $current(protocol) 
+    }
+    
     proc reload_variant {} {
-    variable current
-    if { $current(system) == {} || $current(protocol) == {} || $current(variant) == {} } {
-        if { [query_state] == "running" } { return } 
-        return;
+	variable current
+	if { $current(system) == {} || $current(protocol) == {} || $current(variant) == {} } {
+	    if { [query_state] == "running" } { return } 
+	    return;
     }
 
     # initialize the variant by calling the appropriate loader 
@@ -1952,6 +1971,43 @@ namespace eval ess {
     return [$obj get]
     }
 }
+
+
+namespace eval ess {
+    proc switch_branch { { branch main } } {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    return [git::switch_branch $path $branch]
+	}
+    }
+    proc current_branch {} {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    return [git::current_branch $path]
+	} else {
+	    return "main"
+	}
+    }
+    proc branches {} {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    return [git::branches $path]
+	} else {
+	    return "main"
+	}
+    }
+    proc pull {} {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    return [git::pull $path]
+	} 
+    }
+}
+
 
 namespace eval ess {
     namespace export create_system set_system
