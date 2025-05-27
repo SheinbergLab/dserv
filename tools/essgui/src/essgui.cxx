@@ -613,6 +613,26 @@ int set_variant(void) {
   return 0;
 }
 
+int reload_system(void) {
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, "ess::reload_system", rstr);
+  return 0;
+}
+
+int reload_protocol(void) {
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, "ess::reload_protocol", rstr);
+  return 0;
+}
+
+int reload_variant(void) {
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, "ess::reload_variant", rstr);
+  return 0;
+}
+
+
+
 int add_host(const char *host)
 {
   if (!host_widget->find_item(host)) {

@@ -36,6 +36,11 @@ extern Fl_Box *obs_widget;
 extern Fl_Choice *system_widget;
 extern Fl_Choice *protocol_widget;
 extern Fl_Choice *variant_widget;
+#include <FL/Fl_Pack.H>
+extern Fl_Pack *reload_buttons;
+extern Fl_Button *reload_system_button;
+extern Fl_Button *reload_protocol_button;
+extern Fl_Button *reload_variant_button;
 #include <FL/Fl_Scroll.H>
 extern Fl_Scroll *options_widget;
 extern Fl_Scroll *settings_widget;
@@ -63,7 +68,6 @@ extern Fl_Text_Editor *variant_editor;
 extern Fl_Text_Editor *stim_editor;
 #include <FL/Fl_Input.H>
 extern Fl_Input *FileEntry;
-#include <FL/Fl_Pack.H>
 extern void file_open_cb(Fl_Button*, void*);
 extern Fl_Button *FileOpen;
 extern void file_close_cb(Fl_Button*, void*);

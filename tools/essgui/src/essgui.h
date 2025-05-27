@@ -16,6 +16,9 @@ int set_subject(void);
 int set_system(void);
 int set_protocol(void);
 int set_variant(void);
+int reload_system(void);
+int reload_protocol(void);
+int reload_variant(void);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);

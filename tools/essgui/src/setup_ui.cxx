@@ -54,6 +54,26 @@ static void cb_variant_widget(Fl_Choice*, void*) {
   set_variant();
 }
 
+Fl_Pack *reload_buttons=(Fl_Pack *)0;
+
+Fl_Button *reload_system_button=(Fl_Button *)0;
+
+static void cb_reload_system_button(Fl_Button*, void*) {
+  reload_system();
+}
+
+Fl_Button *reload_protocol_button=(Fl_Button *)0;
+
+static void cb_reload_protocol_button(Fl_Button*, void*) {
+  reload_protocol();
+}
+
+Fl_Button *reload_variant_button=(Fl_Button *)0;
+
+static void cb_reload_variant_button(Fl_Button*, void*) {
+  reload_variant();
+}
+
 Fl_Scroll *options_widget=(Fl_Scroll *)0;
 
 Fl_Scroll *settings_widget=(Fl_Scroll *)0;
@@ -203,22 +223,22 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           { Fl_Group* o = new Fl_Group(186, 216, 306, 128);
             o->box(FL_THIN_UP_BOX);
             o->labelsize(20);
-            { Fl_Flex* o = new Fl_Flex(258, 228, 210, 102);
-              { system_widget = new Fl_Choice(258, 228, 210, 28, "System:");
+            { Fl_Flex* o = new Fl_Flex(263, 228, 180, 100);
+              { system_widget = new Fl_Choice(263, 228, 180, 27, "System:");
                 system_widget->down_box(FL_BORDER_BOX);
                 system_widget->labelsize(16);
                 system_widget->textsize(16);
                 system_widget->callback((Fl_Callback*)cb_system_widget);
                 system_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
               } // Fl_Choice* system_widget
-              { protocol_widget = new Fl_Choice(258, 266, 210, 27, "Protocol:");
+              { protocol_widget = new Fl_Choice(263, 265, 180, 27, "Protocol:");
                 protocol_widget->down_box(FL_BORDER_BOX);
                 protocol_widget->labelsize(16);
                 protocol_widget->textsize(16);
                 protocol_widget->callback((Fl_Callback*)cb_protocol_widget);
                 protocol_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
               } // Fl_Choice* protocol_widget
-              { variant_widget = new Fl_Choice(258, 303, 210, 27, "Variant:");
+              { variant_widget = new Fl_Choice(263, 302, 180, 26, "Variant:");
                 variant_widget->down_box(FL_BORDER_BOX);
                 variant_widget->labelsize(16);
                 variant_widget->textsize(16);
@@ -228,6 +248,20 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               o->gap(10);
               o->end();
             } // Fl_Flex* o
+            { reload_buttons = new Fl_Pack(447, 229, 37, 108);
+              reload_buttons->label_image_spacing(30);
+              { reload_system_button = new Fl_Button(452, 229, 26, 26, "@reload");
+                reload_system_button->callback((Fl_Callback*)cb_reload_system_button);
+              } // Fl_Button* reload_system_button
+              { reload_protocol_button = new Fl_Button(452, 266, 26, 26, "@reload");
+                reload_protocol_button->callback((Fl_Callback*)cb_reload_protocol_button);
+              } // Fl_Button* reload_protocol_button
+              { reload_variant_button = new Fl_Button(452, 303, 26, 26, "@reload");
+                reload_variant_button->callback((Fl_Callback*)cb_reload_variant_button);
+              } // Fl_Button* reload_variant_button
+              reload_buttons->spacing(11);
+              reload_buttons->end();
+            } // Fl_Pack* reload_buttons
             o->end();
           } // Fl_Group* o
           o->end();
