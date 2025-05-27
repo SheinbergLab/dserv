@@ -31,27 +31,48 @@ namespace eval git {
     proc diff { path } {
 	set cmd [list git -C $path diff --name-only]
 	catch [list exec {*}$cmd] result
-	dservSet git/diff $result
+	dservSet ess/git/diff $result
 	return $result
     }
 
-    proc get_branch { path } {
+    proc current_branch { path } {
 	set cmd [list git -C $path branch --show-current]
 	catch [list exec {*}$cmd] result
-	dservSet git/branch $result
+	dservSet ess/git/branch $result
 	return $result
     }
     
-    proc set_branch { path branch } {
-	set cmd [list git -C $path checkout $branch]
+    proc switch_branch { path { branch main } } {
+	set cmd [list git -C $path switch $branch]
 	catch [list exec {*}$cmd] result
-	return [getBranch $path]
+	return [current_branch $path]
     }
 
+    #
+    # branches
+    #
+    #  return a cleaned up list of available branches
+    #   main will always be first
+    #
+    proc branches { path } {
+	set cmd [list git -C $path branch -a]
+	catch [list exec {*}$cmd] result
+	set branches {}
+	foreach line [split $result \n] {
+	    if { ![string match *HEAD* $line] } {
+		set b [file tail [string trim $line " *"]]
+		if { $b != "main" } {
+		    lappend branches $b
+		}
+	    }
+	}
+	return "main [lsort -unique $branches]"
+    }
+    
     proc pull { path } {
 	set cmd [list git -C $path pull]
 	catch [list exec {*}$cmd] result
-	dservSet git/pull $result
+	dservSet ess/git/pull $result
 	return $result
     }
 
@@ -64,7 +85,7 @@ namespace eval git {
 	    lassign $line commit tag
 	    dict set d $tag $commit
 	}
-	dservSet git/tags $d
+	dservSet ess/git/tags $d
 	return $d
     }
 
