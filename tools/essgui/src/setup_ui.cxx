@@ -104,13 +104,13 @@ Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
 
 Fl_Tabs *editor_tabs=(Fl_Tabs *)0;
 
-Fl_Text_Editor *system_editor=(Fl_Text_Editor *)0;
+TclEditor *system_editor=(TclEditor *)0;
 
-Fl_Text_Editor *protocol_editor=(Fl_Text_Editor *)0;
+TclEditor *protocol_editor=(TclEditor *)0;
 
-Fl_Text_Editor *variant_editor=(Fl_Text_Editor *)0;
+TclEditor *variant_editor=(TclEditor *)0;
 
-Fl_Text_Editor *stim_editor=(Fl_Text_Editor *)0;
+TclEditor *stim_editor=(TclEditor *)0;
 
 Fl_Input *FileEntry=(Fl_Input *)0;
 
@@ -290,6 +290,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 642);
           { Fl_Group* o = new Fl_Group(504, 91, 747, 615, "behavior");
             o->labelsize(16);
+            o->hide();
             { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
               { eyetouch_widget = new EyeTouchWin(521, 126, 232, 232, "EyeWindow");
@@ -439,23 +440,54 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           } // Fl_Group* o
           { Fl_Group* o = new Fl_Group(503, 92, 762, 617, "scripts");
             o->labelsize(16);
-            o->hide();
             { editor_tabs = new Fl_Tabs(503, 114, 758, 595);
-              { system_editor = new Fl_Text_Editor(503, 149, 747, 560, "system");
+              { system_editor = new TclEditor(503, 149, 747, 560, "system");
+                system_editor->box(FL_DOWN_FRAME);
+                system_editor->color(FL_BACKGROUND2_COLOR);
                 system_editor->selection_color((Fl_Color)31);
-              } // Fl_Text_Editor* system_editor
-              { protocol_editor = new Fl_Text_Editor(503, 149, 747, 560, "protocol");
+                system_editor->labeltype(FL_NORMAL_LABEL);
+                system_editor->labelfont(0);
+                system_editor->labelsize(14);
+                system_editor->labelcolor(FL_FOREGROUND_COLOR);
+                system_editor->align(Fl_Align(FL_ALIGN_TOP));
+                system_editor->when(FL_WHEN_RELEASE);
+              } // TclEditor* system_editor
+              { protocol_editor = new TclEditor(503, 149, 747, 560, "protocol");
+                protocol_editor->box(FL_DOWN_FRAME);
+                protocol_editor->color(FL_BACKGROUND2_COLOR);
                 protocol_editor->selection_color((Fl_Color)31);
+                protocol_editor->labeltype(FL_NORMAL_LABEL);
+                protocol_editor->labelfont(0);
+                protocol_editor->labelsize(14);
+                protocol_editor->labelcolor(FL_FOREGROUND_COLOR);
+                protocol_editor->align(Fl_Align(FL_ALIGN_TOP));
+                protocol_editor->when(FL_WHEN_RELEASE);
                 protocol_editor->hide();
-              } // Fl_Text_Editor* protocol_editor
-              { variant_editor = new Fl_Text_Editor(503, 149, 747, 550, "variant");
+              } // TclEditor* protocol_editor
+              { variant_editor = new TclEditor(503, 149, 747, 550, "variant");
+                variant_editor->box(FL_DOWN_FRAME);
+                variant_editor->color(FL_BACKGROUND2_COLOR);
                 variant_editor->selection_color((Fl_Color)31);
+                variant_editor->labeltype(FL_NORMAL_LABEL);
+                variant_editor->labelfont(0);
+                variant_editor->labelsize(14);
+                variant_editor->labelcolor(FL_FOREGROUND_COLOR);
+                variant_editor->align(Fl_Align(FL_ALIGN_TOP));
+                variant_editor->when(FL_WHEN_RELEASE);
                 variant_editor->hide();
-              } // Fl_Text_Editor* variant_editor
-              { stim_editor = new Fl_Text_Editor(503, 149, 747, 550, "stim");
+              } // TclEditor* variant_editor
+              { stim_editor = new TclEditor(503, 149, 747, 550, "stim");
+                stim_editor->box(FL_DOWN_FRAME);
+                stim_editor->color(FL_BACKGROUND2_COLOR);
                 stim_editor->selection_color((Fl_Color)31);
+                stim_editor->labeltype(FL_NORMAL_LABEL);
+                stim_editor->labelfont(0);
+                stim_editor->labelsize(14);
+                stim_editor->labelcolor(FL_FOREGROUND_COLOR);
+                stim_editor->align(Fl_Align(FL_ALIGN_TOP));
+                stim_editor->when(FL_WHEN_RELEASE);
                 stim_editor->hide();
-              } // Fl_Text_Editor* stim_editor
+              } // TclEditor* stim_editor
               editor_tabs->end();
             } // Fl_Tabs* editor_tabs
             o->end();

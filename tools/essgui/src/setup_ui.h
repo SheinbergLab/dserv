@@ -10,6 +10,7 @@
 #include "Cgwin.hpp"
 #include "essgui.h"
 #include "EyeTouchWin.hpp"
+#include "TclEditor.h"
 #include "VirtualEye.hpp"
 #include "VirtualJoystick.hpp"
 #include "Fl_OpDesk.h"
@@ -61,11 +62,10 @@ extern Fl_Scroll *rmt_commands_widget;
 extern DGTable *stimdg_widget;
 extern Fl_OpDesk *opdesk_widget;
 extern Fl_Tabs *editor_tabs;
-#include <FL/Fl_Text_Editor.H>
-extern Fl_Text_Editor *system_editor;
-extern Fl_Text_Editor *protocol_editor;
-extern Fl_Text_Editor *variant_editor;
-extern Fl_Text_Editor *stim_editor;
+extern TclEditor *system_editor;
+extern TclEditor *protocol_editor;
+extern TclEditor *variant_editor;
+extern TclEditor *stim_editor;
 #include <FL/Fl_Input.H>
 extern Fl_Input *FileEntry;
 extern void file_open_cb(Fl_Button*, void*);

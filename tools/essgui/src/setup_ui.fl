@@ -9,6 +9,7 @@ decl {\#include "Fl_Console.h"
 \#include "Cgwin.hpp"
 \#include "essgui.h"
 \#include "EyeTouchWin.hpp"
+\#include "TclEditor.h"
 \#include "VirtualEye.hpp"
 \#include "VirtualJoystick.hpp"
 \#include "Fl_OpDesk.h"} {public global
@@ -18,7 +19,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {725 136 1280 800} type Double hide resizable
+    xywh {404 338 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {open
       xywh {0 0 1280 32}
@@ -147,17 +148,17 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             } {
               Fl_Button reload_system_button {
                 label {@reload}
-                callback {reload_system()} selected
+                callback {reload_system()}
                 xywh {452 229 26 26}
               }
               Fl_Button reload_protocol_button {
                 label {@reload}
-                callback {reload_protocol()} selected
+                callback {reload_protocol()}
                 xywh {452 266 26 26}
               }
               Fl_Button reload_variant_button {
                 label {@reload}
-                callback {reload_variant()} selected
+                callback {reload_variant()}
                 xywh {452 303 26 26}
               }
             }
@@ -185,7 +186,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         } {
           Fl_Group {} {
             label behavior open
-            xywh {504 91 747 615} labelsize 16
+            xywh {504 91 747 615} labelsize 16 hide
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
@@ -286,26 +287,30 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
           Fl_Group {} {
             label scripts open
-            xywh {503 92 762 617} labelsize 16 hide
+            xywh {503 92 762 617} labelsize 16
           } {
             Fl_Tabs editor_tabs {open
               xywh {503 114 758 595}
             } {
               Fl_Text_Editor system_editor {
-                label system
+                label system selected
                 xywh {503 149 747 560} selection_color 31
+                class TclEditor
               }
               Fl_Text_Editor protocol_editor {
                 label protocol
                 xywh {503 149 747 560} selection_color 31 hide
+                class TclEditor
               }
               Fl_Text_Editor variant_editor {
                 label variant
                 xywh {503 149 747 550} selection_color 31 hide
+                class TclEditor
               }
               Fl_Text_Editor stim_editor {
                 label stim
                 xywh {503 149 747 550} selection_color 31 hide
+                class TclEditor
               }
             }
           }

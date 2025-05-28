@@ -29,6 +29,8 @@
 
 #include "EyeTouchWin.hpp"
 
+#include "TclEditor.h"
+
 #include "DservSocket.h"
 #include "TclInterp.h"
 #include "setup_ui.h"
@@ -150,20 +152,16 @@ public:
   void init_text_widgets(void)
   {
     text_buffers["system"] = new Fl_Text_Buffer();
-    system_editor->buffer(text_buffers["system"]);
-    system_editor->textfont(FL_COURIER);
+    configure_editor(system_editor, text_buffers["system"]);
     
     text_buffers["protocol"] = new Fl_Text_Buffer();
-    protocol_editor->buffer(text_buffers["protocol"]);
-    protocol_editor->textfont(FL_COURIER);
-
+    configure_editor(protocol_editor, text_buffers["protocol"]);
+    
     text_buffers["variant"] = new Fl_Text_Buffer();
-    variant_editor->buffer(text_buffers["variant"]);
-    variant_editor->textfont(FL_COURIER);
+    configure_editor(variant_editor, text_buffers["variant"]);
 
     text_buffers["stim"] = new Fl_Text_Buffer();
-    stim_editor->buffer(text_buffers["stim"]);
-    stim_editor->textfont(FL_COURIER);
+    configure_editor(stim_editor, text_buffers["stim"]);
   }
 
   void reset_text_widgets(void)
@@ -174,9 +172,10 @@ public:
     clear_editor_buffer("stim");
   }
   
-  void set_editor_buffer(const char *name, const char *buf)
+  void set_editor_buffer(TclEditor *editor, const char *name, const char *buf)
   {
     text_buffers[name]->text(buf);
+    initial_styling(editor);
   }
   
   void clear_editor_buffer(const char *name)
@@ -1461,16 +1460,17 @@ void process_dpoint_cb(void *cbdata) {
 
   /* script files for this system */
   else if (!strcmp(json_string_value(name), "ess/system_script")) {
-    g_App->set_editor_buffer("system", json_string_value(data));
+    g_App->set_editor_buffer(system_editor, "system", json_string_value(data));
   }
   else if (!strcmp(json_string_value(name), "ess/protocol_script")) {
-    g_App->set_editor_buffer("protocol", json_string_value(data));
+    g_App->set_editor_buffer(protocol_editor, "protocol",
+			     json_string_value(data));
   }
   else if (!strcmp(json_string_value(name), "ess/variant_script")) {
-    g_App->set_editor_buffer("variant", json_string_value(data));
+    g_App->set_editor_buffer(variant_editor, "variant", json_string_value(data));
   }
   else if (!strcmp(json_string_value(name), "ess/stim_script")) {
-    g_App->set_editor_buffer("stim", json_string_value(data));
+    g_App->set_editor_buffer(stim_editor, "stim", json_string_value(data));
   }
 
   
