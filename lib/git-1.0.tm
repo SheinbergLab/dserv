@@ -66,7 +66,9 @@ namespace eval git {
 		}
 	    }
 	}
-	return "main [lsort -unique $branches]"
+	set result "main [lsort -unique $branches]"
+	dservSet ess/git/branches $result
+	return $result
     }
     
     proc pull { path } {
@@ -90,7 +92,7 @@ namespace eval git {
     }
 
     proc set_safe_directory { path } {
-	set cmd [list git config --system -add safe.directory $path]
+	set cmd [list git config --system --add safe.directory $path]
 	catch [list exec {*}$cmd] result
     }
 }
