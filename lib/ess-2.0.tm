@@ -365,8 +365,8 @@ oo::class create System {
     }
 
     method start {} {
-        if { $_status == "running" } return
-        set _status running
+        if { $_status != "stopped" } return
+        my set_status running
 
         ::ess::evt_put SYSTEM_STATE RUNNING [now]
 
@@ -387,7 +387,7 @@ oo::class create System {
     }
 
     method stop {} {
-        set _status stopped
+        my set_status stopped
         ::ess::evt_put SYSTEM_STATE STOPPED [now]
         if { [info exists _callbacks(quit)] } {
             my $_callbacks(quit)
@@ -396,7 +396,7 @@ oo::class create System {
     }
 
     method end {} {
-        set _status stopped
+        my set_status stopped
         ::ess::evt_put SYSTEM_STATE STOPPED [now]
         if { [info exists _callbacks(end)] } {
             my $_callbacks(end)
@@ -405,7 +405,7 @@ oo::class create System {
     }
 
     method file_suggest {} {
-        if { $_status == "running" } return
+        if { $_status != "stopped" } return
         if { [info exists _callbacks(file_suggest)] } {
             return [my $_callbacks(file_suggest)]
         }
@@ -413,7 +413,7 @@ oo::class create System {
     }
 
     method file_open { f } {
-        if { $_status == "running" } return
+        if { $_status != "stopped" } return
         if { [info exists _callbacks(file_open)] } {
             my $_callbacks(file_open) $f
         }
@@ -421,7 +421,7 @@ oo::class create System {
     }
 
     method file_close { f } {
-        if { $_status == "running" } return
+        if { $_status != "stopped" } return
         if { [info exists _callbacks(file_close)] } {
             my $_callbacks(file_close) $f
         }
@@ -429,7 +429,7 @@ oo::class create System {
     }
 
     method set_subject {} {
-        if { $_status == "running" } return
+        if { $_status != "stopped" } return
         if { [info exists _callbacks(subject)] } {
             my $_callbacks(subject)
         }
@@ -438,6 +438,11 @@ oo::class create System {
 
     method status {} { return $_status }
 
+    method set_status { status } {
+	dservSet ess/status $status
+	set _status $status
+    }
+    
     method update {} {
         if { $_status eq "running" } {
             while { [set next [my do_transition]] != {} &&
@@ -497,6 +502,7 @@ namespace eval ess {
             }
         }
         set s [System new $name]
+	$s set_version [ess::current_branch]-[ess::current_tag]
         return $s
     }
 
@@ -613,86 +619,91 @@ namespace eval ess {
 
     proc load_system { { system {} } { protocol {} } { variant {} } } {
 
-    variable current
+	variable current
+	
+	if { $current(system) != {} && [info exists $current(system)] } {
+	    if { [query_state] == "running" } { return } 
+	    catch unload_system
+	}
+	
+	set systems [find_systems]
+	
+	# store these so client interfaces can know what protocols we have
+	dservSet ess/systems $systems
+	
+	if { $system == "" } {
+	    set current(system) [lindex $systems 0]
+	} else {
+	    if { [lsearch $systems $system] < 0 } {
+		error "system $system not found"
+	    }
+	    set current(system) $system
+	}
+	
+	[set current(system)]::create
+	
+	system_init $current(system)
 
-    if { $current(system) != {} && [info exists $current(system)] } {
-        if { [query_state] == "running" } { return } 
-        catch unload_system
-    }
-    
-    set systems [find_systems]
+	# signal loading a new system
+	$current(state_system) set_status loading
+	
+	set protocols [find_protocols $current(system)]
+	
+	# store these so client interfaces can know what protocols we have
+	dservSet ess/protocols $protocols
+	
+	if { $protocol == "" } {
+	    set current(protocol) [lindex $protocols 0]
+	} else {
+	    if { [lsearch $protocols $protocol] < 0 } {
+		error "protocol $protocol not found in $current(system)"
+	    }
+	    set current(protocol) $protocol
+	}
+	
+	set variants [find_variants $current(system) $current(protocol)]
+	
+	# store these so client interfaces can know what protocols we have
+	dservSet ess/variants $variants
+	
+	if { $variant == "" } {
+	    set current(variant) [lindex $variants 0]
+	} else {
+	    if { [lsearch $variants $variant] < 0 } {
+		set s_p "$current(system)/$current(protocol)"
+		error "variant $variant not found in $s_p"
+	    }
+	    set current(variant) $variant
+	}
+	
+	protocol_init $current(system) $current(protocol)
+	
+	# set the variant for the current system
+	set s [find_system $current(system)]
+	$s set_variant $current(variant)
+	
+	# this resets any unsaved variant args
+	$s reset_variant_args
+	
+	# initialize the variant by calling the appropriate loader 
+	variant_init $current(system) $current(protocol) $current(variant)
+	
+	# dictionary of states and associated transition states
+	dservSet ess/state_table [get_state_transitions]
+	
+	# set list of rmtSend commands used by this protocol
+	dservSet ess/rmt_cmds [get_rmt_cmds]
+	
+	# update current scripts in dserv
+	foreach t "system protocol variant stim" {
+	    dservSet ess/${t}_script [${t}_script]
+	}
+	
+	set current(trialid) 0
+	if [dg_exists trialdg] { dg_delete trialdg }
+	reset_trial_info
 
-    # store these so client interfaces can know what protocols we have
-    dservSet ess/systems $systems
-
-    if { $system == "" } {
-        set current(system) [lindex $systems 0]
-    } else {
-        if { [lsearch $systems $system] < 0 } {
-        error "system $system not found"
-        }
-        set current(system) $system
-    }
-    
-    [set current(system)]::create
-    
-    system_init $current(system)
-
-    set protocols [find_protocols $current(system)]
-
-    # store these so client interfaces can know what protocols we have
-    dservSet ess/protocols $protocols
-    
-    if { $protocol == "" } {
-        set current(protocol) [lindex $protocols 0]
-    } else {
-        if { [lsearch $protocols $protocol] < 0 } {
-        error "protocol $protocol not found in $current(system)"
-        }
-        set current(protocol) $protocol
-    }
-
-    set variants [find_variants $current(system) $current(protocol)]
-
-    # store these so client interfaces can know what protocols we have
-    dservSet ess/variants $variants
-
-    if { $variant == "" } {
-        set current(variant) [lindex $variants 0]
-    } else {
-        if { [lsearch $variants $variant] < 0 } {
-        set s_p "$current(system)/$current(protocol)"
-        error "variant $variant not found in $s_p"
-        }
-        set current(variant) $variant
-    }
-
-    protocol_init $current(system) $current(protocol)
-
-    # set the variant for the current system
-    set s [find_system $current(system)]
-    $s set_variant $current(variant)
-
-    # this resets any unsaved variant args
-    $s reset_variant_args
-    
-    # initialize the variant by calling the appropriate loader 
-    variant_init $current(system) $current(protocol) $current(variant)
-
-    # dictionary of states and associated transition states
-    dservSet ess/state_table [get_state_transitions]
-
-    # set list of rmtSend commands used by this protocol
-    dservSet ess/rmt_cmds [get_rmt_cmds]
-
-    # update current scripts in dserv
-    foreach t "system protocol variant stim" {
-        dservSet ess/${t}_script [${t}_script]
-    }
-    
-    set current(trialid) 0
-    if [dg_exists trialdg] { dg_delete trialdg }
-    reset_trial_info
+	$current(state_system) set_status stopped
     }
 
     proc reload_system {} {
@@ -1987,7 +1998,7 @@ namespace eval ess {
 	if { [git::is_repo $path] } {
 	    return [git::current_branch $path]
 	} else {
-	    return "main"
+	    return "default"
 	}
     }
     proc branches {} {
@@ -1996,7 +2007,7 @@ namespace eval ess {
 	if { [git::is_repo $path] } {
 	    return [git::branches $path]
 	} else {
-	    return "main"
+	    return "default"
 	}
     }
     proc pull {} {
@@ -2004,6 +2015,22 @@ namespace eval ess {
 	set path [file join $::ess::system_path $current(project)]
 	if { [git::is_repo $path] } {
 	    return [git::pull $path]
+	} 
+    }
+    proc current_tag {} {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    return [git::current_tag $path]
+	} else {
+	    return "1.0.0"
+	}
+    }
+    proc tags {} {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    return [git::tags $path]
 	} 
     }
 }

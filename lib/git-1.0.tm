@@ -91,6 +91,13 @@ namespace eval git {
 	return $d
     }
 
+    proc current_tag { path } {
+	set cmd [list git  -C $path describe --abbrev=0 --tags]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/tag $result
+	return $result
+    }
+    
     proc set_safe_directory { path } {
 	set cmd [list git config --system --add safe.directory $path]
 	catch [list exec {*}$cmd] result
