@@ -644,9 +644,6 @@ namespace eval ess {
 	
 	system_init $current(system)
 
-	# signal loading a new system
-	$current(state_system) set_status loading
-	
 	set protocols [find_protocols $current(system)]
 	
 	# store these so client interfaces can know what protocols we have
@@ -702,8 +699,6 @@ namespace eval ess {
 	set current(trialid) 0
 	if [dg_exists trialdg] { dg_delete trialdg }
 	reset_trial_info
-
-	$current(state_system) set_status stopped
     }
 
     proc reload_system {} {
@@ -1825,6 +1820,9 @@ namespace eval ess {
     proc variant_init { system protocol variant } {
 	variable current
 	set s [::ess::find_system $system]
+
+	# let clients know we are loading a new set of trials
+	$current(state_system) set_status loading	
 	
 	# get loader info for this variant and call
 	$s {*}[variant_loader_command $system $protocol $variant]
@@ -1858,6 +1856,10 @@ namespace eval ess {
 	::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
 	set current(variant) $variant
 	set current(open_variant) 1
+
+
+	# loading is complete, so return status to stopped
+	$current(state_system) set_status stopped
     }
     
     proc find_systems {} {
@@ -2016,6 +2018,14 @@ namespace eval ess {
 	if { [git::is_repo $path] } {
 	    return [git::pull $path]
 	} 
+    }
+    proc switch_and_pull { { branch main } } {
+	variable current
+	set path [file join $::ess::system_path $current(project)]
+	if { [git::is_repo $path] } {
+	    git::switch_branch $branch
+	    git::pull
+	}
     }
     proc current_tag {} {
 	variable current
