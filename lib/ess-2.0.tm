@@ -2016,15 +2016,23 @@ namespace eval ess {
 	variable current
 	set path [file join $::ess::system_path $current(project)]
 	if { [git::is_repo $path] } {
-	    return [git::pull $path]
+	    set s $current(state_system)
+	    if { $s != "" } { $s set_status updating }
+	    set result [git::pull $path]
+	    if { $s != "" } { $s set_status stopped }
+	    return $result
 	} 
     }
     proc switch_and_pull { { branch main } } {
 	variable current
 	set path [file join $::ess::system_path $current(project)]
 	if { [git::is_repo $path] } {
-	    git::switch_branch $branch
-	    git::pull
+	    git::switch_branch $path $branch
+	    set s $current(state_system)
+	    if { $s != "" } { $s set_status updating }
+	    set result [git::pull $path]
+	    if { $s != "" } { $s set_status stopped }
+	    return $result
 	}
     }
     proc current_tag {} {
