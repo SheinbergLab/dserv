@@ -94,6 +94,7 @@ if __name__ == "__main__":
     t.start()
     
     register_with_dserv('127.0.0.1', port)
-    add_match('127.0.0.1', port, "eventlog/events")
+    match_arg = sys.argv[1] if len(sys.argv) > 1 else "eventlog/events"
+    add_match('127.0.0.1', port, match_arg)
     run()
- 
+
