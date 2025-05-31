@@ -17,6 +17,8 @@
 #define STIM_PORT 4612
 #define PG_PROMPT "pg> "
 #define PG_PORT 2572
+#define GIT_PROMPT "git> "
+#define GIT_PORT 2573
 
 void completion(const char *buf, linenoiseCompletions *lc) {
     if (buf[0] == 'h') {
@@ -169,7 +171,16 @@ int main (int argc, char *argv[])
       }
       else {
 	tcpport = PG_PORT;
-	prompt =PG_PROMPT;
+	prompt = PG_PROMPT;
+      }
+    } else if (!strncmp(line, "/git", 4)) {
+      if (strlen(line) > 4) {
+	resultstr = do_command(server, GIT_PORT, &line[5], strlen(line)-5);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = GIT_PORT;
+	prompt = GIT_PROMPT;
       }
     } else if (line[0] == '/') {
       printf("Unreconized command: %s\n", line);
