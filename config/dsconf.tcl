@@ -259,6 +259,9 @@ if { [lsearch $hbs $host] >= 0 } {
     subprocess 2572 "source [file join $dspath config/central_postgresconf.tcl]"
 }
 
+# start a "git" interpreter
+subprocess 2573 "source [file join $dspath config/gitconf.tcl]"
+
 # and finally load a default system
 ess::load_system
 
