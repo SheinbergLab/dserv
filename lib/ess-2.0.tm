@@ -3,7 +3,6 @@
 package require dlsh
 package provide ess 2.0
 package require yajltcl
-package require git
 
 catch { System destroy }
 
@@ -494,6 +493,17 @@ namespace eval ess {
     variable em_active 0
     variable touch_active 0
 
+    proc version_string {} {
+	if { [dservExists ess/git/branch] && [dservExists ess/git/tag] } {
+	    set branch [dservGet ess/git/branch]
+	    set tag [dservGet ess/git/tag]
+	} else {
+	    set branch default
+	    set tag 0.0.0
+	}
+	return "$branch-$tag"
+    }
+    
     proc create_system { name } {
         # only allow one instance of a system with this name
         foreach s [info class instances System] {
@@ -502,7 +512,8 @@ namespace eval ess {
             }
         }
         set s [System new $name]
-	$s set_version [ess::current_branch]-[ess::current_tag]
+	$s set_version [version_string]
+
         return $s
     }
 
@@ -2010,74 +2021,6 @@ namespace eval ess {
     $obj string in_obs string $in_obs
     $obj map_close
     return [$obj get]
-    }
-}
-
-
-namespace eval ess {
-    proc switch_branch { { branch main } } {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    return [git::switch_branch $path $branch]
-	}
-    }
-    proc current_branch {} {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    return [git::current_branch $path]
-	} else {
-	    return "default"
-	}
-    }
-    proc branches {} {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    return [git::branches $path]
-	} else {
-	    return "default"
-	}
-    }
-    proc pull {} {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    set s $current(state_system)
-	    if { $s != "" } { $s set_status updating }
-	    set result [git::pull $path]
-	    if { $s != "" } { $s set_status stopped }
-	    return $result
-	} 
-    }
-    proc switch_and_pull { { branch main } } {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    git::switch_branch $path $branch
-	    set s $current(state_system)
-	    if { $s != "" } { $s set_status updating }
-	    set result [git::pull $path]
-	    if { $s != "" } { $s set_status stopped }
-	    return $result
-	}
-    }
-    proc current_tag {} {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    return [git::current_tag $path]
-	} else {
-	    return "1.0.0"
-	}
-    }
-    proc tags {} {
-	variable current
-	set path [file join $::ess::system_path $current(project)]
-	if { [git::is_repo $path] } {
-	    return [git::tags $path]
-	} 
     }
 }
 
