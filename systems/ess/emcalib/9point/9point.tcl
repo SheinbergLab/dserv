@@ -7,6 +7,8 @@
 #
 
 namespace eval emcalib::9point {
+    variable params_defaults         {}
+
     proc protocol_init { s } {
 	$s set_protocol [namespace tail [namespace current]]
 	

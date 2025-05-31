@@ -7,6 +7,8 @@
 #
 
 namespace eval match_to_sample::colormatch {
+    variable params_defaults { sample_time 2000 delay_time 0 }
+
     proc protocol_init { s } {
 	$s set_protocol [namespace tail [namespace current]]
 	

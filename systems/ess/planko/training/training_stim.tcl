@@ -157,9 +157,17 @@ proc nexttrial { id } {
     set ::world [make_stims $id]
 }
 
-proc show_feedback { resp correct } {
+proc show_response { resp } {
     set body [setObjProp $::ball body]
     Box2D_setBodyType $::world $body 2
+    if { $resp == 0 } { set c $::left_catcher } { set c $::right_catcher }
+    set color     "0.7 0.7 0.7"
+    foreach p $c {
+	polycolor $p {*}$color
+    }
+}
+
+proc show_feedback { resp correct } {
     if { $resp == 0 } { set c $::left_catcher } { set c $::right_catcher }
     set green   "0.2 .9 .3"
     set red     "1.0 .2 .2"

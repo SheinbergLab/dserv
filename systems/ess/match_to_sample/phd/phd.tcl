@@ -7,6 +7,9 @@
 #
 
 namespace eval match_to_sample::phd {
+
+    variable params_defaults { delay_time 100 }
+
     proc protocol_init { s } {
 	package require sqlite3
 	

@@ -3,24 +3,24 @@
 #   planko training
 #
 # DESCRIPTION
-#   variant dictionary
+#   variant dictionary for planko::training
 #
 
 namespace eval planko::training {
-    package require planko
-    
-    variable params_defaults          { n_rep 50 }
-
     variable variants {
 	single {
 	    description "one plank"
 	    loader_proc basic_planko
 	    loader_options {
-		nr { 100 200 }
+		nr { 100 200 300}
 		nplanks { 1 }
 		wrong_catcher_alpha 1
 		params { { defaults {} } }
 	    }
+	    init {
+		rmtSend "setBackground 0 0 10"
+	    }
+	    deinit {}
 	}
 	jitter {
 	    description "jitter ball start"
@@ -55,38 +55,5 @@ namespace eval planko::training {
 	    }
 	}
     }	
-    
-    proc variants_init { s } {
-	$s add_method single_init {} {
-	    rmtSend "setBackground 10 10 10"
-	}
-
-	$s add_method single_deinit {} {}
-
-	$s add_method basic_planko { nr nplanks wrong_catcher_alpha params } {
-	    set n_rep $nr
-	    
-	    if { [dg_exists stimdg] } { dg_delete stimdg }
-
-	    
-	    set n_obs [expr [llength $nplanks]*$n_rep]
-	    
-	    set maxx [expr $screen_halfx]
-	    set maxy [expr $screen_halfy]
-
-	    # this is a set of params to pass into generate_worlds
-	    set p "nplanks $nplanks $params"
-	    set g [planko::generate_worlds $n_obs $p]
-	    dl_set $g:wrong_catcher_alpha \
-		[dl_repeat [dl_flist $wrong_catcher_alpha] $n_obs]
-
-	    # rename id column to stimtytpe
-	    dg_rename $g:id stimtype 
-	    dl_set $g:remaining [dl_ones $n_obs]
-	    
-	    dg_rename $g stimdg
-	    return $g
-	}
-    }
 }
 
