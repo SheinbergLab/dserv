@@ -100,7 +100,9 @@ private:
   std::unordered_map<std::string, Fl_Text_Buffer *> text_buffers;
   
 public:
-  typedef enum { TERM_LOCAL, TERM_STIM, TERM_ESS } TerminalMode;
+  typedef enum {
+    TERM_LOCAL, TERM_STIM, TERM_ESS, TERM_GIT
+  } TerminalMode;
   bool auto_reload = true; // reload variant immediately upon setting change
   std::thread dsnet_thread;
   DservSocket *ds_sock;
@@ -320,6 +322,14 @@ public:
     return retval;
   }
 
+  int git_eval(const char *command, std::string &resultstr)
+  {
+    int retval = ds_sock->gitcmd(g_App->host,
+				 std::string(command),
+				 resultstr);
+    return retval;
+  }
+  
   int stim_eval(const char *command, std::string &resultstr)
   {
     int retval = ds_sock->stimcmd(g_App->host,
@@ -514,6 +524,11 @@ int eval(char *command, void *cbdata) {
     output_term->prompt("essgui> ");
     g_App->terminal_mode = App::TERM_LOCAL;
   }
+
+  else if (!strcmp(command, "/git")) {
+    output_term->prompt("git> ");
+    g_App->terminal_mode = App::TERM_GIT;
+  }
   
   else {
     switch (g_App->terminal_mode) {
@@ -532,6 +547,17 @@ int eval(char *command, void *cbdata) {
       break;
     case App::TERM_STIM:
       result = g_App->stim_eval(command, resultstr);
+      if (resultstr.empty()) result = TCL_OK;
+      else if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
+	resultstr = resultstr.substr(11);
+	result = TCL_ERROR;
+      }
+      else {
+	result = TCL_OK;
+      }
+      break;
+    case App::TERM_GIT:
+      result = g_App->git_eval(command, resultstr);
       if (resultstr.empty()) result = TCL_OK;
       else if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
 	resultstr = resultstr.substr(11);

@@ -462,6 +462,12 @@ public:
   int dbcmd(std::string host, std::string cmd, std::string &rstr) {
     return dscmd(host, cmd, rstr, 2571);
   }
+  int pgcmd(std::string host, std::string cmd, std::string &rstr) {
+    return dscmd(host, cmd, rstr, 2572);
+  }
+  int gitcmd(std::string host, std::string cmd, std::string &rstr) {
+    return dscmd(host, cmd, rstr, 2573);
+  }
   int dservcmd(std::string host, std::string cmd, std::string &rstr) {
     return dscmd(host, cmd, rstr, 4620);
   }
