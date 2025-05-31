@@ -108,7 +108,9 @@ TclEditor *system_editor=(TclEditor *)0;
 
 TclEditor *protocol_editor=(TclEditor *)0;
 
-TclEditor *variant_editor=(TclEditor *)0;
+TclEditor *loaders_editor=(TclEditor *)0;
+
+TclEditor *variants_editor=(TclEditor *)0;
 
 TclEditor *stim_editor=(TclEditor *)0;
 
@@ -290,7 +292,6 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 642);
           { Fl_Group* o = new Fl_Group(504, 91, 747, 615, "behavior");
             o->labelsize(16);
-            o->hide();
             { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
               { eyetouch_widget = new EyeTouchWin(521, 126, 232, 232, "EyeWindow");
@@ -440,6 +441,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           } // Fl_Group* o
           { Fl_Group* o = new Fl_Group(503, 92, 762, 617, "scripts");
             o->labelsize(16);
+            o->hide();
             { editor_tabs = new Fl_Tabs(503, 114, 758, 595);
               { system_editor = new TclEditor(503, 149, 747, 560, "system");
                 system_editor->box(FL_DOWN_FRAME);
@@ -464,18 +466,30 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 protocol_editor->when(FL_WHEN_RELEASE);
                 protocol_editor->hide();
               } // TclEditor* protocol_editor
-              { variant_editor = new TclEditor(503, 149, 747, 550, "variant");
-                variant_editor->box(FL_DOWN_FRAME);
-                variant_editor->color(FL_BACKGROUND2_COLOR);
-                variant_editor->selection_color((Fl_Color)31);
-                variant_editor->labeltype(FL_NORMAL_LABEL);
-                variant_editor->labelfont(0);
-                variant_editor->labelsize(14);
-                variant_editor->labelcolor(FL_FOREGROUND_COLOR);
-                variant_editor->align(Fl_Align(FL_ALIGN_TOP));
-                variant_editor->when(FL_WHEN_RELEASE);
-                variant_editor->hide();
-              } // TclEditor* variant_editor
+              { loaders_editor = new TclEditor(503, 149, 747, 550, "loaders");
+                loaders_editor->box(FL_DOWN_FRAME);
+                loaders_editor->color(FL_BACKGROUND2_COLOR);
+                loaders_editor->selection_color((Fl_Color)31);
+                loaders_editor->labeltype(FL_NORMAL_LABEL);
+                loaders_editor->labelfont(0);
+                loaders_editor->labelsize(14);
+                loaders_editor->labelcolor(FL_FOREGROUND_COLOR);
+                loaders_editor->align(Fl_Align(FL_ALIGN_TOP));
+                loaders_editor->when(FL_WHEN_RELEASE);
+                loaders_editor->hide();
+              } // TclEditor* loaders_editor
+              { variants_editor = new TclEditor(503, 149, 747, 550, "variants");
+                variants_editor->box(FL_DOWN_FRAME);
+                variants_editor->color(FL_BACKGROUND2_COLOR);
+                variants_editor->selection_color((Fl_Color)31);
+                variants_editor->labeltype(FL_NORMAL_LABEL);
+                variants_editor->labelfont(0);
+                variants_editor->labelsize(14);
+                variants_editor->labelcolor(FL_FOREGROUND_COLOR);
+                variants_editor->align(Fl_Align(FL_ALIGN_TOP));
+                variants_editor->when(FL_WHEN_RELEASE);
+                variants_editor->hide();
+              } // TclEditor* variants_editor
               { stim_editor = new TclEditor(503, 149, 747, 550, "stim");
                 stim_editor->box(FL_DOWN_FRAME);
                 stim_editor->color(FL_BACKGROUND2_COLOR);

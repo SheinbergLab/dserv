@@ -64,7 +64,8 @@ extern Fl_OpDesk *opdesk_widget;
 extern Fl_Tabs *editor_tabs;
 extern TclEditor *system_editor;
 extern TclEditor *protocol_editor;
-extern TclEditor *variant_editor;
+extern TclEditor *loaders_editor;
+extern TclEditor *variants_editor;
 extern TclEditor *stim_editor;
 #include <FL/Fl_Input.H>
 extern Fl_Input *FileEntry;

@@ -561,8 +561,22 @@ namespace eval ess {
     }
     }
 
+    proc loaders_script {} {
+	variable current
+	if { $current(system) != "" &&
+	     $current(protocol) != ""  && $current(variant) != "" } {
+	    set f [file join $::ess::system_path $current(project) \
+		       $current(system) $current(protocol) $current(protocol)_loaders.tcl]
+	    if  { [file exists $f] } {
+		set script_file [open $f r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }
 
-    proc variant_script {} {
+    proc variants_script {} {
     variable current
     if { $current(system) != "" && $current(protocol) != ""  && $current(variant) != "" } {
         set f [file join $::ess::system_path $current(project) \
@@ -692,7 +706,7 @@ namespace eval ess {
 	dservSet ess/rmt_cmds [get_rmt_cmds]
 	
 	# update current scripts in dserv
-	foreach t "system protocol variant stim" {
+	foreach t "system protocol loaders variants stim" {
 	    dservSet ess/${t}_script [${t}_script]
 	}
 	

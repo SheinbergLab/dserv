@@ -157,8 +157,11 @@ public:
     text_buffers["protocol"] = new Fl_Text_Buffer();
     configure_editor(protocol_editor, text_buffers["protocol"]);
     
-    text_buffers["variant"] = new Fl_Text_Buffer();
-    configure_editor(variant_editor, text_buffers["variant"]);
+    text_buffers["loaders"] = new Fl_Text_Buffer();
+    configure_editor(loaders_editor, text_buffers["loaders"]);
+
+    text_buffers["variants"] = new Fl_Text_Buffer();
+    configure_editor(variants_editor, text_buffers["variants"]);
 
     text_buffers["stim"] = new Fl_Text_Buffer();
     configure_editor(stim_editor, text_buffers["stim"]);
@@ -168,7 +171,8 @@ public:
   {
     clear_editor_buffer("system");
     clear_editor_buffer("protocol");
-    clear_editor_buffer("variant");
+    clear_editor_buffer("loaders");
+    clear_editor_buffer("variants");
     clear_editor_buffer("stim");
   }
   
@@ -293,7 +297,7 @@ public:
 				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
 				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
 				"ess/state_table ess/rmt_cmds "
-				"ess/system_script ess/protocol_script ess/variant_script ess/stim_script "
+				"ess/system_script ess/protocol_script ess/variants_script ess/loaders_script ess/stim_script "
 				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
 				"system/os} { dservTouch $v }"), rstr);
 
@@ -1466,8 +1470,13 @@ void process_dpoint_cb(void *cbdata) {
     g_App->set_editor_buffer(protocol_editor, "protocol",
 			     json_string_value(data));
   }
-  else if (!strcmp(json_string_value(name), "ess/variant_script")) {
-    g_App->set_editor_buffer(variant_editor, "variant", json_string_value(data));
+  else if (!strcmp(json_string_value(name), "ess/loaders_script")) {
+    g_App->set_editor_buffer(loaders_editor,
+			     "loaders", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/variants_script")) {
+    g_App->set_editor_buffer(variants_editor,
+			     "variants", json_string_value(data));
   }
   else if (!strcmp(json_string_value(name), "ess/stim_script")) {
     g_App->set_editor_buffer(stim_editor, "stim", json_string_value(data));
