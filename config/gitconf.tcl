@@ -128,6 +128,39 @@ namespace eval git {
 	return $result
     }
 
+    proc push {} {
+	variable is_repo
+	if { !$is_repo } return 
+	
+	set git [exec_cmd]
+	set cmd [list {*}$git push]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/push $result
+	return $result
+    }
+    
+    proc commit { pattern message } {
+	variable is_repo
+	if { !$is_repo } return 
+	
+	set git [exec_cmd]
+	set cmd [list {*}$git commit $pattern -m $message]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/commit $result
+	return $result
+    }
+    
+    proc status {} {
+	variable is_repo
+	if { !$is_repo } return 
+	
+	set git [exec_cmd]
+	set cmd [list {*}$git status]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/status $result
+	return $result
+    }
+    
     proc switch_and_pull { { branch main } } {
 	variable is_repo
 	if { !$is_repo } return 
