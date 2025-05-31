@@ -682,7 +682,7 @@ namespace eval ess {
 	# this resets any unsaved variant args
 	$s reset_variant_args
 	
-	# initialize the variant by calling the appropriate loader 
+	# initialize the loaders by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 	
 	# dictionary of states and associated transition states
@@ -1709,39 +1709,50 @@ namespace eval ess {
     dservSet ess/block_id 0
     
     proc system_init { system } {
-    variable current
-
-    set s [find_system $system]
-    set current(state_system) $s
-
-    # initialize the system
-    $s init
-    
-    #::io::init
-    #::screen::init
-
-    # publish this system's event name table
-    ::ess::store_evt_names
-    ::ess::evt_put ID ESS [now] $system
-    set current(open_system) 1
+	variable current
+	
+	set s [find_system $system]
+	set current(state_system) $s
+	
+	# initialize the system
+	$s init
+	
+	#::io::init
+	#::screen::init
+	
+	# publish this system's event name table
+	::ess::store_evt_names
+	::ess::evt_put ID ESS [now] $system
+	set current(open_system) 1
     }
-
-    proc protocol_init { system protocol } {
-    variable current
-    set s [::ess::find_system $system]
-
-    # initialize the protocol
-    ::ess::${system}::${protocol}::protocol_init $current(state_system)
-
-    # initialize this protocol's variants
-    ${s} set_variants [set ${system}::${protocol}::variants]    
-    ::ess::${system}::${protocol}::variants_init $current(state_system)
-
-    ${s} protocol_init
     
-    ::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
-    set current(protocol) $protocol
-    set current(open_protocol) 1
+    proc protocol_init { system protocol } {
+	variable current
+	set s [::ess::find_system $system]
+	
+	# initialize the protocol
+	::ess::${system}::${protocol}::protocol_init $current(state_system)
+	
+	# initialize this protocol's variants
+	set vinfo [set ${system}::${protocol}::variants]
+	${s} set_variants $vinfo
+
+	dict for { k v } $vinfo {
+	    foreach m "init deinit" {
+		if { [dict exists $v $m] } {
+		    ${s} add_method ${k}_${m} {} [dict get $v $m]
+		}
+	    }
+	}
+	
+	# initialize this protocol's loader methods
+	::ess::${system}::${protocol}::loaders_init $current(state_system)
+	
+	${s} protocol_init
+	
+	::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
+	set current(protocol) $protocol
+	set current(open_protocol) 1
     }
 
     #
@@ -1840,9 +1851,10 @@ namespace eval ess {
 	}
 	
 	# and update system parameters for this variant
-	set param_settings ${system}::${protocol}::params_${variant}
-	if { [info exists $param_settings] } {
-	    ::ess::set_params {*}[set $param_settings]
+	set vinfo [dict get [$s get_variants] $variant]
+	if { [lsearch [dict keys $vinfo] params] != -1 } {
+	    set param_settings [dict get $vinfo params]
+	    ::ess::set_params {*}$param_settings
 	}
 	
 	# call a specific init function for this variant
@@ -1892,10 +1904,12 @@ namespace eval ess {
     }
 
     proc find_variants { s p } {
-    variable current
-    set f [file join $::ess::system_path $current(project) $s ${p} ${p}_variants.tcl]
-    source $f
-    return [dict keys [set ::ess::${s}::${p}::variants]]
+	variable current
+	set loader_file [file join $::ess::system_path $current(project) $s ${p} ${p}_loaders.tcl]
+	source $loader_file
+	set variant_file [file join $::ess::system_path $current(project) $s ${p} ${p}_variants.tcl]
+	source $variant_file
+	return [dict keys [set ::ess::${s}::${p}::variants]]
     }
 
     # The system and protocol getters don't re-"source"
