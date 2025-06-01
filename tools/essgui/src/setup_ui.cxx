@@ -74,6 +74,14 @@ static void cb_reload_variant_button(Fl_Button*, void*) {
   reload_variant();
 }
 
+static void cb_Save(Fl_Button*, void*) {
+  save_settings();
+}
+
+static void cb_Reset1(Fl_Button*, void*) {
+  reset_settings();
+}
+
 Fl_Scroll *options_widget=(Fl_Scroll *)0;
 
 Fl_Scroll *settings_widget=(Fl_Scroll *)0;
@@ -268,14 +276,26 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           } // Fl_Group* o
           o->end();
         } // Fl_Group* o
-        { Fl_Group* o = new Fl_Group(186, 347, 306, 360);
-          { options_widget = new Fl_Scroll(186, 370, 306, 160, "Variant Options");
+        { Fl_Group* o = new Fl_Group(184, 347, 311, 360);
+          { Fl_Pack* o = new Fl_Pack(200, 347, 280, 26);
+            o->type(1);
+            { Fl_Button* o = new Fl_Button(200, 348, 124, 23, "Save Settings");
+              o->callback((Fl_Callback*)cb_Save);
+            } // Fl_Button* o
+            { new Fl_Box(326, 348, 20, 23);
+            } // Fl_Box* o
+            { Fl_Button* o = new Fl_Button(348, 348, 128, 23, "Reset Settings");
+              o->callback((Fl_Callback*)cb_Reset1);
+            } // Fl_Button* o
+            o->end();
+          } // Fl_Pack* o
+          { options_widget = new Fl_Scroll(185, 398, 310, 128, "Variant Options");
             options_widget->type(7);
             options_widget->vertical_label_margin(3);
             options_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
             options_widget->end();
           } // Fl_Scroll* options_widget
-          { settings_widget = new Fl_Scroll(186, 551, 306, 150, "System Settings");
+          { settings_widget = new Fl_Scroll(186, 551, 309, 150, "System Settings");
             settings_widget->type(7);
             settings_widget->vertical_label_margin(3);
             settings_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));

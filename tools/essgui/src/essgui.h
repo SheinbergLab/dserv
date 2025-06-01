@@ -19,6 +19,8 @@ int set_variant(void);
 int reload_system(void);
 int reload_protocol(void);
 int reload_variant(void);
+int save_settings(void);
+int reset_settings(void);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);

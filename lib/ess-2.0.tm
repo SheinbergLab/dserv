@@ -618,28 +618,28 @@ namespace eval ess {
 
     
     proc unload_system {} {
-    variable current
-    set sname $current(system)
-
-    if { $current(open_system) } {
-        set s [find_system $sname]
-
-        # call variant_deinit if exists
-        set vdeinit_method $current(variant)_deinit
-        
-        if { [lsearch [info object methods $s] $vdeinit_method] != -1 } {
-        $s $vdeinit_method
-        }
-        
-        # protocol deinit callback
-        $s protocol_deinit
-
-        # system deinit callback
-        $s deinit
-        
-        set current(open_system) 0
-        set current(system) {}
-    }
+	variable current
+	set sname $current(system)
+	
+	if { $current(open_system) } {
+	    set s [find_system $sname]
+	    
+	    # call variant_deinit if exists
+	    set vdeinit_method $current(variant)_deinit
+	    
+	    if { [lsearch [info object methods $s] $vdeinit_method] != -1 } {
+		$s $vdeinit_method
+	    }
+	    
+	    # protocol deinit callback
+	    $s protocol_deinit
+	    
+	    # system deinit callback
+	    $s deinit
+	    
+	    set current(open_system) 0
+	    set current(system) {}
+	}
     }
 
     proc load_system { { system {} } { protocol {} } { variant {} } } {
@@ -707,12 +707,15 @@ namespace eval ess {
 	# this resets any unsaved variant args
 	$s reset_variant_args
 	
+	# load saved settings
+	load_settings
+	
 	# initialize the loaders by calling the appropriate loader 
 	variant_init $current(system) $current(protocol) $current(variant)
 	
 	# dictionary of states and associated transition states
 	dservSet ess/state_table [get_state_transitions]
-	
+
 	# set list of rmtSend commands used by this protocol
 	dservSet ess/rmt_cmds [get_rmt_cmds]
 	
@@ -763,21 +766,25 @@ namespace eval ess {
     }
     
     proc set_system { system } {
-    variable current
-    catch unload_system
-    set s [find_system $system]
-    if { $s == "" } {
-        error "system $system not found"
+	variable current
+	catch unload_system
+	set s [find_system $system]
+	if { $s == "" } {
+	    error "system $system not found"
+	}
+	$s init
+	set current(system) $system
+	set current(state_system) $s
     }
-    $s init
-    set current(system) $system
-    set current(state_system) $s
-    }
-
+    
     proc set_subject { subj } {
-    variable subject_id
-    set subject_id [string tolower $subj]
-    ::ess::evt_put ID SUBJECT  [now] $subject_id
+	variable subject_id
+	set subject_id [string tolower $subj]
+	::ess::evt_put ID SUBJECT  [now] $subject_id
+
+	# load subject specific settings and reload
+	load_settings
+	reload_variant
     }
 
     proc set_subjects { args } {
@@ -1853,6 +1860,133 @@ namespace eval ess {
     return [$s set_variant_args $vargs]
     }
 
+    proc get_variant_args {} {
+	variable current
+	set s [::ess::find_system $current(system)]
+	set vinfo [dict get [$s get_variants] $current(variant)]
+	set loader_proc [dict get $vinfo loader_proc]
+
+	# get all options for this variant
+	set loader_arg_options [dict get $vinfo loader_options]
+	
+	# get names of args for loader_proc
+	set loader_arg_names [lindex [info object definition $s $loader_proc] 0]
+        
+	# standardize options
+	set d [dict create]
+	foreach a $loader_arg_names {
+	    set opts [dict get $loader_arg_options $a]
+	    set olist {}
+        foreach o $opts {
+	    # if there are two elements, we have name/value, otherwise just copy
+	    if { [llength $o] == 2 } {
+		lappend olist $o
+	    } elseif { [llength $o] == 1 } {
+		lappend olist [list $o $o]
+	    }
+        }
+	    dict set d $a $olist
+	}
+	set loader_arg_options $d
+    
+	# choose defaults to get initial valid options
+	set loader_variant_defaults [variant_loader_defaults $loader_arg_options]
+
+	# merge the default and override args
+	set loader_args_dict \
+	    [dict merge $loader_variant_defaults [$s get_variant_args]]
+	return $loader_args_dict
+    }
+    
+    proc save_settings {} {
+	variable current
+	variable subject_id
+	if { $current(system) == {} ||
+	     $current(protocol) == {} ||
+	     $current(variant) == {} } { return }
+
+	set vargs [get_variant_args]
+	set param_settings [get_params]
+
+	# locate settings file and create if necessary
+	set path [file join $::ess::system_path $current(project)]
+	set owner [file attributes $path -owner]
+	set group [file attributes $path -group]
+	set uid [exec whoami]
+	set folder [file join $path $current(system) $current(protocol)]
+	set settings_file [file join $folder $current(protocol)_settings.tcl]
+	if { ![file exists $settings_file] } {
+	    close [open $settings_file w];
+	    # change ownership to match owner of systems folder
+	    if { $owner != $uid } {
+		file attributes $settings_file -owner $owner -group $group
+	    }
+	}
+
+	set new_settings \
+	    [dict create variant_args $vargs param_settings $param_settings]
+	
+	set f [open $settings_file r]
+	set contents [read $f]
+	close $f
+
+	set settings_dict [dict create {*}$contents]
+	set name ${subject_id}@$current(system)_$current(protocol)_$current(variant)
+	set new_settings_dict [dict merge \
+				   $settings_dict \
+				   [dict create $name $new_settings]]
+	set f [open $settings_file w]
+	puts $f $new_settings_dict
+	close $f
+    }
+
+    proc load_settings {} {
+	variable current
+	variable subject_id
+	if { $current(system) == {} ||
+	     $current(protocol) == {} ||
+	     $current(variant) == {} } { return }
+	set path [file join $::ess::system_path $current(project)]
+	set folder [file join $path $current(system) $current(protocol)]
+	set settings_file [file join $folder $current(protocol)_settings.tcl]
+	if { ![file exists $settings_file] } return
+	set f [open $settings_file r]
+	set contents [read $f]
+	close $f	
+	set settings_dict [dict create {*}$contents]
+	set name ${subject_id}@$current(system)_$current(protocol)_$current(variant)
+	if [dict exists $settings_dict $name] {
+	    set s [dict get $settings_dict $name]
+	    set vargs [dict get $s variant_args]
+	    set param_settings [dict get $s param_settings]
+	    set_variant_args $vargs
+	    set_params {*}$param_settings
+	}
+    }
+
+    proc reset_settings {} {
+	variable current
+	variable subject_id
+	if { $current(system) == {} ||
+	     $current(protocol) == {} ||
+	     $current(variant) == {} } { return }
+	set path [file join $::ess::system_path $current(project)]
+	set folder [file join $path $current(system) $current(protocol)]
+	set settings_file [file join $folder $current(protocol)_settings.tcl]
+	if { ![file exists $settings_file] } return
+	set f [open $settings_file r]
+	set contents [read $f]
+	close $f	
+	set settings_dict [dict create {*}$contents]
+	set name ${subject_id}@$current(system)_$current(protocol)_$current(variant)
+	if [dict exists $settings_dict $name] {
+	    set settings_dict [dict unset $settings_dict $name]	    
+	}
+	set f [open $settings_file w]
+	puts $f $new_settings_dict
+	close $f	
+    }
+    
     proc variant_init { system protocol variant } {
 	variable current
 	set s [::ess::find_system $system]

@@ -660,7 +660,17 @@ int reload_variant(void) {
   return 0;
 }
 
+int save_settings(void) {
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, "ess::save_settings", rstr);
+  return 0;
+}
 
+int reset_settings(void) {
+  std::string rstr;
+  g_App->ds_sock->esscmd(g_App->host, "ess::reset_settings", rstr);
+  return 0;
+}
 
 int add_host(const char *host)
 {

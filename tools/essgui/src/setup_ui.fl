@@ -19,7 +19,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {586 85 1280 800} type Double resizable visible
+    xywh {976 66 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {open
       xywh {0 0 1280 32}
@@ -165,15 +165,32 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
         }
         Fl_Group {} {open
-          xywh {186 347 306 360} resizable
+          xywh {184 347 311 360} resizable
         } {
+          Fl_Pack {} {open
+            xywh {200 347 280 26} type HORIZONTAL
+          } {
+            Fl_Button {} {
+              label {Save Settings}
+              callback {save_settings()}
+              xywh {200 348 124 23}
+            }
+            Fl_Box {} {
+              xywh {326 348 20 23}
+            }
+            Fl_Button {} {
+              label {Reset Settings}
+              callback {reset_settings()} selected
+              xywh {348 348 128 23}
+            }
+          }
           Fl_Scroll options_widget {
             label {Variant Options} open
-            xywh {186 370 306 160} type BOTH_ALWAYS align 5 v_label_margin 3
+            xywh {185 398 310 128} type BOTH_ALWAYS align 5 v_label_margin 3
           } {}
           Fl_Scroll settings_widget {
             label {System Settings} open
-            xywh {186 551 306 150} type BOTH_ALWAYS align 5 v_label_margin 3
+            xywh {186 551 309 150} type BOTH_ALWAYS align 5 v_label_margin 3
           } {}
         }
       }
@@ -185,7 +202,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 67 762 642}
         } {
           Fl_Group {} {
-            label behavior open selected
+            label behavior open
             xywh {504 91 747 615} labelsize 16
           } {
             Fl_Group {} {
