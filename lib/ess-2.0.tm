@@ -1974,17 +1974,27 @@ namespace eval ess {
 	set folder [file join $path $current(system) $current(protocol)]
 	set settings_file [file join $folder $current(protocol)_settings.tcl]
 	if { ![file exists $settings_file] } return
+
 	set f [open $settings_file r]
 	set contents [read $f]
 	close $f	
 	set settings_dict [dict create {*}$contents]
-	set name ${subject_id}@$current(system)_$current(protocol)_$current(variant)
+
+	set name \
+	    ${subject_id}@$current(system)_$current(protocol)_$current(variant)
+
 	if [dict exists $settings_dict $name] {
-	    set settings_dict [dict unset $settings_dict $name]	    
+	    set settings_dict [dict unset settings_dict $name]	    
 	}
+
 	set f [open $settings_file w]
-	puts $f $new_settings_dict
-	close $f	
+	puts $f $settings_dict
+	close $f
+
+	# reset param_settings and variant argument
+	set s [::ess::find_system $current(system)]
+	$s set_default_param_vals
+	$s reset_variant_args
     }
     
     proc variant_init { system protocol variant } {

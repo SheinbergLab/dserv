@@ -668,7 +668,7 @@ int save_settings(void) {
 
 int reset_settings(void) {
   std::string rstr;
-  g_App->ds_sock->esscmd(g_App->host, "ess::reset_settings", rstr);
+  g_App->ds_sock->esscmd(g_App->host, "ess::reset_settings; ess::reload_variant", rstr);
   return 0;
 }
 
