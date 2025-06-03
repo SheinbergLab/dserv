@@ -468,6 +468,9 @@ public:
   int gitcmd(std::string host, std::string cmd, std::string &rstr) {
     return dscmd(host, cmd, rstr, 2573);
   }
+  int openiriscmd(std::string host, std::string cmd, std::string &rstr) {
+    return dscmd(host, cmd, rstr, 2574);
+  }
   int dservcmd(std::string host, std::string cmd, std::string &rstr) {
     return dscmd(host, cmd, rstr, 4620);
   }

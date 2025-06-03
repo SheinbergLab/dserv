@@ -19,6 +19,8 @@
 #define PG_PORT 2572
 #define GIT_PROMPT "git> "
 #define GIT_PORT 2573
+#define OPENIRIS_PROMPT "openiris> "
+#define OPENIRIS_PORT 2574
 
 void completion(const char *buf, linenoiseCompletions *lc) {
     if (buf[0] == 'h') {
@@ -181,6 +183,15 @@ int main (int argc, char *argv[])
       else {
 	tcpport = GIT_PORT;
 	prompt = GIT_PROMPT;
+      }
+    } else if (!strncmp(line, "/openiris", 9)) {
+      if (strlen(line) > 9) {
+	resultstr = do_command(server, GIT_PORT, &line[10], strlen(line)-10);
+	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+      }
+      else {
+	tcpport = OPENIRIS_PORT;
+	prompt = OPENIRIS_PROMPT;
       }
     } else if (line[0] == '/') {
       printf("Unreconized command: %s\n", line);

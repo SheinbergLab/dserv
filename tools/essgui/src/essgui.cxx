@@ -101,7 +101,7 @@ private:
   
 public:
   typedef enum {
-    TERM_LOCAL, TERM_STIM, TERM_ESS, TERM_GIT
+    TERM_LOCAL, TERM_STIM, TERM_ESS, TERM_GIT, TERM_OPENIRIS
   } TerminalMode;
   bool auto_reload = true; // reload variant immediately upon setting change
   std::thread dsnet_thread;
@@ -330,6 +330,14 @@ public:
     return retval;
   }
   
+  int openiris_eval(const char *command, std::string &resultstr)
+  {
+    int retval = ds_sock->openiriscmd(g_App->host,
+				      std::string(command),
+				      resultstr);
+    return retval;
+  }
+  
   int stim_eval(const char *command, std::string &resultstr)
   {
     int retval = ds_sock->stimcmd(g_App->host,
@@ -530,6 +538,11 @@ int eval(char *command, void *cbdata) {
     g_App->terminal_mode = App::TERM_GIT;
   }
   
+  else if (!strcmp(command, "/openiris")) {
+    output_term->prompt("openiris> ");
+    g_App->terminal_mode = App::TERM_OPENIRIS;
+  }
+  
   else {
     switch (g_App->terminal_mode) {
     case App::TERM_LOCAL:
@@ -558,6 +571,17 @@ int eval(char *command, void *cbdata) {
       break;
     case App::TERM_GIT:
       result = g_App->git_eval(command, resultstr);
+      if (resultstr.empty()) result = TCL_OK;
+      else if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
+	resultstr = resultstr.substr(11);
+	result = TCL_ERROR;
+      }
+      else {
+	result = TCL_OK;
+      }
+      break;
+    case App::TERM_OPENIRIS:
+      result = g_App->openiris_eval(command, resultstr);
       if (resultstr.empty()) result = TCL_OK;
       else if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
 	resultstr = resultstr.substr(11);
