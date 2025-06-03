@@ -1,0 +1,4 @@
+# set an alternative path for finding systems
+#   this should point to a folder that includes another
+#   folder called, by default, "ess"
+set env(ESS_SYSTEM_PATH) /home/lab/systems
