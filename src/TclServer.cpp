@@ -14,25 +14,22 @@ TclServer::TclServer(int argc, char **argv,
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
 
-  /*
-   * private interpreter for this TclServer object
-   */
-  //  interp = setup_tcl(this);
-  
-  net_thread = std::thread(&TclServer::start_tcp_server, this);
+  // create a tcp/ip listener if port is not -1
+  if (port >= 0)
+    net_thread = std::thread(&TclServer::start_tcp_server, this);
+
+  // the process thread
   process_thread = std::thread(&process_requests, this);
 }
 
 TclServer::~TclServer()
 {
   shutdown();
-  net_thread.detach();
-  process_thread.join();
 
-  /*
-   * delete our private interpreter
-   */
-  //  Tcl_DeleteInterp(interp);
+  if (tcpport > 0) 
+    net_thread.detach();
+  
+  process_thread.join();
 }
 
 void TclServer::shutdown(void)
