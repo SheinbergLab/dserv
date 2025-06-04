@@ -38,7 +38,9 @@ namespace eval openiris {
 	dservSet openiris/left/pupil $l_pupil
 	dservSet openiris/left/cr1   $l_cr1
 	dservSet openiris/left/cr4   $l_cr4
-
+	dservSet openiris/left/frame [dict get $left FrameNumber]
+	dservSet openiris/left/time  [dict get $left Seconds]
+	
 	# set ain/vals as shorts to be compatible with other eye inputs
 	dl_local avals [dl_reverse [dl_short \
 			 [dl_add \
