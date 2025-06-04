@@ -248,19 +248,19 @@ ina226Add 0x44 system 24v
 set host [dservGet system/hostaddr]
 
 # start sqlite local db
-subprocess 2571 "source [file join $dspath config/sqliteconf.tcl]"
+subprocess db 2571 "source [file join $dspath config/sqliteconf.tcl]"
 
 # homebase computers use postgresql
 set hbs "192.168.4.100 192.168.4.101 192.168.4.102 192.168.4.103 192.168.4.104 192.168.4.201"
 set rigs "192.168.88.40"
 if { [lsearch $hbs $host] >= 0 } {
-    subprocess 2572 "source [file join $dspath config/postgresconf.tcl]"
+    subprocess pg 2572 "source [file join $dspath config/postgresconf.tcl]"
 } elseif { [lsearch $rigs $host] >= 0 } {
-    subprocess 2572 "source [file join $dspath config/central_postgresconf.tcl]"
+    subprocess pg 2572 "source [file join $dspath config/central_postgresconf.tcl]"
 }
 
 # start a "git" interpreter
-subprocess 2573 "source [file join $dspath config/gitconf.tcl]"
+subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
 
 # and finally load a default system
 ess::load_system
