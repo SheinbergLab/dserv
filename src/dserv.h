@@ -7,6 +7,7 @@ extern "C" {
   Dataserver *get_ds(void);
   TclServer *get_tclserver(void);
   int service_mdns(const char* hostname, const char* service_name, int service_port);
+  extern ObjectRegistry<TclServer> TclServerRegistry;
 #ifdef __cplusplus
 }
 #endif

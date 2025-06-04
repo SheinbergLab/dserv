@@ -92,4 +92,6 @@ public:
   void eval_noreply(char *s);
   void eval_noreply(std::string script);
 };
+
 #endif  // TCLSERVER_H
+

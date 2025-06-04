@@ -1,5 +1,8 @@
 #include "TclServer.h"
 #include "TclCommands.h"
+#include "ObjectRegistry.h"
+#include "dserv.h"
+#include <vector>
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
@@ -123,20 +126,21 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   TclServer *tclserver = (TclServer *) data;
   int port;
   
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "port [startup_script]");
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name port [startup_script]");
     return TCL_ERROR;
   }
   
-  if (Tcl_GetIntFromObj(interp, objv[1], &port) != TCL_OK) {
+  if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
     return TCL_ERROR;
   }
 
   TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
 				   tclserver->ds, port);
+  TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
 
   if (objc > 2) {
-    std::string script = std::string(Tcl_GetString(objv[2]));
+    std::string script = std::string(Tcl_GetString(objv[3]));
     auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
       Tcl_AppendResult(interp, result.c_str(), NULL);
@@ -148,6 +152,47 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   Tcl_SetObjResult(interp, Tcl_NewStringObj(child->client_name.c_str(), -1));
   
   return TCL_OK;
+}
+
+
+static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp, 
+				   int objc, Tcl_Obj *const objv[])
+{
+  try {
+    // Get all object names 
+    auto allObjects = TclServerRegistry.getAllObjects();
+    std::vector<std::string> names;
+    names.reserve(allObjects.size());
+    for (const auto& pair : allObjects) {
+      names.push_back(pair.first);
+    }    
+    
+    // Create a new Tcl dictionary
+    Tcl_Obj *dictObj = Tcl_NewDictObj();
+    
+    // Iterate through all objects
+    for (const std::string& name : names) {
+      TclServer* obj = TclServerRegistry.getObject(name);
+      if (obj != nullptr) {
+	// Create key (object name)
+	Tcl_Obj *keyObj = Tcl_NewStringObj(name.c_str(), -1);
+	Tcl_Obj *valueObj = Tcl_NewIntObj(obj->port());
+        
+	// Add key-value pair to dictionary
+	if (Tcl_DictObjPut(interp, dictObj, keyObj, valueObj) != TCL_OK) {
+	  return TCL_ERROR;
+	}
+      }
+    }  
+    
+    // Set the result
+    Tcl_SetObjResult(interp, dictObj);
+    return TCL_OK;
+    
+  } catch (const std::exception& e) {
+    Tcl_SetResult(interp, const_cast<char*>(e.what()), TCL_VOLATILE);
+    return TCL_ERROR;
+  }
 }
 
 
@@ -474,6 +519,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
   Tcl_CreateObjCommand(interp, "subprocess",
 		       (Tcl_ObjCmdProc *) subprocess_command,
+		       tserv, NULL);
+  Tcl_CreateObjCommand(interp, "subprocessInfo",
+		       (Tcl_ObjCmdProc *) getsubprocesses_command,
 		       tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservAddMatch",

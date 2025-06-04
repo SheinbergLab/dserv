@@ -9,12 +9,16 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
 #include "TclServer.h"
+#include "ObjectRegistry.h"
 #include "cxxopts.hpp"
 #include "dserv.h"
 #include "tclserver_api.h"
 #include "mdns_advertise.h"
 
 #include "dservConfig.h"
+
+// A regsitry for main tclserver and subprocesses
+ObjectRegistry<TclServer> TclServerRegistry;
 
 // Provide hooks for loaded modules
 Dataserver *dserver;
@@ -82,7 +86,8 @@ int main(int argc, char *argv[])
 
   dserver = new Dataserver(argc, argv);
   tclserver = new TclServer(argc, argv, dserver);
-
+  TclServerRegistry.registerObject("ess", tclserver);
+  
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result;
