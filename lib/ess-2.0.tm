@@ -3,6 +3,7 @@
 package require dlsh
 package provide ess 2.0
 package require yajltcl
+package require dslog
 
 catch { System destroy }
 
@@ -1310,13 +1311,31 @@ namespace eval ess {
 	    dservSet ess/lastfile [file tail [file root $open_datafile]]
 	    dservSet ess/datafile {}
 	    
-	    
 	    # call the system's specific file_close callback
 	    catch {$current(state_system) file_close $open_datafile} ioerror
+
+	    # convert to json
+	    catch { file_to_json $open_datafile } ioerror
+	    
 	    set open_datafile {}
 	    return 1
 	}
 	return 0
+    }
+
+    proc file_to_json { f } {
+	variable data_dir
+	set json_dir [regsub essdat $data_dir json]
+	set infile   [file join $data_dir $f.ess]
+	set outfile  [file join $json_dir $f.json]
+	
+	set g [dslog::readESS $infile]
+	set j [dg_toJSON $g]
+	dg_delete $g
+
+	set f [open $outfile w]
+	puts $f $j
+	close $f
     }
 }
 
