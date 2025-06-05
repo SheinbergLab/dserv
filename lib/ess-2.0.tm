@@ -644,7 +644,10 @@ namespace eval ess {
     }
 
     proc load_system { { system {} } { protocol {} } { variant {} } } {
-
+	# Reset the result so we can check if a new error is raised
+	set ::errorInfo ""
+	set ::errorCode NONE
+	
 	variable current
 	
 	if { $current(system) != {} && [info exists $current(system)] } {
