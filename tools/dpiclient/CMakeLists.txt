@@ -8,9 +8,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Add executable
 add_executable(dpi_client dpiclient.cpp)
 
+include(FetchContent)
+
+FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz)
+FetchContent_MakeAvailable(json)
+
+target_include_directories(dpi_client PRIVATE ${nlohmann_json_SOURCE_DIR}/include/nlohmann)
+
 # Platform-specific libraries
 if(WIN32)
-    target_link_libraries(dpi_client ws2_32)
+    target_link_libraries(dpi_client PRIVATE ws2_32 nlohmann_json::nlohmann_json)
+else ()
+    target_link_libraries(dpi_client PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
 # Compiler-specific flags

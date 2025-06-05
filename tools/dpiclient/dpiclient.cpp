@@ -4,6 +4,11 @@
 #include <vector>
 #include <chrono>
 #include <thread>
+#include "json.hpp"
+using json = nlohmann::json;
+
+#define DPOINT_BINARY_MSG_CHAR '>'
+#define DPOINT_BINARY_FIXED_LENGTH (128)
 
 #ifdef _WIN32
     #include <winsock2.h>
@@ -123,49 +128,167 @@ public:
     return true;
   }
 
-  bool sendMessage(const std::string& message) {
+  bool write_to_dataserver(const char *varname, int dtype, int len, void *data)
+  {
+    uint8_t cmd = DPOINT_BINARY_MSG_CHAR;
+    static char buf[DPOINT_BINARY_FIXED_LENGTH];
+
+    uint16_t varlen;
+    uint64_t timestamp = 0; // Use 0 for now, can be replaced with actual timestamp if needed
+    if (sock == INVALID_SOCKET || varname == nullptr || data == nullptr || len <= 0)
+    {
+      std::cerr << "Invalid parameters for write_to_dataserver" << std::endl;
+      return false;
+    }
+    uint32_t datatype = dtype, datalen = len;
+
+    uint16_t bufidx = 0;
+    uint16_t total_bytes = 0;
+
+    varlen = (int16_t) strlen(varname);
+
+    // Start by seeing how much space we need
+    total_bytes += sizeof(uint16_t); // varlen
+    total_bytes += varlen;           // strlen(varname)
+    total_bytes += sizeof(uint64_t); // timestamp
+    total_bytes += sizeof(uint32_t); // datatype
+    total_bytes += sizeof(uint32_t); // datalen
+    total_bytes += len;              // data
+
+    // data don't fit
+    if (total_bytes > sizeof(buf) - 1)
+    {
+      return false;
+    }
+
+    memcpy(&buf[bufidx], &cmd, sizeof(uint8_t));
+    bufidx += sizeof(uint8_t);
+
+    memcpy(&buf[bufidx], &varlen, sizeof(uint16_t));
+    bufidx += sizeof(uint16_t);
+
+    memcpy(&buf[bufidx], varname, varlen);
+    bufidx += varlen;
+
+    memcpy(&buf[bufidx], &timestamp, sizeof(uint64_t));
+    bufidx += sizeof(uint64_t);
+
+    memcpy(&buf[bufidx], &datatype, sizeof(uint32_t));
+    bufidx += sizeof(uint32_t);
+
+    memcpy(&buf[bufidx], &datalen, sizeof(uint32_t));
+    bufidx += sizeof(uint32_t);
+
+    memcpy(&buf[bufidx], data, datalen);
+    bufidx += datalen;
+
+    int total_sent = 0;
+    while (total_sent < DPOINT_BINARY_FIXED_LENGTH)
+    {
+      int sent = send(sock, buf + total_sent,
+                      DPOINT_BINARY_FIXED_LENGTH - total_sent, 0);
+      if (sent == SOCKET_ERROR)
+      {
+        std::cerr << "Failed to send TCP message" << std::endl;
+        return false;
+      }
+      total_sent += sent;
+    }
+
+    return true;
+  }
+
+  bool sendMessage(const std::string& message, bool send_as_json_string = true) {
     if (sock == INVALID_SOCKET) {
       return false;
     }
 
     const char *name = "openiris/frameinfo";
-    const int dtype = 1; // DSERV_STRING
     const int ts = 0;
 
-    std::ostringstream oss;
-    oss << "%setdata " << name << " " << dtype << " " << ts << " " 
-	<< message.length() << " {" << message << "}\r\n";
-    std::string sendbuf = oss.str(); 
-    
-    int total_sent = 0;
-    int message_len = static_cast<int>(sendbuf.length());
-    
-    while (total_sent < message_len) {
-      int sent = send(sock, sendbuf.c_str() + total_sent,
-		      message_len - total_sent, 0);
-      if (sent == SOCKET_ERROR) {
-	std::cerr << "Failed to send TCP message" << std::endl;
-	return false;
-      }
-      total_sent += sent;
-    }
+    if (send_as_json_string)
+    {
+      const int dtype = 1; // DSERV_STRING
+      std::ostringstream oss;
+      oss << "%setdata " << name << " " << dtype << " " << ts << " "
+          << message.length() << " {" << message << "}\r\n";
+      std::string sendbuf = oss.str();
 
-    // Read status message back from TCP server
-    char buffer[1024];
-    int received = recv(sock, buffer, sizeof(buffer) - 1, 0);
-    
-    if (received == SOCKET_ERROR) {
-      std::cerr << "Failed to receive status message from TCP server (timeout or error)" << std::endl;
-      return false;
+      int total_sent = 0;
+      int message_len = static_cast<int>(sendbuf.length());
+
+      while (total_sent < message_len)
+      {
+        int sent = send(sock, sendbuf.c_str() + total_sent,
+                        message_len - total_sent, 0);
+        if (sent == SOCKET_ERROR)
+        {
+          std::cerr << "Failed to send TCP message" << std::endl;
+          return false;
+        }
+        total_sent += sent;
+      }
+
+      // Read status message back from TCP server
+      char buffer[1024];
+      int received = recv(sock, buffer, sizeof(buffer) - 1, 0);
+
+      if (received == SOCKET_ERROR)
+      {
+        std::cerr << "Failed to receive status message from TCP server (timeout or error)" << std::endl;
+        return false;
+      }
+
+      if (received == 0)
+      {
+        std::cerr << "TCP server closed connection without sending status" << std::endl;
+        return false;
+      }
+      //    std::cout << "Forwarded JSON to TCP server: " << message << std::endl;
     }
-    
-    if (received == 0) {
-      std::cerr << "TCP server closed connection without sending status" << std::endl;
-      return false;
+    else {
+      // Parse JSON
+      json j = json::parse(message);
+      // Create binary data structure
+      if (!j.contains("Left") || !j["Left"].contains("Pupil") ||
+          !j["Left"]["Pupil"].contains("Center") ||
+          !j["Left"].contains("CRs")) {
+        std::cerr << "Invalid JSON format" << std::endl;
+        return false;
+      }
+      if (j["Left"]["CRs"].size() < 4) {
+        std::cerr << "CRs array must contain at least 4 elements" << std::endl;
+        return false;
+      }
+      if (!j["Left"]["CRs"][0].contains("X") || !j["Left"]["CRs"][0].contains("Y") ||
+          !j["Left"]["CRs"][3].contains("X") || !j["Left"]["CRs"][3].contains("Y")) {
+        std::cerr << "CRs must contain X and Y coordinates" << std::endl;
+        return false;
+      }
+      if (!j["Left"]["Pupil"].contains("Center") ||
+          !j["Left"]["Pupil"]["Center"].contains("X") ||
+          !j["Left"]["Pupil"]["Center"].contains("Y")) {
+        std::cerr << "Pupil center must contain X and Y coordinates" << std::endl;
+        return false;
+      }
+      if (!j["Left"]["Seconds"].is_number() ||
+          !j["Left"]["FrameNumber"].is_number()) {
+        std::cerr << "Frame and Time must be numbers" << std::endl;
+        return false;
+      }
+      float data[8] = {
+          j["Left"]["FrameNumber"].get<float>(),
+          j["Left"]["Seconds"].get<float>(),
+          j["Left"]["Pupil"]["Center"]["X"].get<float>(),
+          j["Left"]["Pupil"]["Center"]["Y"].get<float>(),
+          j["Left"]["CRs"][0]["X"].get<float>(),
+          j["Left"]["CRs"][0]["Y"].get<float>(),
+          j["Left"]["CRs"][3]["X"].get<float>(),
+          j["Left"]["CRs"][3]["Y"].get<float>()
+      };
+      const int dtype = 2; // DSERV_FLOAT
+      return write_to_dataserver(name, dtype, 8*sizeof(float), data);
     }
-    
-    
-    //    std::cout << "Forwarded JSON to TCP server: " << message << std::endl;
     return true;
   }
 };
@@ -222,7 +345,7 @@ public:
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 #endif
 
-	// Setup server address using getaddrinfo
+    // Setup server address using getaddrinfo
         struct addrinfo hints, *result;
         memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_INET;      // IPv4
@@ -255,7 +378,7 @@ public:
             return "";
         }
 
-	//        std::cout << "Sent: " << message << std::endl;
+    //        std::cout << "Sent: " << message << std::endl;
 
         // Receive response
         char buffer[4096];
@@ -318,12 +441,12 @@ int main(int argc, char* argv[]) {
       std::string response = client.sendAndReceive("WAITFORDATA");
       
       if (!response.empty()) {
-	if (forwarder.sendMessage(response)) {
-	  //	  std::cout << "Successfully forwarded JSON to TCP server" << std::endl;
-	} else {
-	  std::cerr << "Failed to forward JSON to TCP server" << std::endl;
-	  return 1;
-	}
+    if (forwarder.sendMessage(response, false)) {
+      //      std::cout << "Successfully forwarded JSON to TCP server" << std::endl;
+    } else {
+      std::cerr << "Failed to forward JSON to TCP server" << std::endl;
+      return 1;
+    }
       } 
     }
 
