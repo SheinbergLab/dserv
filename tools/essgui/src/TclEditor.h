@@ -9,6 +9,10 @@
 #include <cctype>
 #include <vector>
 #include <string>
+#include <sstream>
+#include <regex>
+
+#include "TclFormatter.h"
 
 void handle_auto_indent(Fl_Text_Editor* editor);
 
@@ -37,6 +41,11 @@ public:
     return Fl_Text_Editor::handle(event);
   }
 
+  void format_code(void) {
+    TclFormatterFLTK::format_editor_text_preserve_cursor(buffer(), this);
+    //    TclFormatterFLTK::debug_format_editor_text(buffer());
+  }
+  
   ~TclEditor() {
     delete stylebuf;
   }  

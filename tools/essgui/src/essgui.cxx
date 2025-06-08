@@ -182,6 +182,7 @@ public:
   {
     text_buffers[name]->text(buf);
     initial_styling(editor);
+    editor->format_code();
   }
   
   void clear_editor_buffer(const char *name)

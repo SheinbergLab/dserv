@@ -225,40 +225,40 @@ void parse_tcl_syntax(const char* text, char* style_out, int length) {
 // --- Style Update Callback ---
 void style_update_tcl(int pos, int nInserted, int nDeleted, int nRestyled,
 		      const char* deletedText, void* cbArg) {
-    Fl_Text_Editor* editor = static_cast<Fl_Text_Editor*>(cbArg);
-    Fl_Text_Buffer* textBuffer = editor->buffer(); 
-    Fl_Text_Buffer* stylebuf = editor->style_buffer();
-
-    if (!stylebuf) {
-        return;
-    }
-
-    int text_len = textBuffer->length();
-    if (text_len == 0) {
-        stylebuf->text(""); 
-        editor->redisplay_range(0, 0); 
-        return;
-    }
-
-    char* current_text = textBuffer->text_range(0, text_len);
-    if (!current_text) {
-        return; 
-    }
-
-    char* parsed_styles_temp = (char*)malloc(text_len + 1); 
-    if (!parsed_styles_temp) {
-        free(current_text);
-        return;
-    }
-
-    parse_tcl_syntax(current_text, parsed_styles_temp, text_len);
-    parsed_styles_temp[text_len] = '\0'; 
-
-    stylebuf->text(parsed_styles_temp);
-
-    free(parsed_styles_temp);
+  Fl_Text_Editor* editor = static_cast<Fl_Text_Editor*>(cbArg);
+  Fl_Text_Buffer* textBuffer = editor->buffer(); 
+  Fl_Text_Buffer* stylebuf = editor->style_buffer();
+  
+  if (!stylebuf) {
+    return;
+  }
+  
+  int text_len = textBuffer->length();
+  if (text_len == 0) {
+    stylebuf->text(""); 
+    editor->redisplay_range(0, 0); 
+    return;
+  }
+  
+  char* current_text = textBuffer->text_range(0, text_len);
+  if (!current_text) {
+    return; 
+  }
+  
+  char* parsed_styles_temp = (char*)malloc(text_len + 1); 
+  if (!parsed_styles_temp) {
     free(current_text);
-
+    return;
+    }
+  
+  parse_tcl_syntax(current_text, parsed_styles_temp, text_len);
+  parsed_styles_temp[text_len] = '\0'; 
+  
+  stylebuf->text(parsed_styles_temp);
+  
+  free(parsed_styles_temp);
+  free(current_text);
+  
     editor->redisplay_range(0, text_len);
 }
 
@@ -323,4 +323,3 @@ void handle_auto_indent(Fl_Text_Editor* editor) {
     
     free(line_text);
 }
-
