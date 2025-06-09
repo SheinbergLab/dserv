@@ -250,44 +250,47 @@ public:
       // Parse JSON
       json j = json::parse(message);
       // Create binary data structure
-      if (!j.contains("Left") || !j["Left"].contains("Pupil") ||
-          !j["Left"]["Pupil"].contains("Center") ||
-          !j["Left"].contains("CRs")) {
+      if (!j.contains("Right") || !j["Right"].contains("Pupil") ||
+          !j["Right"]["Pupil"].contains("Center") ||
+          !j["Right"].contains("CRs")) {
         std::cerr << "Invalid JSON format" << std::endl;
         return false;
       }
-      if (j["Left"]["CRs"].size() < 4) {
+      if (j["Right"]["CRs"].size() < 4) {
         std::cerr << "CRs array must contain at least 4 elements" << std::endl;
         return false;
       }
-      if (!j["Left"]["CRs"][0].contains("X") || !j["Left"]["CRs"][0].contains("Y") ||
-          !j["Left"]["CRs"][3].contains("X") || !j["Left"]["CRs"][3].contains("Y")) {
+      if (!j["Right"]["CRs"][0].contains("X") || !j["Right"]["CRs"][0].contains("Y") ||
+          !j["Right"]["CRs"][3].contains("X") || !j["Right"]["CRs"][3].contains("Y")) {
         std::cerr << "CRs must contain X and Y coordinates" << std::endl;
         return false;
       }
-      if (!j["Left"]["Pupil"].contains("Center") ||
-          !j["Left"]["Pupil"]["Center"].contains("X") ||
-          !j["Left"]["Pupil"]["Center"].contains("Y")) {
+      if (!j["Right"]["Pupil"].contains("Center") ||
+          !j["Right"]["Pupil"]["Center"].contains("X") ||
+          !j["Right"]["Pupil"]["Center"].contains("Y")) {
         std::cerr << "Pupil center must contain X and Y coordinates" << std::endl;
         return false;
       }
-      if (!j["Left"]["Seconds"].is_number() ||
-          !j["Left"]["FrameNumber"].is_number()) {
+      if (!j["Right"]["Seconds"].is_number() ||
+          !j["Right"]["FrameNumber"].is_number()) {
         std::cerr << "Frame and Time must be numbers" << std::endl;
         return false;
       }
-      float data[8] = {
-          j["Left"]["FrameNumber"].get<float>(),
-          j["Left"]["Seconds"].get<float>(),
-          j["Left"]["Pupil"]["Center"]["X"].get<float>(),
-          j["Left"]["Pupil"]["Center"]["Y"].get<float>(),
-          j["Left"]["CRs"][0]["X"].get<float>(),
-          j["Left"]["CRs"][0]["Y"].get<float>(),
-          j["Left"]["CRs"][3]["X"].get<float>(),
-          j["Left"]["CRs"][3]["Y"].get<float>()
+      float data[10] = {
+          j["Right"]["FrameNumber"].get<float>(),
+          j["Right"]["Seconds"].get<float>(),
+          j["Right"]["Pupil"]["Center"]["X"].get<float>(),
+          j["Right"]["Pupil"]["Center"]["Y"].get<float>(),
+          j["Right"]["CRs"][0]["X"].get<float>(),
+          j["Right"]["CRs"][0]["Y"].get<float>(),
+          j["Right"]["CRs"][3]["X"].get<float>(),
+          j["Right"]["CRs"][3]["Y"].get<float>(),
+	  j["Extra"]["Int0"].get<float>(),
+	  j["Extra"]["Int1"].get<float>()
+	    
       };
       const int dtype = 2; // DSERV_FLOAT
-      return write_to_dataserver(name, dtype, 8*sizeof(float), data);
+      return write_to_dataserver(name, dtype, 10*sizeof(float), data);
     }
     return true;
   }
