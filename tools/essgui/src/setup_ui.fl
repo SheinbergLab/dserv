@@ -19,7 +19,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {976 66 1280 800} type Double resizable visible
+    xywh {974 66 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {open
       xywh {0 0 1280 32}
@@ -180,7 +180,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             }
             Fl_Button {} {
               label {Reset Settings}
-              callback {reset_settings()} selected
+              callback {reset_settings()}
               xywh {348 348 128 23}
             }
           }
@@ -202,7 +202,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 67 762 642}
         } {
           Fl_Group {} {
-            label behavior open
+            label behavior open selected
             xywh {504 91 747 615} labelsize 16
           } {
             Fl_Group {} {
@@ -307,32 +307,57 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             xywh {503 92 762 617} labelsize 16 hide
           } {
             Fl_Tabs editor_tabs {open
-              xywh {503 114 758 595}
+              xywh {503 100 758 595}
             } {
-              Fl_Text_Editor system_editor {
-                label system
-                xywh {503 149 747 560} selection_color 31
-                class TclEditor
+              Fl_Group {} {
+                label System open
+                xywh {503 125 758 570}
+              } {
+                Fl_Text_Editor system_editor {
+                  label system
+                  xywh {503 138 754 510} selection_color 31
+                  class TclEditor
+                }
               }
-              Fl_Text_Editor protocol_editor {
-                label protocol
-                xywh {503 149 747 560} selection_color 31 hide
-                class TclEditor
+              Fl_Group {} {
+                label Protocol open
+                xywh {503 125 758 570} hide
+              } {
+                Fl_Text_Editor protocol_editor {
+                  label protocol
+                  xywh {503 138 754 515} selection_color 31
+                  class TclEditor
+                }
               }
-              Fl_Text_Editor loaders_editor {
-                label loaders
-                xywh {503 149 747 550} selection_color 31 hide
-                class TclEditor
+              Fl_Group {} {
+                label Loaders open
+                xywh {503 125 758 570} hide
+              } {
+                Fl_Text_Editor loaders_editor {
+                  label loaders
+                  xywh {503 138 754 515} selection_color 31
+                  class TclEditor
+                }
               }
-              Fl_Text_Editor variants_editor {
-                label variants
-                xywh {503 149 747 550} selection_color 31 hide
-                class TclEditor
+              Fl_Group {} {
+                label Variants open
+                xywh {503 125 758 570} hide
+              } {
+                Fl_Text_Editor variants_editor {
+                  label variants
+                  xywh {503 138 754 515} selection_color 31
+                  class TclEditor
+                }
               }
-              Fl_Text_Editor stim_editor {
-                label stim
-                xywh {503 149 747 550} selection_color 31 hide
-                class TclEditor
+              Fl_Group {} {
+                label Stim open
+                xywh {503 125 758 570} hide
+              } {
+                Fl_Text_Editor stim_editor {
+                  label stim
+                  xywh {503 138 754 515} selection_color 31
+                  class TclEditor
+                }
               }
             }
           }

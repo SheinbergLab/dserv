@@ -259,7 +259,7 @@ void style_update_tcl(int pos, int nInserted, int nDeleted, int nRestyled,
   free(parsed_styles_temp);
   free(current_text);
   
-    editor->redisplay_range(0, text_len);
+  editor->redisplay_range(0, text_len);
 }
 
 void initial_styling(TclEditor *editor)
@@ -279,7 +279,7 @@ void configure_editor(TclEditor *editor, Fl_Text_Buffer *buffer)
 
 
 // Auto-indent function
-void handle_auto_indent(Fl_Text_Editor* editor) {
+void handle_auto_indent(TclEditor* editor) {
     // Get current line
     int pos = editor->insert_position();
     Fl_Text_Buffer* buf = editor->buffer();
