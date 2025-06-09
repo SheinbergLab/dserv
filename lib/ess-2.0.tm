@@ -494,6 +494,9 @@ namespace eval ess {
     variable em_active 0
     variable touch_active 0
 
+    # if this is set, there is a callback associated with errorInfo to set the ess/errorInfo dpoint
+    variable error_trace 0
+    
     proc version_string {} {
         if {[dservExists ess/git/branch] && [dservExists ess/git/tag]} {
             set branch [dservGet ess/git/branch]
@@ -650,6 +653,24 @@ namespace eval ess {
         }
     }
 
+    proc error_callback { name element op } {
+	dservSet ess/errorInfo [set $name]
+    }
+
+    proc error_trace { } {
+	variable error_trace
+	if { $error_trace } { return }
+	trace add variable ::errorInfo write ::ess::error_callback
+	set error_trace 1
+    }
+
+    proc error_untrace { } {
+	variable error_trace
+	if { !$error_trace } { return }
+	trace remove variable ::errorInfo write ::ess::error_callback
+	set error_trace 0
+    }
+    
     proc load_system {{system {}} {protocol {}} {variant {}}} {
         # Reset the result so we can check if a new error is raised
         set ::errorInfo ""
@@ -2089,7 +2110,9 @@ namespace eval ess {
                 [file isdirectory $f] &&
                 [file exists $f/[file tail $f].tcl]
             } {
-                catch {namespace delete ::ess::[file tail $f]}
+		if { [namespace exists ::ess::[file tail $f]] } {
+		    namespace delete ::ess::[file tail $f]
+		}
                 set fname [file join $f [file tail $f].tcl]
                 source $fname
                 lappend systems [file tail $f]
@@ -2106,7 +2129,9 @@ namespace eval ess {
                 [file isdirectory $f] &&
                 [file exists $f/[file tail $f].tcl]
             } {
-                catch {namespace delete ::ess::${s}::[file tail $f]}
+		if { [namespace exists ::ess::[file tail $f]] } {
+		    namespace delete ::ess::${s}::[file tail $f]
+		}
                 source $f/[file tail $f].tcl
                 lappend protocols [file tail $f]
             }
