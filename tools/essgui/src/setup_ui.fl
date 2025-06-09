@@ -21,7 +21,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
     label EssGUI open
     xywh {974 66 1280 800} type Double resizable visible
   } {
-    Fl_Menu_Bar menu_bar {open
+    Fl_Menu_Bar menu_bar {open selected
       xywh {0 0 1280 32}
     } {}
     Fl_Group {} {open
@@ -202,7 +202,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           xywh {503 67 762 642}
         } {
           Fl_Group {} {
-            label behavior open selected
+            label behavior open
             xywh {504 91 747 615} labelsize 16
           } {
             Fl_Group {} {

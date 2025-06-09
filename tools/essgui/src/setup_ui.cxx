@@ -312,7 +312,6 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 642);
           { Fl_Group* o = new Fl_Group(504, 91, 747, 615, "behavior");
             o->labelsize(16);
-            o->hide();
             { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
               { eyetouch_widget = new EyeTouchWin(521, 126, 232, 232, "EyeWindow");
@@ -462,6 +461,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           } // Fl_Group* o
           { Fl_Group* o = new Fl_Group(503, 92, 762, 617, "scripts");
             o->labelsize(16);
+            o->hide();
             { editor_tabs = new Fl_Tabs(503, 100, 758, 595);
               { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "System");
                 { system_editor = new TclEditor(503, 138, 754, 510, "system");
