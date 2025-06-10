@@ -11,6 +11,7 @@
 #include "essgui.h"
 #include "EyeTouchWin.hpp"
 #include "TclEditor.h"
+#include "WheelSpinner.h"
 #include "VirtualEye.hpp"
 #include "VirtualJoystick.hpp"
 #include "Fl_OpDesk.h"
@@ -47,6 +48,7 @@ extern Fl_Scroll *options_widget;
 extern Fl_Scroll *settings_widget;
 #include <FL/Fl_Tabs.H>
 extern EyeTouchWin *eyetouch_widget;
+extern Fl_Output *eye_settings_label;
 extern Fl_Flex *sorters_widget;
 extern void sortby_cb(Fl_Choice*, void*);
 extern Fl_Choice *sortby_1;
@@ -58,6 +60,10 @@ extern void virtual_eye_cb(VirtualEye*, void*);
 extern VirtualEye *virtual_eye_widget;
 extern void virtual_joystick_cb(VirtualJoystick*, void*);
 extern VirtualJoystick *virtual_joystick_widget;
+extern Wheel_Spinner *hBias_input;
+extern Wheel_Spinner *vBias_input;
+extern Wheel_Spinner *hGain_input;
+extern Wheel_Spinner *vGain_input;
 extern Fl_Scroll *rmt_commands_widget;
 extern DGTable *stimdg_widget;
 extern Fl_OpDesk *opdesk_widget;

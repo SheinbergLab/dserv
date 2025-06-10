@@ -88,6 +88,8 @@ Fl_Scroll *settings_widget=(Fl_Scroll *)0;
 
 EyeTouchWin *eyetouch_widget=(EyeTouchWin *)0;
 
+Fl_Output *eye_settings_label=(Fl_Output *)0;
+
 Fl_Flex *sorters_widget=(Fl_Flex *)0;
 
 Fl_Choice *sortby_1=(Fl_Choice *)0;
@@ -103,6 +105,30 @@ Fl_Group *plot_widget=(Fl_Group *)0;
 VirtualEye *virtual_eye_widget=(VirtualEye *)0;
 
 VirtualJoystick *virtual_joystick_widget=(VirtualJoystick *)0;
+
+Wheel_Spinner *hBias_input=(Wheel_Spinner *)0;
+
+static void cb_hBias_input(Wheel_Spinner* o, long v) {
+  update_eye_settings(o,v);
+}
+
+Wheel_Spinner *vBias_input=(Wheel_Spinner *)0;
+
+static void cb_vBias_input(Wheel_Spinner* o, long v) {
+  update_eye_settings(o,v);
+}
+
+Wheel_Spinner *hGain_input=(Wheel_Spinner *)0;
+
+static void cb_hGain_input(Wheel_Spinner* o, long v) {
+  update_eye_settings(o,v);
+}
+
+Wheel_Spinner *vGain_input=(Wheel_Spinner *)0;
+
+static void cb_vGain_input(Wheel_Spinner* o, long v) {
+  update_eye_settings(o,v);
+}
 
 Fl_Scroll *rmt_commands_widget=(Fl_Scroll *)0;
 
@@ -289,18 +315,22 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
             } // Fl_Button* o
             o->end();
           } // Fl_Pack* o
-          { options_widget = new Fl_Scroll(185, 398, 310, 128, "Variant Options");
-            options_widget->type(7);
-            options_widget->vertical_label_margin(3);
-            options_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
-            options_widget->end();
-          } // Fl_Scroll* options_widget
-          { settings_widget = new Fl_Scroll(186, 551, 309, 150, "System Settings");
-            settings_widget->type(7);
-            settings_widget->vertical_label_margin(3);
-            settings_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
-            settings_widget->end();
-          } // Fl_Scroll* settings_widget
+          { Fl_Group* o = new Fl_Group(184, 381, 311, 324);
+            { options_widget = new Fl_Scroll(185, 398, 310, 128, "Variant Options");
+              options_widget->type(7);
+              options_widget->vertical_label_margin(3);
+              options_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
+              options_widget->end();
+            } // Fl_Scroll* options_widget
+            { settings_widget = new Fl_Scroll(186, 551, 309, 150, "System Settings");
+              settings_widget->type(7);
+              settings_widget->vertical_label_margin(3);
+              settings_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
+              settings_widget->end();
+            } // Fl_Scroll* settings_widget
+            o->end();
+            Fl_Group::current()->resizable(o);
+          } // Fl_Group* o
           o->end();
           Fl_Group::current()->resizable(o);
         } // Fl_Group* o
@@ -310,11 +340,11 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
         o->labelsize(18);
         o->vertical_label_margin(4);
         { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 642);
-          { Fl_Group* o = new Fl_Group(504, 91, 747, 615, "behavior");
+          { Fl_Group* o = new Fl_Group(504, 91, 747, 618, "behavior");
             o->labelsize(16);
             { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
               o->box(FL_DOWN_BOX);
-              { eyetouch_widget = new EyeTouchWin(521, 126, 232, 232, "EyeWindow");
+              { eyetouch_widget = new EyeTouchWin(519, 126, 232, 232, "EyeWindow");
                 eyetouch_widget->box(FL_DOWN_FRAME);
                 eyetouch_widget->color(FL_BACKGROUND_COLOR);
                 eyetouch_widget->selection_color(FL_BACKGROUND_COLOR);
@@ -325,14 +355,17 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 eyetouch_widget->align(Fl_Align(FL_ALIGN_CENTER));
                 eyetouch_widget->when(FL_WHEN_RELEASE);
               } // EyeTouchWin* eyetouch_widget
-              { Fl_Group* o = new Fl_Group(514, 360, 241, 20, "window status");
+              { Fl_Group* o = new Fl_Group(514, 358, 241, 22, "window status");
                 o->box(FL_THIN_DOWN_FRAME);
                 o->labeltype(FL_NO_LABEL);
+                { eye_settings_label = new Fl_Output(518, 359, 236, 20, "settings");
+                  eye_settings_label->labeltype(FL_NO_LABEL);
+                } // Fl_Output* eye_settings_label
                 o->end();
               } // Fl_Group* o
               o->end();
             } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(759, 455, 492, 248, "Performance");
+            { Fl_Group* o = new Fl_Group(763, 455, 488, 248, "Performance");
               o->box(FL_UP_BOX);
               o->vertical_label_margin(3);
               { sorters_widget = new Fl_Flex(1070, 602, 166, 60);
@@ -378,7 +411,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               plot_widget->labeltype(FL_NO_LABEL);
               plot_widget->end();
             } // Fl_Group* plot_widget
-            { Fl_Group* o = new Fl_Group(514, 407, 245, 296, "Virtual Input");
+            { Fl_Group* o = new Fl_Group(514, 407, 246, 302, "Input");
               o->color(FL_BLACK);
               o->vertical_label_margin(3);
               { Fl_Group* o = new Fl_Group(531, 407, 208, 204, "Eye Window");
@@ -415,6 +448,86 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   virtual_joystick_widget->align(Fl_Align(FL_ALIGN_CENTER));
                   virtual_joystick_widget->when(FL_WHEN_CHANGED | FL_WHEN_RELEASE_ALWAYS);
                 } // VirtualJoystick* virtual_joystick_widget
+                o->end();
+              } // Fl_Group* o
+              { Fl_Group* o = new Fl_Group(612, 614, 148, 84);
+                { Fl_Group* o = new Fl_Group(612, 614, 148, 84);
+                  { Fl_Button* o = new Fl_Button(612, 614, 36, 18, "Bias");
+                    o->box(FL_NO_BOX);
+                  } // Fl_Button* o
+                  { hBias_input = new Wheel_Spinner(627, 632, 55, 22, "h");
+                    hBias_input->box(FL_NO_BOX);
+                    hBias_input->color(FL_BACKGROUND_COLOR);
+                    hBias_input->selection_color(FL_BACKGROUND_COLOR);
+                    hBias_input->labeltype(FL_NORMAL_LABEL);
+                    hBias_input->labelfont(0);
+                    hBias_input->labelsize(14);
+                    hBias_input->labelcolor(FL_FOREGROUND_COLOR);
+                    hBias_input->minimum(0);
+                    hBias_input->maximum(4095);
+                    hBias_input->step(10);
+                    hBias_input->value(2047);
+                    hBias_input->callback((Fl_Callback*)cb_hBias_input, (void*)(1));
+                    hBias_input->align(Fl_Align(FL_ALIGN_LEFT));
+                    hBias_input->when(FL_WHEN_RELEASE);
+                  } // Wheel_Spinner* hBias_input
+                  { vBias_input = new Wheel_Spinner(696, 632, 54, 22, "v");
+                    vBias_input->box(FL_NO_BOX);
+                    vBias_input->color(FL_BACKGROUND_COLOR);
+                    vBias_input->selection_color(FL_BACKGROUND_COLOR);
+                    vBias_input->labeltype(FL_NORMAL_LABEL);
+                    vBias_input->labelfont(0);
+                    vBias_input->labelsize(14);
+                    vBias_input->labelcolor(FL_FOREGROUND_COLOR);
+                    vBias_input->minimum(0);
+                    vBias_input->maximum(4095);
+                    vBias_input->step(10);
+                    vBias_input->value(2047);
+                    vBias_input->callback((Fl_Callback*)cb_vBias_input, (void*)(2));
+                    vBias_input->align(Fl_Align(FL_ALIGN_LEFT));
+                    vBias_input->when(FL_WHEN_RELEASE);
+                  } // Wheel_Spinner* vBias_input
+                  { Fl_Button* o = new Fl_Button(614, 656, 36, 18, "Gain");
+                    o->box(FL_NO_BOX);
+                  } // Fl_Button* o
+                  { hGain_input = new Wheel_Spinner(628, 674, 55, 22, "h");
+                    hGain_input->type(1);
+                    hGain_input->box(FL_NO_BOX);
+                    hGain_input->color(FL_BACKGROUND_COLOR);
+                    hGain_input->selection_color(FL_BACKGROUND_COLOR);
+                    hGain_input->labeltype(FL_NORMAL_LABEL);
+                    hGain_input->labelfont(0);
+                    hGain_input->labelsize(14);
+                    hGain_input->labelcolor(FL_FOREGROUND_COLOR);
+                    hGain_input->minimum(0);
+                    hGain_input->maximum(4);
+                    hGain_input->step(0.1);
+                    hGain_input->value(2);
+                    hGain_input->callback((Fl_Callback*)cb_hGain_input, (void*)(3));
+                    hGain_input->align(Fl_Align(FL_ALIGN_LEFT));
+                    hGain_input->when(FL_WHEN_RELEASE);
+                    hGain_input->format("%.2f");
+                  } // Wheel_Spinner* hGain_input
+                  { vGain_input = new Wheel_Spinner(696, 674, 54, 22, "v");
+                    vGain_input->type(1);
+                    vGain_input->box(FL_NO_BOX);
+                    vGain_input->color(FL_BACKGROUND_COLOR);
+                    vGain_input->selection_color(FL_BACKGROUND_COLOR);
+                    vGain_input->labeltype(FL_NORMAL_LABEL);
+                    vGain_input->labelfont(0);
+                    vGain_input->labelsize(14);
+                    vGain_input->labelcolor(FL_FOREGROUND_COLOR);
+                    vGain_input->minimum(0);
+                    vGain_input->maximum(4);
+                    vGain_input->step(0.1);
+                    vGain_input->value(2);
+                    vGain_input->callback((Fl_Callback*)cb_vGain_input, (void*)(4));
+                    vGain_input->align(Fl_Align(FL_ALIGN_LEFT));
+                    vGain_input->when(FL_WHEN_RELEASE);
+                    vGain_input->format("%.2f");
+                  } // Wheel_Spinner* vGain_input
+                  o->end();
+                } // Fl_Group* o
                 o->end();
               } // Fl_Group* o
               o->end();

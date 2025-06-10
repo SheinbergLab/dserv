@@ -10,18 +10,19 @@ decl {\#include "Fl_Console.h"
 \#include "essgui.h"
 \#include "EyeTouchWin.hpp"
 \#include "TclEditor.h"
+\#include "WheelSpinner.h"
 \#include "VirtualEye.hpp"
 \#include "VirtualJoystick.hpp"
-\#include "Fl_OpDesk.h"} {public global
+\#include "Fl_OpDesk.h"} {selected public global
 }
 
 Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window *}
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {974 66 1280 800} type Double resizable visible
+    xywh {921 326 1280 800} type Double resizable visible
   } {
-    Fl_Menu_Bar menu_bar {open selected
+    Fl_Menu_Bar menu_bar {open
       xywh {0 0 1280 32}
     } {}
     Fl_Group {} {open
@@ -184,14 +185,18 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               xywh {348 348 128 23}
             }
           }
-          Fl_Scroll options_widget {
-            label {Variant Options} open
-            xywh {185 398 310 128} type BOTH_ALWAYS align 5 v_label_margin 3
-          } {}
-          Fl_Scroll settings_widget {
-            label {System Settings} open
-            xywh {186 551 309 150} type BOTH_ALWAYS align 5 v_label_margin 3
-          } {}
+          Fl_Group {} {open
+            xywh {184 381 311 324} resizable
+          } {
+            Fl_Scroll options_widget {
+              label {Variant Options} open
+              xywh {185 398 310 128} type BOTH_ALWAYS align 5 v_label_margin 3
+            } {}
+            Fl_Scroll settings_widget {
+              label {System Settings} open
+              xywh {186 551 309 150} type BOTH_ALWAYS align 5 v_label_margin 3
+            } {}
+          }
         }
       }
       Fl_Group {} {
@@ -203,7 +208,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         } {
           Fl_Group {} {
             label behavior open
-            xywh {504 91 747 615} labelsize 16
+            xywh {504 91 747 618} labelsize 16
           } {
             Fl_Group {} {
               label {Behavior Monitor} open
@@ -211,17 +216,22 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             } {
               Fl_Box eyetouch_widget {
                 label EyeWindow
-                xywh {521 126 232 232} box DOWN_FRAME
+                xywh {519 126 232 232} box DOWN_FRAME
                 class EyeTouchWin
               }
               Fl_Group {} {
                 label {window status} open
-                xywh {514 360 241 20} box THIN_DOWN_FRAME labeltype NO_LABEL
-              } {}
+                xywh {514 358 241 22} box THIN_DOWN_FRAME labeltype NO_LABEL
+              } {
+                Fl_Output eye_settings_label {
+                  label settings
+                  xywh {518 359 236 20} labeltype NO_LABEL
+                }
+              }
             }
             Fl_Group {} {
               label Performance open
-              xywh {759 455 492 248} box UP_BOX v_label_margin 3
+              xywh {763 455 488 248} box UP_BOX v_label_margin 3
             } {
               Fl_Flex sorters_widget {open
                 xywh {1070 602 166 60} hide gap 10
@@ -251,8 +261,8 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               xywh {763 119 488 304} labeltype NO_LABEL
             } {}
             Fl_Group {} {
-              label {Virtual Input} open
-              xywh {514 407 245 296} color 56 v_label_margin 3
+              label Input open
+              xywh {514 407 246 302} color 56 v_label_margin 3
             } {
               Fl_Group {} {
                 label {Eye Window} open
@@ -274,6 +284,52 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   callback virtual_joystick_cb
                   xywh {565 649 12 12} when 7
                   class VirtualJoystick
+                }
+              }
+              Fl_Group {} {open
+                xywh {612 614 148 84}
+              } {
+                Fl_Group {} {open
+                  xywh {612 614 148 84}
+                } {
+                  Fl_Button {} {
+                    label Bias
+                    xywh {612 614 36 18} box NO_BOX
+                  }
+                  Fl_Spinner hBias_input {
+                    label h
+                    user_data 1 user_data_type long
+                    callback {update_eye_settings(o,v);}
+                    xywh {627 632 55 22} minimum 0 maximum 4095 step 10 value 2047
+                    class Wheel_Spinner
+                  }
+                  Fl_Spinner vBias_input {
+                    label v
+                    user_data 2 user_data_type long
+                    callback {update_eye_settings(o,v);}
+                    xywh {696 632 54 22} minimum 0 maximum 4095 step 10 value 2047
+                    class Wheel_Spinner
+                  }
+                  Fl_Button {} {
+                    label Gain
+                    xywh {614 656 36 18} box NO_BOX
+                  }
+                  Fl_Spinner hGain_input {
+                    label h
+                    user_data 3 user_data_type long
+                    callback {update_eye_settings(o,v);}
+                    xywh {628 674 55 22} type Float minimum 0 maximum 4 step 0.1 value 2
+                    code0 {hGain_input->format("%.2f");}
+                    class Wheel_Spinner
+                  }
+                  Fl_Spinner vGain_input {
+                    label v
+                    user_data 4 user_data_type long
+                    callback {update_eye_settings(o,v);}
+                    xywh {696 674 54 22} type Float minimum 0 maximum 4 step 0.1 value 2
+                    code0 {vGain_input->format("%.2f");}
+                    class Wheel_Spinner
+                  }
                 }
               }
             }

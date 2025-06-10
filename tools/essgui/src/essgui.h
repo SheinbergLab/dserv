@@ -21,6 +21,7 @@ int reload_protocol(void);
 int reload_variant(void);
 int save_settings(void);
 int reset_settings(void);
+void update_eye_settings(Fl_Widget *, long);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);

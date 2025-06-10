@@ -693,8 +693,44 @@ int save_settings(void) {
 
 int reset_settings(void) {
   std::string rstr;
-  g_App->ds_sock->esscmd(g_App->host, "ess::reset_settings; ess::reload_variant", rstr);
+  g_App->ds_sock->esscmd(g_App->host,
+			 "ess::reset_settings; ess::reload_variant", rstr);
   return 0;
+}
+
+void update_eye_settings(Fl_Widget *w, long wtype)
+{
+  std::string cmd;
+
+  switch(wtype) {
+  case 1:
+    cmd = std::format("set ::openiris::offset_h {}", hBias_input->value());
+    break;
+    
+  case 2:
+    cmd = std::format("set ::openiris::offset_v {}", vBias_input->value());
+    break;
+    
+  case 3:
+    cmd = std::format("set ::openiris::scale_h {}", hGain_input->value());
+    break;
+    
+  case 4:
+    cmd = std::format("set ::openiris::scale_v {}", vGain_input->value());
+    break;
+    
+  default:
+    break;
+  }
+  
+  std::string rstr;
+  g_App->openiris_eval(cmd.c_str(), rstr);
+
+#if 0
+  std::string settings = std::format("Hello {}",
+				     hBias_input->value());
+  eye_settings_label->value(settings.c_str());
+#endif
 }
 
 int add_host(const char *host)
