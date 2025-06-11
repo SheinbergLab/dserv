@@ -19,7 +19,7 @@ enum TclStyleTypes {
     STYLE_STRING_DQ = 'D',     // Double-quoted string
     STYLE_VARIABLE = 'E',
     STYLE_COMMAND_SUBST = 'F', // Square bracket command substitution
-    STYLE_NUMBER = 'G'
+    STYLE_NUMBER = 'G',
     // If specific styling for '{' and '}' characters is desired later,
     // a new style like STYLE_BRACE_DELIMITER could be added.
 };
@@ -33,7 +33,9 @@ Fl_Text_Display::Style_Table_Entry styletable[] = {
     { FL_DARK_GREEN,   FL_COURIER, 14 },        // D - Strings
     { FL_DARK_MAGENTA, FL_COURIER, 14 },        // E - Variables
     { FL_DARK_CYAN,    FL_COURIER, 14 },        // F - Command subst
-    { FL_DARK_RED,     FL_COURIER, 14 }         // G - Numbers
+    { FL_DARK_RED,     FL_COURIER, 14 },        // G - Numbers
+    { FL_DARK_BLUE,    FL_COURIER_BOLD, 14 }    // H - Highlighting for search
+    
 };
 
 // Tcl keywords

@@ -54,6 +54,8 @@ private:
   }
   
 public:
+  int indent_size = 4;
+  
   Fl_Text_Buffer *textbuf;
   Fl_Text_Buffer *stylebuf;
   
@@ -184,7 +186,8 @@ static void format_editor_text_preserve_cursor(Fl_Text_Buffer* buffer,
   std::string code(text);
   free(text);
   
-  std::string formatted = TclFormatter::format_tcl_code(code);
+  std::string formatted = TclFormatter::format_tcl_code(code,
+							editor->indent_size);
   buffer->text(formatted.c_str());
   
   // Attempt to preserve cursor position (approximate)
