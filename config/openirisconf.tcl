@@ -53,19 +53,25 @@ namespace eval openiris {
 	set r_cr1 "$r_cr1_x $r_cr1_y"
 	set r_cr4 "$r_cr4_x $r_cr4_y"
 
-	dservSet openiris/right/pupil $r_pupil
-	dservSet openiris/right/cr1   $r_cr1
-	dservSet openiris/right/cr4   $r_cr4
-	dservSet openiris/frame       [expr {int($frame)}]
-	dservSet openiris/time        $seconds
-	dservSet openiris/int0        [expr {int($int0)}]
-	dservSet openiris/int1        [expr {int($int1)}]
+	foreach v "pupil cr1 cr4" {
+	    dl_local vals [dl_flist {*}[set r_$v]]
+	    dl_toString $vals fvals
+	    dservSetData openiris/right/$v 0 2 $fvals
+	}
+
+	dl_toString [dl_flist $seconds] fvals
+	dservSetData openiris/time 0 2 $fvals
+
+	foreach v "frame int0 int1" {
+	    dl_toString [dl_ilist [expr {int([set $v])}]] ival
+	    dservSet openiris/$v 0 5 $ival
+	}
 
 	# do actual conversion using params in settings
 	dict with settings {
 	    # set ain/vals as shorts to be compatible with other eye inputs
 	    if { $invert_h } { set s_h [expr {-1*$scale_h}] } { set s_h $scale_h }
-	    if { $invert_v } { set s_v [expr {-1*$scale_v}] } { set s_h $scale_v }
+	    if { $invert_v } { set s_v [expr {-1*$scale_v}] } { set s_v $scale_v }
 	    dl_local avals [dl_reverse [dl_short \
 					    [dl_add \
 						 "$offset_h $offset_v" \

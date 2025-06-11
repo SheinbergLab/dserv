@@ -1366,12 +1366,16 @@ namespace eval ess {
 
     proc file_to_json {f} {
         variable data_dir
-        set json_dir [regsub essdat $data_dir json]
+        set json_dir [regsub essdat $data_dir jsondat]
+        set dgz_dir [regsub essdat $data_dir dgzdat]
         set infile [file join $data_dir $f.ess]
         set outfile [file join $json_dir $f.json]
-
+	set dgfile [file join $dgz_dir $f.dgz]
+	
         set g [dslog::readESS $infile]
         set j [dg_toJSON $g]
+
+	dg_write $g $dgfile
         dg_delete $g
 
         set f [open $outfile w]
