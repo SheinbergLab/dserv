@@ -7,6 +7,7 @@
 #include <FL/fl_string_functions.h>
 
 #include <iostream>
+#include <sstream>
 #include <cassert>
 #include <algorithm> 
 #include <cctype>
@@ -290,6 +291,7 @@ public:
     ds_sock->add_match(hoststr.c_str(), "system/*");
     ds_sock->add_match(hoststr.c_str(), "stimdg");
     ds_sock->add_match(hoststr.c_str(), "trialdg");
+    ds_sock->add_match(hoststr.c_str(), "openiris/settings");
     ds_sock->add_match(hoststr.c_str(), "print");
 
     /* touch variables to update interface (check spaces at EOL!) */
@@ -302,7 +304,7 @@ public:
 				"ess/state_table ess/rmt_cmds "
 				"ess/system_script ess/protocol_script ess/variants_script ess/loaders_script ess/stim_script "
 				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
-				"system/os} { dservTouch $v }"), rstr);
+				"system/os openiris/settings} { dservTouch $v }"), rstr);
 
     update_em_regions();
     update_touch_regions();
@@ -700,37 +702,76 @@ int reset_settings(void) {
 
 void update_eye_settings(Fl_Widget *w, long wtype)
 {
+  Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
   std::string cmd;
 
+  std::ostringstream oss;
+  std::string param;
   switch(wtype) {
-  case 1:
-    cmd = std::format("set ::openiris::offset_h {}", hBias_input->value());
-    break;
-    
-  case 2:
-    cmd = std::format("set ::openiris::offset_v {}", vBias_input->value());
-    break;
-    
-  case 3:
-    cmd = std::format("set ::openiris::scale_h {}", hGain_input->value());
-    break;
-    
-  case 4:
-    cmd = std::format("set ::openiris::scale_v {}", vGain_input->value());
-    break;
-    
-  default:
-    break;
+  case 1: param = std::string("offset_h"); break;
+  case 2: param = std::string("offset_v"); break;
+  case 3: param = std::string("scale_h"); break;
+  case 4: param = std::string("scale_v"); break;
+  default: return; break;
   }
+  oss << "::openiris::set_param " << param << " " << spinner->value();
+  cmd = oss.str();
   
   std::string rstr;
   g_App->openiris_eval(cmd.c_str(), rstr);
+}
 
-#if 0
-  std::string settings = std::format("Hello {}",
-				     hBias_input->value());
-  eye_settings_label->value(settings.c_str());
-#endif
+// Version for string input
+int refresh_eye_settings(Tcl_Interp *interp, const char *dictString)
+{
+  // Convert string to Tcl object
+  Tcl_Obj *dictObj = Tcl_NewStringObj(dictString, -1);
+  Tcl_IncrRefCount(dictObj);  // Prevent garbage collection
+  
+  // Verify it's a valid dictionary by trying to get its size
+  Tcl_Size dictSize;
+  if (Tcl_DictObjSize(interp, dictObj, &dictSize) != TCL_OK) {
+    Tcl_DecrRefCount(dictObj);
+    return TCL_ERROR;
+  }
+    
+  Tcl_DictSearch search;
+  Tcl_Obj *keyObj, *valueObj;
+  int done;
+  
+  // Start the dictionary search
+  if (Tcl_DictObjFirst(interp, dictObj, &search, &keyObj, &valueObj, &done) != TCL_OK) {
+    Tcl_DecrRefCount(dictObj);
+    return TCL_ERROR;
+  }
+  
+  // Iterate through all key-value pairs
+  while (!done) {
+    const char *key = Tcl_GetString(keyObj);
+    const char *value = Tcl_GetString(valueObj);
+    
+    // Get typed values as needed
+    if (strcmp(key, "scale_h") == 0 || strcmp(key, "scale_v") == 0) {
+      double doubleValue;
+      if (Tcl_GetDoubleFromObj(interp, valueObj, &doubleValue) == TCL_OK) {
+	if (!strcmp(key, "scale_h")) hGain_input->value(doubleValue);
+	else vGain_input->value(doubleValue);
+      }
+    } else if (strcmp(key, "offset_h") == 0 || strcmp(key, "offset_v") == 0) {
+      int intValue;
+      if (Tcl_GetIntFromObj(interp, valueObj, &intValue) == TCL_OK) {
+	if (!strcmp(key, "offset_h")) hBias_input->value(intValue);
+	else vBias_input->value(intValue);
+      }
+    }
+    
+    Tcl_DictObjNext(&search, &keyObj, &valueObj, &done);
+  }
+  
+  // Clean up
+  Tcl_DictObjDone(&search);
+  Tcl_DecrRefCount(dictObj);
+  return TCL_OK;
 }
 
 int add_host(const char *host)
@@ -1678,7 +1719,7 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "ess/trialinfo")) {
     // use trialdg instead
   }
-  
+
   else if (!strcmp(json_string_value(name), "trialdg")) {
     const char *dgdata = json_string_value(data);
     DYN_GROUP *dg = decode_dg(dgdata, strlen(dgdata));
@@ -1692,6 +1733,10 @@ void process_dpoint_cb(void *cbdata) {
     const char *msg = json_string_value(data);
     output_term->append(msg);
     output_term->append("\n");
+  }
+  
+  else if (!strcmp(json_string_value(name), "openiris/settings")) {
+    refresh_eye_settings(g_App->interp(), json_string_value(data));
   }
   
   else {
