@@ -1294,15 +1294,18 @@ namespace eval ess {
 
         variable em_active
         if {$em_active} {
-            # record raw em data: obs_limited, 80 byte buffer, every 5 samples
-            dservLoggerAddMatch $filename ain/vals 1 80 5
+            # record raw em data: obs_limited, 80 byte buffer, every sample
+            dservLoggerAddMatch $filename ain/vals 1 80 1
             dservLoggerAddMatch $filename em_coeffDG
 
 	    if { [dservExists openiris/frameinfo] } {
-		foreach side "left" {
-		    foreach v "pupil cr1 cr4 frame time" {
+		foreach side "right" {
+		    foreach v "pupil cr1 cr4" {
 			dservLoggerAddMatch $filename openiris/$side/$v
 		    }
+		}
+		foreach v "frame time int0 int1" {
+		    dservLoggerAddMatch $filename openiris/$v
 		}
 	    }
         }

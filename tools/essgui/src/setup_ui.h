@@ -62,6 +62,9 @@ extern void virtual_joystick_cb(VirtualJoystick*, void*);
 extern VirtualJoystick *virtual_joystick_widget;
 extern Wheel_Spinner *hBias_input;
 extern Wheel_Spinner *vBias_input;
+#include <FL/Fl_Check_Button.H>
+extern Fl_Check_Button *hInvert_checkbox;
+extern Fl_Check_Button *vInvert_checkbox;
 extern Wheel_Spinner *hGain_input;
 extern Wheel_Spinner *vGain_input;
 extern Fl_Scroll *rmt_commands_widget;

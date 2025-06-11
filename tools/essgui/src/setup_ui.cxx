@@ -118,6 +118,18 @@ static void cb_vBias_input(Wheel_Spinner* o, long v) {
   update_eye_settings(o,v);
 }
 
+Fl_Check_Button *hInvert_checkbox=(Fl_Check_Button *)0;
+
+static void cb_hInvert_checkbox(Fl_Check_Button* o, long v) {
+  update_eye_settings(o,v);
+}
+
+Fl_Check_Button *vInvert_checkbox=(Fl_Check_Button *)0;
+
+static void cb_vInvert_checkbox(Fl_Check_Button* o, long v) {
+  update_eye_settings(o,v);
+}
+
 Wheel_Spinner *hGain_input=(Wheel_Spinner *)0;
 
 static void cb_hGain_input(Wheel_Spinner* o, long v) {
@@ -490,6 +502,14 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   { Fl_Button* o = new Fl_Button(614, 656, 36, 18, "Gain");
                     o->box(FL_NO_BOX);
                   } // Fl_Button* o
+                  { hInvert_checkbox = new Fl_Check_Button(650, 655, 36, 19, "inv");
+                    hInvert_checkbox->down_box(FL_DOWN_BOX);
+                    hInvert_checkbox->callback((Fl_Callback*)cb_hInvert_checkbox, (void*)(5));
+                  } // Fl_Check_Button* hInvert_checkbox
+                  { vInvert_checkbox = new Fl_Check_Button(717, 655, 33, 19, "inv");
+                    vInvert_checkbox->down_box(FL_DOWN_BOX);
+                    vInvert_checkbox->callback((Fl_Callback*)cb_vInvert_checkbox, (void*)(6));
+                  } // Fl_Check_Button* vInvert_checkbox
                   { hGain_input = new Wheel_Spinner(628, 674, 55, 22, "h");
                     hGain_input->type(1);
                     hGain_input->box(FL_NO_BOX);
@@ -577,11 +597,12 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
             o->hide();
             { editor_tabs = new Fl_Tabs(503, 100, 758, 595);
               { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "System");
+                o->hide();
                 { system_editor = new TclEditor(503, 138, 754, 510, "system");
                   system_editor->box(FL_DOWN_FRAME);
                   system_editor->color(FL_BACKGROUND2_COLOR);
                   system_editor->selection_color((Fl_Color)31);
-                  system_editor->labeltype(FL_NORMAL_LABEL);
+                  system_editor->labeltype(FL_NO_LABEL);
                   system_editor->labelfont(0);
                   system_editor->labelsize(14);
                   system_editor->labelcolor(FL_FOREGROUND_COLOR);
@@ -596,7 +617,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   protocol_editor->box(FL_DOWN_FRAME);
                   protocol_editor->color(FL_BACKGROUND2_COLOR);
                   protocol_editor->selection_color((Fl_Color)31);
-                  protocol_editor->labeltype(FL_NORMAL_LABEL);
+                  protocol_editor->labeltype(FL_NO_LABEL);
                   protocol_editor->labelfont(0);
                   protocol_editor->labelsize(14);
                   protocol_editor->labelcolor(FL_FOREGROUND_COLOR);
@@ -611,7 +632,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   loaders_editor->box(FL_DOWN_FRAME);
                   loaders_editor->color(FL_BACKGROUND2_COLOR);
                   loaders_editor->selection_color((Fl_Color)31);
-                  loaders_editor->labeltype(FL_NORMAL_LABEL);
+                  loaders_editor->labeltype(FL_NO_LABEL);
                   loaders_editor->labelfont(0);
                   loaders_editor->labelsize(14);
                   loaders_editor->labelcolor(FL_FOREGROUND_COLOR);
@@ -626,7 +647,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   variants_editor->box(FL_DOWN_FRAME);
                   variants_editor->color(FL_BACKGROUND2_COLOR);
                   variants_editor->selection_color((Fl_Color)31);
-                  variants_editor->labeltype(FL_NORMAL_LABEL);
+                  variants_editor->labeltype(FL_NO_LABEL);
                   variants_editor->labelfont(0);
                   variants_editor->labelsize(14);
                   variants_editor->labelcolor(FL_FOREGROUND_COLOR);
@@ -636,12 +657,11 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 o->end();
               } // Fl_Group* o
               { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "Stim");
-                o->hide();
                 { stim_editor = new TclEditor(503, 138, 754, 515, "stim");
                   stim_editor->box(FL_DOWN_FRAME);
                   stim_editor->color(FL_BACKGROUND2_COLOR);
                   stim_editor->selection_color((Fl_Color)31);
-                  stim_editor->labeltype(FL_NORMAL_LABEL);
+                  stim_editor->labeltype(FL_NO_LABEL);
                   stim_editor->labelfont(0);
                   stim_editor->labelsize(14);
                   stim_editor->labelcolor(FL_FOREGROUND_COLOR);

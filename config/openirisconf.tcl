@@ -15,7 +15,9 @@ namespace eval openiris {
 			   scale_h 2 \
 			   scale_v 2 \
 			   offset_h 2000 \
-			   offset_v 2000]
+			   offset_v 2000 \
+			   invert_h 0 \
+			   invert_v 0]
 
     proc update_settings {} {
 	variable settings
@@ -33,6 +35,8 @@ namespace eval openiris {
     proc set_scale_v {s} { set_param scale_v $s }
     proc set_offset_h {o} { set_param offset_h $o }
     proc set_offset_v {o} { set_param offset_v $o }
+    proc set_invert_h {o} { set_param invert_h $o }
+    proc set_invert_v {o} { set_param invert_v $o }
     
     proc process { dpoint data } {
 	variable settings
@@ -60,12 +64,14 @@ namespace eval openiris {
 	# do actual conversion using params in settings
 	dict with settings {
 	    # set ain/vals as shorts to be compatible with other eye inputs
+	    if { $invert_h } { set s_h [expr {-1*$scale_h}] } { set s_h $scale_h }
+	    if { $invert_v } { set s_v [expr {-1*$scale_v}] } { set s_h $scale_v }
 	    dl_local avals [dl_reverse [dl_short \
 					    [dl_add \
 						 "$offset_h $offset_v" \
 						 [dl_mult \
 						      [dl_sub $r_cr1 $r_cr4] \
-						      "$scale_h $scale_v"]]]]
+						      "$s_h $s_v"]]]]
 	}
 
 	# convert vals to binary and set the ain/vals points as two shorts

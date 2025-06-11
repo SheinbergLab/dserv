@@ -5,6 +5,7 @@
 #include <FL/Fl_Text_Buffer.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/fl_string_functions.h>
+#include <FL/Fl_Check_Button.H>
 
 #include <iostream>
 #include <sstream>
@@ -702,20 +703,55 @@ int reset_settings(void) {
 
 void update_eye_settings(Fl_Widget *w, long wtype)
 {
-  Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
   std::string cmd;
 
   std::ostringstream oss;
-  std::string param;
   switch(wtype) {
-  case 1: param = std::string("offset_h"); break;
-  case 2: param = std::string("offset_v"); break;
-  case 3: param = std::string("scale_h"); break;
-  case 4: param = std::string("scale_v"); break;
+  case 1:
+    {
+      Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
+      oss << "::openiris::set_param offset_h " << spinner->value();
+      cmd = oss.str();
+    }
+    break;
+  case 2:
+    {
+      Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
+      oss << "::openiris::set_param offset_v " << spinner->value();
+      cmd = oss.str();
+    }
+    break;
+  case 3:
+    {
+      Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
+      oss << "::openiris::set_param scale_h " << spinner->value();
+      cmd = oss.str();
+    }
+    break;
+  case 4:
+    {
+      Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
+      oss << "::openiris::set_param scale_v " << spinner->value();
+      cmd = oss.str();
+    }
+    break;
+  case 5:
+    {
+      Fl_Check_Button *check = static_cast<Fl_Check_Button *>(w);
+      oss << "::openiris::set_param invert_h " << std::to_string(check->value());
+      cmd = oss.str();
+    }
+    break;
+  case 6:
+    {
+      Fl_Check_Button *check = static_cast<Fl_Check_Button *>(w);
+      oss << "::openiris::set_param invert_v " << std::to_string(check->value());
+      cmd = oss.str();
+    }
+    break;
+    
   default: return; break;
   }
-  oss << "::openiris::set_param " << param << " " << spinner->value();
-  cmd = oss.str();
   
   std::string rstr;
   g_App->openiris_eval(cmd.c_str(), rstr);
@@ -762,6 +798,12 @@ int refresh_eye_settings(Tcl_Interp *interp, const char *dictString)
       if (Tcl_GetIntFromObj(interp, valueObj, &intValue) == TCL_OK) {
 	if (!strcmp(key, "offset_h")) hBias_input->value(intValue);
 	else vBias_input->value(intValue);
+      }
+    } else if (strcmp(key, "invert_h") == 0 || strcmp(key, "invert_v") == 0) {
+      int intValue;
+      if (Tcl_GetIntFromObj(interp, valueObj, &intValue) == TCL_OK) {
+	if (!strcmp(key, "invert_h")) hInvert_checkbox->value(intValue);
+	else vInvert_checkbox->value(intValue);
       }
     }
     
