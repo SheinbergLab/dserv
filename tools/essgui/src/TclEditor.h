@@ -26,7 +26,8 @@ class TclEditor : public Fl_Text_Editor {
 private:
   Fl_Menu_Button *context_menu;
   static TclEditor* menu_editor; // For static callbacks
-
+  std::string kill_buffer; // Store killed text for yanking
+  
  // Static callback functions for menu items
   static void cut_cb(Fl_Widget*, void* data) {
     TclEditor* editor = static_cast<TclEditor*>(data);
@@ -71,7 +72,7 @@ public:
     context_menu->add("Copy", FL_CTRL+'c', copy_cb, this, 0);
     context_menu->add("Paste", FL_CTRL+'v', paste_cb, this, FL_MENU_DIVIDER);
     context_menu->add("Select All", FL_CTRL+'a', select_all_cb, this, FL_MENU_DIVIDER);
-    context_menu->add("Format", FL_CTRL+'f', format_cb, this, 0);    
+    context_menu->add("Format", FL_META+'f', format_cb, this, 0);    
   }
 
   ~TclEditor() {
@@ -82,14 +83,50 @@ public:
   int handle(int event) override {
     if (event == FL_KEYDOWN) {
       int key = Fl::event_key();
+      int ctrl = Fl::event_state() & FL_CTRL;
+      int shift = Fl::event_state() & FL_SHIFT;
+      
       if (key == FL_Enter) {
-	handle_auto_indent(this);
-
+	//	handle_auto_indent(this);
+	handle_enter();
 	return 1;
       }
-      if (key == FL_Tab) {
-	format_code();
-	return 1;
+
+      if (key == FL_Tab && !shift) {
+	// Handle Tab key press
+	handle_tab();
+	return 1; // Event handled
+      }
+
+
+      // Emacs/macOS keybindings
+      if (ctrl) {
+	switch (key) {
+	case 'a': case 'A': // Beginning of line
+	  handle_beginning_of_line();
+	  return 1;
+	case 'e': case 'E': // End of line
+	  handle_end_of_line();
+	  return 1;
+	case 'f': case 'F': // Forward char
+	  handle_forward_char();
+	  return 1;
+	case 'b': case 'B': // Back char
+	  handle_back_char();
+	  return 1;
+	case 'n': case 'N': // Next line
+	  handle_next_line();
+	  return 1;
+	case 'p': case 'P': // Previous line
+	  handle_previous_line();
+	  return 1;
+	case 'k': case 'K': // Kill to end of line
+	  handle_kill_line();
+	  return 1;
+	case 'y': case 'Y': // Yank
+	  handle_yank();
+	  return 1;
+	}
       }
     }
     else if (event == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE) {
@@ -103,6 +140,226 @@ public:
     return Fl_Text_Editor::handle(event);
   }
 
+  void handle_tab() {
+    // Get current cursor position
+    int cursor_pos = insert_position();
+    
+    // Get the entire buffer text
+    char* text = buffer()->text();
+    std::string code(text);
+    free(text);
+    
+    // Split into lines
+    std::vector<std::string> lines = TclFormatter::split_lines(code);
+    
+    // Find which line the cursor is on
+    int current_line = 0;
+    int char_count = 0;
+    for (int i = 0; i < lines.size(); ++i) {
+      char_count += lines[i].length() + 1; // +1 for newline
+      if (cursor_pos < char_count) {
+	current_line = i;
+	break;
+      }
+    }
+    
+    // Calculate proper indent for this line
+    int target_indent = TclFormatter::calculate_line_indent(lines, current_line, 4);
+    
+    // Get current line's existing indent
+    std::string& line = lines[current_line];
+    int current_indent = 0;
+    for (char c : line) {
+      if (c == ' ') current_indent++;
+      else if (c == '\t') current_indent += 4; // Assuming tab = 4 spaces
+      else break;
+    }
+    
+    // Adjust indentation
+    if (current_indent < target_indent) {
+      // Need to add spaces
+      int spaces_to_add = target_indent - current_indent;
+      
+      // Find line start position
+      int line_start = 0;
+      for (int i = 0; i < current_line; ++i) {
+	line_start += lines[i].length() + 1;
+      }
+      
+      // Insert spaces at beginning of line
+      buffer()->insert(line_start, std::string(spaces_to_add, ' ').c_str());
+      
+      // Move cursor to end of indentation
+      insert_position(line_start + target_indent);
+    } else if (current_indent > target_indent) {
+      // Need to remove spaces
+      int spaces_to_remove = current_indent - target_indent;
+      
+      // Find line start position
+      int line_start = 0;
+      for (int i = 0; i < current_line; ++i) {
+	line_start += lines[i].length() + 1;
+      }
+      
+      // Remove excess spaces
+      buffer()->remove(line_start, line_start + spaces_to_remove);
+      
+      // Move cursor to end of indentation
+      insert_position(line_start + target_indent);
+    } else {
+      // Already at correct indent - move cursor to end of indentation
+      int line_start = 0;
+      for (int i = 0; i < current_line; ++i) {
+	line_start += lines[i].length() + 1;
+      }
+      insert_position(line_start + current_indent);
+    }
+  }
+
+  void handle_enter() {
+    // Get current cursor position
+    int cursor_pos = insert_position();
+        
+    // Insert newline first
+    buffer()->insert(cursor_pos, "\n");
+    cursor_pos++; // Move past the newline
+    
+    // Move cursor to the new line
+    insert_position(cursor_pos);
+    
+    // Get updated text and calculate indent for new line
+    char* text = buffer()->text();
+    std::string code(text);
+    free(text);
+    
+    std::vector<std::string> lines = TclFormatter::split_lines(code);
+    
+    // Find current line (after the newline)
+    int current_line = 0;
+    int char_count = 0;
+    for (int i = 0; i < lines.size(); ++i) {
+      char_count += lines[i].length() + 1;
+      if (cursor_pos <= char_count) {
+	current_line = i;
+	break;
+      }
+    }
+    
+    // Calculate and insert proper indent
+    int indent = TclFormatter::calculate_line_indent(lines, current_line, 4);
+    if (indent > 0) {
+      buffer()->insert(cursor_pos, std::string(indent, ' ').c_str());
+      cursor_pos += indent;
+    }
+    
+    // Always update cursor position to after the indent
+    insert_position(cursor_pos);
+  }
+
+
+  // Emacs/macOS keybinding implementations
+  void handle_beginning_of_line() {
+    int pos = insert_position();
+    int line_start = buffer()->line_start(pos);
+    insert_position(line_start);
+  }
+    
+  void handle_end_of_line() {
+    int pos = insert_position();
+    int line_end = buffer()->line_end(pos);
+    insert_position(line_end);
+  }
+    
+  void handle_forward_char() {
+    int pos = insert_position();
+    int max_pos = buffer()->length();
+    if (pos < max_pos) {
+      insert_position(pos + 1);
+    }
+  }
+    
+  void handle_back_char() {
+    int pos = insert_position();
+    if (pos > 0) {
+      insert_position(pos - 1);
+    }
+  }
+    
+  void handle_next_line() {
+    int pos = insert_position();
+    int line = buffer()->count_lines(0, pos);
+    int col = pos - buffer()->line_start(pos);
+        
+    // Move to next line
+    if (line < buffer()->count_lines(0, buffer()->length())) {
+      int next_line_start = buffer()->line_end(pos) + 1;
+      if (next_line_start <= buffer()->length()) {
+	int next_line_end = buffer()->line_end(next_line_start);
+	int next_line_length = next_line_end - next_line_start;
+                
+	// Try to maintain column position
+	int new_pos = next_line_start + std::min(col, next_line_length);
+	insert_position(new_pos);
+      }
+    }
+  }
+    
+  void handle_previous_line() {
+    int pos = insert_position();
+    int line_start = buffer()->line_start(pos);
+    int col = pos - line_start;
+    
+    // Move to previous line
+    if (line_start > 0) {
+      int prev_line_end = line_start - 1;
+      int prev_line_start = buffer()->line_start(prev_line_end);
+      int prev_line_length = prev_line_end - prev_line_start;
+      
+      // Try to maintain column position
+      int new_pos = prev_line_start + std::min(col, prev_line_length);
+      insert_position(new_pos);
+    }
+  }
+
+  void handle_kill_line() {
+    int pos = insert_position();
+    int line_end = buffer()->line_end(pos);
+    
+    if (pos == line_end) {
+      // At end of line - kill the newline character if there is one
+      if (pos < buffer()->length()) {
+	// Kill just the newline
+	kill_buffer = "\n";
+	buffer()->remove(pos, pos + 1);
+        
+	// Also copy to system clipboard
+	Fl::copy(kill_buffer.c_str(), kill_buffer.length(), 1);
+      }
+    } else {
+      // Kill from cursor to end of line
+      int length = line_end - pos;
+      char* text = buffer()->text_range(pos, line_end);
+      kill_buffer = std::string(text);
+      free(text);
+      
+      buffer()->remove(pos, line_end);
+      
+      // Also copy to system clipboard
+      Fl::copy(kill_buffer.c_str(), kill_buffer.length(), 1);
+    }
+  }
+  
+  void handle_yank() {
+    if (!kill_buffer.empty()) {
+      int pos = insert_position();
+      buffer()->insert(pos, kill_buffer.c_str());
+      insert_position(pos + kill_buffer.length());
+    } else {
+      // If kill buffer is empty, try to paste from system clipboard
+      Fl::paste(*this, 1);
+    }
+  }  
+  
   void format_code(void) {
     format_editor_text_preserve_cursor(buffer(), this);
   }
