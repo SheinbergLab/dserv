@@ -27,6 +27,7 @@ private:
   Fl_Menu_Button *context_menu;
   static TclEditor* menu_editor; // For static callbacks
   std::string kill_buffer; // Store killed text for yanking
+  bool last_was_kill;      // Track if last command was a kill
   
  // Static callback functions for menu items
   static void cut_cb(Fl_Widget*, void* data) {
@@ -89,44 +90,66 @@ public:
       if (key == FL_Enter) {
 	//	handle_auto_indent(this);
 	handle_enter();
+	last_was_kill = false;
 	return 1;
       }
 
       if (key == FL_Tab && !shift) {
 	// Handle Tab key press
 	handle_tab();
+	last_was_kill = false;
 	return 1; // Event handled
       }
-
-
+      
       // Emacs/macOS keybindings
       if (ctrl) {
 	switch (key) {
 	case 'a': case 'A': // Beginning of line
 	  handle_beginning_of_line();
+	  last_was_kill = false;
 	  return 1;
 	case 'e': case 'E': // End of line
 	  handle_end_of_line();
+	  last_was_kill = false;
 	  return 1;
 	case 'f': case 'F': // Forward char
 	  handle_forward_char();
+	  last_was_kill = false;
 	  return 1;
 	case 'b': case 'B': // Back char
 	  handle_back_char();
+	  last_was_kill = false;
 	  return 1;
 	case 'n': case 'N': // Next line
 	  handle_next_line();
+	  last_was_kill = false;
 	  return 1;
 	case 'p': case 'P': // Previous line
 	  handle_previous_line();
+	  last_was_kill = false;
+	  return 1;
+	case 'd': case 'D': // Delete char
+	  handle_delete_char();
+	  last_was_kill = false;
 	  return 1;
 	case 'k': case 'K': // Kill to end of line
 	  handle_kill_line();
+	  // Note: last_was_kill is set in handle_kill_line()
 	  return 1;
 	case 'y': case 'Y': // Yank
 	  handle_yank();
+	  last_was_kill = false;
 	  return 1;
 	}
+      }
+      // Any other key resets the kill sequence
+      // Check for cursor movement keys that aren't handled above
+      if (key == FL_Left || key == FL_Right || key == FL_Up || key == FL_Down ||
+	  key == FL_Home || key == FL_End || key == FL_Page_Up || key == FL_Page_Down) {
+	last_was_kill = false;
+      } else if (key != (FL_KP + 'k') && key != (FL_KP + 'K')) {
+	// Reset for any other key except Ctrl+K itself
+	last_was_kill = false;
       }
     }
     else if (event == FL_PUSH && Fl::event_button() == FL_RIGHT_MOUSE) {
@@ -136,7 +159,10 @@ public:
     else  if (event == FL_MOUSEWHEEL) {
       Fl_Text_Editor::handle(event);
       return 1;			// consume even if nothing to do
-    }
+    } else if (event == FL_PUSH || event == FL_DRAG || event == FL_RELEASE) {
+      // Mouse events also reset the kill sequence
+      last_was_kill = false;
+    }    
     return Fl_Text_Editor::handle(event);
   }
 
@@ -321,32 +347,63 @@ public:
     }
   }
 
+  void handle_delete_char() {
+    int pos = insert_position();
+    int max_pos = buffer()->length();
+    
+    if (pos < max_pos) {
+      // Check if we're at the end of a line (before a newline)
+      int line_end = buffer()->line_end(pos);
+      
+      if (pos == line_end && pos < max_pos) {
+	// At end of line - delete the newline to join lines
+	buffer()->remove(pos, pos + 1);
+      } else {
+	// Normal case - delete character at cursor
+	buffer()->remove(pos, pos + 1);
+      }
+    }
+    
+    // Note: Unlike kill commands, delete doesn't affect the kill buffer
+    // and doesn't copy to clipboard in standard Emacs
+  }
+
   void handle_kill_line() {
     int pos = insert_position();
     int line_end = buffer()->line_end(pos);
+    
+    std::string killed_text;
     
     if (pos == line_end) {
       // At end of line - kill the newline character if there is one
       if (pos < buffer()->length()) {
 	// Kill just the newline
-	kill_buffer = "\n";
+	killed_text = "\n";
 	buffer()->remove(pos, pos + 1);
-        
-	// Also copy to system clipboard
-	Fl::copy(kill_buffer.c_str(), kill_buffer.length(), 1);
       }
     } else {
       // Kill from cursor to end of line
-      int length = line_end - pos;
       char* text = buffer()->text_range(pos, line_end);
-      kill_buffer = std::string(text);
+      killed_text = std::string(text);
       free(text);
       
       buffer()->remove(pos, line_end);
-      
-      // Also copy to system clipboard
-      Fl::copy(kill_buffer.c_str(), kill_buffer.length(), 1);
     }
+    
+    // Append or replace kill buffer based on whether last command was also a kill
+    if (last_was_kill) {
+      // Append to existing kill buffer
+      kill_buffer += killed_text;
+    } else {
+      // Start new kill buffer
+      kill_buffer = killed_text;
+    }
+    
+    // Copy entire kill buffer to system clipboard
+    Fl::copy(kill_buffer.c_str(), kill_buffer.length(), 1);
+    
+    // Mark that this was a kill command
+    last_was_kill = true;
   }
   
   void handle_yank() {
