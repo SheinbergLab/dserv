@@ -1301,11 +1301,11 @@ namespace eval ess {
 	    if { [dservExists openiris/frameinfo] } {
 		foreach side "right" {
 		    foreach v "pupil cr1 cr4" {
-			dservLoggerAddMatch $filename openiris/$side/$v
+			dservLoggerAddMatch $filename openiris/$side/$v 1 40 1
 		    }
 		}
 		foreach v "frame time int0 int1" {
-		    dservLoggerAddMatch $filename openiris/$v
+		    dservLoggerAddMatch $filename openiris/$v 1 40 1
 		}
 	    }
         }
@@ -1349,38 +1349,59 @@ namespace eval ess {
             # could put pre_close callback here
 
             dservLoggerClose $open_datafile
-            dservSet ess/lastfile [file tail [file root $open_datafile]]
+	    set lastfile [file tail [file root $open_datafile]]
+            dservSet ess/lastfile $lastfile
             dservSet ess/datafile {}
 
             # call the system's specific file_close callback
-            catch {$current(state_system) file_close $open_datafile} ioerror
+            if { [catch {$current(state_system) file_close $open_datafile} ioerror] } {
+		error $ioerror
+	    }
 
-            # convert to json
-            catch {file_to_json $open_datafile} ioerror
-
-            set open_datafile {}
+            # convert to other formats
+	    if { [catch { file_load_ess $lastfile } result] } {
+		error $result
+	    } else {
+		set g $result
+	    }
+            if { [catch {ess_to_dgz $lastfile $g} ioerror] } {
+		dg_delete $g
+		set open_datafile {}
+		error $ioerror
+	    }
+            if { [catch {ess_to_json $lastfile $g} ioerror] } {
+		dg_delete $g
+		set open_datafile {}
+		error $ioerror
+	    }
             return 1
         }
         return 0
     }
 
-    proc file_to_json {f} {
+    proc file_load_ess {f} {
+	variable data_dir
+        set infile [file join $data_dir $f.ess]
+        set g [dslog::readESS $infile]
+	return $g
+    }
+    
+    proc ess_to_dgz {f g} {
+	variable data_dir
+        set dgz_dir [regsub essdat $data_dir dgzdat]
+	set outfile [file join $dgz_dir $f.dgz]
+	dg_write $g $outfile
+    }
+    
+    proc ess_to_json {f g} {
         variable data_dir
         set json_dir [regsub essdat $data_dir jsondat]
-        set dgz_dir [regsub essdat $data_dir dgzdat]
-        set infile [file join $data_dir $f.ess]
         set outfile [file join $json_dir $f.json]
-	set dgfile [file join $dgz_dir $f.dgz]
 	
-        set g [dslog::readESS $infile]
         set j [dg_toJSON $g]
-
-	dg_write $g $dgfile
-        dg_delete $g
-
-        set f [open $outfile w]
-        puts $f $j
-        close $f
+        set out_f [open $outfile w]
+        puts $out_f $j
+        close $out_f
     }
 }
 
@@ -1798,7 +1819,10 @@ namespace eval ess {
     if {[info exists ::env(ESS_DATA_DIR)]} {
         variable data_dir $::env(ESS_DATA_DIR)
     } else {
-        variable data_dir /tmp
+        variable data_dir /tmp/essdat
+	if { ![file exists $data_dir] } {
+	    file mkdir $data_dir
+	}
     }
 
     set project "ess"

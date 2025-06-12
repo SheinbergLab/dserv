@@ -33,7 +33,7 @@ if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
 
 package require ess
 
-foreach d "/shared/qpcs/data/essdat /tmp" {
+foreach d "/shared/qpcs/data/essdat" {
     if { [file exists $d] } {
 	set ess::data_dir $d
 	break

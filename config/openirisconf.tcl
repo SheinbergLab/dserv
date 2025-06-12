@@ -64,7 +64,7 @@ namespace eval openiris {
 
 	foreach v "frame int0 int1" {
 	    dl_toString [dl_ilist [expr {int([set $v])}]] ival
-	    dservSet openiris/$v 0 5 $ival
+	    dservSetData openiris/$v 0 5 $ival
 	}
 
 	# do actual conversion using params in settings
@@ -72,19 +72,17 @@ namespace eval openiris {
 	    # set ain/vals as shorts to be compatible with other eye inputs
 	    if { $invert_h } { set s_h [expr {-1*$scale_h}] } { set s_h $scale_h }
 	    if { $invert_v } { set s_v [expr {-1*$scale_v}] } { set s_v $scale_v }
-	    dl_local avals [dl_reverse [dl_short \
-					    [dl_add \
-						 "$offset_h $offset_v" \
-						 [dl_mult \
-						      [dl_sub $r_cr1 $r_cr4] \
-						      "$s_h $s_v"]]]]
+	    dl_local cr1_minus_cr4 [dl_sub $r_cr1 $r_cr4]
+	    dl_local scaled [dl_mult $cr1_minus_cr4 [dl_flist $s_h $s_v]]
+	    dl_local with_bias [dl_add $scaled [dl_flist $offset_h $offset_v]]
+	    dl_local avals [dl_reverse [dl_short $with_bias]]
 	}
 
 	# convert vals to binary and set the ain/vals points as two shorts
 	dl_toString $avals ainvals
 	dservSetData ain/vals 0 4 $ainvals
 	
-	lassign [dl_tcllist $avals] h v
+	lassign [dl_tcllist $avals] v h
 	set h [expr {(2048.-$h)/$to_deg_h}]
 	set v [expr {($v-2048.)/$to_deg_v}]
 	
