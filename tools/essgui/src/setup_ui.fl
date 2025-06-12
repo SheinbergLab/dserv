@@ -323,22 +323,22 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   Fl_Check_Button vInvert_checkbox {
                     label inv
                     user_data 6 user_data_type long
-                    callback {update_eye_settings(o,v);} selected
+                    callback {update_eye_settings(o,v);}
                     xywh {717 655 33 19} down_box DOWN_BOX
                   }
                   Fl_Spinner hGain_input {
                     label h
                     user_data 3 user_data_type long
                     callback {update_eye_settings(o,v);}
-                    xywh {628 674 55 22} type Float minimum 0 maximum 4 step 0.1 value 2
+                    xywh {628 674 55 22} type Float minimum 0 maximum 20 step 0.1 value 2
                     code0 {hGain_input->format("%.2f");}
                     class Wheel_Spinner
                   }
                   Fl_Spinner vGain_input {
                     label v
                     user_data 4 user_data_type long
-                    callback {update_eye_settings(o,v);}
-                    xywh {696 674 54 22} type Float minimum 0 maximum 4 step 0.1 value 2
+                    callback {update_eye_settings(o,v);} selected
+                    xywh {696 674 54 22} type Float minimum 0 maximum 20 step 0.1 value 2
                     code0 {vGain_input->format("%.2f");}
                     class Wheel_Spinner
                   }

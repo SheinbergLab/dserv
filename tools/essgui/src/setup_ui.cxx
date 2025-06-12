@@ -520,7 +520,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                     hGain_input->labelsize(14);
                     hGain_input->labelcolor(FL_FOREGROUND_COLOR);
                     hGain_input->minimum(0);
-                    hGain_input->maximum(4);
+                    hGain_input->maximum(20);
                     hGain_input->step(0.1);
                     hGain_input->value(2);
                     hGain_input->callback((Fl_Callback*)cb_hGain_input, (void*)(3));
@@ -538,7 +538,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                     vGain_input->labelsize(14);
                     vGain_input->labelcolor(FL_FOREGROUND_COLOR);
                     vGain_input->minimum(0);
-                    vGain_input->maximum(4);
+                    vGain_input->maximum(20);
                     vGain_input->step(0.1);
                     vGain_input->value(2);
                     vGain_input->callback((Fl_Callback*)cb_vGain_input, (void*)(4));
