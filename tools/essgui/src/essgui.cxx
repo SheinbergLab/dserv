@@ -32,6 +32,7 @@
 #include "EyeTouchWin.hpp"
 
 #include "TclEditor.h"
+#include "EssguiFileDialog.h"
 
 #include "DservSocket.h"
 #include "TclInterp.h"
@@ -49,14 +50,69 @@
 void menu_cb(Fl_Widget*, void*) {
 }
 
+
+// Example usage function
+void show_file_dialog_example() {
+  EssguiFileDialog dialog("Open Data File", "");
+  
+  int result = dialog.show();
+  
+  switch (result) {
+  case 0: // Cancel
+    fl_message("Dialog cancelled");
+    break;
+    
+  case 1: // OK
+    if (strlen(dialog.filename()) > 0) {
+      fl_message("Selected file: %s", dialog.filename());
+    } else {
+      fl_message("No file path entered");
+    }
+    break;
+    
+  case 2: // Suggest
+    {
+      // Your suggest logic here - could be:
+      // - Recent files list
+      // - Auto-completion based on partial input
+      // - Template file paths
+      // - Context-sensitive suggestions
+      
+      std::string current_input = dialog.get_input_text();
+      std::string suggested = "/remote/suggested/file.txt";
+      
+      // Example: if user typed partial path, complete it
+      if (!current_input.empty()) {
+	suggested = current_input + "_suggested.txt";
+      }
+      
+      fl_message("Suggest clicked. Current input: '%s'\nSuggested: %s", 
+		 current_input.c_str(), suggested.c_str());
+      
+      // Create a new dialog with the suggestion:
+      EssguiFileDialog suggest_dialog("Open Suggested File", suggested.c_str());
+      int suggest_result = suggest_dialog.show();
+      
+      if (suggest_result == 1) {
+	fl_message("Final selected file: %s", suggest_dialog.filename());
+      }
+    }
+    break;
+  }
+}
+
+void open_cb(Fl_Widget*, void*) {
+    show_file_dialog_example();
+}
+
 void exit_cb(Fl_Widget*, void*) {
   exit(0);
 }
 
 Fl_Menu_Item menuitems[] = {
-  { "&File",              0, 0, 0, FL_SUBMENU },
+  { "&File",              FL_COMMAND + 'f', 0, 0, FL_SUBMENU },
   { "&New File",        0, (Fl_Callback *) menu_cb },
-    { "&Open File...",    FL_COMMAND + 'o', (Fl_Callback *)menu_cb },
+    { "&Open File...",    FL_COMMAND + 'o', (Fl_Callback *)open_cb },
     { "&Insert File...",  FL_COMMAND + 'i', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
     { "&Save File",       FL_COMMAND + 's', (Fl_Callback *)menu_cb },
     { "Save File &As...", FL_COMMAND + FL_SHIFT + 's', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },

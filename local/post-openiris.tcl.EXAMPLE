@@ -1,0 +1,2 @@
+# start openiris subprocess
+subprocess openiris 2574 "source [file join $dspath config/openirisconf.tcl]"
