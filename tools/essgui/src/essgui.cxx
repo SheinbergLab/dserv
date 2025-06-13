@@ -90,23 +90,23 @@ void open_cb(Fl_Widget*, void*) {
     show_file_dialog();
 }
 
+void close_cb(Fl_Widget*, void*) {
+  std::string rstr;
+  std::string close_cmd("ess::file_close");
+  auto result = esscmd(close_cmd, rstr);
+  if (rstr[0] != '1') {
+    fl_message("%s", rstr.c_str());
+  }
+}
+
 void exit_cb(Fl_Widget*, void*) {
   exit(0);
 }
 
 Fl_Menu_Item menuitems[] = {
   { "&File",              FL_COMMAND + 'f', 0, 0, FL_SUBMENU },
-  { "&New File",        0, (Fl_Callback *) menu_cb },
-    { "&Open File...",    FL_COMMAND + 'o', (Fl_Callback *)open_cb },
-    { "&Insert File...",  FL_COMMAND + 'i', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
-    { "&Save File",       FL_COMMAND + 's', (Fl_Callback *)menu_cb },
-    { "Save File &As...", FL_COMMAND + FL_SHIFT + 's', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
-    { "New &View",        FL_ALT
-#ifdef __APPLE__
-      + FL_COMMAND
-#endif
-      + 'v', (Fl_Callback *)menu_cb, 0 },
-    { "&Close View",      FL_COMMAND + 'w', (Fl_Callback *)menu_cb, 0, FL_MENU_DIVIDER },
+    { "&Open Datafile...",    FL_COMMAND + 'o', (Fl_Callback *)open_cb },
+    { "&Close Datafile...",   FL_COMMAND + 'c', (Fl_Callback *)close_cb },
     { "E&xit",            FL_COMMAND + 'q', (Fl_Callback *)exit_cb, 0 },
     { 0 },
 
