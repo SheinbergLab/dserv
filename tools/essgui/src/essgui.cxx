@@ -51,58 +51,43 @@ void menu_cb(Fl_Widget*, void*) {
 }
 
 
-// Example usage function
-void show_file_dialog_example() {
-  EssguiFileDialog dialog("Open Data File", "");
+void suggest_cb(EssguiFileDialog* dialog, void* data) {
+  std::string suggested;
+  const char *cmd = "ess::file_suggest";
+  auto result = esscmd((char *) cmd, suggested);
+  if (!suggested.empty() && suggested[0] != '!') {
+    dialog->set_suggested_filename(suggested.c_str());
+  }
+}
+
+static void show_file_dialog() {
+  EssguiFileDialog dialog("Open Data File");
+  dialog.set_suggest_callback(suggest_cb);
+
+  int result = dialog.show(); 
   
-  int result = dialog.show();
-  
+  // Handle final result (OK or Cancel)
   switch (result) {
   case 0: // Cancel
-    fl_message("Dialog cancelled");
     break;
     
   case 1: // OK
     if (strlen(dialog.filename()) > 0) {
-      fl_message("Selected file: %s", dialog.filename());
-    } else {
-      fl_message("No file path entered");
-    }
-    break;
-    
-  case 2: // Suggest
-    {
-      // Your suggest logic here - could be:
-      // - Recent files list
-      // - Auto-completion based on partial input
-      // - Template file paths
-      // - Context-sensitive suggestions
+      std::string rstr;
+      std::string open_cmd("ess::file_open ");
+      open_cmd += dialog.filename();
       
-      std::string current_input = dialog.get_input_text();
-      std::string suggested = "/remote/suggested/file.txt";
-      
-      // Example: if user typed partial path, complete it
-      if (!current_input.empty()) {
-	suggested = current_input + "_suggested.txt";
-      }
-      
-      fl_message("Suggest clicked. Current input: '%s'\nSuggested: %s", 
-		 current_input.c_str(), suggested.c_str());
-      
-      // Create a new dialog with the suggestion:
-      EssguiFileDialog suggest_dialog("Open Suggested File", suggested.c_str());
-      int suggest_result = suggest_dialog.show();
-      
-      if (suggest_result == 1) {
-	fl_message("Final selected file: %s", suggest_dialog.filename());
+      auto result = esscmd(open_cmd, rstr);
+      if (rstr[0] != '1') {
+	fl_message("%s", rstr.c_str());
       }
     }
     break;
-  }
+  }  
 }
 
 void open_cb(Fl_Widget*, void*) {
-    show_file_dialog_example();
+    show_file_dialog();
 }
 
 void exit_cb(Fl_Widget*, void*) {
@@ -139,10 +124,7 @@ Fl_Menu_Item menuitems[] = {
 };
 
 
-
 int add_tcl_commands(Tcl_Interp *interp);
-
-int esscmd(char *cmd, std::string &rstr);
 
 class App *g_App;
 
@@ -666,6 +648,14 @@ int eval(char *command, void *cbdata) {
 }
 
 int esscmd(char *cmd, std::string &rstr) {
+  
+  int result =  g_App->ds_sock->esscmd(g_App->host,
+				       std::string(cmd),
+				       rstr);
+  return result;
+}
+
+int esscmd(std::string cmd, std::string &rstr) {
   
   int result =  g_App->ds_sock->esscmd(g_App->host,
 				       std::string(cmd),

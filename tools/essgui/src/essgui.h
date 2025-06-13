@@ -8,6 +8,8 @@
 int eval(char *command, void *cbdata);
 int stim_eval(char *command, void *cbdata);
 void tree_cb(Fl_Tree*, void*);
+int esscmd(std::string cmd, std::string &rstr);
+int esscmd(std::string cmd);
 int esscmd(char *cmd, std::string &rstr);
 int esscmd(const char *cmd);
 int set_host(void);
