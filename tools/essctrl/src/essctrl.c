@@ -9,6 +9,8 @@
 
 #define ESS_PROMPT "ess> "
 #define ESS_PORT 2570
+#define MSG_PROMPT "msg> "
+#define MSG_PORT 2560
 #define DB_PROMPT "db> "
 #define DB_PORT 2571
 #define DSERV_PROMPT "dserv> "
@@ -105,8 +107,7 @@ int main (int argc, char *argv[])
     if (!strcmp(line, "exit")) exit(0);
     
     if (line[0] != '\0' && line[0] != '/') {
-
-      if (tcpport == STIM_PORT) {
+      if (tcpport == STIM_PORT || tcpport == MSG_PORT) {
 	resultstr = do_msg_command(server, tcpport, line, strlen(line));
 	if (resultstr) {
 	  if (strlen(resultstr)) printf("%s\n", resultstr);
@@ -145,9 +146,23 @@ int main (int argc, char *argv[])
 	tcpport = DSERV_PORT;
 	prompt = DSERV_PROMPT;
       }
+    } else if (!strncmp(line, "/msg", 4)) {
+      if (strlen(line) > 4) {
+	resultstr = do_msg_command(server, MSG_PORT, &line[5],
+				   strlen(line)-5);
+	if (resultstr) {
+	  if (strlen(resultstr)) printf("%s\n", resultstr);
+	  free(resultstr);
+	}
+      }
+      else {
+	tcpport = MSG_PORT;
+	prompt = MSG_PROMPT;
+      }
     } else if (!strncmp(line, "/stim", 5)) {
       if (strlen(line) > 5) {
-	resultstr = do_msg_command(server, STIM_PORT, &line[6], strlen(line)-6);
+	resultstr = do_msg_command(server, STIM_PORT, &line[6],
+				   strlen(line)-6);
 	if (resultstr) {
 	  if (strlen(resultstr)) printf("%s\n", resultstr);
 	  free(resultstr);

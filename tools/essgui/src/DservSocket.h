@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <queue>
+#include <tuple>
 
 #include <stdlib.h>
 
@@ -277,6 +278,49 @@ public:
     return ConnectSocket;
   }
 #endif
+
+  
+  void send_message(int socket, const std::string& message) {
+    uint32_t msgSize = htonl(message.size()); // Convert size to network byte order
+    send(socket, (char *) &msgSize, sizeof(msgSize), 0);
+    send(socket, message.c_str(), message.size(), 0);
+  }
+  
+  int receive_message(int socket, char **buf) {
+    uint32_t msgSize;
+    // Receive the size of the message
+    ssize_t bytesReceived = recv(socket, (char *) &msgSize,
+				 sizeof(msgSize), 0);
+    if (bytesReceived <= 0) return 0; 
+    
+    msgSize = ntohl(msgSize);
+    
+    // Allocate buffer for the message
+    char* buffer = new char[msgSize];
+    size_t totalBytesReceived = 0;
+    while (totalBytesReceived < msgSize) {
+      bytesReceived = recv(socket, buffer + totalBytesReceived,
+			   msgSize - totalBytesReceived, 0);
+      if (bytesReceived <= 0) {
+	delete[] buffer;
+	return 0;
+      }
+      totalBytesReceived += bytesReceived;
+    }
+    *buf = buffer;
+    return msgSize;
+  }
+
+  int ds_msg_command(int sock, std::string cmd, std::string &retstr)
+  {
+    send_message(sock, cmd);
+    char *buffer;
+    int size = receive_message(sock, &buffer);
+    retstr = std::move(std::string(buffer, size));
+    delete[] buffer;
+
+    return (size > 0);
+  }
   
   int ds_command(int sock, std::string cmd, std::string &retstr)
   {
@@ -453,6 +497,24 @@ public:
 
     std::string retstr;
     int result = ds_command(sock, cmd, rstr);
+
+    rstr.erase(std::remove(rstr.begin(), rstr.end(), '\n'), rstr.cend());
+    rstr.erase(std::remove(rstr.begin(), rstr.end(), '\r'), rstr.cend());
+    
+    close_socket(sock);
+    return result;
+  }
+
+  int msgcmd(std::string host, std::string cmd,
+	     std::string &rstr,
+	     int port=2560)
+  {
+    if (!strlen(host.c_str())) return -1;
+    int sock = client_socket(host.c_str(), port);
+    if (sock <= 0) return sock;
+    
+    std::string retstr;
+    int result = ds_msg_command(sock, cmd, rstr);
 
     rstr.erase(std::remove(rstr.begin(), rstr.end(), '\n'), rstr.cend());
     rstr.erase(std::remove(rstr.begin(), rstr.end(), '\r'), rstr.cend());

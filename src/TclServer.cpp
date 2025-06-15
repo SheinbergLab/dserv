@@ -972,31 +972,36 @@ TclServer::tcp_client_process(TclServer *tserv,
 }
 
 static  void sendMessage(int socket, const std::string& message) {
-  uint32_t msgSize = htonl(message.size()); // Convert size to network byte order
-  send(socket, &msgSize, sizeof(msgSize), 0);
+  // Convert size to network byte order
+  uint32_t msgSize = htonl(message.size()); 
+
+  send(socket, (char *) &msgSize, sizeof(msgSize), 0);
   send(socket, message.c_str(), message.size(), 0);
 }
 
 static std::pair<char*, size_t> receiveMessage(int socket) {
     uint32_t msgSize;
     // Receive the size of the message
-    ssize_t bytesReceived = recv(socket, &msgSize, sizeof(msgSize), 0);
-    if (bytesReceived <= 0) return {nullptr, 0}; // Connection closed or error
+    ssize_t bytesReceived = recv(socket, (char *) &msgSize,
+				 sizeof(msgSize), 0);
+    if (bytesReceived <= 0) return {nullptr, 0};
 
-    msgSize = ntohl(msgSize); // Convert size from network byte order to host byte order
+    // Convert size from network byte order to host byte order
+    msgSize = ntohl(msgSize); 
 
     // Allocate buffer for the message
     char* buffer = new char[msgSize];
     size_t totalBytesReceived = 0;
     while (totalBytesReceived < msgSize) {
-        bytesReceived = recv(socket, buffer + totalBytesReceived, msgSize - totalBytesReceived, 0);
+        bytesReceived = recv(socket, buffer + totalBytesReceived,
+			     msgSize - totalBytesReceived, 0);
         if (bytesReceived <= 0) {
-            delete[] buffer;
-            return {nullptr, 0}; // Connection closed or error
+	  delete[] buffer;
+	  return {nullptr, 0}; // Connection closed or error
         }
         totalBytesReceived += bytesReceived;
     }
-
+    
     return {buffer, msgSize};
 }
 
@@ -1027,7 +1032,8 @@ TclServer::message_client_process(TclServer *tserv,
 
       // shutdown if main server has shutdown
       if (tserv->m_bDone) break;
-      
+
+      client_request.script = std::string(buffer);
       std::string s;
       
       // ignore certain commands, especially exit...
@@ -1040,7 +1046,7 @@ TclServer::message_client_process(TclServer *tserv,
 	// rqueue will be available after command has been processed
 	s = client_request.rqueue->front();
 	client_request.rqueue->pop_front();
-	//	  std::cout << "TCL Result: " << s << std::endl;
+	//	std::cout << "TCL Result: " << s << std::endl;
       }
 
       // Send a response back to the client

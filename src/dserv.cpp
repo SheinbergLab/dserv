@@ -87,6 +87,11 @@ int main(int argc, char *argv[])
   dserver = new Dataserver(argc, argv);
   tclserver = new TclServer(argc, argv, dserver);
   TclServerRegistry.registerObject("ess", tclserver);
+
+  // a tcl interpreter set to receive messages
+  auto msgserver = new TclServer(argc, argv, dserver, msgport,
+			       TclServer::SOCKET_MESSAGE);
+  TclServerRegistry.registerObject("msg", msgserver);
   
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
