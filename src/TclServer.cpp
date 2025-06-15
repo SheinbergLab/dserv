@@ -8,7 +8,9 @@ static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
 
 TclServer::TclServer(int argc, char **argv,
-		     Dataserver *dserv, int port): argc(argc), argv(argv)
+		     Dataserver *dserv, int port,
+		     socket_t socket_type):
+  argc(argc), argv(argv), socket_type(socket_type)
 {
   m_bDone = false;
   tcpport = port;
@@ -20,7 +22,7 @@ TclServer::TclServer(int argc, char **argv,
   // create a tcp/ip listener if port is not -1
   if (port >= 0)
     net_thread = std::thread(&TclServer::start_tcp_server, this);
-
+  
   // the process thread
   process_thread = std::thread(&process_requests, this);
 }
@@ -98,8 +100,14 @@ void TclServer::start_tcp_server(void)
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     
     // Create a thread and transfer the new stream to it.
-    std::thread thr(tcp_client_process, this, new_socket_fd, &queue);
-    thr.detach();
+    if (socket_type == SOCKET_LINE) {
+      std::thread thr(tcp_client_process, this, new_socket_fd, &queue);
+      thr.detach();
+    }
+    else {
+      std::thread thr(message_client_process, this, new_socket_fd, &queue);
+      thr.detach();
+    }
   }
   
   close(socket_fd);
@@ -117,6 +125,89 @@ static int now_command (ClientData data, Tcl_Interp *interp,
   Tcl_SetObjResult(interp, Tcl_NewWideIntObj(ds->now()));
   return TCL_OK;
 }
+
+
+/********************************* send ********************************/
+
+static int send_command (ClientData data, Tcl_Interp *interp,
+				 int objc, Tcl_Obj *objv[])
+{
+  TclServer *this_server = (TclServer *) data;
+  
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "server message");
+    return TCL_ERROR;
+  }
+    
+  auto tclserver = TclServerRegistry.getObject(Tcl_GetString(objv[1]));
+  if (!tclserver) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": server \"", Tcl_GetString(objv[1]), "\" not found",
+		     NULL);
+    return TCL_ERROR;
+  }
+
+  if (tclserver == this_server) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": cannot send message to self", NULL);
+    return TCL_ERROR;
+  }
+
+
+  SharedQueue<std::string> rqueue;
+  client_request_t client_request;
+  client_request.type = REQ_SCRIPT;
+  client_request.rqueue = &rqueue;
+  client_request.script = std::string(Tcl_GetString(objv[2]));
+  
+  tclserver->queue.push_back(client_request);
+
+  /* rqueue will be available after command has been processed */
+  /* NOTE: this can create a deadlock between two tclservers   */
+  
+  std::string s(client_request.rqueue->front());
+  client_request.rqueue->pop_front();
+
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(s.c_str(), -1));
+  return TCL_OK;
+}
+
+/***************************** send_noreply ****************************/
+
+static int send_noreply_command (ClientData data, Tcl_Interp *interp,
+				 int objc, Tcl_Obj *objv[])
+{
+  TclServer *this_server = (TclServer *) data;
+  
+  if (objc < 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "server message");
+    return TCL_ERROR;
+  }
+    
+  auto tclserver = TclServerRegistry.getObject(Tcl_GetString(objv[1]));
+  if (!tclserver) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": server \"", Tcl_GetString(objv[1]), "\" not found",
+		     NULL);
+    return TCL_ERROR;
+  }
+
+  if (tclserver == this_server) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		     ": cannot send message to self", NULL);
+    return TCL_ERROR;
+  }
+
+  client_request_t client_request;
+  client_request.type = REQ_SCRIPT_NOREPLY;
+  client_request.script = std::string(Tcl_GetString(objv[2]));
+
+  tclserver->queue.push_back(client_request);
+
+  /* don't wait for a reply to the message, just return */
+  return TCL_OK;
+}
+
 
 /******************************* process *******************************/
 
@@ -523,6 +614,13 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "subprocessInfo",
 		       (Tcl_ObjCmdProc *) getsubprocesses_command,
 		       tserv, NULL);
+
+  Tcl_CreateObjCommand(interp, "send",
+		       (Tcl_ObjCmdProc *) send_command,
+		       tserv, NULL);
+  Tcl_CreateObjCommand(interp, "sendNoReply",
+		       (Tcl_ObjCmdProc *) send_noreply_command,
+		       tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservAddMatch",
 		       dserv_add_match_command, tserv, NULL);
@@ -802,50 +900,159 @@ void TclServer::eval_noreply(std::string script)
   queue.push_back(client_request);
 }
 
-void TclServer::tcp_client_process(TclServer *tserv,
-				   int sockfd,
-				   SharedQueue<client_request_t> *queue)
+/*
+ * tcp_client_process is CR/LF oriented
+ *  incoming messages are terminated by newlines and responses append these
+ */
+void
+TclServer::tcp_client_process(TclServer *tserv,
+			      int sockfd,
+			      SharedQueue<client_request_t> *queue)
 {
-  // fix this...
-  char buf[16384];
-  double start;
-  int rval, wrval;
-
-  //  std::cout << "starting tcp_client_process: " << std::to_string(sockfd) << std::endl;
+  int rval;
+  int wrval;
+  char buf[1024];
   
   // each client has its own request structure and reply queue
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
-  client_request.type = REQ_SCRIPT;
   client_request.rqueue = &rqueue;
+  client_request.type = REQ_SCRIPT;
 
-  std::string s;
-  while ((rval = read(sockfd, buf, sizeof(buf)-1)) > 0) {
-    // null terminate
-    buf[rval] = '\0';
-      
-    // shutdown if main server has shutdown
-    if (tserv->m_bDone) break;
+  std::string script;  
     
-    client_request.script = std::string(buf, rval);
+  while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
+    for (int i = 0; i < rval; i++) {
+      char c = buf[i];
+      if (c == '\n') {
+	// shutdown if main server has shutdown
+	if (tserv->m_bDone) break;
+	
+	if (script.length() > 0) {
+	  std::string s;
+	  client_request.script = std::string(script);
 
-    // ignore certain commands, especially exit...
-    if (!client_request.script.compare(0, 4, "exit")) {
-      s = std::string("");
-    } else {
-      queue->push_back(client_request);
-      
-      /* rqueue will be available after command has been processed */
-      s = std::string(client_request.rqueue->front());
-      client_request.rqueue->pop_front();
-      
-      //std::cout << "TCL Result: " << s << std::endl;
+	  // ignore certain commands, especially exit...
+	  if (!client_request.script.compare(0, 4, "exit")) {
+	    s = std::string("");
+	  } else {
+	    // push request onto queue for main thread to retrieve
+	    queue->push_back(client_request);
+	    
+	    // rqueue will be available after command has been processed
+	    s = client_request.rqueue->front();
+	    client_request.rqueue->pop_front();
+	    
+	    //	  std::cout << "TCL Result: " << s << std::endl;
+	  }
+	  // Add a newline, and send the buffer including the null termination
+	  s = s+"\n";
+#ifndef _MSC_VER
+	  wrval = write(sockfd, s.c_str(), s.size());
+#else
+	  wrval = send(sockfd, s.c_str(), s.size(), 0);
+#endif
+	  if (wrval < 0) {		// couldn't send to client
+	    break;
+	  }
+	}
+	script = "";
+      }
+      else {
+	script += c;
+      }
     }
-    // Add a newline, and send the buffer including the null termination
-    s = s+"\n";
-    wrval = write(sockfd, s.c_str(), s.size());
   }
-  // std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+  //    std::cout << "Connection closed from " << sock.peer_address() << std::endl;
+#ifndef _MSC_VER
   close(sockfd);
+#else
+  closesocket(sockfd);
+#endif
 }
+
+static  void sendMessage(int socket, const std::string& message) {
+  uint32_t msgSize = htonl(message.size()); // Convert size to network byte order
+  send(socket, &msgSize, sizeof(msgSize), 0);
+  send(socket, message.c_str(), message.size(), 0);
+}
+
+static std::pair<char*, size_t> receiveMessage(int socket) {
+    uint32_t msgSize;
+    // Receive the size of the message
+    ssize_t bytesReceived = recv(socket, &msgSize, sizeof(msgSize), 0);
+    if (bytesReceived <= 0) return {nullptr, 0}; // Connection closed or error
+
+    msgSize = ntohl(msgSize); // Convert size from network byte order to host byte order
+
+    // Allocate buffer for the message
+    char* buffer = new char[msgSize];
+    size_t totalBytesReceived = 0;
+    while (totalBytesReceived < msgSize) {
+        bytesReceived = recv(socket, buffer + totalBytesReceived, msgSize - totalBytesReceived, 0);
+        if (bytesReceived <= 0) {
+            delete[] buffer;
+            return {nullptr, 0}; // Connection closed or error
+        }
+        totalBytesReceived += bytesReceived;
+    }
+
+    return {buffer, msgSize};
+}
+
+/*
+ * message_client_process is frame oriented with 32 size following by bytes
+ *  response is similarly organized
+ */
+void
+TclServer::message_client_process(TclServer *tserv,
+				    int sockfd,
+				  SharedQueue<client_request_t> *queue)
+{
+  int rval;
+  int wrval;
+  
+  // each client has its own request structure and reply queue
+  SharedQueue<std::string> rqueue;
+  client_request_t client_request;
+  client_request.rqueue = &rqueue;
+  client_request.type = REQ_SCRIPT;
+  
+  std::string script;  
+
+  while (true) {
+    auto [buffer, msgSize] = receiveMessage(sockfd);
+    if (buffer == nullptr) break;
+    if (msgSize) {
+
+      // shutdown if main server has shutdown
+      if (tserv->m_bDone) break;
+      
+      std::string s;
+      
+      // ignore certain commands, especially exit...
+      if (!client_request.script.compare(0, 4, "exit")) {
+	s = std::string("");
+      } else {
+	// push request onto queue for main thread to retrieve
+	queue->push_back(client_request);
+	
+	// rqueue will be available after command has been processed
+	s = client_request.rqueue->front();
+	client_request.rqueue->pop_front();
+	//	  std::cout << "TCL Result: " << s << std::endl;
+      }
+
+      // Send a response back to the client
+      sendMessage(sockfd, s);
+      
+      delete[] buffer;
+    }
+  }
+#ifndef _MSC_VER
+  close(sockfd);
+#else
+  closesocket(sockfd);
+#endif
+}    
 

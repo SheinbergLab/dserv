@@ -176,10 +176,18 @@ char *sock_send(char *server, int port, char *buf, int len)
   char *rbuf, *eol;
   int rbytes, status, l;
   static char sbuf[SOCK_BUF_SIZE];
-  
+
   sock = socket_open(server, port);
   if (sock < 0) return NULL;
 
+  /* add a new line if necessary */
+  if (len > SOCK_BUF_SIZE-1) return NULL;
+  memcpy(sbuf, buf, len);
+  if (buf[len-1] != '\n') {
+    buf[len] = '\n';
+    len++;
+  }
+    
   status = socket_send(sock, buf, len, &rbuf, &rbytes);
   if (status == 0) return NULL;
   if ((eol = strrchr(rbuf, '\n'))) *eol = 0;

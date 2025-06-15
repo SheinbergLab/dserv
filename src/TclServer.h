@@ -50,6 +50,8 @@ public:
   int argc;
   char **argv;
 
+  enum socket_t { SOCKET_LINE, SOCKET_MESSAGE };
+  
   std::atomic<bool> m_bDone;	// flag to close process loop
   
   // identify connection to send process
@@ -70,13 +72,22 @@ public:
   int tcpport;
   int port(void) { return tcpport; }
 
+  // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
+  socket_t socket_type;
+  
   static void
   tcp_client_process(TclServer *tserv,
 		     int sock,
 		     SharedQueue<client_request_t> *queue);
   
+  static void
+  message_client_process(TclServer *tserv,
+			 int sock,
+			 SharedQueue<client_request_t> *queue);
+  
   TclServer(int argc, char **argv,
-	    Dataserver *dserv, int port = 2570);
+	    Dataserver *dserv, int port = 2570,
+	    socket_t socket_type = SOCKET_LINE);
   ~TclServer();
   void shutdown(void);
   bool isDone();

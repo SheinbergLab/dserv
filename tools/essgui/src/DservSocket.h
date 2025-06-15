@@ -440,11 +440,16 @@ public:
     return 1;
   }
 
-  int dscmd(std::string host, std::string cmd, std::string &rstr, int port=2570)
+  int dscmd(std::string host, std::string cmd, std::string &rstr,
+	    int port=2570)
   {
     if (!strlen(host.c_str())) return -1;
     int sock = client_socket(host.c_str(), port);
     if (sock <= 0) return sock;
+
+    if (cmd.empty() || cmd.back() != '\n') {
+      cmd.push_back('\n');
+    }
 
     std::string retstr;
     int result = ds_command(sock, cmd, rstr);
