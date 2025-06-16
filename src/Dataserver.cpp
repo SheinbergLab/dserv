@@ -441,7 +441,7 @@ Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,
       elt = Tcl_NewDoubleObj(*p++);
       obj = Tcl_NewListObj(1, &elt);
       for (i = 1; i < n; i++) {
-	elt = Tcl_NewIntObj(*p++);
+	elt = Tcl_NewDoubleObj(*p++);
 	Tcl_ListObjAppendElement(interp, obj, elt);
       }
     }
