@@ -85,25 +85,21 @@ int main(int argc, char *argv[])
   std::signal(SIGINT, signalHandler);
 
   dserver = new Dataserver(argc, argv);
-  tclserver = new TclServer(argc, argv, dserver);
+  tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560);
   TclServerRegistry.registerObject("ess", tclserver);
-
-  // a tcl interpreter set to receive messages
-  auto msgserver = new TclServer(argc, argv, dserver, msgport,
-			       TclServer::SOCKET_MESSAGE);
-  TclServerRegistry.registerObject("msg", msgserver);
   
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result;
   }
   if (!configuration_script.empty()) {
-    auto result = tclserver->eval(std::string("source ")+configuration_script);
+    auto result =
+      tclserver->eval(std::string("source ")+configuration_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result << std::endl;
   }
 
   /* use mdns to advertise services */
-  advertise_services(dserver->port(), tclserver->port());
+  advertise_services(dserver->port(), tclserver->newline_port());
 
   std::promise<void>().get_future().wait();
 }

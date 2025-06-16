@@ -7,21 +7,39 @@
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
 
+TclServer::TclServer(int argc, char **argv, Dataserver *dserv,
+                     std::string name, int port)
+  : TclServer(argc, argv, dserv, TclServerConfig(name, port, -1))
+{
+}
+
+TclServer::TclServer(int argc, char **argv, Dataserver *dserv,
+                     std::string name, int newline_port, int message_port)
+  : TclServer(argc, argv, dserv, TclServerConfig(name, newline_port, message_port))
+{
+}
+
 TclServer::TclServer(int argc, char **argv,
-		     Dataserver *dserv, int port,
-		     socket_t socket_type):
-  argc(argc), argv(argv), socket_type(socket_type)
+		     Dataserver *dserv, TclServerConfig cfg):
+  argc(argc), argv(argv)
 {
   m_bDone = false;
-  tcpport = port;
   ds = dserv;
+
+  name = cfg.name;
+  _newline_port = cfg.newline_listener_port;
+  _message_port = cfg.message_listener_port;
   
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
 
-  // create a tcp/ip listener if port is not -1
-  if (port >= 0)
-    net_thread = std::thread(&TclServer::start_tcp_server, this);
+  // create a CR/LF tcp/ip listener if port is not -1
+  if (newline_port() >= 0)
+    newline_net_thread = std::thread(&TclServer::start_tcp_server, this);
+  
+  // create a message tcp/ip listener if port is not -1
+  if (message_port() >= 0)
+    message_net_thread = std::thread(&TclServer::start_message_server, this);
   
   // the process thread
   process_thread = std::thread(&process_requests, this);
@@ -31,8 +49,11 @@ TclServer::~TclServer()
 {
   shutdown();
 
-  if (tcpport > 0) 
-    net_thread.detach();
+  if (newline_port() > 0) 
+    newline_net_thread.detach();
+  
+  if (message_port() > 0) 
+    message_net_thread.detach();
   
   process_thread.join();
 }
@@ -53,15 +74,14 @@ void TclServer::start_tcp_server(void)
   struct sockaddr_in address;
   struct sockaddr client_address;
   socklen_t client_address_len = sizeof(client_address);
+  int socket_fd;
   int new_socket_fd;		// client socket
   int on = 1;
-  
-  //  std::cout << "opening server on port " << std::to_string(tcpport) << std::endl;
   
   /* Initialise IPv4 address. */
   memset(&address, 0, sizeof(struct sockaddr_in));
   address.sin_family = AF_INET;
-  address.sin_port = htons(tcpport);
+  address.sin_port = htons(newline_port());
   address.sin_addr.s_addr = INADDR_ANY;
   
   
@@ -87,7 +107,55 @@ void TclServer::start_tcp_server(void)
     return;
   }
 
-  //  std::cout << "listen socket: " << std::to_string(socket_fd) << std::endl;
+  while (!m_bDone) {
+    /* Accept connection to client. */
+    new_socket_fd = accept(socket_fd, &client_address, &client_address_len);
+    if (new_socket_fd == -1) {
+      perror("accept");
+      continue;
+    }
+    
+    setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    
+    std::thread thr(tcp_client_process, this, new_socket_fd, &queue);
+    thr.detach();
+  }
+  
+  close(socket_fd);
+}
+
+
+void TclServer::start_message_server(void)
+{
+  struct sockaddr_in address;
+  struct sockaddr client_address;
+  socklen_t client_address_len = sizeof(client_address);
+  int socket_fd;
+  int new_socket_fd;
+  int on = 1;
+  
+  memset(&address, 0, sizeof(struct sockaddr_in));
+  address.sin_family = AF_INET;
+  address.sin_port = htons(message_port());
+  address.sin_addr.s_addr = INADDR_ANY;
+
+  if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+    perror("socket");
+    return;
+  }
+
+  setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+  
+  if (bind(socket_fd, (const struct sockaddr *) &address,
+	   sizeof (struct sockaddr)) == -1) {
+    perror("bind");
+    return;
+  }
+  
+  if (listen(socket_fd, 20) == -1) {
+    perror("listen");
+    return;
+  }
 
   while (!m_bDone) {
     /* Accept connection to client. */
@@ -99,15 +167,8 @@ void TclServer::start_tcp_server(void)
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     
-    // Create a thread and transfer the new stream to it.
-    if (socket_type == SOCKET_LINE) {
-      std::thread thr(tcp_client_process, this, new_socket_fd, &queue);
-      thr.detach();
-    }
-    else {
-      std::thread thr(message_client_process, this, new_socket_fd, &queue);
-      thr.detach();
-    }
+    std::thread thr(message_client_process, this, new_socket_fd, &queue);
+    thr.detach();
   }
   
   close(socket_fd);
@@ -227,7 +288,8 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   }
 
   TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
-				   tclserver->ds, port);
+				   tclserver->ds,
+				   Tcl_GetString(objv[1]), port);
   TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
 
   if (objc > 2) {
@@ -267,7 +329,7 @@ static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp,
       if (obj != nullptr) {
 	// Create key (object name)
 	Tcl_Obj *keyObj = Tcl_NewStringObj(name.c_str(), -1);
-	Tcl_Obj *valueObj = Tcl_NewIntObj(obj->port());
+	Tcl_Obj *valueObj = Tcl_NewIntObj(obj->newline_port());
         
 	// Add key-value pair to dictionary
 	if (Tcl_DictObjPut(interp, dictObj, keyObj, valueObj) != TCL_OK) {
@@ -660,7 +722,7 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "print",
 		       (Tcl_ObjCmdProc *) print_command, tserv, NULL);
   
-  Tcl_LinkVar(interp, "tcpPort", (char *) &tserv->tcpport,
+  Tcl_LinkVar(interp, "tcpPort", (char *) &tserv->_newline_port,
 	      TCL_LINK_INT | TCL_LINK_READ_ONLY);
   return;
 }

@@ -37,15 +37,29 @@
 #include <unordered_map>
 #include <mutex>
 
+class TclServerConfig
+{
+public:
+  int newline_listener_port = -1;
+  int message_listener_port = -1;
+  std::string name;
+  TclServerConfig(std::string name, int newline_port, int message_port):
+    name(name), newline_listener_port(newline_port), message_listener_port(message_port) {};
+  TclServerConfig(std::string name):
+    name(name), newline_listener_port(-1), message_listener_port(-1) {};
+  TclServerConfig(std::string name, int port):
+    name(name), newline_listener_port(port), message_listener_port(-1) {};
+};
+  
 class TclServer
 {
-  int socket_fd;
-  std::thread net_thread;
+  std::thread newline_net_thread;
+  std::thread message_net_thread;
   std::thread process_thread;
   
   std::mutex mutex;	      // ensure only one thread accesses table
   std::condition_variable cond;	// condition variable for sync
-  
+
 public:
   int argc;
   char **argv;
@@ -53,6 +67,8 @@ public:
   enum socket_t { SOCKET_LINE, SOCKET_MESSAGE };
   
   std::atomic<bool> m_bDone;	// flag to close process loop
+
+  std::string name;		// name of this TclServer
   
   // identify connection to send process
   std::string client_name;
@@ -68,10 +84,12 @@ public:
 
   const char *PRINT_DPOINT_NAME = "print";
 
-  // communication port setting (2570)
-  int tcpport;
-  int port(void) { return tcpport; }
+  int _newline_port;		// for CR/LF oriented communication
+  int _message_port;		// for message oriented comm  
 
+  int newline_port(void) { return _newline_port; }
+  int message_port(void) { return _message_port; }
+  
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;
   
@@ -85,13 +103,17 @@ public:
 			 int sock,
 			 SharedQueue<client_request_t> *queue);
   
-  TclServer(int argc, char **argv,
-	    Dataserver *dserv, int port = 2570,
-	    socket_t socket_type = SOCKET_LINE);
+  TclServer(int argc, char **argv, Dataserver *dserv, TclServerConfig cfg);
+  TclServer(int argc, char **argv, Dataserver *dserv, std::string name);
+  TclServer(int argc, char **argv, Dataserver *dserv,
+	    std::string name, int port);
+  TclServer(int argc, char **argv, Dataserver *dserv,
+	    std::string name, int newline_port, int message_port);
   ~TclServer();
   void shutdown(void);
   bool isDone();
   void start_tcp_server(void);
+  void start_message_server(void);
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }
   
