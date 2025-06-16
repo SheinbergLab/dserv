@@ -276,21 +276,23 @@ public:
         std::cerr << "Frame and Time must be numbers" << std::endl;
         return false;
       }
-      float data[10] = {
-          j["Right"]["FrameNumber"].get<float>(),
-          j["Right"]["Seconds"].get<float>(),
-          j["Right"]["Pupil"]["Center"]["X"].get<float>(),
-          j["Right"]["Pupil"]["Center"]["Y"].get<float>(),
-          j["Right"]["CRs"][0]["X"].get<float>(),
-          j["Right"]["CRs"][0]["Y"].get<float>(),
-          j["Right"]["CRs"][3]["X"].get<float>(),
-          j["Right"]["CRs"][3]["Y"].get<float>(),
-	  j["Extra"]["Int0"].get<float>(),
-	  j["Extra"]["Int1"].get<float>()
+      double data[10] = {
+          j["Right"]["FrameNumber"].get<double>(),
+          j["Right"]["Seconds"].get<double>(),
+          j["Right"]["Pupil"]["Center"]["X"].get<double>(),
+          j["Right"]["Pupil"]["Center"]["Y"].get<double>(),
+          j["Right"]["CRs"][0]["X"].get<double>(),
+          j["Right"]["CRs"][0]["Y"].get<double>(),
+          j["Right"]["CRs"][3]["X"].get<double>(),
+          j["Right"]["CRs"][3]["Y"].get<double>(),
+	  j["Extra"]["Int0"].get<double>(),
+	  j["Extra"]["Int1"].get<double>()
 	    
       };
-      const int dtype = 2; // DSERV_FLOAT
-      return write_to_dataserver(name, dtype, 10*sizeof(float), data);
+      const int dtype = 3; // DSERV_DOUBLE
+
+      // max payload is 128 bytes for fixed length message - fits barely
+      return write_to_dataserver(name, dtype, 10*sizeof(double), data);
     }
     return true;
   }
