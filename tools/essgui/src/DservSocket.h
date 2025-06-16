@@ -324,6 +324,8 @@ public:
   
   int ds_command(int sock, std::string cmd, std::string &retstr)
   {
+    if (cmd.empty() || cmd.back() != '\n') cmd += '\n';
+    
     int len = cmd.length();
     int nwritten = send(sock, cmd.c_str(), cmd.length(), 0);
     if (len != nwritten) return 0;
