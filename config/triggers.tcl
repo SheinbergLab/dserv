@@ -122,7 +122,7 @@ init_vars
 
 triggerAdd rpio/vals                   1  update_dio
 triggerAdd pca9538/vals                1  update_joystick
-triggerAdd ain/vals                    20 update_ain
+triggerAdd ain/vals                    1  update_ain
 triggerAdd mtouch/touchvals            1  update_touch
 triggerAdd proc/windows/status         1  update_ain_window_status
 triggerAdd proc/windows/settings       1  update_ain_window_settings

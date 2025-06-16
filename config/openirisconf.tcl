@@ -85,7 +85,7 @@ namespace eval openiris {
 	lassign [dl_tcllist $avals] v h
 	set h [expr {(2048.-$h)/$to_deg_h}]
 	set v [expr {($v-2048.)/$to_deg_v}]
-	
+
 	dservSet ess/em_pos "[dl_tcllist $avals] $h $v"
     }
 
