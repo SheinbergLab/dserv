@@ -1048,10 +1048,13 @@ void virtual_eye_cb (VirtualEye *w, void *data)
 {
   int result;
   std::string rstr;
+  int nreps = 1;
   
   std::string cmd("set d [binary format s2 {");
   cmd += std::to_string(w->adc[1])+" "+std::to_string(w->adc[0])+"}];";
-  cmd += "for {set i 0} {$i < 20} {incr i} {dservSetData ain/vals 0 4 $d};";
+  cmd += "for {set i 0} {$i < ";
+  cmd += std::to_string(nreps);
+  cmd += "} {incr i} {dservSetData ain/vals 0 4 $d};";
   cmd += "unset d";
 
   //  std::cout << cmd << std::endl;

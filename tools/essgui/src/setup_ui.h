@@ -19,6 +19,7 @@
 extern Fl_Double_Window *main_window;
 #include <FL/Fl_Menu_Bar.H>
 extern Fl_Menu_Bar *menu_bar;
+#include <FL/Fl_Tile.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Flex.H>
 #include <FL/Fl_Button.H>
