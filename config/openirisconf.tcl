@@ -54,16 +54,15 @@ namespace eval openiris {
 	set r_cr4 "$r_cr4_x $r_cr4_y"
 
 	foreach v "pupil cr1 cr4" {
-	    dl_local vals [dl_flist {*}[set r_$v]]
-	    dl_toString $vals fvals
+	    set fvals [binary format "ff" [set r_${v}_x] [set r_${v}_y]]
 	    dservSetData openiris/right/$v 0 2 $fvals
 	}
-
-	dl_toString [dl_flist $seconds] fvals
-	dservSetData openiris/time 0 2 $fvals
+	
+	set seconds_binary [binary format d $seconds]
+	dservSetData openiris/time 0 3 $fvals
 
 	foreach v "frame int0 int1" {
-	    dl_toString [dl_ilist [expr {int([set $v])}]] ival
+	    set ival [binary format i [expr {int([set $v])}]]
 	    dservSetData openiris/$v 0 5 $ival
 	}
 
@@ -72,21 +71,19 @@ namespace eval openiris {
 	    # set ain/vals as shorts to be compatible with other eye inputs
 	    if { $invert_h } { set s_h [expr {-1*$scale_h}] } { set s_h $scale_h }
 	    if { $invert_v } { set s_v [expr {-1*$scale_v}] } { set s_v $scale_v }
-	    dl_local cr1_minus_cr4 [dl_sub $r_cr1 $r_cr4]
-	    dl_local scaled [dl_mult $cr1_minus_cr4 [dl_flist $s_h $s_v]]
-	    dl_local with_bias [dl_add $scaled [dl_flist $offset_h $offset_v]]
-	    dl_local avals [dl_reverse [dl_short $with_bias]]
+	    set h [expr {int(($s_h*($r_cr1_x-$r_cr4_x))+$offset_h)}]
+	    set v [expr {int(($s_v*($r_cr1_y-$r_cr4_y))+$offset_v)}]
 	}
 
 	# convert vals to binary and set the ain/vals points as two shorts
-	dl_toString $avals ainvals
+	set ainvals [binary format ss $v $h]
 	dservSetData ain/vals 0 4 $ainvals
 	
-	lassign [dl_tcllist $avals] v h
-	set h [expr {(2048.-$h)/$to_deg_h}]
-	set v [expr {($v-2048.)/$to_deg_v}]
+	set h_deg [expr {(2048.-$h)/$to_deg_h}]
+	set v_deg [expr {($v-2048.)/$to_deg_v}]
 
-	dservSet ess/em_pos "[dl_tcllist $avals] $h $v"
+	# because of old ADC ordering, v comes before h for raw values
+	dservSet ess/em_pos "$v $h $h_deg $v_deg"
     }
 
     update_settings
