@@ -1051,8 +1051,8 @@ static std::pair<char*, size_t> receiveMessage(int socket) {
     // Convert size from network byte order to host byte order
     msgSize = ntohl(msgSize); 
 
-    // Allocate buffer for the message
-    char* buffer = new char[msgSize];
+    // Allocate and zero buffer for the message
+    char* buffer = new char[msgSize+1]{};
     size_t totalBytesReceived = 0;
     while (totalBytesReceived < msgSize) {
         bytesReceived = recv(socket, buffer + totalBytesReceived,
