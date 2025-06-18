@@ -295,8 +295,8 @@ public:
     
     msgSize = ntohl(msgSize);
     
-    // Allocate buffer for the message
-    char* buffer = new char[msgSize];
+    // Allocate buffer for the message (include extra byte for null termination)
+    char* buffer = new char[msgSize+1]{};
     size_t totalBytesReceived = 0;
     while (totalBytesReceived < msgSize) {
       bytesReceived = recv(socket, buffer + totalBytesReceived,
