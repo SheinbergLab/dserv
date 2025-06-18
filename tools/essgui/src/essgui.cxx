@@ -229,6 +229,11 @@ public:
   {
     text_buffers[name]->text("");
   }
+
+  char *editor_buffer_contents(const char *name)
+  {
+    return text_buffers[name]->text();
+  }
   
   void clear_params(void) { params.clear(); }
   void add_param(std::string key, Fl_Object *o) { params[key] = o; }
@@ -336,14 +341,22 @@ public:
     /* touch variables to update interface (check spaces at EOL!) */
     std::string rstr;
     ds_sock->esscmd(hoststr,
-		    std::string("foreach v {ess/systems ess/protocols ess/variants ess/system ess/protocol "
-				"ess/variant ess/subject ess/state ess/em_pos ess/obs_id ess/obs_total "
-				"ess/block_pct_complete ess/block_pct_correct ess/variant_info "
-				"ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy "
+		    std::string("foreach v {ess/systems ess/protocols "
+				"ess/variants ess/system ess/protocol "
+				"ess/variant ess/subject ess/state ess/em_pos "
+				"ess/obs_id ess/obs_total "
+				"ess/block_pct_complete ess/block_pct_correct "
+				"ess/variant_info ess/screen_w ess/screen_h "
+				"ess/screen_halfx ess/screen_halfy "
 				"ess/state_table ess/rmt_cmds "
-				"ess/system_script ess/protocol_script ess/variants_script ess/loaders_script ess/stim_script "
-				"ess/param_settings ess/state_table ess/params stimdg trialdg system/hostname "
-				"system/os openiris/settings} { dservTouch $v }"), rstr);
+				"ess/system_script ess/protocol_script "
+				"ess/variants_script ess/loaders_script "
+				"ess/stim_script ess/param_settings "
+				"ess/state_table ess/params stimdg trialdg "
+				"ess/git/branches ess/git/branch "
+				"system/hostname system/os openiris/settings} "
+				"{ dservTouch $v }"),
+		    rstr);
 
     update_em_regions();
     update_touch_regions();
@@ -442,13 +455,17 @@ static void clear_widgets(void) {
   system_status_widget->redraw_label();
   
   system_widget->clear();
-  protocol_widget->clear();
-  variant_widget->clear();
-
   system_widget->redraw();
+
+  protocol_widget->clear();
   protocol_widget->redraw();
+
+  variant_widget->clear();
   variant_widget->redraw();
 
+  branch_widget->clear();
+  branch_widget->redraw();
+  
   /* clear the table but leave tab label as stimdg */
   const char *l = "stimdg";
   stimdg_widget->clear(l);
@@ -740,19 +757,32 @@ int set_variant(void) {
   return 0;
 }
 
+void wait_cursor(void) {
+  // Change to waiting cursor (ess/status will change back)
+  fl_cursor(FL_CURSOR_WAIT);
+  Fl::flush();
+  Fl::check(); // Process pending events
+}
+
 int reload_system(void) {
+  wait_cursor();
+  
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host, "ess::reload_system", rstr);
   return 0;
 }
 
 int reload_protocol(void) {
+  wait_cursor();
+
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host, "ess::reload_protocol", rstr);
   return 0;
 }
 
 int reload_variant(void) {
+  wait_cursor();
+
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host, "ess::reload_variant", rstr);
   return 0;
@@ -767,8 +797,20 @@ int save_settings(void) {
 int reset_settings(void) {
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host,
-			 "ess::reset_settings; ess::reload_variant", rstr);
+			 "ess::reset_settings", rstr);
+  reload_variant();
   return 0;
+}
+
+void set_branch_cb(Fl_Widget *w, void *cbData) {
+  Fl_Choice *b = (Fl_Choice *) w;
+  char cmd[256];
+  std::string rstr;
+
+  snprintf(cmd, sizeof(cmd), "send git {git::switch_and_pull %s}", b->text());
+  g_App->ess_eval(cmd, rstr);
+
+  reload_variant();
 }
 
 void update_eye_settings(Fl_Widget *w, long wtype)
@@ -967,6 +1009,34 @@ void refresh_cb(Fl_Button *, void *)
   return;
 }
 
+void save_script_cb(Fl_Widget *w, void *cbData)
+{
+  std::string type(editor_tabs->value()->label());
+  std::string text = g_App->editor_buffer_contents(type.c_str());
+  std::string cmd = std::string("ess::save_script ") + type + " {" + text + "}";
+  std::string rstr;
+  g_App->msg_eval(cmd.c_str(), rstr);
+  //  std::cout << cmd << std::endl;
+}
+
+void push_script_cb(Fl_Widget *w, void *cbData)
+{
+  std::string cmd = std::string("git::commit_and_push");
+  std::string rstr;
+  g_App->git_eval(cmd.c_str(), rstr);
+  //  std::cout << cmd << std::endl;
+}
+
+void pull_script_cb(Fl_Widget *w, void *cbData)
+{
+  std::string cmd = std::string("git::pull");
+  std::string rstr;
+  g_App->git_eval(cmd.c_str(), rstr);
+  //  std::cout << cmd << std::endl;
+}
+
+
+
 void do_sortby(void)
 {  
   Tcl_VarEval(g_App->interp(),
@@ -1160,14 +1230,14 @@ void variant_setting_callback(Fl_Widget* o, void* data) {
   cmd += std::string(setting_info->arg());
   cmd += " {";
   cmd += setting_info->settings()->at(c->value());
-  cmd += "} }; ";
-
-  if (g_App->auto_reload) {
-    cmd += "ess::reload_variant";
-  }
+  cmd += "} }";
 
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+
+  if (g_App->auto_reload) {
+    reload_variant();
+  }
 
 }
 
@@ -1599,6 +1669,14 @@ void process_dpoint_cb(void *cbdata) {
     system_status_widget->redraw_label();
   }
 
+  else if (!strcmp(json_string_value(name), "ess/status")) {
+    // for all but loading, set back to default
+    if (strcmp(json_string_value(data), "loading")) {
+      fl_cursor(FL_CURSOR_DEFAULT);
+      Fl::flush();
+    }
+  }
+
   // obs_id always precedes obs_total
   else if (!strcmp(json_string_value(name), "ess/obs_id")) {
     obs_id = atoi(json_string_value(data));
@@ -1811,6 +1889,22 @@ void process_dpoint_cb(void *cbdata) {
     }
   }
 
+  else if (!strcmp(json_string_value(name), "ess/git/branch")) {
+    branch_widget->value(branch_widget->find_index(json_string_value(data)));    
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/git/branches")) {
+    Tcl_Size argc;
+    char *string;
+    const char **argv;
+    if (Tcl_SplitList(g_App->interp(),
+		      json_string_value(data), &argc, &argv) == TCL_OK) {
+      branch_widget->clear();
+      for (int i = 0; i < argc; i++) branch_widget->add(argv[i]);
+      Tcl_Free((char *) argv);
+    }
+  }
+  
   else if (!strcmp(json_string_value(name), "system/os")) {
     sysos_widget->value(json_string_value(data));
     sysos_widget->redraw_label();

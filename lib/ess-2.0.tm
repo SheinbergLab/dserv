@@ -546,6 +546,29 @@ namespace eval ess {
         }
     }
 
+    proc save_script { type s } {
+	variable current
+        if { $current(system) == "" } return
+
+	set f [file join $::ess::system_path $current(project) $current(system)]
+	if { $type == "system" } {
+	    set saveto [file join $f $current(system).tcl]
+	} elseif { $type == "protocol" } {
+	    set saveto [file join $f $current(protocol) $current(protocol).tcl]
+	} elseif { $type == "loaders" } {
+	    set saveto [file join $f $current(protocol) ${current(protocol)}_loaders.tcl]
+	} elseif { $type == "variants" } {
+	    set saveto [file join $f $current(protocol) ${current(protocol)}_variants.tcl]
+	} elseif { $type == "stim" } {
+	    set saveto [file join $f $current(protocol) ${current(protocol)}_stim.tcl]
+	}
+
+	# could do some backup or versioning here
+	set f [open $saveto w]
+	puts $f $s
+	close $f
+    }
+    
     proc system_script {} {
         variable current
         if {$current(system) != ""} {

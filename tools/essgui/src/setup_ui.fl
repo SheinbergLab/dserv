@@ -20,7 +20,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {811 301 1280 800} type Double resizable visible
+    xywh {-17 107 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
@@ -72,7 +72,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           Fl_Group {} {open
             xywh {180 64 315 283}
           } {
-            Fl_Group {} {
+            Fl_Group {} {open
               xywh {186 69 306 36} box THIN_UP_BOX
             } {
               Fl_Flex {} {open
@@ -151,17 +151,17 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 code0 {reload_buttons->spacing(11);}
               } {
                 Fl_Button reload_system_button {
-                  label {@reload}
+                  label {@\#-1reload}
                   callback {reload_system()}
                   xywh {452 229 26 26}
                 }
                 Fl_Button reload_protocol_button {
-                  label {@reload}
+                  label {@\#-1reload}
                   callback {reload_protocol()}
                   xywh {452 266 26 26}
                 }
                 Fl_Button reload_variant_button {
-                  label {@reload}
+                  label {@\#-1reload}
                   callback {reload_variant()}
                   xywh {452 303 26 26}
                 }
@@ -193,11 +193,11 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             } {
               Fl_Scroll options_widget {
                 label {Variant Options} open
-                xywh {185 398 310 128} type BOTH_ALWAYS align 5 v_label_margin 3
+                xywh {185 398 304 124} type BOTH_ALWAYS align 5 v_label_margin 3
               } {}
               Fl_Scroll settings_widget {
                 label {System Settings} open
-                xywh {186 551 309 150} type BOTH_ALWAYS align 5 v_label_margin 3
+                xywh {186 551 304 150} type BOTH_ALWAYS align 5 v_label_margin 3
               } {}
             }
           }
@@ -211,7 +211,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           } {
             Fl_Group {} {
               label behavior open
-              xywh {504 91 747 614} labelsize 16
+              xywh {504 91 747 614} labelsize 16 hide
             } {
               Fl_Group {} {
                 label {Behavior Monitor} open
@@ -340,7 +340,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                     Fl_Spinner vGain_input {
                       label v
                       user_data 4 user_data_type long
-                      callback {update_eye_settings(o,v);} selected
+                      callback {update_eye_settings(o,v);}
                       xywh {696 674 54 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
                       code0 {vGain_input->format("%.2f");}
                       class Wheel_Spinner
@@ -374,59 +374,83 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
             }
             Fl_Group {} {
-              label scripts
-              xywh {503 92 762 611} labelsize 16 hide
+              label scripts open
+              xywh {503 92 762 613} labelsize 16
             } {
+              Fl_Pack {} {open
+                xywh {1040 102 220 28} type HORIZONTAL
+              } {
+                Fl_Choice branch_widget {
+                  label {Branch:}
+                  callback set_branch_cb open
+                  xywh {1085 102 96 24} down_box BORDER_BOX
+                } {}
+                Fl_Button save_script_button {
+                  label {@filesave}
+                  callback save_script_cb
+                  tooltip save xywh {1182 102 25 23}
+                }
+                Fl_Button push_script_button {
+                  label {@8->}
+                  callback push_script_cb
+                  tooltip {commit and push} xywh {1208 102 25 23}
+                }
+                Fl_Button pull_script_button {
+                  label {@2->}
+                  callback pull_script_cb selected
+                  tooltip pull xywh {1233 102 25 23}
+                }
+              }
               Fl_Tabs editor_tabs {open
-                xywh {503 100 758 595}
+                xywh {506 134 759 553}
               } {
                 Fl_Group {} {
-                  label System open
-                  xywh {503 125 758 570} hide
+                  label system open
+                  xywh {506 159 759 523}
                 } {
                   Fl_Text_Editor system_editor {
                     label system
-                    xywh {503 138 754 510} selection_color 31 labeltype NO_LABEL
+                    xywh {506 172 759 510} selection_color 31 labeltype NO_LABEL
                     class TclEditor
                   }
                 }
                 Fl_Group {} {
-                  label Protocol open
-                  xywh {503 125 758 570} hide
+                  label protocol
+                  xywh {506 159 759 528} hide
                 } {
                   Fl_Text_Editor protocol_editor {
                     label protocol
-                    xywh {503 138 754 515} selection_color 31 labeltype NO_LABEL
+                    xywh {506 172 759 515} selection_color 31 labeltype NO_LABEL
                     class TclEditor
                   }
                 }
                 Fl_Group {} {
-                  label Loaders open
-                  xywh {503 125 758 570} hide
+                  label loaders open
+                  xywh {506 159 759 528} hide
                 } {
                   Fl_Text_Editor loaders_editor {
                     label loaders
-                    xywh {503 138 754 515} selection_color 31 labeltype NO_LABEL
+                    xywh {506 172 759 515} selection_color 31 labeltype NO_LABEL
                     class TclEditor
                   }
                 }
                 Fl_Group {} {
-                  label Variants open
-                  xywh {503 125 758 570} hide
+                  label variants open
+                  xywh {506 159 759 528} hide
                 } {
                   Fl_Text_Editor variants_editor {
                     label variants
-                    xywh {503 138 754 515} selection_color 31 labeltype NO_LABEL
+                    xywh {506 172 759 515} selection_color 31 labeltype NO_LABEL
                     class TclEditor
                   }
                 }
                 Fl_Group {} {
-                  label Stim open
-                  xywh {503 125 758 570}
+                  label stim
+                  xywh {506 159 759 528} hide
                 } {
                   Fl_Text_Editor stim_editor {
                     label stim
-                    xywh {503 138 754 515} selection_color 31 labeltype NO_LABEL
+                    xywh {506 172 759 515} selection_color 31 labeltype NO_LABEL
                     class TclEditor
                   }
                 }

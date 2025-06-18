@@ -40,15 +40,47 @@ Fl_Text_Display::Style_Table_Entry styletable[] = {
 
 // Tcl keywords
 const std::set<std::string> tcl_keywords = {
-  "after", "append", "array", "break", "case", "catch", "cd", "clock", "close", "concat", "continue",
-  "dde", "encoding", "eof", "error", "eval", "exec", "exit", "expr", "fblocked", "fconfigure",
-  "fcopy", "file", "fileevent", "flush", "for", "foreach", "format", "gets", "glob", "global",
-  "history", "http", "if", "incr", "info", "interp", "join", "lappend", "lindex", "linsert",
-  "list", "llength", "load", "lrange", "lreplace", "lsearch", "lset", "lsort", "memory", "msgcat",
-  "namespace", "open", "package", "parray", "pid", "pkg::create", "pkg_mkIndex", "proc", "puts",
-  "pwd", "read", "regexp", "regsub", "rename", "return", "scan", "seek", "set", "socket",
-  "source", "split", "string", "subst", "switch", "tell", "time", "trace", "unknown",
-  "unset", "update", "uplevel", "upvar", "variable", "vwait", "while"
+    // Control flow
+    "if", "then", "else", "elseif", "endif",
+    "for", "foreach", "while", "break", "continue",
+    "switch", "case", "default",
+    
+    // Procedure and namespace
+    "proc", "return", "namespace", "variable", "global", "upvar",
+    "uplevel", "apply", "coroutine", "yield", "yieldto",
+    
+    // Error handling
+    "try", "trap", "finally", "throw", "catch", "error",
+    
+    // Variable and array operations
+    "set", "unset", "array", "dict", "list", "lappend", "linsert",
+    "lreplace", "lsearch", "lsort", "llength", "lindex", "lrange",
+    "join", "split", "concat",
+    
+    // String operations
+    "string", "regexp", "regsub", "scan", "format", "subst",
+    
+    // File and I/O
+    "open", "close", "read", "write", "puts", "gets", "flush",
+    "seek", "tell", "eof", "file", "glob", "pwd", "cd",
+    "exec", "eval", "source", "load", "package",
+    
+    // Channel operations
+    "chan", "socket", "fileevent", "fconfigure", "fcopy",
+    
+    // Time and events
+    "after", "update", "vwait", "time", "clock",
+    
+    // Miscellaneous
+    "expr", "incr", "append", "lset", "binary", "encoding",
+    "exit", "rename", "info", "history", "unknown", "auto_load",
+    "auto_import", "auto_qualify", "auto_mkindex",
+    
+    // Tcl 9 specific
+    "tailcall", "nextto", "self", "my", "oo::class", "oo::object",
+    "oo::define", "method", "constructor", "destructor", "filter",
+    "mixin", "forward", "unexport", "export", "create", "new",
+    "destroy", "copy", "configure", "cget"
 };
 
 // --- Tcl Syntax Parsing Function ---

@@ -24,6 +24,10 @@ int reload_variant(void);
 int save_settings(void);
 int reset_settings(void);
 void update_eye_settings(Fl_Widget *, long);
+void save_script_cb(Fl_Widget *, void *);
+void set_branch_cb(Fl_Widget *, void *);
+void push_script_cb(Fl_Widget *, void *);
+void pull_script_cb(Fl_Widget *, void *);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);

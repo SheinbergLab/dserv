@@ -149,6 +149,34 @@ namespace eval git {
 	dservSet ess/git/commit $result
 	return $result
     }
+
+    proc commit_and_push { { message "" } } {
+	# Get current timestamp in a readable format
+	set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+	
+	# Create the full commit message with timestamp
+	if { $message == "" } {
+	    set commit_message "commit"
+	} else {
+	    set commit_message $message
+	}
+	set full_message "${commit_message} ${timestamp}"
+
+	set git [exec_cmd]
+
+	# commit step
+	set cmd [list {*}$git commit -am $full_message]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/commit $result
+
+	# Push the updates to active branch
+	set cmd [list {*}$git push]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/push $result
+
+	return $result
+	
+    }
     
     proc status {} {
 	variable is_repo
@@ -185,6 +213,52 @@ namespace eval git {
 	return $d
     }
 
+    proc merge_to_main { { message "" } } {
+	variable is_repo
+	if { !$is_repo } { return -1 }
+
+	set this_branch [current_branch]
+	
+	if { $this_branch == "main" } { return 0 }
+	
+	# Get current timestamp in a readable format
+	set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+	
+	# Create the full commit message with timestamp
+	if { $message == "" } {
+	    set commit_message "commit"
+	} else {
+	    set commit_message $message
+	}
+	set full_message "$commit_message - $timestamp"	
+
+	set git [exec_cmd]
+
+	# commit step
+	set cmd [list {*}$git commit -am $full_message]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/commit $result
+
+	# Switch to main branch
+	git::switch
+
+	# Pull latest changes from remote
+	set cmd [list {*}$git pull origin main]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/pull $result
+
+	# Merge your branch into main
+	set cmd [list {*}$git merge ${this_branch}]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/merge $result
+
+	# Push the updated main branch
+	set cmd [list {*}$git push origin main]
+	catch [list exec {*}$cmd] result
+	dservSet ess/git/push $result
+
+	return $result
+    }
     proc current_tag {} {
 	variable is_repo
 	if { !$is_repo } { return 0.0.0 }
@@ -199,5 +273,9 @@ namespace eval git {
 }
 git::set_path
 git::branches
-git::switch_and_pull
+if { [info exists ::env(ESS_GIT_USERID)] } {
+    git::switch_and_pull $::env(ESS_GIT_USERID)
+} else {
+    git::switch_and_pull $::env(ESS_GIT_USERID)
+}
 puts "Git listener on port 2573"

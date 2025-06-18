@@ -148,6 +148,14 @@ DGTable *stimdg_widget=(DGTable *)0;
 
 Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
 
+Fl_Choice *branch_widget=(Fl_Choice *)0;
+
+Fl_Button *save_script_button=(Fl_Button *)0;
+
+Fl_Button *push_script_button=(Fl_Button *)0;
+
+Fl_Button *pull_script_button=(Fl_Button *)0;
+
 Fl_Tabs *editor_tabs=(Fl_Tabs *)0;
 
 TclEditor *system_editor=(TclEditor *)0;
@@ -301,13 +309,13 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Flex* o
               { reload_buttons = new Fl_Pack(447, 229, 37, 108);
                 reload_buttons->label_image_spacing(30);
-                { reload_system_button = new Fl_Button(452, 229, 26, 26, "@reload");
+                { reload_system_button = new Fl_Button(452, 229, 26, 26, "@#-1reload");
                   reload_system_button->callback((Fl_Callback*)cb_reload_system_button);
                 } // Fl_Button* reload_system_button
-                { reload_protocol_button = new Fl_Button(452, 266, 26, 26, "@reload");
+                { reload_protocol_button = new Fl_Button(452, 266, 26, 26, "@#-1reload");
                   reload_protocol_button->callback((Fl_Callback*)cb_reload_protocol_button);
                 } // Fl_Button* reload_protocol_button
-                { reload_variant_button = new Fl_Button(452, 303, 26, 26, "@reload");
+                { reload_variant_button = new Fl_Button(452, 303, 26, 26, "@#-1reload");
                   reload_variant_button->callback((Fl_Callback*)cb_reload_variant_button);
                 } // Fl_Button* reload_variant_button
                 reload_buttons->spacing(11);
@@ -331,13 +339,13 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               o->end();
             } // Fl_Pack* o
             { Fl_Group* o = new Fl_Group(184, 381, 311, 324);
-              { options_widget = new Fl_Scroll(185, 398, 310, 128, "Variant Options");
+              { options_widget = new Fl_Scroll(185, 398, 304, 124, "Variant Options");
                 options_widget->type(7);
                 options_widget->vertical_label_margin(3);
                 options_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
                 options_widget->end();
               } // Fl_Scroll* options_widget
-              { settings_widget = new Fl_Scroll(186, 551, 309, 150, "System Settings");
+              { settings_widget = new Fl_Scroll(186, 551, 304, 150, "System Settings");
                 settings_widget->type(7);
                 settings_widget->vertical_label_margin(3);
                 settings_widget->align(Fl_Align(FL_ALIGN_TOP_LEFT));
@@ -357,6 +365,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 640);
             { Fl_Group* o = new Fl_Group(504, 91, 747, 614, "behavior");
               o->labelsize(16);
+              o->hide();
               { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
                 o->box(FL_DOWN_BOX);
                 { eyetouch_widget = new EyeTouchWin(519, 126, 232, 232, "EyeWindow");
@@ -595,13 +604,31 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_OpDesk* opdesk_widget
               o->end();
             } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "scripts");
+            { Fl_Group* o = new Fl_Group(503, 92, 762, 613, "scripts");
               o->labelsize(16);
-              o->hide();
-              { editor_tabs = new Fl_Tabs(503, 100, 758, 595);
-                { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "System");
-                  o->hide();
-                  { system_editor = new TclEditor(503, 138, 754, 510, "system");
+              { Fl_Pack* o = new Fl_Pack(1040, 102, 220, 28);
+                o->type(1);
+                { branch_widget = new Fl_Choice(1085, 102, 96, 24, "Branch:");
+                  branch_widget->down_box(FL_BORDER_BOX);
+                  branch_widget->callback((Fl_Callback*)set_branch_cb);
+                } // Fl_Choice* branch_widget
+                { save_script_button = new Fl_Button(1182, 102, 25, 23, "@filesave");
+                  save_script_button->tooltip("save");
+                  save_script_button->callback((Fl_Callback*)save_script_cb);
+                } // Fl_Button* save_script_button
+                { push_script_button = new Fl_Button(1208, 102, 25, 23, "@8->");
+                  push_script_button->tooltip("commit and push");
+                  push_script_button->callback((Fl_Callback*)push_script_cb);
+                } // Fl_Button* push_script_button
+                { pull_script_button = new Fl_Button(1233, 102, 25, 23, "@2->");
+                  pull_script_button->tooltip("pull");
+                  pull_script_button->callback((Fl_Callback*)pull_script_cb);
+                } // Fl_Button* pull_script_button
+                o->end();
+              } // Fl_Pack* o
+              { editor_tabs = new Fl_Tabs(506, 134, 759, 553);
+                { Fl_Group* o = new Fl_Group(506, 159, 759, 523, "system");
+                  { system_editor = new TclEditor(506, 172, 759, 510, "system");
                     system_editor->box(FL_DOWN_FRAME);
                     system_editor->color(FL_BACKGROUND2_COLOR);
                     system_editor->selection_color((Fl_Color)31);
@@ -614,9 +641,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   } // TclEditor* system_editor
                   o->end();
                 } // Fl_Group* o
-                { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "Protocol");
+                { Fl_Group* o = new Fl_Group(506, 159, 759, 528, "protocol");
                   o->hide();
-                  { protocol_editor = new TclEditor(503, 138, 754, 515, "protocol");
+                  { protocol_editor = new TclEditor(506, 172, 759, 515, "protocol");
                     protocol_editor->box(FL_DOWN_FRAME);
                     protocol_editor->color(FL_BACKGROUND2_COLOR);
                     protocol_editor->selection_color((Fl_Color)31);
@@ -629,9 +656,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   } // TclEditor* protocol_editor
                   o->end();
                 } // Fl_Group* o
-                { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "Loaders");
+                { Fl_Group* o = new Fl_Group(506, 159, 759, 528, "loaders");
                   o->hide();
-                  { loaders_editor = new TclEditor(503, 138, 754, 515, "loaders");
+                  { loaders_editor = new TclEditor(506, 172, 759, 515, "loaders");
                     loaders_editor->box(FL_DOWN_FRAME);
                     loaders_editor->color(FL_BACKGROUND2_COLOR);
                     loaders_editor->selection_color((Fl_Color)31);
@@ -644,9 +671,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   } // TclEditor* loaders_editor
                   o->end();
                 } // Fl_Group* o
-                { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "Variants");
+                { Fl_Group* o = new Fl_Group(506, 159, 759, 528, "variants");
                   o->hide();
-                  { variants_editor = new TclEditor(503, 138, 754, 515, "variants");
+                  { variants_editor = new TclEditor(506, 172, 759, 515, "variants");
                     variants_editor->box(FL_DOWN_FRAME);
                     variants_editor->color(FL_BACKGROUND2_COLOR);
                     variants_editor->selection_color((Fl_Color)31);
@@ -659,8 +686,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   } // TclEditor* variants_editor
                   o->end();
                 } // Fl_Group* o
-                { Fl_Group* o = new Fl_Group(503, 125, 758, 570, "Stim");
-                  { stim_editor = new TclEditor(503, 138, 754, 515, "stim");
+                { Fl_Group* o = new Fl_Group(506, 159, 759, 528, "stim");
+                  o->hide();
+                  { stim_editor = new TclEditor(506, 172, 759, 515, "stim");
                     stim_editor->box(FL_DOWN_FRAME);
                     stim_editor->color(FL_BACKGROUND2_COLOR);
                     stim_editor->selection_color((Fl_Color)31);
