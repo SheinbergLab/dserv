@@ -466,20 +466,69 @@ static int gpio_input_init_command(ClientData data,
 					    Tcl_Interp *interp,
 				    int objc, Tcl_Obj *objv[])
 {
-  int offset, value;
-  
+  int offset = 0;
+  int debounce_period_us = 0;
+  uint32_t bias_flag;
+  uint32_t active_flag;
+  uint32_t edge_flag;
+
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "offset [initial_value]");
+    Tcl_WrongNumArgs(interp, 1, objv,
+		     "offset [RISING|FALLING|BOTH] [debounce_us] [PULL_UP|PULL_DOWN] [ACTIVE_LOW|ACTIVE_HIGH]");
     return TCL_ERROR;
-  }  
+  }
+
+  /* check all args first */
   if (Tcl_GetIntFromObj(interp, objv[1], &offset) != TCL_OK) {
     return TCL_ERROR;
   }
+
   if (objc > 2) {
-    if (Tcl_GetIntFromObj(interp, objv[2], &value) != TCL_OK) {
+    if (strcmp(Tcl_GetString(objv[2]), "BOTH") &&
+	strcmp(Tcl_GetString(objv[2]), "FALLING") &&
+	strcmp(Tcl_GetString(objv[2]), "RISING")) {
+      Tcl_AppendResult(interp, "edge should be one of BOTH|FALLING|RISING", NULL);
       return TCL_ERROR;
     }
   }
+
+  if (objc > 3) {
+    if (Tcl_GetIntFromObj(interp, objv[3], &debounce_period_us) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+
+  if (objc > 4) {
+    if (!strcmp(Tcl_GetString(objv[4]), "PULL_UP") ||
+	!strcmp(Tcl_GetString(objv[4]), "pull_up")) {
+    }
+    else if (!strcmp(Tcl_GetString(objv[4]), "PULL_DOWN") ||
+	!strcmp(Tcl_GetString(objv[4]), "pull_down")) {
+    }
+    else if (!strcmp(Tcl_GetString(objv[4]), "PULL_NONE") ||
+	!strcmp(Tcl_GetString(objv[4]), "pull_none")) {
+    }
+    else {
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		       ": bias must be PULL_UP|PULL_DOWN|PULL_NONE", NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  if (objc > 5) {
+    if (!strcmp(Tcl_GetString(objv[5]), "ACTIVE_LOW") ||
+	!strcmp(Tcl_GetString(objv[5]), "active_low")) {
+    }
+    else if (!strcmp(Tcl_GetString(objv[5]), "ACTIVE_HIGH") ||
+	!strcmp(Tcl_GetString(objv[5]), "ACTIVE_HIGH")) {
+    }
+    else {
+      Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+		       ": active_flag be ACTIVE_HIGH|ACTIVE_LOW", NULL);
+      return TCL_ERROR;
+    }
+  }
+
   return TCL_OK;
 }
 
