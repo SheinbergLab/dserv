@@ -276,6 +276,6 @@ git::branches
 if { [info exists ::env(ESS_GIT_USERID)] } {
     git::switch_and_pull $::env(ESS_GIT_USERID)
 } else {
-    git::switch_and_pull $::env(ESS_GIT_USERID)
+    git::switch_and_pull
 }
 puts "Git listener on port 2573"
