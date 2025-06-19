@@ -753,6 +753,7 @@ namespace eval ess {
             set current(variant) $variant
         }
 
+	# setup protocol (but don't call its actually init cb until below)
         protocol_init $current(system) $current(protocol)
 
         # set the variant for the current system
@@ -768,6 +769,11 @@ namespace eval ess {
         # initialize the loaders by calling the appropriate loader
         variant_init $current(system) $current(protocol) $current(variant)
 
+	# because the variants can override system paramters
+	#  initialize the protocol now that the variant is set
+	
+	$s protocol_init
+	
         # dictionary of states and associated transition states
         dservSet ess/state_table [get_state_transitions]
 
@@ -1910,11 +1916,11 @@ namespace eval ess {
         # initialize this protocol's loader methods
         ::ess::${system}::${protocol}::loaders_init $current(state_system)
 
-        ${s} protocol_init
-
-        ::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
-        set current(protocol) $protocol
-        set current(open_protocol) 1
+	# had called ${s} protocol_init here, but now wait for variants
+	    
+	::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
+	set current(protocol) $protocol
+	set current(open_protocol) 1
     }
 
     #
