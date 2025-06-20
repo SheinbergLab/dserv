@@ -237,7 +237,7 @@ int receiveMessage(int socket, char **rbuf)
   msgSize = ntohl(msgSize);
   
   // Allocate buffer for the message
-  char* buffer = (char *) malloc(msgSize);
+  char* buffer = (char *) malloc(msgSize+1);
   size_t totalBytesReceived = 0;
   while (totalBytesReceived < msgSize) {
     bytesReceived = recv(socket, buffer + totalBytesReceived, msgSize - totalBytesReceived, 0);
@@ -249,6 +249,7 @@ int receiveMessage(int socket, char **rbuf)
     totalBytesReceived += bytesReceived;
   }
   *rbuf = buffer;
+  buffer[msgSize] = '\0';	/* null terminate the response */
   return msgSize;
 }
 
