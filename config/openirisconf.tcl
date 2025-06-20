@@ -59,7 +59,7 @@ namespace eval openiris {
 	}
 	
 	set seconds_binary [binary format d $seconds]
-	dservSetData openiris/time 0 3 $fvals
+	dservSetData openiris/time 0 3 $seconds_binary
 
 	foreach v "frame int0 int1" {
 	    set ival [binary format i [expr {int([set $v])}]]
