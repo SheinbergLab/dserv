@@ -20,7 +20,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {-17 107 1280 800} type Double resizable visible
+    xywh {419 94 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
@@ -397,7 +397,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 }
                 Fl_Button pull_script_button {
                   label {@2->}
-                  callback pull_script_cb selected
+                  callback pull_script_cb
                   tooltip pull xywh {1233 102 25 23}
                 }
               }
@@ -405,7 +405,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 xywh {506 134 759 553}
               } {
                 Fl_Group {} {
-                  label system open
+                  label system open selected
                   xywh {506 159 759 523}
                 } {
                   Fl_Text_Editor system_editor {

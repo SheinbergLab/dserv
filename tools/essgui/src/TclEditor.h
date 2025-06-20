@@ -21,9 +21,76 @@ void handle_auto_indent(TclEditor* editor);
 static void format_editor_text_preserve_cursor(Fl_Text_Buffer* buffer, 
 					       TclEditor* editor);
 
+void save_script_cb(Fl_Widget *w, void *cbData);
+  
 
 class TclEditor : public Fl_Text_Editor {
 private:
+  bool is_modified;
+  bool _track_modifications;
+  
+  std::string original_tab_label;
+  Fl_Group* parent_tab;  // Reference to the tab group containing this editor
+  
+public:
+  void set_parent_tab(Fl_Group* tab) {
+    parent_tab = tab;
+    if (tab && tab->label()) {
+      original_tab_label = tab->label();
+    }
+  }
+
+  void track_modifications(bool track) {
+    _track_modifications = track;
+  }
+  
+  bool track_modifications(void) {
+    return _track_modifications;
+  }
+  
+  void mark_modified(bool modified = true) {
+    if (is_modified == modified) return; // No change
+    
+    is_modified = modified;
+    update_tab_label();
+  }
+  
+  bool get_modified() const {
+    return is_modified;
+  }
+  
+  void mark_saved() {
+    mark_modified(false);
+  }
+
+private:
+
+  void update_tab_label() {
+    if (!parent_tab) {
+      printf("no parent tab set\n");
+      return;
+    }
+    
+    std::string new_label;
+    if (is_modified) {
+      new_label = original_tab_label + " •";  // Add bullet point
+      // Alternative: new_label = "• " + original_tab_label;  // Prefix
+      // Alternative: new_label = original_tab_label + "*";   // Asterisk
+    } else {
+      new_label = original_tab_label;
+    }
+        
+    // Allocate persistent string for FLTK
+    char* persistent_label = new char[new_label.length() + 1];
+    strcpy(persistent_label, new_label.c_str());
+    parent_tab->label(persistent_label);
+    
+    // Force redraw of the tab widget
+    if (parent_tab->parent()) {
+      parent_tab->parent()->redraw();
+    }
+  }
+  
   Fl_Menu_Button *context_menu;
   static TclEditor* menu_editor; // For static callbacks
   std::string kill_buffer; // Store killed text for yanking
@@ -60,8 +127,9 @@ public:
   
   Fl_Text_Buffer *textbuf;
   Fl_Text_Buffer *stylebuf;
-  
-  TclEditor(int X, int Y, int W, int H, const char* l = 0) : Fl_Text_Editor(X, Y, W, H, l) {
+
+  TclEditor(int X, int Y, int W, int H, const char* l = 0)
+    : Fl_Text_Editor(X, Y, W, H, l), is_modified(false), _track_modifications(false), parent_tab(nullptr) {
     stylebuf = new Fl_Text_Buffer();
 
     // Create invisible menu button for context menu
@@ -73,14 +141,14 @@ public:
     context_menu->add("Copy", FL_CTRL+'c', copy_cb, this, 0);
     context_menu->add("Paste", FL_CTRL+'v', paste_cb, this, FL_MENU_DIVIDER);
     context_menu->add("Select All", FL_CTRL+'a', select_all_cb, this, FL_MENU_DIVIDER);
-    context_menu->add("Format", FL_META+'f', format_cb, this, 0);    
+    context_menu->add("Format", FL_META+'f', format_cb, this, 0);
   }
 
   ~TclEditor() {
     delete stylebuf;
     delete context_menu;
   }
-  
+
   int handle(int event) override {
     if (event == FL_KEYDOWN) {
       int key = Fl::event_key();
@@ -140,6 +208,9 @@ public:
 	  handle_yank();
 	  last_was_kill = false;
 	  return 1;
+	case 's': case 'S': // Save
+	  save_script_cb(this, nullptr);
+	  return 1;
 	}
       }
       // Any other key resets the kill sequence
@@ -166,6 +237,10 @@ public:
     return Fl_Text_Editor::handle(event);
   }
 
+  void setup_modification_tracking() {
+    mark_modified(false);
+  }
+  
   void handle_tab() {
     // Get current cursor position
     int cursor_pos = insert_position();

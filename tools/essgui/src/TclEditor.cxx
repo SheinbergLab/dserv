@@ -259,10 +259,17 @@ void parse_tcl_syntax(const char* text, char* style_out, int length) {
 // --- Style Update Callback ---
 void style_update_tcl(int pos, int nInserted, int nDeleted, int nRestyled,
 		      const char* deletedText, void* cbArg) {
-  Fl_Text_Editor* editor = static_cast<Fl_Text_Editor*>(cbArg);
+  //  Fl_Text_Editor* editor = static_cast<Fl_Text_Editor*>(cbArg);
+  TclEditor* editor = static_cast<TclEditor*>(cbArg);
   Fl_Text_Buffer* textBuffer = editor->buffer(); 
   Fl_Text_Buffer* stylebuf = editor->style_buffer();
-  
+
+  if (editor->track_modifications()) {
+    if (nInserted > 0 || nDeleted > 0) {
+      editor->mark_modified();
+    }
+  }
+	
   if (!stylebuf) {
     return;
   }
@@ -304,11 +311,13 @@ void initial_styling(TclEditor *editor)
 void configure_editor(TclEditor *editor, Fl_Text_Buffer *buffer)
 {
   Fl_Text_Buffer* stylebuf = new Fl_Text_Buffer();
+  editor->set_parent_tab(editor->parent());
   editor->buffer(buffer);
   editor->highlight_data(editor->stylebuf, styletable, 
 			 sizeof(styletable) / sizeof(styletable[0]),
 			 'A', NULL, NULL);
   buffer->add_modify_callback(style_update_tcl, editor);
+
 }
 
 

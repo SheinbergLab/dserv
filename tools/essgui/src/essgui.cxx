@@ -191,6 +191,21 @@ public:
     delete _interp;
   }
 
+  // Helper function to get the currently active editor
+  TclEditor* get_current_editor() {
+    if (!editor_tabs) return nullptr;
+    
+    Fl_Group* current_tab = static_cast<Fl_Group*>(editor_tabs->value());
+    if (!current_tab) return nullptr;
+    
+    for (int i = 0; i < current_tab->children(); ++i) {
+      TclEditor* editor = dynamic_cast<TclEditor*>(current_tab->child(i));
+      if (editor) return editor;
+    }
+    
+    return nullptr;
+  }
+  
   void init_text_widgets(void)
   {
     text_buffers["system"] = new Fl_Text_Buffer();
@@ -220,9 +235,12 @@ public:
   
   void set_editor_buffer(TclEditor *editor, const char *name, const char *buf)
   {
+    editor->track_modifications(false);
     text_buffers[name]->text(buf);
+    editor->mark_modified(false);
     initial_styling(editor);
     editor->format_code();
+    editor->track_modifications(true);
   }
   
   void clear_editor_buffer(const char *name)
@@ -1011,12 +1029,30 @@ void refresh_cb(Fl_Button *, void *)
 
 void save_script_cb(Fl_Widget *w, void *cbData)
 {
-  std::string type(editor_tabs->value()->label());
+  TclEditor *editor = nullptr;
+
+  // find the active editor
+  if (editor_tabs) {
+    Fl_Group* current_tab = static_cast<Fl_Group*>(editor_tabs->value());
+    if (current_tab) {
+      // Find the TclEditor in the current tab
+      for (int i = 0; i < current_tab->children(); ++i) {
+	editor = dynamic_cast<TclEditor*>(current_tab->child(i));
+	break;
+      }
+    }
+  }
+
+  if (!editor) return;
+  
+  // use its label to save correct script type
+  std::string type(editor->label());
   std::string text = g_App->editor_buffer_contents(type.c_str());
   std::string cmd = std::string("ess::save_script ") + type + " {" + text + "}";
   std::string rstr;
   g_App->msg_eval(cmd.c_str(), rstr);
-  //  std::cout << cmd << std::endl;
+  //std::cout << std::string("ess::save_script ") + type << std::endl;
+  editor->mark_saved();
 }
 
 void push_script_cb(Fl_Widget *w, void *cbData)
@@ -1360,17 +1396,33 @@ int add_params(const char *param_list)
    if (Tcl_SplitList(g_App->interp(), Tcl_GetString(value),
 		     &argc, &argv) == TCL_OK) {
      Fl_Widget *input;
+     const char *vstr;
+     const char *vkind;
+     const char *vdtype;
      /*
       * argv[0] = value
       * argv[1] = variable_type (1=time,2=variable)
       * argv[2] = datatype
      */
-     if (!strcmp(argv[2],"int")) {
+
+     if (argc == 2) {
+       vstr = "";
+       vkind = argv[0];
+       vdtype = argv[1];
+     }
+     else if (argc == 3) {
+       vstr = argv[0];
+       vkind = argv[1];
+       vdtype = argv[2];
+     }
+     else continue;
+     
+     if (!strcmp(vdtype, "int")) {
        input = (Fl_Widget *) new Fl_Int_Input(xoff+label_width,
 					      yoff+10+row*height,
 					      options_widget->w()-(label_width+20), height, 0);
      }
-     else if (!strcmp(argv[2],"float")) {
+     else if (!strcmp(vdtype, "float")) {
        input = (Fl_Widget *) new Fl_Float_Input(xoff+label_width,
 						yoff+10+row*height,
 						options_widget->w()-(label_width+20), height, 0);
@@ -1387,10 +1439,11 @@ int add_params(const char *param_list)
      input->labeltype(FL_NORMAL_LABEL);
 
      /* differentiate time from variable settings by color */
-     if (!strcmp(argv[1], "1")) input->labelcolor(fl_rgb_color(60, 50, 30));
+     if (argc != 3) input->labelcolor(fl_rgb_color(200, 50, 30));
+     else if (!strcmp(vkind, "1")) input->labelcolor(fl_rgb_color(60, 50, 30));
      else input->labelcolor(fl_rgb_color(0, 0, 0));
      
-     ((Fl_Input *) input)->value(argv[0]);
+     ((Fl_Input *) input)->value(vstr);
      input->callback(param_setting_callback);
      input->when(FL_WHEN_ENTER_KEY | FL_UNFOCUS);
      Tcl_Free((char *) argv);
