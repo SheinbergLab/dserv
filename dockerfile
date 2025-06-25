@@ -1,3 +1,23 @@
+## This dockerfile is used to build a container that runs the latest version of dserv
+# It installs the latest version of dserv, dlsh, and ess, as well as dependencies like Tcl9
+# It can be accessed as normal by sending TCP commands to the dserv port (2570) and git port (2573)
+# e.g., {
+#           echo "ess::load_system search" | nc -N 127.0.0.1 2570
+#           echo "ess::get_system_status" | nc -N 127.0.0.1 2570
+#       }
+# echo "git::switch_and_pull ryan" | nc -N 127.0.0.1 2573
+
+# To use entirely self-contained including task code,
+# wget https://raw.githubusercontent.com/SheinbergLab/dserv/main/dockerfile
+# docker build -t dserv-img:latest .
+# docker run -p 2570:2570 -p 2573:2573 -it dserv-img:latest
+
+# alternatively, if you want the task code on the host system directly,
+# wget https://raw.githubusercontent.com/SheinbergLab/dserv/main/dockerfile
+# git clone https://github.com/homebase-sheinberg/ess.git
+# docker build -t dserv-img:latest .
+# docker run -p 2570:2570 -p 2573:2573 -v /home/lab/docker_dserv/ess:/home/lab/ess -it dserv-img:latest
+
 # Use latest Debian image (similar base to Raspberry Pi OS)
 FROM debian:bookworm
 
@@ -29,7 +49,10 @@ RUN git clone --recurse-submodules https://github.com/SheinbergLab/dserv.git /ro
     rm -rf /root/code
 
 # Install dlsh and configure dserv/ess in a single layer.
-RUN wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.6/dlsh.zip -P /tmp && \
+RUN wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases/latest \
+    | grep -m 1 '"browser_download_url":".*dlsh\\.zip"' \
+    | cut -d '"' -f 4 \
+    | wget -qi - -O /tmp/dlsh.zip && \
     mkdir -p /usr/local/dlsh && \
     cp /tmp/dlsh.zip /usr/local/dlsh/ && \
     rm /tmp/dlsh.zip && \
