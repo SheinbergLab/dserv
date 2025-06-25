@@ -29,7 +29,7 @@ RUN apt-get update && \
     apt-get full-upgrade -y && \
     apt-get install -y --no-install-recommends \
         build-essential cmake libevdev-dev libpq-dev \
-        git wget ca-certificates pkg-config \
+        git wget ca-certificates pkg-config jq \
         tcl-dev libjansson-dev liblz4-dev libhpdf-dev libyajl2 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -49,16 +49,19 @@ RUN git clone --recurse-submodules https://github.com/SheinbergLab/dserv.git /ro
     rm -rf /root/code
 
 # Install dlsh and configure dserv/ess in a single layer.
-RUN wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases/latest \
-    | grep -m 1 '"browser_download_url":".*dlsh\\.zip"' \
-    | cut -d '"' -f 4 \
-    | wget -qi - -O /tmp/dlsh.zip && \
+RUN DLSH_URL=$(wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases \
+    | jq -r '.[0].assets[] | select(.name == "dlsh.zip") | .browser_download_url') && \
+    if [ -z "$DLSH_URL" ]; then \
+        echo "ERROR: Could not find dlsh.zip download URL." >&2; \
+        exit 1; \
+    fi && \
+    wget "$DLSH_URL" -O /tmp/dlsh.zip && \
     mkdir -p /usr/local/dlsh && \
     cp /tmp/dlsh.zip /usr/local/dlsh/ && \
     rm /tmp/dlsh.zip && \
     # Configure dserv
     cp /usr/local/dserv/local/post-pins.tcl.EXAMPLE /usr/local/dserv/local/post-pins.tcl && \
-    sed -i '/gpio/s/^/#/' /usr/local/dserv/local/post-pins.tcl && \
+    sed -i '/^\\s*gpio/s/^/#/' /usr/local/dserv/local/post-pins.tcl && \
     # Install and configure ess
     mkdir -p /home/lab && \
     git clone https://github.com/homebase-sheinberg/ess.git /home/lab/ess && \
