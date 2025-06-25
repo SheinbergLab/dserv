@@ -67,7 +67,14 @@ RUN DLSH_URL=$(wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases
     git clone https://github.com/homebase-sheinberg/ess.git /home/lab/ess && \
     git config --system --add safe.directory /home/lab/ess && \
     cp /usr/local/dserv/local/pre-systemdir.tcl.EXAMPLE /usr/local/dserv/local/pre-systemdir.tcl && \
-    echo 'set env(ESS_SYSTEM_PATH) /home/lab/' >> /usr/local/dserv/local/pre-systemdir.tcl
+    echo 'set env(ESS_SYSTEM_PATH) /home/lab/' >> /usr/local/dserv/local/pre-systemdir.tcl && \
+    # Allow any user to write to the application and data directories
+    chmod -R 777 /usr/local/dserv /home/lab
+
+# Configure the entrypoint
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Default command to start dserv in the background and open a shell
 CMD ["/bin/bash", "-c", "/usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl & exec bash"]
