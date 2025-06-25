@@ -17,6 +17,7 @@
 # git clone https://github.com/homebase-sheinberg/ess.git
 # docker build -t dserv-img:latest .
 # docker run -p 2570:2570 -p 2573:2573 -v /home/lab/docker_dserv/ess:/home/lab/ess -it dserv-img:latest
+# (git commands through dserv wont work in this situation because the container is running as root)
 
 # Use latest Debian image (similar base to Raspberry Pi OS)
 FROM debian:bookworm
@@ -70,11 +71,6 @@ RUN DLSH_URL=$(wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases
     echo 'set env(ESS_SYSTEM_PATH) /home/lab/' >> /usr/local/dserv/local/pre-systemdir.tcl && \
     # Allow any user to write to the application and data directories
     chmod -R 777 /usr/local/dserv /home/lab
-
-# Configure the entrypoint
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Default command to start dserv in the background and open a shell
 CMD ["/bin/bash", "-c", "/usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl & exec bash"]
