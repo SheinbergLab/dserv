@@ -1,6 +1,6 @@
 # essctrl - Multi-Service Command Line Client
 
-`essctrl` is a versatile command-line client that provides both interactive and non-interactive access to multiple network services. It supports various service types including databases, messaging systems, git repositories, and more.
+`essctrl` is a command-line client that provides both interactive and non-interactive access to [*dserv*](https://github.com/sheinberglab/dserv) services. It supports different service types including state system control, database access, git commands, and others.
 
 The default service is the ESS service (port 2560), which supports commands with newline characters and provides robust message-based communication.
 
@@ -418,7 +418,7 @@ Status: Success"
 
 #### Multi-line Command Examples
 
-The default messaging service supports commands with embedded newlines:
+The default ESS service supports commands with embedded newlines:
 
 ```bash
 # Send formatted text
@@ -453,10 +453,10 @@ Command history is automatically saved to `history.txt` in the current directory
 
 Default connection settings:
 - Server: localhost
-- Default service: Messaging (port 2560)
+- Default service: ESS (port 2560)
 - History file: history.txt
 
-The messaging service (default) provides enhanced functionality:
+The ESS service (default) provides enhanced functionality:
 - Supports commands and responses with embedded newlines
 - Better handling of structured data and multi-line content
 - Robust message-based communication protocol
@@ -569,13 +569,13 @@ echo -e "STATUS\nINFO\nVERSION" | ./essctrl
 ### Service Switching in Interactive Mode
 
 ```
-msg> hello world
-msg> /db
+ess> hello world
+ess> /db
 db> SELECT * FROM users;
-db> /ess  
-ess> status
-ess> /msg
-msg> multi-line message:
+db> /legacy  
+legacy> status
+legacy> /ess
+ess> multi-line message:
 line 1
 line 2
 ```
@@ -583,8 +583,8 @@ line 2
 ### History Management
 
 ```
-msg> /historylen 1000    # Set history to 1000 entries
-msg> # Use up/down arrows to navigate history
+ess> /historylen 1000    # Set history to 1000 entries
+ess> # Use up/down arrows to navigate history
 ```
 
 ### Tab Completion
@@ -606,7 +606,7 @@ Start typing and press `<Tab>` for command completion (currently supports basic 
 
 ```bash
 # Test if stdin detection works
-echo "test" | ./essctrl -s msg
+echo "test" | ./essctrl -s ess
 
 # Check if file reading works  
 cat > test_commands.txt <<EOF
