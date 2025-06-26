@@ -80,31 +80,52 @@ int supports_color() {
 #endif
 }
 
+
+// Check if string contains only whitespace characters
+int is_whitespace_only(char *str) {
+    if (!str) return 1;
+    while (*str) {
+        if (*str != ' ' && *str != '\t' && *str != '\n' && *str != '\r') {
+            return 0;
+        }
+        str++;
+    }
+    return 1;
+}
+
 // Process server response and handle errors
 // Returns 0 for success, 1 for error
 int process_response(char *response, int interactive) {
-    if (!response || strlen(response) == 0) {
-        return 0; // Empty response is not an error
+  if (!response || strlen(response) == 0) {
+    return 0; // Empty response is not an error
+  }
+  
+  // Check if response is only whitespace - not an error
+  if (is_whitespace_only(response)) {
+    if (strlen(response) > 0) {
+      printf("%s", response); // Print the whitespace as-is (including newlines)
     }
+    return 0; // Whitespace-only response is not an error
+  }
+  
+  // Check if response starts with error prefix
+  if (strncmp(response, ERROR_PREFIX, ERROR_PREFIX_LEN) == 0) {
+    // Extract error message (skip the prefix)
+    char *error_msg = response + ERROR_PREFIX_LEN;
     
-    // Check if response starts with error prefix
-    if (strncmp(response, ERROR_PREFIX, ERROR_PREFIX_LEN) == 0) {
-        // Extract error message (skip the prefix)
-        char *error_msg = response + ERROR_PREFIX_LEN;
-        
-        if (interactive && supports_color()) {
-            // Print in red for interactive mode with color support
-            printf("%s%s%s\n", ANSI_COLOR_RED, error_msg, ANSI_COLOR_RESET);
-        } else {
-            // Just print the error message without prefix
-            printf("%s\n", error_msg);
-        }
-        return 1; // Error occurred
+    if (interactive && supports_color()) {
+      // Print in red for interactive mode with color support
+      printf("%s%s%s\n", ANSI_COLOR_RED, error_msg, ANSI_COLOR_RESET);
     } else {
-        // Normal response, print as-is
-        printf("%s\n", response);
-        return 0; // Success
+      // Just print the error message without prefix
+      printf("%s\n", error_msg);
     }
+    return 1; // Error occurred
+  } else {
+    // Normal response, print as-is
+    printf("%s\n", response);
+    return 0; // Success
+  }
 }
 
 char *do_command(char *server, int tcpport, char *line, int n)
@@ -148,13 +169,14 @@ int execute_single_command(char *server, int tcpport, char *command) {
     }
     
     if (resultstr) {
-        if (strlen(resultstr)) {
-            error_occurred = process_response(resultstr, 0); // Not interactive
-        }
-        if (tcpport == STIM_PORT || tcpport == ESS_PORT) {
-            free(resultstr);
-        }
-        return error_occurred; // Return 0 for success, 1 for error
+      error_occurred = process_response(resultstr, 0);
+      if (tcpport == STIM_PORT || tcpport == ESS_PORT) {
+	free(resultstr);
+      }
+      return error_occurred; // Return 0 for success, 1 for error
+    }
+    else {
+      return 0;
     }
     
     fprintf(stderr, "Error: Failed to execute command\n");
