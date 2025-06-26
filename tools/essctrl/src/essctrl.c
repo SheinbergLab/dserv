@@ -7,10 +7,10 @@
 #include "linenoise.h"
 #include "sockapi.h"
 
+#define LEGACY_PROMPT "legacy> "
+#define LEGACY_PORT 2570
 #define ESS_PROMPT "ess> "
-#define ESS_PORT 2570
-#define MSG_PROMPT "msg> "
-#define MSG_PORT 2560
+#define ESS_PORT 2560
 #define DB_PROMPT "db> "
 #define DB_PORT 2571
 #define DSERV_PROMPT "dserv> "
@@ -24,6 +24,17 @@
 #define OPENIRIS_PROMPT "openiris> "
 #define OPENIRIS_PORT 2574
 
+// ANSI color codes
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
+
+// Error constants
+#define ERROR_PREFIX "!TCL_ERROR "
+#define ERROR_PREFIX_LEN 11
+
+// Global flag to track if we're in interactive mode
+int g_interactive_mode = 1;
+
 void completion(const char *buf, linenoiseCompletions *lc) {
     if (buf[0] == 'h') {
         linenoiseAddCompletion(lc,"hello");
@@ -35,19 +46,19 @@ void print_usage(char *prgname) {
     printf("Usage: %s [server] [options]\n", prgname);
     printf("  server        Server address (default: localhost)\n");
     printf("  -c command    Execute command and exit\n");
-    printf("  -s service    Target service (ess, msg, db, dserv, stim, pg, git, openiris)\n");
+    printf("  -s service    Target service (ess, legacy, db, dserv, stim, pg, git, openiris)\n");
     printf("  -h            Show this help\n");
     printf("\nExamples:\n");
     printf("  %s                    # Interactive mode with localhost\n", prgname);
     printf("  %s server.example.com # Interactive mode with specific server\n", prgname);
     printf("  %s -c \"return 100\"        # Execute 'status' command on localhost\n", prgname);
     printf("  %s -s db -c \"SELECT * FROM users\" # Execute SQL on db service\n", prgname);
-    printf("  %s server.com -s msg -c \"expr 5*5\"    # Send message to specific server\n", prgname);
+    printf("  %s server.com -s ess -c \"expr 5*5\"    # Send message to specific server\n", prgname);
 }
 
 int get_port_for_service(char *service) {
     if (!strcmp(service, "ess")) return ESS_PORT;
-    if (!strcmp(service, "msg")) return MSG_PORT;
+    if (!strcmp(service, "legacy")) return LEGACY_PORT;
     if (!strcmp(service, "db")) return DB_PORT;
     if (!strcmp(service, "dserv")) return DSERV_PORT;
     if (!strcmp(service, "stim")) return STIM_PORT;
@@ -55,6 +66,45 @@ int get_port_for_service(char *service) {
     if (!strcmp(service, "git")) return GIT_PORT;
     if (!strcmp(service, "openiris")) return OPENIRIS_PORT;
     return -1;
+}
+
+// Check if terminal supports colors
+int supports_color() {
+#ifdef _WIN32
+    // On Windows, check if we're in a modern terminal
+    char* term = getenv("TERM");
+    return (term != NULL);
+#else
+    // On Unix/Linux, check if stdout is a terminal and TERM is set
+    return isatty(STDOUT_FILENO) && getenv("TERM") != NULL;
+#endif
+}
+
+// Process server response and handle errors
+// Returns 0 for success, 1 for error
+int process_response(char *response, int interactive) {
+    if (!response || strlen(response) == 0) {
+        return 0; // Empty response is not an error
+    }
+    
+    // Check if response starts with error prefix
+    if (strncmp(response, ERROR_PREFIX, ERROR_PREFIX_LEN) == 0) {
+        // Extract error message (skip the prefix)
+        char *error_msg = response + ERROR_PREFIX_LEN;
+        
+        if (interactive && supports_color()) {
+            // Print in red for interactive mode with color support
+            printf("%s%s%s\n", ANSI_COLOR_RED, error_msg, ANSI_COLOR_RESET);
+        } else {
+            // Just print the error message without prefix
+            printf("%s\n", error_msg);
+        }
+        return 1; // Error occurred
+    } else {
+        // Normal response, print as-is
+        printf("%s\n", response);
+        return 0; // Success
+    }
 }
 
 char *do_command(char *server, int tcpport, char *line, int n)
@@ -89,8 +139,9 @@ char *do_msg_command(char *server, int port, char *line, int n)
 
 int execute_single_command(char *server, int tcpport, char *command) {
     char *resultstr;
+    int error_occurred = 0;
     
-    if (tcpport == STIM_PORT || tcpport == MSG_PORT) {
+    if (tcpport == STIM_PORT || tcpport == ESS_PORT) {
         resultstr = do_msg_command(server, tcpport, command, strlen(command));
     } else {
         resultstr = sock_send(server, tcpport, command, strlen(command));
@@ -98,19 +149,17 @@ int execute_single_command(char *server, int tcpport, char *command) {
     
     if (resultstr) {
         if (strlen(resultstr)) {
-            printf("%s\n", resultstr);
+            error_occurred = process_response(resultstr, 0); // Not interactive
         }
-        if (tcpport == STIM_PORT || tcpport == MSG_PORT) {
+        if (tcpport == STIM_PORT || tcpport == ESS_PORT) {
             free(resultstr);
         }
-        return 0; // Success
+        return error_occurred; // Return 0 for success, 1 for error
     }
     
     fprintf(stderr, "Error: Failed to execute command\n");
-    return 1; // Error
+    return 1; // Connection/communication error
 }
-
-// Add this function after the existing helper functions
 
 int is_stdin_available() {
 #ifdef _WIN32
@@ -128,6 +177,7 @@ int process_stdin_commands(char *server, int tcpport) {
     ssize_t read;
     char *resultstr;
     int commands_processed = 0;
+    int any_errors = 0;
 
     while ((read = getline(&line, &len, stdin)) != -1) {
         // Remove newline if present
@@ -140,16 +190,24 @@ int process_stdin_commands(char *server, int tcpport) {
         if (read == 0 || line[0] == '\0') continue;
         
         // Process the command
-        if (tcpport == STIM_PORT || tcpport == MSG_PORT) {
+        if (tcpport == STIM_PORT || tcpport == ESS_PORT) {
             resultstr = do_msg_command(server, tcpport, line, strlen(line));
             if (resultstr) {
-                if (strlen(resultstr)) printf("%s\n", resultstr);
+                if (strlen(resultstr)) {
+                    if (process_response(resultstr, 0)) { // Not interactive
+                        any_errors = 1;
+                    }
+                }
                 free(resultstr);
             }
         } else {
             resultstr = sock_send(server, tcpport, line, strlen(line));
             if (resultstr) {
-                if (strlen(resultstr)) printf("%s\n", resultstr);
+                if (strlen(resultstr)) {
+                    if (process_response(resultstr, 0)) { // Not interactive
+                        any_errors = 1;
+                    }
+                }
             }
         }
         
@@ -157,7 +215,10 @@ int process_stdin_commands(char *server, int tcpport) {
     }
     
     if (line) free(line);
-    return commands_processed;
+    
+    // Return appropriate exit code
+    if (commands_processed == 0) return 1; // No commands processed
+    return any_errors ? 1 : 0;  // Return 1 if any errors occurred
 }
 
 int main (int argc, char *argv[])
@@ -166,9 +227,9 @@ int main (int argc, char *argv[])
   char *prgname = argv[0];
   int async = 0;
   char *server = "localhost";
-  int tcpport = MSG_PORT;
+  int tcpport = ESS_PORT;
   char *resultstr;
-  char *prompt = MSG_PROMPT;
+  char *prompt = ESS_PROMPT;
   char *command_to_execute = NULL;
   char *target_service = NULL;
   int interactive_mode = 1;
@@ -210,23 +271,27 @@ int main (int argc, char *argv[])
       }
   }
   
+  // Set global interactive mode flag
+  g_interactive_mode = interactive_mode;
+  
   // Set target service port if specified
   if (target_service) {
       tcpport = get_port_for_service(target_service);
       if (tcpport == -1) {
           fprintf(stderr, "Error: Unknown service '%s'\n", target_service);
-          fprintf(stderr, "Valid services: ess, msg, db, dserv, stim, pg, git, openiris\n");
+          fprintf(stderr, "Valid services: ess, legacy, db, dserv, stim, pg, git, openiris\n");
           return 1;
       }
   }
 
   // Check if we should read from stdin
   if (!command_to_execute && is_stdin_available()) {
-      int processed = process_stdin_commands(server, tcpport);
+      g_interactive_mode = 0; // Stdin mode is not interactive
+      int result = process_stdin_commands(server, tcpport);
 #ifdef _MSC_VER
       cleanup_w32_socket();
 #endif
-      return (processed > 0) ? 0 : 1;
+      return result;
   }
   
   // If command specified, execute it and exit
@@ -239,6 +304,7 @@ int main (int argc, char *argv[])
   }
   
   // Continue with interactive mode
+  g_interactive_mode = 1;
   linenoiseInstallWindowChangeHandler();
 
   /* Set the completion callback. This will be called every time the
@@ -263,10 +329,12 @@ int main (int argc, char *argv[])
     if (!strcmp(line, "exit")) exit(0);
     
     if (line[0] != '\0' && line[0] != '/') {
-      if (tcpport == STIM_PORT || tcpport == MSG_PORT) {
+      if (tcpport == STIM_PORT || tcpport == ESS_PORT) {
 	resultstr = do_msg_command(server, tcpport, line, strlen(line));
 	if (resultstr) {
-	  if (strlen(resultstr)) printf("%s\n", resultstr);
+	  if (strlen(resultstr)) {
+              process_response(resultstr, 1); // Interactive mode
+          }
 	  free(resultstr);
 	}
       }
@@ -274,7 +342,7 @@ int main (int argc, char *argv[])
 	resultstr = sock_send(server, tcpport, line, strlen(line));
 	if (resultstr) {
 	  if (strlen(resultstr)) {
-	    printf("%s\n", resultstr);
+	    process_response(resultstr, 1); // Interactive mode
 	  }
 	}
 	linenoiseHistoryAdd(line);
@@ -284,43 +352,50 @@ int main (int argc, char *argv[])
       /* The "/historylen" command will change the history len. */
       int len = atoi(line+11);
       linenoiseHistorySetMaxLen(len);
+    } else if (!strncmp(line, "/legacy", 7)) {
+      if (strlen(line) > 7) {
+	resultstr = do_command(server, LEGACY_PORT, &line[8], strlen(line)-8);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
+      }
+      else {
+	tcpport = LEGACY_PORT;
+	prompt = LEGACY_PROMPT;
+      }
     } else if (!strncmp(line, "/ess", 4)) {
       if (strlen(line) > 4) {
-	resultstr = do_command(server, ESS_PORT, &line[5], strlen(line)-5);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	resultstr = do_msg_command(server, ESS_PORT, &line[5],
+				   strlen(line)-5);
+	if (resultstr) {
+	  if (strlen(resultstr)) {
+              process_response(resultstr, 1); // Interactive mode
+          }
+	  free(resultstr);
+	}
       }
       else {
 	tcpport = ESS_PORT;
 	prompt = ESS_PROMPT;
       }
-    } else if (!strncmp(line, "/dserv", 6)) {
       if (strlen(line) > 6) {
 	resultstr = do_command(server, DSERV_PORT, &line[7], strlen(line)-7);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
       }
       else {
 	tcpport = DSERV_PORT;
 	prompt = DSERV_PROMPT;
       }
-    } else if (!strncmp(line, "/msg", 4)) {
-      if (strlen(line) > 4) {
-	resultstr = do_msg_command(server, MSG_PORT, &line[5],
-				   strlen(line)-5);
-	if (resultstr) {
-	  if (strlen(resultstr)) printf("%s\n", resultstr);
-	  free(resultstr);
-	}
-      }
-      else {
-	tcpport = MSG_PORT;
-	prompt = MSG_PROMPT;
-      }
-    } else if (!strncmp(line, "/stim", 5)) {
+    } else if (!strncmp(line, "/dserv", 6)) {
       if (strlen(line) > 5) {
 	resultstr = do_msg_command(server, STIM_PORT, &line[6],
 				   strlen(line)-6);
 	if (resultstr) {
-	  if (strlen(resultstr)) printf("%s\n", resultstr);
+	  if (strlen(resultstr)) {
+              process_response(resultstr, 1); // Interactive mode
+          }
 	  free(resultstr);
 	}
       }
@@ -331,7 +406,9 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/db", 3)) {
       if (strlen(line) > 3) {
 	resultstr = do_command(server, DB_PORT, &line[4], strlen(line)-4);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
       }
       else {
 	tcpport = DB_PORT;
@@ -340,7 +417,9 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/pg", 3)) {
       if (strlen(line) > 3) {
 	resultstr = do_command(server, PG_PORT, &line[4], strlen(line)-4);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
       }
       else {
 	tcpport = PG_PORT;
@@ -349,7 +428,9 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/git", 4)) {
       if (strlen(line) > 4) {
 	resultstr = do_command(server, GIT_PORT, &line[5], strlen(line)-5);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
       }
       else {
 	tcpport = GIT_PORT;
@@ -358,7 +439,9 @@ int main (int argc, char *argv[])
     } else if (!strncmp(line, "/openiris", 9)) {
       if (strlen(line) > 9) {
 	resultstr = do_command(server, OPENIRIS_PORT, &line[10], strlen(line)-10);
-	if (resultstr && strlen(resultstr)) printf("%s\n", resultstr);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
       }
       else {
 	tcpport = OPENIRIS_PORT;
