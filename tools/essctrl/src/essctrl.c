@@ -110,6 +110,56 @@ int execute_single_command(char *server, int tcpport, char *command) {
     return 1; // Error
 }
 
+// Add this function after the existing helper functions
+
+int is_stdin_available() {
+#ifdef _WIN32
+    // Windows implementation
+    return !_isatty(_fileno(stdin));
+#else
+    // Unix/Linux implementation
+    return !isatty(STDIN_FILENO);
+#endif
+}
+
+int process_stdin_commands(char *server, int tcpport) {
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    char *resultstr;
+    int commands_processed = 0;
+
+    while ((read = getline(&line, &len, stdin)) != -1) {
+        // Remove newline if present
+        if (read > 0 && line[read-1] == '\n') {
+            line[read-1] = '\0';
+            read--;
+        }
+        
+        // Skip empty lines
+        if (read == 0 || line[0] == '\0') continue;
+        
+        // Process the command
+        if (tcpport == STIM_PORT || tcpport == MSG_PORT) {
+            resultstr = do_msg_command(server, tcpport, line, strlen(line));
+            if (resultstr) {
+                if (strlen(resultstr)) printf("%s\n", resultstr);
+                free(resultstr);
+            }
+        } else {
+            resultstr = sock_send(server, tcpport, line, strlen(line));
+            if (resultstr) {
+                if (strlen(resultstr)) printf("%s\n", resultstr);
+            }
+        }
+        
+        commands_processed++;
+    }
+    
+    if (line) free(line);
+    return commands_processed;
+}
+
 int main (int argc, char *argv[])
 {
   char *line;
@@ -168,6 +218,15 @@ int main (int argc, char *argv[])
           fprintf(stderr, "Valid services: ess, msg, db, dserv, stim, pg, git, openiris\n");
           return 1;
       }
+  }
+
+  // Check if we should read from stdin
+  if (!command_to_execute && is_stdin_available()) {
+      int processed = process_stdin_commands(server, tcpport);
+#ifdef _MSC_VER
+      cleanup_w32_socket();
+#endif
+      return (processed > 0) ? 0 : 1;
   }
   
   // If command specified, execute it and exit
