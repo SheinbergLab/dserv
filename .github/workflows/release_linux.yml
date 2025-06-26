@@ -160,7 +160,7 @@ jobs:
         run: |
           ls -alth /usr/local/bin
           ls -alth /usr/local/dserv/db
-          echo "test-123" | essctrl && cat history.txt
+          echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
           timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 
