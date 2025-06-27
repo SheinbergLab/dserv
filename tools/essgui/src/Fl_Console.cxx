@@ -377,138 +377,171 @@ void Fl_Console::handle_escape_sequence(char c) {
 }
 
 int Fl_Console::handle(int e) {
-    switch (e) {
-    case FL_PASTE:
-        handle_paste(Fl::event_text());
-        return 1;
-        
-    case FL_KEYDOWN: {
-        int key = Fl::event_key();
-        const char *text = Fl::event_text();
-        
-        if (Fl::event_alt()) return 0;
-        
-        // Handle special keys first
-        switch (key) {
-        case FL_Meta_L: case FL_Meta_R:
-        case FL_Alt_L: case FL_Alt_R:
-        case FL_Shift_L: case FL_Shift_R:
-        case FL_Control_L: case FL_Control_R:
-        case FL_Caps_Lock:
-            return 0;
-            
-        case 'c': case 'C':
-            if (Fl::event_state(FL_COMMAND)) {
-                copy_to_clipboard();
-                return 1;
-            }
-            break;
-            
-        case 'v': case 'V':
-            if (Fl::event_state(FL_COMMAND)) {
-                paste_from_clipboard();
-                return 1;
-            }
-            break;
-        }
-        
-        // Get the character
-        char c = text && text[0] ? text[0] : 0;
-        
-        // Handle modes
-        if (mode == MODE_ESCAPE_SEQUENCE) {
-            handle_escape_sequence(c);
-            return 1;
-        }
-        
-        if (mode == MODE_COMPLETION) {
-            switch (c) {
-            case '\t':  // Tab - cycle through completions
-                completion_index = (completion_index + 1) % (completions.size() + 1);
-                if (completion_index == completions.size()) {
-                    // Back to original
-                    current_line = original_line;
-                    cursor_pos = original_cursor;
-                    refresh_line();
-                } else {
-                    cycle_completion();
-                }
-                return 1;
-                
-            case 27:    // Escape - cancel completion
-                cancel_completion();
-                return 1;
-                
-            case '\r': case '\n':  // Enter - accept and execute
-                accept_completion();
-                execute_line();
-                return 1;
-                
-            default:    // Any other key - accept completion and continue
-                accept_completion();
-                // Fall through to normal handling
-                break;
-            }
-        }
-        
-        // Normal mode key handling
-        switch (c) {
-        case '\t':      // Tab - start completion
-            start_completion();
-            break;
-            
-        case '\r': case '\n':  // Enter
-            execute_line();
-            break;
-            
-        case 27:        // Escape - start escape sequence
-            mode = MODE_ESCAPE_SEQUENCE;
-            escape_sequence.clear();
-            break;
-            
-        case 127: case 8:  // Backspace
-            backspace();
-            break;
-            
-        case 1:         // Ctrl+A - start of line
-            move_to_start();
-            break;
-            
-        case 5:         // Ctrl+E - end of line
-            move_to_end();
-            break;
-            
-        case 21:        // Ctrl+U - clear line
-            clear_line();
-            break;
-            
-        case 11:        // Ctrl+K - delete to end
-            current_line.erase(cursor_pos);
-            refresh_line();
-            break;
-            
-        case 23:        // Ctrl+W - delete word
-            delete_word();
-            break;
-            
-        case 12:        // Ctrl+L - clear screen
-            clear();
-            refresh_line();
-            break;
-            
-        default:
-            if (c >= 32 && c < 127) {  // Printable characters
-                insert_char(c);
-            }
-            break;
-        }
-        
-        return 1;
-    }
+  switch (e) {
+  case FL_PASTE:
+    handle_paste(Fl::event_text());
+    return 1;
+    
+  case FL_KEYDOWN: {
+    int key = Fl::event_key();
+    const char *text = Fl::event_text();
+    
+    if (Fl::event_alt()) return 0;
+    
+    // Handle arrow keys directly (sometimes they don't come as escape sequences)
+    switch (key) {
+    case FL_Up:
+      history_prev();
+      return 1;
+    case FL_Down:
+      history_next(); 
+      return 1;
+    case FL_Left:
+      move_cursor_left();
+      return 1;
+    case FL_Right:
+      move_cursor_right();
+      return 1;
+    case FL_Home:
+      move_to_start();
+      return 1;
+    case FL_End:
+      move_to_end();
+      return 1;
+    case FL_Delete:
+      delete_char();
+      return 1;
     }
     
-    return Fl_Terminal::handle(e);
+    // Handle modifier keys
+    switch (key) {
+    case FL_Meta_L: case FL_Meta_R:
+    case FL_Alt_L: case FL_Alt_R:
+    case FL_Shift_L: case FL_Shift_R:
+    case FL_Control_L: case FL_Control_R:
+    case FL_Caps_Lock:
+      return 0;
+      
+    case 'c': case 'C':
+      if (Fl::event_state(FL_COMMAND)) {
+	copy_to_clipboard();
+	return 1;
+      }
+      break;
+      
+    case 'v': case 'V':
+      if (Fl::event_state(FL_COMMAND)) {
+	paste_from_clipboard();
+	return 1;
+      }
+      break;
+    }
+    
+    // Get the character
+    char c = text && text[0] ? text[0] : 0;
+    
+    // Handle modes
+    if (mode == MODE_ESCAPE_SEQUENCE) {
+      handle_escape_sequence(c);
+      return 1;
+    }
+    
+    if (mode == MODE_COMPLETION) {
+      switch (c) {
+      case '\t':  // Tab - cycle through completions
+	completion_index = (completion_index + 1) % (completions.size() + 1);
+	if (completion_index == completions.size()) {
+	  // Back to original
+	  current_line = original_line;
+	  cursor_pos = original_cursor;
+	  refresh_line();
+	} else {
+	  cycle_completion();
+	}
+	return 1;
+        
+      case 27:    // Escape - cancel completion
+	cancel_completion();
+	return 1;
+        
+      case '\r': case '\n':  // Enter - accept and execute
+	accept_completion();
+	execute_line();
+	return 1;
+        
+      default:    // Any other key - accept completion and continue
+	accept_completion();
+	// Fall through to normal handling
+	break;
+      }
+    }
+    
+    // Normal mode key handling
+    switch (c) {
+    case '\t':      // Tab - start completion
+      start_completion();
+      break;
+      
+    case '\r': case '\n':  // Enter
+      execute_line();
+      break;
+      
+    case 27:        // Escape - start escape sequence
+      mode = MODE_ESCAPE_SEQUENCE;
+      escape_sequence.clear();
+      break;
+      
+    case 127: case 8:  // Backspace
+      backspace();
+      break;
+      
+    case 1:         // Ctrl+A - start of line
+      move_to_start();
+      break;
+      
+    case 5:         // Ctrl+E - end of line
+      move_to_end();
+      break;
+        
+    case 16:        // Ctrl+P - previous history
+      history_prev();
+      break;
+      
+    case 14:        // Ctrl+N - next history
+      history_next();
+      break;
+      
+    case 21:        // Ctrl+U - clear line
+      clear_line();
+      break;
+      
+    case 11:        // Ctrl+K - delete to end
+      current_line.erase(cursor_pos);
+      refresh_line();
+      break;
+      
+    case 23:        // Ctrl+W - delete word
+      delete_word();
+      break;
+      
+    case 12:        // Ctrl+L - clear screen
+      clear();
+      refresh_line();
+      break;
+      
+    default:
+      if (c >= 32 && c < 127) {  // Printable characters
+	insert_char(c);
+      }
+      break;
+    }
+      
+    return 1;
+  }	
+  }
+  return Fl_Terminal::handle(e);
 }
+  
 
 void Fl_Console::resize(int X, int Y, int W, int H) {
     Fl_Terminal::resize(X, Y, W, H);
