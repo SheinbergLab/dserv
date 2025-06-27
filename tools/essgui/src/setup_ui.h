@@ -3,7 +3,7 @@
 #ifndef setup_ui_h
 #define setup_ui_h
 #include <FL/Fl.H>
-#include "Fl_Console.h"
+#include "Fl_Console.hpp"
 #include "Fl_DgFile.h"
 #include "Fl_DgTable.h"
 #include "Fl_PerfTable.h"

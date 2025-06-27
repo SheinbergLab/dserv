@@ -24,7 +24,7 @@
 
 #include "b64.h"
 
-#include "Fl_Console.h"
+#include "Fl_Console.hpp"
 #include "Fl_DgFile.h"
 #include "Fl_DgTable.h"
 #include "Fl_PerfTable.h"
@@ -138,6 +138,7 @@ private:
   std::unordered_map<std::string, Fl_Widget *> states;
   std::unordered_map<std::string, std::vector<Fl_Widget *>> stim_params;
   std::unordered_map<std::string, Fl_Text_Buffer *> text_buffers;
+  std::string current_prompt;
   
 public:
   typedef enum {
@@ -175,6 +176,14 @@ public:
     
     win = setup_ui(argc, argv);
 
+    // After initialization, you can set up command completion:
+    std::vector<std::string> commands = {
+      "exit", "/ess", "/stim", "/essgui", "/git", "/openiris", "/msg"
+      // Add other commands as needed
+    };
+    output_term->update_command_list(commands);
+    output_term->set_prompt("essgui> ");
+    
     add_tcl_commands(interp());
 
     init_text_widgets();
@@ -604,32 +613,32 @@ int eval(char *command, void *cbdata) {
   if (!strcmp(command, "exit")) g_App->eval(command, resultstr);
   
   else if (!strcmp(command, "/ess")) {
-    output_term->prompt("ess> ");
+    output_term->set_prompt("ess> ");
     g_App->terminal_mode = App::TERM_ESS;
   }
   
   else if (!strcmp(command, "/stim")) {
-    output_term->prompt("stim> ");
+    output_term->set_prompt("stim> ");
     g_App->terminal_mode = App::TERM_STIM;
   }
   
   else if (!strcmp(command, "/essgui")) {
-    output_term->prompt("essgui> ");
+    output_term->set_prompt("essgui> ");
     g_App->terminal_mode = App::TERM_LOCAL;
   }
 
   else if (!strcmp(command, "/git")) {
-    output_term->prompt("git> ");
+    output_term->set_prompt("git> ");
     g_App->terminal_mode = App::TERM_GIT;
   }
   
   else if (!strcmp(command, "/openiris")) {
-    output_term->prompt("openiris> ");
+    output_term->set_prompt("openiris> ");
     g_App->terminal_mode = App::TERM_OPENIRIS;
   }
   
   else if (!strcmp(command, "/msg")) {
-    output_term->prompt("msg> ");
+    output_term->set_prompt("msg> ");
     g_App->terminal_mode = App::TERM_MSG;
   }
   

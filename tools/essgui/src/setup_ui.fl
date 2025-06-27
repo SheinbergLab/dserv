@@ -2,7 +2,7 @@
 version 1.0500
 header_name {.h}
 code_name {.cxx}
-decl {\#include "Fl_Console.h"
+decl {\#include "Fl_Console.hpp"
 \#include "Fl_DgFile.h"
 \#include "Fl_DgTable.h"
 \#include "Fl_PerfTable.h"

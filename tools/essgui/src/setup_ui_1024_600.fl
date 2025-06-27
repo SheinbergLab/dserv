@@ -174,7 +174,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
       }
     }
   }
-  code {output_term->init_linenoise();
+  code {output_term->init_console();
 output_term->set_callback(eval, NULL);
 
 

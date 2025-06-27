@@ -742,8 +742,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       { Fl_Group* o = new Fl_Group(0, 709, 1280, 88);
         o->box(FL_FLAT_BOX);
         { output_term = new Fl_Console(0, 709, 1279, 88);
-          output_term->box(FL_DOWN_FRAME);
-          output_term->color(FL_BLACK);
+          output_term->box(FL_DOWN_BOX);
+          output_term->color(FL_FOREGROUND_COLOR);
           output_term->selection_color(FL_BACKGROUND_COLOR);
           output_term->labeltype(FL_NORMAL_LABEL);
           output_term->labelfont(0);
@@ -759,7 +759,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
     } // Fl_Tile* o
     main_window->end();
   } // Fl_Double_Window* main_window
-  output_term->init_linenoise();
+  output_term->init_console();
   output_term->set_callback(eval, NULL);
 
   return main_window;

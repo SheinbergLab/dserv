@@ -55,7 +55,7 @@ endif()
 include_directories( ../src ../../dlsh/src ../../dlsh/src/lablib )
 link_directories( .. )
 
-add_executable( essgui src/essgui.cxx src/setup_ui.cxx src/TclInterp.cxx src/Fl_Console.cxx src/Fl_DgTable.cxx src/linenoise-fltk.cxx src/mdns.c src/mdns_query.c src/fort.c src/b64.c src/Fl_OpDesk.cxx src/Fl_OpBox.cxx src/Fl_OpButton.cxx src/TclEditor.cxx)
+add_executable( essgui src/essgui.cxx src/setup_ui.cxx src/TclInterp.cxx src/Fl_Console.cxx src/Fl_DgTable.cxx src/mdns.c src/mdns_query.c src/fort.c src/b64.c src/Fl_OpDesk.cxx src/Fl_OpBox.cxx src/Fl_OpButton.cxx src/TclEditor.cxx)
 
 # expose functions in executable to loaded libs
 set_property(TARGET essgui PROPERTY ENABLE_EXPORTS ON)
