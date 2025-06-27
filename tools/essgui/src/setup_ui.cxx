@@ -146,8 +146,6 @@ Fl_Scroll *rmt_commands_widget=(Fl_Scroll *)0;
 
 DGTable *stimdg_widget=(DGTable *)0;
 
-Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
-
 Fl_Choice *branch_widget=(Fl_Choice *)0;
 
 Fl_Button *save_script_button=(Fl_Button *)0;
@@ -167,6 +165,8 @@ TclEditor *loaders_editor=(TclEditor *)0;
 TclEditor *variants_editor=(TclEditor *)0;
 
 TclEditor *stim_editor=(TclEditor *)0;
+
+Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
 
 Fl_Input *FileEntry=(Fl_Input *)0;
 
@@ -365,7 +365,6 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 640);
             { Fl_Group* o = new Fl_Group(504, 91, 747, 614, "behavior");
               o->labelsize(16);
-              o->hide();
               { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
                 o->box(FL_DOWN_BOX);
                 { eyetouch_widget = new EyeTouchWin(519, 126, 232, 232, "EyeWindow");
@@ -587,25 +586,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // DGTable* stimdg_widget
               o->end();
             } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "system");
-              o->labelsize(16);
-              o->hide();
-              { opdesk_widget = new Fl_OpDesk(513, 121, 466, 580, "State System");
-                opdesk_widget->box(FL_THIN_DOWN_BOX);
-                opdesk_widget->color(FL_BACKGROUND_COLOR);
-                opdesk_widget->selection_color(FL_BACKGROUND_COLOR);
-                opdesk_widget->labeltype(FL_NORMAL_LABEL);
-                opdesk_widget->labelfont(0);
-                opdesk_widget->labelsize(14);
-                opdesk_widget->labelcolor(FL_FOREGROUND_COLOR);
-                opdesk_widget->align(Fl_Align(FL_ALIGN_TOP));
-                opdesk_widget->when(FL_WHEN_RELEASE);
-                opdesk_widget->end();
-              } // Fl_OpDesk* opdesk_widget
-              o->end();
-            } // Fl_Group* o
             { Fl_Group* o = new Fl_Group(503, 92, 762, 613, "scripts");
               o->labelsize(16);
+              o->hide();
               { Fl_Pack* o = new Fl_Pack(1040, 102, 220, 28);
                 o->type(1);
                 { branch_widget = new Fl_Choice(1085, 102, 96, 24, "Branch:");
@@ -627,8 +610,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 o->end();
               } // Fl_Pack* o
               { editor_tabs = new Fl_Tabs(506, 134, 759, 553);
-                { Fl_Group* o = new Fl_Group(506, 159, 759, 523, "system");
-                  { system_editor = new TclEditor(506, 172, 759, 510, "system");
+                { Fl_Group* o = new Fl_Group(506, 159, 759, 528, "system");
+                  { system_editor = new TclEditor(506, 172, 759, 515, "system");
                     system_editor->box(FL_DOWN_FRAME);
                     system_editor->color(FL_BACKGROUND2_COLOR);
                     system_editor->selection_color((Fl_Color)31);
@@ -705,6 +688,23 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Tabs* editor_tabs
               o->end();
             } // Fl_Group* o
+            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "system");
+              o->labelsize(16);
+              o->hide();
+              { opdesk_widget = new Fl_OpDesk(513, 121, 466, 580, "State System");
+                opdesk_widget->box(FL_THIN_DOWN_BOX);
+                opdesk_widget->color(FL_BACKGROUND_COLOR);
+                opdesk_widget->selection_color(FL_BACKGROUND_COLOR);
+                opdesk_widget->labeltype(FL_NORMAL_LABEL);
+                opdesk_widget->labelfont(0);
+                opdesk_widget->labelsize(14);
+                opdesk_widget->labelcolor(FL_FOREGROUND_COLOR);
+                opdesk_widget->align(Fl_Align(FL_ALIGN_TOP));
+                opdesk_widget->when(FL_WHEN_RELEASE);
+                opdesk_widget->end();
+              } // Fl_OpDesk* opdesk_widget
+              o->end();
+            } // Fl_Group* o
             { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "data");
               o->labelsize(16);
               o->hide();
@@ -742,8 +742,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       { Fl_Group* o = new Fl_Group(0, 709, 1280, 88);
         o->box(FL_FLAT_BOX);
         { output_term = new Fl_Console(0, 709, 1279, 88);
-          output_term->box(FL_DOWN_BOX);
-          output_term->color(FL_FOREGROUND_COLOR);
+          output_term->box(FL_DOWN_FRAME);
+          output_term->color(FL_BLACK);
           output_term->selection_color(FL_BACKGROUND_COLOR);
           output_term->labeltype(FL_NORMAL_LABEL);
           output_term->labelfont(0);

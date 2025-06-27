@@ -210,8 +210,8 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             xywh {503 67 762 640}
           } {
             Fl_Group {} {
-              label behavior open
-              xywh {504 91 747 614} labelsize 16 hide
+              label behavior
+              xywh {504 91 747 614} labelsize 16
             } {
               Fl_Group {} {
                 label {Behavior Monitor} open
@@ -364,20 +364,10 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
             }
             Fl_Group {} {
-              label system
-              xywh {503 92 762 611} labelsize 16 hide
-            } {
-              Fl_Scroll opdesk_widget {
-                label {State System} open
-                xywh {513 121 466 580} box THIN_DOWN_BOX
-                class Fl_OpDesk
-              } {}
-            }
-            Fl_Group {} {
               label scripts open
-              xywh {503 92 762 613} labelsize 16
+              xywh {503 92 762 613} labelsize 16 hide
             } {
-              Fl_Pack {} {open
+              Fl_Pack {} {
                 xywh {1040 102 220 28} type HORIZONTAL
               } {
                 Fl_Choice branch_widget {
@@ -405,12 +395,12 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 xywh {506 134 759 553}
               } {
                 Fl_Group {} {
-                  label system open selected
-                  xywh {506 159 759 523}
+                  label system
+                  xywh {506 159 759 528}
                 } {
                   Fl_Text_Editor system_editor {
                     label system
-                    xywh {506 172 759 510} selection_color 31 labeltype NO_LABEL
+                    xywh {506 172 759 515} selection_color 31 labeltype NO_LABEL
                     class TclEditor
                   }
                 }
@@ -425,7 +415,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   }
                 }
                 Fl_Group {} {
-                  label loaders open
+                  label loaders
                   xywh {506 159 759 528} hide
                 } {
                   Fl_Text_Editor loaders_editor {
@@ -435,7 +425,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   }
                 }
                 Fl_Group {} {
-                  label variants open
+                  label variants
                   xywh {506 159 759 528} hide
                 } {
                   Fl_Text_Editor variants_editor {
@@ -455,6 +445,16 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   }
                 }
               }
+            }
+            Fl_Group {} {
+              label system
+              xywh {503 92 762 611} labelsize 16 hide
+            } {
+              Fl_Scroll opdesk_widget {
+                label {State System} open
+                xywh {513 121 466 580} box THIN_DOWN_BOX
+                class Fl_OpDesk
+              } {}
             }
             Fl_Group {} {
               label data
@@ -506,8 +506,9 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
       }
     }
   }
-  code {output_term->init_linenoise();
+  code {output_term->init_console();
 output_term->set_callback(eval, NULL);
 
-return main_window;} {}
+return main_window;} {selected
+  }
 }

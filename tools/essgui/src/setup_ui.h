@@ -70,7 +70,6 @@ extern Wheel_Spinner *hGain_input;
 extern Wheel_Spinner *vGain_input;
 extern Fl_Scroll *rmt_commands_widget;
 extern DGTable *stimdg_widget;
-extern Fl_OpDesk *opdesk_widget;
 extern void set_branch_cb(Fl_Choice*, void*);
 extern Fl_Choice *branch_widget;
 extern void save_script_cb(Fl_Button*, void*);
@@ -85,6 +84,7 @@ extern TclEditor *protocol_editor;
 extern TclEditor *loaders_editor;
 extern TclEditor *variants_editor;
 extern TclEditor *stim_editor;
+extern Fl_OpDesk *opdesk_widget;
 #include <FL/Fl_Input.H>
 extern Fl_Input *FileEntry;
 extern void file_open_cb(Fl_Button*, void*);
