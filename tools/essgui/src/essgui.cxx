@@ -107,6 +107,7 @@ Fl_Menu_Item menuitems[] = {
   { "&File",              FL_COMMAND + 'f', 0, 0, FL_SUBMENU },
     { "&Open Datafile...",    FL_COMMAND + 'o', (Fl_Callback *)open_cb },
     { "&Close Datafile...",   FL_COMMAND + 'c', (Fl_Callback *)close_cb },
+    { "&Save Script...",   FL_COMMAND + 's', (Fl_Callback *)save_script_cb },
     { "E&xit",            FL_COMMAND + 'q', (Fl_Callback *)exit_cb, 0 },
     { 0 },
 

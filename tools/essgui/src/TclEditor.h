@@ -154,6 +154,7 @@ public:
       int key = Fl::event_key();
       int ctrl = Fl::event_state() & FL_CTRL;
       int shift = Fl::event_state() & FL_SHIFT;
+      int meta = Fl::event_state() & FL_META;
       
       if (key == FL_Enter) {
 	//	handle_auto_indent(this);
@@ -167,6 +168,11 @@ public:
 	handle_tab();
 	last_was_kill = false;
 	return 1; // Event handled
+      }
+
+      if (key == 'f' && meta) {
+	// do find here
+	return 1;
       }
       
       // Emacs/macOS keybindings
