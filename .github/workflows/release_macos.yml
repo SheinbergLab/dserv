@@ -109,7 +109,7 @@ jobs:
 
       - name: Install dlsh libs and dependencies.
         run: |
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.6/dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
