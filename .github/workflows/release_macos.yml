@@ -110,7 +110,7 @@ jobs:
       - name: Install dlsh libs and dependencies.
         run: |
           wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
-          sudo mkdir /usr/local/dlsh
+          sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
       - name: Sanity check the installed dserv.
@@ -119,8 +119,8 @@ jobs:
           ls -alth /usr/local/dserv
           echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
-          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl
-          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl
+          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 
   release-essgui:
 
