@@ -101,8 +101,10 @@ namespace eval git {
 	if { !$is_repo } { return "default" }
 	
 	set git [exec_cmd]
+	set cmd [list {*}$git remote prune origin]
+        catch [list exec {*}$cmd] result
 	set cmd [list {*}$git branch -a]
-	catch [list exec {*}$cmd] result
+ 	catch [list exec {*}$cmd] result
 	set branches {}
 	foreach line [split $result \n] {
 	    if { ![string match *HEAD* $line] } {
