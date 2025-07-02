@@ -187,45 +187,53 @@ static int now_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
-
 /********************************* send ********************************/
 
 static int send_command (ClientData data, Tcl_Interp *interp,
 				 int objc, Tcl_Obj *objv[])
 {
   TclServer *this_server = (TclServer *) data;
-  
+
   if (objc < 3) {
     Tcl_WrongNumArgs(interp, 1, objv, "server message");
     return TCL_ERROR;
   }
-    
+
   auto tclserver = TclServerRegistry.getObject(Tcl_GetString(objv[1]));
   if (!tclserver) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
-		     ": server \"", Tcl_GetString(objv[1]), "\" not found",
-		     NULL);
+                     ": server \"", Tcl_GetString(objv[1]), "\" not found",
+                     NULL);
     return TCL_ERROR;
   }
 
   if (tclserver == this_server) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
-		     ": cannot send message to self", NULL);
+                     ": cannot send message to self", NULL);
     return TCL_ERROR;
   }
 
+  // Concatenate all arguments from objv[2] to objv[objc-1] into a single string
+  std::string concatenated_script;
+  if (objc > 2) { // Only proceed if there are arguments to concatenate
+    concatenated_script += Tcl_GetString(objv[2]); // Add the first argument without a leading space
+    for (int i = 3; i < objc; ++i) {
+      concatenated_script += " "; // Add a space
+      concatenated_script += Tcl_GetString(objv[i]); // Then add the next argument
+    }
+  }
 
   SharedQueue<std::string> rqueue;
   client_request_t client_request;
   client_request.type = REQ_SCRIPT;
   client_request.rqueue = &rqueue;
-  client_request.script = std::string(Tcl_GetString(objv[2]));
-  
+  client_request.script = concatenated_script; // Use the concatenated string
+
   tclserver->queue.push_back(client_request);
 
   /* rqueue will be available after command has been processed */
   /* NOTE: this can create a deadlock between two tclservers   */
-  
+
   std::string s(client_request.rqueue->front());
   client_request.rqueue->pop_front();
 
