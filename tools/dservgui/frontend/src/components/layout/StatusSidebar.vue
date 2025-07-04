@@ -236,12 +236,12 @@ const loadEssVariables = () => {
   
   try {
     // Convert centralized ESS state variables to display format
-    const variables = Object.entries(essState.variables || {}).map(([name, value]) => ({
+    const variables = Object.entries(essState.variables || {}).map(([name, variableObj]) => ({
       name,
       displayName: name.replace('ess/', ''),
-      value: value,
+      value: variableObj.value, // Access the value property from the variable object
       valid: true, // Assume valid if in centralized state
-      timestamp: new Date().toISOString()
+      timestamp: variableObj.timestamp || new Date().toISOString()
     }))
     
     essVariables.value = variables

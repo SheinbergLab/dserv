@@ -53,11 +53,12 @@
           <label class="field-label">System:</label>
           <div class="input-group">
             <select v-model="selectedSystem" @change="onSystemChange" class="text-input"
-              :disabled="!isConnected">
+              :class="{ 'loading': isSystemLoading }"
+              :disabled="dropdownsDisabled">
               <option value="">{{ getDropdownPlaceholder('systems') }}</option>
               <option v-for="sys in essConfig.systems" :key="sys" :value="sys">{{ sys }}</option>
             </select>
-            <button @click="refreshConfig" class="icon-btn" title="Refresh">
+            <button @click="refreshConfig" class="icon-btn" title="Refresh" :disabled="dropdownsDisabled">
               <span class="icon">🔄</span>
             </button>
           </div>
@@ -67,11 +68,12 @@
           <label class="field-label">Protocol:</label>
           <div class="input-group">
             <select v-model="selectedProtocol" @change="onProtocolChange" class="text-input"
-              :disabled="!isConnected">
+              :class="{ 'loading': isSystemLoading }"
+              :disabled="dropdownsDisabled">
               <option value="">{{ getDropdownPlaceholder('protocols') }}</option>
               <option v-for="proto in essConfig.protocols" :key="proto" :value="proto">{{ proto }}</option>
             </select>
-            <button @click="refreshConfig" class="icon-btn" title="Refresh">
+            <button @click="refreshConfig" class="icon-btn" title="Refresh" :disabled="dropdownsDisabled">
               <span class="icon">🔄</span>
             </button>
           </div>
@@ -81,11 +83,12 @@
           <label class="field-label">Variant:</label>
           <div class="input-group">
             <select v-model="selectedVariant" @change="onVariantChange" class="text-input"
-              :class="{ 'variant-active': selectedVariant }" :disabled="!isConnected">
+              :class="{ 'variant-active': selectedVariant, 'loading': isSystemLoading }" 
+              :disabled="dropdownsDisabled">
               <option value="">{{ getDropdownPlaceholder('variants') }}</option>
               <option v-for="variant in essConfig.variants" :key="variant" :value="variant">{{ variant }}</option>
             </select>
-            <button @click="refreshConfig" class="icon-btn" title="Refresh">
+            <button @click="refreshConfig" class="icon-btn" title="Refresh" :disabled="dropdownsDisabled">
               <span class="icon">🔄</span>
             </button>
           </div>
@@ -98,7 +101,8 @@
 
         <div class="config-status">
           <span class="status-indicator" :class="essConfig.complete ? 'complete' : 'incomplete'">●</span>
-          <span>{{ essConfig.complete ? 'Configuration Complete' : 'Configuration Incomplete' }}</span>
+          <span v-if="isSystemLoading" class="loading-text">Loading system...</span>
+          <span v-else>{{ essConfig.complete ? 'Configuration Complete' : 'Configuration Incomplete' }}</span>
         </div>
       </div>
     </div>
@@ -251,12 +255,30 @@ const essConfig = computed(() => {
 const variantOptions = ref([])
 const systemSettings = ref([])
 
+// Loading state management
+const isSystemLoading = ref(false)
+const loadingTimeout = ref(null)
+
 // Computed
 const statusClass = computed(() => {
   if (status.value === 'Running') return 'status-running'
   if (status.value === 'Stopped') return 'status-stopped'
   if (status.value === 'Error') return 'status-error'
   return ''
+})
+
+// Determine if dropdowns should be disabled (loading or not connected)
+const dropdownsDisabled = computed(() => {
+  return !isConnected.value || isSystemLoading.value
+})
+
+// Get current ESS status from centralized state
+const currentEssStatus = computed(() => {
+  try {
+    return essState?.variables?.['ess/status']?.value || 'unknown'
+  } catch (error) {
+    return 'unknown'
+  }
 })
 
 // Utility functions
@@ -274,6 +296,31 @@ const formatVariableValue = (variable) => {
   }
   
   return String(variable.value)
+}
+
+// Loading state management functions
+const startSystemLoading = () => {
+  console.log('🔄 Starting system loading state...')
+  isSystemLoading.value = true
+  
+  // Set a maximum timeout to prevent getting stuck in loading state
+  if (loadingTimeout.value) {
+    clearTimeout(loadingTimeout.value)
+  }
+  loadingTimeout.value = setTimeout(() => {
+    console.log('⚠️ System loading timeout reached, clearing loading state')
+    isSystemLoading.value = false
+    loadingTimeout.value = null
+  }, 30000) // 30 second timeout
+}
+
+const stopSystemLoading = () => {
+  console.log('✅ Stopping system loading state...')
+  isSystemLoading.value = false
+  if (loadingTimeout.value) {
+    clearTimeout(loadingTimeout.value)
+    loadingTimeout.value = null
+  }
 }
 
 // Event handlers
@@ -340,6 +387,9 @@ const handleReset = async () => {
 }
 
 const getDropdownPlaceholder = (type) => {
+  if (isSystemLoading.value) {
+    return 'Loading system...'
+  }
   if (!isConnected.value) {
     return 'Backend unavailable...'
   }
@@ -353,6 +403,9 @@ const onSystemChange = async () => {
   if (!selectedSystem.value || !isConnected.value) return
   
   console.log('🔄 System changed to:', selectedSystem.value)
+  
+  // Start loading state
+  startSystemLoading()
   
   try {
     // Use proper ESS command with just the system parameter
@@ -375,6 +428,8 @@ const onSystemChange = async () => {
     }
   } catch (error) {
     console.error('❌ Error loading system:', error)
+    // Stop loading state on error
+    stopSystemLoading()
   }
 }
 
@@ -382,6 +437,9 @@ const onProtocolChange = async () => {
   if (!selectedProtocol.value || !isConnected.value) return
   
   console.log('🔄 Protocol changed to:', selectedProtocol.value)
+  
+  // Start loading state
+  startSystemLoading()
   
   try {
     // Use proper ESS command with system and protocol parameters
@@ -404,6 +462,8 @@ const onProtocolChange = async () => {
     }
   } catch (error) {
     console.error('❌ Error loading protocol:', error)
+    // Stop loading state on error
+    stopSystemLoading()
   }
 }
 
@@ -411,6 +471,9 @@ const onVariantChange = async () => {
   if (!selectedVariant.value || !isConnected.value) return
   
   console.log('🔄 Variant changed to:', selectedVariant.value)
+  
+  // Start loading state
+  startSystemLoading()
   
   try {
     // Use proper ESS command with system, protocol, and variant parameters
@@ -431,6 +494,8 @@ const onVariantChange = async () => {
     }
   } catch (error) {
     console.error('❌ Error loading variant:', error)
+    // Stop loading state on error
+    stopSystemLoading()
   }
 }
 
@@ -487,6 +552,23 @@ watch(() => essState?.variables, () => {
     lastUpdate.value = new Date().toLocaleTimeString()
   }
 }, { deep: true, immediate: true })
+
+// Watch for changes in ess/status to manage loading state
+watch(() => currentEssStatus.value, (newStatus, oldStatus) => {
+  console.log('🔍 ESS Status changed from', oldStatus, 'to', newStatus)
+  
+  // If status changed from "loading" to "stopped", clear loading state
+  if (oldStatus === 'loading' && newStatus === 'stopped') {
+    console.log('✅ System loading completed (status: loading → stopped)')
+    stopSystemLoading()
+  }
+  
+  // Also clear loading state if we see "stopped" while in loading state
+  if (newStatus === 'stopped' && isSystemLoading.value) {
+    console.log('✅ System loading completed (status now stopped)')
+    stopSystemLoading()
+  }
+}, { immediate: true })
 
 onMounted(() => {
   console.log('🚀 SystemControlSidebar mounted - using centralized ESS state')
@@ -571,6 +653,24 @@ onMounted(() => {
 .text-input.variant-active {
   background: #e3f2fd;
   border-color: #2196F3;
+}
+
+.text-input.loading {
+  background: #fff3cd;
+  border-color: #ffc107;
+  cursor: wait;
+  opacity: 0.8;
+}
+
+.text-input.loading {
+  background-image: linear-gradient(45deg, transparent 25%, rgba(255, 193, 7, 0.1) 25%, rgba(255, 193, 7, 0.1) 50%, transparent 50%, transparent 75%, rgba(255, 193, 7, 0.1) 75%);
+  background-size: 20px 20px;
+  animation: loading-stripes 1s linear infinite;
+}
+
+@keyframes loading-stripes {
+  0% { background-position: 0 0; }
+  100% { background-position: 20px 0; }
 }
 
 /* Control Buttons */
@@ -718,6 +818,17 @@ onMounted(() => {
   background: white;
   border: 1px solid #ddd;
   border-radius: 2px;
+}
+
+.loading-text {
+  color: #ff9800;
+  font-weight: 500;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .status-indicator {

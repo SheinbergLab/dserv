@@ -51,6 +51,11 @@ const essState = reactive({
   currentSystem: '',
   currentProtocol: '',
   currentVariant: '',
+  currentSubject: '',
+  status: '', // string: 'running', 'stopped', 'inactive'
+  in_obs: false, // boolean: converted from 0/1
+  obs_id: 0, // integer: current observation ID (starts at 0)
+  obs_total: 0, // integer: total number of observations
   systems: [],
   protocols: [],
   variants: [],
@@ -93,8 +98,12 @@ export function useEssState() {
   const updateEssVariable = (name, value) => {
     console.log('🔄 useEssState - updateEssVariable called:', name, '=', value)
     
-    // Store in variables
-    essState.variables[name] = value
+    // Store in variables as an object with value and timestamp for consistency
+    essState.variables[name] = {
+      name: name,
+      value: value,
+      timestamp: new Date().toISOString()
+    }
     console.log('🔄 useEssState - Updated variables store, now has:', Object.keys(essState.variables).length, 'items')
     
     // Update specific ESS state based on variable name
@@ -103,6 +112,13 @@ export function useEssState() {
         const oldSystem = essState.currentSystem
         essState.currentSystem = value || ''
         console.log('🔄 useEssState - System updated:', oldSystem, '->', essState.currentSystem)
+        
+        // Reset observation counters when system changes to trigger empty label
+        if (oldSystem !== essState.currentSystem) {
+          essState.obs_id = 0
+          essState.obs_total = 0
+          console.log('🔄 useEssState - Reset observation counters due to system change')
+        }
         break
       case 'ess/protocol':
         essState.currentProtocol = value || ''
@@ -112,6 +128,36 @@ export function useEssState() {
         essState.currentVariant = value || ''
         console.log('🔄 useEssState - Variant updated:', essState.currentVariant)
         break
+      case 'ess/subject':
+        essState.currentSubject = value || ''
+        console.log('🔄 useEssState - Subject updated:', essState.currentSubject)
+        break
+      case 'ess/status':
+          essState.status = value || ''
+          console.log('🔄 useEssState - Status updated:', essState.status)
+          break
+      case 'ess/in_obs':
+          // Convert 0/1 or "0"/"1" to boolean
+          essState.in_obs = !!(value === 1 || value === '1' || value === true)
+          console.log('🔄 useEssState - in_obs updated:', essState.in_obs)
+          break
+      case 'ess/obs_id':
+          // Convert to integer
+          essState.obs_id = parseInt(value) || 0
+          console.log('🔄 useEssState - obs_id updated:', essState.obs_id)
+          break
+      case 'ess/obs_total':
+          // Convert to integer
+          essState.obs_total = parseInt(value) || 0
+          console.log('🔄 useEssState - obs_total updated:', essState.obs_total)
+          break
+      case 'ess/reset':
+          // Reset event received - reset obs_id to 0 but keep obs_total
+          if (value) { // Only process if value is truthy (event occurred)
+            essState.obs_id = 0
+            console.log('🔄 useEssState - Reset event received, obs_id reset to 0, keeping obs_total:', essState.obs_total)
+          }
+          break
       case 'ess/systems':
         if (Array.isArray(value)) {
           essState.systems = value

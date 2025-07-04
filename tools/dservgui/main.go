@@ -156,6 +156,7 @@ func setupRoutes(api *APIServer) {
 	http.HandleFunc("/api/query", api.HandleQuery)
 	http.HandleFunc("/api/subscribe", api.HandleSubscribe)
 	http.HandleFunc("/api/touch", api.HandleTouch)
+	http.HandleFunc("/api/set", api.HandleSet)
 
 	// ESS operations
 	http.HandleFunc("/api/ess/eval", api.HandleEssEval)

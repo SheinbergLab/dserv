@@ -1,16 +1,37 @@
 <template>
   <div class="panel">
     <div class="panel-header">
-      <span>Variable Query</span>
+      <span>Variable Query & Set</span>
       <div class="panel-controls">
+        <button @click="toggleMode" class="panel-btn" :title="currentMode === 'query' ? 'Switch to Set Mode' : 'Switch to Query Mode'">
+          {{ currentMode === 'query' ? '🔍' : '✏️' }}
+        </button>
         <button @click="clearQueryHistory" class="panel-btn" title="Clear History">🗑️</button>
         <button @click="refreshQuery" class="panel-btn" title="Refresh">🔄</button>
       </div>
     </div>
     
     <div class="panel-content">
+      <!-- Mode Tabs -->
+      <div class="mode-tabs">
+        <button 
+          @click="currentMode = 'query'" 
+          class="mode-tab" 
+          :class="{ active: currentMode === 'query' }"
+        >
+          Query Variable
+        </button>
+        <button 
+          @click="currentMode = 'set'" 
+          class="mode-tab" 
+          :class="{ active: currentMode === 'set' }"
+        >
+          Set Variable
+        </button>
+      </div>
+
       <!-- Query Form -->
-      <div class="query-form">
+      <div v-if="currentMode === 'query'" class="query-form">
         <div class="form-group">
           <label>Variable Name:</label>
           <input 
@@ -41,47 +62,96 @@
         </div>
       </div>
 
-      <!-- Query Result -->
-      <div v-if="queryResult" class="result-area">
-        <div class="result-header">
-          <span>Query Result:</span>
-          <span class="result-timestamp">{{ formatTimestamp(queryResult.timestamp) }}</span>
+      <!-- Set Form -->
+      <div v-if="currentMode === 'set'" class="set-form">
+        <div class="form-group">
+          <label>Variable Name:</label>
+          <input 
+            v-model="setVariable" 
+            type="text" 
+            class="text-input"
+            placeholder="Enter variable name (e.g., ess/status)"
+            :disabled="setLoading"
+            list="variable-suggestions"
+          />
         </div>
-        <div class="result-content" :class="{ error: queryResult.error }">
-          <div v-if="queryResult.error" class="error-message">
-            <strong>Error:</strong> {{ queryResult.error }}
+        
+        <div class="form-group">
+          <label>Value:</label>
+          <textarea 
+            v-model="setValue" 
+            class="text-area"
+            placeholder="Enter value (JSON format for objects, plain text for strings/numbers)"
+            rows="3"
+            :disabled="setLoading"
+          ></textarea>
+          <div class="value-hint">
+            <small>Examples: "hello", 123, {"status": "active"}, true</small>
+          </div>
+        </div>
+        
+        <div class="form-actions">
+          <button 
+            @click="executeSet" 
+            class="primary-btn set-btn" 
+            :disabled="!setVariable.trim() || !setValue.trim() || setLoading"
+          >
+            {{ setLoading ? 'Setting...' : 'Set Variable' }}
+          </button>
+          <button @click="clearSet" class="secondary-btn">
+            Clear
+          </button>
+          <button @click="setAndQuery" class="tertiary-btn" :disabled="!setVariable.trim() || !setValue.trim() || setLoading">
+            Set & Query
+          </button>
+        </div>
+      </div>
+
+      <!-- Result Display -->
+      <div v-if="queryResult || setResult" class="result-area">
+        <div class="result-header">
+          <span>{{ currentMode === 'query' ? 'Query' : 'Set' }} Result:</span>
+          <span class="result-timestamp">{{ formatTimestamp((queryResult || setResult).timestamp) }}</span>
+        </div>
+        <div class="result-content" :class="{ error: (queryResult || setResult).error }">
+          <div v-if="(queryResult || setResult).error" class="error-message">
+            <strong>Error:</strong> {{ (queryResult || setResult).error }}
           </div>
           <div v-else class="success-message">
-            <div class="result-variable">{{ queryResult.variable }}</div>
-            <div class="result-value">{{ queryResult.value }}</div>
+            <div class="result-variable">{{ (queryResult || setResult).variable }}</div>
+            <div v-if="currentMode === 'query'" class="result-value">{{ queryResult.value }}</div>
+            <div v-else class="result-status">✅ Variable set successfully</div>
           </div>
         </div>
       </div>
 
-      <!-- Recent Queries -->
-      <div v-if="queryHistory.length > 0" class="history-section">
+      <!-- Recent Operations -->
+      <div v-if="operationHistory.length > 0" class="history-section">
         <div class="section-header">
-          <span>Recent Queries:</span>
-          <button @click="clearQueryHistory" class="clear-btn">Clear All</button>
+          <span>Recent Operations:</span>
+          <button @click="clearOperationHistory" class="clear-btn">Clear All</button>
         </div>
         <div class="history-list">
           <div 
-            v-for="(query, index) in queryHistory" 
+            v-for="(operation, index) in operationHistory" 
             :key="index"
             class="history-item"
-            @click="selectHistoryItem(query)"
+            @click="selectHistoryItem(operation)"
           >
-            <div class="history-variable">{{ query.variable }}</div>
-            <div class="history-value">{{ query.value || query.error }}</div>
-            <div class="history-time">{{ formatTime(query.timestamp) }}</div>
+            <div class="history-variable">
+              <span class="operation-type">{{ operation.type.toUpperCase() }}</span>
+              {{ operation.variable }}
+            </div>
+            <div class="history-value">{{ operation.value || operation.error }}</div>
+            <div class="history-time">{{ formatTime(operation.timestamp) }}</div>
           </div>
         </div>
       </div>
 
       <!-- Quick Actions -->
       <div class="quick-actions">
-        <div class="section-header">Quick Queries:</div>
-        <div class="quick-buttons">
+        <div class="section-header">Quick {{ currentMode === 'query' ? 'Queries' : 'Sets' }}:</div>
+        <div v-if="currentMode === 'query'" class="quick-buttons">
           <button 
             v-for="variable in quickVariables" 
             :key="variable"
@@ -91,6 +161,20 @@
           >
             {{ variable }}
           </button>
+        </div>
+        <div v-else class="quick-sets">
+          <div class="quick-set-group">
+            <span class="quick-set-label">ess/status:</span>
+            <button @click="quickSet('ess/status', '{&quot;value&quot;: &quot;active&quot;}')" class="quick-btn small">Active</button>
+            <button @click="quickSet('ess/status', '{&quot;value&quot;: &quot;inactive&quot;}')" class="quick-btn small">Inactive</button>
+            <button @click="quickSet('ess/status', '{&quot;value&quot;: &quot;error&quot;}')" class="quick-btn small">Error</button>
+          </div>
+          <div class="quick-set-group">
+            <span class="quick-set-label">ess/em_pos:</span>
+            <button @click="quickSet('ess/em_pos', '0')" class="quick-btn small">0</button>
+            <button @click="quickSet('ess/em_pos', '1')" class="quick-btn small">1</button>
+            <button @click="quickSet('ess/em_pos', '2')" class="quick-btn small">2</button>
+          </div>
         </div>
       </div>
     </div>
@@ -108,10 +192,15 @@ defineProps({
 })
 
 // State
+const currentMode = ref('query')
 const queryVariable = ref('')
 const queryResult = ref(null)
 const queryLoading = ref(false)
-const queryHistory = ref([])
+const setVariable = ref('')
+const setValue = ref('')
+const setResult = ref(null)
+const setLoading = ref(false)
+const operationHistory = ref([])
 const recentVariables = ref([])
 
 // Quick access variables
@@ -119,16 +208,23 @@ const quickVariables = [
   'ess/system',
   'ess/protocol', 
   'ess/variant',
+  'ess/status',
   'ess/em_pos',
   'ess/temperature',
   'ess/voltage'
 ]
 
 // Methods
+const toggleMode = () => {
+  currentMode.value = currentMode.value === 'query' ? 'set' : 'query'
+  clearQuery()
+  clearSet()
+}
 const executeQuery = async () => {
   if (!queryVariable.value.trim() || queryLoading.value) return
   
   queryLoading.value = true
+  setResult.value = null // Clear set result when querying
   
   try {
     const response = await fetch('/api/query', {
@@ -139,6 +235,7 @@ const executeQuery = async () => {
     
     const result = await response.json()
     result.timestamp = new Date().toISOString()
+    result.type = 'query'
     queryResult.value = result
     
     // Add to history
@@ -148,19 +245,92 @@ const executeQuery = async () => {
     addToRecentVariables(queryVariable.value.trim())
     
   } catch (error) {
-    queryResult.value = {
+    const errorResult = {
       variable: queryVariable.value,
       error: `Network error: ${error.message}`,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      type: 'query'
     }
+    queryResult.value = errorResult
+    addToHistory(errorResult)
   } finally {
     queryLoading.value = false
   }
 }
 
+const executeSet = async () => {
+  if (!setVariable.value.trim() || !setValue.value.trim() || setLoading.value) return
+  
+  setLoading.value = true
+  queryResult.value = null // Clear query result when setting
+  
+  try {
+    // Try to parse the value as JSON first, fallback to string
+    let parsedValue
+    try {
+      parsedValue = JSON.parse(setValue.value.trim())
+    } catch {
+      // If JSON parsing fails, treat as string
+      parsedValue = setValue.value.trim()
+    }
+    
+    const response = await fetch('/api/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        variable: setVariable.value.trim(),
+        value: parsedValue
+      })
+    })
+    
+    const result = await response.json()
+    result.timestamp = new Date().toISOString()
+    result.type = 'set'
+    result.value = parsedValue // Store the value we set
+    setResult.value = result
+    
+    // Add to history
+    addToHistory(result)
+    
+    // Add to recent variables
+    addToRecentVariables(setVariable.value.trim())
+    
+  } catch (error) {
+    const errorResult = {
+      variable: setVariable.value,
+      error: `Network error: ${error.message}`,
+      timestamp: new Date().toISOString(),
+      type: 'set'
+    }
+    setResult.value = errorResult
+    addToHistory(errorResult)
+  } finally {
+    setLoading.value = false
+  }
+}
+
+const setAndQuery = async () => {
+  await executeSet()
+  if (setResult.value && !setResult.value.error) {
+    // Wait a moment for the set to propagate, then query
+    setTimeout(() => {
+      queryVariable.value = setVariable.value
+      executeQuery()
+    }, 100)
+  }
+}
+
 const quickQuery = (variable) => {
+  currentMode.value = 'query'
   queryVariable.value = variable
   executeQuery()
+}
+
+const quickSet = (variable, value) => {
+  currentMode.value = 'set'
+  setVariable.value = variable
+  setValue.value = value
+  executeSet()
 }
 
 const clearQuery = () => {
@@ -168,10 +338,16 @@ const clearQuery = () => {
   queryResult.value = null
 }
 
+const clearSet = () => {
+  setVariable.value = ''
+  setValue.value = ''
+  setResult.value = null
+}
+
 const addToHistory = (result) => {
-  queryHistory.value.unshift(result)
-  if (queryHistory.value.length > 50) {
-    queryHistory.value = queryHistory.value.slice(0, 50)
+  operationHistory.value.unshift(result)
+  if (operationHistory.value.length > 50) {
+    operationHistory.value = operationHistory.value.slice(0, 50)
   }
   saveHistory()
 }
@@ -186,19 +362,35 @@ const addToRecentVariables = (variable) => {
   }
 }
 
-const selectHistoryItem = (query) => {
-  queryVariable.value = query.variable
-  queryResult.value = query
+const selectHistoryItem = (operation) => {
+  if (operation.type === 'query') {
+    currentMode.value = 'query'
+    queryVariable.value = operation.variable
+    queryResult.value = operation
+    setResult.value = null
+  } else {
+    currentMode.value = 'set'
+    setVariable.value = operation.variable
+    setValue.value = typeof operation.value === 'string' ? operation.value : JSON.stringify(operation.value)
+    setResult.value = operation
+    queryResult.value = null
+  }
 }
 
 const clearQueryHistory = () => {
-  queryHistory.value = []
-  localStorage.removeItem('dserv-query-history')
+  clearOperationHistory()
+}
+
+const clearOperationHistory = () => {
+  operationHistory.value = []
+  localStorage.removeItem('dserv-operation-history')
 }
 
 const refreshQuery = () => {
-  if (queryVariable.value.trim()) {
+  if (currentMode.value === 'query' && queryVariable.value.trim()) {
     executeQuery()
+  } else if (currentMode.value === 'set' && setVariable.value.trim() && setValue.value.trim()) {
+    executeSet()
   }
 }
 
@@ -211,17 +403,17 @@ const formatTime = (timestamp) => {
 }
 
 const saveHistory = () => {
-  localStorage.setItem('dserv-query-history', JSON.stringify(queryHistory.value))
+  localStorage.setItem('dserv-operation-history', JSON.stringify(operationHistory.value))
 }
 
 const loadHistory = () => {
   try {
-    const saved = localStorage.getItem('dserv-query-history')
+    const saved = localStorage.getItem('dserv-operation-history')
     if (saved) {
-      queryHistory.value = JSON.parse(saved)
+      operationHistory.value = JSON.parse(saved)
     }
   } catch (error) {
-    console.warn('Failed to load query history:', error)
+    console.warn('Failed to load operation history:', error)
   }
 }
 
@@ -295,7 +487,35 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-.query-form {
+.mode-tabs {
+  display: flex;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #ddd;
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-bottom: none;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background-color 0.2s;
+}
+
+.mode-tab.active {
+  background: white;
+  border-bottom: 1px solid white;
+  margin-bottom: -1px;
+  font-weight: 500;
+}
+
+.mode-tab:not(.active):hover {
+  background: #ebebeb;
+}
+
+.query-form, .set-form {
   margin-bottom: 20px;
 }
 
@@ -310,11 +530,22 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.text-input {
+.text-input, .text-area {
   width: 100%;
   padding: 4px 6px;
   border: 2px inset #f0f0f0;
   font-size: 12px;
+  font-family: inherit;
+}
+
+.text-area {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.value-hint {
+  margin-top: 4px;
+  color: #666;
 }
 
 .form-actions {
@@ -322,7 +553,7 @@ onMounted(() => {
   gap: 6px;
 }
 
-.primary-btn, .secondary-btn {
+.primary-btn, .secondary-btn, .tertiary-btn {
   padding: 4px 12px;
   font-size: 12px;
   border: 1px solid #999;
@@ -335,21 +566,47 @@ onMounted(() => {
   color: white;
 }
 
+.primary-btn.set-btn {
+  background: linear-gradient(to bottom, #2196F3, #1976D2);
+}
+
 .secondary-btn {
   background: linear-gradient(to bottom, #fff, #e0e0e0);
+}
+
+.tertiary-btn {
+  background: linear-gradient(to bottom, #FF9800, #F57C00);
+  color: white;
 }
 
 .primary-btn:hover:not(:disabled) {
   background: linear-gradient(to bottom, #45a049, #3e8e41);
 }
 
+.primary-btn.set-btn:hover:not(:disabled) {
+  background: linear-gradient(to bottom, #1976D2, #1565C0);
+}
+
 .secondary-btn:hover:not(:disabled) {
   background: linear-gradient(to bottom, #fff, #d0d0d0);
 }
 
-.primary-btn:disabled {
+.tertiary-btn:hover:not(:disabled) {
+  background: linear-gradient(to bottom, #F57C00, #E65100);
+}
+
+.primary-btn:disabled, .tertiary-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.result-status {
+  background: #e8f5e8;
+  color: #2e7d32;
+  padding: 4px;
+  border-radius: 2px;
+  border: 1px solid #4caf50;
+  font-weight: 500;
 }
 
 .result-area {
@@ -452,6 +709,18 @@ onMounted(() => {
 .history-variable {
   font-weight: 500;
   color: #2196F3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.operation-type {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: #e3f2fd;
+  color: #1976d2;
+  font-weight: 600;
 }
 
 .history-value {
@@ -475,6 +744,26 @@ onMounted(() => {
   gap: 4px;
 }
 
+.quick-sets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quick-set-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.quick-set-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #666;
+  min-width: 80px;
+}
+
 .quick-btn {
   padding: 4px 8px;
   font-size: 10px;
@@ -482,6 +771,11 @@ onMounted(() => {
   background: linear-gradient(to bottom, #fff, #e0e0e0);
   cursor: pointer;
   border-radius: 2px;
+}
+
+.quick-btn.small {
+  padding: 2px 6px;
+  font-size: 9px;
 }
 
 .quick-btn:hover:not(:disabled) {

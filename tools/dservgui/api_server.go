@@ -89,6 +89,18 @@ type TouchResponse struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type SetRequest struct {
+	Variable string `json:"variable"`
+	Value    string `json:"value"`
+}
+
+type SetResponse struct {
+	Variable string `json:"variable"`
+	Value    string `json:"value"`
+	Success  bool   `json:"success"`
+	Error    string `json:"error,omitempty"`
+}
+
 type EssEvalRequest struct {
 	Script string `json:"script"`
 }
@@ -132,7 +144,7 @@ func (api *APIServer) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query dserv
-	value, err := api.dservClient.Query(req.Variable)
+	rawValue, err := api.dservClient.Query(req.Variable)
 
 	response := QueryResponse{
 		Variable: req.Variable,
@@ -142,10 +154,48 @@ func (api *APIServer) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.Error = err.Error()
 	} else {
-		response.Value = value
+		// Parse the space-separated dserv response format
+		// Format: "1 variable_name 1 timestamp dtype {actual_value}"
+		parsedValue := api.parseDservQueryResponse(rawValue)
+		response.Value = parsedValue
+
+		// Optionally update state manager with the parsed value for real-time access
+		if parsedValue != rawValue && parsedValue != "" {
+			api.stateManager.ProcessUpdate(req.Variable, parsedValue)
+		}
 	}
 
 	api.sendJSON(w, response)
+}
+
+// parseDservQueryResponse parses space-separated dserv query response
+// Format: "1 variable_name 1 timestamp dtype {actual_value}"
+// Returns the actual value without braces, or original string if parsing fails
+func (api *APIServer) parseDservQueryResponse(response string) string {
+	// Handle braced content properly - the value might contain spaces
+	// Format: "1 variable_name 1 timestamp dtype {actual_value with spaces}"
+
+	// Look for the opening brace
+	braceStart := strings.Index(response, "{")
+	if braceStart == -1 {
+		// No braces found, try simple field parsing
+		parts := strings.Fields(response)
+		if len(parts) >= 6 {
+			return parts[len(parts)-1]
+		}
+		return response
+	}
+
+	// Look for the closing brace
+	braceEnd := strings.LastIndex(response, "}")
+	if braceEnd == -1 || braceEnd <= braceStart {
+		// Malformed braces, return original
+		return response
+	}
+
+	// Extract content within braces
+	value := response[braceStart+1 : braceEnd]
+	return value
 }
 
 // Utility method to send JSON responses
@@ -228,6 +278,55 @@ func (api *APIServer) HandleTouch(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		response.Error = err.Error()
+	}
+
+	api.sendJSON(w, response)
+}
+
+// HandleSet handles variable set requests
+func (api *APIServer) HandleSet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Variable == "" {
+		api.sendJSON(w, SetResponse{
+			Success: false,
+			Error:   "Variable name cannot be empty",
+		})
+		return
+	}
+
+	if req.Value == "" {
+		api.sendJSON(w, SetResponse{
+			Variable: req.Variable,
+			Success:  false,
+			Error:    "Value cannot be empty",
+		})
+		return
+	}
+
+	// Set via dserv - the subscription mechanism should update our state manager
+	err := api.dservClient.Set(req.Variable, req.Value)
+
+	response := SetResponse{
+		Variable: req.Variable,
+		Value:    req.Value,
+		Success:  err == nil,
+	}
+
+	if err != nil {
+		response.Error = err.Error()
+		fmt.Printf("❌ SET failed for %s: %v\n", req.Variable, err)
+	} else {
+		fmt.Printf("🔧 SET %s = %s (waiting for subscription update...)\n", req.Variable, req.Value)
 	}
 
 	api.sendJSON(w, response)

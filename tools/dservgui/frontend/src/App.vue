@@ -81,6 +81,9 @@
       @close="showSettings = false"
       @save="handleSettingsSave"
     />
+
+    <!-- Development Tools (only shown in dev mode) -->
+    <DevTools />
   </div>
 </template>
 
@@ -92,13 +95,14 @@ import TitleBar from './components/layout/TitleBar.vue'
 import MenuBar from './components/layout/MenuBar.vue'
 import MainToolbar from './components/layout/MainToolbar.vue'
 import PanelContainer from './components/panels/PanelContainer.vue'
-import SystemControlSidebar from './components/SystemControlSidebar.vue'
+import SystemControlSidebar from './components/experiment/SystemControlSidebar.vue'
 import SimpleSidebar from './components/SimpleSidebar.vue'
 import StatusSidebar from './components/layout/StatusSidebar.vue'
 import Terminal from './components/Terminal.vue'
 import StatusBar from './components/layout/StatusBar.vue'
 import AboutDialog from './components/dialogs/AboutDialog.vue'
 import SettingsDialog from './components/dialogs/SettingsDialog.vue'
+import DevTools from './components/DevTools.vue'
 
 // Import composables
 import { useEssState } from './composables/useEssState'
