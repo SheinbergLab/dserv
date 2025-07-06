@@ -154,9 +154,6 @@ oo::class create System {
         if { [dg_exists stimdg] } {
             dg_toString stimdg s
             dservSetData stimdg [now] 6 $s
-	    
-	    set stimdg_json [dg_toJSON stimdg]
-	    dservSetData ess/stiminfo [now] 11 $stimdg_json
         }
     }
 
