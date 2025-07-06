@@ -42,19 +42,32 @@ class TclServerConfig
 public:
   int newline_listener_port = -1;
   int message_listener_port = -1;
+  int websocket_listener_port = -1;  // Add WebSocket port
   std::string name;
+  
   TclServerConfig(std::string name, int newline_port, int message_port):
-    name(name), newline_listener_port(newline_port), message_listener_port(message_port) {};
+    name(name), newline_listener_port(newline_port), 
+    message_listener_port(message_port), websocket_listener_port(-1) {};
+    
   TclServerConfig(std::string name):
-    name(name), newline_listener_port(-1), message_listener_port(-1) {};
+    name(name), newline_listener_port(-1), 
+    message_listener_port(-1), websocket_listener_port(-1) {};
+    
   TclServerConfig(std::string name, int port):
-    name(name), newline_listener_port(port), message_listener_port(-1) {};
+    name(name), newline_listener_port(port), 
+    message_listener_port(-1), websocket_listener_port(-1) {};
+    
+  // New constructor for all three ports
+  TclServerConfig(std::string name, int newline_port, int message_port, int websocket_port):
+    name(name), newline_listener_port(newline_port), 
+    message_listener_port(message_port), websocket_listener_port(websocket_port) {};
 };
   
 class TclServer
 {
   std::thread newline_net_thread;
   std::thread message_net_thread;
+  std::thread websocket_thread;      // Add WebSocket thread
   std::thread process_thread;
   
   std::mutex mutex;	      // ensure only one thread accesses table
@@ -64,7 +77,7 @@ public:
   int argc;
   char **argv;
 
-  enum socket_t { SOCKET_LINE, SOCKET_MESSAGE };
+  enum socket_t { SOCKET_LINE, SOCKET_MESSAGE, SOCKET_WEBSOCKET };
   
   std::atomic<bool> m_bDone;	// flag to close process loop
 
@@ -86,9 +99,11 @@ public:
 
   int _newline_port;		// for CR/LF oriented communication
   int _message_port;		// for message oriented comm  
+  int _websocket_port;		// for WebSocket communication
 
   int newline_port(void) { return _newline_port; }
   int message_port(void) { return _message_port; }
+  int websocket_port(void) { return _websocket_port; }
   
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;
@@ -109,11 +124,14 @@ public:
 	    std::string name, int port);
   TclServer(int argc, char **argv, Dataserver *dserv,
 	    std::string name, int newline_port, int message_port);
+  TclServer(int argc, char **argv, Dataserver *dserv,
+	    std::string name, int newline_port, int message_port, int websocket_port);
   ~TclServer();
   void shutdown(void);
   bool isDone();
   void start_tcp_server(void);
   void start_message_server(void);
+  void start_websocket_server(void);  // Add WebSocket server
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }
   
@@ -127,4 +145,3 @@ public:
 };
 
 #endif  // TCLSERVER_H
-
