@@ -104,6 +104,34 @@
           <span v-if="isSystemLoading" class="loading-text">Loading system...</span>
           <span v-else>{{ essConfig.complete ? 'Configuration Complete' : 'Configuration Incomplete' }}</span>
         </div>
+        
+        <!-- Debug Info Section (for development) -->
+        <div class="debug-status" v-if="debugPollingInfo.active || isSystemLoading">
+          <div class="debug-item">
+            <strong>Debug Status:</strong>
+          </div>
+          <div class="debug-item">
+            Loading: {{ isSystemLoading }}
+          </div>
+          <div class="debug-item">
+            ESS Status: {{ currentEssStatus }}
+          </div>
+          <div class="debug-item">
+            Poll Count: {{ debugPollingInfo.pollCount }}
+          </div>
+          <div class="debug-item">
+            Last Status: {{ debugPollingInfo.lastStatus }}
+          </div>
+          <div class="debug-item">
+            Dropdowns Disabled: {{ dropdownsDisabled }}
+          </div>
+          <div class="debug-item">
+            Interval ID: {{ statusPollingInterval || 'none' }}
+          </div>
+          <div class="debug-item" v-if="debugPollingInfo.startTime">
+            Elapsed: {{ Math.round((Date.now() - debugPollingInfo.startTime) / 1000) }}s
+          </div>
+        </div>
       </div>
     </div>
 
@@ -165,7 +193,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, inject, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, inject, watch } from 'vue'
 
 // Inject services with simple fallbacks
 const connectionService = inject('connectionService', null)
@@ -258,6 +286,7 @@ const systemSettings = ref([])
 // Loading state management
 const isSystemLoading = ref(false)
 const loadingTimeout = ref(null)
+const statusPollingInterval = ref(null)
 
 // Computed
 const statusClass = computed(() => {
@@ -267,9 +296,9 @@ const statusClass = computed(() => {
   return ''
 })
 
-// Determine if dropdowns should be disabled (loading or not connected)
+// Determine if dropdowns should be disabled (loading, not connected, or ESS not stopped)
 const dropdownsDisabled = computed(() => {
-  return !isConnected.value || isSystemLoading.value
+  return !isConnected.value || isSystemLoading.value || currentEssStatus.value !== 'stopped'
 })
 
 // Get current ESS status from centralized state
@@ -298,29 +327,170 @@ const formatVariableValue = (variable) => {
   return String(variable.value)
 }
 
+// Debug tracking for polling
+const debugPollingInfo = ref({
+  active: false,
+  startTime: null,
+  pollCount: 0,
+  lastStatus: 'unknown'
+})
+
 // Loading state management functions
-const startSystemLoading = () => {
-  console.log('🔄 Starting system loading state...')
+const startSystemLoading = async () => {
+  const timestamp = new Date().toISOString()
+  console.log(`🔄 [${timestamp}] Starting system loading state...`)
+  console.log(`🔍 [${timestamp}] Current reactive ESS status:`, currentEssStatus.value)
+  console.log(`🔍 [${timestamp}] Connection status:`, isConnected.value)
+  console.log(`🔍 [${timestamp}] Previous loading state:`, isSystemLoading.value)
+  
   isSystemLoading.value = true
   
-  // Set a maximum timeout to prevent getting stuck in loading state
+  // Initialize debug tracking
+  debugPollingInfo.value = {
+    active: true,
+    startTime: Date.now(),
+    pollCount: 0,
+    lastStatus: 'starting'
+  }
+  
+  // Clear any existing timeouts/intervals
   if (loadingTimeout.value) {
+    console.log(`🧹 [${timestamp}] Clearing existing loadingTimeout`)
     clearTimeout(loadingTimeout.value)
   }
+  if (statusPollingInterval.value) {
+    console.log(`🧹 [${timestamp}] Clearing existing statusPollingInterval`)
+    clearInterval(statusPollingInterval.value)
+  }
+  
+  // Start polling ess/status every 500ms
+  const startTime = Date.now()
+  const maxWaitTime = 60000 // 60 seconds
+  
+  console.log(`🔄 [${timestamp}] Starting ess/status polling every 500ms for up to 60s...`)
+  console.log(`🔄 [${timestamp}] Max wait time: ${maxWaitTime}ms`)
+  
+  // Do an immediate check first
+  try {
+    const response = await fetch('/api/variables/get?name=ess/status')
+    const responseTimestamp = new Date().toISOString()
+    console.log(`🌐 [${responseTimestamp}] Initial API response status:`, response.status, response.ok)
+    
+    if (response.ok) {
+      const data = await response.json()
+      console.log(`🔍 [${responseTimestamp}] Initial API response data:`, JSON.stringify(data, null, 2))
+      const currentStatus = data.value || data.variable?.value || 'unknown'
+      console.log(`🔍 [${responseTimestamp}] Initial ess/status check:`, currentStatus)
+      
+      debugPollingInfo.value.lastStatus = currentStatus
+      
+      // Note initial status but continue polling since we just initiated a load
+      if (currentStatus === 'stopped') {
+        console.log(`🔍 [${responseTimestamp}] System currently stopped, but continuing to poll since load was just initiated`)
+      }
+    } else {
+      console.warn(`⚠️ [${responseTimestamp}] Initial ess/status check failed:`, response.status, response.statusText)
+    }
+  } catch (error) {
+    const errorTimestamp = new Date().toISOString()
+    console.warn(`⚠️ [${errorTimestamp}] Error in initial ess/status check:`, error)
+  }
+  
+  console.log(`🚀 [${timestamp}] Setting up interval polling...`)
+  statusPollingInterval.value = setInterval(async () => {
+    debugPollingInfo.value.pollCount++
+    const pollTimestamp = new Date().toISOString()
+    const elapsed = Date.now() - startTime
+    
+    console.log(`⏰ [${pollTimestamp}] *** INTERVAL FIRED *** Poll #${debugPollingInfo.value.pollCount} starting (elapsed: ${Math.round(elapsed / 1000)}s)`)
+    
+    try {
+      // Check if we've exceeded the maximum wait time
+      if (elapsed > maxWaitTime) {
+        console.log(`⚠️ [${pollTimestamp}] Status polling timeout reached (${elapsed}ms > ${maxWaitTime}ms), clearing loading state`)
+        stopSystemLoading()
+        return
+      }
+      
+      console.log(`🔍 [${pollTimestamp}] Poll #${debugPollingInfo.value.pollCount} starting (elapsed: ${Math.round(elapsed / 1000)}s)`)
+      
+      // Poll the current ess/status
+      const response = await fetch('/api/variables/get?name=ess/status')
+      console.log(`🌐 [${pollTimestamp}] Poll API response status:`, response.status, response.ok)
+      
+      if (response.ok) {
+        const data = await response.json()
+        console.log(`🔍 [${pollTimestamp}] Poll API response data:`, JSON.stringify(data, null, 2))
+        const currentStatus = data.value || data.variable?.value || 'unknown'
+        
+        console.log(`🔍 [${pollTimestamp}] Polling ess/status: "${currentStatus}" (elapsed: ${Math.round(elapsed / 1000)}s, poll #${debugPollingInfo.value.pollCount})`)
+        
+        debugPollingInfo.value.lastStatus = currentStatus
+        
+        // If status is "stopped", we're done loading
+        if (currentStatus === 'stopped') {
+          console.log(`✅ [${pollTimestamp}] System loading completed (status polled as stopped)`)
+          stopSystemLoading()
+        }
+      } else {
+        console.warn(`⚠️ [${pollTimestamp}] Failed to poll ess/status:`, response.status, response.statusText)
+      }
+    } catch (error) {
+      console.warn(`⚠️ [${pollTimestamp}] Error polling ess/status:`, error)
+    }
+  }, 500) // Poll every 500ms
+  
+  console.log(`⏰ [${timestamp}] Interval ID set to:`, statusPollingInterval.value)
+  console.log(`⏰ [${timestamp}] Interval should fire every 500ms starting now...`)
+  
+  // Verify interval is working with a simple test
+  setTimeout(() => {
+    const testTimestamp = new Date().toISOString()
+    console.log(`🧪 [${testTimestamp}] Test: 1 second after setting interval, poll count should be >= 2:`, debugPollingInfo.value.pollCount)
+  }, 1100)
+  
+  // Set a maximum timeout as fallback
   loadingTimeout.value = setTimeout(() => {
-    console.log('⚠️ System loading timeout reached, clearing loading state')
-    isSystemLoading.value = false
-    loadingTimeout.value = null
-  }, 30000) // 30 second timeout
+    const timeoutTimestamp = new Date().toISOString()
+    console.log(`⚠️ [${timeoutTimestamp}] System loading timeout reached (60s fallback), clearing loading state`)
+    stopSystemLoading()
+  }, maxWaitTime)
+  
+  console.log(`⏰ [${timestamp}] Timeout ID set to:`, loadingTimeout.value)
 }
 
 const stopSystemLoading = () => {
-  console.log('✅ Stopping system loading state...')
+  const timestamp = new Date().toISOString()
+  console.log(`✅ [${timestamp}] Stopping system loading state...`)
+  console.log(`🔍 [${timestamp}] Debug info:`, JSON.stringify(debugPollingInfo.value, null, 2))
+  console.log(`🔍 [${timestamp}] Current isSystemLoading:`, isSystemLoading.value)
+  console.log(`🔍 [${timestamp}] Current interval ID:`, statusPollingInterval.value)
+  console.log(`🔍 [${timestamp}] Current timeout ID:`, loadingTimeout.value)
+  
   isSystemLoading.value = false
+  
+  // Clear polling interval
+  if (statusPollingInterval.value) {
+    console.log(`🧹 [${timestamp}] Clearing polling interval:`, statusPollingInterval.value)
+    clearInterval(statusPollingInterval.value)
+    statusPollingInterval.value = null
+  } else {
+    console.log(`🔍 [${timestamp}] No polling interval to clear`)
+  }
+  
+  // Clear timeout
   if (loadingTimeout.value) {
+    console.log(`🧹 [${timestamp}] Clearing loading timeout:`, loadingTimeout.value)
     clearTimeout(loadingTimeout.value)
     loadingTimeout.value = null
+  } else {
+    console.log(`🔍 [${timestamp}] No loading timeout to clear`)
   }
+  
+  // Mark debug info as inactive
+  debugPollingInfo.value.active = false
+  
+  console.log(`✅ [${timestamp}] System loading state cleared successfully`)
 }
 
 // Event handlers
@@ -393,6 +563,9 @@ const getDropdownPlaceholder = (type) => {
   if (!isConnected.value) {
     return 'Backend unavailable...'
   }
+  if (currentEssStatus.value !== 'stopped') {
+    return `ESS ${currentEssStatus.value}...`
+  }
   const items = type === 'systems' ? essConfig.value.systems : 
                 type === 'protocols' ? essConfig.value.protocols : 
                 essConfig.value.variants
@@ -405,7 +578,7 @@ const onSystemChange = async () => {
   console.log('🔄 System changed to:', selectedSystem.value)
   
   // Start loading state
-  startSystemLoading()
+  await startSystemLoading()
   
   try {
     // Use proper ESS command with just the system parameter
@@ -439,7 +612,7 @@ const onProtocolChange = async () => {
   console.log('🔄 Protocol changed to:', selectedProtocol.value)
   
   // Start loading state
-  startSystemLoading()
+  await startSystemLoading()
   
   try {
     // Use proper ESS command with system and protocol parameters
@@ -473,7 +646,7 @@ const onVariantChange = async () => {
   console.log('🔄 Variant changed to:', selectedVariant.value)
   
   // Start loading state
-  startSystemLoading()
+  await startSystemLoading()
   
   try {
     // Use proper ESS command with system, protocol, and variant parameters
@@ -553,22 +726,8 @@ watch(() => essState?.variables, () => {
   }
 }, { deep: true, immediate: true })
 
-// Watch for changes in ess/status to manage loading state
-watch(() => currentEssStatus.value, (newStatus, oldStatus) => {
-  console.log('🔍 ESS Status changed from', oldStatus, 'to', newStatus)
-  
-  // If status changed from "loading" to "stopped", clear loading state
-  if (oldStatus === 'loading' && newStatus === 'stopped') {
-    console.log('✅ System loading completed (status: loading → stopped)')
-    stopSystemLoading()
-  }
-  
-  // Also clear loading state if we see "stopped" while in loading state
-  if (newStatus === 'stopped' && isSystemLoading.value) {
-    console.log('✅ System loading completed (status now stopped)')
-    stopSystemLoading()
-  }
-}, { immediate: true })
+// Note: We use polling instead of reactive watching for ess/status during loading
+// because Vue reactivity was not reliable for this use case
 
 onMounted(() => {
   console.log('🚀 SystemControlSidebar mounted - using centralized ESS state')
@@ -577,6 +736,12 @@ onMounted(() => {
   
   // Initial load will happen via the watcher when essState.variables is available
   // No need for polling since we use reactive centralized state
+})
+
+onUnmounted(() => {
+  console.log('🔄 SystemControlSidebar unmounting - cleaning up polling')
+  // Clean up any active polling
+  stopSystemLoading()
 })
 </script>
 
@@ -642,6 +807,9 @@ onMounted(() => {
   padding: 4px 6px;
   border: 2px inset #f0f0f0;
   font-size: 12px;
+  box-sizing: border-box;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .text-input:disabled {
@@ -656,21 +824,52 @@ onMounted(() => {
 }
 
 .text-input.loading {
-  background: #fff3cd;
-  border-color: #ffc107;
+  background: #fff3cd !important;
+  border-color: #ffc107 !important;
   cursor: wait;
-  opacity: 0.8;
+  /* Use only opacity animation to avoid any layout changes */
+  animation: loading-pulse 1.2s ease-in-out infinite;
+  /* Ensure size constraints are maintained during loading */
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  /* Prevent any background effects from changing size */
+  background-size: auto !important;
+  background-attachment: scroll !important;
 }
 
-.text-input.loading {
-  background-image: linear-gradient(45deg, transparent 25%, rgba(255, 193, 7, 0.1) 25%, rgba(255, 193, 7, 0.1) 50%, transparent 50%, transparent 75%, rgba(255, 193, 7, 0.1) 75%);
-  background-size: 20px 20px;
-  animation: loading-stripes 1s linear infinite;
+@keyframes loading-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
 }
 
-@keyframes loading-stripes {
-  0% { background-position: 0 0; }
-  100% { background-position: 20px 0; }
+/* Ensure loading animation doesn't affect layout */
+.text-input.loading * {
+  box-sizing: border-box;
+}
+
+/* Specific handling for select elements to prevent expansion */
+select.text-input {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Lock the size for select elements */
+  height: auto;
+  line-height: normal;
+}
+
+select.text-input.loading {
+  /* Override any potential size changes during loading animation */
+  min-width: 100px !important;
+  max-width: 100% !important;
+  height: auto !important;
+  /* Disable any background effects that could cause reflow */
+  background-attachment: scroll !important;
+  background-repeat: no-repeat !important;
+  /* Ensure the select doesn't change size due to animation */
+  transform: none !important;
+  will-change: opacity !important; /* Only allow opacity changes */
 }
 
 /* Control Buttons */
@@ -818,6 +1017,22 @@ onMounted(() => {
   background: white;
   border: 1px solid #ddd;
   border-radius: 2px;
+}
+
+/* Debug Status */
+.debug-status {
+  margin-top: 8px;
+  padding: 4px;
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  border-radius: 2px;
+  font-size: 10px;
+  color: #856404;
+}
+
+.debug-item {
+  margin: 1px 0;
+  font-family: monospace;
 }
 
 .loading-text {

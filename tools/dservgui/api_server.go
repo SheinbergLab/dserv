@@ -10,6 +10,26 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// CORS middleware to handle cross-origin requests
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
+
+		// Handle preflight OPTIONS request
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Call the next handler
+		next.ServeHTTP(w, r)
+	})
+}
+
 // APIServer handles all HTTP API endpoints
 type APIServer struct {
 	dservClient  *DservClient
@@ -22,9 +42,10 @@ type APIServer struct {
 type ChannelConfig struct {
 	HighFrequency []string // WebSocket channel for high-frequency updates
 	LowFrequency  []string // SSE channel for low-frequency updates
+	LargeData     []string // Variables that should use optimized large data handling
 }
 
-// Default channel routing - route high-frequency variables through WebSocket
+// Default channel routing - route variables based on their characteristics
 var defaultChannelRouting = ChannelConfig{
 	HighFrequency: []string{
 		"ess/em_pos",      // Eye position data (high frequency)
@@ -37,6 +58,10 @@ var defaultChannelRouting = ChannelConfig{
 		"ess/variants",
 		"ess/status", // Status updates
 		"ess/trial_", // Trial-level data (prefix match)
+	},
+	LargeData: []string{
+		"ess/stiminfo",  // Stimulus information (large columnar data)
+		"ess/trialinfo", // Trial data tables (potentially large)
 	},
 }
 
@@ -441,9 +466,20 @@ func (api *APIServer) HandleLiveUpdates(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 
-			// Send variable update
-			data, _ := json.Marshal(variable)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			// Check if this is a large data variable that should be optimized
+			if api.shouldOptimizeVariable(variable) {
+				// Send optimized metadata notification instead of full data
+				optimizedUpdate := api.createOptimizedUpdate(variable)
+				data, _ := json.Marshal(optimizedUpdate)
+				fmt.Fprintf(w, "data: %s\n\n", data)
+
+				fmt.Printf("📊 Sent optimized update for large variable: %s (%d bytes -> %d bytes)\n",
+					variable.Name, len(variable.Value), len(data))
+			} else {
+				// Send normal variable update
+				data, _ := json.Marshal(variable)
+				fmt.Fprintf(w, "data: %s\n\n", data)
+			}
 
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
@@ -744,9 +780,362 @@ func (api *APIServer) HandleVariableRoutes(w http.ResponseWriter, r *http.Reques
 		api.HandleGetSingleVariable(w, r)
 	case "prefix":
 		api.HandleGetVariablesByPrefix(w, r)
+	case "large":
+		api.HandleLargeData(w, r)
+	case "stimulus":
+		api.HandleStimulusData(w, r) // Legacy endpoint - forwards to large endpoint
 	default:
 		// If no subpath matches, it might be the root /api/variables/ request
 		// But since we handle /api/variables separately, this is an error
 		http.Error(w, "Invalid variables endpoint", http.StatusNotFound)
 	}
+}
+
+// LargeDataRequest represents request parameters for large JSON data
+type LargeDataRequest struct {
+	Variable string   `json:"variable"`          // Variable name to fetch
+	Columns  []string `json:"columns,omitempty"` // Specific columns to return
+	Limit    int      `json:"limit,omitempty"`   // Max rows to return (0 = all)
+	Offset   int      `json:"offset,omitempty"`  // Row offset for pagination
+	Preview  bool     `json:"preview,omitempty"` // Just metadata and sample
+}
+
+// LargeDataResponse represents the response for large JSON data
+type LargeDataResponse struct {
+	Variable string                 `json:"variable"`
+	Metadata LargeDataMetadata      `json:"metadata"`
+	Data     map[string]interface{} `json:"data,omitempty"`
+	Preview  map[string]interface{} `json:"preview,omitempty"`
+	Error    string                 `json:"error,omitempty"`
+}
+
+// LargeDataMetadata provides information about the dataset
+type LargeDataMetadata struct {
+	Variable     string                 `json:"variable"`
+	Columns      []string               `json:"columns"`
+	RowCount     int                    `json:"rowCount"`
+	ColumnTypes  map[string]string      `json:"columnTypes"`
+	DataSize     int                    `json:"dataSize"`
+	LastUpdated  time.Time              `json:"lastUpdated"`
+	HasData      bool                   `json:"hasData"`
+	SampleValues map[string]interface{} `json:"sampleValues"`
+	IsColumnar   bool                   `json:"isColumnar"`
+}
+
+// HandleLargeData provides optimized access to large JSON variables
+func (api *APIServer) HandleLargeData(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	variableName := r.URL.Query().Get("name")
+	if variableName == "" {
+		http.Error(w, "Variable name parameter required", http.StatusBadRequest)
+		return
+	}
+
+	preview := r.URL.Query().Get("preview") == "true"
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+	columnsStr := r.URL.Query().Get("columns")
+
+	var limit, offset int
+	var requestedColumns []string
+
+	if limitStr != "" {
+		fmt.Sscanf(limitStr, "%d", &limit)
+	}
+	if offsetStr != "" {
+		fmt.Sscanf(offsetStr, "%d", &offset)
+	}
+	if columnsStr != "" {
+		requestedColumns = strings.Split(columnsStr, ",")
+	}
+
+	// Get the variable from state manager
+	variable, exists := api.stateManager.GetVariable(variableName)
+	if !exists {
+		response := LargeDataResponse{
+			Variable: variableName,
+			Metadata: LargeDataMetadata{Variable: variableName, HasData: false},
+			Error:    fmt.Sprintf("Variable '%s' not found", variableName),
+		}
+		api.sendJSON(w, response)
+		return
+	}
+
+	// Try to parse as JSON
+	var jsonData interface{}
+	if err := json.Unmarshal([]byte(variable.Value), &jsonData); err != nil {
+		response := LargeDataResponse{
+			Variable: variableName,
+			Metadata: LargeDataMetadata{Variable: variableName, HasData: false},
+			Error:    fmt.Sprintf("Variable '%s' is not valid JSON: %v", variableName, err),
+		}
+		api.sendJSON(w, response)
+		return
+	}
+
+	// Check if it's columnar data (object with array values)
+	dataMap, isObject := jsonData.(map[string]interface{})
+	if !isObject {
+		response := LargeDataResponse{
+			Variable: variableName,
+			Metadata: LargeDataMetadata{Variable: variableName, HasData: false, IsColumnar: false},
+			Error:    fmt.Sprintf("Variable '%s' is not a columnar JSON object", variableName),
+		}
+		api.sendJSON(w, response)
+		return
+	}
+
+	// Calculate metadata
+	metadata := api.calculateLargeDataMetadata(dataMap, variable)
+
+	response := LargeDataResponse{
+		Variable: variableName,
+		Metadata: metadata,
+	}
+
+	if preview {
+		// For preview, just return metadata and sample values
+		response.Preview = api.createLargeDataPreview(dataMap, 3) // 3 sample rows
+	} else {
+		// Return actual data with potential filtering/pagination
+		response.Data = api.filterLargeData(dataMap, requestedColumns, limit, offset)
+	}
+
+	api.sendJSON(w, response)
+}
+
+// calculateLargeDataMetadata analyzes the JSON data and returns metadata
+func (api *APIServer) calculateLargeDataMetadata(dataMap map[string]interface{}, variable Variable) LargeDataMetadata {
+	columns := make([]string, 0, len(dataMap))
+	columnTypes := make(map[string]string)
+	sampleValues := make(map[string]interface{})
+	rowCount := 0
+	isColumnar := true
+
+	for colName, colData := range dataMap {
+		columns = append(columns, colName)
+
+		if arr, ok := colData.([]interface{}); ok {
+			if len(arr) > rowCount {
+				rowCount = len(arr)
+			}
+
+			// Determine column type from first non-nil value
+			columnType := "unknown"
+			var sampleValue interface{}
+
+			for _, val := range arr {
+				if val != nil {
+					sampleValue = val
+					switch val.(type) {
+					case float64, int64, int:
+						columnType = "numeric"
+					case string:
+						columnType = "text"
+					case bool:
+						columnType = "boolean"
+					default:
+						columnType = "mixed"
+					}
+					break
+				}
+			}
+
+			columnTypes[colName] = columnType
+			sampleValues[colName] = sampleValue
+		} else {
+			// Not an array - this might not be columnar data
+			isColumnar = false
+			columnTypes[colName] = "non-array"
+			sampleValues[colName] = colData
+		}
+	}
+
+	return LargeDataMetadata{
+		Variable:     variable.Name,
+		Columns:      columns,
+		RowCount:     rowCount,
+		ColumnTypes:  columnTypes,
+		DataSize:     len(variable.Value),
+		LastUpdated:  variable.Timestamp,
+		HasData:      len(columns) > 0 && (rowCount > 0 || !isColumnar),
+		SampleValues: sampleValues,
+		IsColumnar:   isColumnar,
+	}
+}
+
+// createLargeDataPreview creates a small sample of the data for preview
+func (api *APIServer) createLargeDataPreview(dataMap map[string]interface{}, sampleRows int) map[string]interface{} {
+	preview := make(map[string]interface{})
+
+	for colName, colData := range dataMap {
+		if arr, ok := colData.([]interface{}); ok {
+			maxRows := sampleRows
+			if len(arr) < maxRows {
+				maxRows = len(arr)
+			}
+
+			if maxRows > 0 {
+				preview[colName] = arr[:maxRows]
+			} else {
+				preview[colName] = []interface{}{}
+			}
+		} else {
+			// Non-array data - just include as-is
+			preview[colName] = colData
+		}
+	}
+
+	return preview
+}
+
+// filterLargeData applies column filtering and pagination to the data
+func (api *APIServer) filterLargeData(dataMap map[string]interface{}, columns []string, limit, offset int) map[string]interface{} {
+	filtered := make(map[string]interface{})
+
+	// Determine which columns to include
+	columnsToInclude := columns
+	if len(columnsToInclude) == 0 {
+		// Include all columns if none specified
+		for colName := range dataMap {
+			columnsToInclude = append(columnsToInclude, colName)
+		}
+	}
+
+	// Apply column filtering and pagination
+	for _, colName := range columnsToInclude {
+		if colData, exists := dataMap[colName]; exists {
+			if arr, ok := colData.([]interface{}); ok {
+				// Apply pagination for array data
+				start := offset
+				end := len(arr)
+
+				if start >= len(arr) {
+					// Offset beyond data
+					filtered[colName] = []interface{}{}
+					continue
+				}
+
+				if limit > 0 && start+limit < len(arr) {
+					end = start + limit
+				}
+
+				filtered[colName] = arr[start:end]
+			} else {
+				// Non-array data - include as-is
+				filtered[colName] = colData
+			}
+		}
+	}
+
+	return filtered
+}
+
+// isLargeDataVariable checks if a variable should use optimized large data handling
+func (api *APIServer) isLargeDataVariable(variableName string) bool {
+	for _, pattern := range defaultChannelRouting.LargeData {
+		if strings.HasSuffix(pattern, "/") {
+			// Prefix match (e.g., "data/" matches "data/experiment1")
+			if strings.HasPrefix(variableName, pattern) {
+				return true
+			}
+		} else if strings.HasSuffix(pattern, "_") {
+			// Prefix match with underscore (e.g., "ess/trial_" matches "ess/trial_001")
+			if strings.HasPrefix(variableName, pattern) {
+				return true
+			}
+		} else {
+			// Exact match
+			if variableName == pattern {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shouldOptimizeVariable determines if a variable should be automatically optimized
+// based on size thresholds and content analysis
+func (api *APIServer) shouldOptimizeVariable(variable Variable) bool {
+	// Check if it's explicitly marked as large data
+	if api.isLargeDataVariable(variable.Name) {
+		return true
+	}
+
+	// Auto-detect based on size (>100KB)
+	if len(variable.Value) > 100*1024 {
+		// Try to parse as JSON to see if it's structured data
+		var jsonData interface{}
+		if err := json.Unmarshal([]byte(variable.Value), &jsonData); err == nil {
+			// It's valid JSON and large - candidate for optimization
+			if dataMap, ok := jsonData.(map[string]interface{}); ok {
+				// Check if it looks like columnar data
+				hasArrays := false
+				for _, value := range dataMap {
+					if _, isArray := value.([]interface{}); isArray {
+						hasArrays = true
+						break
+					}
+				}
+				return hasArrays
+			}
+		}
+	}
+
+	return false
+}
+
+// createOptimizedUpdate creates a lightweight notification for large data variables
+func (api *APIServer) createOptimizedUpdate(variable Variable) map[string]interface{} {
+	// Try to parse the JSON and get metadata
+	var jsonData interface{}
+	if err := json.Unmarshal([]byte(variable.Value), &jsonData); err != nil {
+		// If parsing fails, send basic notification
+		return map[string]interface{}{
+			"name":      variable.Name,
+			"timestamp": variable.Timestamp,
+			"type":      "large_data_update",
+			"size":      len(variable.Value),
+			"error":     "Failed to parse JSON",
+		}
+	}
+
+	if dataMap, ok := jsonData.(map[string]interface{}); ok {
+		// Calculate basic metadata
+		metadata := api.calculateLargeDataMetadata(dataMap, variable)
+
+		return map[string]interface{}{
+			"name":      variable.Name,
+			"timestamp": variable.Timestamp,
+			"type":      "large_data_update",
+			"metadata": map[string]interface{}{
+				"columns":    metadata.Columns,
+				"rowCount":   metadata.RowCount,
+				"dataSize":   metadata.DataSize,
+				"isColumnar": metadata.IsColumnar,
+				"hasData":    metadata.HasData,
+			},
+			// Include just the column names and types, not the data
+			"preview": "Use /api/variables/large?name=" + variable.Name + "&preview=true for data",
+		}
+	}
+
+	// Non-object JSON
+	return map[string]interface{}{
+		"name":      variable.Name,
+		"timestamp": variable.Timestamp,
+		"type":      "large_data_update",
+		"size":      len(variable.Value),
+		"preview":   "Use /api/variables/large?name=" + variable.Name + " for data",
+	}
+}
+
+// Legacy stimulus endpoint - now just calls the general endpoint
+func (api *APIServer) HandleStimulusData(w http.ResponseWriter, r *http.Request) {
+	// Add the stimulus variable name and forward to general handler
+	q := r.URL.Query()
+	q.Set("name", "ess/stiminfo")
+	r.URL.RawQuery = q.Encode()
+
+	api.HandleLargeData(w, r)
 }
