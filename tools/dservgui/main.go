@@ -53,8 +53,12 @@ func main() {
 	printStartupInfo(verbose)
 
 	// Start HTTP server
-	log.Printf("✅ Server ready on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Printf("✅ Server ready on http://localhost:%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 // startUpdatePipeline processes all incoming dserv updates
@@ -75,8 +79,6 @@ func subscribeToDatapoints(client *DservClient) {
 	wildcards := []string{
 		"ess/*",             // All ESS variables
 		"system/*",          // All system variables
-		"stimdg",            // Stimulus data
-		"trialdg",           // Trial data
 		"openiris/settings", // OpenIris settings
 		"print",             // Print messages
 	}
@@ -119,10 +121,7 @@ func touchInterfaceVariables(client *DservClient) {
 		"ess/stim_script", "ess/param_settings",
 		"ess/params",
 
-		// Data streams
-		"stimdg", "trialdg",
-
-		// Git information
+		// Git control variables
 		"ess/git/branches", "ess/git/branch",
 
 		// System information
@@ -162,8 +161,8 @@ func setupRoutes(api *APIServer) {
 	http.HandleFunc("/api/ess/eval", api.HandleEssEval)
 
 	// State access
+	http.HandleFunc("/api/variables/", api.HandleVariableRoutes)
 	http.HandleFunc("/api/variables", api.HandleGetAllVariables)
-	http.HandleFunc("/api/variables/prefix", api.HandleGetVariablesByPrefix)
 
 	// Live updates - dual channel approach!
 	http.HandleFunc("/api/updates", api.HandleLiveUpdates) // SSE for low-frequency
@@ -223,6 +222,7 @@ func printStartupInfo(verbose bool) {
 		endpoints := []string{
 			"GET  /api/status - System status",
 			"GET  /api/variables - All variables",
+			"GET  /api/variables/get?name=X - Single variable by name",
 			"GET  /api/variables/prefix?prefix=X - Variables by prefix",
 			"GET  /api/updates - Live variable updates (SSE)",
 			"POST /api/query - Query single variable",

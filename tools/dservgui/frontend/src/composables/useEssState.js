@@ -72,9 +72,73 @@ export function useEssState() {
     // Just listen for server updates via window events
     window.addEventListener('server-update', handleEssUpdate)
     
+    // Add visibility change listener to detect wake from sleep
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
     console.log('🔄 Connected to ESS state via existing connection')
     backendStateAvailable.value = true
     return true
+  }
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      console.log('🔄 useEssState - Page became visible, checking connection...')
+      
+      // Force a complete reconnection by testing the connection
+      testConnectionAndReconnect()
+    }
+  }
+
+  const testConnectionAndReconnect = async () => {
+    try {
+      // Test if we can actually reach the server
+      const testResponse = await fetch('/api/status', { 
+        method: 'HEAD',
+        cache: 'no-cache'
+      })
+      
+      if (!testResponse.ok) {
+        throw new Error(`Server not responding: ${testResponse.status}`)
+      }
+      
+      // Test if our variable endpoint works
+      const variableTest = await fetch('/api/variables/prefix?prefix=ess/', {
+        cache: 'no-cache'
+      })
+      
+      if (variableTest.ok) {
+        console.log('🔄 useEssState - Server is responding, reloading ESS state...')
+        // Small delay to allow any connection recovery
+        setTimeout(() => {
+          loadInitialState()
+        }, 1000)
+      } else {
+        throw new Error(`Variables endpoint not responding: ${variableTest.status}`)
+      }
+      
+    } catch (error) {
+      console.error('❌ useEssState - Server connection test failed:', error)
+      
+      // Force connection service to reconnect
+      const connectionService = window.connectionService || 
+        (typeof window !== 'undefined' && window.app?.config?.globalProperties?.$connectionService)
+      
+      if (connectionService && typeof connectionService.forceReconnect === 'function') {
+        console.log('🔄 useEssState - Forcing connection service to reconnect...')
+        await connectionService.forceReconnect()
+        
+        // Try loading ESS state again after reconnection
+        setTimeout(() => {
+          loadInitialState()
+        }, 2000)
+      } else {
+        console.log('🔄 useEssState - Connection service not available, retrying in 5s...')
+        // Retry after longer delay
+        setTimeout(() => {
+          testConnectionAndReconnect()
+        }, 5000)
+      }
+    }
   }
 
   const handleEssUpdate = (event) => {
@@ -294,8 +358,9 @@ export function useEssState() {
   const cleanup = () => {
     console.log('🔄 Cleaning up ESS state...')
     
-    // Remove event listener
+    // Remove event listeners
     window.removeEventListener('server-update', handleEssUpdate)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
     
     backendStateAvailable.value = false
   }

@@ -15,14 +15,14 @@
       <!-- Mode Tabs -->
       <div class="mode-tabs">
         <button 
-          @click="currentMode = 'query'" 
+          @click="switchToMode('query')" 
           class="mode-tab" 
           :class="{ active: currentMode === 'query' }"
         >
           Query Variable
         </button>
         <button 
-          @click="currentMode = 'set'" 
+          @click="switchToMode('set')" 
           class="mode-tab" 
           :class="{ active: currentMode === 'set' }"
         >
@@ -81,12 +81,12 @@
           <textarea 
             v-model="setValue" 
             class="text-area"
-            placeholder="Enter value (JSON format for objects, plain text for strings/numbers)"
+            placeholder="Enter value as string (e.g., hello, 123, true, stopped)"
             rows="3"
             :disabled="setLoading"
           ></textarea>
           <div class="value-hint">
-            <small>Examples: "hello", 123, {"status": "active"}, true</small>
+            <small>Value will be sent as string to dserv</small>
           </div>
         </div>
         
@@ -165,9 +165,9 @@
         <div v-else class="quick-sets">
           <div class="quick-set-group">
             <span class="quick-set-label">ess/status:</span>
-            <button @click="quickSet('ess/status', '{&quot;value&quot;: &quot;active&quot;}')" class="quick-btn small">Active</button>
-            <button @click="quickSet('ess/status', '{&quot;value&quot;: &quot;inactive&quot;}')" class="quick-btn small">Inactive</button>
-            <button @click="quickSet('ess/status', '{&quot;value&quot;: &quot;error&quot;}')" class="quick-btn small">Error</button>
+            <button @click="quickSet('ess/status', 'active')" class="quick-btn small">Active</button>
+            <button @click="quickSet('ess/status', 'inactive')" class="quick-btn small">Inactive</button>
+            <button @click="quickSet('ess/status', 'error')" class="quick-btn small">Error</button>
           </div>
           <div class="quick-set-group">
             <span class="quick-set-label">ess/em_pos:</span>
@@ -216,13 +216,24 @@ const quickVariables = [
 
 // Methods
 const toggleMode = () => {
-  currentMode.value = currentMode.value === 'query' ? 'set' : 'query'
-  clearQuery()
-  clearSet()
+  const newMode = currentMode.value === 'query' ? 'set' : 'query'
+  switchToMode(newMode)
+}
+
+const switchToMode = (mode) => {
+  console.log(`QueryPanel: Switching to mode: ${mode}`)
+  currentMode.value = mode
+  // Clear results from the other mode to avoid confusion
+  if (mode === 'query') {
+    setResult.value = null
+  } else {
+    queryResult.value = null
+  }
 }
 const executeQuery = async () => {
   if (!queryVariable.value.trim() || queryLoading.value) return
   
+  console.log(`QueryPanel: Executing query for ${queryVariable.value}`)
   queryLoading.value = true
   setResult.value = null // Clear set result when querying
   
@@ -237,6 +248,8 @@ const executeQuery = async () => {
     result.timestamp = new Date().toISOString()
     result.type = 'query'
     queryResult.value = result
+    
+    console.log('QueryPanel: Query result:', result)
     
     // Add to history
     addToHistory(result)
@@ -253,6 +266,7 @@ const executeQuery = async () => {
     }
     queryResult.value = errorResult
     addToHistory(errorResult)
+    console.error('QueryPanel: Query error:', error)
   } finally {
     queryLoading.value = false
   }
@@ -261,33 +275,30 @@ const executeQuery = async () => {
 const executeSet = async () => {
   if (!setVariable.value.trim() || !setValue.value.trim() || setLoading.value) return
   
+  console.log(`QueryPanel: Executing set for ${setVariable.value} = ${setValue.value}`)
   setLoading.value = true
   queryResult.value = null // Clear query result when setting
   
   try {
-    // Try to parse the value as JSON first, fallback to string
-    let parsedValue
-    try {
-      parsedValue = JSON.parse(setValue.value.trim())
-    } catch {
-      // If JSON parsing fails, treat as string
-      parsedValue = setValue.value.trim()
-    }
+    // For now, always send as string (as requested)
+    const valueToSend = setValue.value.trim()
     
     const response = await fetch('/api/set', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         variable: setVariable.value.trim(),
-        value: parsedValue
+        value: valueToSend
       })
     })
     
     const result = await response.json()
     result.timestamp = new Date().toISOString()
     result.type = 'set'
-    result.value = parsedValue // Store the value we set
+    result.value = valueToSend // Store the value we set
     setResult.value = result
+    
+    console.log('QueryPanel: Set result:', result)
     
     // Add to history
     addToHistory(result)
@@ -304,16 +315,20 @@ const executeSet = async () => {
     }
     setResult.value = errorResult
     addToHistory(errorResult)
+    console.error('QueryPanel: Set error:', error)
   } finally {
     setLoading.value = false
   }
 }
 
 const setAndQuery = async () => {
+  console.log('QueryPanel: Executing set and query operation')
   await executeSet()
   if (setResult.value && !setResult.value.error) {
     // Wait a moment for the set to propagate, then query
     setTimeout(() => {
+      console.log('QueryPanel: Switching to query mode after set')
+      switchToMode('query')
       queryVariable.value = setVariable.value
       executeQuery()
     }, 100)
@@ -321,13 +336,15 @@ const setAndQuery = async () => {
 }
 
 const quickQuery = (variable) => {
-  currentMode.value = 'query'
+  console.log(`QueryPanel: Quick query for ${variable}`)
+  switchToMode('query')
   queryVariable.value = variable
   executeQuery()
 }
 
 const quickSet = (variable, value) => {
-  currentMode.value = 'set'
+  console.log(`QueryPanel: Quick set for ${variable} = ${value}`)
+  switchToMode('set')
   setVariable.value = variable
   setValue.value = value
   executeSet()
@@ -363,17 +380,16 @@ const addToRecentVariables = (variable) => {
 }
 
 const selectHistoryItem = (operation) => {
+  console.log(`QueryPanel: Selecting history item: ${operation.type} ${operation.variable}`)
   if (operation.type === 'query') {
-    currentMode.value = 'query'
+    switchToMode('query')
     queryVariable.value = operation.variable
     queryResult.value = operation
-    setResult.value = null
   } else {
-    currentMode.value = 'set'
+    switchToMode('set')
     setVariable.value = operation.variable
     setValue.value = typeof operation.value === 'string' ? operation.value : JSON.stringify(operation.value)
     setResult.value = operation
-    queryResult.value = null
   }
 }
 

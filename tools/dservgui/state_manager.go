@@ -61,16 +61,8 @@ func (sm *StateManager) ProcessUpdate(name, value string) {
 
 // logUpdate provides simple logging
 func (sm *StateManager) logUpdate(variable Variable) {
-	// Log large data streams by size only
-	if variable.Name == "stimdg" || variable.Name == "trialdg" {
-		//		dataSize := len(variable.Value)
-		//		log.Printf("📊 %s: %d bytes", variable.Name, dataSize)
-		return
-	}
-
 	// Log important variables that might be set via API
 	if strings.Contains(variable.Name, "ess/status") ||
-		strings.Contains(variable.Name, "ess/em_pos") ||
 		strings.Contains(variable.Name, "ess/subject") ||
 		strings.Contains(variable.Name, "test/") {
 		log.Printf("📊 %s = %s", variable.Name, variable.Value)

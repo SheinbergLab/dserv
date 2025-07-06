@@ -281,6 +281,19 @@ export function useConnection() {
     }
   }
 
+  const forceReconnect = async () => {
+    console.log('🔄 Force reconnect requested - disconnecting and reconnecting...')
+    
+    // Disconnect first
+    disconnectFromServer()
+    
+    // Wait a moment for cleanup
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    
+    // Reconnect
+    await connectToServer()
+  }
+
   const cleanup = () => {
     console.log('🔄 Cleaning up connection service...')
     disconnectFromServer()
@@ -299,6 +312,7 @@ export function useConnection() {
     // Methods
     connectToServer,
     disconnectFromServer,
+    forceReconnect,
     getServerStatus,
     initialize,
     cleanup

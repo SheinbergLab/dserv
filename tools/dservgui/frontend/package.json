@@ -12,7 +12,10 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "vue": "^3.4.0"
+    "ag-grid-community": "^34.0.0",
+    "ag-grid-vue3": "^34.0.0",
+    "vue": "^3.4.0",
+    "vue3-easy-data-table": "^1.5.47"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

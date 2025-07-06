@@ -304,14 +304,15 @@ func (api *APIServer) HandleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Value == "" {
-		api.sendJSON(w, SetResponse{
-			Variable: req.Variable,
-			Success:  false,
-			Error:    "Value cannot be empty",
-		})
-		return
-	}
+	// Allow empty values for testing (value can be empty string)
+	// if req.Value == "" {
+	// 	api.sendJSON(w, SetResponse{
+	// 		Variable: req.Variable,
+	// 		Success:  false,
+	// 		Error:    "Value cannot be empty",
+	// 	})
+	// 	return
+	// }
 
 	// Set via dserv - the subscription mechanism should update our state manager
 	err := api.dservClient.Set(req.Variable, req.Value)
@@ -707,4 +708,45 @@ func (api *APIServer) HandleGetDataStreams(w http.ResponseWriter, r *http.Reques
 	}
 
 	api.sendJSON(w, response)
+}
+
+// HandleGetSingleVariable returns a single variable by name
+func (api *APIServer) HandleGetSingleVariable(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		http.Error(w, "Name parameter required", http.StatusBadRequest)
+		return
+	}
+
+	variable, exists := api.stateManager.GetVariable(name)
+	if !exists {
+		http.Error(w, fmt.Sprintf("Variable '%s' not found", name), http.StatusNotFound)
+		return
+	}
+
+	response := map[string]interface{}{
+		"variable":  variable,
+		"timestamp": time.Now(),
+	}
+
+	api.sendJSON(w, response)
+}
+
+// HandleVariableRoutes routes variable-related requests
+func (api *APIServer) HandleVariableRoutes(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Remove the /api/variables/ prefix
+	subPath := strings.TrimPrefix(path, "/api/variables/")
+
+	switch subPath {
+	case "get":
+		api.HandleGetSingleVariable(w, r)
+	case "prefix":
+		api.HandleGetVariablesByPrefix(w, r)
+	default:
+		// If no subpath matches, it might be the root /api/variables/ request
+		// But since we handle /api/variables separately, this is an error
+		http.Error(w, "Invalid variables endpoint", http.StatusNotFound)
+	}
 }
