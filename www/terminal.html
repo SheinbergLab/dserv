@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dserv Terminal</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            background: #2d2d30;
+            padding: 10px 20px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #header h1 {
+            font-size: 16px;
+            font-weight: normal;
+            color: #cccccc;
+        }
+
+        #status {
+            font-size: 12px;
+            padding: 4px 12px;
+            border-radius: 3px;
+            background: #0e639c;
+            color: white;
+        }
+
+        #status.disconnected {
+            background: #a1260d;
+        }
+
+        #terminal {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .output-line {
+            margin: 2px 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .command-line {
+            color: #569cd6;
+        }
+
+        .result-line {
+            color: #d4d4d4;
+        }
+
+        .error-line {
+            color: #f48771;
+        }
+
+        .info-line {
+            color: #608b4e;
+            font-style: italic;
+        }
+
+        .input-container {
+            display: flex;
+            align-items: center;
+            margin-top: 4px;
+        }
+
+        .prompt {
+            color: #569cd6;
+            margin-right: 8px;
+            user-select: none;
+        }
+
+        #input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #d4d4d4;
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+            caret-color: #d4d4d4;
+        }
+
+        #input::selection {
+            background: #264f78;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #424242;
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4a4a4a;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>dserv Terminal</h1>
+        <span id="status" class="disconnected">Disconnected</span>
+    </div>
+    
+    <div id="terminal">
+        <div class="info-line">dserv Web Terminal v1.0 - Type 'help' for commands</div>
+        <div class="info-line">Connecting to WebSocket...</div>
+    </div>
+
+    <script>
+        const terminal = document.getElementById('terminal');
+        const statusElement = document.getElementById('status');
+        
+        let ws = null;
+        let history = JSON.parse(localStorage.getItem('dserv-history') || '[]');
+        let historyIndex = history.length;
+        let inputElement = null;
+        
+        function createInputLine() {
+            const container = document.createElement('div');
+            container.className = 'input-container';
+            
+            const prompt = document.createElement('span');
+            prompt.className = 'prompt';
+            prompt.textContent = 'tcl> ';
+            
+            inputElement = document.createElement('input');
+            inputElement.id = 'input';
+            inputElement.type = 'text';
+            inputElement.autocomplete = 'off';
+            inputElement.spellcheck = false;
+            
+            container.appendChild(prompt);
+            container.appendChild(inputElement);
+            terminal.appendChild(container);
+            
+            inputElement.focus();
+            terminal.scrollTop = terminal.scrollHeight;
+            
+            inputElement.addEventListener('keydown', handleKeyDown);
+        }
+        
+        function handleKeyDown(e) {
+            switch(e.key) {
+                case 'Enter':
+                    e.preventDefault();
+                    submitCommand();
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    navigateHistory(-1);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    navigateHistory(1);
+                    break;
+                case 'c':
+                    if (e.ctrlKey) {
+                        e.preventDefault();
+                        inputElement.value = '';
+                    }
+                    break;
+                case 'l':
+                    if (e.ctrlKey) {
+                        e.preventDefault();
+                        clearTerminal();
+                    }
+                    break;
+            }
+        }
+        
+        function navigateHistory(direction) {
+            if (history.length === 0) return;
+            
+            historyIndex += direction;
+            historyIndex = Math.max(0, Math.min(history.length, historyIndex));
+            
+            if (historyIndex === history.length) {
+                inputElement.value = '';
+            } else {
+                inputElement.value = history[historyIndex];
+            }
+        }
+        
+        function submitCommand() {
+            const command = inputElement.value.trim();
+            if (!command) return;
+            
+            // Save to history
+            if (command !== history[history.length - 1]) {
+                history.push(command);
+                if (history.length > 100) history.shift();
+                localStorage.setItem('dserv-history', JSON.stringify(history));
+            }
+            historyIndex = history.length;
+            
+            // Display command
+            const commandLine = document.createElement('div');
+            commandLine.className = 'output-line command-line';
+            commandLine.textContent = 'tcl> ' + command;
+            inputElement.parentElement.replaceWith(commandLine);
+            
+            // Send command
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: command
+                }));
+            } else {
+                showError('Not connected to server');
+                createInputLine();
+            }
+        }
+        
+        function showResult(data) {
+            const resultLine = document.createElement('div');
+            resultLine.className = 'output-line result-line';
+            
+            if (typeof data === 'object') {
+                if (data.status === 'error' || (data.result && data.result.startsWith('!TCL_ERROR'))) {
+                    resultLine.className = 'output-line error-line';
+                    resultLine.textContent = data.result || data.error || 'Unknown error';
+                } else {
+                    resultLine.textContent = data.result || JSON.stringify(data);
+                }
+            } else {
+                resultLine.textContent = data;
+            }
+            
+            terminal.appendChild(resultLine);
+            createInputLine();
+        }
+        
+        function showError(message) {
+            const errorLine = document.createElement('div');
+            errorLine.className = 'output-line error-line';
+            errorLine.textContent = 'Error: ' + message;
+            terminal.appendChild(errorLine);
+        }
+        
+        function showInfo(message) {
+            const infoLine = document.createElement('div');
+            infoLine.className = 'output-line info-line';
+            infoLine.textContent = message;
+            terminal.appendChild(infoLine);
+        }
+        
+        function clearTerminal() {
+            terminal.innerHTML = '';
+            showInfo('Terminal cleared');
+            createInputLine();
+        }
+        
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.hostname}:${window.location.port}/ws`;
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    statusElement.textContent = 'Connected';
+                    statusElement.classList.remove('disconnected');
+                    showInfo('Connected to dserv WebSocket');
+                    createInputLine();
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        showResult(data);
+                    } catch (e) {
+                        showResult(event.data);
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    showError('WebSocket error');
+                };
+                
+                ws.onclose = () => {
+                    statusElement.textContent = 'Disconnected';
+                    statusElement.classList.add('disconnected');
+                    showInfo('Disconnected from server. Reconnecting in 3 seconds...');
+                    setTimeout(connect, 3000);
+                };
+                
+            } catch (error) {
+                showError('Failed to connect: ' + error.message);
+                setTimeout(connect, 3000);
+            }
+        }
+        
+        // Start connection
+        connect();
+        
+        // Focus input when clicking anywhere in terminal
+        terminal.addEventListener('click', (e) => {
+            if (e.target === terminal || e.target.classList.contains('output-line')) {
+                if (inputElement) inputElement.focus();
+            }
+        });
+    </script>
+</body>
+</html>
