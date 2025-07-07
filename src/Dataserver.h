@@ -159,6 +159,7 @@ public:
   int process_send_requests(void);
   int add_new_send_client(char *host, int port, uint8_t flags);
   std::string send_client_id(void);
+  int remove_send_client_by_id(std::string client_id);  
   std::string add_new_send_client(SharedQueue<client_request_t> *queue);
   int remove_send_client(char *host, int port);
   int open_send_sock(char *host, int port);
