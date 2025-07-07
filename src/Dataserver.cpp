@@ -1202,7 +1202,7 @@ int Dataserver::process_send_requests(void) {
     // loop through all send_clients and decide if inactive
     // or if point matches subscription
     send_table.forward_dpoint(dpoint);
-      
+
     /* dpoints need to be freed after forwarding */
     dpoint_free(dpoint);
   }

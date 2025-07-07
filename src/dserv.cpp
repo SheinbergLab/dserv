@@ -89,7 +89,7 @@ int main(int argc, char *argv[])
   dserver = new Dataserver(argc, argv);
   tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560, 2565);
   TclServerRegistry.registerObject("ess", tclserver);
-  
+
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result;
