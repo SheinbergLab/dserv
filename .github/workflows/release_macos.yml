@@ -20,7 +20,7 @@ jobs:
       - name: Install cmake build tool and tcl9.0 dependency.
         run: |
           brew update
-          brew install cmake tcl-tk@9
+          brew install cmake tcl-tk@9 libuv
 
       - name: Check out our code
         uses: actions/checkout@v4
