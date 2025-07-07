@@ -141,6 +141,28 @@ void TclServer::start_tcp_server(void)
       perror("accept");
       continue;
     }
+
+    // Get client IP address
+    std::string client_ip = get_client_ip(client_address);
+	
+    if (!accept_new_connection(client_ip)) {
+       std::lock_guard<std::mutex> lock(connection_mutex);
+       auto ip_count_it = ip_connection_count.find(client_ip);
+       int current_ip_connections = (ip_count_it != ip_connection_count.end()) ? ip_count_it->second : 0;
+       
+       if (active_connections.load() >= MAX_TOTAL_CONNECTIONS) {
+	 std::cout << "Total connection limit reached (" << MAX_TOTAL_CONNECTIONS 
+		   << "), rejecting client from " << client_ip << std::endl;
+       } else {
+	 std::cout << "Per-IP connection limit reached (" << MAX_CONNECTIONS_PER_IP 
+		   << "), rejecting client from " << client_ip 
+		   << " (current: " << current_ip_connections << ")" << std::endl;
+       }
+       close(new_socket_fd);
+       continue;      
+    }
+        
+    register_connection(new_socket_fd, client_ip);
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     
@@ -191,9 +213,31 @@ void TclServer::start_message_server(void)
       perror("accept");
       continue;
     }
+
+    // Get client IP address
+    std::string client_ip = get_client_ip(client_address);
+
+    if (!accept_new_connection(client_ip)) {
+      std::lock_guard<std::mutex> lock(connection_mutex);
+      auto ip_count_it = ip_connection_count.find(client_ip);
+      int current_ip_connections = (ip_count_it != ip_connection_count.end()) ? ip_count_it->second : 0;
+      
+      if (active_connections.load() >= MAX_TOTAL_CONNECTIONS) {
+	std::cout << "Message server: Total connection limit reached (" << MAX_TOTAL_CONNECTIONS 
+		  << "), rejecting client from " << client_ip << std::endl;
+      } else {
+	std::cout << "Message server: Per-IP connection limit reached (" << MAX_CONNECTIONS_PER_IP 
+		  << "), rejecting client from " << client_ip 
+		  << " (current: " << current_ip_connections << ")" << std::endl;
+      }
+      close(new_socket_fd);
+      continue;
+    }
     
     setsockopt(new_socket_fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
     
+    register_connection(new_socket_fd, client_ip);
+	
     std::thread thr(message_client_process, this, new_socket_fd, &queue);
     thr.detach();
   }
@@ -201,7 +245,25 @@ void TclServer::start_message_server(void)
   close(socket_fd);
 }
 
-// Add this to your TclServer.cpp file, updating the start_websocket_server method
+// A method to get connection statistics
+std::string TclServer::get_connection_stats() {
+  std::lock_guard<std::mutex> lock(connection_mutex);
+  std::ostringstream stats;
+  stats << "Active connections: " << active_connections.load() 
+	<< "/" << MAX_TOTAL_CONNECTIONS << "\n";  // Changed from MAX_CONNECTIONS
+  stats << "Per-IP limit: " << MAX_CONNECTIONS_PER_IP << "\n\n";
+  
+  stats << "Connections by IP:\n";
+  for (const auto& [ip, count] : ip_connection_count) {
+    stats << "  " << ip << ": " << count << "/" << MAX_CONNECTIONS_PER_IP;
+    if (count >= MAX_CONNECTIONS_PER_IP * 0.8) {  // Warn at 80% of limit
+      stats << " (WARNING: approaching limit)";
+    }
+    stats << "\n";
+  }
+  
+  return stats.str();
+}
 
 void TclServer::start_websocket_server(void)
 {

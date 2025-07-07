@@ -36,6 +36,10 @@
 
 #include <unordered_map>
 #include <mutex>
+#include <set>
+#include <unordered_map>
+#include <sstream>
+#include <arpa/inet.h>  // for inet_ntop
 
 class TclServerConfig
 {
@@ -73,6 +77,15 @@ class TclServer
   std::mutex mutex;	      // ensure only one thread accesses table
   std::condition_variable cond;	// condition variable for sync
 
+private:
+  std::atomic<int> active_connections{0};
+  static const int MAX_TOTAL_CONNECTIONS = 128;      // Total server limit
+  static const int MAX_CONNECTIONS_PER_IP = 8;       // Per-IP limit
+  std::mutex connection_mutex;
+  std::set<int> active_sockets;
+  std::unordered_map<int, std::string> socket_to_ip;     // socket -> IP mapping
+  std::unordered_map<std::string, int> ip_connection_count;
+  
 public:
   int argc;
   char **argv;
@@ -104,6 +117,73 @@ public:
   int newline_port(void) { return _newline_port; }
   int message_port(void) { return _message_port; }
   int websocket_port(void) { return _websocket_port; }
+
+  bool accept_new_connection(const std::string& client_ip) {
+    std::lock_guard<std::mutex> lock(connection_mutex);
+    
+    // Check total server limit
+    if (active_connections.load() >= MAX_TOTAL_CONNECTIONS) {
+      return false;
+    }
+    
+    // Check per-IP limit
+    auto ip_count_it = ip_connection_count.find(client_ip);
+    int current_ip_connections = (ip_count_it != ip_connection_count.end()) ? ip_count_it->second : 0;
+    
+    return current_ip_connections < MAX_CONNECTIONS_PER_IP;
+    }
+    
+  void register_connection(int sockfd, const std::string& client_ip) {
+    std::lock_guard<std::mutex> lock(connection_mutex);
+    active_sockets.insert(sockfd);
+    socket_to_ip[sockfd] = client_ip;
+    ip_connection_count[client_ip]++;
+    active_connections++;
+#ifdef LOG_CONNECTIONS    
+    std::cout << "Client connected from " << client_ip 
+	      << " (IP connections: " << ip_connection_count[client_ip] 
+	      << "/" << MAX_CONNECTIONS_PER_IP 
+	      << ", total: " << active_connections.load() 
+	      << "/" << MAX_TOTAL_CONNECTIONS << ")" << std::endl;
+#endif
+  }
+  
+  void unregister_connection(int sockfd) {
+    std::lock_guard<std::mutex> lock(connection_mutex);
+    auto ip_it = socket_to_ip.find(sockfd);
+    std::string client_ip = (ip_it != socket_to_ip.end()) ? ip_it->second : "unknown";
+    
+    active_sockets.erase(sockfd);
+    socket_to_ip.erase(sockfd);
+    
+    if (ip_it != socket_to_ip.end()) {
+      ip_connection_count[client_ip]--;
+      if (ip_connection_count[client_ip] <= 0) {
+	ip_connection_count.erase(client_ip);  // Clean up zero counts
+      }
+    }
+    
+    active_connections--;
+    close(sockfd);
+    
+    auto remaining_count = ip_connection_count.find(client_ip);
+    int remaining = (remaining_count != ip_connection_count.end()) ? remaining_count->second : 0;
+    
+#ifdef LOG_CONNECTIONS    
+    std::cout << "Client disconnected from " << client_ip 
+	      << " (IP connections: " << remaining 
+	      << "/" << MAX_CONNECTIONS_PER_IP 
+	      << ", total: " << active_connections.load() 
+	      << "/" << MAX_TOTAL_CONNECTIONS << ")" << std::endl;
+#endif    
+  }
+  
+  std::string get_client_ip(const struct sockaddr& addr) {
+    struct sockaddr_in* addr_in = (struct sockaddr_in*)&addr;
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(addr_in->sin_addr), ip_str, INET_ADDRSTRLEN);
+    return std::string(ip_str);
+  }  
   
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;
@@ -132,6 +212,8 @@ public:
   void start_tcp_server(void);
   void start_message_server(void);
   void start_websocket_server(void);  // Add WebSocket server
+  std::string get_connection_stats(void);
+  
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }
   
