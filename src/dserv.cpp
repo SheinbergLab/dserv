@@ -17,6 +17,8 @@
 
 #include "dservConfig.h"
 
+#include "tclserver_api.h"
+
 // A regsitry for main tclserver and subprocesses
 ObjectRegistry<TclServer> TclServerRegistry;
 
@@ -85,7 +87,7 @@ int main(int argc, char *argv[])
   std::signal(SIGINT, signalHandler);
 
   dserver = new Dataserver(argc, argv);
-  tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560);
+  tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560, 2565);
   TclServerRegistry.registerObject("ess", tclserver);
   
   if (!trigger_script.empty()) {
