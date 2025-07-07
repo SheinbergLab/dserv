@@ -164,7 +164,12 @@ public:
     }
     
     active_connections--;
+
+#ifndef _MSC_VER
     close(sockfd);
+#else
+    closesocket(sockfd);
+#endif    
     
     auto remaining_count = ip_connection_count.find(client_ip);
     int remaining = (remaining_count != ip_connection_count.end()) ? remaining_count->second : 0;

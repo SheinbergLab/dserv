@@ -1379,12 +1379,9 @@ TclServer::tcp_client_process(TclServer *tserv,
       }
     }
   }
-  //    std::cout << "Connection closed from " << sock.peer_address() << std::endl;
-#ifndef _MSC_VER
-  close(sockfd);
-#else
-  closesocket(sockfd);
-#endif
+
+  // close and unregister for proper limit tracking
+  tserv->unregister_connection(sockfd);
 }
 
 static  void sendMessage(int socket, const std::string& message) {
@@ -1471,10 +1468,6 @@ TclServer::message_client_process(TclServer *tserv,
       delete[] buffer;
     }
   }
-#ifndef _MSC_VER
-  close(sockfd);
-#else
-  closesocket(sockfd);
-#endif
+  tserv->unregister_connection(sockfd);
 }    
 
