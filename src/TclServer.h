@@ -41,6 +41,20 @@
 #include <sstream>
 #include <arpa/inet.h>  // for inet_ntop
 
+// Add uWebSockets support
+#include <App.h>
+
+// Add WebSocket per-socket data structure
+struct WSPerSocketData {
+  SharedQueue<std::string> *rqueue;
+  std::string client_name;
+  std::vector<std::string> subscriptions;
+  
+  // Add datapoint notification queue
+  SharedQueue<client_request_t> *notification_queue;
+  std::string dataserver_client_id;  // ID for Dataserver registration  
+};
+
 class TclServerConfig
 {
 public:
@@ -85,6 +99,10 @@ private:
   std::set<int> active_sockets;
   std::unordered_map<int, std::string> socket_to_ip;     // socket -> IP mapping
   std::unordered_map<std::string, int> ip_connection_count;
+
+  // WebSocket subscription support
+  std::mutex ws_connections_mutex;
+  std::map<std::string, uWS::WebSocket<false, true, WSPerSocketData>*> ws_connections;
   
 public:
   int argc;
@@ -218,6 +236,8 @@ public:
   void start_message_server(void);
   void start_websocket_server(void);  // Add WebSocket server
   std::string get_connection_stats(void);
+
+  void process_websocket_client_notifications(uWS::WebSocket<false, true, WSPerSocketData>* ws, WSPerSocketData* userData);
   
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }

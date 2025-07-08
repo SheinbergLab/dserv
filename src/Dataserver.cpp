@@ -1202,7 +1202,7 @@ int Dataserver::process_send_requests(void) {
     // loop through all send_clients and decide if inactive
     // or if point matches subscription
     send_table.forward_dpoint(dpoint);
-      
+
     /* dpoints need to be freed after forwarding */
     dpoint_free(dpoint);
   }
@@ -1213,7 +1213,6 @@ int Dataserver::process_send_requests(void) {
   return 0;
 }
 
-  
 
 /*
  * add_new_send_client
@@ -1254,37 +1253,48 @@ int Dataserver::add_new_send_client(char *host, int port, uint8_t flags)
 }
 
 /*
- * add_new_send_client (queue)
+ * add_new_send_client
+ *
+ * create client thread to manage send requests for TCP/IP notifications
  */
 std::string Dataserver::add_new_send_client(SharedQueue<client_request_t> *queue)
-			  
 {
-  int newentry;
-  std::thread send_thread_id;
-  SendClient *send_client;
-
-  // use the queue address to identify this client for matching purposes
-  char client_id[32];
-  snprintf(client_id, sizeof(client_id), "%p", (void *) queue);
+  static std::atomic<int> client_counter{0};
+  
+  // Create a unique client ID combining pointer and counter
+  char client_id[64];
+  snprintf(client_id, sizeof(client_id), "queue_%p_%d", (void *) queue, client_counter.fetch_add(1));
   std::string client_name = std::string(client_id);
   const char *key = client_name.c_str();
   
-  // remove existing table;
-  if (send_table.find(key, &send_client)) {
+  // Remove existing entry if it exists
+  SendClient *existing_client;
+  if (send_table.find(key, &existing_client)) {
     send_table.remove(key);
-    send_client->dpoint_queue.push_back(&send_client->shutdown_dpoint);
+    existing_client->dpoint_queue.push_back(&existing_client->shutdown_dpoint);
   }
 
-  // create a new entry for this client
-  send_client = new SendClient(queue);
-  send_thread_id = std::thread(&SendClient::send_client_process,
-			       send_client);
+  // Create a new entry for this client
+  SendClient *send_client = new SendClient(queue);
+  std::thread send_thread_id = std::thread(&SendClient::send_client_process, send_client);
   send_thread_id.detach();
   send_table.insert(key, send_client);
 
   return client_name;
 }
+
+int Dataserver::remove_send_client_by_id(std::string client_id)
+{
+  SendClient *send_client;
   
+  if (send_table.find(client_id, &send_client)) {
+    send_table.remove(client_id);
+    send_client->dpoint_queue.push_back(&send_client->shutdown_dpoint);
+    return 1;
+  }
+  return 0;
+}
+
 int Dataserver::remove_send_client(char *host, int port)
 {
   SendClient *send_client;

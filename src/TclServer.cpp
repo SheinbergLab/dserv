@@ -4,20 +4,18 @@
 #include "dserv.h"
 #include <vector>
 
-// Add uWebSockets and JSON support
-#include <App.h>
+// JSON support
 #include <jansson.h>
 
-// our minified terminal server (www/terminal.html)
+#include <fnmatch.h>  // Add this include for pattern matching
+
+// our minified html pages (in www/*.html)
 #include "embedded_terminal.h"
+#include "embedded_datapoint_explorer.h"
+#include "embedded_welcome.h"
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
-
-// Add WebSocket per-socket data structure
-struct WSPerSocketData {
-    SharedQueue<std::string> *rqueue;
-};
 
 TclServer::TclServer(int argc, char **argv, Dataserver *dserv,
                      std::string name, int port)
@@ -62,9 +60,13 @@ TclServer::TclServer(int argc, char **argv,
     message_net_thread = std::thread(&TclServer::start_message_server, this);
   
   // create a WebSocket listener if port is not -1
-  if (websocket_port() >= 0)
+  if (websocket_port() >= 0) {
+    std::cout << "Starting WebSocket server on port " << websocket_port() << std::endl;
+    
+    // Start the WebSocket server thread
     websocket_thread = std::thread(&TclServer::start_websocket_server, this);
-
+  }
+  
   // the process thread
   process_thread = std::thread(&process_requests, this);
 }
@@ -72,18 +74,19 @@ TclServer::TclServer(int argc, char **argv,
 TclServer::~TclServer()
 {
   shutdown();
-
-  if (newline_port() > 0) 
-    newline_net_thread.detach();
-  
-  if (message_port() > 0) 
-    message_net_thread.detach();
   
   if (websocket_port() > 0)
     websocket_thread.detach();
+  
+  if (message_port() > 0) 
+    message_net_thread.detach();
     
+  if (newline_port() > 0) 
+    newline_net_thread.detach();
+  
   process_thread.join();
 }
+
 
 void TclServer::shutdown(void)
 {
@@ -268,21 +271,39 @@ std::string TclServer::get_connection_stats() {
 void TclServer::start_websocket_server(void)
 {
   auto app = uWS::App();
-  
+
+  // Welcome page as the root
   app.get("/", [](auto *res, auto *req) {
+    res->writeHeader("Content-Type", "text/html; charset=utf-8")
+      ->writeHeader("Cache-Control", "no-cache")
+      ->end(embedded::welcome_html);
+  });
+  
+  app.get("/terminal", [](auto *res, auto *req) {
     res->writeHeader("Content-Type", "text/html; charset=utf-8")
       ->writeHeader("Cache-Control", "no-cache")
       ->end(embedded::terminal_html);
   });
   
-  // Redirect /terminal to root
-  app.get("/terminal", [](auto *res, auto *req) {
+  app.get("/explorer", [](auto *res, auto *req) {
+    res->writeHeader("Content-Type", "text/html; charset=utf-8")
+      ->writeHeader("Cache-Control", "no-cache")
+      ->end(embedded::datapoint_explorer_html);
+  });
+  
+  // Add some aliases
+  app.get("/datapoints", [](auto *res, auto *req) {
     res->writeStatus("302 Found")
-      ->writeHeader("Location", "/")
+      ->writeHeader("Location", "/explorer")
       ->end();
   });
   
-  // Simple health check endpoint
+  app.get("/console", [](auto *res, auto *req) {
+    res->writeStatus("302 Found")
+      ->writeHeader("Location", "/terminal")
+      ->end();
+  });  
+  
   app.get("/health", [](auto *res, auto *req) {
     res->writeHeader("Content-Type", "application/json")
       ->end("{\"status\":\"ok\",\"service\":\"dserv-tclserver\"}");
@@ -297,36 +318,88 @@ void TclServer::start_websocket_server(void)
   app.ws<WSPerSocketData>("/ws", {
       /* Settings */
       .compression = uWS::SHARED_COMPRESSOR,
-        .maxPayloadLength = 16 * 1024 * 1024,
-        .idleTimeout = 120,
-        .maxBackpressure = 1 * 1024 * 1024,
-        
-        /* Handlers */
-        .upgrade = [](auto *res, auto *req, auto *context) {
+	.maxPayloadLength = 16 * 1024 * 1024,
+	.idleTimeout = 120,
+	.maxBackpressure = 1 * 1024 * 1024,
+      
+	.upgrade = [](auto *res, auto *req, auto *context) {
 	  res->template upgrade<WSPerSocketData>({
-	      .rqueue = new SharedQueue<std::string>()
-            }, req->getHeader("sec-websocket-key"),
+	      .rqueue = new SharedQueue<std::string>(),
+	      .client_name = "",
+	      .subscriptions = std::vector<std::string>(),
+	      .notification_queue = nullptr,
+	      .dataserver_client_id = ""
+	    }, req->getHeader("sec-websocket-key"),
 	    req->getHeader("sec-websocket-protocol"),
 	    req->getHeader("sec-websocket-extensions"),
 	    context);
-        },
-        
-        .open = [](auto *ws) {
-	  /* Open event here, you may access ws->getUserData() which points to a PerSocketData struct */
-	  std::cout << "WebSocket client connected" << std::endl;
-        },
-        
-        .message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
+	},
+	
+	.open = [this](auto *ws) {
 	  WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
-            
+	  
+	  if (!userData || !userData->rqueue) {
+	    std::cerr << "ERROR: Invalid userData in WebSocket open handler" << std::endl;
+	    ws->close();
+	    return;
+	  }
+	  
+	  try {
+	    // Create notification queue for this client
+	    userData->notification_queue = new SharedQueue<client_request_t>();
+	    
+	    // Register with Dataserver as a queue-based client
+	    userData->dataserver_client_id = this->ds->add_new_send_client(userData->notification_queue);
+	    
+	    if (userData->dataserver_client_id.empty()) {
+	      std::cerr << "Failed to register WebSocket client with Dataserver" << std::endl;
+	      delete userData->notification_queue;
+	      userData->notification_queue = nullptr;
+	      ws->close();
+	      return;
+	    }
+	    
+	    // Create a unique client name for this WebSocket
+	    char client_id[32];
+	    snprintf(client_id, sizeof(client_id), "ws_%p", (void*)ws);
+	    userData->client_name = std::string(client_id);
+	    
+	    // Store this WebSocket connection
+	    {
+	      std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+	      this->ws_connections[userData->client_name] = ws;
+	    }
+	    
+	    // Start a thread to process notifications for this client
+	    std::thread([this, ws, userData]() {
+	      this->process_websocket_client_notifications(ws, userData);
+	    }).detach();
+	    
+	    //	    std::cout << "WebSocket client connected: " << userData->client_name << std::endl;
+	    
+	  } catch (const std::exception& e) {
+	    std::cerr << "Exception in WebSocket open handler: " << e.what() << std::endl;
+	    ws->close();
+	  }
+	},
+	
+	.message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
+	  WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
+  
+	  if (!userData || !userData->rqueue) {
+	    std::cerr << "ERROR: Invalid userData in WebSocket message handler!" << std::endl;
+	    ws->close();
+	    return;
+	  }
+  
 	  // Handle JSON protocol for web clients
 	  if (message.length() > 0 && message[0] == '{') {
 	    // Create null-terminated string for jansson
 	    std::string json_str(message.data(), message.length());
-                
+          
 	    json_error_t error;
 	    json_t *root = json_loads(json_str.c_str(), 0, &error);
-                
+          
 	    if (!root) {
 	      json_t *error_response = json_object();
 	      json_object_set_new(error_response, "error", json_string("Invalid JSON"));
@@ -336,7 +409,7 @@ void TclServer::start_websocket_server(void)
 	      json_decref(error_response);
 	      return;
 	    }
-                
+          
 	    json_t *cmd_obj = json_object_get(root, "cmd");
 	    if (!cmd_obj || !json_is_string(cmd_obj)) {
 	      json_t *error_response = json_object();
@@ -348,28 +421,28 @@ void TclServer::start_websocket_server(void)
 	      json_decref(root);
 	      return;
 	    }
-                
+          
 	    const char *cmd = json_string_value(cmd_obj);
-                
+          
 	    if (strcmp(cmd, "eval") == 0) {
 	      // Handle Tcl script evaluation
 	      json_t *script_obj = json_object_get(root, "script");
 	      if (script_obj && json_is_string(script_obj)) {
 		const char *script = json_string_value(script_obj);
-                        
+              
 		// Create request
 		client_request_t req;
 		req.type = REQ_SCRIPT;
 		req.rqueue = userData->rqueue;
 		req.script = std::string(script);
-                        
+              
 		// Push to queue
 		queue.push_back(req);
-                        
+              
 		// Wait for response
 		std::string result = userData->rqueue->front();
 		userData->rqueue->pop_front();
-                        
+              
 		// Create JSON response
 		json_t *response = json_object();
 		if (result.starts_with("!TCL_ERROR ")) {
@@ -379,47 +452,130 @@ void TclServer::start_websocket_server(void)
 		  json_object_set_new(response, "status", json_string("ok"));
 		  json_object_set_new(response, "result", json_string(result.c_str()));
 		}
-                        
+              
 		char *response_str = json_dumps(response, 0);
 		ws->send(response_str, uWS::OpCode::TEXT);
 		free(response_str);
 		json_decref(response);
 	      }
 	    }
+
+	    else if (strcmp(cmd, "touch") == 0) {
+	      // Handle datapoint touch
+	      json_t *name_obj = json_object_get(root, "name");
+	      if (name_obj && json_is_string(name_obj)) {
+		const char *name = json_string_value(name_obj);
+		
+		// Call the Dataserver touch method
+		int found = ds->touch((char *)name);
+		
+		// Send response
+		json_t *response = json_object();
+		if (found) {
+		  json_object_set_new(response, "status", json_string("ok"));
+		  json_object_set_new(response, "action", json_string("touched"));
+		  json_object_set_new(response, "name", json_string(name));
+		} else {
+		  json_object_set_new(response, "status", json_string("error"));
+		  json_object_set_new(response, "error", json_string("Datapoint not found"));
+		  json_object_set_new(response, "name", json_string(name));
+		}
+		
+		char *response_str = json_dumps(response, 0);
+		ws->send(response_str, uWS::OpCode::TEXT);
+		free(response_str);
+		json_decref(response);
+	      } else {
+		json_t *error_response = json_object();
+		json_object_set_new(error_response, "error", json_string("Missing or invalid 'name' field"));
+		char *error_str = json_dumps(error_response, 0);
+		ws->send(error_str, uWS::OpCode::TEXT);
+		free(error_str);
+		json_decref(error_response);
+	      }
+	    }	    
+	    
 	    else if (strcmp(cmd, "subscribe") == 0) {
-	      // Handle datapoint subscription
 	      json_t *match_obj = json_object_get(root, "match");
 	      json_t *every_obj = json_object_get(root, "every");
-                    
+	      
 	      if (match_obj && json_is_string(match_obj)) {
 		const char *match = json_string_value(match_obj);
 		int every = 1;
 		if (every_obj && json_is_integer(every_obj)) {
 		  every = json_integer_value(every_obj);
 		}
-                        
-		// Add match using existing infrastructure
-		ds->client_add_match(client_name, (char *)match, every);
-                        
+		
+		// Store the subscription for this WebSocket client
+		userData->subscriptions.push_back(std::string(match));
+		
+		// Register the match with Dataserver so we get notifications
+		ds->client_add_match(userData->dataserver_client_id, (char*)match, every);
+		
 		// Send confirmation
 		json_t *response = json_object();
 		json_object_set_new(response, "status", json_string("ok"));
 		json_object_set_new(response, "action", json_string("subscribed"));
 		json_object_set_new(response, "match", json_string(match));
-                        
+		
 		char *response_str = json_dumps(response, 0);
 		ws->send(response_str, uWS::OpCode::TEXT);
 		free(response_str);
 		json_decref(response);
 	      }
 	    }
+
+	    else if (strcmp(cmd, "unsubscribe") == 0) {
+	      json_t *match_obj = json_object_get(root, "match");
+	      if (match_obj && json_is_string(match_obj)) {
+		const char *match = json_string_value(match_obj);
+		
+		// Remove from local subscriptions
+		auto it = std::find(userData->subscriptions.begin(), userData->subscriptions.end(), match);
+		if (it != userData->subscriptions.end()) {
+		  userData->subscriptions.erase(it);
+		}
+		
+		// Remove from Dataserver
+		this->ds->client_remove_match(userData->dataserver_client_id, (char*)match);
+		
+		// Send confirmation
+		json_t *response = json_object();
+		json_object_set_new(response, "status", json_string("ok"));
+		json_object_set_new(response, "action", json_string("unsubscribed"));
+		json_object_set_new(response, "match", json_string(match));
+		
+		char *response_str = json_dumps(response, 0);
+		ws->send(response_str, uWS::OpCode::TEXT);
+		free(response_str);
+		json_decref(response);
+	      }
+	    }
+
+	    else if (strcmp(cmd, "list_subscriptions") == 0) {
+	      json_t *response = json_object();
+	      json_t *subs_array = json_array();
+	      
+	      for (const std::string& sub : userData->subscriptions) {
+		json_array_append_new(subs_array, json_string(sub.c_str()));
+	      }
+	      
+	      json_object_set_new(response, "status", json_string("ok"));
+	      json_object_set_new(response, "subscriptions", subs_array);
+	      
+	      char *response_str = json_dumps(response, 0);
+	      ws->send(response_str, uWS::OpCode::TEXT);
+	      free(response_str);
+	      json_decref(response);
+	    }
+	    
 	    else if (strcmp(cmd, "get") == 0) {
 	      // Handle datapoint get
 	      json_t *name_obj = json_object_get(root, "name");
 	      if (name_obj && json_is_string(name_obj)) {
 		const char *name = json_string_value(name_obj);
 		ds_datapoint_t *dp = ds->get_datapoint((char *)name);
-                        
+              
 		if (dp) {
 		  char *json_str = dpoint_to_json(dp);
 		  ws->send(json_str, uWS::OpCode::TEXT);
@@ -439,85 +595,199 @@ void TclServer::start_websocket_server(void)
 	      // Handle datapoint set
 	      json_t *name_obj = json_object_get(root, "name");
 	      json_t *value_obj = json_object_get(root, "value");
-                    
+            
 	      if (name_obj && json_is_string(name_obj) && value_obj && json_is_string(value_obj)) {
 		const char *name = json_string_value(name_obj);
 		const char *value = json_string_value(value_obj);
-                        
+              
 		ds->set((char *)name, (char *)value);
-                        
+              
 		json_t *response = json_object();
 		json_object_set_new(response, "status", json_string("ok"));
 		json_object_set_new(response, "action", json_string("set"));
-                        
+              
 		char *response_str = json_dumps(response, 0);
 		ws->send(response_str, uWS::OpCode::TEXT);
 		free(response_str);
 		json_decref(response);
 	      }
 	    }
-                
+          
 	    json_decref(root);
 	  }
 	  else {
 	    // Handle legacy text protocol (newline-terminated commands)
 	    std::string script(message);
-                
+          
 	    // Remove trailing newline if present
 	    if (!script.empty() && script.back() == '\n') {
 	      script.pop_back();
 	    }
-                
+          
 	    // Process as Tcl command
 	    client_request_t req;
 	    req.type = REQ_SCRIPT;
 	    req.rqueue = userData->rqueue;
 	    req.script = script;
-                
+          
 	    queue.push_back(req);
-                
+          
 	    std::string result = userData->rqueue->front();
 	    userData->rqueue->pop_front();
-                
+          
 	    // For text protocol, send plain response
 	    ws->send(result, uWS::OpCode::TEXT);
 	  }
-        },
-        
-        .dropped = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
-	  /* A message was dropped due to set maxBackpressure */
+	},
+      
+	.dropped = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
 	  std::cerr << "WebSocket message dropped due to backpressure" << std::endl;
-        },
-        
-        .drain = [](auto *ws) {
-	  /* Check getBufferedAmount, close if needed */
+	},
+      
+	.drain = [](auto *ws) {
 	  if (ws->getBufferedAmount() > 1024 * 1024) {
 	    ws->close();
 	  }
-        },
-        
-        .ping = [](auto *ws, std::string_view) {
+	},
+      
+	.ping = [](auto *ws, std::string_view) {
 	  /* Not used, uWS automatically handles pings */
-        },
-        
-        .pong = [](auto *ws, std::string_view) {
+	},
+      
+	.pong = [](auto *ws, std::string_view) {
 	  /* Not used */
-        },
-        
-        .close = [](auto *ws, int code, std::string_view message) {
-	  /* Clean up per-socket data */
+	},
+
+	.close = [this](auto *ws, int code, std::string_view message) {
 	  WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
-	  delete userData->rqueue;
-	  std::cout << "WebSocket client disconnected with code " << code << std::endl;
-        }
+	  
+	  if (!userData) {
+	    return;
+	  }
+	  
+	  try {
+	    // Remove from active connections
+	    {
+	      std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+	      this->ws_connections.erase(userData->client_name);
+	    }
+	    
+	    // Remove from Dataserver's send_table
+	    if (!userData->dataserver_client_id.empty()) {
+	      this->ds->remove_send_client_by_id(userData->dataserver_client_id);
+	    }
+	    
+	    // Signal shutdown to the notification processing thread
+	    if (userData->notification_queue) {
+	      client_request_t shutdown_req;
+	      shutdown_req.type = REQ_SHUTDOWN;
+	      userData->notification_queue->push_back(shutdown_req);
+	      
+	      // Give the thread a moment to process the shutdown
+	      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	    }
+	    
+	    // Clean up rqueue
+	    delete userData->rqueue;
+	    userData->rqueue = nullptr;
+	    
+	    //	    std::cout << "WebSocket client disconnected: " << userData->client_name << std::endl;
+	    
+	  } catch (const std::exception& e) {
+	    std::cerr << "Exception in WebSocket close handler: " << e.what() << std::endl;
+	  }
+	}	
+	
 	}).listen(websocket_port(), [this](auto *listen_socket) {
 	  if (listen_socket) {
-            std::cout << "WebSocket server listening on port " << websocket_port() << std::endl;
-            std::cout << "Web terminal available at http://localhost:" << websocket_port() << "/" << std::endl;
+	    std::cout << "WebSocket server listening on port " << websocket_port() << std::endl;
+	    std::cout << "Web terminal available at http://localhost:" << websocket_port() << "/" << std::endl;
 	  } else {
-            std::cerr << "Failed to start WebSocket server on port " << websocket_port() << std::endl;
+	    std::cerr << "Failed to start WebSocket server on port " << websocket_port() << std::endl;
 	  }
 	}).run();
+}
+
+void TclServer::process_websocket_client_notifications(uWS::WebSocket<false, true, WSPerSocketData>* ws, WSPerSocketData* userData) {
+    if (!userData) {
+        std::cerr << "ERROR: userData is null in notification thread" << std::endl;
+        return;
+    }
+    
+    std::string client_name = userData->client_name; // Copy for safety
+    bool done = false;
+    
+    while (!done) {
+        try {
+            if (!userData || !userData->notification_queue) {
+                break;
+            }
+            
+            client_request_t req = userData->notification_queue->front();
+            userData->notification_queue->pop_front();
+            
+            if (req.type == REQ_SHUTDOWN) {
+                done = true;
+                break;
+            }
+            
+            if (req.type == REQ_DPOINT_SCRIPT && req.dpoint) {
+                // Check if this datapoint matches any of the client's subscriptions
+                bool matches = false;
+                std::string dpoint_name(req.dpoint->varname);
+                
+                for (const std::string& pattern : userData->subscriptions) {
+                    if (pattern == "*") {
+                        matches = true;
+                    } else if (pattern.back() == '*') {
+                        std::string prefix = pattern.substr(0, pattern.length() - 1);
+                        matches = (strncmp(dpoint_name.c_str(), prefix.c_str(), prefix.length()) == 0);
+                    } else {
+                        matches = (strcmp(dpoint_name.c_str(), pattern.c_str()) == 0);
+                    }
+                    
+                    if (matches) break;
+                }
+                
+                if (matches) {
+                    // Convert to JSON and send
+                    char *json_str = dpoint_to_json(req.dpoint);
+                    if (json_str) {
+                        json_error_t error;
+                        json_t *root = json_loads(json_str, 0, &error);
+                        if (root) {
+                            json_object_set_new(root, "type", json_string("datapoint"));
+                            char *enhanced_json = json_dumps(root, 0);
+                            
+                            try {
+                                if (ws && !done) {
+                                    ws->send(enhanced_json, uWS::OpCode::TEXT);
+                                }
+                            } catch (...) {
+                                // WebSocket send failed - client disconnected
+                                done = true;
+                            }
+                            
+                            free(enhanced_json);
+                            json_decref(root);
+                        }
+                        free(json_str);
+                    }
+                }
+                
+                dpoint_free(req.dpoint);
+            }
+        } catch (...) {
+            // Queue empty or other error
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    
+    // Cleanup
+    if (userData && userData->notification_queue) {
+        delete userData->notification_queue;
+        userData->notification_queue = nullptr;
+    }
 }
 
 /********************************* now *********************************/

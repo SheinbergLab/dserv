@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dserv Web Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+            color: white;
+        }
+        
+        .header h1 {
+            font-size: 3.5em;
+            font-weight: 300;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header .subtitle {
+            font-size: 1.3em;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+        
+        .header .version {
+            font-size: 0.9em;
+            opacity: 0.7;
+            margin-top: 10px;
+        }
+        
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+            margin-bottom: 50px;
+        }
+        
+        .tool-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .tool-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
+        }
+        
+        .tool-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #3498db, #2ecc71);
+            transition: all 0.3s ease;
+        }
+        
+        .tool-card:hover::before {
+            height: 6px;
+            background: linear-gradient(90deg, #2980b9, #27ae60);
+        }
+        
+        .tool-icon {
+            font-size: 3em;
+            margin-bottom: 20px;
+            display: block;
+        }
+        
+        .tool-title {
+            font-size: 1.5em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+        
+        .tool-description {
+            color: #7f8c8d;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        
+        .tool-features {
+            list-style: none;
+            margin-bottom: 20px;
+        }
+        
+        .tool-features li {
+            color: #34495e;
+            margin-bottom: 8px;
+            position: relative;
+            padding-left: 20px;
+            font-size: 0.9em;
+        }
+        
+        .tool-features li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #27ae60;
+            font-weight: bold;
+        }
+        
+        .tool-status {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            background: #27ae60;
+            color: white;
+        }
+        
+        .tool-status.beta {
+            background: #f39c12;
+        }
+        
+        .tool-status.coming-soon {
+            background: #95a5a6;
+        }
+        
+        .quick-actions {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .quick-actions h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        .actions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .action-btn {
+            background: linear-gradient(135deg, #3498db, #2ecc71);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .action-btn.secondary {
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+        }
+        
+        .server-info {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .info-section h4 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        
+        .info-label {
+            color: #7f8c8d;
+        }
+        
+        .info-value {
+            color: #2c3e50;
+            font-weight: 600;
+            font-family: monospace;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-indicator.online {
+            background: #27ae60;
+            box-shadow: 0 0 10px rgba(39, 174, 96, 0.3);
+        }
+        
+        .footer {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            margin-top: 30px;
+            font-size: 0.9em;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2.5em;
+            }
+            
+            .tools-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .tool-card {
+                padding: 20px;
+            }
+        }
+        
+        .navigation-hint {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Dserv</h1>
+            <div class="subtitle">Data Server Web Interface</div>
+            <div class="version">Real-time data acquisition and control system</div>
+        </div>
+        
+        <div class="quick-actions">
+            <h3>🚀 Quick Start</h3>
+            <div class="actions-grid">
+                <a href="/explorer" class="action-btn">Launch Datapoint Explorer</a>
+                <a href="/terminal" class="action-btn">Open Terminal</a>
+                <button class="action-btn secondary" onclick="refreshStatus()">Refresh Status</button>
+                <button class="action-btn secondary" onclick="showHelp()">Show Help</button>
+            </div>
+        </div>
+        
+        <div class="tools-grid">
+            <div class="tool-card" onclick="window.location.href='/explorer'">
+                <span class="tool-icon">🔍</span>
+                <div class="tool-title">Datapoint Explorer</div>
+                <div class="tool-description">
+                    Interactive real-time datapoint browser with live subscriptions and notifications.
+                </div>
+                <ul class="tool-features">
+                    <li>Browse all available datapoints</li>
+                    <li>Subscribe to live updates</li>
+                    <li>Set and get datapoint values</li>
+                    <li>Touch datapoints for testing</li>
+                    <li>Separate notifications panel</li>
+                </ul>
+                <span class="tool-status">Available</span>
+            </div>
+            
+            <div class="tool-card" onclick="window.location.href='/terminal'">
+                <span class="tool-icon">💻</span>
+                <div class="tool-title">Web Terminal</div>
+                <div class="tool-description">
+                    Full-featured terminal interface for executing Tcl commands and scripts.
+                </div>
+                <ul class="tool-features">
+                    <li>Execute Tcl commands</li>
+                    <li>Real-time command output</li>
+                    <li>Command history</li>
+                    <li>Multi-line script support</li>
+                    <li>Syntax highlighting</li>
+                </ul>
+                <span class="tool-status">Available</span>
+            </div>
+            
+            <div class="tool-card" onclick="showComingSoon('API Browser')">
+                <span class="tool-icon">📡</span>
+                <div class="tool-title">API Browser</div>
+                <div class="tool-description">
+                    REST API documentation and testing interface for all Dserv endpoints.
+                </div>
+                <ul class="tool-features">
+                    <li>Interactive API documentation</li>
+                    <li>Test API endpoints</li>
+                    <li>Request/response examples</li>
+                    <li>Authentication helpers</li>
+                </ul>
+                <span class="tool-status coming-soon">Coming Soon</span>
+            </div>
+            
+            <div class="tool-card" onclick="showComingSoon('System Monitor')">
+                <span class="tool-icon">📊</span>
+                <div class="tool-title">System Monitor</div>
+                <div class="tool-description">
+                    Real-time system performance monitoring and health dashboard.
+                </div>
+                <ul class="tool-features">
+                    <li>System resource usage</li>
+                    <li>Connection statistics</li>
+                    <li>Performance graphs</li>
+                    <li>Alert notifications</li>
+                </ul>
+                <span class="tool-status coming-soon">Coming Soon</span>
+            </div>
+            
+            <div class="tool-card" onclick="showComingSoon('Log Viewer')">
+                <span class="tool-icon">📋</span>
+                <div class="tool-title">Log Viewer</div>
+                <div class="tool-description">
+                    Advanced log file viewer with filtering, search, and real-time updates.
+                </div>
+                <ul class="tool-features">
+                    <li>Real-time log streaming</li>
+                    <li>Advanced filtering</li>
+                    <li>Search and highlighting</li>
+                    <li>Multiple log sources</li>
+                </ul>
+                <span class="tool-status coming-soon">Coming Soon</span>
+            </div>
+            
+            <div class="tool-card" onclick="showComingSoon('Configuration Editor')">
+                <span class="tool-icon">⚙️</span>
+                <div class="tool-title">Configuration Editor</div>
+                <div class="tool-description">
+                    Web-based configuration file editor with syntax validation.
+                </div>
+                <ul class="tool-features">
+                    <li>Syntax highlighting</li>
+                    <li>Configuration validation</li>
+                    <li>Backup and restore</li>
+                    <li>Live reload support</li>
+                </ul>
+                <span class="tool-status coming-soon">Coming Soon</span>
+            </div>
+        </div>
+        
+        <div class="server-info">
+            <div class="info-section">
+                <h4>🌐 Server Status</h4>
+                <div class="info-item">
+                    <span class="info-label">WebSocket Server:</span>
+                    <span class="info-value">
+                        <span class="status-indicator online"></span>
+                        <span id="wsPort">2565</span>
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">TCP Server:</span>
+                    <span class="info-value">
+                        <span class="status-indicator online"></span>
+                        <span id="tcpPort">2570</span>
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Message Server:</span>
+                    <span class="info-value">
+                        <span class="status-indicator online"></span>
+                        <span id="msgPort">2560</span>
+                    </span>
+                </div>
+            </div>
+            
+            <div class="info-section">
+                <h4>📈 Statistics</h4>
+                <div class="info-item">
+                    <span class="info-label">Active Connections:</span>
+                    <span class="info-value" id="activeConnections">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Datapoints:</span>
+                    <span class="info-value" id="datapointCount">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Uptime:</span>
+                    <span class="info-value" id="uptime">-</span>
+                </div>
+            </div>
+            
+            <div class="info-section">
+                <h4>🔗 Quick Access</h4>
+                <div class="info-item">
+                    <span class="info-label">Web Interface:</span>
+                    <span class="info-value" id="webUrl">http://localhost:2565</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">WebSocket:</span>
+                    <span class="info-value" id="wsUrl">ws://localhost:2565/ws</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Health Check:</span>
+                    <span class="info-value"><a href="/health" style="color: #3498db;">/health</a></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="navigation-hint">
+            💡 <strong>Navigation Tip:</strong> All tools open in the same window. Use your browser's back button or bookmark specific tools for quick access.
+        </div>
+        
+        <div class="footer">
+            <p>Dserv Data Server &copy; 2025 • Real-time data acquisition and control</p>
+        </div>
+    </div>
+
+    <script>
+        let startTime = Date.now();
+        
+        function updateUrls() {
+            const host = window.location.host;
+            const protocol = window.location.protocol;
+            const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+            
+            document.getElementById('webUrl').textContent = `${protocol}//${host}`;
+            document.getElementById('wsUrl').textContent = `${wsProtocol}//${host}/ws`;
+        }
+        
+        function updateUptime() {
+            const uptime = Date.now() - startTime;
+            const seconds = Math.floor(uptime / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            
+            let uptimeStr = '';
+            if (hours > 0) {
+                uptimeStr += `${hours}h `;
+            }
+            if (minutes % 60 > 0) {
+                uptimeStr += `${minutes % 60}m `;
+            }
+            uptimeStr += `${seconds % 60}s`;
+            
+            document.getElementById('uptime').textContent = uptimeStr;
+        }
+        
+        function refreshStatus() {
+            // Try to get real stats via WebSocket
+            const ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`);
+            
+            ws.onopen = () => {
+                // Get @keys to count datapoints
+                ws.send(JSON.stringify({cmd: 'get', name: '@keys'}));
+                
+                // Could also get connection stats if available
+                ws.send(JSON.stringify({cmd: 'eval', script: 'info connections'}));
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.name === '@keys' && data.data) {
+                        const dpCount = data.data.trim().split(/\s+/).filter(k => k.length > 0).length;
+                        document.getElementById('datapointCount').textContent = dpCount;
+                    }
+                } catch (e) {
+                    // Ignore parsing errors
+                }
+            };
+            
+            setTimeout(() => ws.close(), 1000); // Close after 1 second
+        }
+        
+        function showComingSoon(toolName) {
+            alert(`${toolName} is coming soon! This feature is planned for a future release.`);
+        }
+        
+        function showHelp() {
+            alert(`Dserv Web Interface Help:
+
+🔍 Datapoint Explorer: Browse and monitor datapoints in real-time
+💻 Web Terminal: Execute Tcl commands and scripts
+📡 WebSocket API: Connect at ws://${window.location.host}/ws
+
+Commands you can try in the terminal:
+• dservKeys - list all datapoints
+• dservGet <name> - get a datapoint value
+• dservSet <name> <value> - set a datapoint
+• now - get current timestamp
+
+For more help, visit the terminal and type 'help'`);
+        }
+        
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', () => {
+            updateUrls();
+            updateUptime();
+            refreshStatus();
+            
+            // Update uptime every second
+            setInterval(updateUptime, 1000);
+        });
+    </script>
+</body>
+</html>

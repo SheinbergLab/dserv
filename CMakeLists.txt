@@ -183,7 +183,16 @@ embed_resource(
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h
     terminal_html
 )
-
+embed_resource(
+    ${WEB_ASSETS_DIR}/datapoint_explorer.html
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
+    datapoint_explorer_html
+)
+embed_resource(
+    ${WEB_ASSETS_DIR}/welcome.html
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
+    welcome_html
+)
 add_subdirectory(modules)
 add_subdirectory(processors)
 add_subdirectory(tools/essctrl)
@@ -207,7 +216,11 @@ add_executable(dserv
 # export symbols for shared objects loaded at runtime
 set_property(TARGET dserv PROPERTY ENABLE_EXPORTS ON)
 
-target_sources(dserv PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h)
+target_sources(dserv PRIVATE 
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h 
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
+)
 target_include_directories(dserv PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 # Link libraries based on platform

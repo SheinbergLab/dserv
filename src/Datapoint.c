@@ -373,8 +373,8 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
   
   return d;
 }
-
-char *dpoint_to_json(ds_datapoint_t *dpoint)
+  
+  char *dpoint_to_json(ds_datapoint_t *dpoint)
 {
   int i;  
   int n;
@@ -526,8 +526,8 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
 	  for (i = 0; i < n; i++) {
 	    json_array_append_new(array, json_integer(vals[i]));
 	  }
+	  json_object_set_new(json_dpoint, "data", array);
 	}
-	json_object_set_new(json_dpoint, "data", array);
       }
       break;
     case DSERV_INT:
@@ -542,8 +542,8 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
 	  for (i = 0; i < n; i++) {
 	    json_array_append_new(array, json_integer(vals[i]));
 	  }
+	  json_object_set_new(json_dpoint, "data", array);
 	}
-	json_object_set_new(json_dpoint, "data", array);
       }
       break;
     case DSERV_STRING:
@@ -582,3 +582,5 @@ char *dpoint_to_json(ds_datapoint_t *dpoint)
   json_decref(json_dpoint);
   return json_str;
 }
+  
+
