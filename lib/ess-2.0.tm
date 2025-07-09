@@ -155,6 +155,7 @@ oo::class create System {
             dg_toString stimdg s
             dservSetData stimdg [now] 6 $s
         }
+	dservSet ess/stiminfo [dg_toHybridJSON stimdg]
     }
 
     method set_init_callback { cb } {

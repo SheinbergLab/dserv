@@ -235,17 +235,29 @@ embed_resource(
 file(GLOB ESSGUI_JS_ASSETS "${CMAKE_SOURCE_DIR}/essgui-web/dist/assets/index-*.js")
 file(GLOB ESSGUI_CSS_ASSETS "${CMAKE_SOURCE_DIR}/essgui-web/dist/assets/index-*.css")
 
+# Extract just the filename (without path and extension)
+get_filename_component(JS_FILENAME ${ESSGUI_JS_ASSETS} NAME_WE)
+get_filename_component(CSS_FILENAME ${ESSGUI_CSS_ASSETS} NAME_WE)
+
 # We'll create fixed header names regardless of the hash
 set(ESSGUI_JS_HEADER "${CMAKE_BINARY_DIR}/embedded_essgui_index_js.h")
 set(ESSGUI_CSS_HEADER "${CMAKE_BINARY_DIR}/embedded_essgui_index_css.h")
 
+# Extract the hash (everything after "index-")
+string(REGEX REPLACE "^index-(.+)$" "\\1" ESSGUI_JS_HASH ${JS_FILENAME})
+string(REGEX REPLACE "^index-(.+)$" "\\1" ESSGUI_CSS_HASH ${CSS_FILENAME})
+
+# And you can also use them as preprocessor definitions
+add_definitions(-DESSGUI_JS_HASH=${ESSGUI_JS_HASH})
+add_definitions(-DESSGUI_CSS_HASH=${ESSGUI_CSS_HASH})
+
 # Debug: Show what assets were found
 message(STATUS "Found ESS GUI assets:")
 foreach(asset ${ESSGUI_JS_ASSETS})
-    message(STATUS "  JS: ${asset}")
+    message(STATUS "  JS: ${asset} / ${ESSGUI_JS_HASH}")
 endforeach()
 foreach(asset ${ESSGUI_CSS_ASSETS})
-    message(STATUS "  CSS: ${asset}")
+    message(STATUS "  CSS: ${asset} / ${ESSGUI_CSS_HASH}")
 endforeach()
 
 # Embed JS asset (take the first/only one found)

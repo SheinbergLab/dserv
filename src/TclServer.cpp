@@ -279,24 +279,40 @@ void TclServer::start_websocket_server(void)
   
   auto app = uWS::App();
 
+  // Helper macros for stringification
+#define STRINGIFY(x) #x
+#define EXPAND_AND_STRINGIFY(x) STRINGIFY(x)
+  
   // Welcome page as the root
   app.get("/", [](auto *res, auto *req) {
     res->writeHeader("Content-Type", "text/html; charset=utf-8")
       ->writeHeader("Cache-Control", "no-cache")
       ->end(embedded::essgui_index_html);
   });
-  
-  app.get("/assets/index-lf3vg-E_.js", [](auto *res, auto *req) {
+
+ // Build route strings with actual hash values
+  std::string js_route = "/assets/index-" + std::string(EXPAND_AND_STRINGIFY(ESSGUI_JS_HASH)) + ".js";
+  std::string css_route = "/assets/index-" + std::string(EXPAND_AND_STRINGIFY(ESSGUI_CSS_HASH)) + ".css";
+    
+  // Register the exact routes
+  app.get(js_route, [](auto *res, auto *req) {
     res->writeHeader("Content-Type", "application/javascript; charset=utf-8")
-      ->writeHeader("Cache-Control", "no-cache")
+      ->writeHeader("Cache-Control", "public, max-age=31536000") // Long cache since hash changes
       ->end(embedded::essgui_index_js);
   });
 
-  app.get("/assets/index-7TaETyqb.css", [](auto *res, auto *req) {
+  app.get(css_route, [](auto *res, auto *req) {
     res->writeHeader("Content-Type", "text/css; charset=utf-8")
-      ->writeHeader("Cache-Control", "no-cache")
+      ->writeHeader("Cache-Control", "public, max-age=31536000") // Long cache since hash changes
       ->end(embedded::essgui_index_css);
   });
+
+#if 0
+  // Debug output to verify routes
+  std::cout << "Registered asset routes:" << std::endl;
+  std::cout << "  JS: " << js_route << std::endl;
+  std::cout << "  CSS: " << css_route << std::endl;
+#endif  
   
   app.get("/terminal", [](auto *res, auto *req) {
     res->writeHeader("Content-Type", "text/html; charset=utf-8")
@@ -337,9 +353,9 @@ void TclServer::start_websocket_server(void)
   app.ws<WSPerSocketData>("/ws", {
       /* Settings */
       .compression = uWS::SHARED_COMPRESSOR,
-    .maxPayloadLength = 16 * 1024 * 1024,
+    .maxPayloadLength = 24 * 1024 * 1024,
     .idleTimeout = 120,
-    .maxBackpressure = 16 * 1024 * 1024,
+    .maxBackpressure = 24 * 1024 * 1024,
       
     .upgrade = [](auto *res, auto *req, auto *context) {
       res->template upgrade<WSPerSocketData>({
