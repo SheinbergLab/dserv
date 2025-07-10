@@ -77,7 +77,10 @@
               </a-tab-pane>
 
               <a-tab-pane key="system" tab="System" style="height: 100%; overflow: hidden;">
-                <div>System state diagram will go here</div>
+	        <div style="height: 100%; overflow: hidden;">
+                  <state-system-diagram />
+  	        </div>
+
               </a-tab-pane>
 
               <a-tab-pane key="data" tab="Data" style="height: 100%; overflow: hidden;">
@@ -109,6 +112,7 @@ import EssTerminal from '../components/EssTerminal.vue'
 import StatusBar from '../components/StatusBar.vue'
 import StimInfo from '../components/StimInfo.vue'
 import Scripts from '../components/Scripts.vue'
+import StateSystemDiagram from '../components/StateSystemDiagram.vue'
 
 // Status message
 const statusMessage = ref('Ready')
