@@ -1,0 +1,17 @@
+.resizer {
+  width: 100%;
+  height: 5px;
+  background: #f0f2f5;
+  cursor: ns-resize;
+  border-top: 1px solid #d9d9d9;
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.resizer:hover {
+  background: #e6f7ff;
+}
+
+.terminal-wrapper {
+  overflow: hidden;
+  position: relative;
+}

@@ -52,7 +52,7 @@ struct WSPerSocketData {
   
   // Add datapoint notification queue
   SharedQueue<client_request_t> *notification_queue;
-  std::string dataserver_client_id;  // ID for Dataserver registration  
+  std::string dataserver_client_id;  // ID for Dataserver registration
 };
 
 class TclServerConfig
@@ -101,8 +101,9 @@ private:
   std::unordered_map<std::string, int> ip_connection_count;
 
   // WebSocket subscription support
-  std::mutex ws_connections_mutex;
+  mutable std::mutex ws_connections_mutex;
   std::map<std::string, uWS::WebSocket<false, true, WSPerSocketData>*> ws_connections;
+  uWS::Loop *ws_loop = nullptr;  // Store the loop reference
   
 public:
   int argc;
@@ -210,6 +211,12 @@ public:
   
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;
+
+  bool isWebSocketConnected(const std::string& client_name, uWS::WebSocket<false, true, WSPerSocketData>* ws) {
+    std::lock_guard<std::mutex> lock(ws_connections_mutex);
+    auto it = ws_connections.find(client_name);
+    return it != ws_connections.end() && it->second == ws;
+  }
   
   static void
   tcp_client_process(TclServer *tserv,

@@ -155,6 +155,7 @@ oo::class create System {
             dg_toString stimdg s
             dservSetData stimdg [now] 6 $s
         }
+	dservSet ess/stiminfo [dg_toHybridJSON stimdg]
     }
 
     method set_init_callback { cb } {
@@ -2161,9 +2162,15 @@ namespace eval ess {
         # push new stimdg to dataserver
         $s update_stimdg
 
-        # share new variant options to dataserver and other programs
-        dservSet ess/variant_info [variant_loader_info $system $protocol $variant]
+        # get new variant options to dataserver and other programs
+	set vli [variant_loader_info $system $protocol $variant]
 
+	# share loader_arg_options in json format for js clients
+	dservSet ess/variant_info_json [variant_info_to_json $vli]
+
+	# having shared options, share whole thing to specify selected options
+        dservSet ess/variant_info $vli
+	
         # protocol defaults for system parameters
         set param_default_settings ${system}::${protocol}::params_defaults
         if {[info exists $param_default_settings]} {
@@ -2329,6 +2336,182 @@ namespace eval ess {
         $obj map_close
         return [$obj get]
     }
+
+    # Convert full variant info dictionary to JSON
+    proc variant_info_to_json {full_dict_data} {
+	set obj [yajl create #auto]
+	
+	# Extract the main components
+	set loader_proc [dict get $full_dict_data loader_proc]
+	set loader_args [dict get $full_dict_data loader_args]
+	set loader_arg_names [dict get $full_dict_data loader_arg_names]
+	set loader_arg_options [dict get $full_dict_data loader_arg_options]
+	
+	# Start main object
+	$obj map_open
+	
+	# Add loader proc info
+	$obj string "loader_proc" string $loader_proc
+	
+	# Add the argument names array
+	$obj string "loader_arg_names" array_open
+	foreach name $loader_arg_names {
+	    $obj string $name
+	}
+	$obj array_close
+	
+	# Add current loader args
+	$obj string "loader_args" array_open
+	foreach arg $loader_args {
+	    # Handle complex nested arguments (like params)
+	    if {[llength $arg] > 1} {
+		# Convert nested list to space-separated string for consistency
+		set arg_str [join $arg " "]
+		$obj string $arg_str
+	    } else {
+		$obj string $arg
+	    }
+	}
+	$obj array_close
+	
+	# Add the options with current values marked
+	$obj string "options" map_open
+	
+	# Iterate through each option type using the names list to maintain order
+	for {set i 0} {$i < [llength $loader_arg_names]} {incr i} {
+	    set key [lindex $loader_arg_names $i]
+	    set current_value [lindex $loader_args $i]
+	    
+	    # Get the available options for this key
+	    if {[dict exists $loader_arg_options $key]} {
+		set value_list [dict get $loader_arg_options $key]
+		
+		# Add the key and start an array of options
+		$obj string $key array_open
+		
+		# Process each option in the list
+		foreach option $value_list {
+		    # Start object for this option
+		    $obj map_open
+		    
+		    if {[llength $option] == 2} {
+			# Standard key-value pair like {4 4} or {jittered {...}}
+			lassign $option label value
+			$obj string "label" string $label
+			
+			# Handle complex values (like nested parameter lists)
+			if {[llength $value] > 1} {
+			    set value_str [join $value " "]
+			    $obj string "value" string $value_str
+			} else {
+			    $obj string "value" string $value
+			}
+			
+			# Check if this is the currently selected option
+			if {[llength $current_value] > 1} {
+			    set current_str [join $current_value " "]
+			    set is_current [expr {$value_str eq $current_str}]
+			} else {
+			    set is_current [expr {$value eq $current_value}]
+			}
+			$obj string "selected" bool $is_current
+			
+		    } elseif {[llength $option] == 1} {
+			# Single value - use as both label and value
+			$obj string "label" string $option
+			$obj string "value" string $option
+			set is_current [expr {$option eq $current_value}]
+			$obj string "selected" bool $is_current
+		    } else {
+			# Complex structure - shouldn't happen in this context but handle it
+			set label [lindex $option 0]
+			set values [lrange $option 1 end]
+			set values_str [join $values " "]
+			$obj string "label" string $label
+			$obj string "value" string $values_str
+			
+			if {[llength $current_value] > 1} {
+			    set current_str [join $current_value " "]
+			    set is_current [expr {$values_str eq $current_str}]
+			} else {
+			    set is_current [expr {$values_str eq $current_value}]
+			}
+			$obj string "selected" bool $is_current
+		    }
+		    
+		    # Close this option object
+		    $obj map_close
+		}
+		
+		# Close the options array
+		$obj array_close
+	    }
+	}
+	
+	# Close options map
+	$obj map_close
+	
+	# Close main object
+	$obj map_close
+	
+	# Get the result and clean up
+	set result [$obj get]
+	$obj delete
+	return $result
+    }
+
+    proc variant_arg_options_to_json { dict_data } {
+	set obj [yajl create #auto]
+	
+	# Start main object
+	$obj map_open
+	
+	# Iterate through each option type (e.g., "noise_type", "rotations", etc.)
+	dict for {key value_list} $dict_data {
+	    # Add the key and start an array of options
+	    $obj string $key array_open
+	    
+	    # Process each option in the list
+	    foreach option $value_list {
+		# Start object for this option
+		$obj map_open
+		
+		if {[llength $option] == 2} {
+		    # Standard key-value pair like {circles circles} or {right 1}
+		    lassign $option label value
+		    $obj string "label" string $label
+		    $obj string "value" string $value
+		} elseif {[llength $option] == 1} {
+		    # Single value - use as both label and value
+		    $obj string "label" string $option
+		    $obj string "value" string $option
+		} else {
+		    # Complex structure like {three {60 180 300}}
+		    set label [lindex $option 0]
+		    set values [lrange $option 1 end]
+		    # Convert nested list to space-separated string
+		    set values_str [join $values " "]
+		    $obj string "label" string $label
+		    $obj string "value" string $values_str
+		}
+		
+		# Close this option object
+		$obj map_close
+	    }
+	    
+	    # Close the options array
+	    $obj array_close
+	}
+	
+	# Close main object
+	$obj map_close
+	
+	# Get the result and clean up
+	set result [$obj get]
+	$obj delete
+	return $result
+    }
+    
 }
 
 
