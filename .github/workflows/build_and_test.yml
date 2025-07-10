@@ -54,6 +54,7 @@ jobs:
 
       - name: ctest
         run: |
+          cd build/
           ctest -VV --timeout 10
 
   build-macos:
