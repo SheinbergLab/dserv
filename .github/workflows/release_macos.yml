@@ -107,9 +107,10 @@ jobs:
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv-${{ github.ref_name }}-Darwin-signed.pkg
           sudo installer -pkg dserv-${{ github.ref_name }}-Darwin-signed.pkg -target /
 
-      - name: Install dlsh libs and dependencies.
+      - name: Install dlsh packages.
         run: |
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.6/dlsh.zip
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m).zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
@@ -166,9 +167,9 @@ jobs:
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.23
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
-          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m)-signed.pkg
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-$(uname -m)-signed.pkg -target /
 
       - name: Set up a keychain for Apple code signing.
         env:

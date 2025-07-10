@@ -43,5 +43,6 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && rm -rf /var/lib/apt/lists/*
 
 # Install our dlsh TCL utils and their dependencies.
+ENV DLSH_VERSION=0.0.48
 WORKDIR /usr/local/dlsh
-RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+RUN wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
