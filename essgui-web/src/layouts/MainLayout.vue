@@ -5,7 +5,7 @@
       <menu-bar @toggle-terminal="toggleTerminal" />
     </a-layout-header>
 
-    <a-layout>
+    <a-layout style="height: calc(100vh - 32px);">
       <!-- Control Panel - Left Sidebar -->
       <a-layout-sider
         width="280"
@@ -16,18 +16,22 @@
       </a-layout-sider>
 
       <!-- Main Content Area with Terminal -->
-      <a-layout>
+      <a-layout style="display: flex; flex-direction: column; height: 100%; overflow: hidden;">
         <!-- Main Content -->
-        <a-layout-content style="background: white; display: flex; flex-direction: column;">
+        <a-layout-content style="background: white; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
           <!-- Tabs Area -->
-          <div style="flex: 1; overflow: hidden;">
+          <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
             <a-tabs
               size="small"
-              style="height: 100%; overflow: hidden;"
+              style="height: 100%; display: flex; flex-direction: column;"
               tab-position="top"
             >
-              <a-tab-pane key="behavior" tab="Behavior">
-                <div style="height: 100%; display: flex; flex-direction: column;">
+              <template #tabBarExtraContent>
+                <div style="height: 40px;"></div>
+              </template>
+              
+              <a-tab-pane key="behavior" tab="Behavior" style="height: 100%; overflow: hidden;">
+                <div style="height: 100%; display: flex; flex-direction: column; overflow: auto;">
                   <div style="flex: 1; display: flex; gap: 16px;">
                     <!-- Behavior Monitor Placeholder -->
                     <div style="flex: 1; border: 1px solid #d9d9d9; padding: 8px;">
@@ -60,33 +64,37 @@
                 </div>
               </a-tab-pane>
 
-	      <a-tab-pane key="stim" tab="Stim" style="height: 100%; overflow: hidden;">
-	        <stim-info />
-	      </a-tab-pane>
-
-              <a-tab-pane key="scripts" tab="Scripts">
-                <div>Script editor will go here</div>
+              <a-tab-pane key="stim" tab="Stim" style="height: 100%; overflow: hidden;">
+                <div style="height: 100%; overflow: hidden;">
+                  <stim-info />
+                </div>
               </a-tab-pane>
 
-              <a-tab-pane key="system" tab="System">
+              <a-tab-pane key="scripts" tab="Scripts" style="height: 100%; overflow: hidden;">
+	        <div style="height: 100%; overflow: hidden;">
+                  <scripts />
+  	        </div>
+              </a-tab-pane>
+
+              <a-tab-pane key="system" tab="System" style="height: 100%; overflow: hidden;">
                 <div>System state diagram will go here</div>
               </a-tab-pane>
 
-              <a-tab-pane key="data" tab="Data">
+              <a-tab-pane key="data" tab="Data" style="height: 100%; overflow: hidden;">
                 <div>Data file management will go here</div>
               </a-tab-pane>
 
             </a-tabs>
           </div>
-
-          <!-- Terminal at Bottom -->
-          <template v-if="isTerminalVisible">
-            <div class="resizer" @mousedown="startResize"></div>
-            <div v-if="isTerminalVisible" :style="{ height: `${terminalHeight}px` }" class="terminal-wrapper">
-              <ess-terminal ref="bottomTerminalRef" />
-            </div>
-          </template>
         </a-layout-content>
+
+        <!-- Terminal at Bottom -->
+        <template v-if="isTerminalVisible">
+          <div class="resizer" @mousedown="startResize"></div>
+          <div :style="{ height: `${terminalHeight}px`, flexShrink: 0 }" class="terminal-wrapper">
+            <ess-terminal ref="bottomTerminalRef" />
+          </div>
+        </template>
       </a-layout>
     </a-layout>
     <status-bar :status-message="statusMessage" />
@@ -100,6 +108,7 @@ import ExperimentControl from '../components/ExperimentControl.vue'
 import EssTerminal from '../components/EssTerminal.vue'
 import StatusBar from '../components/StatusBar.vue'
 import StimInfo from '../components/StimInfo.vue'
+import Scripts from '../components/Scripts.vue'
 
 // Status message
 const statusMessage = ref('Ready')
@@ -161,15 +170,37 @@ function handleStatusUpdate({ message, type }) {
   height: 5px;
   background: #f0f0f0;
   cursor: ns-resize;
-  margin: 0 16px;
+  flex-shrink: 0;
 }
 
 .terminal-wrapper {
   overflow: hidden;
+  background: white;
+  border-top: 1px solid #d9d9d9;
+}
+
+/* Fix tab content height */
+:deep(.ant-tabs) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 :deep(.ant-tabs-nav) {
   margin-left: 14px;
+  flex-shrink: 0;
 }
 
+:deep(.ant-tabs-content) {
+  height: 100%;
+  overflow: hidden;
+}
+
+:deep(.ant-tabs-content-holder) {
+  height: 100%;
+}
+
+:deep(.ant-tabs-tabpane) {
+  height: 100%;
+}
 </style>
