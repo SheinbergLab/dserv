@@ -25,9 +25,9 @@
           style="width: 120px;"
           @change="applyLayout"
         >
+          <a-select-option value="grid">Grid</a-select-option>
           <a-select-option value="hierarchical">Hierarchical</a-select-option>
           <a-select-option value="circular">Circular</a-select-option>
-          <a-select-option value="grid">Grid</a-select-option>
         </a-select>
         
         <a-button 
@@ -218,7 +218,7 @@ const currentState = ref('')
 const actionState = ref('')
 const transitionState = ref('')
 const isLoading = ref(false)
-const layoutMode = ref('hierarchical')
+const layoutMode = ref('grid')
 
 // SVG refs and transform state
 const svgRef = ref(null)
@@ -322,7 +322,10 @@ function parseStateTable(stateTableStr) {
     // Apply initial layout
     nextTick(() => {
       applyLayout()
-      centerView()
+      // Immediate fit to screen
+      setTimeout(() => {
+        centerView()
+      }, 50) // Small delay to ensure layout is complete
     })
   } catch (error) {
     console.error('Failed to parse state table:', error)
@@ -474,6 +477,11 @@ function applyLayout() {
   }
   
   updateEdgePaths()
+  
+  // Auto-fit after layout change
+  setTimeout(() => {
+    centerView()
+  }, 50)
 }
 
 function applyHierarchicalLayout() {

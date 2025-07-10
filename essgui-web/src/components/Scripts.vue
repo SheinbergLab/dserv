@@ -44,7 +44,7 @@
           size="small" 
           @click="pushScripts"
           :loading="isGitBusy"
-          :disabled="!hasModifiedScripts"
+          :disabled="!canPushToGit"
           title="Commit and push scripts to git"
         >
           Push
@@ -86,7 +86,7 @@
       </div>
       <div style="display: flex; gap: 12px;">
         <span>{{ keyBindings === 'emacs' ? 'Emacs Bindings' : 'Default Bindings' }}</span>
-        <span>Ctrl+S: Save | Ctrl+F: Search | Enter: Auto-indent</span>
+        <span>Ctrl+S: Save | {{ keyBindings === 'emacs' ? 'Ctrl+/: Search' : 'Ctrl+F: Search' }} | Enter: Auto-indent</span>
       </div>
     </div>
   </div>
@@ -148,6 +148,22 @@ const hasModifiedScripts = computed(() =>
   Object.values(scripts.value).some(script => script.modified)
 )
 
+// Track if we've made any changes since last git operation
+const hasChangesSinceLastGit = ref(false)
+
+// Watch for any script modifications to track git state
+watch(scripts, (newScripts) => {
+  // If any script becomes modified, mark as having changes since git
+  const hasModified = Object.values(newScripts).some(script => script.modified)
+  if (hasModified) {
+    hasChangesSinceLastGit.value = true
+  }
+}, { deep: true })
+
+// Git push should be available if we have changes since last git operation
+// or if there are saved changes that haven't been pushed
+const canPushToGit = computed(() => hasChangesSinceLastGit.value)
+
 // CodeMirror editor creation
 function createEditor() {
   if (!editorContainer.value) return
@@ -168,6 +184,17 @@ function createEditor() {
     }
   }
 
+  // Custom search command that works well with both emacs and default bindings
+  const searchCommand = {
+    key: 'Ctrl-/',  // Emacs-friendly search key
+    run: (view) => {
+      import('@codemirror/search').then(({ openSearchPanel }) => {
+        openSearchPanel(view)
+      })
+      return true
+    }
+  }
+
   // Emacs-style key bindings with auto-indent on Enter
   const emacsBindings = [
     { key: 'Ctrl-a', run: cursorLineStart },
@@ -182,14 +209,31 @@ function createEditor() {
       }
     },
     { key: 'Tab', run: insertTab }, // Simple tab insertion
+    { key: 'Shift-Tab', run: indentLess },
+    searchCommand // Add our custom search binding for emacs mode
+  ]
+
+  // Default bindings still use Ctrl+F for search
+  const defaultBindings = [
+    { 
+      key: 'Enter', 
+      run: (view) => {
+        return autoIndentNewline(view)
+      }
+    },
+    { key: 'Tab', run: insertTab },
     { key: 'Shift-Tab', run: indentLess }
   ]
 
-  const currentKeybindings = keyBindings.value === 'emacs' ? emacsBindings : []
+  // Choose appropriate keybindings
+  const currentKeybindings = keyBindings.value === 'emacs' ? emacsBindings : defaultBindings
+
+  // For non-emacs mode, use default search keybindings (Ctrl+F)
+  const searchKeybindings = keyBindings.value === 'emacs' ? [] : searchKeymap
 
   const allKeybindings = [
     ...currentKeybindings,
-    ...searchKeymap, // Add search keybindings (Ctrl+F, etc.)
+    ...searchKeybindings,
     saveCommand,
     saveAllCommand
   ]
@@ -364,6 +408,9 @@ async function pullScripts() {
     await dserv.gitCommand('git::pull')
     console.log('Git pull completed successfully')
     
+    // Reset git change tracking after successful pull
+    hasChangesSinceLastGit.value = false
+    
     // After pull, request updated script data
     setTimeout(() => {
       requestScriptData()
@@ -381,12 +428,16 @@ async function pushScripts() {
     console.log('Committing and pushing scripts to git...')
     await dserv.gitCommand('git::commit_and_push')
     console.log('Git push completed successfully')
+    
+    // Reset git change tracking after successful push
+    hasChangesSinceLastGit.value = false
   } catch (error) {
     console.error('Failed to push scripts:', error)
   } finally {
     isGitBusy.value = false
   }
 }
+
 async function saveAllScripts() {
   if (!hasModifiedScripts.value) return
   

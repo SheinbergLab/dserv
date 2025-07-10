@@ -8,7 +8,7 @@
     <a-layout style="height: calc(100vh - 32px);">
       <!-- Control Panel - Left Sidebar -->
       <a-layout-sider
-        width="280"
+        width="290"
         theme="light"
         style="border-right: 1px solid #d9d9d9;"
       >
