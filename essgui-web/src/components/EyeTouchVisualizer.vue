@@ -7,8 +7,8 @@
           <div class="window-status-mini">
             <span style="font-size: 11px;">Eye windows:</span>
             <div class="window-indicators-mini">
-              <span 
-                v-for="i in 8" 
+              <span
+                v-for="i in 8"
                 :key="i-1"
                 class="window-dot"
                 :class="{ active: eyeWindows[i-1].active, inside: (eyeWindowStatusMask & (1 << (i-1))) !== 0 }"
@@ -21,7 +21,7 @@
 
     <!-- Main canvas area -->
     <div class="canvas-container" ref="canvasContainer">
-      <canvas 
+      <canvas
         ref="canvasRef"
         :width="canvasSize.width"
         :height="canvasSize.height"
@@ -41,24 +41,16 @@
           <a-space size="small">
             <a-checkbox v-model:checked="displayOptions.showGrid">Grid</a-checkbox>
             <a-checkbox v-model:checked="displayOptions.showTrails">Trails</a-checkbox>
-            <a-checkbox v-model:checked="displayOptions.showLabels">Labels</a-checkbox>
           </a-space>
         </a-col>
         <a-col :span="12" style="text-align: right;">
           <a-space size="small">
             <a-button
-	        size="small"
-		@click="resetView"
-		:icon="h(ReloadOutlined)"
-		style="padding: 1px 6px; font-size: 10px;">
+            size="small"
+        @click="resetView"
+        :icon="h(ReloadOutlined)"
+        style="padding: 1px 6px; font-size: 10px;">
               Reset View
-            </a-button>
-            <a-button
-	        size="small"
-		@click="refreshWindows"
-		:icon="h(SyncOutlined)"
-		style="padding: 1px 6px; font-size: 10px;">
-              Refresh Windows
             </a-button>
           </a-space>
         </a-col>
@@ -142,7 +134,7 @@ function parseWindowSetting(data) {
   }
 
   const [reg, active, state, type, cx, cy, dx, dy] = data
-  
+
   return {
     id: reg,
     active: active === 1,
@@ -168,15 +160,15 @@ function degreesToCanvas(degX, degY) {
 // Datapoint handlers - only for component-specific data
 function handleEyePosition(data) {
 //  console.log('Eye position data received:', data) // Debug log
-  
+
   // Check both data.value and data.data (your dserv uses data.data)
   const value = data.value || data.data
-  
+
   if (data.name === 'ess/em_pos') {
     const [rx, ry, x, y] = value.split(' ').map(Number);
     eyePosition.value = { x, y };
     eyePositionRaw.value = { x: rx, y: ry };
-    
+
     // Add to trail history if enabled
     if (displayOptions.showTrails) {
       eyeHistory.value.push({ ...eyePosition.value, timestamp: Date.now() })
@@ -201,27 +193,27 @@ function startAnimation() {
 
 function render() {
   if (!ctx) return
-  
+
   // Clear canvas
   ctx.fillStyle = '#000000'
   ctx.fillRect(0, 0, canvasSize.value.width, canvasSize.value.height)
-  
+
   // Draw layers in order
   if (displayOptions.showGrid) {
     drawGrid()
   }
-  
+
   if (displayOptions.showTrails) {
     drawTrails()
   }
-  
+
   // Draw eye windows
   eyeWindows.value.forEach(window => {
     if (window.active) {
       drawWindow(window)
     }
   })
-  
+
   // Draw eye position
   drawEyePosition()
 }
@@ -229,7 +221,7 @@ function render() {
 function drawGrid() {
   ctx.strokeStyle = '#333333'
   ctx.lineWidth = 1
-  
+
   // Vertical lines every 5 degrees
   for (let deg = -10; deg <= 10; deg += 5) {
     const x = canvasCenter.value.x + (deg * pixelsPerDegree.value.x)
@@ -238,7 +230,7 @@ function drawGrid() {
     ctx.lineTo(x, canvasSize.value.height)
     ctx.stroke()
   }
-  
+
   // Horizontal lines every 5 degrees
   for (let deg = -10; deg <= 10; deg += 5) {
     const y = canvasCenter.value.y - (deg * pixelsPerDegree.value.y)
@@ -247,7 +239,7 @@ function drawGrid() {
     ctx.lineTo(canvasSize.value.width, y)
     ctx.stroke()
   }
-  
+
   // Center crosshair
   ctx.strokeStyle = '#666666'
   ctx.lineWidth = 2
@@ -261,22 +253,22 @@ function drawGrid() {
 
 function drawTrails() {
   if (eyeHistory.value.length < 2) return
-  
+
   ctx.strokeStyle = '#ff0000'
   ctx.lineWidth = 2
   ctx.beginPath()
-  
+
   for (let i = 0; i < eyeHistory.value.length; i++) {
     const pos = degreesToCanvas(eyeHistory.value[i].x, eyeHistory.value[i].y)
     const alpha = i / eyeHistory.value.length
-    
+
     if (i === 0) {
       ctx.moveTo(pos.x, pos.y)
     } else {
       ctx.lineTo(pos.x, pos.y)
     }
   }
-  
+
   ctx.globalAlpha = 0.5
   ctx.stroke()
   ctx.globalAlpha = 1.0
@@ -288,12 +280,12 @@ function drawWindow(window) {
     width: window.size.width * pixelsPerDegree.value.x,
     height: window.size.height * pixelsPerDegree.value.y
   }
-  
+
   // Color based on state
   const isInside = (eyeWindowStatusMask.value & (1 << window.id)) !== 0
   ctx.strokeStyle = isInside ? '#00ff00' : '#ff0000'
   ctx.lineWidth = isInside ? 3 : 1
-  
+
   if (window.type === 'ellipse') {
     // Draw ellipse
     ctx.beginPath()
@@ -312,7 +304,7 @@ function drawWindow(window) {
       size.height
     )
   }
-  
+
   // Draw window ID label if enabled
   if (displayOptions.showLabels) {
     ctx.fillStyle = ctx.strokeStyle
@@ -323,24 +315,24 @@ function drawWindow(window) {
       pos.y - size.height / 2 - 5
     )
   }
-  
+
   // Draw center point
   ctx.fillRect(pos.x - 2, pos.y - 2, 4, 4)
 }
 
 function drawEyePosition() {
   const pos = degreesToCanvas(eyePosition.value.x, eyePosition.value.y)
-  
+
   // Draw white circle with red outline
   ctx.fillStyle = '#ffffff'
   ctx.strokeStyle = '#ff0000'
   ctx.lineWidth = 2
-  
+
   ctx.beginPath()
   ctx.arc(pos.x, pos.y, 5, 0, 2 * Math.PI)
   ctx.fill()
   ctx.stroke()
-  
+
   // Draw crosshair
   ctx.strokeStyle = '#ffffff'
   ctx.lineWidth = 1
@@ -367,7 +359,7 @@ async function refreshWindows() {
 function resetView() {
   // Clear trails
   eyeHistory.value = []
-  
+
   // Reset any zoom/pan in future
   // For now, just redraw
   if (ctx) {
@@ -377,16 +369,16 @@ function resetView() {
 
 function handleResize() {
   if (!canvasContainer.value) return
-  
+
   const rect = canvasContainer.value.getBoundingClientRect()
   const padding = 20
   const size = Math.min(rect.width - padding, rect.height - padding)
-  
+
   canvasSize.value = {
     width: size,
     height: size
   }
-  
+
   // Canvas will be resized on next render due to reactive binding
   nextTick(() => {
     if (canvasRef.value) {
@@ -404,7 +396,7 @@ onMounted(() => {
   if (canvasRef.value) {
     ctx = canvasRef.value.getContext('2d')
   }
-  
+
   // Register component with dserv
   cleanupDserv = dserv.registerComponent('EyeTouchVisualizer', {
     subscriptions: [
@@ -418,7 +410,7 @@ onMounted(() => {
   // Set up datapoint handlers - only for component-specific data
   dserv.on('datapoint:ess/em_pos', handleEyePosition)
   // Note: removed region handlers - using dserv.state instead
-  
+
   // Connection status is handled by dserv central state
   // No need for separate connection event handler
 
@@ -432,7 +424,7 @@ onMounted(() => {
 
   // Initial resize
   handleResize()
-  
+
   // Start rendering
   startAnimation()
 
@@ -447,15 +439,15 @@ onUnmounted(() => {
   if (animationId) {
     cancelAnimationFrame(animationId)
   }
-  
+
   // Clean up resize observer
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
-  
+
   // Clean up dserv
   if (cleanupDserv) cleanupDserv()
-  
+
   // Remove event listeners - only component-specific ones
   dserv.off('datapoint:ess/em_pos', handleEyePosition)
 })

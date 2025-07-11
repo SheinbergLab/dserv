@@ -2,11 +2,7 @@
   <a-layout style="height: 100vh; font-size: 13px;">
     <a-layout style="height: 100vh;">
       <!-- Control Panel - Left Sidebar -->
-      <a-layout-sider
-        width="290"
-        theme="light"
-        style="border-right: 1px solid #d9d9d9;"
-      >
+      <a-layout-sider width="290" theme="light" style="border-right: 1px solid #d9d9d9;">
         <experiment-control ref="experimentControlRef" @status-update="handleStatusUpdate" />
       </a-layout-sider>
 
@@ -16,16 +12,13 @@
         <a-layout-content style="background: white; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
           <!-- Tabs Area -->
           <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-            <a-tabs
-              size="small"
-              style="height: 100%; display: flex; flex-direction: column;"
-              tab-position="top"
-            >
+            <a-tabs size="small" style="height: 100%; display: flex; flex-direction: column;" tab-position="top">
               <a-tab-pane key="behavior" tab="Behavior" style="height: 100%; overflow: hidden;">
                 <div style="height: 100%; display: flex; flex-direction: column; overflow: auto;">
                   <div style="flex: 1; display: flex; gap: 16px;">
                     <!-- Eye/Touch Visualizer -->
-                    <div style="flex: 1; border: 1px solid #d9d9d9; padding: 8px; display: flex; flex-direction: column;">
+                    <div
+                      style="width: 300px; border: 1px solid #d9d9d9; padding: 8px; display: flex; flex-direction: column;">
                       <div style="font-weight: 500; margin-bottom: 8px;">Eye/Touch Monitor</div>
                       <div style="flex: 1; min-height: 400px; position: relative;">
                         <eye-touch-visualizer style="position: absolute; inset: 0;" />
@@ -33,9 +26,10 @@
                     </div>
 
                     <!-- Input Controls Placeholder -->
-                    <div style="width: 200px; border: 1px solid #d9d9d9; padding: 8px;">
+                    <div style="flex: 1; border: 1px solid #d9d9d9; padding: 8px;">
                       <div style="font-weight: 500; margin-bottom: 8px;">Input</div>
-                      <div style="height: 200px; background: #f5f5f5; display: flex; align-items: center; justify-content: center;">
+                      <div
+                        style="height: 200px; background: #f5f5f5; display: flex; align-items: center; justify-content: center;">
                         Virtual Controls
                       </div>
                     </div>
@@ -44,13 +38,8 @@
                   <!-- Performance Table -->
                   <div style="margin-top: 16px; border: 1px solid #d9d9d9; padding: 8px;">
                     <div style="font-weight: 500; margin-bottom: 8px;">Performance</div>
-                    <a-table
-                      :columns="performanceColumns"
-                      :data-source="performanceData"
-                      size="small"
-                      :pagination="false"
-                      :scroll="{ y: 100 }"
-                    />
+                    <a-table :columns="performanceColumns" :data-source="performanceData" size="small"
+                      :pagination="false" :scroll="{ y: 100 }" />
                   </div>
                 </div>
               </a-tab-pane>
