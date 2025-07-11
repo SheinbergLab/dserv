@@ -4,7 +4,10 @@
     <div class="event-header">
       <a-row :gutter="12" align="middle">
         <a-col :span="4">
-          <a-statistic title="Current Obs" :value="obsInfo.obsCount >= 0 ? obsInfo.obsCount : 'None'" />
+          <a-statistic 
+            :title="viewingObsIndex === -1 ? 'Current Obs' : 'Viewing Obs'" 
+            :value="viewingObsIndex === -1 ? (obsInfo.obsCount >= 0 ? obsInfo.obsCount : 'None') : allObservations[viewingObsIndex]?.obsNumber ?? 'N/A'" 
+          />
         </a-col>
         <a-col :span="4">
           <a-statistic title="Events" :value="currentObsEventCount" />
@@ -15,7 +18,7 @@
         <a-col :span="6">
           <!-- Observation navigation -->
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 12px;">View Obs:</span>
+            <span style="font-size: 12px;">View:</span>
             <a-button-group size="small">
               <a-button 
                 @click="previousObservation" 
@@ -28,26 +31,35 @@
                 :icon="h(RightOutlined)"
               />
             </a-button-group>
-            <span style="font-size: 12px;">{{ viewingObsText }}</span>
+            <span 
+              style="font-size: 12px; font-weight: 500;"
+              :style="{ color: viewingObsIndex === -1 ? '#52c41a' : '#1890ff' }"
+            >
+              {{ viewingObsText }}
+            </span>
           </div>
         </a-col>
         <a-col :span="6" style="text-align: right;">
-          <a-space>
-            <a-button size="small" @click="clearEvents" :icon="h(ClearOutlined)">
-              Clear
-            </a-button>
-            <a-button size="small" @click="exportEvents" :icon="h(DownloadOutlined)">
-              Export
-            </a-button>
+          <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+            <a-space size="small">
+              <a-button size="small" @click="clearEvents" :icon="h(ClearOutlined)">
+                Clear
+              </a-button>
+              <a-button size="small" @click="exportEvents" :icon="h(DownloadOutlined)">
+                Export
+              </a-button>
+            </a-space>
             <a-button 
+              v-if="viewingObsIndex !== -1"
               size="small" 
-              @click="autoScroll = !autoScroll"
-              :type="autoScroll ? 'primary' : 'default'"
-              :icon="h(autoScroll ? PauseOutlined : CaretRightOutlined)"
+              @click="jumpToLive"
+              type="primary"
+              :icon="h(FastForwardOutlined)"
+              style="width: 80px;"
             >
-              {{ autoScroll ? 'Pause' : 'Scroll' }}
+              Live
             </a-button>
-          </a-space>
+          </div>
         </a-col>
       </a-row>
     </div>
@@ -140,8 +152,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { 
   ClearOutlined, 
   DownloadOutlined, 
-  PauseOutlined, 
-  CaretRightOutlined,
+  FastForwardOutlined,
   SearchOutlined,
   LeftOutlined,
   RightOutlined 
@@ -157,7 +168,6 @@ const allObservations = ref([]) // Store all observation periods
 const viewingObsIndex = ref(-1) // Which observation we're currently viewing (-1 = live)
 const loading = ref(false)
 const connected = ref(false)
-const autoScroll = ref(true)
 const lastEventTime = ref(null)
 const obsInfo = ref({ obsCount: -1, obsStart: 0, events: [] })
 const eventTable = ref(null)
@@ -285,11 +295,12 @@ const viewingObsText = computed(() => {
   }
 })
 
-// Event handling functions
+// Event handling functions  
 function handleDatapoint(data) {
   if (data.name === 'eventlog/events') {
-    // ALWAYS process the event to update names, state, etc.
-    const event = eventService.processEvent(data)
+    // The event has already been processed by the global service
+    // We just need to parse it and check if we should display it
+    const event = eventService.parseEvent(data);
     
     // Only ADD TO DISPLAY if it meets our criteria:
     // - During observation periods OR BEGINOBS/ENDOBS events
@@ -298,51 +309,53 @@ function handleDatapoint(data) {
     // - Not SUBTYPES events (type 6)
     if (event && (obsInfo.value.obsCount >= 0 || event.type === 19 || event.type === 20) && 
         event.type !== 7 && event.type !== 1 && event.type !== 6) {
+      
+      // Apply timestamp adjustment if in observation (already done by service, but need for display)
+      if (obsInfo.value.obsCount >= 0) {
+        event.timestamp -= obsInfo.value.obsStart;
+      }
+      
       addEvent(event)
     }
   }
 }
 
 function addEvent(event) {
-  // Only add to live events if we're not viewing historical data
-  if (viewingObsIndex.value !== -1) {
-    // If we're viewing historical data and a new event comes in,
-    // switch back to live view
-    viewingObsIndex.value = -1
-  }
-
-  // Calculate elapsed time from previous event
-  let elapsedTime = ''
-  if (events.value.length > 0) {
-    const previousEvent = events.value[events.value.length - 1]
-    const timeDiff = (event.timestamp - previousEvent.timestamp) / 1000
-    elapsedTime = timeDiff.toFixed(1)
-  } else {
-    elapsedTime = '0.0'
-  }
-
+  // Don't automatically switch to live view when viewing historical data
+  // Let the user stay in review mode even when new events arrive
+  
   const enhancedEvent = {
     key: Date.now() + Math.random(), // Unique key for Vue
     ...event,
     decodedParams: eventService.decodeParams(event),
     obsIndex: obsInfo.value.obsCount,
-    elapsedTime: elapsedTime
+    elapsedTime: '0.0' // Will be calculated if viewing live
   }
 
-  events.value.push(enhancedEvent)
-  lastEventTime.value = Date.now()
+  // Only add to live events and calculate elapsed time if in live view
+  if (viewingObsIndex.value === -1) {
+    // Calculate elapsed time from previous event
+    if (events.value.length > 0) {
+      const previousEvent = events.value[events.value.length - 1]
+      const timeDiff = (event.timestamp - previousEvent.timestamp) / 1000
+      enhancedEvent.elapsedTime = timeDiff.toFixed(1)
+    }
 
-  // Limit number of events per observation to prevent memory issues
-  if (events.value.length > 2000) {
-    events.value.splice(0, 500) // Remove oldest 500 events
-  }
+    events.value.push(enhancedEvent)
+    lastEventTime.value = Date.now()
 
-  // Auto-scroll to bottom if enabled and viewing live
-  if (autoScroll.value && viewingObsIndex.value === -1) {
+    // Limit number of events per observation to prevent memory issues
+    if (events.value.length > 2000) {
+      events.value.splice(0, 500) // Remove oldest 500 events
+    }
+
+    // Auto-scroll to bottom in live view
     nextTick(() => {
       scrollToBottom()
     })
   }
+  // If viewing historical data, just ignore new events for display
+  // (they're still being tracked by the service in the background)
 }
 
 // Auto-scroll throttling
@@ -486,6 +499,16 @@ function nextObservation() {
   }
 }
 
+function jumpToLive() {
+  viewingObsIndex.value = -1
+  // Auto-scroll to bottom when returning to live view
+  if (events.value.length > 0) {
+    nextTick(() => {
+      scrollToBottom()
+    })
+  }
+}
+
 // Actions
 function clearEvents() {
   events.value = []
@@ -536,20 +559,19 @@ onMounted(() => {
     originalError.apply(console, args)
   }
   
-  // Subscribe to eventlog events from dserv
+  // Don't need to subscribe to eventlog/events here since the service handles it globally
+  // Just register for component cleanup
   cleanupDserv = dserv.registerComponent('EventTracker', {
-    subscriptions: [
-      { pattern: 'eventlog/events', every: 1 }
-    ]
+    subscriptions: [] // No subscriptions needed
   })
 
-  // Set up dserv event handlers
+  // Listen to the same datapoint stream for display filtering
   dserv.on('datapoint:eventlog/events', handleDatapoint)
   dserv.on('connection', (data) => {
     connected.value = data.connected
   })
 
-  // Set up event service handlers
+  // Set up event service handlers for state updates
   cleanupEventService = eventService.addHandler(handleEventServiceUpdate)
 
   // Initialize connection state
@@ -643,28 +665,28 @@ defineExpose({
   white-space: nowrap;
 }
 
-/* Row highlighting for special events */
-:deep(.obs-start-row) {
+/* Row highlighting for special events - ensure they extend to fixed columns */
+:deep(.obs-start-row td) {
   background-color: #e6f7ff !important;
 }
 
-:deep(.obs-start-row:hover) {
+:deep(.obs-start-row:hover td) {
   background-color: #bae7ff !important;
 }
 
-:deep(.obs-end-row) {
+:deep(.obs-end-row td) {
   background-color: #fff2e6 !important;
 }
 
-:deep(.obs-end-row:hover) {
+:deep(.obs-end-row:hover td) {
   background-color: #ffd591 !important;
 }
 
-:deep(.user-event-row) {
+:deep(.user-event-row td) {
   background-color: #f6ffed !important;
 }
 
-:deep(.user-event-row:hover) {
+:deep(.user-event-row:hover td) {
   background-color: #d9f7be !important;
 }
 

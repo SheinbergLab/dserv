@@ -24,11 +24,11 @@
               <a-tab-pane key="behavior" tab="Behavior" style="height: 100%; overflow: hidden;">
                 <div style="height: 100%; display: flex; flex-direction: column; overflow: auto;">
                   <div style="flex: 1; display: flex; gap: 16px;">
-                    <!-- Behavior Monitor Placeholder -->
-                    <div style="flex: 1; border: 1px solid #d9d9d9; padding: 8px;">
-                      <div style="font-weight: 500; margin-bottom: 8px;">Behavior Monitor</div>
-                      <div style="height: 200px; background: #f5f5f5; display: flex; align-items: center; justify-content: center;">
-                        EyeTouch Window Placeholder
+                    <!-- Eye/Touch Visualizer -->
+                    <div style="flex: 1; border: 1px solid #d9d9d9; padding: 8px; display: flex; flex-direction: column;">
+                      <div style="font-weight: 500; margin-bottom: 8px;">Eye/Touch Monitor</div>
+                      <div style="flex: 1; min-height: 400px; position: relative;">
+                        <eye-touch-visualizer style="position: absolute; inset: 0;" />
                       </div>
                     </div>
 
@@ -79,10 +79,6 @@
                 </div>
               </a-tab-pane>
 
-              <a-tab-pane key="data" tab="Data" style="height: 100%; overflow: hidden;">
-                <div>Data file management will go here</div>
-              </a-tab-pane>
-
             </a-tabs>
           </div>
         </a-layout-content>
@@ -109,6 +105,7 @@ import StimInfo from '../components/StimInfo.vue'
 import Scripts from '../components/Scripts.vue'
 import StateSystemDiagram from '../components/StateSystemDiagram.vue'
 import EventTracker from '../components/EventTracker.vue'
+import EyeTouchVisualizer from '../components/EyeTouchVisualizer.vue'
 
 // Status message
 const statusMessage = ref('Ready')

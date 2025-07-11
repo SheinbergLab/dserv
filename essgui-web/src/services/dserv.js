@@ -72,7 +72,18 @@ class DservWebSocket {
       subject: '',
       systemName: '',
       systemOS: '',
-      inObs: false,
+	inObs: false,
+      eyeWindows: Array(8).fill(null).map((_, i) => ({
+	  id: i,
+	  active: false,
+	  state: 0,
+	  type: 'rectangle',
+	  center: { x: 0, y: 0 },
+	  centerRaw: { x: 2048, y: 2048 },
+	  size: { width: 2, height: 2 },
+	  sizeRaw: { width: 400, height: 400 }
+      })),
+      eyeWindowStatusMask: 0,	
     });
 
     this.loadingOperations = reactive({
@@ -327,7 +338,36 @@ class DservWebSocket {
         this.state.blockPctCorrect = Math.round(parseFloat(value) * 100); 
         break;
       case 'ess/subject': this.state.subject = value; break;
-      case 'system/hostname': this.state.systemName = value; break;
+
+      case 'ess/em_region_setting':
+        const [reg, active, state, type, cx, cy, dx, dy] = value.split(' ').map(Number);
+        if (reg >= 0 && reg < 8) {
+	    this.state.eyeWindows[reg] = {
+		id: reg,
+		active: active === 1,
+		type: type === 1 ? 'ellipse' : 'rectangle',
+		center: {
+		    x: (cx - 2048) / 200.0,
+		    y: -1 * (cy - 2048) / 200.0
+		},
+		centerRaw: { x: cx, y: cy },
+		size: {
+		    width: Math.abs(dx / 200.0),
+		    height: Math.abs(dy / 200.0)
+		},
+		sizeRaw: { width: dx, height: dy }
+	    };
+        }
+	break;
+    case 'ess/em_region_status':
+	const [changes, states, adc_x, adc_y] = value.split(' ').map(Number);
+        this.state.eyeWindowStatusMask = states;
+	for (let i = 0; i < 8; i++) {
+	    this.state.eyeWindows[i].state = ((states & (1 << i)) !== 0) && this.state.eyeWindows[i].active;
+	}
+	break;
+	
+    case 'system/hostname': this.state.systemName = value; break;
       case 'system/os': this.state.systemOS = value; break;
       case 'print': console.log('ESS:', value); break;
       // Component-specific data is handled by event system, not stored centrally

@@ -219,9 +219,9 @@
         <!-- File status now shown in main status area above -->
 
         <!-- Filename input -->
-        <a-form-item 
-          label="Filename" 
-          style="margin-bottom: 4px;" 
+        <a-form-item
+          label="Filename"
+          style="margin-bottom: 4px;"
           class="datafile-config-item"
         >
           <div style="display: flex; align-items: center; gap: 4px;">
@@ -274,11 +274,11 @@
 
     <!-- SCROLLABLE SECTION - Optional/advanced controls -->
     <div style="flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
-      
+
       <!-- Variant Options - Now collapsible with improved scrolling -->
-      <a-collapse 
-        v-if="variantOptions.length > 0" 
-        ghost 
+      <a-collapse
+        v-if="variantOptions.length > 0"
+        ghost
         :bordered="true"
         style="margin-bottom: 12px; width: 100%; max-width: 100%;"
         :default-active-key="['variant-options']"
@@ -286,8 +286,8 @@
         <a-collapse-panel key="variant-options" header="Variant Options">
           <template #extra>
             <div style="display: flex; align-items: center; gap: 4px;" @click.stop>
-              <a-checkbox 
-                v-model:checked="autoReload" 
+              <a-checkbox
+                v-model:checked="autoReload"
                 size="small"
                 style="font-size: 9px; transform: scale(0.8);"
               />
@@ -302,7 +302,7 @@
               />
             </div>
           </template>
-          
+
           <div style="max-height: 200px; overflow-y: auto; padding-right: 4px;">
             <div v-for="option in variantOptions" :key="option.name" style="margin-bottom: 6px;">
               <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
@@ -315,15 +315,15 @@
                   class="variant-option-select"
                   style="width: 85px; flex-shrink: 0;"
                   :disabled="isSystemBusy"
-                  @change="(value) => { 
-                    console.log('Dropdown changed:', { optionName: option.name, selectedValue: value }); 
+                  @change="(value) => {
+                    console.log('Dropdown changed:', { optionName: option.name, selectedValue: value });
                     console.log('All option choices:', option.choices);
-                    setVariantOption(option.name, value); 
+                    setVariantOption(option.name, value);
                   }"
                 >
-                  <a-select-option 
-                    v-for="choice in option.choices" 
-                    :key="choice.label" 
+                  <a-select-option
+                    v-for="choice in option.choices"
+                    :key="choice.label"
                     :value="choice.value"
                   >
                     {{ choice.label }}
@@ -336,9 +336,9 @@
       </a-collapse>
 
       <!-- System Parameters - Now collapsible with improved scrolling -->
-      <a-collapse 
-        v-if="systemParameters.length > 0" 
-        ghost 
+      <a-collapse
+        v-if="systemParameters.length > 0"
+        ghost
         :bordered="true"
         style="margin-bottom: 12px; width: 100%; max-width: 100%;"
         :default-active-key="['system-parameters']"
@@ -433,7 +433,7 @@ const loading = ref({
 
 onMounted(() => {
   console.log('ExperimentControl component mounted')
-  
+
   // Register component with subscription for variant info JSON
   const cleanup = dserv.registerComponent('ExperimentControl', {
     subscriptions: [
@@ -444,13 +444,13 @@ onMounted(() => {
       { pattern: 'ess/rmt_connected', every: 1 }
     ]
   })
-  
+
   // Listen for comprehensive variant info data
   dserv.on('datapoint:ess/variant_info_json', (data) => {
     console.log('Received variant_info_json:', data.data)
     parseVariantInfoJson(data.data)
   })
-  
+
   // Listen for system parameters data (unchanged)
   dserv.on('datapoint:ess/param_settings', (data) => {
     console.log('Received param_settings:', data.data)
@@ -489,7 +489,7 @@ dserv.on('datapoint:ess/rmt_connected', (data) => {
 function parseVariantInfoJson(rawData) {
   try {
     console.log('Parsing variant info JSON:', rawData)
-    
+
     // Parse JSON data
     let variantInfo
     if (typeof rawData === 'string') {
@@ -497,7 +497,7 @@ function parseVariantInfoJson(rawData) {
     } else {
       variantInfo = rawData
     }
-    
+
     // Extract the main components
     const {
       loader_proc,
@@ -505,63 +505,63 @@ function parseVariantInfoJson(rawData) {
       loader_args,
       options
     } = variantInfo
-    
+
     console.log('Extracted variant info:', {
       loader_proc,
       loader_arg_names,
       loader_args,
       options
     })
-    
+
     // Convert to our internal format for variant options
     const variantOptionsArray = []
-    
+
     // Use loader_arg_names to maintain proper order
     loader_arg_names.forEach((argName, index) => {
       if (options[argName]) {
         // Find the currently selected option
         const currentValue = loader_args[index]
         let selectedValue = null
-        
+
         // Look through the options to find which one is selected
         const optionChoices = options[argName].map(option => {
           const isSelected = option.selected === true
           if (isSelected) {
             selectedValue = option.value
           }
-          
+
           return {
             label: option.label,
             value: option.value
           }
         })
-        
+
         // If no option was marked as selected, try to match by value
         if (selectedValue === null && optionChoices.length > 0) {
-          const matchingChoice = optionChoices.find(choice => 
-            choice.value === currentValue || 
+          const matchingChoice = optionChoices.find(choice =>
+            choice.value === currentValue ||
             (typeof currentValue === 'string' && choice.value === currentValue.trim())
           )
           selectedValue = matchingChoice ? matchingChoice.value : optionChoices[0].value
         }
-        
+
         variantOptionsArray.push({
           name: argName,
           choices: optionChoices,
           selectedValue: selectedValue || optionChoices[0]?.value || ''
         })
-        
+
         console.log(`Processed ${argName}: selected=${selectedValue}, choices=${optionChoices.length}`)
       }
     })
-    
+
     console.log('Final variant options array:', variantOptionsArray)
     variantOptions.value = variantOptionsArray
-    
+
     // Log the loader information for debugging
     console.log(`Loader proc: ${loader_proc}`)
     console.log(`Current args: [${loader_args.join(', ')}]`)
-    
+
   } catch (error) {
     console.error('Failed to parse variant info JSON:', error)
     variantOptions.value = []
@@ -572,21 +572,21 @@ function parseVariantInfoJson(rawData) {
 function parseSystemParameters(rawData) {
   try {
     console.log('Parsing system parameters:', rawData)
-    
+
     const params = []
     // Split by parameter pattern: param_name {value type datatype}
     const paramMatches = rawData.match(/(\w+)\s+{([^}]+)}/g)
-    
+
     if (paramMatches) {
       paramMatches.forEach(match => {
         const [, paramName, paramData] = match.match(/(\w+)\s+{([^}]+)}/)
         const parts = paramData.trim().split(/\s+/)
-        
+
         if (parts.length >= 3) {
           const value = parts[0]
           const variableType = parts[1] // 1=time, 2=variable, 5=other
           const dataType = parts[2] // int, float, ipaddr, etc.
-          
+
           // Convert value to appropriate type
           let convertedValue = value
           if (dataType === 'int') {
@@ -594,7 +594,7 @@ function parseSystemParameters(rawData) {
           } else if (dataType === 'float') {
             convertedValue = parseFloat(value)
           }
-          
+
           params.push({
             name: paramName,
             value: convertedValue,
@@ -604,7 +604,7 @@ function parseSystemParameters(rawData) {
         }
       })
     }
-    
+
     console.log('Parsed system parameters:', params)
     systemParameters.value = params
   } catch (error) {
@@ -615,7 +615,7 @@ function parseSystemParameters(rawData) {
 
 async function refreshSuggestion() {
   if (suggestLoading.value) return
-  
+
   suggestLoading.value = true
   try {
     const suggestion = await dserv.essCommand('ess::file_suggest')
@@ -638,11 +638,11 @@ async function refreshSuggestion() {
 async function openDatafile() {
   // Use manual input if provided, otherwise use suggestion, otherwise auto-suggest
   let filename = datafilename.value.trim()
-  
+
   if (!filename && suggestedFilename.value) {
     filename = suggestedFilename.value
   }
-  
+
   if (!filename) {
     // No manual input and no existing suggestion - try to get one
     try {
@@ -655,18 +655,18 @@ async function openDatafile() {
       console.error('Failed to auto-suggest filename:', error)
     }
   }
-  
+
   if (!filename) {
     logToTerminal('Unable to determine filename. Please enter one manually.', 'error')
     return
   }
-  
+
   if (datafileLoading.value) return
-  
+
   datafileLoading.value = true
   try {
     const result = await dserv.essCommand(`ess::file_open ${filename}`)
-    
+
     if (result === '1' || result === 1) {
       logToTerminal(`Datafile opened: ${filename}`, 'success')
       // Clear inputs after successful open
@@ -692,13 +692,13 @@ async function closeDatafile() {
     logToTerminal('No datafile is currently open', 'error')
     return
   }
-  
+
   if (datafileLoading.value) return
-  
+
   datafileLoading.value = true
   try {
     const result = await dserv.essCommand('ess::file_close')
-    
+
     if (result === '1' || result === 1) {
       logToTerminal('Datafile closed successfully', 'success')
       // Clear any lingering inputs after close
@@ -720,21 +720,21 @@ async function setVariantOption(optionName, value) {
     // 1. Always wrap the value in braces to make it a single argument
     // 2. This preserves any internal structure that may exist in the value
     // 3. Tcl will properly parse the internal structure based on its own rules
-    
+
     const command = `ess::set_variant_args {${optionName} {${value}}}`;
     console.log('Setting variant option with command:', command);
-    
+
     await dserv.essCommand(command);
-    logToTerminal(`Variant option ${optionName} set to: ${value}`, 'success');
-    
+    //logToTerminal(`Variant option ${optionName} set to: ${value}`, 'success');
+
     if (autoReload.value) {
       try {
         await dserv.essCommand('ess::reload_variant');
-        logToTerminal('Variant auto-reloaded', 'success');
+        //logToTerminal('Variant auto-reloaded', 'success');
       } catch (reloadError) {
         console.error('Failed to auto-reload variant:', reloadError);
         logToTerminal(`Auto-reload failed: ${reloadError.message}`, 'error');
-        
+
         try {
           await dserv.essCommand('dservSet ess/status stopped');
           console.log('Reset system status to stopped after reload failure');
@@ -927,7 +927,7 @@ async function resetExperiment() {
 
     // Clear observation count after reset
     dserv.state.obsCount = ' '
-    
+
     logToTerminal('Experiment reset', 'success')
   } catch (error) {
     console.error('Failed to reset experiment:', error)
@@ -1020,7 +1020,7 @@ function getStatusColor(status) {
 }
 
 :deep(label[title="System"]),
-:deep(label[title="Protocol"]), 
+:deep(label[title="Protocol"]),
 :deep(label[title="Variant"]) {
   font-size: 10px !important;
   font-weight: 500 !important;

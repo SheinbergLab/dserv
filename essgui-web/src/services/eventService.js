@@ -119,7 +119,46 @@ class EventService {
       events: []
     };
     this.eventHandlers = new Set();
+    this.isInitialized = false;
+    this.dservCleanup = null;
     this.initialize();
+  }
+
+  // Initialize the service and start listening to dserv events immediately
+  async initializeGlobalTracking(dservInstance) {
+    if (this.isInitialized) return; // Already initialized
+    
+    console.log('Starting global event tracking...');
+    
+    // Subscribe to eventlog events globally
+    this.dservCleanup = dservInstance.registerComponent('EventService', {
+      subscriptions: [
+        { pattern: 'eventlog/events', every: 1 }
+      ]
+    });
+
+    // Set up global event handler
+    dservInstance.on('datapoint:eventlog/events', this.handleGlobalDatapoint.bind(this));
+    
+    this.isInitialized = true;
+    console.log('Global event tracking started');
+  }
+
+  // Global datapoint handler - processes ALL events for state management
+  handleGlobalDatapoint(data) {
+    if (data.name === 'eventlog/events') {
+      // ALWAYS process events for names, state tracking, etc.
+      this.processEvent(data); // Use processEvent, not parseEvent!
+    }
+  }
+
+  // Cleanup global tracking
+  cleanup() {
+    if (this.dservCleanup) {
+      this.dservCleanup();
+      this.dservCleanup = null;
+    }
+    this.isInitialized = false;
   }
 
   initialize() {
@@ -471,5 +510,10 @@ class EventService {
   }
 }
 
-  // Create singleton instance
+  // Create singleton instance and expose globally
 export const eventService = new EventService();
+
+// Auto-initialize when dserv is available (call this from your main app)
+export const initializeEventTracking = async (dservInstance) => {
+  return await eventService.initializeGlobalTracking(dservInstance);
+};
