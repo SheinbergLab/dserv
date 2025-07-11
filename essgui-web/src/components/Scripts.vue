@@ -97,6 +97,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { dserv } from '../services/dserv.js'
 
 // CodeMirror imports
+import { EditorSelection } from '@codemirror/state'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
@@ -114,6 +115,8 @@ import {
 } from '@codemirror/commands'
 import { search, highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
+
+import TclFormatter from '../utils/TclFormatter.js'
 
 // Component state
 const editorContainer = ref(null)
@@ -195,6 +198,14 @@ function createEditor() {
     }
   }
 
+const formatCommand = {
+  key: 'Ctrl-Shift-f',  
+  run: () => {
+    formatScript()
+    return true
+  }
+}
+
   // Emacs-style key bindings with auto-indent on Enter
   const emacsBindings = [
     { key: 'Ctrl-a', run: cursorLineStart },
@@ -208,8 +219,9 @@ function createEditor() {
         return autoIndentNewline(view)
       }
     },
-    { key: 'Tab', run: insertTab }, // Simple tab insertion
+    { key: 'Tab', run: handleSmartTab },
     { key: 'Shift-Tab', run: indentLess },
+    formatCommand, 
     searchCommand // Add our custom search binding for emacs mode
   ]
 
@@ -221,7 +233,8 @@ function createEditor() {
         return autoIndentNewline(view)
       }
     },
-    { key: 'Tab', run: insertTab },
+    { key: 'Tab', run: handleSmartTab },
+    formatCommand, 
     { key: 'Shift-Tab', run: indentLess }
   ]
 
@@ -251,13 +264,71 @@ function createEditor() {
       EditorState.tabSize.of(4),
       EditorView.lineWrapping,
       keymap.of(allKeybindings),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged && !isUpdatingContent.value) {
-          const newContent = update.state.doc.toString()
-          scripts.value[activeScript.value].content = newContent
-          scripts.value[activeScript.value].modified = true
+EditorView.updateListener.of((update) => {
+  // Handle content changes for marking as modified
+  if (update.docChanged && !isUpdatingContent.value) {
+    const newContent = update.state.doc.toString()
+    scripts.value[activeScript.value].content = newContent
+    scripts.value[activeScript.value].modified = true
+  }
+  
+  // Handle auto-indent for newlines
+  if (update.docChanged) {
+    try {
+      let foundNewline = false
+      let newlinePos = -1
+      
+      update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+        const insertedText = inserted.toString()
+        if (insertedText.includes('\n')) {
+          foundNewline = true
+          newlinePos = fromB + insertedText.indexOf('\n') + 1
         }
-      }),
+      })
+      
+      if (foundNewline && newlinePos > 0) {
+        setTimeout(() => {
+          try {
+            const view = update.view
+            const state = view.state
+            const line = state.doc.lineAt(newlinePos)
+            
+            if (line.text.trim() === '') {
+              const allText = state.doc.toString()
+              const lines = TclFormatter.splitLines(allText)
+              const lineNum = line.number - 1
+              
+              const indent = TclFormatter.calculateLineIndent(lines, lineNum, 4)
+              
+              if (indent > 0) {
+                const indentText = ' '.repeat(indent)
+                
+                isUpdatingContent.value = true
+                
+                view.dispatch({
+                  changes: {
+                    from: line.from,
+                    to: line.to,
+                    insert: indentText
+                  },
+                  selection: EditorSelection.cursor(line.from + indent)
+                })
+                
+                nextTick(() => {
+                  isUpdatingContent.value = false
+                })
+              }
+            }
+          } catch (error) {
+            console.error('Error in auto-indent:', error)
+          }
+        }, 10)
+      }
+    } catch (error) {
+      console.error('Error in update listener:', error)
+    }
+  }
+}),
       EditorView.theme({
         '&': { height: '100%' },
         '.cm-scroller': { 
@@ -338,39 +409,47 @@ function setKeyBindings(bindings) {
   }
 }
 
-// Format current script (basic Tcl formatting)
 function formatScript() {
-  if (!currentScript.value.content) return
+
+if (!currentScript.value.content) return
   
-  const lines = currentScript.value.content.split('\n')
-  let indentLevel = 0
-  const formatted = []
-  
-  for (let line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      formatted.push('')
-      continue
+  try {
+    const formattedContent = TclFormatter.formatTclCode(currentScript.value.content, 4)
+    scripts.value[activeScript.value].content = formattedContent
+    scripts.value[activeScript.value].modified = true
+    updateEditorContent(formattedContent)
+  } catch (error) {
+    console.error('Error formatting script:', error)
+    console.error('Stack trace:', error.stack)
+    // Fallback to your existing simple formatter
+    console.log('Using fallback formatter...')
+    const lines = currentScript.value.content.split('\n')
+    let indentLevel = 0
+    const formatted = []
+    
+    for (let line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) {
+        formatted.push('')
+        continue
+      }
+      
+      if (trimmed.startsWith('}')) {
+        indentLevel = Math.max(0, indentLevel - 1)
+      }
+      
+      formatted.push('    '.repeat(indentLevel) + trimmed)
+      
+      if (trimmed.endsWith('{')) {
+        indentLevel++
+      }
     }
     
-    // Decrease indent for closing braces
-    if (trimmed.startsWith('}')) {
-      indentLevel = Math.max(0, indentLevel - 1)
-    }
-    
-    // Add indented line
-    formatted.push('    '.repeat(indentLevel) + trimmed)
-    
-    // Increase indent for opening braces
-    if (trimmed.endsWith('{')) {
-      indentLevel++
-    }
+    const formattedContent = formatted.join('\n')
+    scripts.value[activeScript.value].content = formattedContent
+    scripts.value[activeScript.value].modified = true
+    updateEditorContent(formattedContent)
   }
-  
-  const formattedContent = formatted.join('\n')
-  scripts.value[activeScript.value].content = formattedContent
-  scripts.value[activeScript.value].modified = true
-  updateEditorContent(formattedContent)
 }
 
 // Save current script
@@ -583,46 +662,96 @@ function requestScriptData() {
   }
 }
 
-// Auto-indent on newline (much cleaner than complex tab handling)
 function autoIndentNewline(view) {
+  console.log('=== autoIndentNewline called ===')
+  
   const state = view.state
   const selection = state.selection.main
   const line = state.doc.lineAt(selection.head)
-  const lineText = line.text
   
-  // Calculate indentation for new line
-  let indentLevel = 0
+  console.log('Current line:', line.text)
+  console.log('Cursor position:', selection.head)
   
-  // Count current line's indentation
-  const currentIndentMatch = lineText.match(/^(\s*)/)
-  const currentIndent = currentIndentMatch ? currentIndentMatch[1] : ''
-  const currentIndentLevel = Math.floor(currentIndent.length / 4)
+  // Get all lines up to current position
+  const allText = state.doc.toString()
+  const lines = TclFormatter.splitLines(allText)
+  const currentLineNum = line.number - 1
   
-  // Check if current line ends with opening brace
-  const trimmedLine = lineText.trim()
-  if (trimmedLine.endsWith('{')) {
-    indentLevel = currentIndentLevel + 1
-  } else {
-    indentLevel = currentIndentLevel
+  console.log('Current line number:', currentLineNum)
+  
+  try {
+    // Calculate proper indent for next line (after the newline we're about to insert)
+    const nextLineIndent = TclFormatter.calculateLineIndent(lines, currentLineNum + 1, 4)
+    
+    console.log('Calculated next line indent:', nextLineIndent)
+    
+    // Create the new line with proper indentation
+    const newIndent = ' '.repeat(nextLineIndent)
+    const newline = '\n' + newIndent
+    
+    console.log('Inserting newline with indent:', JSON.stringify(newline))
+    
+    view.dispatch({
+      changes: { from: selection.head, insert: newline },
+      selection: { anchor: selection.head + newline.length }
+    })
+    
+    console.log('Auto-indent completed successfully')
+    return true
+  } catch (error) {
+    console.error('Error in auto-indent:', error)
+    // Fallback to simple auto-indent
+    console.log('Using fallback auto-indent')
+    // ... your existing fallback code
+    return true
   }
-  
-  // Check for Tcl keywords that should increase indentation
-  const tclKeywords = ['if', 'for', 'foreach', 'while', 'proc', 'switch', 'catch', 'try']
-  if (tclKeywords.some(keyword => trimmedLine.startsWith(keyword + ' ')) && !trimmedLine.endsWith('{')) {
-    indentLevel = currentIndentLevel + 1
-  }
-  
-  // Create the new line with proper indentation
-  const newIndent = '    '.repeat(Math.max(0, indentLevel))
-  const newline = '\n' + newIndent
-  
-  view.dispatch({
-    changes: { from: selection.head, insert: newline },
-    selection: { anchor: selection.head + newline.length }
-  })
-  
-  return true
 }
+
+function handleSmartTab(view) {
+  const state = view.state
+  const selection = state.selection.main
+  const line = state.doc.lineAt(selection.head)
+  
+  // Get all lines
+  const allText = state.doc.toString()
+  const lines = TclFormatter.splitLines(allText)
+  const currentLineNum = line.number - 1
+  
+  try {
+    // Always calculate and apply proper indent for current line
+    const targetIndent = TclFormatter.calculateLineIndent(lines, currentLineNum, 4)
+    
+    // Get current line's existing indent
+    const lineText = line.text
+    const currentIndentMatch = lineText.match(/^(\s*)/)
+    const currentIndent = currentIndentMatch ? currentIndentMatch[1].length : 0
+    
+    // Always adjust to proper indentation (don't insert extra spaces)
+    const lineStart = line.from
+    const contentStart = lineStart + currentIndent
+    const newIndent = ' '.repeat(targetIndent)
+    
+    view.dispatch({
+      changes: {
+        from: lineStart,
+        to: contentStart,
+        insert: newIndent
+      },
+      selection: { anchor: lineStart + targetIndent }
+    })
+    
+    return true
+  } catch (error) {
+    console.error('Error in smart tab:', error)
+    // Fallback to simple tab
+    view.dispatch({
+      changes: { from: selection.head, insert: '    ' },
+      selection: { anchor: selection.head + 4 }
+    })
+    return true
+  }
+}
+
 </script>
 
 <style scoped>
