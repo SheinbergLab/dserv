@@ -386,7 +386,7 @@ class DservWebSocket {
           ess/git/branches ess/git/branch
           ess/system_script ess/protocol_script
           ess/variants_script ess/loaders_script
-	  ess/stim_script          
+	  ess/stim_script ess/rmt_connected
           system/hostname system/os
         } {
           catch { dservTouch $v }

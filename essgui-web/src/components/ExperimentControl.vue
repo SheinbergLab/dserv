@@ -1,287 +1,398 @@
 <template>
-  <div style="padding: 8px;">
+  <div style="height: 100%; display: flex; flex-direction: column; padding: 8px; overflow: hidden;">
     <!-- Connection Status Header -->
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
+    <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
       <div style="font-weight: 500; font-size: 14px;">ESS Control</div>
-      <a-tag
-        :color="connectionColor"
-        style="margin: 0;"
-      >
-        {{ connectionStatus }}
-      </a-tag>
-    </div>
-
-    <!-- Subject Selection -->
-    <div class="system-config" style="border: 1px solid #d9d9d9; padding: 4px; margin-bottom: 8px;">
-       <a-form-item label="Subject" style="margin-bottom: 0;">
-        <a-select
-          v-model:value="dserv.state.subject"
-          size="small"
-          style="flex: 1; min-width: 140px;"
-          :disabled="isSystemBusy"
-          @change="setSubject"
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <a-tag
+          :color="connectionColor"
+          style="margin: 0;"
         >
-          <a-select-option v-for="subject in subjects" :key="subject" :value="subject">
-            {{ subject }}
-          </a-select-option>
-        </a-select>
-      </a-form-item>
-    </div>
-
-    <!-- Control Buttons -->
-    <div class="control-buttons" style="margin-bottom: 12px;">
-      <a-space size="small">
-        <a-button
-          type="primary"
-          size="small"
-          :loading="loading.start"
-          :disabled="isSystemBusy || dserv.state.status === 'Running' || !dserv.state.currentVariant"
-          @click="startExperiment"
+          {{ connectionStatus }}
+        </a-tag>
+        <a-tag
+          :color="stimConnectionColor"
+          style="margin: 0; font-size: 11px;"
         >
-          Go
-        </a-button>
-        <a-button
-          danger
-          size="small"
-          :loading="loading.stop"
-          :disabled="isSystemBusy || dserv.state.status !== 'Running'"
-          @click="stopExperiment"
-        >
-          Stop
-        </a-button>
-        <a-button
-          size="small"
-          :loading="loading.reset"
-          :disabled="isSystemBusy"
-          @click="resetExperiment"
-        >
-          Reset
-        </a-button>
-      </a-space>
-    </div>
-
-    <!-- Status Display -->
-    <div style="margin-bottom: 12px; font-size: 12px;">
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <div class="obs-indicator" :class="{ 'is-active': dserv.state.inObs }"></div>
-        <div style="flex: 1; display: flex; justify-content: space-between; align-items: center;">
-          <span><strong>Status:</strong></span>
-          <a-tag
-            :color="getStatusColor(dserv.state.status)"
-            style="margin: 0;"
-          >
-            {{ dserv.state.status }}
-          </a-tag>
-        </div>
-      </div>
-
-      <!-- Indent subsequent lines to align with Status text -->
-      <div style="padding-left: 20px;">
-        <!-- Show loading indicator when system is busy -->
-        <div
-          v-if="isSystemBusy"
-          style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;"
-        >
-          <span><strong>ESS:</strong></span>
-          <a-tag color="orange" style="margin: 0;">
-            {{ dserv.state.essStatus }}
-          </a-tag>
-        </div>
-
-        <div
-          v-if="dserv.state.obsCount"
-          style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;"
-        >
-          <span><strong>Obs:</strong></span>
-          <a-tag
-            :color="dserv.state.inObs ? 'red' : 'default'"
-            style="margin: 0;"
-          >
-            {{ dserv.state.obsCount }}
-          </a-tag>
-        </div>
+          {{ stimConnectionStatus }}
+        </a-tag>
       </div>
     </div>
 
-    <!-- System Configuration -->
-    <div class="system-config" style="border: 1px solid #d9d9d9; padding: 6px; margin-bottom: 8px;">
-      <div style="font-weight: 500; margin-bottom: 6px; font-size: 12px;">
-        System Configuration
-        <a-spin v-if="isSystemBusy" size="small" style="margin-left: 8px;" />
-      </div>
-
-      <a-form-item label="System" style="margin-bottom: 4px;">
-        <div style="display: flex; align-items: center; gap: 4px;">
+    <!-- FIXED SECTION - Always visible essential controls -->
+    <div style="flex-shrink: 0; margin-bottom: 12px; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
+      <!-- Subject Selection -->
+      <div class="system-config subject-section" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 4px; margin-bottom: 8px; width: 100%; max-width: 100%;">
+         <a-form-item label="Subject" style="margin-bottom: 0;" class="subject-item">
           <a-select
-            v-model:value="dserv.state.currentSystem"
+            v-model:value="dserv.state.subject"
             size="small"
             style="flex: 1; min-width: 140px;"
-            :loading="loading.system || isSystemBusy"
             :disabled="isSystemBusy"
-            @change="setSystem"
+            @change="setSubject"
           >
-            <a-select-option v-for="system in dserv.state.systems" :key="system" :value="system">
-              {{ system }}
+            <a-select-option v-for="subject in subjects" :key="subject" :value="subject">
+              {{ subject }}
             </a-select-option>
           </a-select>
-          <a-button
-            size="small"
-            :icon="h(ReloadOutlined)"
-            :disabled="isSystemBusy"
-            @click="reloadSystem"
-            style="width: 24px; height: 24px;"
-          />
-        </div>
-      </a-form-item>
-
-      <a-form-item label="Protocol" style="margin-bottom: 4px;">
-        <div style="display: flex; align-items: center; gap: 4px;">
-          <a-select
-            v-model:value="dserv.state.currentProtocol"
-            size="small"
-            style="flex: 1; min-width: 140px;"
-            :loading="loading.protocol || isSystemBusy"
-            :disabled="isSystemBusy || !dserv.state.currentSystem"
-            @change="setProtocol"
-          >
-            <a-select-option v-for="protocol in dserv.state.protocols" :key="protocol" :value="protocol">
-              {{ protocol }}
-            </a-select-option>
-          </a-select>
-          <a-button
-            size="small"
-            :icon="h(ReloadOutlined)"
-            :disabled="isSystemBusy"
-            @click="reloadProtocol"
-            style="width: 24px; height: 24px;"
-          />
-        </div>
-      </a-form-item>
-
-      <a-form-item label="Variant" style="margin-bottom: 0;">
-        <div style="display: flex; align-items: center; gap: 4px;">
-          <a-select
-            v-model:value="dserv.state.currentVariant"
-            size="small"
-            style="flex: 1; min-width: 140px;"
-            :loading="loading.variant || isSystemBusy"
-            :disabled="isSystemBusy || !dserv.state.currentProtocol"
-            @change="setVariant"
-          >
-            <a-select-option v-for="variant in dserv.state.variants" :key="variant" :value="variant">
-              {{ variant }}
-            </a-select-option>
-          </a-select>
-          <a-button
-            size="small"
-            :icon="h(ReloadOutlined)"
-            :disabled="isSystemBusy"
-            @click="reloadVariant"
-            style="width: 24px; height: 24px;"
-          />
-        </div>
-      </a-form-item>
-    </div>
-
-    <!-- Variant Options -->
-    <div v-if="variantOptions.length > 0" style="border: 1px solid #d9d9d9; padding: 8px; margin-bottom: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <div style="font-weight: 500; font-size: 12px;">Variant Options</div>
-        <div style="display: flex; align-items: center; gap: 4px;">
-          <a-checkbox 
-            v-model:checked="autoReload" 
-            size="small"
-            style="font-size: 10px;"
-          >
-            Auto-reload
-          </a-checkbox>
-          <a-button
-            size="small"
-            :icon="h(ReloadOutlined)"
-            :disabled="isSystemBusy"
-            @click="reloadVariant"
-            style="width: 20px; height: 20px; font-size: 9px;"
-            title="Reload variant manually"
-          />
-        </div>
+        </a-form-item>
       </div>
-      <div style="max-height: 120px; overflow-y: auto; padding-right: 4px;">
-        <div v-for="option in variantOptions" :key="option.name" style="margin-bottom: 2px;">
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <span style="font-size: 10px; flex: 1; text-align: left; padding-right: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-              {{ option.name }}
-            </span>
-            <a-select
-              v-model:value="option.selectedValue"
+
+      <!-- Control Buttons and Status Display - Active Control Area -->
+      <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 8px; padding: 8px; margin-bottom: 12px; width: 100%; max-width: 100%;">
+        <!-- Control Buttons -->
+        <div class="control-buttons" style="margin-bottom: 8px;">
+          <a-space size="small">
+            <a-button
+              type="primary"
               size="small"
-              class="variant-option-select"
-              style="width: 75px; flex-shrink: 0;"
-              :disabled="isSystemBusy"
-              @change="(value) => setVariantOption(option.name, value)"
+              :loading="loading.start"
+              :disabled="isSystemBusy || dserv.state.status === 'Running' || !dserv.state.currentVariant"
+              @click="startExperiment"
             >
-              <a-select-option 
-                v-for="choice in option.choices" 
-                :key="choice.label" 
-                :value="choice.value"
+              Go
+            </a-button>
+            <a-button
+              danger
+              size="small"
+              :loading="loading.stop"
+              :disabled="isSystemBusy || dserv.state.status !== 'Running'"
+              @click="stopExperiment"
+            >
+              Stop
+            </a-button>
+            <a-button
+              size="small"
+              :loading="loading.reset"
+              :disabled="isSystemBusy"
+              @click="resetExperiment"
+            >
+              Reset
+            </a-button>
+          </a-space>
+        </div>
+
+        <!-- Status Display -->
+        <div style="font-size: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+            <div class="obs-indicator" :class="{ 'is-active': dserv.state.inObs }"></div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="width: 50px; text-align: right;"><strong>Status:</strong></span>
+              <a-tag
+                :color="getStatusColor(dserv.state.status)"
+                style="margin: 0;"
               >
-                {{ choice.label }}
+                {{ dserv.state.status }}
+              </a-tag>
+            </div>
+          </div>
+
+          <!-- Additional status info aligned with Status line -->
+          <div style="padding-left: 20px;">
+            <!-- Show loading indicator when system is busy -->
+            <div
+              v-if="isSystemBusy"
+              style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;"
+            >
+              <span style="width: 50px; text-align: right;"><strong>ESS:</strong></span>
+              <a-tag color="orange" style="margin: 0;">
+                {{ dserv.state.essStatus }}
+              </a-tag>
+            </div>
+
+            <div
+              v-if="dserv.state.obsCount"
+              style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;"
+            >
+              <span style="width: 50px; text-align: right;"><strong>Obs:</strong></span>
+              <a-tag
+                :color="dserv.state.inObs ? 'red' : 'default'"
+                style="margin: 0;"
+              >
+                {{ dserv.state.obsCount }}
+              </a-tag>
+            </div>
+
+            <div
+              v-if="currentDatafile"
+              style="display: flex; align-items: center; gap: 8px;"
+            >
+              <a-tag
+                color="green"
+                style="margin: 0; font-family: monospace; font-size: 10px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                {{ currentDatafile.split('/').pop().replace('.ess', '') }}
+              </a-tag>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- System Configuration -->
+      <div class="system-config" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 6px; margin-bottom: 8px; width: 100%; max-width: 100%;">
+        <div style="font-weight: 500; margin-bottom: 6px; font-size: 12px;">
+          System Configuration
+          <a-spin v-if="isSystemBusy" size="small" style="margin-left: 8px;" />
+        </div>
+
+        <a-form-item label="System" style="margin-bottom: 4px;" class="system-config-item">
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <a-select
+              v-model:value="dserv.state.currentSystem"
+              size="small"
+              style="flex: 1; min-width: 140px;"
+              :loading="loading.system || isSystemBusy"
+              :disabled="isSystemBusy"
+              @change="setSystem"
+            >
+              <a-select-option v-for="system in dserv.state.systems" :key="system" :value="system">
+                {{ system }}
               </a-select-option>
             </a-select>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- System Parameters -->
-    <div v-if="systemParameters.length > 0" style="border: 1px solid #d9d9d9; padding: 8px; margin-bottom: 12px;">
-      <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">System Parameters</div>
-      <div style="max-height: 120px; overflow-y: auto; padding-right: 4px;">
-        <div v-for="param in systemParameters" :key="param.name" style="margin-bottom: 2px;">
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <span style="font-size: 10px; flex: 1; text-align: left; padding-right: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-              {{ param.name }}
-            </span>
-            <a-input-number
-              v-if="param.dataType === 'int' || param.dataType === 'float'"
-              v-model:value="param.value"
+            <a-button
               size="small"
-              style="width: 75px; flex-shrink: 0;"
-              :precision="param.dataType === 'float' ? 2 : 0"
-              :step="param.dataType === 'float' ? 0.1 : 1"
+              :icon="h(ReloadOutlined)"
               :disabled="isSystemBusy"
-              @change="() => setSystemParameter(param.name, param.value)"
+              @click="reloadSystem"
+              style="width: 24px; height: 24px;"
             />
+          </div>
+        </a-form-item>
+
+        <a-form-item label="Protocol" style="margin-bottom: 4px;" class="system-config-item">
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <a-select
+              v-model:value="dserv.state.currentProtocol"
+              size="small"
+              style="flex: 1; min-width: 140px;"
+              :loading="loading.protocol || isSystemBusy"
+              :disabled="isSystemBusy || !dserv.state.currentSystem"
+              @change="setProtocol"
+            >
+              <a-select-option v-for="protocol in dserv.state.protocols" :key="protocol" :value="protocol">
+                {{ protocol }}
+              </a-select-option>
+            </a-select>
+            <a-button
+              size="small"
+              :icon="h(ReloadOutlined)"
+              :disabled="isSystemBusy"
+              @click="reloadProtocol"
+              style="width: 24px; height: 24px;"
+            />
+          </div>
+        </a-form-item>
+
+        <a-form-item label="Variant" style="margin-bottom: 0;" class="system-config-item">
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <a-select
+              v-model:value="dserv.state.currentVariant"
+              size="small"
+              style="flex: 1; min-width: 140px;"
+              :loading="loading.variant || isSystemBusy"
+              :disabled="isSystemBusy || !dserv.state.currentProtocol"
+              @change="setVariant"
+            >
+              <a-select-option v-for="variant in dserv.state.variants" :key="variant" :value="variant">
+                {{ variant }}
+              </a-select-option>
+            </a-select>
+            <a-button
+              size="small"
+              :icon="h(ReloadOutlined)"
+              :disabled="isSystemBusy"
+              @click="reloadVariant"
+              style="width: 24px; height: 24px;"
+            />
+          </div>
+        </a-form-item>
+      </div>
+
+      <!-- Datafile Management -->
+      <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 6px; width: 100%; max-width: 100%;">
+        <div style="font-weight: 500; margin-bottom: 6px; font-size: 12px;">
+          Datafile Management
+          <a-spin v-if="datafileLoading" size="small" style="margin-left: 8px;" />
+        </div>
+
+        <!-- Current file status -->
+        <!-- File status now shown in main status area above -->
+
+        <!-- Filename input -->
+        <a-form-item 
+          label="Filename" 
+          style="margin-bottom: 4px;" 
+          class="datafile-config-item"
+        >
+          <div style="display: flex; align-items: center; gap: 4px;">
             <a-input
-              v-else
-              v-model:value="param.value"
+              ref="filenameInput"
+              v-model:value="datafilename"
               size="small"
-              style="width: 75px; flex-shrink: 0;"
-              :disabled="isSystemBusy"
-              @change="() => setSystemParameter(param.name, param.value)"
+              style="flex: 1; min-width: 100px;"
+              :disabled="isSystemBusy || !!currentDatafile"
+              :placeholder="datafilename ? '' : (suggestedFilename ? 'use suggested file' : 'enter filename or click open')"
+              @press-enter="openDatafile"
+            />
+            <a-button
+              size="small"
+              :icon="h(BulbOutlined)"
+              :disabled="isSystemBusy || !!currentDatafile"
+              @click="refreshSuggestion"
+              :loading="suggestLoading"
+              style="width: 24px; height: 24px;"
+              title="Refresh suggestion"
             />
           </div>
+        </a-form-item>
+
+        <!-- Action buttons -->
+        <div style="display: flex; justify-content: center; gap: 4px;">
+          <a-button
+            type="primary"
+            size="small"
+            :disabled="isSystemBusy || !!currentDatafile"
+            @click="openDatafile"
+            :loading="datafileLoading"
+            style="width: 60px;"
+          >
+            Open
+          </a-button>
+          <a-button
+            danger
+            size="small"
+            :disabled="isSystemBusy || !currentDatafile"
+            @click="closeDatafile"
+            :loading="datafileLoading"
+            style="width: 60px;"
+          >
+            Close
+          </a-button>
         </div>
       </div>
     </div>
 
-    <!-- Settings Management -->
-    <div style="border: 1px solid #d9d9d9; padding: 8px; margin-bottom: 12px;">
-      <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Settings</div>
-      <div style="display: flex; justify-content: center; padding-bottom: 4px;">
-        <a-space size="small" wrap>
-          <a-button size="small" :disabled="isSystemBusy" @click="saveSettings">Save</a-button>
-          <a-button size="small" :disabled="isSystemBusy" @click="resetSettings">Reset</a-button>
-          <a-button size="small" :disabled="isSystemBusy" @click="loadSettings">Load</a-button>
-        </a-space>
-      </div>
-    </div>
+    <!-- SCROLLABLE SECTION - Optional/advanced controls -->
+    <div style="flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
+      
+      <!-- Variant Options - Now collapsible with improved scrolling -->
+      <a-collapse 
+        v-if="variantOptions.length > 0" 
+        ghost 
+        :bordered="true"
+        style="margin-bottom: 12px; width: 100%; max-width: 100%;"
+        :default-active-key="['variant-options']"
+      >
+        <a-collapse-panel key="variant-options" header="Variant Options">
+          <template #extra>
+            <div style="display: flex; align-items: center; gap: 4px;" @click.stop>
+              <a-checkbox 
+                v-model:checked="autoReload" 
+                size="small"
+                style="font-size: 9px; transform: scale(0.8);"
+              />
+              <span style="font-size: 9px;">Auto-reload</span>
+              <a-button
+                size="small"
+                :icon="h(ReloadOutlined)"
+                :disabled="isSystemBusy"
+                @click="reloadVariant"
+                style="width: 18px; height: 18px; font-size: 8px; margin-left: 4px;"
+                title="Reload variant manually"
+              />
+            </div>
+          </template>
+          
+          <div style="max-height: 200px; overflow-y: auto; padding-right: 4px;">
+            <div v-for="option in variantOptions" :key="option.name" style="margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                <span style="font-size: 11px; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                  {{ option.name }}
+                </span>
+                <a-select
+                  v-model:value="option.selectedValue"
+                  size="small"
+                  class="variant-option-select"
+                  style="width: 85px; flex-shrink: 0;"
+                  :disabled="isSystemBusy"
+                  @change="(value) => { 
+                    console.log('Dropdown changed:', { optionName: option.name, selectedValue: value }); 
+                    console.log('All option choices:', option.choices);
+                    setVariantOption(option.name, value); 
+                  }"
+                >
+                  <a-select-option 
+                    v-for="choice in option.choices" 
+                    :key="choice.label" 
+                    :value="choice.value"
+                  >
+                    {{ choice.label }}
+                  </a-select-option>
+                </a-select>
+              </div>
+            </div>
+          </div>
+        </a-collapse-panel>
+      </a-collapse>
 
-    <!-- Quick Performance Summary (minimal) -->
-    <div v-if="showPerformance" style="border: 1px solid #d9d9d9; padding: 8px;">
-      <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Performance</div>
-      <div style="font-size: 11px;">
-        <div>{{ dserv.state.blockPctCorrect }}% Correct</div>
-        <div>{{ dserv.state.blockPctComplete }}% Complete</div>
+      <!-- System Parameters - Now collapsible with improved scrolling -->
+      <a-collapse 
+        v-if="systemParameters.length > 0" 
+        ghost 
+        :bordered="true"
+        style="margin-bottom: 12px; width: 100%; max-width: 100%;"
+        :default-active-key="['system-parameters']"
+      >
+        <a-collapse-panel key="system-parameters" header="System Parameters">
+          <div style="max-height: 200px; overflow-y: auto; padding-right: 4px;">
+            <div v-for="param in systemParameters" :key="param.name" style="margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                <span style="font-size: 11px; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                  {{ param.name }}
+                </span>
+                <a-input-number
+                  v-if="param.dataType === 'int' || param.dataType === 'float'"
+                  v-model:value="param.value"
+                  size="small"
+                  style="width: 85px; flex-shrink: 0;"
+                  :precision="param.dataType === 'float' ? 2 : 0"
+                  :step="param.dataType === 'float' ? 0.1 : 1"
+                  :disabled="isSystemBusy"
+                  @change="() => setSystemParameter(param.name, param.value)"
+                />
+                <a-input
+                  v-else
+                  v-model:value="param.value"
+                  size="small"
+                  style="width: 85px; flex-shrink: 0;"
+                  :disabled="isSystemBusy"
+                  @change="() => setSystemParameter(param.name, param.value)"
+                />
+              </div>
+            </div>
+          </div>
+        </a-collapse-panel>
+      </a-collapse>
+
+      <!-- Settings Management - Always visible at bottom -->
+      <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 8px; margin-bottom: 12px; width: 100%; max-width: 100%;">
+        <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Settings</div>
+        <div style="display: flex; justify-content: center; padding-bottom: 4px;">
+          <a-space size="small" wrap>
+            <a-button size="small" :disabled="isSystemBusy" @click="saveSettings">Save</a-button>
+            <a-button size="small" :disabled="isSystemBusy" @click="resetSettings">Reset</a-button>
+            <a-button size="small" :disabled="isSystemBusy" @click="loadSettings">Load</a-button>
+          </a-space>
+        </div>
+      </div>
+
+      <!-- Quick Performance Summary (minimal) -->
+      <div v-if="showPerformance" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 8px; width: 100%; max-width: 100%;">
+        <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Performance</div>
+        <div style="font-size: 11px;">
+          <div>{{ dserv.state.blockPctCorrect }}% Correct</div>
+          <div>{{ dserv.state.blockPctComplete }}% Complete</div>
+        </div>
       </div>
     </div>
   </div>
@@ -290,6 +401,7 @@
 <script setup>
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
+import { BulbOutlined } from '@ant-design/icons-vue'
 import { dserv } from '../services/dserv.js'
 
 // Define emits for terminal logging
@@ -297,9 +409,18 @@ const emit = defineEmits(['status-update'])
 
 // Local state
 const subjects = ['sally', 'momo', 'riker', 'glenn', 'human']
+
+const datafilename = ref('')
+const currentDatafile = ref('')
+const datafileLoading = ref(false)
+const suggestLoading = ref(false)
+const suggestedFilename = ref('')
+const filenameInput = ref(null)
+
 const variantOptions = ref([])
 const systemParameters = ref([])
 const autoReload = ref(true) // Default to auto-reload enabled
+const stimConnected = ref(false) // Track stim connection status
 
 const loading = ref({
   start: false,
@@ -317,7 +438,10 @@ onMounted(() => {
   const cleanup = dserv.registerComponent('ExperimentControl', {
     subscriptions: [
       { pattern: 'ess/variant_info_json', every: 1 },
-      { pattern: 'ess/param_settings', every: 1 }
+      { pattern: 'ess/param_settings', every: 1 },
+      { pattern: 'ess/datafile', every: 1 },
+      { pattern: 'ess/lastfile', every: 1 },
+      { pattern: 'ess/rmt_connected', every: 1 }
     ]
   })
   
@@ -332,7 +456,32 @@ onMounted(() => {
     console.log('Received param_settings:', data.data)
     parseSystemParameters(data.data)
   })
-  
+
+// Listen for datafile status
+dserv.on('datapoint:ess/datafile', (data) => {
+  console.log('Received datafile status:', data.data)
+  currentDatafile.value = data.data || ''
+  if (!data.data) {
+    // File was closed, clear the filename for next use
+    datafilename.value = ''
+  }
+})
+
+// Listen for last file info (when file is closed and processed)
+dserv.on('datapoint:ess/lastfile', (data) => {
+  console.log('Last file processed:', data.data)
+  if (data.data) {
+    logToTerminal(`File processed: ${data.data}`, 'success')
+  }
+})
+
+// Listen for stim connection status
+dserv.on('datapoint:ess/rmt_connected', (data) => {
+  console.log('Received stim connection status:', data.data)
+  stimConnected.value = data.data === '1' || data.data === 1
+})
+
+
   // Cleanup on unmount
   onUnmounted(cleanup)
 })
@@ -464,33 +613,139 @@ function parseSystemParameters(rawData) {
   }
 }
 
+async function refreshSuggestion() {
+  if (suggestLoading.value) return
+  
+  suggestLoading.value = true
+  try {
+    const suggestion = await dserv.essCommand('ess::file_suggest')
+    if (suggestion && suggestion.trim()) {
+      suggestedFilename.value = suggestion.trim()
+      logToTerminal(`Filename suggested: ${suggestion}`, 'info')
+    } else {
+      suggestedFilename.value = ''
+      logToTerminal('No filename suggestion available', 'info')
+    }
+  } catch (error) {
+    console.error('Failed to get filename suggestion:', error)
+    suggestedFilename.value = ''
+    logToTerminal(`Failed to suggest filename: ${error.message}`, 'error')
+  } finally {
+    suggestLoading.value = false
+  }
+}
+
+async function openDatafile() {
+  // Use manual input if provided, otherwise use suggestion, otherwise auto-suggest
+  let filename = datafilename.value.trim()
+  
+  if (!filename && suggestedFilename.value) {
+    filename = suggestedFilename.value
+  }
+  
+  if (!filename) {
+    // No manual input and no existing suggestion - try to get one
+    try {
+      const suggestion = await dserv.essCommand('ess::file_suggest')
+      if (suggestion && suggestion.trim()) {
+        filename = suggestion.trim()
+        logToTerminal(`Auto-suggested filename: ${filename}`, 'info')
+      }
+    } catch (error) {
+      console.error('Failed to auto-suggest filename:', error)
+    }
+  }
+  
+  if (!filename) {
+    logToTerminal('Unable to determine filename. Please enter one manually.', 'error')
+    return
+  }
+  
+  if (datafileLoading.value) return
+  
+  datafileLoading.value = true
+  try {
+    const result = await dserv.essCommand(`ess::file_open ${filename}`)
+    
+    if (result === '1' || result === 1) {
+      logToTerminal(`Datafile opened: ${filename}`, 'success')
+      // Clear inputs after successful open
+      datafilename.value = ''
+      suggestedFilename.value = ''
+    } else if (result === '0' || result === 0) {
+      logToTerminal(`File ${filename} already exists`, 'error')
+    } else if (result === '-1' || result === -1) {
+      logToTerminal('Another file is already open. Close it first.', 'error')
+    } else {
+      logToTerminal(`Unexpected response: ${result}`, 'error')
+    }
+  } catch (error) {
+    console.error('Failed to open datafile:', error)
+    logToTerminal(`Failed to open datafile: ${error.message}`, 'error')
+  } finally {
+    datafileLoading.value = false
+  }
+}
+
+async function closeDatafile() {
+  if (!currentDatafile.value) {
+    logToTerminal('No datafile is currently open', 'error')
+    return
+  }
+  
+  if (datafileLoading.value) return
+  
+  datafileLoading.value = true
+  try {
+    const result = await dserv.essCommand('ess::file_close')
+    
+    if (result === '1' || result === 1) {
+      logToTerminal('Datafile closed successfully', 'success')
+      // Clear any lingering inputs after close
+      datafilename.value = ''
+    } else {
+      logToTerminal('No datafile was open', 'info')
+    }
+  } catch (error) {
+    console.error('Failed to close datafile:', error)
+    logToTerminal(`Failed to close datafile: ${error.message}`, 'error')
+  } finally {
+    datafileLoading.value = false
+  }
+}
+
 async function setVariantOption(optionName, value) {
   try {
-    // Handle complex values that might contain spaces (like parameter lists)
-    let commandValue = value
-    if (value.includes(' ') && !value.startsWith('{')) {
-      commandValue = `{${value}}`
-    }
+    // Following Tcl dictionary rules:
+    // 1. Always wrap the value in braces to make it a single argument
+    // 2. This preserves any internal structure that may exist in the value
+    // 3. Tcl will properly parse the internal structure based on its own rules
     
-    const command = `ess::set_variant_args {${optionName} ${commandValue}}`
-    console.log('Setting variant option with command:', command)
+    const command = `ess::set_variant_args {${optionName} {${value}}}`;
+    console.log('Setting variant option with command:', command);
     
-    await dserv.essCommand(command)
-    logToTerminal(`Variant option ${optionName} set to: ${value}`, 'success')
+    await dserv.essCommand(command);
+    logToTerminal(`Variant option ${optionName} set to: ${value}`, 'success');
     
-    // Auto-reload variant if enabled (like C++ auto_reload functionality)
     if (autoReload.value) {
       try {
-        await dserv.essCommand('ess::reload_variant')
-        logToTerminal('Variant auto-reloaded', 'success')
+        await dserv.essCommand('ess::reload_variant');
+        logToTerminal('Variant auto-reloaded', 'success');
       } catch (reloadError) {
-        console.error('Failed to auto-reload variant:', reloadError)
-        logToTerminal(`Auto-reload failed: ${reloadError.message}`, 'error')
+        console.error('Failed to auto-reload variant:', reloadError);
+        logToTerminal(`Auto-reload failed: ${reloadError.message}`, 'error');
+        
+        try {
+          await dserv.essCommand('dservSet ess/status stopped');
+          console.log('Reset system status to stopped after reload failure');
+        } catch (resetError) {
+          console.error('Failed to reset system status:', resetError);
+        }
       }
     }
   } catch (error) {
-    console.error('Failed to set variant option:', error)
-    logToTerminal(`Failed to set variant option: ${error.message}`, 'error')
+    console.error('Failed to set variant option:', error);
+    logToTerminal(`Failed to set variant option: ${error.message}`, 'error');
   }
 }
 
@@ -536,6 +791,14 @@ const connectionStatus = computed(() => {
   return 'Connected'
 })
 
+const stimConnectionColor = computed(() => {
+  return stimConnected.value ? 'orange' : 'default'
+})
+
+const stimConnectionStatus = computed(() => {
+  return stimConnected.value ? 'Stim Connected' : 'Stim Not Connected'
+})
+
 // Watch for loading state changes
 watch(isSystemBusy, (isBusy) => {
   if (!isBusy) {
@@ -550,6 +813,15 @@ watch(isSystemBusy, (isBusy) => {
 watch(() => dserv.state.essStatus, (newStatus, oldStatus) => {
   if (oldStatus === 'loading' && newStatus === 'stopped') {
     logToTerminal('System loading completed', 'success')
+  }
+})
+
+// Clear inputs when file operations complete
+watch(() => currentDatafile.value, (newFile, oldFile) => {
+  if (oldFile && !newFile) {
+    // File was closed, reset to clean state
+    datafilename.value = ''
+    suggestedFilename.value = ''
   }
 })
 
@@ -741,13 +1013,26 @@ function getStatusColor(status) {
   margin-bottom: 4px;
 }
 
-:deep(.ant-form-item-label) {
-  font-size: 11px;
-  font-weight: 500;
+/* Target the actual label elements by their title attributes - much more precise! */
+:deep(label[title="Subject"]) {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+}
+
+:deep(label[title="System"]),
+:deep(label[title="Protocol"]), 
+:deep(label[title="Variant"]) {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+}
+
+/* Also target the form item containers for width/spacing */
+.subject-section :deep(.ant-form-item-label),
+.system-config :deep(.ant-form-item-label) {
+  width: 55px !important;
+  padding-right: 6px !important;
+  line-height: 1.2 !important;
   text-align: right;
-  width: 70px; /* Adjust as needed */
-  padding-right: 9px;
-  line-height: 1.2;
 }
 
 :deep(.ant-select-selector) {
@@ -822,6 +1107,34 @@ function getStatusColor(status) {
   background-color: #f5222d; /* Ant Design red-6 */
 }
 
+/* Datafile management styling */
+.datafile-config-item :deep(.ant-form-item-label) {
+  width: 55px !important;
+  padding-right: 6px !important;
+  line-height: 1.2 !important;
+  text-align: right;
+}
+
+.datafile-config-item :deep(label[title="Filename"]) {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+}
+
+.datafile-config-item :deep(.ant-input::placeholder) {
+  font-style: italic;
+  color: #bfbfbf;
+}
+
+/* File status indicator styling */
+div[style*="background: #f6ffed"] {
+  font-family: monospace;
+}
+
+/* Datafile button styling */
+.datafile-buttons .ant-btn {
+  font-size: 10px !important;
+}
+
 /* Variant Options and System Parameters styling */
 .variant-option-select :deep(.ant-select-selector) {
   font-size: 10px !important;
@@ -857,22 +1170,57 @@ function getStatusColor(status) {
   font-size: 10px !important;
 }
 
-/* Custom scrollbar for variant options and system parameters */
-div[style*="max-height: 120px"]::-webkit-scrollbar {
+/* Collapse panel styling */
+:deep(.ant-collapse-ghost .ant-collapse-item) {
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+}
+
+:deep(.ant-collapse-header) {
+  font-size: 12px !important;
+  font-weight: 500;
+  padding: 8px 12px !important;
+}
+
+:deep(.ant-collapse-content-box) {
+  padding: 8px 12px !important;
+}
+
+/* Scrollbar styling for parameter sections */
+div[style*="max-height: 200px"]::-webkit-scrollbar {
   width: 6px;
 }
 
-div[style*="max-height: 120px"]::-webkit-scrollbar-track {
+div[style*="max-height: 200px"]::-webkit-scrollbar-track {
   background: #f1f1f1;
   border-radius: 3px;
 }
 
-div[style*="max-height: 120px"]::-webkit-scrollbar-thumb {
+div[style*="max-height: 200px"]::-webkit-scrollbar-thumb {
   background: #c1c1c1;
   border-radius: 3px;
 }
 
-div[style*="max-height: 120px"]::-webkit-scrollbar-thumb:hover {
+div[style*="max-height: 200px"]::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* Main scrollbar styling for the entire panel */
+div[style*="overflow-y: auto"]::-webkit-scrollbar {
+  width: 8px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-track {
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 4px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
 }
 </style>

@@ -94,9 +94,12 @@ oo::class create System {
             variable screen_halfy 9.0
             variable screen_w 1024
             variable screen_h 600
-            return 0
+	    dservSet ess/rmt_connected [rmtConnected]
+	    return 0
         }
 
+	dservSet ess/rmt_connected [rmtConnected]
+	
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
         set scale_x [rmtSend "screen_set ScaleX"]
@@ -2337,7 +2340,9 @@ namespace eval ess {
         return [$obj get]
     }
 
-    # Convert full variant info dictionary to JSON
+    # Fixed variant_info_to_json function for ess-2.0.tm
+    # Replace the existing variant_info_to_json proc with this version
+    
     proc variant_info_to_json {full_dict_data} {
 	set obj [yajl create #auto]
 	
@@ -2365,8 +2370,8 @@ namespace eval ess {
 	foreach arg $loader_args {
 	    # Handle complex nested arguments (like params)
 	    if {[llength $arg] > 1} {
-		# Convert nested list to space-separated string for consistency
-		set arg_str [join $arg " "]
+		# FIXED: Preserve Tcl structure instead of flattening
+		set arg_str [list {*}$arg]
 		$obj string $arg_str
 	    } else {
 		$obj string $arg
@@ -2399,17 +2404,18 @@ namespace eval ess {
 			lassign $option label value
 			$obj string "label" string $label
 			
-			# Handle complex values (like nested parameter lists)
+			# FIXED: Preserve Tcl structure instead of flattening
 			if {[llength $value] > 1} {
-			    set value_str [join $value " "]
+			    set value_str [list {*}$value]
 			    $obj string "value" string $value_str
 			} else {
+			    set value_str $value
 			    $obj string "value" string $value
 			}
 			
 			# Check if this is the currently selected option
 			if {[llength $current_value] > 1} {
-			    set current_str [join $current_value " "]
+			    set current_str [list {*}$current_value]
 			    set is_current [expr {$value_str eq $current_str}]
 			} else {
 			    set is_current [expr {$value eq $current_value}]
@@ -2426,12 +2432,13 @@ namespace eval ess {
 			# Complex structure - shouldn't happen in this context but handle it
 			set label [lindex $option 0]
 			set values [lrange $option 1 end]
-			set values_str [join $values " "]
+			# FIXED: Preserve Tcl structure instead of flattening
+			set values_str [list {*}$values]
 			$obj string "label" string $label
 			$obj string "value" string $values_str
 			
 			if {[llength $current_value] > 1} {
-			    set current_str [join $current_value " "]
+			    set current_str [list {*}$current_value]
 			    set is_current [expr {$values_str eq $current_str}]
 			} else {
 			    set is_current [expr {$values_str eq $current_value}]
@@ -2458,7 +2465,7 @@ namespace eval ess {
 	set result [$obj get]
 	$obj delete
 	return $result
-    }
+    }    
 
     proc variant_arg_options_to_json { dict_data } {
 	set obj [yajl create #auto]
