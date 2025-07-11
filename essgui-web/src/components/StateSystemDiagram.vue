@@ -12,6 +12,12 @@
           <span v-if="currentState" style="margin-left: 12px;">
             <strong>Current:</strong> {{ currentState }}
           </span>
+          <span v-if="totalVisits > 0" style="margin-left: 12px;">
+            <strong>Total visits:</strong> {{ totalVisits }}
+          </span>
+          <span v-if="totalTransitions > 0" style="margin-left: 12px;">
+            <strong>Transitions:</strong> {{ totalTransitions }}
+          </span>
         </template>
         <template v-else>
           No state system loaded
@@ -29,6 +35,15 @@
           <a-select-option value="hierarchical">Hierarchical</a-select-option>
           <a-select-option value="circular">Circular</a-select-option>
         </a-select>
+        
+        <a-button 
+          size="small" 
+          @click="resetCounters"
+          :icon="h(ClearOutlined)"
+          title="Reset visit counters and timing data"
+        >
+          Reset
+        </a-button>
         
         <a-button 
           size="small" 
@@ -55,6 +70,20 @@
           <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
             <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f0f0f0" stroke-width="1"/>
           </pattern>
+          <!-- Arrow marker -->
+          <marker
+            id="arrowhead"
+            markerWidth="10"
+            markerHeight="7"
+            refX="9"
+            refY="3.5"
+            orient="auto"
+          >
+            <polygon
+              points="0 0, 10 3.5, 0 7"
+              fill="#666"
+            />
+          </marker>
         </defs>
         <rect width="100%" height="100%" fill="url(#grid)" />
         
@@ -66,40 +95,25 @@
             <g v-for="edge in edges" :key="edge.id">
               <path
                 :d="getEdgePath(edge)"
-                :stroke="edge.isActive ? '#1890ff' : '#d9d9d9'"
-                :stroke-width="edge.isActive ? 3 : 2"
+                :stroke="edge.isActive ? '#1890ff' : getEdgeColor(edge)"
+                :stroke-width="edge.isActive ? 3 : getEdgeWidth(edge)"
                 fill="none"
                 :stroke-dasharray="edge.isActive ? '5,5' : 'none'"
                 marker-end="url(#arrowhead)"
               />
+              <!-- Timing label on edge -->
               <text
-                v-if="edge.label"
+                v-if="getEdgeTimingLabel(edge)"
                 :x="edge.labelX"
                 :y="edge.labelY"
                 text-anchor="middle"
-                style="font-size: 10px; fill: #666; user-select: none;"
+                style="font-size: 9px; fill: #666; user-select: none; font-family: monospace;"
+                :style="{ fill: edge.isActive ? '#1890ff' : '#999' }"
               >
-                {{ edge.label }}
+                {{ getEdgeTimingLabel(edge) }}
               </text>
             </g>
           </g>
-          
-          <!-- Arrow marker -->
-          <defs>
-            <marker
-              id="arrowhead"
-              markerWidth="10"
-              markerHeight="7"
-              refX="9"
-              refY="3.5"
-              orient="auto"
-            >
-              <polygon
-                points="0 0, 10 3.5, 0 7"
-                fill="#666"
-              />
-            </marker>
-          </defs>
           
           <!-- Nodes (states) -->
           <g class="nodes">
@@ -125,12 +139,24 @@
               <!-- Node label -->
               <text
                 :x="node.width / 2"
-                :y="node.height / 2"
+                :y="node.height / 2 - 2"
                 text-anchor="middle"
                 dominant-baseline="middle"
                 style="font-size: 12px; font-weight: 500; fill: #333; user-select: none;"
               >
                 {{ node.label }}
+              </text>
+              
+              <!-- Visit counter -->
+              <text
+                v-if="getVisitCount(node.id) > 0"
+                :x="node.width / 2"
+                :y="node.height / 2 + 12"
+                text-anchor="middle"
+                dominant-baseline="middle"
+                style="font-size: 10px; font-weight: 400; fill: #666; user-select: none;"
+              >
+                ({{ getVisitCount(node.id) }})
               </text>
               
               <!-- Current state indicator -->
@@ -143,15 +169,35 @@
                 stroke="white"
                 stroke-width="1"
               />
+              
+              <!-- Visit count badge for high counts -->
+              <g v-if="getVisitCount(node.id) >= 10">
+                <circle
+                  :cx="8"
+                  :cy="8"
+                  r="8"
+                  fill="#ff4d4f"
+                  stroke="white"
+                  stroke-width="1"
+                />
+                <text
+                  x="8"
+                  y="12"
+                  text-anchor="middle"
+                  style="font-size: 8px; font-weight: bold; fill: white; user-select: none;"
+                >
+                  {{ getVisitCount(node.id) }}
+                </text>
+              </g>
             </g>
           </g>
         </g>
       </svg>
       
-      <!-- Node details panel -->
+      <!-- Enhanced node details panel with timing -->
       <div
         v-if="selectedNode"
-        style="position: absolute; top: 10px; right: 10px; width: 250px; background: white; border: 1px solid #d9d9d9; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 12px; z-index: 10;"
+        style="position: absolute; top: 10px; right: 10px; width: 320px; background: white; border: 1px solid #d9d9d9; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 12px; z-index: 10; max-height: 80vh; overflow-y: auto;"
       >
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <h4 style="margin: 0; font-size: 14px;">{{ selectedNode.label }}</h4>
@@ -168,35 +214,60 @@
             ● Currently Active
           </div>
           
-          <div style="margin-bottom: 8px;">
-            <strong>Transitions to:</strong>
-            <div v-if="selectedNode.transitions.length === 0" style="color: #999; font-style: italic;">
-              No transitions (end state)
-            </div>
-            <div v-else>
-              <a-tag
-                v-for="transition in selectedNode.transitions"
-                :key="transition"
-                size="small"
-                style="margin: 2px 4px 2px 0;"
+          <div v-if="getVisitCount(selectedNode.id) > 0" style="margin-bottom: 4px;">
+            <strong>Visits:</strong> {{ getVisitCount(selectedNode.id) }}
+          </div>
+          
+          <div v-if="getStateDwellTime(selectedNode.id)" style="margin-bottom: 8px;">
+            <strong>Avg Dwell Time:</strong> 
+            <span style="color: #1890ff; font-family: monospace;">
+              {{ getStateDwellTime(selectedNode.id).toFixed(1) }}ms
+            </span>
+          </div>
+          
+          <!-- Incoming Transitions with Timing -->
+          <div v-if="getIncomingTransitionAverage(selectedNode.id).length > 0" style="margin-bottom: 8px;">
+            <strong>Incoming Transitions:</strong>
+            <div style="margin-left: 8px;">
+              <div 
+                v-for="incoming in getIncomingTransitionAverage(selectedNode.id)" 
+                :key="incoming.from"
+                style="display: flex; justify-content: space-between; margin: 2px 0; font-size: 11px;"
               >
-                {{ transition }}
-              </a-tag>
+                <span>{{ incoming.from }}</span>
+                <span style="color: #1890ff; font-family: monospace;">
+                  {{ incoming.average.toFixed(1) }}ms (n={{ incoming.count }})
+                </span>
+              </div>
             </div>
           </div>
           
-          <div v-if="selectedNode.incomingStates.length > 0">
-            <strong>Incoming from:</strong>
-            <div>
-              <a-tag
-                v-for="incoming in selectedNode.incomingStates"
-                :key="incoming"
-                size="small"
-                color="blue"
-                style="margin: 2px 4px 2px 0;"
+          <!-- Outgoing Transitions with Timing -->
+          <div style="margin-bottom: 8px;">
+            <strong>Outgoing Transitions:</strong>
+            <div v-if="selectedNode.transitions.length === 0" style="color: #999; font-style: italic; margin-left: 8px;">
+              No transitions (end state)
+            </div>
+            <div v-else style="margin-left: 8px;">
+              <div 
+                v-for="transition in selectedNode.transitions"
+                :key="transition"
+                style="margin: 2px 0;"
               >
-                {{ incoming }}
-              </a-tag>
+                <div style="display: flex; justify-content: space-between; font-size: 11px;">
+                  <span>{{ transition }}</span>
+                  <span 
+                    v-if="getOutgoingTransitionAverage(selectedNode.id).find(t => t.to === transition)"
+                    style="color: #52c41a; font-family: monospace;"
+                  >
+                    {{ getOutgoingTransitionAverage(selectedNode.id).find(t => t.to === transition).average.toFixed(1) }}ms 
+                    (n={{ getOutgoingTransitionAverage(selectedNode.id).find(t => t.to === transition).count }})
+                  </span>
+                  <span v-else style="color: #999; font-style: italic; font-size: 10px;">
+                    not visited
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -207,7 +278,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, h } from 'vue'
-import { ZoomInOutlined, CloseOutlined } from '@ant-design/icons-vue'
+import { ZoomInOutlined, CloseOutlined, ClearOutlined } from '@ant-design/icons-vue'
 import { dserv } from '../services/dserv.js'
 
 // Reactive state
@@ -219,6 +290,13 @@ const actionState = ref('')
 const transitionState = ref('')
 const isLoading = ref(false)
 const layoutMode = ref('grid')
+const visitCounts = ref(new Map()) // Track visit counts for each state
+
+// Timing tracking state
+const transitionTimings = ref(new Map()) // Track timing data per transition
+const stateEnterTimes = ref(new Map()) // Track when states were entered
+const lastActionState = ref('')
+const lastActionTime = ref(0)
 
 // SVG refs and transform state
 const svgRef = ref(null)
@@ -227,6 +305,23 @@ const diagramContainer = ref(null)
 const transform = ref({ x: 0, y: 0, scale: 1 })
 const isPanning = ref(false)
 const lastPanPoint = ref({ x: 0, y: 0 })
+
+// Computed properties
+const totalVisits = computed(() => {
+  let total = 0
+  for (const count of visitCounts.value.values()) {
+    total += count
+  }
+  return total
+})
+
+const totalTransitions = computed(() => {
+  let total = 0
+  for (const timing of transitionTimings.value.values()) {
+    total += timing.count
+  }
+  return total
+})
 
 // Component registration and cleanup
 onMounted(() => {
@@ -237,7 +332,8 @@ onMounted(() => {
       { pattern: 'ess/state_table', every: 1 },
       { pattern: 'ess/action_state', every: 1 },
       { pattern: 'ess/transition_state', every: 1 },
-      { pattern: 'ess/state', every: 1 }
+      { pattern: 'ess/state', every: 1 },
+      { pattern: 'ess/reset', every: 1 }
     ]
   })
   
@@ -270,6 +366,12 @@ onMounted(() => {
     }
   })
   
+  // Listen for reset events
+  dserv.on('datapoint:ess/reset', () => {
+    console.log('Reset received, clearing visit counters and timing data')
+    resetCounters()
+  })
+  
   // Listen for system changes that clear the diagram
   dserv.on('systemState', ({ loading }) => {
     if (loading) {
@@ -280,6 +382,7 @@ onMounted(() => {
       currentState.value = ''
       actionState.value = ''
       transitionState.value = ''
+      resetCounters()
     }
   })
   
@@ -302,6 +405,96 @@ onMounted(() => {
   
   onUnmounted(cleanup)
 })
+
+// Visit counter functions
+function getVisitCount(nodeId) {
+  return visitCounts.value.get(nodeId) || 0
+}
+
+// Timing helper functions
+function getIncomingTransitionAverage(stateName) {
+  const incomingTimings = []
+  for (const [transitionKey, timing] of transitionTimings.value.entries()) {
+    if (transitionKey.endsWith(`->${stateName}`)) {
+      incomingTimings.push({
+        from: transitionKey.split('->')[0],
+        average: timing.average / 1000, // Convert to milliseconds
+        count: timing.count
+      })
+    }
+  }
+  return incomingTimings.sort((a, b) => a.from.localeCompare(b.from))
+}
+
+function getOutgoingTransitionAverage(stateName) {
+  const outgoingTimings = []
+  for (const [transitionKey, timing] of transitionTimings.value.entries()) {
+    if (transitionKey.startsWith(`${stateName}->`)) {
+      outgoingTimings.push({
+        to: transitionKey.split('->')[1],
+        average: timing.average / 1000, // Convert to milliseconds
+        count: timing.count
+      })
+    }
+  }
+  return outgoingTimings.sort((a, b) => a.to.localeCompare(b.to))
+}
+
+function getStateDwellTime(stateName) {
+  // Calculate average time spent in this state
+  const outgoingTimings = getOutgoingTransitionAverage(stateName)
+  if (outgoingTimings.length === 0) return null
+  
+  const totalTime = outgoingTimings.reduce((sum, timing) => sum + (timing.average * timing.count), 0)
+  const totalCount = outgoingTimings.reduce((sum, timing) => sum + timing.count, 0)
+  
+  return totalCount > 0 ? totalTime / totalCount : null
+}
+
+function getTransitionTiming(fromState, toState) {
+  const transitionKey = `${fromState}->${toState}`
+  return transitionTimings.value.get(transitionKey)
+}
+
+function getEdgeTimingLabel(edge) {
+  const timing = getTransitionTiming(edge.source, edge.target)
+  if (!timing || timing.count === 0) return null
+  return `${(timing.average / 1000).toFixed(0)}ms`
+}
+
+function getEdgeColor(edge) {
+  const timing = getTransitionTiming(edge.source, edge.target)
+  if (!timing || timing.count === 0) return '#d9d9d9'
+  
+  // Color based on frequency of use
+  if (timing.count >= 10) return '#52c41a' // Green for frequent
+  if (timing.count >= 5) return '#faad14'  // Orange for moderate
+  return '#1890ff' // Blue for infrequent
+}
+
+function getEdgeWidth(edge) {
+  const timing = getTransitionTiming(edge.source, edge.target)
+  if (!timing || timing.count === 0) return 1
+  
+  // Width based on frequency
+  if (timing.count >= 10) return 3
+  if (timing.count >= 5) return 2
+  return 1
+}
+
+function resetCounters() {
+  visitCounts.value.clear()
+  visitCounts.value = new Map(visitCounts.value)
+  
+  transitionTimings.value.clear()
+  transitionTimings.value = new Map(transitionTimings.value)
+  
+  stateEnterTimes.value.clear()
+  lastActionState.value = ''
+  lastActionTime.value = 0
+  
+  console.log('Visit counters and timing data reset')
+}
 
 // Parse TCL dictionary format state table
 function parseStateTable(stateTableStr) {
@@ -386,6 +579,9 @@ function createNodesAndEdges(stateDict) {
   const newNodes = []
   const newEdges = []
   
+  // Clear visit counts and timing when new state system is loaded
+  resetCounters()
+  
   // Create nodes
   Object.keys(stateDict).forEach((stateName, index) => {
     const node = {
@@ -430,14 +626,56 @@ function createNodesAndEdges(stateDict) {
   updateCurrentState()
 }
 
-// Update current state highlighting
+// Update current state highlighting with timing tracking
 function updateCurrentState() {
   // Extract state name from action/transition state (remove _a/_t suffix)
   let current = ''
+  let previousCurrent = currentState.value
+  const currentTime = Date.now() * 1000 // Convert to microseconds for consistency
+  
   if (actionState.value) {
     current = actionState.value.replace(/_a$/, '')
   } else if (transitionState.value) {
     current = transitionState.value.replace(/_t$/, '')
+  }
+  
+  // Track state visits and timing when we enter a new action state
+  if (current && current !== previousCurrent && actionState.value) {
+    // Update visit counter
+    const currentCount = visitCounts.value.get(current) || 0
+    visitCounts.value.set(current, currentCount + 1)
+    
+    // Track transition timing if we have a previous state
+    if (lastActionState.value && lastActionTime.value > 0) {
+      const transitionKey = `${lastActionState.value}->${current}`
+      const duration = currentTime - lastActionTime.value
+      
+      if (!transitionTimings.value.has(transitionKey)) {
+        transitionTimings.value.set(transitionKey, {
+          durations: [],
+          totalTime: 0,
+          count: 0,
+          average: 0
+        })
+      }
+      
+      const timing = transitionTimings.value.get(transitionKey)
+      timing.durations.push(duration)
+      timing.totalTime += duration
+      timing.count += 1
+      timing.average = timing.totalTime / timing.count
+      
+      console.log(`Transition ${transitionKey}: ${(duration/1000).toFixed(1)}ms (avg: ${(timing.average/1000).toFixed(1)}ms)`)
+    }
+    
+    // Update tracking variables
+    lastActionState.value = current
+    lastActionTime.value = currentTime
+    stateEnterTimes.value.set(current, currentTime)
+    
+    // Force reactivity update
+    visitCounts.value = new Map(visitCounts.value)
+    transitionTimings.value = new Map(transitionTimings.value)
   }
   
   currentState.value = current
@@ -583,12 +821,21 @@ function getEdgePath(edge) {
   return edge.path || ''
 }
 
-// Node styling
+// Node styling with visit-based coloring
 function getNodeColor(node) {
+  const visits = getVisitCount(node.id)
+  
   if (node.isCurrent) return '#e6f7ff'
   if (node.isStartState) return '#f6ffed'
   if (node.isEndState) return '#fff2e8'
-  return '#fafafa'
+  
+  // Color intensity based on visit count
+  if (visits >= 20) return '#fff1f0' // Light red for heavily visited
+  if (visits >= 10) return '#fff7e6' // Light orange for moderately visited
+  if (visits >= 5) return '#fcffe6'  // Light yellow for lightly visited
+  if (visits > 0) return '#f6ffed'   // Light green for visited
+  
+  return '#fafafa' // Default for unvisited
 }
 
 function getNodeBorderColor(node) {
@@ -692,5 +939,31 @@ function calculateBounds() {
 
 .nodes g:hover rect {
   filter: brightness(1.05);
+}
+
+/* Enhanced edge styling */
+.edges text {
+  pointer-events: none;
+  font-size: 9px;
+  font-family: monospace;
+}
+
+/* Node details panel scrollbar */
+div[style*="max-height: 80vh"]::-webkit-scrollbar {
+  width: 6px;
+}
+
+div[style*="max-height: 80vh"]::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+div[style*="max-height: 80vh"]::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+div[style*="max-height: 80vh"]::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
 }
 </style>
