@@ -1,11 +1,6 @@
 <template>
   <a-layout style="height: 100vh; font-size: 13px;">
-    <!-- Application Menu Bar -->
-    <a-layout-header :style="{ background: '#fff', padding: '0 16px', borderBottom: '1px solid #d9d9d9', height: '32px', lineHeight: '32px' }">
-      <menu-bar @toggle-terminal="toggleTerminal" />
-    </a-layout-header>
-
-    <a-layout style="height: calc(100vh - 32px);">
+    <a-layout style="height: 100vh;">
       <!-- Control Panel - Left Sidebar -->
       <a-layout-sider
         width="290"
@@ -26,10 +21,6 @@
               style="height: 100%; display: flex; flex-direction: column;"
               tab-position="top"
             >
-              <template #tabBarExtraContent>
-                <div style="height: 40px;"></div>
-              </template>
-              
               <a-tab-pane key="behavior" tab="Behavior" style="height: 100%; overflow: hidden;">
                 <div style="height: 100%; display: flex; flex-direction: column; overflow: auto;">
                   <div style="flex: 1; display: flex; gap: 16px;">
@@ -71,16 +62,21 @@
               </a-tab-pane>
 
               <a-tab-pane key="scripts" tab="Scripts" style="height: 100%; overflow: hidden;">
-	        <div style="height: 100%; overflow: hidden;">
+                <div style="height: 100%; overflow: hidden;">
                   <scripts />
-  	        </div>
+                </div>
               </a-tab-pane>
 
               <a-tab-pane key="system" tab="System" style="height: 100%; overflow: hidden;">
-	        <div style="height: 100%; overflow: hidden;">
+                <div style="height: 100%; overflow: hidden;">
                   <state-system-diagram />
-  	        </div>
+                </div>
+              </a-tab-pane>
 
+              <a-tab-pane key="events" tab="Events" style="height: 100%; overflow: hidden;">
+                <div style="height: 100%; overflow: hidden;">
+                  <event-tracker />
+                </div>
               </a-tab-pane>
 
               <a-tab-pane key="data" tab="Data" style="height: 100%; overflow: hidden;">
@@ -106,13 +102,13 @@
 
 <script setup>
 import { ref } from 'vue'
-import MenuBar from '../components/MenuBar.vue'
 import ExperimentControl from '../components/ExperimentControl.vue'
 import EssTerminal from '../components/EssTerminal.vue'
 import StatusBar from '../components/StatusBar.vue'
 import StimInfo from '../components/StimInfo.vue'
 import Scripts from '../components/Scripts.vue'
 import StateSystemDiagram from '../components/StateSystemDiagram.vue'
+import EventTracker from '../components/EventTracker.vue'
 
 // Status message
 const statusMessage = ref('Ready')
@@ -153,10 +149,6 @@ function doResize(event) {
 function stopResize() {
   window.removeEventListener('mousemove', doResize);
   window.removeEventListener('mouseup', stopResize);
-}
-
-function toggleTerminal() {
-  isTerminalVisible.value = !isTerminalVisible.value
 }
 
 // Handle terminal logging from experiment control
