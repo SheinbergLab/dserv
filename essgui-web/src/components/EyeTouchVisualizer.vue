@@ -2,21 +2,30 @@
   <div class="eye-touch-visualizer">
     <!-- Header with status -->
     <div class="visualizer-header">
-      <a-row :gutter="12" align="middle">
-        <a-col :span="6">
-          <div class="window-status-mini">
-            <span style="font-size: 11px;">Eye windows:</span>
-            <div class="window-indicators-mini">
-              <span
-                v-for="i in 8"
-                :key="i-1"
-                class="window-dot"
-                :class="{ active: eyeWindows[i-1].active, inside: (eyeWindowStatusMask & (1 << (i-1))) !== 0 }"
-              >{{ i-1 }}</span>
-            </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+        <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+          <span style="font-size: 11px; text-align: right;">Eye:</span>
+          <div class="window-indicators-mini">
+            <span
+              v-for="i in 8"
+              :key="i-1"
+              class="window-dot"
+              :class="{ active: eyeWindows[i-1].active, inside: (eyeWindowStatusMask & (1 << (i-1))) !== 0 }"
+            >{{ i-1 }}</span>
           </div>
-        </a-col>
-      </a-row>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+          <span style="font-size: 11px; text-align: right;">Touch:</span>
+          <div class="window-indicators-mini">
+            <span
+              v-for="i in 8"
+              :key="`touch-${i-1}`"
+              class="window-dot touch-dot"
+              :class="{ active: touchWindows[i-1]?.active, inside: (touchWindowStatusMask & (1 << (i-1))) !== 0 }"
+            >{{ i-1 }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Main canvas area -->
@@ -30,6 +39,9 @@
       <div class="info-overlay">
         <div class="coordinate-info">
           Raw: {{ eyePositionRaw.x }}, {{ eyePositionRaw.y }}
+          <div v-if="showTouchPosition && (touchPosition.x !== 0 || touchPosition.y !== 0)">
+            Touch: {{ touchPosition.x }}, {{ touchPosition.y }}
+          </div>
         </div>
       </div>
     </div>
@@ -41,6 +53,7 @@
           <a-space size="small">
             <a-checkbox v-model:checked="displayOptions.showGrid" style="font-size: 11px;">Grid</a-checkbox>
             <a-checkbox v-model:checked="displayOptions.showTrails" style="font-size: 11px;">Trails</a-checkbox>
+            <a-checkbox v-model:checked="displayOptions.showTouchWindows" style="font-size: 11px;">Touch Windows</a-checkbox>
           </a-space>
         </a-col>
         <a-col :span="12" style="text-align: right;">
@@ -73,6 +86,12 @@ const ADC_TO_DEG = 200.0
 // Component state - only component-specific data
 const eyePosition = ref({ x: 0, y: 0 })
 const eyePositionRaw = ref({ x: 2048, y: 2048 })
+const touchPosition = ref({ x: 0, y: 0 })
+const showTouchPosition = ref(false) // NEW: Control touch marker visibility
+
+// Touch clearing system
+const touchClearTimeout = ref(null)
+const TOUCH_CLEAR_DELAY = 500 // ms delay before clearing touch marker
 
 // Animation state tracking for robustness
 const canvasReady = ref(false)
@@ -92,11 +111,40 @@ const observationTotal = computed(() => dserv.state.obsTotal)
 const eyeWindows = computed(() => dserv.state.eyeWindows)
 const eyeWindowStatusMask = computed(() => dserv.state.eyeWindowStatusMask)
 
+// Use central state for touch windows (with safe defaults)
+const touchWindows = computed(() => {
+  if (!dserv.state.touchWindows) {
+    // Initialize if not present
+    dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
+      id: i,
+      active: false,
+      state: 0,
+      type: 'rectangle',
+      center: { x: 0, y: 0 },
+      centerRaw: { x: 400, y: 320 },
+      size: { width: 2, height: 2 },
+      sizeRaw: { width: 100, height: 100 }
+    }))
+  }
+  return dserv.state.touchWindows
+})
+
+const touchWindowStatusMask = computed(() => dserv.state.touchWindowStatusMask || 0)
+
+// Screen dimensions from central state (with defaults)
+const screenDimensions = computed(() => ({
+  width: dserv.state.screenWidth || 800,
+  height: dserv.state.screenHeight || 600,
+  halfX: dserv.state.screenHalfX || 10.0,
+  halfY: dserv.state.screenHalfY || 7.5
+}))
+
 // Display options
 const displayOptions = reactive({
   showGrid: true,
   showTrails: false,
-  showLabels: true
+  showLabels: true,
+  showTouchWindows: true
 })
 
 // Canvas refs and state
@@ -140,22 +188,287 @@ function degreesToCanvas(degX, degY) {
   }
 }
 
+// Convert touch screen pixels to degrees
+function touchPixelsToDegrees(pixX, pixY) {
+  const screen = screenDimensions.value
+  const screenPixPerDegX = screen.width / (2 * screen.halfX)
+  const screenPixPerDegY = screen.height / (2 * screen.halfY)
+  
+  return {
+    x: (pixX - screen.width / 2) / screenPixPerDegX,
+    // Match FLTK: touch Y coordinates need inversion to match canvas coordinate system
+    y: -1 * (pixY - screen.height / 2) / screenPixPerDegY
+  }
+}
+
 // Eye position data handler
 function handleEyePosition(data) {
-  const value = data.value || data.data
+  try {
+    const value = data.value || data.data
 
-  if (data.name === 'ess/em_pos') {
-    const [rx, ry, x, y] = value.split(' ').map(Number);
-    eyePosition.value = { x, y };
-    eyePositionRaw.value = { x: rx, y: ry };
+    if (data.name === 'ess/em_pos') {
+      // Check if value exists and is a string
+      if (!value || typeof value !== 'string') {
+        console.warn('Invalid ess/em_pos data:', value);
+        return;
+      }
 
-    // Add to trail history if enabled
-    if (displayOptions.showTrails) {
-      eyeHistory.value.push({ ...eyePosition.value, timestamp: Date.now() })
-      if (eyeHistory.value.length > maxTrailLength) {
-        eyeHistory.value.shift()
+      const parts = value.split(' ');
+      if (parts.length < 4) {
+        console.warn('Insufficient ess/em_pos data parts:', parts);
+        return;
+      }
+
+      const [rx, ry, x, y] = parts.map(Number);
+      
+      // Validate the numbers
+      if (isNaN(rx) || isNaN(ry) || isNaN(x) || isNaN(y)) {
+        console.warn('Invalid ess/em_pos coordinates:', { rx, ry, x, y, value });
+        return;
+      }
+
+      eyePosition.value = { x, y };
+      eyePositionRaw.value = { x: rx, y: ry };
+
+      // Add to trail history if enabled
+      if (displayOptions.showTrails) {
+        eyeHistory.value.push({ ...eyePosition.value, timestamp: Date.now() })
+        if (eyeHistory.value.length > maxTrailLength) {
+          eyeHistory.value.shift()
+        }
       }
     }
+  } catch (error) {
+    console.error('Error handling eye position data:', error, data);
+  }
+}
+
+// Touch position data handler
+function handleTouchPosition(data) {
+  try {
+    const value = data.value || data.data
+
+    if (data.name === 'mtouch/touchvals') {
+      let x, y;
+
+      // Handle both array and string formats
+      if (Array.isArray(value)) {
+        // Data comes as array: [320, 308]
+        if (value.length < 2) {
+          console.warn('Insufficient mtouch/touchvals array elements:', value);
+          return;
+        }
+        [x, y] = value.map(Number);
+      } else if (typeof value === 'string') {
+        // Data comes as string: "320 308"
+        const parts = value.split(' ');
+        if (parts.length < 2) {
+          console.warn('Insufficient mtouch/touchvals data parts:', parts);
+          return;
+        }
+        [x, y] = parts.map(Number);
+      } else {
+        console.warn('Invalid mtouch/touchvals data format (expected array or string):', value);
+        return;
+      }
+      
+      // Validate the numbers
+      if (isNaN(x) || isNaN(y)) {
+        console.warn('Invalid mtouch/touchvals coordinates:', { x, y, value });
+        return;
+      }
+
+      touchPosition.value = { x, y };
+      
+      // Show touch marker when new touch data arrives
+      showTouchPosition.value = true;
+      
+      // Clear any existing timeout
+      if (touchClearTimeout.value) {
+        clearTimeout(touchClearTimeout.value);
+        touchClearTimeout.value = null;
+      }
+    }
+  } catch (error) {
+    console.error('Error handling touch position data:', error, data);
+  }
+}
+
+// Touch window settings handler
+function handleTouchWindowSetting(data) {
+  try {
+    const value = data.value || data.data
+    
+    if (data.name === 'ess/touch_region_setting') {
+      // Check if value exists and is a string
+      if (!value || typeof value !== 'string') {
+        console.warn('Invalid ess/touch_region_setting data:', value);
+        return;
+      }
+
+      const parts = value.split(' ');
+      if (parts.length < 8) {
+        console.warn('Insufficient ess/touch_region_setting data parts:', parts);
+        return;
+      }
+
+      const [reg, active, state, type, cx, cy, dx, dy] = parts.map(Number);
+      
+      // Validate the numbers
+      if (parts.some(p => isNaN(Number(p)))) {
+        console.warn('Invalid ess/touch_region_setting data:', { reg, active, state, type, cx, cy, dx, dy, value });
+        return;
+      }
+
+      if (reg >= 0 && reg < 8) {
+        // Ensure touchWindows exists in state
+        if (!dserv.state.touchWindows) {
+          dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
+            id: i,
+            active: false,
+            state: 0,
+            type: 'rectangle',
+            center: { x: 0, y: 0 },
+            centerRaw: { x: 400, y: 320 },
+            size: { width: 2, height: 2 },
+            sizeRaw: { width: 100, height: 100 }
+          }))
+        }
+
+        // Update central state through dserv
+        dserv.state.touchWindows[reg] = {
+          id: reg,
+          active: active === 1,
+          state: state,
+          type: type === 1 ? 'ellipse' : 'rectangle',
+          center: touchPixelsToDegrees(cx, cy),
+          centerRaw: { x: cx, y: cy },
+          size: {
+            width: Math.abs(dx / screenDimensions.value.width * (2 * screenDimensions.value.halfX)),
+            height: Math.abs(dy / screenDimensions.value.height * (2 * screenDimensions.value.halfY))
+          },
+          sizeRaw: { width: dx, height: dy }
+        };
+      }
+    }
+  } catch (error) {
+    console.error('Error handling touch window setting:', error, data);
+  }
+}
+
+// Touch window status handler
+function handleTouchWindowStatus(data) {
+  try {
+    const value = data.value || data.data
+    
+    if (data.name === 'ess/touch_region_status') {
+      // Check if value exists and is a string
+      if (!value || typeof value !== 'string') {
+        console.warn('Invalid ess/touch_region_status data:', value);
+        return;
+      }
+
+      const parts = value.split(' ');
+      if (parts.length < 4) {
+        console.warn('Insufficient ess/touch_region_status data parts:', parts);
+        return;
+      }
+
+      const [changes, states, touch_x, touch_y] = parts.map(Number);
+      
+      // Validate the numbers
+      if (parts.some(p => isNaN(Number(p)))) {
+        console.warn('Invalid ess/touch_region_status data:', { changes, states, touch_x, touch_y, value });
+        return;
+      }
+      
+      // Ensure touchWindowStatusMask exists in state
+      if (!dserv.state.touchWindowStatusMask) {
+        dserv.state.touchWindowStatusMask = 0;
+      }
+      
+      const previousMask = dserv.state.touchWindowStatusMask;
+      dserv.state.touchWindowStatusMask = states;
+      
+      // Ensure touchWindows exists in state
+      if (!dserv.state.touchWindows) {
+        dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
+          id: i,
+          active: false,
+          state: 0,
+          type: 'rectangle',
+          center: { x: 0, y: 0 },
+          centerRaw: { x: 400, y: 320 },
+          size: { width: 2, height: 2 },
+          sizeRaw: { width: 100, height: 100 }
+        }))
+      }
+
+      // Update individual touch window states
+      for (let i = 0; i < 8; i++) {
+        dserv.state.touchWindows[i].state = ((states & (1 << i)) !== 0) && dserv.state.touchWindows[i].active;
+      }
+      
+      // Check if any touch windows were deactivated
+      const anyTouchWindowsActive = dserv.state.touchWindows.some(window => window.active);
+      const anyTouchesInWindows = states !== 0;
+      
+      // If no touch windows are active OR no touches are in windows, schedule touch marker clearing
+      if (!anyTouchWindowsActive || !anyTouchesInWindows) {
+        // Clear any existing timeout
+        if (touchClearTimeout.value) {
+          clearTimeout(touchClearTimeout.value);
+        }
+        
+        // Set timeout to clear touch position
+        touchClearTimeout.value = setTimeout(() => {
+          showTouchPosition.value = false;
+          touchPosition.value = { x: 0, y: 0 };
+          touchClearTimeout.value = null;
+        }, TOUCH_CLEAR_DELAY);
+      } else {
+        // If touches are active in windows, cancel any pending clear
+        if (touchClearTimeout.value) {
+          clearTimeout(touchClearTimeout.value);
+          touchClearTimeout.value = null;
+        }
+        showTouchPosition.value = true;
+      }
+      
+      // Update touch position if provided and valid
+      if (touch_x !== undefined && touch_y !== undefined && !isNaN(touch_x) && !isNaN(touch_y)) {
+        touchPosition.value = { x: touch_x, y: touch_y };
+        if (anyTouchesInWindows) {
+          showTouchPosition.value = true;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error handling touch window status:', error, data);
+  }
+}
+
+// Screen dimension handlers
+function handleScreenDimensions(data) {
+  const value = data.value || data.data
+  
+  switch (data.name) {
+    case 'ess/screen_w':
+      if (!dserv.state.screenWidth) dserv.state.screenWidth = 800;
+      dserv.state.screenWidth = parseInt(value, 10);
+      break;
+    case 'ess/screen_h':
+      if (!dserv.state.screenHeight) dserv.state.screenHeight = 600;
+      dserv.state.screenHeight = parseInt(value, 10);
+      break;
+    case 'ess/screen_halfx':
+      if (!dserv.state.screenHalfX) dserv.state.screenHalfX = 10.0;
+      dserv.state.screenHalfX = parseFloat(value);
+      break;
+    case 'ess/screen_halfy':
+      if (!dserv.state.screenHalfY) dserv.state.screenHalfY = 7.5;
+      dserv.state.screenHalfY = parseFloat(value);
+      break;
   }
 }
 
@@ -244,12 +557,26 @@ function render() {
     // Draw eye windows
     eyeWindows.value.forEach(window => {
       if (window.active) {
-        drawWindow(window)
+        drawEyeWindow(window)
       }
     })
 
+    // Draw touch windows if enabled
+    if (displayOptions.showTouchWindows && touchWindows.value) {
+      touchWindows.value.forEach(window => {
+        if (window && window.active) {
+          drawTouchWindow(window)
+        }
+      })
+    }
+
     // Draw eye position
     drawEyePosition()
+
+    // Draw touch position if available and should be shown
+    if (showTouchPosition.value && (touchPosition.value.x !== 0 || touchPosition.value.y !== 0)) {
+      drawTouchPosition()
+    }
   } catch (error) {
     console.error('Render error:', error)
     // Try to restart animation after a brief delay
@@ -319,7 +646,7 @@ function drawTrails() {
   ctx.globalAlpha = 1.0
 }
 
-function drawWindow(window) {
+function drawEyeWindow(window) {
   const pos = degreesToCanvas(window.center.x, window.center.y)
   const size = {
     width: window.size.width * pixelsPerDegree.value.x,
@@ -355,13 +682,60 @@ function drawWindow(window) {
     ctx.fillStyle = ctx.strokeStyle
     ctx.font = '12px monospace'
     ctx.fillText(
-      `${window.id}`,
+      `E${window.id}`,
       pos.x - size.width / 2 + 2,
       pos.y - size.height / 2 - 5
     )
   }
 
   // Draw center point
+  ctx.fillRect(pos.x - 2, pos.y - 2, 4, 4)
+}
+
+function drawTouchWindow(window) {
+  const pos = degreesToCanvas(window.center.x, window.center.y)
+  const size = {
+    width: window.size.width * pixelsPerDegree.value.x,
+    height: window.size.height * pixelsPerDegree.value.y
+  }
+
+  // Color based on state - cyan for touch windows
+  const isInside = (touchWindowStatusMask.value & (1 << window.id)) !== 0
+  ctx.strokeStyle = isInside ? '#00ffff' : '#0088aa'
+  ctx.lineWidth = isInside ? 3 : 1
+
+  if (window.type === 'ellipse') {
+    // Draw ellipse
+    ctx.beginPath()
+    ctx.ellipse(
+      pos.x, pos.y,
+      size.width, size.height,
+      0, 0, 2 * Math.PI
+    )
+    ctx.stroke()
+  } else {
+    // Draw rectangle
+    ctx.strokeRect(
+      pos.x - size.width / 2,
+      pos.y - size.height / 2,
+      size.width,
+      size.height
+    )
+  }
+
+  // Draw window ID label if enabled
+  if (displayOptions.showLabels) {
+    ctx.fillStyle = ctx.strokeStyle
+    ctx.font = '12px monospace'
+    ctx.fillText(
+      `T${window.id}`,
+      pos.x + size.width / 2 - 15,
+      pos.y + size.height / 2 + 15
+    )
+  }
+
+  // Draw center point
+  ctx.fillStyle = ctx.strokeStyle
   ctx.fillRect(pos.x - 2, pos.y - 2, 4, 4)
 }
 
@@ -389,11 +763,36 @@ function drawEyePosition() {
   ctx.stroke()
 }
 
+function drawTouchPosition() {
+  // Convert touch pixel coordinates to degrees
+  const touchDegrees = touchPixelsToDegrees(touchPosition.value.x, touchPosition.value.y)
+  const pos = degreesToCanvas(touchDegrees.x, touchDegrees.y)
+
+  // Draw cyan diamond for touch position
+  ctx.fillStyle = '#00ffff'
+  ctx.strokeStyle = '#0088aa'
+  ctx.lineWidth = 2
+
+  ctx.beginPath()
+  ctx.moveTo(pos.x, pos.y - 7)
+  ctx.lineTo(pos.x + 7, pos.y)
+  ctx.lineTo(pos.x, pos.y + 7)
+  ctx.lineTo(pos.x - 7, pos.y)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+}
+
 // Actions
 async function refreshWindows() {
   try {
+    // Refresh eye windows
     for (let i = 0; i < 8; i++) {
       await dserv.essCommand(`ainGetRegionInfo ${i}`)
+    }
+    // Refresh touch windows
+    for (let i = 0; i < 8; i++) {
+      await dserv.essCommand(`touchGetRegionInfo ${i}`)
     }
   } catch (error) {
     console.error('Failed to refresh windows:', error)
@@ -403,6 +802,14 @@ async function refreshWindows() {
 function resetView() {
   // Clear trails
   eyeHistory.value = []
+
+  // Clear touch position and any pending timeout
+  showTouchPosition.value = false
+  touchPosition.value = { x: 0, y: 0 }
+  if (touchClearTimeout.value) {
+    clearTimeout(touchClearTimeout.value)
+    touchClearTimeout.value = null
+  }
 
   // Redraw canvas
   if (ctx) {
@@ -447,8 +854,20 @@ onMounted(() => {
       // Register component
       cleanupDserv = dserv.registerComponent('EyeTouchVisualizer')
 
-      // Listen for events
+      // Listen for eye events
       dserv.on('datapoint:ess/em_pos', handleEyePosition, 'EyeTouchVisualizer')
+      
+      // Listen for touch events
+      dserv.on('datapoint:mtouch/touchvals', handleTouchPosition, 'EyeTouchVisualizer')
+      dserv.on('datapoint:ess/touch_region_setting', handleTouchWindowSetting, 'EyeTouchVisualizer')
+      dserv.on('datapoint:ess/touch_region_status', handleTouchWindowStatus, 'EyeTouchVisualizer')
+      
+      // Listen for screen dimension events
+      dserv.on('datapoint:ess/screen_w', handleScreenDimensions, 'EyeTouchVisualizer')
+      dserv.on('datapoint:ess/screen_h', handleScreenDimensions, 'EyeTouchVisualizer')
+      dserv.on('datapoint:ess/screen_halfx', handleScreenDimensions, 'EyeTouchVisualizer')
+      dserv.on('datapoint:ess/screen_halfy', handleScreenDimensions, 'EyeTouchVisualizer')
+      
       dserv.on('connection', (data) => {
         connected.value = data.connected
       }, 'EyeTouchVisualizer')
@@ -479,6 +898,12 @@ onMounted(() => {
 onUnmounted(() => {
   // Stop animation first
   stopAnimation()
+
+  // Clean up touch timeout
+  if (touchClearTimeout.value) {
+    clearTimeout(touchClearTimeout.value)
+    touchClearTimeout.value = null
+  }
 
   // Clean up resize observer
   if (resizeObserver) {
@@ -513,8 +938,11 @@ defineExpose({
   resetView,
   getEyePosition: () => eyePosition.value,
   getEyePositionRaw: () => eyePositionRaw.value,
+  getTouchPosition: () => touchPosition.value,
   getWindowStates: () => eyeWindows.value,
-  getWindowStatusMask: () => eyeWindowStatusMask.value
+  getWindowStatusMask: () => eyeWindowStatusMask.value,
+  getTouchWindowStates: () => touchWindows.value,
+  getTouchWindowStatusMask: () => touchWindowStatusMask.value
 })
 </script>
 
@@ -577,26 +1005,29 @@ defineExpose({
 .window-status-mini {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .window-indicators-mini {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  flex-wrap: wrap;
 }
 
 .window-dot {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
   background: #333;
   border: 1px solid #666;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
   color: #999;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
 .window-dot.active {
@@ -608,6 +1039,15 @@ defineExpose({
   background: #52c41a;
   border-color: #52c41a;
   color: #fff;
+}
+
+.window-dot.touch-dot.active {
+  border-color: #13c2c2;
+}
+
+.window-dot.touch-dot.inside {
+  background: #13c2c2;
+  border-color: #13c2c2;
 }
 
 /* Statistic value styling */
