@@ -1,4 +1,4 @@
-// Corrected dserv.js - keeping original working logic + adding monitoring
+// Complete dserv.js with Touch Window Support - Enhanced version
 import { reactive, ref, computed } from 'vue';
 import { message } from 'ant-design-vue';
 
@@ -17,6 +17,8 @@ function withTimeout(promise, ms, errorMessage = 'Operation timed out') {
 const DATAPOINT_CONFIG = {
   'ess/em_pos': { expectedHz: 60, maxHz: 120, priority: 'high', category: 'eye_tracking' },
   'ess/em_region_status': { expectedHz: 30, maxHz: 60, priority: 'high', category: 'eye_tracking' },
+  'ess/touch_region_status': { expectedHz: 30, maxHz: 60, priority: 'high', category: 'touch_tracking' },
+  'mtouch/touchvals': { expectedHz: 60, maxHz: 120, priority: 'high', category: 'touch_tracking' },
   'ess/block_pct_complete': { expectedHz: 2, maxHz: 10, priority: 'medium', category: 'performance' },
   'ess/block_pct_correct': { expectedHz: 2, maxHz: 10, priority: 'medium', category: 'performance' },
   'ess/obs_id': { expectedHz: 0.1, maxHz: 1, priority: 'medium', category: 'experiment' },
@@ -115,6 +117,23 @@ class DservWebSocket {
         sizeRaw: { width: 400, height: 400 }
       })),
       eyeWindowStatusMask: 0,
+      // NEW: Touch window state
+      touchWindows: Array(8).fill(null).map((_, i) => ({
+        id: i,
+        active: false,
+        state: 0,
+        type: 'rectangle',
+        center: { x: 0, y: 0 },
+        centerRaw: { x: 400, y: 320 },
+        size: { width: 2, height: 2 },
+        sizeRaw: { width: 100, height: 100 }
+      })),
+      touchWindowStatusMask: 0,
+      // NEW: Screen dimensions for touch coordinate conversion
+      screenWidth: 800,
+      screenHeight: 600,
+      screenHalfX: 10.0,
+      screenHalfY: 7.5,
     });
 
     this.loadingOperations = reactive({
@@ -217,6 +236,11 @@ class DservWebSocket {
     this.send({ cmd: 'subscribe', match: 'ess/em_region_setting', every: 1 });
     this.send({ cmd: 'subscribe', match: 'ess/em_region_status', every: 1 });
     
+    // NEW: Touch window subscriptions
+    this.send({ cmd: 'subscribe', match: 'ess/touch_region_setting', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/touch_region_status', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'mtouch/touchvals', every: 1 });
+    
     // Other useful subscriptions
     this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });
     this.send({ cmd: 'subscribe', match: 'print', every: 1 });
@@ -239,9 +263,16 @@ class DservWebSocket {
           ess/system_script ess/protocol_script
           ess/variants_script ess/loaders_script
           ess/stim_script ess/rmt_connected
+          ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           system/hostname system/os
         } {
           catch { dservTouch $v }
+        }
+        
+        # Touch eye and touch window settings
+        for {set i 0} {$i < 8} {incr i} {
+          catch { ainGetRegionInfo $i }
+          catch { touchGetRegionInfo $i }
         }
       `;
       await this.essCommand(touchCommand);
@@ -324,6 +355,20 @@ class DservWebSocket {
       case 'ess/em_region_status':
         this.processEyeWindowStatus(value);
         break;
+        
+      // NEW: Touch window data processing
+      case 'ess/touch_region_setting':
+        this.processTouchWindowSetting(value);
+        break;
+      case 'ess/touch_region_status':
+        this.processTouchWindowStatus(value);
+        break;
+        
+      // NEW: Screen dimensions
+      case 'ess/screen_w': this.state.screenWidth = parseInt(value, 10) || 800; break;
+      case 'ess/screen_h': this.state.screenHeight = parseInt(value, 10) || 600; break;
+      case 'ess/screen_halfx': this.state.screenHalfX = parseFloat(value) || 10.0; break;
+      case 'ess/screen_halfy': this.state.screenHalfY = parseFloat(value) || 7.5; break;
         
       case 'system/hostname': this.state.systemName = value; break;
       case 'system/os': this.state.systemOS = value; break;
@@ -639,6 +684,42 @@ class DservWebSocket {
     }
   }
 
+  // NEW: Touch window processing methods
+  processTouchWindowSetting(value) {
+    const [reg, active, state, type, cx, cy, dx, dy] = value.split(' ').map(Number);
+    if (reg >= 0 && reg < 8) {
+      // Convert touch screen pixels to degrees
+      const screenPixPerDegX = this.state.screenWidth / (2 * this.state.screenHalfX);
+      const screenPixPerDegY = this.state.screenHeight / (2 * this.state.screenHalfY);
+      
+      this.state.touchWindows[reg] = {
+        id: reg,
+        active: active === 1,
+        state: state,
+        type: type === 1 ? 'ellipse' : 'rectangle',
+        center: {
+          x: (cx - this.state.screenWidth / 2) / screenPixPerDegX,
+          // Match FLTK: touch Y coordinates need inversion to match canvas coordinate system
+          y: -1 * (cy - this.state.screenHeight / 2) / screenPixPerDegY
+        },
+        centerRaw: { x: cx, y: cy },
+        size: {
+          width: Math.abs(dx / screenPixPerDegX),
+          height: Math.abs(dy / screenPixPerDegY)
+        },
+        sizeRaw: { width: dx, height: dy }
+      };
+    }
+  }
+
+  processTouchWindowStatus(value) {
+    const [changes, states, touch_x, touch_y] = value.split(' ').map(Number);
+    this.state.touchWindowStatusMask = states;
+    for (let i = 0; i < 8; i++) {
+      this.state.touchWindows[i].state = ((states & (1 << i)) !== 0) && this.state.touchWindows[i].active;
+    }
+  }
+
   handleStatusChange(status) {
     if (status === 'loading') {
       console.log('System entering loading state');
@@ -714,7 +795,7 @@ class DservWebSocket {
     };
   }
 
-  // Experiment control methods (if these exist in your original)
+  // Experiment control methods
   async startExperiment() {
     try {
       await this.essCommand('ess::start');
@@ -751,6 +832,144 @@ class DservWebSocket {
       this.emit('subjectChange', { subject, success: true });
     } catch (error) {
       this.emit('subjectChange', { subject, success: false, error });
+      throw error;
+    }
+  }
+
+  // System loading methods
+  async setSystem(system) {
+    try {
+      this.loadingOperations.system = true;
+      await this.essCommand(`ess::load_system ${system}`);
+      this.emit('systemLoaded', { system, success: true });
+    } catch (error) {
+      this.loadingOperations.system = false;
+      this.emit('systemLoaded', { system, success: false, error });
+      throw error;
+    }
+  }
+
+  async setProtocol(protocol) {
+    try {
+      this.loadingOperations.protocol = true;
+      const system = this.state.currentSystem;
+      await this.essCommand(`ess::load_system ${system} ${protocol}`);
+      this.emit('protocolLoaded', { protocol, success: true });
+    } catch (error) {
+      this.loadingOperations.protocol = false;
+      this.emit('protocolLoaded', { protocol, success: false, error });
+      throw error;
+    }
+  }
+
+  async setVariant(variant) {
+    try {
+      this.loadingOperations.variant = true;
+      const system = this.state.currentSystem;
+      const protocol = this.state.currentProtocol;
+      await this.essCommand(`ess::load_system ${system} ${protocol} ${variant}`);
+      this.emit('variantLoaded', { variant, success: true });
+    } catch (error) {
+      this.loadingOperations.variant = false;
+      this.emit('variantLoaded', { variant, success: false, error });
+      throw error;
+    }
+  }
+
+  async reloadSystem() {
+    try {
+      this.loadingOperations.system = true;
+      await this.essCommand('ess::reload_system');
+      this.emit('systemReloaded', { success: true });
+    } catch (error) {
+      this.loadingOperations.system = false;
+      this.emit('systemReloaded', { success: false, error });
+      throw error;
+    }
+  }
+
+  async reloadProtocol() {
+    try {
+      this.loadingOperations.protocol = true;
+      await this.essCommand('ess::reload_protocol');
+      this.emit('protocolReloaded', { success: true });
+    } catch (error) {
+      this.loadingOperations.protocol = false;
+      this.emit('protocolReloaded', { success: false, error });
+      throw error;
+    }
+  }
+
+  async reloadVariant() {
+    try {
+      this.loadingOperations.variant = true;
+      await this.essCommand('ess::reload_variant');
+      this.emit('variantReloaded', { success: true });
+    } catch (error) {
+      this.loadingOperations.variant = false;
+      this.emit('variantReloaded', { success: false, error });
+      throw error;
+    }
+  }
+
+  async saveSettings() {
+    try {
+      await this.essCommand('ess::save_settings');
+      this.emit('settingsSaved', { success: true });
+    } catch (error) {
+      this.emit('settingsSaved', { success: false, error });
+      throw error;
+    }
+  }
+
+  async resetSettings() {
+    try {
+      await this.essCommand('ess::reset_settings');
+      this.emit('settingsReset', { success: true });
+    } catch (error) {
+      this.emit('settingsReset', { success: false, error });
+      throw error;
+    }
+  }
+
+  // Git operations
+  async setBranch(branch) {
+    try {
+      await this.essCommand(`send git {git::switch_and_pull ${branch}}`);
+      this.emit('branchChanged', { branch, success: true });
+    } catch (error) {
+      this.emit('branchChanged', { branch, success: false, error });
+      throw error;
+    }
+  }
+
+  // Data file operations
+  async openDataFile(filename) {
+    try {
+      await this.essCommand(`ess::file_open ${filename}`);
+      this.emit('dataFileOpened', { filename, success: true });
+    } catch (error) {
+      this.emit('dataFileOpened', { filename, success: false, error });
+      throw error;
+    }
+  }
+
+  async closeDataFile() {
+    try {
+      await this.essCommand('ess::file_close');
+      this.emit('dataFileClosed', { success: true });
+    } catch (error) {
+      this.emit('dataFileClosed', { success: false, error });
+      throw error;
+    }
+  }
+
+  async suggestFilename() {
+    try {
+      const result = await this.essCommand('ess::file_suggest');
+      return result;
+    } catch (error) {
+      console.error('Failed to get filename suggestion:', error);
       throw error;
     }
   }
