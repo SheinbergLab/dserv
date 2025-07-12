@@ -113,9 +113,11 @@ jobs:
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.18
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
 
       - name: Install essgui itself and package for release.
         run: |
@@ -150,9 +152,10 @@ jobs:
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
-      - name: Install dlsh libs and dependencies.
+      - name: Install dlsh packages.
         run: |
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
@@ -182,9 +185,10 @@ jobs:
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/essgui_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./essgui_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
-      - name: Install dlsh libs and dependencies.
+      - name: Install dlsh packages.
         run: |
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/initial/dlsh.zip
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 

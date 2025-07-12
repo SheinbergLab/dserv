@@ -107,10 +107,11 @@ jobs:
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv-${{ github.ref_name }}-Darwin-signed.pkg
           sudo installer -pkg dserv-${{ github.ref_name }}-Darwin-signed.pkg -target /
 
-      - name: Install dlsh libs and dependencies.
+      - name: Install dlsh packages.
         run: |
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
-          sudo mkdir /usr/local/dlsh
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m).zip -O dlsh.zip
+          sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
       - name: Sanity check the installed dserv.
@@ -119,8 +120,8 @@ jobs:
           ls -alth /usr/local/dserv
           echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
-          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl
-          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl
+          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 
   release-essgui:
 
@@ -166,9 +167,9 @@ jobs:
       # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.19
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-signed.pkg
-          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-signed.pkg -target /
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m)-signed.pkg
+          sudo installer -pkg dlsh-${DLSH_VERSION}-Darwin-$(uname -m)-signed.pkg -target /
 
       - name: Set up a keychain for Apple code signing.
         env:

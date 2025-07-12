@@ -45,14 +45,16 @@ jobs:
           cmake -B build
           cmake --build build
 
-      - name: Obtain dlsh (for test scripts to use)
+      - name: Obtain dlsh packages for test scripts to use.
         run: |
           mkdir dlsh/
           cd dlsh/
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
 
       - name: ctest
         run: |
+          cd build/
           ctest -VV --timeout 10
 
   build-macos:
@@ -94,11 +96,12 @@ jobs:
           cmake -B build
           cmake --build build
 
-      - name: Obtain dlsh (for test scripts to use)
+      - name: Obtain dlsh packages for test scripts to use.
         run: |
           mkdir dlsh/
           cd dlsh/
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.3/dlsh.zip
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m).zip -O dlsh.zip
 
       - name: ctest
         run: |
