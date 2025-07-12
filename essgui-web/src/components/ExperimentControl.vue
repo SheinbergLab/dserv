@@ -1,22 +1,8 @@
 <template>
   <div style="height: 100%; display: flex; flex-direction: column; padding: 8px; overflow: hidden;">
-    <!-- Connection Status Header -->
-    <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 4px 0;">
+    <!-- Clean Header - Just the title -->
+    <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; padding: 4px 0;">
       <div style="font-weight: 500; font-size: 14px;">ESS Control</div>
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <a-tag
-          :color="connectionColor"
-          style="margin: 0;"
-        >
-          {{ connectionStatus }}
-        </a-tag>
-        <a-tag
-          :color="stimConnectionColor"
-          style="margin: 0; font-size: 11px;"
-        >
-          {{ stimConnectionStatus }}
-        </a-tag>
-      </div>
     </div>
 
     <!-- FIXED SECTION - Always visible essential controls -->
@@ -215,9 +201,6 @@
           <a-spin v-if="datafileLoading" size="small" style="margin-left: 8px;" />
         </div>
 
-        <!-- Current file status -->
-        <!-- File status now shown in main status area above -->
-
         <!-- Filename input -->
         <a-form-item
           label="Filename"
@@ -275,7 +258,7 @@
     <!-- SCROLLABLE SECTION - Optional/advanced controls -->
     <div style="flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
 
-      <!-- Variant Options - Now collapsible with improved scrolling -->
+      <!-- Variant Options - Collapsible -->
       <a-collapse
         v-if="variantOptions.length > 0"
         ghost
@@ -315,11 +298,7 @@
                   class="variant-option-select"
                   style="width: 85px; flex-shrink: 0;"
                   :disabled="isSystemBusy"
-                  @change="(value) => {
-                    console.log('Dropdown changed:', { optionName: option.name, selectedValue: value });
-                    console.log('All option choices:', option.choices);
-                    setVariantOption(option.name, value);
-                  }"
+                  @change="(value) => setVariantOption(option.name, value)"
                 >
                   <a-select-option
                     v-for="choice in option.choices"
@@ -335,7 +314,7 @@
         </a-collapse-panel>
       </a-collapse>
 
-      <!-- System Parameters - Now collapsible with improved scrolling -->
+      <!-- System Parameters - Collapsible -->
       <a-collapse
         v-if="systemParameters.length > 0"
         ghost
@@ -400,8 +379,7 @@
 
 <script setup>
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
-import { ReloadOutlined } from '@ant-design/icons-vue'
-import { BulbOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined, BulbOutlined } from '@ant-design/icons-vue'
 import { dserv } from '../services/dserv.js'
 
 // Define emits for terminal logging
@@ -420,7 +398,6 @@ const filenameInput = ref(null)
 const variantOptions = ref([])
 const systemParameters = ref([])
 const autoReload = ref(true) // Default to auto-reload enabled
-const stimConnected = ref(false) // Track stim connection status
 
 const loading = ref({
   start: false,
@@ -440,8 +417,7 @@ onMounted(() => {
       { pattern: 'ess/variant_info_json', every: 1 },
       { pattern: 'ess/param_settings', every: 1 },
       { pattern: 'ess/datafile', every: 1 },
-      { pattern: 'ess/lastfile', every: 1 },
-      { pattern: 'ess/rmt_connected', every: 1 }
+      { pattern: 'ess/lastfile', every: 1 }
     ]
   })
 
@@ -451,36 +427,29 @@ onMounted(() => {
     parseVariantInfoJson(data.data)
   })
 
-  // Listen for system parameters data (unchanged)
+  // Listen for system parameters data
   dserv.on('datapoint:ess/param_settings', (data) => {
     console.log('Received param_settings:', data.data)
     parseSystemParameters(data.data)
   })
 
-// Listen for datafile status
-dserv.on('datapoint:ess/datafile', (data) => {
-  console.log('Received datafile status:', data.data)
-  currentDatafile.value = data.data || ''
-  if (!data.data) {
-    // File was closed, clear the filename for next use
-    datafilename.value = ''
-  }
-})
+  // Listen for datafile status
+  dserv.on('datapoint:ess/datafile', (data) => {
+    console.log('Received datafile status:', data.data)
+    currentDatafile.value = data.data || ''
+    if (!data.data) {
+      // File was closed, clear the filename for next use
+      datafilename.value = ''
+    }
+  })
 
-// Listen for last file info (when file is closed and processed)
-dserv.on('datapoint:ess/lastfile', (data) => {
-  console.log('Last file processed:', data.data)
-  if (data.data) {
-    logToTerminal(`File processed: ${data.data}`, 'success')
-  }
-})
-
-// Listen for stim connection status
-dserv.on('datapoint:ess/rmt_connected', (data) => {
-  console.log('Received stim connection status:', data.data)
-  stimConnected.value = data.data === '1' || data.data === 1
-})
-
+  // Listen for last file info (when file is closed and processed)
+  dserv.on('datapoint:ess/lastfile', (data) => {
+    console.log('Last file processed:', data.data)
+    if (data.data) {
+      logToTerminal(`File processed: ${data.data}`, 'success')
+    }
+  })
 
   // Cleanup on unmount
   onUnmounted(cleanup)
@@ -568,7 +537,7 @@ function parseVariantInfoJson(rawData) {
   }
 }
 
-// Parse system parameters from Tcl format (keeping existing implementation)
+// Parse system parameters from Tcl format
 function parseSystemParameters(rawData) {
   try {
     console.log('Parsing system parameters:', rawData)
@@ -716,21 +685,14 @@ async function closeDatafile() {
 
 async function setVariantOption(optionName, value) {
   try {
-    // Following Tcl dictionary rules:
-    // 1. Always wrap the value in braces to make it a single argument
-    // 2. This preserves any internal structure that may exist in the value
-    // 3. Tcl will properly parse the internal structure based on its own rules
-
     const command = `ess::set_variant_args {${optionName} {${value}}}`;
     console.log('Setting variant option with command:', command);
 
     await dserv.essCommand(command);
-    //logToTerminal(`Variant option ${optionName} set to: ${value}`, 'success');
 
     if (autoReload.value) {
       try {
         await dserv.essCommand('ess::reload_variant');
-        //logToTerminal('Variant auto-reloaded', 'success');
       } catch (reloadError) {
         console.error('Failed to auto-reload variant:', reloadError);
         logToTerminal(`Auto-reload failed: ${reloadError.message}`, 'error');
@@ -779,26 +741,6 @@ const isSystemBusy = computed(() => {
   return dserv.state.essStatus === 'loading'
 })
 
-const connectionColor = computed(() => {
-  if (!dserv.state.connected) return 'red'
-  if (isSystemBusy.value) return 'orange'
-  return 'green'
-})
-
-const connectionStatus = computed(() => {
-  if (!dserv.state.connected) return 'Disconnected'
-  if (isSystemBusy.value) return 'Loading...'
-  return 'Connected'
-})
-
-const stimConnectionColor = computed(() => {
-  return stimConnected.value ? 'orange' : 'default'
-})
-
-const stimConnectionStatus = computed(() => {
-  return stimConnected.value ? 'Stim Connected' : 'Stim Not Connected'
-})
-
 // Watch for loading state changes
 watch(isSystemBusy, (isBusy) => {
   if (!isBusy) {
@@ -833,14 +775,7 @@ function logToTerminal(message, type = 'normal') {
 // Load initial data from dserv
 watch(() => dserv.state.subject, async (newSubject) => {
   if (newSubject) {
-    // Uncomment and implement when subject data loading is available:
-    // try {
-    //   await dserv.loadSubjectData(newSubject)
-    //   logToTerminal(`Loaded data for subject: ${newSubject}`, 'success')
-    // } catch (error) {
-    //   console.error('Failed to load subject data:', error)
-    //   logToTerminal(`Failed to load subject data: ${error.message}`, 'error')
-    // }
+    // Future: implement subject data loading if needed
   }
 })
 
@@ -1008,12 +943,11 @@ function getStatusColor(status) {
 </script>
 
 <style scoped>
-/* Ensure compact spacing throughout */
+/* Same styling as before, but without connection status related styles */
 :deep(.ant-form-item) {
   margin-bottom: 4px;
 }
 
-/* Target the actual label elements by their title attributes - much more precise! */
 :deep(label[title="Subject"]) {
   font-size: 11px !important;
   font-weight: 500 !important;
@@ -1026,7 +960,6 @@ function getStatusColor(status) {
   font-weight: 500 !important;
 }
 
-/* Also target the form item containers for width/spacing */
 .subject-section :deep(.ant-form-item-label),
 .system-config :deep(.ant-form-item-label) {
   width: 55px !important;
@@ -1040,7 +973,6 @@ function getStatusColor(status) {
   padding: 2px 8px !important;
 }
 
-/* Global dropdown styling - targets all select dropdowns */
 :global(.ant-select-dropdown .ant-select-item) {
   font-size: 10px !important;
   padding: 2px 8px !important;
@@ -1052,7 +984,6 @@ function getStatusColor(status) {
   font-size: 10px !important;
 }
 
-/* Ensure all select dropdowns use smaller font */
 :global(.ant-select-dropdown) {
   font-size: 10px !important;
 }
@@ -1085,12 +1016,10 @@ function getStatusColor(status) {
   width: 60px;
 }
 
-/* Make all selects in system config the same width */
 .system-config .ant-select {
   flex: 1;
 }
 
-/* Disabled state styling */
 .system-config .ant-select-disabled .ant-select-selector {
   opacity: 0.6;
 }
@@ -1099,15 +1028,14 @@ function getStatusColor(status) {
   width: 12px;
   height: 12px;
   border-radius: 2px;
-  background-color: transparent; /* Invisible by default */
+  background-color: transparent;
   transition: background-color 0.3s ease;
 }
 
 .obs-indicator.is-active {
-  background-color: #f5222d; /* Ant Design red-6 */
+  background-color: #f5222d;
 }
 
-/* Datafile management styling */
 .datafile-config-item :deep(.ant-form-item-label) {
   width: 55px !important;
   padding-right: 6px !important;
@@ -1125,17 +1053,6 @@ function getStatusColor(status) {
   color: #bfbfbf;
 }
 
-/* File status indicator styling */
-div[style*="background: #f6ffed"] {
-  font-family: monospace;
-}
-
-/* Datafile button styling */
-.datafile-buttons .ant-btn {
-  font-size: 10px !important;
-}
-
-/* Variant Options and System Parameters styling */
 .variant-option-select :deep(.ant-select-selector) {
   font-size: 10px !important;
   padding: 1px 4px !important;
@@ -1145,7 +1062,6 @@ div[style*="background: #f6ffed"] {
   font-size: 10px !important;
 }
 
-/* Extra small styling for variant option dropdowns */
 :global(.variant-option-select .ant-select-dropdown .ant-select-item) {
   font-size: 9px !important;
   padding: 1px 6px !important;
@@ -1157,7 +1073,6 @@ div[style*="background: #f6ffed"] {
   font-size: 9px !important;
 }
 
-/* System Parameters input styling */
 .ant-input-number {
   font-size: 10px !important;
 }
@@ -1170,7 +1085,6 @@ div[style*="background: #f6ffed"] {
   font-size: 10px !important;
 }
 
-/* Collapse panel styling */
 :deep(.ant-collapse-ghost .ant-collapse-item) {
   border: 1px solid #d9d9d9;
   border-radius: 6px;
@@ -1186,7 +1100,6 @@ div[style*="background: #f6ffed"] {
   padding: 8px 12px !important;
 }
 
-/* Scrollbar styling for parameter sections */
 div[style*="max-height: 200px"]::-webkit-scrollbar {
   width: 6px;
 }
@@ -1205,7 +1118,6 @@ div[style*="max-height: 200px"]::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
 }
 
-/* Main scrollbar styling for the entire panel */
 div[style*="overflow-y: auto"]::-webkit-scrollbar {
   width: 8px;
 }
