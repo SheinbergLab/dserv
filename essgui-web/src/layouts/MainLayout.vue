@@ -58,7 +58,7 @@
                     
                     <!-- Controls for the behavior tab -->
                     <div style="flex-shrink: 0; padding: 8px; border-bottom: 1px solid #e8e8e8; display: flex; justify-content: space-between; align-items: center;">
-                      <span style="font-weight: 500;">Eye Tracking</span>
+                      <span style="font-weight: 500;">Eye & Touch Tracking</span>
                       <a-button
                         size="small"
                         :type="showVirtualInput ? 'primary' : 'default'"
