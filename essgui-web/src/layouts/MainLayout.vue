@@ -17,19 +17,17 @@
               :text="systemHealthText"
               style="font-size: 11px;"
             />
-            <span style="font-size: 10px; color: #999;">
-              {{ connectionUptime }} • {{ messagesPerSecond }}/s
-            </span>
             
             <!-- Stim Connection Status -->
             <span style="font-size: 11px; color: #666; margin-left: 8px;">Stim:</span>
-            <a-tag
+	    <a-tag
               :color="stimConnectionColor"
               size="small"
               style="margin: 0; font-size: 10px;"
             >
               {{ stimConnectionStatus }}
             </a-tag>
+
           </div>
           
           <div style="display: flex; align-items: center; gap: 4px;">
@@ -59,15 +57,6 @@
                     <!-- Controls for the behavior tab -->
                     <div style="flex-shrink: 0; padding: 8px; border-bottom: 1px solid #e8e8e8; display: flex; justify-content: space-between; align-items: center;">
                       <span style="font-weight: 500;">Eye & Touch Tracking</span>
-                      <a-button
-                        size="small"
-                        :type="showVirtualInput ? 'primary' : 'default'"
-                        @click="showVirtualInput = !showVirtualInput"
-                        :icon="h(showVirtualInput ? EyeOutlined : EyeInvisibleOutlined)"
-                        style="font-size: 11px;"
-                      >
-                        {{ showVirtualInput ? 'Hide' : 'Show' }} Virtual Input
-                      </a-button>
                     </div>
 
                     <div style="flex: 1; display: flex; gap: 16px;">
@@ -78,15 +67,6 @@
                         </div>
                       </div>
 
-                      <!-- Virtual Eye Input - conditionally shown -->
-                      <div 
-                        v-if="showVirtualInput"
-                        style="width: 300px; border: 1px solid #d9d9d9; padding: 8px; display: flex; flex-direction: column;"
-                      >
-                        <div style="flex: 1; min-height: 400px; position: relative;">
-                          <virtual-eye-input style="position: absolute; inset: 0;" />
-                        </div>
-                      </div>
                     </div>
 
                     <!-- Performance Table -->
@@ -148,6 +128,11 @@
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <a-badge :status="systemHealthStatus" />
                   <span style="font-weight: 500; font-size: 12px;">System Monitor</span>
+            <span style="font-size: 10px; color: #999;">
+              {{ connectionUptime }} • {{ messagesPerSecond }}/s
+            </span>
+
+
                 </div>
                 <a-button
                   size="small"
