@@ -39,17 +39,18 @@
       <a-row align="middle">
         <a-col :span="12">
           <a-space size="small">
-            <a-checkbox v-model:checked="displayOptions.showGrid">Grid</a-checkbox>
-            <a-checkbox v-model:checked="displayOptions.showTrails">Trails</a-checkbox>
+            <a-checkbox v-model:checked="displayOptions.showGrid" style="font-size: 11px;">Grid</a-checkbox>
+            <a-checkbox v-model:checked="displayOptions.showTrails" style="font-size: 11px;">Trails</a-checkbox>
           </a-space>
         </a-col>
         <a-col :span="12" style="text-align: right;">
           <a-space size="small">
             <a-button
-            size="small"
-        @click="resetView"
-        :icon="h(ReloadOutlined)"
-        style="padding: 1px 6px; font-size: 10px;">
+              size="small"
+              @click="resetView"
+              :icon="h(ReloadOutlined)"
+              style="padding: 1px 6px; font-size: 10px;"
+            >
               Reset View
             </a-button>
           </a-space>
@@ -72,6 +73,10 @@ const ADC_TO_DEG = 200.0
 // Component state - only component-specific data
 const eyePosition = ref({ x: 0, y: 0 })
 const eyePositionRaw = ref({ x: 2048, y: 2048 })
+
+// Animation state tracking for robustness
+const canvasReady = ref(false)
+const animationRunning = ref(false)
 
 // Use dserv's central state for system-wide data
 const connected = computed(() => dserv.state.connected)
@@ -97,7 +102,7 @@ const displayOptions = reactive({
 // Canvas refs and state
 const canvasRef = ref(null)
 const canvasContainer = ref(null)
-const canvasSize = ref({ width: 600, height: 600 })
+const canvasSize = ref({ width: 300, height: 300 })
 const visualRange = { horizontal: 20.0, vertical: 20.0 } // degrees
 
 // Trail history
@@ -119,33 +124,11 @@ const canvasCenter = computed(() => ({
   y: canvasSize.value.height / 2
 }))
 
-// Utility functions (previously in service)
+// Utility functions
 function convertPosition(xAdc, yAdc) {
   return {
     x: (xAdc - ADC_CENTER) / ADC_TO_DEG,
     y: -1 * (yAdc - ADC_CENTER) / ADC_TO_DEG // Y inverted
-  }
-}
-
-function parseWindowSetting(data) {
-  // data format: [reg, active, state, type, cx, cy, dx, dy, ...]
-  if (!Array.isArray(data) || data.length < 8) {
-    return null
-  }
-
-  const [reg, active, state, type, cx, cy, dx, dy] = data
-
-  return {
-    id: reg,
-    active: active === 1,
-    type: type === 1 ? 'ellipse' : 'rectangle',
-    center: convertPosition(cx, cy),
-    centerRaw: { x: cx, y: cy },
-    size: {
-      width: Math.abs(dx / ADC_TO_DEG),
-      height: Math.abs(dy / ADC_TO_DEG)
-    },
-    sizeRaw: { width: dx, height: dy }
   }
 }
 
@@ -157,11 +140,8 @@ function degreesToCanvas(degX, degY) {
   }
 }
 
-// Datapoint handlers - only for component-specific data
+// Eye position data handler
 function handleEyePosition(data) {
-//  console.log('Eye position data received:', data) // Debug log
-
-  // Check both data.value and data.data (your dserv uses data.data)
   const value = data.value || data.data
 
   if (data.name === 'ess/em_pos') {
@@ -179,43 +159,109 @@ function handleEyePosition(data) {
   }
 }
 
-// Note: Window settings and status are now handled by dserv central state
-// We only need to handle high-frequency eye position data locally
+// Robust canvas setup
+function setupCanvas() {
+  if (!canvasRef.value) {
+    console.warn('Canvas ref not available')
+    return false
+  }
+  
+  try {
+    ctx = canvasRef.value.getContext('2d')
+    if (!ctx) {
+      console.error('Failed to get canvas context')
+      return false
+    }
+    
+    canvasReady.value = true
+    return true
+  } catch (error) {
+    console.error('Canvas setup error:', error)
+    canvasReady.value = false
+    return false
+  }
+}
 
-// Canvas rendering functions
+// Robust animation system
 function startAnimation() {
+  // Stop any existing animation first
+  if (animationId) {
+    cancelAnimationFrame(animationId)
+  }
+  
+  // Ensure canvas is ready
+  if (!ctx || !canvasRef.value) {
+    return
+  }
+  
+  animationRunning.value = true
+  
   function animate() {
+    if (!animationRunning.value) {
+      return
+    }
+    
+    // Verify canvas context is still valid
+    if (!ctx || !canvasRef.value) {
+      animationRunning.value = false
+      return
+    }
+    
     render()
     animationId = requestAnimationFrame(animate)
   }
   animate()
 }
 
+function stopAnimation() {
+  animationRunning.value = false
+  if (animationId) {
+    cancelAnimationFrame(animationId)
+    animationId = null
+  }
+}
+
+// Enhanced render function with error handling
 function render() {
-  if (!ctx) return
-
-  // Clear canvas
-  ctx.fillStyle = '#000000'
-  ctx.fillRect(0, 0, canvasSize.value.width, canvasSize.value.height)
-
-  // Draw layers in order
-  if (displayOptions.showGrid) {
-    drawGrid()
+  if (!ctx || !canvasRef.value) {
+    return
   }
 
-  if (displayOptions.showTrails) {
-    drawTrails()
-  }
+  try {
+    // Clear canvas
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, canvasSize.value.width, canvasSize.value.height)
 
-  // Draw eye windows
-  eyeWindows.value.forEach(window => {
-    if (window.active) {
-      drawWindow(window)
+    // Draw layers in order
+    if (displayOptions.showGrid) {
+      drawGrid()
     }
-  })
 
-  // Draw eye position
-  drawEyePosition()
+    if (displayOptions.showTrails) {
+      drawTrails()
+    }
+
+    // Draw eye windows
+    eyeWindows.value.forEach(window => {
+      if (window.active) {
+        drawWindow(window)
+      }
+    })
+
+    // Draw eye position
+    drawEyePosition()
+  } catch (error) {
+    console.error('Render error:', error)
+    // Try to restart animation after a brief delay
+    setTimeout(() => {
+      if (canvasRef.value) {
+        ctx = canvasRef.value.getContext('2d')
+        if (ctx && !animationRunning.value) {
+          startAnimation()
+        }
+      }
+    }, 100)
+  }
 }
 
 function drawGrid() {
@@ -260,7 +306,6 @@ function drawTrails() {
 
   for (let i = 0; i < eyeHistory.value.length; i++) {
     const pos = degreesToCanvas(eyeHistory.value[i].x, eyeHistory.value[i].y)
-    const alpha = i / eyeHistory.value.length
 
     if (i === 0) {
       ctx.moveTo(pos.x, pos.y)
@@ -346,7 +391,6 @@ function drawEyePosition() {
 
 // Actions
 async function refreshWindows() {
-  // Request current window configurations
   try {
     for (let i = 0; i < 8; i++) {
       await dserv.essCommand(`ainGetRegionInfo ${i}`)
@@ -360,13 +404,13 @@ function resetView() {
   // Clear trails
   eyeHistory.value = []
 
-  // Reset any zoom/pan in future
-  // For now, just redraw
+  // Redraw canvas
   if (ctx) {
     render()
   }
 }
 
+// Enhanced resize handling with canvas reinitialization
 function handleResize() {
   if (!canvasContainer.value) return
 
@@ -379,10 +423,15 @@ function handleResize() {
     height: size
   }
 
-  // Canvas will be resized on next render due to reactive binding
+  // Reinitialize canvas after resize
   nextTick(() => {
-    if (canvasRef.value) {
-      ctx = canvasRef.value.getContext('2d')
+    if (canvasRef.value && !ctx) {
+      setupCanvas()
+    }
+    
+    // Restart animation if it's not running but should be
+    if (canvasReady.value && !animationRunning.value) {
+      startAnimation()
     }
   })
 }
@@ -392,53 +441,44 @@ let cleanupDserv = null
 let resizeObserver = null
 
 onMounted(() => {
-  // Get canvas context
-  if (canvasRef.value) {
-    ctx = canvasRef.value.getContext('2d')
-  }
+  // Setup canvas first
+  nextTick(() => {
+    if (setupCanvas()) {
+      // Register component
+      cleanupDserv = dserv.registerComponent('EyeTouchVisualizer')
 
-  // Register component with dserv
-  cleanupDserv = dserv.registerComponent('EyeTouchVisualizer', {
-    subscriptions: [
-      { pattern: 'ess/em_pos', every: 1 }
-      // Note: em_region_setting and em_region_status are handled by dserv central state
-    ]
+      // Listen for events
+      dserv.on('datapoint:ess/em_pos', handleEyePosition, 'EyeTouchVisualizer')
+      dserv.on('connection', (data) => {
+        connected.value = data.connected
+      }, 'EyeTouchVisualizer')
+
+      // Initialize connection state
+      connected.value = dserv.state.connected
+
+      // Set up resize observer
+      resizeObserver = new ResizeObserver(() => {
+        handleResize()
+      })
+      if (canvasContainer.value) {
+        resizeObserver.observe(canvasContainer.value)
+      }
+
+      // Initial resize and start animation
+      handleResize()
+      startAnimation()
+
+      // Request initial window info
+      if (connected.value) {
+        refreshWindows()
+      }
+    }
   })
-
-  console.log('EyeTouchVisualizer mounted, subscribing to datapoints...')
-
-  // Set up datapoint handlers - only for component-specific data
-  dserv.on('datapoint:ess/em_pos', handleEyePosition)
-  // Note: removed region handlers - using dserv.state instead
-
-  // Connection status is handled by dserv central state
-  // No need for separate connection event handler
-
-  // Set up resize observer
-  resizeObserver = new ResizeObserver(() => {
-    handleResize()
-  })
-  if (canvasContainer.value) {
-    resizeObserver.observe(canvasContainer.value)
-  }
-
-  // Initial resize
-  handleResize()
-
-  // Start rendering
-  startAnimation()
-
-  // Request initial window info after mount
-  if (connected.value) {
-    refreshWindows()
-  }
 })
 
 onUnmounted(() => {
-  // Stop animation
-  if (animationId) {
-    cancelAnimationFrame(animationId)
-  }
+  // Stop animation first
+  stopAnimation()
 
   // Clean up resize observer
   if (resizeObserver) {
@@ -447,20 +487,20 @@ onUnmounted(() => {
 
   // Clean up dserv
   if (cleanupDserv) cleanupDserv()
-
-  // Remove event listeners - only component-specific ones
-  dserv.off('datapoint:ess/em_pos', handleEyePosition)
+  
+  // Clear canvas state
+  canvasReady.value = false
+  ctx = null
 })
 
-// Watch for connection changes to refresh windows
-watch(connected, (newConnected) => {
-  if (newConnected) {
-    // Refresh windows when reconnected
-    refreshWindows()
+// Restart animation when canvas becomes ready
+watch(canvasReady, (ready) => {
+  if (ready && !animationRunning.value) {
+    startAnimation()
   }
 })
 
-// Watch display options to clear trails when disabled
+// Clear trails when disabled
 watch(() => displayOptions.showTrails, (showTrails) => {
   if (!showTrails) {
     eyeHistory.value = []
@@ -529,6 +569,9 @@ defineExpose({
   border-top: 1px solid #d9d9d9;
   background: #fafafa;
   flex-shrink: 0;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
 }
 
 .window-status-mini {
@@ -579,6 +622,11 @@ defineExpose({
 
 /* Checkbox styling */
 :deep(.ant-checkbox-wrapper) {
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+:deep(.ant-checkbox) {
+  margin-right: 4px;
 }
 </style>
