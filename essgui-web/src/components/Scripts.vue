@@ -1,73 +1,91 @@
 <template>
   <div style="height: 100%; display: flex; flex-direction: column; overflow: hidden;">
     
-    <!-- Header with tabs and controls -->
+    <!-- Header with script selector and controls -->
     <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #d9d9d9; background: #fafafa;">
-      <!-- Script tabs -->
-      <div style="display: flex; gap: 4px;">
-        <a-button
-          v-for="script in scriptTabs"
-          :key="script.name"
-          :type="activeScript === script.name ? 'primary' : 'default'"
+      <!-- Script Selector Dropdown -->
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <a-select
+          v-model:value="activeScript"
           size="small"
-          @click="switchScript(script.name)"
-          style="position: relative;"
+          style="width: 140px;"
+          @change="(value) => switchScript(value)"
         >
-          {{ script.label }}
-          <span 
-            v-if="scripts[script.name]?.modified" 
-            style="position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; background: #ff4d4f; border-radius: 50%; font-size: 10px;"
-          ></span>
-        </a-button>
+          <a-select-option v-for="script in scriptTabs" :key="script.name" :value="script.name">
+            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+              <span>{{ script.label }}</span>
+              <span 
+                v-if="scripts[script.name]?.modified" 
+                style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%; margin-left: 8px;"
+              ></span>
+            </div>
+          </a-select-option>
+        </a-select>
       </div>
 
-      <!-- Controls -->
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <a-button 
-          size="small" 
-          @click="formatScript"
-          :disabled="!currentScript?.content"
-        >
-          Format
-        </a-button>
+      <!-- Controls with icons and branch dropdown -->
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <!-- Icon toolbar (moved to left) -->
+        <a-tooltip title="Format Code (Ctrl+Shift+F)">
+          <a-button 
+            size="small" 
+            @click="formatScript"
+            :disabled="!currentScript?.content"
+            :icon="h(FormatPainterOutlined)"
+            style="width: 32px; height: 24px;"
+          />
+        </a-tooltip>
 
-        <a-button 
-          size="small" 
-          @click="pullScripts"
+        <a-tooltip title="Save Script (Ctrl+S)">
+          <a-button 
+            type="primary" 
+            size="small" 
+            @click="saveScript"
+            :loading="isSaving"
+            :disabled="!currentScript?.modified"
+            :icon="h(SaveOutlined)"
+            style="width: 32px; height: 24px;"
+          />
+        </a-tooltip>
+
+        <a-tooltip title="Pull from Git">
+          <a-button 
+            size="small" 
+            @click="pullScripts"
+            :loading="isGitBusy"
+            :icon="h(DownloadOutlined)"
+            style="width: 32px; height: 24px;"
+          />
+        </a-tooltip>
+
+        <a-tooltip title="Push to Git">
+          <a-button 
+            size="small" 
+            @click="pushScripts"
+            :loading="isGitBusy"
+            :disabled="isGitBusy"
+            :icon="h(UploadOutlined)"
+            style="width: 32px; height: 24px;"
+          />
+        </a-tooltip>
+
+        <!-- Divider -->
+        <a-divider type="vertical" style="margin: 0;" />
+
+        <!-- Git Branch Dropdown (moved to right) -->
+        <a-select
+          v-model:value="currentBranch"
+          size="small"
+          style="width: 120px;"
           :loading="isGitBusy"
-          title="Pull latest scripts from git"
+          @change="switchBranch"
+          :disabled="isGitBusy"
+          placeholder="Select branch"
         >
-          Pull
-        </a-button>
-
-        <a-button 
-          size="small" 
-          @click="pushScripts"
-          :loading="isGitBusy"
-          :disabled="!canPushToGit"
-          title="Commit and push scripts to git"
-        >
-          Push
-        </a-button>
-
-        <a-button 
-          type="primary" 
-          size="small" 
-          @click="saveScript"
-          :loading="isSaving"
-          :disabled="!currentScript?.modified"
-        >
-          Save {{ scriptTabs.find(s => s.name === activeScript)?.label }}
-        </a-button>
-
-        <a-button 
-          size="small" 
-          @click="saveAllScripts"
-          :loading="isSavingAll"
-          :disabled="!hasModifiedScripts"
-        >
-          Save All
-        </a-button>
+          <a-select-option v-for="branch in availableBranches" :key="branch" :value="branch">
+            {{ branch }}
+          </a-select-option>
+        </a-select>
       </div>
     </div>
 
@@ -83,6 +101,7 @@
         <span>{{ currentScript?.name?.toUpperCase() }} Script</span>
         <span v-if="currentScript?.modified" style="color: #ff9500;">Modified</span>
         <span>Tcl</span>
+        <span v-if="currentBranch" style="color: #1890ff;">{{ currentBranch }}</span>
       </div>
       <div style="display: flex; gap: 12px;">
         <span>{{ keyBindings === 'emacs' ? 'Emacs Bindings' : 'Default Bindings' }}</span>
@@ -94,6 +113,13 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { 
+  FormatPainterOutlined, 
+  SaveOutlined, 
+  DownloadOutlined, 
+  UploadOutlined 
+} from '@ant-design/icons-vue'
+import { h } from 'vue'
 import { dserv } from '../services/dserv.js'
 
 // CodeMirror imports
@@ -125,9 +151,12 @@ let editorView = null
 const activeScript = ref('system')
 const keyBindings = ref('emacs')
 const isSaving = ref(false)
-const isSavingAll = ref(false)
 const isGitBusy = ref(false)
 const isUpdatingContent = ref(false) // Flag to prevent marking as modified during programmatic updates
+
+// Git branch state
+const currentBranch = ref('')
+const availableBranches = ref([])
 
 const scripts = ref({
   system: { name: 'system', content: '', modified: false, loaded: false },
@@ -147,9 +176,6 @@ const scriptTabs = [
 
 // Computed properties
 const currentScript = computed(() => scripts.value[activeScript.value])
-const hasModifiedScripts = computed(() => 
-  Object.values(scripts.value).some(script => script.modified)
-)
 
 // Track if we've made any changes since last git operation
 const hasChangesSinceLastGit = ref(false)
@@ -164,8 +190,34 @@ watch(scripts, (newScripts) => {
 }, { deep: true })
 
 // Git push should be available if we have changes since last git operation
-// or if there are saved changes that haven't been pushed
 const canPushToGit = computed(() => hasChangesSinceLastGit.value)
+
+// Git branch operations
+async function switchBranch(branchName) {
+  if (branchName === currentBranch.value) return
+  
+  isGitBusy.value = true
+  try {
+    console.log(`Switching to branch: ${branchName}`)
+    const cmd = `send git {git::switch_and_pull ${branchName}}`
+    await dserv.essCommand(cmd)
+    console.log(`Successfully switched to branch: ${branchName}`)
+    
+    // Reset git change tracking after branch switch
+    hasChangesSinceLastGit.value = false
+    
+    // After branch switch, request updated script data
+    setTimeout(() => {
+      requestScriptData()
+    }, 500)
+  } catch (error) {
+    console.error(`Failed to switch to branch ${branchName}:`, error)
+    // Revert selection on error
+    currentBranch.value = currentBranch.value
+  } finally {
+    isGitBusy.value = false
+  }
+}
 
 // CodeMirror editor creation
 function createEditor() {
@@ -175,14 +227,6 @@ function createEditor() {
     key: 'Ctrl-s',
     run: () => {
       saveScript()
-      return true
-    }
-  }
-
-  const saveAllCommand = {
-    key: 'Ctrl-Shift-s', 
-    run: () => {
-      saveAllScripts()
       return true
     }
   }
@@ -247,8 +291,7 @@ const formatCommand = {
   const allKeybindings = [
     ...currentKeybindings,
     ...searchKeybindings,
-    saveCommand,
-    saveAllCommand
+    saveCommand
   ]
 
   const state = EditorState.create({
@@ -374,6 +417,7 @@ function updateEditorContent(content) {
   const currentContent = editorView.state.doc.toString()
   if (currentContent !== content) {
     isUpdatingContent.value = true
+    
     editorView.dispatch({
       changes: {
         from: 0,
@@ -381,6 +425,7 @@ function updateEditorContent(content) {
         insert: content
       }
     })
+    
     // Use nextTick to ensure the flag is reset after the update is processed
     nextTick(() => {
       isUpdatingContent.value = false
@@ -390,11 +435,14 @@ function updateEditorContent(content) {
 
 // Switch between scripts
 function switchScript(scriptName) {
-  if (activeScript.value === scriptName) return
-  
+  // Don't return early - the v-model has already updated activeScript.value
   activeScript.value = scriptName
+  
+  // Get the content directly
+  const newContent = scripts.value[scriptName]?.content || ''
+  
   if (editorView) {
-    updateEditorContent(currentScript.value.content)
+    updateEditorContent(newContent)
   }
 }
 
@@ -468,12 +516,8 @@ async function saveScript() {
     scripts.value[activeScript.value].modified = false
     console.log(`${activeScript.value} script saved successfully`)
     
-    // Could emit an event here for global menu integration if needed
-    // dserv.emit('scriptSaved', { scriptType: activeScript.value })
-    
   } catch (error) {
     console.error(`Failed to save ${activeScript.value} script:`, error)
-    // Could show an error notification here
   } finally {
     isSaving.value = false
   }
@@ -517,47 +561,27 @@ async function pushScripts() {
   }
 }
 
-async function saveAllScripts() {
-  if (!hasModifiedScripts.value) return
-  
-  isSavingAll.value = true
-  try {
-    const modifiedScripts = Object.entries(scripts.value)
-      .filter(([_, script]) => script.modified)
-    
-    console.log(`Saving ${modifiedScripts.length} modified scripts...`)
-    
-    for (const [scriptName, script] of modifiedScripts) {
-      const cmd = `ess::save_script ${scriptName} {${script.content}}`
-      await dserv.essCommand(cmd)
-      script.modified = false
-      console.log(`${scriptName} script saved`)
-    }
-    
-    console.log('All scripts saved successfully')
-  } catch (error) {
-    console.error('Failed to save scripts:', error)
-  } finally {
-    isSavingAll.value = false
-  }
-}
-
 // Component lifecycle
 onMounted(() => {
   console.log('Scripts component mounted')
   
   // Register component with dserv
-  const cleanup = dserv.registerComponent('Scripts', {
-    subscriptions: []
-  })
+  const cleanup = dserv.registerComponent('Scripts')
 
-  // Expose save function globally for menu integration (like essgui)
-  window.saveCurrentScript = saveScript
-  
-  // Listen for global save events (if triggered from menu)
-  dserv.on('saveScript', () => {
-    saveScript()
-  })
+  // Listen for git branch data
+  dserv.on('datapoint:ess/git/branches', (data) => {
+    console.log('Received git branches:', data.data)
+    if (data.data) {
+      // Parse the TCL list format (space-separated)
+      availableBranches.value = data.data.trim().split(/\s+/).filter(branch => branch.length > 0)
+      console.log('Available branches:', availableBranches.value)
+    }
+  }, 'Scripts')
+
+  dserv.on('datapoint:ess/git/branch', (data) => {
+    console.log('Received current git branch:', data.data)
+    currentBranch.value = data.data || ''
+  }, 'Scripts')
   
   // Listen for script data from dserv
   dserv.on('datapoint:ess/system_script', (data) => {
@@ -568,7 +592,7 @@ onMounted(() => {
     if (activeScript.value === 'system') {
       updateEditorContent(data.data)
     }
-  })
+  }, 'Scripts')
   
   dserv.on('datapoint:ess/protocol_script', (data) => {
     console.log('Received protocol script data')
@@ -578,7 +602,7 @@ onMounted(() => {
     if (activeScript.value === 'protocol') {
       updateEditorContent(data.data)
     }
-  })
+  }, 'Scripts')
   
   dserv.on('datapoint:ess/loaders_script', (data) => {
     console.log('Received loaders script data')
@@ -588,7 +612,7 @@ onMounted(() => {
     if (activeScript.value === 'loaders') {
       updateEditorContent(data.data)
     }
-  })
+  }, 'Scripts')
   
   dserv.on('datapoint:ess/variants_script', (data) => {
     console.log('Received variants script data')
@@ -598,7 +622,7 @@ onMounted(() => {
     if (activeScript.value === 'variants') {
       updateEditorContent(data.data)
     }
-  })
+  }, 'Scripts')
   
   dserv.on('datapoint:ess/stim_script', (data) => {
     console.log('Received stim script data')
@@ -608,32 +632,35 @@ onMounted(() => {
     if (activeScript.value === 'stim') {
       updateEditorContent(data.data)
     }
-  })
+  }, 'Scripts')
 
   // Listen for connection events to request script data
   dserv.on('connection', ({ connected }) => {
     if (connected) {
-      console.log('Connected - requesting script data')
+      console.log('Connected - requesting script and git data')
       requestScriptData()
+      requestGitData()
     }
-  })
+  }, 'Scripts')
 
   // Listen for initialization completion
   dserv.on('initialized', () => {
-    console.log('dserv initialized - requesting script data')
+    console.log('dserv initialized - requesting script and git data')
     requestScriptData()
-  })
+    requestGitData()
+  }, 'Scripts')
   
   // Create editor after mount
   nextTick(() => {
     createEditor()
   })
 
-  // If already connected, request script data immediately
+  // If already connected, request data immediately
   if (dserv.state.connected) {
-    console.log('Already connected - requesting script data')
+    console.log('Already connected - requesting script and git data')
     setTimeout(() => {
       requestScriptData()
+      requestGitData()
     }, 100)
   }
   
@@ -643,8 +670,6 @@ onMounted(() => {
     if (editorView) {
       editorView.destroy()
     }
-    // Clean up global reference
-    delete window.saveCurrentScript
   })
 })
 
@@ -659,6 +684,17 @@ function requestScriptData() {
     dserv.essCommand('dservTouch ess/stim_script')
   } catch (error) {
     console.error('Failed to request script data:', error)
+  }
+}
+
+// Helper function to request git data
+function requestGitData() {
+  try {
+    console.log('Touching git variables...')
+    dserv.essCommand('dservTouch ess/git/branches')
+    dserv.essCommand('dservTouch ess/git/branch')
+  } catch (error) {
+    console.error('Failed to request git data:', error)
   }
 }
 
