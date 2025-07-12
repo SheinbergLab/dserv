@@ -4,9 +4,9 @@
     <div class="event-header">
       <a-row :gutter="12" align="middle">
         <a-col :span="4">
-          <a-statistic 
-            :title="viewingObsIndex === -1 ? 'Current Obs' : 'Viewing Obs'" 
-            :value="viewingObsIndex === -1 ? (obsInfo.obsCount >= 0 ? obsInfo.obsCount : 'None') : allObservations[viewingObsIndex]?.obsNumber ?? 'N/A'" 
+          <a-statistic
+            :title="viewingObsIndex === -1 ? 'Current Obs' : 'Viewing Obs'"
+            :value="viewingObsIndex === -1 ? (obsInfo.obsCount >= 0 ? obsInfo.obsCount : 'None') : allObservations[viewingObsIndex]?.obsNumber ?? 'N/A'"
           />
         </a-col>
         <a-col :span="4">
@@ -20,18 +20,18 @@
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 12px;">View:</span>
             <a-button-group size="small">
-              <a-button 
-                @click="previousObservation" 
+              <a-button
+                @click="previousObservation"
                 :disabled="!canNavigateBack"
                 :icon="h(LeftOutlined)"
               />
-              <a-button 
-                @click="nextObservation" 
+              <a-button
+                @click="nextObservation"
                 :disabled="!canNavigateForward"
                 :icon="h(RightOutlined)"
               />
             </a-button-group>
-            <span 
+            <span
               style="font-size: 12px; font-weight: 500;"
               :style="{ color: viewingObsIndex === -1 ? '#52c41a' : '#1890ff' }"
             >
@@ -49,9 +49,9 @@
                 Export
               </a-button>
             </a-space>
-            <a-button 
+            <a-button
               v-if="viewingObsIndex !== -1"
-              size="small" 
+              size="small"
               @click="jumpToLive"
               type="primary"
               :icon="h(FastForwardOutlined)"
@@ -114,8 +114,8 @@
         <a-col :span="12">
           <a-space size="small">
             <span>Connection:</span>
-            <a-badge 
-              :status="connected ? 'processing' : 'error'" 
+            <a-badge
+              :status="connected ? 'processing' : 'error'"
               :text="connected ? 'Connected' : 'Disconnected'"
             />
             <span v-if="lastEventTime">Last event: {{ formatLastEventTime() }}</span>
@@ -149,13 +149,13 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { 
-  ClearOutlined, 
-  DownloadOutlined, 
+import {
+  ClearOutlined,
+  DownloadOutlined,
   FastForwardOutlined,
   SearchOutlined,
   LeftOutlined,
-  RightOutlined 
+  RightOutlined
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { h } from 'vue'
@@ -227,7 +227,7 @@ const columns = [
 // Computed properties
 const displayedEvents = computed(() => {
   let sourceEvents
-  
+
   if (viewingObsIndex.value === -1) {
     // Viewing live events
     sourceEvents = events.value
@@ -236,7 +236,7 @@ const displayedEvents = computed(() => {
     const obs = allObservations.value[viewingObsIndex.value]
     sourceEvents = obs ? obs.events : []
   }
-  
+
   let filtered = sourceEvents
 
   // Filter by event type
@@ -247,7 +247,7 @@ const displayedEvents = computed(() => {
   // Filter by search text
   if (searchText.value) {
     const search = searchText.value.toLowerCase()
-    filtered = filtered.filter(event => 
+    filtered = filtered.filter(event =>
       getEventTypeName(event.type).toLowerCase().includes(search) ||
       getEventSubtypeName(event.type, event.subtype).toLowerCase().includes(search) ||
       event.decodedParams.toLowerCase().includes(search)
@@ -271,7 +271,7 @@ const currentObsEventCount = computed(() => {
 const totalObservations = computed(() => allObservations.value.length)
 
 const typeFilterOptions = computed(() => {
-  const sourceEvents = viewingObsIndex.value === -1 ? events.value : 
+  const sourceEvents = viewingObsIndex.value === -1 ? events.value :
     (allObservations.value[viewingObsIndex.value]?.events || [])
   const types = new Set(sourceEvents.map(e => e.type))
   return Array.from(types).map(type => ({
@@ -295,26 +295,26 @@ const viewingObsText = computed(() => {
   }
 })
 
-// Event handling functions  
+// Event handling functions
 function handleDatapoint(data) {
   if (data.name === 'eventlog/events') {
     // The event has already been processed by the global service
     // We just need to parse it and check if we should display it
     const event = eventService.parseEvent(data);
-    
+
     // Only ADD TO DISPLAY if it meets our criteria:
     // - During observation periods OR BEGINOBS/ENDOBS events
     // - Not SYSTEM_STATE events (type 7)
-    // - Not NAME events (type 1) 
+    // - Not NAME events (type 1)
     // - Not SUBTYPES events (type 6)
-    if (event && (obsInfo.value.obsCount >= 0 || event.type === 19 || event.type === 20) && 
+    if (event && (obsInfo.value.obsCount >= 0 || event.type === 19 || event.type === 20) &&
         event.type !== 7 && event.type !== 1 && event.type !== 6) {
-      
+
       // Apply timestamp adjustment if in observation (already done by service, but need for display)
       if (obsInfo.value.obsCount >= 0) {
         event.timestamp -= obsInfo.value.obsStart;
       }
-      
+
       addEvent(event)
     }
   }
@@ -323,7 +323,7 @@ function handleDatapoint(data) {
 function addEvent(event) {
   // Don't automatically switch to live view when viewing historical data
   // Let the user stay in review mode even when new events arrive
-  
+
   const enhancedEvent = {
     key: Date.now() + Math.random(), // Unique key for Vue
     ...event,
@@ -364,7 +364,7 @@ let scrollTimeout = null
 function scrollToBottom() {
   // Throttle scroll operations to reduce ResizeObserver triggers
   if (scrollTimeout) return
-  
+
   scrollTimeout = setTimeout(() => {
     const table = eventTable.value
     if (table && table.$el) {
@@ -391,7 +391,7 @@ function handleEventServiceUpdate(eventOrInfo) {
     if (events.value.length > 0) {
       // Calculate elapsed times for historical events before saving
       const eventsWithElapsed = calculateElapsedTimesForSavedEvents(events.value)
-      
+
       // Save the previous observation
       const prevObs = {
         obsNumber: obsInfo.value.obsCount - 1,
@@ -400,7 +400,7 @@ function handleEventServiceUpdate(eventOrInfo) {
         endTime: null
       }
       allObservations.value.unshift(prevObs) // Add to beginning
-      
+
       // Limit history to last 20 observations
       if (allObservations.value.length > 20) {
         allObservations.value = allObservations.value.slice(0, 20)
@@ -469,7 +469,7 @@ function getSubtypeColor(type, subtype) {
 
 function getRowClassName(record) {
   const classes = []
-  
+
   // Highlight important events
   switch (record.type) {
     case 19: // BEGINOBS
@@ -482,7 +482,7 @@ function getRowClassName(record) {
       classes.push('user-event-row')
       break
   }
-  
+
   return classes.join(' ')
 }
 
@@ -558,12 +558,8 @@ onMounted(() => {
     }
     originalError.apply(console, args)
   }
-  
-  // Don't need to subscribe to eventlog/events here since the service handles it globally
-  // Just register for component cleanup
-  cleanupDserv = dserv.registerComponent('EventTracker', {
-    subscriptions: [] // No subscriptions needed
-  })
+
+  cleanupDserv = dserv.registerComponent('EventTracker')
 
   // Listen to the same datapoint stream for display filtering
   dserv.on('datapoint:eventlog/events', handleDatapoint)
@@ -711,7 +707,7 @@ defineExpose({
   .event-header :deep(.ant-col) {
     margin-bottom: 8px;
   }
-  
+
   .status-bar :deep(.ant-col) {
     margin-bottom: 4px;
   }
