@@ -3,7 +3,20 @@
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
 import MainLayout from './layouts/MainLayout.vue'
+import { dserv } from './services/dserv.js'
+import { initializeErrorTracking } from './services/errorService.js'
+
+onMounted(async () => {
+  // Initialize global error tracking
+  try {
+    await initializeErrorTracking(dserv)
+    console.log('Global error tracking initialized')
+  } catch (error) {
+    console.error('Failed to initialize error tracking:', error)
+  }
+})
 </script>
 
 <style>

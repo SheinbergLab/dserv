@@ -102,6 +102,13 @@
                   </div>
                 </a-tab-pane>
 
+<a-tab-pane key="errors" tab="Errors" style="height: 100%; overflow: hidden;">
+  <div style="height: 100%; overflow: hidden;">
+    <ess-error-console />
+  </div>
+</a-tab-pane>
+
+
               </a-tabs>
             </div>
           </a-layout-content>
@@ -179,6 +186,7 @@ import EventTracker from '../components/EventTracker.vue'
 import EyeTouchVisualizer from '../components/EyeTouchVisualizer.vue'
 import VirtualEyeInput from '../components/VirtualEyeInput.vue'
 import SystemStatus from '../components/SystemStatus.vue'
+import EssErrorConsole from '../components/EssErrorConsole.vue'
 
 // Import dserv for system health monitoring
 import { useDservMonitoring, dserv } from '../services/dserv.js'
