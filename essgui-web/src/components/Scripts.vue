@@ -9,23 +9,53 @@
           v-model:value="activeScript"
           size="small"
           style="width: 140px;"
-          @change="(value) => switchScript(value)"
+          @change="(value) => switchScriptWithValidation(value)"
         >
           <a-select-option v-for="script in scriptTabs" :key="script.name" :value="script.name">
             <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
               <span>{{ script.label }}</span>
-              <span 
-                v-if="scripts[script.name]?.modified" 
-                style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%; margin-left: 8px;"
-              ></span>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <!-- Modified indicator -->
+                <span 
+                  v-if="scripts[script.name]?.modified" 
+                  style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"
+                ></span>
+                <!-- Validation error indicator -->
+                <span 
+                  v-if="activeScript === script.name && validationResult && !validationResult.isValid" 
+                  style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"
+                  title="Has validation errors"
+                ></span>
+              </div>
             </div>
           </a-select-option>
         </a-select>
       </div>
 
-      <!-- Controls with icons and branch dropdown -->
+      <!-- Controls with icons and validation -->
       <div style="display: flex; align-items: center; gap: 12px;">
-        <!-- Icon toolbar (moved to left) -->
+        <!-- Validation controls -->
+        <a-tooltip title="Validate Script (Ctrl+Shift+V)">
+          <a-button 
+            size="small" 
+            @click="validateCurrentScript"
+            :loading="isValidating"
+            :icon="h(CheckCircleOutlined)"
+            :type="validationResult && !validationResult.isValid ? 'danger' : 'default'"
+            style="width: 32px; height: 24px;"
+          />
+        </a-tooltip>
+
+        <a-tooltip title="Auto-validate while typing">
+          <a-checkbox
+            v-model:checked="autoValidate"
+            size="small"
+          >
+            Auto
+          </a-checkbox>
+        </a-tooltip>
+
+        <!-- Existing toolbar -->
         <a-tooltip title="Format Code (Ctrl+Shift+F)">
           <a-button 
             size="small" 
@@ -40,7 +70,7 @@
           <a-button 
             type="primary" 
             size="small" 
-            @click="saveScript"
+            @click="saveScriptWithErrorHandling"
             :loading="isSaving"
             :disabled="!currentScript?.modified"
             :icon="h(SaveOutlined)"
@@ -72,7 +102,7 @@
         <!-- Divider -->
         <a-divider type="vertical" style="margin: 0;" />
 
-        <!-- Git Branch Dropdown (moved to right) -->
+        <!-- Git Branch Dropdown -->
         <a-select
           v-model:value="currentBranch"
           size="small"
@@ -86,6 +116,27 @@
             {{ branch }}
           </a-select-option>
         </a-select>
+
+        <!-- Backup menu dropdown -->
+<a-dropdown>
+  <template #overlay>
+    <a-menu>
+      <a-menu-item key="backups" @click="showBackupManager = true">
+        <HistoryOutlined /> View Backups
+      </a-menu-item>
+      <a-menu-item key="validate-all" @click="validateAllScripts">
+        <CheckCircleOutlined /> Validate All Scripts
+      </a-menu-item>
+      <a-menu-divider />
+      <a-menu-item key="debug-mode" @click="showDebugMode = !showDebugMode">
+        <BugOutlined /> {{ showDebugMode ? 'Hide' : 'Show' }} Debug Mode
+      </a-menu-item>
+    </a-menu>
+  </template>
+  <a-button size="small" style="width: 32px; height: 24px;">
+    <EllipsisOutlined />
+  </a-button>
+</a-dropdown>
       </div>
     </div>
 
@@ -95,19 +146,115 @@
       style="flex: 1; overflow: hidden; background: #1e1e1e;"
     ></div>
 
-    <!-- Status bar -->
-    <div style="flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: #f0f0f0; border-top: 1px solid #d9d9d9; font-size: 11px; color: #666;">
-      <div style="display: flex; gap: 12px;">
-        <span>{{ currentScript?.name?.toUpperCase() }} Script</span>
-        <span v-if="currentScript?.modified" style="color: #ff9500;">Modified</span>
-        <span>Tcl</span>
-        <span v-if="currentBranch" style="color: #1890ff;">{{ currentBranch }}</span>
+    <!-- Validation Panel -->
+    <div 
+      v-if="showValidationPanel && validationResult" 
+      style="flex-shrink: 0; max-height: 200px; overflow-y: auto; background: #fafafa; border-top: 1px solid #d9d9d9; padding: 8px;"
+    >
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <div style="font-weight: 500; font-size: 12px;">
+          Validation Results: {{ validationResult.summary }}
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <a-button 
+            size="small" 
+            @click="validateCurrentScript"
+            :loading="isValidating"
+            style="height: 24px;"
+          >
+            Re-validate
+          </a-button>
+          <a-button 
+            size="small" 
+            @click="showValidationPanel = false"
+            style="height: 24px;"
+          >
+            Hide
+          </a-button>
+        </div>
       </div>
-      <div style="display: flex; gap: 12px;">
-        <span>{{ keyBindings === 'emacs' ? 'Emacs Bindings' : 'Default Bindings' }}</span>
-        <span>Ctrl+S: Save | {{ keyBindings === 'emacs' ? 'Ctrl+/: Search' : 'Ctrl+F: Search' }} | Enter: Auto-indent</span>
+
+<!-- Debug Panel -->
+<div 
+  v-if="showDebugMode" 
+  style="flex-shrink: 0; background: #fafafa; border-top: 1px solid #d9d9d9;"
+>
+  <backup-debugger />
+</div>
+      <!-- Errors -->
+      <div v-if="validationResult.errors.length > 0" style="margin-bottom: 8px;">
+        <div style="font-weight: 500; color: #ff4d4f; font-size: 11px; margin-bottom: 4px;">
+          Errors ({{ validationResult.errors.length }})
+        </div>
+        <div v-for="error in validationResult.errors" :key="`error-${error.line}-${error.column}`" 
+             style="font-size: 11px; margin-bottom: 2px; cursor: pointer; padding: 2px 4px; border-radius: 2px;"
+             class="validation-item error-item"
+             @click="jumpToError(error)">
+          <span style="color: #ff4d4f;">●</span>
+          Line {{ error.line }}: {{ error.message }}
+        </div>
+      </div>
+      
+      <!-- Warnings -->
+      <div v-if="validationResult.warnings.length > 0">
+        <div style="font-weight: 500; color: #faad14; font-size: 11px; margin-bottom: 4px;">
+          Warnings ({{ validationResult.warnings.length }})
+        </div>
+        <div v-for="warning in validationResult.warnings" :key="`warning-${warning.line}-${warning.column}`"
+             style="font-size: 11px; margin-bottom: 2px; cursor: pointer; padding: 2px 4px; border-radius: 2px;"
+             class="validation-item warning-item"
+             @click="jumpToError(warning)">
+          <span style="color: #faad14;">⚠</span>
+          Line {{ warning.line }}: {{ warning.message }}
+        </div>
       </div>
     </div>
+
+    <!-- Status bar -->
+    <div style="flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: #f0f0f0; border-top: 1px solid #d9d9d9; font-size: 11px; color: #666;">
+<div style="display: flex; gap: 12px;">
+  <span>{{ currentScript?.name?.toUpperCase() }} Script</span>
+  <span v-if="currentScript?.modified" style="color: #ff9500;">Modified</span>
+  
+  <!-- Validation status - show ONLY ONE status -->
+  <template v-if="validationResult">
+    <!-- Errors take priority -->
+    <span v-if="!validationResult.isValid" style="color: #ff4d4f;">
+      {{ validationResult.errors.length }} error(s)
+    </span>
+    <!-- Then warnings (only if no errors) -->
+    <span v-else-if="validationResult.warnings.length > 0" style="color: #faad14;">
+      {{ validationResult.warnings.length }} warning(s)
+    </span>
+    <!-- Valid only if no errors AND no warnings -->
+    <span v-else style="color: #52c41a;">
+      ✓ Valid
+    </span>
+    <span v-if="showDebugMode" style="color: #722ed1;">🐛 Debug</span>    
+  </template>
+  
+  <span>Tcl</span>
+  <span v-if="currentBranch" style="color: #1890ff;">{{ currentBranch }}</span>
+</div>    
+      <div style="display: flex; gap: 12px;">
+        <span>{{ keyBindings === 'emacs' ? 'Emacs Bindings' : 'Default Bindings' }}</span>
+        <span>Ctrl+S: Save | Ctrl+Shift+V: Validate | {{ keyBindings === 'emacs' ? 'Ctrl+/: Search' : 'Ctrl+F: Search' }}</span>
+      </div>
+    </div>
+
+    <!-- Backup Manager Modal -->
+    <a-modal
+      v-model:open="showBackupManager"
+      title="Script Backups"
+      width="600px"
+      :footer="null"
+    >
+      <backup-manager 
+        :script-type="activeScript"
+        @restore="restoreBackup"
+        @close="showBackupManager = false"
+      />
+    </a-modal>
   </div>
 </template>
 
@@ -117,10 +264,21 @@ import {
   FormatPainterOutlined, 
   SaveOutlined, 
   DownloadOutlined, 
-  UploadOutlined 
+  UploadOutlined,
+  CheckCircleOutlined,
+  HistoryOutlined,
+  EllipsisOutlined,
+  ReloadOutlined,
+  BugOutlined  
 } from '@ant-design/icons-vue'
 import { h } from 'vue'
+import { Modal, message } from 'ant-design-vue'
 import { dserv } from '../services/dserv.js'
+
+// Import validation and backup components
+import { TclLinter } from '../utils/TclLinter.js'
+import BackupManager from '../components/BackupManager.vue'
+import BackupDebugger from '../components/BackupDebugger.vue'
 
 // CodeMirror imports
 import { EditorSelection } from '@codemirror/state'
@@ -152,7 +310,15 @@ const activeScript = ref('system')
 const keyBindings = ref('emacs')
 const isSaving = ref(false)
 const isGitBusy = ref(false)
-const isUpdatingContent = ref(false) // Flag to prevent marking as modified during programmatic updates
+const isUpdatingContent = ref(false)
+
+// Validation state
+const validationResult = ref(null)
+const showValidationPanel = ref(false)
+const isValidating = ref(false)
+const autoValidate = ref(true)
+const showBackupManager = ref(false)
+const showDebugMode = ref(false) // Add this line
 
 // Git branch state
 const currentBranch = ref('')
@@ -182,18 +348,271 @@ const hasChangesSinceLastGit = ref(false)
 
 // Watch for any script modifications to track git state
 watch(scripts, (newScripts) => {
-  // If any script becomes modified, mark as having changes since git
   const hasModified = Object.values(newScripts).some(script => script.modified)
   if (hasModified) {
     hasChangesSinceLastGit.value = true
   }
 }, { deep: true })
 
-// Git push should be available if we have changes since last git operation
-const canPushToGit = computed(() => hasChangesSinceLastGit.value)
+// Auto-validation watcher (debounced)
+let validationTimeout = null
+watch(() => currentScript.value?.content, (newContent) => {
+  if (!autoValidate.value || !newContent) return
+  
+  if (validationTimeout) {
+    clearTimeout(validationTimeout)
+  }
+  
+  validationTimeout = setTimeout(() => {
+    validateCurrentScript()
+  }, 1000)
+})
+
+
+// Fixed backend validation in Scripts.vue validateCurrentScript
+
+async function validateCurrentScript() {
+  if (!currentScript.value?.content) return
+
+  isValidating.value = true
+  try {
+    const linter = new TclLinter()
+    const result = linter.lint(currentScript.value.content)
+    
+    validationResult.value = result
+    showValidationPanel.value = result.errors.length > 0 || result.warnings.length > 0
+    
+    // Backend validation if frontend passes - USE MINIMAL LEVEL for auto-validation
+    if (result.isValid) {
+      try {
+        // Always use minimal for auto-validation to avoid backend warnings
+        const backendResult = await dserv.essCommand(
+          `ess::validate_script_minimal {${currentScript.value.content}}`
+        )
+        
+        console.log('Backend validation result:', backendResult)
+        
+        // Only report backend issues if there are actual syntax errors
+        if (backendResult && typeof backendResult === 'string') {
+          if (backendResult.includes('valid 0')) {
+            // Backend found actual syntax errors
+            validationResult.value.errors.push({
+              line: 0,
+              column: 0,
+              message: 'Backend syntax validation failed',
+              severity: 'error'
+            })
+            validationResult.value.isValid = false
+            console.error('Backend validation details:', backendResult)
+          }
+          // Don't add warnings for backend unavailable - just log it
+        }
+      } catch (backendError) {
+        console.log('Backend validation unavailable:', backendError.message)
+        // Don't add any warnings to the UI for backend unavailability
+      }
+    }
+  } catch (error) {
+    console.error('Validation error:', error)
+    validationResult.value = {
+      isValid: false,
+      errors: [{
+        line: 0,
+        column: 0,
+        message: 'Validation failed: ' + error.message,
+        severity: 'error'
+      }],
+      warnings: [],
+      summary: 'Validation error'
+    }
+  } finally {
+    isValidating.value = false
+  }
+}
+
+// Updated save script validation 
+async function saveScriptWithErrorHandling() {
+  if (!currentScript.value.modified) return
+  
+  try {
+    // Use strict validation for save operations
+    const linter = new TclLinter()
+    const frontendResult = linter.lint(currentScript.value.content)
+    
+    // Always validate with backend on save using minimal level to avoid false positives
+    let backendResult
+    try {
+      backendResult = await dserv.essCommand(
+        `ess::validate_script_minimal {${currentScript.value.content}}`
+      )
+    } catch (error) {
+      console.warn('Backend validation unavailable for save:', error)
+      // Continue with save if backend unavailable
+    }
+    
+    validationResult.value = frontendResult
+    
+    // Check for critical errors
+    if (!frontendResult.isValid) {
+      const criticalErrors = frontendResult.errors.filter(e => 
+        e.message.includes('syntax') || 
+        e.message.includes('brace') || 
+        e.message.includes('quote')
+      )
+      
+      if (criticalErrors.length > 0) {
+        const shouldContinue = await new Promise((resolve) => {
+          Modal.confirm({
+            title: 'Syntax Errors Detected',
+            content: `This script has ${criticalErrors.length} syntax error(s). Saving may cause issues when the system loads this script.`,
+            okText: 'Save Anyway',
+            okType: 'danger',
+            cancelText: 'Fix Errors First',
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false)
+          })
+        })
+        
+        if (!shouldContinue) {
+          showValidationPanel.value = true
+          return
+        }
+      }
+    }
+    
+    // Proceed with save
+    await saveScript()
+    
+  } catch (error) {
+    console.error('Save with error handling failed:', error)
+    message.error(`Failed to save script: ${error.message}`)
+  }
+}
+
+async function validateCurrentScriptStrict() {
+  if (!currentScript.value?.content) return
+
+  isValidating.value = true
+  try {
+    // Use frontend strict validation
+    const linter = new TclLinter()
+    const result = linter.lint(currentScript.value.content)
+    
+    // Always try backend strict validation for manual validation
+    try {
+      const backendResult = await dserv.essCommand(
+        `ess::validate_script_strict {${currentScript.value.content}}`
+      )
+      
+      console.log('Backend strict validation result:', backendResult)
+      
+      // Parse backend warnings and add them
+      if (backendResult && typeof backendResult === 'string') {
+        if (backendResult.includes('warnings')) {
+          // Could parse and add backend warnings here if needed
+          console.log('Backend found additional warnings:', backendResult)
+        }
+      }
+    } catch (backendError) {
+      console.log('Backend strict validation unavailable:', backendError.message)
+    }
+    
+    validationResult.value = result
+    showValidationPanel.value = true // Always show panel for manual validation
+    
+  } catch (error) {
+    console.error('Strict validation error:', error)
+    validationResult.value = {
+      isValid: false,
+      errors: [{
+        line: 0,
+        column: 0,
+        message: 'Validation failed: ' + error.message,
+        severity: 'error'
+      }],
+      warnings: [],
+      summary: 'Validation error'
+    }
+  } finally {
+    isValidating.value = false
+  }
+}
+
+// Update the validateAllScripts to also use minimal validation
+async function validateAllScripts() {
+  const results = {}
+  
+  for (const scriptTab of scriptTabs) {
+    if (scripts.value[scriptTab.name]?.content) {
+      const linter = new TclLinter()
+      results[scriptTab.name] = linter.lint(scripts.value[scriptTab.name].content)
+    }
+  }
+  
+  const allValid = Object.values(results).every(r => r.isValid)
+  const totalErrors = Object.values(results).reduce((sum, r) => sum + r.errors.length, 0)
+  const totalWarnings = Object.values(results).reduce((sum, r) => sum + r.warnings.length, 0)
+  
+  if (allValid && totalWarnings === 0) {
+    message.success('All scripts are valid!')
+  } else if (allValid) {
+    message.info(`All scripts are syntactically valid but have ${totalWarnings} warning(s)`)
+  } else {
+    const summary = []
+    if (totalErrors > 0) summary.push(`${totalErrors} error(s)`)
+    if (totalWarnings > 0) summary.push(`${totalWarnings} warning(s)`)
+    
+    message.warning(`Validation complete: ${summary.join(', ')} found across all scripts`)
+  }
+  
+  console.log('Validation results for all scripts:', results)
+}
+
+function jumpToError(error) {
+  if (!editorView || !error.line) return
+  
+  try {
+    const line = editorView.state.doc.line(error.line)
+    const pos = line.from + (error.column || 0)
+    
+    editorView.dispatch({
+      selection: { anchor: pos },
+      effects: EditorView.scrollIntoView(pos, { y: 'center' })
+    })
+    
+    editorView.focus()
+  } catch (e) {
+    console.error('Failed to jump to error:', e)
+  }
+}
+
+// Enhanced script switching with validation
+function switchScriptWithValidation(scriptName) {
+  validationResult.value = null
+  showValidationPanel.value = false
+  switchScript(scriptName)
+  
+  if (autoValidate.value) {
+    setTimeout(() => {
+      validateCurrentScript()
+    }, 500)
+  }
+}
+
+// Backup methods
+async function restoreBackup(backupFile) {
+  try {
+    await dserv.essCommand(`ess::restore_script_backup ${activeScript.value} {${backupFile}}`)
+    requestScriptData()
+    message.success('Script restored from backup')
+    showBackupManager.value = false
+  } catch (error) {
+    console.error('Failed to restore backup:', error)
+    message.error(`Failed to restore backup: ${error.message}`)
+  }
+}
 
 // Git branch operations
-
 async function switchBranch(branchName) {
   if (branchName === currentBranch.value) return
   
@@ -203,16 +622,13 @@ async function switchBranch(branchName) {
     await dserv.gitSwitchBranch(branchName)
     console.log(`Successfully switched to branch: ${branchName}`)
     
-    // Reset git change tracking after branch switch
     hasChangesSinceLastGit.value = false
     
-    // After branch switch, request updated script data
     setTimeout(() => {
       requestScriptData()
     }, 500)
   } catch (error) {
     console.error(`Failed to switch to branch ${branchName}:`, error)
-    // Request current git data to sync state instead of the broken line
     requestGitData()
   } finally {
     isGitBusy.value = false
@@ -226,14 +642,13 @@ function createEditor() {
   const saveCommand = {
     key: 'Ctrl-s',
     run: () => {
-      saveScript()
+      saveScriptWithErrorHandling()
       return true
     }
   }
 
-  // Custom search command that works well with both emacs and default bindings
   const searchCommand = {
-    key: 'Ctrl-/',  // Emacs-friendly search key
+    key: 'Ctrl-/',
     run: (view) => {
       import('@codemirror/search').then(({ openSearchPanel }) => {
         openSearchPanel(view)
@@ -242,15 +657,22 @@ function createEditor() {
     }
   }
 
-const formatCommand = {
-  key: 'Ctrl-Shift-f',  
-  run: () => {
-    formatScript()
-    return true
+  const formatCommand = {
+    key: 'Ctrl-Shift-f',  
+    run: () => {
+      formatScript()
+      return true
+    }
   }
-}
 
-  // Emacs-style key bindings with auto-indent on Enter
+  const validateCommand = {
+    key: 'Ctrl-Shift-v',
+    run: () => {
+      validateCurrentScript()
+      return true
+    }
+  }
+
   const emacsBindings = [
     { key: 'Ctrl-a', run: cursorLineStart },
     { key: 'Ctrl-e', run: cursorLineEnd },
@@ -266,10 +688,9 @@ const formatCommand = {
     { key: 'Tab', run: handleSmartTab },
     { key: 'Shift-Tab', run: indentLess },
     formatCommand, 
-    searchCommand // Add our custom search binding for emacs mode
+    searchCommand
   ]
 
-  // Default bindings still use Ctrl+F for search
   const defaultBindings = [
     { 
       key: 'Enter', 
@@ -282,16 +703,14 @@ const formatCommand = {
     { key: 'Shift-Tab', run: indentLess }
   ]
 
-  // Choose appropriate keybindings
   const currentKeybindings = keyBindings.value === 'emacs' ? emacsBindings : defaultBindings
-
-  // For non-emacs mode, use default search keybindings (Ctrl+F)
   const searchKeybindings = keyBindings.value === 'emacs' ? [] : searchKeymap
 
   const allKeybindings = [
     ...currentKeybindings,
     ...searchKeybindings,
-    saveCommand
+    saveCommand,
+    validateCommand
   ]
 
   const state = EditorState.create({
@@ -299,79 +718,76 @@ const formatCommand = {
     extensions: [
       basicSetup,
       StreamLanguage.define(tcl),
-      oneDark, // Dark theme
+      oneDark,
       lineNumbers(),
-      search(), // Enable search functionality
-      highlightSelectionMatches(), // Highlight all matches when text is selected
-      // Simple tab configuration
+      search(),
+      highlightSelectionMatches(),
       EditorState.tabSize.of(4),
       EditorView.lineWrapping,
       keymap.of(allKeybindings),
-EditorView.updateListener.of((update) => {
-  // Handle content changes for marking as modified
-  if (update.docChanged && !isUpdatingContent.value) {
-    const newContent = update.state.doc.toString()
-    scripts.value[activeScript.value].content = newContent
-    scripts.value[activeScript.value].modified = true
-  }
-  
-  // Handle auto-indent for newlines
-  if (update.docChanged) {
-    try {
-      let foundNewline = false
-      let newlinePos = -1
-      
-      update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
-        const insertedText = inserted.toString()
-        if (insertedText.includes('\n')) {
-          foundNewline = true
-          newlinePos = fromB + insertedText.indexOf('\n') + 1
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged && !isUpdatingContent.value) {
+          const newContent = update.state.doc.toString()
+          scripts.value[activeScript.value].content = newContent
+          scripts.value[activeScript.value].modified = true
         }
-      })
-      
-      if (foundNewline && newlinePos > 0) {
-        setTimeout(() => {
+        
+        if (update.docChanged) {
           try {
-            const view = update.view
-            const state = view.state
-            const line = state.doc.lineAt(newlinePos)
+            let foundNewline = false
+            let newlinePos = -1
             
-            if (line.text.trim() === '') {
-              const allText = state.doc.toString()
-              const lines = TclFormatter.splitLines(allText)
-              const lineNum = line.number - 1
-              
-              const indent = TclFormatter.calculateLineIndent(lines, lineNum, 4)
-              
-              if (indent > 0) {
-                const indentText = ' '.repeat(indent)
-                
-                isUpdatingContent.value = true
-                
-                view.dispatch({
-                  changes: {
-                    from: line.from,
-                    to: line.to,
-                    insert: indentText
-                  },
-                  selection: EditorSelection.cursor(line.from + indent)
-                })
-                
-                nextTick(() => {
-                  isUpdatingContent.value = false
-                })
+            update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+              const insertedText = inserted.toString()
+              if (insertedText.includes('\n')) {
+                foundNewline = true
+                newlinePos = fromB + insertedText.indexOf('\n') + 1
               }
+            })
+            
+            if (foundNewline && newlinePos > 0) {
+              setTimeout(() => {
+                try {
+                  const view = update.view
+                  const state = view.state
+                  const line = state.doc.lineAt(newlinePos)
+                  
+                  if (line.text.trim() === '') {
+                    const allText = state.doc.toString()
+                    const lines = TclFormatter.splitLines(allText)
+                    const lineNum = line.number - 1
+                    
+                    const indent = TclFormatter.calculateLineIndent(lines, lineNum, 4)
+                    
+                    if (indent > 0) {
+                      const indentText = ' '.repeat(indent)
+                      
+                      isUpdatingContent.value = true
+                      
+                      view.dispatch({
+                        changes: {
+                          from: line.from,
+                          to: line.to,
+                          insert: indentText
+                        },
+                        selection: EditorSelection.cursor(line.from + indent)
+                      })
+                      
+                      nextTick(() => {
+                        isUpdatingContent.value = false
+                      })
+                    }
+                  }
+                } catch (error) {
+                  console.error('Error in auto-indent:', error)
+                }
+              }, 10)
             }
           } catch (error) {
-            console.error('Error in auto-indent:', error)
+            console.error('Error in update listener:', error)
           }
-        }, 10)
-      }
-    } catch (error) {
-      console.error('Error in update listener:', error)
-    }
-  }
-}),
+        }
+      }),
       EditorView.theme({
         '&': { height: '100%' },
         '.cm-scroller': { 
@@ -379,7 +795,6 @@ EditorView.updateListener.of((update) => {
           fontSize: '12px'
         },
         '.cm-focused': { outline: 'none' },
-        // Style the search panel
         '.cm-search': {
           backgroundColor: '#2d3748',
           border: '1px solid #4a5568',
@@ -410,7 +825,6 @@ EditorView.updateListener.of((update) => {
   })
 }
 
-// Update editor content without triggering change event
 function updateEditorContent(content) {
   if (!editorView) return
   
@@ -426,19 +840,14 @@ function updateEditorContent(content) {
       }
     })
     
-    // Use nextTick to ensure the flag is reset after the update is processed
     nextTick(() => {
       isUpdatingContent.value = false
     })
   }
 }
 
-// Switch between scripts
 function switchScript(scriptName) {
-  // Don't return early - the v-model has already updated activeScript.value
   activeScript.value = scriptName
-  
-  // Get the content directly
   const newContent = scripts.value[scriptName]?.content || ''
   
   if (editorView) {
@@ -446,20 +855,8 @@ function switchScript(scriptName) {
   }
 }
 
-// Set key bindings and recreate editor
-function setKeyBindings(bindings) {
-  keyBindings.value = bindings
-  if (editorView) {
-    editorView.destroy()
-    nextTick(() => {
-      createEditor()
-    })
-  }
-}
-
 function formatScript() {
-
-if (!currentScript.value.content) return
+  if (!currentScript.value.content) return
   
   try {
     const formattedContent = TclFormatter.formatTclCode(currentScript.value.content, 4)
@@ -468,9 +865,6 @@ if (!currentScript.value.content) return
     updateEditorContent(formattedContent)
   } catch (error) {
     console.error('Error formatting script:', error)
-    console.error('Stack trace:', error.stack)
-    // Fallback to your existing simple formatter
-    console.log('Using fallback formatter...')
     const lines = currentScript.value.content.split('\n')
     let indentLevel = 0
     const formatted = []
@@ -500,7 +894,6 @@ if (!currentScript.value.content) return
   }
 }
 
-// Save current script
 async function saveScript() {
   if (!currentScript.value.modified) return
   
@@ -512,9 +905,11 @@ async function saveScript() {
     console.log(`Saving ${activeScript.value} script...`)
     await dserv.essCommand(cmd)
     
-    // Mark as saved (matching essgui behavior)
     scripts.value[activeScript.value].modified = false
     console.log(`${activeScript.value} script saved successfully`)
+    
+    validationResult.value = null
+    showValidationPanel.value = false
     
   } catch (error) {
     console.error(`Failed to save ${activeScript.value} script:`, error)
@@ -523,7 +918,6 @@ async function saveScript() {
   }
 }
 
-// Git operations (matching essgui.cxx git functionality)
 async function pullScripts() {
   isGitBusy.value = true
   try {
@@ -531,10 +925,8 @@ async function pullScripts() {
     await dserv.gitCommand('git::pull')
     console.log('Git pull completed successfully')
     
-    // Reset git change tracking after successful pull
     hasChangesSinceLastGit.value = false
     
-    // After pull, request updated script data
     setTimeout(() => {
       requestScriptData()
     }, 500)
@@ -552,7 +944,6 @@ async function pushScripts() {
     await dserv.gitCommand('git::commit_and_push')
     console.log('Git push completed successfully')
     
-    // Reset git change tracking after successful push
     hasChangesSinceLastGit.value = false
   } catch (error) {
     console.error('Failed to push scripts:', error)
@@ -561,18 +952,135 @@ async function pushScripts() {
   }
 }
 
+async function reloadSystem() {
+  try {
+    await dserv.essCommand('ess::reload_system')
+    message.success('System reloaded')
+  } catch (error) {
+    console.error('Failed to reload system:', error)
+    message.error(`Failed to reload system: ${error.message}`)
+  }
+}
+
+async function reloadProtocol() {
+  try {
+    await dserv.essCommand('ess::reload_protocol')
+    message.success('Protocol reloaded')
+  } catch (error) {
+    console.error('Failed to reload protocol:', error)
+    message.error(`Failed to reload protocol: ${error.message}`)
+  }
+}
+
+async function reloadVariant() {
+  try {
+    await dserv.essCommand('ess::reload_variant')
+    message.success('Variant reloaded')
+  } catch (error) {
+    console.error('Failed to reload variant:', error)
+    message.error(`Failed to reload variant: ${error.message}`)
+  }
+}
+
+function autoIndentNewline(view) {
+  console.log('=== autoIndentNewline called ===')
+  
+  const state = view.state
+  const selection = state.selection.main
+  const line = state.doc.lineAt(selection.head)
+  
+  console.log('Current line:', line.text)
+  console.log('Cursor position:', selection.head)
+  
+  const allText = state.doc.toString()
+  const lines = TclFormatter.splitLines(allText)
+  const currentLineNum = line.number - 1
+  
+  console.log('Current line number:', currentLineNum)
+  
+  try {
+    const nextLineIndent = TclFormatter.calculateLineIndent(lines, currentLineNum + 1, 4)
+    
+    console.log('Calculated next line indent:', nextLineIndent)
+    
+    const newIndent = ' '.repeat(nextLineIndent)
+    const newline = '\n' + newIndent
+    
+    console.log('Inserting newline with indent:', JSON.stringify(newline))
+    
+    view.dispatch({
+      changes: { from: selection.head, insert: newline },
+      selection: { anchor: selection.head + newline.length }
+    })
+    
+    console.log('Auto-indent completed successfully')
+    return true
+  } catch (error) {
+    console.error('Error in auto-indent:', error)
+    console.log('Using fallback auto-indent')
+    
+    // Fallback to simple indentation
+    const currentIndent = line.text.match(/^\s*/)[0]
+    const newline = '\n' + currentIndent
+    
+    view.dispatch({
+      changes: { from: selection.head, insert: newline },
+      selection: { anchor: selection.head + newline.length }
+    })
+    
+    return true
+  }
+}
+
+function handleSmartTab(view) {
+  const state = view.state
+  const selection = state.selection.main
+  const line = state.doc.lineAt(selection.head)
+  
+  const allText = state.doc.toString()
+  const lines = TclFormatter.splitLines(allText)
+  const currentLineNum = line.number - 1
+  
+  try {
+    const targetIndent = TclFormatter.calculateLineIndent(lines, currentLineNum, 4)
+    
+    const lineText = line.text
+    const currentIndentMatch = lineText.match(/^(\s*)/)
+    const currentIndent = currentIndentMatch ? currentIndentMatch[1].length : 0
+    
+    const lineStart = line.from
+    const contentStart = lineStart + currentIndent
+    const newIndent = ' '.repeat(targetIndent)
+    
+    view.dispatch({
+      changes: {
+        from: lineStart,
+        to: contentStart,
+        insert: newIndent
+      },
+      selection: { anchor: lineStart + targetIndent }
+    })
+    
+    return true
+  } catch (error) {
+    console.error('Error in smart tab:', error)
+    view.dispatch({
+      changes: { from: selection.head, insert: '    ' },
+      selection: { anchor: selection.head + 4 }
+    })
+    return true
+  }
+}
+
 // Component lifecycle
 onMounted(() => {
   console.log('Scripts component mounted')
   
-  // Register component with dserv
   const cleanup = dserv.registerComponent('Scripts')
 
-  // Listen for git branch data
   dserv.on('datapoint:ess/git/branches', (data) => {
     console.log('Received git branches:', data.data)
     if (data.data) {
-      // Parse the TCL list format (space-separated)
       availableBranches.value = data.data.trim().split(/\s+/).filter(branch => branch.length > 0)
       console.log('Available branches:', availableBranches.value)
     }
@@ -583,7 +1091,6 @@ onMounted(() => {
     currentBranch.value = data.data || ''
   }, 'Scripts')
   
-  // Listen for script data from dserv
   dserv.on('datapoint:ess/system_script', (data) => {
     console.log('Received system script data')
     scripts.value.system.content = data.data
@@ -634,7 +1141,6 @@ onMounted(() => {
     }
   }, 'Scripts')
 
-  // Listen for connection events to request script data
   dserv.on('connection', ({ connected }) => {
     if (connected) {
       console.log('Connected - requesting script and git data')
@@ -643,19 +1149,16 @@ onMounted(() => {
     }
   }, 'Scripts')
 
-  // Listen for initialization completion
   dserv.on('initialized', () => {
     console.log('dserv initialized - requesting script and git data')
     requestScriptData()
     requestGitData()
   }, 'Scripts')
   
-  // Create editor after mount
   nextTick(() => {
     createEditor()
   })
 
-  // If already connected, request data immediately
   if (dserv.state.connected) {
     console.log('Already connected - requesting script and git data')
     setTimeout(() => {
@@ -664,7 +1167,6 @@ onMounted(() => {
     }, 100)
   }
   
-  // Cleanup on unmount
   onUnmounted(() => {
     cleanup()
     if (editorView) {
@@ -673,7 +1175,7 @@ onMounted(() => {
   })
 })
 
-// Helper function to request all script data
+// Helper functions
 function requestScriptData() {
   try {
     console.log('Touching script variables...')
@@ -687,7 +1189,6 @@ function requestScriptData() {
   }
 }
 
-// Helper function to request git data
 function requestGitData() {
   try {
     console.log('Touching git variables...')
@@ -697,97 +1198,6 @@ function requestGitData() {
     console.error('Failed to request git data:', error)
   }
 }
-
-function autoIndentNewline(view) {
-  console.log('=== autoIndentNewline called ===')
-  
-  const state = view.state
-  const selection = state.selection.main
-  const line = state.doc.lineAt(selection.head)
-  
-  console.log('Current line:', line.text)
-  console.log('Cursor position:', selection.head)
-  
-  // Get all lines up to current position
-  const allText = state.doc.toString()
-  const lines = TclFormatter.splitLines(allText)
-  const currentLineNum = line.number - 1
-  
-  console.log('Current line number:', currentLineNum)
-  
-  try {
-    // Calculate proper indent for next line (after the newline we're about to insert)
-    const nextLineIndent = TclFormatter.calculateLineIndent(lines, currentLineNum + 1, 4)
-    
-    console.log('Calculated next line indent:', nextLineIndent)
-    
-    // Create the new line with proper indentation
-    const newIndent = ' '.repeat(nextLineIndent)
-    const newline = '\n' + newIndent
-    
-    console.log('Inserting newline with indent:', JSON.stringify(newline))
-    
-    view.dispatch({
-      changes: { from: selection.head, insert: newline },
-      selection: { anchor: selection.head + newline.length }
-    })
-    
-    console.log('Auto-indent completed successfully')
-    return true
-  } catch (error) {
-    console.error('Error in auto-indent:', error)
-    // Fallback to simple auto-indent
-    console.log('Using fallback auto-indent')
-    // ... your existing fallback code
-    return true
-  }
-}
-
-function handleSmartTab(view) {
-  const state = view.state
-  const selection = state.selection.main
-  const line = state.doc.lineAt(selection.head)
-  
-  // Get all lines
-  const allText = state.doc.toString()
-  const lines = TclFormatter.splitLines(allText)
-  const currentLineNum = line.number - 1
-  
-  try {
-    // Always calculate and apply proper indent for current line
-    const targetIndent = TclFormatter.calculateLineIndent(lines, currentLineNum, 4)
-    
-    // Get current line's existing indent
-    const lineText = line.text
-    const currentIndentMatch = lineText.match(/^(\s*)/)
-    const currentIndent = currentIndentMatch ? currentIndentMatch[1].length : 0
-    
-    // Always adjust to proper indentation (don't insert extra spaces)
-    const lineStart = line.from
-    const contentStart = lineStart + currentIndent
-    const newIndent = ' '.repeat(targetIndent)
-    
-    view.dispatch({
-      changes: {
-        from: lineStart,
-        to: contentStart,
-        insert: newIndent
-      },
-      selection: { anchor: lineStart + targetIndent }
-    })
-    
-    return true
-  } catch (error) {
-    console.error('Error in smart tab:', error)
-    // Fallback to simple tab
-    view.dispatch({
-      changes: { from: selection.head, insert: '    ' },
-      selection: { anchor: selection.head + 4 }
-    })
-    return true
-  }
-}
-
 </script>
 
 <style scoped>
@@ -798,5 +1208,122 @@ function handleSmartTab(view) {
 
 :deep(.cm-focused) {
   outline: none;
+}
+
+/* Validation styles */
+.validation-item {
+  transition: background-color 0.2s;
+}
+
+.validation-item:hover {
+  background-color: #f0f0f0;
+}
+
+.error-item:hover {
+  background-color: #fff2f0;
+}
+
+.warning-item:hover {
+  background-color: #fffbe6;
+}
+
+/* Enhanced status bar styling */
+:deep(.validation-status) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Validation panel scrollbar */
+div[style*="max-height: 200px"]::-webkit-scrollbar {
+  width: 6px;
+}
+
+div[style*="max-height: 200px"]::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+div[style*="max-height: 200px"]::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+div[style*="max-height: 200px"]::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* Existing compact styling */
+:deep(.ant-form-item) {
+  margin-bottom: 4px;
+}
+
+:deep(label[title="Subject"]) {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+}
+
+:deep(label[title="System"]),
+:deep(label[title="Protocol"]),
+:deep(label[title="Variant"]) {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+}
+
+:deep(.ant-select-selector) {
+  font-size: 12px;
+  padding: 2px 8px !important;
+}
+
+:global(.ant-select-dropdown .ant-select-item) {
+  font-size: 10px !important;
+  padding: 2px 8px !important;
+  line-height: 1.2 !important;
+  min-height: 20px !important;
+}
+
+:global(.ant-select-dropdown .ant-select-item-option-content) {
+  font-size: 10px !important;
+}
+
+:global(.ant-select-dropdown) {
+  font-size: 10px !important;
+}
+
+:deep(.ant-input) {
+  font-size: 12px;
+  padding: 2px 8px !important;
+}
+
+:deep(.ant-input-number) {
+  font-size: 12px;
+}
+
+:deep(.ant-input-number .ant-input-number-input) {
+  padding: 2px 8px !important;
+}
+
+:deep(.ant-btn-sm) {
+  font-size: 11px;
+  height: 22px;
+  padding: 0 6px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar {
+  width: 8px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-track {
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 4px;
+}
+
+div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
 }
 </style>

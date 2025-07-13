@@ -223,30 +223,36 @@ class DservWebSocket {
   }
 
   // Subscribe to everything we need - once and forever
-  establishGlobalSubscriptions() {
-    console.log('Establishing global subscriptions...');
-    
-    // Core system subscriptions
-    this.send({ cmd: 'subscribe', match: 'ess/*', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'system/*', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'eventlog/*', every: 1 });
-    
-    // High-frequency data subscriptions
-    this.send({ cmd: 'subscribe', match: 'ess/em_pos', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'ess/em_region_setting', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'ess/em_region_status', every: 1 });
-    
-    // NEW: Touch window subscriptions
-    this.send({ cmd: 'subscribe', match: 'ess/touch_region_setting', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'ess/touch_region_status', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'mtouch/touchvals', every: 1 });
-    
-    // Other useful subscriptions
-    this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'print', every: 1 });
-    
-    console.log('All global subscriptions established');
-  }
+    establishGlobalSubscriptions() {
+	console.log('Establishing global subscriptions...');
+	
+	// Core system subscriptions
+	this.send({ cmd: 'subscribe', match: 'ess/*', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'system/*', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'eventlog/*', every: 1 });
+	
+	// High-frequency data subscriptions
+	this.send({ cmd: 'subscribe', match: 'ess/em_pos', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/em_region_setting', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/em_region_status', every: 1 });
+	
+	// NEW: Touch window subscriptions
+	this.send({ cmd: 'subscribe', match: 'ess/touch_region_setting', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/touch_region_status', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'mtouch/touchvals', every: 1 });
+	
+	// Other useful subscriptions
+	this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });
+	
+	this.send({ cmd: 'subscribe', match: 'ess/warningInfo', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/infoLog', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/debugLog', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/generalLog', every: 1 });
+	
+	this.send({ cmd: 'subscribe', match: 'print', every: 1 });
+	
+	console.log('All global subscriptions established');
+    }
 
   async initializeState() {
     console.log('Initializing ESS state...');

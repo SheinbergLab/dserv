@@ -8,7 +8,83 @@ package require dslog
 catch {System destroy}
 
 #
-# System class
+# ESS Logging System - integrates with errorService/EssErrorConsole
+#
+# Environment Variables:
+#   ESS_CONSOLE_LOG=1  - Enable console output (default: off)
+#
+namespace eval ess {
+    # Enhanced logging
+    proc ess_log {level message {category "general"}} {
+	variable current
+	
+	# Early exit for debug messages when debug mode is off
+	if {$level eq "debug" &&
+	    (![info exists ::ess::debug_mode] || !$::ess::debug_mode)} {
+	    return
+	}
+	
+	# Optional console logging
+	if {[info exists ::env(ESS_CONSOLE_LOG)] && $::env(ESS_CONSOLE_LOG)} {
+	    puts "ESS $level: $message"
+	}
+	
+	# Pre-format timestamp once
+	set timestamp [clock format [clock seconds] -format "%H:%M:%S"]
+	set formatted_msg "\[$timestamp\] \[$category\] $message"
+	
+	# Use faster switch with exact matching
+	switch -- $level {
+	    error {
+		dservSet ess/errorInfo $formatted_msg
+	    }
+	    warning {
+		dservSet ess/warningInfo $formatted_msg  
+	    }
+	    info {
+		dservSet ess/infoLog $formatted_msg
+	    }
+	    debug {
+		dservSet ess/debugLog $formatted_msg
+	    }
+	    default {
+		dservSet ess/generalLog $formatted_msg
+	    }
+	}
+    }    
+    
+    # Convenience procedures for different log levels
+    proc ess_error {message {category "system"}} {
+        ess_log error $message $category
+    }
+    
+    proc ess_warning {message {category "system"}} {
+        ess_log warning $message $category
+    }
+    
+    proc ess_info {message {category "system"}} {
+        ess_log info $message $category
+    }
+    
+    proc ess_debug {message {category "system"}} {
+        ess_log debug $message $category
+    }
+    
+    # Enable/disable debug mode
+    variable debug_mode 0
+    proc set_debug_mode {enabled} {
+        variable debug_mode
+        set debug_mode $enabled
+        if {$enabled} {
+            ess_info "Debug mode enabled" "system"
+        } else {
+            ess_info "Debug mode disabled" "system"
+        }
+    }
+}
+
+#
+# System class (cleaned up with proper logging)
 #
 oo::class create System {
     variable _systemname
@@ -53,33 +129,56 @@ oo::class create System {
         set _variants {}
         set _variant_args {}
         set _version 0.0
+        
+        ::ess::ess_debug "System $_systemname created" "system"
     }
 
-    destructor { my deinit }
+    destructor { 
+        ::ess::ess_debug "System $_systemname destroyed" "system"
+        my deinit 
+    }
 
     method name { } { return $_systemname }
     method get_system { } { return $_systemname }
 
-    method set_version { v } { set _version $v }
+    method set_version { v } { 
+        set _version $v 
+        ::ess::ess_debug "System $_systemname version set to $v" "system"
+    }
     method get_version { } { return $_version }
 
-    method set_protocol { p } { set _protocolname $p }
+    method set_protocol { p } { 
+        set _protocolname $p 
+        ::ess::ess_info "Protocol set to $p for system $_systemname" "system"
+    }
     method get_protocol { } { return $_protocolname }
 
-    method set_variants { vdict } { set _variants $vdict }
+    method set_variants { vdict } { 
+        set _variants $vdict 
+        ::ess::ess_debug "Variants loaded: [dict keys $vdict]" "system"
+    }
     method get_variants { } { return $_variants }
 
-    method set_variant { v } { set _variantname $v }
+    method set_variant { v } { 
+        set _variantname $v 
+        ::ess::ess_info "Variant set to $v" "system"
+    }
     method get_variant { } { return $_variantname }
 
-    method reset_variant_args {} { set _variant_args {} }
+    method reset_variant_args {} { 
+        set _variant_args {} 
+        ::ess::ess_debug "Variant args reset" "system"
+    }
+    
     method set_variant_args { vdict } {
         set _variant_args [dict merge  $_variant_args $vdict]
+        ::ess::ess_debug "Variant args updated: $vdict" "system"
     }
     method get_variant_args { } { return $_variant_args }
 
     method add_variant { name method params } {
         dict set _variants $name [list $method $params]
+        ::ess::ess_debug "Added variant $name with method $method" "system"
     }
 
     method configure_stim { host } {
@@ -88,32 +187,41 @@ oo::class create System {
             oo::objdefine [self] variable $var
         }
 
+        ::ess::ess_info "Configuring stimulus host: $host" "stim"
+
         if { ![rmtOpen $host] } {
             # not connected but set some defaults
             variable screen_halfx 16.0
             variable screen_halfy 9.0
             variable screen_w 1024
             variable screen_h 600
-	    dservSet ess/rmt_connected [rmtConnected]
-	    return 0
+            dservSet ess/rmt_connected [rmtConnected]
+            ::ess::ess_warning "Could not connect to stimulus host $host, using defaults" "stim"
+            return 0
         }
 
-	dservSet ess/rmt_connected [rmtConnected]
-	
+        dservSet ess/rmt_connected [rmtConnected]
+        
         variable screen_halfx [rmtSend "screen_set HalfScreenDegreeX"]
         variable screen_halfy [rmtSend "screen_set HalfScreenDegreeY"]
         set scale_x [rmtSend "screen_set ScaleX"]
         set scale_y [rmtSend "screen_set ScaleY"]
         variable screen_w [expr int([rmtSend "screen_set WinWidth"]/$scale_x)]
         variable screen_h [expr int([rmtSend "screen_set WinHeight"]/$scale_y)]
+        
         if { $screen_halfx == "" } {
             variable screen_halfx 16.0
             variable screen_halfy 9.0
             variable screen_w 1024
             variable screen_h 600
+            ::ess::ess_warning "Received empty screen parameters, using defaults" "stim"
         }
 
-        foreach v "halfx halfy w h" { dservSet ess/screen_${v} [set screen_${v}] }
+        foreach v "halfx halfy w h" { 
+            dservSet ess/screen_${v} [set screen_${v}] 
+        }
+
+        ::ess::ess_info "Screen configured: ${screen_w}x${screen_h}, ${screen_halfx}°x${screen_halfy}°" "stim"
 
         rmtSend "set dservhost [dservGet ess/ipaddr]"
 
@@ -149,6 +257,9 @@ oo::class create System {
             set script [read $f]
             close $f
             rmtSend $script
+            ::ess::ess_info "Loaded stimulus script: $stimfile" "stim"
+        } else {
+            ::ess::ess_warning "No stimulus script found: $stimfile" "stim"
         }
         return 1
     }
@@ -157,8 +268,9 @@ oo::class create System {
         if { [dg_exists stimdg] } {
             dg_toString stimdg s
             dservSetData stimdg [now] 6 $s
+            ::ess::ess_debug "Updated stimdg datapoint" "system"
         }
-	dservSet ess/stiminfo [dg_toHybridJSON stimdg]
+        dservSet ess/stiminfo [dg_toHybridJSON stimdg]
     }
 
     method set_init_callback { cb } {
@@ -380,16 +492,36 @@ oo::class create System {
     }
     
     method start {} {
-        if { $_status != "stopped" } return
+        if { $_status != "stopped" } {
+            ::ess::ess_warning "Cannot start: system status is $_status" "system"
+            return
+        }
         my set_status running
 
         ::ess::evt_put SYSTEM_STATE RUNNING [now]
+        ::ess::ess_info "System $_systemname started" "system"
 
         if { [info exists _callbacks(start)] } {
             my $_callbacks(start)
         }
         set _current_state $_start_state
         my update
+    }
+
+    method stop {} {
+        my set_status stopped
+        ::ess::evt_put SYSTEM_STATE STOPPED [now]
+        ::ess::ess_info "System $_systemname stopped" "system"
+        if { [info exists _callbacks(quit)] } {
+            my $_callbacks(quit)
+        }
+        return
+    }
+
+    method set_status { status } {
+        dservSet ess/status $status
+        set _status $status
+        ::ess::ess_debug "System status changed to $status" "system"
     }
 
     method reset {} {
@@ -399,15 +531,6 @@ oo::class create System {
                 my $_callbacks(reset)
             }
         }
-    }
-
-    method stop {} {
-        my set_status stopped
-        ::ess::evt_put SYSTEM_STATE STOPPED [now]
-        if { [info exists _callbacks(quit)] } {
-            my $_callbacks(quit)
-        }
-        return
     }
 
     method end {} {
@@ -452,11 +575,6 @@ oo::class create System {
     }
 
     method status {} { return $_status }
-
-    method set_status { status } {
-    dservSet ess/status $status
-    set _status $status
-    }
 
     method update {} {
         if { $_status eq "running" } {
@@ -561,29 +679,6 @@ namespace eval ess {
         }
     }
 
-    proc save_script { type s } {
-	variable current
-        if { $current(system) == "" } return
-
-	set f [file join $::ess::system_path $current(project) $current(system)]
-	if { $type == "system" } {
-	    set saveto [file join $f $current(system).tcl]
-	} elseif { $type == "protocol" } {
-	    set saveto [file join $f $current(protocol) $current(protocol).tcl]
-	} elseif { $type == "loaders" } {
-	    set saveto [file join $f $current(protocol) ${current(protocol)}_loaders.tcl]
-	} elseif { $type == "variants" } {
-	    set saveto [file join $f $current(protocol) ${current(protocol)}_variants.tcl]
-	} elseif { $type == "stim" } {
-	    set saveto [file join $f $current(protocol) ${current(protocol)}_stim.tcl]
-	}
-
-	# could do some backup or versioning here
-	set f [open $saveto w]
-	puts $f $s
-	close $f
-    }
-    
     proc system_script {} {
         variable current
         if {$current(system) != ""} {
@@ -691,24 +786,6 @@ namespace eval ess {
         }
     }
 
-    proc error_callback { name element op } {
-	dservSet ess/errorInfo [set $name]
-    }
-
-    proc error_trace { } {
-	variable error_trace
-	if { $error_trace } { return }
-	trace add variable ::errorInfo write ::ess::error_callback
-	set error_trace 1
-    }
-
-    proc error_untrace { } {
-	variable error_trace
-	if { !$error_trace } { return }
-	trace remove variable ::errorInfo write ::ess::error_callback
-	set error_trace 0
-    }
-    
     proc load_system {{system {}} {protocol {}} {variant {}}} {
         # Reset the result so we can check if a new error is raised
         set ::errorInfo ""
@@ -717,45 +794,45 @@ namespace eval ess {
         variable current
 
         if {$current(system) != {} && [info exists $current(system)]} {
-            if {[query_state] == "running"} {return}
+            if {[query_state] == "running"} {
+                ess_warning "Cannot load system while running" "system"
+                return
+            }
             catch {unload_system}
         }
 
-        set systems [find_systems]
+        ess_info "Loading system: $system, protocol: $protocol, variant: $variant" "system"
 
-        # store these so client interfaces can know what protocols we have
+        set systems [find_systems]
         dservSet ess/systems $systems
 
         if {$system == ""} {
             set current(system) [lindex $systems 0]
         } else {
             if {[lsearch $systems $system] < 0} {
+                ess_error "system $system not found" "system"
                 error "system $system not found"
             }
             set current(system) $system
         }
 
         [set current(system)]::create
-
         system_init $current(system)
 
         set protocols [find_protocols $current(system)]
-
-        # store these so client interfaces can know what protocols we have
         dservSet ess/protocols $protocols
 
         if {$protocol == ""} {
             set current(protocol) [lindex $protocols 0]
         } else {
             if {[lsearch $protocols $protocol] < 0} {
+                ess_error "protocol $protocol not found in $current(system)" "system"
                 error "protocol $protocol not found in $current(system)"
             }
             set current(protocol) $protocol
         }
 
         set variants [find_variants $current(system) $current(protocol)]
-
-        # store these so client interfaces can know what protocols we have
         dservSet ess/variants $variants
 
         if {$variant == ""} {
@@ -763,37 +840,33 @@ namespace eval ess {
         } else {
             if {[lsearch $variants $variant] < 0} {
                 set s_p "$current(system)/$current(protocol)"
+                ess_error "variant $variant not found in $s_p" "system"
                 error "variant $variant not found in $s_p"
             }
             set current(variant) $variant
         }
 
-	# setup protocol
+        # Setup protocol
         protocol_init $current(system) $current(protocol)
 
-        # set the variant for the current system
+        # Set the variant for the current system
         set s [find_system $current(system)]
         $s set_variant $current(variant)
-
-        # this resets any unsaved variant args
         $s reset_variant_args
 
-        # load saved settings
+        # Load saved settings
         load_settings
 
-        # initialize the loaders by calling the appropriate loader
+        # Initialize the loaders
         variant_init $current(system) $current(protocol) $current(variant)
 
-	# one final init now that protocol and variant info set
-	$s final_init
+        # Final init
+        $s final_init
 
-        # dictionary of states and associated transition states
+        # Update various datapoints
         dservSet ess/state_table [get_state_transitions]
-
-        # set list of rmtSend commands used by this protocol
         dservSet ess/rmt_cmds [get_rmt_cmds]
 
-        # update current scripts in dserv
         foreach t "system protocol loaders variants stim" {
             dservSet ess/${t}_script [${t}_script]
         }
@@ -801,8 +874,10 @@ namespace eval ess {
         set current(trialid) 0
         if {[dg_exists trialdg]} {dg_delete trialdg}
         reset_trial_info
+        
+        ess_info "System loaded successfully: $current(system)/$current(protocol)/$current(variant)" "system"
     }
-
+    
     proc reload_system {} {
         variable current
         if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
@@ -1458,6 +1533,887 @@ namespace eval ess {
         set out_f [open $outfile w]
         puts $out_f $j
         close $out_f
+    }
+}
+
+namespace eval ess {
+    proc error_callback { name element op } {
+        dservSet ess/errorInfo [set $name]
+    }
+
+    proc error_trace { } {
+        variable error_trace
+        if { $error_trace } { 
+            ess_warning "Error tracing already enabled" "error"
+            return 
+        }
+        trace add variable ::errorInfo write ::ess::error_callback
+        set error_trace 1
+        ess_info "Error tracing enabled" "error"
+    }
+
+    proc error_untrace { } {
+        variable error_trace
+        if { !$error_trace } { 
+            ess_warning "Error tracing already disabled" "error"
+            return 
+        }
+        trace remove variable ::errorInfo write ::ess::error_callback
+        set error_trace 0
+        ess_info "Error tracing disabled" "error"
+    }
+}
+
+
+namespace eval ess {
+    # Complete list of ESS system methods
+    variable ess_system_methods {
+        add_state add_action add_transition add_param add_variable add_method
+        set_start set_end get_params set_param get_states status set_status
+        init deinit start stop reset update do_action do_transition
+        set_init_callback set_deinit_callback set_protocol_init_callback
+        set_protocol_deinit_callback set_final_init_callback
+        set_start_callback set_end_callback set_reset_callback set_quit_callback
+        set_file_suggest_callback set_file_open_callback set_file_close_callback
+        set_subject_callback configure_stim update_stimdg
+        file_suggest file_open file_close set_subject
+        name get_system set_version get_version set_protocol get_protocol
+        set_variants get_variants set_variant get_variant add_variant
+        reset_variant_args set_variant_args get_variant_args
+        get_variable set_variable set_parameters set_default_param_vals
+        protocol_init protocol_deinit final_init
+    }
+    
+    # Complete list of ESS event types (from evt_info in ess-2.0.tm)
+    variable ess_event_types {
+        MAGIC NAME FILE USER TRACE PARAM SUBTYPES SYSTEM_STATE
+        FSPIKE HSPIKE ID BEGINOBS ENDOBS ISI TRIALTYPE OBSTYPE
+        EMLOG FIXSPOT EMPARAMS STIMULUS PATTERN STIMTYPE SAMPLE
+        PROBE CUE TARGET DISTRACTOR SOUND CHOICES FIXATE RESP
+        SACCADE DECIDE ENDTRIAL ABORT REWARD DELAY PUNISH PHYS
+        MRI STIMULATOR TOUCH TARGNAME SCENENAME SACCADE_INFO
+        STIM_TRIGGER MOVIENAME STIMULATION SECOND_CHANCE SECOND_RESP
+        SWAPBUFFER STIM_DATA DIGITAL_LINES
+    }
+    
+    # ESS functions that are commonly used
+    variable ess_functions {
+        timerTick timerExpired now dservSet dservGet dservTouch dservClear
+        rmtSend rmtOpen rmtClose rmtConnected rmtName soundPlay soundReset
+        soundSetVoice soundVolume evtPut evt_put begin_obs end_obs
+        em_region_on em_region_off em_fixwin_set em_eye_in_region
+        em_sampler_enable em_sampler_start em_sampler_status em_sampler_vals
+        touch_region_on touch_region_off touch_win_set touch_in_region
+        reward juicer_init print my
+    }
+
+# Fixed analyze_ess_patterns with proper brace counting
+
+proc analyze_ess_patterns {script_content} {
+    variable ess_system_methods
+    variable ess_event_types
+    
+    set warnings {}
+    set lines [split $script_content "\n"]
+    set line_num 0
+    
+    # Timer analysis (unchanged)
+    set has_timer_tick 0
+    set has_timer_expired 0
+    set timer_tick_lines {}
+    
+    foreach line $lines {
+        incr line_num
+        if {[string match "*timerTick*" $line]} {
+            set has_timer_tick 1
+            lappend timer_tick_lines $line_num
+        }
+        if {[string match "*timerExpired*" $line]} {
+            set has_timer_expired 1
+        }
+    }
+    
+    # Helper function to count braces safely
+    proc count_braces {text} {
+        set open_count 0
+        set close_count 0
+        
+        for {set i 0} {$i < [string length $text]} {incr i} {
+            set char [string index $text $i]
+            if {$char eq "\{"} {
+                incr open_count
+            } elseif {$char eq "\}"} {
+                incr close_count
+            }
+        }
+        
+        return [expr {$open_count - $close_count}]
+    }
+    
+    # Pattern analysis
+    set line_num 0
+    foreach line $lines {
+        incr line_num
+        set trimmed [string trim $line]
+        
+        if {$trimmed eq "" || [string index $trimmed 0] eq "#"} {
+            continue
+        }
+        
+        # ESS system method calls
+        if {[regexp {\$sys(?:tem)?\s+(\w+)} $line -> method]} {
+            if {[lsearch $ess_system_methods $method] < 0} {
+                lappend warnings [dict create \
+                    line $line_num \
+                    message "Unknown ESS system method: $method" \
+                    type "warning"]
+            }
+        }
+        
+        # ESS event calls  
+        if {[regexp {::ess::evt_put\s+(\w+)} $line -> event_type]} {
+            if {[lsearch $ess_event_types $event_type] < 0} {
+                lappend warnings [dict create \
+                    line $line_num \
+                    message "Unknown event type: $event_type" \
+                    type "warning"]
+            }
+        }
+        
+        # FIXED: State transition analysis
+        if {[regexp {\$sys\s+add_transition\s+\w+} $line]} {
+            # Check if this is a one-liner with inline return
+            if {[string match "*return*" $line]} {
+                # One-liner with return - this is fine, no warning needed
+                continue
+            }
+            
+            # Check if this starts a block with braces
+            if {[string match "*\{*" $line]} {
+                # This starts a transition block - look for return in the block
+                set block_has_return 0
+                set brace_count [count_braces $line]
+                set search_line $line_num
+                
+                # Look through the transition block for return statement
+                while {$search_line < [llength $lines] && $brace_count > 0} {
+                    incr search_line
+                    if {$search_line >= [llength $lines]} break
+                    
+                    set search_text [lindex $lines [expr $search_line - 1]]
+                    
+                    # Count braces to track the block
+                    incr brace_count [count_braces $search_text]
+                    
+                    # Look for return statement
+                    if {[string match "*return*" $search_text]} {
+                        set block_has_return 1
+                        break
+                    }
+                }
+                
+                if {!$block_has_return} {
+                    lappend warnings [dict create \
+                        line $line_num \
+                        message "State transition block should include return statement" \
+                        type "warning"]
+                }
+            } else {
+                # No braces and no return on the same line - this might be incomplete
+                # Look at the next few lines to see if there's a separate transition definition
+                set has_return_nearby 0
+                for {set i $line_num} {$i < [expr $line_num + 3] && $i <= [llength $lines]} {incr i} {
+                    if {$i > [llength $lines]} break
+                    set check_line [lindex $lines [expr $i - 1]]
+                    if {[string match "*return*" $check_line]} {
+                        set has_return_nearby 1
+                        break
+                    }
+                }
+                
+                if {!$has_return_nearby} {
+                    lappend warnings [dict create \
+                        line $line_num \
+                        message "State transition should include return statement" \
+                        type "warning"]
+                }
+            }
+        }
+    }
+    
+    # Clean up the helper proc
+    rename count_braces {}
+    
+    # Timer warning (only if timerTick without timerExpired)
+    if {$has_timer_tick && !$has_timer_expired} {
+        lappend warnings [dict create \
+            line [lindex $timer_tick_lines 0] \
+            message "timerTick used but no timerExpired check found in script" \
+            type "warning"]
+    }
+    
+    return [dict create warnings $warnings]
+}    
+
+    # Enhanced validation with better ESS awareness
+    proc validate_script_syntax_fast {script_content} {
+        set validation_result [dict create valid 1 errors {} warnings {} method "syntax_only"]
+        
+        # Check if script is complete
+        if {![info complete $script_content]} {
+            dict set validation_result valid 0
+            dict set validation_result errors [list [dict create \
+                line 0 \
+                message "Script has unmatched braces, quotes, or incomplete structure" \
+                type "syntax"]]
+            return $validation_result
+        }
+        
+        # Try to parse without executing
+        if {[catch {
+            set temp_ns "::temp_parse_[clock milliseconds]"
+            namespace eval $temp_ns {}
+            
+            # Parse the script without execution
+            namespace eval $temp_ns "if 0 { $script_content }"
+            
+        } parse_error]} {
+            dict set validation_result valid 0
+            
+            # Extract line number and clean error message
+            if {[regexp {line (\d+)} $parse_error -> line_num]} {
+                set clean_error [regsub {.*line \d+: } $parse_error ""]
+                dict set validation_result errors [list [dict create \
+                    line $line_num \
+                    message $clean_error \
+                    type "syntax"]]
+            } else {
+                dict set validation_result errors [list [dict create \
+                    line 0 \
+                    message $parse_error \
+                    type "syntax"]]
+            }
+        }
+        
+        # Clean up
+        catch {namespace delete $temp_ns}
+        
+        # ESS pattern analysis (only if syntax is good)
+        if {[dict get $validation_result valid]} {
+            set analysis [analyze_ess_patterns $script_content]
+            dict set validation_result warnings [dict get $analysis warnings]
+        }
+        
+        return $validation_result
+    }
+    
+    # FIXED: Validation levels for different use cases - removed circular dependency
+    proc validate_script_syntax {script_content {script_type ""} {level "normal"}} {
+        switch $level {
+            "minimal" {
+                # Just check completeness and basic parsing
+                if {![info complete $script_content]} {
+                    return [dict create valid 0 errors [list [dict create \
+                        line 0 message "Script incomplete" type "syntax"]] warnings {} method "minimal"]
+                }
+                
+                if {[catch {
+                    set ns "::minimal_[clock milliseconds]"
+                    namespace eval $ns "if 0 { $script_content }"
+                    namespace delete $ns
+                } error]} {
+                    return [dict create valid 0 errors [list [dict create \
+                        line 0 message $error type "syntax"]] warnings {} method "minimal"]
+                }
+                
+                return [dict create valid 1 errors {} warnings {} method "minimal"]
+            }
+            
+            "strict" {
+                # Full validation with all warnings
+                return [validate_script_syntax_fast $script_content]
+            }
+            
+            "normal" -
+            default {
+                # Normal validation with reduced warning noise
+                set result [validate_script_syntax_fast $script_content]
+                
+                # Filter out some warnings for normal mode
+                set filtered_warnings {}
+                foreach warning [dict get $result warnings] {
+                    set msg [dict get $warning message]
+                    set type [dict get $warning type]
+                    
+                    # Skip certain warning types in normal mode
+                    if {$type eq "info"} {
+                        continue  # Skip info messages
+                    }
+                    
+                    if {[string match "*ESS system method*" $msg] || 
+                        [string match "*ESS event*" $msg]} {
+                        continue  # Skip ESS method detection messages
+                    }
+                    
+                    lappend filtered_warnings $warning
+                }
+                
+                dict set result warnings $filtered_warnings
+                dict set result method "normal"
+                return $result
+            }
+        }
+    }
+    
+    proc validate_script_minimal {script_content} {
+        return [validate_script_syntax $script_content "" "minimal"]
+    }
+    
+    proc validate_script_normal {script_content} {
+        return [validate_script_syntax $script_content "" "normal"]  
+    }
+    
+    proc validate_script_strict {script_content} {
+        return [validate_script_syntax $script_content "" "strict"]
+    }
+
+    # Public interface - chooses appropriate validation level
+    proc validate_script {script_content {script_type ""} {level "fast"}} {
+        switch $level {
+            "fast" {
+                return [validate_script_syntax_fast $script_content]
+            }
+            "comprehensive" {
+                return [validate_script_syntax $script_content $script_type "strict"]
+            }
+            default {
+                return [validate_script_syntax $script_content $script_type "normal"]
+            }
+        }
+    }
+    
+    # Helper function to compare backup files by timestamp
+    proc compare_backup_files {file1 file2} {
+        # Extract timestamps from filenames
+        set ts1 [extract_timestamp_from_filename $file1]
+        set ts2 [extract_timestamp_from_filename $file2]
+        
+        # If timestamps are equal or invalid, sort by modification time
+        if {$ts1 == $ts2 || $ts1 == "" || $ts2 == ""} {
+            set mtime1 [file mtime $file1]
+            set mtime2 [file mtime $file2]
+            return [expr {$mtime2 - $mtime1}]  # Newer first
+        }
+        
+        # Sort by timestamp (newer first)
+        return [string compare $ts2 $ts1]
+    }
+    
+    # Helper function to extract timestamp from backup filename
+    proc extract_timestamp_from_filename {filename} {
+        set basename [file tail $filename]
+        
+        # Try different timestamp patterns
+        if {[regexp {backup_(\d{8}_\d{6})_} $basename -> timestamp]} {
+            return $timestamp
+        } elseif {[regexp {backup_(\d{14})_} $basename -> timestamp]} {
+            return $timestamp
+        } elseif {[regexp {(\d{8}_\d{6})} $basename -> timestamp]} {
+            return $timestamp
+        } elseif {[regexp {(\d{14})} $basename -> timestamp]} {
+            return $timestamp
+        }
+        
+        return ""
+    }
+
+    # Enhanced restore_script_backup function with validation
+    proc restore_script_backup {type backup_file} {
+        variable current
+        if {$current(system) == ""} {
+            error "Cannot restore: no system loaded"
+        }
+        
+#        puts "restore_script_backup: Restoring $type from $backup_file"
+        
+        if {![file exists $backup_file]} {
+            error "Cannot restore: backup file doesn't exist: $backup_file"
+        }
+        
+        # Validate backup file path for security
+        set backup_dir [file dirname $backup_file]
+        set expected_base [file join $::ess::system_path $current(project) $current(system)]
+        
+        if {![string match "$expected_base*" $backup_dir]} {
+            error "Cannot restore: backup file outside of expected directory tree"
+        }
+        
+        # Read backup content
+        if {[catch {
+            set f [open $backup_file r]
+            set backup_content [read $f]
+            close $f
+        } error]} {
+            error "Cannot read backup file: $error"
+        }
+        
+#        puts "restore_script_backup: Read [string length $backup_content] characters from backup"
+        
+        # Validate the content before saving
+        if {[catch {ess::validate_script_minimal $backup_content} validation_result]} {
+#            puts "restore_script_backup: Validation failed: $validation_result"
+            # Continue anyway for now, but warn
+#            puts "restore_script_backup: WARNING - backup content may have syntax issues"
+        } else {
+#            puts "restore_script_backup: Backup content validated successfully"
+        }
+        
+        # Save it as the current script using the enhanced save function
+        if {[catch {save_script $type $backup_content "minimal"} save_result]} {
+            error "Failed to save restored script: $save_result"
+        }
+        
+#        puts "restore_script_backup: Successfully restored $type script from backup"
+        return "restored"
+    }
+    
+    # Enhanced get_backup_info function for detailed backup information
+    proc get_backup_info {type} {
+        variable current
+        set info [dict create]
+        
+        dict set info type $type
+        dict set info system $current(system)
+        dict set info protocol $current(protocol)
+        dict set info variant $current(variant)
+        
+        set backup_files [get_script_backups $type]
+        dict set info backup_count [llength $backup_files]
+        dict set info backup_files $backup_files
+        
+        if {[llength $backup_files] > 0} {
+            set newest [lindex $backup_files 0]
+            dict set info newest_backup $newest
+            dict set info newest_timestamp [extract_timestamp_from_filename $newest]
+            dict set info newest_mtime [file mtime $newest]
+            
+            set oldest [lindex $backup_files end]
+            dict set info oldest_backup $oldest
+            dict set info oldest_timestamp [extract_timestamp_from_filename $oldest]
+            dict set info oldest_mtime [file mtime $oldest]
+        }
+        
+        return $info
+    }
+    
+    # Function to export backup information as JSON for frontend debugging
+    proc get_backup_info_json {type} {
+        package require yajltcl
+        set info [get_backup_info $type]
+        
+        set obj [yajl create #auto]
+        $obj map_open
+        
+        dict for {key value} $info {
+            if {$key == "backup_files"} {
+                $obj string $key array_open
+                foreach file $value {
+                    $obj string $file
+                }
+                $obj array_close
+            } else {
+                $obj string $key string $value
+            }
+        }
+        
+        $obj map_close
+        set result [$obj get]
+        $obj delete
+        return $result
+    }
+
+    # Enhanced save_script with validation and backup
+  proc save_script {type script_content {validation_level "fast"}} {
+        variable current
+        if {$current(system) == ""} {
+            error "No system loaded"
+        }
+        
+        # Step 1: Validate based on level
+        set validation [validate_script $script_content $type $validation_level]
+        
+        if {![dict get $validation valid]} {
+            set errors [dict get $validation errors]
+            set error_msg "Script validation failed:\n"
+            foreach err $errors {
+                set line [dict get $err line]
+                set message [dict get $err message]
+                append error_msg "Line $line: $message\n"
+            }
+            error $error_msg
+        }
+        
+        # Step 2: Create backup (only if validation passes)
+        set backup_file [backup_script $type]
+        
+        # Step 3: Save the script
+        set f [file join $::ess::system_path $current(project) $current(system)]
+        if {$type == "system"} {
+            set saveto [file join $f $current(system).tcl]
+        } elseif {$type == "protocol"} {
+            set saveto [file join $f $current(protocol) $current(protocol).tcl]
+        } elseif {$type == "loaders"} {
+            set saveto [file join $f $current(protocol) ${current(protocol)}_loaders.tcl]
+        } elseif {$type == "variants"} {
+            set saveto [file join $f $current(protocol) ${current(protocol)}_variants.tcl]
+        } elseif {$type == "stim"} {
+            set saveto [file join $f $current(protocol) ${current(protocol)}_stim.tcl]
+        } else {
+            error "Unknown script type: $type"
+        }
+        
+        if {[catch {
+            set file_handle [open $saveto w]
+            puts $file_handle $script_content
+            close $file_handle
+        } save_error]} {
+            error "Failed to save script: $save_error"
+        }
+        
+        # Step 4: Update datapoints
+        dservSet ess/${type}_script $script_content
+        
+        # Step 5: Clean up old backups
+        cleanup_old_backups $type
+        
+        return "success"
+    }
+    
+    # Convenience methods for different validation levels
+    proc save_script_fast {type script_content} {
+        return [save_script $type $script_content "fast"]
+    }
+    
+    proc save_script_comprehensive {type script_content} {
+        return [save_script $type $script_content "comprehensive"]
+    }
+}
+
+namespace eval ess {
+
+    variable backup_base_dir
+    
+    proc init_backup_system {} {
+        variable backup_base_dir
+        variable current
+        
+        set backup_base_dir [file join $::ess::system_path "backups"]
+        
+        if {![file exists $backup_base_dir]} {
+            if {[catch {file mkdir $backup_base_dir} error]} {
+                ess_error "Could not create backup directory $backup_base_dir: $error" "backup"
+                return ""
+            } else {
+                ess_info "Created backup base directory: $backup_base_dir" "backup"
+            }
+        }
+        
+        return $backup_base_dir
+    }
+    
+    proc get_backup_directory {type} {
+        variable backup_base_dir
+        variable current
+        
+        # Lazy initialization
+        if {![info exists backup_base_dir]} {
+            set backup_base_dir [init_backup_system]
+            if {$backup_base_dir == ""} {
+                return [get_original_backup_directory $type]
+            }
+        }
+        
+        # Build path based on script type
+        if {$type == "system"} {
+            set backup_dir [file join $backup_base_dir $current(project) $current(system)]
+        } elseif {$type == "protocol"} {
+            set backup_dir [file join $backup_base_dir $current(project) $current(system) $current(protocol)]
+        } elseif {$type in {loaders variants stim}} {
+            set backup_dir [file join $backup_base_dir $current(project) $current(system) $current(protocol)]
+        } else {
+            ess_error "Unknown script type: $type" "backup"
+            return ""
+        }
+        
+        # Ensure directory exists
+        if {![file exists $backup_dir]} {
+            if {[catch {file mkdir $backup_dir} error]} {
+                ess_warning "Could not create backup directory $backup_dir: $error" "backup"
+                return [get_original_backup_directory $type]
+            } else {
+                ess_debug "Created backup directory: $backup_dir" "backup"
+            }
+        }
+        
+        return $backup_dir
+    }
+    
+    proc backup_script {type} {
+        variable current
+        if {$current(system) == ""} {
+            ess_warning "No system loaded for backup" "backup"
+            return ""
+        }
+        
+        set timestamp [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+        
+        # Get original file path
+        set original_file [get_original_file_path $type]
+        
+        if {![file exists $original_file]} {
+            ess_warning "Original file does not exist: $original_file" "backup"
+            return ""
+        }
+        
+        # Get backup directory and create backup filename
+        set backup_dir [get_backup_directory $type]
+        
+        if {$type == "system"} {
+            set backup_file [file join $backup_dir "${timestamp}_${type}_$current(system).tcl"]
+        } elseif {$type == "protocol"} {
+            set backup_file [file join $backup_dir "${timestamp}_${type}_$current(protocol).tcl"]
+        } else {
+            set backup_file [file join $backup_dir "${timestamp}_${type}_${current(protocol)}.tcl"]
+        }
+        
+        if {[catch {file copy $original_file $backup_file} error]} {
+            ess_error "Error creating backup: $error" "backup"
+            return ""
+        } else {
+            ess_info "Created backup: [file tail $backup_file]" "backup"
+            create_backup_metadata $backup_file $type $original_file
+            return $backup_file
+        }
+    }
+    
+    # Removed duplicate helper functions, kept only essential ones
+    
+    proc save_script {type script_content {validation_level "fast"}} {
+        variable current
+        if {$current(system) == ""} {
+            ess_error "No system loaded" "script"
+            return
+        }
+        
+        ess_info "Saving $type script with $validation_level validation" "script"
+        
+        # Validate script
+        set validation [validate_script $script_content $type $validation_level]
+        
+        if {![dict get $validation valid]} {
+            set errors [dict get $validation errors]
+            set error_msg "Script validation failed:\n"
+            foreach err $errors {
+                set line [dict get $err line]
+                set message [dict get $err message]
+                append error_msg "Line $line: $message\n"
+            }
+            ess_error $error_msg "script"
+            error $error_msg
+        }
+        
+        # Create backup
+        set backup_file [backup_script $type]
+        
+        # Save the script
+        set saveto [get_original_file_path $type]
+        
+        if {[catch {
+            set file_handle [open $saveto w]
+            puts $file_handle $script_content
+            close $file_handle
+        } save_error]} {
+            ess_error "Failed to save script: $save_error" "script"
+            error "Failed to save script: $save_error"
+        }
+        
+        # Update datapoints
+        dservSet ess/${type}_script $script_content
+        ess_info "Successfully saved $type script" "script"
+        
+        # Clean up old backups
+        cleanup_old_backups $type
+        
+        return "success"
+    }
+    
+    # Create metadata file alongside backup for enhanced tracking
+    proc create_backup_metadata {backup_file type original_file} {
+        variable current
+        
+        set metadata_file "${backup_file}.meta"
+        
+        if {[catch {
+            set f [open $metadata_file w]
+            puts $f "# ESS Backup Metadata"
+            puts $f "backup_time: [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]"
+            puts $f "backup_timestamp: [clock seconds]"
+            puts $f "script_type: $type"
+            puts $f "original_file: $original_file"
+            puts $f "system: $current(system)"
+            puts $f "protocol: $current(protocol)"
+            puts $f "variant: $current(variant)"
+            puts $f "project: $current(project)"
+            puts $f "file_size: [file size $backup_file]"
+            puts $f "file_mtime: [file mtime $original_file]"
+            close $f
+        } error]} {
+            puts "Warning: Could not create metadata file: $metadata_file ($error)"
+        }
+    }
+    
+    # Enhanced get_script_backups function with centralized directory
+    proc get_script_backups {type} {
+        variable current
+        if {$current(system) == ""} {
+#            puts "get_script_backups: No system loaded"
+            return {}
+        }
+        
+#        puts "get_script_backups: Looking for $type backups in centralized directory"
+        
+        # Get centralized backup directory
+        if {[catch {get_backup_directory $type} backup_dir]} {
+            puts "get_script_backups: Could not get backup directory: $backup_dir"
+            return {}
+        }
+        
+        # Create pattern for new naming scheme
+        if {$type == "system"} {
+            set pattern "*_${type}_$current(system).tcl"
+        } elseif {$type == "protocol"} {
+            set pattern "*_${type}_$current(protocol).tcl"
+        } else {
+            set pattern "*_${type}_${current(protocol)}.tcl"
+        }
+        
+#        puts "get_script_backups: Backup directory: $backup_dir"
+#        puts "get_script_backups: Pattern: $pattern"
+        
+        if {![file isdirectory $backup_dir]} {
+            puts "get_script_backups: Backup directory does not exist: $backup_dir"
+            return {}
+        }
+        
+        if {[catch {glob -nocomplain [file join $backup_dir $pattern]} backup_files]} {
+            puts "get_script_backups: Error globbing files: $backup_files"
+            return {}
+        }
+        
+ #       puts "get_script_backups: Found [llength $backup_files] total backup files"
+        
+        if {[llength $backup_files] == 0} {
+  #          puts "get_script_backups: No backup files found"
+            return {}
+        }
+        
+        # Sort by timestamp (newest first)
+        set sorted_files [lsort -command {compare_backup_files} $backup_files]
+        
+#        puts "get_script_backups: Returning sorted list of [llength $sorted_files] files"
+#        foreach file $sorted_files {
+#            puts "  - $file"
+#        }
+        
+        return $sorted_files
+    }
+    
+    # Get original file path for a script type
+    proc get_original_file_path {type} {
+        variable current
+        
+        if {$type == "system"} {
+            return [file join $::ess::system_path $current(project) $current(system) $current(system).tcl]
+        } elseif {$type == "protocol"} {
+            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) $current(protocol).tcl]
+        } elseif {$type == "loaders"} {
+            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) ${current(protocol)}_loaders.tcl]
+        } elseif {$type == "variants"} {
+            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) ${current(protocol)}_variants.tcl]
+        } elseif {$type == "stim"} {
+            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) ${current(protocol)}_stim.tcl]
+        } else {
+            error "Unknown script type: $type"
+        }
+    }
+    
+    # Enhanced cleanup with centralized directory
+    proc cleanup_old_backups {type {max_backups 10}} {
+        variable current
+        if {$current(system) == ""} return
+        
+#        puts "cleanup_old_backups: Cleaning up $type backups (keeping $max_backups)"
+        
+        # Get all backup files for this type (including legacy)
+        set backup_files [get_script_backups $type]
+        
+        if {[llength $backup_files] <= $max_backups} {
+#            puts "cleanup_old_backups: Only [llength $backup_files] backups found, no cleanup needed"
+            return
+        }
+        
+        # Keep only the most recent backups
+        set files_to_delete [lrange $backup_files $max_backups end]
+        
+#        puts "cleanup_old_backups: Deleting [llength $files_to_delete] old backup files"
+        
+        foreach file $files_to_delete {
+            if {[catch {file delete $file} error]} {
+#                puts "cleanup_old_backups: Error deleting $file: $error"
+            } else {
+#                puts "cleanup_old_backups: Deleted $file"
+                
+                # Also delete metadata file if it exists
+                set metadata_file "${file}.meta"
+                if {[file exists $metadata_file]} {
+                    catch {file delete $metadata_file}
+                }
+            }
+        }
+    }
+    
+    # Get backup information including metadata
+    proc get_backup_info_enhanced {backup_file} {
+        set info [dict create]
+        dict set info file $backup_file
+        dict set info exists [file exists $backup_file]
+        
+        if {[file exists $backup_file]} {
+            dict set info size [file size $backup_file]
+            dict set info mtime [file mtime $backup_file]
+            dict set info mtime_formatted [clock format [file mtime $backup_file]]
+        }
+        
+        # Read metadata if available
+        set metadata_file "${backup_file}.meta"
+        if {[file exists $metadata_file]} {
+            if {[catch {
+                set f [open $metadata_file r]
+                set metadata_content [read $f]
+                close $f
+                
+                # Parse metadata
+                foreach line [split $metadata_content "\n"] {
+                    if {[regexp {^([^:]+):\s*(.+)$} $line -> key value]} {
+                        dict set info metadata $key $value
+                    }
+                }
+            } error]} {
+                dict set info metadata_error $error
+            }
+        }
+        
+        return $info
     }
 }
 
