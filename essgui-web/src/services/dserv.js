@@ -619,13 +619,34 @@ class DservWebSocket {
     return promise;
   }
 
-  async gitCommand(command) {
-    return withTimeout(this.sendRequest('git_command', { command }), 15000, 'Git command timed out');
+  async gitCommand(command, timeout = 15000) {
+    const fullCommand = `send git {${command}}`
+    return withTimeout(this.essCommand(fullCommand), timeout, 'Git command timed out')
   }
 
-  async stimCommand(command) {
-    return withTimeout(this.sendRequest('stim_command', { command }), 10000, 'Stim command timed out');
+  async gitPull() {
+    return this.gitCommand('git::pull')
   }
+
+  async gitPush() {
+    return this.gitCommand('git::commit_and_push')
+  }
+
+  async gitStatus() {
+    return this.gitCommand('git::status')
+  }
+    
+  async gitSwitchBranch(branchName) {
+    return this.gitCommand(`git::switch_and_pull ${branchName}`)
+  }
+
+  async gitGetBranches() {
+    return this.gitCommand('git::get_branches')
+  }
+
+  async gitGetCurrentBranch() {
+    return this.gitCommand('git::get_current_branch')
+  }    
 
   sendRequest(type, data) {
     return new Promise((resolve, reject) => {

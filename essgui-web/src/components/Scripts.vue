@@ -193,14 +193,14 @@ watch(scripts, (newScripts) => {
 const canPushToGit = computed(() => hasChangesSinceLastGit.value)
 
 // Git branch operations
+
 async function switchBranch(branchName) {
   if (branchName === currentBranch.value) return
   
   isGitBusy.value = true
   try {
     console.log(`Switching to branch: ${branchName}`)
-    const cmd = `send git {git::switch_and_pull ${branchName}}`
-    await dserv.essCommand(cmd)
+    await dserv.gitSwitchBranch(branchName)
     console.log(`Successfully switched to branch: ${branchName}`)
     
     // Reset git change tracking after branch switch
@@ -212,8 +212,8 @@ async function switchBranch(branchName) {
     }, 500)
   } catch (error) {
     console.error(`Failed to switch to branch ${branchName}:`, error)
-    // Revert selection on error
-    currentBranch.value = currentBranch.value
+    // Request current git data to sync state instead of the broken line
+    requestGitData()
   } finally {
     isGitBusy.value = false
   }
