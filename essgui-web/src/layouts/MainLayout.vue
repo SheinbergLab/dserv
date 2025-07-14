@@ -3,42 +3,75 @@
     <a-layout style="height: 100vh;">
       <!-- Control Panel - Left Sidebar -->
       <a-layout-sider width="290" theme="light" style="border-right: 1px solid #d9d9d9;">
-        <experiment-control ref="experimentControlRef" @status-update="handleStatusUpdate" />
+        <experiment-control ref="experimentControlRef" />
       </a-layout-sider>
 
-      <!-- Main Content Area with Terminal -->
+      <!-- Middle Column - Eye/Touch Viewer + Performance -->
+      <a-layout-sider width="320" theme="light" style="border-right: 1px solid #d9d9d9; background: white;">
+        <div style="height: 100%; display: flex; flex-direction: column;">
+          <!-- Eye/Touch Visualizer Section -->
+          <div
+            style="flex: 0 0 auto; height: 450px; border-bottom: 1px solid #d9d9d9; display: flex; flex-direction: column;">
+            <!-- Simple Header -->
+            <div style="flex-shrink: 0; padding: 8px; border-bottom: 1px solid #e8e8e8; background: #fafafa;">
+              <span style="font-weight: 500; font-size: 12px;">Eye & Touch Tracking</span>
+            </div>
+
+            <!-- Eye/Touch Visualizer -->
+            <div style="flex: 1; min-height: 0; padding: 8px;">
+              <eye-touch-visualizer style="height: 100%;" />
+            </div>
+          </div>
+
+          <!-- Performance Section -->
+          <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
+            <!-- Performance Header -->
+            <div style="flex-shrink: 0; padding: 8px; border-bottom: 1px solid #e8e8e8; background: #fafafa;">
+              <span style="font-weight: 500; font-size: 12px;">Performance Monitor</span>
+            </div>
+
+            <!-- Performance Content -->
+            <div style="flex: 1; padding: 8px; overflow: auto;">
+              <!-- Performance Table -->
+              <a-table :columns="performanceColumns" :data-source="performanceData" size="small" :pagination="false"
+                :scroll="{ y: 120 }" style="margin-bottom: 8px;" />
+
+              <!-- Quick Stats -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+                <div style="padding: 4px 8px; background: #f5f5f5; border-radius: 4px; text-align: center;">
+                  <div style="font-size: 10px; color: #666;">Overall Accuracy</div>
+                  <div style="font-size: 14px; font-weight: 500;">86.5%</div>
+                </div>
+                <div style="padding: 4px 8px; background: #f5f5f5; border-radius: 4px; text-align: center;">
+                  <div style="font-size: 10px; color: #666;">Avg RT</div>
+                  <div style="font-size: 14px; font-weight: 500;">550ms</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </a-layout-sider>
+
+      <!-- Main Content Area with Tabs -->
       <a-layout style="display: flex; flex-direction: column; height: 100%; overflow: hidden;">
         <!-- Top Bar with System Status Toggle -->
-        <div style="flex-shrink: 0; height: 32px; background: #fafafa; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; padding: 0 8px;">
+        <div
+          style="flex-shrink: 0; height: 32px; background: #fafafa; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; padding: 0 8px;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 11px; color: #666;">System:</span>
-            <a-badge 
-              :status="systemHealthStatus" 
-              :text="systemHealthText"
-              style="font-size: 11px;"
-            />
-            
+            <a-badge :status="systemHealthStatus" :text="systemHealthText" style="font-size: 11px;" />
+
             <!-- Stim Connection Status -->
             <span style="font-size: 11px; color: #666; margin-left: 8px;">Stim:</span>
-	    <a-tag
-              :color="stimConnectionColor"
-              size="small"
-              style="margin: 0; font-size: 10px;"
-            >
+            <a-tag :color="stimConnectionColor" size="small" style="margin: 0; font-size: 10px;">
               {{ stimConnectionStatus }}
             </a-tag>
-
           </div>
-          
+
           <div style="display: flex; align-items: center; gap: 4px;">
-            <a-button
-              size="small"
-              type="text"
-              :icon="h(isStatusSidebarVisible ? EyeInvisibleOutlined : EyeOutlined)"
-              @click="toggleStatusSidebar"
-              style="font-size: 11px; height: 24px; padding: 0 8px;"
-              :title="isStatusSidebarVisible ? 'Hide System Monitor' : 'Show System Monitor'"
-            >
+            <a-button size="small" type="text" :icon="h(isStatusSidebarVisible ? EyeInvisibleOutlined : EyeOutlined)"
+              @click="toggleStatusSidebar" style="font-size: 11px; height: 24px; padding: 0 8px;"
+              :title="isStatusSidebarVisible ? 'Hide System Monitor' : 'Show System Monitor'">
               {{ isStatusSidebarVisible ? 'Hide Monitor' : 'Show Monitor' }}
             </a-button>
           </div>
@@ -47,46 +80,21 @@
         <!-- Main Content with Optional Right Sidebar -->
         <div style="flex: 1; display: flex; overflow: hidden;">
           <!-- Main Content Area -->
-          <a-layout-content style="background: white; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+          <a-layout-content
+            style="background: white; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
             <!-- Tabs Area -->
             <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
               <a-tabs size="small" style="height: 100%; display: flex; flex-direction: column;" tab-position="top">
-                <a-tab-pane key="behavior" tab="Behavior" style="height: 100%; overflow: hidden;">
-                  <div style="height: 100%; display: flex; flex-direction: column; overflow: auto;">
-                    
-                    <!-- Controls for the behavior tab -->
-                    <div style="flex-shrink: 0; padding: 8px; border-bottom: 1px solid #e8e8e8; display: flex; justify-content: space-between; align-items: center;">
-                      <span style="font-weight: 500;">Eye & Touch Tracking</span>
-                    </div>
 
-                    <div style="flex: 1; display: flex; gap: 16px;">
-                      <!-- Eye/Touch Visualizer -->
-                      <div style="width: 300px; border: 1px solid #d9d9d9; padding: 8px; display: flex; flex-direction: column;">
-                        <div style="flex: 1; min-height: 400px; position: relative;">
-                          <eye-touch-visualizer style="position: absolute; inset: 0;" />
-                        </div>
-                      </div>
-
-                    </div>
-
-                    <!-- Performance Table -->
-                    <div style="margin-top: 16px; border: 1px solid #d9d9d9; padding: 8px;">
-                      <div style="font-weight: 500; margin-bottom: 8px;">Performance</div>
-                      <a-table :columns="performanceColumns" :data-source="performanceData" size="small"
-                        :pagination="false" :scroll="{ y: 100 }" />
-                    </div>
+                <a-tab-pane key="scripts" tab="Scripts" style="height: 100%; overflow: hidden;">
+                  <div style="height: 100%; overflow: hidden;">
+                    <scripts />
                   </div>
                 </a-tab-pane>
 
                 <a-tab-pane key="stim" tab="Stim" style="height: 100%; overflow: hidden;">
                   <div style="height: 100%; overflow: hidden;">
                     <stim-info />
-                  </div>
-                </a-tab-pane>
-
-                <a-tab-pane key="scripts" tab="Scripts" style="height: 100%; overflow: hidden;">
-                  <div style="height: 100%; overflow: hidden;">
-                    <scripts />
                   </div>
                 </a-tab-pane>
 
@@ -102,13 +110,11 @@
                   </div>
                 </a-tab-pane>
 
-<a-tab-pane key="console" tab="Console" style="height: 100%; overflow: hidden;">
-  <div style="height: 100%; overflow: hidden;">
-    <ess-console />
-  </div>
-</a-tab-pane>
-
-
+                <a-tab-pane key="console" tab="Console" style="height: 100%; overflow: hidden;">
+                  <div style="height: 100%; overflow: hidden;">
+                    <ess-console />
+                  </div>
+                </a-tab-pane>
               </a-tabs>
             </div>
           </a-layout-content>
@@ -117,37 +123,29 @@
           <template v-if="isStatusSidebarVisible">
             <!-- Vertical Resizer -->
             <div class="vertical-resizer" @mousedown="startVerticalResize"></div>
-            
+
             <!-- System Status Sidebar -->
-            <div 
-              :style="{ 
-                width: `${statusSidebarWidth}px`, 
-                flexShrink: 0,
-                borderLeft: '1px solid #d9d9d9',
-                background: '#fafafa',
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden'
-              }"
-            >
+            <div :style="{
+              width: `${statusSidebarWidth}px`,
+              flexShrink: 0,
+              borderLeft: '1px solid #d9d9d9',
+              background: '#fafafa',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }">
               <!-- Sidebar Header -->
-              <div style="flex-shrink: 0; height: 40px; padding: 8px; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; background: white;">
+              <div
+                style="flex-shrink: 0; height: 40px; padding: 8px; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; background: white;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <a-badge :status="systemHealthStatus" />
                   <span style="font-weight: 500; font-size: 12px;">System Monitor</span>
-            <span style="font-size: 10px; color: #999;">
-              {{ connectionUptime }} • {{ messagesPerSecond }}/s
-            </span>
-
-
+                  <span style="font-size: 10px; color: #999;">
+                    {{ connectionUptime }} • {{ messagesPerSecond }}/s
+                  </span>
                 </div>
-                <a-button
-                  size="small"
-                  type="text"
-                  :icon="h(CloseOutlined)"
-                  @click="isStatusSidebarVisible = false"
-                  style="font-size: 10px; width: 20px; height: 20px; padding: 0;"
-                />
+                <a-button size="small" type="text" :icon="h(CloseOutlined)" @click="isStatusSidebarVisible = false"
+                  style="font-size: 10px; width: 20px; height: 20px; padding: 0;" />
               </div>
 
               <!-- System Status Content -->
@@ -226,11 +224,11 @@ function updateSystemStatus() {
 
 const systemHealthStatus = computed(() => {
   const status = systemStatusData.value
-  
+
   if (!status?.connection?.connected) {
     return 'error'
   }
-  
+
   // Check if we have any high-frequency datapoints that are stalled
   const datapoints = status?.datapoints || []
   const hasStalled = datapoints.some(dp => {
@@ -240,21 +238,21 @@ const systemHealthStatus = computed(() => {
     }
     return false
   })
-  
+
   if (hasStalled) {
     return 'warning'
   }
-  
+
   return 'success'
 })
 
 const systemHealthText = computed(() => {
   const status = systemStatusData.value
-  
+
   if (!status?.connection?.connected) {
     return 'Disconnected'
   }
-  
+
   const datapoints = status?.datapoints || []
   const hasStalled = datapoints.some(dp => {
     if (dp?.config?.priority === 'high' && dp?.config?.expectedHz > 10) {
@@ -263,24 +261,24 @@ const systemHealthText = computed(() => {
     }
     return false
   })
-  
+
   if (hasStalled) {
     return 'Data Stalled'
   }
-  
+
   return 'Healthy'
 })
 
 const connectionUptime = computed(() => {
   const status = systemStatusData.value
   const uptime = status?.connection?.uptime || 0
-  
+
   if (!uptime) return '0s'
-  
+
   const seconds = Math.floor(uptime / 1000)
   const minutes = Math.floor(seconds / 60)
   const hours = Math.floor(minutes / 60)
-  
+
   if (hours > 0) return `${hours}h ${minutes % 60}m`
   if (minutes > 0) return `${minutes}m ${seconds % 60}s`
   return `${seconds}s`
@@ -311,6 +309,30 @@ const performanceData = ref([
   { key: '1', condition: 'Easy', correct: 95, rt: 450, n: 50 },
   { key: '2', condition: 'Hard', correct: 78, rt: 650, n: 50 }
 ])
+
+// Use central state for eye windows (removed since they're only used in EyeTouchVisualizer now)
+// const eyeWindows = computed(() => dserv.state.eyeWindows)
+// const eyeWindowStatusMask = computed(() => dserv.state.eyeWindowStatusMask)
+
+// Use central state for touch windows (removed since they're only used in EyeTouchVisualizer now)
+// const touchWindows = computed(() => {
+//   if (!dserv.state.touchWindows) {
+//     // Initialize if not present
+//     dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
+//       id: i,
+//       active: false,
+//       state: 0,
+//       type: 'rectangle',
+//       center: { x: 0, y: 0 },
+//       centerRaw: { x: 400, y: 320 },
+//       size: { width: 2, height: 2 },
+//       sizeRaw: { width: 100, height: 100 }
+//     }))
+//   }
+//   return dserv.state.touchWindows
+// })
+
+// const touchWindowStatusMask = computed(() => dserv.state.touchWindowStatusMask || 0)
 
 // Terminal resizing (existing)
 function startResize(event) {
@@ -373,17 +395,17 @@ watch(isStatusSidebarVisible, (visible) => {
 })
 
 onMounted(() => {
-  console.log('MainLayout mounted with resizable SystemStatus sidebar')
-  
+  console.log('MainLayout mounted with three-column layout')
+
   // Start updating system status
   updateSystemStatus()
   setInterval(updateSystemStatus, 1000) // Update every second
-  
+
   // Listen for stim connection status
   dserv.on('datapoint:ess/rmt_connected', (data) => {
     stimConnected.value = data.data === '1' || data.data === 1
   }, 'MainLayout')
-  
+
   // Restore sidebar state from localStorage
   const savedWidth = localStorage.getItem('essgui-sidebar-width')
   if (savedWidth) {
@@ -392,7 +414,7 @@ onMounted(() => {
       statusSidebarWidth.value = width
     }
   }
-  
+
   const savedVisible = localStorage.getItem('essgui-sidebar-visible')
   if (savedVisible) {
     isStatusSidebarVisible.value = savedVisible === 'true'
@@ -424,6 +446,41 @@ onMounted(() => {
   overflow: hidden;
   background: white;
   border-top: 1px solid #d9d9d9;
+}
+
+.window-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: #333;
+  border: 1px solid #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #999;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.window-dot.active {
+  border-color: #1890ff;
+  color: #fff;
+}
+
+.window-dot.inside {
+  background: #52c41a;
+  border-color: #52c41a;
+  color: #fff;
+}
+
+.window-dot.touch-dot.active {
+  border-color: #13c2c2;
+}
+
+.window-dot.touch-dot.inside {
+  background: #13c2c2;
+  border-color: #13c2c2;
 }
 
 /* Fix tab content height */
