@@ -9,14 +9,14 @@
     <div style="flex-shrink: 0; margin-bottom: 12px; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
       <!-- Subject Selection - FIXED HEIGHT -->
       <div class="system-config subject-section" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 4px; margin-bottom: 8px; width: 100%; max-width: 100%; min-height: 40px;">
-         <a-form-item label="Subject" style="margin-bottom: 0;" class="subject-item">
+        <a-form-item label="Subject" style="margin-bottom: 0;" class="subject-item">
           <a-select
             v-model:value="dserv.state.subject"
             size="small"
             style="flex: 1; min-width: 140px;"
             :disabled="isSystemBusy"
             @change="setSubject"
-          >
+						>
             <a-select-option v-for="subject in subjects" :key="subject" :value="subject">
               {{ subject }}
             </a-select-option>
@@ -35,7 +35,7 @@
               :loading="loading.start"
               :disabled="isSystemBusy || dserv.state.status === 'Running' || !dserv.state.currentVariant"
               @click="startExperiment"
-            >
+							>
               Go
             </a-button>
             <a-button
@@ -44,15 +44,15 @@
               :loading="loading.stop"
               :disabled="isSystemBusy || dserv.state.status !== 'Running'"
               @click="stopExperiment"
-            >
+							>
               Stop
             </a-button>
             <a-button
               size="small"
               :loading="loading.reset"
-              :disabled="isSystemBusy"
+              :disabled="isSystemBusy || dserv.state.status === 'Running'"
               @click="resetExperiment"
-            >
+							>
               Reset
             </a-button>
           </a-space>
@@ -60,63 +60,61 @@
 
         <!-- Status Display - FIXED LAYOUT -->
         <div style="font-size: 12px; min-height: 72px;">
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; min-height: 20px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
             <div class="obs-indicator" :class="{ 'is-active': dserv.state.inObs }"></div>
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Status:</strong></span>
               <a-tag
                 :color="getStatusColor(dserv.state.status)"
                 style="margin: 0; min-width: 60px; text-align: center;"
-              >
+								>
                 {{ dserv.state.status }}
               </a-tag>
             </div>
           </div>
 
-          <!-- Additional status info aligned with Status line - FIXED HEIGHT -->
+          <!-- Additional status info aligned with Status line -->
           <div style="padding-left: 20px; min-height: 48px;">
             <!-- Show loading indicator when system is busy -->
-            <div
-              style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; min-height: 16px;"
-            >
-              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>ESS:</strong></span>
-              <a-tag 
-                :color="isSystemBusy ? 'orange' : 'default'" 
-                style="margin: 0; min-width: 60px; text-align: center;"
-              >
-                {{ isSystemBusy ? dserv.state.essStatus : 'Ready' }}
-              </a-tag>
-            </div>
+						<div
+							style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;"
+							>
+							<span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Obs:</strong></span>
+							<a-tag
+								:color="dserv.state.inObs ? 'red' : 'default'"
+								style="margin: 0; min-width: 60px; text-align: center; height: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; font-size: 12px;"
+								>
+								{{ dserv.state.obsCount || 'None' }}
+							</a-tag>
+						</div>
 
-            <div
-              style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; min-height: 16px;"
-            >
-              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Obs:</strong></span>
-              <a-tag
-                :color="dserv.state.inObs ? 'red' : 'default'"
-                style="margin: 0; min-width: 60px; text-align: center;"
-              >
-                {{ dserv.state.obsCount || 'None' }}
-              </a-tag>
-            </div>
 
-            <div
-              style="display: flex; align-items: center; gap: 8px; min-height: 16px;"
-            >
-              <a-tag
-                v-if="currentDatafile"
-                color="green"
-                style="margin: 0; font-family: monospace; font-size: 10px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-              >
-                {{ currentDatafile.split('/').pop().replace('.ess', '') }}
-              </a-tag>
-              <span v-else style="color: #999; font-size: 10px;">No datafile</span>
-            </div>
+						<div style="display: flex; align-items: center; gap: 4px; min-height: 16px;">
+							<span style="width: 50px; text-align: right; white-space: nowrap;"><strong>File:</strong></span>
+							<div style="flex: 1; display: flex; align-items: center; gap: 2px;">
+								<span v-if="currentDatafile" style="color: green; font-family: monospace; font-size: 10px; flex: 1; overflow: hidden; text-overflow: ellipsis;">
+									{{ currentDatafile.split('/').pop().replace('.ess', '') }}
+								</span>
+								<span v-else style="color: #999; font-size: 10px; flex: 1;">No file</span>
+								<a-button
+									size="small"
+									:icon="h(currentDatafile ? CloseOutlined : FolderOpenOutlined)"
+									:type="currentDatafile ? 'default' : 'primary'"
+									:danger="!!currentDatafile"
+									:disabled="isSystemBusy"
+									@click="currentDatafile ? closeDatafile() : openDatafile()"
+									:loading="datafileLoading"
+									style="width: 16px; height: 16px; font-size: 8px;"
+									/>
+							</div>
+						</div>
+
+
           </div>
         </div>
       </div>
 
-      <!-- System Configuration - FIXED HEIGHT -->
+      <!-- System Configuration -->
       <div class="system-config" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 6px; margin-bottom: 8px; width: 100%; max-width: 100%; min-height: 140px;">
         <div style="font-weight: 500; margin-bottom: 6px; font-size: 12px; min-height: 18px; display: flex; align-items: center;">
           System Configuration
@@ -125,7 +123,7 @@
         </div>
 
         <!-- All form items with consistent heights -->
-        <a-form-item label="System" style="margin-bottom: 4px; min-height: 32px;" class="system-config-item">
+        <a-form-item label="System" style="margin-bottom: 1px; min-height: 32px;" class="system-config-item">
           <div style="display: flex; align-items: center; gap: 4px;">
             <a-select
               v-model:value="dserv.state.currentSystem"
@@ -135,7 +133,7 @@
               :disabled="isSystemBusy"
               @change="setSystem"
               placeholder="Select system..."
-            >
+							>
               <a-select-option v-for="system in dserv.state.systems" :key="system" :value="system">
                 {{ system }}
               </a-select-option>
@@ -146,11 +144,11 @@
               :disabled="isSystemBusy"
               @click="reloadSystem"
               style="width: 24px; height: 24px;"
-            />
+							/>
           </div>
         </a-form-item>
 
-        <a-form-item label="Protocol" style="margin-bottom: 4px; min-height: 32px;" class="system-config-item">
+        <a-form-item label="Protocol" style="margin-bottom: 1px; min-height: 32px;" class="system-config-item">
           <div style="display: flex; align-items: center; gap: 4px;">
             <a-select
               :value="displayProtocolValue"
@@ -162,7 +160,7 @@
               :placeholder="getProtocolPlaceholder"
               :allow-clear="true"
               :show-search="false"
-            >
+							>
               <a-select-option v-for="protocol in availableProtocols" :key="protocol" :value="protocol">
                 {{ protocol }}
               </a-select-option>
@@ -173,7 +171,7 @@
               :disabled="isSystemBusy"
               @click="reloadProtocol"
               style="width: 24px; height: 24px;"
-            />
+							/>
           </div>
         </a-form-item>
 
@@ -189,7 +187,7 @@
               :placeholder="getVariantPlaceholder"
               :allow-clear="true"
               :show-search="false"
-            >
+							>
               <a-select-option v-for="variant in availableVariants" :key="variant" :value="variant">
                 {{ variant }}
               </a-select-option>
@@ -200,70 +198,23 @@
               :disabled="isSystemBusy"
               @click="reloadVariant"
               style="width: 24px; height: 24px;"
-            />
+							/>
           </div>
         </a-form-item>
       </div>
 
-      <!-- Datafile Management - FIXED HEIGHT -->
-      <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 6px; width: 100%; max-width: 100%; min-height: 100px;">
-        <div style="font-weight: 500; margin-bottom: 6px; font-size: 12px; min-height: 18px; display: flex; align-items: center;">
-          Datafile Management
-          <a-spin v-if="datafileLoading" size="small" style="margin-left: 8px;" />
+  <!-- Settings Management -->
+      <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 8px; margin-bottom: 8px; width: 100%; max-width: 100%; min-height: 60px;">
+        <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Settings</div>
+        <div style="display: flex; justify-content: center; padding-bottom: 4px;">
+          <a-space size="small" wrap>
+            <a-button size="small" :disabled="isSystemBusy" @click="saveSettings">Save</a-button>
+            <a-button size="small" :disabled="isSystemBusy" @click="resetSettings">Reset</a-button>
+            <a-button size="small" :disabled="isSystemBusy" @click="loadSettings">Load</a-button>
+          </a-space>
         </div>
+      </div>			
 
-        <!-- Filename input -->
-        <a-form-item
-          label="Filename"
-          style="margin-bottom: 4px; min-height: 32px;"
-          class="datafile-config-item"
-        >
-          <div style="display: flex; align-items: center; gap: 4px;">
-            <a-input
-              ref="filenameInput"
-              v-model:value="datafilename"
-              size="small"
-              style="flex: 1; min-width: 100px;"
-              :disabled="isSystemBusy || !!currentDatafile"
-              :placeholder="datafilename ? '' : (suggestedFilename ? 'use suggested file' : 'enter filename or click open')"
-              @press-enter="openDatafile"
-            />
-            <a-button
-              size="small"
-              :icon="h(BulbOutlined)"
-              :disabled="isSystemBusy || !!currentDatafile"
-              @click="refreshSuggestion"
-              :loading="suggestLoading"
-              style="width: 24px; height: 24px;"
-              title="Refresh suggestion"
-            />
-          </div>
-        </a-form-item>
-
-        <!-- Action buttons -->
-        <div style="display: flex; justify-content: center; gap: 4px; min-height: 24px;">
-          <a-button
-            type="primary"
-            size="small"
-            :disabled="isSystemBusy || !!currentDatafile"
-            @click="openDatafile"
-            :loading="datafileLoading"
-            style="width: 60px;"
-          >
-            Open
-          </a-button>
-          <a-button
-            danger
-            size="small"
-            :disabled="isSystemBusy || !currentDatafile"
-            @click="closeDatafile"
-            :loading="datafileLoading"
-            style="width: 60px;"
-          >
-            Close
-          </a-button>
-        </div>
-      </div>
     </div>
 
     <!-- SCROLLABLE SECTION - Optional/advanced controls -->
@@ -276,7 +227,7 @@
         :bordered="true"
         style="margin-bottom: 12px; width: 100%; max-width: 100%;"
         :default-active-key="['variant-options']"
-      >
+				>
         <a-collapse-panel key="variant-options" header="Variant Options">
           <template #extra>
             <div style="display: flex; align-items: center; gap: 4px;" @click.stop>
@@ -284,7 +235,7 @@
                 v-model:checked="autoReload"
                 size="small"
                 style="font-size: 9px; transform: scale(0.8);"
-              />
+								/>
               <span style="font-size: 9px;">Auto-reload</span>
               <a-button
                 size="small"
@@ -293,7 +244,7 @@
                 @click="reloadVariant"
                 style="width: 18px; height: 18px; font-size: 8px; margin-left: 4px;"
                 title="Reload variant manually"
-              />
+								/>
             </div>
           </template>
 
@@ -310,12 +261,12 @@
                   style="width: 85px; flex-shrink: 0;"
                   :disabled="isSystemBusy"
                   @change="(value) => setVariantOption(option.name, value)"
-                >
+									>
                   <a-select-option
                     v-for="choice in option.choices"
                     :key="choice.label"
                     :value="choice.value"
-                  >
+										>
                     {{ choice.label }}
                   </a-select-option>
                 </a-select>
@@ -332,7 +283,7 @@
         :bordered="true"
         style="margin-bottom: 12px; width: 100%; max-width: 100%;"
         :default-active-key="['system-parameters']"
-      >
+				>
         <a-collapse-panel key="system-parameters" header="System Parameters">
           <div style="max-height: 200px; overflow-y: auto; padding-right: 4px;">
             <div v-for="param in systemParameters" :key="param.name" style="margin-bottom: 6px;">
@@ -349,7 +300,7 @@
                   :step="param.dataType === 'float' ? 0.1 : 1"
                   :disabled="isSystemBusy"
                   @change="() => setSystemParameter(param.name, param.value)"
-                />
+									/>
                 <a-input
                   v-else
                   v-model:value="param.value"
@@ -357,44 +308,21 @@
                   style="width: 85px; flex-shrink: 0;"
                   :disabled="isSystemBusy"
                   @change="() => setSystemParameter(param.name, param.value)"
-                />
+									/>
               </div>
             </div>
           </div>
         </a-collapse-panel>
       </a-collapse>
-
-      <!-- Settings Management - Always visible at bottom -->
-      <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 8px; margin-bottom: 12px; width: 100%; max-width: 100%;">
-        <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Settings</div>
-        <div style="display: flex; justify-content: center; padding-bottom: 4px;">
-          <a-space size="small" wrap>
-            <a-button size="small" :disabled="isSystemBusy" @click="saveSettings">Save</a-button>
-            <a-button size="small" :disabled="isSystemBusy" @click="resetSettings">Reset</a-button>
-            <a-button size="small" :disabled="isSystemBusy" @click="loadSettings">Load</a-button>
-          </a-space>
-        </div>
-      </div>
-
-      <!-- Quick Performance Summary (minimal) -->
-      <div v-if="showPerformance" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 8px; width: 100%; max-width: 100%;">
-        <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Performance</div>
-        <div style="font-size: 11px;">
-          <div>{{ dserv.state.blockPctCorrect }}% Correct</div>
-          <div>{{ dserv.state.blockPctComplete }}% Complete</div>
-        </div>
-      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
-import { ReloadOutlined, BulbOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined, BulbOutlined, FolderOpenOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import { dserv } from '../services/dserv.js'
-
-// Define emits for terminal logging
-const emit = defineEmits(['status-update'])
+import { errorService } from '../services/errorService.js'
 
 // Local state
 const subjects = ['sally', 'momo', 'riker', 'glenn', 'human']
@@ -558,7 +486,7 @@ function forceLoadingRecovery() {
   operationInProgress.value.system = false
   operationInProgress.value.protocol = false
   operationInProgress.value.variant = false
-  logToTerminal('Loading timeout - recovered control', 'warning')
+  logToConsole('Loading timeout - recovered control', 'warning')
 }
 
 onMounted(() => {
@@ -600,7 +528,7 @@ onMounted(() => {
   dserv.on('datapoint:ess/lastfile', (data) => {
     console.log('Last file processed:', data.data)
     if (data.data) {
-      logToTerminal(`File processed: ${data.data}`, 'success')
+      logToConsole(`File processed: ${data.data}`, 'success')
     }
   })
 
@@ -746,15 +674,15 @@ async function refreshSuggestion() {
     const suggestion = await dserv.essCommand('ess::file_suggest')
     if (suggestion && suggestion.trim()) {
       suggestedFilename.value = suggestion.trim()
-      logToTerminal(`Filename suggested: ${suggestion}`, 'info')
+      logToConsole(`Filename suggested: ${suggestion}`, 'info')
     } else {
       suggestedFilename.value = ''
-      logToTerminal('No filename suggestion available', 'info')
+      logToConsole('No filename suggestion available', 'info')
     }
   } catch (error) {
     console.error('Failed to get filename suggestion:', error)
     suggestedFilename.value = ''
-    logToTerminal(`Failed to suggest filename: ${error.message}`, 'error')
+    logToConsole(`Failed to suggest filename: ${error.message}`, 'error')
   } finally {
     suggestLoading.value = false
   }
@@ -774,7 +702,7 @@ async function openDatafile() {
       const suggestion = await dserv.essCommand('ess::file_suggest')
       if (suggestion && suggestion.trim()) {
         filename = suggestion.trim()
-        logToTerminal(`Auto-suggested filename: ${filename}`, 'info')
+        logToConsole(`Auto-suggested filename: ${filename}`, 'info')
       }
     } catch (error) {
       console.error('Failed to auto-suggest filename:', error)
@@ -782,7 +710,7 @@ async function openDatafile() {
   }
 
   if (!filename) {
-    logToTerminal('Unable to determine filename. Please enter one manually.', 'error')
+    logToConsole('Unable to determine filename. Please enter one manually.', 'error')
     return
   }
 
@@ -793,20 +721,20 @@ async function openDatafile() {
     const result = await dserv.essCommand(`ess::file_open ${filename}`)
 
     if (result === '1' || result === 1) {
-      logToTerminal(`Datafile opened: ${filename}`, 'success')
+      logToConsole(`Datafile opened: ${filename}`, 'success')
       // Clear inputs after successful open
       datafilename.value = ''
       suggestedFilename.value = ''
     } else if (result === '0' || result === 0) {
-      logToTerminal(`File ${filename} already exists`, 'error')
+      logToConsole(`File ${filename} already exists`, 'error')
     } else if (result === '-1' || result === -1) {
-      logToTerminal('Another file is already open. Close it first.', 'error')
+      logToConsole('Another file is already open. Close it first.', 'error')
     } else {
-      logToTerminal(`Unexpected response: ${result}`, 'error')
+      logToConsole(`Unexpected response: ${result}`, 'error')
     }
   } catch (error) {
     console.error('Failed to open datafile:', error)
-    logToTerminal(`Failed to open datafile: ${error.message}`, 'error')
+    logToConsole(`Failed to open datafile: ${error.message}`, 'error')
   } finally {
     datafileLoading.value = false
   }
@@ -814,7 +742,7 @@ async function openDatafile() {
 
 async function closeDatafile() {
   if (!currentDatafile.value) {
-    logToTerminal('No datafile is currently open', 'error')
+    logToConsole('No datafile is currently open', 'error')
     return
   }
 
@@ -825,15 +753,15 @@ async function closeDatafile() {
     const result = await dserv.essCommand('ess::file_close')
 
     if (result === '1' || result === 1) {
-      logToTerminal('Datafile closed successfully', 'success')
+      logToConsole('Datafile closed successfully', 'success')
       // Clear any lingering inputs after close
       datafilename.value = ''
     } else {
-      logToTerminal('No datafile was open', 'info')
+      logToConsole('No datafile was open', 'info')
     }
   } catch (error) {
     console.error('Failed to close datafile:', error)
-    logToTerminal(`Failed to close datafile: ${error.message}`, 'error')
+    logToConsole(`Failed to close datafile: ${error.message}`, 'error')
   } finally {
     datafileLoading.value = false
   }
@@ -851,7 +779,7 @@ async function setVariantOption(optionName, value) {
         await dserv.essCommand('ess::reload_variant');
       } catch (reloadError) {
         console.error('Failed to auto-reload variant:', reloadError);
-        logToTerminal(`Auto-reload failed: ${reloadError.message}`, 'error');
+        logToConsole(`Auto-reload failed: ${reloadError.message}`, 'error');
 
         try {
           await dserv.essCommand('dservSet ess/status stopped');
@@ -863,7 +791,7 @@ async function setVariantOption(optionName, value) {
     }
   } catch (error) {
     console.error('Failed to set variant option:', error);
-    logToTerminal(`Failed to set variant option: ${error.message}`, 'error');
+    logToConsole(`Failed to set variant option: ${error.message}`, 'error');
   }
 }
 
@@ -872,19 +800,19 @@ async function setSystemParameter(paramName, value) {
   try {
     const command = `ess::set_param ${paramName} ${value}`
     await dserv.essCommand(command)
-    logToTerminal(`Parameter ${paramName} set to: ${value}`, 'success')
+    logToConsole(`Parameter ${paramName} set to: ${value}`, 'success')
   } catch (error) {
     console.error('Failed to set system parameter:', error)
-    logToTerminal(`Failed to set parameter: ${error.message}`, 'error')
+    logToConsole(`Failed to set parameter: ${error.message}`, 'error')
   }
 }
 
 // Watch for dserv connection status
 watch(() => dserv.state.connected, (connected) => {
   if (connected) {
-    logToTerminal('Connected to dserv', 'success')
+    logToConsole('Connected to dserv', 'success')
   } else {
-    logToTerminal('Disconnected from dserv', 'error')
+    logToConsole('Disconnected from dserv', 'error')
   }
 })
 
@@ -903,7 +831,7 @@ watch(isSystemBusy, (isBusy, wasBusy) => {
 // FIXED: Enhanced status change watcher
 watch(() => dserv.state.essStatus, (newStatus, oldStatus) => {
   if (oldStatus === 'loading' && (newStatus === 'stopped' || newStatus === 'running')) {
-    logToTerminal('System loading completed', 'success')
+    logToConsole('System loading completed', 'success')
     stopStatusPolling()
     ensureLoadingStatesCleared()
   }
@@ -956,9 +884,28 @@ watch(() => currentDatafile.value, (newFile, oldFile) => {
   }
 })
 
-// Helper function to emit terminal logs
-function logToTerminal(message, type = 'normal') {
-  emit('status-update', { message, type })
+// In ExperimentControl.vue, replace the logToTerminal function:
+function logToConsole(message, type = 'normal') {
+  try {
+    // Map your existing types to log levels
+    const levelMap = {
+      'success': 'info',
+      'error': 'error', 
+      'warning': 'warning',
+      'info': 'info',
+      'normal': 'info'
+    }
+    
+    const level = levelMap[type] || 'info'
+    
+    // Add directly to the error service logs (simulates a frontend log entry)
+    errorService.addFrontendLog(level, message, 'frontend')
+    
+  } catch (error) {
+    console.warn('Failed to log to terminal:', error)
+    // Fallback to console if error service fails
+    console.log(`[${type}] ${message}`)
+  }
 }
 
 // Load initial data from dserv
@@ -972,10 +919,10 @@ watch(() => dserv.state.subject, async (newSubject) => {
 async function setSubject(subject) {
   try {
     await dserv.setSubject(subject)
-    logToTerminal(`Subject set to: ${subject}`, 'success')
+    logToConsole(`Subject set to: ${subject}`, 'success')
   } catch (error) {
     console.error('Failed to set subject:', error)
-    logToTerminal(`Failed to set subject: ${error.message}`, 'error')
+    logToConsole(`Failed to set subject: ${error.message}`, 'error')
   }
 }
 
@@ -993,11 +940,11 @@ async function setSystem(system) {
   
   try {
     await dserv.setSystem(system)
-    logToTerminal(`System loaded: ${system}`, 'success')
+    logToConsole(`System loaded: ${system}`, 'success')
     // Don't clear loading states here - let the watchers handle it when state actually changes
   } catch (error) {
     console.error('Failed to set system:', error)
-    logToTerminal(`Failed to load system: ${error.message}`, 'error')
+    logToConsole(`Failed to load system: ${error.message}`, 'error')
     // Force recovery on error
     operationInProgress.value.system = false
     operationInProgress.value.protocol = false
@@ -1018,11 +965,11 @@ async function setProtocol(protocol) {
   
   try {
     await dserv.setProtocol(protocol)
-    logToTerminal(`Protocol loaded: ${protocol}`, 'success')
+    logToConsole(`Protocol loaded: ${protocol}`, 'success')
     // Don't clear loading states here - let the watchers handle it
   } catch (error) {
     console.error('Failed to set protocol:', error)
-    logToTerminal(`Failed to load protocol: ${error.message}`, 'error')
+    logToConsole(`Failed to load protocol: ${error.message}`, 'error')
     // Force recovery on error
     operationInProgress.value.protocol = false
     operationInProgress.value.variant = false
@@ -1038,11 +985,11 @@ async function setVariant(variant) {
   
   try {
     await dserv.setVariant(variant)
-    logToTerminal(`Variant loaded: ${variant}`, 'success')
+    logToConsole(`Variant loaded: ${variant}`, 'success')
     // Don't clear loading state here - let the watcher handle it
   } catch (error) {
     console.error('Failed to set variant:', error)
-    logToTerminal(`Failed to load variant: ${error.message}`, 'error')
+    logToConsole(`Failed to load variant: ${error.message}`, 'error')
     // Force recovery on error
     operationInProgress.value.variant = false
     ensureLoadingStatesCleared()
@@ -1055,10 +1002,10 @@ async function startExperiment() {
   loading.value.start = true
   try {
     await dserv.startExperiment()
-    logToTerminal('Experiment started', 'success')
+    logToConsole('Experiment started', 'success')
   } catch (error) {
     console.error('Failed to start experiment:', error)
-    logToTerminal(`Failed to start: ${error.message}`, 'error')
+    logToConsole(`Failed to start: ${error.message}`, 'error')
   } finally {
     loading.value.start = false
   }
@@ -1068,10 +1015,10 @@ async function stopExperiment() {
   loading.value.stop = true
   try {
     await dserv.stopExperiment()
-    logToTerminal('Experiment stopped', 'success')
+    logToConsole('Experiment stopped', 'success')
   } catch (error) {
     console.error('Failed to stop experiment:', error)
-    logToTerminal(`Failed to stop: ${error.message}`, 'error')
+    logToConsole(`Failed to stop: ${error.message}`, 'error')
   } finally {
     loading.value.stop = false
   }
@@ -1085,10 +1032,10 @@ async function resetExperiment() {
     // Clear observation count after reset
     dserv.state.obsCount = ' '
 
-    logToTerminal('Experiment reset', 'success')
+    logToConsole('Experiment reset', 'success')
   } catch (error) {
     console.error('Failed to reset experiment:', error)
-    logToTerminal(`Failed to reset: ${error.message}`, 'error')
+    logToConsole(`Failed to reset: ${error.message}`, 'error')
   } finally {
     loading.value.reset = false
   }
@@ -1097,60 +1044,60 @@ async function resetExperiment() {
 async function reloadSystem() {
   try {
     await dserv.essCommand('ess::reload_system')
-    logToTerminal('System reloaded', 'success')
+    logToConsole('System reloaded', 'success')
   } catch (error) {
     console.error('Failed to reload system:', error)
-    logToTerminal(`Failed to reload system: ${error.message}`, 'error')
+    logToConsole(`Failed to reload system: ${error.message}`, 'error')
   }
 }
 
 async function reloadProtocol() {
   try {
     await dserv.essCommand('ess::reload_protocol')
-    logToTerminal('Protocol reloaded', 'success')
+    logToConsole('Protocol reloaded', 'success')
   } catch (error) {
     console.error('Failed to reload protocol:', error)
-    logToTerminal(`Failed to reload protocol: ${error.message}`, 'error')
+    logToConsole(`Failed to reload protocol: ${error.message}`, 'error')
   }
 }
 
 async function reloadVariant() {
   try {
     await dserv.essCommand('ess::reload_variant')
-    logToTerminal('Variant reloaded', 'success')
+    logToConsole('Variant reloaded', 'success')
   } catch (error) {
     console.error('Failed to reload variant:', error)
-    logToTerminal(`Failed to reload variant: ${error.message}`, 'error')
+    logToConsole(`Failed to reload variant: ${error.message}`, 'error')
   }
 }
 
 async function saveSettings() {
   try {
     await dserv.essCommand('ess::save_settings')
-    logToTerminal('Settings saved', 'success')
+    logToConsole('Settings saved', 'success')
   } catch (error) {
     console.error('Failed to save settings:', error)
-    logToTerminal(`Failed to save settings: ${error.message}`, 'error')
+    logToConsole(`Failed to save settings: ${error.message}`, 'error')
   }
 }
 
 async function resetSettings() {
   try {
     await dserv.essCommand('ess::reset_settings')
-    logToTerminal('Settings reset to defaults', 'success')
+    logToConsole('Settings reset to defaults', 'success')
   } catch (error) {
     console.error('Failed to reset settings:', error)
-    logToTerminal(`Failed to reset settings: ${error.message}`, 'error')
+    logToConsole(`Failed to reset settings: ${error.message}`, 'error')
   }
 }
 
 async function loadSettings() {
   try {
     await dserv.essCommand('ess::load_settings')
-    logToTerminal('Settings loaded', 'success')
+    logToConsole('Settings loaded', 'success')
   } catch (error) {
     console.error('Failed to load settings:', error)
-    logToTerminal(`Failed to load settings: ${error.message}`, 'error')
+    logToConsole(`Failed to load settings: ${error.message}`, 'error')
   }
 }
 
@@ -1167,7 +1114,7 @@ function getStatusColor(status) {
 <style scoped>
 /* Enhanced styles for fixed layout */
 :deep(.ant-form-item) {
-  margin-bottom: 4px;
+  margin-bottom: 1px;
 }
 
 :deep(label[title="Subject"]) {
