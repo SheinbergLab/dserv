@@ -1,13 +1,11 @@
 <template>
-  <div class="event-tracker">
-    <!-- Header with controls -->
+  <div class="event-tracker-container">
+    <!-- Header Section -->
     <div class="event-header">
       <a-row :gutter="12" align="middle">
         <a-col :span="4">
-          <a-statistic
-            :title="viewingObsIndex === -1 ? 'Current Obs' : 'Viewing Obs'"
-            :value="viewingObsIndex === -1 ? (obsInfo.obsCount >= 0 ? obsInfo.obsCount : 'None') : allObservations[viewingObsIndex]?.obsNumber ?? 'N/A'"
-          />
+          <a-statistic :title="viewingObsIndex === -1 ? 'Current Obs' : 'Viewing Obs'"
+            :value="viewingObsIndex === -1 ? (obsInfo.obsCount >= 0 ? obsInfo.obsCount : 'None') : allObservations[viewingObsIndex]?.obsNumber ?? 'N/A'" />
         </a-col>
         <a-col :span="4">
           <a-statistic title="Events" :value="currentObsEventCount" />
@@ -17,30 +15,19 @@
         </a-col>
         <a-col :span="6">
           <!-- Observation navigation -->
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 12px;">View:</span>
+          <div class="obs-navigation">
+            <span class="nav-label">View:</span>
             <a-button-group size="small">
-              <a-button
-                @click="previousObservation"
-                :disabled="!canNavigateBack"
-                :icon="h(LeftOutlined)"
-              />
-              <a-button
-                @click="nextObservation"
-                :disabled="!canNavigateForward"
-                :icon="h(RightOutlined)"
-              />
+              <a-button @click="previousObservation" :disabled="!canNavigateBack" :icon="h(LeftOutlined)" />
+              <a-button @click="nextObservation" :disabled="!canNavigateForward" :icon="h(RightOutlined)" />
             </a-button-group>
-            <span
-              style="font-size: 12px; font-weight: 500;"
-              :style="{ color: viewingObsIndex === -1 ? '#52c41a' : '#1890ff' }"
-            >
+            <span class="view-status" :class="{ 'live': viewingObsIndex === -1 }">
               {{ viewingObsText }}
             </span>
           </div>
         </a-col>
         <a-col :span="6" style="text-align: right;">
-          <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+          <div class="header-actions">
             <a-space size="small">
               <a-button size="small" @click="clearEvents" :icon="h(ClearOutlined)">
                 Clear
@@ -49,14 +36,8 @@
                 Export
               </a-button>
             </a-space>
-            <a-button
-              v-if="viewingObsIndex !== -1"
-              size="small"
-              @click="jumpToLive"
-              type="primary"
-              :icon="h(FastForwardOutlined)"
-              style="width: 80px;"
-            >
+            <a-button v-if="viewingObsIndex !== -1" size="small" @click="jumpToLive" type="primary"
+              :icon="h(FastForwardOutlined)" class="live-button">
               Live
             </a-button>
           </div>
@@ -64,82 +45,64 @@
       </a-row>
     </div>
 
-    <!-- Event table -->
-    <div class="table-container">
-      <a-table
-        ref="eventTable"
-        :columns="columns"
-        :data-source="displayedEvents"
-        :pagination="false"
-        :scroll="{ y: 'calc(100vh - 300px)', x: 800 }"
-        size="small"
-        :row-class-name="getRowClassName"
-        :loading="loading"
-      >
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'timestamp'">
-            <span class="timestamp-cell">{{ formatTimestamp(record.timestamp) }}</span>
+    <!-- Table Section -->
+    <div class="table-section">
+      <div class="table-container">
+        <a-table ref="eventTable" :columns="columns" :data-source="displayedEvents" :pagination="false"
+          :scroll="{ y: true, x: 800 }" size="small" :row-class-name="getRowClassName" :loading="loading"
+          class="event-table">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'timestamp'">
+              <span class="timestamp-cell">{{ formatTimestamp(record.timestamp) }}</span>
+            </template>
+            <template v-else-if="column.key === 'elapsedTime'">
+              <span class="elapsed-time-cell">{{ record.elapsedTime }}</span>
+            </template>
+            <template v-else-if="column.key === 'type'">
+              <a-tag :color="getTypeColor(record.type)">
+                {{ record.type }}
+              </a-tag>
+            </template>
+            <template v-else-if="column.key === 'typeName'">
+              <span class="type-name">{{ getEventTypeName(record.type) }}</span>
+            </template>
+            <template v-else-if="column.key === 'subtype'">
+              <a-tag size="small" :color="getSubtypeColor(record.type, record.subtype)">
+                {{ record.subtype }}
+              </a-tag>
+            </template>
+            <template v-else-if="column.key === 'subtypeName'">
+              <span class="subtype-name">{{ getEventSubtypeName(record.type, record.subtype) }}</span>
+            </template>
+            <template v-else-if="column.key === 'params'">
+              <span class="params-cell" :title="record.decodedParams">
+                {{ record.decodedParams }}
+              </span>
+            </template>
           </template>
-          <template v-else-if="column.key === 'elapsedTime'">
-            <span class="elapsed-time-cell">{{ record.elapsedTime }}</span>
-          </template>
-          <template v-else-if="column.key === 'type'">
-            <a-tag :color="getTypeColor(record.type)">
-              {{ record.type }}
-            </a-tag>
-          </template>
-          <template v-else-if="column.key === 'typeName'">
-            <span class="type-name">{{ getEventTypeName(record.type) }}</span>
-          </template>
-          <template v-else-if="column.key === 'subtype'">
-            <a-tag size="small" :color="getSubtypeColor(record.type, record.subtype)">
-              {{ record.subtype }}
-            </a-tag>
-          </template>
-          <template v-else-if="column.key === 'subtypeName'">
-            <span class="subtype-name">{{ getEventSubtypeName(record.type, record.subtype) }}</span>
-          </template>
-          <template v-else-if="column.key === 'params'">
-            <span class="params-cell" :title="record.decodedParams">
-              {{ record.decodedParams }}
-            </span>
-          </template>
-        </template>
-      </a-table>
+        </a-table>
+      </div>
     </div>
 
-    <!-- Status bar -->
-    <div class="status-bar">
+    <!-- Footer Section -->
+    <div class="event-footer">
       <a-row align="middle">
         <a-col :span="12">
           <a-space size="small">
             <span>Connection:</span>
-            <a-badge
-              :status="connected ? 'processing' : 'error'"
-              :text="connected ? 'Connected' : 'Disconnected'"
-            />
-            <span v-if="lastEventTime">Last event: {{ formatLastEventTime() }}</span>
+            <a-badge :status="connected ? 'processing' : 'error'" :text="connected ? 'Connected' : 'Disconnected'" />
+            <span v-if="lastEventTime" class="last-event">
+              Last event: {{ formatLastEventTime() }}
+            </span>
           </a-space>
         </a-col>
         <a-col :span="12" style="text-align: right;">
           <a-space size="small">
             <span>Filter:</span>
-            <a-select
-              v-model:value="eventTypeFilter"
-              size="small"
-              style="width: 120px;"
-              placeholder="All types"
-              :options="typeFilterOptions"
-              allow-clear
-            />
-            <a-input
-              v-model:value="searchText"
-              size="small"
-              placeholder="Search events..."
-              style="width: 150px;"
-              :suffix="h(SearchOutlined)"
-              allow-clear
-            />
+            <a-select v-model:value="eventTypeFilter" size="small" style="width: 120px;" placeholder="All types"
+              :options="typeFilterOptions" allow-clear />
+            <a-input v-model:value="searchText" size="small" placeholder="Search events..." style="width: 150px;"
+              :suffix="h(SearchOutlined)" allow-clear />
           </a-space>
         </a-col>
       </a-row>
@@ -308,7 +271,7 @@ function handleDatapoint(data) {
     // - Not NAME events (type 1)
     // - Not SUBTYPES events (type 6)
     if (event && (obsInfo.value.obsCount >= 0 || event.type === 19 || event.type === 20) &&
-        event.type !== 7 && event.type !== 1 && event.type !== 6) {
+      event.type !== 7 && event.type !== 1 && event.type !== 6) {
 
       // Apply timestamp adjustment if in observation (already done by service, but need for display)
       if (obsInfo.value.obsCount >= 0) {
@@ -350,31 +313,25 @@ function addEvent(event) {
     }
 
     // Auto-scroll to bottom in live view
-    nextTick(() => {
-      scrollToBottom()
-    })
+    scrollToBottom()
   }
   // If viewing historical data, just ignore new events for display
   // (they're still being tracked by the service in the background)
 }
 
-// Auto-scroll throttling
-let scrollTimeout = null
-
-function scrollToBottom() {
-  // Throttle scroll operations to reduce ResizeObserver triggers
-  if (scrollTimeout) return
-
-  scrollTimeout = setTimeout(() => {
+// Auto-scroll function using unified approach
+const scrollToBottom = () => {
+  nextTick(() => {
     const table = eventTable.value
-    if (table && table.$el) {
-      const scrollBody = table.$el.querySelector('.ant-table-body')
-      if (scrollBody) {
-        scrollBody.scrollTop = scrollBody.scrollHeight
+    if (table?.querySelector) {
+      const scrollContainer = table.querySelector('.ant-table-body')
+      if (scrollContainer) {
+        requestAnimationFrame(() => {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight
+        })
       }
     }
-    scrollTimeout = null
-  }, 50) // Throttle to max 20 times per second
+  })
 }
 
 // Event service handlers
@@ -503,9 +460,7 @@ function jumpToLive() {
   viewingObsIndex.value = -1
   // Auto-scroll to bottom when returning to live view
   if (events.value.length > 0) {
-    nextTick(() => {
-      scrollToBottom()
-    })
+    scrollToBottom()
   }
 }
 
@@ -550,15 +505,6 @@ let cleanupDserv = null
 let cleanupEventService = null
 
 onMounted(() => {
-  // Suppress harmless ResizeObserver warnings
-  const originalError = window.console.error
-  window.console.error = (...args) => {
-    if (args[0] && args[0].toString().includes('ResizeObserver loop completed')) {
-      return // Suppress this specific error
-    }
-    originalError.apply(console, args)
-  }
-
   cleanupDserv = dserv.registerComponent('EventTracker')
 
   // Listen to the same datapoint stream for display filtering
@@ -602,33 +548,111 @@ defineExpose({
 </script>
 
 <style scoped>
-.event-tracker {
+/* UNIFIED EVENT TRACKER LAYOUT */
+.event-tracker-container {
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
 }
 
 .event-header {
+  flex-shrink: 0;
   padding: 12px;
   border-bottom: 1px solid #d9d9d9;
   background: #fafafa;
-  flex-shrink: 0;
+}
+
+.obs-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-label {
+  font-size: 12px;
+}
+
+.view-status {
+  font-size: 12px;
+  font-weight: 500;
+  color: #1890ff;
+}
+
+.view-status.live {
+  color: #52c41a;
+}
+
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.live-button {
+  width: 80px;
+}
+
+.table-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .table-container {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
-.status-bar {
+.event-footer {
+  flex-shrink: 0;
   padding: 8px 12px;
   border-top: 1px solid #d9d9d9;
   background: #fafafa;
   font-size: 12px;
+}
+
+.last-event {
+  font-size: 11px;
+  color: #666;
+}
+
+/* TABLE SPECIFIC STYLES */
+.event-table {
+  height: 100%;
+}
+
+/* Apply unified table layout */
+:deep(.event-table .ant-table) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.event-table .ant-table-container) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.event-table .ant-table-header) {
   flex-shrink: 0;
 }
 
+:deep(.event-table .ant-table-body) {
+  flex: 1;
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+  min-height: 0;
+}
+
+/* Cell styling */
 .timestamp-cell {
   font-family: monospace;
   font-size: 11px;
@@ -661,7 +685,7 @@ defineExpose({
   white-space: nowrap;
 }
 
-/* Row highlighting for special events - ensure they extend to fixed columns */
+/* Row highlighting for special events */
 :deep(.obs-start-row td) {
   background-color: #e6f7ff !important;
 }
@@ -687,13 +711,30 @@ defineExpose({
 }
 
 /* Table styling */
-:deep(.ant-table-small .ant-table-tbody > tr > td) {
+:deep(.event-table .ant-table-small .ant-table-tbody > tr > td) {
   padding: 4px 8px;
 }
 
-:deep(.ant-table-thead > tr > th) {
+:deep(.event-table .ant-table-thead > tr > th) {
   font-weight: 600;
   background: #fafafa;
+}
+
+/* Table wrapper styling for proper height */
+:deep(.event-table .ant-table-wrapper) {
+  height: 100% !important;
+  display: flex;
+  flex-direction: column;
+}
+
+:deep(.event-table .ant-spin-nested-loading) {
+  height: 100% !important;
+}
+
+:deep(.event-table .ant-spin-container) {
+  height: 100% !important;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Responsive adjustments */
@@ -708,7 +749,7 @@ defineExpose({
     margin-bottom: 8px;
   }
 
-  .status-bar :deep(.ant-col) {
+  .event-footer :deep(.ant-col) {
     margin-bottom: 4px;
   }
 }
