@@ -3148,97 +3148,122 @@ namespace eval ess {
     }
 
     proc variant_init {system protocol variant} {
-        variable current
-        set s [::ess::find_system $system]
-
-        # let clients know we are loading a new set of trials
-        $current(state_system) set_status loading
-
-        # get loader info for this variant and call
-        $s {*}[variant_loader_command $system $protocol $variant]
-
-        # push new stimdg to dataserver
-        $s update_stimdg
-
-        # get new variant options to dataserver and other programs
+	variable current
+	set s [::ess::find_system $system]
+	
+	# let clients know we are loading a new set of trials
+	$current(state_system) set_status loading
+	
+	# get loader info for this variant and call
+	$s {*}[variant_loader_command $system $protocol $variant]
+	
+	# push new stimdg to dataserver
+	$s update_stimdg
+	
+	# get new variant options to dataserver and other programs
 	set vli [variant_loader_info $system $protocol $variant]
-
+	
 	# share loader_arg_options in json format for js clients
 	dservSet ess/variant_info_json [variant_info_to_json $vli]
-
-	# having shared options, share whole thing to specify selected options
-        dservSet ess/variant_info $vli
 	
-        # protocol defaults for system parameters
-        set param_default_settings ${system}::${protocol}::params_defaults
-        if {[info exists $param_default_settings]} {
-            ::ess::set_params {*}[set $param_default_settings]
-        }
+	# having shared options, share whole thing to specify selected options
+	dservSet ess/variant_info $vli
+	
+	# protocol defaults for system parameters
+	set param_default_settings ${system}::${protocol}::params_defaults
+	if {[info exists $param_default_settings]} {
+	    ::ess::set_params {*}[set $param_default_settings]
+	}
+	
+	# and update system parameters for this variant
+	set vinfo [dict get [$s get_variants] $variant]
+	if {[lsearch [dict keys $vinfo] params] != -1} {
+	    set param_settings [dict get $vinfo params]
+	    ::ess::set_params {*}$param_settings
+	}
+	
+	# call a specific init function for this variant
+	set vinit_method ${variant}_init
+	if {[lsearch [info object methods $s] $vinit_method] != -1} {
+	    $s $vinit_method
+	}
+	
+	dservSet ess/param_settings [ess::get_params]
 
-        # and update system parameters for this variant
-        set vinfo [dict get [$s get_variants] $variant]
-        if {[lsearch [dict keys $vinfo] params] != -1} {
-            set param_settings [dict get $vinfo params]
-            ::ess::set_params {*}$param_settings
-        }
-
-        # call a specific init function for this variant
-        set vinit_method ${variant}_init
-        if {[lsearch [info object methods $s] $vinit_method] != -1} {
-            $s $vinit_method
-        }
-
-        dservSet ess/param_settings [ess::get_params]
-
-	# Process and publish visualization scripts
+	# Send event mappings to frontend
+	send_event_mappings
+	
+	# Send raw visualization scripts WITHOUT preprocessing
 	set s [::ess::find_system $system]
 	set raw_scripts [$s get_visualization_scripts]
 	
 	if {[dict size $raw_scripts] > 0} {
-	    ess_info "Processing [dict size $raw_scripts] visualization scripts" "visualization"
-	    set processed_scripts [dict create]
+	    ess_info "Sending [dict size $raw_scripts] raw visualization scripts" "visualization"
 	    
-	    dict for {script_id script_template} $raw_scripts {
-		try {
-		    # Substitute evt_id calls and other ESS constructs
-		    set processed_script [subst $script_template]
-		    dict set processed_scripts $script_id $processed_script
-		    ess_debug "Processed script: $script_id" "visualization"
-		} on error {err opts} {
-		    ess_error "Failed to process script $script_id: $err" "visualization"
-		    dict set processed_scripts $script_id "console.error('Script processing failed: $err');"
-		}
+	    # Convert to JSON and publish WITHOUT any Tcl processing
+	    set json_obj [yajl create #auto]
+	    $json_obj map_open
+	    dict for {k v} $raw_scripts {
+		$json_obj string $k string $v
 	    }
+	    $json_obj map_close
+	    set json_result [$json_obj get]
+	    $json_obj delete
 	    
-	    # Convert to JSON and publish
-	    if {[dict size $processed_scripts] > 0} {
-		set json_obj [yajl create #auto]
-		$json_obj map_open
-		dict for {k v} $processed_scripts {
-		    $json_obj string $k string $v
-		}
-		$json_obj map_close
-		set json_result [$json_obj get]
-		$json_obj delete
-		
-		dservSet ess/visualization_scripts $json_result
-		ess_info "Published visualization scripts" "visualization"
-	    }
+	    dservSet ess/visualization_scripts $json_result
+	    ess_info "Published raw visualization scripts" "visualization"
 	} else {
 	    dservSet ess/visualization_scripts "{}"
 	    ess_debug "No visualization scripts found" "visualization"
 	}
 	
+	::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
+	set current(variant) $variant
+	set current(open_variant) 1
 	
-        ::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
-        set current(variant) $variant
-        set current(open_variant) 1
-	
-	
-        # loading is complete, so return status to stopped
-        $current(state_system) set_status stopped
+	# loading is complete, so return status to stopped
+	$current(state_system) set_status stopped
     }
 
+    # Helper function to shared event mappings to interested listeners
+    proc send_event_mappings {} {
+	variable current
+	if {$current(state_system) == ""} {return}
+	
+	set s $current(state_system)
+	set evt_type_ids [set ${s}::_evt_type_ids]
+	set evt_subtype_ids [set ${s}::_evt_subtype_ids]
+	
+	# Create JSON mapping of event names to IDs
+	set json_obj [yajl create #auto]
+	$json_obj map_open
+	
+	# Add type mappings
+	$json_obj string "types" map_open
+	dict for {name id} $evt_type_ids {
+	    $json_obj string $name number $id
+	}
+	$json_obj map_close
+	
+	# Add subtype mappings
+	$json_obj string "subtypes" map_open
+	dict for {type_name subtypes} $evt_subtype_ids {
+	    $json_obj string $type_name map_open
+	    dict for {subtype_name subtype_id} $subtypes {
+		$json_obj string $subtype_name number $subtype_id
+	    }
+	    $json_obj map_close
+	}
+	$json_obj map_close
+	
+	$json_obj map_close
+	set result [$json_obj get]
+	$json_obj delete
+	
+	dservSet ess/event_mappings $result
+	ess_info "Sent event mappings to frontend" "visualization"
+    }
+    
     proc find_systems {} {
         variable current
         set systems {}
