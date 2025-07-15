@@ -1,13 +1,14 @@
 <template>
   <div style="height: 100%; display: flex; flex-direction: column; padding: 8px; overflow: hidden;">
-    <!-- Clean Header - Just the title -->
+    <!-- Clean Header -->
     <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; padding: 4px 0;">
       <div style="font-weight: 500; font-size: 14px;">ESS Control</div>
     </div>
 
-    <!-- FIXED SECTION - Always visible essential controls with FIXED HEIGHTS -->
+    <!-- FIXED SECTION - Always visible essential controls -->
     <div style="flex-shrink: 0; margin-bottom: 12px; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
-      <!-- Subject Selection - FIXED HEIGHT -->
+      
+      <!-- Subject Selection -->
       <div class="system-config subject-section" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 4px; margin-bottom: 8px; width: 100%; max-width: 100%; min-height: 40px;">
         <a-form-item label="Subject" style="margin-bottom: 0;" class="subject-item">
           <a-select
@@ -16,7 +17,7 @@
             style="flex: 1; min-width: 140px;"
             :disabled="isSystemBusy"
             @change="setSubject"
-						>
+          >
             <a-select-option v-for="subject in subjects" :key="subject" :value="subject">
               {{ subject }}
             </a-select-option>
@@ -24,7 +25,7 @@
         </a-form-item>
       </div>
 
-      <!-- Control Buttons and Status Display - FIXED HEIGHT -->
+      <!-- Control Buttons and Status Display -->
       <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 8px; padding: 8px; margin-bottom: 12px; width: 100%; max-width: 100%; min-height: 120px;">
         <!-- Control Buttons -->
         <div class="control-buttons" style="margin-bottom: 8px;">
@@ -35,7 +36,7 @@
               :loading="loading.start"
               :disabled="isSystemBusy || dserv.state.status === 'Running' || !dserv.state.currentVariant"
               @click="startExperiment"
-							>
+            >
               Go
             </a-button>
             <a-button
@@ -44,7 +45,7 @@
               :loading="loading.stop"
               :disabled="isSystemBusy || dserv.state.status !== 'Running'"
               @click="stopExperiment"
-							>
+            >
               Stop
             </a-button>
             <a-button
@@ -52,13 +53,13 @@
               :loading="loading.reset"
               :disabled="isSystemBusy || dserv.state.status === 'Running'"
               @click="resetExperiment"
-							>
+            >
               Reset
             </a-button>
           </a-space>
         </div>
 
-        <!-- Status Display - FIXED LAYOUT -->
+        <!-- Status Display -->
         <div style="font-size: 12px; min-height: 72px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
             <div class="obs-indicator" :class="{ 'is-active': dserv.state.inObs }"></div>
@@ -67,49 +68,43 @@
               <a-tag
                 :color="getStatusColor(dserv.state.status)"
                 style="margin: 0; min-width: 60px; text-align: center;"
-								>
+              >
                 {{ dserv.state.status }}
               </a-tag>
             </div>
           </div>
 
-          <!-- Additional status info aligned with Status line -->
+          <!-- Additional status info -->
           <div style="padding-left: 20px; min-height: 48px;">
-            <!-- Show loading indicator when system is busy -->
-						<div
-							style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;"
-							>
-							<span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Obs:</strong></span>
-							<a-tag
-								:color="dserv.state.inObs ? 'red' : 'default'"
-								style="margin: 0; min-width: 60px; text-align: center; height: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; font-size: 12px;"
-								>
-								{{ dserv.state.obsCount || 'None' }}
-							</a-tag>
-						</div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
+              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Obs:</strong></span>
+              <a-tag
+                :color="dserv.state.inObs ? 'red' : 'default'"
+                style="margin: 0; min-width: 60px; text-align: center; height: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; font-size: 12px;"
+              >
+                {{ dserv.state.obsCount || 'None' }}
+              </a-tag>
+            </div>
 
-
-						<div style="display: flex; align-items: center; gap: 4px; min-height: 16px;">
-							<span style="width: 50px; text-align: right; white-space: nowrap;"><strong>File:</strong></span>
-							<div style="flex: 1; display: flex; align-items: center; gap: 2px;">
-								<span v-if="currentDatafile" style="color: green; font-family: monospace; font-size: 10px; flex: 1; overflow: hidden; text-overflow: ellipsis;">
-									{{ currentDatafile.split('/').pop().replace('.ess', '') }}
-								</span>
-								<span v-else style="color: #999; font-size: 10px; flex: 1;">No file</span>
-								<a-button
-									size="small"
-									:icon="h(currentDatafile ? CloseOutlined : FolderOpenOutlined)"
-									:type="currentDatafile ? 'default' : 'primary'"
-									:danger="!!currentDatafile"
-									:disabled="isSystemBusy"
-									@click="currentDatafile ? closeDatafile() : openDatafile()"
-									:loading="datafileLoading"
-									style="width: 16px; height: 16px; font-size: 8px;"
-									/>
-							</div>
-						</div>
-
-
+            <div style="display: flex; align-items: center; gap: 4px; min-height: 16px;">
+              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>File:</strong></span>
+              <div style="flex: 1; display: flex; align-items: center; gap: 2px;">
+                <span v-if="currentDatafile" style="color: green; font-family: monospace; font-size: 10px; flex: 1; overflow: hidden; text-overflow: ellipsis;">
+                  {{ currentDatafile.split('/').pop().replace('.ess', '') }}
+                </span>
+                <span v-else style="color: #999; font-size: 10px; flex: 1;">No file</span>
+                <a-button
+                  size="small"
+                  :icon="h(currentDatafile ? CloseOutlined : FolderOpenOutlined)"
+                  :type="currentDatafile ? 'default' : 'primary'"
+                  :danger="!!currentDatafile"
+                  :disabled="isSystemBusy"
+                  @click="currentDatafile ? closeDatafile() : openDatafile()"
+                  :loading="datafileLoading"
+                  style="width: 16px; height: 16px; font-size: 8px;"
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -122,7 +117,7 @@
           <span v-if="isSystemBusy" style="margin-left: 8px; font-size: 10px; color: #666;">Loading...</span>
         </div>
 
-        <!-- All form items with consistent heights -->
+        <!-- System selection -->
         <a-form-item label="System" style="margin-bottom: 1px; min-height: 32px;" class="system-config-item">
           <div style="display: flex; align-items: center; gap: 4px;">
             <a-select
@@ -133,7 +128,7 @@
               :disabled="isSystemBusy"
               @change="setSystem"
               placeholder="Select system..."
-							>
+            >
               <a-select-option v-for="system in dserv.state.systems" :key="system" :value="system">
                 {{ system }}
               </a-select-option>
@@ -144,10 +139,11 @@
               :disabled="isSystemBusy"
               @click="reloadSystem"
               style="width: 24px; height: 24px;"
-							/>
+            />
           </div>
         </a-form-item>
 
+        <!-- Protocol selection -->
         <a-form-item label="Protocol" style="margin-bottom: 1px; min-height: 32px;" class="system-config-item">
           <div style="display: flex; align-items: center; gap: 4px;">
             <a-select
@@ -160,7 +156,7 @@
               :placeholder="getProtocolPlaceholder"
               :allow-clear="true"
               :show-search="false"
-							>
+            >
               <a-select-option v-for="protocol in availableProtocols" :key="protocol" :value="protocol">
                 {{ protocol }}
               </a-select-option>
@@ -171,10 +167,11 @@
               :disabled="isSystemBusy"
               @click="reloadProtocol"
               style="width: 24px; height: 24px;"
-							/>
+            />
           </div>
         </a-form-item>
 
+        <!-- Variant selection -->
         <a-form-item label="Variant" style="margin-bottom: 0; min-height: 32px;" class="system-config-item">
           <div style="display: flex; align-items: center; gap: 4px;">
             <a-select
@@ -187,7 +184,7 @@
               :placeholder="getVariantPlaceholder"
               :allow-clear="true"
               :show-search="false"
-							>
+            >
               <a-select-option v-for="variant in availableVariants" :key="variant" :value="variant">
                 {{ variant }}
               </a-select-option>
@@ -198,12 +195,24 @@
               :disabled="isSystemBusy"
               @click="reloadVariant"
               style="width: 24px; height: 24px;"
-							/>
+            />
           </div>
         </a-form-item>
+
+        <!-- Manual Recovery Button (visible when stuck) -->
+        <div v-if="isSystemBusy && showRecoveryButton" style="margin-top: 8px; text-align: center;">
+          <a-button 
+            size="small" 
+            type="dashed" 
+            @click="forceLoadingRecovery"
+            style="font-size: 10px;"
+          >
+            Force Recovery
+          </a-button>
+        </div>
       </div>
 
-  <!-- Settings Management -->
+      <!-- Settings Management -->
       <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 8px; margin-bottom: 8px; width: 100%; max-width: 100%; min-height: 60px;">
         <div style="font-weight: 500; margin-bottom: 8px; font-size: 12px;">Settings</div>
         <div style="display: flex; justify-content: center; padding-bottom: 4px;">
@@ -213,13 +222,12 @@
             <a-button size="small" :disabled="isSystemBusy" @click="loadSettings">Load</a-button>
           </a-space>
         </div>
-      </div>			
-
+      </div>
     </div>
 
     <!-- SCROLLABLE SECTION - Optional/advanced controls -->
     <div style="flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 4px; display: flex; flex-direction: column; align-items: center;">
-
+      
       <!-- Variant Options - Collapsible -->
       <a-collapse
         v-if="variantOptions.length > 0"
@@ -227,7 +235,7 @@
         :bordered="true"
         style="margin-bottom: 12px; width: 100%; max-width: 100%;"
         :default-active-key="['variant-options']"
-				>
+      >
         <a-collapse-panel key="variant-options" header="Variant Options">
           <template #extra>
             <div style="display: flex; align-items: center; gap: 4px;" @click.stop>
@@ -235,7 +243,7 @@
                 v-model:checked="autoReload"
                 size="small"
                 style="font-size: 9px; transform: scale(0.8);"
-								/>
+              />
               <span style="font-size: 9px;">Auto-reload</span>
               <a-button
                 size="small"
@@ -244,7 +252,7 @@
                 @click="reloadVariant"
                 style="width: 18px; height: 18px; font-size: 8px; margin-left: 4px;"
                 title="Reload variant manually"
-								/>
+              />
             </div>
           </template>
 
@@ -261,12 +269,12 @@
                   style="width: 85px; flex-shrink: 0;"
                   :disabled="isSystemBusy"
                   @change="(value) => setVariantOption(option.name, value)"
-									>
+                >
                   <a-select-option
                     v-for="choice in option.choices"
                     :key="choice.label"
                     :value="choice.value"
-										>
+                  >
                     {{ choice.label }}
                   </a-select-option>
                 </a-select>
@@ -283,7 +291,7 @@
         :bordered="true"
         style="margin-bottom: 12px; width: 100%; max-width: 100%;"
         :default-active-key="['system-parameters']"
-				>
+      >
         <a-collapse-panel key="system-parameters" header="System Parameters">
           <div style="max-height: 200px; overflow-y: auto; padding-right: 4px;">
             <div v-for="param in systemParameters" :key="param.name" style="margin-bottom: 6px;">
@@ -300,7 +308,7 @@
                   :step="param.dataType === 'float' ? 0.1 : 1"
                   :disabled="isSystemBusy"
                   @change="() => setSystemParameter(param.name, param.value)"
-									/>
+                />
                 <a-input
                   v-else
                   v-model:value="param.value"
@@ -308,7 +316,7 @@
                   style="width: 85px; flex-shrink: 0;"
                   :disabled="isSystemBusy"
                   @change="() => setSystemParameter(param.name, param.value)"
-									/>
+                />
               </div>
             </div>
           </div>
@@ -336,7 +344,7 @@ const filenameInput = ref(null)
 
 const variantOptions = ref([])
 const systemParameters = ref([])
-const autoReload = ref(true) // Default to auto-reload enabled
+const autoReload = ref(true)
 
 const loading = ref({
   start: false,
@@ -354,28 +362,26 @@ const operationInProgress = ref({
   variant: false
 })
 
-// Polling mechanism to ensure we recover from stuck loading states
+// Polling mechanism and recovery
 const statusPollTimer = ref(null)
 const loadingStartTime = ref(null)
+const showRecoveryButton = ref(false)
 
-// FIXED: Better system busy detection - check both local and global states
+// FIXED: Better system busy detection
 const isSystemBusy = computed(() => {
   const localLoading = loading.value.system || loading.value.protocol || loading.value.variant
   const globalLoading = dserv.state.essStatus === 'loading'
   return localLoading || globalLoading
 })
 
-// FIXED: Protocol-specific loading check
 const isProtocolLoading = computed(() => {
   return loading.value.system || loading.value.protocol || dserv.state.essStatus === 'loading'
 })
 
-// FIXED: Variant-specific loading check  
 const isVariantLoading = computed(() => {
   return loading.value.system || loading.value.protocol || loading.value.variant || dserv.state.essStatus === 'loading'
 })
 
-// FIXED: Display values should be null during loading for immediate clearing
 const displayProtocolValue = computed(() => {
   if (isProtocolLoading.value) {
     return null
@@ -390,22 +396,20 @@ const displayVariantValue = computed(() => {
   return dserv.state.currentVariant || null
 })
 
-// FIXED: Clear options during loading for immediate UI feedback
 const availableProtocols = computed(() => {
   if (isProtocolLoading.value) {
-    return [] // Clear options during any relevant loading
+    return []
   }
   return dserv.state.protocols
 })
 
 const availableVariants = computed(() => {
   if (isVariantLoading.value) {
-    return [] // Clear options during any relevant loading
+    return []
   }
   return dserv.state.variants
 })
 
-// FIXED: Updated placeholders with better loading messages
 const getProtocolPlaceholder = computed(() => {
   if (isProtocolLoading.value) {
     return "Loading protocols..."
@@ -426,34 +430,67 @@ const getVariantPlaceholder = computed(() => {
   return "Select variant..."
 })
 
-const showPerformance = computed(() => {
-  return dserv.state.blockPctComplete > 0 || dserv.state.blockPctCorrect > 0
-})
-
-// Polling function to check status and recover from stuck states
+// ENHANCED POLLING: Check backend status directly
 function startStatusPolling() {
   if (statusPollTimer.value) {
     clearInterval(statusPollTimer.value)
   }
   
   loadingStartTime.value = Date.now()
+  let missedStatusChecks = 0
+  const maxMissedChecks = 3
+  showRecoveryButton.value = false
   
-  statusPollTimer.value = setInterval(() => {
-    // Check if we've been loading too long (30 seconds timeout)
+  statusPollTimer.value = setInterval(async () => {
     const elapsed = Date.now() - loadingStartTime.value
-    if (elapsed > 30000) {
-      console.warn('Loading timeout detected, forcing recovery')
+    
+    // Show recovery button after 15 seconds
+    if (elapsed > 15000) {
+      showRecoveryButton.value = true
+    }
+    
+    // Check backend status directly via command
+    try {
+      const backendStatus = await dserv.essCommand('dservGet ess/status', 2000)
+      const isBackendBusy = backendStatus === 'loading'
+      
+      missedStatusChecks = 0
+      
+      // If backend says it's not busy but frontend thinks it is, force recovery
+      if (!isBackendBusy && (loading.value.system || loading.value.protocol || loading.value.variant)) {
+        console.warn('Backend not busy but frontend stuck - forcing recovery')
+        stopStatusPolling()
+        forceLoadingRecovery()
+        return
+      }
+      
+      // Normal completion check
+      if (!isBackendBusy && (dserv.state.essStatus === 'stopped' || dserv.state.essStatus === 'running')) {
+        stopStatusPolling()
+        ensureLoadingStatesCleared()
+        return
+      }
+      
+    } catch (error) {
+      missedStatusChecks++
+      console.warn(`Failed to check backend status (${missedStatusChecks}/${maxMissedChecks}):`, error)
+      
+      if (missedStatusChecks >= maxMissedChecks) {
+        console.warn('Lost communication with backend - assuming operation complete')
+        stopStatusPolling()
+        forceLoadingRecovery()
+        return
+      }
+    }
+    
+    // Timeout check (45 seconds for long operations)
+    if (elapsed > 45000) {
+      console.warn('Loading timeout detected after 45s, forcing recovery')
       stopStatusPolling()
       forceLoadingRecovery()
       return
     }
-    
-    // Check if loading is complete
-    if (dserv.state.essStatus === 'stopped' || dserv.state.essStatus === 'running') {
-      stopStatusPolling()
-      ensureLoadingStatesCleared()
-    }
-  }, 500)
+  }, 1000)
 }
 
 function stopStatusPolling() {
@@ -462,10 +499,10 @@ function stopStatusPolling() {
     statusPollTimer.value = null
   }
   loadingStartTime.value = null
+  showRecoveryButton.value = false
 }
 
 function ensureLoadingStatesCleared() {
-  // Only clear loading states that don't have operations in progress
   if (!operationInProgress.value.system) {
     loading.value.system = false
   }
@@ -477,22 +514,46 @@ function ensureLoadingStatesCleared() {
   }
 }
 
-function forceLoadingRecovery() {
-  console.warn('Forcing loading state recovery due to timeout')
-  // Force clear everything on timeout
+// ENHANCED RECOVERY: Sync with backend
+async function forceLoadingRecovery() {
+  console.warn('Forcing loading state recovery')
+  
+  try {
+    const actualStatus = await dserv.essCommand('dservGet ess/status', 3000)
+    console.log('Backend status during recovery:', actualStatus)
+    
+    if (actualStatus === 'loading') {
+      console.log('Backend still loading - extending timeout')
+      startStatusPolling()
+      return
+    }
+  } catch (error) {
+    console.warn('Could not verify backend status during recovery:', error)
+  }
+  
+  // Force clear everything
   loading.value.system = false
   loading.value.protocol = false
   loading.value.variant = false
   operationInProgress.value.system = false
   operationInProgress.value.protocol = false
   operationInProgress.value.variant = false
-  logToConsole('Loading timeout - recovered control', 'warning')
+  
+  logToConsole('Control recovered - check system status if needed', 'warning')
+  
+  // Refresh current state
+  try {
+    await dserv.essCommand('dservTouch ess/system')
+    await dserv.essCommand('dservTouch ess/protocol') 
+    await dserv.essCommand('dservTouch ess/variant')
+  } catch (error) {
+    console.warn('Failed to refresh state after recovery:', error)
+  }
 }
 
 onMounted(() => {
   console.log('ExperimentControl component mounted')
 
-  // Register component with subscription for variant info JSON
   const cleanup = dserv.registerComponent('ExperimentControl', {
     subscriptions: [
       { pattern: 'ess/variant_info_json', every: 1 },
@@ -502,29 +563,24 @@ onMounted(() => {
     ]
   })
 
-  // Listen for comprehensive variant info data
   dserv.on('datapoint:ess/variant_info_json', (data) => {
     console.log('Received variant_info_json:', data.data)
     parseVariantInfoJson(data.data)
   })
 
-  // Listen for system parameters data
   dserv.on('datapoint:ess/param_settings', (data) => {
     console.log('Received param_settings:', data.data)
     parseSystemParameters(data.data)
   })
 
-  // Listen for datafile status
   dserv.on('datapoint:ess/datafile', (data) => {
     console.log('Received datafile status:', data.data)
     currentDatafile.value = data.data || ''
     if (!data.data) {
-      // File was closed, clear the filename for next use
       datafilename.value = ''
     }
   })
 
-  // Listen for last file info (when file is closed and processed)
   dserv.on('datapoint:ess/lastfile', (data) => {
     console.log('Last file processed:', data.data)
     if (data.data) {
@@ -532,7 +588,6 @@ onMounted(() => {
     }
   })
 
-  // Cleanup on unmount
   onUnmounted(() => {
     cleanup()
     stopStatusPolling()
@@ -543,7 +598,6 @@ function parseVariantInfoJson(rawData) {
   try {
     console.log('Parsing variant info JSON:', rawData)
 
-    // Parse JSON data
     let variantInfo
     if (typeof rawData === 'string') {
       variantInfo = JSON.parse(rawData)
@@ -551,7 +605,6 @@ function parseVariantInfoJson(rawData) {
       variantInfo = rawData
     }
 
-    // Extract the main components
     const {
       loader_proc,
       loader_arg_names,
@@ -566,17 +619,13 @@ function parseVariantInfoJson(rawData) {
       options
     })
 
-    // Convert to our internal format for variant options
     const variantOptionsArray = []
 
-    // Use loader_arg_names to maintain proper order
     loader_arg_names.forEach((argName, index) => {
       if (options[argName]) {
-        // Find the currently selected option
         const currentValue = loader_args[index]
         let selectedValue = null
 
-        // Look through the options to find which one is selected
         const optionChoices = options[argName].map(option => {
           const isSelected = option.selected === true
           if (isSelected) {
@@ -589,7 +638,6 @@ function parseVariantInfoJson(rawData) {
           }
         })
 
-        // If no option was marked as selected, try to match by value
         if (selectedValue === null && optionChoices.length > 0) {
           const matchingChoice = optionChoices.find(choice =>
             choice.value === currentValue ||
@@ -611,7 +659,6 @@ function parseVariantInfoJson(rawData) {
     console.log('Final variant options array:', variantOptionsArray)
     variantOptions.value = variantOptionsArray
 
-    // Log the loader information for debugging
     console.log(`Loader proc: ${loader_proc}`)
     console.log(`Current args: [${loader_args.join(', ')}]`)
 
@@ -621,13 +668,11 @@ function parseVariantInfoJson(rawData) {
   }
 }
 
-// Parse system parameters from Tcl format
 function parseSystemParameters(rawData) {
   try {
     console.log('Parsing system parameters:', rawData)
 
     const params = []
-    // Split by parameter pattern: param_name {value type datatype}
     const paramMatches = rawData.match(/(\w+)\s+{([^}]+)}/g)
 
     if (paramMatches) {
@@ -637,10 +682,9 @@ function parseSystemParameters(rawData) {
 
         if (parts.length >= 3) {
           const value = parts[0]
-          const variableType = parts[1] // 1=time, 2=variable, 5=other
-          const dataType = parts[2] // int, float, ipaddr, etc.
+          const variableType = parts[1]
+          const dataType = parts[2]
 
-          // Convert value to appropriate type
           let convertedValue = value
           if (dataType === 'int') {
             convertedValue = parseInt(value, 10)
@@ -689,7 +733,6 @@ async function refreshSuggestion() {
 }
 
 async function openDatafile() {
-  // Use manual input if provided, otherwise use suggestion, otherwise auto-suggest
   let filename = datafilename.value.trim()
 
   if (!filename && suggestedFilename.value) {
@@ -697,7 +740,6 @@ async function openDatafile() {
   }
 
   if (!filename) {
-    // No manual input and no existing suggestion - try to get one
     try {
       const suggestion = await dserv.essCommand('ess::file_suggest')
       if (suggestion && suggestion.trim()) {
@@ -722,7 +764,6 @@ async function openDatafile() {
 
     if (result === '1' || result === 1) {
       logToConsole(`Datafile opened: ${filename}`, 'success')
-      // Clear inputs after successful open
       datafilename.value = ''
       suggestedFilename.value = ''
     } else if (result === '0' || result === 0) {
@@ -754,7 +795,6 @@ async function closeDatafile() {
 
     if (result === '1' || result === 1) {
       logToConsole('Datafile closed successfully', 'success')
-      // Clear any lingering inputs after close
       datafilename.value = ''
     } else {
       logToConsole('No datafile was open', 'info')
@@ -769,33 +809,32 @@ async function closeDatafile() {
 
 async function setVariantOption(optionName, value) {
   try {
-    const command = `ess::set_variant_args {${optionName} {${value}}}`;
-    console.log('Setting variant option with command:', command);
+    const command = `ess::set_variant_args {${optionName} {${value}}}`
+    console.log('Setting variant option with command:', command)
 
-    await dserv.essCommand(command);
+    await dserv.essCommand(command)
 
     if (autoReload.value) {
       try {
-        await dserv.essCommand('ess::reload_variant');
+        await dserv.essCommand('ess::reload_variant')
       } catch (reloadError) {
-        console.error('Failed to auto-reload variant:', reloadError);
-        logToConsole(`Auto-reload failed: ${reloadError.message}`, 'error');
+        console.error('Failed to auto-reload variant:', reloadError)
+        logToConsole(`Auto-reload failed: ${reloadError.message}`, 'error')
 
         try {
-          await dserv.essCommand('dservSet ess/status stopped');
-          console.log('Reset system status to stopped after reload failure');
+          await dserv.essCommand('dservSet ess/status stopped')
+          console.log('Reset system status to stopped after reload failure')
         } catch (resetError) {
-          console.error('Failed to reset system status:', resetError);
+          console.error('Failed to reset system status:', resetError)
         }
       }
     }
   } catch (error) {
-    console.error('Failed to set variant option:', error);
-    logToConsole(`Failed to set variant option: ${error.message}`, 'error');
+    console.error('Failed to set variant option:', error)
+    logToConsole(`Failed to set variant option: ${error.message}`, 'error')
   }
 }
 
-// System parameter change handler
 async function setSystemParameter(paramName, value) {
   try {
     const command = `ess::set_param ${paramName} ${value}`
@@ -807,28 +846,39 @@ async function setSystemParameter(paramName, value) {
   }
 }
 
-// Watch for dserv connection status
-watch(() => dserv.state.connected, (connected) => {
-  if (connected) {
-    logToConsole('Connected to dserv', 'success')
-  } else {
+// WATCHERS
+watch(() => dserv.state.connected, async (connected, wasConnected) => {
+  if (connected && !wasConnected) {
+    logToConsole('Reconnected to dserv', 'success')
+    
+    if (loading.value.system || loading.value.protocol || loading.value.variant) {
+      console.log('Recovering loading state after reconnection')
+      
+      try {
+        const actualStatus = await dserv.essCommand('dservGet ess/status', 3000)
+        if (actualStatus !== 'loading') {
+          console.log('Backend not loading after reconnect - clearing loading states')
+          forceLoadingRecovery()
+        }
+      } catch (error) {
+        console.warn('Could not verify backend state after reconnection')
+        setTimeout(() => forceLoadingRecovery(), 2000)
+      }
+    }
+  } else if (!connected) {
     logToConsole('Disconnected from dserv', 'error')
   }
 })
 
-// FIXED: Better watch for loading state changes
 watch(isSystemBusy, (isBusy, wasBusy) => {
   if (isBusy && !wasBusy) {
-    // Just entered loading state - start polling
     startStatusPolling()
   } else if (!isBusy && wasBusy) {
-    // Just exited loading state - stop polling and clear states
     stopStatusPolling()
     ensureLoadingStatesCleared()
   }
 })
 
-// FIXED: Enhanced status change watcher
 watch(() => dserv.state.essStatus, (newStatus, oldStatus) => {
   if (oldStatus === 'loading' && (newStatus === 'stopped' || newStatus === 'running')) {
     logToConsole('System loading completed', 'success')
@@ -837,10 +887,8 @@ watch(() => dserv.state.essStatus, (newStatus, oldStatus) => {
   }
 })
 
-// FIXED: Enhanced watchers that clear loading states AND operation tracking when backend state actually changes
 watch(() => dserv.state.currentSystem, (newVal, oldVal) => {
   if (newVal !== oldVal) {
-    // System changed, clear system operation and loading
     operationInProgress.value.system = false
     loading.value.system = false
   }
@@ -848,7 +896,6 @@ watch(() => dserv.state.currentSystem, (newVal, oldVal) => {
 
 watch(() => dserv.state.currentProtocol, (newVal, oldVal) => {
   if (newVal !== oldVal) {
-    // Protocol changed, clear protocol operation and loading
     operationInProgress.value.protocol = false
     loading.value.protocol = false
   }
@@ -856,13 +903,11 @@ watch(() => dserv.state.currentProtocol, (newVal, oldVal) => {
 
 watch(() => dserv.state.currentVariant, (newVal, oldVal) => {
   if (newVal !== oldVal) {
-    // Variant changed, clear variant operation and loading
     operationInProgress.value.variant = false
     loading.value.variant = false
   }
 })
 
-// FIXED: Also watch for when protocol/variant lists change, but only clear if no operation in progress
 watch(() => dserv.state.protocols, (newVal, oldVal) => {
   if (newVal !== oldVal && !operationInProgress.value.protocol && !operationInProgress.value.system) {
     loading.value.protocol = false
@@ -875,19 +920,15 @@ watch(() => dserv.state.variants, (newVal, oldVal) => {
   }
 })
 
-// Clear inputs when file operations complete
 watch(() => currentDatafile.value, (newFile, oldFile) => {
   if (oldFile && !newFile) {
-    // File was closed, reset to clean state
     datafilename.value = ''
     suggestedFilename.value = ''
   }
 })
 
-// In ExperimentControl.vue, replace the logToTerminal function:
 function logToConsole(message, type = 'normal') {
   try {
-    // Map your existing types to log levels
     const levelMap = {
       'success': 'info',
       'error': 'error', 
@@ -897,25 +938,21 @@ function logToConsole(message, type = 'normal') {
     }
     
     const level = levelMap[type] || 'info'
-    
-    // Add directly to the error service logs (simulates a frontend log entry)
     errorService.addFrontendLog(level, message, 'frontend')
     
   } catch (error) {
     console.warn('Failed to log to terminal:', error)
-    // Fallback to console if error service fails
     console.log(`[${type}] ${message}`)
   }
 }
 
-// Load initial data from dserv
 watch(() => dserv.state.subject, async (newSubject) => {
   if (newSubject) {
     // Future: implement subject data loading if needed
   }
 })
 
-// Methods
+// METHODS
 async function setSubject(subject) {
   try {
     await dserv.setSubject(subject)
@@ -926,57 +963,52 @@ async function setSubject(subject) {
   }
 }
 
-// FIXED: Track operations and don't clear loading states until actual state changes
+// FIXED: Reset observation indicator when loading new system
 async function setSystem(system) {
-  // Set loading states IMMEDIATELY for instant UI feedback
-  loading.value.system = true
-  loading.value.protocol = true  // Also clear protocol dropdown
-  loading.value.variant = true   // Also clear variant dropdown
+  // RESET OBS INDICATOR IMMEDIATELY
+  dserv.state.obsCount = ''
+  dserv.state.inObs = false
   
-  // Track that we're doing a system operation
+  loading.value.system = true
+  loading.value.protocol = true
+  loading.value.variant = true
+  
   operationInProgress.value.system = true
-  operationInProgress.value.protocol = true  // System change affects protocol
-  operationInProgress.value.variant = true   // System change affects variant
+  operationInProgress.value.protocol = true
+  operationInProgress.value.variant = true
   
   try {
     await dserv.setSystem(system)
     logToConsole(`System loaded: ${system}`, 'success')
-    // Don't clear loading states here - let the watchers handle it when state actually changes
   } catch (error) {
     console.error('Failed to set system:', error)
     logToConsole(`Failed to load system: ${error.message}`, 'error')
-    // Force recovery on error
     operationInProgress.value.system = false
     operationInProgress.value.protocol = false
     operationInProgress.value.variant = false
     ensureLoadingStatesCleared()
     stopStatusPolling()
   }
-  // NO finally block - let the state watchers clear the loading flags
 }
 
-// FIXED: Track protocol operations
 async function setProtocol(protocol) {
   loading.value.protocol = true
-  loading.value.variant = true // Clear variant when protocol changes
+  loading.value.variant = true
   
   operationInProgress.value.protocol = true
-  operationInProgress.value.variant = true  // Protocol change affects variant
+  operationInProgress.value.variant = true
   
   try {
     await dserv.setProtocol(protocol)
     logToConsole(`Protocol loaded: ${protocol}`, 'success')
-    // Don't clear loading states here - let the watchers handle it
   } catch (error) {
     console.error('Failed to set protocol:', error)
     logToConsole(`Failed to load protocol: ${error.message}`, 'error')
-    // Force recovery on error
     operationInProgress.value.protocol = false
     operationInProgress.value.variant = false
     ensureLoadingStatesCleared()
     stopStatusPolling()
   }
-  // NO finally block - let the state watchers clear the loading flags
 }
 
 async function setVariant(variant) {
@@ -986,16 +1018,13 @@ async function setVariant(variant) {
   try {
     await dserv.setVariant(variant)
     logToConsole(`Variant loaded: ${variant}`, 'success')
-    // Don't clear loading state here - let the watcher handle it
   } catch (error) {
     console.error('Failed to set variant:', error)
     logToConsole(`Failed to load variant: ${error.message}`, 'error')
-    // Force recovery on error
     operationInProgress.value.variant = false
     ensureLoadingStatesCleared()
     stopStatusPolling()
   }
-  // NO finally block - let the state watcher clear the loading flag
 }
 
 async function startExperiment() {
@@ -1028,10 +1057,7 @@ async function resetExperiment() {
   loading.value.reset = true
   try {
     await dserv.resetExperiment()
-
-    // Clear observation count after reset
     dserv.state.obsCount = ' '
-
     logToConsole('Experiment reset', 'success')
   } catch (error) {
     console.error('Failed to reset experiment:', error)
@@ -1104,7 +1130,7 @@ async function loadSettings() {
 function getStatusColor(status) {
   switch (status) {
     case 'Running': return 'green'
-    case 'Stopped': return 'red'
+    case 'Stopped': return 'red'  
     case 'loading': return 'orange'
     default: return 'default'
   }
@@ -1112,7 +1138,6 @@ function getStatusColor(status) {
 </script>
 
 <style scoped>
-/* Enhanced styles for fixed layout */
 :deep(.ant-form-item) {
   margin-bottom: 1px;
 }
@@ -1143,7 +1168,6 @@ function getStatusColor(status) {
   transition: all 0.3s ease;
 }
 
-/* Enhanced loading states for selects */
 :deep(.ant-select-loading .ant-select-selector) {
   background-color: #f5f5f5 !important;
   border-color: #d9d9d9 !important;
@@ -1155,13 +1179,11 @@ function getStatusColor(status) {
   border-color: #d9d9d9 !important;
 }
 
-/* Special styling for loading state placeholders */
 :deep(.ant-select-selector .ant-select-selection-placeholder) {
   color: #1890ff !important;
   font-style: italic;
 }
 
-/* When system is busy, make protocol/variant appear more "ghosted" */
 .system-config :deep(.ant-select-disabled.ant-select-loading .ant-select-selector) {
   background-color: #fafafa !important;
   opacity: 0.7;
@@ -1305,7 +1327,6 @@ function getStatusColor(status) {
   padding: 8px 12px !important;
 }
 
-/* Fixed scrollbar styles */
 div[style*="max-height: 200px"]::-webkit-scrollbar {
   width: 6px;
 }
@@ -1342,19 +1363,16 @@ div[style*="overflow-y: auto"]::-webkit-scrollbar-thumb:hover {
   background: #bfbfbf;
 }
 
-/* Prevent layout jumps with consistent sizing */
 .ant-tag {
   min-width: 60px;
   text-align: center;
   display: inline-block;
 }
 
-/* Ensure loading states are visible */
 .ant-spin {
   color: #1890ff;
 }
 
-/* Loading indicator for combo boxes */
 :deep(.ant-select-arrow .ant-select-suffix) {
   transition: all 0.3s ease;
 }
