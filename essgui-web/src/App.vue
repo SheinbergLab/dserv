@@ -7,7 +7,7 @@ import { onMounted } from 'vue'
 import MainLayout from './layouts/MainLayout.vue'
 import { dserv } from './services/dserv.js'
 import { initializeErrorTracking } from './services/errorService.js'
-import { scriptExecutionService } from './services/ScriptExecutionService.js'
+import { scriptExecutionService } from './services/scriptExecutionService.js'
 
 onMounted(async () => {
   // Initialize global error tracking

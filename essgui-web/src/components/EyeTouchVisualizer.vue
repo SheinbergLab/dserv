@@ -83,7 +83,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import { ReloadOutlined, SyncOutlined } from '@ant-design/icons-vue'
 import { h } from 'vue'
 import { dserv } from '../services/dserv.js'
-import { useScriptExecution } from '../services/ScriptExecutionService.js'
+import { useScriptExecution } from '../services/scriptExecutionService.js'
 
 // Conversion constants
 const ADC_CENTER = 2048

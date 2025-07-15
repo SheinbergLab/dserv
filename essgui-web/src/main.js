@@ -31,7 +31,7 @@ const waitForConnection = () => {
 
 // Add this to your main.js file (near the top, after imports)
 
-import { scriptExecutionService } from './services/ScriptExecutionService.js'
+import { scriptExecutionService } from './services/scriptExecutionService.js'
 
 // Make service globally accessible for debugging and console access
 window.scriptExecutionService = scriptExecutionService
