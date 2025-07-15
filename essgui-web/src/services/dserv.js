@@ -375,7 +375,12 @@ class DservWebSocket {
       case 'ess/screen_h': this.state.screenHeight = parseInt(value, 10) || 600; break;
       case 'ess/screen_halfx': this.state.screenHalfX = parseFloat(value) || 10.0; break;
       case 'ess/screen_halfy': this.state.screenHalfY = parseFloat(value) || 7.5; break;
-        
+
+    case 'ess/stiminfo':
+	this.state.stiminfo = value;
+	console.log('Updated ess/stiminfo in dserv.state:', value ? 'DATA AVAILABLE' : 'NO DATA');
+	break;	
+	
       case 'system/hostname': this.state.systemName = value; break;
       case 'system/os': this.state.systemOS = value; break;
       case 'print': console.log('ESS:', value); break;
