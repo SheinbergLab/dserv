@@ -115,6 +115,12 @@
                     <ess-console />
                   </div>
                 </a-tab-pane>
+
+<a-tab-pane key="script-test" tab="Script Test" style="height: 100%; overflow: hidden;">
+  <div style="height: 100%; overflow: hidden;">
+    <script-test-canvas />
+  </div>
+</a-tab-pane>
               </a-tabs>
             </div>
           </a-layout-content>
@@ -185,6 +191,7 @@ import EyeTouchVisualizer from '../components/EyeTouchVisualizer.vue'
 import VirtualEyeInput from '../components/VirtualEyeInput.vue'
 import SystemStatus from '../components/SystemStatus.vue'
 import EssConsole from '../components/EssConsole.vue'
+import ScriptTestCanvas from '../components/ScriptTestCanvas.vue'
 
 // Import dserv for system health monitoring
 import { useDservMonitoring, dserv } from '../services/dserv.js'

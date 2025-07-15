@@ -83,6 +83,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import { ReloadOutlined, SyncOutlined } from '@ant-design/icons-vue'
 import { h } from 'vue'
 import { dserv } from '../services/dserv.js'
+import { useScriptExecution } from '../services/ScriptExecutionService.js'
 
 // Conversion constants
 const ADC_CENTER = 2048
@@ -93,6 +94,12 @@ const eyePosition = ref({ x: 0, y: 0 })
 const eyePositionRaw = ref({ x: 2048, y: 2048 })
 const touchPosition = ref({ x: 0, y: 0 })
 const showTouchPosition = ref(false)
+
+// script execution support
+const { registerCanvas, renderCanvas } = useScriptExecution()
+
+// At the top of setup()
+console.log('EyeTouchVisualizer: useScriptExecution result:', { registerCanvas, renderCanvas })
 
 // Virtual input state
 const virtualInputEnabled = ref(false)
@@ -514,7 +521,8 @@ function stopAnimation() {
   }
 }
 
-// Enhanced render function
+// Replace the render function in EyeTouchVisualizer.vue with this fixed version:
+
 function render() {
   if (!ctx || !canvasRef.value) {
     return
@@ -564,6 +572,33 @@ function render() {
     if (virtualInputEnabled.value && virtualTouch.active) {
       drawVirtualTouch()
     }
+
+    // call renderCanvas for script elements directed to eyeTouch
+    if (renderCanvas) {
+      renderCanvas('eyeTouch')
+    }
+
+    // Check for cross-canvas test data
+    if (window.scriptExecutionService) {
+      const crossCanvasData = window.scriptExecutionService.globalScriptData.crossCanvasTest
+      if (crossCanvasData && crossCanvasData.timestamp > (window.lastCrossCanvasRender || 0)) {
+        console.log('EyeTouchVisualizer: Rendering cross-canvas test elements')
+        window.lastCrossCanvasRender = crossCanvasData.timestamp
+        
+        // Draw cross-canvas test elements
+        crossCanvasData.drawElements.forEach(element => {
+          if (element.type === 'circle') {
+            drawTestCircle(element.x, element.y, element.radius, element.color)
+          } else if (element.type === 'text') {
+            drawTestText(element.x, element.y, element.text, element.fontSize, element.color)
+          }
+        })
+        
+        // Also draw the message
+        drawTestText(-7, 7, crossCanvasData.message, 10, '#ffff00')
+      }
+    }
+     
   } catch (error) {
     console.error('Render error:', error)
     setTimeout(() => {
@@ -575,6 +610,31 @@ function render() {
       }
     }, 100)
   }
+}
+
+// Add these helper functions for test drawing
+function drawTestCircle(x, y, radius, color) {
+  const pos = degreesToCanvas(x, y)
+  ctx.save()
+  ctx.fillStyle = color
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI)
+  ctx.fill()
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawTestText(x, y, text, fontSize, color) {
+  const pos = degreesToCanvas(x, y)
+  ctx.save()
+  ctx.fillStyle = color
+  ctx.font = `${fontSize}px monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, pos.x, pos.y)
+  ctx.restore()
 }
 
 // Drawing functions (most remain the same, with additions for virtual input)
@@ -1096,6 +1156,41 @@ onMounted(() => {
 
       // Initialize virtual eye at center
       updateVirtualEyePosition(0, 0)
+
+      // FIX: Register with script execution service - make sure this happens AFTER canvas is ready
+      console.log('EyeTouchVisualizer: Registering canvas with script service')
+      console.log('Canvas context available:', !!ctx)
+      console.log('Canvas size:', canvasSize.value)
+      
+      const scriptCleanup = registerCanvas('eyeTouch', ctx, {
+        width: canvasSize.value.width,
+        height: canvasSize.value.height,
+        degreesHorizontal: visualRange.horizontal,
+        degreesVertical: visualRange.vertical,
+        type: 'eyeTracking'
+      })
+
+      // Store cleanup function properly
+      window.eyeTouchScriptCleanup = scriptCleanup
+
+    // FORCE global service availability for debugging
+    const { service } = useScriptExecution()
+    window.scriptExecutionService = service
+    console.log('ScriptTestCanvas: Forced global service availability:', !!window.scriptExecutionService)
+    
+    // Add a simple test function
+    window.quickEyeTouchTest = () => {
+      console.log('Quick eyeTouch test from ScriptTestCanvas...')
+      if (service && service.canvasRegistry.has('eyeTouch')) {
+        service.executeScript(`
+          draw.drawCircle(0, 0, 15, { fillColor: '#ff0000' });
+          draw.drawText(0, -3, 'QUICK TEST', { fontSize: 12, color: '#ffffff' });
+        `, 'quickTest', 'eyeTouch')
+        console.log('Quick test executed - check EyeTouch visualizer!')
+      } else {
+        console.error('EyeTouch canvas not available')
+      }
+    }
     }
   })
 
@@ -1104,6 +1199,7 @@ onMounted(() => {
   document.addEventListener('mouseup', handleMouseUp)
 })
 
+// Also fix the onUnmounted to clean up properly:
 onUnmounted(() => {
   // Stop animation first
   stopAnimation()
@@ -1125,7 +1221,13 @@ onUnmounted(() => {
 
   // Clean up dserv
   if (cleanupDserv) cleanupDserv()
-  
+
+  // FIX: Clean up script registration properly
+  if (window.eyeTouchScriptCleanup) {
+    window.eyeTouchScriptCleanup()
+    window.eyeTouchScriptCleanup = null
+  }
+
   // Clear canvas state
   canvasReady.value = false
   ctx = null

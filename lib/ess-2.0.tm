@@ -273,6 +273,20 @@ oo::class create System {
         dservSet ess/stiminfo [dg_toHybridJSON stimdg]
     }
 
+    method set_visualization_scripts {scripts_dict} {
+	my variable _visualization_scripts
+	set _visualization_scripts $scripts_dict
+    }
+    
+    method get_visualization_scripts {} {
+	my variable _visualization_scripts
+	if {[info exists _visualization_scripts]} {
+	    return $_visualization_scripts
+	} else {
+	    return [dict create]
+	}
+    }
+    
     method set_init_callback { cb } {
         oo::objdefine [self] method init_cb {} $cb
         set _callbacks(init) init_cb
@@ -1339,6 +1353,31 @@ namespace eval ess {
                 $type $subtype]
         }
         return "$type_id $subtype_id"
+    }
+
+    # New function specifically for JavaScript visualization scripts
+    proc evt_id_array {type {subtype {}}} {
+	variable current
+	if {[string is int $type]} {
+	    set type_id $type
+	} else {
+	    set type_id [dict get [set $current(state_system)::_evt_type_ids] $type]
+	}
+	
+	if {$subtype == {}} {
+	    # For single values, return as single-element array
+	    return "\[${type_id}\]"
+	}
+	
+	if {[string is int $subtype]} {
+	    set subtype_id $subtype
+	} else {
+	    set subtype_id [dict get [set $current(state_system)::_evt_subtype_ids] \
+				$type $subtype]
+	}
+	
+	# Return JavaScript array syntax: [type, subtype]
+	return "\[${type_id}, ${subtype_id}\]"
     }
 
     proc store_evt_names {} {
@@ -3151,11 +3190,51 @@ namespace eval ess {
 
         dservSet ess/param_settings [ess::get_params]
 
+	# Process and publish visualization scripts
+	set s [::ess::find_system $system]
+	set raw_scripts [$s get_visualization_scripts]
+	
+	if {[dict size $raw_scripts] > 0} {
+	    ess_info "Processing [dict size $raw_scripts] visualization scripts" "visualization"
+	    set processed_scripts [dict create]
+	    
+	    dict for {script_id script_template} $raw_scripts {
+		try {
+		    # Substitute evt_id calls and other ESS constructs
+		    set processed_script [subst $script_template]
+		    dict set processed_scripts $script_id $processed_script
+		    ess_debug "Processed script: $script_id" "visualization"
+		} on error {err opts} {
+		    ess_error "Failed to process script $script_id: $err" "visualization"
+		    dict set processed_scripts $script_id "console.error('Script processing failed: $err');"
+		}
+	    }
+	    
+	    # Convert to JSON and publish
+	    if {[dict size $processed_scripts] > 0} {
+		set json_obj [yajl create #auto]
+		$json_obj map_open
+		dict for {k v} $processed_scripts {
+		    $json_obj string $k string $v
+		}
+		$json_obj map_close
+		set json_result [$json_obj get]
+		$json_obj delete
+		
+		dservSet ess/visualization_scripts $json_result
+		ess_info "Published visualization scripts" "visualization"
+	    }
+	} else {
+	    dservSet ess/visualization_scripts "{}"
+	    ess_debug "No visualization scripts found" "visualization"
+	}
+	
+	
         ::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
         set current(variant) $variant
         set current(open_variant) 1
-
-
+	
+	
         # loading is complete, so return status to stopped
         $current(state_system) set_status stopped
     }
