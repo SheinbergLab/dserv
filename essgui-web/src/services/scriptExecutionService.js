@@ -69,8 +69,22 @@ class ScriptExecutionService {
     })
   }
 
-  updateTrialData(trialData) {
-    if (!trialData) return
+  updateTrialData(trialDataJson) {
+    if (!trialDataJson) return
+
+    let trialData;
+    try {
+      trialData = JSON.parse(trialDataJson);
+    } catch (error) {
+      console.error('Failed to parse trial_data JSON:', error);
+      this.scriptErrors.push({
+        scriptId: 'system',
+        canvasId: 'N/A',
+        error: `Failed to parse trial_data: ${error.message}`,
+        timestamp: Date.now()
+      });
+      return;
+    }
 
     // Route data to any script that has registered an update handler
     const key = '__trial_update_handler__'
@@ -153,6 +167,18 @@ createDrawingAPI(canvasId) {
     }
   }
 
+  // Helper to convert "r g b" (0-1) strings to "rgb(r,g,b)" (0-255)
+  const normalizeColor = (color) => {
+    if (typeof color === 'string' && color.includes(' ')) {
+      const parts = color.split(' ').map(Number);
+      if (parts.length === 3 && parts.every(p => !isNaN(p))) {
+        const [r, g, b] = parts;
+        return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+      }
+    }
+    return color; // Return as-is if not in the expected "r g b" format
+  };
+
   // Define the API object with proper references
   const api = {
     // Canvas info
@@ -210,47 +236,47 @@ createDrawingAPI(canvasId) {
     },
 
       drawCircle: (x, y, radius, options = {}) => {
-	  // REMOVED: Immediate drawing. We now only add/update the element list.
-	  // The renderCanvas loop is the single source of truth for drawing.
+      // REMOVED: Immediate drawing. We now only add/update the element list.
+      // The renderCanvas loop is the single source of truth for drawing.
 
-	  // store the element for persistent rendering
-	  const id = options.id || `circle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
-	  return api.addElement({
-	      id: id,
-	      type: 'circle',
-	      x, y, radius,
-	      ...options
-	  })
+      // store the element for persistent rendering
+      const id = options.id || `circle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      return api.addElement({
+          id: id,
+          type: 'circle',
+          x, y, radius,
+          ...options
+      })
       },
 
       drawRectangle: (x, y, width, height, options = {}) => {
-	  // REMOVED: Immediate drawing.
+      // REMOVED: Immediate drawing.
 
-	  const id = options.id || `rectangle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
-	  return api.addElement({
-	      id: id,
-	      type: 'rectangle',
-	      x, y, width, height,
-	      ...options
-	  })
+      const id = options.id || `rectangle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      return api.addElement({
+          id: id,
+          type: 'rectangle',
+          x, y, width, height,
+          ...options
+      })
       },
 
       drawText: (x, y, text, options = {}) => {
-	  // REMOVED: Immediate drawing.
+      // REMOVED: Immediate drawing.
 
-	  const id = options.id || `text_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
-	  return api.addElement({
-	      id: id,
-	      type: 'text',
-	      x, y, text,
-	      ...options
-	  })
+      const id = options.id || `text_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      return api.addElement({
+          id: id,
+          type: 'text',
+          x, y, text,
+          ...options
+      })
       },
 
       drawLine: (x1, y1, x2, y2, options = {}) => {
-	  // REMOVED: Immediate drawing.
+      // REMOVED: Immediate drawing.
 
-	  const id = options.id || `line_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      const id = options.id || `line_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
           return api.addElement({
               id: id,
               type: 'line',
@@ -261,8 +287,8 @@ createDrawingAPI(canvasId) {
 
       // Custom draw function registration
       registerDrawFunction: (func) => {
-	  canvasData.drawCallbacks.add(func)
-	  return () => canvasData.drawCallbacks.delete(func)
+      canvasData.drawCallbacks.add(func)
+      return () => canvasData.drawCallbacks.delete(func)
       }
   }
 
@@ -487,7 +513,7 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
   // Render canvas elements (called from canvas render loops)
     renderCanvas(canvasId) {
 
-	const canvasData = this.canvasRegistry.get(canvasId)
+    const canvasData = this.canvasRegistry.get(canvasId)
     if (!canvasData) return
 
     // Sort elements by zIndex
@@ -530,58 +556,71 @@ canvasData.drawCallbacks.forEach(drawFunc => {
     if (!canvasData) return
 
     const { ctx, metadata } = canvasData
-
-    // Calculate position
-    const centerX = metadata.width / 2
-    const centerY = metadata.height / 2
     const pixPerDegX = metadata.width / metadata.degreesHorizontal
-    const pixPerDegY = metadata.height / metadata.degreesVertical
-    const pos = {
-      x: centerX + (element.x * pixPerDegX),
-      y: centerY - (element.y * pixPerDegY) // Y inverted
-    }
+
+    // Helper to convert "r g b" (0-1) strings to "rgb(r,g,b)" (0-255)
+    const normalizeColor = (color) => {
+        if (typeof color === 'string' && color.includes(' ')) {
+            const parts = color.split(' ').map(Number);
+            if (parts.length === 3 && parts.every(p => !isNaN(p))) {
+                const [r, g, b] = parts;
+                return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+            }
+        }
+        return color; // Return as-is if not in the expected "r g b" format
+    };
+
+    const p = this.createDrawingAPI(canvasId).degreesToPixels(element.x, element.y)
 
     ctx.save()
     ctx.globalAlpha = element.opacity || 1
 
+    // Apply styles
+    if (element.fillColor) {
+      ctx.fillStyle = normalizeColor(element.fillColor)
+    }
+    if (element.strokeColor) {
+      ctx.strokeStyle = normalizeColor(element.strokeColor)
+      ctx.lineWidth = element.lineWidth || 1
+    }
+
     switch (element.type) {
-      case 'circle':
-        ctx.fillStyle = element.fillColor || element.color || '#ffffff'
-        ctx.strokeStyle = element.strokeColor || '#000000'
-        ctx.lineWidth = element.lineWidth || 1
-
+      case 'circle': {
+        const radius = (element.radius ?? 0.5) * pixPerDegX
         ctx.beginPath()
-        ctx.arc(pos.x, pos.y, element.radius || 5, 0, 2 * Math.PI)
-        if (element.fillColor || element.color) ctx.fill()
-        if (element.lineWidth > 0) ctx.stroke()
+        ctx.arc(p.x, p.y, radius, 0, 2 * Math.PI)
+        if (element.fillColor) ctx.fill()
+        if (element.strokeColor) ctx.stroke()
         break
-
-      case 'rectangle': {
-	ctx.fillStyle = element.fillColor || element.color || '#ffffff'
-	ctx.strokeStyle = element.strokeColor || '#000000'
-	ctx.lineWidth = element.lineWidth || 1
-
-	// Convert element width/height from degrees to pixels
-	const widthPx = (element.width || 10) * pixPerDegX
-	const heightPx = (element.height || 10) * pixPerDegY
-
-	const rectX = pos.x - widthPx / 2
-	const rectY = pos.y - heightPx / 2
-
-	// Use pixel values
-	if (element.fillColor || element.color) ctx.fillRect(rectX, rectY, widthPx, heightPx)
-	if (element.lineWidth > 0) ctx.strokeRect(rectX, rectY, widthPx, heightPx)
-	break
       }
 
-      case 'text':
-        ctx.fillStyle = element.color || '#ffffff'
-        ctx.font = `${element.fontSize || 12}px ${element.fontFamily || 'monospace'}`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
+      case 'rectangle': {
+        // Convert element width/height from degrees to pixels
+        const w = element.width * pixPerDegX
+        const h = element.height * pixPerDegX
 
-        ctx.fillText(element.text || '', pos.x, pos.y)
+        // Translate and rotate around the center of the rectangle
+        ctx.translate(p.x, p.y);
+        ctx.rotate((element.rotation || 0) * Math.PI / 180);
+        
+        if (element.fillColor) {
+          ctx.fillRect(-w / 2, -h / 2, w, h);
+        }
+        if (element.strokeColor) {
+          ctx.strokeRect(-w / 2, -h / 2, w, h);
+        }
+        break;
+      }
+
+      case 'text': {
+        ctx.font = `${element.fontSize || 12}px ${element.fontFamily || 'sans-serif'}`
+        ctx.textAlign = element.textAlign || 'center'
+        ctx.textBaseline = element.textBaseline || 'middle'
+        if (element.fillColor) {
+          ctx.fillText(element.text, p.x, p.y)
+        }
         break
+      }
     }
 
     ctx.restore()
