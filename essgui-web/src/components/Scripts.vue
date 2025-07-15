@@ -626,15 +626,30 @@ function switchScriptWithValidation(scriptName) {
   }
 }
 
+// Replace the existing switchScript function with this:
+
 function switchScript(scriptName) {
   activeScript.value = scriptName
   const newContent = scripts.value[scriptName]?.content || ''
 
   if (editorView) {
-    updateEditorContent(newContent)
+    // Always recreate the editor when switching scripts to ensure clean history
+    editorView.destroy()
+    createEditorWithContent(newContent)
 
-    // Reset undo/redo state for new script
+    // Set the unchanged state properly for the new script
     nextTick(() => {
+      if (scripts.value[scriptName] && editorView) {
+        const histState = editorView.state.field(historyField, false)
+        if (histState) {
+          // For script switching, we want a clean slate
+          scripts.value[scriptName].unchangedHistoryDepth = 0
+          
+          // Only mark as modified if the script was actually modified before
+          // (this preserves the modified state when switching between tabs)
+          console.log(`switchScript: Set ${scriptName} unchangedDepth=0, preserving modified=${scripts.value[scriptName].modified}`)
+        }
+      }
       updateUndoRedoState()
     })
   }
@@ -676,8 +691,13 @@ async function switchBranch(branchName) {
   }
 }
 
-// UPDATED: CodeMirror editor creation with undo/redo support
 function createEditor() {
+   createEditorWithContent(currentScript.value.content)
+}
+
+// Add this function right after the createEditor() function in your Scripts.vue
+
+function createEditorWithContent(initialContent = '') {
   if (!editorContainer.value) return
 
   const saveCommand = {
@@ -714,7 +734,6 @@ function createEditor() {
     }
   }
 
-  // NEW: Undo/Redo commands
   const undoCommand = {
     key: 'Ctrl-z',
     run: (view) => {
@@ -780,16 +799,16 @@ function createEditor() {
     ...searchKeybindings,
     saveCommand,
     validateCommand,
-    undoCommand,      // NEW
-    redoCommand,      // NEW
-    redoAltCommand    // NEW
+    undoCommand,
+    redoCommand,
+    redoAltCommand
   ]
 
   const state = EditorState.create({
-    doc: currentScript.value.content,
+    doc: initialContent,
     extensions: [
       basicSetup,
-      history(),  // NEW: Enable history tracking
+      history(),  // Fresh history
       StreamLanguage.define(tcl),
       oneDark,
       lineNumbers(),
@@ -807,7 +826,7 @@ function createEditor() {
           updateUndoRedoState()
         }
 
-        // Rest of your existing update listener code for auto-indent...
+        // Auto-indent logic (same as in createEditor)
         if (update.docChanged) {
           try {
             let foundNewline = false
@@ -900,7 +919,7 @@ function createEditor() {
     parent: editorContainer.value
   })
 
-  // NEW: Initialize undo/redo state after editor creation
+  // Initialize undo/redo state after editor creation
   nextTick(() => {
     updateUndoRedoState()
   })
@@ -913,36 +932,44 @@ function updateEditorContent(content, clearHistory = false) {
   if (currentContent !== content) {
     isUpdatingContent.value = true
 
-    editorView.dispatch({
-      changes: {
-        from: 0,
-        to: editorView.state.doc.length,
-        insert: content
-      }
-    })
+    if (clearHistory) {
+      // For fresh content from backend, destroy and recreate the editor
+      const parent = editorView.dom.parentNode
+      editorView.destroy()
+      
+      // Recreate with fresh content and history
+      createEditorWithContent(content)
+    } else {
+      // For user edits, just update the content
+      editorView.dispatch({
+        changes: {
+          from: 0,
+          to: editorView.state.doc.length,
+          insert: content
+        }
+      })
+    }
 
     nextTick(() => {
       isUpdatingContent.value = false
 
-      // Set the unchanged history depth to match the current depth after loading
+      // Set the unchanged history depth and modified state
       if (scripts.value[activeScript.value] && editorView) {
         const histState = editorView.state.field(historyField, false)
         if (histState) {
-          let currentDepth = histState.done.length
+          const currentDepth = histState.done.length
 
-          // If we need to clear history (new script from backend), reset everything
           if (clearHistory) {
-            // Clear the history by recreating the history extension
-            editorView.dispatch({
-              effects: StateEffect.reconfigure.of([
-                history() // Fresh history with no past
-              ])
-            })
-            currentDepth = 0
+            // Fresh content from backend - this is the clean baseline
+            scripts.value[activeScript.value].unchangedHistoryDepth = 0
+            scripts.value[activeScript.value].modified = false
+            console.log(`updateEditorContent: Cleared history for ${activeScript.value}, unchangedDepth=0, modified=false`)
+          } else {
+            // User edit - maintain existing unchanged depth
+            scripts.value[activeScript.value].unchangedHistoryDepth = currentDepth
+            scripts.value[activeScript.value].modified = false
+            console.log(`updateEditorContent: Set ${activeScript.value} unchangedDepth=${currentDepth}, modified=false`)
           }
-
-          scripts.value[activeScript.value].unchangedHistoryDepth = currentDepth
-          scripts.value[activeScript.value].modified = false
         }
       }
 
