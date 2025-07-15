@@ -4,70 +4,129 @@ import { dserv } from './dserv.js'
 import { eventService } from './eventService.js'
 
 class ScriptExecutionService {
-  constructor() {
-    this.activeScripts = reactive(new Map())
-    this.scriptContexts = new Map()
-    this.canvasRegistry = new Map() // Track multiple canvases
-    this.eventHandlers = new Map() // Simple key -> array of handlers
-    this.isInitialized = false
+    constructor() {
+	this.activeScripts = reactive(new Map())
+	this.scriptContexts = new Map()
+	this.canvasRegistry = new Map() // Track multiple canvases
+	this.eventHandlers = new Map() // Simple key -> array of handlers
+	this.isInitialized = false
+	
+	// Script state management
+	this.globalScriptData = reactive({})
+	this.scriptErrors = reactive([])
+	
+	this.eventMappings = {
+	    types: {},
+	    subtypes: {}
+	}      
+    }
 
-    // Script state management
-    this.globalScriptData = reactive({})
-    this.scriptErrors = reactive([])
-  }
+    async initialize() {
+	if (this.isInitialized) return
+	
+	// Listen for visualization scripts from backend
+	dserv.on('datapoint:ess/visualization_scripts', (data) => {
+	    console.log('Received visualization scripts from ESS:', data.data)
+	    this.handleVisualizationScripts(data.data)
+	}, 'ScriptExecutionService')
+	
+	// Listen for event mappings from backend
+	dserv.on('datapoint:ess/event_mappings', (data) => {
+	    console.log('Received event mappings from ESS:', data.data)
+	    this.updateEventMappings(data.data)
+	}, 'ScriptExecutionService_EventMappings')
+	
+	// Listen for per-trial data updates
+	dserv.on('datapoint:ess/trial_data', (data) => {
+	    this.updateTrialData(data.data)
+	}, 'ScriptExecutionService_TrialData')
+	
+	eventService.addHandler((event) => {
+	    this.routeEventToScripts(event)
+	})
+	
+	this.isInitialized = true
+	console.log('ScriptExecutionService initialized with event routing')
+    }
 
-  async initialize() {
-    if (this.isInitialized) return
+    updateEventMappings(mappingsJson) {
+	try {
+	    this.eventMappings = JSON.parse(mappingsJson || '{"types":{}, "subtypes":{}}')
+	    console.log('Updated event mappings:', this.eventMappings)
+	} catch (error) {
+	    console.error('Failed to parse event mappings:', error)
+	}
+    }
+    
+    // Create event constants for JavaScript scripts
+    createEventConstants() {
+	const constants = {}
+	
+	// Create simple constants like PATTERN_ON, RESP_LEFT, etc.
+	Object.entries(this.eventMappings.types).forEach(([typeName, typeId]) => {
+	    // Add type-only constant
+	    constants[typeName] = typeId
+	    
+	    // Add subtype constants if they exist
+	    if (this.eventMappings.subtypes[typeName]) {
+		Object.entries(this.eventMappings.subtypes[typeName]).forEach(([subtypeName, subtypeId]) => {
+		    constants[`${typeName}_${subtypeName}`] = [typeId, subtypeId]
+		})
+	    }
+	})
+	
+	return constants
+    }
+    
+    // Process raw JavaScript code to add event constants
+    processScriptCode(rawCode) {
+	const eventConstants = this.createEventConstants()
+	
+	// Create variable declarations for event constants
+	const constantDeclarations = Object.entries(eventConstants)
+	      .map(([name, value]) => {
+		  if (Array.isArray(value)) {
+		      return `const ${name} = [${value.join(', ')}];`
+		  } else {
+		      return `const ${name} = ${value};`
+		  }
+	      })
+	      .join('\n')
+	
+	// Prepend constants to the script
+	return `
+// ESS Event Constants (auto-generated)
+${constantDeclarations}
 
-    // Listen for visualization scripts from backend
-    dserv.on('datapoint:ess/visualization_scripts', (data) => {
-      console.log('Received visualization scripts from ESS:', data.data)
-      this.handleVisualizationScripts(data.data)
-    }, 'ScriptExecutionService')
-
-    // IMPORTANT: Connect to event service for routing events to scripts
-    eventService.addHandler((event) => {
-      this.routeEventToScripts(event)
-    })
-
-    // Listen for per-trial data updates
-    dserv.on('datapoint:ess/trial_data', (data) => {
-      this.updateTrialData(data.data)
-    }, 'ScriptExecutionService_TrialData')
-
-    this.isInitialized = true
-    console.log('ScriptExecutionService initialized with event routing')
-  }
-
-  // Route events from eventService to script handlers
+// Original script code
+${rawCode}
+`
+    }
+    
+    // Route events from eventService to script handlers
     routeEventToScripts(event) {
-  if (event.type === 'obs_reset' || event.type === 'name_update') {
-    return
-  }
-
-  // Create key format that matches registration: "type,subtype"
-  const key = `${event.type},${event.subtype}`
-  const handlers = this.eventHandlers.get(key) || []
-
-//  if (handlers.length > 0) {
-//    console.log(`Routing event ${key} to ${handlers.length} script handlers`)
-//    console.log('Event data:', event)
-//  }
-
-    handlers.forEach(handlerInfo => {
-      try {
-        handlerInfo.handler(event)
-      } catch (error) {
-        console.error(`Event handler error for ${key}:`, error)
-        this.scriptErrors.push({
-          scriptId: handlerInfo.scriptId,
-          canvasId: handlerInfo.canvasId,
-          error: error.message,
-          timestamp: Date.now()
-        })
-      }
-    })
-  }
+	if (event.type === 'obs_reset' || event.type === 'name_update') {
+	    return
+	}
+	
+	// Create key format that matches registration: "type,subtype"
+	const key = `${event.type},${event.subtype}`
+	const handlers = this.eventHandlers.get(key) || []
+	
+	handlers.forEach(handlerInfo => {
+	    try {
+		handlerInfo.handler(event)
+	    } catch (error) {
+		console.error(`Event handler error for ${key}:`, error)
+		this.scriptErrors.push({
+		    scriptId: handlerInfo.scriptId,
+		    canvasId: handlerInfo.canvasId,
+		    error: error.message,
+		    timestamp: Date.now()
+		})
+	    }
+	})
+    }
 
   updateTrialData(trialDataJson) {
     if (!trialDataJson) return
@@ -236,10 +295,6 @@ createDrawingAPI(canvasId) {
     },
 
       drawCircle: (x, y, radius, options = {}) => {
-      // REMOVED: Immediate drawing. We now only add/update the element list.
-      // The renderCanvas loop is the single source of truth for drawing.
-
-      // store the element for persistent rendering
       const id = options.id || `circle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
       return api.addElement({
           id: id,
@@ -250,7 +305,6 @@ createDrawingAPI(canvasId) {
       },
 
       drawRectangle: (x, y, width, height, options = {}) => {
-      // REMOVED: Immediate drawing.
 
       const id = options.id || `rectangle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
       return api.addElement({
@@ -262,7 +316,6 @@ createDrawingAPI(canvasId) {
       },
 
       drawText: (x, y, text, options = {}) => {
-      // REMOVED: Immediate drawing.
 
       const id = options.id || `text_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
       return api.addElement({
@@ -274,7 +327,6 @@ createDrawingAPI(canvasId) {
       },
 
       drawLine: (x1, y1, x2, y2, options = {}) => {
-      // REMOVED: Immediate drawing.
 
       const id = options.id || `line_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
           return api.addElement({
@@ -293,7 +345,7 @@ createDrawingAPI(canvasId) {
   }
 
     return api
-}
+} 
 
   // Register event handler for scripts
 registerEventHandler(eventKey, handler, scriptId, canvasId) {
@@ -351,39 +403,78 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
 }
 
 
-
-  // SIMPLE script execution using eval
-  executeScript(scriptCode, scriptId, canvasId) {
-    try {
-//      console.log(`Executing script ${scriptId} for canvas ${canvasId}`)
-
-      const canvasData = this.canvasRegistry.get(canvasId)
-      if (!canvasData) {
-        throw new Error(`Canvas ${canvasId} not found`)
-      }
-
-      // Create drawing API
-      const drawingAPI = this.createDrawingAPI(canvasId)
-
-      // Store current context for cleanup
-      const originalVars = {}
-
-      // Create safe execution environment
-      const scriptGlobals = {
-        // Drawing API
-        draw: drawingAPI,
-
-        // Event registration - THIS IS THE KEY FIX!
-        registerEventHandler: (eventKey, handler) => {
-          this.registerEventHandler(eventKey, handler, scriptId, canvasId)
-        },
-
-        // NEW: Register a handler for per-trial data updates
-        registerTrialUpdateHandler: (handler) => {
-          // We reuse the event handler mechanism with a special key
-          this.registerEventHandler('trial_update', handler, scriptId, canvasId)
-        },
-
+    executeScript(scriptCode, scriptId, canvasId) {
+	try {
+	    const canvasData = this.canvasRegistry.get(canvasId)
+	    if (!canvasData) {
+		throw new Error(`Canvas ${canvasId} not found`)
+	    }
+	    
+	    // Process the script to add event constants
+	    const processedCode = this.processScriptCode(scriptCode)
+	    
+	    console.log(`Executing processed script for ${scriptId}:`)
+	    console.log('--- Event Constants Added ---')
+	    console.log(processedCode.split('\n').slice(0, 10).join('\n') + '...')
+	    
+	    // Create drawing API
+	    const drawingAPI = this.createDrawingAPI(canvasId)
+	    
+	    // Store current context for cleanup
+	    const originalVars = {}
+	    
+	    // Create safe execution environment
+	    const scriptGlobals = {
+		// Drawing API
+		draw: drawingAPI,
+		
+		// Event registration
+		registerEventHandler: (eventKey, handler) => {
+		    this.registerEventHandler(eventKey, handler, scriptId, canvasId)
+		},
+		
+		// Register a handler for per-trial data updates
+		registerTrialUpdateHandler: (handler) => {
+		    this.registerEventHandler('trial_update', handler, scriptId, canvasId)
+		},
+		
+		// Access to stiminfo data
+		getStimInfo: () => {
+		    if (dserv.state.stiminfo) {
+			try {
+			    return JSON.parse(dserv.state.stiminfo);
+			} catch (e) {
+			    console.error('Failed to parse stiminfo:', e);
+			    return null;
+			}
+		    }
+		    return null;
+		},
+		
+		// Helper to process hybrid JSON (as in StimInfo.vue)
+		processStimData: (hybridData) => {
+		    if (!hybridData || !hybridData.rows || !hybridData.arrays) {
+			return [];
+		    }
+		    
+		    const { rows, arrays } = hybridData;
+		    const arrayFields = Object.keys(arrays);
+		    
+		    return rows.map((row, index) => {
+			const enhancedRow = { trial_index: index, ...row };
+			
+			arrayFields.forEach(fieldName => {
+			    if (fieldName in row && typeof row[fieldName] === 'number') {
+				const arrayIndex = row[fieldName];
+				const arrayData = arrays[fieldName][arrayIndex];
+				enhancedRow[fieldName] = arrayData;
+			    }
+			});
+			
+			return enhancedRow;
+		    });
+		},
+	  
         // State management
         setData: (key, value) => {
           this.globalScriptData[key] = value
@@ -409,7 +500,8 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
         Math: Math,
         Array: Array,
         Object: Object,
-        Date: Date
+        Date: Date,
+        console: console
       }
 
       // Set globals temporarily
@@ -421,11 +513,11 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
       })
 
       try {
-        // Execute script in global scope
+        // Execute processed script in global scope
         eval(`
           (function() {
             "use strict";
-            ${scriptCode}
+            ${processedCode}
           })();
         `)
 
@@ -434,12 +526,13 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
           id: scriptId,
           canvasId,
           code: scriptCode,
+          processedCode: processedCode,
           loadedAt: Date.now(),
           status: 'loaded',
           lastExecution: Date.now()
         })
 
-//        console.log(`Successfully executed script ${scriptId}`)
+        console.log(`Successfully executed script ${scriptId}`)
 
       } finally {
         // Restore original globals
@@ -454,14 +547,14 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
 
     } catch (error) {
       console.error(`Failed to execute script ${scriptId}:`, error)
-
+      
       this.scriptErrors.push({
         scriptId,
         canvasId,
         error: error.message,
         timestamp: Date.now()
       })
-
+      
       this.activeScripts.set(scriptId, {
         id: scriptId,
         canvasId,
@@ -470,10 +563,10 @@ registerEventHandler(eventKey, handler, scriptId, canvasId) {
         status: 'error',
         error: error.message
       })
-
+      
       throw error
     }
-  }
+ }
 
     // Handle visualization scripts from backend
   handleVisualizationScripts(scriptsJson) {
@@ -550,82 +643,87 @@ canvasData.drawCallbacks.forEach(drawFunc => {
 })
   }
 
-  // Draw individual element
-  drawElement(canvasId, element) {
-    const canvasData = this.canvasRegistry.get(canvasId)
-    if (!canvasData) return
-
-    const { ctx, metadata } = canvasData
-    const pixPerDegX = metadata.width / metadata.degreesHorizontal
-
-    // Helper to convert "r g b" (0-1) strings to "rgb(r,g,b)" (0-255)
-    const normalizeColor = (color) => {
-        if (typeof color === 'string' && color.includes(' ')) {
-            const parts = color.split(' ').map(Number);
-            if (parts.length === 3 && parts.every(p => !isNaN(p))) {
-                const [r, g, b] = parts;
-                return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+    // Draw individual element
+    drawElement(canvasId, element) {
+	const canvasData = this.canvasRegistry.get(canvasId)
+	if (!canvasData) return
+	
+	const { ctx, metadata } = canvasData
+	const pixPerDegX = metadata.width / metadata.degreesHorizontal
+	const pixPerDegY = metadata.height / metadata.degreesVertical  // Fixed: separate Y scaling
+	
+	// Helper to convert "r g b" (0-1) strings to "rgb(r,g,b)" (0-255)
+	const normalizeColor = (color) => {
+            if (typeof color === 'string' && color.includes(' ')) {
+		const parts = color.split(' ').map(Number);
+		if (parts.length === 3 && parts.every(p => !isNaN(p))) {
+                    const [r, g, b] = parts;
+                    return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+		}
             }
-        }
-        return color; // Return as-is if not in the expected "r g b" format
-    };
-
-    const p = this.createDrawingAPI(canvasId).degreesToPixels(element.x, element.y)
-
-    ctx.save()
-    ctx.globalAlpha = element.opacity || 1
-
-    // Apply styles
-    if (element.fillColor) {
-      ctx.fillStyle = normalizeColor(element.fillColor)
-    }
-    if (element.strokeColor) {
-      ctx.strokeStyle = normalizeColor(element.strokeColor)
-      ctx.lineWidth = element.lineWidth || 1
-    }
-
-    switch (element.type) {
-      case 'circle': {
-        const radius = (element.radius ?? 0.5) * pixPerDegX
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, radius, 0, 2 * Math.PI)
-        if (element.fillColor) ctx.fill()
-        if (element.strokeColor) ctx.stroke()
-        break
-      }
-
-      case 'rectangle': {
-        // Convert element width/height from degrees to pixels
-        const w = element.width * pixPerDegX
-        const h = element.height * pixPerDegX
-
-        // Translate and rotate around the center of the rectangle
-        ctx.translate(p.x, p.y);
-        ctx.rotate((element.rotation || 0) * Math.PI / 180);
-        
-        if (element.fillColor) {
-          ctx.fillRect(-w / 2, -h / 2, w, h);
-        }
-        if (element.strokeColor) {
-          ctx.strokeRect(-w / 2, -h / 2, w, h);
-        }
-        break;
-      }
-
-      case 'text': {
-        ctx.font = `${element.fontSize || 12}px ${element.fontFamily || 'sans-serif'}`
-        ctx.textAlign = element.textAlign || 'center'
-        ctx.textBaseline = element.textBaseline || 'middle'
-        if (element.fillColor) {
-          ctx.fillText(element.text, p.x, p.y)
-        }
-        break
-      }
-    }
-
-    ctx.restore()
-  }
-
+            return color;
+	};
+	
+	const p = this.createDrawingAPI(canvasId).degreesToPixels(element.x, element.y)
+	
+	ctx.save()
+	ctx.globalAlpha = element.opacity || 1
+	
+	// Apply styles
+	if (element.fillColor) {
+	    ctx.fillStyle = normalizeColor(element.fillColor)
+	}
+	if (element.strokeColor) {
+	    ctx.strokeStyle = normalizeColor(element.strokeColor)
+	    ctx.lineWidth = element.lineWidth || 1
+	}
+	
+	switch (element.type) {
+	case 'circle': {
+            const radius = (element.radius ?? 0.5) * pixPerDegX
+            ctx.beginPath()
+            ctx.arc(p.x, p.y, radius, 0, 2 * Math.PI)
+            if (element.fillColor) ctx.fill()
+            if (element.strokeColor) ctx.stroke()
+            break
+	}
+	    
+	case 'rectangle': {
+            const w = element.width * pixPerDegX
+            const h = element.height * pixPerDegY
+            
+            // Translate to rectangle center
+            ctx.translate(p.x, p.y);
+            
+	    
+            if (element.rotation !== undefined && element.rotation !== 0) {
+		ctx.rotate(element.rotation);
+            }
+            
+            // Draw rectangle centered at origin (since we translated)
+            if (element.fillColor) {
+		ctx.fillRect(-w / 2, -h / 2, w, h);
+            }
+            if (element.strokeColor) {
+		ctx.strokeRect(-w / 2, -h / 2, w, h);
+            }
+            break;
+	}
+	    
+	case 'text': {
+            ctx.font = `${element.fontSize || 12}px ${element.fontFamily || 'sans-serif'}`
+            ctx.textAlign = element.textAlign || 'center'
+            ctx.textBaseline = element.textBaseline || 'middle'
+            if (element.fillColor) {
+		ctx.fillText(element.text, p.x, p.y)
+            }
+            break
+	}
+	}
+	
+	ctx.restore()
+    }    
+    
   // Global data management
   setGlobalData(key, value) {
     this.globalScriptData[key] = value
