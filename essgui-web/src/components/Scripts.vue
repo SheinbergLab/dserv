@@ -210,8 +210,8 @@ import {
   EllipsisOutlined,
   ReloadOutlined,
   BugOutlined,
-  UndoOutlined,    // NEW
-  RedoOutlined     // NEW
+  UndoOutlined,
+  RedoOutlined
 } from '@ant-design/icons-vue'
 import { h } from 'vue'
 import { Modal, message } from 'ant-design-vue'
@@ -238,10 +238,10 @@ import {
   indentSelection,
   indentLess,
   insertTab,
-  undo,           // NEW
-  redo,           // NEW
-  history,        // NEW
-  historyField    // NEW
+  undo,
+  redo,
+  history,
+  historyField
 } from '@codemirror/commands'
 import { search, highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -265,7 +265,7 @@ const autoValidate = ref(true)
 const showBackupManager = ref(false)
 const showDebugMode = ref(false)
 
-// NEW: Undo/Redo state
+// FIXED: Undo/Redo state
 const canUndo = ref(false)
 const canRedo = ref(false)
 
@@ -273,42 +273,47 @@ const canRedo = ref(false)
 const currentBranch = ref('')
 const availableBranches = ref([])
 
-// UPDATED: Scripts with undo tracking
+// FIXED: Scripts with undo tracking and original content preservation
 const scripts = ref({
   system: {
     name: 'system',
     content: '',
+    originalContent: '', // NEW: Preserve original loaded content
     modified: false,
     loaded: false,
-    unchangedHistoryDepth: 0  // NEW: Track history depth at last save
+    unchangedHistoryDepth: 0
   },
   protocol: {
     name: 'protocol',
     content: '',
+    originalContent: '', // NEW: Preserve original loaded content
     modified: false,
     loaded: false,
-    unchangedHistoryDepth: 0  // NEW
+    unchangedHistoryDepth: 0
   },
   loaders: {
     name: 'loaders',
     content: '',
+    originalContent: '', // NEW: Preserve original loaded content
     modified: false,
     loaded: false,
-    unchangedHistoryDepth: 0  // NEW
+    unchangedHistoryDepth: 0
   },
   variants: {
     name: 'variants',
     content: '',
+    originalContent: '', // NEW: Preserve original loaded content
     modified: false,
     loaded: false,
-    unchangedHistoryDepth: 0  // NEW
+    unchangedHistoryDepth: 0
   },
   stim: {
     name: 'stim',
     content: '',
+    originalContent: '', // NEW: Preserve original loaded content
     modified: false,
     loaded: false,
-    unchangedHistoryDepth: 0  // NEW
+    unchangedHistoryDepth: 0
   }
 })
 
@@ -348,53 +353,151 @@ watch(() => currentScript.value?.content, (newContent) => {
   }, 1000)
 })
 
-// NEW: Undo/Redo functions
-function undoEdit() {
-  if (editorView && canUndo.value) {
-    undo(editorView)
-    updateUndoRedoState()
+// FIXED: Debugging helper function
+function debugHistoryState(context = '') {
+  if (!editorView) {
+    console.log(`[${context}] No editor view`)
+    return
   }
+
+  const histState = editorView.state.field(historyField, false)
+  if (!histState) {
+    console.log(`[${context}] No history state`)
+    return
+  }
+
+  const script = currentScript.value
+  console.log(`[${context}] History debug:`, {
+    scriptName: script?.name,
+    doneLength: histState.done.length,
+    undoneLength: histState.undone.length,
+    canUndo: canUndo.value,
+    canRedo: canRedo.value,
+    modified: script?.modified,
+    unchangedDepth: script?.unchangedHistoryDepth,
+    doneEntries: histState.done.map((entry, i) => ({
+      index: i,
+      hasChanges: entry.changes ? entry.changes.length : 0
+    }))
+  })
 }
 
-function redoEdit() {
-  if (editorView && canRedo.value) {
-    redo(editorView)
-    updateUndoRedoState()
-  }
-}
-
+// FIXED: Improved undo/redo state management with content-aware undo state
 function updateUndoRedoState() {
   if (!editorView) return
 
   const histState = editorView.state.field(historyField, false)
   if (histState) {
-    canUndo.value = histState.done.length > 0
-    canRedo.value = histState.undone.length > 0
+    // Get raw history state
+    const doneLength = histState.done.length
+    const undoneLength = histState.undone.length
+    
+    // Base undo/redo availability on CodeMirror's history
+    const cmCanUndo = doneLength > 0
+    const cmCanRedo = undoneLength > 0
 
-    // Check if we're back to unchanged state
-    const currentDepth = histState.done.length
+    const currentDepth = doneLength
     const script = currentScript.value
 
     if (script) {
-      const wasModified = script.modified // Track what it was before
+      const wasModified = script.modified
+      const currentContent = editorView.state.doc.toString()
 
-      // If we're at depth 0 and unchanged depth is 0, we're at the loaded state
-      if (currentDepth === 0 && script.unchangedHistoryDepth === 0) {
+      // Check if we're back to the original loaded content
+      const isBackToOriginalContent = currentContent === script.originalContent
+
+      if (isBackToOriginalContent) {
+        // We're back to the unchanged state by content match
         script.modified = false
-      } else if (currentDepth <= script.unchangedHistoryDepth) {
-        // We've undone back to or past the unchanged state
+        
+        // FIXED: If we're back to original content, don't allow further undo
+        // (we shouldn't undo past the loaded state)
+        canUndo.value = false
+        console.log(`Content matches original - marking ${script.name} as unmodified and blocking undo`)
+      } else if (currentDepth === script.unchangedHistoryDepth) {
+        // We're back to the unchanged state by history depth
         script.modified = false
+        canUndo.value = cmCanUndo // Use CodeMirror's undo state
+        console.log(`History depth matches unchanged depth - marking ${script.name} as unmodified`)
       } else {
-        // We're beyond the unchanged state
+        // We have changes from the unchanged state
         script.modified = true
+        canUndo.value = cmCanUndo // Use CodeMirror's undo state
       }
 
-      // ADD THIS DEBUG LINE:
-      if (wasModified !== script.modified) {
-        console.log(`updateUndoRedoState: changed ${script.name} from modified=${wasModified} to modified=${script.modified}, depth=${currentDepth}, unchangedDepth=${script.unchangedHistoryDepth}`)
-      }
+      // Redo is always based on CodeMirror's state
+      canRedo.value = cmCanRedo
+
+      // Enhanced debug logging
+      console.log(`updateUndoRedoState: ${script.name}:`, {
+        wasModified,
+        nowModified: script.modified,
+        currentDepth,
+        unchangedDepth: script.unchangedHistoryDepth,
+        cmCanUndo,
+        cmCanRedo,
+        finalCanUndo: canUndo.value,
+        finalCanRedo: canRedo.value,
+        doneLength,
+        undoneLength,
+        isBackToOriginalContent,
+        currentContentLength: currentContent.length,
+        originalContentLength: script.originalContent ? script.originalContent.length : 0
+      })
+    } else {
+      // No script - use CodeMirror's raw state
+      canUndo.value = cmCanUndo
+      canRedo.value = cmCanRedo
     }
+  } else {
+    // No history state available
+    canUndo.value = false
+    canRedo.value = false
+    console.warn('No history state available in updateUndoRedoState')
   }
+}
+
+// FIXED: Undo/Redo functions with content-aware restrictions
+function undoEdit() {
+  if (editorView && canUndo.value) {
+    console.log('undoEdit called')
+    
+    // Check if we're already at original content before undoing
+    const currentContent = editorView.state.doc.toString()
+    const script = currentScript.value
+    
+    if (script && currentContent === script.originalContent) {
+      console.log('Already at original content - undo blocked')
+      return false
+    }
+    
+    const result = undo(editorView)
+    
+    // FIXED: Ensure state update happens after undo
+    nextTick(() => {
+      updateUndoRedoState()
+      debugHistoryState('after undoEdit')
+    })
+    
+    return result
+  }
+  return false
+}
+
+function redoEdit() {
+  if (editorView && canRedo.value) {
+    console.log('redoEdit called')
+    const result = redo(editorView)
+    
+    // FIXED: Ensure state update happens after redo
+    nextTick(() => {
+      updateUndoRedoState()
+      debugHistoryState('after redoEdit')
+    })
+    
+    return result
+  }
+  return false
 }
 
 // Fixed backend validation in Scripts.vue validateCurrentScript
@@ -516,55 +619,6 @@ async function saveScriptWithErrorHandling() {
   }
 }
 
-async function validateCurrentScriptStrict() {
-  if (!currentScript.value?.content) return
-
-  isValidating.value = true
-  try {
-    // Use frontend strict validation
-    const linter = new TclLinter()
-    const result = linter.lint(currentScript.value.content)
-
-    // Always try backend strict validation for manual validation
-    try {
-      const backendResult = await dserv.essCommand(
-        `ess::validate_script_strict {${currentScript.value.content}}`
-      )
-
-      console.log('Backend strict validation result:', backendResult)
-
-      // Parse backend warnings and add them
-      if (backendResult && typeof backendResult === 'string') {
-        if (backendResult.includes('warnings')) {
-          // Could parse and add backend warnings here if needed
-          console.log('Backend found additional warnings:', backendResult)
-        }
-      }
-    } catch (backendError) {
-      console.log('Backend strict validation unavailable:', backendError.message)
-    }
-
-    validationResult.value = result
-    showValidationPanel.value = true // Always show panel for manual validation
-
-  } catch (error) {
-    console.error('Strict validation error:', error)
-    validationResult.value = {
-      isValid: false,
-      errors: [{
-        line: 0,
-        column: 0,
-        message: 'Validation failed: ' + error.message,
-        severity: 'error'
-      }],
-      warnings: [],
-      summary: 'Validation error'
-    }
-  } finally {
-    isValidating.value = false
-  }
-}
-
 // Update the validateAllScripts to also use minimal validation
 async function validateAllScripts() {
   const results = {}
@@ -626,8 +680,7 @@ function switchScriptWithValidation(scriptName) {
   }
 }
 
-// Replace the existing switchScript function with this:
-
+// FIXED: Script switching with proper history management
 function switchScript(scriptName) {
   activeScript.value = scriptName
   const newContent = scripts.value[scriptName]?.content || ''
@@ -651,6 +704,7 @@ function switchScript(scriptName) {
         }
       }
       updateUndoRedoState()
+      debugHistoryState('after switchScript')
     })
   }
 }
@@ -695,8 +749,7 @@ function createEditor() {
    createEditorWithContent(currentScript.value.content)
 }
 
-// Add this function right after the createEditor() function in your Scripts.vue
-
+// FIXED: Create editor with proper undo/redo command integration
 function createEditorWithContent(initialContent = '') {
   if (!editorContainer.value) return
 
@@ -734,11 +787,29 @@ function createEditorWithContent(initialContent = '') {
     }
   }
 
+  // FIXED: Undo/redo commands with content-aware restrictions
   const undoCommand = {
     key: 'Ctrl-z',
     run: (view) => {
+      console.log('Undo command triggered')
+      
+      // Check if we're already at original content
+      const currentContent = view.state.doc.toString()
+      const script = currentScript.value
+      
+      if (script && currentContent === script.originalContent) {
+        console.log('Already at original content - undo blocked')
+        return true // Return true to indicate we handled it (even though we blocked it)
+      }
+      
       const result = undo(view)
-      updateUndoRedoState()
+      
+      // FIXED: Use nextTick to ensure state is updated after undo completes
+      nextTick(() => {
+        updateUndoRedoState()
+        debugHistoryState('after undo command')
+      })
+      
       return result
     }
   }
@@ -746,8 +817,15 @@ function createEditorWithContent(initialContent = '') {
   const redoCommand = {
     key: 'Ctrl-y',
     run: (view) => {
+      console.log('Redo command triggered')
       const result = redo(view)
-      updateUndoRedoState()
+      
+      // FIXED: Use nextTick to ensure state is updated after redo completes
+      nextTick(() => {
+        updateUndoRedoState()
+        debugHistoryState('after redo command')
+      })
+      
       return result
     }
   }
@@ -755,8 +833,15 @@ function createEditorWithContent(initialContent = '') {
   const redoAltCommand = {
     key: 'Ctrl-Shift-z',
     run: (view) => {
+      console.log('Redo alt command triggered')
       const result = redo(view)
-      updateUndoRedoState()
+      
+      // FIXED: Use nextTick to ensure state is updated after redo completes
+      nextTick(() => {
+        updateUndoRedoState()
+        debugHistoryState('after redo alt command')
+      })
+      
       return result
     }
   }
@@ -817,13 +902,30 @@ function createEditorWithContent(initialContent = '') {
       EditorState.tabSize.of(4),
       EditorView.lineWrapping,
       keymap.of(allKeybindings),
+      
+      // FIXED: More careful update listener
       EditorView.updateListener.of((update) => {
+        // Handle content changes ONLY
         if (update.docChanged && !isUpdatingContent.value) {
           const newContent = update.state.doc.toString()
           scripts.value[activeScript.value].content = newContent
           scripts.value[activeScript.value].modified = true
 
-          updateUndoRedoState()
+          console.log(`Content changed in ${activeScript.value}, marking as modified`)
+
+          // FIXED: Use setTimeout instead of immediate call to ensure history is updated
+          setTimeout(() => {
+            updateUndoRedoState()
+            debugHistoryState('after content change')
+          }, 0)
+        }
+
+        // FIXED: Only update undo/redo state for actual document changes, not selection changes
+        // Selection changes (clicks, cursor moves) should NOT trigger modification
+        if (update.docChanged) {
+          setTimeout(() => {
+            updateUndoRedoState()
+          }, 0)
         }
 
         // Auto-indent logic (same as in createEditor)
@@ -919,9 +1021,16 @@ function createEditorWithContent(initialContent = '') {
     parent: editorContainer.value
   })
 
-  // Initialize undo/redo state after editor creation
+  // FIXED: Proper initialization timing
   nextTick(() => {
+    // Set initial state for a freshly created editor
+    const script = scripts.value[activeScript.value]
+    if (script) {
+      script.unchangedHistoryDepth = 0
+      console.log(`createEditorWithContent: Initialized ${activeScript.value} with unchangedDepth=0`)
+    }
     updateUndoRedoState()
+    debugHistoryState('after createEditorWithContent')
   })
 }
 
@@ -974,6 +1083,7 @@ function updateEditorContent(content, clearHistory = false) {
       }
 
       updateUndoRedoState()
+      debugHistoryState('after updateEditorContent')
     })
   }
 }
@@ -1017,7 +1127,7 @@ function formatScript() {
   }
 }
 
-// UPDATED: saveScript with unchanged history depth tracking
+// FIXED: saveScript with unchanged history depth tracking and original content update
 async function saveScript() {
   if (!currentScript.value.modified) return
 
@@ -1029,14 +1139,18 @@ async function saveScript() {
     console.log(`Saving ${activeScript.value} script...`)
     await dserv.essCommand(cmd)
 
-    // NEW: Mark as unchanged and record history depth
+    // FIXED: Mark as unchanged and record history depth
     scripts.value[activeScript.value].modified = false
+    
+    // NEW: Update the original content baseline to the current content
+    scripts.value[activeScript.value].originalContent = scriptContent
 
-    // NEW: Record the current history depth as the "unchanged" point
+    // FIXED: Record the current history depth as the "unchanged" point
     if (editorView) {
       const histState = editorView.state.field(historyField, false)
       if (histState) {
         scripts.value[activeScript.value].unchangedHistoryDepth = histState.done.length
+        console.log(`saveScript: Set ${activeScript.value} unchangedDepth=${histState.done.length}, updated originalContent`)
       }
     }
 
@@ -1044,6 +1158,10 @@ async function saveScript() {
 
     validationResult.value = null
     showValidationPanel.value = false
+
+    // Update undo/redo state after save
+    updateUndoRedoState()
+    debugHistoryState('after saveScript')
 
   } catch (error) {
     console.error(`Failed to save ${activeScript.value} script:`, error)
@@ -1228,8 +1346,10 @@ onMounted(() => {
   dserv.on('datapoint:ess/system_script', (data) => {
     console.log('Received system script data')
     scripts.value.system.content = data.data
+    scripts.value.system.originalContent = data.data // NEW: Preserve original
     scripts.value.system.loaded = true
     scripts.value.system.unchangedHistoryDepth = 0
+    scripts.value.system.modified = false // NEW: Ensure clean state
     if (activeScript.value === 'system') {
       updateEditorContent(data.data, true) // Clear history for new script from backend
     }
@@ -1238,8 +1358,10 @@ onMounted(() => {
   dserv.on('datapoint:ess/protocol_script', (data) => {
     console.log('Received protocol script data')
     scripts.value.protocol.content = data.data
+    scripts.value.protocol.originalContent = data.data // NEW: Preserve original
     scripts.value.protocol.loaded = true
     scripts.value.protocol.unchangedHistoryDepth = 0
+    scripts.value.protocol.modified = false // NEW: Ensure clean state
     if (activeScript.value === 'protocol') {
       updateEditorContent(data.data, true) // Clear history for new script from backend
     }
@@ -1248,8 +1370,10 @@ onMounted(() => {
   dserv.on('datapoint:ess/loaders_script', (data) => {
     console.log('Received loaders script data')
     scripts.value.loaders.content = data.data
+    scripts.value.loaders.originalContent = data.data // NEW: Preserve original
     scripts.value.loaders.loaded = true
     scripts.value.loaders.unchangedHistoryDepth = 0
+    scripts.value.loaders.modified = false // NEW: Ensure clean state
     if (activeScript.value === 'loaders') {
       updateEditorContent(data.data, true) // Clear history for new script from backend
     }
@@ -1258,8 +1382,10 @@ onMounted(() => {
   dserv.on('datapoint:ess/variants_script', (data) => {
     console.log('Received variants script data')
     scripts.value.variants.content = data.data
+    scripts.value.variants.originalContent = data.data // NEW: Preserve original
     scripts.value.variants.loaded = true
     scripts.value.variants.unchangedHistoryDepth = 0
+    scripts.value.variants.modified = false // NEW: Ensure clean state
     if (activeScript.value === 'variants') {
       updateEditorContent(data.data, true) // Clear history for new script from backend
     }
@@ -1268,8 +1394,10 @@ onMounted(() => {
   dserv.on('datapoint:ess/stim_script', (data) => {
     console.log('Received stim script data')
     scripts.value.stim.content = data.data
+    scripts.value.stim.originalContent = data.data // NEW: Preserve original
     scripts.value.stim.loaded = true
     scripts.value.stim.unchangedHistoryDepth = 0
+    scripts.value.stim.modified = false // NEW: Ensure clean state
     if (activeScript.value === 'stim') {
       updateEditorContent(data.data, true) // Clear history for new script from backend
     }
@@ -1330,6 +1458,22 @@ function requestGitData() {
     dserv.essCommand('dservTouch ess/git/branch')
   } catch (error) {
     console.error('Failed to request git data:', error)
+  }
+}
+
+// DEBUGGING: Expose helper for console testing
+if (typeof window !== 'undefined') {
+  window.debugHistory = () => debugHistoryState('manual check')
+  window.debugScriptState = () => {
+    const script = currentScript.value
+    console.log('Current script state:', {
+      name: script?.name,
+      modified: script?.modified,
+      unchangedDepth: script?.unchangedHistoryDepth,
+      canUndo: canUndo.value,
+      canRedo: canRedo.value,
+      hasEditor: !!editorView
+    })
   }
 }
 </script>
