@@ -25,6 +25,35 @@
         </a-form-item>
       </div>
 
+      <!-- Loading Progress Indicator -->
+      <div v-if="isSystemBusy" style="background: #f0f7ff; border: 1px solid #91d5ff; border-radius: 6px; padding: 8px; margin-bottom: 8px; width: 100%;">
+        <a-progress 
+          :percent="dserv.loadingState.percent" 
+          size="small"
+          :status="dserv.loadingState.error ? 'exception' : 'active'"
+          :show-info="true"
+        />
+        <div style="font-size: 10px; color: #1890ff; text-align: center; margin-top: 4px;">
+          {{ loadingMessage }}
+        </div>
+        <div v-if="dserv.loadingState.elapsed > 0" style="font-size: 9px; color: #999; text-align: center;">
+          {{ Math.round(dserv.loadingState.elapsed / 1000) }}s elapsed
+        </div>
+      </div>
+
+      <!-- Recovery Button (only when needed) -->
+      <div v-if="showRecoveryButton" style="text-align: center; margin-bottom: 8px; width: 100%;">
+        <a-button 
+          size="small" 
+          type="dashed" 
+          danger
+          @click="forceLoadingRecovery"
+          style="font-size: 10px;"
+        >
+          Force Recovery
+        </a-button>
+      </div>
+
       <!-- Control Buttons and Status Display -->
       <div style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 8px; padding: 8px; margin-bottom: 12px; width: 100%; max-width: 100%; min-height: 120px;">
         <!-- Control Buttons -->
@@ -33,7 +62,6 @@
             <a-button
               type="primary"
               size="small"
-              :loading="loading.start"
               :disabled="isSystemBusy || dserv.state.status === 'Running' || !dserv.state.currentVariant"
               @click="startExperiment"
             >
@@ -42,7 +70,6 @@
             <a-button
               danger
               size="small"
-              :loading="loading.stop"
               :disabled="isSystemBusy || dserv.state.status !== 'Running'"
               @click="stopExperiment"
             >
@@ -50,7 +77,6 @@
             </a-button>
             <a-button
               size="small"
-              :loading="loading.reset"
               :disabled="isSystemBusy || dserv.state.status === 'Running'"
               @click="resetExperiment"
             >
@@ -59,53 +85,61 @@
           </a-space>
         </div>
 
-        <!-- Status Display -->
-        <div style="font-size: 12px; min-height: 72px;">
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
-            <div class="obs-indicator" :class="{ 'is-active': dserv.state.inObs }"></div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Status:</strong></span>
-              <a-tag
-                :color="getStatusColor(dserv.state.status)"
-                style="margin: 0; min-width: 60px; text-align: center;"
-              >
-                {{ dserv.state.status }}
-              </a-tag>
-            </div>
-          </div>
+<!-- Status Display -->
+<div style="font-size: 12px; min-height: 72px;">
+  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
+    <div class="obs-indicator" :class="{ 'is-active': dserv.state.inObs }"></div>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Status:</strong></span>
+      <a-tag
+        :color="getStatusColor(dserv.state.status)"
+        style="margin: 0; min-width: 60px; text-align: center;"
+      >
+        {{ dserv.state.status }}
+      </a-tag>
+    </div>
+  </div>
 
-          <!-- Additional status info -->
-          <div style="padding-left: 20px; min-height: 48px;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
-              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Obs:</strong></span>
-              <a-tag
-                :color="dserv.state.inObs ? 'red' : 'default'"
-                style="margin: 0; min-width: 60px; text-align: center; height: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; font-size: 12px;"
-              >
-                {{ dserv.state.obsCount || 'None' }}
-              </a-tag>
-            </div>
+  <!-- Additional status info -->
+  <div style="padding-left: 20px; min-height: 48px;">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; height: 20px;">
+      <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>Obs:</strong></span>
+      <a-tag
+        :color="dserv.state.inObs ? 'red' : 'default'"
+        style="margin: 0; min-width: 60px; text-align: center; height: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-sizing: border-box; font-size: 12px;"
+      >
+        {{ dserv.state.obsCount || 'None' }}
+      </a-tag>
+      <!-- Show trial count when available -->
+      <span v-if="trialCount > 0" style="font-size: 10px; color: #666; margin-left: 8px;">
+        ({{ trialCount }} trials)
+      </span>
+    </div>
 
-            <div style="display: flex; align-items: center; gap: 4px; min-height: 16px;">
-              <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>File:</strong></span>
-              <div style="flex: 1; display: flex; align-items: center; gap: 2px;">
-                <span v-if="currentDatafile" style="color: green; font-family: monospace; font-size: 10px; flex: 1; overflow: hidden; text-overflow: ellipsis;">
-                  {{ currentDatafile.split('/').pop().replace('.ess', '') }}
-                </span>
-                <span v-else style="color: #999; font-size: 10px; flex: 1;">No file</span>
-                <a-button
-                  size="small"
-                  :icon="h(currentDatafile ? CloseOutlined : FolderOpenOutlined)"
-                  :type="currentDatafile ? 'default' : 'primary'"
-                  :danger="!!currentDatafile"
-                  :disabled="isSystemBusy"
-                  @click="currentDatafile ? closeDatafile() : openDatafile()"
-                  :loading="datafileLoading"
-                  style="width: 16px; height: 16px; font-size: 8px;"
-                />
-              </div>
-            </div>
-          </div>
+    <div style="display: flex; align-items: center; gap: 4px; min-height: 16px;">
+      <span style="width: 50px; text-align: right; white-space: nowrap;"><strong>File:</strong></span>
+      <div style="flex: 1; display: flex; align-items: center; gap: 2px;">
+        <span v-if="currentDatafile" style="color: green; font-family: monospace; font-size: 10px; flex: 1; overflow: hidden; text-overflow: ellipsis;">
+          {{ currentDatafile.split('/').pop().replace('.ess', '') }}
+        </span>
+        <span v-else style="color: #999; font-size: 10px; flex: 1;">No file</span>
+        <a-button
+          size="small"
+          :icon="h(currentDatafile ? CloseOutlined : FolderOpenOutlined)"
+          :type="currentDatafile ? 'default' : 'primary'"
+          :danger="!!currentDatafile"
+          :disabled="isSystemBusy"
+          @click="currentDatafile ? closeDatafile() : openDatafile()"
+          :loading="datafileLoading"
+          style="width: 16px; height: 16px; font-size: 8px;"
+        />
+      </div>
+    </div>
+        <!-- Show loading completion message briefly -->
+    <div v-if="lastLoadedTrials > 0 && !isSystemBusy" style="font-size: 10px; color: #52c41a; margin-top: 2px;">
+      ✓ Ready: {{ lastLoadedTrials }} trials loaded
+    </div>
+	  </div>
         </div>
       </div>
 
@@ -113,8 +147,9 @@
       <div class="system-config" style="background: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 6px; margin-bottom: 8px; width: 100%; max-width: 100%; min-height: 140px;">
         <div style="font-weight: 500; margin-bottom: 6px; font-size: 12px; min-height: 18px; display: flex; align-items: center;">
           System Configuration
+          <!-- Just show loading state, no complex detection -->
           <a-spin v-if="isSystemBusy" size="small" style="margin-left: 8px;" />
-          <span v-if="isSystemBusy" style="margin-left: 8px; font-size: 10px; color: #666;">Loading...</span>
+          <span v-if="isSystemBusy" style="margin-left: 8px; font-size: 10px; color: #666;">{{ dserv.loadingState.stage }}...</span>
         </div>
 
         <!-- System selection -->
@@ -124,10 +159,9 @@
               v-model:value="dserv.state.currentSystem"
               size="small"
               style="flex: 1; min-width: 140px;"
-              :loading="loading.system || isSystemBusy"
               :disabled="isSystemBusy"
               @change="setSystem"
-              placeholder="Select system..."
+              :placeholder="isSystemBusy ? 'Loading...' : 'Select system...'"
             >
               <a-select-option v-for="system in dserv.state.systems" :key="system" :value="system">
                 {{ system }}
@@ -150,7 +184,6 @@
               :value="displayProtocolValue"
               size="small"
               style="flex: 1; min-width: 140px;"
-              :loading="loading.protocol || isSystemBusy"
               :disabled="isSystemBusy || !dserv.state.currentSystem"
               @change="setProtocol"
               :placeholder="getProtocolPlaceholder"
@@ -178,7 +211,6 @@
               :value="displayVariantValue"
               size="small"
               style="flex: 1; min-width: 140px;"
-              :loading="loading.variant || isSystemBusy"
               :disabled="isSystemBusy || !dserv.state.currentProtocol"
               @change="setVariant"
               :placeholder="getVariantPlaceholder"
@@ -198,18 +230,6 @@
             />
           </div>
         </a-form-item>
-
-        <!-- Manual Recovery Button (visible when stuck) -->
-        <div v-if="isSystemBusy && showRecoveryButton" style="margin-top: 8px; text-align: center;">
-          <a-button 
-            size="small" 
-            type="dashed" 
-            @click="forceLoadingRecovery"
-            style="font-size: 10px;"
-          >
-            Force Recovery
-          </a-button>
-        </div>
       </div>
 
       <!-- Settings Management -->
@@ -346,208 +366,55 @@ const variantOptions = ref([])
 const systemParameters = ref([])
 const autoReload = ref(true)
 
-const loading = ref({
-  start: false,
-  stop: false,
-  reset: false,
-  system: false,
-  protocol: false,
-  variant: false
-})
-
-// Track which operation is in progress to avoid premature clearing
-const operationInProgress = ref({
-  system: false,
-  protocol: false,
-  variant: false
-})
-
-// Polling mechanism and recovery
-const statusPollTimer = ref(null)
-const loadingStartTime = ref(null)
-const showRecoveryButton = ref(false)
-
-// FIXED: Better system busy detection
 const isSystemBusy = computed(() => {
-  const localLoading = loading.value.system || loading.value.protocol || loading.value.variant
-  const globalLoading = dserv.state.essStatus === 'loading'
-  return localLoading || globalLoading
+  return dserv.loadingState.isLoading
 })
 
-const isProtocolLoading = computed(() => {
-  return loading.value.system || loading.value.protocol || dserv.state.essStatus === 'loading'
-})
-
-const isVariantLoading = computed(() => {
-  return loading.value.system || loading.value.protocol || loading.value.variant || dserv.state.essStatus === 'loading'
-})
-
-const displayProtocolValue = computed(() => {
-  if (isProtocolLoading.value) {
-    return null
+const loadingMessage = computed(() => {
+  if (dserv.loadingState.isLoading) {
+    const { stage, message, percent } = dserv.loadingState
+    
+    // Show more detailed progress information
+    if (stage === 'complete' && trialCount.value > 0) {
+      return `Loaded ${trialCount.value} trials successfully`
+    }
+    
+    return `${stage}: ${message} (${percent}%)`
   }
-  return dserv.state.currentProtocol || null
+  return ''
 })
 
-const displayVariantValue = computed(() => {
-  if (isVariantLoading.value) {
-    return null
-  }
-  return dserv.state.currentVariant || null
+// Trial count tracking
+const trialCount = ref(0)
+const lastLoadedTrials = ref(0)
+
+const showRecoveryButton = computed(() => {
+  return dserv.loadingState.timeout || (dserv.loadingState.elapsed > 30000)
 })
 
-const availableProtocols = computed(() => {
-  if (isProtocolLoading.value) {
-    return []
-  }
-  return dserv.state.protocols
-})
-
-const availableVariants = computed(() => {
-  if (isVariantLoading.value) {
-    return []
-  }
-  return dserv.state.variants
-})
+const displayProtocolValue = computed(() => dserv.state.currentProtocol || null)
+const displayVariantValue = computed(() => dserv.state.currentVariant || null)
+const availableProtocols = computed(() => dserv.state.protocols)
+const availableVariants = computed(() => dserv.state.variants)
 
 const getProtocolPlaceholder = computed(() => {
-  if (isProtocolLoading.value) {
-    return "Loading protocols..."
-  }
-  if (!dserv.state.currentSystem) {
-    return "Select system first"
-  }
+  if (dserv.loadingState.isLoading) return "Loading..."
+  if (!dserv.state.currentSystem) return "Select system first"
   return "Select protocol..."
 })
 
 const getVariantPlaceholder = computed(() => {
-  if (isVariantLoading.value) {
-    return "Loading variants..."
-  }
-  if (!dserv.state.currentProtocol) {
-    return "Select protocol first"
-  }
+  if (dserv.loadingState.isLoading) return "Loading..."
+  if (!dserv.state.currentProtocol) return "Select protocol first"
   return "Select variant..."
 })
 
-// ENHANCED POLLING: Check backend status directly
-function startStatusPolling() {
-  if (statusPollTimer.value) {
-    clearInterval(statusPollTimer.value)
-  }
-  
-  loadingStartTime.value = Date.now()
-  let missedStatusChecks = 0
-  const maxMissedChecks = 3
-  showRecoveryButton.value = false
-  
-  statusPollTimer.value = setInterval(async () => {
-    const elapsed = Date.now() - loadingStartTime.value
-    
-    // Show recovery button after 15 seconds
-    if (elapsed > 15000) {
-      showRecoveryButton.value = true
-    }
-    
-    // Check backend status directly via command
-    try {
-      const backendStatus = await dserv.essCommand('dservGet ess/status', 2000)
-      const isBackendBusy = backendStatus === 'loading'
-      
-      missedStatusChecks = 0
-      
-      // If backend says it's not busy but frontend thinks it is, force recovery
-      if (!isBackendBusy && (loading.value.system || loading.value.protocol || loading.value.variant)) {
-        console.warn('Backend not busy but frontend stuck - forcing recovery')
-        stopStatusPolling()
-        forceLoadingRecovery()
-        return
-      }
-      
-      // Normal completion check
-      if (!isBackendBusy && (dserv.state.essStatus === 'stopped' || dserv.state.essStatus === 'running')) {
-        stopStatusPolling()
-        ensureLoadingStatesCleared()
-        return
-      }
-      
-    } catch (error) {
-      missedStatusChecks++
-      console.warn(`Failed to check backend status (${missedStatusChecks}/${maxMissedChecks}):`, error)
-      
-      if (missedStatusChecks >= maxMissedChecks) {
-        console.warn('Lost communication with backend - assuming operation complete')
-        stopStatusPolling()
-        forceLoadingRecovery()
-        return
-      }
-    }
-    
-    // Timeout check (45 seconds for long operations)
-    if (elapsed > 45000) {
-      console.warn('Loading timeout detected after 45s, forcing recovery')
-      stopStatusPolling()
-      forceLoadingRecovery()
-      return
-    }
-  }, 1000)
-}
-
-function stopStatusPolling() {
-  if (statusPollTimer.value) {
-    clearInterval(statusPollTimer.value)
-    statusPollTimer.value = null
-  }
-  loadingStartTime.value = null
-  showRecoveryButton.value = false
-}
-
-function ensureLoadingStatesCleared() {
-  if (!operationInProgress.value.system) {
-    loading.value.system = false
-  }
-  if (!operationInProgress.value.protocol) {
-    loading.value.protocol = false
-  }
-  if (!operationInProgress.value.variant) {
-    loading.value.variant = false
-  }
-}
-
-// ENHANCED RECOVERY: Sync with backend
 async function forceLoadingRecovery() {
-  console.warn('Forcing loading state recovery')
-  
   try {
-    const actualStatus = await dserv.essCommand('dservGet ess/status', 3000)
-    console.log('Backend status during recovery:', actualStatus)
-    
-    if (actualStatus === 'loading') {
-      console.log('Backend still loading - extending timeout')
-      startStatusPolling()
-      return
-    }
+    await dserv.forceLoadingRecovery()
+    logToConsole('Loading state recovered', 'success')
   } catch (error) {
-    console.warn('Could not verify backend status during recovery:', error)
-  }
-  
-  // Force clear everything
-  loading.value.system = false
-  loading.value.protocol = false
-  loading.value.variant = false
-  operationInProgress.value.system = false
-  operationInProgress.value.protocol = false
-  operationInProgress.value.variant = false
-  
-  logToConsole('Control recovered - check system status if needed', 'warning')
-  
-  // Refresh current state
-  try {
-    await dserv.essCommand('dservTouch ess/system')
-    await dserv.essCommand('dservTouch ess/protocol') 
-    await dserv.essCommand('dservTouch ess/variant')
-  } catch (error) {
-    console.warn('Failed to refresh state after recovery:', error)
+    logToConsole('Recovery failed', 'error')
   }
 }
 
@@ -563,15 +430,43 @@ onMounted(() => {
     ]
   })
 
+  // Event handlers
+  const unsubscribeLoading = dserv.on('loadingProgress', (progress) => {
+    console.log('Loading progress:', progress)
+  }, 'ExperimentControl')
+
+  const unsubscribeStarted = dserv.on('loadingStarted', (data) => {
+    console.log('Loading started:', data.operationId)
+  }, 'ExperimentControl')
+
+  const unsubscribeFinished = dserv.on('loadingFinished', (data) => {
+    console.log('Loading finished')
+    
+    // If we have trial count info, show it
+    if (lastLoadedTrials.value > 0) {
+      setTimeout(() => {
+        logToConsole(`Ready: ${lastLoadedTrials.value} trials loaded`, 'success')
+      }, 500)
+    }
+  }, 'ExperimentControl')
+
+  const unsubscribeError = dserv.on('loadingFailed', (data) => {
+    logToConsole(`Loading failed: ${data.error}`, 'error')
+  }, 'ExperimentControl')
+
+  const unsubscribeTimeout = dserv.on('loadingTimeout', () => {
+    logToConsole('Loading operation timed out', 'error')
+  }, 'ExperimentControl')
+  
   dserv.on('datapoint:ess/variant_info_json', (data) => {
     console.log('Received variant_info_json:', data.data)
     parseVariantInfoJson(data.data)
-  })
+  }, 'ExperimentControl') // Add component ID
 
   dserv.on('datapoint:ess/param_settings', (data) => {
     console.log('Received param_settings:', data.data)
     parseSystemParameters(data.data)
-  })
+  }, 'ExperimentControl') // Add component ID
 
   dserv.on('datapoint:ess/datafile', (data) => {
     console.log('Received datafile status:', data.data)
@@ -579,19 +474,67 @@ onMounted(() => {
     if (!data.data) {
       datafilename.value = ''
     }
-  })
+  }, 'ExperimentControl') // Add component ID
 
   dserv.on('datapoint:ess/lastfile', (data) => {
     console.log('Last file processed:', data.data)
     if (data.data) {
       logToConsole(`File processed: ${data.data}`, 'success')
     }
-  })
+  }, 'ExperimentControl') // Add component ID
+
+  dserv.on('trialsLoaded', (data) => {
+    trialCount.value = data.count
+    lastLoadedTrials.value = data.count
+    
+    logToConsole(`Loaded ${data.count} trials`, 'success')
+    console.log('Trials loaded event:', data)
+  }, 'ExperimentControl')
+
+  dserv.on('datapoint:ess/stiminfo', (data) => {
+    console.log('Received stiminfo data:', data.data ? 'HAS DATA' : 'NO DATA')
+    
+    if (data.data) {
+      try {
+        const stimData = JSON.parse(data.data)
+        if (stimData && stimData.rows && Array.isArray(stimData.rows)) {
+          const newTrialCount = stimData.rows.length
+          trialCount.value = newTrialCount
+          lastLoadedTrials.value = newTrialCount
+          
+          console.log(`Stiminfo parsed: ${newTrialCount} trials available`)
+          
+          if (newTrialCount > 0) {
+            setTimeout(() => {
+              if (dserv.state.obsTotal === newTrialCount && dserv.state.obsId === 0) {
+                console.log(`Confirmed obs count reset to 1/${newTrialCount}`)
+              }
+            }, 100)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to parse stiminfo:', error)
+      }
+    }
+  }, 'ExperimentControl') // Add component ID
 
   onUnmounted(() => {
     cleanup()
-    stopStatusPolling()
   })
+})
+
+const enhancedStatusInfo = computed(() => {
+  const baseInfo = {
+    status: dserv.state.status,
+    obsCount: dserv.state.obsCount,
+    inObs: dserv.state.inObs
+  }
+  
+  if (trialCount.value > 0) {
+    baseInfo.trialInfo = `${trialCount.value} trials loaded`
+  }
+  
+  return baseInfo
 })
 
 function parseVariantInfoJson(rawData) {
@@ -851,7 +794,7 @@ watch(() => dserv.state.connected, async (connected, wasConnected) => {
   if (connected && !wasConnected) {
     logToConsole('Reconnected to dserv', 'success')
     
-    if (loading.value.system || loading.value.protocol || loading.value.variant) {
+    if (dserv.loadingState.isLoading) {
       console.log('Recovering loading state after reconnection')
       
       try {
@@ -867,56 +810,6 @@ watch(() => dserv.state.connected, async (connected, wasConnected) => {
     }
   } else if (!connected) {
     logToConsole('Disconnected from dserv', 'error')
-  }
-})
-
-watch(isSystemBusy, (isBusy, wasBusy) => {
-  if (isBusy && !wasBusy) {
-    startStatusPolling()
-  } else if (!isBusy && wasBusy) {
-    stopStatusPolling()
-    ensureLoadingStatesCleared()
-  }
-})
-
-watch(() => dserv.state.essStatus, (newStatus, oldStatus) => {
-  if (oldStatus === 'loading' && (newStatus === 'stopped' || newStatus === 'running')) {
-    logToConsole('System loading completed', 'success')
-    stopStatusPolling()
-    ensureLoadingStatesCleared()
-  }
-})
-
-watch(() => dserv.state.currentSystem, (newVal, oldVal) => {
-  if (newVal !== oldVal) {
-    operationInProgress.value.system = false
-    loading.value.system = false
-  }
-})
-
-watch(() => dserv.state.currentProtocol, (newVal, oldVal) => {
-  if (newVal !== oldVal) {
-    operationInProgress.value.protocol = false
-    loading.value.protocol = false
-  }
-})
-
-watch(() => dserv.state.currentVariant, (newVal, oldVal) => {
-  if (newVal !== oldVal) {
-    operationInProgress.value.variant = false
-    loading.value.variant = false
-  }
-})
-
-watch(() => dserv.state.protocols, (newVal, oldVal) => {
-  if (newVal !== oldVal && !operationInProgress.value.protocol && !operationInProgress.value.system) {
-    loading.value.protocol = false
-  }
-})
-
-watch(() => dserv.state.variants, (newVal, oldVal) => {
-  if (newVal !== oldVal && !operationInProgress.value.variant && !operationInProgress.value.protocol && !operationInProgress.value.system) {
-    loading.value.variant = false
   }
 })
 
@@ -963,19 +856,10 @@ async function setSubject(subject) {
   }
 }
 
-// FIXED: Reset observation indicator when loading new system
 async function setSystem(system) {
-  // RESET OBS INDICATOR IMMEDIATELY
+  // RESET OBS INDICATOR IMMEDIATELY (keep this important behavior)
   dserv.state.obsCount = ''
   dserv.state.inObs = false
-  
-  loading.value.system = true
-  loading.value.protocol = true
-  loading.value.variant = true
-  
-  operationInProgress.value.system = true
-  operationInProgress.value.protocol = true
-  operationInProgress.value.variant = true
   
   try {
     await dserv.setSystem(system)
@@ -983,78 +867,50 @@ async function setSystem(system) {
   } catch (error) {
     console.error('Failed to set system:', error)
     logToConsole(`Failed to load system: ${error.message}`, 'error')
-    operationInProgress.value.system = false
-    operationInProgress.value.protocol = false
-    operationInProgress.value.variant = false
-    ensureLoadingStatesCleared()
-    stopStatusPolling()
   }
 }
 
 async function setProtocol(protocol) {
-  loading.value.protocol = true
-  loading.value.variant = true
-  
-  operationInProgress.value.protocol = true
-  operationInProgress.value.variant = true
-  
   try {
     await dserv.setProtocol(protocol)
     logToConsole(`Protocol loaded: ${protocol}`, 'success')
   } catch (error) {
     console.error('Failed to set protocol:', error)
     logToConsole(`Failed to load protocol: ${error.message}`, 'error')
-    operationInProgress.value.protocol = false
-    operationInProgress.value.variant = false
-    ensureLoadingStatesCleared()
-    stopStatusPolling()
   }
 }
 
 async function setVariant(variant) {
-  loading.value.variant = true
-  operationInProgress.value.variant = true
-  
   try {
     await dserv.setVariant(variant)
     logToConsole(`Variant loaded: ${variant}`, 'success')
   } catch (error) {
     console.error('Failed to set variant:', error)
     logToConsole(`Failed to load variant: ${error.message}`, 'error')
-    operationInProgress.value.variant = false
-    ensureLoadingStatesCleared()
-    stopStatusPolling()
   }
 }
 
 async function startExperiment() {
-  loading.value.start = true
   try {
     await dserv.startExperiment()
     logToConsole('Experiment started', 'success')
   } catch (error) {
     console.error('Failed to start experiment:', error)
     logToConsole(`Failed to start: ${error.message}`, 'error')
-  } finally {
-    loading.value.start = false
   }
 }
 
 async function stopExperiment() {
-  loading.value.stop = true
   try {
     await dserv.stopExperiment()
     logToConsole('Experiment stopped', 'success')
   } catch (error) {
     console.error('Failed to stop experiment:', error)
     logToConsole(`Failed to stop: ${error.message}`, 'error')
-  } finally {
-    loading.value.stop = false
   }
 }
 
 async function resetExperiment() {
-  loading.value.reset = true
   try {
     await dserv.resetExperiment()
     dserv.state.obsCount = ' '
@@ -1062,8 +918,6 @@ async function resetExperiment() {
   } catch (error) {
     console.error('Failed to reset experiment:', error)
     logToConsole(`Failed to reset: ${error.message}`, 'error')
-  } finally {
-    loading.value.reset = false
   }
 }
 

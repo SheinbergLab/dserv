@@ -167,34 +167,182 @@
 import { ref, computed, onMounted, onUnmounted, h, nextTick } from 'vue'
 import { dserv } from '../services/dserv.js'
 
-// Reactive state
+// ============================================================================
+// REACTIVE STATE (Enhanced with caching)
+// ============================================================================
+
 const rawStimData = ref(null)
 const tableContainerRef = ref(null)
 const tableScrollHeight = ref(400)
 const stimData = ref([])
 const arrayColumns = ref([])
+
+// NEW: Caching state for two-tier approach
+const expandedRowData = ref(new Map())
+const expandedCache = ref(new Map())
+const arrayMetadata = ref(new Map())
+
+// Existing modal state
 const arrayModalVisible = ref(false)
 const arrayModalData = ref(null)
 const arrayModalTitle = ref('')
 const arrayModalTrialIndex = ref(0)
 
-// Loading state
+// Loading state (unchanged)
 const isLoading = ref(false)
 const hasRequestedData = ref(false)
-const autoLoad = ref(false)
+const autoLoad = ref(true) // CHANGED: Default to true for "always show"
 const autoLoadTimeoutId = ref(null)
 const resetTimeoutId = ref(null)
 
-// Tree view state
+// Tree view state (unchanged)
 const selectedRowKeys = ref([])
 const selectedTrial = ref(0)
 const selectedTrialData = ref(null)
 
-// Tree functionality
+// ============================================================================
+// CORE DATA PROCESSING (New two-tier approach)
+// ============================================================================
+
+// TIER 1: Ultra-fast summary processing - minimal metadata only
+function processHybridDataSummary(hybridData) {
+  console.time('Ultra-fast processing');
+  
+  if (!hybridData || !hybridData.rows || !hybridData.arrays) {
+    console.error('Invalid hybrid data format');
+    return [];
+  }
+
+  const { rows, arrays } = hybridData;
+  const arrayFields = Object.keys(arrays);
+  
+  // Pre-compute array sizes ONCE (not reactive for performance)
+  const arraySizeMaps = {};
+  arrayFields.forEach(fieldName => {
+    const arrayCollection = arrays[fieldName];
+    arraySizeMaps[fieldName] = arrayCollection.map(arr => 
+      Array.isArray(arr) ? arr.length : 0
+    );
+    
+    // Store minimal metadata (non-reactive)
+    arrayMetadata.value.set(fieldName, {
+      totalArrays: arrayCollection.length,
+      hasNestedArrays: arrayCollection.length > 0 && 
+                     Array.isArray(arrayCollection[0]) && 
+                     Array.isArray(arrayCollection[0][0])
+    });
+  });
+
+  // Create ultra-lightweight summary rows
+  const summaryRows = rows.map((row, index) => {
+    // Start with minimal object
+    const summaryRow = { trial_index: index };
+    
+    // Copy non-array fields directly
+    Object.keys(row).forEach(key => {
+      if (!arrayFields.includes(key)) {
+        summaryRow[key] = row[key];
+      } else if (typeof row[key] === 'number') {
+        // For array fields, store just the index and size as simple properties
+        const arrayIndex = row[key];
+        const size = arraySizeMaps[key][arrayIndex] || 0;
+        
+        // Use simple object (not reactive metadata object)
+        summaryRow[key] = `ARRAY_REF:${arrayIndex}:${size}:${key}`;
+      }
+    });
+    
+    return summaryRow;
+  });
+
+  console.timeEnd('Ultra-fast processing');
+  console.log(`Ultra-fast processed: ${summaryRows.length} trials, ${arrayFields.length} array fields`);
+  
+  return summaryRows;
+}
+
+// TIER 2: On-demand expansion for tree view (entire row) - Throttled
+function expandRowData(trialIndex) {
+  if (expandedRowData.value.has(trialIndex)) {
+    return expandedRowData.value.get(trialIndex);
+  }
+
+  console.time(`Expand row ${trialIndex}`);
+  
+  const row = rawStimData.value.rows[trialIndex];
+  const { arrays } = rawStimData.value;
+  const expandedRow = { trial_index: trialIndex, ...row };
+  
+  // Expand array fields but limit depth for performance
+  Object.keys(arrays).forEach(fieldName => {
+    if (fieldName in row && typeof row[fieldName] === 'number') {
+      const arrayIndex = row[fieldName];
+      const arrayData = arrays[fieldName][arrayIndex];
+      
+      // For very large arrays, just store reference for tree view
+      // CONFIGURABLE: Threshold for "large" arrays
+      const LARGE_ARRAY_THRESHOLD = 100; // Was 1000, now 100
+      const PREVIEW_SIZE = 5; // Was 10, now 5
+      
+      if (Array.isArray(arrayData) && arrayData.length > LARGE_ARRAY_THRESHOLD) {
+        expandedRow[fieldName] = {
+          _isLargeArray: true,
+          _size: arrayData.length,
+          _preview: arrayData.slice(0, PREVIEW_SIZE), // Just first 5 items
+          _fullData: arrayData // Keep reference for modal
+        };
+      } else {
+        expandedRow[fieldName] = arrayData;
+      }
+    }
+  });
+  
+  expandedRowData.value.set(trialIndex, expandedRow);
+  console.timeEnd(`Expand row ${trialIndex}`);
+  
+  return expandedRow;
+}
+
+// TIER 2: On-demand expansion for specific arrays (modal view)
+function expandSingleArray(trialIndex, fieldName) {
+  const cacheKey = `${trialIndex}:${fieldName}`;
+  
+  if (expandedCache.value.has(cacheKey)) {
+    return expandedCache.value.get(cacheKey);
+  }
+
+  const row = rawStimData.value.rows[trialIndex];
+  const { arrays } = rawStimData.value;
+  
+  if (fieldName in row && typeof row[fieldName] === 'number') {
+    const arrayIndex = row[fieldName];
+    const arrayData = arrays[fieldName][arrayIndex];
+    expandedCache.value.set(cacheKey, arrayData);
+    return arrayData;
+  }
+  
+  return null;
+}
+
+// Clear all caches when new data loads
+function clearCaches() {
+  expandedRowData.value.clear();
+  expandedCache.value.clear();
+  arrayMetadata.value.clear();
+}
+
+// ============================================================================
+// TREE FUNCTIONALITY (Updated to use expanded data)
+// ============================================================================
+
 function onRowSelect(record) {
   selectedRowKeys.value = [record.trial_index]
   selectedTrial.value = record.trial_index
-  selectedTrialData.value = record
+  
+  // Expand the row data for tree view (async to avoid blocking)
+  nextTick(() => {
+    selectedTrialData.value = expandRowData(record.trial_index);
+  });
 }
 
 function formatValue(value) {
@@ -213,12 +361,31 @@ function buildTreeData(data) {
   const treeNodes = []
   let keyCounter = 0
   
+  // CONFIGURABLE: Tree view limits for performance
+  const MAX_TREE_ITEMS = 50; // Back to 50 for better single-trial exploration
+  
   Object.entries(data).forEach(([key, value]) => {
     const nodeKey = `${keyCounter++}`
     
-    if (Array.isArray(value) || (value && typeof value === 'object' && 'length' in value)) {
+    // Handle large arrays specially
+    if (value && value._isLargeArray) {
+      treeNodes.push({
+        title: `${key} (${value._size} items - showing first ${value._preview.length})`,
+        key: nodeKey,
+        children: value._preview.map((item, i) => ({
+          title: `[${i}]`,
+          key: `${nodeKey}-${i}`,
+          value: item,
+          isLeaf: true
+        }))
+      });
+    } else if (Array.isArray(value) || (value && typeof value === 'object' && 'length' in value)) {
+      // Limit tree display for performance
+      const actualLength = value.length;
+      const itemsToShow = Math.min(actualLength, MAX_TREE_ITEMS);
+      
       const children = []
-      for (let i = 0; i < value.length; i++) {
+      for (let i = 0; i < itemsToShow; i++) {
         children.push({
           title: `[${i}]`,
           key: `${nodeKey}-${i}`,
@@ -227,8 +394,17 @@ function buildTreeData(data) {
         })
       }
       
+      if (actualLength > MAX_TREE_ITEMS) {
+        children.push({
+          title: `... and ${actualLength - MAX_TREE_ITEMS} more items`,
+          key: `${nodeKey}-more`,
+          value: `(${actualLength - MAX_TREE_ITEMS} additional items)`,
+          isLeaf: true
+        });
+      }
+      
       treeNodes.push({
-        title: `${key} (${value.length})`,
+        title: `${key} (${actualLength})`,
         key: nodeKey,
         children: children
       })
@@ -252,32 +428,10 @@ const defaultExpandedKeys = computed(() => {
     .map(node => node.key)
 })
 
-// Process hybrid JSON data
-function processHybridData(hybridData) {
-  if (!hybridData || !hybridData.rows || !hybridData.arrays) {
-    console.error('Invalid hybrid data format')
-    return []
-  }
+// ============================================================================
+// TABLE COLUMNS (Updated for ultra-fast summary view)
+// ============================================================================
 
-  const { rows, arrays } = hybridData
-  const arrayFields = Object.keys(arrays)
-  
-  return rows.map((row, index) => {
-    const enhancedRow = { trial_index: index, ...row }
-    
-    arrayFields.forEach(fieldName => {
-      if (fieldName in row && typeof row[fieldName] === 'number') {
-        const arrayIndex = row[fieldName]
-        const arrayData = arrays[fieldName][arrayIndex]
-        enhancedRow[fieldName] = arrayData
-      }
-    })
-    
-    return enhancedRow
-  })
-}
-
-// Generate table columns
 const tableColumns = computed(() => {
   if (!stimData.value || stimData.value.length === 0) return []
   
@@ -296,61 +450,95 @@ const tableColumns = computed(() => {
     if (key === 'trial_index') return
     
     const sampleValue = sampleRow[key]
-    const isArrayColumn = Array.isArray(sampleValue) || (sampleValue && typeof sampleValue === 'object' && 'length' in sampleValue)
+    const isArrayRef = typeof sampleValue === 'string' && sampleValue.startsWith('ARRAY_REF:')
     
-    if (isArrayColumn && !arrayColumns.value.includes(key)) {
-      arrayColumns.value.push(key)
-    }
-    
-    columns.push({
-      title: key,
-      dataIndex: key,
-      key: key,
-      width: isArrayColumn ? 80 : 90,
-      ellipsis: !isArrayColumn,
-      customRender: isArrayColumn ? ({ text, record }) => {
-        if (text && text.length !== undefined) {
+    if (isArrayRef) {
+      if (!arrayColumns.value.includes(key)) {
+        arrayColumns.value.push(key)
+      }
+      
+      columns.push({
+        title: key,
+        dataIndex: key,
+        key: key,
+        width: 100,
+        customRender: ({ text, record }) => {
+          if (!text || !text.startsWith('ARRAY_REF:')) return '—'
+          
+          // Parse: "ARRAY_REF:arrayIndex:size:fieldName"
+          const [, arrayIndex, size, fieldName] = text.split(':')
+          const metadata = arrayMetadata.value.get(fieldName)
+          const typeIndicator = metadata?.hasNestedArrays ? 'nested' : 'array'
+          
           return h('span', {
             style: {
               color: '#666',
               fontSize: '11px',
               cursor: 'pointer',
               textDecoration: 'none',
-              transition: 'text-decoration 0.1s ease'
+              transition: 'color 0.2s ease'
             },
             onMouseenter: (e) => {
+              e.target.style.color = '#1890ff'
               e.target.style.textDecoration = 'underline'
             },
             onMouseleave: (e) => {
-              // Immediate removal of underline
+              e.target.style.color = '#666'
               e.target.style.textDecoration = 'none'
             },
-            onClick: () => showArrayDetail(text, key, record.trial_index)
-          }, `array[${text.length}]`)
-        } else {
-          return '—'
+            onClick: () => handleArrayExpand(record.trial_index, fieldName)
+          }, `${typeIndicator}[${size}] →`)
         }
-      } : ({ text }) => {
-        if (typeof text === 'number' && !Number.isInteger(text)) {
-          return text.toFixed(3)
+      })
+    } else {
+      // Regular columns (unchanged)
+      columns.push({
+        title: key,
+        dataIndex: key,
+        key: key,
+        width: 90,
+        ellipsis: true,
+        customRender: ({ text }) => {
+          if (typeof text === 'number' && !Number.isInteger(text)) {
+            return text.toFixed(3)
+          }
+          return text
+        },
+        sorter: (a, b) => {
+          const aVal = a[key]
+          const bVal = b[key]
+          if (typeof aVal === 'number' && typeof bVal === 'number') {
+            return aVal - bVal
+          }
+          return String(aVal).localeCompare(String(bVal))
         }
-        return text
-      },
-      sorter: !isArrayColumn ? (a, b) => {
-        const aVal = a[key]
-        const bVal = b[key]
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          return aVal - bVal
-        }
-        return String(aVal).localeCompare(String(bVal))
-      } : false
-    })
+      })
+    }
   })
   
   return columns
 })
 
-// Array detail modal functions
+// ============================================================================
+// ARRAY EXPANSION HANDLERS
+// ============================================================================
+
+function handleArrayExpand(trialIndex, fieldName) {
+  console.log(`Expanding array: trial ${trialIndex}, field ${fieldName}`);
+  
+  try {
+    const arrayData = expandSingleArray(trialIndex, fieldName);
+    if (arrayData) {
+      showArrayDetail(arrayData, fieldName, trialIndex);
+    } else {
+      console.warn(`No array data found for trial ${trialIndex}, field ${fieldName}`);
+    }
+  } catch (error) {
+    console.error('Failed to expand array:', error);
+  }
+}
+
+// Array detail modal functions (unchanged)
 function showArrayDetail(arrayData, columnName, trialIndex) {
   arrayModalData.value = arrayData
   arrayModalTitle.value = columnName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
@@ -402,7 +590,10 @@ const nestedArrayTableData = computed(() => {
   })
 })
 
-// Load data function
+// ============================================================================
+// DATA LOADING (Updated to use summary processing)
+// ============================================================================
+
 async function loadStimData() {
   if (isLoading.value) return
   
@@ -419,17 +610,18 @@ async function loadStimData() {
   }
 }
 
-// Calculate and update table height
+// ============================================================================
+// UI MANAGEMENT (unchanged)
+// ============================================================================
+
 function updateTableHeight() {
   if (tableContainerRef.value) {
     const containerHeight = tableContainerRef.value.clientHeight
-    // Subtract header height (approximately 40px for the table header)
     tableScrollHeight.value = Math.max(200, containerHeight - 40)
     console.log('Updated table scroll height:', tableScrollHeight.value)
   }
 }
 
-// Handle window resize
 let resizeObserver = null
 function setupResizeObserver() {
   if (tableContainerRef.value && window.ResizeObserver) {
@@ -461,6 +653,9 @@ function resetStimDataState() {
     selectedTrial.value = 0
     selectedTrialData.value = null
     
+    // NEW: Clear caches
+    clearCaches()
+    
     // Clear any existing auto-load timeout
     if (autoLoadTimeoutId.value) {
       clearTimeout(autoLoadTimeoutId.value)
@@ -487,7 +682,10 @@ function resetStimDataState() {
   }, 300) // Wait 300ms for all related changes to settle
 }
 
-// Component lifecycle and event handling
+// ============================================================================
+// COMPONENT LIFECYCLE (Updated data handler)
+// ============================================================================
+
 onMounted(() => {
   console.log('StimInfo component mounted')
   
@@ -498,7 +696,7 @@ onMounted(() => {
     ]
   })
   
-  // ONLY event-based data handling - no more handler chaining
+  // UPDATED: Event-based data handling with summary processing
   dserv.on('datapoint:ess/stiminfo', (data) => {
     console.log('Received stiminfo data (autoLoad:', autoLoad.value, 'hasRequestedData:', hasRequestedData.value, 'isLoading:', isLoading.value, ')')
     
@@ -506,9 +704,12 @@ onMounted(() => {
     if (isLoading.value || hasRequestedData.value || autoLoad.value) {
       try {
         rawStimData.value = JSON.parse(data.data)
-        stimData.value = processHybridData(rawStimData.value)
-        arrayColumns.value = []
         
+        // NEW: Use summary processing instead of full processing
+        stimData.value = processHybridDataSummary(rawStimData.value)
+        
+        // Clear state
+        arrayColumns.value = []
         selectedRowKeys.value = []
         selectedTrial.value = 0
         selectedTrialData.value = null
@@ -516,7 +717,7 @@ onMounted(() => {
         // Mark as requested since we received and processed data
         hasRequestedData.value = true
         
-        console.log('Processed stiminfo data:', stimData.value.length, 'trials')
+        console.log('Processed stiminfo summary:', stimData.value.length, 'trials')
         
         // Update table height after data loads
         nextTick(() => {
@@ -534,18 +735,17 @@ onMounted(() => {
     }
   })
   
-  // Listen for system changes - reset when loading finishes
+  // Listen for system changes - reset when loading finishes (unchanged)
   dserv.on('systemState', ({ loading }) => {
-    if (!loading) { // Only when loading completes
+    if (!loading) {
       console.log('System loading completed, checking if reset needed')
-      // Use a small delay to let all system changes settle
       setTimeout(() => {
         resetStimDataState()
       }, 100)
     }
   })
   
-  // Handle reconnection scenarios
+  // Handle reconnection scenarios (unchanged)
   dserv.on('connection', ({ connected }) => {
     if (connected && isLoading.value && hasRequestedData.value) {
       console.log('Reconnected while loading, re-requesting stimulus data')

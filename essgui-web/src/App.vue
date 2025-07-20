@@ -25,7 +25,9 @@ onMounted(async () => {
   } catch (error) {
     console.error('Failed to initialize script execution service:', error)
   }
-  
+
+  window.dserv = dserv
+
 })
 </script>
 

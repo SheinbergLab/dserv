@@ -133,15 +133,26 @@ class DservWebSocket {
       screenWidth: 800,
       screenHeight: 600,
       screenHalfX: 10.0,
-      screenHalfY: 7.5,
+	screenHalfY: 7.5,
     });
+      
+      this.loadingState = reactive({
+	  isLoading: false,
+	  operationId: null,
+	  startTime: null,
+	  stage: '',
+	  message: '',
+	  percent: 0,
+	  elapsed: 0,
+	  timeout: false,
+	  error: null
+      });
 
-    this.loadingOperations = reactive({
-      system: false,
-      protocol: false,
-      variant: false,
-    });
-
+    this.loadingTimer = null;
+    this.loadingWatchdog = null;
+    this.LOADING_TIMEOUT = 60000; // 60 seconds max
+    this.PROGRESS_TIMEOUT = 15000; // 15 seconds without progress
+      
     // Start monitoring
     this.startMonitoring();
 
@@ -250,7 +261,11 @@ class DservWebSocket {
 	this.send({ cmd: 'subscribe', match: 'ess/generalLog', every: 1 });
 	
 	this.send({ cmd: 'subscribe', match: 'print', every: 1 });
-	
+
+	this.send({ cmd: 'subscribe', match: 'ess/loading_progress', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/loading_operation_id', every: 1 });
+	this.send({ cmd: 'subscribe', match: 'ess/loading_start_time', every: 1 });
+    	
 	console.log('All global subscriptions established');
     }
 
@@ -290,7 +305,6 @@ class DservWebSocket {
     }
   }
 
-  // ORIGINAL: This is the critical method that was broken!
   handleMessage(data) {
     if (data.requestId && this.requestCallbacks.has(data.requestId)) {
       const { resolve, reject } = this.requestCallbacks.get(data.requestId);
@@ -308,85 +322,284 @@ class DservWebSocket {
     }
   }
 
-  // ORIGINAL: This is the method that actually updates state and emits to components!
-  handleDatapoint(data) {
-    const { name, data: value } = data;
-    
-    // ORIGINAL: Update state and enrich data
-    this.updateCentralState(name, value);
-    
-    // ORIGINAL: Route to components
-    this.emit(`datapoint:${name}`, data);
-    this.emit('datapoint:*', data);
-  }
-
-  // ORIGINAL: Central state management (this was working!)
-  updateCentralState(name, value) {
-    // This is where dserv.js adds value - central state management
-    switch (name) {
-      case 'ess/systems': this.state.systems = this.parseList(value); break;
-      case 'ess/protocols': this.state.protocols = this.parseList(value); break;
-      case 'ess/variants': this.state.variants = this.parseList(value); break;
-      case 'ess/git/branches': this.state.branches = this.parseList(value); break;
-      case 'ess/system': this.state.currentSystem = value; break;
-      case 'ess/protocol': this.state.currentProtocol = value; break;
-      case 'ess/variant': this.state.currentVariant = value; break;
-      case 'ess/git/branch': this.state.currentBranch = value; break;
-      case 'ess/status': 
-        this.state.essStatus = value; 
-        this.handleStatusChange(value); 
-        break;
-      case 'ess/state': this.state.status = value; break;
-      case 'ess/obs_id': 
-        this.state.obsId = parseInt(value, 10) || 0; 
-        this.updateObsCount(); 
-        break;
-      case 'ess/obs_total': 
-        this.state.obsTotal = parseInt(value, 10) || 0; 
-        this.updateObsCount(); 
-        break;
-      case 'ess/in_obs': this.state.inObs = value === '1'; break;
-      case 'ess/block_pct_complete': 
-        this.state.blockPctComplete = Math.round(parseFloat(value) * 100); 
-        break;
-      case 'ess/block_pct_correct': 
-        this.state.blockPctCorrect = Math.round(parseFloat(value) * 100); 
-        break;
-      case 'ess/subject': this.state.subject = value; break;
-
-      // Eye tracking data processing
-      case 'ess/em_region_setting':
-        this.processEyeWindowSetting(value);
-        break;
-      case 'ess/em_region_status':
-        this.processEyeWindowStatus(value);
-        break;
-        
-      // NEW: Touch window data processing
-      case 'ess/touch_region_setting':
-        this.processTouchWindowSetting(value);
-        break;
-      case 'ess/touch_region_status':
-        this.processTouchWindowStatus(value);
-        break;
-        
-      // NEW: Screen dimensions
-      case 'ess/screen_w': this.state.screenWidth = parseInt(value, 10) || 800; break;
-      case 'ess/screen_h': this.state.screenHeight = parseInt(value, 10) || 600; break;
-      case 'ess/screen_halfx': this.state.screenHalfX = parseFloat(value) || 10.0; break;
-      case 'ess/screen_halfy': this.state.screenHalfY = parseFloat(value) || 7.5; break;
-
-    case 'ess/stiminfo':
-	this.state.stiminfo = value;
-	console.log('Updated ess/stiminfo in dserv.state:', value ? 'DATA AVAILABLE' : 'NO DATA');
-	break;	
+    handleDatapoint(data) {
+	const { name, data: value } = data;
 	
-      case 'system/hostname': this.state.systemName = value; break;
-      case 'system/os': this.state.systemOS = value; break;
-      case 'print': console.log('ESS:', value); break;
+	this.updateCentralState(name, value);
+	
+	this.emit(`datapoint:${name}`, data);
+	this.emit('datapoint:*', data);
+    }
+    
+    updateCentralState(name, value) {
+	// This is where dserv.js adds value - central state management
+	switch (name) {
+	case 'ess/systems': this.state.systems = this.parseList(value); break;
+	case 'ess/protocols': this.state.protocols = this.parseList(value); break;
+	case 'ess/variants': this.state.variants = this.parseList(value); break;
+	case 'ess/git/branches': this.state.branches = this.parseList(value); break;
+	case 'ess/system': this.state.currentSystem = value; break;
+	case 'ess/protocol': this.state.currentProtocol = value; break;
+	case 'ess/variant': this.state.currentVariant = value; break;
+	case 'ess/git/branch': this.state.currentBranch = value; break;
+	case 'ess/status': 
+            this.state.essStatus = value; 
+            this.handleEssStatus(value); 
+            break;
+	case 'ess/state': this.state.status = value; break;
+	case 'ess/obs_id': 
+            this.state.obsId = parseInt(value, 10) || 0; 
+            this.updateObsCount(); 
+            break;
+	case 'ess/obs_total': 
+            this.state.obsTotal = parseInt(value, 10) || 0; 
+            this.updateObsCount(); 
+            break;
+	case 'ess/in_obs': this.state.inObs = value === '1'; break;
+	case 'ess/block_pct_complete': 
+            this.state.blockPctComplete = Math.round(parseFloat(value) * 100); 
+            break;
+	case 'ess/block_pct_correct': 
+            this.state.blockPctCorrect = Math.round(parseFloat(value) * 100); 
+            break;
+	case 'ess/subject': this.state.subject = value; break;
+	    
+	    // Eye tracking data processing
+	case 'ess/em_region_setting':
+            this.processEyeWindowSetting(value);
+            break;
+	case 'ess/em_region_status':
+            this.processEyeWindowStatus(value);
+            break;
+            
+	    // NEW: Touch window data processing
+	case 'ess/touch_region_setting':
+            this.processTouchWindowSetting(value);
+            break;
+	case 'ess/touch_region_status':
+            this.processTouchWindowStatus(value);
+            break;
+            
+	    // NEW: Screen dimensions
+	case 'ess/screen_w': this.state.screenWidth = parseInt(value, 10) || 800; break;
+	case 'ess/screen_h': this.state.screenHeight = parseInt(value, 10) || 600; break;
+	case 'ess/screen_halfx': this.state.screenHalfX = parseFloat(value) || 10.0; break;
+	case 'ess/screen_halfy': this.state.screenHalfY = parseFloat(value) || 7.5; break;
+	    
+	case 'ess/stiminfo':
+	    this.state.stiminfo = value;
+      console.log('Updated ess/stiminfo in dserv.state:', value ? 'DATA AVAILABLE' : 'NO DATA');
+      break;	    
+	    
+	case 'system/hostname': this.state.systemName = value; break;
+	case 'system/os': this.state.systemOS = value; break;
+	case 'print': console.log('ESS:', value); break;
+	    
+	case 'ess/loading_progress':
+            this.handleLoadingProgress(value);
+            break;
+	case 'ess/loading_operation_id':
+            this.handleLoadingOperationId(value);
+            break;
+	case 'ess/loading_start_time':
+            // Just for reference, main logic is in operation_id handler
+            break;	
+	}
+    }
+
+    updateTrialCounts(trialCount) {
+    if (trialCount > 0) {
+        console.log(`StimInfo reported: ${trialCount} trials`);
+        
+        // Only update if different from current
+        if (this.state.obsTotal !== trialCount) {
+            this.state.obsTotal = trialCount;
+            this.state.obsId = 0; // Reset to first trial
+            this.updateObsCount();
+            
+            // Emit event for other components that might care
+            this.emit('trialsLoaded', { 
+                count: trialCount,
+                source: 'StimInfo'
+            });
+            
+            console.log(`Updated obs count to 1/${trialCount} from StimInfo processing`);
+        }
+    }
+    }
+    
+handleLoadingProgress(value) {
+    if (!value) {
+      this.clearLoadingState();
+      return;
+    }
+
+    try {
+      const progress = JSON.parse(value);
+      Object.assign(this.loadingState, {
+        stage: progress.stage,
+        message: progress.message,
+        percent: progress.percent,
+        elapsed: progress.elapsed,
+        error: progress.stage === 'error' ? progress.message : null
+      });
+
+      // Reset progress timeout since we got an update
+      this.resetProgressWatchdog();
+
+      if (progress.stage === 'complete' || progress.stage === 'error') {
+        setTimeout(() => this.clearLoadingState(), 1000);
+      }
+
+      this.emit('loadingProgress', this.loadingState);
+    } catch (error) {
+      console.error('Failed to parse loading progress:', error);
     }
   }
 
+  handleLoadingOperationId(value) {
+    if (value && !this.loadingState.isLoading) {
+      this.startLoadingMonitoring(value);
+    } else if (!value && this.loadingState.isLoading) {
+      this.clearLoadingState();
+    }
+  }
+
+  handleEssStatus(value) {
+    this.state.essStatus = value;
+    
+    if (value === 'loading' && !this.loadingState.isLoading) {
+      // Fallback: start monitoring even without operation ID
+      this.startLoadingMonitoring('unknown_' + Date.now());
+    } else if (value === 'stopped' && this.loadingState.isLoading) {
+      // Loading completed
+      setTimeout(() => this.clearLoadingState(), 500);
+    }
+  }
+
+startLoadingMonitoring(operationId) {
+    console.log('Starting loading monitoring:', operationId);
+    
+    this.loadingState.isLoading = true;
+    this.loadingState.operationId = operationId;
+    this.loadingState.startTime = Date.now();
+    this.loadingState.timeout = false;
+    this.loadingState.error = null;
+
+    // Set overall timeout
+    this.loadingTimer = setTimeout(() => {
+      console.warn('Loading operation timed out');
+      this.handleLoadingTimeout();
+    }, this.LOADING_TIMEOUT);
+
+    // Start progress watchdog
+    this.resetProgressWatchdog();
+
+    this.emit('loadingStarted', { operationId });
+}
+
+resetProgressWatchdog() {
+    if (this.loadingWatchdog) {
+      clearTimeout(this.loadingWatchdog);
+    }
+
+    this.loadingWatchdog = setTimeout(() => {
+      console.warn('No loading progress for 15 seconds');
+      this.handleProgressTimeout();
+    }, this.PROGRESS_TIMEOUT);
+}
+
+  handleLoadingTimeout() {
+    console.error('Loading operation timed out completely');
+    this.loadingState.timeout = true;
+    this.loadingState.error = 'Loading operation timed out';
+    this.emit('loadingTimeout', this.loadingState);
+    this.forceLoadingRecovery();
+  }
+
+  handleProgressTimeout() {
+    console.warn('Loading progress stalled');
+    // Don't immediately fail, but check backend status
+    this.checkBackendStatus();
+  }
+
+ async checkBackendStatus() {
+    try {
+      const status = await withTimeout(
+        this.essCommand('dservGet ess/status'), 
+        5000, 
+        'Status check timeout'
+      );
+      
+      if (status !== 'loading') {
+        console.log('Backend not loading, clearing frontend loading state');
+        this.clearLoadingState();
+      } else {
+        // Reset watchdog and continue waiting
+        this.resetProgressWatchdog();
+      }
+    } catch (error) {
+      console.error('Failed to check backend status:', error);
+      this.forceLoadingRecovery();
+    }
+ }
+
+async forceLoadingRecovery() {
+    console.warn('Forcing loading recovery');
+    
+    try {
+      // Try to reset backend status
+      await withTimeout(
+        this.essCommand('dservSet ess/status stopped'),
+        3000,
+        'Recovery command timeout'
+      );
+      
+      // Clear frontend state
+      this.clearLoadingState();
+      
+      // Refresh current state
+      await this.essCommand('dservTouch ess/system');
+      await this.essCommand('dservTouch ess/protocol');
+      await this.essCommand('dservTouch ess/variant');
+      
+      this.emit('loadingRecovered', { forced: true });
+      
+    } catch (error) {
+      console.error('Recovery failed:', error);
+      this.emit('loadingFailed', { error: 'Recovery failed' });
+    }
+  }
+
+  clearLoadingState() {
+    if (this.loadingTimer) {
+      clearTimeout(this.loadingTimer);
+      this.loadingTimer = null;
+    }
+    if (this.loadingWatchdog) {
+      clearTimeout(this.loadingWatchdog);
+      this.loadingWatchdog = null;
+    }
+
+    const wasLoading = this.loadingState.isLoading;
+    
+    Object.assign(this.loadingState, {
+      isLoading: false,
+      operationId: null,
+      startTime: null,
+      stage: '',
+      message: '',
+      percent: 0,
+      elapsed: 0,
+      timeout: false,
+      error: null
+    });
+
+    if (wasLoading) {
+      this.emit('loadingFinished', this.loadingState);
+    }
+  }
+    
   // NEW: Non-intrusive frequency tracking
   trackDatapointFrequency(datapointName, timestamp) {
     if (!this.monitoring.datapointFrequencies.has(datapointName)) {
@@ -752,20 +965,6 @@ class DservWebSocket {
     }
   }
 
-  handleStatusChange(status) {
-    if (status === 'loading') {
-      console.log('System entering loading state');
-      this.emit('systemState', { loading: true });
-    } else if (status === 'stopped') {
-        // When loading is finished, reset all loading flags
-        this.loadingOperations.system = false;
-        this.loadingOperations.protocol = false;
-        this.loadingOperations.variant = false;
-        console.log('System finished loading.');
-        this.emit('systemState', { loading: false });
-    }
-  }
-
   updateObsCount() {
     if (this.state.obsTotal > 0) {
       this.state.obsCount = `${this.state.obsId + 1}/${this.state.obsTotal}`;
@@ -868,81 +1067,108 @@ class DservWebSocket {
     }
   }
 
-  // System loading methods
-  async setSystem(system) {
-    try {
-      this.loadingOperations.system = true;
-      await this.essCommand(`ess::load_system ${system}`);
-      this.emit('systemLoaded', { system, success: true });
-    } catch (error) {
-      this.loadingOperations.system = false;
-      this.emit('systemLoaded', { system, success: false, error });
-      throw error;
-    }
+async setSystem(system) {
+  this.startImmediateLoadingState('system', `Loading system: ${system}`);	
+  try {
+    await this.essCommand(`ess::load_system ${system}`);
+    this.emit('systemLoaded', { system, success: true });
+  } catch (error) {
+    this.clearLoadingState(); // Add this line
+    this.emit('systemLoaded', { system, success: false, error });
+    throw error;
   }
+}
 
-  async setProtocol(protocol) {
-    try {
-      this.loadingOperations.protocol = true;
-      const system = this.state.currentSystem;
-      await this.essCommand(`ess::load_system ${system} ${protocol}`);
-      this.emit('protocolLoaded', { protocol, success: true });
-    } catch (error) {
-      this.loadingOperations.protocol = false;
-      this.emit('protocolLoaded', { protocol, success: false, error });
-      throw error;
-    }
+async setProtocol(protocol) {
+  this.startImmediateLoadingState('protocol', `Loading protocol: ${protocol}`);
+  try {
+    const system = this.state.currentSystem;
+    await this.essCommand(`ess::load_system ${system} ${protocol}`);
+    this.emit('protocolLoaded', { protocol, success: true });
+  } catch (error) {
+    this.clearLoadingState(); // Add this line
+    this.emit('protocolLoaded', { protocol, success: false, error });
+    throw error;
   }
+}
 
-  async setVariant(variant) {
-    try {
-      this.loadingOperations.variant = true;
-      const system = this.state.currentSystem;
-      const protocol = this.state.currentProtocol;
-      await this.essCommand(`ess::load_system ${system} ${protocol} ${variant}`);
-      this.emit('variantLoaded', { variant, success: true });
-    } catch (error) {
-      this.loadingOperations.variant = false;
-      this.emit('variantLoaded', { variant, success: false, error });
-      throw error;
-    }
+async setVariant(variant) {
+  this.startImmediateLoadingState('variant', `Loading variant: ${variant}`);
+  try {
+    const system = this.state.currentSystem;
+    const protocol = this.state.currentProtocol;
+    await this.essCommand(`ess::load_system ${system} ${protocol} ${variant}`);
+    this.emit('variantLoaded', { variant, success: true });
+  } catch (error) {
+    this.clearLoadingState(); // Add this line
+    this.emit('variantLoaded', { variant, success: false, error });
+    throw error;
   }
+}
 
-  async reloadSystem() {
-    try {
-      this.loadingOperations.system = true;
-      await this.essCommand('ess::reload_system');
-      this.emit('systemReloaded', { success: true });
-    } catch (error) {
-      this.loadingOperations.system = false;
-      this.emit('systemReloaded', { success: false, error });
-      throw error;
-    }
-  }
+// New method for immediate loading feedback
+startImmediateLoadingState(operationType, message) {
+  console.log(`Starting immediate loading state: ${operationType} - ${message}`);
+  
+  Object.assign(this.loadingState, {
+    isLoading: true,
+    operationId: `${operationType}_${Date.now()}`,
+    startTime: Date.now(),
+    stage: 'initializing',
+    message: message,
+    percent: 5, // Small progress to show activity
+    elapsed: 0,
+    timeout: false,
+    error: null
+  });
 
-  async reloadProtocol() {
-    try {
-      this.loadingOperations.protocol = true;
-      await this.essCommand('ess::reload_protocol');
-      this.emit('protocolReloaded', { success: true });
-    } catch (error) {
-      this.loadingOperations.protocol = false;
-      this.emit('protocolReloaded', { success: false, error });
-      throw error;
-    }
-  }
+  // Start the loading timer and watchdog
+  this.loadingTimer = setTimeout(() => {
+    console.warn('Loading operation timed out');
+    this.handleLoadingTimeout();
+  }, this.LOADING_TIMEOUT);
 
-  async reloadVariant() {
-    try {
-      this.loadingOperations.variant = true;
-      await this.essCommand('ess::reload_variant');
-      this.emit('variantReloaded', { success: true });
-    } catch (error) {
-      this.loadingOperations.variant = false;
-      this.emit('variantReloaded', { success: false, error });
-      throw error;
-    }
+  this.resetProgressWatchdog();
+
+  this.emit('loadingStarted', { operationId: this.loadingState.operationId });
+  this.emit('loadingProgress', this.loadingState);
+}
+
+async reloadSystem() {
+  this.startImmediateLoadingState('system_reload', 'Reloading system...');
+  try {
+    await this.essCommand('ess::reload_system');
+    this.emit('systemReloaded', { success: true });
+  } catch (error) {
+    this.clearLoadingState(); // Add this line
+    this.emit('systemReloaded', { success: false, error });
+    throw error;
   }
+}
+
+async reloadProtocol() {
+  this.startImmediateLoadingState('protocol_reload', 'Reloading protocol...');
+  try {
+    await this.essCommand('ess::reload_protocol');
+    this.emit('protocolReloaded', { success: true });
+  } catch (error) {
+    this.clearLoadingState(); // Add this line
+    this.emit('protocolReloaded', { success: false, error });
+    throw error;
+  }
+}
+
+async reloadVariant() {
+  this.startImmediateLoadingState('variant_reload', 'Reloading variant...');
+  try {
+    await this.essCommand('ess::reload_variant');
+    this.emit('variantReloaded', { success: true });
+  } catch (error) {
+    this.clearLoadingState(); // Add this line
+    this.emit('variantReloaded', { success: false, error });
+    throw error;
+  }
+}    
 
   async saveSettings() {
     try {

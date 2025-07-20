@@ -1,13 +1,92 @@
 <template>
   <a-layout style="height: 100vh; font-size: 13px;">
-    <a-layout style="height: 100vh;">
-      <!-- Control Panel - Left Sidebar -->
-      <a-layout-sider width="290" theme="light" style="border-right: 1px solid #d9d9d9;">
+    
+    <!-- Top Bar with Development Mode Toggle - FULL WIDTH -->
+    <div
+      style="flex-shrink: 0; height: 32px; background: #fafafa; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; padding: 0 12px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        
+        <!-- Existing system status (hide in dev mode) -->
+        <template v-if="!developmentMode">
+          <span style="font-size: 11px; color: #666;">System:</span>
+          <a-badge :status="systemHealthStatus" :text="systemHealthText" style="font-size: 11px;" />
+
+          <!-- Stim Connection Status -->
+          <span style="font-size: 11px; color: #666; margin-left: 8px;">Stim:</span>
+          <a-tag :color="stimConnectionColor" size="small" style="margin: 0; font-size: 10px;">
+            {{ stimConnectionStatus }}
+          </a-tag>
+        </template>
+        
+        <!-- Development Mode Toggle -->
+        <a-divider type="vertical" style="margin: 0 8px;" />
+        <a-switch 
+          v-model:checked="developmentMode"
+          size="small"
+          checked-children="Dev"
+          un-checked-children="Exp"
+        />
+        <span style="font-size: 11px; color: #666;">
+          {{ developmentMode ? 'Development' : 'Experiment' }} Mode
+        </span>
+        
+        <!-- Development mode indicator -->
+        <template v-if="developmentMode">
+          <a-tag color="processing" size="small" style="margin: 0; font-size: 10px;">
+            🛠️ Development Active
+          </a-tag>
+        </template>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 4px;">
+        <!-- System monitor toggle (hide in dev mode) -->
+        <a-button 
+          v-if="!developmentMode"
+          size="small" 
+          type="text" 
+          :icon="h(isStatusSidebarVisible ? EyeInvisibleOutlined : EyeOutlined)"
+          @click="toggleStatusSidebar" 
+          style="font-size: 11px; height: 24px; padding: 0 8px;"
+          :title="isStatusSidebarVisible ? 'Hide System Monitor' : 'Show System Monitor'"
+        >
+          {{ isStatusSidebarVisible ? 'Hide Monitor' : 'Show Monitor' }}
+        </a-button>
+        
+        <!-- Development mode help -->
+        <a-button 
+          v-if="developmentMode"
+          size="small" 
+          type="text"
+          :icon="h(QuestionCircleOutlined)"
+          @click="showDevHelp = true"
+          style="font-size: 11px; height: 24px; padding: 0 8px;"
+          title="Development Mode Help"
+        >
+          Help
+        </a-button>
+      </div>
+    </div>
+
+    <!-- Main Content Area Below Header -->
+    <a-layout style="height: calc(100vh - 56px);"> <!-- 56px = 32px header + 24px status bar -->
+      
+      <!-- Control Panel - Left Sidebar (Hide in dev mode) -->
+      <a-layout-sider 
+        v-if="!developmentMode"
+        width="290" 
+        theme="light" 
+        style="border-right: 1px solid #d9d9d9;"
+      >
         <experiment-control ref="experimentControlRef" />
       </a-layout-sider>
 
-      <!-- Middle Column - Eye/Touch Viewer + Performance -->
-      <a-layout-sider width="320" theme="light" style="border-right: 1px solid #d9d9d9; background: white;">
+      <!-- Middle Column - Eye/Touch Viewer + Performance (Hide in dev mode) -->
+      <a-layout-sider 
+        v-if="!developmentMode"
+        width="320" 
+        theme="light" 
+        style="border-right: 1px solid #d9d9d9; background: white;"
+      >
         <div style="height: 100%; display: flex; flex-direction: column;">
           <!-- Eye/Touch Visualizer Section -->
           <div
@@ -54,36 +133,21 @@
 
       <!-- Main Content Area with Tabs -->
       <a-layout style="display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-        <!-- Top Bar with System Status Toggle -->
-        <div
-          style="flex-shrink: 0; height: 32px; background: #fafafa; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; padding: 0 8px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 11px; color: #666;">System:</span>
-            <a-badge :status="systemHealthStatus" :text="systemHealthText" style="font-size: 11px;" />
-
-            <!-- Stim Connection Status -->
-            <span style="font-size: 11px; color: #666; margin-left: 8px;">Stim:</span>
-            <a-tag :color="stimConnectionColor" size="small" style="margin: 0; font-size: 10px;">
-              {{ stimConnectionStatus }}
-            </a-tag>
-          </div>
-
-          <div style="display: flex; align-items: center; gap: 4px;">
-            <a-button size="small" type="text" :icon="h(isStatusSidebarVisible ? EyeInvisibleOutlined : EyeOutlined)"
-              @click="toggleStatusSidebar" style="font-size: 11px; height: 24px; padding: 0 8px;"
-              :title="isStatusSidebarVisible ? 'Hide System Monitor' : 'Show System Monitor'">
-              {{ isStatusSidebarVisible ? 'Hide Monitor' : 'Show Monitor' }}
-            </a-button>
-          </div>
-        </div>
-
+        
         <!-- Main Content with Optional Right Sidebar -->
         <div style="flex: 1; display: flex; overflow: hidden;">
+          
           <!-- Main Content Area -->
           <a-layout-content
             style="background: white; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-            <!-- Tabs Area -->
-            <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+            
+            <!-- Development Workspace (Full Screen in Dev Mode) -->
+            <div v-if="developmentMode" style="height: 100%; overflow: hidden;">
+              <development-workspace ref="developmentWorkspaceRef" />
+            </div>
+            
+            <!-- Regular Tabs (Experiment Mode) -->
+            <div v-else style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
               <a-tabs size="small" style="height: 100%; display: flex; flex-direction: column;" tab-position="top">
 
                 <a-tab-pane key="scripts" tab="Scripts" style="height: 100%; overflow: hidden;">
@@ -116,17 +180,12 @@
                   </div>
                 </a-tab-pane>
 
-<a-tab-pane key="script-test" tab="Script Test" style="height: 100%; overflow: hidden;">
-  <div style="height: 100%; overflow: hidden;">
-    <script-test-canvas />
-  </div>
-</a-tab-pane>
               </a-tabs>
             </div>
           </a-layout-content>
 
-          <!-- Resizable Right Sidebar for System Status -->
-          <template v-if="isStatusSidebarVisible">
+          <!-- Resizable Right Sidebar for System Status (Hide in dev mode) -->
+          <template v-if="!developmentMode && isStatusSidebarVisible">
             <!-- Vertical Resizer -->
             <div class="vertical-resizer" @mousedown="startVerticalResize"></div>
 
@@ -162,22 +221,60 @@
           </template>
         </div>
 
-        <!-- Terminal at Bottom -->
-        <template v-if="isTerminalVisible">
+        <!-- Terminal at Bottom (Hide in dev mode - dev workspace has its own) -->
+        <template v-if="!developmentMode && isTerminalVisible">
           <div class="resizer" @mousedown="startResize"></div>
           <div :style="{ height: `${terminalHeight}px`, flexShrink: 0 }" class="terminal-wrapper">
             <ess-terminal ref="bottomTerminalRef" />
           </div>
         </template>
+        
+        <!-- Note: Development mode has its own integrated terminal in DevelopmentWorkspace -->
       </a-layout>
     </a-layout>
+    
+    <!-- Status Bar at Bottom - FULL WIDTH -->
     <status-bar :status-message="statusMessage" />
+    
+    <!-- Development Help Modal -->
+    <a-modal
+      v-model:open="showDevHelp"
+      title="Development Mode Help"
+      width="600px"
+      :footer="null"
+    >
+      <div class="dev-help-content">
+        <h4>🛠️ Development Mode Features</h4>
+        <ul>
+          <li><strong>Script Editor:</strong> Write and execute TCL scripts with syntax highlighting</li>
+          <li><strong>Templates:</strong> Use the dropdown to load common script patterns</li>
+          <li><strong>Terminal:</strong> View script output and system messages</li>
+          <li><strong>Data Groups:</strong> Load and visualize dynamic groups (DGs)</li>
+        </ul>
+        
+        <h4>⌨️ Keyboard Shortcuts</h4>
+        <ul>
+          <li><kbd>Ctrl+Enter</kbd> - Run script</li>
+          <li><kbd>Ctrl+S</kbd> - Save script</li>
+        </ul>
+        
+        <h4>📊 Working with Data Groups</h4>
+        <ul>
+          <li>Enter DG name (e.g., "stimdg") in the Data Groups tab</li>
+          <li>Use script templates like "Load StimDG" for quick access</li>
+          <li>Click array cells to view detailed content</li>
+        </ul>
+        
+        <h4>🔄 Switching Modes</h4>
+        <p>Toggle the <strong>Dev/Exp</strong> switch to return to experiment mode. Your development work is preserved.</p>
+      </div>
+    </a-modal>
   </a-layout>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined } from '@ant-design/icons-vue'
+import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, QuestionCircleOutlined } from '@ant-design/icons-vue'
 import { h } from 'vue'
 
 import ExperimentControl from '../components/ExperimentControl.vue'
@@ -188,10 +285,9 @@ import Scripts from '../components/Scripts.vue'
 import StateSystemDiagram from '../components/StateSystemDiagram.vue'
 import EventTracker from '../components/EventTracker.vue'
 import EyeTouchVisualizer from '../components/EyeTouchVisualizer.vue'
-import VirtualEyeInput from '../components/VirtualEyeInput.vue'
 import SystemStatus from '../components/SystemStatus.vue'
 import EssConsole from '../components/EssConsole.vue'
-import ScriptTestCanvas from '../components/ScriptTestCanvas.vue'
+import DevelopmentWorkspace from '../components/DevelopmentWorkspace.vue'
 
 // Import dserv for system health monitoring
 import { useDservMonitoring, dserv } from '../services/dserv.js'
@@ -199,12 +295,14 @@ import { useDservMonitoring, dserv } from '../services/dserv.js'
 // Status message
 const statusMessage = ref('Ready')
 
-// Virtual input toggle
-const showVirtualInput = ref(false) // Default hidden for real experiments
+// Development mode state
+const developmentMode = ref(false)
+const showDevHelp = ref(false)
 
 // Terminal refs and state
 const bottomTerminalRef = ref(null)
 const experimentControlRef = ref(null)
+const developmentWorkspaceRef = ref(null)
 const isTerminalVisible = ref(true)
 const terminalHeight = ref(180) // Initial height in px
 
@@ -317,30 +415,6 @@ const performanceData = ref([
   { key: '2', condition: 'Hard', correct: 78, rt: 650, n: 50 }
 ])
 
-// Use central state for eye windows (removed since they're only used in EyeTouchVisualizer now)
-// const eyeWindows = computed(() => dserv.state.eyeWindows)
-// const eyeWindowStatusMask = computed(() => dserv.state.eyeWindowStatusMask)
-
-// Use central state for touch windows (removed since they're only used in EyeTouchVisualizer now)
-// const touchWindows = computed(() => {
-//   if (!dserv.state.touchWindows) {
-//     // Initialize if not present
-//     dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
-//       id: i,
-//       active: false,
-//       state: 0,
-//       type: 'rectangle',
-//       center: { x: 0, y: 0 },
-//       centerRaw: { x: 400, y: 320 },
-//       size: { width: 2, height: 2 },
-//       sizeRaw: { width: 100, height: 100 }
-//     }))
-//   }
-//   return dserv.state.touchWindows
-// })
-
-// const touchWindowStatusMask = computed(() => dserv.state.touchWindowStatusMask || 0)
-
 // Terminal resizing (existing)
 function startResize(event) {
   event.preventDefault();
@@ -392,7 +466,7 @@ function handleStatusUpdate({ message, type }) {
   }
 }
 
-// Save sidebar state to localStorage
+// Save state to localStorage
 watch(statusSidebarWidth, (newWidth) => {
   localStorage.setItem('essgui-sidebar-width', newWidth.toString())
 })
@@ -401,8 +475,17 @@ watch(isStatusSidebarVisible, (visible) => {
   localStorage.setItem('essgui-sidebar-visible', visible.toString())
 })
 
+watch(developmentMode, (newValue) => {
+  localStorage.setItem('essgui-development-mode', newValue.toString())
+  
+  // When entering dev mode, hide system sidebar to give more space
+  if (newValue) {
+    isStatusSidebarVisible.value = false
+  }
+})
+
 onMounted(() => {
-  console.log('MainLayout mounted with three-column layout')
+  console.log('MainLayout mounted with development mode support')
 
   // Start updating system status
   updateSystemStatus()
@@ -413,7 +496,7 @@ onMounted(() => {
     stimConnected.value = data.data === '1' || data.data === 1
   }, 'MainLayout')
 
-  // Restore sidebar state from localStorage
+  // Restore state from localStorage
   const savedWidth = localStorage.getItem('essgui-sidebar-width')
   if (savedWidth) {
     const width = parseInt(savedWidth, 10)
@@ -425,6 +508,11 @@ onMounted(() => {
   const savedVisible = localStorage.getItem('essgui-sidebar-visible')
   if (savedVisible) {
     isStatusSidebarVisible.value = savedVisible === 'true'
+  }
+  
+  const savedMode = localStorage.getItem('essgui-development-mode')
+  if (savedMode) {
+    developmentMode.value = savedMode === 'true'
   }
 })
 </script>
@@ -455,39 +543,31 @@ onMounted(() => {
   border-top: 1px solid #d9d9d9;
 }
 
-.window-dot {
-  width: 18px;
-  height: 18px;
+.dev-help-content {
+  line-height: 1.6;
+}
+
+.dev-help-content h4 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.dev-help-content ul {
+  margin-bottom: 16px;
+}
+
+.dev-help-content li {
+  margin-bottom: 4px;
+}
+
+.dev-help-content kbd {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
   border-radius: 3px;
-  background: #333;
-  border: 1px solid #666;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  color: #999;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.window-dot.active {
-  border-color: #1890ff;
-  color: #fff;
-}
-
-.window-dot.inside {
-  background: #52c41a;
-  border-color: #52c41a;
-  color: #fff;
-}
-
-.window-dot.touch-dot.active {
-  border-color: #13c2c2;
-}
-
-.window-dot.touch-dot.inside {
-  background: #13c2c2;
-  border-color: #13c2c2;
+  padding: 2px 4px;
+  font-family: monospace;
+  font-size: 11px;
 }
 
 /* Fix tab content height */

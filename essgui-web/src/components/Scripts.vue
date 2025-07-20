@@ -1,110 +1,150 @@
 <template>
   <div style="height: 100%; display: flex; flex-direction: column; overflow: hidden;">
 
-    <!-- Header with script selector and controls -->
-    <div
-      style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #d9d9d9; background: #fafafa;">
-      <!-- Script Selector Dropdown -->
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <a-select v-model:value="activeScript" size="small" style="width: 140px;"
-          @change="(value) => switchScriptWithValidation(value)">
-          <a-select-option v-for="script in scriptTabs" :key="script.name" :value="script.name">
-            <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-              <span>{{ script.label }}</span>
-              <div style="display: flex; align-items: center; gap: 4px;">
-                <!-- Modified indicator -->
-                <span v-if="scripts[script.name]?.modified"
-                  style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"></span>
-                <!-- Validation error indicator -->
-                <span v-if="activeScript === script.name && validationResult && !validationResult.isValid"
-                  style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"
-                  title="Has validation errors"></span>
-              </div>
-            </div>
-          </a-select-option>
-        </a-select>
-      </div>
-
-      <!-- Controls with icons and validation -->
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <!-- Validation controls -->
-        <a-tooltip title="Validate Script (Ctrl+Shift+V)">
-          <a-button size="small" @click="validateCurrentScript" :loading="isValidating" :icon="h(CheckCircleOutlined)"
-            :type="validationResult && !validationResult.isValid ? 'danger' : 'default'"
-            style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <a-tooltip title="Auto-validate while typing">
-          <a-checkbox v-model:checked="autoValidate" size="small">
-            Auto
-          </a-checkbox>
-        </a-tooltip>
-
-        <!-- NEW: Undo/Redo controls -->
-        <a-tooltip title="Undo (Ctrl+Z)">
-          <a-button size="small" @click="undoEdit" :disabled="!canUndo" :icon="h(UndoOutlined)"
-            style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <a-tooltip title="Redo (Ctrl+Y)">
-          <a-button size="small" @click="redoEdit" :disabled="!canRedo" :icon="h(RedoOutlined)"
-            style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <!-- Existing toolbar -->
-        <a-tooltip title="Format Code (Ctrl+Shift+F)">
-          <a-button size="small" @click="formatScript" :disabled="!currentScript?.content"
-            :icon="h(FormatPainterOutlined)" style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <a-tooltip title="Save Script (Ctrl+S)">
-          <a-button type="primary" size="small" @click="saveScriptWithErrorHandling" :loading="isSaving"
-            :disabled="!currentScript?.modified" :icon="h(SaveOutlined)" style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <a-tooltip title="Pull from Git">
-          <a-button size="small" @click="pullScripts" :loading="isGitBusy" :icon="h(DownloadOutlined)"
-            style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <a-tooltip title="Push to Git">
-          <a-button size="small" @click="pushScripts" :loading="isGitBusy" :disabled="isGitBusy"
-            :icon="h(UploadOutlined)" style="width: 32px; height: 24px;" />
-        </a-tooltip>
-
-        <!-- Divider -->
-        <a-divider type="vertical" style="margin: 0;" />
-
-        <!-- Git Branch Dropdown -->
-        <a-select v-model:value="currentBranch" size="small" style="width: 120px;" :loading="isGitBusy"
-          @change="switchBranch" :disabled="isGitBusy" placeholder="Select branch">
-          <a-select-option v-for="branch in availableBranches" :key="branch" :value="branch">
-            {{ branch }}
-          </a-select-option>
-        </a-select>
-
-        <!-- Backup menu dropdown -->
-        <a-dropdown>
-          <template #overlay>
-            <a-menu>
-              <a-menu-item key="backups" @click="showBackupManager = true">
-                <HistoryOutlined /> View Backups
-              </a-menu-item>
-              <a-menu-item key="validate-all" @click="validateAllScripts">
-                <CheckCircleOutlined /> Validate All Scripts
-              </a-menu-item>
-              <a-menu-divider />
-              <a-menu-item key="debug-mode" @click="showDebugMode = !showDebugMode">
-                <BugOutlined /> {{ showDebugMode ? 'Hide' : 'Show' }} Debug Mode
-              </a-menu-item>
-            </a-menu>
-          </template>
-          <a-button size="small" style="width: 32px; height: 24px;">
-            <EllipsisOutlined />
-          </a-button>
-        </a-dropdown>
-      </div>
+<!-- Header with script selector and controls -->
+<div
+  style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 8px; border-bottom: 1px solid #d9d9d9; background: #fafafa;">
+  <!-- Script Selector Dropdown and Lib File Controls -->
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <!-- Main script selector - MADE SMALLER -->
+    <a-select v-model:value="activeScript" size="small" style="width: 100px;"
+      @change="(value) => switchScriptWithValidation(value)">
+      <a-select-option v-for="script in scriptTabs" :key="script.name" :value="script.name">
+        <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+          <!-- SHORTENED LABELS -->
+          <span>{{ script.name === 'system' ? 'System' : 
+                   script.name === 'protocol' ? 'Protocol' : 
+                   script.name === 'loaders' ? 'Loaders' : 
+                   script.name === 'variants' ? 'Variants' : 
+                   script.name === 'stim' ? 'Stim' : 
+                   script.name === 'lib' ? 'Libs' : script.label }}</span>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <!-- Modified indicator for regular scripts -->
+            <span v-if="script.type === 'script' && scripts[script.name]?.modified"
+              style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"></span>
+            <!-- Modified indicator for lib files -->
+            <span v-if="script.type === 'library' && scripts.lib?.modified"
+              style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"></span>
+            <!-- Validation error indicator -->
+            <span v-if="activeScript === script.name && validationResult && !validationResult.isValid"
+              style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"
+              title="Has validation errors"></span>
+          </div>
+        </div>
+      </a-select-option>
+    </a-select>
+    
+    <!-- Lib file selector (only show when lib tab active) - MADE SMALLER -->
+    <div v-if="isLibMode" style="display: flex; align-items: center; gap: 6px;">
+      <a-select 
+        v-model:value="selectedLibFile" 
+        size="small" 
+        style="width: 140px;"
+        placeholder="Select .tm file"
+        @change="loadLibFile"
+        :loading="loadingLibFiles"
+        allowClear
+      >
+        <a-select-option v-for="file in libFiles" :key="file" :value="file">
+          <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+            <!-- SHOW JUST FILENAME WITHOUT EXTENSION -->
+            <span>{{ file.replace('.tm', '') }}</span>
+            <span v-if="selectedLibFile === file && scripts.lib?.modified"
+              style="width: 6px; height: 6px; background: #ff4d4f; border-radius: 50%;"
+              title="Modified"></span>
+          </div>
+        </a-select-option>
+      </a-select>
+      
+      <a-tooltip title="Refresh lib files">
+        <a-button size="small" @click="loadLibFiles" :loading="loadingLibFiles"
+          :icon="h(ReloadOutlined)" style="width: 28px; height: 22px;" />
+      </a-tooltip>
+      
+      <a-tooltip title="Create new lib file">
+        <a-button size="small" @click="showCreateLibFile = true"
+          :icon="h(PlusOutlined)" style="width: 28px; height: 22px;" />
+      </a-tooltip>
     </div>
+  </div>
+
+  <!-- Controls with icons and validation - MADE MORE COMPACT -->
+  <div style="display: flex; align-items: center; gap: 8px;">
+    <!-- Validation controls -->
+    <a-tooltip title="Validate (Ctrl+Shift+V)">
+      <a-button size="small" @click="validateCurrentScript" :loading="isValidating" :icon="h(CheckCircleOutlined)"
+        :type="validationResult && !validationResult.isValid ? 'danger' : 'default'"
+        style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <a-tooltip title="Auto-validate">
+      <a-checkbox v-model:checked="autoValidate" size="small" style="transform: scale(0.85);">
+      </a-checkbox>
+    </a-tooltip>
+
+    <!-- Undo/Redo controls -->
+    <a-tooltip title="Undo (Ctrl+Z)">
+      <a-button size="small" @click="undoEdit" :disabled="!canUndo" :icon="h(UndoOutlined)"
+        style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <a-tooltip title="Redo (Ctrl+Y)">
+      <a-button size="small" @click="redoEdit" :disabled="!canRedo" :icon="h(RedoOutlined)"
+        style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <!-- Existing toolbar -->
+    <a-tooltip title="Format (Ctrl+Shift+F)">
+      <a-button size="small" @click="formatScript" :disabled="!currentScript?.content"
+        :icon="h(FormatPainterOutlined)" style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <a-tooltip title="Save (Ctrl+S)">
+      <a-button type="primary" size="small" @click="saveScriptWithErrorHandling" :loading="isSaving"
+        :disabled="!currentScript?.modified" :icon="h(SaveOutlined)" style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <!-- Git operations - CONDENSED -->
+    <a-tooltip title="Pull">
+      <a-button size="small" @click="pullScripts" :loading="isGitBusy" :icon="h(DownloadOutlined)"
+        style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <a-tooltip title="Push">
+      <a-button size="small" @click="pushScripts" :loading="isGitBusy" :disabled="isGitBusy"
+        :icon="h(UploadOutlined)" style="width: 28px; height: 22px;" />
+    </a-tooltip>
+
+    <!-- Git Branch Dropdown - MADE SMALLER -->
+    <a-select v-model:value="currentBranch" size="small" style="width: 80px;" :loading="isGitBusy"
+      @change="switchBranch" :disabled="isGitBusy" placeholder="Branch">
+      <a-select-option v-for="branch in availableBranches" :key="branch" :value="branch">
+        {{ branch }}
+      </a-select-option>
+    </a-select>
+
+    <!-- Backup menu dropdown -->
+    <a-dropdown>
+      <template #overlay>
+        <a-menu>
+          <a-menu-item key="backups" @click="showBackupManager = true">
+            <HistoryOutlined /> View Backups
+          </a-menu-item>
+          <a-menu-item key="validate-all" @click="validateAllScripts">
+            <CheckCircleOutlined /> Validate All Scripts
+          </a-menu-item>
+          <a-menu-divider />
+          <a-menu-item key="debug-mode" @click="showDebugMode = !showDebugMode">
+            <BugOutlined /> {{ showDebugMode ? 'Hide' : 'Show' }} Debug Mode
+          </a-menu-item>
+        </a-menu>
+      </template>
+      <a-button size="small" style="width: 28px; height: 22px;">
+        <EllipsisOutlined />
+      </a-button>
+    </a-dropdown>
+  </div>
+</div>
 
     <!-- Editor container -->
     <div ref="editorContainer" style="flex: 1; overflow: hidden; background: #1e1e1e;"></div>
@@ -130,6 +170,7 @@
       <div v-if="showDebugMode" style="flex-shrink: 0; background: #fafafa; border-top: 1px solid #d9d9d9;">
         <backup-debugger />
       </div>
+      
       <!-- Errors -->
       <div v-if="validationResult.errors.length > 0" style="margin-bottom: 8px;">
         <div style="font-weight: 500; color: #ff4d4f; font-size: 11px; margin-bottom: 4px;">
@@ -161,7 +202,16 @@
     <div
       style="flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: #f0f0f0; border-top: 1px solid #d9d9d9; font-size: 11px; color: #666;">
       <div style="display: flex; gap: 12px;">
-        <span>{{ currentScript?.name?.toUpperCase() }} Script</span>
+        <span v-if="activeScript === 'lib' && selectedLibFile">
+          {{ selectedLibFile.toUpperCase() }} (Lib)
+        </span>
+        <span v-else-if="activeScript === 'lib'">
+          LIB FILES (No file selected)
+        </span>
+        <span v-else>
+          {{ currentScript?.name?.toUpperCase() }} Script
+        </span>
+        
         <span v-if="currentScript?.modified" style="color: #ff9500;">Modified</span>
 
         <!-- Validation status - show ONLY ONE status -->
@@ -195,6 +245,28 @@
     <a-modal v-model:open="showBackupManager" title="Script Backups" width="600px" :footer="null">
       <backup-manager :script-type="activeScript" @restore="restoreBackup" @close="showBackupManager = false" />
     </a-modal>
+
+    <!-- NEW: Create Lib File Modal -->
+    <a-modal v-model:open="showCreateLibFile" title="Create New Lib File" width="400px">
+      <div style="margin: 16px 0;">
+        <a-input 
+          v-model:value="newLibFileName" 
+          placeholder="Enter filename (e.g., mymodule.tm)"
+          @keyup.enter="createLibFile"
+          style="width: 100%;"
+        />
+        <div style="margin-top: 8px; font-size: 12px; color: #666;">
+          File will be created in the lib/ directory. Extension .tm will be added if not provided.
+        </div>
+      </div>
+      
+      <template #footer>
+        <a-button @click="showCreateLibFile = false">Cancel</a-button>
+        <a-button type="primary" @click="createLibFile" :disabled="!newLibFileName.trim()">
+          Create
+        </a-button>
+      </template>
+    </a-modal>
   </div>
 </template>
 
@@ -211,7 +283,8 @@ import {
   ReloadOutlined,
   BugOutlined,
   UndoOutlined,
-  RedoOutlined
+  RedoOutlined,
+  PlusOutlined  // NEW: Added for create lib file button
 } from '@ant-design/icons-vue'
 import { h } from 'vue'
 import { Modal, message } from 'ant-design-vue'
@@ -265,7 +338,7 @@ const autoValidate = ref(true)
 const showBackupManager = ref(false)
 const showDebugMode = ref(false)
 
-// FIXED: Undo/Redo state
+// Undo/Redo state
 const canUndo = ref(false)
 const canRedo = ref(false)
 
@@ -273,12 +346,22 @@ const canRedo = ref(false)
 const currentBranch = ref('')
 const availableBranches = ref([])
 
-// FIXED: Scripts with undo tracking and original content preservation
+// NEW: Lib file state
+const libFiles = ref([])
+const selectedLibFile = ref('')
+const loadingLibFiles = ref(false)
+const showCreateLibFile = ref(false)
+const newLibFileName = ref('')
+
+// NEW: Computed property for lib mode
+const isLibMode = computed(() => activeScript.value === 'lib')
+
+// Scripts with undo tracking and original content preservation
 const scripts = ref({
   system: {
     name: 'system',
     content: '',
-    originalContent: '', // NEW: Preserve original loaded content
+    originalContent: '',
     modified: false,
     loaded: false,
     unchangedHistoryDepth: 0
@@ -286,7 +369,7 @@ const scripts = ref({
   protocol: {
     name: 'protocol',
     content: '',
-    originalContent: '', // NEW: Preserve original loaded content
+    originalContent: '',
     modified: false,
     loaded: false,
     unchangedHistoryDepth: 0
@@ -294,7 +377,7 @@ const scripts = ref({
   loaders: {
     name: 'loaders',
     content: '',
-    originalContent: '', // NEW: Preserve original loaded content
+    originalContent: '',
     modified: false,
     loaded: false,
     unchangedHistoryDepth: 0
@@ -302,7 +385,7 @@ const scripts = ref({
   variants: {
     name: 'variants',
     content: '',
-    originalContent: '', // NEW: Preserve original loaded content
+    originalContent: '',
     modified: false,
     loaded: false,
     unchangedHistoryDepth: 0
@@ -310,30 +393,39 @@ const scripts = ref({
   stim: {
     name: 'stim',
     content: '',
-    originalContent: '', // NEW: Preserve original loaded content
+    originalContent: '',
     modified: false,
     loaded: false,
     unchangedHistoryDepth: 0
-  }
+  },
+  // NEW: Lib file entry (will be populated when lib file is selected)
+  lib: null
 })
 
+// UPDATED: Script tabs to include lib files
 const scriptTabs = [
-  { name: 'system', label: 'System' },
-  { name: 'protocol', label: 'Protocol' },
-  { name: 'loaders', label: 'Loaders' },
-  { name: 'variants', label: 'Variants' },
-  { name: 'stim', label: 'Stim' }
+  { name: 'system', label: 'System', type: 'script' },
+  { name: 'protocol', label: 'Protocol', type: 'script' },
+  { name: 'loaders', label: 'Loaders', type: 'script' },
+  { name: 'variants', label: 'Variants', type: 'script' },
+  { name: 'stim', label: 'Stim', type: 'script' },
+  { name: 'lib', label: 'Lib Files', type: 'library' }  // NEW
 ]
 
-// Computed properties
-const currentScript = computed(() => scripts.value[activeScript.value])
+// UPDATED: Computed properties to handle lib files
+const currentScript = computed(() => {
+  if (activeScript.value === 'lib') {
+    return scripts.value.lib
+  }
+  return scripts.value[activeScript.value]
+})
 
 // Track if we've made any changes since last git operation
 const hasChangesSinceLastGit = ref(false)
 
 // Watch for any script modifications to track git state
 watch(scripts, (newScripts) => {
-  const hasModified = Object.values(newScripts).some(script => script.modified)
+  const hasModified = Object.values(newScripts).some(script => script?.modified)
   if (hasModified) {
     hasChangesSinceLastGit.value = true
   }
@@ -353,7 +445,274 @@ watch(() => currentScript.value?.content, (newContent) => {
   }, 1000)
 })
 
-// FIXED: Debugging helper function
+// NEW: Lib file methods
+async function loadLibFiles() {
+  loadingLibFiles.value = true
+  try {
+    const files = await dserv.essCommand('ess::get_lib_files')
+    libFiles.value = Array.isArray(files) ? files : (files ? files.split(' ').filter(f => f.length > 0) : [])
+    console.log('Loaded lib files:', libFiles.value)
+  } catch (error) {
+    console.error('Failed to load lib files:', error)
+    message.error('Failed to load lib files')
+    libFiles.value = []
+  } finally {
+    loadingLibFiles.value = false
+  }
+}
+
+async function loadLibFile(filename) {
+  if (!filename) {
+    // Clear editor when no file selected
+    selectedLibFile.value = ''
+    if (scripts.value.lib) {
+      scripts.value.lib = null
+    }
+    if (editorView) {
+      updateEditorContent('', true)
+    }
+    return
+  }
+  
+  try {
+    console.log('Loading lib file:', filename)
+    const content = await dserv.essCommand(`ess::get_lib_file_content {${filename}}`)
+    
+    // Create/update lib script entry
+    scripts.value.lib = {
+      name: 'lib',
+      filename: filename,
+      content: content,
+      originalContent: content,
+      modified: false,
+      loaded: true,
+      unchangedHistoryDepth: 0
+    }
+    
+    selectedLibFile.value = filename
+    updateEditorContent(content, true)
+    
+    console.log('Loaded lib file successfully:', filename)
+    
+  } catch (error) {
+    console.error('Failed to load lib file:', error)
+    message.error(`Failed to load lib file: ${error.message}`)
+  }
+}
+
+async function saveLibFile() {
+  if (!selectedLibFile.value || !scripts.value.lib?.modified) {
+    console.log('No lib file to save or not modified')
+    return
+  }
+
+  try {
+    // Validate first (same as regular scripts)
+    const linter = new TclLinter()
+    const frontendResult = linter.lint(scripts.value.lib.content)
+    
+    if (!frontendResult.isValid) {
+      const criticalErrors = frontendResult.errors.filter(e =>
+        e.message.includes('syntax') ||
+        e.message.includes('brace') ||
+        e.message.includes('quote')
+      )
+
+      if (criticalErrors.length > 0) {
+        const shouldContinue = await new Promise((resolve) => {
+          Modal.confirm({
+            title: 'Syntax Errors in Lib File',
+            content: `This lib file has ${criticalErrors.length} syntax error(s). Save anyway?`,
+            okText: 'Save Anyway',
+            okType: 'danger',
+            cancelText: 'Fix Errors First',
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false)
+          })
+        })
+        
+        if (!shouldContinue) return
+      }
+    }
+
+    isSaving.value = true
+    
+    console.log('Saving lib file:', selectedLibFile.value)
+    await dserv.essCommand(`ess::save_lib_file {${selectedLibFile.value}} {${scripts.value.lib.content}}`)
+    
+    // Mark as saved
+    scripts.value.lib.modified = false
+    scripts.value.lib.originalContent = scripts.value.lib.content
+    
+    // Update undo/redo state
+    if (editorView) {
+      const histState = editorView.state.field(historyField, false)
+      if (histState) {
+        scripts.value.lib.unchangedHistoryDepth = histState.done.length
+      }
+    }
+    
+    updateUndoRedoState()
+    message.success(`Lib file ${selectedLibFile.value} saved`)
+    
+  } catch (error) {
+    console.error('Failed to save lib file:', error)
+    message.error(`Failed to save lib file: ${error.message}`)
+  } finally {
+    isSaving.value = false
+  }
+}
+
+async function createLibFile() {
+  let filename = newLibFileName.value.trim()
+  
+  if (!filename) {
+    message.error('Please enter a filename')
+    return
+  }
+  
+  if (!filename.endsWith('.tm')) {
+    filename += '.tm'
+  }
+  
+  // Basic validation
+  if (!/^[a-zA-Z0-9._-]+\.tm$/.test(filename)) {
+    message.error('Invalid filename. Use only letters, numbers, dots, dashes, and underscores.')
+    return
+  }
+  
+  try {
+    // Create empty file with basic template
+    const template = `# ${filename}\n# Tcl Module\n\npackage require Tcl 8.5\npackage provide ${filename.replace('.tm', '')} 1.0\n\n# Add your procedures here\n`
+    
+    await dserv.essCommand(`ess::save_lib_file {${filename}} {${template}}`)
+    
+    // Refresh list and select new file
+    await loadLibFiles()
+    selectedLibFile.value = filename
+    await loadLibFile(filename)
+    
+    showCreateLibFile.value = false
+    newLibFileName.value = ''
+    
+    message.success(`Created lib file: ${filename}`)
+    
+  } catch (error) {
+    console.error('Failed to create lib file:', error)
+    message.error(`Failed to create lib file: ${error.message}`)
+  }
+}
+
+function switchToLibMode() {
+  activeScript.value = 'lib'
+  
+  // Load lib files list if not already loaded
+  if (libFiles.value.length === 0) {
+    loadLibFiles()
+  }
+  
+  // If no lib file selected, clear editor
+  if (!selectedLibFile.value) {
+    if (editorView) {
+      updateEditorContent('', true)
+    }
+  }
+  // If lib file already selected, load it
+  else if (scripts.value.lib) {
+    updateEditorContent(scripts.value.lib.content, false)
+  }
+}
+
+// UPDATED: Enhanced script switching with lib file support
+function switchScriptWithValidation(scriptName) {
+  validationResult.value = null
+  showValidationPanel.value = false
+  
+  // Handle lib files specially
+  if (scriptName === 'lib') {
+    switchToLibMode()
+  } else {
+    // Clear lib selection when switching away from lib
+    if (activeScript.value === 'lib') {
+      selectedLibFile.value = ''
+      scripts.value.lib = null
+    }
+    switchScript(scriptName)
+  }
+
+  if (autoValidate.value && scriptName !== 'lib') {
+    setTimeout(() => {
+      validateCurrentScript()
+    }, 500)
+  }
+}
+
+// UPDATED: Save script with lib file support
+async function saveScriptWithErrorHandling() {
+  // Handle lib files
+  if (activeScript.value === 'lib') {
+    return await saveLibFile()
+  }
+  
+  // Existing script save logic for regular scripts
+  if (!currentScript.value?.modified) return
+
+  try {
+    // Use strict validation for save operations
+    const linter = new TclLinter()
+    const frontendResult = linter.lint(currentScript.value.content)
+
+    // Always validate with backend on save using minimal level to avoid false positives
+    let backendResult
+    try {
+      backendResult = await dserv.essCommand(
+        `ess::validate_script_minimal {${currentScript.value.content}}`
+      )
+    } catch (error) {
+      console.warn('Backend validation unavailable for save:', error)
+      // Continue with save if backend unavailable
+    }
+
+    validationResult.value = frontendResult
+
+    // Check for critical errors
+    if (!frontendResult.isValid) {
+      const criticalErrors = frontendResult.errors.filter(e =>
+        e.message.includes('syntax') ||
+        e.message.includes('brace') ||
+        e.message.includes('quote')
+      )
+
+      if (criticalErrors.length > 0) {
+        const shouldContinue = await new Promise((resolve) => {
+          Modal.confirm({
+            title: 'Syntax Errors Detected',
+            content: `This script has ${criticalErrors.length} syntax error(s). Saving may cause issues when the system loads this script.`,
+            okText: 'Save Anyway',
+            okType: 'danger',
+            cancelText: 'Fix Errors First',
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false)
+          })
+        })
+
+        if (!shouldContinue) {
+          showValidationPanel.value = true
+          return
+        }
+      }
+    }
+
+    // Proceed with save
+    await saveScript()
+
+  } catch (error) {
+    console.error('Save with error handling failed:', error)
+    message.error(`Failed to save script: ${error.message}`)
+  }
+}
+
+// Debugging helper function
 function debugHistoryState(context = '') {
   if (!editorView) {
     console.log(`[${context}] No editor view`)
@@ -382,7 +741,7 @@ function debugHistoryState(context = '') {
   })
 }
 
-// FIXED: Improved undo/redo state management with content-aware undo state
+// Improved undo/redo state management with content-aware undo state
 function updateUndoRedoState() {
   if (!editorView) return
 
@@ -410,7 +769,7 @@ function updateUndoRedoState() {
         // We're back to the unchanged state by content match
         script.modified = false
         
-        // FIXED: If we're back to original content, don't allow further undo
+        // If we're back to original content, don't allow further undo
         // (we shouldn't undo past the loaded state)
         canUndo.value = false
         console.log(`Content matches original - marking ${script.name} as unmodified and blocking undo`)
@@ -457,7 +816,7 @@ function updateUndoRedoState() {
   }
 }
 
-// FIXED: Undo/Redo functions with content-aware restrictions
+// Undo/Redo functions with content-aware restrictions
 function undoEdit() {
   if (editorView && canUndo.value) {
     console.log('undoEdit called')
@@ -473,7 +832,7 @@ function undoEdit() {
     
     const result = undo(editorView)
     
-    // FIXED: Ensure state update happens after undo
+    // Ensure state update happens after undo
     nextTick(() => {
       updateUndoRedoState()
       debugHistoryState('after undoEdit')
@@ -489,7 +848,7 @@ function redoEdit() {
     console.log('redoEdit called')
     const result = redo(editorView)
     
-    // FIXED: Ensure state update happens after redo
+    // Ensure state update happens after redo
     nextTick(() => {
       updateUndoRedoState()
       debugHistoryState('after redoEdit')
@@ -500,7 +859,7 @@ function redoEdit() {
   return false
 }
 
-// Fixed backend validation in Scripts.vue validateCurrentScript
+// Backend validation in validateCurrentScript
 async function validateCurrentScript() {
   if (!currentScript.value?.content) return
 
@@ -560,74 +919,21 @@ async function validateCurrentScript() {
   }
 }
 
-// Updated save script validation
-async function saveScriptWithErrorHandling() {
-  if (!currentScript.value.modified) return
-
-  try {
-    // Use strict validation for save operations
-    const linter = new TclLinter()
-    const frontendResult = linter.lint(currentScript.value.content)
-
-    // Always validate with backend on save using minimal level to avoid false positives
-    let backendResult
-    try {
-      backendResult = await dserv.essCommand(
-        `ess::validate_script_minimal {${currentScript.value.content}}`
-      )
-    } catch (error) {
-      console.warn('Backend validation unavailable for save:', error)
-      // Continue with save if backend unavailable
-    }
-
-    validationResult.value = frontendResult
-
-    // Check for critical errors
-    if (!frontendResult.isValid) {
-      const criticalErrors = frontendResult.errors.filter(e =>
-        e.message.includes('syntax') ||
-        e.message.includes('brace') ||
-        e.message.includes('quote')
-      )
-
-      if (criticalErrors.length > 0) {
-        const shouldContinue = await new Promise((resolve) => {
-          Modal.confirm({
-            title: 'Syntax Errors Detected',
-            content: `This script has ${criticalErrors.length} syntax error(s). Saving may cause issues when the system loads this script.`,
-            okText: 'Save Anyway',
-            okType: 'danger',
-            cancelText: 'Fix Errors First',
-            onOk: () => resolve(true),
-            onCancel: () => resolve(false)
-          })
-        })
-
-        if (!shouldContinue) {
-          showValidationPanel.value = true
-          return
-        }
-      }
-    }
-
-    // Proceed with save
-    await saveScript()
-
-  } catch (error) {
-    console.error('Save with error handling failed:', error)
-    message.error(`Failed to save script: ${error.message}`)
-  }
-}
-
 // Update the validateAllScripts to also use minimal validation
 async function validateAllScripts() {
   const results = {}
 
   for (const scriptTab of scriptTabs) {
-    if (scripts.value[scriptTab.name]?.content) {
+    if (scriptTab.type === 'script' && scripts.value[scriptTab.name]?.content) {
       const linter = new TclLinter()
       results[scriptTab.name] = linter.lint(scripts.value[scriptTab.name].content)
     }
+  }
+  
+  // Also validate current lib file if one is selected
+  if (scripts.value.lib?.content) {
+    const linter = new TclLinter()
+    results[`lib:${selectedLibFile.value}`] = linter.lint(scripts.value.lib.content)
   }
 
   const allValid = Object.values(results).every(r => r.isValid)
@@ -667,20 +973,7 @@ function jumpToError(error) {
   }
 }
 
-// Enhanced script switching with validation
-function switchScriptWithValidation(scriptName) {
-  validationResult.value = null
-  showValidationPanel.value = false
-  switchScript(scriptName)
-
-  if (autoValidate.value) {
-    setTimeout(() => {
-      validateCurrentScript()
-    }, 500)
-  }
-}
-
-// FIXED: Script switching with proper history management
+// Script switching with proper history management
 function switchScript(scriptName) {
   activeScript.value = scriptName
   const newContent = scripts.value[scriptName]?.content || ''
@@ -712,8 +1005,13 @@ function switchScript(scriptName) {
 // Backup methods
 async function restoreBackup(backupFile) {
   try {
-    await dserv.essCommand(`ess::restore_script_backup ${activeScript.value} {${backupFile}}`)
-    requestScriptData()
+    if (activeScript.value === 'lib' && selectedLibFile.value) {
+      await dserv.essCommand(`ess::restore_lib_backup {${selectedLibFile.value}} {${backupFile}}`)
+      await loadLibFile(selectedLibFile.value) // Reload the lib file
+    } else {
+      await dserv.essCommand(`ess::restore_script_backup ${activeScript.value} {${backupFile}}`)
+      requestScriptData()
+    }
     message.success('Script restored from backup')
     showBackupManager.value = false
   } catch (error) {
@@ -736,6 +1034,7 @@ async function switchBranch(branchName) {
 
     setTimeout(() => {
       requestScriptData()
+      loadLibFiles() // Reload lib files after branch switch
     }, 500)
   } catch (error) {
     console.error(`Failed to switch to branch ${branchName}:`, error)
@@ -746,10 +1045,10 @@ async function switchBranch(branchName) {
 }
 
 function createEditor() {
-   createEditorWithContent(currentScript.value.content)
+   createEditorWithContent(currentScript.value?.content || '')
 }
 
-// FIXED: Create editor with proper undo/redo command integration
+// Create editor with proper undo/redo command integration
 function createEditorWithContent(initialContent = '') {
   if (!editorContainer.value) return
 
@@ -787,7 +1086,7 @@ function createEditorWithContent(initialContent = '') {
     }
   }
 
-  // FIXED: Undo/redo commands with content-aware restrictions
+  // Undo/redo commands with content-aware restrictions
   const undoCommand = {
     key: 'Ctrl-z',
     run: (view) => {
@@ -804,7 +1103,7 @@ function createEditorWithContent(initialContent = '') {
       
       const result = undo(view)
       
-      // FIXED: Use nextTick to ensure state is updated after undo completes
+      // Use nextTick to ensure state is updated after undo completes
       nextTick(() => {
         updateUndoRedoState()
         debugHistoryState('after undo command')
@@ -820,7 +1119,7 @@ function createEditorWithContent(initialContent = '') {
       console.log('Redo command triggered')
       const result = redo(view)
       
-      // FIXED: Use nextTick to ensure state is updated after redo completes
+      // Use nextTick to ensure state is updated after redo completes
       nextTick(() => {
         updateUndoRedoState()
         debugHistoryState('after redo command')
@@ -836,7 +1135,7 @@ function createEditorWithContent(initialContent = '') {
       console.log('Redo alt command triggered')
       const result = redo(view)
       
-      // FIXED: Use nextTick to ensure state is updated after redo completes
+      // Use nextTick to ensure state is updated after redo completes
       nextTick(() => {
         updateUndoRedoState()
         debugHistoryState('after redo alt command')
@@ -903,578 +1202,604 @@ function createEditorWithContent(initialContent = '') {
       EditorView.lineWrapping,
       keymap.of(allKeybindings),
       
-      // FIXED: More careful update listener
+      // More careful update listener
       EditorView.updateListener.of((update) => {
         // Handle content changes ONLY
         if (update.docChanged && !isUpdatingContent.value) {
-          const newContent = update.state.doc.toString()
-          scripts.value[activeScript.value].content = newContent
-          scripts.value[activeScript.value].modified = true
+const newContent = update.state.doc.toString()
+         if (activeScript.value === 'lib' && scripts.value.lib) {
+           scripts.value.lib.content = newContent
+           scripts.value.lib.modified = true
+           console.log(`Content changed in lib file ${selectedLibFile.value}, marking as modified`)
+         } else if (scripts.value[activeScript.value]) {
+           scripts.value[activeScript.value].content = newContent
+           scripts.value[activeScript.value].modified = true
+           console.log(`Content changed in ${activeScript.value}, marking as modified`)
+         }
 
-          console.log(`Content changed in ${activeScript.value}, marking as modified`)
+         // Use setTimeout instead of immediate call to ensure history is updated
+         setTimeout(() => {
+           updateUndoRedoState()
+           debugHistoryState('after content change')
+         }, 0)
+       }
 
-          // FIXED: Use setTimeout instead of immediate call to ensure history is updated
-          setTimeout(() => {
-            updateUndoRedoState()
-            debugHistoryState('after content change')
-          }, 0)
-        }
+       // Only update undo/redo state for actual document changes, not selection changes
+       // Selection changes (clicks, cursor moves) should NOT trigger modification
+       if (update.docChanged) {
+         setTimeout(() => {
+           updateUndoRedoState()
+         }, 0)
+       }
 
-        // FIXED: Only update undo/redo state for actual document changes, not selection changes
-        // Selection changes (clicks, cursor moves) should NOT trigger modification
-        if (update.docChanged) {
-          setTimeout(() => {
-            updateUndoRedoState()
-          }, 0)
-        }
+       // Auto-indent logic
+       if (update.docChanged) {
+         try {
+           let foundNewline = false
+           let newlinePos = -1
 
-        // Auto-indent logic (same as in createEditor)
-        if (update.docChanged) {
-          try {
-            let foundNewline = false
-            let newlinePos = -1
+           update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+             const insertedText = inserted.toString()
+             if (insertedText.includes('\n')) {
+               foundNewline = true
+               newlinePos = fromB + insertedText.indexOf('\n') + 1
+             }
+           })
 
-            update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
-              const insertedText = inserted.toString()
-              if (insertedText.includes('\n')) {
-                foundNewline = true
-                newlinePos = fromB + insertedText.indexOf('\n') + 1
-              }
-            })
+           if (foundNewline && newlinePos > 0) {
+             setTimeout(() => {
+               try {
+                 const view = update.view
+                 const state = view.state
+                 const line = state.doc.lineAt(newlinePos)
 
-            if (foundNewline && newlinePos > 0) {
-              setTimeout(() => {
-                try {
-                  const view = update.view
-                  const state = view.state
-                  const line = state.doc.lineAt(newlinePos)
+                 if (line.text.trim() === '') {
+                   const allText = state.doc.toString()
+                   const lines = TclFormatter.splitLines(allText)
+                   const lineNum = line.number - 1
 
-                  if (line.text.trim() === '') {
-                    const allText = state.doc.toString()
-                    const lines = TclFormatter.splitLines(allText)
-                    const lineNum = line.number - 1
+                   const indent = TclFormatter.calculateLineIndent(lines, lineNum, 4)
 
-                    const indent = TclFormatter.calculateLineIndent(lines, lineNum, 4)
+                   if (indent > 0) {
+                     const indentText = ' '.repeat(indent)
 
-                    if (indent > 0) {
-                      const indentText = ' '.repeat(indent)
+                     isUpdatingContent.value = true
 
-                      isUpdatingContent.value = true
+                     view.dispatch({
+                       changes: {
+                         from: line.from,
+                         to: line.to,
+                         insert: indentText
+                       },
+                       selection: EditorSelection.cursor(line.from + indent)
+                     })
 
-                      view.dispatch({
-                        changes: {
-                          from: line.from,
-                          to: line.to,
-                          insert: indentText
-                        },
-                        selection: EditorSelection.cursor(line.from + indent)
-                      })
+                     nextTick(() => {
+                       isUpdatingContent.value = false
+                     })
+                   }
+                 }
+               } catch (error) {
+                 console.error('Error in auto-indent:', error)
+               }
+             }, 10)
+           }
+         } catch (error) {
+           console.error('Error in update listener:', error)
+         }
+       }
+     }),
+     EditorView.theme({
+       '&': { height: '100%' },
+       '.cm-scroller': {
+         fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+         fontSize: '12px'
+       },
+       '.cm-focused': { outline: 'none' },
+       '.cm-search': {
+         backgroundColor: '#2d3748',
+         border: '1px solid #4a5568',
+         borderRadius: '4px'
+       },
+       '.cm-search input': {
+         backgroundColor: '#1a202c',
+         color: '#e2e8f0',
+         border: '1px solid #4a5568',
+         borderRadius: '2px'
+       },
+       '.cm-search button': {
+         backgroundColor: '#4a5568',
+         color: '#e2e8f0',
+         border: '1px solid #4a5568',
+         borderRadius: '2px'
+       },
+       '.cm-search button:hover': {
+         backgroundColor: '#718096'
+       }
+     })
+   ]
+ })
 
-                      nextTick(() => {
-                        isUpdatingContent.value = false
-                      })
-                    }
-                  }
-                } catch (error) {
-                  console.error('Error in auto-indent:', error)
-                }
-              }, 10)
-            }
-          } catch (error) {
-            console.error('Error in update listener:', error)
-          }
-        }
-      }),
-      EditorView.theme({
-        '&': { height: '100%' },
-        '.cm-scroller': {
-          fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-          fontSize: '12px'
-        },
-        '.cm-focused': { outline: 'none' },
-        '.cm-search': {
-          backgroundColor: '#2d3748',
-          border: '1px solid #4a5568',
-          borderRadius: '4px'
-        },
-        '.cm-search input': {
-          backgroundColor: '#1a202c',
-          color: '#e2e8f0',
-          border: '1px solid #4a5568',
-          borderRadius: '2px'
-        },
-        '.cm-search button': {
-          backgroundColor: '#4a5568',
-          color: '#e2e8f0',
-          border: '1px solid #4a5568',
-          borderRadius: '2px'
-        },
-        '.cm-search button:hover': {
-          backgroundColor: '#718096'
-        }
-      })
-    ]
-  })
+ editorView = new EditorView({
+   state,
+   parent: editorContainer.value
+ })
 
-  editorView = new EditorView({
-    state,
-    parent: editorContainer.value
-  })
-
-  // FIXED: Proper initialization timing
-  nextTick(() => {
-    // Set initial state for a freshly created editor
-    const script = scripts.value[activeScript.value]
-    if (script) {
-      script.unchangedHistoryDepth = 0
-      console.log(`createEditorWithContent: Initialized ${activeScript.value} with unchangedDepth=0`)
-    }
-    updateUndoRedoState()
-    debugHistoryState('after createEditorWithContent')
-  })
+ // Proper initialization timing
+ nextTick(() => {
+   // Set initial state for a freshly created editor
+   const script = currentScript.value
+   if (script) {
+     script.unchangedHistoryDepth = 0
+     console.log(`createEditorWithContent: Initialized ${activeScript.value} with unchangedDepth=0`)
+   }
+   updateUndoRedoState()
+   debugHistoryState('after createEditorWithContent')
+ })
 }
 
 function updateEditorContent(content, clearHistory = false) {
-  if (!editorView) return
+ if (!editorView) return
 
-  const currentContent = editorView.state.doc.toString()
-  if (currentContent !== content) {
-    isUpdatingContent.value = true
+ const currentContent = editorView.state.doc.toString()
+ if (currentContent !== content) {
+   isUpdatingContent.value = true
 
-    if (clearHistory) {
-      // For fresh content from backend, destroy and recreate the editor
-      const parent = editorView.dom.parentNode
-      editorView.destroy()
-      
-      // Recreate with fresh content and history
-      createEditorWithContent(content)
-    } else {
-      // For user edits, just update the content
-      editorView.dispatch({
-        changes: {
-          from: 0,
-          to: editorView.state.doc.length,
-          insert: content
-        }
-      })
-    }
+   if (clearHistory) {
+     // For fresh content from backend, destroy and recreate the editor
+     const parent = editorView.dom.parentNode
+     editorView.destroy()
+     
+     // Recreate with fresh content and history
+     createEditorWithContent(content)
+   } else {
+     // For user edits, just update the content
+     editorView.dispatch({
+       changes: {
+         from: 0,
+         to: editorView.state.doc.length,
+         insert: content
+       }
+     })
+   }
 
-    nextTick(() => {
-      isUpdatingContent.value = false
+   nextTick(() => {
+     isUpdatingContent.value = false
 
-      // Set the unchanged history depth and modified state
-      if (scripts.value[activeScript.value] && editorView) {
-        const histState = editorView.state.field(historyField, false)
-        if (histState) {
-          const currentDepth = histState.done.length
+     // Set the unchanged history depth and modified state
+     const script = currentScript.value
+     if (script && editorView) {
+       const histState = editorView.state.field(historyField, false)
+       if (histState) {
+         const currentDepth = histState.done.length
 
-          if (clearHistory) {
-            // Fresh content from backend - this is the clean baseline
-            scripts.value[activeScript.value].unchangedHistoryDepth = 0
-            scripts.value[activeScript.value].modified = false
-            console.log(`updateEditorContent: Cleared history for ${activeScript.value}, unchangedDepth=0, modified=false`)
-          } else {
-            // User edit - maintain existing unchanged depth
-            scripts.value[activeScript.value].unchangedHistoryDepth = currentDepth
-            scripts.value[activeScript.value].modified = false
-            console.log(`updateEditorContent: Set ${activeScript.value} unchangedDepth=${currentDepth}, modified=false`)
-          }
-        }
-      }
+         if (clearHistory) {
+           // Fresh content from backend - this is the clean baseline
+           script.unchangedHistoryDepth = 0
+           script.modified = false
+           console.log(`updateEditorContent: Cleared history for ${script.name || script.filename}, unchangedDepth=0, modified=false`)
+         } else {
+           // User edit - maintain existing unchanged depth
+           script.unchangedHistoryDepth = currentDepth
+           script.modified = false
+           console.log(`updateEditorContent: Set ${script.name || script.filename} unchangedDepth=${currentDepth}, modified=false`)
+         }
+       }
+     }
 
-      updateUndoRedoState()
-      debugHistoryState('after updateEditorContent')
-    })
-  }
+     updateUndoRedoState()
+     debugHistoryState('after updateEditorContent')
+   })
+ }
 }
 
 function formatScript() {
-  if (!currentScript.value.content) return
+ if (!currentScript.value?.content) return
 
-  try {
-    const formattedContent = TclFormatter.formatTclCode(currentScript.value.content, 4)
-    scripts.value[activeScript.value].content = formattedContent
-    scripts.value[activeScript.value].modified = true
-    updateEditorContent(formattedContent)
-  } catch (error) {
-    console.error('Error formatting script:', error)
-    const lines = currentScript.value.content.split('\n')
-    let indentLevel = 0
-    const formatted = []
+ try {
+   const formattedContent = TclFormatter.formatTclCode(currentScript.value.content, 4)
+   
+   if (activeScript.value === 'lib' && scripts.value.lib) {
+     scripts.value.lib.content = formattedContent
+     scripts.value.lib.modified = true
+   } else {
+     scripts.value[activeScript.value].content = formattedContent
+     scripts.value[activeScript.value].modified = true
+   }
+   
+   updateEditorContent(formattedContent)
+ } catch (error) {
+   console.error('Error formatting script:', error)
+   const lines = currentScript.value.content.split('\n')
+   let indentLevel = 0
+   const formatted = []
 
-    for (let line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) {
-        formatted.push('')
-        continue
-      }
+   for (let line of lines) {
+     const trimmed = line.trim()
+     if (!trimmed) {
+       formatted.push('')
+       continue
+     }
 
-      if (trimmed.startsWith('}')) {
-        indentLevel = Math.max(0, indentLevel - 1)
-      }
+     if (trimmed.startsWith('}')) {
+       indentLevel = Math.max(0, indentLevel - 1)
+     }
 
-      formatted.push('    '.repeat(indentLevel) + trimmed)
+     formatted.push('    '.repeat(indentLevel) + trimmed)
 
-      if (trimmed.endsWith('{')) {
-        indentLevel++
-      }
-    }
+     if (trimmed.endsWith('{')) {
+       indentLevel++
+     }
+   }
 
-    const formattedContent = formatted.join('\n')
-    scripts.value[activeScript.value].content = formattedContent
-    scripts.value[activeScript.value].modified = true
-    updateEditorContent(formattedContent)
-  }
+   const formattedContent = formatted.join('\n')
+   
+   if (activeScript.value === 'lib' && scripts.value.lib) {
+     scripts.value.lib.content = formattedContent
+     scripts.value.lib.modified = true
+   } else {
+     scripts.value[activeScript.value].content = formattedContent
+     scripts.value[activeScript.value].modified = true
+   }
+   
+   updateEditorContent(formattedContent)
+ }
 }
 
-// FIXED: saveScript with unchanged history depth tracking and original content update
+// saveScript with unchanged history depth tracking and original content update
 async function saveScript() {
-  if (!currentScript.value.modified) return
+ if (!currentScript.value?.modified) return
 
-  isSaving.value = true
-  try {
-    const scriptContent = currentScript.value.content
-    const cmd = `ess::save_script ${activeScript.value} {${scriptContent}}`
+ isSaving.value = true
+ try {
+   const scriptContent = currentScript.value.content
+   const cmd = `ess::save_script ${activeScript.value} {${scriptContent}}`
 
-    console.log(`Saving ${activeScript.value} script...`)
-    await dserv.essCommand(cmd)
+   console.log(`Saving ${activeScript.value} script...`)
+   await dserv.essCommand(cmd)
 
-    // FIXED: Mark as unchanged and record history depth
-    scripts.value[activeScript.value].modified = false
-    
-    // NEW: Update the original content baseline to the current content
-    scripts.value[activeScript.value].originalContent = scriptContent
+   // Mark as unchanged and record history depth
+   scripts.value[activeScript.value].modified = false
+   
+   // Update the original content baseline to the current content
+   scripts.value[activeScript.value].originalContent = scriptContent
 
-    // FIXED: Record the current history depth as the "unchanged" point
-    if (editorView) {
-      const histState = editorView.state.field(historyField, false)
-      if (histState) {
-        scripts.value[activeScript.value].unchangedHistoryDepth = histState.done.length
-        console.log(`saveScript: Set ${activeScript.value} unchangedDepth=${histState.done.length}, updated originalContent`)
-      }
-    }
+   // Record the current history depth as the "unchanged" point
+   if (editorView) {
+     const histState = editorView.state.field(historyField, false)
+     if (histState) {
+       scripts.value[activeScript.value].unchangedHistoryDepth = histState.done.length
+       console.log(`saveScript: Set ${activeScript.value} unchangedDepth=${histState.done.length}, updated originalContent`)
+     }
+   }
 
-    console.log(`${activeScript.value} script saved successfully`)
+   console.log(`${activeScript.value} script saved successfully`)
 
-    validationResult.value = null
-    showValidationPanel.value = false
+   validationResult.value = null
+   showValidationPanel.value = false
 
-    // Update undo/redo state after save
-    updateUndoRedoState()
-    debugHistoryState('after saveScript')
+   // Update undo/redo state after save
+   updateUndoRedoState()
+   debugHistoryState('after saveScript')
 
-  } catch (error) {
-    console.error(`Failed to save ${activeScript.value} script:`, error)
-  } finally {
-    isSaving.value = false
-  }
+ } catch (error) {
+   console.error(`Failed to save ${activeScript.value} script:`, error)
+ } finally {
+   isSaving.value = false
+ }
 }
 
 async function pullScripts() {
-  isGitBusy.value = true
-  try {
-    console.log('Pulling scripts from git...')
-    await dserv.gitCommand('git::pull')
-    console.log('Git pull completed successfully')
+ isGitBusy.value = true
+ try {
+   console.log('Pulling scripts from git...')
+   await dserv.gitCommand('git::pull')
+   console.log('Git pull completed successfully')
 
-    hasChangesSinceLastGit.value = false
+   hasChangesSinceLastGit.value = false
 
-    setTimeout(() => {
-      requestScriptData()
-    }, 500)
-  } catch (error) {
-    console.error('Failed to pull scripts:', error)
-  } finally {
-    isGitBusy.value = false
-  }
+   setTimeout(() => {
+     requestScriptData()
+     loadLibFiles() // Reload lib files after pull
+   }, 500)
+ } catch (error) {
+   console.error('Failed to pull scripts:', error)
+ } finally {
+   isGitBusy.value = false
+ }
 }
 
 async function pushScripts() {
-  isGitBusy.value = true
-  try {
-    console.log('Committing and pushing scripts to git...')
-    await dserv.gitCommand('git::commit_and_push')
-    console.log('Git push completed successfully')
+ isGitBusy.value = true
+ try {
+   console.log('Committing and pushing scripts to git...')
+   await dserv.gitCommand('git::commit_and_push')
+   console.log('Git push completed successfully')
 
-    hasChangesSinceLastGit.value = false
-  } catch (error) {
-    console.error('Failed to push scripts:', error)
-  } finally {
-    isGitBusy.value = false
-  }
+   hasChangesSinceLastGit.value = false
+ } catch (error) {
+   console.error('Failed to push scripts:', error)
+ } finally {
+   isGitBusy.value = false
+ }
 }
 
 async function reloadSystem() {
-  try {
-    await dserv.essCommand('ess::reload_system')
-    message.success('System reloaded')
-  } catch (error) {
-    console.error('Failed to reload system:', error)
-    message.error(`Failed to reload system: ${error.message}`)
-  }
+ try {
+   await dserv.essCommand('ess::reload_system')
+   message.success('System reloaded')
+ } catch (error) {
+   console.error('Failed to reload system:', error)
+   message.error(`Failed to reload system: ${error.message}`)
+ }
 }
 
 async function reloadProtocol() {
-  try {
-    await dserv.essCommand('ess::reload_protocol')
-    message.success('Protocol reloaded')
-  } catch (error) {
-    console.error('Failed to reload protocol:', error)
-    message.error(`Failed to reload protocol: ${error.message}`)
-  }
+ try {
+   await dserv.essCommand('ess::reload_protocol')
+   message.success('Protocol reloaded')
+ } catch (error) {
+   console.error('Failed to reload protocol:', error)
+   message.error(`Failed to reload protocol: ${error.message}`)
+ }
 }
 
 async function reloadVariant() {
-  try {
-    await dserv.essCommand('ess::reload_variant')
-    message.success('Variant reloaded')
-  } catch (error) {
-    console.error('Failed to reload variant:', error)
-    message.error(`Failed to reload variant: ${error.message}`)
-  }
+ try {
+   await dserv.essCommand('ess::reload_variant')
+   message.success('Variant reloaded')
+ } catch (error) {
+   console.error('Failed to reload variant:', error)
+   message.error(`Failed to reload variant: ${error.message}`)
+ }
 }
 
 function autoIndentNewline(view) {
-  console.log('=== autoIndentNewline called ===')
+ console.log('=== autoIndentNewline called ===')
 
-  const state = view.state
-  const selection = state.selection.main
-  const line = state.doc.lineAt(selection.head)
+ const state = view.state
+ const selection = state.selection.main
+ const line = state.doc.lineAt(selection.head)
 
-  console.log('Current line:', line.text)
-  console.log('Cursor position:', selection.head)
+ console.log('Current line:', line.text)
+ console.log('Cursor position:', selection.head)
 
-  const allText = state.doc.toString()
-  const lines = TclFormatter.splitLines(allText)
-  const currentLineNum = line.number - 1
+ const allText = state.doc.toString()
+ const lines = TclFormatter.splitLines(allText)
+ const currentLineNum = line.number - 1
 
-  console.log('Current line number:', currentLineNum)
+ console.log('Current line number:', currentLineNum)
 
-  try {
-    const nextLineIndent = TclFormatter.calculateLineIndent(lines, currentLineNum + 1, 4)
+ try {
+   const nextLineIndent = TclFormatter.calculateLineIndent(lines, currentLineNum + 1, 4)
 
-    console.log('Calculated next line indent:', nextLineIndent)
+   console.log('Calculated next line indent:', nextLineIndent)
 
-    const newIndent = ' '.repeat(nextLineIndent)
-    const newline = '\n' + newIndent
+   const newIndent = ' '.repeat(nextLineIndent)
+   const newline = '\n' + newIndent
 
-    console.log('Inserting newline with indent:', JSON.stringify(newline))
+   console.log('Inserting newline with indent:', JSON.stringify(newline))
 
-    view.dispatch({
-      changes: { from: selection.head, insert: newline },
-      selection: { anchor: selection.head + newline.length }
-    })
+   view.dispatch({
+     changes: { from: selection.head, insert: newline },
+     selection: { anchor: selection.head + newline.length }
+   })
 
-    console.log('Auto-indent completed successfully')
-    return true
-  } catch (error) {
-    console.error('Error in auto-indent:', error)
-    console.log('Using fallback auto-indent')
+   console.log('Auto-indent completed successfully')
+   return true
+ } catch (error) {
+   console.error('Error in auto-indent:', error)
+   console.log('Using fallback auto-indent')
 
-    // Fallback to simple indentation
-    const currentIndent = line.text.match(/^\s*/)[0]
-    const newline = '\n' + currentIndent
+   // Fallback to simple indentation
+   const currentIndent = line.text.match(/^\s*/)[0]
+   const newline = '\n' + currentIndent
 
-    view.dispatch({
-      changes: { from: selection.head, insert: newline },
-      selection: { anchor: selection.head + newline.length }
-    })
+   view.dispatch({
+     changes: { from: selection.head, insert: newline },
+     selection: { anchor: selection.head + newline.length }
+   })
 
-    return true
-  }
+   return true
+ }
 }
 
 function handleSmartTab(view) {
-  const state = view.state
-  const selection = state.selection.main
-  const line = state.doc.lineAt(selection.head)
+ const state = view.state
+ const selection = state.selection.main
+ const line = state.doc.lineAt(selection.head)
 
-  const allText = state.doc.toString()
-  const lines = TclFormatter.splitLines(allText)
-  const currentLineNum = line.number - 1
+ const allText = state.doc.toString()
+ const lines = TclFormatter.splitLines(allText)
+ const currentLineNum = line.number - 1
 
-  try {
-    const targetIndent = TclFormatter.calculateLineIndent(lines, currentLineNum, 4)
+ try {
+   const targetIndent = TclFormatter.calculateLineIndent(lines, currentLineNum, 4)
 
-    const lineText = line.text
-    const currentIndentMatch = lineText.match(/^(\s*)/)
-    const currentIndent = currentIndentMatch ? currentIndentMatch[1].length : 0
+   const lineText = line.text
+   const currentIndentMatch = lineText.match(/^(\s*)/)
+   const currentIndent = currentIndentMatch ? currentIndentMatch[1].length : 0
 
-    const lineStart = line.from
-    const contentStart = lineStart + currentIndent
-    const newIndent = ' '.repeat(targetIndent)
+   const lineStart = line.from
+   const contentStart = lineStart + currentIndent
+   const newIndent = ' '.repeat(targetIndent)
 
-    view.dispatch({
-      changes: {
-        from: lineStart,
-        to: contentStart,
-        insert: newIndent
-      },
-      selection: { anchor: lineStart + targetIndent }
-    })
+   view.dispatch({
+     changes: {
+       from: lineStart,
+       to: contentStart,
+       insert: newIndent
+     },
+     selection: { anchor: lineStart + targetIndent }
+   })
 
-    return true
-  } catch (error) {
-    console.error('Error in smart tab:', error)
-    view.dispatch({
-      changes: { from: selection.head, insert: '    ' },
-      selection: { anchor: selection.head + 4 }
-    })
-    return true
-  }
+   return true
+ } catch (error) {
+   console.error('Error in smart tab:', error)
+   view.dispatch({
+     changes: { from: selection.head, insert: '    ' },
+     selection: { anchor: selection.head + 4 }
+   })
+   return true
+ }
 }
 
 // Component lifecycle
 onMounted(() => {
-  console.log('Scripts component mounted')
+ console.log('Scripts component mounted')
 
-  const cleanup = dserv.registerComponent('Scripts')
+ const cleanup = dserv.registerComponent('Scripts')
 
-  dserv.on('datapoint:ess/git/branches', (data) => {
-    console.log('Received git branches:', data.data)
-    if (data.data) {
-      availableBranches.value = data.data.trim().split(/\s+/).filter(branch => branch.length > 0)
-      console.log('Available branches:', availableBranches.value)
-    }
-  }, 'Scripts')
+ dserv.on('datapoint:ess/git/branches', (data) => {
+   console.log('Received git branches:', data.data)
+   if (data.data) {
+     availableBranches.value = data.data.trim().split(/\s+/).filter(branch => branch.length > 0)
+     console.log('Available branches:', availableBranches.value)
+   }
+ }, 'Scripts')
 
-  dserv.on('datapoint:ess/git/branch', (data) => {
-    console.log('Received current git branch:', data.data)
-    currentBranch.value = data.data || ''
-  }, 'Scripts')
+ dserv.on('datapoint:ess/git/branch', (data) => {
+   console.log('Received current git branch:', data.data)
+   currentBranch.value = data.data || ''
+ }, 'Scripts')
 
-  dserv.on('datapoint:ess/system_script', (data) => {
-    console.log('Received system script data')
-    scripts.value.system.content = data.data
-    scripts.value.system.originalContent = data.data // NEW: Preserve original
-    scripts.value.system.loaded = true
-    scripts.value.system.unchangedHistoryDepth = 0
-    scripts.value.system.modified = false // NEW: Ensure clean state
-    if (activeScript.value === 'system') {
-      updateEditorContent(data.data, true) // Clear history for new script from backend
-    }
-  }, 'Scripts')
+ dserv.on('datapoint:ess/system_script', (data) => {
+   console.log('Received system script data')
+   scripts.value.system.content = data.data
+   scripts.value.system.originalContent = data.data
+   scripts.value.system.loaded = true
+   scripts.value.system.unchangedHistoryDepth = 0
+   scripts.value.system.modified = false
+   if (activeScript.value === 'system') {
+     updateEditorContent(data.data, true)
+   }
+ }, 'Scripts')
 
-  dserv.on('datapoint:ess/protocol_script', (data) => {
-    console.log('Received protocol script data')
-    scripts.value.protocol.content = data.data
-    scripts.value.protocol.originalContent = data.data // NEW: Preserve original
-    scripts.value.protocol.loaded = true
-    scripts.value.protocol.unchangedHistoryDepth = 0
-    scripts.value.protocol.modified = false // NEW: Ensure clean state
-    if (activeScript.value === 'protocol') {
-      updateEditorContent(data.data, true) // Clear history for new script from backend
-    }
-  }, 'Scripts')
+ dserv.on('datapoint:ess/protocol_script', (data) => {
+   console.log('Received protocol script data')
+   scripts.value.protocol.content = data.data
+   scripts.value.protocol.originalContent = data.data
+   scripts.value.protocol.loaded = true
+   scripts.value.protocol.unchangedHistoryDepth = 0
+   scripts.value.protocol.modified = false
+   if (activeScript.value === 'protocol') {
+     updateEditorContent(data.data, true)
+   }
+ }, 'Scripts')
 
-  dserv.on('datapoint:ess/loaders_script', (data) => {
-    console.log('Received loaders script data')
-    scripts.value.loaders.content = data.data
-    scripts.value.loaders.originalContent = data.data // NEW: Preserve original
-    scripts.value.loaders.loaded = true
-    scripts.value.loaders.unchangedHistoryDepth = 0
-    scripts.value.loaders.modified = false // NEW: Ensure clean state
-    if (activeScript.value === 'loaders') {
-      updateEditorContent(data.data, true) // Clear history for new script from backend
-    }
-  }, 'Scripts')
+ dserv.on('datapoint:ess/loaders_script', (data) => {
+   console.log('Received loaders script data')
+   scripts.value.loaders.content = data.data
+   scripts.value.loaders.originalContent = data.data
+   scripts.value.loaders.loaded = true
+   scripts.value.loaders.unchangedHistoryDepth = 0
+   scripts.value.loaders.modified = false
+   if (activeScript.value === 'loaders') {
+     updateEditorContent(data.data, true)
+   }
+ }, 'Scripts')
 
-  dserv.on('datapoint:ess/variants_script', (data) => {
-    console.log('Received variants script data')
-    scripts.value.variants.content = data.data
-    scripts.value.variants.originalContent = data.data // NEW: Preserve original
-    scripts.value.variants.loaded = true
-    scripts.value.variants.unchangedHistoryDepth = 0
-    scripts.value.variants.modified = false // NEW: Ensure clean state
-    if (activeScript.value === 'variants') {
-      updateEditorContent(data.data, true) // Clear history for new script from backend
-    }
-  }, 'Scripts')
+ dserv.on('datapoint:ess/variants_script', (data) => {
+   console.log('Received variants script data')
+   scripts.value.variants.content = data.data
+   scripts.value.variants.originalContent = data.data
+   scripts.value.variants.loaded = true
+   scripts.value.variants.unchangedHistoryDepth = 0
+   scripts.value.variants.modified = false
+   if (activeScript.value === 'variants') {
+     updateEditorContent(data.data, true)
+   }
+ }, 'Scripts')
 
-  dserv.on('datapoint:ess/stim_script', (data) => {
-    console.log('Received stim script data')
-    scripts.value.stim.content = data.data
-    scripts.value.stim.originalContent = data.data // NEW: Preserve original
-    scripts.value.stim.loaded = true
-    scripts.value.stim.unchangedHistoryDepth = 0
-    scripts.value.stim.modified = false // NEW: Ensure clean state
-    if (activeScript.value === 'stim') {
-      updateEditorContent(data.data, true) // Clear history for new script from backend
-    }
-  }, 'Scripts')
+ dserv.on('datapoint:ess/stim_script', (data) => {
+   console.log('Received stim script data')
+   scripts.value.stim.content = data.data
+   scripts.value.stim.originalContent = data.data
+   scripts.value.stim.loaded = true
+   scripts.value.stim.unchangedHistoryDepth = 0
+   scripts.value.stim.modified = false
+   if (activeScript.value === 'stim') {
+     updateEditorContent(data.data, true)
+   }
+ }, 'Scripts')
 
-  dserv.on('connection', ({ connected }) => {
-    if (connected) {
-      console.log('Connected - requesting script and git data')
-      requestScriptData()
-      requestGitData()
-    }
-  }, 'Scripts')
+ dserv.on('connection', ({ connected }) => {
+   if (connected) {
+     console.log('Connected - requesting script and git data')
+     requestScriptData()
+     requestGitData()
+     loadLibFiles() // Load lib files on connection
+   }
+ }, 'Scripts')
 
-  dserv.on('initialized', () => {
-    console.log('dserv initialized - requesting script and git data')
-    requestScriptData()
-    requestGitData()
-  }, 'Scripts')
+ dserv.on('initialized', () => {
+   console.log('dserv initialized - requesting script and git data')
+   requestScriptData()
+   requestGitData()
+   loadLibFiles() // Load lib files on initialization
+ }, 'Scripts')
 
-  nextTick(() => {
-    createEditor()
-  })
+ nextTick(() => {
+   createEditor()
+ })
 
-  if (dserv.state.connected) {
-    console.log('Already connected - requesting script and git data')
-    setTimeout(() => {
-      requestScriptData()
-      requestGitData()
-    }, 100)
-  }
+ if (dserv.state.connected) {
+   console.log('Already connected - requesting script and git data')
+   setTimeout(() => {
+     requestScriptData()
+     requestGitData()
+     loadLibFiles() // Load lib files if already connected
+   }, 100)
+ }
 
-  onUnmounted(() => {
-    cleanup()
-    if (editorView) {
-      editorView.destroy()
-    }
-  })
+ onUnmounted(() => {
+   cleanup()
+   if (editorView) {
+     editorView.destroy()
+   }
+ })
 })
 
 // Helper functions
 function requestScriptData() {
-  try {
-    console.log('Touching script variables...')
-    dserv.essCommand('dservTouch ess/system_script')
-    dserv.essCommand('dservTouch ess/protocol_script')
-    dserv.essCommand('dservTouch ess/loaders_script')
-    dserv.essCommand('dservTouch ess/variants_script')
-    dserv.essCommand('dservTouch ess/stim_script')
-  } catch (error) {
-    console.error('Failed to request script data:', error)
-  }
+ try {
+   console.log('Touching script variables...')
+   dserv.essCommand('dservTouch ess/system_script')
+   dserv.essCommand('dservTouch ess/protocol_script')
+   dserv.essCommand('dservTouch ess/loaders_script')
+   dserv.essCommand('dservTouch ess/variants_script')
+   dserv.essCommand('dservTouch ess/stim_script')
+ } catch (error) {
+   console.error('Failed to request script data:', error)
+ }
 }
 
 function requestGitData() {
-  try {
-    console.log('Touching git variables...')
-    dserv.essCommand('dservTouch ess/git/branches')
-    dserv.essCommand('dservTouch ess/git/branch')
-  } catch (error) {
-    console.error('Failed to request git data:', error)
-  }
+ try {
+   console.log('Touching git variables...')
+   dserv.essCommand('dservTouch ess/git/branches')
+   dserv.essCommand('dservTouch ess/git/branch')
+ } catch (error) {
+   console.error('Failed to request git data:', error)
+ }
 }
 
 // DEBUGGING: Expose helper for console testing
 if (typeof window !== 'undefined') {
-  window.debugHistory = () => debugHistoryState('manual check')
-  window.debugScriptState = () => {
-    const script = currentScript.value
-    console.log('Current script state:', {
-      name: script?.name,
-      modified: script?.modified,
-      unchangedDepth: script?.unchangedHistoryDepth,
-      canUndo: canUndo.value,
-      canRedo: canRedo.value,
-      hasEditor: !!editorView
-    })
-  }
+ window.debugHistory = () => debugHistoryState('manual check')
+ window.debugScriptState = () => {
+   const script = currentScript.value
+   console.log('Current script state:', {
+     name: script?.name || script?.filename,
+     modified: script?.modified,
+     unchangedDepth: script?.unchangedHistoryDepth,
+     canUndo: canUndo.value,
+     canRedo: canRedo.value,
+     hasEditor: !!editorView,
+     isLibMode: isLibMode.value,
+     selectedLibFile: selectedLibFile.value
+   })
+ }
 }
 </script>
 
