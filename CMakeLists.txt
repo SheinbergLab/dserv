@@ -14,17 +14,26 @@ set(CMAKE_BUILD_TYPE Release)
 # Add uWebSockets as external project
 include(FetchContent)
 
-# Fetch uWebSockets from GitHub
+# Set shorter timeouts for FetchContent
+set(FETCHCONTENT_QUIET OFF)  # Show progress
+set(CMAKE_TIMEOUT 120)       # 2 minute timeout
+
 FetchContent_Declare(
   uwebsockets
   GIT_REPOSITORY https://github.com/uNetworking/uWebSockets.git
-  GIT_TAG        v20.62.0  # Latest stable version as of early 2024
+  GIT_TAG        v20.62.0
+  GIT_SHALLOW    TRUE
+  GIT_SUBMODULES ""
+  TIMEOUT        120
 )
 
 FetchContent_Declare(
   usockets
   GIT_REPOSITORY https://github.com/uNetworking/uSockets.git
-  GIT_TAG        v0.8.8   # Match with uWebSockets version
+  GIT_TAG        v0.8.8  
+  GIT_SHALLOW    TRUE
+  GIT_SUBMODULES ""  # This prevents boringssl/lsquic from being cloned
+  TIMEOUT        120
 )
 
 # Make both available
@@ -456,3 +465,6 @@ endif()
 
 include(CPack)
 cpack_add_component(dserv essctrl REQUIRED)
+
+
+
