@@ -147,14 +147,24 @@ char *do_msg_command(char *server, int port, char *line, int n)
   
   if (sock < 0) return NULL;
 
-  if (!sendMessage(sock, line, n)) return NULL;
-  if (!receiveMessage(sock, &buf)) return NULL;
+  if (!sendMessage(sock, line, n)) {
+    socket_close(sock);
+    return NULL;
+  }
+  if (!receiveMessage(sock, &buf)) {
+    socket_close(sock);
+    return NULL;
+  }
+  
   if (buf) {
     if (strlen(buf)) {
       linenoiseHistoryAdd(line); /* Add to the history. */
       linenoiseHistorySave("history.txt"); /* Save the history on disk. */
     }
   }
+  
+  socket_close(sock);
+
   return buf;
 }
 
