@@ -269,6 +269,13 @@ oo::class create System {
             dg_toString stimdg s
             dservSetData stimdg [now] 6 $s
             ::ess::ess_debug "Updated stimdg datapoint" "system"
+            
+            # Count and log trials
+            if {[catch {set trial_count [dl_length stimdg:stimtype]} error]} {
+                ::ess::ess_warning "Could not count trials in stimdg: $error" "system"
+            } else {
+                ::ess::ess_info "Stimdg contains $trial_count trials" "system"
+            }
         }
         dservSet ess/stiminfo [dg_toHybridJSON stimdg]
     }
@@ -643,6 +650,11 @@ namespace eval ess {
 
     # if this is set, there is a callback associated with errorInfo to set the ess/errorInfo dpoint
     variable error_trace 0
+
+    # to help manage system loading
+    variable loading_progress
+    variable loading_operation_id  
+    variable loading_start_time
     
     proc version_string {} {
         if {[dservExists ess/git/branch] && [dservExists ess/git/tag]} {
@@ -775,6 +787,75 @@ namespace eval ess {
     }
 
 
+    proc set_loading_progress {stage message {percent 0}} {
+        variable loading_progress
+        variable loading_operation_id
+        variable loading_start_time
+        
+        set timestamp [clock seconds]
+        set elapsed [expr {$timestamp - $loading_start_time}]
+        
+        set loading_progress [dict create \
+				  stage $stage \
+				  message $message \
+				  percent $percent \
+				  elapsed $elapsed \
+				  timestamp $timestamp \
+				  operation_id $loading_operation_id]
+        
+        # Convert to JSON and publish
+        dservSet ess/loading_progress [loading_dict_to_json $loading_progress]
+        ess_info "Loading progress: $stage - $message ($percent%)" "loading"
+    }
+    
+    proc start_loading_operation {operation_type} {
+        variable loading_operation_id
+        variable loading_start_time
+        
+        set loading_operation_id "${operation_type}_[clock milliseconds]"
+        set loading_start_time [clock seconds]
+        
+        dservSet ess/loading_operation_id $loading_operation_id
+        dservSet ess/loading_start_time $loading_start_time
+        set_loading_progress "starting" "Initializing $operation_type" 0
+        
+        return $loading_operation_id
+    }
+    
+    proc finish_loading_operation {success {error_msg ""}} {
+        variable loading_operation_id
+        variable loading_start_time
+        
+        if {$success} {
+            set_loading_progress "complete" "Loading completed successfully" 100
+        } else {
+            set_loading_progress "error" "Loading failed: $error_msg" 0
+        }
+        
+        # Clear loading state after a brief delay
+        after 1000 {
+            catch {dservClear ess/loading_progress}
+            catch {dservClear ess/loading_operation_id}  
+            catch {dservClear ess/loading_start_time}
+        }
+    }
+    
+    proc loading_dict_to_json {dict_data} {
+        set obj [yajl create #auto]
+        $obj map_open
+        dict for {key value} $dict_data {
+            if {[string is integer $value]} {
+                $obj string $key number $value
+            } else {
+                $obj string $key string $value
+            }
+        }
+        $obj map_close
+        set result [$obj get]
+        $obj delete
+        return $result
+    }
+
     proc unload_system {} {
         variable current
         set sname $current(system)
@@ -799,135 +880,208 @@ namespace eval ess {
             set current(system) {}
         }
     }
-
+    
+    # load_system with feedback and completion info
     proc load_system {{system {}} {protocol {}} {variant {}}} {
+        variable current
+        
+        # start progress tracking right away
+        set operation_id [start_loading_operation "system_load"]
+        ess_info "Starting system load: $system/$protocol/$variant" "system"
+        
         # Reset the result so we can check if a new error is raised
         set ::errorInfo ""
         set ::errorCode NONE
-
-        variable current
-
+        
         if {$current(system) != {} && [info exists $current(system)]} {
             if {[query_state] == "running"} {
+                finish_loading_operation false "Cannot load system while running"
                 ess_warning "Cannot load system while running" "system"
                 return
             }
+            set_loading_progress "cleanup" "Unloading current system" 10
             catch {unload_system}
         }
-
+        
+        set_loading_progress "discovery" "Finding available systems" 20
         ess_info "Loading system: $system, protocol: $protocol, variant: $variant" "system"
 
         set systems [find_systems]
         dservSet ess/systems $systems
-
+        
         if {$system == ""} {
             set current(system) [lindex $systems 0]
         } else {
             if {[lsearch $systems $system] < 0} {
+                finish_loading_operation false "system $system not found"
                 ess_error "system $system not found" "system"
                 error "system $system not found"
             }
             set current(system) $system
         }
-
+        
+        set_loading_progress "system_init" "Initializing system: $current(system)" 30
         [set current(system)]::create
         system_init $current(system)
-
+        
+        set_loading_progress "protocol_discovery" "Finding protocols for $current(system)" 40
         set protocols [find_protocols $current(system)]
         dservSet ess/protocols $protocols
-
+        
         if {$protocol == ""} {
             set current(protocol) [lindex $protocols 0]
         } else {
             if {[lsearch $protocols $protocol] < 0} {
+                finish_loading_operation false "protocol $protocol not found in $current(system)"
                 ess_error "protocol $protocol not found in $current(system)" "system"
                 error "protocol $protocol not found in $current(system)"
             }
             set current(protocol) $protocol
         }
-
+        
+        set_loading_progress "variant_discovery" "Finding variants for $current(protocol)" 50
         set variants [find_variants $current(system) $current(protocol)]
         dservSet ess/variants $variants
-
+        
         if {$variant == ""} {
             set current(variant) [lindex $variants 0]
         } else {
             if {[lsearch $variants $variant] < 0} {
                 set s_p "$current(system)/$current(protocol)"
+                finish_loading_operation false "variant $variant not found in $s_p"
                 ess_error "variant $variant not found in $s_p" "system"
                 error "variant $variant not found in $s_p"
             }
             set current(variant) $variant
         }
-
+        
+        set_loading_progress "protocol_init" "Initializing protocol: $current(protocol)" 60
         # Setup protocol
         protocol_init $current(system) $current(protocol)
-
+        
         # Set the variant for the current system
         set s [find_system $current(system)]
         $s set_variant $current(variant)
         $s reset_variant_args
-
+        
+        set_loading_progress "settings" "Loading saved settings" 70
         # Load saved settings
         load_settings
-
+        
+        set_loading_progress "variant_init" "Initializing variant: $current(variant)" 80
         # Initialize the loaders
         variant_init $current(system) $current(protocol) $current(variant)
-
+        
+        set_loading_progress "final_init" "Completing system initialization" 90
         # Final init
         $s final_init
-
+        
+        set_loading_progress "finalization" "Updating system state and scripts" 95
         # Update various datapoints
         dservSet ess/state_table [get_state_transitions]
         dservSet ess/rmt_cmds [get_rmt_cmds]
-
+        
         foreach t "system protocol loaders variants stim" {
             dservSet ess/${t}_script [${t}_script]
         }
-
+        
         set current(trialid) 0
         if {[dg_exists trialdg]} {dg_delete trialdg}
         reset_trial_info
         
-        ess_info "System loaded successfully: $current(system)/$current(protocol)/$current(variant)" "system"
+        set trial_count 0
+        if {[dg_exists stimdg]} {
+            if {[catch {set trial_count [dl_length stimdg:stimtype]} error]} {
+                ess_warning "Could not get trial count from stimdg: $error" "system"
+                set trial_count 0
+            }
+        }
+        
+        if {$trial_count > 0} {
+            ess_info "Loaded $trial_count trials in stimdg" "system"
+            set_loading_progress "complete" "Loaded $trial_count trials successfully" 100
+            
+            # Reset obs counts to reflect new trial count
+            dservSet ess/obs_total $trial_count
+            dservSet ess/obs_id 0
+            # This will trigger updateObsCount in the system object
+            if {$trial_count > 0} {
+                dservSet ess/obs_count "1/$trial_count"
+            }
+        } else {
+            set_loading_progress "complete" "System loaded (no trials)" 100
+            ess_warning "No trials found in stimdg after loading" "system"
+        }
+        
+        # Mark loading as complete
+        finish_loading_operation true
+        ess_info "System loaded successfully: $current(system)/$current(protocol)/$current(variant) ($trial_count trials)" "system"
     }
     
     proc reload_system {} {
-        variable current
-        if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
-            if {[query_state] == "running"} {return}
-            return
-        }
-        load_system $current(system) $current(protocol) $current(variant)
+	variable current
+	if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
+	    if {[query_state] == "running"} {return}
+	    return
+	}
+	
+	# NEW: Add progress tracking
+	set operation_id [start_loading_operation "system_reload"]
+	
+	if {[catch {
+	    load_system $current(system) $current(protocol) $current(variant)
+	} error]} {
+	    finish_loading_operation false "Reload failed: $error"
+	    error $error
+	}
     }
 
     proc reload_protocol {} {
-        variable current
-        if {$current(system) == {} || $current(protocol) == {}} {
-            if {[query_state] == "running"} {return}
-            return
-        }
-        load_system $current(system) $current(protocol)
+	variable current
+	if {$current(system) == {} || $current(protocol) == {}} {
+	    if {[query_state] == "running"} {return}
+	    return
+	}
+	
+	set operation_id [start_loading_operation "protocol_reload"]
+	
+	if {[catch {
+	    load_system $current(system) $current(protocol)
+	} error]} {
+	    finish_loading_operation false "Protocol reload failed: $error"
+	    error $error
+	}
     }
-
+    
     proc reload_variant {} {
-        variable current
-        if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
-            if {[query_state] == "running"} {return}
-            return
-        }
-
-        # initialize the variant by calling the appropriate loader
-        variant_init $current(system) $current(protocol) $current(variant)
-
-        # reset counters
-        reset
-
-        set current(trialid) 0
-        if {[dg_exists trialdg]} {dg_delete trialdg}
-        reset_trial_info
+	variable current
+	if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
+	    if {[query_state] == "running"} {return}
+	    return
+	}
+	
+	set operation_id [start_loading_operation "variant_reload"] 
+	set_loading_progress "variant_init" "Reloading variant: $current(variant)" 50
+	
+	if {[catch {
+	    # initialize the variant by calling the appropriate loader
+	    variant_init $current(system) $current(protocol) $current(variant)
+	    
+	    # reset counters
+	    reset
+	    
+	    set current(trialid) 0
+	    if {[dg_exists trialdg]} {dg_delete trialdg}
+	    reset_trial_info
+	    
+	    finish_loading_operation true
+	    
+	} error]} {
+	    finish_loading_operation false "Variant reload failed: $error"
+	    error $error
+	}
     }
-
+    
     proc set_system {system} {
         variable current
         catch {unload_system}
@@ -1056,6 +1210,15 @@ namespace eval ess {
         ::ess::evt_put BEGINOBS INFO [now] $current $total
         set in_obs 1
         dservSet ess/in_obs 1
+    }
+
+
+    proc get_dg_json {dg_name} {
+	if {![dg_exists $dg_name]} {
+	    return "error: DG '$dg_name' not found"
+	}
+	dservSet ess/dev_dg_data [dg_toHybridJSON $dg_name]
+	return "ok"
     }
 
     proc create_trialdg {status rt {stimid {}}} {
@@ -3148,81 +3311,113 @@ namespace eval ess {
     }
 
     proc variant_init {system protocol variant} {
-	variable current
-	set s [::ess::find_system $system]
-	
-	# let clients know we are loading a new set of trials
-	$current(state_system) set_status loading
-	
-	# get loader info for this variant and call
-	$s {*}[variant_loader_command $system $protocol $variant]
-	
-	# push new stimdg to dataserver
-	$s update_stimdg
-	
-	# get new variant options to dataserver and other programs
-	set vli [variant_loader_info $system $protocol $variant]
-	
-	# share loader_arg_options in json format for js clients
-	dservSet ess/variant_info_json [variant_info_to_json $vli]
-	
-	# having shared options, share whole thing to specify selected options
-	dservSet ess/variant_info $vli
-	
-	# protocol defaults for system parameters
-	set param_default_settings ${system}::${protocol}::params_defaults
-	if {[info exists $param_default_settings]} {
-	    ::ess::set_params {*}[set $param_default_settings]
-	}
-	
-	# and update system parameters for this variant
-	set vinfo [dict get [$s get_variants] $variant]
-	if {[lsearch [dict keys $vinfo] params] != -1} {
-	    set param_settings [dict get $vinfo params]
-	    ::ess::set_params {*}$param_settings
-	}
-	
-	# call a specific init function for this variant
-	set vinit_method ${variant}_init
-	if {[lsearch [info object methods $s] $vinit_method] != -1} {
-	    $s $vinit_method
-	}
-	
-	dservSet ess/param_settings [ess::get_params]
+        variable current
+        set s [::ess::find_system $system]
+        
+        # let clients know we are loading a new set of trials
+        $current(state_system) set_status loading
+        set_loading_progress "variant_loading" "Loading variant: $variant" 50
+        
+        # get loader info for this variant and call
+        set_loading_progress "variant_execution" "Executing variant loader" 60
+        $s {*}[variant_loader_command $system $protocol $variant]
+        
+        # push new stimdg to dataserver
+        set_loading_progress "stimdg_update" "Updating stimulus data" 70
+        $s update_stimdg
+        
+        # ENHANCED: Count trials immediately after stimdg update
+        set trial_count 0
+        if {[dg_exists stimdg]} {
+            if {[catch {set trial_count [dl_length stimdg:stimtype]} error]} {
+                ess_warning "Could not get trial count from stimdg: $error" "variant"
+                set trial_count 0
+            } else {
+                ess_info "Variant loaded with $trial_count trials" "variant"
+            }
+        }
+        
+        set_loading_progress "variant_options" "Configuring variant options" 80
+        # get new variant options to dataserver and other programs
+        set vli [variant_loader_info $system $protocol $variant]
+        
+        # share loader_arg_options in json format for js clients
+        dservSet ess/variant_info_json [variant_info_to_json $vli]
+        
+        # having shared options, share whole thing to specify selected options
+        dservSet ess/variant_info $vli
+        
+        set_loading_progress "parameters" "Setting parameters" 85
+        # protocol defaults for system parameters
+        set param_default_settings ${system}::${protocol}::params_defaults
+        if {[info exists $param_default_settings]} {
+            ::ess::set_params {*}[set $param_default_settings]
+        }
+        
+        # and update system parameters for this variant
+        set vinfo [dict get [$s get_variants] $variant]
+        if {[lsearch [dict keys $vinfo] params] != -1} {
+            set param_settings [dict get $vinfo params]
+            ::ess::set_params {*}$param_settings
+        }
+        
+        # call a specific init function for this variant
+        set vinit_method ${variant}_init
+        if {[lsearch [info object methods $s] $vinit_method] != -1} {
+            $s $vinit_method
+        }
+        
+        dservSet ess/param_settings [ess::get_params]
 
-	# Send event mappings to frontend
-	send_event_mappings
-	
-	# Send raw visualization scripts WITHOUT preprocessing
-	set s [::ess::find_system $system]
-	set raw_scripts [$s get_visualization_scripts]
-	
-	if {[dict size $raw_scripts] > 0} {
-	    ess_info "Sending [dict size $raw_scripts] raw visualization scripts" "visualization"
-	    
-	    # Convert to JSON and publish WITHOUT any Tcl processing
-	    set json_obj [yajl create #auto]
-	    $json_obj map_open
-	    dict for {k v} $raw_scripts {
-		$json_obj string $k string $v
-	    }
-	    $json_obj map_close
-	    set json_result [$json_obj get]
-	    $json_obj delete
-	    
-	    dservSet ess/visualization_scripts $json_result
-	    ess_info "Published raw visualization scripts" "visualization"
-	} else {
-	    dservSet ess/visualization_scripts "{}"
-	    ess_debug "No visualization scripts found" "visualization"
-	}
-	
-	::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
-	set current(variant) $variant
-	set current(open_variant) 1
-	
-	# loading is complete, so return status to stopped
-	$current(state_system) set_status stopped
+        set_loading_progress "event_mappings" "Sending event mappings" 90
+        # Send event mappings to frontend
+        send_event_mappings
+        
+        set_loading_progress "visualization" "Loading visualization scripts" 95
+        # Send raw visualization scripts WITHOUT preprocessing
+        set s [::ess::find_system $system]
+        set raw_scripts [$s get_visualization_scripts]
+        
+        if {[dict size $raw_scripts] > 0} {
+            ess_info "Sending [dict size $raw_scripts] raw visualization scripts" "visualization"
+            
+            # Convert to JSON and publish WITHOUT any Tcl processing
+            set json_obj [yajl create #auto]
+            $json_obj map_open
+            dict for {k v} $raw_scripts {
+                $json_obj string $k string $v
+            }
+            $json_obj map_close
+            set json_result [$json_obj get]
+            $json_obj delete
+            
+            dservSet ess/visualization_scripts $json_result
+            ess_info "Published raw visualization scripts" "visualization"
+        } else {
+            dservSet ess/visualization_scripts "{}"
+            ess_debug "No visualization scripts found" "visualization"
+        }
+        
+        # ENHANCED: Update obs counts with trial information
+        if {$trial_count > 0} {
+            dservSet ess/obs_total $trial_count
+            dservSet ess/obs_id 0
+            dservSet ess/obs_count "1/$trial_count"
+            ess_info "Reset obs count to 1/$trial_count" "variant"
+        }
+        
+        ::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
+        set current(variant) $variant
+        set current(open_variant) 1
+        
+        # loading is complete, so return status to stopped
+        $current(state_system) set_status stopped
+        
+        if {$trial_count > 0} {
+            ess_info "Variant initialization complete: $trial_count trials ready" "variant"
+        } else {
+            ess_warning "Variant initialization complete: no trials found" "variant"
+        }
     }
 
     # Helper function to shared event mappings to interested listeners
@@ -3593,6 +3788,371 @@ namespace eval ess {
     namespace export evt_name_set
     namespace export file_open file_close
     namespace ensemble create
+}
+
+namespace eval ess {
+    # Helper to set proper ownership on lib files
+    proc set_lib_file_ownership {filepath} {
+        variable system_path
+        variable current
+        
+        if {$current(project) == ""} return
+        
+        set project_path [file join $system_path $current(project)]
+        
+        if {![file exists $project_path]} return
+        
+        # Get ownership from project directory
+        set owner [file attributes $project_path -owner]
+        set group [file attributes $project_path -group]
+        
+        # Use environment variable instead of exec whoami
+        set current_user $::env(USER)
+        
+        # Only change ownership if we're running as different user
+        if {$owner != $current_user && [file exists $filepath]} {
+            if {[catch {
+                file attributes $filepath -owner $owner -group $group
+            } error]} {
+                ess_warning "Could not set ownership on $filepath: $error" "lib"
+            } else {
+                ess_debug "Set ownership on [file tail $filepath] to $owner:$group" "lib"
+            }
+        }
+    }
+    
+    # Get list of all .tm files in the lib directory
+    proc get_lib_files {} {
+        variable system_path
+        variable current
+        
+        if {$current(project) == ""} {
+            return {}
+        }
+        
+        set lib_dir [file join $system_path $current(project) lib]
+        if {![file isdirectory $lib_dir]} {
+            return {}
+        }
+        
+        set files {}
+        if {[catch {glob -nocomplain [file join $lib_dir *.tm]} glob_result]} {
+            # If glob fails, return empty list
+            return {}
+        }
+        
+        foreach f $glob_result {
+            lappend files [file tail $f]
+        }
+        
+        # Sort alphabetically for consistent ordering
+        return [lsort $files]
+    }
+    
+    # Get content of a specific lib file
+    proc get_lib_file_content {filename} {
+        variable system_path
+        variable current
+        
+        if {$current(project) == ""} {
+            error "No project loaded"
+        }
+        
+        if {![is_valid_lib_filename $filename]} {
+            error "Invalid lib filename: $filename"
+        }
+        
+        set lib_dir [file join $system_path $current(project) lib]
+        set full_path [file join $lib_dir $filename]
+        
+        if {![file exists $full_path]} {
+            error "Lib file not found: $filename"
+        }
+        
+        if {[catch {
+            set f [open $full_path r]
+            set content [read $f]
+            close $f
+        } error]} {
+            error "Failed to read lib file $filename: $error"
+        }
+        
+        return $content
+    }
+    
+    # Save content to a lib file
+    proc save_lib_file {filename content} {
+        variable system_path
+        variable current
+        
+        if {$current(project) == ""} {
+            error "No project loaded"
+        }
+        
+        if {![is_valid_lib_filename $filename]} {
+            error "Invalid lib filename: $filename"
+        }
+        
+        set lib_dir [file join $system_path $current(project) lib]
+        
+        # Create lib directory if it doesn't exist
+        if {![file isdirectory $lib_dir]} {
+            if {[catch {file mkdir $lib_dir} error]} {
+                error "Failed to create lib directory: $error"
+            }
+            ess_info "Created lib directory: $lib_dir" "lib"
+            
+            # Set ownership on new directory
+            set_lib_file_ownership $lib_dir
+        }
+        
+        set full_path [file join $lib_dir $filename]
+        
+        # Create backup if file already exists
+        if {[file exists $full_path]} {
+            if {[catch {backup_lib_file $filename} backup_error]} {
+                ess_warning "Failed to create backup for $filename: $backup_error" "lib"
+                # Continue with save even if backup fails
+            }
+        }
+        
+        # Save the file
+        if {[catch {
+            set f [open $full_path w]
+            puts -nonewline $f $content
+            close $f
+        } error]} {
+            error "Failed to save lib file $filename: $error"
+        }
+        
+        # Set proper ownership on the saved file
+        set_lib_file_ownership $full_path
+        
+        ess_info "Saved lib file: $filename" "lib"
+        
+        # Clean up old backups
+        cleanup_lib_backups $filename
+        
+        return "success"
+    }
+    
+    # Validate lib filename for security
+    proc is_valid_lib_filename {filename} {
+        # Must end with .tm
+        if {![string match "*.tm" $filename]} {
+            return 0
+        }
+        
+        # No path traversal
+        if {[string match "*..*" $filename]} {
+            return 0
+        }
+        
+        # No directory separators
+        if {[string match "*/*" $filename] || [string match "*\\*" $filename]} {
+            return 0
+        }
+        
+        # Must not be empty or just ".tm"
+        if {$filename == "" || $filename == ".tm"} {
+            return 0
+        }
+        
+        # Check for reasonable filename characters
+        # Allow alphanumeric, dash, underscore, dot
+        if {![regexp {^[a-zA-Z0-9._-]+\.tm$} $filename]} {
+            return 0
+        }
+        
+        return 1
+    }
+    
+    # Create backup of lib file (extend existing backup system)
+    proc backup_lib_file {filename} {
+        variable system_path
+        variable current
+        
+        if {![is_valid_lib_filename $filename]} {
+            error "Invalid lib filename: $filename"
+        }
+        
+        set lib_dir [file join $system_path $current(project) lib]
+        set original_file [file join $lib_dir $filename]
+        
+        if {![file exists $original_file]} {
+            ess_warning "Cannot backup lib file - original does not exist: $filename" "lib"
+            return ""
+        }
+        
+        # Create backup directory structure similar to scripts
+        set backup_base_dir [init_backup_system]
+        if {$backup_base_dir == ""} {
+            error "Could not initialize backup system"
+        }
+        
+        set backup_dir [file join $backup_base_dir $current(project) lib]
+        if {![file exists $backup_dir]} {
+            if {[catch {file mkdir $backup_dir} error]} {
+                error "Could not create lib backup directory $backup_dir: $error"
+            }
+            ess_debug "Created lib backup directory: $backup_dir" "lib"
+            
+            # Set ownership on backup directory
+            set_lib_file_ownership $backup_dir
+        }
+        
+        # Create timestamped backup filename
+        set timestamp [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+        set backup_filename "${timestamp}_lib_${filename}"
+        set backup_file [file join $backup_dir $backup_filename]
+        
+        if {[catch {file copy $original_file $backup_file} error]} {
+            error "Error creating lib backup: $error"
+        } else {
+            # Set ownership on backup file
+            set_lib_file_ownership $backup_file
+            
+            ess_info "Created lib backup: [file tail $backup_file]" "lib"
+            create_lib_backup_metadata $backup_file $filename $original_file
+            return $backup_file
+        }
+    }
+    
+    # Create metadata for lib file backup
+    proc create_lib_backup_metadata {backup_file filename original_file} {
+        variable current
+        
+        set metadata_file "${backup_file}.meta"
+        
+        if {[catch {
+            set f [open $metadata_file w]
+            puts $f "# ESS Lib File Backup Metadata"
+            puts $f "backup_time: [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]"
+            puts $f "backup_timestamp: [clock seconds]"
+            puts $f "file_type: lib"
+            puts $f "filename: $filename"
+            puts $f "original_file: $original_file"
+            puts $f "project: $current(project)"
+            puts $f "file_size: [file size $backup_file]"
+            if {[file exists $original_file]} {
+                puts $f "original_mtime: [file mtime $original_file]"
+            }
+            close $f
+        } error]} {
+            ess_warning "Could not create lib backup metadata file: $metadata_file ($error)" "lib"
+        }
+        
+        # Set ownership on metadata file too
+        set_lib_file_ownership $metadata_file
+    }
+    
+    # Get list of backups for a specific lib file
+    proc get_lib_file_backups {filename} {
+        variable current
+        
+        if {![is_valid_lib_filename $filename]} {
+            return {}
+        }
+        
+        set backup_base_dir [init_backup_system]
+        if {$backup_base_dir == ""} {
+            return {}
+        }
+        
+        set backup_dir [file join $backup_base_dir $current(project) lib]
+        if {![file isdirectory $backup_dir]} {
+            return {}
+        }
+        
+        # Pattern: timestamp_lib_filename
+        set pattern "*_lib_${filename}"
+        
+        if {[catch {glob -nocomplain [file join $backup_dir $pattern]} backup_files]} {
+            return {}
+        }
+        
+        # Sort by timestamp (newest first) - reuse existing compare_backup_files
+        if {[llength $backup_files] > 1} {
+            set sorted_files [lsort -command {compare_backup_files} $backup_files]
+        } else {
+            set sorted_files $backup_files
+        }
+        
+        return $sorted_files
+    }
+    
+    # Cleanup old lib file backups
+    proc cleanup_lib_backups {filename {max_backups 10}} {
+        variable current
+        
+        if {$current(project) == ""} return
+        
+        set backup_files [get_lib_file_backups $filename]
+        
+        if {[llength $backup_files] <= $max_backups} {
+            return
+        }
+        
+        # Keep only the most recent backups
+        set files_to_delete [lrange $backup_files $max_backups end]
+        
+        foreach file $files_to_delete {
+            if {[catch {file delete $file} error]} {
+                ess_warning "Error deleting lib backup $file: $error" "lib"
+            } else {
+                ess_debug "Deleted old lib backup: [file tail $file]" "lib"
+                
+                # Also delete metadata file if it exists
+                set metadata_file "${file}.meta"
+                if {[file exists $metadata_file]} {
+                    catch {file delete $metadata_file}
+                }
+            }
+        }
+    }
+    
+    # Restore lib file from backup
+    proc restore_lib_backup {filename backup_file} {
+        variable system_path
+        variable current
+        
+        if {$current(project) == ""} {
+            error "No project loaded"
+        }
+        
+        if {![is_valid_lib_filename $filename]} {
+            error "Invalid lib filename: $filename"
+        }
+        
+        if {![file exists $backup_file]} {
+            error "Backup file does not exist: $backup_file"
+        }
+        
+        # Validate backup file path for security
+        set backup_dir [file dirname $backup_file]
+        set expected_base [file join [init_backup_system] $current(project) lib]
+        
+        if {![string match "$expected_base*" $backup_dir]} {
+            error "Backup file outside of expected directory tree"
+        }
+        
+        # Read backup content
+        if {[catch {
+            set f [open $backup_file r]
+            set backup_content [read $f]
+            close $f
+        } error]} {
+            error "Cannot read backup file: $error"
+        }
+        
+        # Save as current lib file
+        if {[catch {save_lib_file $filename $backup_content} save_result]} {
+            error "Failed to restore lib file: $save_result"
+        }
+        
+        ess_info "Restored lib file $filename from backup" "lib"
+        return "restored"
+    }
 }
 
 namespace eval ess {
