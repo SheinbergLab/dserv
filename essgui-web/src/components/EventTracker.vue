@@ -94,6 +94,8 @@
             <span v-if="lastEventTime" class="last-event">
               Last event: {{ formatLastEventTime() }}
             </span>
+            <!-- NEW: Background tracking indicator -->
+            <a-badge v-if="connected" status="success" text="Background tracking active" />
           </a-space>
         </a-col>
         <a-col :span="12" style="text-align: right;">
@@ -118,7 +120,8 @@ import {
   FastForwardOutlined,
   SearchOutlined,
   LeftOutlined,
-  RightOutlined
+  RightOutlined,
+  DownOutlined
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { h } from 'vue'
@@ -138,6 +141,9 @@ const eventTable = ref(null)
 // Filtering and search
 const eventTypeFilter = ref(null)
 const searchText = ref('')
+
+// NEW: Track if we need to sync with background events
+const needsSync = ref(false)
 
 // Table columns
 const columns = [
@@ -187,27 +193,168 @@ const columns = [
   }
 ]
 
-// Computed properties
+// NEW: Sync with background events when component becomes visible
+function syncWithBackgroundEvents() {
+  console.log('Syncing with background events...')
+  
+  // Get the current observation events from the event service
+  const serviceObsInfo = eventService.getObsInfo()
+  const serviceEvents = eventService.getCurrentObsEvents()
+  
+  // Update our local state
+  obsInfo.value = serviceObsInfo
+  
+  // Convert service events to display format
+  events.value = serviceEvents.map((event, index) => {
+    // Calculate elapsed time from previous event
+    let elapsedTime = '0.0'
+    if (index > 0) {
+      const timeDiff = (event.timestamp - serviceEvents[index - 1].timestamp) / 1000
+      elapsedTime = timeDiff.toFixed(1)
+    }
+    
+    return {
+      key: `sync_${event.timestamp}_${event.type}_${event.subtype}_${index}_${Math.random().toString(36).substr(2, 6)}`, // Guaranteed unique key
+      ...event,
+      decodedParams: eventService.decodeParams(event),
+      obsIndex: serviceObsInfo.obsCount,
+      elapsedTime: elapsedTime
+    }
+  })
+  
+  // NEW: Sync historical observations from the service
+  const historicalObs = eventService.getHistoricalObservations()
+  allObservations.value = historicalObs.map(obs => ({
+    obsNumber: obs.obsNumber,
+    events: obs.events.map((event, index) => ({
+      key: `hist_${obs.obsNumber}_${event.timestamp}_${event.type}_${event.subtype}_${index}_${Math.random().toString(36).substr(2, 6)}`,
+      ...event,
+      decodedParams: event.decodedParams || eventService.decodeParams(event)
+    })),
+    startTime: obs.startTime,
+    endTime: obs.endTime
+  }))
+  
+  lastEventTime.value = events.value.length > 0 ? Date.now() : null
+  needsSync.value = false
+  
+  console.log(`Synced ${events.value.length} current events and ${allObservations.value.length} historical observations`)
+  
+  // Auto-scroll to bottom if viewing live
+  if (viewingObsIndex.value === -1 && events.value.length > 0) {
+    scrollToBottom()
+  }
+}
+
+// Enhanced event handling - now works with service events and historical data
+function handleEventServiceUpdate(eventOrInfo) {
+  if (eventOrInfo.type === 'obs_reset') {
+    obsInfo.value = eventService.getObsInfo()
+    // Clear all observations and events
+    allObservations.value = []
+    events.value = []
+    viewingObsIndex.value = -1
+  } else if (eventOrInfo.type === 'obs_start') {
+    obsInfo.value = eventService.getObsInfo()
+    
+    // NEW: Historical observations are now managed by the service
+    // Just sync with the service's historical data
+    const historicalObs = eventService.getHistoricalObservations()
+    allObservations.value = historicalObs.map(obs => ({
+      obsNumber: obs.obsNumber,
+      events: obs.events.map((event, index) => ({
+        key: `hist_start_${obs.obsNumber}_${event.timestamp}_${event.type}_${event.subtype}_${index}_${Math.random().toString(36).substr(2, 6)}`,
+        ...event,
+        decodedParams: event.decodedParams || eventService.decodeParams(event)
+      })),
+      startTime: obs.startTime,
+      endTime: obs.endTime
+    }))
+    
+    // Clear current events for new observation
+    events.value = []
+    viewingObsIndex.value = -1
+  } else if (eventOrInfo.type === 'obs_end') {
+    obsInfo.value = eventService.getObsInfo()
+  } else if (eventOrInfo.type === 'name_update' || eventOrInfo.type === 'subtype_names_update' || eventOrInfo.type === 'names_reset') {
+    // Force re-render when names update
+    events.value = [...events.value]
+    allObservations.value = [...allObservations.value]
+  } else if (eventOrInfo.timestamp) {
+    // This is an actual event, not a control message
+    addEventFromService(eventOrInfo)
+  }
+}
+
+// NEW: Add event from service (works whether component is mounted or not)
+function addEventFromService(event) {
+  // Skip system events that shouldn't be displayed
+  if (event.type === 7 || event.type === 1 || event.type === 6) {
+    return
+  }
+  
+  // Only display if in observation or it's a BEGINOBS/ENDOBS event
+  if (!(obsInfo.value.obsCount >= 0 || event.type === 19 || event.type === 20)) {
+    return
+  }
+  
+  const enhancedEvent = {
+    key: `live_${event.timestamp}_${event.type}_${event.subtype}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`, // Guaranteed unique
+    ...event,
+    decodedParams: eventService.decodeParams(event),
+    obsIndex: obsInfo.value.obsCount,
+    elapsedTime: '0.0'
+  }
+  
+  // Calculate elapsed time from previous event
+  if (events.value.length > 0) {
+    const previousEvent = events.value[events.value.length - 1]
+    const timeDiff = (event.timestamp - previousEvent.timestamp) / 1000
+    enhancedEvent.elapsedTime = timeDiff.toFixed(1)
+  }
+  
+  events.value.push(enhancedEvent)
+  lastEventTime.value = Date.now()
+  
+  // Limit events per observation
+  if (events.value.length > 2000) {
+    events.value.splice(0, 500)
+  }
+  
+  // Auto-scroll if viewing live
+  if (viewingObsIndex.value === -1) {
+    scrollToBottom()
+  }
+}
+
+// Keep the original datapoint handler for direct dserv events (backup)
+function handleDatapoint(data) {
+  if (data.name === 'eventlog/events') {
+    const event = eventService.parseEvent(data)
+    if (event) {
+      // The service will handle this and call our handler
+      // This is just a backup in case service isn't working
+    }
+  }
+}
+
+// Computed properties (unchanged)
 const displayedEvents = computed(() => {
   let sourceEvents
 
   if (viewingObsIndex.value === -1) {
-    // Viewing live events
     sourceEvents = events.value
   } else {
-    // Viewing historical observation
     const obs = allObservations.value[viewingObsIndex.value]
     sourceEvents = obs ? obs.events : []
   }
 
   let filtered = sourceEvents
 
-  // Filter by event type
   if (eventTypeFilter.value !== null) {
     filtered = filtered.filter(event => event.type === eventTypeFilter.value)
   }
 
-  // Filter by search text
   if (searchText.value) {
     const search = searchText.value.toLowerCase()
     filtered = filtered.filter(event =>
@@ -222,10 +369,8 @@ const displayedEvents = computed(() => {
 
 const currentObsEventCount = computed(() => {
   if (viewingObsIndex.value === -1) {
-    // Live view
     return events.value.length
   } else {
-    // Historical view
     const obs = allObservations.value[viewingObsIndex.value]
     return obs ? obs.events.length : 0
   }
@@ -258,68 +403,7 @@ const viewingObsText = computed(() => {
   }
 })
 
-// Event handling functions
-function handleDatapoint(data) {
-  if (data.name === 'eventlog/events') {
-    // The event has already been processed by the global service
-    // We just need to parse it and check if we should display it
-    const event = eventService.parseEvent(data);
-
-    // Only ADD TO DISPLAY if it meets our criteria:
-    // - During observation periods OR BEGINOBS/ENDOBS events
-    // - Not SYSTEM_STATE events (type 7)
-    // - Not NAME events (type 1)
-    // - Not SUBTYPES events (type 6)
-    if (event && (obsInfo.value.obsCount >= 0 || event.type === 19 || event.type === 20) &&
-      event.type !== 7 && event.type !== 1 && event.type !== 6) {
-
-      // Apply timestamp adjustment if in observation (already done by service, but need for display)
-      if (obsInfo.value.obsCount >= 0) {
-        event.timestamp -= obsInfo.value.obsStart;
-      }
-
-      addEvent(event)
-    }
-  }
-}
-
-function addEvent(event) {
-  // Don't automatically switch to live view when viewing historical data
-  // Let the user stay in review mode even when new events arrive
-
-  const enhancedEvent = {
-    key: Date.now() + Math.random(), // Unique key for Vue
-    ...event,
-    decodedParams: eventService.decodeParams(event),
-    obsIndex: obsInfo.value.obsCount,
-    elapsedTime: '0.0' // Will be calculated if viewing live
-  }
-
-  // Only add to live events and calculate elapsed time if in live view
-  if (viewingObsIndex.value === -1) {
-    // Calculate elapsed time from previous event
-    if (events.value.length > 0) {
-      const previousEvent = events.value[events.value.length - 1]
-      const timeDiff = (event.timestamp - previousEvent.timestamp) / 1000
-      enhancedEvent.elapsedTime = timeDiff.toFixed(1)
-    }
-
-    events.value.push(enhancedEvent)
-    lastEventTime.value = Date.now()
-
-    // Limit number of events per observation to prevent memory issues
-    if (events.value.length > 2000) {
-      events.value.splice(0, 500) // Remove oldest 500 events
-    }
-
-    // Auto-scroll to bottom in live view
-    scrollToBottom()
-  }
-  // If viewing historical data, just ignore new events for display
-  // (they're still being tracked by the service in the background)
-}
-
-// Auto-scroll function using unified approach
+// Auto-scroll function (unchanged)
 const scrollToBottom = () => {
   nextTick(() => {
     const table = eventTable.value
@@ -334,63 +418,7 @@ const scrollToBottom = () => {
   })
 }
 
-// Event service handlers
-function handleEventServiceUpdate(eventOrInfo) {
-  if (eventOrInfo.type === 'obs_reset') {
-    obsInfo.value = eventService.getObsInfo()
-    // Clear all observations and events
-    allObservations.value = []
-    events.value = []
-    viewingObsIndex.value = -1
-  } else if (eventOrInfo.type === 'obs_start') {
-    obsInfo.value = eventService.getObsInfo()
-    // Start new observation - keep previous ones in history
-    if (events.value.length > 0) {
-      // Calculate elapsed times for historical events before saving
-      const eventsWithElapsed = calculateElapsedTimesForSavedEvents(events.value)
-
-      // Save the previous observation
-      const prevObs = {
-        obsNumber: obsInfo.value.obsCount - 1,
-        events: eventsWithElapsed,
-        startTime: Date.now(),
-        endTime: null
-      }
-      allObservations.value.unshift(prevObs) // Add to beginning
-
-      // Limit history to last 20 observations
-      if (allObservations.value.length > 20) {
-        allObservations.value = allObservations.value.slice(0, 20)
-      }
-    }
-    // Clear current events for new observation
-    events.value = []
-    viewingObsIndex.value = -1 // Return to live view
-  } else if (eventOrInfo.type === 'obs_end') {
-    obsInfo.value = eventService.getObsInfo()
-  } else if (eventOrInfo.type === 'name_update' || eventOrInfo.type === 'subtype_names_update' || eventOrInfo.type === 'names_reset') {
-    // Force re-render when names update
-    events.value = [...events.value]
-    allObservations.value = [...allObservations.value]
-  }
-}
-
-// Helper function to calculate elapsed times for events being saved to history
-function calculateElapsedTimesForSavedEvents(eventList) {
-  return eventList.map((event, index) => {
-    let elapsedTime = '0.0'
-    if (index > 0) {
-      const timeDiff = (event.timestamp - eventList[index - 1].timestamp) / 1000
-      elapsedTime = timeDiff.toFixed(1)
-    }
-    return {
-      ...event,
-      elapsedTime: elapsedTime
-    }
-  })
-}
-
-// Utility functions
+// Utility functions (unchanged)
 function getEventTypeName(type) {
   return eventService.getEventTypeName(type)
 }
@@ -412,12 +440,11 @@ function formatLastEventTime() {
 }
 
 function getTypeColor(type) {
-  // Color coding based on event type ranges
-  if (type < 16) return 'blue'      // Reserved/System
-  if (type < 32) return 'green'     // Core events
-  if (type < 64) return 'orange'    // Experiment events
-  if (type < 128) return 'purple'   // System events
-  return 'red'                      // User events
+  if (type < 16) return 'blue'
+  if (type < 32) return 'green'
+  if (type < 64) return 'orange'
+  if (type < 128) return 'purple'
+  return 'red'
 }
 
 function getSubtypeColor(type, subtype) {
@@ -427,7 +454,6 @@ function getSubtypeColor(type, subtype) {
 function getRowClassName(record) {
   const classes = []
 
-  // Highlight important events
   switch (record.type) {
     case 19: // BEGINOBS
       classes.push('obs-start-row')
@@ -443,7 +469,7 @@ function getRowClassName(record) {
   return classes.join(' ')
 }
 
-// Navigation functions
+// Navigation functions (unchanged)
 function previousObservation() {
   if (canNavigateBack.value) {
     viewingObsIndex.value++
@@ -458,39 +484,97 @@ function nextObservation() {
 
 function jumpToLive() {
   viewingObsIndex.value = -1
-  // Auto-scroll to bottom when returning to live view
   if (events.value.length > 0) {
     scrollToBottom()
   }
 }
 
-// Actions
+// Actions with enhanced export and clear
 function clearEvents() {
   events.value = []
   allObservations.value = []
   viewingObsIndex.value = -1
-  // No notification message
+  
+  // NEW: Also clear the service's historical data
+  eventService.obsReset()
+  message.success('All events and historical data cleared')
 }
 
+// NEW: Enhanced export with options
 function exportEvents() {
   try {
-    const data = eventService.exportEvents('csv')
+    // Export all data including historical observations
+    const data = eventService.exportAllData('csv')
     const blob = new Blob([data], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `events_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`
+    a.download = `all_events_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    console.log('Events exported to CSV')
+    
+    // Show export statistics
+    const stats = eventService.getEventStatistics()
+    console.log('Events exported:', {
+      currentObs: stats.currentObservation,
+      historical: stats.historical,
+      session: stats.session
+    })
+    
+    message.success(`Exported ${stats.session.totalEvents} events from ${stats.session.totalObservations} observations`)
   } catch (error) {
     console.error('Export failed:', error)
+    message.error('Export failed')
   }
 }
 
-// Refresh event names from the system (useful when system changes)
+// NEW: Export just current view
+function exportCurrentView() {
+  try {
+    const viewEvents = displayedEvents.value
+    if (viewEvents.length === 0) {
+      message.warning('No events to export in current view')
+      return
+    }
+    
+    const headers = ['Timestamp', 'ElapsedTime', 'Type', 'Subtype', 'TypeName', 'SubtypeName', 'Parameters']
+    const rows = [headers]
+    
+    viewEvents.forEach(event => {
+      rows.push([
+        formatTimestamp(event.timestamp),
+        event.elapsedTime || '0.0',
+        event.type,
+        event.subtype,
+        getEventTypeName(event.type),
+        getEventSubtypeName(event.type, event.subtype),
+        event.decodedParams || eventService.decodeParams(event)
+      ])
+    })
+    
+    const csvData = rows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n')
+    const blob = new Blob([csvData], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    
+    const viewType = viewingObsIndex.value === -1 ? 'live' : `obs_${allObservations.value[viewingObsIndex.value]?.obsNumber}`
+    a.download = `events_${viewType}_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`
+    
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    
+    message.success(`Exported ${viewEvents.length} events from current view`)
+  } catch (error) {
+    console.error('Export current view failed:', error)
+    message.error('Export failed')
+  }
+}
+
 async function refreshEventNames() {
   try {
     await eventService.requestEventNameRefresh(dserv)
@@ -505,25 +589,31 @@ let cleanupDserv = null
 let cleanupEventService = null
 
 onMounted(() => {
+  console.log('EventTracker mounted - syncing with background events')
+  
   cleanupDserv = dserv.registerComponent('EventTracker')
 
-  // Listen to the same datapoint stream for display filtering
+  // Listen to datapoints as backup
   dserv.on('datapoint:eventlog/events', handleDatapoint)
   dserv.on('connection', (data) => {
     connected.value = data.connected
   })
 
-  // Set up event service handlers for state updates
+  // Set up event service handlers - this is the primary event source
   cleanupEventService = eventService.addHandler(handleEventServiceUpdate)
 
   // Initialize connection state
   connected.value = dserv.state.connected
 
-  // Get initial observation info
-  obsInfo.value = eventService.getObsInfo()
+  // NEW: Sync with any events that happened while component was unmounted
+  syncWithBackgroundEvents()
+  
+  console.log('EventTracker fully initialized and synced')
 })
 
 onUnmounted(() => {
+  console.log('EventTracker unmounted - events will continue tracking in background')
+  
   if (cleanupDserv) cleanupDserv()
   if (cleanupEventService) cleanupEventService()
   dserv.off('datapoint:eventlog/events', handleDatapoint)
@@ -532,6 +622,13 @@ onUnmounted(() => {
 // Watch for connection changes to update UI
 watch(() => dserv.state.connected, (newConnected) => {
   connected.value = newConnected
+})
+
+// NEW: Watch for when component becomes visible again (if using visibility API)
+watch(() => document.visibilityState, (newState) => {
+  if (newState === 'visible' && needsSync.value) {
+    syncWithBackgroundEvents()
+  }
 })
 
 // Expose methods for parent components
@@ -543,12 +640,13 @@ defineExpose({
   nextObservation,
   getCurrentEvents: () => events.value,
   getObsInfo: () => obsInfo.value,
-  getAllObservations: () => allObservations.value
+  getAllObservations: () => allObservations.value,
+  syncWithBackgroundEvents // NEW: Allow manual sync
 })
 </script>
 
 <style scoped>
-/* UNIFIED EVENT TRACKER LAYOUT */
+/* Same styles as before - keeping all the existing CSS */
 .event-tracker-container {
   height: 100%;
   display: flex;
@@ -622,12 +720,10 @@ defineExpose({
   color: #666;
 }
 
-/* TABLE SPECIFIC STYLES */
 .event-table {
   height: 100%;
 }
 
-/* Apply unified table layout */
 :deep(.event-table .ant-table) {
   height: 100%;
   display: flex;
@@ -652,7 +748,6 @@ defineExpose({
   min-height: 0;
 }
 
-/* Cell styling */
 .timestamp-cell {
   font-family: monospace;
   font-size: 11px;
@@ -685,7 +780,6 @@ defineExpose({
   white-space: nowrap;
 }
 
-/* Row highlighting for special events */
 :deep(.obs-start-row td) {
   background-color: #e6f7ff !important;
 }
@@ -710,7 +804,6 @@ defineExpose({
   background-color: #d9f7be !important;
 }
 
-/* Table styling */
 :deep(.event-table .ant-table-small .ant-table-tbody > tr > td) {
   padding: 4px 8px;
 }
@@ -720,7 +813,6 @@ defineExpose({
   background: #fafafa;
 }
 
-/* Table wrapper styling for proper height */
 :deep(.event-table .ant-table-wrapper) {
   height: 100% !important;
   display: flex;
@@ -737,7 +829,6 @@ defineExpose({
   flex-direction: column;
 }
 
-/* Responsive adjustments */
 @media (max-width: 1200px) {
   .params-cell {
     max-width: 150px;

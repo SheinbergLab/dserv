@@ -118,6 +118,8 @@ class EventService {
       obsCount: -1,
       events: []
     };
+    this.historicalObservations = [];
+    this.maxHistoricalObs = 20;      
     this.eventHandlers = new Set();
     this.isInitialized = false;
     this.dservCleanup = null;
@@ -366,13 +368,49 @@ class EventService {
   }
 
   // Observation handling
-  obsReset() {
-    this.obsInfo.obsCount = -1;
-    this.obsInfo.events = [];
-    this.notifyHandlers({ type: 'obs_reset' });
-  }
+obsReset() {
+  this.obsInfo.obsCount = -1;
+  this.obsInfo.events = [];
+  this.historicalObservations = []; // Clear history too
+  this.notifyHandlers({ type: 'obs_reset' });
+}
+
 
   obsStart(event) {
+    // Save previous observation if it had events
+    if (this.obsInfo.obsCount >= 0 && this.obsInfo.events[this.obsInfo.obsCount]?.length > 0) {
+      const prevObsEvents = this.obsInfo.events[this.obsInfo.obsCount];
+      const obsData = {
+        obsNumber: this.obsInfo.obsCount,
+        events: prevObsEvents.map((event, index) => {
+          // Calculate elapsed times for historical storage
+          let elapsedTime = '0.0';
+          if (index > 0) {
+            const timeDiff = (event.timestamp - prevObsEvents[index - 1].timestamp) / 1000;
+            elapsedTime = timeDiff.toFixed(1);
+          }
+          return {
+            ...event,
+            elapsedTime,
+            decodedParams: this.decodeParams(event)
+          };
+        }),
+        startTime: this.obsInfo.obsStart,
+        endTime: event.timestamp
+      };
+      
+      // Add to beginning of history
+      this.historicalObservations.unshift(obsData);
+      
+      // Limit history size
+      if (this.historicalObservations.length > this.maxHistoricalObs) {
+        this.historicalObservations = this.historicalObservations.slice(0, this.maxHistoricalObs);
+      }
+      
+      console.log(`Saved observation ${obsData.obsNumber} with ${obsData.events.length} events to history`);
+    }
+
+    // Continue with normal obs start
     this.obsInfo.obsCount++;
     this.obsInfo.obsStart = event.timestamp;
     this.obsInfo.events.push([event]);
@@ -489,6 +527,133 @@ class EventService {
     };
   }
 
+// Get historical observations
+getHistoricalObservations() {
+  return [...this.historicalObservations];
+}
+
+// Get specific historical observation
+getHistoricalObservation(obsNumber) {
+  return this.historicalObservations.find(obs => obs.obsNumber === obsNumber);
+}
+
+// Get complete event statistics
+getEventStatistics() {
+  const currentEvents = this.getCurrentObsEvents();
+  const totalHistoricalEvents = this.historicalObservations.reduce(
+    (sum, obs) => sum + obs.events.length, 0
+  );
+  
+  return {
+    currentObservation: {
+      number: this.obsInfo.obsCount,
+      eventCount: currentEvents.length,
+      duration: currentEvents.length > 0 ? 
+        (currentEvents[currentEvents.length - 1].timestamp - currentEvents[0].timestamp) / 1000 : 0
+    },
+    historical: {
+      observationCount: this.historicalObservations.length,
+      totalEvents: totalHistoricalEvents,
+      averageEventsPerObs: this.historicalObservations.length > 0 ? 
+        totalHistoricalEvents / this.historicalObservations.length : 0
+    },
+    session: {
+      totalObservations: this.historicalObservations.length + (this.obsInfo.obsCount >= 0 ? 1 : 0),
+      totalEvents: totalHistoricalEvents + currentEvents.length
+    }
+  };
+}
+
+// Export all data including history
+exportAllData(format = 'json') {
+  const data = {
+    current: {
+      obsInfo: this.obsInfo,
+      events: this.getCurrentObsEvents()
+    },
+    historical: this.historicalObservations,
+    typeNames: this.evtTypeNames,
+    subtypeNames: Object.fromEntries(this.evtSubtypeNames),
+    statistics: this.getEventStatistics(),
+    exportTime: new Date().toISOString()
+  };
+
+  switch (format) {
+    case 'json':
+      return JSON.stringify(data, null, 2);
+    case 'csv':
+      return this.exportAllDataCSV(data);
+    default:
+      return data;
+  }
+}
+
+// CSV export with all observations
+exportAllDataCSV(data) {
+  const headers = ['ObsNumber', 'Timestamp', 'ElapsedTime', 'Type', 'Subtype', 'TypeName', 'SubtypeName', 'Parameters'];
+  const rows = [headers];
+
+  // Add historical observations
+  data.historical.forEach(obs => {
+    obs.events.forEach(event => {
+      rows.push([
+        obs.obsNumber,
+        this.formatTimestamp(event.timestamp),
+        event.elapsedTime || '0.0',
+        event.type,
+        event.subtype,
+        this.getEventTypeName(event.type),
+        this.getEventSubtypeName(event.type, event.subtype),
+        event.decodedParams || this.decodeParams(event)
+      ]);
+    });
+  });
+
+  // Add current observation events
+  if (data.current.events.length > 0) {
+    data.current.events.forEach((event, index) => {
+      let elapsedTime = '0.0';
+      if (index > 0) {
+        const timeDiff = (event.timestamp - data.current.events[index - 1].timestamp) / 1000;
+        elapsedTime = timeDiff.toFixed(1);
+      }
+      
+      rows.push([
+        data.current.obsInfo.obsCount,
+        this.formatTimestamp(event.timestamp),
+        elapsedTime,
+        event.type,
+        event.subtype,
+        this.getEventTypeName(event.type),
+        this.getEventSubtypeName(event.type, event.subtype),
+        this.decodeParams(event)
+      ]);
+    });
+  }
+
+  return rows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+}
+
+// Clear historical data (useful for debugging)
+clearHistoricalData() {
+  this.historicalObservations = [];
+  console.log('Historical observation data cleared');
+  this.notifyHandlers({ type: 'historical_data_cleared' });
+}
+
+// Get summary of historical data
+getHistoricalSummary() {
+  return {
+    totalObservations: this.historicalObservations.length,
+    totalEvents: this.historicalObservations.reduce((sum, obs) => sum + obs.events.length, 0),
+    oldestObservation: this.historicalObservations.length > 0 ? 
+      this.historicalObservations[this.historicalObservations.length - 1].obsNumber : null,
+    newestObservation: this.historicalObservations.length > 0 ? 
+      this.historicalObservations[0].obsNumber : null,
+    memoryUsageEstimate: this.historicalObservations.length * 50 // rough estimate in KB
+  };
+}
+    
   exportEventsCSV() {
     const headers = ['Timestamp', 'Type', 'Subtype', 'TypeName', 'SubtypeName', 'Parameters'];
     const rows = [headers];
