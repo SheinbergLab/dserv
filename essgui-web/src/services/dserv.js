@@ -35,7 +35,9 @@ class DservWebSocket {
     this.maxReconnectAttempts = 5;
     this.reconnectInterval = 2000;
     this.requestCallbacks = new Map();
-    
+    this.messageChunks = new Map(); // For reassembling chunked messages
+    this.chunkTimeouts = new Map(); // Cleanup orphaned chunks
+      
     // Simple event system - no complex subscription tracking
     this.eventHandlers = new Map();
     this.componentHandlers = new Map(); // Track which components are listening
@@ -180,46 +182,38 @@ class DservWebSocket {
       this.emit('connection', { connected: true });
     };
 
-    this.ws.onmessage = (event) => {
-      const startTime = performance.now();
-      const messageSize = event.data.length;
+      this.ws.onmessage = (event) => {
+	  const startTime = performance.now();
+	  const messageSize = event.data.length;
+	  
+	  this.stats.messagesReceived++;
+	  this.monitoring.messageStats.totalReceived++;
+	  
+	  try {
+              const data = JSON.parse(event.data);
+              
+              // Check if this is a chunked message
+              if (data.isChunkedMessage) {
+		  this.handleChunkedMessage(data);
+		  return;
+              }
+              
+              // Handle normal message
+              this.handleMessage(data);
+              
+              // Update performance stats
+              const processingTime = performance.now() - startTime;
+              this.stats.avgProcessingTime = (this.stats.avgProcessingTime * 0.9) + (processingTime * 0.1);
+              
+	  } catch (error) {
+              console.error('Failed to parse WebSocket message:', {
+		  error: error.message,
+		  messageSize: messageSize,
+		  preview: event.data.slice(0, 200) + '...'
+              });
+	  }
+      };
       
-      // ORIGINAL: Basic stats
-      this.stats.messagesReceived++;
-      
-      // NEW: Enhanced monitoring stats
-      this.monitoring.messageStats.totalReceived++;
-      this.monitoring.messageStats.lastSecondCount++;
-      this.monitoring.messageStats.lastSecondBytes += messageSize;
-      
-      try {
-        const data = JSON.parse(event.data);
-        
-        // NEW: Track datapoint frequencies (non-intrusive)
-        if (data.type === 'datapoint' && data.data) {
-          this.trackDatapointFrequency(data.data.name, startTime);
-        }
-        
-        // ORIGINAL: Handle message (this is the critical part!)
-        this.handleMessage(data);
-        
-        // ORIGINAL: Update performance stats
-        const processingTime = performance.now() - startTime;
-        this.stats.avgProcessingTime = (this.stats.avgProcessingTime * 0.9) + (processingTime * 0.1);
-        this.stats.lastMessageTime = Date.now();
-        
-        // NEW: Enhanced performance tracking
-        this.monitoring.performance.avgProcessingTime = this.stats.avgProcessingTime;
-        this.monitoring.performance.maxProcessingTime = Math.max(
-          this.monitoring.performance.maxProcessingTime, 
-          processingTime
-        );
-        
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error, 'Raw data:', event.data);
-      }
-    };
-
     this.ws.onclose = () => {
       this.state.connected = false;
       this.monitoring.connectionStats.connected = false;
@@ -233,6 +227,57 @@ class DservWebSocket {
     };
   }
 
+handleChunkedMessage(chunk) {
+    const { messageId, chunkIndex, totalChunks, data, isLastChunk } = chunk;
+    
+    if (!this.messageChunks.has(messageId)) {
+        this.messageChunks.set(messageId, {
+            chunks: new Array(totalChunks),
+            receivedCount: 0,
+            totalChunks: totalChunks,
+            startTime: Date.now()
+        });
+        
+        // Set timeout to cleanup orphaned chunks
+        this.chunkTimeouts.set(messageId, setTimeout(() => {
+            console.warn(`Cleaning up orphaned chunks for message ${messageId}`);
+            this.messageChunks.delete(messageId);
+            this.chunkTimeouts.delete(messageId);
+        }, 30000)); // 30 second timeout
+    }
+    
+    const message = this.messageChunks.get(messageId);
+    message.chunks[chunkIndex] = data;
+    message.receivedCount++;
+    
+    console.log(`Received chunk ${chunkIndex + 1}/${totalChunks} for message ${messageId}`);
+    
+    // Check if we have all chunks
+    if (message.receivedCount === totalChunks) {
+        console.log(`All chunks received for message ${messageId}, reassembling...`);
+        
+        // Clear timeout
+        if (this.chunkTimeouts.has(messageId)) {
+            clearTimeout(this.chunkTimeouts.get(messageId));
+            this.chunkTimeouts.delete(messageId);
+        }
+        
+        // Reassemble message
+        const completeData = message.chunks.join('');
+        this.messageChunks.delete(messageId);
+        
+        const totalTime = Date.now() - message.startTime;
+        console.log(`Message ${messageId} reassembled in ${totalTime}ms (${(completeData.length/1024).toFixed(1)}KB)`);
+        
+        try {
+            const parsedData = JSON.parse(completeData);
+            this.handleMessage(parsedData);
+        } catch (error) {
+            console.error('Failed to parse reassembled message:', error);
+        }
+    }
+}
+    
   // Subscribe to everything we need - once and forever
     establishGlobalSubscriptions() {
 	console.log('Establishing global subscriptions...');
