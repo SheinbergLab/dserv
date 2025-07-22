@@ -37,11 +37,11 @@ class DservWebSocket {
     this.requestCallbacks = new Map();
     this.messageChunks = new Map(); // For reassembling chunked messages
     this.chunkTimeouts = new Map(); // Cleanup orphaned chunks
-      
+
     // Simple event system - no complex subscription tracking
     this.eventHandlers = new Map();
     this.componentHandlers = new Map(); // Track which components are listening
-    
+
     // ORIGINAL: Performance monitoring (enhanced but non-intrusive)
     this.stats = reactive({
       messagesReceived: 0,
@@ -135,26 +135,26 @@ class DservWebSocket {
       screenWidth: 800,
       screenHeight: 600,
       screenHalfX: 10.0,
-	screenHalfY: 7.5,
+    screenHalfY: 7.5,
     });
-      
+
       this.loadingState = reactive({
-	  isLoading: false,
-	  operationId: null,
-	  startTime: null,
-	  stage: '',
-	  message: '',
-	  percent: 0,
-	  elapsed: 0,
-	  timeout: false,
-	  error: null
+      isLoading: false,
+      operationId: null,
+      startTime: null,
+      stage: '',
+      message: '',
+      percent: 0,
+      elapsed: 0,
+      timeout: false,
+      error: null
       });
 
     this.loadingTimer = null;
     this.loadingWatchdog = null;
     this.LOADING_TIMEOUT = 60000; // 60 seconds max
     this.PROGRESS_TIMEOUT = 15000; // 15 seconds without progress
-      
+
     // Start monitoring
     this.startMonitoring();
 
@@ -175,7 +175,7 @@ class DservWebSocket {
       this.monitoring.connectionStats.connected = true;
       this.monitoring.connectionStats.connectedSince = Date.now();
       this.reconnectAttempts = 0;
-      
+
       // Subscribe to ALL patterns we'll ever need - just once
       this.establishGlobalSubscriptions();
       this.initializeState();
@@ -185,26 +185,26 @@ class DservWebSocket {
 this.ws.onmessage = (event) => {
     const startTime = performance.now();
     const messageSize = event.data.length;
-    
+
     this.stats.messagesReceived++;
     this.monitoring.messageStats.totalReceived++;
-    
+
     try {
         const data = JSON.parse(event.data);
-        
+
         // Handle chunked messages internally - BEFORE any component processing
         if (data.isChunkedMessage) {
             this.handleChunkedMessage(data);
             return; // Don't process further until reassembly is complete
         }
-        
+
         // Process normal messages (your existing handleMessage logic)
         this.handleMessage(data);
-        
+
         // Performance tracking
         const processingTime = performance.now() - startTime;
         this.stats.avgProcessingTime = (this.stats.avgProcessingTime * 0.9) + (processingTime * 0.1);
-        
+
     } catch (error) {
         console.error('Failed to parse WebSocket message:', error);
     }
@@ -226,7 +226,7 @@ this.ws.onmessage = (event) => {
 // Enhanced chunk handler that processes internally
 handleChunkedMessage(chunk) {
     const { messageId, chunkIndex, totalChunks, data, isLastChunk } = chunk;
-    
+
     if (!this.messageChunks.has(messageId)) {
         this.messageChunks.set(messageId, {
             chunks: new Array(totalChunks),
@@ -234,9 +234,9 @@ handleChunkedMessage(chunk) {
             totalChunks: totalChunks,
             startTime: Date.now()
         });
-        
+
         console.log(`Receiving chunked message ${messageId} (${totalChunks} chunks)`);
-        
+
         // Set cleanup timeout for orphaned chunks
         setTimeout(() => {
             if (this.messageChunks.has(messageId)) {
@@ -248,75 +248,75 @@ handleChunkedMessage(chunk) {
             }
         }, 30000); // 30 second cleanup timeout
     }
-    
+
     const message = this.messageChunks.get(messageId);
     message.chunks[chunkIndex] = data;
     message.receivedCount++;
-    
+
     // Optional: Log progress for very large messages
     if (totalChunks > 10 && chunkIndex % 5 === 0) {
         console.log(`Chunk progress: ${message.receivedCount}/${totalChunks} (${Math.round(message.receivedCount/totalChunks*100)}%)`);
     }
-    
+
     // Check if we have all chunks
     if (message.receivedCount === totalChunks) {
         const totalTime = Date.now() - message.startTime;
         console.log(`All chunks received for ${messageId}, reassembling... (${totalTime}ms)`);
-        
+
         // Reassemble the complete message
         const completeData = message.chunks.join('');
         this.messageChunks.delete(messageId);
-        
+
         try {
             // Parse the reassembled message
             const parsedData = JSON.parse(completeData);
-            
+
             console.log(`Successfully reassembled message: ${(completeData.length/1024).toFixed(1)}KB in ${totalTime}ms`);
-            
+
             // NOW process it as if it was a normal message
             // This goes through your existing handleMessage logic
             this.handleMessage(parsedData);
-            
+
         } catch (error) {
             console.error('Failed to parse reassembled chunked message:', error);
         }
     }
-}      
-    
+}
+
   // Subscribe to everything we need - once and forever
     establishGlobalSubscriptions() {
-	console.log('Establishing global subscriptions...');
-	
-	// Core system subscriptions
-	this.send({ cmd: 'subscribe', match: 'ess/*', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'system/*', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'eventlog/*', every: 1 });
-	
-	// High-frequency data subscriptions
-	this.send({ cmd: 'subscribe', match: 'ess/em_pos', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/em_region_setting', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/em_region_status', every: 1 });
-	
-	// NEW: Touch window subscriptions
-	this.send({ cmd: 'subscribe', match: 'ess/touch_region_setting', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/touch_region_status', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'mtouch/touchvals', every: 1 });
-	
-	// Other useful subscriptions
-	this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });
-	
-	this.send({ cmd: 'subscribe', match: 'ess/warningInfo', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/infoLog', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/debugLog', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/generalLog', every: 1 });
-	
-	this.send({ cmd: 'subscribe', match: 'print', every: 1 });
+    console.log('Establishing global subscriptions...');
 
-	this.send({ cmd: 'subscribe', match: 'ess/loading_progress', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/loading_operation_id', every: 1 });
-	this.send({ cmd: 'subscribe', match: 'ess/loading_start_time', every: 1 });
-    	
-	console.log('All global subscriptions established');
+    // Core system subscriptions
+    this.send({ cmd: 'subscribe', match: 'ess/*', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'system/*', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'eventlog/*', every: 1 });
+
+    // High-frequency data subscriptions
+    this.send({ cmd: 'subscribe', match: 'ess/em_pos', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/em_region_setting', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/em_region_status', every: 1 });
+
+    // NEW: Touch window subscriptions
+    this.send({ cmd: 'subscribe', match: 'ess/touch_region_setting', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/touch_region_status', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'mtouch/touchvals', every: 1 });
+
+    // Other useful subscriptions
+    this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });
+
+    this.send({ cmd: 'subscribe', match: 'ess/warningInfo', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/infoLog', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/debugLog', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/generalLog', every: 1 });
+
+    this.send({ cmd: 'subscribe', match: 'print', every: 1 });
+
+    this.send({ cmd: 'subscribe', match: 'ess/loading_progress', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/loading_operation_id', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'ess/loading_start_time', every: 1 });
+
+    console.log('All global subscriptions established');
     }
 
   async initializeState() {
@@ -339,7 +339,7 @@ handleChunkedMessage(chunk) {
         } {
           catch { dservTouch $v }
         }
-        
+
         # Touch eye and touch window settings
         for {set i 0} {$i < 8} {incr i} {
           catch { ainGetRegionInfo $i }
@@ -373,111 +373,111 @@ handleChunkedMessage(chunk) {
   }
 
     handleDatapoint(data) {
-	const { name, data: value } = data;
-	
-	this.updateCentralState(name, value);
-	
-	this.emit(`datapoint:${name}`, data);
-	this.emit('datapoint:*', data);
+    const { name, data: value } = data;
+
+    this.updateCentralState(name, value);
+
+    this.emit(`datapoint:${name}`, data);
+    this.emit('datapoint:*', data);
     }
-    
+
     updateCentralState(name, value) {
-	// This is where dserv.js adds value - central state management
-	switch (name) {
-	case 'ess/systems': this.state.systems = this.parseList(value); break;
-	case 'ess/protocols': this.state.protocols = this.parseList(value); break;
-	case 'ess/variants': this.state.variants = this.parseList(value); break;
-	case 'ess/git/branches': this.state.branches = this.parseList(value); break;
-	case 'ess/system': this.state.currentSystem = value; break;
-	case 'ess/protocol': this.state.currentProtocol = value; break;
-	case 'ess/variant': this.state.currentVariant = value; break;
-	case 'ess/git/branch': this.state.currentBranch = value; break;
-	case 'ess/status': 
-            this.state.essStatus = value; 
-            this.handleEssStatus(value); 
+    // This is where dserv.js adds value - central state management
+    switch (name) {
+    case 'ess/systems': this.state.systems = this.parseList(value); break;
+    case 'ess/protocols': this.state.protocols = this.parseList(value); break;
+    case 'ess/variants': this.state.variants = this.parseList(value); break;
+    case 'ess/git/branches': this.state.branches = this.parseList(value); break;
+    case 'ess/system': this.state.currentSystem = value; break;
+    case 'ess/protocol': this.state.currentProtocol = value; break;
+    case 'ess/variant': this.state.currentVariant = value; break;
+    case 'ess/git/branch': this.state.currentBranch = value; break;
+    case 'ess/status':
+            this.state.essStatus = value;
+            this.handleEssStatus(value);
             break;
-	case 'ess/state': this.state.status = value; break;
-	case 'ess/obs_id': 
-            this.state.obsId = parseInt(value, 10) || 0; 
-            this.updateObsCount(); 
+    case 'ess/state': this.state.status = value; break;
+    case 'ess/obs_id':
+            this.state.obsId = parseInt(value, 10) || 0;
+            this.updateObsCount();
             break;
-	case 'ess/obs_total': 
-            this.state.obsTotal = parseInt(value, 10) || 0; 
-            this.updateObsCount(); 
+    case 'ess/obs_total':
+            this.state.obsTotal = parseInt(value, 10) || 0;
+            this.updateObsCount();
             break;
-	case 'ess/in_obs': this.state.inObs = value === '1'; break;
-	case 'ess/block_pct_complete': 
-            this.state.blockPctComplete = Math.round(parseFloat(value) * 100); 
+    case 'ess/in_obs': this.state.inObs = value === '1'; break;
+    case 'ess/block_pct_complete':
+            this.state.blockPctComplete = Math.round(parseFloat(value) * 100);
             break;
-	case 'ess/block_pct_correct': 
-            this.state.blockPctCorrect = Math.round(parseFloat(value) * 100); 
+    case 'ess/block_pct_correct':
+            this.state.blockPctCorrect = Math.round(parseFloat(value) * 100);
             break;
-	case 'ess/subject': this.state.subject = value; break;
-	    
-	    // Eye tracking data processing
-	case 'ess/em_region_setting':
+    case 'ess/subject': this.state.subject = value; break;
+
+        // Eye tracking data processing
+    case 'ess/em_region_setting':
             this.processEyeWindowSetting(value);
             break;
-	case 'ess/em_region_status':
+    case 'ess/em_region_status':
             this.processEyeWindowStatus(value);
             break;
-            
-	    // NEW: Touch window data processing
-	case 'ess/touch_region_setting':
+
+        // NEW: Touch window data processing
+    case 'ess/touch_region_setting':
             this.processTouchWindowSetting(value);
             break;
-	case 'ess/touch_region_status':
+    case 'ess/touch_region_status':
             this.processTouchWindowStatus(value);
             break;
-            
-	    // NEW: Screen dimensions
-	case 'ess/screen_w': this.state.screenWidth = parseInt(value, 10) || 800; break;
-	case 'ess/screen_h': this.state.screenHeight = parseInt(value, 10) || 600; break;
-	case 'ess/screen_halfx': this.state.screenHalfX = parseFloat(value) || 10.0; break;
-	case 'ess/screen_halfy': this.state.screenHalfY = parseFloat(value) || 7.5; break;
-	    
-	case 'ess/stiminfo':
-	    this.state.stiminfo = value;
+
+        // NEW: Screen dimensions
+    case 'ess/screen_w': this.state.screenWidth = parseInt(value, 10) || 800; break;
+    case 'ess/screen_h': this.state.screenHeight = parseInt(value, 10) || 600; break;
+    case 'ess/screen_halfx': this.state.screenHalfX = parseFloat(value) || 10.0; break;
+    case 'ess/screen_halfy': this.state.screenHalfY = parseFloat(value) || 7.5; break;
+
+    case 'ess/stiminfo':
+        this.state.stiminfo = value;
       console.log('Updated ess/stiminfo in dserv.state:', value ? 'DATA AVAILABLE' : 'NO DATA');
-      break;	    
-	    
-	case 'system/hostname': this.state.systemName = value; break;
-	case 'system/os': this.state.systemOS = value; break;
-	case 'print': console.log('ESS:', value); break;
-	    
-	case 'ess/loading_progress':
+      break;
+
+    case 'system/hostname': this.state.systemName = value; break;
+    case 'system/os': this.state.systemOS = value; break;
+    case 'print': console.log('ESS:', value); break;
+
+    case 'ess/loading_progress':
             this.handleLoadingProgress(value);
             break;
-	case 'ess/loading_operation_id':
+    case 'ess/loading_operation_id':
             this.handleLoadingOperationId(value);
             break;
-	case 'ess/loading_start_time':
+    case 'ess/loading_start_time':
             // Just for reference, main logic is in operation_id handler
-            break;	
-	}
+            break;
+    }
     }
 
     updateTrialCounts(trialCount) {
     if (trialCount > 0) {
         console.log(`StimInfo reported: ${trialCount} trials`);
-        
+
         // Only update if different from current
         if (this.state.obsTotal !== trialCount) {
             this.state.obsTotal = trialCount;
             this.state.obsId = 0; // Reset to first trial
             this.updateObsCount();
-            
+
             // Emit event for other components that might care
-            this.emit('trialsLoaded', { 
+            this.emit('trialsLoaded', {
                 count: trialCount,
                 source: 'StimInfo'
             });
-            
+
             console.log(`Updated obs count to 1/${trialCount} from StimInfo processing`);
         }
     }
     }
-    
+
 handleLoadingProgress(value) {
     if (!value) {
       this.clearLoadingState();
@@ -517,7 +517,7 @@ handleLoadingProgress(value) {
 
   handleEssStatus(value) {
     this.state.essStatus = value;
-    
+
     if (value === 'loading' && !this.loadingState.isLoading) {
       // Fallback: start monitoring even without operation ID
       this.startLoadingMonitoring('unknown_' + Date.now());
@@ -529,7 +529,7 @@ handleLoadingProgress(value) {
 
 startLoadingMonitoring(operationId) {
     console.log('Starting loading monitoring:', operationId);
-    
+
     this.loadingState.isLoading = true;
     this.loadingState.operationId = operationId;
     this.loadingState.startTime = Date.now();
@@ -576,11 +576,11 @@ resetProgressWatchdog() {
  async checkBackendStatus() {
     try {
       const status = await withTimeout(
-        this.essCommand('dservGet ess/status'), 
-        5000, 
+        this.essCommand('dservGet ess/status'),
+        5000,
         'Status check timeout'
       );
-      
+
       if (status !== 'loading') {
         console.log('Backend not loading, clearing frontend loading state');
         this.clearLoadingState();
@@ -596,7 +596,7 @@ resetProgressWatchdog() {
 
 async forceLoadingRecovery() {
     console.warn('Forcing loading recovery');
-    
+
     try {
       // Try to reset backend status
       await withTimeout(
@@ -604,17 +604,17 @@ async forceLoadingRecovery() {
         3000,
         'Recovery command timeout'
       );
-      
+
       // Clear frontend state
       this.clearLoadingState();
-      
+
       // Refresh current state
       await this.essCommand('dservTouch ess/system');
       await this.essCommand('dservTouch ess/protocol');
       await this.essCommand('dservTouch ess/variant');
-      
+
       this.emit('loadingRecovered', { forced: true });
-      
+
     } catch (error) {
       console.error('Recovery failed:', error);
       this.emit('loadingFailed', { error: 'Recovery failed' });
@@ -632,7 +632,7 @@ async forceLoadingRecovery() {
     }
 
     const wasLoading = this.loadingState.isLoading;
-    
+
     Object.assign(this.loadingState, {
       isLoading: false,
       operationId: null,
@@ -649,7 +649,7 @@ async forceLoadingRecovery() {
       this.emit('loadingFinished', this.loadingState);
     }
   }
-    
+
   // NEW: Non-intrusive frequency tracking
   trackDatapointFrequency(datapointName, timestamp) {
     if (!this.monitoring.datapointFrequencies.has(datapointName)) {
@@ -660,34 +660,34 @@ async forceLoadingRecovery() {
         avgHz: 0,
         maxHz: 0,
         lastUpdate: timestamp,
-        config: DATAPOINT_CONFIG[datapointName] || { 
-          expectedHz: 'unknown', 
-          priority: 'unknown', 
-          category: 'unknown' 
+        config: DATAPOINT_CONFIG[datapointName] || {
+          expectedHz: 'unknown',
+          priority: 'unknown',
+          category: 'unknown'
         }
       }));
     }
-    
+
     const freq = this.monitoring.datapointFrequencies.get(datapointName);
     freq.count++;
     freq.timestamps.push(timestamp);
     freq.lastUpdate = timestamp;
-    
+
     // Keep only last 60 timestamps for frequency calculation
     if (freq.timestamps.length > 60) {
       freq.timestamps.shift();
     }
-    
+
     // Calculate current frequency (messages in last second)
     const oneSecondAgo = timestamp - 1000;
     const recentTimestamps = freq.timestamps.filter(t => t > oneSecondAgo);
     freq.currentHz = recentTimestamps.length;
-    
+
     // Update max frequency
     if (freq.currentHz > freq.maxHz) {
       freq.maxHz = freq.currentHz;
     }
-    
+
     // Update average (exponential moving average)
     freq.avgHz = freq.avgHz * 0.95 + freq.currentHz * 0.05;
   }
@@ -698,7 +698,7 @@ async forceLoadingRecovery() {
     setInterval(() => {
       this.updateSecondlyStats();
     }, 1000);
-    
+
     // Update uptime
     setInterval(() => {
       if (this.monitoring.connectionStats.connected && this.monitoring.connectionStats.connectedSince) {
@@ -710,27 +710,27 @@ async forceLoadingRecovery() {
   updateSecondlyStats() {
     const stats = this.monitoring.messageStats;
     const bandwidth = this.monitoring.bandwidth;
-    
+
     // Calculate messages per second
     stats.messagesPerSecond = stats.lastSecondCount;
     stats.bytesPerSecond = stats.lastSecondBytes;
-    
+
     // Calculate bandwidth in Kbps
     const currentKbps = (stats.lastSecondBytes * 8) / 1024;
     bandwidth.currentKbps = currentKbps;
     bandwidth.peakKbps = Math.max(bandwidth.peakKbps, currentKbps);
-    
+
     // Keep bandwidth samples for averaging
     bandwidth.samples.push(currentKbps);
     if (bandwidth.samples.length > 60) {
       bandwidth.samples.shift();
     }
     bandwidth.averageKbps = bandwidth.samples.reduce((a, b) => a + b, 0) / bandwidth.samples.length;
-    
+
     // Reset per-second counters
     stats.lastSecondCount = 0;
     stats.lastSecondBytes = 0;
-    
+
     // Update subscription stats
     this.updateSubscriptionStats();
   }
@@ -739,19 +739,19 @@ async forceLoadingRecovery() {
     const subs = this.monitoring.subscriptions;
     subs.active = this.eventHandlers.size;
     subs.components = this.componentHandlers.size;
-    
+
     // Clear and rebuild category/priority maps (avoid modifying computed-like objects)
     const newByCategory = new Map();
     const newByPriority = new Map();
-    
+
     this.monitoring.datapointFrequencies.forEach((freq, name) => {
       const category = freq.config.category || 'unknown';
       const priority = freq.config.priority || 'unknown';
-      
+
       newByCategory.set(category, (newByCategory.get(category) || 0) + 1);
       newByPriority.set(priority, (newByPriority.get(priority) || 0) + 1);
     });
-    
+
     // Replace the entire Maps instead of modifying them
     subs.byCategory = reactive(newByCategory);
     subs.byPriority = reactive(newByPriority);
@@ -774,11 +774,11 @@ async forceLoadingRecovery() {
   // ORIGINAL: Component registration
   registerComponent(componentId, options = {}) {
     console.log(`Registering component: ${componentId}`);
-    
+
     // Return cleanup function that only removes event handlers
     return () => {
       console.log(`Cleaning up component: ${componentId}`);
-      
+
       // Remove all event handlers for this component
       const componentEvents = this.componentHandlers.get(componentId) || [];
       componentEvents.forEach(({ eventPattern, handler }) => {
@@ -790,7 +790,7 @@ async forceLoadingRecovery() {
           }
         }
       });
-      
+
       this.componentHandlers.delete(componentId);
     };
   }
@@ -800,10 +800,10 @@ async forceLoadingRecovery() {
     if (!this.eventHandlers.has(eventPattern)) {
       this.eventHandlers.set(eventPattern, []);
     }
-    
+
     const handlerInfo = { handler, componentId };
     this.eventHandlers.get(eventPattern).push(handlerInfo);
-    
+
     // Track which components are listening to what
     if (componentId) {
       if (!this.componentHandlers.has(componentId)) {
@@ -811,9 +811,9 @@ async forceLoadingRecovery() {
       }
       this.componentHandlers.get(componentId).push({ eventPattern, handler });
     }
-    
+
     console.log(`Component ${componentId} listening to ${eventPattern}`);
-    
+
     // Return unsubscribe function
     return () => {
       const handlers = this.eventHandlers.get(eventPattern);
@@ -846,7 +846,7 @@ async forceLoadingRecovery() {
         console.error(`Error in event handler for ${eventName}:`, error);
       }
     });
-    
+
     // Pattern matching for datapoint events
     if (eventName.startsWith('datapoint:')) {
       this.eventHandlers.forEach((handlers, pattern) => {
@@ -909,7 +909,7 @@ async forceLoadingRecovery() {
   async gitStatus() {
     return this.gitCommand('git::status')
   }
-    
+
   async gitSwitchBranch(branchName) {
     return this.gitCommand(`git::switch_and_pull ${branchName}`)
   }
@@ -920,20 +920,20 @@ async forceLoadingRecovery() {
 
   async gitGetCurrentBranch() {
     return this.gitCommand('git::get_current_branch')
-  }    
+  }
 
   sendRequest(type, data) {
     return new Promise((resolve, reject) => {
       const requestId = Math.random().toString(36).substr(2, 9);
-      
+
       this.requestCallbacks.set(requestId, { resolve, reject });
-      
+
       this.send({
         type,
         requestId,
         ...data
       });
-      
+
       setTimeout(() => {
         if (this.requestCallbacks.has(requestId)) {
           this.requestCallbacks.delete(requestId);
@@ -986,7 +986,7 @@ async forceLoadingRecovery() {
       // Convert touch screen pixels to degrees
       const screenPixPerDegX = this.state.screenWidth / (2 * this.state.screenHalfX);
       const screenPixPerDegY = this.state.screenHeight / (2 * this.state.screenHalfY);
-      
+
       this.state.touchWindows[reg] = {
         id: reg,
         active: active === 1,
@@ -1042,9 +1042,9 @@ async forceLoadingRecovery() {
   assessDatapointHealth(datapointData) {
     const { currentHz, config } = datapointData;
     const expected = config.expectedHz;
-    
+
     if (expected === 'unknown') return 'unknown';
-    
+
     const ratio = currentHz / expected;
     if (ratio > 2) return 'too_fast';
     if (ratio > 0.8) return 'healthy';
@@ -1054,7 +1054,7 @@ async forceLoadingRecovery() {
 
   getDatapointsByCategory() {
     const categories = new Map();
-    
+
     this.monitoring.datapointFrequencies.forEach((data, name) => {
       const category = data.config.category || 'unknown';
       if (!categories.has(category)) {
@@ -1062,7 +1062,7 @@ async forceLoadingRecovery() {
       }
       categories.get(category).push({ name, ...data });
     });
-    
+
     return categories;
   }
 
@@ -1118,7 +1118,7 @@ async forceLoadingRecovery() {
   }
 
 async setSystem(system) {
-  this.startImmediateLoadingState('system', `Loading system: ${system}`);	
+  this.startImmediateLoadingState('system', `Loading system: ${system}`);
   try {
     await this.essCommand(`ess::load_system ${system}`);
     this.emit('systemLoaded', { system, success: true });
@@ -1159,7 +1159,7 @@ async setVariant(variant) {
 // New method for immediate loading feedback
 startImmediateLoadingState(operationType, message) {
   console.log(`Starting immediate loading state: ${operationType} - ${message}`);
-  
+
   Object.assign(this.loadingState, {
     isLoading: true,
     operationId: `${operationType}_${Date.now()}`,
@@ -1184,14 +1184,17 @@ startImmediateLoadingState(operationType, message) {
   this.emit('loadingProgress', this.loadingState);
 }
 
+
 async reloadSystem() {
-  this.startImmediateLoadingState('system_reload', 'Reloading system...');
+  console.log('Reloading current system:', this.state.currentSystem);
+  const system = this.state.currentSystem;
+  this.startImmediateLoadingState('system', `Loading system: ${system}`);
   try {
-    await this.essCommand('ess::reload_system');
-    this.emit('systemReloaded', { success: true });
+    await this.essCommand(`ess::reload_system`);
+    this.emit('systemLoaded', { system, success: true });
   } catch (error) {
     this.clearLoadingState(); // Add this line
-    this.emit('systemReloaded', { success: false, error });
+    this.emit('systemLoaded', { system, success: false, error });
     throw error;
   }
 }
@@ -1218,7 +1221,7 @@ async reloadVariant() {
     this.emit('variantReloaded', { success: false, error });
     throw error;
   }
-}    
+}
 
   async saveSettings() {
     try {
