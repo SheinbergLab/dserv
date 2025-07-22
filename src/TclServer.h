@@ -55,6 +55,15 @@ struct WSPerSocketData {
   std::string dataserver_client_id;  // ID for Dataserver registration
 };
 
+// To help manage large WebSocket messages (stimdg -> ess/stiminfo)
+struct ChunkedMessage {
+    std::string messageId;
+    size_t chunkIndex;
+    size_t totalChunks;
+    std::string data;
+    bool isLastChunk;
+};
+
 class TclServerConfig
 {
 public:
@@ -104,6 +113,13 @@ private:
   mutable std::mutex ws_connections_mutex;
   std::map<std::string, uWS::WebSocket<false, true, WSPerSocketData>*> ws_connections;
   uWS::Loop *ws_loop = nullptr;  // Store the loop reference
+
+  static const size_t LARGE_MESSAGE_THRESHOLD = 1024 * 1024; // 1MB
+  static const size_t CHUNK_SIZE = 512 * 1024; // 512KB chunks
+  
+  void sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
+			const std::string& message,
+			const std::string& client_name);
   
 public:
   int argc;

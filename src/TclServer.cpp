@@ -799,38 +799,36 @@ void TclServer::process_websocket_client_notifications(uWS::WebSocket<false, tru
                     if (matches) break;
                 }
 
-        if (matches) {
-          // Convert to JSON
-          char *json_str = dpoint_to_json(req.dpoint);
-          if (json_str) {
-            json_error_t error;
-            json_t *root = json_loads(json_str, 0, &error);
-            if (root) {
-              json_object_set_new(root, "type", json_string("datapoint"));
-              char *enhanced_json = json_dumps(root, 0);
-                      
-              // Create a string copy for the defer lambda
-              std::string message(enhanced_json);
-                      
-              // Use defer to send from the event loop thread
-              if (ws_loop && !done) {
-            ws_loop->defer([ws, message, client_name, this]() {
-              // Double-check the WebSocket is still valid
-              std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
-              auto it = this->ws_connections.find(client_name);
-              if (it != this->ws_connections.end() && it->second == ws) {
-                ws->send(message, uWS::OpCode::TEXT);
-              }
-            });
-              }
-                      
-              free(enhanced_json);
-              json_decref(root);
-            }
-            free(json_str);
-          }
-                }       
-                
+		if (matches) {
+		  // Convert to JSON
+		  char *json_str = dpoint_to_json(req.dpoint);
+		  if (json_str) {
+		    size_t json_size = strlen(json_str);
+		    
+		    // Log large messages
+		    if (json_size > 500000) {
+		      //		      std::cout << "Large datapoint: " << (json_size/1024) << "KB for " 
+		      //				<< req.dpoint->varname << std::endl;
+		    }
+		    
+		    json_error_t error;
+		    json_t *root = json_loads(json_str, 0, &error);
+		    if (root) {
+		      json_object_set_new(root, "type", json_string("datapoint"));
+		      char *enhanced_json = json_dumps(root, 0);
+		      
+		      // Create string for the message
+		      std::string message(enhanced_json);
+		      
+		      // Use chunking-aware send method (handles both small and large)
+		      sendLargeMessage(ws, message, client_name);
+		      
+		      free(enhanced_json);
+		      json_decref(root);
+		    }
+		    free(json_str);
+		  }
+		}
                 dpoint_free(req.dpoint);
             }
         } catch (...) {
@@ -844,6 +842,73 @@ void TclServer::process_websocket_client_notifications(uWS::WebSocket<false, tru
         delete userData->notification_queue;
         userData->notification_queue = nullptr;
     }
+}
+
+void TclServer::sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
+                               const std::string& message,
+                               const std::string& client_name) {
+    if (message.size() <= LARGE_MESSAGE_THRESHOLD) {
+        // Small message, send directly
+        if (ws_loop) {
+            ws_loop->defer([ws, message, client_name, this]() {
+                std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+                auto it = this->ws_connections.find(client_name);
+                if (it != this->ws_connections.end() && it->second == ws) {
+                    ws->send(message, uWS::OpCode::TEXT);
+                }
+            });
+        }
+        return;
+    }
+    
+    // Large message - chunk it
+    //    std::cout << "Chunking large message: " << (message.size() / 1024) << "KB" << std::endl;
+    
+    // Generate unique message ID
+    auto now = std::chrono::steady_clock::now();
+    std::string messageId = std::to_string(now.time_since_epoch().count());
+    
+    size_t totalChunks = (message.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    
+    for (size_t i = 0; i < totalChunks; i++) {
+        size_t start = i * CHUNK_SIZE;
+        size_t end = std::min(start + CHUNK_SIZE, message.size());
+        std::string chunk = message.substr(start, end - start);
+        
+        // Create chunked message
+        json_t *chunked = json_object();
+        json_object_set_new(chunked, "isChunkedMessage", json_true());
+        json_object_set_new(chunked, "messageId", json_string(messageId.c_str()));
+        json_object_set_new(chunked, "chunkIndex", json_integer(i));
+        json_object_set_new(chunked, "totalChunks", json_integer(totalChunks));
+        json_object_set_new(chunked, "data", json_string(chunk.c_str()));
+        json_object_set_new(chunked, "isLastChunk", json_boolean(i == totalChunks - 1));
+        
+        char *chunk_str = json_dumps(chunked, 0);
+        std::string chunk_message(chunk_str);
+        
+        // Send chunk with proper defer
+        if (ws_loop) {
+            ws_loop->defer([ws, chunk_message, client_name, this, i]() {
+                std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+                auto it = this->ws_connections.find(client_name);
+                if (it != this->ws_connections.end() && it->second == ws) {
+                    bool sent = ws->send(chunk_message, uWS::OpCode::TEXT);
+                    if (!sent) {
+                        std::cerr << "Failed to send chunk " << i << std::endl;
+                    }
+                }
+            });
+        }
+        
+        free(chunk_str);
+        json_decref(chunked);
+        
+        // Small delay between chunks to prevent overwhelming
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    
+    //    std::cout << "Sent " << totalChunks << " chunks for message " << messageId << std::endl;
 }
 
 /********************************* now *********************************/
