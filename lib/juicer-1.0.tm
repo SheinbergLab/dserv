@@ -11,53 +11,62 @@
 # $j close
 #
 
- # Available API Commands (defined by arduino firmware)
-
- # 1. Set Commands:
- #    - {"set": {"flow_rate": <float>}}
- #      - Sets the flow rate (must be > 0).
- #    - {"set": {"purge_vol": <float>}}
- #      - Sets the purge volume (must be > 0).
- #    - {"set": {"target_rps": <float>}} {"set": {"target_rps": 3}}
- #      - Sets the target revolutions per second (must be > 0 and <= MAX_RPS).
-
- # 2. Do Commands (only 1 allowed per request):
- #    - {"do": "abort"}
- #      - Aborts the current operation, stops the pump, and updates reward metrics.
- #    - {"do": {"reward": <float>}} {"do": {"reward": 0.8}}
- #      - Dispenses a reward of the specified amount (must be > 0).
- #    - {"do": {"purge": <float>}}
- #      - Starts a purge operation for the specified amount (must be > 0).
- #    - {"do": {"calibration": {"n": <int>, "on": <int>, "off": <int>}}}
- #         e.g.  {"do": {"calibration": {"n": 10, "on": 500, "off": 500}}}
- #      - Runs a calibration cycle with:
- #        - n: Number of cycles (must be > 0).
- #        - on: Duration in milliseconds for the pump to be ON (must be > 0).
- #        - off: Duration in milliseconds for the pump to be OFF (must be > 0).
-
- # 3. Get Commands:
- #    - {"get": ["flow_rate"]}
- #      - Retrieves the current flow rate.
- #    - {"get": ["purge_vol"]}
- #      - Retrieves the current purge volume.
- #    - {"get": ["target_rps"]}
- #      - Retrieves the current target revolutions per second.
- #    - {"get": ["reward_mls"]}
- #      - Retrieves the total amount of reward dispensed in milliliters.
- #    - {"get": ["reward_number"]}
- #      - Retrieves the total number of rewards dispensed.
- #    - {"get": ["<unknown_parameter>"]}
- #      - Returns "Unknown parameter" for any unrecognized parameter.
-
- # Example Combined Request:
- #    {"set": {"target_rps": 2, "flow_rate": 0.65}, "do": {"reward": 1},"get": ["reward_mls", "reward_number"]}
-
- # Expected Response:
- #    {
- #      "status": "success",
- #      "reward_mls": <float>,
- #      "reward_number": <int>
- #    }
+/*
+ * Available API Commands:
+ *
+ * 1. Set Commands:
+ *    - {"set": {"flow_rate": <float>}}
+ *      - Sets the flow rate (must be > 0).
+ *    - {"set": {"purge_vol": <float>}}
+ *      - Sets the purge volume (must be > 0).
+ *    - {"set": {"target_rps": <float>}} {"set": {"target_rps": 3}}
+ *      - Sets the target revolutions per second (must be > 0 and <= MAX_RPS).
+ *    - {"set": {"voltage_mult": <float>}} {"set": {"voltage_mult": 11.909}}
+ *      - Sets the multiplier to account for the voltage divider ratio
+ *
+ * 2. Do Commands (only 1 allowed per request):
+ *    - {"do": "abort"}
+ *      - Aborts the current operation, stops the pump, and updates reward metrics.
+ *    - {"do": {"reward": <float>}} {"do": {"reward": 0.8}}
+ *      - Dispenses a reward of the specified amount (must be > 0).
+ *    - {"do": {"purge": <float>}}
+ *      - Starts a purge operation for the specified amount (must be > 0).
+ *    - {"do": {"calibration": {"n": <int>, "on": <int>, "off": <int>}}} {"do": {"calibration": {"n": 10, "on": 500, "off": 500}}}
+ *      - Runs a calibration cycle with:
+ *        - n: Number of cycles (must be > 0).
+ *        - on: Duration in milliseconds for the pump to be ON (must be > 0).
+ *        - off: Duration in milliseconds for the pump to be OFF (must be > 0).
+ *
+ * 3. Get Commands:
+ *    - {"get": ["flow_rate"]}
+ *      - Retrieves the current flow rate.
+ *    - {"get": ["purge_vol"]}
+ *      - Retrieves the current purge volume.
+ *    - {"get": ["target_rps"]}
+ *      - Retrieves the current target revolutions per second.
+ *    - {"get": ["reward_mls"]}
+ *      - Retrieves the total amount of reward dispensed in milliliters.
+ *    - {"get": ["reward_number"]}
+ *      - Retrieves the total number of rewards dispensed.
+ *    - {"get": ["pump_voltage"]}
+ *      - Retrieves the current voltage supplied to the pump
+ *    - {"get": ["voltage_mult"]}
+ *      - Retrieves the multiplier to account for the voltage divider ratio
+ *    - {"get": ["charging"]}
+ *      - Retrieves the status of whether the battery is charging or not
+ *    - {"get": ["<unknown_parameter>"]}
+ *      - Returns "Unknown parameter" for any unrecognized parameter.
+ *
+ * Example Combined Request:
+ *    {"set": {"target_rps": 2, "flow_rate": 0.65}, "do": {"reward": 1},"get": ["reward_mls", "reward_number"]}
+ *
+ * Expected Response:
+ *    {
+ *      "status": "success",
+ *      "reward_mls": <float>,
+ *      "reward_number": <int>
+ *    }
+ */
 
 
 set dlshlib [file join /usr/local dlsh dlsh.zip]
