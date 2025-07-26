@@ -924,6 +924,38 @@ static int now_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/***************************** eval_noreply ***************************/
+
+static int eval_noreply_command (ClientData data, Tcl_Interp *interp,
+				 int objc, Tcl_Obj *objv[])
+{
+  TclServer *this_server = (TclServer *) data;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "message");
+    return TCL_ERROR;
+  }
+
+  // Concatenate all arguments from objv[2] to objv[objc-1] into a single string
+  std::string concatenated_script;
+  if (objc > 1) { 
+    concatenated_script += Tcl_GetString(objv[1]); // First argument without a leading space
+    for (int i = 2; i < objc; ++i) {
+      concatenated_script += " ";
+      concatenated_script += Tcl_GetString(objv[i]);
+    }
+  }
+
+  client_request_t client_request;
+  client_request.type = REQ_SCRIPT_NOREPLY;
+  client_request.script = concatenated_script;
+
+  this_server->queue.push_back(client_request);
+
+  /* don't wait for a reply to the message, just return */
+  return TCL_OK;
+}
+
 /********************************* send ********************************/
 
 static int send_command (ClientData data, Tcl_Interp *interp,
@@ -1422,6 +1454,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                (Tcl_ObjCmdProc *) getsubprocesses_command,
                tserv, NULL);
 
+  Tcl_CreateObjCommand(interp, "evalNoReply",
+               (Tcl_ObjCmdProc *) eval_noreply_command,
+               tserv, NULL);
+  
   Tcl_CreateObjCommand(interp, "send",
                (Tcl_ObjCmdProc *) send_command,
                tserv, NULL);
