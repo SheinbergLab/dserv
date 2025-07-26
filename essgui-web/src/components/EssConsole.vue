@@ -34,7 +34,7 @@
             </span>
           </div>
 
-          <!-- Log counts -->
+          <!-- Log counts with performance info -->
           <div v-if="logCounts.total > 0" class="log-counts">
             <a-badge :count="logCounts.error"
               :number-style="{ backgroundColor: '#ff4d4f', fontSize: '9px', height: '16px', minWidth: '16px', lineHeight: '16px' }" />
@@ -45,11 +45,23 @@
             <a-badge :count="logCounts.debug"
               :number-style="{ backgroundColor: '#722ed1', fontSize: '9px', height: '16px', minWidth: '16px', lineHeight: '16px' }" />
             <span class="total-count">{{ logCounts.total }}</span>
+            <!-- Performance indicator -->
+            <span class="perf-indicator" v-if="performanceMode === 'reduced'" title="Performance mode active">
+              ⚡
+            </span>
           </div>
         </div>
 
         <!-- System controls on right -->
         <div class="right-controls">
+          <!-- Performance mode toggle -->
+          <a-tooltip title="Toggle performance mode">
+            <a-switch size="small" v-model:checked="autoPerformanceMode" @change="toggleAutoPerformance">
+              <template #checkedChildren>Auto</template>
+              <template #unCheckedChildren>Full</template>
+            </a-switch>
+          </a-tooltip>
+
           <!-- Debug mode toggle -->
           <a-tooltip title="Enable debug logging in ESS backend">
             <a-switch size="small" v-model:checked="debugMode" @change="toggleDebugMode" :disabled="!connected">
@@ -96,8 +108,11 @@
             <a-select-option value="general">General</a-select-option>
           </a-select>
 
-          <!-- Search -->
-          <a-input size="small" placeholder="Search logs..." v-model:value="searchText" style="width: 140px;"
+          <!-- Search with debounce -->
+          <a-input size="small" placeholder="Search logs..." 
+            :value="searchText"
+            @input="handleSearchInput"
+            style="width: 140px;"
             allow-clear>
             <template #prefix>
               <SearchOutlined />
@@ -126,11 +141,11 @@
       Not connected to dserv - logging unavailable
     </div>
 
-    <!-- Main table section -->
-    <div class="table-section">
+    <!-- Main table section with virtual scrolling -->
+    <div class="table-section" ref="tableSection">
       <!-- Empty state -->
       <div v-if="displayedEntries.length === 0" class="empty-state">
-        <template v-if="allEntries.length === 0">
+        <template v-if="limitedAllEntries.length === 0">
           <CodeOutlined class="empty-icon" />
           <div class="empty-text">No log entries captured yet</div>
           <div class="empty-subtext">
@@ -143,7 +158,24 @@
         </template>
       </div>
 
-      <!-- Table container -->
+      <!-- Virtual scrolling for large lists -->
+      <div v-else-if="performanceMode === 'reduced' && displayedEntries.length > 100" class="virtual-scroll-container">
+        <div class="virtual-scroll-spacer" :style="{ height: `${virtualScrollHeight}px` }"></div>
+        <div class="virtual-scroll-viewport" :style="{ transform: `translateY(${virtualScrollOffset}px)` }">
+          <div v-for="entry in virtualizedEntries" :key="entry.id" class="virtual-log-row" :class="getRowClassName(entry)">
+            <span class="log-time">{{ entry.timeString }}</span>
+            <a-tag :color="getLevelInfo(entry.level).color" class="level-tag">
+              {{ entry.level.toUpperCase() }}
+            </a-tag>
+            <span class="log-category">{{ entry.category }}</span>
+            <span class="log-source">{{ entry.source }}</span>
+            <span class="log-context">{{ entry.system }}/{{ entry.protocol }}/{{ entry.variant }}</span>
+            <span class="log-text" @click="showLogDetails(entry)">{{ getFirstLine(entry.text) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Regular table for smaller datasets -->
       <div v-else class="table-container">
         <a-table ref="logTable" :columns="columns" :data-source="displayedEntries" size="small" row-key="id"
           :pagination="false" :scroll="{ y: true, x: 800 }" :row-class-name="getRowClassName"
@@ -236,11 +268,12 @@
       <!-- Left side - entry counts -->
       <div class="footer-left">
         <span v-if="displayedEntries.length > 0" class="entry-info">
-          Showing {{ displayedEntries.length }}{{ allEntries.length !== displayedEntries.length ? ` of
-          ${allEntries.length}`
+          Showing {{ displayedEntries.length }}{{ limitedAllEntries.length !== displayedEntries.length ? ` of
+          ${limitedAllEntries.length}`
           : '' }} entries
           <span v-if="searchText" class="filter-indicator">(filtered)</span>
           <span v-if="filterLevel !== 'all'" class="filter-indicator">({{ filterLevel }})</span>
+          <span v-if="allEntries.length > MAX_ENTRIES" class="filter-indicator">(limited to {{ MAX_ENTRIES }})</span>
         </span>
       </div>
 
@@ -252,8 +285,11 @@
         <span class="status-item">
           {{ connected ? (isTracing ? 'Tracing' : 'Connected') : 'Disconnected' }}
         </span>
-        <span v-if="allEntries.length > 0" class="status-item">
-          {{ new Date(allEntries[allEntries.length - 1].timestamp).toLocaleTimeString() }}
+        <span v-if="performanceMode === 'reduced'" class="status-item perf-mode">
+          Performance Mode
+        </span>
+        <span v-if="limitedAllEntries.length > 0" class="status-item">
+          {{ new Date(limitedAllEntries[limitedAllEntries.length - 1].timestamp).toLocaleTimeString() }}
         </span>
       </div>
     </div>
@@ -328,7 +364,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, h, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, h, watch, shallowRef } from 'vue'
 import {
   ClearOutlined,
   DownloadOutlined,
@@ -350,6 +386,14 @@ import {
 import { message } from 'ant-design-vue'
 import { dserv } from '../services/dserv.js'
 import { errorService } from '../services/errorService.js'
+import { debounce, throttle } from 'lodash-es'
+
+// Performance constants
+const MAX_ENTRIES = 1000 // Maximum entries to keep in memory
+const MAX_RECENT_ENTRIES = 100 // For 'recent' view
+const VIRTUAL_SCROLL_THRESHOLD = 100 // When to switch to virtual scrolling
+const VIRTUAL_ITEM_HEIGHT = 28 // Height of each virtual row
+const VIRTUAL_OVERSCAN = 5 // Extra items to render above/below viewport
 
 // Component state
 const loading = ref(false)
@@ -360,9 +404,21 @@ const searchText = ref('')
 const selectedEntry = ref(null)
 const showDetails = ref(false)
 const logTable = ref(null)
-const expandedRows = ref([])
+const expandedRows = shallowRef([]) // Use shallowRef for better performance
 const viewMode = ref('all') // 'errors', 'all', 'recent'
 const debugMode = ref(false)
+const tableSection = ref(null)
+
+// Performance mode
+const performanceMode = ref('full') // 'full' or 'reduced'
+const autoPerformanceMode = ref(true)
+const frameDrops = ref(0)
+const lastFrameTime = ref(performance.now())
+
+// Virtual scrolling state
+const virtualScrollOffset = ref(0)
+const virtualScrollHeight = computed(() => displayedEntries.value.length * VIRTUAL_ITEM_HEIGHT)
+const virtualizedEntries = ref([])
 
 // Send message modal
 const showSendModal = ref(false)
@@ -372,24 +428,40 @@ const sendForm = ref({
   message: ''
 })
 
-// Reactive references to global service data
+// Filter cache for performance
+const filterCache = new Map()
+const CACHE_SIZE = 20
+
+// Reactive references to global service data with limits
 const allLogs = computed(() => errorService.getLogs())
 const allErrors = computed(() => errorService.getErrors())
 const logCounts = computed(() => errorService.getLogCounts())
 const isTracing = computed(() => errorService.isTracingActive())
 
-// Determine which entries to show based on view mode
-const allEntries = computed(() => {
+// Limit entries based on view mode and memory constraints
+const limitedAllEntries = computed(() => {
+  let entries;
   switch (viewMode.value) {
     case 'errors':
-      return allErrors.value
+      entries = allErrors.value;
+      break;
     case 'recent':
-      return errorService.getRecentLogs(100)
+      entries = errorService.getRecentLogs(MAX_RECENT_ENTRIES);
+      break;
     case 'all':
     default:
-      return allLogs.value
+      entries = allLogs.value;
   }
+  
+  // Apply MAX_ENTRIES limit
+  if (entries.length > MAX_ENTRIES) {
+    return entries.slice(-MAX_ENTRIES);
+  }
+  return entries;
 })
+
+// Determine which entries to show based on view mode
+const allEntries = computed(() => limitedAllEntries.value)
 
 // Helper functions for text handling
 const getFirstLine = (text) => {
@@ -402,23 +474,27 @@ const isMultiLine = (text) => {
 
 // Row expansion handling
 const toggleRowExpansion = (rowId) => {
-  const index = expandedRows.value.indexOf(rowId)
+  const currentExpanded = [...expandedRows.value];
+  const index = currentExpanded.indexOf(rowId)
   if (index === -1) {
-    expandedRows.value.push(rowId)
+    currentExpanded.push(rowId)
   } else {
-    expandedRows.value.splice(index, 1)
+    currentExpanded.splice(index, 1)
   }
+  expandedRows.value = currentExpanded;
 }
 
 const onRowExpand = (expanded, record) => {
   if (expanded) {
     if (!expandedRows.value.includes(record.id)) {
-      expandedRows.value.push(record.id)
+      expandedRows.value = [...expandedRows.value, record.id];
     }
   } else {
     const index = expandedRows.value.indexOf(record.id)
     if (index !== -1) {
-      expandedRows.value.splice(index, 1)
+      const newExpanded = [...expandedRows.value];
+      newExpanded.splice(index, 1);
+      expandedRows.value = newExpanded;
     }
   }
 }
@@ -451,6 +527,9 @@ const toggleDebugMode = async () => {
 }
 
 const clearLogs = () => {
+  // Clear filter cache when clearing logs
+  filterCache.clear();
+  
   if (viewMode.value === 'errors') {
     errorService.clearErrors()
     message.success('Errors cleared')
@@ -503,9 +582,17 @@ const sendMessage = async () => {
   }
 }
 
-// Filter logs
+// Optimized filtering with caching
 const filteredEntries = computed(() => {
-  let filtered = allEntries.value
+  // Create cache key
+  const cacheKey = `${filterLevel.value}-${searchText.value}-${allEntries.value.length}`;
+  
+  // Check cache
+  if (filterCache.has(cacheKey)) {
+    return filterCache.get(cacheKey);
+  }
+  
+  let filtered = allEntries.value;
 
   // Filter by level
   if (filterLevel.value !== 'all') {
@@ -524,14 +611,23 @@ const filteredEntries = computed(() => {
     )
   }
 
-  return filtered
+  // Manage cache size
+  if (filterCache.size >= CACHE_SIZE) {
+    const firstKey = filterCache.keys().next().value;
+    filterCache.delete(firstKey);
+  }
+  
+  // Cache result
+  filterCache.set(cacheKey, filtered);
+  
+  return filtered;
 })
 
-// Final displayed entries (for naming consistency)
+// Final displayed entries
 const displayedEntries = computed(() => filteredEntries.value)
 
-// Auto-scroll function using the unified approach
-const scrollToBottom = () => {
+// Debounced auto-scroll function
+const scrollToBottom = debounce(() => {
   if (!autoScroll.value) return
 
   nextTick(() => {
@@ -545,14 +641,93 @@ const scrollToBottom = () => {
       }
     }
   })
+}, 100)
+
+// Debounced search input handler
+const handleSearchInput = debounce((e) => {
+  searchText.value = e.target.value
+}, 300)
+
+// Add to component state
+const hasShownPerfModeMessage = ref(false)
+const performanceModeDebounce = ref(null)
+
+// Performance monitoring
+const checkPerformance = () => {
+  const now = performance.now()
+  const delta = now - lastFrameTime.value
+  
+  if (delta > 50) { // More than 50ms between frames = dropped frame
+    frameDrops.value++
+  }
+  
+  lastFrameTime.value = now
+  
+  // Auto-switch to reduced performance mode if needed
+  if (autoPerformanceMode.value && 
+      frameDrops.value > 10 && 
+      displayedEntries.value.length > 200 &&
+      performanceMode.value !== 'reduced') {
+    
+    // Clear any pending debounce
+    if (performanceModeDebounce.value) {
+      clearTimeout(performanceModeDebounce.value)
+    }
+    
+    // Debounce the switch to prevent multiple triggers
+    performanceModeDebounce.value = setTimeout(() => {
+      if (performanceMode.value !== 'reduced') {
+        performanceMode.value = 'reduced'
+        
+        // Only show message once per session
+        if (!hasShownPerfModeMessage.value) {
+          message.info('Switched to performance mode for better responsiveness')
+          hasShownPerfModeMessage.value = true
+        }
+        
+        frameDrops.value = 0
+      }
+    }, 500) // Wait 500ms to ensure it's not a temporary spike
+  }
 }
 
-// Watch for new entries to auto-scroll
-watch(allEntries, () => {
+// Toggle auto performance mode
+const toggleAutoPerformance = (checked) => {
+  if (!checked) {
+    performanceMode.value = 'full'
+    hasShownPerfModeMessage.value = false // Reset for next time
+  }
+}
+
+// Virtual scrolling handler
+const handleVirtualScroll = throttle((e) => {
+  if (performanceMode.value !== 'reduced' || displayedEntries.value.length <= VIRTUAL_SCROLL_THRESHOLD) {
+    return
+  }
+  
+  const scrollTop = e.target.scrollTop
+  const containerHeight = e.target.clientHeight
+  
+  // Calculate which items should be visible
+  const startIndex = Math.floor(scrollTop / VIRTUAL_ITEM_HEIGHT) - VIRTUAL_OVERSCAN
+  const endIndex = Math.ceil((scrollTop + containerHeight) / VIRTUAL_ITEM_HEIGHT) + VIRTUAL_OVERSCAN
+  
+  const safeStartIndex = Math.max(0, startIndex)
+  const safeEndIndex = Math.min(displayedEntries.value.length, endIndex)
+  
+  virtualizedEntries.value = displayedEntries.value.slice(safeStartIndex, safeEndIndex)
+  virtualScrollOffset.value = safeStartIndex * VIRTUAL_ITEM_HEIGHT
+}, 16) // ~60fps
+
+// Watch for new entries to auto-scroll (throttled)
+const watchEntriesThrottled = throttle(() => {
   if (autoScroll.value) {
     scrollToBottom()
   }
-}, { deep: true })
+  checkPerformance()
+}, 100)
+
+watch(allEntries, watchEntriesThrottled, { deep: false }) // shallow watch
 
 // Get level icon and color
 const getLevelInfo = (level) => {
@@ -645,7 +820,7 @@ const columns = [
 
 // Component lifecycle
 onMounted(() => {
-  console.log('ESS Console mounted - using global error/log service')
+  console.log('ESS Console mounted - optimized version with performance improvements')
 
   // Listen for connection changes
   const cleanup = dserv.registerComponent('EssConsole')
@@ -657,8 +832,34 @@ onMounted(() => {
   // Set initial connection state
   connected.value = dserv.state.connected
 
+  // Set up virtual scrolling if needed
+  if (tableSection.value) {
+    const scrollContainer = tableSection.value.querySelector('.virtual-scroll-container')
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', handleVirtualScroll)
+    }
+  }
+
+  // Performance monitoring
+  const perfInterval = setInterval(checkPerformance, 1000)
+
   onUnmounted(() => {
     cleanup()
+    clearInterval(perfInterval)
+    filterCache.clear()
+    
+    // Clear performance mode debounce
+    if (performanceModeDebounce.value) {
+      clearTimeout(performanceModeDebounce.value)
+    }
+    
+    // Remove scroll listener
+    if (tableSection.value) {
+      const scrollContainer = tableSection.value.querySelector('.virtual-scroll-container')
+      if (scrollContainer) {
+        scrollContainer.removeEventListener('scroll', handleVirtualScroll)
+      }
+    }
   })
 })
 </script>
@@ -718,6 +919,13 @@ onMounted(() => {
 .total-count {
   color: #666;
   font-size: 10px;
+}
+
+.perf-indicator {
+  color: #faad14;
+  font-size: 12px;
+  margin-left: 4px;
+  cursor: help;
 }
 
 .right-controls {
@@ -787,6 +995,69 @@ onMounted(() => {
   overflow: hidden;
 }
 
+/* Virtual scrolling styles */
+.virtual-scroll-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+
+.virtual-scroll-spacer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  pointer-events: none;
+}
+
+.virtual-scroll-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.virtual-log-row {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.virtual-log-row:hover {
+  background: #f5f5f5;
+}
+
+.log-time {
+  width: 90px;
+  font-family: monospace;
+  color: #666;
+}
+
+.log-category,
+.log-source {
+  width: 80px;
+  margin: 0 8px;
+}
+
+.log-context {
+  width: 180px;
+  margin: 0 8px;
+  font-family: monospace;
+  font-size: 10px;
+}
+
+.log-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .console-footer {
   flex-shrink: 0;
   padding: 4px 12px;
@@ -825,6 +1096,11 @@ onMounted(() => {
 
 .status-item {
   white-space: nowrap;
+}
+
+.perf-mode {
+  color: #faad14;
+  font-weight: 500;
 }
 
 /* TABLE SPECIFIC STYLES */
@@ -1075,5 +1351,22 @@ onMounted(() => {
   height: 100% !important;
   display: flex;
   flex-direction: column;
+}
+
+/* Performance mode styles */
+.virtual-log-row.error-row {
+  background-color: #fff2f0;
+}
+
+.virtual-log-row.warning-row {
+  background-color: #fffbe6;
+}
+
+.virtual-log-row.info-row {
+  background-color: #e6f7ff;
+}
+
+.virtual-log-row.debug-row {
+  background-color: #f9f0ff;
 }
 </style>
