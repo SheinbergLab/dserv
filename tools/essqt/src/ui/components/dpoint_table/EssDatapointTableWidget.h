@@ -46,6 +46,9 @@ private slots:
     void onFilterChanged(const QString &text);
     void onMaxRowsChanged(int value);
     void onAutoScrollToggled(bool checked);
+    
+    // Connection management
+    void onHostDisconnected();
 
 private:
     void setupUi();

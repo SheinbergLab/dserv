@@ -19,13 +19,15 @@
 #include "console/EssOutputConsole.h"
 #include "dpoint_table/EssDatapointTableWidget.h"
 #include "event_table/EssEventTableWidget.h"
+#include "host_discovery/EssHostDiscoveryWidget.h"
+#include "experiment_control/EssExperimentControlWidget.h"
 
 EssMainWindow::EssMainWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_terminal(nullptr)
     , m_terminalDock(nullptr)
-    , m_console(nullptr)        // Add this
-    , m_consoleDock(nullptr)     // Add this      
+    , m_console(nullptr)
+    , m_consoleDock(nullptr)
 {
     setWindowTitle(QString("EssQt - ESS Control System"));
 
@@ -124,7 +126,21 @@ void EssMainWindow::createMenus()
     m_showEventTableAction->setShortcut(QKeySequence("Ctrl+E"));
     connect(m_showEventTableAction, &QAction::triggered,
 	    this, &EssMainWindow::onShowEventTable);
+    
+    m_showHostDiscoveryAction = m_viewMenu->addAction(tr("&Host Discovery"));
+    m_showHostDiscoveryAction->setCheckable(true);
+    m_showHostDiscoveryAction->setChecked(true);
+    m_showHostDiscoveryAction->setShortcut(QKeySequence("Ctrl+H"));
+    connect(m_showHostDiscoveryAction, &QAction::triggered, this,
+	    &EssMainWindow::onShowHostDiscovery);    
 
+m_showExperimentControlAction = m_viewMenu->addAction(tr("E&xperiment Control"));
+m_showExperimentControlAction->setCheckable(true);
+m_showExperimentControlAction->setChecked(true);
+m_showExperimentControlAction->setShortcut(QKeySequence("Ctrl+X"));
+connect(m_showExperimentControlAction, &QAction::triggered,
+        this, &EssMainWindow::onShowExperimentControl);
+        
     m_viewMenu->addSeparator();
     QAction *resetLayoutAction = m_viewMenu->addAction(tr("&Reset Layout"));
     connect(resetLayoutAction, &QAction::triggered, this, &EssMainWindow::resetLayout);
@@ -169,13 +185,14 @@ void EssMainWindow::createDockWidgets()
     m_terminalDock->setWidget(m_terminal);
     
     addDockWidget(Qt::BottomDockWidgetArea, m_terminalDock);
-    
-    // Connect terminal signals
-    connect(m_terminal, &EssTerminalWidget::commandExecuted,
-            this, &EssMainWindow::onCommandExecuted);
+
+    // Connect status bar updates to terminal
+    connect(m_terminal, &EssTerminalWidget::statusMessage,
+            this, &EssMainWindow::updateStatus);
     
     // Connect to command interface signals for status updates
-    EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
+    EssCommandInterface *cmdInterface =
+      EssApplication::instance()->commandInterface();
     connect(cmdInterface, &EssCommandInterface::connected,
             this, &EssMainWindow::onConnected);
     connect(cmdInterface, &EssCommandInterface::disconnected,
@@ -208,7 +225,7 @@ void EssMainWindow::createDockWidgets()
     m_datapointTable = new EssDatapointTableWidget(m_datapointTableDock);
     m_datapointTableDock->setWidget(m_datapointTable);
     
-    addDockWidget(Qt::TopDockWidgetArea, m_datapointTableDock);
+    addDockWidget(Qt::RightDockWidgetArea, m_datapointTableDock);
     
     m_datapointTable->setMaxRows(2000);
     m_datapointTable->setFilterPattern("");
@@ -220,10 +237,89 @@ void EssMainWindow::createDockWidgets()
     m_eventTable = new EssEventTableWidget(m_eventTableDock);
     m_eventTableDock->setWidget(m_eventTable);
     
-    addDockWidget(Qt::TopDockWidgetArea, m_eventTableDock);
+    addDockWidget(Qt::RightDockWidgetArea, m_eventTableDock);
     
     // Split datapoint and event tables side by side
     splitDockWidget(m_datapointTableDock, m_eventTableDock, Qt::Horizontal);
+
+    // Create host discovery dock - ultra compact
+    m_hostDiscoveryDock = new QDockWidget(tr("Hosts"), this);
+    m_hostDiscoveryDock->setObjectName("HostDiscoveryDock");
+    
+    m_hostDiscovery = new EssHostDiscoveryWidget(m_hostDiscoveryDock);
+    m_hostDiscoveryDock->setWidget(m_hostDiscovery);
+    
+    // Set size constraints for the ultra-compact combo box widget
+    m_hostDiscovery->setMinimumHeight(32);   // Single line
+    m_hostDiscovery->setMaximumHeight(32);   // Fixed height
+    m_hostDiscoveryDock->setMaximumHeight(65); // Account for dock title bar
+    
+    // Create experiment control dock
+    m_experimentControlDock = new QDockWidget(tr("Experiment Control"), this);
+    m_experimentControlDock->setObjectName("ExperimentControlDock");
+    
+    m_experimentControl = new EssExperimentControlWidget(m_experimentControlDock);
+    m_experimentControlDock->setWidget(m_experimentControl);
+    
+    // Add to left side - Host Discovery FIRST (on top)
+    addDockWidget(Qt::LeftDockWidgetArea, m_hostDiscoveryDock);
+    addDockWidget(Qt::LeftDockWidgetArea, m_experimentControlDock);
+    
+    // Connect experiment control signals
+    connect(m_experimentControl, &EssExperimentControlWidget::experimentStarted,
+	    this, [this]() {
+	      updateStatus("Experiment started", 3000);
+	    });
+    
+    connect(m_experimentControl, &EssExperimentControlWidget::experimentStopped,
+	    this, [this]() {
+	      updateStatus("Experiment stopped", 3000);
+	    });
+    
+    connect(m_experimentControl, &EssExperimentControlWidget::systemChanged,
+	    this, [this](const QString &system) {
+	      updateStatus(QString("System loaded: %1").arg(system), 3000);
+	    });
+    
+    connect(m_experimentControl, &EssExperimentControlWidget::protocolChanged,
+	    this, [this](const QString &protocol) {
+        updateStatus(QString("Protocol loaded: %1").arg(protocol), 3000);
+	    });
+    
+    connect(m_experimentControl, &EssExperimentControlWidget::variantChanged,
+	    this, [this](const QString &variant) {
+	      updateStatus(QString("Variant loaded: %1").arg(variant), 3000);
+	    });
+    
+    connect(m_experimentControl, &EssExperimentControlWidget::experimentReset,
+	    this, [this]() {
+	      updateStatus("Experiment reset", 3000);
+	    });
+    
+    // Connect dock visibility to menu action
+    connect(m_experimentControlDock, &QDockWidget::visibilityChanged,
+	    m_showExperimentControlAction, &QAction::setChecked);
+        
+    
+    // Connect host discovery signals
+    connect(m_hostDiscovery, &EssHostDiscoveryWidget::hostSelected,
+	    this, [this](const QString &host) {
+	      updateStatus(QString("Selected host: %1").arg(host), 3000);
+	    });
+    
+    connect(m_hostDiscovery, &EssHostDiscoveryWidget::connectionStateChanged,
+	    this, [this](bool connected, const QString &host) {
+	      if (connected) {
+                updateStatus(QString("Connected to %1").arg(host), 5000);
+	      } else {
+                updateStatus("Disconnected", 3000);
+	      }
+	    });
+    
+    // Connect dock visibility to menu action
+    connect(m_hostDiscoveryDock, &QDockWidget::visibilityChanged,
+	    m_showHostDiscoveryAction, &QAction::setChecked);
+    
     
     // Register console with manager
     EssConsoleManager::instance()->registerConsole("main", m_console);
@@ -252,35 +348,46 @@ void EssMainWindow::resetLayout()
     m_consoleDock->setVisible(false);
     m_datapointTableDock->setVisible(false);
     m_eventTableDock->setVisible(false);
+    m_hostDiscoveryDock->setVisible(false);
+    m_experimentControlDock->setVisible(false);
     
     // Remove all docks
     removeDockWidget(m_terminalDock);
     removeDockWidget(m_consoleDock);
     removeDockWidget(m_datapointTableDock);
     removeDockWidget(m_eventTableDock);
+    removeDockWidget(m_hostDiscoveryDock);
+    removeDockWidget(m_experimentControlDock);
     
     // Re-add in desired configuration
     addDockWidget(Qt::BottomDockWidgetArea, m_terminalDock);
     addDockWidget(Qt::BottomDockWidgetArea, m_consoleDock);
     tabifyDockWidget(m_terminalDock, m_consoleDock);
     
-    addDockWidget(Qt::TopDockWidgetArea, m_datapointTableDock);
-    addDockWidget(Qt::TopDockWidgetArea, m_eventTableDock);
+    addDockWidget(Qt::RightDockWidgetArea, m_datapointTableDock);
+    addDockWidget(Qt::RightDockWidgetArea, m_eventTableDock);
     splitDockWidget(m_datapointTableDock, m_eventTableDock, Qt::Horizontal);
+
+    // Host Discovery on top, Experiment Control below
+    addDockWidget(Qt::LeftDockWidgetArea, m_hostDiscoveryDock);
+    addDockWidget(Qt::LeftDockWidgetArea, m_experimentControlDock);
     
     // Show all docks
     m_terminalDock->setVisible(true);
     m_consoleDock->setVisible(true);
     m_datapointTableDock->setVisible(true);
     m_eventTableDock->setVisible(true);
+    m_hostDiscoveryDock->setVisible(true);
+    m_experimentControlDock->setVisible(true);
     
     // Update menu checkmarks
     m_showTerminalAction->setChecked(true);
     m_showConsoleAction->setChecked(true);
     m_showDatapointTableAction->setChecked(true);
     m_showEventTableAction->setChecked(true);
+    m_showHostDiscoveryAction->setChecked(true);    
+    m_showExperimentControlAction->setChecked(true);
 }
-
 void EssMainWindow::readSettings()
 {
     EssConfig *config = EssApplication::instance()->config();
@@ -382,34 +489,17 @@ void EssMainWindow::onShowEventTable()
     }
 }
 
-void EssMainWindow::onCommandExecuted(const QString &command)
+void EssMainWindow::onShowHostDiscovery()
 {
-    // Log to console
-    m_console->logInfo(QString("Command: %1").arg(command), "Terminal");
-    
-    // Update status bar too
-    updateStatus(QString("Command: %1").arg(command), 3000);
-    
-    // Process commands...
-    if (command == "help") {
-        m_terminal->executeCommand("Available commands: help, clear, about, quit, test");
-        m_console->logSystem("Help displayed", "Terminal");
-    } else if (command == "test") {
-        // Test different log types
-        m_console->logInfo("This is an info message", "Test");
-        m_console->logSuccess("This is a success message", "Test");
-        m_console->logWarning("This is a warning message", "Test");
-        m_console->logError("This is an error message", "Test");
-        m_console->logDebug("This is a debug message", "Test");
-        m_console->logSystem("This is a system message", "Test");
-    } else if (command == "about") {
-        onAbout();
-        m_console->logInfo("About dialog shown", "UI");
-    } else if (command == "quit" || command == "exit") {
-        m_console->logSystem("Application shutdown requested", "Main");
-        close();
-    } else {
-        m_console->logDebug(QString("Unknown command: %1").arg(command), "Terminal");
+    if (m_hostDiscoveryDock) {
+        m_hostDiscoveryDock->setVisible(!m_hostDiscoveryDock->isVisible());
+    }
+}
+
+void EssMainWindow::onShowExperimentControl()
+{
+    if (m_experimentControlDock) {
+        m_experimentControlDock->setVisible(!m_experimentControlDock->isVisible());
     }
 }
 

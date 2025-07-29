@@ -2,6 +2,7 @@
 #include "EssDatapointTableWidget.h"
 #include "EssApplication.h"
 #include "EssDataProcessor.h"
+#include "EssCommandInterface.h"
 #include <QTableWidget>
 #include <QLineEdit>
 #include <QPushButton>
@@ -17,7 +18,7 @@
 
 EssDatapointTableWidget::EssDatapointTableWidget(QWidget *parent)
     : QWidget(parent)
-    , m_paused(false)
+    , m_paused(true)
     , m_autoScroll(true)
     , m_maxRows(1000)
     , m_updateCounter(0)
@@ -28,6 +29,12 @@ EssDatapointTableWidget::EssDatapointTableWidget(QWidget *parent)
 
 EssDatapointTableWidget::~EssDatapointTableWidget()
 {
+// Ensure we're disconnected before destruction
+    if (!m_paused && EssApplication::instance() && EssApplication::instance()->dataProcessor()) {
+        disconnect(EssApplication::instance()->dataProcessor(), 
+                  &EssDataProcessor::genericDatapointReceived,
+                  this, &EssDatapointTableWidget::onGenericDatapointReceived);
+    }
 }
 
 void EssDatapointTableWidget::setupUi()
@@ -44,8 +51,9 @@ void EssDatapointTableWidget::setupUi()
     m_filterEdit->setToolTip("Regular expression to filter datapoint names");
     
     // Pause button
-    m_pauseButton = new QPushButton("Pause", this);
+    m_pauseButton = new QPushButton("Start", this);
     m_pauseButton->setCheckable(true);
+    m_pauseButton->setChecked(true); 
     m_pauseButton->setToolTip("Pause/resume datapoint updates");
     
     // Clear button
@@ -102,12 +110,13 @@ void EssDatapointTableWidget::setupUi()
 }
 
 void EssDatapointTableWidget::connectSignals()
-{
-    // Connect to data processor
-    if (EssApplication::instance() && EssApplication::instance()->dataProcessor()) {
-        connect(EssApplication::instance()->dataProcessor(), 
-                &EssDataProcessor::genericDatapointReceived,
-                this, &EssDatapointTableWidget::onGenericDatapointReceived);
+{   
+    if (EssApplication::instance()) {
+        auto* cmdInterface = EssApplication::instance()->commandInterface();
+        if (cmdInterface) {
+            connect(cmdInterface, &EssCommandInterface::disconnected,
+                    this, &EssDatapointTableWidget::onHostDisconnected);
+        }
     }
     
     // UI connections
@@ -252,8 +261,30 @@ void EssDatapointTableWidget::trimTableRows()
 
 void EssDatapointTableWidget::onPauseToggled(bool checked)
 {
-    m_paused = checked;
-    m_pauseButton->setText(checked ? "Resume" : "Pause");
+   m_paused = checked;
+    m_pauseButton->setText(checked ? "Start" : "Stop");
+    
+    // Connect/disconnect from data stream based on state
+    if (EssApplication::instance() && EssApplication::instance()->dataProcessor()) {
+        if (checked) {
+            // Disconnect when paused (checked = true means button says "Start")
+            disconnect(EssApplication::instance()->dataProcessor(), 
+                      &EssDataProcessor::genericDatapointReceived,
+                      this, &EssDatapointTableWidget::onGenericDatapointReceived);
+        } else {
+            // Connect when running
+            connect(EssApplication::instance()->dataProcessor(), 
+                    &EssDataProcessor::genericDatapointReceived,
+                    this, &EssDatapointTableWidget::onGenericDatapointReceived);
+        }
+    }
+    
+    // Add visual indicator when running
+    if (!checked) {
+        m_pauseButton->setStyleSheet("QPushButton { background-color: #90EE90; }"); // Light green
+    } else {
+        m_pauseButton->setStyleSheet(""); // Default
+    }
 }
 
 void EssDatapointTableWidget::onClearClicked()
@@ -279,10 +310,38 @@ void EssDatapointTableWidget::onAutoScrollToggled(bool checked)
     m_autoScroll = checked;
 }
 
+void EssDatapointTableWidget::onHostDisconnected()
+{
+    // 1. Ensure we're paused and disconnected from data stream
+    if (!m_paused) {
+        // Force to paused state without triggering button events
+        m_paused = true;
+        m_pauseButton->setChecked(true);
+        m_pauseButton->setText("Start");
+        m_pauseButton->setStyleSheet(""); // Remove green background
+        
+        // Disconnect from data stream
+        if (EssApplication::instance() && EssApplication::instance()->dataProcessor()) {
+            disconnect(EssApplication::instance()->dataProcessor(), 
+                      &EssDataProcessor::genericDatapointReceived,
+                      this, &EssDatapointTableWidget::onGenericDatapointReceived);
+        }
+    }
+    
+    // 2. Clear all data from the table
+    m_tableWidget->setRowCount(0);
+    m_updateCounter = 0;
+    
+    // 3. Reset filter
+    m_filterEdit->clear();
+    m_filterRegex = QRegularExpression();
+}
+
 void EssDatapointTableWidget::setPaused(bool paused)
 {
     m_paused = paused;
     m_pauseButton->setChecked(paused);
+    onPauseToggled(paused);
 }
 
 void EssDatapointTableWidget::setFilterPattern(const QString &pattern)

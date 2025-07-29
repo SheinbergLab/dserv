@@ -65,6 +65,8 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/terminal    
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/console 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/host_discovery
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/experiment_control
     ${CMAKE_CURRENT_SOURCE_DIR}/src/communication
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl
 )
@@ -92,14 +94,16 @@ set(UI_SOURCES
     src/ui/components/console/EssOutputConsole.cpp
     src/ui/components/dpoint_table/EssDatapointTableWidget.cpp
     src/ui/components/event_table/EssEventTableWidget.cpp    
+    src/ui/components/host_discovery/EssHostDiscoveryWidget.cpp
+    src/ui/components/experiment_control/EssExperimentControlWidget.cpp
 )
 
 # Optional: Add these if you have them
 set(OPTIONAL_SOURCES
     # src/dlfuncs.c
     # src/tcl/TclInterp.cpp
-    # src/communication/mdns_query.c
-    # src/communication/mdns.c
+    src/communication/mdns_query.c
+    src/communication/mdns.c
 )
 
 # Main executable

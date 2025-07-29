@@ -30,10 +30,15 @@ private slots:
     void onObservationReset();
     void onClearClicked();
 
+    // Connection management
+	void onHostConnected(const QString &host); 
+    void onHostDisconnected();
+    
 private:
     void setupUi();
     void connectToEventProcessor();
     void addEventRow(const EssEvent &event);
+    QString formatEventParams(const EssEvent &event) const;
     
     QTableWidget *m_tableWidget;
     QPushButton *m_clearButton;

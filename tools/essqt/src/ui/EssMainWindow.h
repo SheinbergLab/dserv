@@ -14,6 +14,8 @@ class EssTerminalWidget;
 class EssOutputConsole;
 class EssDatapointTableWidget;
 class EssEventTableWidget;
+class EssHostDiscoveryWidget;
+class EssExperimentControlWidget;
 
 class EssMainWindow : public QMainWindow
 {
@@ -41,12 +43,12 @@ private slots:
     // Status updates
     void updateStatus(const QString &message, int timeout = 0);
 
-  void onCommandExecuted(const QString &command);
-
   void onShowTerminal();
   void onShowConsole();
   void onShowDatapointTable();
-void onShowEventTable();
+  void onShowEventTable();
+  void onShowHostDiscovery();
+  void onShowExperimentControl();
   
   void createDockWidgets();
 
@@ -75,22 +77,35 @@ private:
     QLabel *m_statusLabel;
     QLabel *m_connectionLabel;
     
-    // UI Components
-    EssTerminalWidget *m_terminal;
-  EssOutputConsole *m_console;
-  EssDatapointTableWidget *m_datapointTable;
- EssEventTableWidget *m_eventTable;
+// Terminal
+EssTerminalWidget *m_terminal;
+QDockWidget *m_terminalDock;
+QAction *m_showTerminalAction;
 
-  // Dock widgets
-  QDockWidget *m_terminalDock;
-  QDockWidget *m_consoleDock;
-  QDockWidget *m_datapointTableDock;
-  QDockWidget *m_eventTableDock;
+// Console
+EssOutputConsole *m_console;
+QDockWidget *m_consoleDock;
+QAction *m_showConsoleAction;
 
-  QAction *m_showTerminalAction;
-  QAction *m_showConsoleAction;
-  QAction *m_showDatapointTableAction;
-  QAction *m_showEventTableAction;
+// Datapoint Table
+EssDatapointTableWidget *m_datapointTable;
+QDockWidget *m_datapointTableDock;
+QAction *m_showDatapointTableAction;
+
+// Event Table
+EssEventTableWidget *m_eventTable;
+QDockWidget *m_eventTableDock;
+QAction *m_showEventTableAction;
+
+// Host Discovery
+EssHostDiscoveryWidget *m_hostDiscovery;
+QDockWidget *m_hostDiscoveryDock;
+QAction *m_showHostDiscoveryAction;
+
+// Experiment Control  
+  EssExperimentControlWidget *m_experimentControl;
+  QDockWidget *m_experimentControlDock;
+  QAction *m_showExperimentControlAction;
   
   void updateConnectionStatus(bool connected, const QString &host = QString());
 };

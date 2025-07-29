@@ -21,6 +21,9 @@ public:
     // Synchronous command execution
     bool sendCommand(const QString& command, QString& response, int timeoutMs = 5000);
 
+    // Send command but get reply immediately
+    bool sendAsyncCommand(const QString& command, QString& response, int timeoutMs = 5000);
+
 private:
     // Helper methods for synchronous communication
     bool sendMessage(const QString& message);

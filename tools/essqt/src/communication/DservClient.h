@@ -24,6 +24,10 @@ public:
     bool getValue(const QString& host, const QString& key, QString& value, quint16 dservPort = 4620);
     bool getKeys(const QString& host, QString& keys, quint16 dservPort = 4620);
     
+    // Connection testing
+    bool testConnection(const QString& host, quint16 port = 4620, int timeoutMs = 1000);
+    bool isHostAvailable(const QString& host, quint16 port = 4620, int timeoutMs = 1000);
+    
     // Get last error message for debugging
     QString lastError() const { return m_lastError; }
     void clearError() { m_lastError.clear(); }

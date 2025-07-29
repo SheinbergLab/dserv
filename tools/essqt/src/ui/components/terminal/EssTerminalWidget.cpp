@@ -69,19 +69,23 @@ void EssTerminalWidget::setupCommandInterface()
     connect(cmdInterface, &EssCommandInterface::connected,
             this, [this](const QString &host) {
                 appendOutput(QString("Connected to %1\n").arg(host), OutputType::Success);
-                updatePrompt("ess:" + host + "> ");
+                updatePrompt();
             });
     
     connect(cmdInterface, &EssCommandInterface::disconnected,
             this, [this]() {
                 appendOutput("Disconnected from host\n", OutputType::System);
-                updatePrompt("ess> ");
+                updatePrompt();
             });
     
     connect(cmdInterface, &EssCommandInterface::connectionError,
             this, [this](const QString &error) {
                 appendOutput(QString("Connection error: %1\n").arg(error), OutputType::Error);
             });
+    
+    // Connect to built-in command signals
+    connect(cmdInterface, &EssCommandInterface::clearRequested,
+            this, &EssTerminalWidget::clearTerminal);
     
     // Set up command completion
     setupCompleter();
@@ -103,10 +107,19 @@ void EssTerminalWidget::setupCompleter()
 
 void EssTerminalWidget::updateCompletionList()
 {
-    QStringList commands = EssApplication::instance()->commandInterface()->getAvailableCommands();
+    QStringList commands;
     
-    // Add built-in terminal commands
-    commands << "connect" << "disconnect" << "clear" << "help" << "exit" << "quit";
+    // Get Tcl commands from command interface
+    commands = EssApplication::instance()->commandInterface()->getAvailableCommands();
+    
+    // Add our built-in commands
+    commands << "connect" << "disconnect" << "subscribe" << "unsubscribe" 
+             << "subscriptions" << "status" << "clear" << "help" << "about" 
+             << "exit" << "quit" << "/local" << "/tcl" << "/ess" << "/dserv";
+    
+    // Remove duplicates and sort
+    commands.removeDuplicates();
+    commands.sort();
     
     m_completer->setModel(new QStringListModel(commands, m_completer));
 }
@@ -119,22 +132,6 @@ void EssTerminalWidget::insertCompletion(const QString &completion)
     cursor.movePosition(QTextCursor::EndOfWord);
     cursor.insertText(completion.right(extra));
     setTextCursor(cursor);
-}
-
-bool EssTerminalWidget::connectToHost(const QString &host)
-{
-    appendOutput(QString("Connecting to %1...\n").arg(host), OutputType::System);
-    return EssApplication::instance()->commandInterface()->connectToHost(host);
-}
-
-void EssTerminalWidget::disconnectFromHost()
-{
-    EssApplication::instance()->commandInterface()->disconnectFromHost();
-}
-
-bool EssTerminalWidget::isConnected() const
-{
-    return m_commandInterface && EssApplication::instance()->commandInterface()->isConnected();
 }
 
 void EssTerminalWidget::executeCommand(const QString &command)
@@ -172,132 +169,12 @@ void EssTerminalWidget::processCommand()
     // Add to history
     m_history->add(command);
     
-    // Emit signal for processing
-    emit commandExecuted(command);
+    // Emit status message if needed
+    emit statusMessage(QString("Executing: %1").arg(command), 2000);
     
-    // Get current channel
-    EssCommandInterface::CommandChannel currentChannel = EssApplication::instance()->commandInterface()->defaultChannel();
-    
-    // Handle channel switching commands (available in all modes)
-    if (command == "/local" || command == "/tcl") {
-        EssApplication::instance()->commandInterface()->setDefaultChannel(EssCommandInterface::ChannelLocal);
-        appendOutput("Switched to Local Tcl channel\n", OutputType::Success);
-        updatePrompt("tcl> ");
-        m_isExecutingCommand = false;
-        return;
-    } else if (command == "/ess") {
-        EssApplication::instance()->commandInterface()->setDefaultChannel(EssCommandInterface::ChannelEss);
-        appendOutput("Switched to ESS channel (port 2560)\n", OutputType::Success);
-        QString host = EssApplication::instance()->commandInterface()->currentHost();
-        updatePrompt(host.isEmpty() ? "ess> " : "ess:" + host + "> ");
-        m_isExecutingCommand = false;
-        return;
-    } else if (command == "/dserv") {
-        EssApplication::instance()->commandInterface()->setDefaultChannel(EssCommandInterface::ChannelDserv);
-        appendOutput("Switched to dserv channel (port 4620)\n", OutputType::Success);
-        QString host = EssApplication::instance()->commandInterface()->currentHost();
-        updatePrompt(host.isEmpty() ? "dserv> " : "dserv:" + host + "> ");
-        m_isExecutingCommand = false;
-        return;
-    }
-    
-    // In ESS or dserv mode, just pass everything through
-    if (currentChannel == EssCommandInterface::ChannelEss || 
-        currentChannel == EssCommandInterface::ChannelDserv) {
-        
-        // Execute command through interface
-        EssCommandInterface::CommandResult result = EssApplication::instance()->commandInterface()->executeCommand(command);
-        
-        // Display result
-        switch (result.status) {
-            case EssCommandInterface::StatusSuccess:
-                if (!result.response.isEmpty()) {
-                    appendOutput(result.response + "\n", OutputType::Info);
-                }
-                break;
-                
-            case EssCommandInterface::StatusError:
-                appendOutput("Error: " + result.error + "\n", OutputType::Error);
-                break;
-                
-            case EssCommandInterface::StatusTimeout:
-                appendOutput("Command timed out\n", OutputType::Warning);
-                break;
-                
-            case EssCommandInterface::StatusNotConnected:
-                appendOutput("Not connected. Use 'connect <host>' to connect.\n", OutputType::Warning);
-                break;
-        }
-        
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    }
-    
-    // In local mode, handle built-in terminal commands
-    if (command == "clear") {
-        clearTerminal();
-        m_isExecutingCommand = false;
-        return;
-    } else if (command == "help") {
-        showHelp();
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    } else if (command == "exit" || command == "quit") {
-        appendOutput("Exiting terminal...\n", OutputType::System);
-        m_isExecutingCommand = false;
-        // Parent should handle the actual exit
-        return;
-    } else if (command.startsWith("connect ")) {
-        QString host = command.mid(8).trimmed();
-        if (!host.isEmpty()) {
-            connectToHost(host);
-        } else {
-            appendOutput("Usage: connect <hostname>\n", OutputType::Error);
-        }
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    } else if (command == "disconnect") {
-        disconnectFromHost();
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    } else if (command.startsWith("subscribe ")) {
-        QString pattern = command.mid(10).trimmed();
-        if (!pattern.isEmpty()) {
-            if (EssApplication::instance()->commandInterface()->isConnected()) {
-                EssApplication::instance()->commandInterface()->subscribe(pattern);
-            } else {
-                appendOutput("Not connected. Use 'connect <host>' first.\n", OutputType::Error);
-            }
-        } else {
-            appendOutput("Usage: subscribe <pattern>\nExample: subscribe ain/*\n", OutputType::Error);
-        }
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    } else if (command.startsWith("unsubscribe ")) {
-        QString pattern = command.mid(12).trimmed();
-        if (!pattern.isEmpty()) {
-            EssApplication::instance()->commandInterface()->unsubscribe(pattern);
-        } else {
-            appendOutput("Usage: unsubscribe <pattern>\n", OutputType::Error);
-        }
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    } else if (command == "subscriptions") {
-        appendOutput("Active subscriptions:\n", OutputType::Info);
-        // TODO: Add method to get active subscriptions list
-        m_isExecutingCommand = false;
-        updatePrompt();
-        return;
-    }
-    
-    // Otherwise, execute as Tcl command
-    EssCommandInterface::CommandResult result = EssApplication::instance()->commandInterface()->executeCommand(command);
+    // Execute through command interface - it handles EVERYTHING
+    EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
+    EssCommandInterface::CommandResult result = cmdInterface->executeCommand(command);
     
     // Display result
     switch (result.status) {
@@ -308,7 +185,9 @@ void EssTerminalWidget::processCommand()
             break;
             
         case EssCommandInterface::StatusError:
-            appendOutput("Error: " + result.error + "\n", OutputType::Error);
+            if (!result.error.isEmpty()) {
+                appendOutput("Error: " + result.error + "\n", OutputType::Error);
+            }
             break;
             
         case EssCommandInterface::StatusTimeout:
@@ -320,93 +199,36 @@ void EssTerminalWidget::processCommand()
             break;
     }
     
-    // Log channel used
-    QString channelName = EssApplication::instance()->commandInterface()->channelName(result.channel);
-    EssConsoleManager::instance()->logDebug(
-        QString("Command executed on %1 channel").arg(channelName), 
-        "Terminal"
-    );
-    
     m_isExecutingCommand = false;
     updatePrompt();
-}
-
-void EssTerminalWidget::showHelp()
-{
-    QString currentMode = EssApplication::instance()->commandInterface()->channelName(EssApplication::instance()->commandInterface()->defaultChannel());
-    
-    QString help = R"(ESS Qt Terminal Help
-====================
-
-Channel Commands (available in all modes):
-  /local or /tcl - Switch to Local Tcl mode
-  /ess          - Switch to ESS mode (port 2560)
-  /dserv        - Switch to dserv mode (port 4620)
-
-Current Mode: )" + currentMode + R"(
-
-)";
-
-    if (EssApplication::instance()->commandInterface()->defaultChannel() == EssCommandInterface::ChannelLocal) {
-        help += R"(Local Mode Commands:
-  help              - Show this help
-  clear             - Clear terminal
-  connect <host>    - Connect to ESS/dserv host
-  disconnect        - Disconnect from host
-  exit/quit         - Exit terminal
-  
-  subscribe <pattern>   - Subscribe to datapoint updates
-  unsubscribe <pattern> - Unsubscribe from pattern
-  subscriptions        - List active subscriptions
-  
-  Any Tcl command      - Execute in local interpreter
-
-Examples:
-  connect localhost    - Connect to backends
-  subscribe ain/*      - Subscribe to analog inputs
-  set x 42            - Set Tcl variable
-  puts $x             - Print variable
-)";
-    } else if (EssApplication::instance()->commandInterface()->defaultChannel() == EssCommandInterface::ChannelEss) {
-        help += R"(ESS Mode:
-  ALL commands are sent directly to the ESS server on port 2560
-  
-  Common ESS commands:
-  get_status          - Get experiment status
-  list_systems        - List available systems  
-  load_system s p v   - Load system/protocol/variant
-  reload_system       - Reload current system
-  start              - Start experiment
-  stop               - Stop experiment
-  reset              - Reset experiment
-  set_param n v      - Set parameter value
-  get_param n        - Get parameter value
-  
-  Switch to local mode (/local) for terminal commands
-)";
-    } else if (EssApplication::instance()->commandInterface()->defaultChannel() == EssCommandInterface::ChannelDserv) {
-        help += R"(dserv Mode:
-  ALL commands are sent directly to dserv on port 4620
-  
-  Common dserv commands:
-  getkeys            - List all datapoint keys
-  get <key>          - Get datapoint value
-  set <key> <value>  - Set datapoint value
-  touch <var>        - Touch a variable
-  
-  Note: No need for % prefix in dserv mode
-  
-  Switch to local mode (/local) for terminal commands
-)";
-    }
-    
-    appendOutput(help, OutputType::Info);
 }
 
 void EssTerminalWidget::updatePrompt(const QString &newPrompt)
 {
     if (!newPrompt.isEmpty()) {
         m_prompt = newPrompt;
+    } else {
+        // Update prompt based on current channel and connection
+        EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
+        EssCommandInterface::CommandChannel channel = cmdInterface->defaultChannel();
+        QString host = cmdInterface->currentHost();
+        
+        switch (channel) {
+            case EssCommandInterface::ChannelLocal:
+                m_prompt = "tcl> ";
+                break;
+                
+            case EssCommandInterface::ChannelEss:
+                m_prompt = host.isEmpty() ? "ess> " : QString("ess:%1> ").arg(host);
+                break;
+                
+            case EssCommandInterface::ChannelDserv:
+                m_prompt = host.isEmpty() ? "dserv> " : QString("dserv:%1> ").arg(host);
+                break;
+                
+            default:
+                m_prompt = "ess> ";
+        }
     }
     
     moveCursor(QTextCursor::End);
@@ -626,6 +448,15 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
         case Qt::Key_Down:
             navigateHistory(1);
             return;
+            
+        case Qt::Key_Tab:
+            {
+                // Simple tab completion
+                QString currentWord = getCurrentCommand();
+                m_completer->setCompletionPrefix(currentWord);
+                m_completer->complete();
+                return;
+            }
     }
     
     // Ensure we're at the end for typing

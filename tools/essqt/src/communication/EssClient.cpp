@@ -78,6 +78,11 @@ bool EssClient::sendCommand(const QString& command, QString& response, int timeo
     return true;
 }
 
+bool EssClient::sendAsyncCommand(const QString& command, QString& response, int timeoutMs) {
+	QString noreply_command = QString("evalNoReply {%1}").arg(command);
+	return sendCommand(noreply_command, response, timeoutMs);
+}
+
 bool EssClient::sendMessage(const QString& message) {
     QByteArray data = message.toUtf8();
     quint32 size = data.size();

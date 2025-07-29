@@ -1,6 +1,7 @@
 // EssEventTableWidget.cpp
 #include "EssEventTableWidget.h"
 #include "EssApplication.h"
+#include "EssCommandInterface.h"
 #include "EssDataProcessor.h"
 #include "EssEventProcessor.h"
 #include "core/EssEvent.h"
@@ -10,6 +11,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QRegularExpression>
 
 
 // In EssEventTableWidget constructor, add instance tracking:
@@ -56,9 +58,9 @@ void EssEventTableWidget::setupUi()
     
     mainLayout->addLayout(statusLayout);
     
-    // Event table
-    m_tableWidget = new QTableWidget(0, 4, this);
-    QStringList headers = {"Timestamp", "Type", "Subtype", "Parameters"};
+    // Event table - NOW WITH 5 COLUMNS
+    m_tableWidget = new QTableWidget(0, 5, this);
+    QStringList headers = {"Timestamp", "Elapsed", "Type", "Subtype", "Parameters"};
     m_tableWidget->setHorizontalHeaderLabels(headers);
     m_tableWidget->setAlternatingRowColors(true);
     m_tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -68,16 +70,17 @@ void EssEventTableWidget::setupUi()
     // Column sizing
     QHeaderView *header = m_tableWidget->horizontalHeader();
     header->setSectionResizeMode(0, QHeaderView::ResizeToContents); // Timestamp
-    header->setSectionResizeMode(1, QHeaderView::Interactive);      // Type
-    header->setSectionResizeMode(2, QHeaderView::Interactive);      // Subtype
-    header->setSectionResizeMode(3, QHeaderView::Stretch);          // Parameters
+    header->setSectionResizeMode(1, QHeaderView::ResizeToContents); // Elapsed
+    header->setSectionResizeMode(2, QHeaderView::Interactive);      // Type
+    header->setSectionResizeMode(3, QHeaderView::Interactive);      // Subtype
+    header->setSectionResizeMode(4, QHeaderView::Stretch);          // Parameters
     
     mainLayout->addWidget(m_tableWidget);
     
     setLayout(mainLayout);  // For QWidget, use setLayout instead of setWidget
     
     // Set reasonable default size
-    resize(600, 400);
+    resize(700, 400);  // Slightly wider for the extra column
 }
 
 void EssEventTableWidget::connectToEventProcessor()
@@ -88,7 +91,6 @@ void EssEventTableWidget::connectToEventProcessor()
         m_eventProcessor = dataProc->eventProcessor();
         
         if (m_eventProcessor) {
-            
             connect(m_eventProcessor, &EssEventProcessor::eventReceived,
                     this, &EssEventTableWidget::onEventReceived);
             connect(m_eventProcessor, &EssEventProcessor::systemStateChanged,
@@ -97,24 +99,101 @@ void EssEventTableWidget::connectToEventProcessor()
                     this, &EssEventTableWidget::onObservationStarted);
             connect(m_eventProcessor, &EssEventProcessor::observationReset,
                     this, &EssEventTableWidget::onObservationReset);
-                    
         } else {
             qDebug() << "ERROR: Event processor is null!";
         }
     } else {
         qDebug() << "ERROR: Cannot access data processor!";
     }
+    
+    // Connect to command interface for disconnect notifications
+    if (EssApplication::instance()) {
+        auto* cmdInterface = EssApplication::instance()->commandInterface();
+        if (cmdInterface) {
+            connect(cmdInterface, &EssCommandInterface::connected,
+                    this, &EssEventTableWidget::onHostConnected);
+            connect(cmdInterface, &EssCommandInterface::disconnected,
+                    this, &EssEventTableWidget::onHostDisconnected);
+        }
+    }
 }
 
+
+void EssEventTableWidget::onHostConnected(const QString &host)
+{
+    // Clear any old data
+    clearEvents();
+    
+    // Reset observation state
+    m_currentObsStart = 0;
+    m_obsLabel->setText("No observation");
+    
+    // Update system state display to show we're connected but system is stopped
+    m_statusLabel->setText("System: Stopped");
+    m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
+}
+
+void EssEventTableWidget::onHostDisconnected()
+{
+    // Clear all events
+    clearEvents();
+    
+    // Reset observation state
+    m_currentObsStart = 0;
+    m_obsLabel->setText("No observation");
+    
+    // Reset system state display
+    m_statusLabel->setText("System: Disconnected");
+    m_statusLabel->setStyleSheet("QLabel { font-weight: bold; }");
+    
+    // Note: We don't need to disconnect signals here because the event processor
+    // will stop sending events when disconnected
+}
 void EssEventTableWidget::onEventReceived(const EssEvent &event)
 {
     addEventRow(event);
+}
+
+QString EssEventTableWidget::formatEventParams(const EssEvent &event) const
+{
+    // Get the default string representation first
+    QString paramStr = event.paramsAsString();
+    
+    // Check for empty parameters - common patterns
+    if (paramStr.isEmpty() || 
+        paramStr == "[]" || 
+        paramStr == "{}" || 
+        paramStr == "null" ||
+        paramStr == "\"\"") {
+        return "";  // Return empty string for cleaner display
+    }
+    
+    // If params is a number, format it nicely
+    if (event.params.isDouble()) {
+        double value = event.params.toDouble();
+        // Check if it's effectively an integer
+        if (value == floor(value)) {
+            return QString::number(static_cast<int>(value));
+        } else {
+            // Format with up to 3 decimal places, removing trailing zeros
+            QString formatted = QString::number(value, 'f', 3);
+            // Remove trailing zeros and decimal point if not needed
+            formatted.remove(QRegularExpression("\\.?0+$"));
+            return formatted;
+        }
+    }
+    
+    // For all other cases, return the string representation
+    return paramStr;
 }
 
 void EssEventTableWidget::addEventRow(const EssEvent &event)
 {
     int row = m_tableWidget->rowCount();
     m_tableWidget->insertRow(row);
+    
+    // Store the current event timestamp for next elapsed calculation
+    uint64_t currentTimestamp = event.timestamp;
     
     // Timestamp handling
     QString timeStr;
@@ -123,7 +202,7 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
         uint64_t relativeTime = event.timestamp - m_currentObsStart;
         timeStr = QString::number(relativeTime / 1000); // Convert to ms
     } else if (event.type == EVT_BEGINOBS) {
-        // For observation start, just show "0" instead of huge number
+        // For observation start, just show "0"
         timeStr = "0";
     } else {
         // Outside observation: show absolute time in seconds
@@ -132,7 +211,31 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
     
     QTableWidgetItem *timeItem = new QTableWidgetItem(timeStr);
     timeItem->setFlags(timeItem->flags() & ~Qt::ItemIsEditable);
+    timeItem->setData(Qt::UserRole, QVariant::fromValue(currentTimestamp)); // Store raw timestamp
     m_tableWidget->setItem(row, 0, timeItem);
+    
+    // Elapsed time since previous event
+    QString elapsedStr = "";
+    if (row > 0) {
+        // Get previous event's timestamp
+        QTableWidgetItem *prevTimeItem = m_tableWidget->item(row - 1, 0);
+        if (prevTimeItem) {
+            uint64_t prevTimestamp = prevTimeItem->data(Qt::UserRole).toULongLong();
+            if (prevTimestamp > 0 && currentTimestamp > prevTimestamp) {
+                uint64_t elapsed = currentTimestamp - prevTimestamp;
+                // Show in ms with 1 decimal place if < 1000ms, otherwise whole ms
+                if (elapsed < 1000000) { // Less than 1 second
+                    elapsedStr = QString::number(elapsed / 1000.0, 'f', 1);
+                } else {
+                    elapsedStr = QString::number(elapsed / 1000);
+                }
+            }
+        }
+    }
+    
+    QTableWidgetItem *elapsedItem = new QTableWidgetItem(elapsedStr);
+    elapsedItem->setFlags(elapsedItem->flags() & ~Qt::ItemIsEditable);
+    m_tableWidget->setItem(row, 1, elapsedItem);
     
     // Type - get the actual name from event processor
     QString typeName;
@@ -143,7 +246,7 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
     }
     QTableWidgetItem *typeItem = new QTableWidgetItem(typeName);
     typeItem->setFlags(typeItem->flags() & ~Qt::ItemIsEditable);
-    m_tableWidget->setItem(row, 1, typeItem);
+    m_tableWidget->setItem(row, 2, typeItem);
     
     // Subtype - get the actual name from event processor
     QString subtypeName;
@@ -154,12 +257,13 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
     }
     QTableWidgetItem *subtypeItem = new QTableWidgetItem(subtypeName);
     subtypeItem->setFlags(subtypeItem->flags() & ~Qt::ItemIsEditable);
-    m_tableWidget->setItem(row, 2, subtypeItem);
+    m_tableWidget->setItem(row, 3, subtypeItem);
     
     // Parameters
-    QTableWidgetItem *paramsItem = new QTableWidgetItem(event.paramsAsString());
+    QString formattedParams = formatEventParams(event);
+    QTableWidgetItem *paramsItem = new QTableWidgetItem(formattedParams);
     paramsItem->setFlags(paramsItem->flags() & ~Qt::ItemIsEditable);
-    m_tableWidget->setItem(row, 3, paramsItem);
+    m_tableWidget->setItem(row, 4, paramsItem);
     
     // Limit rows
     while (m_tableWidget->rowCount() > m_maxEvents) {
@@ -179,20 +283,25 @@ void EssEventTableWidget::onSystemStateChanged(SystemState state)
         m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: green; }");
     } else {
         m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
+        if (m_currentObsStart > 0) {
+            m_currentObsStart = 0;
+            m_obsLabel->setText("");
+        }
     }
 }
 
 void EssEventTableWidget::onObservationStarted(uint64_t timestamp)
 {
     m_currentObsStart = timestamp;
-    m_obsLabel->setText(QString("Observation started at %1").arg(timestamp));
+    // Just show "Observation started" without the confusing timestamp
+    m_obsLabel->setText("Observation period in progress");
     clearEvents(); // Clear table for new observation
 }
 
 void EssEventTableWidget::onObservationReset()
 {
     m_currentObsStart = 0;
-    m_obsLabel->setText("No observation");
+    m_obsLabel->setText("Observation period ended");
     clearEvents();
 }
 

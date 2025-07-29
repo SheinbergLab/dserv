@@ -8,6 +8,7 @@
 #include "console/EssOutputConsole.h"
 
 #include <QDebug>
+#include <QMetaObject>
 #include <tcl.h>
 
 // Static member initialization
@@ -51,82 +52,129 @@ EssCommandInterface::~EssCommandInterface()
     if (m_isConnected) {
         m_isConnected = false;
         m_activeSubscriptions.clear();
-        
-        // Clients will clean up in their destructors
     }
     
     // Shutdown Tcl
     shutdownTcl();
-    
-    // Let unique_ptrs handle cleanup
 }
 
 void EssCommandInterface::initializeTcl()
 {
     m_tclInterp = Tcl_CreateInterp();
-    if (m_tclInterp) {
-        if (Tcl_Init(m_tclInterp) != TCL_OK) {
-            EssConsoleManager::instance()->logError(
-                QString("Tcl initialization failed: %1").arg(Tcl_GetStringResult(m_tclInterp)), 
-                "CommandInterface"
-            );
-            Tcl_DeleteInterp(m_tclInterp);
-            m_tclInterp = nullptr;
-        } else {
-            EssConsoleManager::instance()->logSuccess("Local Tcl interpreter initialized", "CommandInterface");
-            
-            // Set up some basic Tcl procedures
-            const char* initScript = R"(
-                proc help {} {
-                    return "Available command channels:
-  Local Tcl: Direct Tcl commands (default for unrecognized commands)
-  ESS (port 2560): ::ess::* commands for experiment control
-  dserv (port 4620): %* commands for datapoint access
-  
-Type 'info commands' to see all Tcl commands
-Type 'ess help' to see ESS commands
-Type 'dserv help' to see dserv commands"
-                }
-                
-                proc ess {args} {
-                    if {[llength $args] == 0 || [lindex $args 0] == "help"} {
-                        return "ESS Commands (via port 2560):
-  ::ess::load_system <s> <protocol> <variant>
-  ::ess::reload_system
-  ::ess::start / ::ess::stop / ::ess::reset
-  ::ess::save_script <type> <content>
-  ::ess::set_param <n> <value>
-  ::ess::get_param <n>
-  ::ess::list_systems / list_protocols / list_variants
-  ::ess::get_status / get_system / get_protocol / get_variant"
-                    }
-                    return "Use full ::ess:: prefix for ESS commands"
-                }
-                
-                proc dserv {args} {
-                    if {[llength $args] == 0 || [lindex $args 0] == "help"} {
-                        return "dserv Commands (via port 4620):
-  %get <key> - Get datapoint value
-  %set <key> <value> - Set datapoint value
-  %getkeys [pattern] - List datapoint keys
-  %match <ip> <port> <pattern> [every] - Subscribe to pattern
-  %unmatch <ip> <port> <pattern> - Unsubscribe from pattern
-  %touch <var> - Touch a variable
-  %reg <ip> <port> <type> - Register listener
-  %unreg <ip> <port> - Unregister listener"
-                    }
-                    return "Use % prefix for dserv commands"
-                }
-            )";
-            
-            if (Tcl_Eval(m_tclInterp, initScript) != TCL_OK) {
-                EssConsoleManager::instance()->logWarning(
-                    QString("Failed to set up help commands: %1").arg(Tcl_GetStringResult(m_tclInterp)),
-                    "CommandInterface"
-                );
-            }
-        }
+    if (!m_tclInterp) {
+        EssConsoleManager::instance()->logError("Failed to create Tcl interpreter", "CommandInterface");
+        return;
     }
+    
+    if (Tcl_Init(m_tclInterp) != TCL_OK) {
+        EssConsoleManager::instance()->logError(
+            QString("Tcl initialization failed: %1").arg(Tcl_GetStringResult(m_tclInterp)), 
+            "CommandInterface"
+        );
+        Tcl_DeleteInterp(m_tclInterp);
+        m_tclInterp = nullptr;
+        return;
+    }
+    
+    EssConsoleManager::instance()->logSuccess("Local Tcl interpreter initialized", "CommandInterface");
+    
+    // Register C++ commands with Tcl
+    registerTclCommands();
+
+   // Set up initialization script with procedures only
+    const char* initScript = R"tcl(
+        # Aliases for common variations
+        interp alias {} quit {} exit
+        interp alias {} ? {} help
+        
+        # Set initial channel
+        set ess_channel "local"
+        
+        # Procedure to show current channel
+        proc channel {} {
+            global ess_channel
+            return "Current channel: $ess_channel"
+        }
+        
+        # Standard connection setup procedure
+        proc setup_connection {host} {
+            puts "Setting up connection to $host..."
+            
+            # Subscribe to essential datapoints
+            set subscriptions {
+                "ess/*"
+                "system/*" 
+                "stimdg"
+                "trialdg"
+                "eventlog/events"
+                "ain/eye_*"
+                "print"
+            }
+            
+            foreach pattern $subscriptions {
+                if {[catch {subscribe $pattern} err]} {
+                    puts "Warning: Failed to subscribe to $pattern: $err"
+                }
+            }
+            
+            # Touch variables to initialize UI
+            set touch_vars {
+                ess/systems ess/protocols ess/variants
+                ess/system ess/protocol ess/variant  
+                ess/subject ess/state ess/obs_id ess/obs_total
+                ess/block_pct_complete ess/block_pct_correct
+                ess/variant_info_json ess/param_settings
+                ess/state_table ess/rmt_cmds
+                system/hostname system/os
+            }
+            
+            # Touch all variables via ESS
+            if {[catch {ess "foreach v {$touch_vars} { dservTouch \$v }"} err]} {
+                puts "Warning: Failed to touch variables: $err"
+            }
+            
+            puts "Connection setup complete"
+        }
+        
+        # Helper procedures  
+        proc update_em_regions {} {
+            ess {for {set i 0} {$i < 8} {incr i} {ainGetRegionInfo $i}}
+        }
+        
+        proc update_touch_regions {} {
+            ess {for {set i 0} {$i < 8} {incr i} {touchGetRegionInfo $i}}
+        }
+    )tcl";
+    
+    if (Tcl_Eval(m_tclInterp, initScript) != TCL_OK) {
+        EssConsoleManager::instance()->logWarning(
+            QString("Failed to set up init script: %1").arg(Tcl_GetStringResult(m_tclInterp)),
+            "CommandInterface"
+        );
+    }
+}    
+
+
+void EssCommandInterface::registerTclCommands()
+{
+    // Connection commands
+    Tcl_CreateObjCommand(m_tclInterp, "connect", TclConnectCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "disconnect", TclDisconnectCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "status", TclStatusCmd, this, nullptr);
+    
+    // Subscription commands
+    Tcl_CreateObjCommand(m_tclInterp, "subscribe", TclSubscribeCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "unsubscribe", TclUnsubscribeCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "subscriptions", TclSubscriptionsCmd, this, nullptr);
+    
+    // UI commands
+    Tcl_CreateObjCommand(m_tclInterp, "clear", TclClearCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "about", TclAboutCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "help", TclHelpCmd, this, nullptr);
+    
+    // Backend command proxies
+    Tcl_CreateObjCommand(m_tclInterp, "ess", TclEssCmd, this, nullptr);
+    Tcl_CreateObjCommand(m_tclInterp, "dserv", TclDservCmd, this, nullptr);
 }
 
 void EssCommandInterface::shutdownTcl()
@@ -136,6 +184,335 @@ void EssCommandInterface::shutdownTcl()
         m_tclInterp = nullptr;
     }
 }
+
+// Helper to emit Qt signals from static Tcl callbacks
+void EssCommandInterface::emitSignal(EssCommandInterface *obj, const char *signal)
+{
+    // Use QMetaObject to safely emit signals from static context
+    QMetaObject::invokeMethod(obj, signal, Qt::QueuedConnection);
+}
+
+EssCommandInterface::CommandResult EssCommandInterface::executeCommand(const QString &command, CommandChannel channel)
+{
+    QString trimmedCommand = command.trimmed();
+    CommandResult result;
+    
+    if (trimmedCommand.isEmpty()) {
+        result.status = StatusSuccess;
+        return result;
+    }
+    
+    // Handle channel switches (these are special and don't go to Tcl)
+    if (trimmedCommand == "/local" || trimmedCommand == "/tcl") {
+        setDefaultChannel(ChannelLocal);
+        Tcl_SetVar(m_tclInterp, "ess_channel", "local", TCL_GLOBAL_ONLY);
+        result.status = StatusSuccess;
+        result.response = "Switched to Local Tcl channel";
+        result.channel = ChannelLocal;
+        return result;
+    } else if (trimmedCommand == "/ess") {
+        setDefaultChannel(ChannelEss);
+        Tcl_SetVar(m_tclInterp, "ess_channel", "ess", TCL_GLOBAL_ONLY);
+        result.status = StatusSuccess;
+        result.response = "Switched to ESS channel (port 2560)";
+        result.channel = ChannelEss;
+        return result;
+    } else if (trimmedCommand == "/dserv") {
+        setDefaultChannel(ChannelDserv);
+        Tcl_SetVar(m_tclInterp, "ess_channel", "dserv", TCL_GLOBAL_ONLY);
+        result.status = StatusSuccess;
+        result.response = "Switched to dserv channel (port 4620)";
+        result.channel = ChannelDserv;
+        return result;
+    }
+    
+    // Special handling for exit (emit signal but also return success)
+    if (trimmedCommand == "exit" || trimmedCommand == "quit") {
+      //        emitSignal(this, "quitRequested");
+      result.status = StatusSuccess;
+      result.response = "";
+        return result;
+    }
+    
+    // Route based on current channel
+    if (m_defaultChannel == ChannelEss) {
+        // In ESS mode, send directly to ESS backend
+        return executeEss(trimmedCommand);
+    } else if (m_defaultChannel == ChannelDserv) {
+        // In dserv mode, send directly to dserv backend
+        return executeDserv(trimmedCommand);
+    } else {
+        // In local mode, everything goes through Tcl
+        return executeLocalTcl(trimmedCommand);
+    }
+}
+
+// Tcl command implementations
+// All Tcl command implementations simplified - no QMetaObject needed
+
+int EssCommandInterface::TclConnectCmd(ClientData clientData, Tcl_Interp *interp, 
+                                       int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "hostname");
+        return TCL_ERROR;
+    }
+    
+    QString host = Tcl_GetString(objv[1]);
+    
+    if (self->connectToHost(host)) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Connected", -1));
+        return TCL_OK;
+    } else {
+        Tcl_SetResult(interp, "Connection failed", TCL_STATIC);
+        return TCL_ERROR;
+    }
+}
+
+int EssCommandInterface::TclDisconnectCmd(ClientData clientData, Tcl_Interp *interp,
+                                         int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    // Get current host before disconnecting for cleanup
+    QString currentHost = self->currentHost();
+    
+    // Call cleanup procedure if connected
+    if (!currentHost.isEmpty()) {
+        QString cleanupCmd = QString("if {[info procs cleanup_connection] ne \"\"} { cleanup_connection {%1} }").arg(currentHost);
+        Tcl_Eval(interp, cleanupCmd.toUtf8().constData());
+    }
+    
+    self->disconnectFromHost();
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclSubscribeCmd(ClientData clientData, Tcl_Interp *interp,
+                                        int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    if (objc < 2 || objc > 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "pattern ?every?");
+        return TCL_ERROR;
+    }
+    
+    QString pattern = Tcl_GetString(objv[1]);
+    int every = 1;
+    
+    if (objc == 3) {
+        if (Tcl_GetIntFromObj(interp, objv[2], &every) != TCL_OK) {
+            return TCL_ERROR;
+        }
+    }
+    
+    if (!self->isConnected()) {
+        Tcl_SetResult(interp, "Not connected", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (self->subscribe(pattern, every)) {
+        return TCL_OK;
+    } else {
+        Tcl_SetResult(interp, "Subscribe failed", TCL_STATIC);
+        return TCL_ERROR;
+    }
+}
+
+int EssCommandInterface::TclUnsubscribeCmd(ClientData clientData, Tcl_Interp *interp,
+                                          int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "pattern");
+        return TCL_ERROR;
+    }
+    
+    QString pattern = Tcl_GetString(objv[1]);
+    
+    if (self->unsubscribe(pattern)) {
+        return TCL_OK;
+    } else {
+        Tcl_SetResult(interp, "Unsubscribe failed", TCL_STATIC);
+        return TCL_ERROR;
+    }
+}
+
+int EssCommandInterface::TclSubscriptionsCmd(ClientData clientData, Tcl_Interp *interp,
+                                            int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    QStringList subs = self->activeSubscriptions();
+    
+    if (subs.isEmpty()) {
+        Tcl_SetResult(interp, "No active subscriptions", TCL_STATIC);
+    } else {
+        QString result = "Active subscriptions:\n";
+        for (const QString &sub : subs) {
+            result += "  " + sub + "\n";
+        }
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(result.toUtf8().data(), -1));
+    }
+    
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclStatusCmd(ClientData clientData, Tcl_Interp *interp,
+                                     int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    QString status;
+    if (self->isConnected()) {
+        status = QString("Connected to %1").arg(self->currentHost());
+        
+        QStringList subs = self->activeSubscriptions();
+        if (!subs.isEmpty()) {
+            status += QString("\nActive subscriptions: %1").arg(subs.count());
+        }
+    } else {
+        status = "Not connected";
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(status.toUtf8().data(), -1));
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclClearCmd(ClientData clientData, Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    emit self->clearRequested();
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclAboutCmd(ClientData clientData, Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    emit self->aboutRequested();
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclHelpCmd(ClientData clientData, Tcl_Interp *interp,
+                                   int objc, Tcl_Obj *const objv[])
+{
+    const char *helpText = R"(ESS Qt Terminal Commands
+========================
+
+Connection Commands:
+  connect <host>      - Connect to ESS/dserv host
+  disconnect          - Disconnect from current host
+  status              - Show connection status
+
+Subscription Commands:
+  subscribe <pattern> ?every?  - Subscribe to datapoint pattern
+  unsubscribe <pattern>        - Unsubscribe from pattern
+  subscriptions               - List active subscriptions
+
+UI Commands:
+  clear               - Clear terminal
+  about               - Show about dialog
+  help                - Show this help
+  exit/quit           - Exit application
+
+Backend Commands:
+  ess <command>       - Send command to ESS (port 2560)
+  dserv <command>     - Send command to dserv (port 4620)
+
+Channel Switching:
+  /local or /tcl      - Switch to local Tcl mode
+  /ess                - Switch to ESS mode
+  /dserv              - Switch to dserv mode
+
+Examples:
+  connect localhost
+  subscribe "ain/*"
+  ess get_status
+  dserv %getkeys
+  
+You can also use any Tcl command in local mode.)";
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(helpText, -1));
+    
+    // Also emit signal for other widgets if needed
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    emit self->helpRequested(QString(helpText));
+    
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclEssCmd(ClientData clientData, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    if (objc < 2) {
+        Tcl_SetResult(interp, "Usage: ess command ?args ...?", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    // Reconstruct the ESS command
+    QString essCommand;
+    for (int i = 1; i < objc; ++i) {
+        if (i > 1) essCommand += " ";
+        essCommand += Tcl_GetString(objv[i]);
+    }
+    
+    CommandResult result = self->executeEss(essCommand);
+    
+    if (result.status == StatusSuccess) {
+        if (!result.response.isEmpty()) {
+            Tcl_SetObjResult(interp, Tcl_NewStringObj(result.response.toUtf8().data(), -1));
+        }
+        return TCL_OK;
+    } else {
+        QString error = result.error.isEmpty() ? "ESS command failed" : result.error;
+        Tcl_SetResult(interp, error.toUtf8().data(), TCL_VOLATILE);
+        return TCL_ERROR;
+    }
+}
+
+int EssCommandInterface::TclDservCmd(ClientData clientData, Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *const objv[])
+{
+    auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    if (objc < 2) {
+        Tcl_SetResult(interp, "Usage: dserv command ?args ...?", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    // Reconstruct the dserv command with % prefix if not present
+    QString dservCommand;
+    QString firstArg = Tcl_GetString(objv[1]);
+    if (!firstArg.startsWith("%")) {
+        dservCommand = "%";
+    }
+    
+    for (int i = 1; i < objc; ++i) {
+        if (i > 1) dservCommand += " ";
+        dservCommand += Tcl_GetString(objv[i]);
+    }
+    
+    CommandResult result = self->executeDserv(dservCommand);
+    
+    if (result.status == StatusSuccess) {
+        if (!result.response.isEmpty()) {
+            Tcl_SetObjResult(interp, Tcl_NewStringObj(result.response.toUtf8().data(), -1));
+        }
+        return TCL_OK;
+    } else {
+        QString error = result.error.isEmpty() ? "dserv command failed" : result.error;
+        Tcl_SetResult(interp, error.toUtf8().data(), TCL_VOLATILE);
+        return TCL_ERROR;
+    }
+}
+
 
 bool EssCommandInterface::connectToHost(const QString &host)
 {
@@ -187,6 +564,17 @@ bool EssCommandInterface::connectToHost(const QString &host)
         if (dservConnected && startListener()) {
             EssConsoleManager::instance()->logSuccess(
                 QString("Listener started on port %1").arg(listenerPort()), 
+                "CommandInterface"
+            );
+        }
+        
+        // Call the Tcl setup procedure if it exists
+        QString setupCmd = QString("if {[info procs setup_connection] ne \"\"} { setup_connection {%1} }").arg(host);
+        int result = Tcl_Eval(m_tclInterp, setupCmd.toUtf8().constData());
+        
+        if (result != TCL_OK) {
+            EssConsoleManager::instance()->logWarning(
+                QString("Connection setup script failed: %1").arg(Tcl_GetStringResult(m_tclInterp)),
                 "CommandInterface"
             );
         }
@@ -271,47 +659,6 @@ EssCommandInterface::CommandChannel EssCommandInterface::detectChannel(const QSt
     return ChannelLocal;
 }
 
-EssCommandInterface::CommandResult EssCommandInterface::executeCommand(const QString &command, CommandChannel channel)
-{
-    QString trimmedCommand = command.trimmed();
-    if (trimmedCommand.isEmpty()) {
-        return {StatusSuccess, "", "", channel};
-    }
-    
-    // Use the specified channel or the default channel
-    if (channel == ChannelAuto) {
-        channel = m_defaultChannel;
-    }
-    
-    // If still auto, default to local Tcl
-    if (channel == ChannelAuto) {
-        channel = ChannelLocal;
-    }
-    
-    CommandResult result;
-    result.channel = channel;
-    
-    switch (channel) {
-        case ChannelLocal:
-            result = executeLocalTcl(trimmedCommand);
-            break;
-            
-        case ChannelEss:
-            result = executeEss(trimmedCommand);
-            break;
-            
-        case ChannelDserv:
-            result = executeDserv(trimmedCommand);
-            break;
-            
-        default:
-            result.status = StatusError;
-            result.error = "Unknown command channel";
-    }
-    
-    return result;
-}
-
 void EssCommandInterface::executeCommandAsync(const QString &command, CommandChannel channel)
 {
     // For now, just execute synchronously and emit result
@@ -368,6 +715,32 @@ EssCommandInterface::CommandResult EssCommandInterface::executeEss(const QString
     
     return result;
 }
+
+EssCommandInterface::CommandResult EssCommandInterface::executeEssAsync(const QString &command)
+{
+    CommandResult result;
+    result.channel = ChannelEss;
+    
+    if (!m_essClient->isConnected()) {
+        result.status = StatusNotConnected;
+        result.error = "Not connected to ESS service";
+        return result;
+    }
+    
+    QString response;
+    bool success = m_essClient->sendAsyncCommand(command, response, 5000);
+    
+    if (success) {
+        result.status = StatusSuccess;
+        result.response = response;
+    } else {
+        result.status = StatusError;
+        result.error = "Failed to execute ESS command";
+    }
+    
+    return result;
+}
+
 
 EssCommandInterface::CommandResult EssCommandInterface::executeDserv(const QString &command)
 {
@@ -586,7 +959,6 @@ void EssCommandInterface::clearSubscriptions()
     EssConsoleManager::instance()->logInfo("Cleared all subscriptions", "CommandInterface");
 }
 
-// In EssCommandInterface::onEventReceived, update the logging:
 void EssCommandInterface::onEventReceived(const QString &event)
 {
     // Parse the event using DservEventParser
@@ -595,51 +967,14 @@ void EssCommandInterface::onEventReceived(const QString &event)
     if (parsedEvent.has_value()) {
         const DservEvent &evt = parsedEvent.value();
         
-        // Emit the parsed event
+        // Simply emit the parsed event - let interested components handle it
         emit datapointUpdated(evt.name, evt.data, evt.timestamp);
         
-        // Special logging for eventlog/events
-        if (evt.name == "eventlog/events" && evt.data.userType() == QMetaType::QVariantMap) {
-            QVariantMap eventMap = evt.data.toMap();
-            if (eventMap.contains("e_type") && eventMap.contains("e_subtype")) {
-                uint8_t type = eventMap["e_type"].toUInt();
-                uint8_t subtype = eventMap["e_subtype"].toUInt();
-                QString params = eventMap.value("e_params", "").toString();
-                
-                EssConsoleManager::instance()->logInfo(
-                    QString("Event[%1:%2] %3").arg(type).arg(subtype).arg(params), 
-                    "Event"
-                );
-            } else {
-                EssConsoleManager::instance()->logInfo(
-                    QString("Datapoint: %1 = [Event Data]").arg(evt.name), 
-                    "Listener"
-                );
-            }
-        } else if (evt.name.contains("eye") || evt.name.contains("ain")) {
-            EssConsoleManager::instance()->logDebug(
-                QString("Datapoint: %1 = %2").arg(evt.name, evt.data.toString()), 
-                "Listener"
-            );
-        } else {
-            // For other datapoints, show the value
-            QString valueStr;
-            if (evt.data.userType() == QMetaType::QVariantMap) {
-                valueStr = "[Map Data]";
-            } else {
-                valueStr = evt.data.toString();
-            }
-            
-            EssConsoleManager::instance()->logInfo(
-                QString("Datapoint: %1 = %2").arg(evt.name, valueStr), 
-                "Listener"
-            );
-        }
     } else {
-        qDebug() << "Failed to parse event";
-        EssConsoleManager::instance()->logWarning(
-            QString("Failed to parse event: %1").arg(event), 
-            "Listener"
+        // Only log actual parse errors, not every event
+        EssConsoleManager::instance()->logError(
+            QString("Failed to parse event from listener"), 
+            "CommandInterface"
         );
     }
 }

@@ -147,6 +147,74 @@ bool DservClient::sendCommand(const QString& host, quint16 port, const QString& 
     return result.networkSuccess;
 }
 
+
+bool DservClient::testConnection(const QString& host, quint16 port, int timeoutMs) {
+    QTcpSocket socket;
+    
+    socket.connectToHost(host, port);
+    
+    if (!socket.waitForConnected(timeoutMs)) {
+        return false;
+    }
+    
+    // Successfully connected
+    socket.disconnectFromHost();
+    if (socket.state() != QAbstractSocket::UnconnectedState) {
+        socket.waitForDisconnected(200);
+    }
+    
+    return true;
+}
+
+bool DservClient::isHostAvailable(const QString& host, quint16 port, int timeoutMs) {
+    // First test basic connectivity
+    if (!testConnection(host, port, timeoutMs)) {
+        return false;
+    }
+    
+    // Then verify it's actually dserv by sending %version
+    // We'll create a temporary socket with custom timeout for this test
+    QTcpSocket socket;
+    socket.connectToHost(host, port);
+    
+    if (!socket.waitForConnected(timeoutMs)) {
+        return false;
+    }
+    
+    // Send version command
+    QString command = "%version\n";
+    QByteArray msg = command.toUtf8();
+    qint64 bytesWritten = socket.write(msg);
+    
+    if (bytesWritten != msg.size()) {
+        socket.disconnectFromHost();
+        return false;
+    }
+    
+    if (!socket.waitForBytesWritten(timeoutMs)) {
+        socket.disconnectFromHost();
+        return false;
+    }
+    
+    if (!socket.waitForReadyRead(timeoutMs)) {
+        socket.disconnectFromHost();
+        return false;
+    }
+    
+    QByteArray responseData = socket.readAll();
+    QString response = QString::fromUtf8(responseData).trimmed();
+    
+    socket.disconnectFromHost();
+    if (socket.state() != QAbstractSocket::UnconnectedState) {
+        socket.waitForDisconnected(200);
+    }
+    
+    // Check if we got a valid response
+    // Response format should be "1 <version>" for success
+    return !response.isEmpty() && (response.startsWith("1 ") || response == "1");
+}
+
+
 bool DservClient::getValue(const QString& host, const QString& key, QString& value, quint16 dservPort) {
     QString cmd = QString("%get %1").arg(key);
     DservResponse result = executeCommand(host, dservPort, cmd, QString("Get value for key '%1'").arg(key));

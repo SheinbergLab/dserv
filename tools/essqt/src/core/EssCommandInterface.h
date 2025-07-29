@@ -11,8 +11,17 @@ class DservListener;
 class DservEventParser;
 class QThread;
 
-// Forward declare for Tcl
+// Forward declare Tcl types for MOC
 struct Tcl_Interp;
+struct Tcl_Obj;
+
+// Include Tcl header only for non-MOC builds
+#ifndef Q_MOC_RUN
+#include <tcl.h>
+#else
+// Define Tcl types for MOC
+typedef void *ClientData;
+#endif
 
 class EssCommandInterface : public QObject
 {
@@ -59,10 +68,17 @@ public:
     bool subscribe(const QString &pattern, int every = 1);
     bool unsubscribe(const QString &pattern);
     void clearSubscriptions();
+    QStringList activeSubscriptions() const { return m_activeSubscriptions; }
 
     // Command execution
     CommandResult executeCommand(const QString &command, CommandChannel channel = ChannelAuto);
-    
+
+  // Execute on specific channels
+    CommandResult executeLocalTcl(const QString &command);
+    CommandResult executeDserv(const QString &command);
+    CommandResult executeEss(const QString &command);
+    CommandResult executeEssAsync(const QString &command);
+  
     // Async command execution
     void executeCommandAsync(const QString &command, CommandChannel channel = ChannelAuto);
 
@@ -78,11 +94,19 @@ public:
     QStringList getAvailableCommands() const;
     QStringList getTclCommands() const;
 
+  
+
 signals:
     void connected(const QString &host);
     void disconnected();
     void commandCompleted(const CommandResult &result);
     void connectionError(const QString &error);
+    
+    // UI action requests
+    void clearRequested();
+    void aboutRequested();
+    void quitRequested();
+    void helpRequested(const QString &helpText);
     
     // Datapoint updates from listener
     void datapointUpdated(const QString &name, const QVariant &value, qint64 timestamp);
@@ -94,11 +118,23 @@ private:
     // Initialize Tcl interpreter
     void initializeTcl();
     void shutdownTcl();
+    void registerTclCommands();
 
-    // Execute on specific channels
-    CommandResult executeLocalTcl(const QString &command);
-    CommandResult executeDserv(const QString &command);
-    CommandResult executeEss(const QString &command);
+    // Static Tcl command callbacks
+    static int TclConnectCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclDisconnectCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclSubscribeCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclUnsubscribeCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclSubscriptionsCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclStatusCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclClearCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclAboutCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclHelpCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclEssCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclDservCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    
+    // Helper to emit signals from static context
+    static void emitSignal(EssCommandInterface *obj, const char *signal);
 
     // Member variables
     std::unique_ptr<DservClient> m_dservClient;

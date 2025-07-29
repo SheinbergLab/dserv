@@ -6,7 +6,6 @@
 #include "console/EssOutputConsole.h"  // Get OutputType from here
 
 class CommandHistory;
-class EssCommandInterface;
 class QCompleter;
 
 class EssTerminalWidget : public QPlainTextEdit
@@ -16,11 +15,6 @@ class EssTerminalWidget : public QPlainTextEdit
 public:
     explicit EssTerminalWidget(QWidget *parent = nullptr);
     ~EssTerminalWidget();
-    
-    // Connection management
-    bool connectToHost(const QString &host);
-    void disconnectFromHost();
-    bool isConnected() const;
     
     // Execute command programmatically
     void executeCommand(const QString &command);
@@ -33,8 +27,8 @@ public:
     void clearTerminal();
 
 signals:
-    void commandExecuted(const QString &command);
-    void commandResult(const QString &result, bool isError);
+    // Optional: emit status messages for status bar
+    void statusMessage(const QString &message, int timeout = 0);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -52,7 +46,6 @@ private:
     void setupCommandInterface();
     void setupCompleter();
     void updateCompletionList();
-    void showHelp();
     void appendOutput(const QString &text, OutputType type = OutputType::Info);
     void ensureCursorInEditableArea();
     QString getCurrentCommand() const;
@@ -65,6 +58,5 @@ private:
     int m_currentLineStart;
     
     std::unique_ptr<CommandHistory> m_history;
-    std::unique_ptr<EssCommandInterface> m_commandInterface;
     QCompleter *m_completer;
 };
