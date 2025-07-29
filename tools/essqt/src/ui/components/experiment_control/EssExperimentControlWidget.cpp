@@ -754,6 +754,22 @@ void EssExperimentControlWidget::updateButtonStates()
         m_reloadVariantBtn->setEnabled(false);
         m_saveSettingsBtn->setEnabled(false);
         m_resetSettingsBtn->setEnabled(false);
+        
+        // Also disable all parameter inputs
+        for (int i = 0; i < m_parameterLayout->rowCount(); ++i) {
+            QLayoutItem* item = m_parameterLayout->itemAt(i, QFormLayout::FieldRole);
+            if (item && item->widget()) {
+                item->widget()->setEnabled(false);
+            }
+        }
+        
+        // And disable all variant option combos
+        for (int i = 0; i < m_variantOptionsLayout->rowCount(); ++i) {
+            QLayoutItem* item = m_variantOptionsLayout->itemAt(i, QFormLayout::FieldRole);
+            if (item && item->widget()) {
+                item->widget()->setEnabled(false);
+            }
+        }
     }
     else {
         // Normal state handling
@@ -771,6 +787,22 @@ void EssExperimentControlWidget::updateButtonStates()
         m_reloadVariantBtn->setEnabled(configEnabled);
         m_saveSettingsBtn->setEnabled(configEnabled);
         m_resetSettingsBtn->setEnabled(configEnabled);
+        
+        // Re-enable all parameter inputs when not running
+        for (int i = 0; i < m_parameterLayout->rowCount(); ++i) {
+            QLayoutItem* item = m_parameterLayout->itemAt(i, QFormLayout::FieldRole);
+            if (item && item->widget()) {
+                item->widget()->setEnabled(!m_isRunning);
+            }
+        }
+        
+        // Re-enable all variant option combos when not running
+        for (int i = 0; i < m_variantOptionsLayout->rowCount(); ++i) {
+            QLayoutItem* item = m_variantOptionsLayout->itemAt(i, QFormLayout::FieldRole);
+            if (item && item->widget()) {
+                item->widget()->setEnabled(!m_isRunning);
+            }
+        }
     }
 }
 
