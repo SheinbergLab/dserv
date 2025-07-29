@@ -379,10 +379,40 @@ void EssExperimentControlWidget::processEssDatapoint(const QString &name, const 
         updateButtonStates();
         updateStatusDisplay();
     }
-    else if (name == "ess/loading_progress") {
-        // Handle progress updates from backend
-        m_loadingProgress = value.toString();
+    else if (name == "ess/loading_operation_id") {
+        // A loading operation has started
+        m_isLoading = true;
+        updateButtonStates();
         updateStatusDisplay();
+    }
+    else if (name == "ess/loading_progress") {
+        // Parse JSON progress data
+        QJsonParseError error;
+        QJsonDocument doc = QJsonDocument::fromJson(value.toString().toUtf8(), &error);
+        if (error.error == QJsonParseError::NoError && doc.isObject()) {
+            QJsonObject obj = doc.object();
+            QString stage = obj["stage"].toString();
+            QString message = obj["message"].toString();
+            int percent = obj["percent"].toInt();
+            
+            // Update loading state based on stage
+            if (stage == "starting") {
+                m_isLoading = true;
+            } else if (stage == "complete") {
+                m_isLoading = false;
+                m_loadingProgress.clear();
+            }
+            
+            // Format progress message
+            if (percent > 0) {
+                m_loadingProgress = QString("%1% - %2").arg(percent).arg(message);
+            } else {
+                m_loadingProgress = message;
+            }
+            
+            updateButtonStates();
+            updateStatusDisplay();
+        }
     }
     else if (name == "ess/obs_id") {
         m_currentObsId = value.toInt();
@@ -571,7 +601,8 @@ connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         auto result = cmdInterface->executeEss(cmd);
         if (result.status == EssCommandInterface::StatusSuccess) {
             EssConsoleManager::instance()->logSuccess("Command succeeded, reloading variant", "ExperimentControl");
-            cmdInterface->executeEss("::ess::reload_variant");
+            // Use async for reload to show progress
+            cmdInterface->executeEssAsync("::ess::reload_variant");
         } else {
             EssConsoleManager::instance()->logError(
                 QString("Command failed: %1").arg(result.error), 
@@ -859,10 +890,10 @@ void EssExperimentControlWidget::onSystemComboChanged(int index)
         QString cmd = QString("::ess::load_system {%1}").arg(newSystem);
         
         // Use async execution for loading
-        auto result = cmdInterface->executeEssAsync(cmd);
+        cmdInterface->executeEssAsync(cmd);
         
         // The async call returns immediately
-        // State updates will come through datapoints
+        // Loading state will be tracked via ess/loading_operation_id and ess/loading_progress
         emit systemChanged(newSystem);
         EssConsoleManager::instance()->logInfo(
             QString("Loading system: %1").arg(newSystem), "ExperimentControl");
@@ -883,7 +914,7 @@ void EssExperimentControlWidget::onProtocolComboChanged(int index)
                       .arg(newProtocol);
         
         // Use async execution for loading
-        auto result = cmdInterface->executeEssAsync(cmd);
+        cmdInterface->executeEssAsync(cmd);
         
         emit protocolChanged(newProtocol);
         EssConsoleManager::instance()->logInfo(
@@ -906,7 +937,7 @@ void EssExperimentControlWidget::onVariantComboChanged(int index)
                       .arg(newVariant);
         
         // Use async execution for loading
-        auto result = cmdInterface->executeEssAsync(cmd);
+        cmdInterface->executeEssAsync(cmd);
         
         emit variantChanged(newVariant);
         EssConsoleManager::instance()->logInfo(
@@ -1090,9 +1121,9 @@ void EssExperimentControlWidget::updateVariantOptions(const QJsonObject &variant
                     .arg(values[index]);
                 cmdInterface->executeEss(cmd);
                 
-                // Auto-reload variant if enabled
+                // Auto-reload variant if enabled using async
                 // (you could add a checkbox for this feature)
-                cmdInterface->executeEss("::ess::reload_variant");
+                cmdInterface->executeEssAsync("::ess::reload_variant");
             }
         });
         
@@ -1151,8 +1182,8 @@ void EssExperimentControlWidget::onResetSettingsClicked()
         if (result.status == EssCommandInterface::StatusSuccess) {
             emit resetSettingsRequested();
             EssConsoleManager::instance()->logSuccess("Settings reset", "ExperimentControl");
-            // Reload variant to refresh parameters
-            cmdInterface->executeEss("::ess::reload_variant");
+            // Reload variant to refresh parameters using async
+            cmdInterface->executeEssAsync("::ess::reload_variant");
         } else {
             EssConsoleManager::instance()->logError("Failed to reset settings: " + result.error,
                                                    "ExperimentControl");

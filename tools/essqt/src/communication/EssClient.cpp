@@ -74,7 +74,6 @@ bool EssClient::sendCommand(const QString& command, QString& response, int timeo
         qDebug() << "[sendCommand] Failed to receive response";
         return false;
     }
-
     return true;
 }
 
