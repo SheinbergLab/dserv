@@ -29,6 +29,8 @@ enum SpecialEventType {
     EVT_NAMESET = 1,        // Sets event type name
     EVT_FILEIO = 2,         // File I/O event
     EVT_USER = 3,           // User control events
+    EVT_TRACE = 4,
+    EVT_PARAM = 5,
     EVT_SUBTYPE_NAMES = 6,  // Sets subtype names
     EVT_SYSTEM_CHANGES = 18,
     EVT_BEGINOBS = 19,      // Begin observation
