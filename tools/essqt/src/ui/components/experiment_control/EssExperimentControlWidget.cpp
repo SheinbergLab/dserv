@@ -25,6 +25,7 @@
 EssExperimentControlWidget::EssExperimentControlWidget(QWidget *parent)
     : QWidget(parent)
     , m_isRunning(false)
+    , m_isLoading(false)
     , m_currentObsId(0)
     , m_totalObs(0)
     , m_observationActive(false)
@@ -108,6 +109,14 @@ void EssExperimentControlWidget::createStatusSection()
     statusLayout->addWidget(m_statusLabel);
     statusLayout->addStretch();
     
+    // Progress row
+    QHBoxLayout *progressLayout = new QHBoxLayout();
+    progressLayout->addWidget(new QLabel("Progress:"));
+    m_progressLabel = new QLabel("");
+    m_progressLabel->setVisible(false);  // Hidden by default
+    progressLayout->addWidget(m_progressLabel);
+    progressLayout->addStretch();
+    
     // Observation count row
     QHBoxLayout *obsLayout = new QHBoxLayout();
     obsLayout->addWidget(new QLabel("Observation:"));
@@ -121,6 +130,7 @@ void EssExperimentControlWidget::createStatusSection()
     obsLayout->addStretch();
     
     layout->addLayout(statusLayout);
+    layout->addLayout(progressLayout);  // Add progress layout
     layout->addLayout(obsLayout);
 }
 
@@ -365,7 +375,14 @@ void EssExperimentControlWidget::processEssDatapoint(const QString &name, const 
     else if (name == "ess/state") {
         QString state = value.toString();
         m_isRunning = (state == "Running" || state == "RUNNING");
+        m_isLoading = (state == "Loading" || state == "LOADING");
         updateButtonStates();
+        updateStatusDisplay();
+    }
+    else if (name == "ess/loading_progress") {
+        // Handle progress updates from backend
+        m_loadingProgress = value.toString();
+        updateStatusDisplay();
     }
     else if (name == "ess/obs_id") {
         m_currentObsId = value.toInt();
@@ -626,7 +643,9 @@ void EssExperimentControlWidget::resetToDisconnectedState()
     
     // Reset state variables
     m_isRunning = false;
+    m_isLoading = false;
     m_currentStatus.clear();
+    m_loadingProgress.clear();
     m_currentObsId = 0;
     m_totalObs = 0;
     m_observationActive = false;
@@ -641,6 +660,7 @@ void EssExperimentControlWidget::resetToDisconnectedState()
     m_statusLabel->setStyleSheet("QLabel { color: #666; font-weight: bold; }");
     m_obsCountLabel->setText("--/--");
     m_obsIndicator->setStyleSheet("QLabel { color: gray; }");
+    m_progressLabel->setVisible(false);
     
     // Disable all controls
     m_startBtn->setEnabled(false);
@@ -690,20 +710,59 @@ void EssExperimentControlWidget::setComboBoxItems(QComboBox *combo, const QStrin
 
 void EssExperimentControlWidget::updateButtonStates()
 {
-    m_startBtn->setEnabled(!m_isRunning);
-    m_stopBtn->setEnabled(m_isRunning);
-    m_resetBtn->setEnabled(!m_isRunning);
+    // During loading, disable all controls except progress indication
+    if (m_isLoading) {
+        m_startBtn->setEnabled(false);
+        m_stopBtn->setEnabled(false);
+        m_resetBtn->setEnabled(false);
+        m_systemCombo->setEnabled(false);
+        m_protocolCombo->setEnabled(false);
+        m_variantCombo->setEnabled(false);
+        m_reloadSystemBtn->setEnabled(false);
+        m_reloadProtocolBtn->setEnabled(false);
+        m_reloadVariantBtn->setEnabled(false);
+        m_saveSettingsBtn->setEnabled(false);
+        m_resetSettingsBtn->setEnabled(false);
+    }
+    else {
+        // Normal state handling
+        m_startBtn->setEnabled(!m_isRunning);
+        m_stopBtn->setEnabled(m_isRunning);
+        m_resetBtn->setEnabled(!m_isRunning);
+        
+        // Re-enable config controls when not running and not loading
+        bool configEnabled = !m_isRunning && !m_isLoading;
+        m_systemCombo->setEnabled(configEnabled);
+        m_protocolCombo->setEnabled(configEnabled);
+        m_variantCombo->setEnabled(configEnabled);
+        m_reloadSystemBtn->setEnabled(configEnabled);
+        m_reloadProtocolBtn->setEnabled(configEnabled);
+        m_reloadVariantBtn->setEnabled(configEnabled);
+        m_saveSettingsBtn->setEnabled(configEnabled);
+        m_resetSettingsBtn->setEnabled(configEnabled);
+    }
 }
 
 void EssExperimentControlWidget::updateStatusDisplay()
 {
-    // Update status label based on m_isRunning state
-    if (m_isRunning) {
+    // Update status label based on state
+    if (m_isLoading) {
+        m_statusLabel->setText("Loading...");
+        m_statusLabel->setStyleSheet("QLabel { color: #f39c12; font-weight: bold; }");  // Orange
+        
+        // Show progress
+        m_progressLabel->setVisible(true);
+        m_progressLabel->setText(m_loadingProgress);
+    }
+    else if (m_isRunning) {
         m_statusLabel->setText("Running");
         m_statusLabel->setStyleSheet("QLabel { color: #28c814; font-weight: bold; }");
-    } else {
+        m_progressLabel->setVisible(false);
+    } 
+    else {
         m_statusLabel->setText("Stopped");
         m_statusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
+        m_progressLabel->setVisible(false);
     }
     
     // Update observation count (show 1-based index)
@@ -798,18 +857,15 @@ void EssExperimentControlWidget::onSystemComboChanged(int index)
     if (cmdInterface && cmdInterface->isConnected()) {
         // When system changes, we need to reload with the new system
         QString cmd = QString("::ess::load_system {%1}").arg(newSystem);
-        auto result = cmdInterface->executeEss(cmd);
         
-        if (result.status == EssCommandInterface::StatusSuccess) {
-            emit systemChanged(newSystem);
-            EssConsoleManager::instance()->logInfo(
-                QString("System changed to: %1").arg(newSystem), "ExperimentControl");
-        } else {
-            // Revert the combo box
-            setComboBoxValue(m_systemCombo, m_pendingSystem);
-            EssConsoleManager::instance()->logError(
-                QString("Failed to change system: %1").arg(result.error), "ExperimentControl");
-        }
+        // Use async execution for loading
+        auto result = cmdInterface->executeEssAsync(cmd);
+        
+        // The async call returns immediately
+        // State updates will come through datapoints
+        emit systemChanged(newSystem);
+        EssConsoleManager::instance()->logInfo(
+            QString("Loading system: %1").arg(newSystem), "ExperimentControl");
     }
 }
 
@@ -825,17 +881,13 @@ void EssExperimentControlWidget::onProtocolComboChanged(int index)
         QString cmd = QString("::ess::load_system {%1} {%2}")
                       .arg(currentSystem())
                       .arg(newProtocol);
-        auto result = cmdInterface->executeEss(cmd);
         
-        if (result.status == EssCommandInterface::StatusSuccess) {
-            emit protocolChanged(newProtocol);
-            EssConsoleManager::instance()->logInfo(
-                QString("Protocol changed to: %1").arg(newProtocol), "ExperimentControl");
-        } else {
-            setComboBoxValue(m_protocolCombo, m_pendingProtocol);
-            EssConsoleManager::instance()->logError(
-                QString("Failed to change protocol: %1").arg(result.error), "ExperimentControl");
-        }
+        // Use async execution for loading
+        auto result = cmdInterface->executeEssAsync(cmd);
+        
+        emit protocolChanged(newProtocol);
+        EssConsoleManager::instance()->logInfo(
+            QString("Loading protocol: %1").arg(newProtocol), "ExperimentControl");
     }
 }
 
@@ -852,17 +904,13 @@ void EssExperimentControlWidget::onVariantComboChanged(int index)
                       .arg(currentSystem())
                       .arg(currentProtocol()) 
                       .arg(newVariant);
-        auto result = cmdInterface->executeEss(cmd);
         
-        if (result.status == EssCommandInterface::StatusSuccess) {
-            emit variantChanged(newVariant);
-            EssConsoleManager::instance()->logInfo(
-                QString("Variant changed to: %1").arg(newVariant), "ExperimentControl");
-        } else {
-            setComboBoxValue(m_variantCombo, m_pendingVariant);
-            EssConsoleManager::instance()->logError(
-                QString("Failed to change variant: %1").arg(result.error), "ExperimentControl");
-        }
+        // Use async execution for loading
+        auto result = cmdInterface->executeEssAsync(cmd);
+        
+        emit variantChanged(newVariant);
+        EssConsoleManager::instance()->logInfo(
+            QString("Loading variant: %1").arg(newVariant), "ExperimentControl");
     }
 }
 

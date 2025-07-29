@@ -29,6 +29,7 @@ public:
     
     // Control state
     bool isRunning() const { return m_isRunning; }
+    bool isLoading() const { return m_isLoading; }
     
     // Reset to disconnected state
     void resetToDisconnectedState();
@@ -115,6 +116,7 @@ private:
     QLabel *m_statusLabel;
     QLabel *m_obsCountLabel;
     QLabel *m_obsIndicator;
+    QLabel *m_progressLabel;  // Added for loading progress
     
     // System configuration section
     QGroupBox *m_systemConfigGroup;
@@ -144,7 +146,9 @@ private:
     
     // State tracking
     bool m_isRunning;
+    bool m_isLoading;  // Added for loading state
     QString m_currentStatus;
+    QString m_loadingProgress;  // Added for progress messages
     int m_currentObsId;
     int m_totalObs;
     bool m_observationActive;
