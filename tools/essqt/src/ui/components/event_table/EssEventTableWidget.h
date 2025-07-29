@@ -1,15 +1,16 @@
 // EssEventTableWidget.h
 #pragma once
 
-#include <QWidget>  // Change from QDockWidget
-#include <QTableWidget>
-#include "core/EssEvent.h"
+#include <QWidget>
+#include <cstdint>
+#include "core/EssEvent.h"  // For SystemState enum
 
+class QTableWidget;
 class QPushButton;
 class QLabel;
 class EssEventProcessor;
 
-class EssEventTableWidget : public QWidget  // Change from QDockWidget
+class EssEventTableWidget : public QWidget
 {
     Q_OBJECT
 
@@ -17,29 +18,23 @@ public:
     explicit EssEventTableWidget(QWidget *parent = nullptr);
     ~EssEventTableWidget();
 
-    // Clear the event table
-    void clearEvents();
-    
-    // Set max events to display
-    void setMaxEvents(int max) { m_maxEvents = max; }
-
 private slots:
     void onEventReceived(const EssEvent &event);
     void onSystemStateChanged(SystemState state);
     void onObservationStarted(uint64_t timestamp);
     void onObservationReset();
     void onClearClicked();
-
-    // Connection management
-	void onHostConnected(const QString &host); 
+    void onHostConnected(const QString &host);
     void onHostDisconnected();
-    
+
 private:
     void setupUi();
     void connectToEventProcessor();
     void addEventRow(const EssEvent &event);
+    void clearEvents();
     QString formatEventParams(const EssEvent &event) const;
-    
+    bool shouldDisplayEvent(const EssEvent &event) const;  // New method for filtering
+
     QTableWidget *m_tableWidget;
     QPushButton *m_clearButton;
     QLabel *m_statusLabel;
@@ -47,5 +42,5 @@ private:
     
     int m_maxEvents;
     uint64_t m_currentObsStart;
-    EssEventProcessor *m_eventProcessor;  // This was missing
+    EssEventProcessor *m_eventProcessor;
 };

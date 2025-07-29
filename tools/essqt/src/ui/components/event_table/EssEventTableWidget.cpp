@@ -149,11 +149,39 @@ void EssEventTableWidget::onHostDisconnected()
     // Note: We don't need to disconnect signals here because the event processor
     // will stop sending events when disconnected
 }
-void EssEventTableWidget::onEventReceived(const EssEvent &event)
+
+bool EssEventTableWidget::shouldDisplayEvent(const EssEvent &event) const
 {
-    addEventRow(event);
+    // Filter out events we don't want to display
+    switch (event.type) {
+        case EVT_USER:           // Type 3 - USER events (START/STOP/RESET)      
+        case EVT_NAMESET:        // Type 17 - Event naming
+		case EVT_PARAM:
+		case EVT_FILEIO:
+		case EVT_SYSTEM_CHANGES:
+        case EVT_SUBTYPE_NAMES:  // Type 18 - Subtype naming
+            return false;
+            
+        // Add more cases here as needed:
+        // case EVT_SOME_OTHER_TYPE:
+        //     return false;
+            
+        default:
+            return true;  // Display all other events
+    }
 }
 
+void EssEventTableWidget::onEventReceived(const EssEvent &event)
+{
+    if (event.type == EVT_SYSTEM_CHANGES) {
+        clearEvents();
+    }
+    
+    // Check if we should display this event
+    if (shouldDisplayEvent(event)) {
+        addEventRow(event);
+    }
+}
 QString EssEventTableWidget::formatEventParams(const EssEvent &event) const
 {
     // Get the default string representation first
@@ -168,7 +196,7 @@ QString EssEventTableWidget::formatEventParams(const EssEvent &event) const
         return "";  // Return empty string for cleaner display
     }
     
-    // If params is a number, format it nicely
+    // If params is a single number, format it nicely
     if (event.params.isDouble()) {
         double value = event.params.toDouble();
         // Check if it's effectively an integer
@@ -180,6 +208,65 @@ QString EssEventTableWidget::formatEventParams(const EssEvent &event) const
             // Remove trailing zeros and decimal point if not needed
             formatted.remove(QRegularExpression("\\.?0+$"));
             return formatted;
+        }
+    }
+    
+    // If params is an array, format each element
+    if (event.params.isArray()) {
+        QJsonArray array = event.params.toArray();
+        QStringList formattedParts;
+        
+        for (const QJsonValue &val : array) {
+            if (val.isDouble()) {
+                double value = val.toDouble();
+                if (value == floor(value)) {
+                    formattedParts.append(QString::number(static_cast<int>(value)));
+                } else {
+                    QString formatted = QString::number(value, 'f', 3);
+                    formatted.remove(QRegularExpression("\\.?0+$"));
+                    formattedParts.append(formatted);
+                }
+            } else if (val.isString()) {
+                formattedParts.append(val.toString());
+            } else {
+                // For other types, use the JSON representation
+                formattedParts.append(QJsonDocument(QJsonArray{val}).toJson(QJsonDocument::Compact));
+            }
+        }
+        
+        return "[" + formattedParts.join(", ") + "]";
+    }
+    
+    // Check if it's a comma-separated list of numbers (keeping for backward compatibility)
+    if (paramStr.contains(',') && !paramStr.startsWith('[')) {
+        QStringList parts = paramStr.split(',');
+        QStringList formattedParts;
+        bool allNumbers = true;
+        
+        for (const QString &part : parts) {
+            QString trimmed = part.trimmed();
+            bool ok;
+            double value = trimmed.toDouble(&ok);
+            
+            if (ok) {
+                // Format this number
+                if (value == floor(value)) {
+                    formattedParts.append(QString::number(static_cast<int>(value)));
+                } else {
+                    QString formatted = QString::number(value, 'f', 3);
+                    formatted.remove(QRegularExpression("\\.?0+$"));
+                    formattedParts.append(formatted);
+                }
+            } else {
+                // Not a number, keep original
+                formattedParts.append(trimmed);
+                allNumbers = false;
+            }
+        }
+        
+        // If we processed at least some numbers, return the formatted version
+        if (allNumbers || formattedParts.size() == parts.size()) {
+            return formattedParts.join(", ");
         }
     }
     
