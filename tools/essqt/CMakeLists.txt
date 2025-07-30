@@ -13,6 +13,9 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# Add QScintilla subdirectory
+add_subdirectory(third_party/QScintilla)
+
 # Tcl/Tk detection (from your working version)
 if(WIN32)
     add_compile_options("/DFL_DLL")
@@ -67,6 +70,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/console 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/host_discovery
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/experiment_control
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/script_editor
     ${CMAKE_CURRENT_SOURCE_DIR}/src/communication
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl
 )
@@ -89,6 +93,7 @@ set(COMM_SOURCES
 
 set(UI_SOURCES
     src/ui/EssMainWindow.cpp
+    src/ui/EssWorkspaceManager.cpp
     src/ui/components/terminal/EssTerminalWidget.cpp
     src/ui/components/terminal/CommandHistory.cpp
     src/ui/components/console/EssOutputConsole.cpp
@@ -96,6 +101,7 @@ set(UI_SOURCES
     src/ui/components/event_table/EssEventTableWidget.cpp    
     src/ui/components/host_discovery/EssHostDiscoveryWidget.cpp
     src/ui/components/experiment_control/EssExperimentControlWidget.cpp
+    src/ui/components/script_editor/EssScriptEditorWidget.cpp
 )
 
 # Optional: Add these if you have them
@@ -121,6 +127,7 @@ target_link_libraries(essqt PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
+    qscintilla2_qt6  # Add QScintilla library
 )
 
 # Platform-specific linking
