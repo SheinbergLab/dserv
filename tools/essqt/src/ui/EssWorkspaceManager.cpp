@@ -153,10 +153,17 @@ void EssWorkspaceManager::connectSignals()
             this, &EssWorkspaceManager::statusMessage);
     
     // Script editor signals
-    connect(m_scriptEditor, &EssScriptEditorWidget::executeRequested,
-            m_terminal, &EssTerminalWidget::executeCommand);
     connect(m_scriptEditor, &EssScriptEditorWidget::statusMessage,
             this, &EssWorkspaceManager::statusMessage);
+
+  // When scripts are modified, optionally show in status bar
+    connect(m_scriptEditor, &EssScriptEditorWidget::scriptModified,
+            [this](EssScriptEditorWidget::ScriptType type, bool modified) {
+                if (modified) {
+                    QString scriptName = m_scriptEditor->scriptTypeToString(type);
+                    emit statusMessage(QString("%1 script modified").arg(scriptName), 2000);
+                }
+            });
     
     // Host discovery signals
     connect(m_hostDiscovery, &EssHostDiscoveryWidget::hostSelected,

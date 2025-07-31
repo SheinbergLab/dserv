@@ -124,6 +124,8 @@ void EssCommandInterface::initializeTcl()
                 ess/subject ess/state ess/obs_id ess/obs_total
                 ess/block_pct_complete ess/block_pct_correct
                 ess/variant_info_json ess/param_settings
+                ess/system_script ess/protocol_script ess/variants_script
+                ess/loaders_script ess/stim_script
                 ess/state_table ess/rmt_cmds
                 system/hostname system/os
             }
@@ -271,6 +273,13 @@ int EssCommandInterface::TclConnectCmd(ClientData clientData, Tcl_Interp *interp
     }
 }
 
+void EssCommandInterface::requestDisconnect()
+{
+    // Emit the signal to let the application handle the request
+    emit disconnectRequested();
+}
+
+// Also update the TclDisconnectCmd to use the new approach:
 int EssCommandInterface::TclDisconnectCmd(ClientData clientData, Tcl_Interp *interp,
                                          int objc, Tcl_Obj *const objv[])
 {
@@ -285,7 +294,8 @@ int EssCommandInterface::TclDisconnectCmd(ClientData clientData, Tcl_Interp *int
         Tcl_Eval(interp, cleanupCmd.toUtf8().constData());
     }
     
-    self->disconnectFromHost();
+    // Request disconnect through the signal mechanism
+    self->requestDisconnect();
     return TCL_OK;
 }
 

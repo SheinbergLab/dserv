@@ -52,6 +52,8 @@ public:
     explicit EssCommandInterface(QObject *parent = nullptr);
     ~EssCommandInterface();
 
+    void requestDisconnect(); 
+
     // Connection management
     bool connectToHost(const QString &host);
     void disconnectFromHost();
@@ -107,6 +109,8 @@ signals:
     void aboutRequested();
     void quitRequested();
     void helpRequested(const QString &helpText);
+    
+    void disconnectRequested();
     
     // Datapoint updates from listener
     void datapointUpdated(const QString &name, const QVariant &value, qint64 timestamp);

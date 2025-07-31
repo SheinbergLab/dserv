@@ -111,6 +111,14 @@ void EssHostDiscoveryWidget::connectSignals()
             connect(m_commandInterface, &EssCommandInterface::connectionError,
                     this, &EssHostDiscoveryWidget::onConnectionError);
         }
+        
+        connect(EssApplication::instance(), &EssApplication::disconnectCancelled,
+                this, [this]() {
+                    EssConsoleManager::instance()->logInfo(
+                        "Disconnect cancelled - keeping connection", 
+                        "Discovery"
+                    );
+                });
     }
     
     // UI connections
@@ -386,10 +394,12 @@ void EssHostDiscoveryWidget::disconnectFromHost()
         return;
     }
     
-    EssConsoleManager::instance()->logInfo("Disconnecting from host", "Discovery");
-    m_commandInterface->disconnectFromHost();
+    EssConsoleManager::instance()->logInfo("Requesting disconnect from host", "Discovery");
     
-    // The actual UI update will happen in onDisconnected() slot when the signal is received
+    // Request disconnect - the application will handle checking for unsaved changes
+    m_commandInterface->requestDisconnect();
+    
+    // The actual UI update will happen in onDisconnected() slot when the disconnected signal is received
 }
 
 void EssHostDiscoveryWidget::onHostSelectionChanged(int index)

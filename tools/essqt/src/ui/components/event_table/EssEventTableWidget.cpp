@@ -12,75 +12,117 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QRegularExpression>
+#include <QFont>
 
-
-// In EssEventTableWidget constructor, add instance tracking:
 EssEventTableWidget::EssEventTableWidget(QWidget *parent)
     : QWidget(parent)
     , m_maxEvents(1000)
     , m_currentObsStart(0)
     , m_eventProcessor(nullptr)
+    , m_obsCount(0)
+    , m_obsTotal(0)
+    , m_currentObsIndex(-1)
 {
-    static int instanceCount = 0;
-    instanceCount++;
-    
     setupUi();
     connectToEventProcessor();
 }
 
-// Also add to destructor:
 EssEventTableWidget::~EssEventTableWidget()
 {
-    static int destroyCount = 0;
-    destroyCount++;
 }
 
 void EssEventTableWidget::setupUi()
 {
-    // Create main layout directly (no central widget needed for QWidget)
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);  // Pass 'this' as parent
+    // Create main layout
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(5, 5, 5, 5);  // Reduce margins
+    mainLayout->setSpacing(3);  // Reduce spacing
     
     // Status bar
     QHBoxLayout *statusLayout = new QHBoxLayout();
+    statusLayout->setSpacing(10);
     
     m_statusLabel = new QLabel("System: Stopped", this);
     m_statusLabel->setStyleSheet("QLabel { font-weight: bold; }");
     
     m_obsLabel = new QLabel("No observation", this);
     
-    m_clearButton = new QPushButton("Clear", this);
+    // Navigation controls
+    m_prevObsButton = new QPushButton("<", this);
+    m_prevObsButton->setFixedWidth(30);
+    m_prevObsButton->setEnabled(false);
+    connect(m_prevObsButton, &QPushButton::clicked, [this]() {
+        if (m_currentObsIndex > 0) {
+            showObservation(m_currentObsIndex - 1);
+        }
+    });
+    
+    m_obsNavigationLabel = new QLabel("", this);
+    
+    m_nextObsButton = new QPushButton(">", this);
+    m_nextObsButton->setFixedWidth(30);
+    m_nextObsButton->setEnabled(false);
+    connect(m_nextObsButton, &QPushButton::clicked, [this]() {
+        if (m_currentObsIndex < m_observationHistory.size() - 1) {
+            showObservation(m_currentObsIndex + 1);
+        }
+    });
+    
+    m_clearButton = new QPushButton("Clear All", this);
     connect(m_clearButton, &QPushButton::clicked, this, &EssEventTableWidget::onClearClicked);
     
     statusLayout->addWidget(m_statusLabel);
     statusLayout->addWidget(m_obsLabel);
     statusLayout->addStretch();
+    statusLayout->addWidget(m_prevObsButton);
+    statusLayout->addWidget(m_obsNavigationLabel);
+    statusLayout->addWidget(m_nextObsButton);
+    statusLayout->addSpacing(10);
     statusLayout->addWidget(m_clearButton);
     
     mainLayout->addLayout(statusLayout);
     
-    // Event table - NOW WITH 5 COLUMNS
+    // Event table with compact settings
     m_tableWidget = new QTableWidget(0, 5, this);
-    QStringList headers = {"Timestamp", "Elapsed", "Type", "Subtype", "Parameters"};
+    QStringList headers = {"Time", "Δt", "Type", "Subtype", "Parameters"};
     m_tableWidget->setHorizontalHeaderLabels(headers);
     m_tableWidget->setAlternatingRowColors(true);
     m_tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tableWidget->setSortingEnabled(false);
     m_tableWidget->verticalHeader()->setVisible(false);
     
+    // Make the table more compact
+    QFont tableFont = m_tableWidget->font();
+    tableFont.setPointSize(tableFont.pointSize() - 1);  // Smaller font
+    m_tableWidget->setFont(tableFont);
+    
+    // Reduce row height
+    m_tableWidget->verticalHeader()->setDefaultSectionSize(20);  // Smaller row height
+    m_tableWidget->verticalHeader()->setMinimumSectionSize(16);
+    
+    // Compact header
+    QHeaderView *vHeader = m_tableWidget->verticalHeader();
+    vHeader->setSectionResizeMode(QHeaderView::Fixed);
+    
     // Column sizing
     QHeaderView *header = m_tableWidget->horizontalHeader();
-    header->setSectionResizeMode(0, QHeaderView::ResizeToContents); // Timestamp
-    header->setSectionResizeMode(1, QHeaderView::ResizeToContents); // Elapsed
-    header->setSectionResizeMode(2, QHeaderView::Interactive);      // Type
-    header->setSectionResizeMode(3, QHeaderView::Interactive);      // Subtype
-    header->setSectionResizeMode(4, QHeaderView::Stretch);          // Parameters
+    header->setDefaultSectionSize(60);  // Default smaller width
+    header->setSectionResizeMode(0, QHeaderView::Fixed);  // Time
+    header->setSectionResizeMode(1, QHeaderView::Fixed);  // Elapsed
+    header->setSectionResizeMode(2, QHeaderView::Interactive);  // Type
+    header->setSectionResizeMode(3, QHeaderView::Interactive);  // Subtype
+    header->setSectionResizeMode(4, QHeaderView::Stretch);  // Parameters
+    
+    // Set specific column widths
+    m_tableWidget->setColumnWidth(0, 60);  // Time
+    m_tableWidget->setColumnWidth(1, 50);  // Elapsed
+    m_tableWidget->setColumnWidth(2, 100); // Type
+    m_tableWidget->setColumnWidth(3, 100); // Subtype
     
     mainLayout->addWidget(m_tableWidget);
     
-    setLayout(mainLayout);  // For QWidget, use setLayout instead of setWidget
-    
-    // Set reasonable default size
-    resize(700, 400);  // Slightly wider for the extra column
+    setLayout(mainLayout);
+    resize(700, 400);
 }
 
 void EssEventTableWidget::connectToEventProcessor()
@@ -95,18 +137,16 @@ void EssEventTableWidget::connectToEventProcessor()
                     this, &EssEventTableWidget::onEventReceived);
             connect(m_eventProcessor, &EssEventProcessor::systemStateChanged,
                     this, &EssEventTableWidget::onSystemStateChanged);
+            connect(dataProc, &EssDataProcessor::experimentStateChanged,
+                    this, &EssEventTableWidget::onExperimentStateChanged);
             connect(m_eventProcessor, &EssEventProcessor::observationStarted,
                     this, &EssEventTableWidget::onObservationStarted);
             connect(m_eventProcessor, &EssEventProcessor::observationReset,
                     this, &EssEventTableWidget::onObservationReset);
-        } else {
-            qDebug() << "ERROR: Event processor is null!";
         }
-    } else {
-        qDebug() << "ERROR: Cannot access data processor!";
     }
     
-    // Connect to command interface for disconnect notifications
+    // Connect to command interface
     if (EssApplication::instance()) {
         auto* cmdInterface = EssApplication::instance()->commandInterface();
         if (cmdInterface) {
@@ -118,100 +158,156 @@ void EssEventTableWidget::connectToEventProcessor()
     }
 }
 
-
 void EssEventTableWidget::onHostConnected(const QString &host)
 {
-    // Clear any old data
+    // Clear all observation history
+    m_observationHistory.clear();
+    m_currentObsIndex = -1;
     clearEvents();
     
     // Reset observation state
     m_currentObsStart = 0;
     m_obsLabel->setText("No observation");
+    updateNavigationControls();
     
-    // Update system state display to show we're connected but system is stopped
+    // Update system state display
     m_statusLabel->setText("System: Stopped");
     m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
 }
 
 void EssEventTableWidget::onHostDisconnected()
 {
-    // Clear all events
+    // Clear all events and history
+    m_observationHistory.clear();
+    m_currentObsIndex = -1;
     clearEvents();
     
     // Reset observation state
     m_currentObsStart = 0;
     m_obsLabel->setText("No observation");
+    updateNavigationControls();
     
     // Reset system state display
     m_statusLabel->setText("System: Disconnected");
     m_statusLabel->setStyleSheet("QLabel { font-weight: bold; }");
-    
-    // Note: We don't need to disconnect signals here because the event processor
-    // will stop sending events when disconnected
 }
 
 bool EssEventTableWidget::shouldDisplayEvent(const EssEvent &event) const
 {
-    // Filter out events we don't want to display
     switch (event.type) {
-        case EVT_USER:           // Type 3 - USER events (START/STOP/RESET)      
-        case EVT_NAMESET:        // Type 17 - Event naming
-		case EVT_PARAM:
-		case EVT_FILEIO:
-		case EVT_SYSTEM_CHANGES:
-        case EVT_SUBTYPE_NAMES:  // Type 18 - Subtype naming
+        case EVT_USER:
+        case EVT_NAMESET:
+        case EVT_PARAM:
+        case EVT_FILEIO:
+        case EVT_SYSTEM_CHANGES:
+        case EVT_SUBTYPE_NAMES:
             return false;
-            
-        // Add more cases here as needed:
-        // case EVT_SOME_OTHER_TYPE:
-        //     return false;
-            
         default:
-            return true;  // Display all other events
+            return true;
     }
 }
 
 void EssEventTableWidget::onEventReceived(const EssEvent &event)
 {
     if (event.type == EVT_SYSTEM_CHANGES) {
+        // Clear all history on system changes
+        m_observationHistory.clear();
+        m_currentObsIndex = -1;
         clearEvents();
+        updateNavigationControls();
+        return;
+    }
+
+    // Handle EVT_BEGINOBS to extract observation count and total
+    if (event.type == EVT_BEGINOBS) {
+        extractObservationParams(event);
     }
     
-    // Check if we should display this event
-    if (shouldDisplayEvent(event)) {
+    // Store event if we're in an active observation
+    if (m_currentObsIndex >= 0 && m_currentObsIndex < m_observationHistory.size()) {
+        m_observationHistory[m_currentObsIndex].events.append(event);
+    }
+    
+    // Display event if we should and we're viewing the current observation
+    if (shouldDisplayEvent(event) && m_currentObsIndex == m_observationHistory.size() - 1) {
         addEventRow(event);
     }
 }
+
+void EssEventTableWidget::extractObservationParams(const EssEvent &event)
+{
+    m_obsCount = 0;
+    m_obsTotal = 0;
+    
+    if (event.params.isArray()) {
+        QJsonArray array = event.params.toArray();
+        if (array.size() >= 2) {
+            if (array[0].isDouble()) {
+                m_obsCount = static_cast<int>(array[0].toDouble());
+            }
+            if (array[1].isDouble()) {
+                m_obsTotal = static_cast<int>(array[1].toDouble());
+            }
+        }
+    }
+    else if (event.params.isObject()) {
+        QJsonObject obj = event.params.toObject();
+        if (obj.contains("count") && obj["count"].isDouble()) {
+            m_obsCount = static_cast<int>(obj["count"].toDouble());
+        }
+        if (obj.contains("total") && obj["total"].isDouble()) {
+            m_obsTotal = static_cast<int>(obj["total"].toDouble());
+        }
+    }
+    else if (event.params.isString()) {
+        QString paramStr = event.params.toString();
+        QStringList parts = paramStr.split(',');
+        if (parts.size() >= 2) {
+            bool ok;
+            m_obsCount = parts[0].trimmed().toInt(&ok);
+            if (!ok) m_obsCount = 0;
+            
+            m_obsTotal = parts[1].trimmed().toInt(&ok);
+            if (!ok) m_obsTotal = 0;
+        }
+    }
+    
+    updateObservationLabel();
+}
+
+void EssEventTableWidget::updateObservationLabel()
+{
+    if (m_obsTotal > 0) {
+        m_obsLabel->setText(QString("[Obs %1/%2]").arg(m_obsCount+1).arg(m_obsTotal));
+    }
+}
+
 QString EssEventTableWidget::formatEventParams(const EssEvent &event) const
 {
-    // Get the default string representation first
     QString paramStr = event.paramsAsString();
     
-    // Check for empty parameters - common patterns
+    // Check for empty parameters
     if (paramStr.isEmpty() || 
         paramStr == "[]" || 
         paramStr == "{}" || 
         paramStr == "null" ||
         paramStr == "\"\"") {
-        return "";  // Return empty string for cleaner display
+        return "";
     }
     
-    // If params is a single number, format it nicely
+    // Format single numbers
     if (event.params.isDouble()) {
         double value = event.params.toDouble();
-        // Check if it's effectively an integer
         if (value == floor(value)) {
             return QString::number(static_cast<int>(value));
         } else {
-            // Format with up to 3 decimal places, removing trailing zeros
             QString formatted = QString::number(value, 'f', 3);
-            // Remove trailing zeros and decimal point if not needed
             formatted.remove(QRegularExpression("\\.?0+$"));
             return formatted;
         }
     }
     
-    // If params is an array, format each element
+    // Format arrays compactly
     if (event.params.isArray()) {
         QJsonArray array = event.params.toArray();
         QStringList formattedParts;
@@ -222,55 +318,20 @@ QString EssEventTableWidget::formatEventParams(const EssEvent &event) const
                 if (value == floor(value)) {
                     formattedParts.append(QString::number(static_cast<int>(value)));
                 } else {
-                    QString formatted = QString::number(value, 'f', 3);
+                    QString formatted = QString::number(value, 'f', 2);  // Less precision for compactness
                     formatted.remove(QRegularExpression("\\.?0+$"));
                     formattedParts.append(formatted);
                 }
             } else if (val.isString()) {
                 formattedParts.append(val.toString());
             } else {
-                // For other types, use the JSON representation
                 formattedParts.append(QJsonDocument(QJsonArray{val}).toJson(QJsonDocument::Compact));
             }
         }
         
-        return "[" + formattedParts.join(", ") + "]";
+        return formattedParts.join(",");  // No spaces for compactness
     }
     
-    // Check if it's a comma-separated list of numbers (keeping for backward compatibility)
-    if (paramStr.contains(',') && !paramStr.startsWith('[')) {
-        QStringList parts = paramStr.split(',');
-        QStringList formattedParts;
-        bool allNumbers = true;
-        
-        for (const QString &part : parts) {
-            QString trimmed = part.trimmed();
-            bool ok;
-            double value = trimmed.toDouble(&ok);
-            
-            if (ok) {
-                // Format this number
-                if (value == floor(value)) {
-                    formattedParts.append(QString::number(static_cast<int>(value)));
-                } else {
-                    QString formatted = QString::number(value, 'f', 3);
-                    formatted.remove(QRegularExpression("\\.?0+$"));
-                    formattedParts.append(formatted);
-                }
-            } else {
-                // Not a number, keep original
-                formattedParts.append(trimmed);
-                allNumbers = false;
-            }
-        }
-        
-        // If we processed at least some numbers, return the formatted version
-        if (allNumbers || formattedParts.size() == parts.size()) {
-            return formattedParts.join(", ");
-        }
-    }
-    
-    // For all other cases, return the string representation
     return paramStr;
 }
 
@@ -279,39 +340,33 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
     int row = m_tableWidget->rowCount();
     m_tableWidget->insertRow(row);
     
-    // Store the current event timestamp for next elapsed calculation
     uint64_t currentTimestamp = event.timestamp;
     
-    // Timestamp handling
+    // Timestamp - more compact format
     QString timeStr;
     if (m_currentObsStart > 0 && event.timestamp >= m_currentObsStart) {
-        // During observation: show relative time in milliseconds
         uint64_t relativeTime = event.timestamp - m_currentObsStart;
-        timeStr = QString::number(relativeTime / 1000); // Convert to ms
+        timeStr = QString::number(relativeTime / 1000);  // ms
     } else if (event.type == EVT_BEGINOBS) {
-        // For observation start, just show "0"
         timeStr = "0";
     } else {
-        // Outside observation: show absolute time in seconds
-        timeStr = QString::number(event.timestamp / 1000000); // Convert microseconds to seconds
+        timeStr = QString::number(event.timestamp / 1000000);  // seconds
     }
     
     QTableWidgetItem *timeItem = new QTableWidgetItem(timeStr);
     timeItem->setFlags(timeItem->flags() & ~Qt::ItemIsEditable);
-    timeItem->setData(Qt::UserRole, QVariant::fromValue(currentTimestamp)); // Store raw timestamp
+    timeItem->setData(Qt::UserRole, QVariant::fromValue(currentTimestamp));
     m_tableWidget->setItem(row, 0, timeItem);
     
-    // Elapsed time since previous event
+    // Elapsed time - compact format
     QString elapsedStr = "";
     if (row > 0) {
-        // Get previous event's timestamp
         QTableWidgetItem *prevTimeItem = m_tableWidget->item(row - 1, 0);
         if (prevTimeItem) {
             uint64_t prevTimestamp = prevTimeItem->data(Qt::UserRole).toULongLong();
             if (prevTimestamp > 0 && currentTimestamp > prevTimestamp) {
                 uint64_t elapsed = currentTimestamp - prevTimestamp;
-                // Show in ms with 1 decimal place if < 1000ms, otherwise whole ms
-                if (elapsed < 1000000) { // Less than 1 second
+                if (elapsed < 1000000) {  // Less than 1 second
                     elapsedStr = QString::number(elapsed / 1000.0, 'f', 1);
                 } else {
                     elapsedStr = QString::number(elapsed / 1000);
@@ -324,7 +379,7 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
     elapsedItem->setFlags(elapsedItem->flags() & ~Qt::ItemIsEditable);
     m_tableWidget->setItem(row, 1, elapsedItem);
     
-    // Type - get the actual name from event processor
+    // Type
     QString typeName;
     if (m_eventProcessor) {
         typeName = m_eventProcessor->getEventTypeName(event.type);
@@ -335,7 +390,7 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
     typeItem->setFlags(typeItem->flags() & ~Qt::ItemIsEditable);
     m_tableWidget->setItem(row, 2, typeItem);
     
-    // Subtype - get the actual name from event processor
+    // Subtype
     QString subtypeName;
     if (m_eventProcessor) {
         subtypeName = m_eventProcessor->getEventSubtypeName(event.type, event.subtype);
@@ -357,7 +412,6 @@ void EssEventTableWidget::addEventRow(const EssEvent &event)
         m_tableWidget->removeRow(0);
     }
     
-    // Auto-scroll to bottom
     m_tableWidget->scrollToBottom();
 }
 
@@ -377,27 +431,88 @@ void EssEventTableWidget::onSystemStateChanged(SystemState state)
     }
 }
 
+void EssEventTableWidget::onExperimentStateChanged(const QString &newstate)
+{
+    m_statusLabel->setText(QString("System: %1").arg(newstate));
+
+    if (newstate == "Stopped") {
+        m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
+        m_obsLabel->setText("");
+    }
+}
+
 void EssEventTableWidget::onObservationStarted(uint64_t timestamp)
 {
     m_currentObsStart = timestamp;
-    // Just show "Observation started" without the confusing timestamp
-    m_obsLabel->setText("Observation period in progress");
-    clearEvents(); // Clear table for new observation
+    
+    // Create new observation data
+    ObservationData newObs;
+    newObs.startTime = timestamp;
+    newObs.obsCount = m_obsCount;
+    newObs.obsTotal = m_obsTotal;
+    
+    m_observationHistory.append(newObs);
+    m_currentObsIndex = m_observationHistory.size() - 1;
+    
+    clearEvents();  // Clear display for new observation
+    updateNavigationControls();
 }
 
 void EssEventTableWidget::onObservationReset()
 {
     m_currentObsStart = 0;
-    m_obsLabel->setText("Observation period ended");
-    clearEvents();
+    // Don't clear history, just stop recording
 }
 
 void EssEventTableWidget::onClearClicked()
 {
+    m_observationHistory.clear();
+    m_currentObsIndex = -1;
     clearEvents();
+    updateNavigationControls();
 }
 
 void EssEventTableWidget::clearEvents()
 {
     m_tableWidget->setRowCount(0);
+}
+
+void EssEventTableWidget::showObservation(int index)
+{
+    if (index < 0 || index >= m_observationHistory.size()) {
+        return;
+    }
+    
+    m_currentObsIndex = index;
+    clearEvents();
+    
+    // Display all events for this observation
+    const ObservationData &obs = m_observationHistory[index];
+    m_currentObsStart = obs.startTime;
+    m_obsCount = obs.obsCount;
+    m_obsTotal = obs.obsTotal;
+    
+    updateObservationLabel();
+    
+    for (const EssEvent &event : obs.events) {
+        if (shouldDisplayEvent(event)) {
+            addEventRow(event);
+        }
+    }
+    
+    updateNavigationControls();
+}
+
+void EssEventTableWidget::updateNavigationControls()
+{
+    m_prevObsButton->setEnabled(m_currentObsIndex > 0);
+    m_nextObsButton->setEnabled(m_currentObsIndex < m_observationHistory.size() - 1);
+    
+    if (m_observationHistory.isEmpty()) {
+        m_obsNavigationLabel->setText("");
+    } else {
+        m_obsNavigationLabel->setText(QString("%1/%2")
+            .arg(m_currentObsIndex + 1)
+            .arg(m_observationHistory.size()));
+    }
 }

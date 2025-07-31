@@ -1,8 +1,10 @@
-// EssApplication.cpp
+// EssApplication.cpp - Complete implementation with disconnect handling
 #include "EssApplication.h"
 #include "EssConfig.h"
 #include "EssCommandInterface.h"
 #include "EssDataProcessor.h"
+#include "EssScriptEditorWidget.h"  // Add this include
+#include "console/EssOutputConsole.h"  // Add for logging
 #include <QDebug>
 
 const QString EssApplication::Version = "0.1.0";
@@ -40,20 +42,43 @@ void EssApplication::initializeServices()
     connect(m_commandInterface.get(), &EssCommandInterface::datapointUpdated,
             m_dataProcessor.get(), &EssDataProcessor::processDatapoint);
     
+    // Connect disconnect request to handler
+    connect(m_commandInterface.get(), &EssCommandInterface::disconnectRequested,
+            this, &EssApplication::handleDisconnectRequest);
+    
     qDebug() << "ESS Application services initialized";
 }
 
 void EssApplication::shutdownServices()
 {
-  if (m_commandInterface) {
-    m_commandInterface->disconnectFromHost();
-  }
-  // Shutdown in reverse order
-  m_dataProcessor.reset();
-  m_commandInterface.reset();
-  m_config.reset();
-  
-  qDebug() << "ESS Application services shut down";
+    if (m_commandInterface) {
+        m_commandInterface->disconnectFromHost();
+    }
+    // Shutdown in reverse order
+    m_dataProcessor.reset();
+    m_commandInterface.reset();
+    m_config.reset();
+    
+    qDebug() << "ESS Application services shut down";
+}
+
+void EssApplication::handleDisconnectRequest()
+{
+    // Find script editor widget
+    auto* scriptEditor = findChild<EssScriptEditorWidget*>();
+    
+    // Check for unsaved changes if script editor exists
+    if (scriptEditor && !scriptEditor->confirmDisconnectWithUnsavedChanges()) {
+        EssConsoleManager::instance()->logInfo("Disconnect cancelled due to unsaved scripts", "Application");
+        emit disconnectCancelled();
+        return;
+    }
+    
+    // Proceed with disconnect
+    if (m_commandInterface) {
+        EssConsoleManager::instance()->logInfo("Proceeding with disconnect", "Application");
+        m_commandInterface->disconnectFromHost();
+    }
 }
 
 EssApplication* EssApplication::instance()

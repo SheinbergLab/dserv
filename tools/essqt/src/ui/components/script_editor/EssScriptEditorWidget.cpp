@@ -1,573 +1,806 @@
-#include "EssScriptEditorWidget.h"
-#include "core/EssApplication.h"
-#include "core/EssCommandInterface.h"
-#include "console/EssOutputConsole.h"
-
-#include <Qsci/qsciscintilla.h>
-#include <Qsci/qscilexertcl.h>
-#include <Qsci/qscilexerpython.h>
-#include <Qsci/qscilexercpp.h>
-#include <Qsci/qscilexerbash.h>
-
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <QToolBar>
 #include <QAction>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QTextStream>
-#include <QFileInfo>
 #include <QLabel>
-#include <QKeySequence>
+#include <QMessageBox>
+#include <QTimer>
+#include <QComboBox>
+
+#include "EssScriptEditorWidget.h"
+#include "EssCodeEditor.h"
+#include "core/EssApplication.h"
+#include "core/EssCommandInterface.h"
+#include "core/EssDataProcessor.h"
+#include "console/EssOutputConsole.h"
 
 EssScriptEditorWidget::EssScriptEditorWidget(QWidget *parent)
     : QWidget(parent)
-    , m_editor(new QsciScintilla(this))
+    , m_tabWidget(new QTabWidget(this))
+    , m_globalToolbar(new QToolBar(this))
     , m_statusLabel(new QLabel(this))
-    , m_currentFile()
+    , m_pendingSaves(0)
+    , m_isGitBusy(false)
 {
-    setupEditor();
-    setupActions();
-    createToolBar();
+    setupUi();
+    connectSignals();
+
+    // Connect to data processor for script and git datapoints
+    if (auto *dataProc = EssApplication::instance()->dataProcessor()) {
+      connect(dataProc, &EssDataProcessor::genericDatapointReceived,
+	      this, [this](const QString &name, const QVariant &value, qint64) {
+		if (name.startsWith("ess/") && name.endsWith("_script")) {
+		  onDatapointReceived(name, value.toString());
+		} else if (name == "ess/git/branch") {
+		  m_currentBranch = value.toString();
+		  m_branchCombo->setCurrentText(m_currentBranch);
+		} else if (name == "ess/git/branches") {
+		  QString branchesStr = value.toString();
+		  m_availableBranches = branchesStr.split(' ', Qt::SkipEmptyParts);
+                  
+		  m_branchCombo->blockSignals(true);
+		  m_branchCombo->clear();
+		  m_branchCombo->addItems(m_availableBranches);
+		  m_branchCombo->setCurrentText(m_currentBranch);
+		  m_branchCombo->blockSignals(false);
+		}
+	      });
+    }
     
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(m_toolbar);
-    layout->addWidget(m_editor);
-    layout->addWidget(m_statusLabel);
-    
-    m_statusLabel->setFrameStyle(QFrame::Panel | QFrame::Sunken);
-    m_statusLabel->setMinimumHeight(20);
-    
-    setCurrentFile(QString());
+    // Connect to command interface for connection/disconnection handling
+    if (auto *cmdInterface = EssApplication::instance()->commandInterface()) {
+      connect(cmdInterface, &EssCommandInterface::connected,
+	      this, &EssScriptEditorWidget::updateGitStatus);
+      
+      // Connect to disconnected signal
+      connect(cmdInterface, &EssCommandInterface::disconnected,
+              this, &EssScriptEditorWidget::onDisconnected);
+    }    
 }
 
 EssScriptEditorWidget::~EssScriptEditorWidget() = default;
 
-
-
-void EssScriptEditorWidget::setupEmacsBindings()
+void EssScriptEditorWidget::setupUi()
 {
-    // Install event filter to catch key events before QScintilla
-    m_editor->installEventFilter(this);
+    QVBoxLayout *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    
+    // Create global toolbar
+    createGlobalToolbar();
+    
+    // Setup tab widget
+    m_tabWidget->setTabPosition(QTabWidget::North);
+    m_tabWidget->setMovable(true);
+    m_tabWidget->setDocumentMode(true);
+    
+    // Create tabs for each script type
+    createScriptTab(SystemScript, "System", "ess/system_script");
+    createScriptTab(ProtocolScript, "Protocol", "ess/protocol_script");
+    createScriptTab(LoadersScript, "Loaders", "ess/loaders_script");
+    createScriptTab(VariantsScript, "Variants", "ess/variants_script");
+    createScriptTab(StimScript, "Stim", "ess/stim_script");
+    
+    // Status bar
+    m_statusLabel->setFrameStyle(QFrame::Panel | QFrame::Sunken);
+    m_statusLabel->setMinimumHeight(20);
+    m_statusLabel->setStyleSheet("QLabel { font-family: monospace; font-size: 11px; }");
+    
+    // Add to layout
+    layout->addWidget(m_globalToolbar);
+    layout->addWidget(m_tabWidget, 1);  // Give tab widget stretch priority
+    layout->addWidget(m_statusLabel);
+    
+    // Connect tab change signal
+    connect(m_tabWidget, &QTabWidget::currentChanged, 
+            this, &EssScriptEditorWidget::onTabChanged);
+    
+    // Set initial state - not connected
+    m_statusLabel->setText("Not connected - no scripts loaded");
+    
+    // Disable all actions initially
+    m_saveAction->setEnabled(false);
+    m_saveAllAction->setEnabled(false);
+    m_reloadAction->setEnabled(false);
+    m_pushAction->setEnabled(false);
+    m_pullAction->setEnabled(false);
+    m_branchCombo->setEnabled(false);
+    
+    // Update initial state
+    updateStatusBar();
+    updateGlobalActions();
 }
 
-bool EssScriptEditorWidget::eventFilter(QObject *obj, QEvent *event)
+// Update createGlobalToolbar() in EssScriptEditorWidget.cpp:
+
+void EssScriptEditorWidget::createGlobalToolbar()
 {
-    if (obj == m_editor && event->type() == QEvent::KeyPress) {
-        QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
+    m_globalToolbar->setMovable(false);
+    m_globalToolbar->setIconSize(QSize(16, 16));
+    
+    // Save current script - with both icon and text for clarity
+    m_saveAction = new QAction(tr("Save"), this);
+    m_saveAction->setShortcut(QKeySequence::Save);
+    m_saveAction->setToolTip(tr("Save current script (Ctrl+S)"));
+    // Try theme icon first, but set text as fallback
+    QIcon saveIcon = QIcon::fromTheme("document-save");
+    if (!saveIcon.isNull()) {
+        m_saveAction->setIcon(saveIcon);
+    }
+    m_saveAction->setEnabled(false);
+    connect(m_saveAction, &QAction::triggered, this, &EssScriptEditorWidget::saveCurrentScript);
+    
+    // Save all scripts - with both icon and text
+    m_saveAllAction = new QAction(tr("Save All"), this);
+    m_saveAllAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
+    m_saveAllAction->setToolTip(tr("Save all modified scripts (Ctrl+Shift+S)"));
+    QIcon saveAllIcon = QIcon::fromTheme("document-save-all");
+    if (!saveAllIcon.isNull()) {
+        m_saveAllAction->setIcon(saveAllIcon);
+    }
+    m_saveAllAction->setEnabled(false);
+    connect(m_saveAllAction, &QAction::triggered, this, &EssScriptEditorWidget::saveAllScripts);
+    
+    // Reload current script
+    m_reloadAction = new QAction(tr("Reload"), this);
+    m_reloadAction->setShortcut(QKeySequence(Qt::Key_F5));
+    m_reloadAction->setToolTip(tr("Reload current script from server (F5)"));
+    QIcon reloadIcon = QIcon::fromTheme("view-refresh");
+    if (!reloadIcon.isNull()) {
+        m_reloadAction->setIcon(reloadIcon);
+    }
+    connect(m_reloadAction, &QAction::triggered, this, &EssScriptEditorWidget::reloadCurrentScript);
+    
+    // Git pull
+    m_pullAction = new QAction(tr("Pull"), this);
+    m_pullAction->setToolTip(tr("Pull changes from remote repository"));
+    QIcon pullIcon = QIcon::fromTheme("go-down");
+    if (!pullIcon.isNull()) {
+        m_pullAction->setIcon(pullIcon);
+    }
+    connect(m_pullAction, &QAction::triggered, this, &EssScriptEditorWidget::onPullClicked);
+    
+    // Git push
+    m_pushAction = new QAction(tr("Push"), this);
+    m_pushAction->setToolTip(tr("Commit and push changes to remote repository"));
+    QIcon pushIcon = QIcon::fromTheme("go-up");
+    if (!pushIcon.isNull()) {
+        m_pushAction->setIcon(pushIcon);
+    }
+    connect(m_pushAction, &QAction::triggered, this, &EssScriptEditorWidget::onPushClicked);
+    
+    // Branch selector
+    m_branchCombo = new QComboBox(this);
+    m_branchCombo->setMinimumWidth(120);
+    m_branchCombo->setMaximumWidth(200);
+    m_branchCombo->setToolTip(tr("Current Git branch"));
+    connect(m_branchCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &EssScriptEditorWidget::onBranchChanged);
+    
+    // Add all to toolbar with proper grouping
+    m_globalToolbar->addAction(m_saveAction);
+    m_globalToolbar->addAction(m_saveAllAction);
+    m_globalToolbar->addSeparator();
+    m_globalToolbar->addAction(m_reloadAction);
+    m_globalToolbar->addSeparator();
+    m_globalToolbar->addAction(m_pullAction);
+    m_globalToolbar->addAction(m_pushAction);
+    m_globalToolbar->addWidget(new QLabel(" Branch: "));
+    m_globalToolbar->addWidget(m_branchCombo);
+    
+    // Set toolbar button style to show both icon and text
+    m_globalToolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    // m_globalToolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    // m_globalToolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+}
+
+void EssScriptEditorWidget::createScriptTab(ScriptType type, const QString &tabName, 
+                                           const QString &datapointName)
+{
+    auto *editor = new EssCodeEditor(this);
+    editor->setLanguage(EssCodeEditor::Tcl);
+    editor->setToolbarVisible(false);
+    
+    ScriptEditor scriptEditor;
+    scriptEditor.editor = editor;
+    scriptEditor.type = type;
+    scriptEditor.datapointName = datapointName;
+    scriptEditor.loaded = false;
+    
+    m_scriptEditors[type] = scriptEditor;
+    
+    // Add to tab widget
+    m_tabWidget->addTab(editor, tabName);
+    
+    // Simple connection to modificationChanged signal only
+    connect(editor, &EssCodeEditor::modificationChanged,
+            this, [this, type](bool modified) {
+                updateTabTitle(type);
+                updateGlobalActions();
+                emit scriptModified(type, modified);
+            });
+            
+    connect(editor, &EssCodeEditor::saveRequested,
+            this, [this, type]() {
+                saveScript(type);
+            });
+            
+    connect(editor, &EssCodeEditor::cursorPositionChanged,
+            this, &EssScriptEditorWidget::onCursorPositionChanged);
+}
+
+void EssScriptEditorWidget::connectSignals()
+{
+    // Nothing additional needed here - connections are made in createScriptTab
+}
+
+void EssScriptEditorWidget::onDatapointReceived(const QString &name, const QString &content)
+{
+  ScriptType type = scriptTypeFromDatapoint(name);
+    
+    // Find the corresponding editor
+    auto it = m_scriptEditors.find(type);
+    if (it != m_scriptEditors.end()) {
+        loadScript(type, content);
+    }
+}
+
+void EssScriptEditorWidget::loadScript(ScriptType type, const QString &content)
+{
+    auto it = m_scriptEditors.find(type);
+    if (it == m_scriptEditors.end()) return;
+    
+    ScriptEditor &scriptEditor = it.value();
+    
+    // Only update if content actually changed
+    if (scriptEditor.editor->content() != content) {
+        scriptEditor.editor->setContent(content);
+        scriptEditor.loaded = true;
         
-        // Tab key - smart indent
-        if (keyEvent->key() == Qt::Key_Tab && keyEvent->modifiers() == Qt::NoModifier) {
-            smartIndent();
+        // Clear modification flag since this is freshly loaded
+        scriptEditor.editor->setModified(false);
+        
+        updateTabTitle(type);
+        
+        EssConsoleManager::instance()->logInfo(
+            QString("Loaded %1 script (%2 bytes)")
+                .arg(scriptTypeToString(type))
+                .arg(content.length()),
+            "ScriptEditor"
+        );
+    }
+}
+
+QString EssScriptEditorWidget::getScriptContent(ScriptType type) const
+{
+    auto it = m_scriptEditors.find(type);
+    if (it != m_scriptEditors.end()) {
+        return it->editor->content();
+    }
+    return QString();
+}
+
+bool EssScriptEditorWidget::hasModifiedScripts() const
+{
+    for (const auto &scriptEditor : m_scriptEditors) {
+        if (scriptEditor.editor->isModified()) {
             return true;
         }
-        
-        // Emacs bindings
-        if (keyEvent->modifiers() & Qt::ControlModifier) {
-            switch (keyEvent->key()) {
-                case Qt::Key_A: // Beginning of line
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_VCHOME);
-                    return true;
-                    
-                case Qt::Key_E: // End of line
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_LINEEND);
-                    return true;
-                    
-                case Qt::Key_K: // Kill to end of line
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_DELLINERIGHT);
-                    return true;
-                    
-                case Qt::Key_D: // Delete character forward
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_CLEAR);
-                    return true;
-                    
-                case Qt::Key_N: // Next line
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_LINEDOWN);
-                    return true;
-                    
-                case Qt::Key_P: // Previous line
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_LINEUP);
-                    return true;
-                    
-                case Qt::Key_F: // Forward character
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_CHARRIGHT);
-                    return true;
-                    
-                case Qt::Key_B: // Backward character
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_CHARLEFT);
-                    return true;
-                    
-                case Qt::Key_Space: // Ctrl+Space for auto-completion
-                    m_editor->autoCompleteFromAll();
-                    return true;
-            }
-        }
-        
-        // Alt key bindings
-        if (keyEvent->modifiers() & Qt::AltModifier) {
-            switch (keyEvent->key()) {
-                case Qt::Key_F: // Forward word
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_WORDRIGHT);
-                    return true;
-                    
-                case Qt::Key_B: // Backward word
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_WORDLEFT);
-                    return true;
-                    
-                case Qt::Key_D: // Delete word forward
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_DELWORDRIGHT);
-                    return true;
-                    
-                case Qt::Key_Backspace: // Delete word backward
-                    m_editor->SendScintilla(QsciScintillaBase::SCI_DELWORDLEFT);
-                    return true;
-            }
-        }
     }
-    
-    return QWidget::eventFilter(obj, event);
+    return false;
 }
 
-void EssScriptEditorWidget::smartIndent()
+QList<EssScriptEditorWidget::ScriptType> EssScriptEditorWidget::modifiedScripts() const
 {
-    int line, index;
-    m_editor->getCursorPosition(&line, &index);
+    QList<ScriptType> modified;
+    for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+        if (it->editor->isModified()) {
+            modified.append(it.key());
+        }
+    }
+    return modified;
+}
+
+void EssScriptEditorWidget::saveScript(ScriptType type)
+{
+    auto it = m_scriptEditors.find(type);
+    if (it == m_scriptEditors.end() || !it->editor->isModified()) return;
     
-    if (line > 0) {
-        // Get indentation of previous line
-        QString prevLineText = m_editor->text(line - 1);
-        int prevIndent = 0;
-        for (QChar ch : prevLineText) {
-            if (ch == ' ') prevIndent++;
-            else if (ch == '\t') prevIndent += m_editor->indentationWidth();
-            else break;
+    QString content = it->editor->content();
+    QString scriptName = scriptTypeToString(type).toLower();
+    
+    // Send save command to backend
+    auto *cmdInterface = EssApplication::instance()->commandInterface();
+    if (cmdInterface && cmdInterface->isConnected()) {
+        m_pendingSaves++;
+        
+        QString cmd = QString("::ess::save_script %1 {%2}")
+            .arg(scriptName)
+            .arg(content);
+        
+        auto result = cmdInterface->executeEss(cmd);
+        
+        m_pendingSaves--;
+        
+        if (result.status == EssCommandInterface::StatusSuccess) {
+            // Mark as saved
+            it->editor->setModified(false);
+            updateTabTitle(type);
+            
+            emit scriptSaved(type);
+            emit statusMessage(tr("%1 script saved").arg(scriptTypeToString(type)), 3000);
+            
+            EssConsoleManager::instance()->logSuccess(
+                QString("%1 script saved").arg(scriptTypeToString(type)),
+                "ScriptEditor"
+            );
+        } else {
+            QMessageBox::warning(this, tr("Save Failed"),
+                tr("Failed to save %1 script: %2")
+                    .arg(scriptTypeToString(type))
+                    .arg(result.error));
         }
-        
-        // Check if previous line ends with { or starts a block
-        QString trimmed = prevLineText.trimmed();
-        if (trimmed.endsWith('{') || trimmed.startsWith("proc ") || 
-            trimmed.startsWith("if ") || trimmed.startsWith("while ") ||
-            trimmed.startsWith("for ") || trimmed.startsWith("foreach ")) {
-            prevIndent += m_editor->indentationWidth();
-        }
-        
-        // Check current line for closing brace
-        QString currentLineText = m_editor->text(line);
-        QString currentTrimmed = currentLineText.trimmed();
-        if (currentTrimmed.startsWith('}')) {
-            prevIndent -= m_editor->indentationWidth();
-            if (prevIndent < 0) prevIndent = 0;
-        }
-        
-        // Apply indentation
-        m_editor->setIndentation(line, prevIndent);
-        
-        // Move cursor to end of indentation
-        m_editor->setCursorPosition(line, prevIndent);
+    } else {
+        QMessageBox::warning(this, tr("Not Connected"),
+            tr("Cannot save script - not connected to ESS backend"));
     }
 }
 
-
-void EssScriptEditorWidget::setupEditor()
+void EssScriptEditorWidget::saveCurrentScript()
 {
-    // Editor settings
-    m_editor->setUtf8(true);
-    m_editor->setEolMode(QsciScintilla::EolUnix);
-    m_editor->setIndentationsUseTabs(false);
-    m_editor->setIndentationWidth(4);
-    m_editor->setAutoIndent(true);
+    ScriptType type = currentScriptType();
+    saveScript(type);
+}
+
+void EssScriptEditorWidget::saveAllScripts()
+{
+    int savedCount = 0;
+    QList<ScriptType> toSave = modifiedScripts();
     
-    // Line numbers margin
-    m_editor->setMarginType(0, QsciScintilla::NumberMargin);
-    m_editor->setMarginLineNumbers(0, true);
-    m_editor->setMarginWidth(0, "00000");
+    for (ScriptType type : toSave) {
+        saveScript(type);
+        savedCount++;
+    }
     
-    // Folding - use SymbolMargin type for folding
-    m_editor->setMarginType(1, QsciScintilla::SymbolMargin);
-    m_editor->setFolding(QsciScintilla::BoxedTreeFoldStyle);
+    if (savedCount > 0) {
+        emit statusMessage(tr("Saved %1 script(s)").arg(savedCount), 3000);
+        emit saveAllRequested();
+    }
+}
+
+void EssScriptEditorWidget::reloadCurrentScript()
+{
+    ScriptType type = currentScriptType();
+    auto it = m_scriptEditors.find(type);
+    if (it == m_scriptEditors.end()) return;
     
-    // Marker margin for breakpoints/bookmarks
-    m_editor->setMarginType(2, QsciScintilla::SymbolMargin);
-    m_editor->setMarginWidth(2, 20);
-    m_editor->setMarginSensitivity(2, true);
+    // Check if script is modified
+    if (it->editor->isModified()) {
+        auto reply = QMessageBox::question(this, tr("Reload Script"),
+            tr("The %1 script has unsaved changes. Reload anyway?")
+                .arg(scriptTypeToString(type)),
+            QMessageBox::Yes | QMessageBox::No);
+        
+        if (reply != QMessageBox::Yes) {
+            return;
+        }
+    }
     
-    // Current line highlighting
-    m_editor->setCaretLineVisible(true);
+    // Request fresh data from backend
+    auto *cmdInterface = EssApplication::instance()->commandInterface();
+    if (cmdInterface && cmdInterface->isConnected()) {
+        QString datapointName = it->datapointName;
+        cmdInterface->executeDserv(QString("%%touch %1").arg(datapointName));
+        
+        emit statusMessage(tr("Reloading %1 script...").arg(scriptTypeToString(type)), 2000);
+        
+        EssConsoleManager::instance()->logInfo(
+            QString("Reloading %1 script").arg(scriptTypeToString(type)),
+            "ScriptEditor"
+        );
+    }
+}
+
+void EssScriptEditorWidget::clearAllScripts()
+{
+    // Block signals to prevent unnecessary updates during clearing
+    for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+        it->editor->blockSignals(true);
+        
+        // Clear the content
+        it->editor->setContent("");
+        
+        // Reset the loaded flag
+        it->loaded = false;
+        
+        // Clear any modification flags
+        it->editor->setModified(false);
+        
+        it->editor->blockSignals(false);
+    }
     
-    // Brace matching
-    m_editor->setBraceMatching(QsciScintilla::SloppyBraceMatch);
+    // Clear git information
+    m_currentBranch.clear();
+    m_availableBranches.clear();
+    m_branchCombo->clear();
+    m_branchCombo->setCurrentIndex(-1);
     
-    // Enable auto-completion
-    m_editor->setAutoCompletionSource(QsciScintilla::AcsAll);
-    m_editor->setAutoCompletionThreshold(3);  // Show after 3 characters
-    m_editor->setAutoCompletionCaseSensitivity(false);
-    m_editor->setAutoCompletionReplaceWord(true);
+    // Update all tab titles to remove any modification indicators
+    for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+        updateTabTitle(it.key());
+    }
     
-    // Set default lexer (Tcl)
-    auto tclLexer = new QsciLexerTCL(m_editor);
-    m_lexer.reset(tclLexer);
-    m_editor->setLexer(m_lexer.get());
+    // Update UI state
+    updateStatusBar();
+    updateGlobalActions();
     
-    // Apply dark theme
-    //applyTheme();
+    // Log the action
+    EssConsoleManager::instance()->logInfo(
+        "All scripts cleared on disconnect", 
+        "ScriptEditor"
+    );
+}
+
+void EssScriptEditorWidget::onDisconnected()
+{
+    // Check if we have any unsaved changes
+    if (hasModifiedScripts()) {
+        // Since we're disconnecting, we can't save anyway, so just warn in the log
+        EssConsoleManager::instance()->logWarning(
+            "Disconnecting with unsaved script changes - changes will be lost",
+            "ScriptEditor"
+        );
+    }
     
-    // Connect signals
-    connect(m_editor, &QsciScintilla::textChanged,
-            this, &EssScriptEditorWidget::onTextChanged);
-    connect(m_editor, &QsciScintilla::cursorPositionChanged,
-            this, &EssScriptEditorWidget::onCursorPositionChanged);
-    connect(m_editor, &QsciScintilla::modificationChanged,
-            this, &EssScriptEditorWidget::onModificationChanged);
-    connect(m_editor, &QsciScintilla::marginClicked,
-            this, [this](int margin, int line, Qt::KeyboardModifiers) {
-                if (margin == 2) {
-                    // Toggle bookmark
-                    if (m_editor->markersAtLine(line) & (1 << 1)) {
-                        m_editor->markerDelete(line, 1);
-                    } else {
-                        m_editor->markerAdd(line, 1);
+    // Clear all scripts
+    clearAllScripts();
+    
+    // Reset any pending operations
+    m_pendingSaves = 0;
+    m_isGitBusy = false;
+    
+    // Update status to show disconnected state
+    emit statusMessage(tr("Disconnected - scripts cleared"), 3000);
+}
+
+bool EssScriptEditorWidget::confirmDisconnectWithUnsavedChanges()
+{
+    if (!hasModifiedScripts()) {
+        return true;  // No unsaved changes, OK to disconnect
+    }
+    
+    QStringList modifiedList;
+    for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+        if (it->editor->isModified()) {
+            modifiedList << scriptTypeToString(it.key());
+        }
+    }
+    
+    QString message = tr("The following scripts have unsaved changes:\n\n%1\n\n"
+                        "These changes will be lost if you disconnect. Continue?")
+                        .arg(modifiedList.join(", "));
+    
+    int result = QMessageBox::warning(this, 
+                                     tr("Unsaved Script Changes"),
+                                     message,
+                                     QMessageBox::Yes | QMessageBox::No,
+                                     QMessageBox::No);
+    
+    return (result == QMessageBox::Yes);
+}
+
+void EssScriptEditorWidget::onTabChanged(int index)
+{
+    Q_UNUSED(index)
+    updateStatusBar();
+    updateGlobalActions();
+}
+
+void EssScriptEditorWidget::onScriptModified(bool modified)
+{
+    // Find which editor sent the signal
+    EssCodeEditor *editor = qobject_cast<EssCodeEditor*>(sender());
+    if (!editor) return;
+    
+    // Find the corresponding script type
+    for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+        if (it->editor == editor) {
+            updateTabTitle(it.key());
+            emit scriptModified(it.key(), modified);
+            break;
+        }
+    }
+    
+    updateGlobalActions();
+}
+
+void EssScriptEditorWidget::onPushClicked()
+{
+    // Check for unsaved changes
+    if (hasModifiedScripts()) {
+        auto reply = QMessageBox::question(this, tr("Unsaved Changes"),
+            tr("You have unsaved scripts. Save all before pushing?"),
+            QMessageBox::Save | QMessageBox::Cancel);
+            
+        if (reply == QMessageBox::Cancel) return;
+        
+        saveAllScripts();
+    }
+    
+    m_isGitBusy = true;
+    m_pushAction->setEnabled(false);
+    m_pullAction->setEnabled(false);
+    m_branchCombo->setEnabled(false);
+    
+    auto *cmdInterface = EssApplication::instance()->commandInterface();
+    if (cmdInterface && cmdInterface->isConnected()) {
+        emit statusMessage(tr("Pushing changes to remote..."), 0);
+        
+        // Execute git push through backend
+        auto result = cmdInterface->executeEss("send git git::commit_and_push");
+        
+        if (result.status == EssCommandInterface::StatusSuccess) {
+            emit statusMessage(tr("Push completed successfully"), 3000);
+            EssConsoleManager::instance()->logSuccess("Git push completed", "ScriptEditor");
+        } else {
+            QMessageBox::warning(this, tr("Push Failed"),
+                tr("Failed to push changes: %1").arg(result.error));
+        }
+    }
+    
+    m_isGitBusy = false;
+    updateGlobalActions();
+}
+
+void EssScriptEditorWidget::onPullClicked()
+{
+    // Warn about unsaved changes
+    if (hasModifiedScripts()) {
+        auto reply = QMessageBox::warning(this, tr("Unsaved Changes"),
+            tr("You have unsaved changes. Pull will overwrite them. Continue?"),
+            QMessageBox::Yes | QMessageBox::No);
+            
+        if (reply != QMessageBox::Yes) return;
+    }
+    
+    m_isGitBusy = true;
+    m_pushAction->setEnabled(false);
+    m_pullAction->setEnabled(false);
+    m_branchCombo->setEnabled(false);
+    
+    auto *cmdInterface = EssApplication::instance()->commandInterface();
+    if (cmdInterface && cmdInterface->isConnected()) {
+        emit statusMessage(tr("Pulling changes from remote..."), 0);
+        
+        auto result = cmdInterface->executeEss("send git git::pull");
+        
+        if (result.status == EssCommandInterface::StatusSuccess) {
+            emit statusMessage(tr("Pull completed successfully"), 3000);
+            EssConsoleManager::instance()->logSuccess("Git pull completed", "ScriptEditor");
+            
+            // Reload all scripts after pull
+            QTimer::singleShot(500, this, [this]() {
+                for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+                    QString datapointName = it->datapointName;
+                    auto *cmdInterface = EssApplication::instance()->commandInterface();
+                    if (cmdInterface && cmdInterface->isConnected()) {
+                        cmdInterface->executeDserv(QString("%%touch %1").arg(datapointName));
                     }
                 }
             });
-    
-    // Define bookmark marker
-    m_editor->markerDefine(QsciScintilla::Circle, 1);
-    m_editor->setMarkerBackgroundColor(QColor(255, 195, 0), 1);
-    
-    setupEmacsBindings();    
-}
-
-void EssScriptEditorWidget::applyTheme()
-{
-    // Base colors (matching your terminal theme)
-    m_editor->setPaper(QColor(40, 44, 52));  // Background
-    m_editor->setColor(QColor(171, 178, 191)); // Default text
-    
-    // Margins
-    m_editor->setMarginsBackgroundColor(QColor(40, 44, 52));
-    m_editor->setMarginsForegroundColor(QColor(100, 100, 100));
-    m_editor->setFoldMarginColors(QColor(40, 44, 52), QColor(40, 44, 52));
-    
-    // Selection
-    m_editor->setSelectionBackgroundColor(QColor(61, 90, 128));
-    m_editor->setSelectionForegroundColor(Qt::white);
-    
-    // Caret line
-    m_editor->setCaretLineBackgroundColor(QColor(50, 54, 62));
-    m_editor->setCaretForegroundColor(QColor(171, 178, 191));
-    
-    // Matching braces
-    m_editor->setMatchedBraceBackgroundColor(QColor(86, 182, 255));
-    m_editor->setMatchedBraceForegroundColor(Qt::white);
-    
-    if (auto tcl = qobject_cast<QsciLexerTCL*>(m_lexer.get())) {
-        // Apply theme to lexer
-        QFont font("Consolas, Monaco, Courier New, monospace", 10);
-        font.setFixedPitch(true);
-        
-        // Set paper and default colors for all styles
-        for (int i = 0; i < 128; ++i) {
-            tcl->setPaper(QColor(40, 44, 52), i);
-            tcl->setFont(font, i);
+        } else {
+            QMessageBox::warning(this, tr("Pull Failed"),
+                tr("Failed to pull changes: %1").arg(result.error));
         }
-        
-        // Tcl-specific syntax colors
-        tcl->setColor(QColor(171, 178, 191), QsciLexerTCL::Default);
-        tcl->setColor(QColor(224, 108, 117), QsciLexerTCL::Comment);
-        tcl->setColor(QColor(224, 108, 117), QsciLexerTCL::CommentLine);
-        // QuotedString is the enum for strings in TCL lexer
-        tcl->setColor(QColor(152, 195, 121), QsciLexerTCL::QuotedString);
-        tcl->setColor(QColor(229, 192, 123), QsciLexerTCL::Number);
-        tcl->setColor(QColor(198, 120, 221), QsciLexerTCL::TCLKeyword);
-        tcl->setColor(QColor(86, 182, 255), QsciLexerTCL::TkKeyword);
-        tcl->setColor(QColor(97, 175, 239), QsciLexerTCL::ITCLKeyword);
-        tcl->setColor(QColor(224, 108, 117), QsciLexerTCL::Operator);
-        tcl->setColor(QColor(171, 178, 191), QsciLexerTCL::Identifier);
-        tcl->setColor(QColor(229, 192, 123), QsciLexerTCL::Substitution);
-        tcl->setColor(QColor(97, 175, 239), QsciLexerTCL::SubstitutionBrace);
-    }
-}
-
-void EssScriptEditorWidget::setupActions()
-{
-    // File actions
-    m_newAction = new QAction(tr("&New"), this);
-    m_newAction->setShortcut(QKeySequence::New);
-    connect(m_newAction, &QAction::triggered, this, &EssScriptEditorWidget::newFile);
-    
-    m_openAction = new QAction(tr("&Open..."), this);
-    m_openAction->setShortcut(QKeySequence::Open);
-    connect(m_openAction, &QAction::triggered, this, [this]() { openFile(); });
-    
-    m_saveAction = new QAction(tr("&Save"), this);
-    m_saveAction->setShortcut(QKeySequence::Save);
-    connect(m_saveAction, &QAction::triggered, this, &EssScriptEditorWidget::saveFile);
-    
-    m_saveAsAction = new QAction(tr("Save &As..."), this);
-    m_saveAsAction->setShortcut(QKeySequence::SaveAs);
-    connect(m_saveAsAction, &QAction::triggered, this, &EssScriptEditorWidget::saveFileAs);
-    
-    // Execute actions
-    m_executeSelAction = new QAction(tr("Execute &Selection"), this);
-    m_executeSelAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
-    connect(m_executeSelAction, &QAction::triggered, 
-            this, &EssScriptEditorWidget::executeSelection);
-    
-    m_executeAllAction = new QAction(tr("Execute &All"), this);
-    m_executeAllAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Return));
-    connect(m_executeAllAction, &QAction::triggered, 
-            this, &EssScriptEditorWidget::executeAll);
-    
-    // Find action
-    m_findAction = new QAction(tr("&Find..."), this);
-    m_findAction->setShortcut(QKeySequence::Find);
-    connect(m_findAction, &QAction::triggered, [this]() {
-        // QScintilla has built-in find dialog
-        m_editor->findFirst(QString(), false, false, false, true);
-    });
-}
-
-void EssScriptEditorWidget::createToolBar()
-{
-    m_toolbar = new QToolBar(this);
-    m_toolbar->setMovable(false);
-    
-    m_toolbar->addAction(m_newAction);
-    m_toolbar->addAction(m_openAction);
-    m_toolbar->addAction(m_saveAction);
-    m_toolbar->addSeparator();
-    m_toolbar->addAction(m_executeSelAction);
-    m_toolbar->addAction(m_executeAllAction);
-    m_toolbar->addSeparator();
-    m_toolbar->addAction(m_findAction);
-}
-
-void EssScriptEditorWidget::newFile()
-{
-    if (maybeSave()) {
-        m_editor->clear();
-        setCurrentFile(QString());
-    }
-}
-
-void EssScriptEditorWidget::openFile(const QString &path)
-{
-    QString fileName = path;
-    if (fileName.isEmpty()) {
-        fileName = QFileDialog::getOpenFileName(this, 
-            tr("Open Script"), m_defaultPath,
-            tr("Tcl Scripts (*.tcl);;Python Scripts (*.py);;All Files (*)"));
     }
     
-    if (!fileName.isEmpty()) {
-        loadFile(fileName);
-    }
+    m_isGitBusy = false;
+    updateGlobalActions();
 }
 
-void EssScriptEditorWidget::loadFile(const QString &path)
+void EssScriptEditorWidget::onBranchChanged(int index)
 {
-    QFile file(path);
-    if (!file.open(QFile::ReadOnly | QFile::Text)) {
-        QMessageBox::warning(this, tr("Script Editor"),
-                             tr("Cannot read file %1:\n%2.")
-                             .arg(path, file.errorString()));
-        return;
-    }
+    if (index < 0 || m_isGitBusy) return;
     
-    QTextStream in(&file);
-    m_editor->setText(in.readAll());
+    QString newBranch = m_branchCombo->itemText(index);
+    if (newBranch == m_currentBranch) return;
     
-    setCurrentFile(path);
-    setLexerForFile(path);
-    emit fileOpened(path);
-    emit statusMessage(tr("Opened %1").arg(QFileInfo(path).fileName()), 3000);
-}
-
-bool EssScriptEditorWidget::saveFile()
-{
-    if (m_currentFile.isEmpty()) {
-        return saveFileAs();
-    }
-    
-    QFile file(m_currentFile);
-    if (!file.open(QFile::WriteOnly | QFile::Text)) {
-        QMessageBox::warning(this, tr("Script Editor"),
-                             tr("Cannot write file %1:\n%2.")
-                             .arg(m_currentFile, file.errorString()));
-        return false;
-    }
-    
-    QTextStream out(&file);
-    out << m_editor->text();
-    
-    m_editor->setModified(false);
-    emit fileSaved(m_currentFile);
-    emit statusMessage(tr("Saved %1").arg(QFileInfo(m_currentFile).fileName()), 3000);
-    return true;
-}
-
-bool EssScriptEditorWidget::saveFileAs()
-{
-    QString fileName = QFileDialog::getSaveFileName(this,
-        tr("Save Script"), m_defaultPath,
-        tr("Tcl Scripts (*.tcl);;Python Scripts (*.py);;All Files (*)"));
-    
-    if (fileName.isEmpty())
-        return false;
-    
-    m_currentFile = fileName;
-    return saveFile();
-}
-
-void EssScriptEditorWidget::executeSelection()
-{
-    QString code;
-    if (m_editor->hasSelectedText()) {
-        code = m_editor->selectedText();
-    } else {
-        // Execute current line
-        int line, index;
-        m_editor->getCursorPosition(&line, &index);
-        code = m_editor->text(line);
-    }
-    
-    if (!code.trimmed().isEmpty()) {
-        emit executeRequested(code);
-        
-        // Execute through command interface
-        auto cmdInterface = EssApplication::instance()->commandInterface();
-        if (cmdInterface && cmdInterface->isConnected()) {
-            // Use the appropriate async method based on file type or current channel
-            if (m_currentFile.endsWith(".tcl") || 
-                cmdInterface->defaultChannel() == EssCommandInterface::ChannelLocal) {
-                // Execute as Tcl
-                cmdInterface->executeCommand("/tcl " + code);
-            } else {
-                // Execute as ESS command
-                cmdInterface->executeEssAsync(code);
-            }
+    // Warn about unsaved changes
+    if (hasModifiedScripts()) {
+        auto reply = QMessageBox::warning(this, tr("Unsaved Changes"),
+            tr("You have unsaved changes. Switching branches will lose them. Continue?"),
+            QMessageBox::Yes | QMessageBox::No);
             
-            EssConsoleManager::instance()->logInfo(
-                QString("Executing: %1...").arg(code.left(50)), 
-                "ScriptEditor"
-            );
+        if (reply != QMessageBox::Yes) {
+            // Restore previous selection
+            m_branchCombo->setCurrentText(m_currentBranch);
+            return;
         }
     }
-}
-
-void EssScriptEditorWidget::executeAll()
-{
-    QString code = m_editor->text();
-    if (!code.trimmed().isEmpty()) {
-        emit executeRequested(code);
+    
+    m_isGitBusy = true;
+    updateGlobalActions();
+    
+    auto *cmdInterface = EssApplication::instance()->commandInterface();
+    if (cmdInterface && cmdInterface->isConnected()) {
+        emit statusMessage(tr("Switching to branch %1...").arg(newBranch), 0);
         
-        auto cmdInterface = EssApplication::instance()->commandInterface();
-        if (cmdInterface && cmdInterface->isConnected()) {
-            // For full scripts, use appropriate execution method
-            if (m_currentFile.endsWith(".tcl")) {
-                // Execute entire script as Tcl
-                // We can send it line by line or as a block
-                QStringList lines = code.split('\n');
-                for (const QString &line : lines) {
-                    if (!line.trimmed().isEmpty()) {
-                        cmdInterface->executeCommand("/tcl " + line);
-                    }
-                }
-            } else {
-                cmdInterface->executeEssAsync(code);
-            }
+        QString cmd = QString("send git {git::switch_and_pull %1}").arg(newBranch);
+        auto result = cmdInterface->executeEss(cmd);
+        
+        if (result.status == EssCommandInterface::StatusSuccess) {
+            m_currentBranch = newBranch;
+            emit statusMessage(tr("Switched to branch %1").arg(newBranch), 3000);
             
-            EssConsoleManager::instance()->logInfo(
-                "Executing entire script...", 
-                "ScriptEditor"
-            );
+            // Reload system after branch switch
+            cmdInterface->executeEss("ess::reload_variant");
+        } else {
+            QMessageBox::warning(this, tr("Branch Switch Failed"),
+                tr("Failed to switch branch: %1").arg(result.error));
+            // Restore combo to current branch
+            m_branchCombo->setCurrentText(m_currentBranch);
+        }
+    }
+    
+    m_isGitBusy = false;
+    updateGlobalActions();
+}
+
+void EssScriptEditorWidget::updateGitStatus()
+{
+    auto *cmdInterface = EssApplication::instance()->commandInterface();
+    if (!cmdInterface || !cmdInterface->isConnected()) return;
+    
+    // Request current branch and available branches
+    cmdInterface->executeDserv("%touch ess/git/branch");
+    cmdInterface->executeDserv("%touch ess/git/branches");
+}
+
+void EssScriptEditorWidget::onEditorSaveRequested()
+{
+    saveCurrentScript();
+}
+
+void EssScriptEditorWidget::onCursorPositionChanged(int line, int column)
+{
+    updateStatusBar();
+}
+
+void EssScriptEditorWidget::updateTabTitle(ScriptType type)
+{
+    auto it = m_scriptEditors.find(type);
+    if (it == m_scriptEditors.end()) return;
+    
+    QString baseTitle = scriptTypeToString(type);
+    
+    // Find tab index
+    int index = -1;
+    for (int i = 0; i < m_tabWidget->count(); ++i) {
+        if (m_tabWidget->widget(i) == it->editor) {
+            index = i;
+            break;
+        }
+    }
+    
+    if (index >= 0) {
+        QString title = baseTitle;
+        
+        // Add modified indicator
+        if (it->editor->isModified()) {
+            // Use bullet character for modified indicator
+            title = "● " + title;
+            // OR use traditional asterisk
+            // title = title + " *";
+        }
+        
+        m_tabWidget->setTabText(index, title);
+        
+        // Optional: Use tooltip to indicate modified state
+        if (it->editor->isModified()) {
+            m_tabWidget->setTabToolTip(index, baseTitle + " (modified)");
+        } else {
+            m_tabWidget->setTabToolTip(index, baseTitle);
         }
     }
 }
 
-void EssScriptEditorWidget::setCurrentFile(const QString &path)
+void EssScriptEditorWidget::updateStatusBar()
 {
-    m_currentFile = path;
-    m_editor->setModified(false);
-    
-    QString shownName = m_currentFile;
-    if (m_currentFile.isEmpty())
-        shownName = "untitled.tcl";
-    
-    setWindowTitle(tr("%1[*] - Script Editor").arg(QFileInfo(shownName).fileName()));
-    
-    if (!path.isEmpty()) {
-        m_defaultPath = QFileInfo(path).path();
+    ScriptType type = currentScriptType();
+    auto it = m_scriptEditors.find(type);
+    if (it != m_scriptEditors.end()) {
+        int line, column;
+        it->editor->getCursorPosition(line, column);
+        
+        QString status = QString("%1 Script - Line %2, Column %3")
+            .arg(scriptTypeToString(type))
+            .arg(line + 1)
+            .arg(column + 1);
+        
+        if (it->editor->isModified()) {
+            status += " - Modified";
+        }
+        
+        if (!m_currentBranch.isEmpty()) {
+            status += QString(" - Branch: %1").arg(m_currentBranch);
+        }
+        
+        m_statusLabel->setText(status);
     }
 }
 
-void EssScriptEditorWidget::setLexerForFile(const QString &path)
+void EssScriptEditorWidget::updateGlobalActions()
 {
-    QFileInfo fi(path);
-    QString ext = fi.suffix().toLower();
+    ScriptType type = currentScriptType();
+    auto it = m_scriptEditors.find(type);
     
-    if (ext == "py") {
-        m_lexer.reset(new QsciLexerPython(m_editor));
-    } else if (ext == "cpp" || ext == "cxx" || ext == "h" || ext == "hpp") {
-        m_lexer.reset(new QsciLexerCPP(m_editor));
-    } else if (ext == "sh" || ext == "bash") {
-        m_lexer.reset(new QsciLexerBash(m_editor));
+    if (it != m_scriptEditors.end()) {
+        // Temporarily remove connection check for testing
+        bool modified = it->editor->isModified();
+        m_saveAction->setEnabled(modified);
     } else {
-        // Default to Tcl
-        m_lexer.reset(new QsciLexerTCL(m_editor));
+        m_saveAction->setEnabled(false);
     }
     
-    m_editor->setLexer(m_lexer.get());
-    applyTheme();  // Reapply theme to new lexer
-}
-
-bool EssScriptEditorWidget::maybeSave()
-{
-    if (!m_editor->isModified())
-        return true;
-    
-    const QMessageBox::StandardButton ret = 
-        QMessageBox::warning(this, tr("Script Editor"),
-                             tr("The document has been modified.\n"
-                                "Do you want to save your changes?"),
-                             QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
-    
-    switch (ret) {
-    case QMessageBox::Save:
-        return saveFile();
-    case QMessageBox::Cancel:
-        return false;
-    default:
-        break;
+    // Keep other buttons with connection check
+    bool isConnected = false;
+    if (auto *cmdInterface = EssApplication::instance()->commandInterface()) {
+        isConnected = cmdInterface->isConnected();
     }
-    return true;
+    
+    m_saveAllAction->setEnabled(hasModifiedScripts() && isConnected);
+    m_reloadAction->setEnabled(isConnected);
+    m_pushAction->setEnabled(!m_isGitBusy && isConnected);
+    m_pullAction->setEnabled(!m_isGitBusy && isConnected);
+    m_branchCombo->setEnabled(!m_isGitBusy && isConnected);
 }
 
-bool EssScriptEditorWidget::isModified() const
+QString EssScriptEditorWidget::scriptTypeToString(ScriptType type) const
 {
-    return m_editor->isModified();
-}
-
-void EssScriptEditorWidget::onTextChanged()
-{
-    // Update status or other UI elements if needed
-}
-
-void EssScriptEditorWidget::onCursorPositionChanged(int line, int index)
-{
-    m_statusLabel->setText(tr("Line %1, Column %2").arg(line + 1).arg(index + 1));
-}
-
-void EssScriptEditorWidget::onModificationChanged(bool modified)
-{
-    emit modificationChanged(modified);
-}
-
-void EssScriptEditorWidget::closeEvent(QCloseEvent *event)
-{
-    if (maybeSave()) {
-        event->accept();
-    } else {
-        event->ignore();
+    switch (type) {
+        case SystemScript: return "System";
+        case ProtocolScript: return "Protocol";
+        case LoadersScript: return "Loaders";
+        case VariantsScript: return "Variants";
+        case StimScript: return "Stim";
+        default: return "Unknown";
     }
+}
+
+QString EssScriptEditorWidget::scriptTypeToDatapoint(ScriptType type)
+{
+    switch (type) {
+        case SystemScript: return "ess/system_script";
+        case ProtocolScript: return "ess/protocol_script";
+        case LoadersScript: return "ess/loaders_script";
+        case VariantsScript: return "ess/variants_script";
+        case StimScript: return "ess/stim_script";
+        default: return "";
+    }
+}
+
+EssScriptEditorWidget::ScriptType EssScriptEditorWidget::scriptTypeFromDatapoint(const QString &name) const
+{
+    static const QMap<QString, ScriptType> dpMap = {
+        {"ess/system_script", SystemScript},
+        {"ess/protocol_script", ProtocolScript},
+        {"ess/loaders_script", LoadersScript},
+        {"ess/variants_script", VariantsScript},
+        {"ess/stim_script", StimScript}
+    };
+    
+    return dpMap.value(name, SystemScript);
+}
+
+EssScriptEditorWidget::ScriptType EssScriptEditorWidget::currentScriptType() const
+{
+    QWidget *currentWidget = m_tabWidget->currentWidget();
+    
+    for (auto it = m_scriptEditors.begin(); it != m_scriptEditors.end(); ++it) {
+        if (it->editor == currentWidget) {
+            return it.key();
+        }
+    }
+    
+    return SystemScript;  // Default
 }

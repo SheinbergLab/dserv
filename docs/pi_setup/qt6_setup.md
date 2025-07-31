@@ -1,7 +1,7 @@
 #
 
 ## Linux packages
-qt6-base-dev-tools qt6-tools-dev-tools qt6-wayland-dev-tools libqscintilla2-qt6-dev 
+sudo apt install qt6-base-dev qt6-base-dev-tools qt6-tools-dev-tools qt6-wayland-dev-tools libqt6network6 libqt6widgets6
 
 ## CmakeLists.txt example
 ```

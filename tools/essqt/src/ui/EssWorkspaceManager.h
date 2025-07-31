@@ -43,7 +43,7 @@ public:
     void saveLayout();
     bool restoreLayout();  // Returns true if layout was restored
     void resetToDefaultLayout();
-    
+
     // Get menu actions for View menu
     QList<QAction*> viewMenuActions() const;
 
@@ -56,7 +56,7 @@ private:
     void createBottomPanel();
     void createScriptEditor();
     void connectSignals();
-    
+
     QMainWindow *m_mainWindow;
     
     // Dock widgets

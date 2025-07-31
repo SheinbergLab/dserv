@@ -1,15 +1,23 @@
 #pragma once
 
 #include <QWidget>
+#include <QMap>
 #include <QString>
-#include <memory>
 
-class QsciScintilla;
-class QsciLexer;
-class QAction;
-class QToolBar;
+class EssCodeEditor;
+class QTabWidget;
 class QLabel;
+class QToolBar;
+class QAction;
+class QComboBox;
 
+/**
+ * @brief Specialized script editor for ESS system scripts
+ * 
+ * Manages multiple script types (system, protocol, loaders, variants, stim)
+ * in a tabbed interface. Automatically loads scripts from datapoints and
+ * provides save functionality back to the ESS backend.
+ */
 class EssScriptEditorWidget : public QWidget
 {
     Q_OBJECT
@@ -18,62 +26,103 @@ public:
     explicit EssScriptEditorWidget(QWidget *parent = nullptr);
     ~EssScriptEditorWidget();
 
-    // File operations
-    void newFile();
-    void openFile(const QString &path = QString());
-    bool saveFile();
-    bool saveFileAs();
+    // Script types matching ESS datapoints
+    enum ScriptType {
+        SystemScript,
+        ProtocolScript,
+        LoadersScript,
+        VariantsScript,
+        StimScript
+    };
     
-    // Editor operations
-    void executeSelection();
-    void executeAll();
+    // Load script content from datapoint
+    void loadScript(ScriptType type, const QString &content);
     
-    QString currentFile() const { return m_currentFile; }
-    bool isModified() const;
+    // Get script content
+    QString getScriptContent(ScriptType type) const;
+    
+    // Check if any scripts are modified
+    bool hasModifiedScripts() const;
+    
+    // Get list of modified scripts
+    QList<ScriptType> modifiedScripts() const;
+    
+    // Save a specific script
+    void saveScript(ScriptType type);
+    
+    // Script type utilities
+    QString scriptTypeToString(ScriptType type) const;
+    static QString scriptTypeToDatapoint(ScriptType type);
+    
+    // Disconnect handling
+    bool confirmDisconnectWithUnsavedChanges();
 
 signals:
-    void fileOpened(const QString &path);
-    void fileSaved(const QString &path);
-    void executeRequested(const QString &code);
-    void modificationChanged(bool modified);
+    void scriptModified(ScriptType type, bool modified);
+    void scriptSaved(ScriptType type);
     void statusMessage(const QString &message, int timeout = 0);
+    void saveAllRequested();
 
-protected:
-    void closeEvent(QCloseEvent *event) override;
-
-private slots:
-    void onTextChanged();
-    void onCursorPositionChanged(int line, int index);
-    void onModificationChanged(bool modified);
+public slots:
+    void onDatapointReceived(const QString &name, const QString &content);
+    void saveCurrentScript();
+    void saveAllScripts();
+    void reloadCurrentScript();
+    void onSaveAllTriggered() { saveAllScripts(); }
+    void clearAllScripts();
+    void onDisconnected();
     
-private:
-    void setupEditor();
-    void setupActions();
-    void createToolBar();
-    void setCurrentFile(const QString &path);
-    bool maybeSave();
-    void applyTheme();
-    void loadFile(const QString &path);
-    void setLexerForFile(const QString &path);
+private slots:
+    void onTabChanged(int index);
+    void onScriptModified(bool modified);
+    void onEditorSaveRequested();
+    void onCursorPositionChanged(int line, int column);
+    void updateGlobalActions();
 
-    void setupEmacsBindings();
-    void smartIndent();
-    bool eventFilter(QObject *obj, QEvent *event) override;
+    void onPushClicked();
+    void onPullClicked();
+    void onBranchChanged(int index);
+    void updateGitStatus();
   
-    QsciScintilla *m_editor;
-    std::unique_ptr<QsciLexer> m_lexer;
-    QToolBar *m_toolbar;
+private:
+    struct ScriptEditor {
+        EssCodeEditor *editor;
+        ScriptType type;
+        QString datapointName;
+        bool loaded;
+    };
+
+    void setupUi();
+    void createGlobalToolbar();
+    void createScriptTab(ScriptType type, const QString &tabName, const QString &datapointName);
+    void connectSignals();
+    void updateTabTitle(ScriptType type);
+    void updateStatusBar();
+    ScriptType scriptTypeFromDatapoint(const QString &name) const;
+    ScriptType currentScriptType() const;
+    
+    // UI components
+    QTabWidget *m_tabWidget;
+    QToolBar *m_globalToolbar;
     QLabel *m_statusLabel;
     
-    QString m_currentFile;
-    QString m_defaultPath;
+    // Script editors
+    QMap<ScriptType, ScriptEditor> m_scriptEditors;
     
-    // Actions
-    QAction *m_newAction;
-    QAction *m_openAction;
+    // Global actions
     QAction *m_saveAction;
-    QAction *m_saveAsAction;
-    QAction *m_executeSelAction;
-    QAction *m_executeAllAction;
-    QAction *m_findAction;
+    QAction *m_saveAllAction;
+    QAction *m_reloadAction;
+
+    QAction *m_pushAction;
+    QAction *m_pullAction;
+    QComboBox *m_branchCombo;
+   
+    // State
+    int m_pendingSaves;
+
+    // Git state
+    QString m_currentBranch;
+    QStringList m_availableBranches;
+    bool m_isGitBusy;  
 };

@@ -101,6 +101,7 @@ set(UI_SOURCES
     src/ui/components/event_table/EssEventTableWidget.cpp    
     src/ui/components/host_discovery/EssHostDiscoveryWidget.cpp
     src/ui/components/experiment_control/EssExperimentControlWidget.cpp
+    src/ui/components/script_editor/EssCodeEditor.cpp
     src/ui/components/script_editor/EssScriptEditorWidget.cpp
 )
 

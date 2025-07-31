@@ -28,6 +28,13 @@ public:
     EssCommandInterface* commandInterface() const { return m_commandInterface.get(); }
     EssDataProcessor* dataProcessor() const { return m_dataProcessor.get(); }
 
+signals:
+    void disconnectCancelled();  // Emitted when user cancels disconnect due to unsaved changes
+
+private slots:
+    void handleDisconnectRequest();
+
+
 private:
     void initializeServices();
     void shutdownServices();
