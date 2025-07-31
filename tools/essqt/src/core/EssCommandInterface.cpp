@@ -603,11 +603,11 @@ void EssCommandInterface::disconnectFromHost()
         return;
     }
     
-    // Clear subscriptions
-    clearSubscriptions();
-    
-    // Stop listener
+    // Stop listener first - this will unregister and automatically clear all matches
     stopListener();
+    
+    // Clear our local subscription list without trying to remove from server
+    m_activeSubscriptions.clear();
     
     // Reset and recreate clients
     m_dservClient.reset();
@@ -957,11 +957,16 @@ bool EssCommandInterface::unsubscribe(const QString &pattern)
 
 void EssCommandInterface::clearSubscriptions()
 {
-    if (!isListening()) return;
+    if (!isListening() || m_currentHost.isEmpty()) {
+        // If not listening or no host, just clear the list
+        m_activeSubscriptions.clear();
+        return;
+    }
     
     quint16 port = m_dservListener->port();
     
     for (const QString &pattern : m_activeSubscriptions) {
+        // During shutdown, these might fail if listener was already unregistered
         m_dservClient->removeMatch(m_currentHost, port, pattern);
     }
     m_activeSubscriptions.clear();
