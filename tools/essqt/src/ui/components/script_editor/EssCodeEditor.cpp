@@ -127,7 +127,7 @@ void EssCodeEditor::applyTheme()
     // Try specific fonts in order of preference
     QStringList fontFamilies;
     #ifdef Q_OS_MAC
-        fontFamilies << "SF Mono" << "Monaco" << "Menlo" << "Courier New";
+        fontFamilies << "Monaco" << "Menlo" << "Courier New";
     #elif defined(Q_OS_WIN)
         fontFamilies << "Consolas" << "Courier New" << "Lucida Console";
     #else
@@ -142,12 +142,6 @@ void EssCodeEditor::applyTheme()
             fontFound = true;
             break;
         }
-    }
-    
-    // Fallback to generic monospace
-    if (!fontFound) {
-        fixedFont.setFamily("monospace");
-        fixedFont.setStyleHint(QFont::Monospace);
     }
     
     fixedFont.setFixedPitch(true);
