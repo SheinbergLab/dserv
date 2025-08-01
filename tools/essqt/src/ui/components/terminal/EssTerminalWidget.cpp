@@ -30,7 +30,7 @@ EssTerminalWidget::~EssTerminalWidget() = default;
 void EssTerminalWidget::init()
 {
     // Set terminal appearance
-    QFont terminalFont("Consolas, Monaco, Courier New, monospace");
+    QFont terminalFont("Monaco, Menlo, Courier New");
     terminalFont.setFixedPitch(true);
     terminalFont.setPointSize(10);
     setFont(terminalFont);
