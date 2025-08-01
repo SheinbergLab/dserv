@@ -3,10 +3,16 @@
 #include <QObject>
 #include <QMap>
 #include <QList>
+#include <QSize>
+#include <functional>
 
+QT_BEGIN_NAMESPACE
 class QMainWindow;
 class QDockWidget;
 class QAction;
+class QWidget;
+QT_END_NAMESPACE
+
 class EssTerminalWidget;
 class EssOutputConsole;
 class EssDatapointTableWidget;
@@ -14,6 +20,7 @@ class EssEventTableWidget;
 class EssHostDiscoveryWidget;
 class EssExperimentControlWidget;
 class EssScriptEditorWidget;
+class EssStimDgWidget;
 
 class EssWorkspaceManager : public QObject
 {
@@ -23,46 +30,67 @@ public:
     explicit EssWorkspaceManager(QMainWindow *mainWindow, QObject *parent = nullptr);
     ~EssWorkspaceManager();
 
-    // Create and arrange all docks
+    // Main setup
     void setupWorkspace();
     
-    // Access to widgets
-    EssTerminalWidget* terminal() const { return m_terminal; }
-    EssOutputConsole* console() const { return m_console; }
-    EssDatapointTableWidget* datapointTable() const { return m_datapointTable; }
-    EssEventTableWidget* eventTable() const { return m_eventTable; }
-    EssHostDiscoveryWidget* hostDiscovery() const { return m_hostDiscovery; }
-    EssExperimentControlWidget* experimentControl() const { return m_experimentControl; }
-    EssScriptEditorWidget* scriptEditor() const { return m_scriptEditor; }
+    // Layout management
+    void resetToDefaultLayout();
+    void saveLayout();
+    bool restoreLayout();
     
     // Dock visibility
     void setDockVisible(const QString &dockName, bool visible);
     bool isDockVisible(const QString &dockName) const;
     
-    // Layout management
-    void saveLayout();
-    bool restoreLayout();  // Returns true if layout was restored
-    void resetToDefaultLayout();
-
-    // Get menu actions for View menu
+    // Menu actions
     QList<QAction*> viewMenuActions() const;
 
 signals:
-    void statusMessage(const QString &message, int timeout);
+    void statusMessage(const QString &message, int timeout = 0);
 
 private:
-    void createLeftPanel();
-    void createRightPanel();
-    void createBottomPanel();
-    void createScriptEditor();
+    // Widget factory type
+    using WidgetFactory = std::function<QWidget*()>;
+    
+    struct DockInfo {
+        QString title;
+        QString objectName;
+        WidgetFactory factory;
+        Qt::DockWidgetAreas allowedAreas = Qt::AllDockWidgetAreas;
+        QSize minimumSize;
+        QSize maximumSize;  // Add maximum size
+        QSize preferredSize;
+        // Additional constraints
+        int minHeight = -1;  // -1 means no constraint
+        int maxHeight = -1;
+        int minWidth = -1;
+        int maxWidth = -1;
+    };
+    
+    // Setup methods
+    void registerAllDocks();
+    void createAllDocks();
+    void applyDefaultLayout();
     void connectSignals();
-
+    
+    // Helper methods
+    QDockWidget* createDock(const QString &id);
+    QWidget* getWidget(const QString &id) const;
+    
+    // Meta-widget creators (return the container widget)
+    QWidget* createControlPanel();
+    
+private:
     QMainWindow *m_mainWindow;
     
-    // Dock widgets
-    QMap<QString, QDockWidget*> m_docks;
+    // Dock registry - defines all available docks
+    QMap<QString, DockInfo> m_dockRegistry;
     
-    // Widget instances
+    // Created docks and their widgets
+    QMap<QString, QDockWidget*> m_docks;
+    QMap<QString, QWidget*> m_widgets;
+    
+    // Direct widget pointers for convenience (optional)
     EssTerminalWidget *m_terminal;
     EssOutputConsole *m_console;
     EssDatapointTableWidget *m_datapointTable;
@@ -70,4 +98,5 @@ private:
     EssHostDiscoveryWidget *m_hostDiscovery;
     EssExperimentControlWidget *m_experimentControl;
     EssScriptEditorWidget *m_scriptEditor;
+    EssStimDgWidget *m_stimDgViewer;
 };
