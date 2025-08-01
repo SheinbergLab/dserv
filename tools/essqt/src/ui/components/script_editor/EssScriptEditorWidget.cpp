@@ -84,7 +84,6 @@ void EssScriptEditorWidget::setupUi()
     // Status bar
     m_statusLabel->setFrameStyle(QFrame::Panel | QFrame::Sunken);
     m_statusLabel->setMinimumHeight(20);
-    m_statusLabel->setStyleSheet("QLabel { font-family: monospace; font-size: 11px; }");
     
     // Add to layout
     layout->addWidget(m_globalToolbar);
