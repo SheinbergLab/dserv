@@ -105,12 +105,12 @@ set(UI_SOURCES
     src/ui/components/script_editor/EssScriptEditorWidget.cpp
 )
 
-# Optional: Add these if you have them
 set(OPTIONAL_SOURCES
-    # src/dlfuncs.c
     # src/tcl/TclInterp.cpp
     src/communication/mdns_query.c
     src/communication/mdns.c
+    src/tcl/dlfuncs.c
+    src/tcl/b64.c
 )
 
 # Main executable

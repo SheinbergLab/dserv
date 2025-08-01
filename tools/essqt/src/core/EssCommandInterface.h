@@ -23,6 +23,10 @@ struct Tcl_Obj;
 typedef void *ClientData;
 #endif
 
+extern "C" {
+#include "dlfuncs.h"
+}
+
 class EssCommandInterface : public QObject
 {
     Q_OBJECT
@@ -96,7 +100,13 @@ public:
     QStringList getAvailableCommands() const;
     QStringList getTclCommands() const;
 
-  
+  // Access to Tcl interpreter for DG processing
+  Tcl_Interp* tclInterp() const { return m_tclInterp; }
+
+  // DynGroup access methods
+  DYN_GROUP* getDynGroup(const QString &name) const;
+  QStringList getDynGroupNames() const;
+  QStringList getDynListNames(const QString &groupName) const;
 
 signals:
     void connected(const QString &host);
@@ -113,7 +123,8 @@ signals:
     void disconnectRequested();
     
     // Datapoint updates from listener
-    void datapointUpdated(const QString &name, const QVariant &value, qint64 timestamp);
+    void datapointUpdated(const QString &name, const QVariant &value, 
+    					  qint64 timestamp, int dtype = -1);
 
 private slots:
     void onEventReceived(const QString &event);

@@ -38,7 +38,7 @@ void EssApplication::initializeServices()
     // Create data processor
     m_dataProcessor = std::make_unique<EssDataProcessor>();
     
-    // Connect command interface to data processor
+    // Connect command interface to data processor - now with dtype parameter
     connect(m_commandInterface.get(), &EssCommandInterface::datapointUpdated,
             m_dataProcessor.get(), &EssDataProcessor::processDatapoint);
     

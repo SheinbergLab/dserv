@@ -1,10 +1,18 @@
 #include "EssDataProcessor.h"
 #include "console/EssOutputConsole.h"
-#include "core/EssEventProcessor.h"  // Add this
-#include "core/EssEvent.h"           // Add this
+#include "core/EssEventProcessor.h"
+#include "core/EssEvent.h"
+#include "EssApplication.h"
+#include "EssCommandInterface.h"
+#include "DservEventParser.h"
+
 #include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
+
+extern "C" {
+#include "dlfuncs.h"
+}
 
 // In the constructor:
 EssDataProcessor::EssDataProcessor(QObject *parent)
@@ -39,11 +47,18 @@ EssDataProcessor::~EssDataProcessor()
 
 // In EssDataProcessor::processDatapoint, add this at the beginning of the method:
 
-void EssDataProcessor::processDatapoint(const QString &name, const QVariant &value, qint64 timestamp)
+void EssDataProcessor::processDatapoint(const QString &name,
+										const QVariant &value, 
+										qint64 timestamp, int dtype)
 {
-    // Handle eventlog/events which contains event data in a QVariantMap
-    if (name == "eventlog/events") {
-        
+    // Check if this is a DynGroup by dtype
+    if (dtype == DSERV_DG) {
+        routeDgData(name, value, timestamp);
+        return;
+    }
+    
+    // Handle eventlog/events which has dtype DSERV_EVT
+    if (dtype == DSERV_EVT && name == "eventlog/events") {
         // For eventlog/events, the value should be a QVariantMap with event fields
         if (value.userType() == QMetaType::QVariantMap) {
             QVariantMap eventMap = value.toMap();
@@ -65,14 +80,11 @@ void EssDataProcessor::processDatapoint(const QString &name, const QVariant &val
                 // Process the event
                 m_eventProcessor->processEvent(event);
             }
-        } else {
-
         }
-        
         return;
     }
     
-    // Route based on datapoint name patterns
+    // Route based on datapoint name patterns for non-DG data
     
     // Eye tracking data (ain/eye_*)
     if (name.startsWith("ain/eye_")) {
@@ -81,10 +93,6 @@ void EssDataProcessor::processDatapoint(const QString &name, const QVariant &val
     // ESS system data (ess/*)
     else if (name.startsWith("ess/")) {
         routeEssData(name, value, timestamp);
-    }
-    // DG data tables (*dg)
-    else if (name.endsWith("dg")) {
-        routeDgData(name, value, timestamp);
     }
     // Everything else
     else {
@@ -140,8 +148,33 @@ void EssDataProcessor::routeEssData(const QString &name, const QVariant &value, 
 
 void EssDataProcessor::routeDgData(const QString &name, const QVariant &value, qint64 timestamp)
 {
-    QByteArray dgData = value.toByteArray();
+    // For DSERV_DG type, the data comes as a base64 string
+    QByteArray dgData;
     
+    if (value.userType() == QMetaType::QString) {
+        // It's a base64 encoded string
+        dgData = value.toString().toUtf8();
+    } else if (value.userType() == QMetaType::QByteArray) {
+        // Already a byte array
+        dgData = value.toByteArray();
+    } else {
+        EssConsoleManager::instance()->logError(
+            QString("Unexpected data type for DG %1: %2").arg(name).arg(value.typeName()), 
+            "DataProcessor"
+        );
+        return;
+    }
+    
+    // Decode and register the DG in Tcl
+    if (processDynGroup(name, dgData)) {
+        // Successfully decoded and added to Tcl
+        EssConsoleManager::instance()->logInfo(
+            QString("Decoded and registered DynGroup: %1").arg(name), 
+            "DataProcessor"
+        );
+    }
+    
+    // Still emit specific signals for known DG names for backward compatibility
     if (name == "stimdg") {
         emit stimulusDataReceived(dgData, timestamp);
     }
@@ -149,8 +182,62 @@ void EssDataProcessor::routeDgData(const QString &name, const QVariant &value, q
         emit trialDataReceived(dgData, timestamp);
     }
     else {
+        // Generic DG received
         emit genericDatapointReceived(name, value, timestamp);
     }
+}
+
+bool EssDataProcessor::processDynGroup(const QString &name, const QByteArray &data)
+{
+    // Get the command interface to access Tcl interpreter
+    auto* app = EssApplication::instance();
+    if (!app) return false;
+    
+    auto* cmdInterface = app->commandInterface();
+    if (!cmdInterface) return false;
+    
+    // Get Tcl interpreter
+    Tcl_Interp* interp = cmdInterface->tclInterp();
+    if (!interp) return false;
+    
+    // Decode the DG
+    DYN_GROUP* dg = decode_dg(data.constData(), data.length());
+    if (!dg) {
+        EssConsoleManager::instance()->logError(
+            QString("Failed to decode DynGroup: %1").arg(name), 
+            "DataProcessor"
+        );
+        return false;
+    }
+    
+    // Set the name if not already set
+    if (!DYN_GROUP_NAME(dg)[0]) {
+        // Use the datapoint name as the DG name
+        strncpy(DYN_GROUP_NAME(dg), name.toUtf8().constData(), 
+                sizeof(DYN_GROUP_NAME(dg)) - 1);
+    }
+    
+    // Register with Tcl interpreter using tclPutDynGroup
+    int result = tclPutDynGroup(interp, dg);
+    if (result != TCL_OK) {
+        const char* errorMsg = Tcl_GetStringResult(interp);
+        EssConsoleManager::instance()->logError(
+            QString("Failed to register DynGroup %1: %2").arg(name).arg(errorMsg), 
+            "DataProcessor"
+        );
+        // Clean up the DG if registration failed
+        dfuFreeDynGroup(dg);
+        return false;
+    }
+    
+    // Log success - the DG is now available in Tcl
+    const char* registeredName = Tcl_GetStringResult(interp);
+    EssConsoleManager::instance()->logInfo(
+        QString("DynGroup '%1' registered as '%2'").arg(name).arg(registeredName), 
+        "DataProcessor"
+    );
+    
+    return true;
 }
 
 QPointF EssDataProcessor::parseEyePosition(const QVariant &data)

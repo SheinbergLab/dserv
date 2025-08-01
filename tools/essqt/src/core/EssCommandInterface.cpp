@@ -11,6 +11,7 @@
 #include <QMetaObject>
 #include <tcl.h>
 
+
 // Static member initialization
 const QStringList EssCommandInterface::s_essCommands = {
     "::ess::load_system", "::ess::reload_system", "::ess::start", "::ess::stop", 
@@ -56,6 +57,55 @@ EssCommandInterface::~EssCommandInterface()
     
     // Shutdown Tcl
     shutdownTcl();
+}
+
+DYN_GROUP* EssCommandInterface::getDynGroup(const QString &name) const
+{
+    if (!m_tclInterp) return nullptr;
+    
+    DYN_GROUP* dg = nullptr;
+    int result = tclFindDynGroup(m_tclInterp, 
+                                const_cast<char*>(name.toUtf8().constData()), 
+                                &dg);
+    
+    if (result == TCL_OK) {
+        return dg;
+    }
+    
+    return nullptr;
+}
+
+QStringList EssCommandInterface::getDynGroupNames() const
+{
+    QStringList names;
+    
+    if (!m_tclInterp) return names;
+    
+    // Use Tcl to get the list of DG names
+    int result = Tcl_Eval(m_tclInterp, "dgGetNames");
+    if (result == TCL_OK) {
+        QString nameList = QString::fromUtf8(Tcl_GetStringResult(m_tclInterp));
+        names = nameList.split(' ', Qt::SkipEmptyParts);
+    }
+    
+    return names;
+}
+
+QStringList EssCommandInterface::getDynListNames(const QString &groupName) const
+{
+    QStringList names;
+    
+    if (!m_tclInterp || groupName.isEmpty()) return names;
+    
+    // Use Tcl to get the list names
+    QString cmd = QString("dgGetListNames %1").arg(groupName);
+    int result = Tcl_Eval(m_tclInterp, cmd.toUtf8().constData());
+    if (result == TCL_OK) {
+        QString nameList = QString::fromUtf8(Tcl_GetStringResult(m_tclInterp));
+        names = nameList.split(' ', Qt::SkipEmptyParts);
+    }
+    
+    return names;
 }
 
 void EssCommandInterface::initializeTcl()
@@ -127,6 +177,7 @@ void EssCommandInterface::initializeTcl()
                 ess/system_script ess/protocol_script ess/variants_script
                 ess/loaders_script ess/stim_script
                 ess/state_table ess/rmt_cmds
+                stimdg trialdg
                 system/hostname system/os
             }
             
@@ -134,8 +185,6 @@ void EssCommandInterface::initializeTcl()
             if {[catch {ess "foreach v {$touch_vars} { dservTouch \$v }"} err]} {
                 puts "Warning: Failed to touch variables: $err"
             }
-            
-            puts "Connection setup complete"
         }
         
         # Helper procedures  
@@ -146,6 +195,22 @@ void EssCommandInterface::initializeTcl()
         proc update_touch_regions {} {
             ess {for {set i 0} {$i < 8} {incr i} {touchGetRegionInfo $i}}
         }
+        
+        proc load_dlsh {} {
+            set f [file dirname [info nameofexecutable]]
+            if { [file exists [file join $f dlsh.zip]] } { 
+            	set dlshzip [file join $f dlsh.zip] 
+            } else {
+            	set dlshzip /usr/local/dlsh/dlsh.zip
+            }
+            set dlshroot [file join [zipfs root] dlsh]
+            zipfs unmount $dlshroot
+            zipfs mount $dlshzip $dlshroot
+            set ::auto_path [linsert $::auto_path 0 [file join $dlshroot/lib]]
+            package require dlsh
+        }
+        
+        load_dlsh
     )tcl";
     
     if (Tcl_Eval(m_tclInterp, initScript) != TCL_OK) {
@@ -982,8 +1047,8 @@ void EssCommandInterface::onEventReceived(const QString &event)
     if (parsedEvent.has_value()) {
         const DservEvent &evt = parsedEvent.value();
         
-        // Simply emit the parsed event - let interested components handle it
-        emit datapointUpdated(evt.name, evt.data, evt.timestamp);
+        // Pass dtype along with the data
+        emit datapointUpdated(evt.name, evt.data, evt.timestamp, evt.dtype);
         
     } else {
         // Only log actual parse errors, not every event
@@ -993,3 +1058,4 @@ void EssCommandInterface::onEventReceived(const QString &event)
         );
     }
 }
+

@@ -20,7 +20,8 @@ public:
     ~EssDataProcessor();
 
     // Process incoming datapoint and route to appropriate signal
-    void processDatapoint(const QString &name, const QVariant &value, qint64 timestamp);
+    void processDatapoint(const QString &name, const QVariant &value, 
+    				      qint64 timestamp, int dtype = -1);
 
     EssEventProcessor* eventProcessor() const { return m_eventProcessor; }
   
@@ -44,7 +45,7 @@ signals:
     void stimulusDataReceived(const QByteArray &dgData, qint64 timestamp);
     void trialDataReceived(const QByteArray &dgData, qint64 timestamp);
 
-  // event log entries
+    // event log entries
     void eventLogEntryReceived(const EssEvent &event);
     void observationStarted(uint64_t timestamp);
     void observationEnded(uint64_t timestamp);  
@@ -52,6 +53,9 @@ signals:
   
     // Generic datapoint (for anything not specifically handled)
     void genericDatapointReceived(const QString &name, const QVariant &value, qint64 timestamp);
+
+   // DynGroup registered
+   void dynGroupRegistered(const QString &name);
 
 private:
     // Parsing helpers
@@ -62,6 +66,9 @@ private:
     void routeEyeData(const QString &name, const QVariant &value, qint64 timestamp);
     void routeEssData(const QString &name, const QVariant &value, qint64 timestamp);
     void routeDgData(const QString &name, const QVariant &value, qint64 timestamp);
+
+	// DynGroup processing
+	bool processDynGroup(const QString &name, const QByteArray &data);
 
   EssEventProcessor *m_eventProcessor;
 };
