@@ -71,6 +71,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/host_discovery
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/experiment_control
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/script_editor
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/dg_viewer
     ${CMAKE_CURRENT_SOURCE_DIR}/src/communication
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl
 )
@@ -103,6 +104,8 @@ set(UI_SOURCES
     src/ui/components/experiment_control/EssExperimentControlWidget.cpp
     src/ui/components/script_editor/EssCodeEditor.cpp
     src/ui/components/script_editor/EssScriptEditorWidget.cpp
+    src/ui/components/dg_viewer/EssDynGroupViewer.cpp
+    src/ui/components/dg_viewer/EssStimDgWidget.cpp    
 )
 
 set(OPTIONAL_SOURCES
