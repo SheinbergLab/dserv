@@ -186,7 +186,6 @@ void EssDataProcessor::routeDgData(const QString &name, const QVariant &value, q
         emit genericDatapointReceived(name, value, timestamp);
     }
 }
-
 bool EssDataProcessor::processDynGroup(const QString &name, const QByteArray &data)
 {
     // Get the command interface to access Tcl interpreter
@@ -200,7 +199,21 @@ bool EssDataProcessor::processDynGroup(const QString &name, const QByteArray &da
     Tcl_Interp* interp = cmdInterface->tclInterp();
     if (!interp) return false;
     
-    // Decode the DG
+    // First, check if this DG already exists and remove it
+    DYN_GROUP* oldDg = nullptr;
+    if (tclFindDynGroup(interp, const_cast<char*>(name.toUtf8().constData()), &oldDg) == TCL_OK) {
+        // Delete the old DG from Tcl
+        // We need to unset it from the Tcl hash table
+        QString deleteCmd = QString("catch {dg_delete %1}").arg(name);
+        Tcl_Eval(interp, deleteCmd.toUtf8().constData());
+        
+        EssConsoleManager::instance()->logDebug(
+            QString("Removed existing DynGroup: %1").arg(name), 
+            "DataProcessor"
+        );
+    }
+    
+    // Decode the new DG
     DYN_GROUP* dg = decode_dg(data.constData(), data.length());
     if (!dg) {
         EssConsoleManager::instance()->logError(
@@ -233,7 +246,7 @@ bool EssDataProcessor::processDynGroup(const QString &name, const QByteArray &da
     // Log success - the DG is now available in Tcl
     const char* registeredName = Tcl_GetStringResult(interp);
     EssConsoleManager::instance()->logInfo(
-        QString("DynGroup '%1' registered as '%2'").arg(name).arg(registeredName), 
+        QString("DynGroup '%1' updated/registered as '%2'").arg(name).arg(registeredName), 
         "DataProcessor"
     );
     
