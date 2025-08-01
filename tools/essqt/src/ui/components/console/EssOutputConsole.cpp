@@ -28,7 +28,7 @@ EssOutputConsole::~EssOutputConsole()
 void EssOutputConsole::init()
 {
     // Set appearance
-    QFont consoleFont("Consolas, Monaco, Courier New, monospace");
+    QFont consoleFont("Monaco, Menlo, Courier New");
     consoleFont.setFixedPitch(true);
     consoleFont.setPointSize(9);
     setFont(consoleFont);
