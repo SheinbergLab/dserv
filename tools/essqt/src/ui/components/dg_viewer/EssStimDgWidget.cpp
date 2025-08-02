@@ -16,6 +16,8 @@
 #include <QClipboard>
 #include <QApplication>
 #include <QScrollArea>
+#include <QToolButton>
+#include <QToolTip>
 #include <numeric>
 #include <cmath>
 
@@ -25,8 +27,8 @@ extern "C" {
 
 EssStimDgWidget::EssStimDgWidget(QWidget *parent)
     : EssDynGroupViewer(parent)
-    , m_autoRefresh(true)
     , m_focusMode(false)
+    , m_statusLabel(nullptr)
 {
     // Default to table view for stimulus data
     setViewMode(TableView);
@@ -79,14 +81,18 @@ void EssStimDgWidget::connectToDataProcessor()
                         "Cleared stimulus data on disconnect",
                         "StimDG"
                     );
+                    
+                    // Update status label
+                    if (m_statusLabel) {
+                        m_statusLabel->setText("No data");
+                        m_statusLabel->setToolTip("Disconnected");
+                    }
                 });
     }
 }
 
 void EssStimDgWidget::onStimDgReceived()
 {
-    if (!m_autoRefresh) return;
-    
     EssConsoleManager::instance()->logDebug("Stimulus data received", "StimDG");
     
     // The DG is already processed and stored in Tcl by EssDataProcessor
@@ -114,6 +120,17 @@ void EssStimDgWidget::refreshStimDg()
         setDynGroup(dg, "stimdg");
         
         int numTrials = tableWidget()->rowCount();
+        int numColumns = tableWidget()->columnCount();
+        
+        // Update status label with row/column count
+        m_statusLabel->setText(QString("%1 × %2").arg(numTrials).arg(numColumns));
+        m_statusLabel->setToolTip(QString("%1 rows × %2 columns").arg(numTrials).arg(numColumns));
+        
+        // Also update window title
+        setWindowTitle(QString("Stimulus Data (stimdg) - %1 rows × %2 columns")
+            .arg(numTrials)
+            .arg(numColumns));
+        
         EssConsoleManager::instance()->logInfo(
             QString("Loaded stimdg with %1 trials").arg(numTrials),
             "StimDG"
@@ -138,6 +155,10 @@ void EssStimDgWidget::refreshStimDg()
             "No stimdg available in Tcl interpreter yet",
             "StimDG"
         );
+        
+        // Update status label to show no data
+        m_statusLabel->setText("No data");
+        m_statusLabel->setToolTip("No stimulus data loaded");
     }
 }
 
@@ -146,22 +167,16 @@ void EssStimDgWidget::customizeForStimulus()
     // Add stimulus-specific toolbar actions
     toolbar()->addSeparator();
     
-    // Auto-refresh toggle
-    QAction* autoRefreshAction = toolbar()->addAction("Auto-refresh");
-    autoRefreshAction->setCheckable(true);
-    autoRefreshAction->setChecked(m_autoRefresh);
-    autoRefreshAction->setToolTip("Automatically update when new stimulus data arrives");
-    connect(autoRefreshAction, &QAction::toggled, [this](bool checked) {
-        m_autoRefresh = checked;
-        if (checked) {
-            refreshStimDg(); // Refresh immediately when re-enabled
-        }
-    });
+    // Add status label to show row/column count
+    m_statusLabel = new QLabel("No data");
+    m_statusLabel->setFrameStyle(QFrame::StyledPanel);
+    m_statusLabel->setStyleSheet("QLabel { padding: 2px 8px; }");
+    toolbar()->addWidget(m_statusLabel);
     
     toolbar()->addSeparator();
     
     // Trial navigation
-    QAction* firstTrialAction = toolbar()->addAction(QIcon::fromTheme("go-first"), "First Trial");
+    QAction* firstTrialAction = toolbar()->addAction("First");
     firstTrialAction->setToolTip("Go to first trial");
     connect(firstTrialAction, &QAction::triggered, [this]() {
         if (tableWidget()->rowCount() > 0) {
@@ -171,7 +186,7 @@ void EssStimDgWidget::customizeForStimulus()
         }
     });
     
-    QAction* lastTrialAction = toolbar()->addAction(QIcon::fromTheme("go-last"), "Last Trial");
+    QAction* lastTrialAction = toolbar()->addAction("Last");
     lastTrialAction->setToolTip("Go to last trial");
     connect(lastTrialAction, &QAction::triggered, [this]() {
         int lastRow = tableWidget()->rowCount() - 1;
@@ -184,26 +199,48 @@ void EssStimDgWidget::customizeForStimulus()
     
     toolbar()->addSeparator();
     
-    // Statistics action
-    QAction* statsAction = toolbar()->addAction(QIcon::fromTheme("view-statistics"), "Statistics");
-    statsAction->setToolTip("Show trial statistics");
-    connect(statsAction, &QAction::triggered, this, &EssStimDgWidget::showStatistics);
-    
-    // Highlight columns action
-    QAction* highlightAction = toolbar()->addAction("Select Columns");
-    highlightAction->setToolTip("Choose which columns to highlight/show");
-    connect(highlightAction, &QAction::triggered, this, &EssStimDgWidget::configureHighlighting);
-    
-    // Focus mode toggle
+    // Focus mode toggle (make it more prominent)
     m_focusModeAction = toolbar()->addAction(QIcon::fromTheme("view-filter"), "Focus Mode");
     m_focusModeAction->setCheckable(true);
     m_focusModeAction->setChecked(false);
     m_focusModeAction->setToolTip("Show only selected columns");
     connect(m_focusModeAction, &QAction::toggled, this, &EssStimDgWidget::toggleFocusMode);
     
+    toolbar()->addSeparator();
+    
+    // Create overflow menu
+    QMenu* overflowMenu = new QMenu(this);
+    
+    // Statistics action (move to menu)
+    QAction* statsAction = overflowMenu->addAction(QIcon::fromTheme("view-statistics"), "Show Statistics...");
+    statsAction->setToolTip("Show trial statistics");
+    connect(statsAction, &QAction::triggered, this, &EssStimDgWidget::showStatistics);
+    
+    // Highlight columns action (move to menu)
+    QAction* highlightAction = overflowMenu->addAction("Select Columns...");
+    highlightAction->setToolTip("Choose which columns to highlight/show");
+    connect(highlightAction, &QAction::triggered, this, &EssStimDgWidget::configureHighlighting);
+    
+    overflowMenu->addSeparator();
+    
+    // Note: Auto-refresh removed as it's redundant - the widget already updates
+    // automatically when new data arrives through the data processor signals
+    
+    // Add overflow menu button
+    QToolButton* overflowButton = new QToolButton();
+    overflowButton->setIcon(QIcon::fromTheme("application-menu"));
+    overflowButton->setToolTip("More options");
+    overflowButton->setPopupMode(QToolButton::InstantPopup);
+    overflowButton->setMenu(overflowMenu);
+    toolbar()->addWidget(overflowButton);
+    
     // Add context menu to table for trial-specific actions
     connect(tableWidget(), &QTableWidget::customContextMenuRequested, 
             this, &EssStimDgWidget::showTrialContextMenu);
+    
+    // Connect header clicks for column selection
+    connect(tableWidget()->horizontalHeader(), &QHeaderView::sectionClicked,
+            this, &EssStimDgWidget::onHeaderClicked);
     
     // Connect row selection
     connect(tableWidget(), &QTableWidget::currentCellChanged,
@@ -247,6 +284,14 @@ void EssStimDgWidget::highlightImportantColumns()
     
     QTableWidget* table = tableWidget();
     
+    // Check if we're in dark mode
+    QPalette palette = QApplication::palette();
+    bool isDarkMode = palette.color(QPalette::Window).lightness() < 128;
+    
+    // Define colors for highlighting that work in both light and dark modes
+    QColor highlightTextColor = isDarkMode ? QColor(100, 180, 255) : QColor(0, 100, 200);
+    QColor highlightBgColor = isDarkMode ? QColor(40, 60, 80, 50) : QColor(245, 250, 255);
+    
     // Reset all column backgrounds first
     for (int col = 0; col < table->columnCount(); col++) {
         QTableWidgetItem* headerItem = table->horizontalHeaderItem(col);
@@ -259,7 +304,15 @@ void EssStimDgWidget::highlightImportantColumns()
         QFont font = headerItem->font();
         font.setBold(isHighlighted);
         headerItem->setFont(font);
-        headerItem->setForeground(isHighlighted ? QColor(0, 100, 200) : QColor());
+        
+        if (isHighlighted) {
+            headerItem->setForeground(highlightTextColor);
+            // Add a checkmark or selection indicator to the header
+            headerItem->setToolTip(QString("✓ Selected for focus mode (Ctrl+click to toggle)"));
+        } else {
+            headerItem->setForeground(palette.color(QPalette::Text));
+            headerItem->setToolTip("Click to select, Ctrl+click to add, Shift+click for range");
+        }
         
         // Update cell backgrounds
         for (int row = 0; row < table->rowCount(); row++) {
@@ -267,10 +320,12 @@ void EssStimDgWidget::highlightImportantColumns()
                 // Only update background if it's not a nested list
                 if (!item->data(Qt::UserRole).value<void*>()) {
                     if (isHighlighted) {
-                        item->setBackground(QColor(245, 250, 255)); // Very light blue
+                        item->setBackground(highlightBgColor);
                     } else {
-                        item->setBackground(QBrush());
+                        item->setBackground(palette.color(QPalette::Base));
                     }
+                    // Ensure text is readable
+                    item->setForeground(palette.color(QPalette::Text));
                 }
             }
         }
@@ -716,5 +771,73 @@ void EssStimDgWidget::updateStatistics()
                 "StimDG"
             );
         }
+    }
+}
+
+void EssStimDgWidget::onHeaderClicked(int logicalIndex)
+{
+    // Check if we're holding a modifier key for multi-select
+    Qt::KeyboardModifiers modifiers = QApplication::keyboardModifiers();
+    bool isCtrlClick = (modifiers & Qt::ControlModifier);
+    bool isShiftClick = (modifiers & Qt::ShiftModifier);
+    
+    QTableWidget* table = tableWidget();
+    QString columnName = table->horizontalHeaderItem(logicalIndex)->text();
+    
+    if (isCtrlClick) {
+        // Toggle individual column selection
+        if (m_highlightColumns.contains(columnName)) {
+            m_highlightColumns.removeAll(columnName);
+        } else {
+            m_highlightColumns.append(columnName);
+        }
+    } else if (isShiftClick && !m_highlightColumns.isEmpty()) {
+        // Range selection
+        // Find the last selected column index
+        int lastSelectedIndex = -1;
+        for (int i = table->columnCount() - 1; i >= 0; i--) {
+            if (m_highlightColumns.contains(table->horizontalHeaderItem(i)->text())) {
+                lastSelectedIndex = i;
+                break;
+            }
+        }
+        
+        if (lastSelectedIndex != -1) {
+            // Select range between last selected and clicked
+            int start = qMin(lastSelectedIndex, logicalIndex);
+            int end = qMax(lastSelectedIndex, logicalIndex);
+            
+            for (int i = start; i <= end; i++) {
+                QString colName = table->horizontalHeaderItem(i)->text();
+                if (!m_highlightColumns.contains(colName)) {
+                    m_highlightColumns.append(colName);
+                }
+            }
+        }
+    } else {
+        // Single click without modifier - select only this column
+        m_highlightColumns.clear();
+        m_highlightColumns.append(columnName);
+    }
+    
+    // Update the highlighting
+    highlightImportantColumns();
+    
+    // Show quick feedback about selection
+    QString message;
+    if (m_highlightColumns.isEmpty()) {
+        message = "No columns selected";
+    } else if (m_highlightColumns.size() == 1) {
+        message = QString("Selected: %1").arg(m_highlightColumns.first());
+    } else {
+        message = QString("Selected %1 columns").arg(m_highlightColumns.size());
+    }
+    
+    // Update status or show tooltip
+    QToolTip::showText(QCursor::pos(), message, table);
+    
+    // If focus mode is on, update column visibility
+    if (m_focusMode) {
+        applyColumnVisibility();
     }
 }

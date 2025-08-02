@@ -17,6 +17,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QSplitter>
+#include <QToolButton>
 #include <algorithm>
 #include <functional>
 
@@ -28,15 +29,11 @@ EssDynGroupViewer::EssDynGroupViewer(QWidget *parent)
     : QWidget(parent)
     , m_dynGroup(nullptr)
     , m_ownsDynGroup(false)
-    , m_liveUpdate(false)
     , m_viewMode(TableView)
     , m_showRowDetails(false)
     , m_currentDetailRow(-1)
-    , m_updateTimer(new QTimer(this))
 {
     setupUi();
-    m_updateTimer->setInterval(1000);
-    connect(m_updateTimer, &QTimer::timeout, this, &EssDynGroupViewer::refreshFromTcl);
 }
 
 EssDynGroupViewer::~EssDynGroupViewer()
@@ -73,8 +70,8 @@ void EssDynGroupViewer::setupUi()
     
     m_toolbar->addSeparator();
     
-    // Row details toggle (only visible in table view)
-    m_rowDetailsAction = m_toolbar->addAction(QIcon::fromTheme("view-split-top-bottom"), "Show Row Details");
+    // Row details toggle (shortened label)
+    m_rowDetailsAction = m_toolbar->addAction(QIcon::fromTheme("view-split-top-bottom"), "Row Details");
     m_rowDetailsAction->setCheckable(true);
     m_rowDetailsAction->setChecked(false);
     m_rowDetailsAction->setToolTip("Show detailed view of selected row");
@@ -82,19 +79,21 @@ void EssDynGroupViewer::setupUi()
     
     m_toolbar->addSeparator();
     
-    // Other actions
-    m_toolbar->addAction(QIcon::fromTheme("view-refresh"), "Refresh", this, &EssDynGroupViewer::refreshFromTcl);
-    
-    QAction* liveAction = m_toolbar->addAction("Live Update");
-    liveAction->setCheckable(true);
-    connect(liveAction, &QAction::toggled, this, &EssDynGroupViewer::setLiveUpdate);
-    
-    m_toolbar->addSeparator();
+    // Create overflow menu for less-used actions
+    QMenu* overflowMenu = new QMenu(this);
     
     // Export action
-    m_toolbar->addAction(QIcon::fromTheme("document-save"), "Export", this, [this]() {
+    overflowMenu->addAction(QIcon::fromTheme("document-save"), "Export to CSV...", this, [this]() {
         exportTableToCSV();
     });
+    
+    // Add overflow menu button
+    QToolButton* overflowButton = new QToolButton();
+    overflowButton->setIcon(QIcon::fromTheme("application-menu"));
+    overflowButton->setToolTip("More options");
+    overflowButton->setPopupMode(QToolButton::InstantPopup);
+    overflowButton->setMenu(overflowMenu);
+    m_toolbar->addWidget(overflowButton);
     
     layout->addWidget(m_toolbar);
     
@@ -114,6 +113,10 @@ void EssDynGroupViewer::setupUi()
     m_tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tableWidget->setSortingEnabled(false); // Don't sort trial data by default
     m_tableWidget->setContextMenuPolicy(Qt::CustomContextMenu);
+    
+    // Set compact row height for more data density
+    m_tableWidget->verticalHeader()->setDefaultSectionSize(22); // Reduced from default ~30
+    m_tableWidget->verticalHeader()->setMinimumSectionSize(18); // Allow even smaller if needed
     
     connect(m_tableWidget, &QTableWidget::cellDoubleClicked, 
             this, &EssDynGroupViewer::onTableCellDoubleClicked);
@@ -223,7 +226,12 @@ void EssDynGroupViewer::setupRowDetailsPane()
     
     // Header bar with label and controls
     QWidget* headerBar = new QWidget();
-    headerBar->setStyleSheet("QWidget { background-color: #f0f0f0; }");
+    // Use palette-aware colors for the header bar
+    headerBar->setAutoFillBackground(true);
+    QPalette headerPalette = headerBar->palette();
+    headerPalette.setColor(QPalette::Window, headerPalette.color(QPalette::AlternateBase));
+    headerBar->setPalette(headerPalette);
+    
     QHBoxLayout* headerLayout = new QHBoxLayout(headerBar);
     headerLayout->setContentsMargins(5, 5, 5, 5);
     
@@ -441,6 +449,14 @@ void EssDynGroupViewer::populateTable()
     }
     m_tableWidget->setHorizontalHeaderLabels(headers);
     
+    // Get palette for dark mode detection
+    QPalette palette = QApplication::palette();
+    bool isDarkMode = palette.color(QPalette::Window).lightness() < 128;
+    
+    // Define colors that work in both light and dark modes
+    QColor nestedListBg = isDarkMode ? QColor(60, 60, 80) : QColor(240, 240, 255);
+    QColor emptyBg = isDarkMode ? QColor(40, 40, 40) : QColor(250, 250, 250);
+    
     // Populate cells
     for (int col = 0; col < numLists; col++) {
         DYN_LIST* dl = DYN_GROUP_LIST(m_dynGroup, col);
@@ -462,9 +478,12 @@ void EssDynGroupViewer::populateTable()
                 QString cellText = formatCellValue(dl, row);
                 item->setText(cellText);
                 
+                // Use default text color
+                item->setForeground(palette.color(QPalette::Text));
+                
                 // Special formatting for different types
                 if (dataType == DF_LIST) {
-                    item->setBackground(QColor(240, 240, 255)); // Light blue for nested lists
+                    item->setBackground(nestedListBg);
                     item->setToolTip("Double-click to view nested list");
                     
                     // Store the DYN_LIST pointer for later access
@@ -477,7 +496,7 @@ void EssDynGroupViewer::populateTable()
             } else {
                 // Empty cell for shorter lists
                 item->setText("");
-                item->setBackground(QColor(250, 250, 250)); // Very light gray
+                item->setBackground(emptyBg);
             }
             
             item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
@@ -847,41 +866,6 @@ QIcon EssDynGroupViewer::getTypeIcon(int dataType) const
     }
 }
 
-void EssDynGroupViewer::refreshFromTcl()
-{
-    if (m_groupName.isEmpty()) return;
-    
-    auto* app = EssApplication::instance();
-    if (!app) return;
-    
-    auto* cmdInterface = app->commandInterface();
-    if (!cmdInterface) return;
-    
-    Tcl_Interp* interp = cmdInterface->tclInterp();
-    DYN_GROUP* dg = nullptr;
-    
-    if (tclFindDynGroup(interp, m_groupName.toUtf8().data(), &dg) == TCL_OK && dg) {
-        setDynGroup(dg, m_groupName);
-    } else {
-        // DG no longer exists in Tcl - clear our display
-        clear();
-        EssConsoleManager::instance()->logWarning(
-            QString("DynGroup '%1' no longer exists in Tcl").arg(m_groupName),
-            "DynGroupViewer"
-        );
-    }
-}
-
-void EssDynGroupViewer::setLiveUpdate(bool enabled)
-{
-    m_liveUpdate = enabled;
-    if (enabled) {
-        m_updateTimer->start();
-    } else {
-        m_updateTimer->stop();
-    }
-}
-
 void EssDynGroupViewer::exportTableToCSV()
 {
     if (!m_dynGroup || m_viewMode != TableView) {
@@ -981,6 +965,9 @@ void EssDynGroupViewer::populateRowDetailsTree(int row)
     // Block signals to prevent accessibility issues during population
     m_rowDetailsTree->blockSignals(true);
     
+    // Get palette for proper colors
+    QPalette palette = QApplication::palette();
+    
     // Add each column's value for this row (show ALL columns, not just visible ones)
     for (int col = 0; col < DYN_GROUP_N(m_dynGroup); col++) {
         DYN_LIST* dl = DYN_GROUP_LIST(m_dynGroup, col);
@@ -1008,7 +995,7 @@ void EssDynGroupViewer::populateRowDetailsTree(int row)
             QFont font = item->font(0);
             font.setItalic(true);
             item->setFont(0, font);
-            item->setForeground(0, QColor(128, 128, 128)); // Gray out hidden columns
+            item->setForeground(0, palette.color(QPalette::Disabled, QPalette::Text));
             item->setToolTip(0, "This column is hidden in the main table view");
         }
         

@@ -5,7 +5,6 @@
 #include <QStackedWidget>
 #include <QSplitter>
 #include <QToolBar>
-#include <QTimer>
 #include <memory>
 
 extern "C" {
@@ -34,10 +33,6 @@ public:
     void setViewMode(ViewMode mode);
     ViewMode viewMode() const { return m_viewMode; }
     
-    // Enable/disable live updates from Tcl
-    void setLiveUpdate(bool enabled);
-    bool isLiveUpdateEnabled() const { return m_liveUpdate; }
-    
     // Row details control
     void setShowRowDetails(bool show);
     bool isShowingRowDetails() const { return m_showRowDetails; }
@@ -62,7 +57,6 @@ protected:
 private slots:
     void onTableCellDoubleClicked(int row, int column);
     void onViewModeChanged();
-    void refreshFromTcl();
     void onTreeItemClicked(QTreeWidgetItem* item, int column);
     void onTreeItemExpanded(QTreeWidgetItem* item);
     void exportTableToCSV();
@@ -103,7 +97,5 @@ private:
     DYN_GROUP* m_dynGroup;
     QString m_groupName;
     bool m_ownsDynGroup;
-    bool m_liveUpdate;
     ViewMode m_viewMode;
-    QTimer* m_updateTimer;
 };

@@ -1,6 +1,8 @@
 #pragma once
 #include "EssDynGroupViewer.h"
 
+class QLabel;
+
 class EssStimDgWidget : public EssDynGroupViewer {
     Q_OBJECT
     
@@ -34,11 +36,12 @@ private slots:
     void showTrialContextMenu(const QPoint& pos);
     void findSimilarTrials(int referenceRow);
     void toggleFocusMode(bool enabled);
+    void onHeaderClicked(int logicalIndex);
     
 private:
     QStringList m_highlightColumns;
     QStringList m_allColumns;
-    bool m_autoRefresh;
     bool m_focusMode;
     QAction* m_focusModeAction;
+    QLabel* m_statusLabel;
 };
