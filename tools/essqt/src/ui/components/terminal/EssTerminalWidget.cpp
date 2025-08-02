@@ -27,6 +27,11 @@ EssTerminalWidget::EssTerminalWidget(QWidget *parent)
 
 EssTerminalWidget::~EssTerminalWidget() = default;
 
+QSize EssTerminalWidget::minimumSizeHint() const
+{
+    return QSize(200, 50);  // Allow very small height
+}
+
 void EssTerminalWidget::init()
 {
     // Set terminal appearance

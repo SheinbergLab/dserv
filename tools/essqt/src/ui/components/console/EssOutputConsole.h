@@ -33,6 +33,9 @@ public:
     explicit EssOutputConsole(QWidget *parent = nullptr);
     ~EssOutputConsole();
     
+    // size hint
+	QSize minimumSizeHint() const override;
+	
     // Logging methods
     void logInfo(const QString &message, const QString &source = QString());
     void logSuccess(const QString &message, const QString &source = QString());

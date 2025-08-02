@@ -16,6 +16,9 @@ public:
     explicit EssTerminalWidget(QWidget *parent = nullptr);
     ~EssTerminalWidget();
     
+	// size hint
+	QSize minimumSizeHint() const override;
+
     // Execute command programmatically
     void executeCommand(const QString &command);
     

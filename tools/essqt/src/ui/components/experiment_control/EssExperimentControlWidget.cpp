@@ -52,14 +52,13 @@ void EssExperimentControlWidget::setupUi()
     createVariantOptionsSection();
     createSettingsSection();
     
-    mainLayout->addWidget(m_controlGroup);
-    mainLayout->addWidget(m_statusGroup);
-    mainLayout->addWidget(m_systemConfigGroup);
-    mainLayout->addWidget(m_variantOptionsGroup);
-    mainLayout->addWidget(m_parameterGroup);
-    mainLayout->addWidget(m_settingsGroup);
-    mainLayout->addStretch();
-    
+    mainLayout->addWidget(m_controlGroup, 0);
+    mainLayout->addWidget(m_statusGroup, 0);
+    mainLayout->addWidget(m_systemConfigGroup, 0);
+    mainLayout->addWidget(m_variantOptionsGroup, 1);
+    mainLayout->addWidget(m_parameterGroup, 1);
+    mainLayout->addWidget(m_settingsGroup, 0);
+
     // Set minimum width for better appearance
     setMinimumWidth(300);
 }
@@ -183,7 +182,7 @@ void EssExperimentControlWidget::createParameterSection()
     // Create scroll area for parameters
     m_parameterScrollArea = new QScrollArea();
     m_parameterScrollArea->setWidgetResizable(true);
-    m_parameterScrollArea->setMaximumHeight(200);
+    m_parameterScrollArea->setMaximumHeight(400);
     
     m_parameterContainer = new QWidget();
     m_parameterLayout = new QFormLayout(m_parameterContainer);
@@ -202,7 +201,7 @@ void EssExperimentControlWidget::createVariantOptionsSection()
     // Create scroll area for variant options
     m_variantOptionsScrollArea = new QScrollArea();
     m_variantOptionsScrollArea->setWidgetResizable(true);
-    m_variantOptionsScrollArea->setMaximumHeight(150);
+    m_variantOptionsScrollArea->setMaximumHeight(175);
     
     m_variantOptionsContainer = new QWidget();
     m_variantOptionsLayout = new QFormLayout(m_variantOptionsContainer);

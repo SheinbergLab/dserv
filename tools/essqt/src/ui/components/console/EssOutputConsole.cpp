@@ -25,6 +25,11 @@ EssOutputConsole::~EssOutputConsole()
     }
 }
 
+QSize EssOutputConsole::minimumSizeHint() const
+{
+    return QSize(200, 50);  // Allow very small height
+}
+
 void EssOutputConsole::init()
 {
     // Set appearance

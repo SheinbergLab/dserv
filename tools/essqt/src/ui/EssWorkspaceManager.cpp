@@ -84,10 +84,10 @@ void EssWorkspaceManager::registerAllDocks()
             return m_terminal;
         },
         Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea,
-        QSize(400, 100),  // minimum size
+        QSize(400, 80),  // minimum size
         QSize(),          // no maximum size
-        QSize(800, 200),  // preferred size
-        100,              // minHeight
+        QSize(800, 150),  // preferred size
+        70,              // minHeight
         400               // maxHeight - prevent terminal from taking too much space
     };
     
@@ -100,10 +100,10 @@ void EssWorkspaceManager::registerAllDocks()
             return m_console;
         },
         Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea,
-        QSize(400, 100),  // minimum size
+        QSize(400, 80),  // minimum size
         QSize(),          // no maximum size
-        QSize(800, 200),  // preferred size
-        100,              // minHeight
+        QSize(800, 150),  // preferred size
+        70,              // minHeight
         400               // maxHeight
     };
     
@@ -227,6 +227,17 @@ QDockWidget* EssWorkspaceManager::createDock(const QString &id)
     m_docks[id] = dock;
     m_widgets[id] = widget;
     
+    // Special handling for bottom docks
+    if (id == "Terminal" || id == "Console") {
+        // Allow the dock to be very small
+        dock->setMinimumHeight(50);
+        
+        // Ensure the widget inside can also be small
+        if (widget) {
+            widget->setMinimumHeight(50);
+        }
+    }
+    
     return dock;
 }
 
@@ -258,6 +269,9 @@ void EssWorkspaceManager::applyDefaultLayout()
         m_mainWindow->removeDockWidget(dock);
     }
     
+    m_mainWindow->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
+    m_mainWindow->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
+    
     // Left side: Control Panel and Script Editor (tabbed)
     m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ControlPanel"]);
     m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ScriptEditor"]);
@@ -279,6 +293,10 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Console"]);
     m_mainWindow->tabifyDockWidget(m_docks["Terminal"], m_docks["Console"]);
     
+    if (m_docks["Terminal"]) {
+    	m_docks["Terminal"]->resize(m_docks["Terminal"]->width(), 150);
+	}
+
     // Show all docks and set active tabs
     for (auto dock : m_docks) {
         dock->setVisible(true);
