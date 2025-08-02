@@ -18,6 +18,8 @@
 #include <QScrollArea>
 #include <QToolButton>
 #include <QToolTip>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <numeric>
 #include <cmath>
 
