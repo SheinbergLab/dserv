@@ -1,5 +1,7 @@
 #include "EssWorkspaceManager.h"
 #include "core/EssApplication.h"
+#include "core/EssDataProcessor.h"
+#include "core/EssCommandInterface.h"
 #include "core/EssConfig.h"
 #include "terminal/EssTerminalWidget.h"
 #include "console/EssOutputConsole.h"
@@ -9,6 +11,7 @@
 #include "experiment_control/EssExperimentControlWidget.h"
 #include "script_editor/EssScriptEditorWidget.h"
 #include "dg_viewer/EssStimDgWidget.h"
+#include "visualization/EssEyeTouchVisualizerWidget.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -26,6 +29,7 @@ EssWorkspaceManager::EssWorkspaceManager(QMainWindow *mainWindow, QObject *paren
     , m_experimentControl(nullptr)
     , m_scriptEditor(nullptr)
     , m_stimDgViewer(nullptr)
+    , m_eyeTouchVisualizer(nullptr)
 {
 }
 
@@ -40,11 +44,8 @@ void EssWorkspaceManager::setupWorkspace()
         QMainWindow::AllowTabbedDocks
     );
     
-    // Register all available docks
-    registerAllDocks();
-    
-    // Create dock widgets
-    createAllDocks();
+    // Create dock widgets directly - no registry
+    createDocks();
     
     // Connect signals
     connectSignals();
@@ -56,189 +57,68 @@ void EssWorkspaceManager::setupWorkspace()
     
     // Log initialization
     if (m_console) {
-        // Register console with manager if needed
-        // EssConsoleManager::instance()->registerConsole("main", m_console);
         m_console->logSystem("EssQt Workspace Initialized", "Workspace");
     }
 }
 
-void EssWorkspaceManager::registerAllDocks()
+void EssWorkspaceManager::createDocks()
 {
-    // Control Panel - Meta widget combining host discovery and experiment control
-    m_dockRegistry["ControlPanel"] = {
-        tr("Control Panel"),
-        "ControlPanelDock",
-        [this]() { return createControlPanel(); },
-        Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea,
-        QSize(300, 400),  // minimum size
-        QSize(300, 1000), // no maximum size
-        QSize(300, 600)   // preferred size
-    };
+    // Create Control Panel dock
+    QDockWidget *controlDock = new QDockWidget(tr("Control Panel"), m_mainWindow);
+    controlDock->setObjectName("ControlPanelDock");
+    controlDock->setWidget(createControlPanel());
+    m_docks["ControlPanel"] = controlDock;
     
-    // Terminal - with height constraints
-    m_dockRegistry["Terminal"] = {
-        tr("Terminal"),
-        "TerminalDock",
-        [this]() { 
-            m_terminal = new EssTerminalWidget();
-            return m_terminal;
-        },
-        Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea,
-        QSize(400, 80),  // minimum size
-        QSize(),          // no maximum size
-        QSize(800, 150),  // preferred size
-        70,              // minHeight
-        400               // maxHeight - prevent terminal from taking too much space
-    };
+    // Create Terminal dock - restrict to bottom only
+    QDockWidget *terminalDock = new QDockWidget(tr("Terminal"), m_mainWindow);
+    terminalDock->setObjectName("TerminalDock");
+    terminalDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    m_terminal = new EssTerminalWidget();
+    terminalDock->setWidget(m_terminal);
+    m_docks["Terminal"] = terminalDock;
     
-    // Console - similar constraints to terminal
-    m_dockRegistry["Console"] = {
-        tr("Output Console"),
-        "ConsoleDock",
-        [this]() { 
-            m_console = new EssOutputConsole();
-            return m_console;
-        },
-        Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea,
-        QSize(400, 80),  // minimum size
-        QSize(),          // no maximum size
-        QSize(800, 150),  // preferred size
-        70,              // minHeight
-        400               // maxHeight
-    };
+    // Create Console dock - restrict to bottom only
+    QDockWidget *consoleDock = new QDockWidget(tr("Output Console"), m_mainWindow);
+    consoleDock->setObjectName("ConsoleDock");
+    consoleDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    m_console = new EssOutputConsole();
+    consoleDock->setWidget(m_console);
+    m_docks["Console"] = consoleDock;
     
-    // Datapoint Table
-    m_dockRegistry["DatapointTable"] = {
-        tr("Datapoint Monitor"),
-        "DatapointDock",
-        [this]() { 
-            m_datapointTable = new EssDatapointTableWidget();
-            return m_datapointTable;
-        },
-        Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea,
-        QSize(300, 200),  // minimum size
-        QSize(),          // no maximum size
-        QSize(400, 300),  // preferred size
-        -1,               // no minHeight constraint
-        -1,               // no maxHeight constraint
-        250,              // minWidth
-        -1                // no maxWidth
-    };
+    // Create Eye/Touch Visualizer dock
+    QDockWidget *eyeTouchDock = new QDockWidget(tr("Eye/Touch Monitor"), m_mainWindow);
+    eyeTouchDock->setObjectName("EyeTouchVisualizerDock");
+    m_eyeTouchVisualizer = new EssEyeTouchVisualizerWidget();
+    eyeTouchDock->setWidget(m_eyeTouchVisualizer);
+    m_docks["EyeTouchVisualizer"] = eyeTouchDock;
     
-    // Event Table
-    m_dockRegistry["EventTable"] = {
-        tr("Event Log"),
-        "EventDock",
-        [this]() { 
-            m_eventTable = new EssEventTableWidget();
-            return m_eventTable;
-        },
-        Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea,
-        QSize(300, 200),  // minimum size
-        QSize(),          // no maximum size
-        QSize(400, 300),  // preferred size
-        150,              // minHeight - ensure some rows visible
-        -1,               // no maxHeight
-        250,              // minWidth
-        -1                // no maxWidth
-    };
+    // Create Event Table dock
+    QDockWidget *eventDock = new QDockWidget(tr("Event Log"), m_mainWindow);
+    eventDock->setObjectName("EventDock");
+    m_eventTable = new EssEventTableWidget();
+    eventDock->setWidget(m_eventTable);
+    m_docks["EventTable"] = eventDock;
     
-    // Script Editor
-    m_dockRegistry["ScriptEditor"] = {
-        tr("Script Editor"),
-        "ScriptEditorDock",
-        [this]() { 
-            m_scriptEditor = new EssScriptEditorWidget();
-            return m_scriptEditor;
-        },
-        Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea,
-        QSize(300, 400),  // minimum size
-        QSize(),          // no maximum size
-        QSize(400, 600),  // preferred size
-        300,              // minHeight - need space for editing
-        -1,               // no maxHeight
-        300,              // minWidth - need space for code
-        -1                // no maxWidth
-    };
+    // Create Script Editor dock
+    QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"), m_mainWindow);
+    scriptDock->setObjectName("ScriptEditorDock");
+    m_scriptEditor = new EssScriptEditorWidget();
+    scriptDock->setWidget(m_scriptEditor);
+    m_docks["ScriptEditor"] = scriptDock;
     
-    // Stimulus Data Viewer
-    m_dockRegistry["StimDgViewer"] = {
-        tr("Stimdg"),
-        "StimDgDock",
-        [this]() { 
-            m_stimDgViewer = new EssStimDgWidget();
-            return m_stimDgViewer;
-        },
-        Qt::RightDockWidgetArea | Qt::LeftDockWidgetArea,
-        QSize(300, 200),  // minimum size
-        QSize(),          // no maximum size
-        QSize(400, 300)   // preferred size
-        // No individual constraints - uses QSize constraints only
-    };
-}
-
-void EssWorkspaceManager::createAllDocks()
-{
-    for (auto it = m_dockRegistry.begin(); it != m_dockRegistry.end(); ++it) {
-        createDock(it.key());
-    }
-}
-
-QDockWidget* EssWorkspaceManager::createDock(const QString &id)
-{
-    if (!m_dockRegistry.contains(id)) {
-        return nullptr;
-    }
+    // Create Stim Viewer dock
+    QDockWidget *stimDock = new QDockWidget(tr("Stimdg"), m_mainWindow);
+    stimDock->setObjectName("StimDgDock");
+    m_stimDgViewer = new EssStimDgWidget();
+    stimDock->setWidget(m_stimDgViewer);
+    m_docks["StimDgViewer"] = stimDock;
     
-    const DockInfo &info = m_dockRegistry[id];
-    
-    // Create dock widget
-    QDockWidget *dock = new QDockWidget(info.title, m_mainWindow);
-    dock->setObjectName(info.objectName);
-    dock->setAllowedAreas(info.allowedAreas);
-    
-    // Create widget using factory
-    QWidget *widget = info.factory();
-    dock->setWidget(widget);
-    
-    // Apply size constraints to the dock widget
-    if (!info.minimumSize.isEmpty()) {
-        dock->setMinimumSize(info.minimumSize);
-    }
-    if (!info.maximumSize.isEmpty()) {
-        dock->setMaximumSize(info.maximumSize);
-    }
-    
-    // Apply individual dimension constraints if specified
-    if (info.minHeight >= 0) {
-        dock->setMinimumHeight(info.minHeight);
-    }
-    if (info.maxHeight >= 0) {
-        dock->setMaximumHeight(info.maxHeight);
-    }
-    if (info.minWidth >= 0) {
-        dock->setMinimumWidth(info.minWidth);
-    }
-    if (info.maxWidth >= 0) {
-        dock->setMaximumWidth(info.maxWidth);
-    }
-    
-    // Store references
-    m_docks[id] = dock;
-    m_widgets[id] = widget;
-    
-    // Special handling for bottom docks
-    if (id == "Terminal" || id == "Console") {
-        // Allow the dock to be very small
-        dock->setMinimumHeight(50);
-        
-        // Ensure the widget inside can also be small
-        if (widget) {
-            widget->setMinimumHeight(50);
-        }
-    }
-    
-    return dock;
+    // Create Datapoint Table dock
+    QDockWidget *dpointDock = new QDockWidget(tr("Datapoint Monitor"), m_mainWindow);
+    dpointDock->setObjectName("DatapointDock");
+    m_datapointTable = new EssDatapointTableWidget();
+    dpointDock->setWidget(m_datapointTable);
+    m_docks["DatapointTable"] = dpointDock;
 }
 
 QWidget* EssWorkspaceManager::createControlPanel()
@@ -263,48 +143,89 @@ QWidget* EssWorkspaceManager::createControlPanel()
 
 void EssWorkspaceManager::applyDefaultLayout()
 {
-    // Clear current layout
+    // Clear current layout and hide all docks
     for (auto dock : m_docks) {
         dock->setVisible(false);
+        dock->setFloating(false);
         m_mainWindow->removeDockWidget(dock);
     }
     
+    // Set up corners
+    m_mainWindow->setCorner(Qt::TopLeftCorner, Qt::LeftDockWidgetArea);
+    m_mainWindow->setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
     m_mainWindow->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
     m_mainWindow->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
     
-    // Left side: Control Panel and Script Editor (tabbed)
-    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ControlPanel"]);
-    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ScriptEditor"]);
-    m_mainWindow->tabifyDockWidget(m_docks["ControlPanel"], m_docks["ScriptEditor"]);
+    // Build the layout structure
     
-    // Right side: Tables and viewer
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["EventTable"]);
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
-    
-    // Split tables vertically
-    m_mainWindow->splitDockWidget(m_docks["DatapointTable"], m_docks["EventTable"], Qt::Vertical);
-    
-    // Tab stimulus viewer with datapoint table
-    m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["StimDgViewer"]);
-    
-    // Bottom: Terminal and Console (tabbed)
+    // 1. Bottom area first - Terminal and Console tabbed
     m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Terminal"]);
     m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Console"]);
     m_mainWindow->tabifyDockWidget(m_docks["Terminal"], m_docks["Console"]);
     
-    if (m_docks["Terminal"]) {
-    	m_docks["Terminal"]->resize(m_docks["Terminal"]->width(), 150);
-	}
-
-    // Show all docks and set active tabs
+    // 2. Left area - Control Panel
+    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ControlPanel"]);
+    
+    // 3. Center-left - Eye/Touch above Event
+    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["EyeTouchVisualizer"]);
+    m_mainWindow->splitDockWidget(m_docks["ControlPanel"], m_docks["EyeTouchVisualizer"], Qt::Horizontal);
+    
+    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["EventTable"]);
+    m_mainWindow->splitDockWidget(m_docks["EyeTouchVisualizer"], m_docks["EventTable"], Qt::Vertical);
+    
+    // 4. Right area - Script Editor, Stim Viewer, and Datapoint Monitor (tabbed)
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["ScriptEditor"]);
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
+    
+    // Tab them together
+    m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["StimDgViewer"]);
+    m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
+    
+    // Set constraints rather than absolute sizes
+    
+    // Control Panel: prefer ~300px but flexible
+    m_docks["ControlPanel"]->setMinimumWidth(250);
+    m_docks["ControlPanel"]->setMaximumWidth(400);
+    
+    // Eye/Touch and Event: constrain width to keep them narrow
+    m_docks["EyeTouchVisualizer"]->setMinimumWidth(300);
+    m_docks["EyeTouchVisualizer"]->setMaximumWidth(350);
+    
+    m_docks["EventTable"]->setMinimumWidth(300);
+    m_docks["EventTable"]->setMaximumWidth(350);
+    
+    // Terminal/Console: limit height to prevent taking too much space
+    m_docks["Terminal"]->setMinimumHeight(80);
+    m_docks["Terminal"]->setMaximumHeight(200);
+    m_docks["Console"]->setMinimumHeight(80);
+    m_docks["Console"]->setMaximumHeight(200);
+    
+    // Restrict Terminal/Console to bottom only
+    m_docks["Terminal"]->setAllowedAreas(Qt::BottomDockWidgetArea);
+    m_docks["Console"]->setAllowedAreas(Qt::BottomDockWidgetArea);
+    
+    // Set reasonable initial sizes as hints (Qt will adjust for screen size)
+    QSize mainSize = m_mainWindow->size();
+    if (mainSize.width() > 100 && mainSize.height() > 100) {
+        // Use proportions from your layout
+        int controlWidth = mainSize.width() * 0.24;  // ~24% for control panel
+        int centerWidth = mainSize.width() * 0.24;   // ~24% for eye/event column
+        int terminalHeight = mainSize.height() * 0.18; // ~18% for terminal
+        
+        m_docks["ControlPanel"]->resize(controlWidth, m_docks["ControlPanel"]->height());
+        m_docks["EyeTouchVisualizer"]->resize(centerWidth, m_docks["EyeTouchVisualizer"]->height());
+        m_docks["EventTable"]->resize(centerWidth, m_docks["EventTable"]->height());
+        m_docks["Terminal"]->resize(m_docks["Terminal"]->width(), terminalHeight);
+    }
+    
+    // Show all docks
     for (auto dock : m_docks) {
         dock->setVisible(true);
     }
     
-    // Raise default tabs
-    m_docks["ControlPanel"]->raise();
-    m_docks["DatapointTable"]->raise();
+    // Set active tabs
+    m_docks["ScriptEditor"]->raise();
     m_docks["Terminal"]->raise();
 }
 
@@ -345,14 +266,6 @@ void EssWorkspaceManager::connectSignals()
         connect(m_experimentControl, &EssExperimentControlWidget::experimentStopped,
                 [this]() { emit statusMessage("Experiment stopped", 3000); });
     }
-    
-    // Stimulus viewer signals
-    if (m_stimDgViewer) {
-        connect(m_stimDgViewer, &EssStimDgWidget::trialSelected,
-                [this](int trial) {
-                    emit statusMessage(QString("Selected trial %1").arg(trial), 2000);
-                });
-    }
 }
 
 void EssWorkspaceManager::resetToDefaultLayout()
@@ -368,7 +281,6 @@ QList<QAction*> EssWorkspaceManager::viewMenuActions() const
     for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
         QDockWidget *dock = it.value();
         QAction *action = dock->toggleViewAction();
-        action->setShortcut(QKeySequence()); // Clear any default shortcuts
         actions.append(action);
     }
     
@@ -418,5 +330,8 @@ bool EssWorkspaceManager::isDockVisible(const QString &dockName) const
 
 QWidget* EssWorkspaceManager::getWidget(const QString &id) const
 {
-    return m_widgets.value(id, nullptr);
+    if (m_docks.contains(id)) {
+        return m_docks[id]->widget();
+    }
+    return nullptr;
 }

@@ -23,6 +23,15 @@ EssMainWindow::EssMainWindow(QWidget *parent)
     // No central widget - we use docks for everything
     setCentralWidget(nullptr);    
     
+    // Style to minimize gaps between dock areas
+    setStyleSheet(
+        "QMainWindow::separator {"
+        "    background: palette(mid);"
+        "    width: 2px;"
+        "    height: 2px;"
+        "}"
+    );
+    
     // Create workspace manager FIRST
     m_workspace = new EssWorkspaceManager(this, this);
     m_workspace->setupWorkspace();
