@@ -111,7 +111,7 @@ void EssEyeTouchVisualizerWidget::handleDatapoint(const QString& name,
 }
 
 void EssEyeTouchVisualizerWidget::setupUI() {
- QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
     
@@ -131,41 +131,90 @@ void EssEyeTouchVisualizerWidget::setupUI() {
     // Main visualizer
     mainLayout->addWidget(m_visualizer, 1);  // Stretch factor 1
     
-    // Control panel at the bottom
+    // Control panel with two rows
     QGroupBox* controlGroup = new QGroupBox("Controls");
-    QHBoxLayout* controlLayout = new QHBoxLayout(controlGroup);
+    QVBoxLayout* controlsVLayout = new QVBoxLayout(controlGroup);
+    controlsVLayout->setSpacing(2);
+    controlsVLayout->setContentsMargins(5, 5, 5, 5);
     
-    // Display options
+    // First row - Display options
+    QWidget* row1Widget = new QWidget();
+    QHBoxLayout* row1Layout = new QHBoxLayout(row1Widget);
+    row1Layout->setContentsMargins(0, 0, 0, 0);
+    row1Layout->setSpacing(5);
+    
+    // Display options label (right-aligned, fixed width)
+    QLabel* displayLabel = new QLabel("Display:");
+    displayLabel->setStyleSheet("font-weight: bold;");
+    displayLabel->setFixedWidth(60);
+    displayLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    row1Layout->addWidget(displayLabel);
+    
     m_trailsCheck = new QCheckBox("Trails");
     m_gridCheck = new QCheckBox("Grid");
     m_gridCheck->setChecked(true);
     m_labelsCheck = new QCheckBox("Labels");
     m_labelsCheck->setChecked(true);
     
-    controlLayout->addWidget(m_trailsCheck);
-    controlLayout->addWidget(m_gridCheck);
-    controlLayout->addWidget(m_labelsCheck);
+    row1Layout->addWidget(m_trailsCheck);
+    row1Layout->addWidget(m_gridCheck);
+    row1Layout->addWidget(m_labelsCheck);
+    
+    row1Layout->addSpacing(10);
     
     // Trail length spinner
-    controlLayout->addWidget(new QLabel("Trail:"));
+    row1Layout->addWidget(new QLabel("Trail:"));
     QSpinBox* trailSpin = new QSpinBox();
     trailSpin->setRange(10, 200);
     trailSpin->setValue(50);
     trailSpin->setSuffix(" pts");
+    trailSpin->setMaximumWidth(80);
     connect(trailSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             m_visualizer, &EssEyeTouchVisualizer::setTrailLength);
-    controlLayout->addWidget(trailSpin);
+    row1Layout->addWidget(trailSpin);
     
-    controlLayout->addStretch();
+    row1Layout->addStretch();
     
-    // Virtual input controls
-    controlLayout->addWidget(new QLabel(" | "));
-    m_virtualCheck = new QCheckBox("Virtual Input");
-    controlLayout->addWidget(m_virtualCheck);
+    // Second row - Virtual input controls
+    QWidget* row2Widget = new QWidget();
+    QHBoxLayout* row2Layout = new QHBoxLayout(row2Widget);
+    row2Layout->setContentsMargins(0, 0, 0, 0);
+    row2Layout->setSpacing(5);
+    
+    // Virtual input label (right-aligned, fixed width - same as Display)
+    QLabel* virtualLabel = new QLabel("Virtual:");
+    virtualLabel->setStyleSheet("font-weight: bold;");
+    virtualLabel->setFixedWidth(60);
+    virtualLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    row2Layout->addWidget(virtualLabel);
+    
+    m_virtualCheck = new QCheckBox("Enable");
+    row2Layout->addWidget(m_virtualCheck);
     
     m_resetButton = new QPushButton("Reset");
     m_resetButton->setEnabled(false);
-    controlLayout->addWidget(m_resetButton);
+    row2Layout->addWidget(m_resetButton);
+    
+    row2Layout->addSpacing(10);
+    
+    m_continuousCheck = new QCheckBox("Continuous");
+    m_continuousCheck->setEnabled(false);
+    row2Layout->addWidget(m_continuousCheck);
+    
+    row2Layout->addWidget(new QLabel("Rate:"));
+    m_rateSpinBox = new QSpinBox();
+    m_rateSpinBox->setRange(1, 1000);
+    m_rateSpinBox->setValue(250);
+    m_rateSpinBox->setSuffix(" Hz");
+    m_rateSpinBox->setEnabled(false);
+    m_rateSpinBox->setMaximumWidth(80);
+    row2Layout->addWidget(m_rateSpinBox);
+    
+    row2Layout->addStretch();
+    
+    // Add both rows to control group
+    controlsVLayout->addWidget(row1Widget);
+    controlsVLayout->addWidget(row2Widget);
     
     mainLayout->addWidget(controlGroup);
 }
@@ -179,7 +228,17 @@ void EssEyeTouchVisualizerWidget::connectSignals() {
     connect(m_labelsCheck, &QCheckBox::toggled, 
             m_visualizer, &EssEyeTouchVisualizer::setShowLabels);
     
- connect(m_virtualCheck, &QCheckBox::toggled, this, [this](bool checked) {
+    // Continuous update controls
+    connect(m_continuousCheck, &QCheckBox::toggled, [this](bool checked) {
+        m_visualizer->setContinuousUpdateEnabled(checked);
+        m_rateSpinBox->setEnabled(checked && m_virtualCheck->isChecked());
+    });
+    
+    connect(m_rateSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            m_visualizer, &EssEyeTouchVisualizer::setUpdateRate);
+    
+    // Update the virtual check connection to also handle continuous controls
+    connect(m_virtualCheck, &QCheckBox::toggled, this, [this](bool checked) {
         if (checked) {
             // Check if we're connected to a backend
             auto* app = EssApplication::instance();
@@ -193,6 +252,8 @@ void EssEyeTouchVisualizerWidget::connectSignals() {
         
         m_visualizer->setVirtualInputEnabled(checked);
         m_resetButton->setEnabled(checked);
+        m_continuousCheck->setEnabled(checked);
+        m_rateSpinBox->setEnabled(checked && m_continuousCheck->isChecked());
     });
     
     connect(m_resetButton, &QPushButton::clicked,
@@ -412,4 +473,15 @@ void EssEyeTouchVisualizerWidget::sendVirtualTouchData(int screenX, int screenY)
     stream << (qint16)screenX << (qint16)screenY;
     
     emit virtualTouchData(data);
+}
+
+QSize EssEyeTouchVisualizerWidget::sizeHint() const {
+    // Suggest a square-ish size that accounts for controls
+    // Visualizer wants to be square, plus ~100 pixels for controls
+    return QSize(600, 700);
+}
+
+QSize EssEyeTouchVisualizerWidget::minimumSizeHint() const {
+    // Minimum reasonable size for the widget
+    return QSize(400, 500);
 }

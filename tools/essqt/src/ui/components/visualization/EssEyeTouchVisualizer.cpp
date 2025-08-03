@@ -22,6 +22,9 @@ EssEyeTouchVisualizer::EssEyeTouchVisualizer(QWidget *parent)
     , m_touchWindowStatus(0)
     , m_screenSize(800, 600)
     , m_screenHalfDegrees(10.0, 7.5)
+    , m_continuousUpdateTimer(new QTimer(this))
+    , m_continuousUpdateEnabled(false)
+    , m_updateRate(250)  // Default 250 Hz
 {
     // Set visual range to match FLTK (±10 degrees)
     setVisualRange(20.0, 20.0);
@@ -63,6 +66,10 @@ EssEyeTouchVisualizer::EssEyeTouchVisualizer(QWidget *parent)
     m_touchTimeoutTimerId = startTimer(100);  // Check every 100ms
 
     m_drawingRect = rect();
+    
+    // Setup continuous update timer
+    connect(m_continuousUpdateTimer, &QTimer::timeout, 
+            this, &EssEyeTouchVisualizer::sendContinuousUpdate);
 }
 
 EssEyeTouchVisualizer::~EssEyeTouchVisualizer() {
@@ -157,8 +164,40 @@ void EssEyeTouchVisualizer::setVirtualInputEnabled(bool enabled) {
     if (!enabled) {
         m_virtualEyeDragging = false;
         m_virtualTouchActive = false;
+        m_continuousUpdateTimer->stop();  // Stop continuous updates
     } else {
         // When enabling, emit current virtual position
+        QPoint adc = degreesToAdc(m_virtualEyePos);
+        emit virtualEyePosition(adc.x(), adc.y());
+        
+        // Start continuous updates if they were enabled
+        if (m_continuousUpdateEnabled) {
+            setContinuousUpdateEnabled(true);
+        }
+    }
+}
+
+void EssEyeTouchVisualizer::setContinuousUpdateEnabled(bool enabled) {
+    m_continuousUpdateEnabled = enabled;
+    
+    if (enabled && m_virtualInputEnabled) {
+        m_continuousUpdateTimer->start(1000 / m_updateRate);
+    } else {
+        m_continuousUpdateTimer->stop();
+    }
+}
+
+void EssEyeTouchVisualizer::setUpdateRate(int hz) {
+    m_updateRate = qBound(1, hz, 1000);  // Limit to 1-1000 Hz
+    
+    if (m_continuousUpdateTimer->isActive()) {
+        m_continuousUpdateTimer->setInterval(1000 / m_updateRate);
+    }
+}
+
+void EssEyeTouchVisualizer::sendContinuousUpdate() {
+    if (m_virtualInputEnabled && m_continuousUpdateEnabled) {
+        // Emit current position
         QPoint adc = degreesToAdc(m_virtualEyePos);
         emit virtualEyePosition(adc.x(), adc.y());
     }

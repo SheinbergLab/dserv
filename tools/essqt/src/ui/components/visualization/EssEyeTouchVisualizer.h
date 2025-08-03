@@ -38,6 +38,12 @@ public:
     bool isVirtualInputEnabled() const { return m_virtualInputEnabled; }
     void setVirtualEyePosition(float degX, float degY);
     
+    // Continuous update mode
+    void setContinuousUpdateEnabled(bool enabled);
+    bool isContinuousUpdateEnabled() const { return m_continuousUpdateEnabled; }
+    void setUpdateRate(int hz);
+    int updateRate() const { return m_updateRate; }
+    
     // Data updates
     void updateEyePosition(int adcX, int adcY);
     void updateTouchPosition(int screenX, int screenY);
@@ -77,6 +83,9 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void timerEvent(QTimerEvent *event) override;
     void drawBackground(QPainter& painter) override;
+    
+private slots:
+    void sendContinuousUpdate();
     
 private:
     // Conversion constants matching FLTK version
@@ -123,6 +132,11 @@ private:
     QElapsedTimer m_virtualTouchTimer;
     QPointF m_virtualTouchPos;  // degrees
     bool m_virtualTouchActive;
+    
+    // Continuous update mode
+    QTimer* m_continuousUpdateTimer;
+    bool m_continuousUpdateEnabled;
+    int m_updateRate;  // Hz
     
     // Current data
     QPointF m_eyePosition;     // degrees

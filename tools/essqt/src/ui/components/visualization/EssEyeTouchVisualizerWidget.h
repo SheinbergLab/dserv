@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QCheckBox>
 #include <QPushButton>
+#include <QSpinBox>
 
 class EssEyeTouchVisualizerWidget : public QWidget {
     Q_OBJECT
@@ -23,6 +24,10 @@ public:
     void updateEyePosition(const QString& data);
     void updateScreenDimensions(const QVariant& data, const QString& param);
     
+    // Size hint overrides for better floating behavior
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+    
 signals:
     void virtualEyeData(const QByteArray& data);
     void virtualTouchData(const QByteArray& data);
@@ -41,6 +46,8 @@ private:
     QCheckBox* m_labelsCheck;
     QCheckBox* m_virtualCheck;
     QPushButton* m_resetButton;
+    QCheckBox* m_continuousCheck;
+    QSpinBox* m_rateSpinBox;
     
     // Track initialization state like FLTK version
     bool m_initialized = false;
