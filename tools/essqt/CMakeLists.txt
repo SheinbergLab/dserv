@@ -17,8 +17,8 @@ set(CMAKE_AUTOUIC ON)
 # Determine platform-specific output path
 if(WIN32)
     set(QSCI_SRC_DIR third_party/QScintilla/src)
-    set(QSCI_LIB_NAME qscintilla2_qt6)
-    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/${QSCI_LIB_NAME})
+    set(QSCI_LIB_NAME qscintilla2_qt6.lib)
+    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release)
 else()
     add_subdirectory(third_party/QScintilla)
     set(QSCI_LIB_NAME libqscintilla2_qt6.a)
@@ -38,6 +38,10 @@ if(WIN32)
     # Include directories for Tcl and your custom libraries
     include_directories(c:/usr/local/include ../include ../../../dlsh/src ../../../dlsh/src/lablib ${QSCI_SRC_DIR})
 
+   add_library(qscintilla2_qt6 STATIC IMPORTED GLOBAL)
+   set_target_properties(qscintilla2_qt6 PROPERTIES
+      IMPORTED_LOCATION ${QSCI_LIB_PATH}
+   )
 elseif(APPLE)
     # Tcl may be installed from source or by homebrew
     include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
@@ -149,6 +153,7 @@ target_link_libraries(essqt PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
+    qscintilla2_qt6  # Add QScintilla library
 )
 
 # Platform-specific linking
@@ -159,7 +164,6 @@ if(WIN32)
         ${LIBTCLSTUB} 
         ${LIBDG} 
         ${LZ4LIB}
-        ${QSCI_LIB_PATH}
         ws2_32 
         iphlpapi
         gdiplus
@@ -184,7 +188,6 @@ elseif(APPLE)
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
-        qscintilla2_qt6 
     )
     
     # macOS frameworks
@@ -203,7 +206,6 @@ else()
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
-        qscintilla2_qt6 
     )
 endif()
 
