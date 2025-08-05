@@ -13,22 +13,35 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-
 # Determine platform-specific output path
 if(WIN32)
-    set(QSCI_SRC_DIR third_party/QScintilla/src)
-    set(QSCI_LIB_NAME qscintilla2_qt6)
-    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/${QSCI_LIB_NAME})
-
+    # Set up QScintilla paths for Windows
+    set(QSCI_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/QScintilla/src)
+    
+    # Determine the correct library name and path based on build type
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(QSCI_LIB_NAME qscintilla2_qt6d)  # Debug library usually has 'd' suffix
+        set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/debug/${QSCI_LIB_NAME}.lib)
+    else()
+        set(QSCI_LIB_NAME qscintilla2_qt6)
+        set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/${QSCI_LIB_NAME}.lib)
+    endif()
+    
+    # Check if the library exists
+    if(NOT EXISTS ${QSCI_LIB_PATH})
+        message(FATAL_ERROR "QScintilla library not found at: ${QSCI_LIB_PATH}")
+    endif()
+    
+    # Add the library directory to link directories
+    link_directories(${QSCI_SRC_DIR}/release ${QSCI_SRC_DIR}/debug)
+    
 else()
+    # Non-Windows platforms
     add_subdirectory(third_party/QScintilla)
-    set(QSCI_LIB_NAME libqscintilla2_qt6.a)
-    set(QSCI_LIB_PATH "${QSCI_SRC_DIR}/release/qscintilla2_qt6.lib")
-
-
+    set(QSCI_LIB_NAME qscintilla2_qt6)
 endif()
 
-# Tcl/Tk detection (from your working version)
+# Tcl/Tk detection
 if(WIN32)
     add_compile_options("/DFL_DLL")
     link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
@@ -39,9 +52,15 @@ if(WIN32)
     set(LZ4LIB liblz4_static.lib)
     
     # Include directories for Tcl and your custom libraries
-    include_directories(c:/usr/local/include ../include ../../../dlsh/src ../../../dlsh/src/lablib ${QSCI_SRC_DIR})
+    include_directories(
+        c:/usr/local/include 
+        ../include 
+        ../../../dlsh/src 
+        ../../../dlsh/src/lablib 
+        ${QSCI_SRC_DIR}
+    )
 
- elseif(APPLE)
+elseif(APPLE)
     # Tcl may be installed from source or by homebrew
     include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
@@ -120,7 +139,7 @@ set(UI_SOURCES
     src/ui/components/script_editor/EssScriptEditorWidget.cpp
     src/ui/components/dg_viewer/EssDynGroupViewer.cpp
     src/ui/components/dg_viewer/EssStimDgWidget.cpp
-	src/ui/components/visualization/EssVisualizationWidget.cpp
+    src/ui/components/visualization/EssVisualizationWidget.cpp
     src/ui/components/visualization/EssWindowIndicator.cpp
     src/ui/components/visualization/EssEyeTouchVisualizer.cpp
     src/ui/components/visualization/EssEyeTouchVisualizerWidget.cpp
@@ -152,17 +171,18 @@ target_link_libraries(essqt PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
-   
 )
 
 # Platform-specific linking
 if(WIN32)
+    # For Windows, we need to use the full path or just the library name if link_directories is set
     target_link_libraries(essqt PRIVATE
         ${LIBTCL} 
         ${ZLIB} 
         ${LIBTCLSTUB} 
         ${LIBDG} 
         ${LZ4LIB}
+        ${QSCI_LIB_NAME}  # Use just the library name since we added link_directories
         ws2_32 
         iphlpapi
         gdiplus
@@ -177,7 +197,6 @@ if(WIN32)
         uuid
         comdlg32
         advapi32
-        ${QSCI_LIB_PATH}
     )
     
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt")
@@ -189,7 +208,7 @@ elseif(APPLE)
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
-        qscintilla2_qt6 
+        ${QSCI_LIB_NAME}
     )
     
     # macOS frameworks
@@ -208,7 +227,7 @@ else()
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
-        qscintilla2_qt6
+        ${QSCI_LIB_NAME}
     )
 endif()
 
