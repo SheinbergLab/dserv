@@ -36,7 +36,9 @@ if(WIN32)
     
     # Include directories for Tcl and your custom libraries
     include_directories(c:/usr/local/include ../include ../../../dlsh/src ../../../dlsh/src/lablib)
-    
+
+    target_include_directories(essqt PRIVATE ${QSCI_SRC_DIR}/include)
+
 elseif(APPLE)
     # Tcl may be installed from source or by homebrew
     include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
