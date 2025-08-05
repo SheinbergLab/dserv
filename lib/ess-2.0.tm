@@ -401,14 +401,25 @@ oo::class create System {
     }
 
     method do_action {} {
-        dservSet ess/action_state [dict get $_current_state name]_a
-        set state_time [now]
-        my [dict get $_current_state name]_a
+	set state_name [dict get $_current_state name]
+	if {$::ess::debug::enabled} {
+	    ::ess::debug::state_enter $state_name
+	}
+	dservSet ess/action_state ${state_name}_a
+	set state_time [now]
+	my ${state_name}_a
     }
-
+    
     method do_transition {} {
-        dservSet ess/transition_state [dict get $_current_state name]_t
-        my [dict get $_current_state name]_t
+	set state_name [dict get $_current_state name]
+	dservSet ess/transition_state ${state_name}_t
+	set next_state [my ${state_name}_t]
+	
+	if {$::ess::debug::enabled && $next_state ne ""} {
+	    ::ess::debug::state_exit $state_name $next_state
+	}
+	
+	return $next_state
     }
 
     method set_params { p } {
@@ -2688,6 +2699,10 @@ namespace eval ess {
         # these should be loaded per subject
         variable em_scale_h 200
         variable em_scale_v 200
+
+	# now initialize the sampler processor (listens to ain/sampler_vals)
+	::ess::em_sampler_init 50
+	
     }
 
     proc em_check_state {win} {
@@ -2737,24 +2752,33 @@ namespace eval ess {
         return [expr {($em_windows(states) & (1 << $win)) != 0}]
     }
 
-    proc em_sampler_enable {nsamps {nchan 2} {slot 0}} {
-        ainSamplerAdd $slot $nchan $nsamps
-        dservSet ain/samplers/$slot/status 0
-        dservAddExactMatch ain/samplers/$slot/status
-        dpointSetScript ain/samplers/$slot/status \
-            "[namespace current]::do_update"
+
+    proc em_sampler_init {nsamps {nchan 2} {slot 0}} {
+	# Initial configuration of the sampler processor
+	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+	
+	# Set up monitoring
+	dservSet proc/sampler/status -1
+	dservAddExactMatch proc/sampler/status
+	dpointSetScript proc/sampler/status "[namespace current]::do_update"
     }
 
+    proc em_sampler_configure {nsamps {nchan 2} {slot 0}} {
+	# Configure the sampler processor
+	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+    }
+    
+    
     proc em_sampler_start {{slot 0}} {
-        ainSamplerStart $slot
+		samplerStart $slot
     }
-
+    
     proc em_sampler_status {{slot 0}} {
-        return [dservGet ain/samplers/$slot/status]
+	return [dservGet proc/sampler/status]
     }
-
+    
     proc em_sampler_vals {{slot 0}} {
-        return [dservGet ain/samplers/$slot/vals]
+	return [dservGet proc/sampler/vals]
     }
 }
 
@@ -4155,6 +4179,45 @@ namespace eval ess {
     }
 }
 
+#
+# State Debugging lib (ess::debug)
+#
+namespace eval ess::debug {
+    variable enabled 0
+     
+    proc state_enter {state_name} {
+        variable enabled
+        if {!$enabled} return
+        ::ess::evt_put STATE_DEBUG ENTER [now] $state_name
+    }
+    
+    proc state_exit {state_name {next_state ""}} {
+        variable enabled
+        if {!$enabled} return
+        ::ess::evt_put STATE_DEBUG EXIT [now] "$state_name $next_state"
+    }
+    
+    proc state_check {state_name condition result} {
+        variable enabled
+        if {!$enabled} return
+        # Pack as: "condition_expr result"
+        ::ess::evt_put STATE_DEBUG CHECK [now] "$state_name $condition $result"
+    }
+
+    proc state_var {state_name var_name value} {
+        variable enabled
+        if {!$enabled} return
+        ::ess::evt_put STATE_DEBUG VAR [now] $state_name "$var_name $value"
+    }    
+    
+    proc state_timer {state_name action value} {
+        variable enabled
+        if {!$enabled} return
+        # action = "start" or "check", value = duration or remaining
+        ::ess::evt_put STATE_DEBUG TIMER [now] "$state_name $action $value"
+    }
+}
+
 namespace eval ess {
     variable evt_info
     variable evt_type_ids
@@ -4185,6 +4248,10 @@ namespace eval ess {
 
     set subtypes [dict create STOPPED 0 RUNNING 1 INACTIVE 2]
     dict set evt_info SYSTEM_STATE [list 7 {System State} string $subtypes]
+
+    set subtypes [dict create ENTER 0 EXIT 1 CHECK 2 \
+		      TRANSITION 3 VAR 4 TIMER 5 METHOD 6]
+    dict set evt_info STATE_DEBUG [list 10 {State Debug} string $subtypes]
 
     dict set evt_info FSPIKE [list 16 {Time Stamped Spike} long]
     dict set evt_info HSPIKE [list 17 {DIS-1 Hardware Spike} long]
