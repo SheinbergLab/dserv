@@ -177,7 +177,9 @@ if(WIN32)
         uuid
         comdlg32
         advapi32
+        ${QSCI_LIB_PATH}
     )
+    
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt")
     
 elseif(APPLE)
