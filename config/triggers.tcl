@@ -26,6 +26,7 @@ proc update_ain { name data } {
     set v2a [format %.3f [expr {(($v2-2048.)/$em_pnts_per_deg_y)}]]
     set v1a [format %.3f [expr {((2048.-$v1)/$em_pnts_per_deg_x)}]]
     dservSet ess/em_pos "$v2 $v1 $v2a $v1a"
+    dservCopy ain/vals ain/sampler_vals
 }
 
 proc update_events { name data } {
@@ -143,6 +144,11 @@ processLoad [file join \
 		 $path processors touch_windows[info sharedlibextension]] \
     touch_windows
 processAttach touch_windows mtouch/touchvals touch_windows
+
+# add sampler processor for ain/sampler_vals sampling
+processLoad [file join \
+    $path processors sampler[info sharedlibextension]] sampler
+processAttach sampler ain/sampler_vals sampler
 
 # look for any .tcl configs in local/*.tcl
 foreach f [glob [file join $dspath local trigger-*.tcl]] {
