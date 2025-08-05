@@ -16,6 +16,7 @@ set(CMAKE_AUTOUIC ON)
 
 # Determine platform-specific output path
 if(WIN32)
+    set(QSCI_SRC_DIR ../third-party/QScintilla/src)
     set(QSCI_LIB_NAME qscintilla2_qt6.lib)
     set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/${QSCI_LIB_NAME})
 else()
@@ -143,9 +144,7 @@ qt_add_executable(essqt
 )
 
 if(WIN32)
-    target_include_directories(essqt PRIVATE
-      ${QSCI_SRC_DIR}
-    )
+    target_include_directories(essqt ${QSCI_SRC_DIR})
 endif()
 
 # Link libraries based on platform
