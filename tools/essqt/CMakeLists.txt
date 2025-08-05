@@ -149,7 +149,6 @@ target_link_libraries(essqt PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
-    qscintilla2_qt6  # Add QScintilla library
 )
 
 # Platform-specific linking
@@ -160,6 +159,7 @@ if(WIN32)
         ${LIBTCLSTUB} 
         ${LIBDG} 
         ${LZ4LIB}
+        ${QSCI_LIB_PATH}
         ws2_32 
         iphlpapi
         gdiplus
@@ -184,6 +184,7 @@ elseif(APPLE)
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
+        qscintilla2_qt6 
     )
     
     # macOS frameworks
@@ -202,6 +203,7 @@ else()
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
+        qscintilla2_qt6 
     )
 endif()
 
