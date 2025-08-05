@@ -1,7 +1,15 @@
 #include "EssClient.h"
 #include <QDebug>
 #include <QDataStream>
-#include <arpa/inet.h>
+
+// Platform-specific includes for network byte order conversion
+#ifdef _WIN32
+    #include <winsock2.h>  // For htonl/ntohl on Windows
+    #pragma comment(lib, "ws2_32.lib")  // Link with Winsock library
+#else
+    #include <arpa/inet.h>  // For htonl/ntohl on Unix/Linux/macOS
+#endif
+
 
 EssClient::EssClient(QObject* parent) 
     : QObject(parent)

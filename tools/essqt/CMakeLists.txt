@@ -13,14 +13,13 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# Add QScintilla subdirectory
-add_subdirectory(third_party/QScintilla)
 
 # Determine platform-specific output path
 if(WIN32)
     set(QSCI_LIB_NAME qscintilla2_qt6.lib)
     set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/${QSCI_LIB_NAME})
 else()
+    add_subdirectory(third_party/QScintilla)
     set(QSCI_LIB_NAME libqscintilla2_qt6.a)
     set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/${QSCI_LIB_NAME})
 endif()

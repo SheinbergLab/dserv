@@ -2700,8 +2700,8 @@ namespace eval ess {
         variable em_scale_h 200
         variable em_scale_v 200
 
-	# now initialize the sampler processor (listens to ain/sampler_vals)
-	::ess::em_sampler_init 50
+		# now initialize the sampler processor (listens to ain/sampler_vals)
+		::ess::em_sampler_init 50
 	
     }
 
@@ -2753,19 +2753,31 @@ namespace eval ess {
     }
 
 
+	#
+	# sampler support (using sampler processor)
+	#
     proc em_sampler_init {nsamps {nchan 2} {slot 0}} {
-	# Initial configuration of the sampler processor
-	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
-	
-	# Set up monitoring
-	dservSet proc/sampler/status -1
-	dservAddExactMatch proc/sampler/status
-	dpointSetScript proc/sampler/status "[namespace current]::do_update"
+		# Initial configuration of the sampler processor
+		samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+		
+		# Set up monitoring of status variable that indicates state
+		dservSet proc/sampler/status -1
+		dservAddExactMatch proc/sampler/status
+		
+		# Key to waking up state system on change of status
+		dpointSetScript proc/sampler/status "[namespace current]::do_update"
     }
 
     proc em_sampler_configure {nsamps {nchan 2} {slot 0}} {
-	# Configure the sampler processor
-	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+		# Configure the sampler processor
+
+		# Operations are one of:
+		#   0 mean
+		#   1 min
+		#   2 max
+		#   3 min/max
+
+		samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
     }
     
     
@@ -2774,11 +2786,11 @@ namespace eval ess {
     }
     
     proc em_sampler_status {{slot 0}} {
-	return [dservGet proc/sampler/status]
+		return [dservGet proc/sampler/status]
     }
     
     proc em_sampler_vals {{slot 0}} {
-	return [dservGet proc/sampler/vals]
+		return [dservGet proc/sampler/vals]
     }
 }
 
