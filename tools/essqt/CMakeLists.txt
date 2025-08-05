@@ -133,12 +133,6 @@ set(OPTIONAL_SOURCES
     src/tcl/TclUtils.cpp
 )
 
-if(WIN32)
-    target_include_directories(essqt PRIVATE
-      ${QSCI_SRC_DIR}/..
-    )
-endif()
-
 # Main executable
 qt_add_executable(essqt
     src/main.cpp
@@ -147,6 +141,12 @@ qt_add_executable(essqt
     ${UI_SOURCES}
     ${OPTIONAL_SOURCES}
 )
+
+if(WIN32)
+    target_include_directories(essqt PRIVATE
+      ${QSCI_SRC_DIR}/..
+    )
+endif()
 
 # Link libraries based on platform
 target_link_libraries(essqt PRIVATE
