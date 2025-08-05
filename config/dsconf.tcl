@@ -69,6 +69,8 @@ set_hostinfo
 
 # start analog input if available
 catch { ainStart 1 }
+# if we didn't find an A/D still setup 2 channels for virtual inputs
+ainSetNchan 2
 
 proc dpointGet { d } { return [dservGet $d] }
 proc rpioPinOn { pin } { gpioLineSetValue $pin 1 }
@@ -112,17 +114,53 @@ proc touchGetRegionInfo { reg } { processSetParam "touch_windows" settings 1 $re
 proc touchGetParam { p } { processGetParam "touch_windows" $p }
 proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
 
+
+# Sampler processor convenience functions
+proc samplerSetParam { p v } { processSetParam "sampler" $p $v }
+proc samplerSetIndexedParam { i p v } { processSetParam "sampler" $p $v $i }
+proc samplerGetParam { p } { processGetParam "sampler" $p }
+proc samplerGetIndexedParam { i p } { processGetParam "sampler" $p $i }
+
+# Convenience functions matching the ain/touch pattern
+proc samplerStart { {slot 0} } { processSetParam "sampler" start 1 $slot }
+proc samplerStop { {slot 0} } { processSetParam "sampler" stop 1 $slot }
+proc samplerQueryRate { {slot 0} } { processSetParam "sampler" rate 1 $slot }
+proc samplerSetActive { slot active } { processSetParam "sampler" active $active $slot }
+proc samplerGetStatus { {slot 0} } {
+    processSetParam sampler status 1 0
+    return [dservGet proc/sampler/status]
+}
+proc samplerGetVals { {slot 0} } {
+    return [dservGet proc/sampler/vals]
+}
+
+proc samplerEnableRateTracking { {slot 0} {interval 50} } {
+    processSetParam "sampler" track_rate 1 $slot
+    processSetParam "sampler" rate_update_interval $interval $slot
+}
+
+proc samplerGetRate { {slot 0} } {
+   return [dservGet proc/sampler/rate]
+}
+
+# Configure sampler (matching em_sampler_enable pattern)
+proc samplerConfigure { slot nsamples nchannels {operation 0} } {
+    processSetParam "sampler" sample_count $nsamples $slot
+    processSetParam "sampler" nchannels $nchannels $slot
+    processSetParam "sampler" operation $operation $slot
+}
+
 # make an educated guess about which gpiochip to use
 if { $::tcl_platform(os) == "Linux" } {
     if { $::tcl_platform(machine) == "x86_64" } {
 	set gpiochip /dev/gpiochip1
     } else {
-	if { [file exists /dev/gpiochip4] } {
-	    set gpiochip /dev/gpiochip4
-	} else {
-	    set gpiochip /dev/gpiochip0
+		if { [file exists /dev/gpiochip4] } {
+			set gpiochip /dev/gpiochip4
+		} else {
+			set gpiochip /dev/gpiochip0
+		}
 	}
-    }
 } else {
     set gpiochip {}
 }
