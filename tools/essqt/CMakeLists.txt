@@ -36,7 +36,7 @@ if(WIN32)
     set(LZ4LIB liblz4_static.lib)
     
     # Include directories for Tcl and your custom libraries
-    include_directories(c:/usr/local/include ../include ../../../dlsh/src ../../../dlsh/src/lablib)
+    include_directories(c:/usr/local/include ../include ../../../dlsh/src ../../../dlsh/src/lablib ${QSCI_SRC_DIR})
 
 elseif(APPLE)
     # Tcl may be installed from source or by homebrew
@@ -142,10 +142,6 @@ qt_add_executable(essqt
     ${UI_SOURCES}
     ${OPTIONAL_SOURCES}
 )
-
-if(WIN32)
-    target_include_directories(essqt ${QSCI_SRC_DIR})
-endif()
 
 # Link libraries based on platform
 target_link_libraries(essqt PRIVATE
