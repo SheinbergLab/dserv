@@ -18,17 +18,16 @@ set(CMAKE_AUTOUIC ON)
 if(WIN32)
     set(QSCI_SRC_DIR third_party/QScintilla/src)
     set(QSCI_LIB_NAME qscintilla2_qt6.lib)
-    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release)
-else()
-    add_subdirectory(third_party/QScintilla)
-    set(QSCI_LIB_NAME libqscintilla2_qt6.a)
-    set(QSCI_LIB_PATH "${QSCI_SRC_DIR}/release/qscintilla2_qt6.lib")
+    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/qscintilla2_qt6.lib
 
 	add_library(qscintilla2_qt6 STATIC IMPORTED GLOBAL)
 	set_target_properties(qscintilla2_qt6 PROPERTIES
    	 IMPORTED_LOCATION "${QSCI_LIB_PATH}"
 	)
-
+else()
+    add_subdirectory(third_party/QScintilla)
+    set(QSCI_LIB_NAME libqscintilla2_qt6.a)
+    set(QSCI_LIB_PATH "${QSCI_SRC_DIR}/release/qscintilla2_qt6.lib")
 endif()
 
 # Tcl/Tk detection (from your working version)
