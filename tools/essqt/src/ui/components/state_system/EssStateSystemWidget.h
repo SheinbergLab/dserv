@@ -15,7 +15,7 @@
 
 class EssEventProcessor;
 class EssDataProcessor;
-class EssEvent;
+struct EssEvent;
 
 /**
  * @brief State system widget with trace view
