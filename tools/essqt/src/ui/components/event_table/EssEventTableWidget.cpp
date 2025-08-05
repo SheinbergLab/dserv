@@ -195,12 +195,14 @@ void EssEventTableWidget::onHostDisconnected()
 bool EssEventTableWidget::shouldDisplayEvent(const EssEvent &event) const
 {
     switch (event.type) {
+    	case EVT_TRACE:
         case EVT_USER:
         case EVT_NAMESET:
         case EVT_PARAM:
         case EVT_FILEIO:
         case EVT_SYSTEM_CHANGES:
         case EVT_SUBTYPE_NAMES:
+        case EVT_STATE_DEBUG:
             return false;
         default:
             return true;

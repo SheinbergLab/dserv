@@ -32,6 +32,7 @@ enum SpecialEventType {
     EVT_TRACE = 4,
     EVT_PARAM = 5,
     EVT_SUBTYPE_NAMES = 6,  // Sets subtype names
+    EVT_STATE_DEBUG = 10,
     EVT_SYSTEM_CHANGES = 18,
     EVT_BEGINOBS = 19,      // Begin observation
     EVT_ENDOBS = 20         // End observation

@@ -73,6 +73,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/script_editor
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/dg_viewer
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/visualization
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/state_system
     ${CMAKE_CURRENT_SOURCE_DIR}/src/communication
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl
 )
@@ -111,6 +112,8 @@ set(UI_SOURCES
     src/ui/components/visualization/EssWindowIndicator.cpp
     src/ui/components/visualization/EssEyeTouchVisualizer.cpp
     src/ui/components/visualization/EssEyeTouchVisualizerWidget.cpp
+    src/ui/components/state_system/EssStateSystemWidget.cpp
+    src/ui/components/state_system/EssStateDebugData.cpp
 )
 
 set(OPTIONAL_SOURCES
@@ -119,6 +122,7 @@ set(OPTIONAL_SOURCES
     src/communication/mdns.c
     src/tcl/dlfuncs.c
     src/tcl/b64.c
+    src/tcl/TclUtils.cpp
 )
 
 # Main executable

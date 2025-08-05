@@ -20,6 +20,7 @@ class EssExperimentControlWidget;
 class EssScriptEditorWidget;
 class EssStimDgWidget;
 class EssEyeTouchVisualizerWidget;
+class EssStateSystemWidget;
 
 class EssWorkspaceManager : public QObject
 {
@@ -73,4 +74,5 @@ private:
     EssScriptEditorWidget *m_scriptEditor;
     EssStimDgWidget *m_stimDgViewer;
     EssEyeTouchVisualizerWidget *m_eyeTouchVisualizer;
+    EssStateSystemWidget *m_stateSystemWidget;
 };

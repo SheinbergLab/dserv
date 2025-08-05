@@ -12,6 +12,7 @@
 #include "script_editor/EssScriptEditorWidget.h"
 #include "dg_viewer/EssStimDgWidget.h"
 #include "visualization/EssEyeTouchVisualizerWidget.h"
+#include "state_system/EssStateSystemWidget.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -30,6 +31,7 @@ EssWorkspaceManager::EssWorkspaceManager(QMainWindow *mainWindow, QObject *paren
     , m_scriptEditor(nullptr)
     , m_stimDgViewer(nullptr)
     , m_eyeTouchVisualizer(nullptr)
+    , m_stateSystemWidget(nullptr) 
 {
 }
 
@@ -158,6 +160,39 @@ void EssWorkspaceManager::createDocks()
     
     m_docks["EventTable"] = eventDock;
     
+    // Create State Debug dock
+    QDockWidget *stateSystemDock = new QDockWidget(tr("State System"), m_mainWindow);
+    stateSystemDock->setObjectName("stateSystemDock");
+    m_stateSystemWidget = new EssStateSystemWidget();
+    stateSystemDock->setWidget(m_stateSystemWidget);
+
+  connect(stateSystemDock, &QDockWidget::topLevelChanged, [this, stateSystemDock](bool floating) {
+        if (floating) {
+            stateSystemDock->setMinimumSize(600, 400);
+            stateSystemDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+            
+            if (stateSystemDock->width() < 700) {
+                stateSystemDock->resize(800, 600);
+            }
+            
+            m_stateSystemWidget->setMinimumSize(600, 400);
+            m_stateSystemWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        } else {
+            // When docked, allow more flexibility than Event Table since it has more content
+            stateSystemDock->setMinimumWidth(400);
+            stateSystemDock->setMaximumWidth(600);
+            stateSystemDock->setMinimumHeight(300);
+            stateSystemDock->setMaximumHeight(QWIDGETSIZE_MAX);
+            
+            m_stateSystemWidget->setMinimumWidth(400);
+            m_stateSystemWidget->setMaximumWidth(600);
+            m_stateSystemWidget->setMinimumHeight(300);
+            m_stateSystemWidget->setMaximumHeight(QWIDGETSIZE_MAX);
+        }
+    });
+    
+    m_docks["stateSystem"] = stateSystemDock;
+        
     // Create Script Editor dock
     QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"), m_mainWindow);
     scriptDock->setObjectName("ScriptEditorDock");
@@ -234,11 +269,13 @@ void EssWorkspaceManager::applyDefaultLayout()
     
     // 4. Right area - Script Editor, Stim Viewer, and Datapoint Monitor (tabbed)
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["ScriptEditor"]);
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["stateSystem"]); 
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
     
     // Tab them together
-    m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["StimDgViewer"]);
+    m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
+    m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
     m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
     
     // Set constraints for docked state only

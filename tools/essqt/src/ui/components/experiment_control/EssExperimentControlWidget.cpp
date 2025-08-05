@@ -975,17 +975,17 @@ void EssExperimentControlWidget::onVariantComboChanged(int index)
             QString("Loading variant: %1").arg(newVariant), "ExperimentControl");
     }
 }
-
 void EssExperimentControlWidget::onReloadSystemClicked()
 {
     if (m_blockSignals) return;
     
     EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
     if (cmdInterface && cmdInterface->isConnected()) {
-        // Touch the datapoint to force a refresh
-        cmdInterface->executeDserv("%touch ess/systems");
+        // Use the existing reload_system command
+        cmdInterface->executeEssAsync("::ess::reload_system");
+        
         emit reloadSystemRequested();
-        EssConsoleManager::instance()->logInfo("Reloading system list", "ExperimentControl");
+        EssConsoleManager::instance()->logInfo("Reloading system", "ExperimentControl");
     }
 }
 
@@ -995,9 +995,11 @@ void EssExperimentControlWidget::onReloadProtocolClicked()
     
     EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
     if (cmdInterface && cmdInterface->isConnected()) {
-        cmdInterface->executeDserv("%touch ess/protocols");
+        // Use the existing reload_protocol command
+        cmdInterface->executeEssAsync("::ess::reload_protocol");
+        
         emit reloadProtocolRequested();
-        EssConsoleManager::instance()->logInfo("Reloading protocol list", "ExperimentControl");
+        EssConsoleManager::instance()->logInfo("Reloading protocol", "ExperimentControl");
     }
 }
 
@@ -1007,9 +1009,11 @@ void EssExperimentControlWidget::onReloadVariantClicked()
     
     EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
     if (cmdInterface && cmdInterface->isConnected()) {
-        cmdInterface->executeDserv("%touch ess/variants");
+        // Use the existing reload_variant command
+        cmdInterface->executeEssAsync("::ess::reload_variant");
+        
         emit reloadVariantRequested();
-        EssConsoleManager::instance()->logInfo("Reloading variant list", "ExperimentControl");
+        EssConsoleManager::instance()->logInfo("Reloading variant", "ExperimentControl");
     }
 }
 

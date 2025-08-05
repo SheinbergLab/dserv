@@ -153,12 +153,12 @@ void EssCommandInterface::initializeTcl()
             # Subscribe to essential datapoints
             set subscriptions {
                 "ess/*"
-                "system/*" 
+                "system/*"
                 "stimdg"
                 "trialdg"
                 "eventlog/events"
-                "ain/eye_*"
                 "print"
+                "proc/sampler/*"
             }
             
             foreach pattern $subscriptions {
@@ -179,6 +179,7 @@ void EssCommandInterface::initializeTcl()
                 ess/state_table ess/rmt_cmds
                 stimdg trialdg
                 system/hostname system/os
+                proc/sampler/status proc/sampler/rate proc/sampler/vals
             }
             
             # Touch all variables via ESS
