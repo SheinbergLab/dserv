@@ -134,7 +134,7 @@ set(OPTIONAL_SOURCES
 )
 
 if(WIN32)
-    target_include_directories(your_target_name PRIVATE
+    target_include_directories(essqt PRIVATE
       ${QSCI_SRC_DIR}/..
     )
 endif()
