@@ -254,3 +254,25 @@ install(TARGETS essqt
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+# Add this to your CMakeLists.txt after the install() command
+if(WIN32)
+    # Find windeployqt
+    get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt_bin_dir "${_qmake_executable}" DIRECTORY)
+    find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${_qt_bin_dir}")
+
+    # Add a custom command to run windeployqt after building
+    add_custom_command(TARGET essqt POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E env PATH="${_qt_bin_dir}" 
+        ${WINDEPLOYQT_EXECUTABLE} "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:essqt>"
+    )
+    
+    # Install runtime dependencies
+    install(CODE "
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E env PATH=\"${_qt_bin_dir}\" 
+            \"${WINDEPLOYQT_EXECUTABLE}\" \"$<TARGET_FILE:essqt>\"
+        )
+    ")
+endif()
