@@ -144,7 +144,7 @@ qt_add_executable(essqt
 
 if(WIN32)
     target_include_directories(essqt PRIVATE
-      ${QSCI_SRC_DIR}/..
+      ${QSCI_SRC_DIR}
     )
 endif()
 
