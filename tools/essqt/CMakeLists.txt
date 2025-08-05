@@ -22,7 +22,13 @@ if(WIN32)
 else()
     add_subdirectory(third_party/QScintilla)
     set(QSCI_LIB_NAME libqscintilla2_qt6.a)
-    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/${QSCI_LIB_NAME})
+    set(QSCI_LIB_PATH "${QSCI_SRC_DIR}/release/qscintilla2_qt6.lib")
+
+	add_library(qscintilla2_qt6 STATIC IMPORTED GLOBAL)
+	set_target_properties(qscintilla2_qt6 PROPERTIES
+   	 IMPORTED_LOCATION "${QSCI_LIB_PATH}"
+	)
+
 endif()
 
 # Tcl/Tk detection (from your working version)
@@ -38,11 +44,7 @@ if(WIN32)
     # Include directories for Tcl and your custom libraries
     include_directories(c:/usr/local/include ../include ../../../dlsh/src ../../../dlsh/src/lablib ${QSCI_SRC_DIR})
 
-   add_library(qscintilla2_qt6 STATIC IMPORTED GLOBAL)
-   set_target_properties(qscintilla2_qt6 PROPERTIES
-      IMPORTED_LOCATION ${QSCI_LIB_PATH}
-   )
-elseif(APPLE)
+ elseif(APPLE)
     # Tcl may be installed from source or by homebrew
     include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
