@@ -18,11 +18,7 @@ set(CMAKE_AUTOUIC ON)
 if(WIN32)
     set(QSCI_SRC_DIR third_party/QScintilla/src)
     set(QSCI_LIB_NAME qscintilla2_qt6.lib)
-    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/qscintilla2_qt6.lib)
-	add_library(qscintilla2_qt6 STATIC IMPORTED GLOBAL)
-	set_target_properties(qscintilla2_qt6 PROPERTIES
-   	 IMPORTED_LOCATION "${QSCI_LIB_PATH}"
-	)
+    set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/release/${QSCI_LIB_NAME})
 
 else()
     add_subdirectory(third_party/QScintilla)
@@ -156,7 +152,7 @@ target_link_libraries(essqt PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
-    qscintilla2_qt6  # Add QScintilla library
+   
 )
 
 # Platform-specific linking
@@ -191,6 +187,7 @@ elseif(APPLE)
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
+        qscintilla2_qt6 
     )
     
     # macOS frameworks
@@ -209,6 +206,7 @@ else()
         ${LIBLZ4} 
         ${LIBTCL} 
         ${LIBTCLSTUB}
+        qscintilla2_qt6
     )
 endif()
 
