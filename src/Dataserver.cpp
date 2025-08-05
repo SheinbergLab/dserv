@@ -154,6 +154,24 @@ void Dataserver::set(ds_datapoint_t *dpoint)
   
 }
 
+int Dataserver::copy(char *from_varname, char *to_varname)
+{
+  ds_datapoint_t *dp = get_datapoint(from_varname);
+  if (!dp) {
+    return 0;  // source doesn't exist
+  }
+  
+  // Free the old varname and set the new one
+  free(dp->varname);
+  dp->varname = strdup(to_varname);
+  dp->varlen = strlen(to_varname);
+  
+  // set it - the pointer version takes ownership
+  set(dp);
+  
+  return 1;  // success
+}
+
 void Dataserver::update(ds_datapoint_t *dpoint)
 {
   /*
@@ -585,6 +603,22 @@ int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
   return TCL_OK;
 }
 
+int dserv_copy_command(ClientData data, Tcl_Interp * interp, int objc,
+                       Tcl_Obj * const objv[])
+{
+  Dataserver *ds = (Dataserver *) data;
+  
+  if (objc != 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "from_varname to_varname");
+    return TCL_ERROR;
+  }
+  
+  int result = ds->copy(Tcl_GetString(objv[1]), Tcl_GetString(objv[2]));
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(result));
+  
+  return TCL_OK;
+}
+
 int dserv_setdata_command (ClientData data, Tcl_Interp *interp,
 			   int objc, Tcl_Obj * const objv[])
 {
@@ -893,6 +927,8 @@ static void add_tcl_commands(Tcl_Interp *interp, Dataserver *dserv)
 		       dserv_exists_command, dserv, NULL); 
   Tcl_CreateObjCommand(interp, "dservGet",
 		       dserv_get_command, dserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservCopy",
+		       dserv_copy_command, dserv, NULL);  
   Tcl_CreateObjCommand(interp, "dservTouch",
 		       dserv_touch_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservTimestamp",

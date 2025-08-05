@@ -1405,31 +1405,33 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
   Tcl_CreateObjCommand(interp, "dpointExists",
-               dserv_exists_command, tserv->ds, NULL);
+		       dserv_exists_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservExists",
-               dserv_exists_command, tserv->ds, NULL);
+		       dserv_exists_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dpointGet",
-               dserv_get_command, tserv->ds, NULL);
+		       dserv_get_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservGet",
-               dserv_get_command, tserv->ds, NULL);
+		       dserv_get_command, tserv->ds, NULL);
+  Tcl_CreateObjCommand(interp, "dservCopy",
+		       dserv_copy_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSet",
-               dserv_set_command, tserv->ds, NULL);
+		       dserv_set_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTouch",
-               dserv_touch_command, tserv->ds, NULL);
+		       dserv_touch_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservTimestamp",
-               dserv_timestamp_command, tserv->ds, NULL);
+		       dserv_timestamp_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSetData",
-               dserv_setdata_command, tserv->ds, NULL);
+		       dserv_setdata_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSetData64",
-               dserv_setdata64_command, tserv->ds, NULL);
+		       dserv_setdata64_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservClear",
-               dserv_clear_command, tserv->ds, NULL);
+		       dserv_clear_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservEval",
-               dserv_eval_command, tserv->ds, NULL);
+		       dserv_eval_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservKeys",
-               dserv_keys_command, tserv->ds, NULL);
+		       dserv_keys_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservDGDir",
-               dserv_dgdir_command, tserv->ds, NULL);
+		       dserv_dgdir_command, tserv->ds, NULL);
 
   Tcl_CreateObjCommand(interp, "processGetParam",
                process_get_param_command, tserv->ds, NULL);

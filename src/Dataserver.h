@@ -116,7 +116,8 @@ public:
   void set(ds_datapoint_t &dpoint);
   void set(ds_datapoint_t *dpoint);
   void set(char *varname, char *value);
-
+  int copy(char *from_varname, char *to_varname);
+  
   void update(ds_datapoint_t *dpoint);
   int touch(char *varname);
   int get(char *varname, ds_datapoint_t **dpoint);
