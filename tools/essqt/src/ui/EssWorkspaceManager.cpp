@@ -13,6 +13,7 @@
 #include "dg_viewer/EssStimDgWidget.h"
 #include "visualization/EssEyeTouchVisualizerWidget.h"
 #include "state_system/EssStateSystemWidget.h"
+#include "cgraph/EssCGraphWidget.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -192,6 +193,46 @@ void EssWorkspaceManager::createDocks()
     });
     
     m_docks["stateSystem"] = stateSystemDock;
+
+	// CGraph Widget
+	QDockWidget *cgraphDock = new QDockWidget(tr("Graphs"), m_mainWindow);
+	cgraphDock->setObjectName("CGraphDock");
+	m_cgraphWidget = new EssCGraphWidget();
+	
+	// Set the command interface
+	auto commandInterface = EssApplication::instance()->commandInterface();
+	m_cgraphWidget->setCommandInterface(commandInterface);
+	
+	cgraphDock->setWidget(m_cgraphWidget);
+	
+	// Handle floating behavior similar to other docks
+	connect(cgraphDock, &QDockWidget::topLevelChanged, [this, cgraphDock](bool floating) {
+		if (floating) {
+			cgraphDock->setMinimumSize(600, 400);
+			cgraphDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+			
+			if (cgraphDock->width() < 600) {
+				cgraphDock->resize(800, 600);
+			}
+			
+			m_cgraphWidget->setMinimumSize(600, 400);
+			m_cgraphWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+		} else {
+			// When docked, use reasonable constraints
+			cgraphDock->setMinimumWidth(400);
+			cgraphDock->setMaximumWidth(800);
+			cgraphDock->setMinimumHeight(300);
+			cgraphDock->setMaximumHeight(QWIDGETSIZE_MAX);
+			
+			m_cgraphWidget->setMinimumWidth(400);
+			m_cgraphWidget->setMaximumWidth(800);
+			m_cgraphWidget->setMinimumHeight(300);
+			m_cgraphWidget->setMaximumHeight(QWIDGETSIZE_MAX);
+		}
+	});
+	
+	m_docks["CGraph"] = cgraphDock;
+
         
     // Create Script Editor dock
     QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"), m_mainWindow);
@@ -277,6 +318,7 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
     m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
     m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
+    m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["CGraph"]);
     
     // Set constraints for docked state only
     
