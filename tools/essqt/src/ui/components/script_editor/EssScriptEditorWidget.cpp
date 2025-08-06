@@ -21,6 +21,12 @@ EssScriptEditorWidget::EssScriptEditorWidget(QWidget *parent)
     , m_statusLabel(new QLabel(this))
     , m_pendingSaves(0)
     , m_isGitBusy(false)
+    , m_saveAction(nullptr)   
+    , m_saveAllAction(nullptr)     
+    , m_reloadAction(nullptr)      
+    , m_pushAction(nullptr)        
+    , m_pullAction(nullptr)        
+    , m_branchCombo(nullptr)       
 {
     setupUi();
     connectSignals();
@@ -98,12 +104,12 @@ void EssScriptEditorWidget::setupUi()
     m_statusLabel->setText("Not connected - no scripts loaded");
     
     // Disable all actions initially
-    m_saveAction->setEnabled(false);
-    m_saveAllAction->setEnabled(false);
-    m_reloadAction->setEnabled(false);
-    m_pushAction->setEnabled(false);
-    m_pullAction->setEnabled(false);
-    m_branchCombo->setEnabled(false);
+    if (m_saveAction) m_saveAction->setEnabled(false);
+    if (m_saveAllAction) m_saveAllAction->setEnabled(false);
+    if (m_reloadAction) m_reloadAction->setEnabled(false);
+    if (m_pushAction) m_pushAction->setEnabled(false);
+    if (m_pullAction) m_pullAction->setEnabled(false);
+    if (m_branchCombo) m_branchCombo->setEnabled(false);
     
     // Update initial state
     updateStatusBar();
@@ -148,8 +154,25 @@ void EssScriptEditorWidget::createGlobalToolbar()
     if (!reloadIcon.isNull()) {
         m_reloadAction->setIcon(reloadIcon);
     }
+    m_reloadAction->setEnabled(false);
     connect(m_reloadAction, &QAction::triggered, this, &EssScriptEditorWidget::reloadCurrentScript);
     
+
+    // Format current script
+    QAction *formatAction = new QAction(tr("Format"), this);
+    formatAction->setToolTip(tr("Format current script (Ctrl+Alt+F)"));
+    QIcon formatIcon = QIcon::fromTheme("format-indent-more");
+    if (!formatIcon.isNull()) {
+        formatAction->setIcon(formatIcon);
+    }
+    connect(formatAction, &QAction::triggered, this, [this]() {
+        ScriptType type = currentScriptType();
+        auto it = m_scriptEditors.find(type);
+        if (it != m_scriptEditors.end()) {
+            it->editor->formatCode();
+        }
+    });
+
     // Git pull
     m_pullAction = new QAction(tr("Pull"), this);
     m_pullAction->setToolTip(tr("Pull changes from remote repository"));
@@ -180,7 +203,9 @@ void EssScriptEditorWidget::createGlobalToolbar()
     m_globalToolbar->addAction(m_saveAction);
     m_globalToolbar->addAction(m_saveAllAction);
     m_globalToolbar->addSeparator();
-    m_globalToolbar->addAction(m_reloadAction);
+    m_globalToolbar->addAction(m_reloadAction); 
+    m_globalToolbar->addSeparator();
+    m_globalToolbar->addAction(formatAction);
     m_globalToolbar->addSeparator();
     m_globalToolbar->addAction(m_pullAction);
     m_globalToolbar->addAction(m_pushAction);
