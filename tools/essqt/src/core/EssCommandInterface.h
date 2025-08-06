@@ -125,6 +125,8 @@ signals:
     // Datapoint updates from listener
     void datapointUpdated(const QString &name, const QVariant &value, 
     					  qint64 timestamp, int dtype = -1);
+    					  
+    void tclInitialized();    					  
 
 private slots:
     void onEventReceived(const QString &event);

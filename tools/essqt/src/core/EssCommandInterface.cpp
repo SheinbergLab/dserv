@@ -207,6 +207,7 @@ void EssCommandInterface::initializeTcl()
             zipfs mount $dlshzip $dlshroot
             set ::auto_path [linsert $::auto_path 0 [file join $dlshroot/lib]]
             package require dlsh
+			package require qtcgwin
         }
         
         load_dlsh
@@ -218,6 +219,8 @@ void EssCommandInterface::initializeTcl()
             "CommandInterface"
         );
     }
+    
+    emit tclInitialized();
 }    
 
 
