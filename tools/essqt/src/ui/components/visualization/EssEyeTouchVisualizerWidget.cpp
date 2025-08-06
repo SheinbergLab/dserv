@@ -197,7 +197,7 @@ void EssEyeTouchVisualizerWidget::setupUI() {
     
     row2Layout->addSpacing(10);
     
-    m_continuousCheck = new QCheckBox("Continuous");
+    m_continuousCheck = new QCheckBox("Cont");
     m_continuousCheck->setEnabled(false);
     row2Layout->addWidget(m_continuousCheck);
     
@@ -253,7 +253,12 @@ void EssEyeTouchVisualizerWidget::connectSignals() {
         m_visualizer->setVirtualInputEnabled(checked);
         m_resetButton->setEnabled(checked);
         m_continuousCheck->setEnabled(checked);
+        m_continuousCheck->setChecked(true);
         m_rateSpinBox->setEnabled(checked && m_continuousCheck->isChecked());
+        
+        if (checked && m_continuousCheck->isChecked()) {
+        	m_visualizer->setContinuousUpdateEnabled(true);
+    	}
     });
     
     connect(m_resetButton, &QPushButton::clicked,
