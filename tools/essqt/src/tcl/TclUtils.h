@@ -149,7 +149,50 @@ public:
      */
     void clearError() { m_lastError.clear(); }
 
-    // Advanced functionality (for future use)
+
+    // Quick type checking and conversion helpers
+    bool isNumeric(const QString &str);
+    bool isInteger(const QString &str);
+    bool isDouble(const QString &str);
+    bool isBoolean(const QString &str);
+    
+    // Safe extraction with defaults
+    int extractIntWithDefault(const QString &str, int defaultValue);
+    double extractDoubleWithDefault(const QString &str, double defaultValue);
+    bool extractBoolWithDefault(const QString &str, bool defaultValue);
+    QString extractStringFromList(const QString &listStr, int index, const QString &defaultValue = QString());
+    
+    // Common parsing patterns
+    QVariantMap parseKeyValuePairs(const QString &str, const QString &separator = " ");
+    QPair<QString, QString> splitKeyValue(const QString &str, const QString &separator = " ");
+    QStringList parseSpaceSeparatedQuoted(const QString &str);
+    
+    // Nested structure helpers
+    QVariant parseNestedStructure(const QString &str);
+    QString getNestedValue(const QString &dictStr, const QStringList &keyPath);
+    
+    // Validation and debugging
+    QString validateAndDescribe(const QString &str);
+    QString prettyPrint(const QString &tclStr, int indent = 2);
+    
+    // Conversion helpers
+    QString variantMapToDict(const QVariantMap &map);
+    QString stringListToList(const QStringList &list);
+    QString escapeForTcl(const QString &str);
+
+    // Parsing helpers    
+    bool isCompleteTclCommand(const QString &command);
+    int countCommandWords(const QString &command);
+    bool isBracedArgument(const QString &command, int argIndex);
+
+    struct CommandInfo {
+        QString command;        // The command name
+        int argCount;          // Number of arguments
+        QList<bool> bracedArgs; // Which arguments are braced
+    };
+    
+    // Analyze a Tcl command line
+    CommandInfo analyzeCommand(const QString &commandLine);
     
     /**
      * @brief Get direct access to Tcl interpreter (use with caution)
