@@ -345,6 +345,10 @@ void EssExperimentControlWidget::processEssDatapoint(const QString &name, const 
                          currentSystem() : m_pendingSystem);
         m_pendingSystem.clear();
     }
+    else if (name == "ess/user_reset") {
+	    m_currentObsId = 0;
+        updateStatusDisplay();
+    }
     else if (name == "ess/protocols") {
         QString protocolsStr = value.toString().trimmed();
         QStringList protocols = parseTclList(protocolsStr);
