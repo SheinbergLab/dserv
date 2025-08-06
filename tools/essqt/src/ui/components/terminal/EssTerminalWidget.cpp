@@ -12,6 +12,13 @@
 #include <QDebug>
 #include <QCompleter>
 #include <QStringListModel>
+#include <QApplication>
+#include <QClipboard>
+#include <QRegularExpression>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QUrl>
 
 EssTerminalWidget::EssTerminalWidget(QWidget *parent)
     : QPlainTextEdit(parent)
@@ -55,6 +62,15 @@ void EssTerminalWidget::init()
     
     // Cursor
     setCursorWidth(2);
+    
+    // Enable drag and drop
+    setAcceptDrops(true);
+    
+    // Monitor clipboard for paste availability
+    connect(QApplication::clipboard(), &QClipboard::dataChanged,
+            this, [this]() {
+                // Could emit a signal here to update paste action state
+            });
     
     // Welcome message
     appendOutput("ESS Qt Terminal\n", OutputType::System);
@@ -282,6 +298,72 @@ void EssTerminalWidget::appendOutput(const QString &text, OutputType type)
     verticalScrollBar()->setValue(verticalScrollBar()->maximum());
 }
 
+void EssTerminalWidget::handleCopy()
+{
+    // If there's a selection, copy it
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection()) {
+        QString selectedText = cursor.selectedText();
+        // Convert QChar::ParagraphSeparator to newlines for proper copying
+        selectedText.replace(QChar::ParagraphSeparator, '\n');
+        QApplication::clipboard()->setText(selectedText);
+    }
+}
+
+void EssTerminalWidget::handlePaste()
+{
+    ensureCursorInEditableArea();
+    
+    QString text = QApplication::clipboard()->text();
+    if (!text.isEmpty()) {
+        // Split by newlines to handle multi-line paste
+        QStringList lines = text.split(QRegularExpression("[\r\n]"), Qt::SkipEmptyParts);
+        
+        if (lines.size() == 1) {
+            // Single line - just insert
+            insertPlainText(lines[0]);
+        } else {
+            // Multiple lines - execute each as a command
+            for (int i = 0; i < lines.size(); ++i) {
+                if (i > 0) {
+                    // Process previous command first
+                    processCommand();
+                }
+                insertPlainText(lines[i]);
+            }
+            // Process the last command
+            if (!lines.last().isEmpty()) {
+                processCommand();
+            }
+        }
+    }
+}
+
+void EssTerminalWidget::handleCut()
+{
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection() && cursor.position() >= m_promptPosition) {
+        // Only cut if selection is in editable area
+        int selStart = cursor.selectionStart();
+        int selEnd = cursor.selectionEnd();
+        
+        if (selStart >= m_promptPosition) {
+            QString selectedText = cursor.selectedText();
+            selectedText.replace(QChar::ParagraphSeparator, '\n');
+            QApplication::clipboard()->setText(selectedText);
+            cursor.removeSelectedText();
+        }
+    }
+}
+
+void EssTerminalWidget::handleSelectAll()
+{
+    QTextCursor cursor = textCursor();
+    cursor.movePosition(QTextCursor::End);
+    cursor.setPosition(m_promptPosition, QTextCursor::KeepAnchor);
+    setTextCursor(cursor);
+}
+
 void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
 {
     if (m_isExecutingCommand) {
@@ -290,33 +372,53 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
     
     Qt::KeyboardModifiers modifiers = event->modifiers();
     
-    // On macOS, we want to handle both Ctrl and Cmd for some shortcuts
-    // but for Emacs bindings, we specifically want Ctrl
+    // On macOS, accept either Ctrl OR Cmd for Emacs bindings
 #ifdef Q_OS_MAC
     bool isCtrl = (modifiers & Qt::ControlModifier);
     bool isCmd = (modifiers & Qt::MetaModifier);
     
-    // For Emacs key bindings, use actual Ctrl key
-    if (isCtrl && !isCmd) {
+    // Handle Mac system shortcuts first (Copy/Paste/Cut/Select All)
+    if (isCmd && !(modifiers & Qt::ShiftModifier)) {
+        switch (event->key()) {
+            case Qt::Key_C:
+                handleCopy();
+                return;
+            case Qt::Key_V:
+                handlePaste();
+                return;
+            case Qt::Key_X:
+                handleCut();
+                return;
+            case Qt::Key_A:
+                // For now, Cmd+A goes to beginning of line
+                // If you want it to be Select All instead, change this to:
+                // selectAll();
+                // return;
+                break; // Fall through to Emacs handling
+        }
+    }
+    
+    // For Emacs key bindings, accept EITHER Ctrl or Cmd (but C/V/X already handled above for Cmd)
+    if ((isCtrl || isCmd) && !(modifiers & Qt::ShiftModifier)) {
 #else
     // On other platforms, just use Ctrl
     if (modifiers & Qt::ControlModifier) {
 #endif
         switch (event->key()) {
-            case Qt::Key_A: // Ctrl+A - Beginning of line
+            case Qt::Key_A: // Beginning of line
                 {
                     QTextCursor cursor = textCursor();
                     cursor.setPosition(m_promptPosition);
                     setTextCursor(cursor);
                     return;
                 }
-            case Qt::Key_E: // Ctrl+E - End of line
+            case Qt::Key_E: // End of line
                 {
                     moveCursor(QTextCursor::End);
                     return;
                 }
                 
-            case Qt::Key_K: // Ctrl+K - Kill to end of line
+            case Qt::Key_K: // Kill to end of line
                 {
                     QTextCursor cursor = textCursor();
                     if (cursor.position() >= m_promptPosition) {
@@ -326,7 +428,7 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
                     return;
                 }
                 
-            case Qt::Key_U: // Ctrl+U - Kill to beginning of line
+            case Qt::Key_U: // Kill to beginning of line
                 {
                     QTextCursor cursor = textCursor();
                     if (cursor.position() > m_promptPosition) {
@@ -338,7 +440,7 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
                     return;
                 }
                 
-            case Qt::Key_W: // Ctrl+W - Kill word backward
+            case Qt::Key_W: // Kill word backward
                 {
                     QTextCursor cursor = textCursor();
                     cursor.movePosition(QTextCursor::PreviousWord, QTextCursor::KeepAnchor);
@@ -350,7 +452,7 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
                     return;
                 }
                 
-            case Qt::Key_D: // Ctrl+D - Delete character forward
+            case Qt::Key_D: // Delete character forward
                 {
                     if (getCurrentCommand().isEmpty()) {
                         appendOutput("Use 'exit' or 'quit' to close\n");
@@ -362,32 +464,58 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
                     return;
                 }
                 
-            case Qt::Key_L: // Ctrl+L - Clear screen
+            case Qt::Key_L: // Clear screen
                 {
                     clearTerminal();
                     return;
                 }
                 
-            case Qt::Key_P: // Ctrl+P - Previous history
+            case Qt::Key_P: // Previous history
                 {
                     navigateHistory(-1);
                     return;
                 }
                 
-            case Qt::Key_N: // Ctrl+N - Next history
+            case Qt::Key_N: // Next history
                 {
                     navigateHistory(1);
                     return;
                 }
                 
-            case Qt::Key_C: // Ctrl+C - Cancel current line
+            case Qt::Key_C: // Cancel current line (Ctrl+C only, not Cmd+C)
                 {
-                    appendOutput("^C\n");
-                    updatePrompt();
+#ifdef Q_OS_MAC
+                    if (!isCmd) {  // Only if it's NOT Cmd+C
+                        appendOutput("^C\n");
+                        updatePrompt();
+                    }
+#else
+                    // On other platforms, check if there's a selection
+                    if (textCursor().hasSelection()) {
+                        handleCopy();
+                    } else {
+                        appendOutput("^C\n");
+                        updatePrompt();
+                    }
+#endif
                     return;
                 }
         }
     }
+    
+#ifndef Q_OS_MAC
+    // On non-Mac platforms, handle Ctrl+Shift+C/V for copy/paste
+    if ((modifiers & Qt::ControlModifier) && (modifiers & Qt::ShiftModifier)) {
+        switch (event->key()) {
+            case Qt::Key_C:
+                handleCopy();
+                return;
+            case Qt::Key_V:
+                handlePaste();
+                return;
+        }
+    }
+#endif
     
     // Alt key bindings
     if (event->modifiers() & Qt::AltModifier) {
@@ -464,8 +592,10 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
             }
     }
     
-    // Ensure we're at the end for typing
-    ensureCursorInEditableArea();
+    // Only ensure cursor position before actual text input
+    if (!event->text().isEmpty() && event->text()[0].isPrint()) {
+        ensureCursorInEditableArea();
+    }
     
     QPlainTextEdit::keyPressEvent(event);
 }
@@ -473,25 +603,91 @@ void EssTerminalWidget::keyPressEvent(QKeyEvent *event)
 void EssTerminalWidget::mousePressEvent(QMouseEvent *event)
 {
     QPlainTextEdit::mousePressEvent(event);
-    ensureCursorInEditableArea();
+    // Don't force cursor to editable area on mouse press
+    // This allows selecting text in history
 }
 
 void EssTerminalWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
     QPlainTextEdit::mouseDoubleClickEvent(event);
-    ensureCursorInEditableArea();
+    // Don't force cursor to editable area on double click
+    // This allows selecting words in history
 }
 
 void EssTerminalWidget::contextMenuEvent(QContextMenuEvent *event)
 {
-    QMenu *menu = createStandardContextMenu();
+    QMenu *menu = new QMenu(this);
+    
+    // Add copy action
+    QAction *copyAction = menu->addAction(tr("Copy"));
+    copyAction->setShortcut(QKeySequence::Copy);
+    copyAction->setEnabled(textCursor().hasSelection());
+    connect(copyAction, &QAction::triggered, this, &EssTerminalWidget::handleCopy);
+    
+    // Add paste action
+    QAction *pasteAction = menu->addAction(tr("Paste"));
+    pasteAction->setShortcut(QKeySequence::Paste);
+    pasteAction->setEnabled(!QApplication::clipboard()->text().isEmpty());
+    connect(pasteAction, &QAction::triggered, this, &EssTerminalWidget::handlePaste);
     
     menu->addSeparator();
+    
+    // Add select all action
+    QAction *selectAllAction = menu->addAction(tr("Select All"));
+#ifdef Q_OS_MAC
+    selectAllAction->setShortcut(QKeySequence(Qt::META | Qt::Key_A));
+#else
+    selectAllAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+#endif
+    connect(selectAllAction, &QAction::triggered, this, &QPlainTextEdit::selectAll);
+    
+    menu->addSeparator();
+    
     QAction *clearAction = menu->addAction(tr("Clear Terminal"));
     connect(clearAction, &QAction::triggered, this, &EssTerminalWidget::clearTerminal);
     
     menu->exec(event->globalPos());
     delete menu;
+}
+
+void EssTerminalWidget::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData()->hasUrls() || event->mimeData()->hasText()) {
+        event->acceptProposedAction();
+    }
+}
+
+void EssTerminalWidget::dropEvent(QDropEvent *event)
+{
+    const QMimeData *mimeData = event->mimeData();
+    
+    if (mimeData->hasUrls()) {
+        QStringList paths;
+        for (const QUrl &url : mimeData->urls()) {
+            if (url.isLocalFile()) {
+                paths << url.toLocalFile();
+            }
+        }
+        if (!paths.isEmpty()) {
+            // Insert the file paths at current cursor position
+            ensureCursorInEditableArea();
+            insertPlainText(paths.join(" "));
+        }
+    } else if (mimeData->hasText()) {
+        // Handle text drop like paste
+        ensureCursorInEditableArea();
+        QString text = mimeData->text();
+        // For single line, just insert; for multi-line, use paste logic
+        if (!text.contains('\n') && !text.contains('\r')) {
+            insertPlainText(text);
+        } else {
+            // Temporarily set clipboard and use paste logic
+            QString oldClipboard = QApplication::clipboard()->text();
+            QApplication::clipboard()->setText(text);
+            handlePaste();
+            QApplication::clipboard()->setText(oldClipboard);
+        }
+    }
 }
 
 void EssTerminalWidget::ensureCursorInEditableArea()

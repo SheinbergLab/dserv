@@ -16,8 +16,8 @@ public:
     explicit EssTerminalWidget(QWidget *parent = nullptr);
     ~EssTerminalWidget();
     
-	// size hint
-	QSize minimumSizeHint() const override;
+    // size hint
+    QSize minimumSizeHint() const override;
 
     // Execute command programmatically
     void executeCommand(const QString &command);
@@ -38,7 +38,9 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
-
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+	
 private slots:
     void processCommand();
     void updatePrompt(const QString &newPrompt = QString());
@@ -54,6 +56,12 @@ private:
     QString getCurrentCommand() const;
     void replaceCurrentCommand(const QString &newCommand);
     void navigateHistory(int direction);
+    
+    // Clipboard operations
+    void handleCopy();
+    void handlePaste();
+    void handleCut();
+    void handleSelectAll();
     
     QString m_prompt;
     int m_promptPosition;
