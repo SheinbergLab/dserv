@@ -1,4 +1,5 @@
 #include "EssCodeEditor.h"
+#include "tcl/TclUtils.h"
 
 #include <Qsci/qsciscintilla.h>
 #include <Qsci/qscilexertcl.h>
@@ -7,15 +8,19 @@
 #include <Qsci/qscilexerjavascript.h>
 #include <Qsci/qscilexerbash.h>
 
+#include <QStack>
 #include <QVBoxLayout>
 #include <QToolBar>
 #include <QAction>
 #include <QKeyEvent>
+#include <QRegularExpression>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMenu>
+#include <QContextMenuEvent>
 
 EssCodeEditor::EssCodeEditor(QWidget *parent)
     : QWidget(parent)
@@ -24,6 +29,8 @@ EssCodeEditor::EssCodeEditor(QWidget *parent)
     , m_statusLabel(nullptr)
     , m_language(Tcl)
     , m_showToolbar(true)
+    , m_formatAction(nullptr)           
+    , m_formatSelectionAction(nullptr)  
 {
     setupUi();
     setupEditor();
@@ -248,6 +255,30 @@ void EssCodeEditor::createActions()
     m_toolbar->addAction(m_findAction);
     m_toolbar->addSeparator();
     m_toolbar->addAction(m_toggleBookmarkAction);
+    
+    // Format actions
+m_formatAction = new QAction(tr("Format Code"), this);
+    m_formatAction->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_F));
+    QIcon formatIcon = QIcon::fromTheme("format-indent-more");
+    if (!formatIcon.isNull()) {
+        m_formatAction->setIcon(formatIcon);
+    }
+    connect(m_formatAction, &QAction::triggered, this, &EssCodeEditor::formatCode);
+    
+    m_formatSelectionAction = new QAction(tr("Format Selection"), this);
+    m_formatSelectionAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
+    connect(m_formatSelectionAction, &QAction::triggered, this, &EssCodeEditor::formatSelection);
+    
+    // Only add to toolbar if toolbar exists
+    if (m_toolbar) {
+        m_toolbar->addSeparator();
+        m_toolbar->addAction(m_formatAction);
+    }
+    
+    // Update format action availability based on language
+    bool canFormat = (m_language == Tcl);
+    m_formatAction->setEnabled(canFormat);
+    m_formatSelectionAction->setEnabled(canFormat);
 }
 
 void EssCodeEditor::setContent(const QString &content)
@@ -291,16 +322,6 @@ void EssCodeEditor::setModified(bool modified)
     }
     m_saveAction->setEnabled(modified);
     emit modificationChanged(modified);
-}
-
-void EssCodeEditor::setLanguage(Language lang)
-{
-    if (m_language != lang) {
-        m_language = lang;
-        setLexerForLanguage(lang);
-        emit languageChanged(lang);
-        onLanguageChanged(lang);
-    }
 }
 
 void EssCodeEditor::setLexerForLanguage(Language lang)
@@ -577,6 +598,608 @@ bool EssCodeEditor::shouldDecreaseIndent(const QString &line) const
         default:
             return false;
     }
+}
+
+// Main formatting functions:
+void EssCodeEditor::setLanguage(Language lang)
+{
+    if (m_language != lang) {
+        m_language = lang;
+        setLexerForLanguage(lang);
+        
+        // Only update format actions if they exist
+        if (m_formatAction && m_formatSelectionAction) {
+            bool canFormat = (lang == Tcl);
+            m_formatAction->setEnabled(canFormat);
+            m_formatSelectionAction->setEnabled(canFormat);
+        }
+        
+        emit languageChanged(lang);
+        onLanguageChanged(lang);
+    }
+}
+
+QString EssCodeEditor::formatTclCodeRobust(const QString &code, int baseIndent)
+{
+    QStringList lines = code.split('\n', Qt::KeepEmptyParts);
+    QStringList formatted;
+    
+    int indentWidth = m_editor ? m_editor->indentationWidth() : 4;
+    
+    // Enhanced state tracking
+    struct FormatState {
+        int braceLevel = 0;                    // Current brace-based indentation level
+        bool inContinuation = false;           // Are we in a line continuation?
+        int baseLineIndent = 0;                // Base indent of the line that started continuation
+        bool inParameterList = false;          // Are we in a proc/method parameter list?
+        
+        // Track alignment points for brackets and parentheses
+        struct AlignmentPoint {
+            int column;      // Column position in the formatted line
+            QChar type;      // '[', '(', or '{'
+            int lineNumber;  // Which line this bracket appeared on
+        };
+        QStack<AlignmentPoint> alignmentStack;
+        
+        // Get the best alignment column for continuation
+        int getAlignmentColumn(int defaultIndent) const {
+            if (!alignmentStack.isEmpty()) {
+                // Align 2 spaces after the most recent unclosed bracket/paren
+                return alignmentStack.top().column + 2;
+            }
+            // No brackets to align with
+            if (inParameterList) {
+                // Double indent for parameter lists
+                return defaultIndent + 8; // Two indent levels
+            }
+            // Standard continuation indent
+            return defaultIndent + 4; // One indent level
+        }
+        
+        // Reset continuation state
+        void endContinuation() {
+            inContinuation = false;
+            inParameterList = false;
+            alignmentStack.clear();
+            baseLineIndent = 0;
+        }
+        
+        // Update alignment points based on a formatted line
+        void updateAlignmentPoints(const QString &formattedLine, int lineNumber) {
+            bool inQuotes = false;
+            bool escaped = false;
+            bool inBraces = false;
+            int braceDepth = 0;
+            
+            for (int i = 0; i < formattedLine.length(); ++i) {
+                QChar c = formattedLine[i];
+                
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                
+                if (c == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                
+                if (c == '"' && !inBraces) {
+                    inQuotes = !inQuotes;
+                    continue;
+                }
+                
+                if (!inQuotes) {
+                    if (c == '{') {
+                        braceDepth++;
+                        inBraces = (braceDepth > 0);
+                    } else if (c == '}') {
+                        braceDepth--;
+                        inBraces = (braceDepth > 0);
+                    } else if (!inBraces) {
+                        if (c == '[' || c == '(') {
+                            alignmentStack.push({i, c, lineNumber});
+                        } else if (c == ']' && !alignmentStack.isEmpty() && 
+                                   alignmentStack.top().type == '[') {
+                            alignmentStack.pop();
+                        } else if (c == ')' && !alignmentStack.isEmpty() && 
+                                   alignmentStack.top().type == '(') {
+                            alignmentStack.pop();
+                        }
+                    }
+                }
+            }
+        }
+    };
+    
+    FormatState state;
+    
+    for (int lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+        QString line = lines[lineIdx];
+        QString trimmed = line.trimmed();
+        
+        // Empty lines - preserve them
+        if (trimmed.isEmpty()) {
+            formatted.append("");
+            state.endContinuation();
+            continue;
+        }
+        
+        // Comments - preserve at appropriate indent
+        if (trimmed.startsWith('#')) {
+            int commentIndent;
+            if (state.inContinuation) {
+                commentIndent = state.getAlignmentColumn(state.baseLineIndent);
+            } else {
+                commentIndent = baseIndent + state.braceLevel * indentWidth;
+            }
+            
+            QString formattedLine = QString(commentIndent, ' ') + trimmed;
+            formatted.append(formattedLine);
+            
+            if (endsWithContinuation(trimmed)) {
+                if (!state.inContinuation) {
+                    state.inContinuation = true;
+                    state.baseLineIndent = commentIndent;
+                    state.updateAlignmentPoints(formattedLine, lineIdx);
+                }
+            } else {
+                state.endContinuation();
+            }
+            continue;
+        }
+        
+        // Analyze the line
+        LineAnalysis analysis = analyzeTclLine(trimmed);
+        
+        // Calculate base indent for this line
+        int lineIndent = baseIndent + state.braceLevel * indentWidth;
+        
+        // Handle continuation lines
+        if (state.inContinuation) {
+            lineIndent = state.getAlignmentColumn(state.baseLineIndent);
+        }
+        
+        // Special adjustments for current line (only if not in continuation)
+        if (!state.inContinuation) {
+            // Reduce indent for lines starting with closing braces
+            if (analysis.startsWithCloseBrace) {
+                lineIndent = qMax(baseIndent, 
+                    baseIndent + (state.braceLevel - analysis.leadingCloseBraces) * indentWidth);
+            }
+            
+            // Handle special keywords that reduce indent
+            if (startsWithSpecialKeyword(trimmed)) {
+                lineIndent = qMax(baseIndent, 
+                    baseIndent + (state.braceLevel - 1) * indentWidth);
+            }
+        }
+        
+        // Format the line
+        QString formattedLine = QString(lineIndent, ' ') + trimmed;
+        formatted.append(formattedLine);
+        
+        // Update state based on this line
+        if (!state.inContinuation && analysis.hasContinuation) {
+            // Starting a new continuation
+            state.inContinuation = true;
+            state.baseLineIndent = lineIndent;
+            state.alignmentStack.clear();
+            
+            // Check if this looks like a proc/method parameter list
+            if (looksLikeProcParameterList(trimmed)) {
+                state.inParameterList = true;
+            }
+            
+            state.updateAlignmentPoints(formattedLine, lineIdx);
+            
+        } else if (state.inContinuation && analysis.hasContinuation) {
+            // Continuing a continuation - update alignment points
+            state.updateAlignmentPoints(formattedLine, lineIdx);
+            
+        } else if (state.inContinuation && !analysis.hasContinuation) {
+            // Ending continuation
+            state.endContinuation();
+        }
+        
+        // Always update brace level (affects next line's base indent)
+        state.braceLevel += (analysis.openBraces - analysis.closeBraces);
+        state.braceLevel = qMax(0, state.braceLevel);
+    }
+    
+    return formatted.join('\n');
+}
+
+// Check if a line looks like it's starting a proc/method parameter list
+bool EssCodeEditor::looksLikeProcParameterList(const QString &line)
+{
+    QString trimmed = line.trimmed();
+    
+    // Look for patterns that typically have parameter lists:
+    // proc name { params...
+    // method name { params...
+    // $obj add_method name { params...
+    // constructor { params...
+    // destructor { params...
+    
+    // Check if line contains "proc", "method", "constructor", or "destructor"
+    // followed by a name and then an opening brace
+    static const QRegularExpression procPattern(
+        "(?:proc|method|constructor|destructor)\\s+\\S+\\s*\\{|"  // proc/method name {
+        "add_method\\s+\\S+\\s*\\{"                                // add_method name {
+    );
+    
+    if (procPattern.match(trimmed).hasMatch()) {
+        // Additional check: the line should end with \ for continuation
+        // and likely has parameter-like content after the {
+        int bracePos = trimmed.indexOf('{');
+        if (bracePos >= 0 && bracePos < trimmed.length() - 1) {
+            QString afterBrace = trimmed.mid(bracePos + 1).trimmed();
+            // If there's content after the brace that looks like parameters
+            // (variables, identifiers, not commands)
+            if (!afterBrace.isEmpty() && !afterBrace.startsWith('[')) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+
+// Helper structure for line analysis
+struct LineAnalysis {
+    int openBraces = 0;
+    int closeBraces = 0;
+    int openBrackets = 0;
+    int closeBrackets = 0;
+    bool hasContinuation = false;
+    bool startsWithCloseBrace = false;
+    int leadingCloseBraces = 0;
+};
+
+// Analyze a single line of Tcl code
+EssCodeEditor::LineAnalysis EssCodeEditor::analyzeTclLine(const QString &line)
+{
+    LineAnalysis result;
+    
+    if (line.isEmpty()) return result;
+    
+    // Check for leading close braces
+    result.startsWithCloseBrace = line.startsWith('}');
+    if (result.startsWithCloseBrace) {
+        for (int i = 0; i < line.length() && line[i] == '}'; i++) {
+            result.leadingCloseBraces++;
+        }
+    }
+    
+    // Check for line continuation
+    result.hasContinuation = endsWithContinuation(line);
+    
+    // Count braces and brackets
+    bool inQuotes = false;
+    bool inBraces = false;
+    int braceDepth = 0;
+    bool escaped = false;
+    
+    for (int i = 0; i < line.length(); ++i) {
+        QChar c = line[i];
+        
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
+        
+        if (c == '"' && !inBraces) {
+            inQuotes = !inQuotes;
+            continue;
+        }
+        
+        if (!inQuotes) {
+            if (c == '{') {
+                braceDepth++;
+                inBraces = (braceDepth > 0);
+                result.openBraces++;
+            } else if (c == '}') {
+                braceDepth--;
+                inBraces = (braceDepth > 0);
+                result.closeBraces++;
+            } else if (c == '[' && !inBraces) {
+                result.openBrackets++;
+            } else if (c == ']' && !inBraces) {
+                result.closeBrackets++;
+            }
+        }
+    }
+    
+    return result;
+}
+
+// Check if a line ends with a continuation backslash
+bool EssCodeEditor::endsWithContinuation(const QString &line)
+{
+    if (line.isEmpty()) return false;
+    
+    // Count trailing backslashes
+    int backslashCount = 0;
+    for (int i = line.length() - 1; i >= 0 && line[i] == '\\'; i--) {
+        backslashCount++;
+    }
+    
+    // Odd number of backslashes means continuation
+    return (backslashCount % 2) == 1;
+}
+
+// Check if line starts with special keywords that affect indentation
+bool EssCodeEditor::startsWithSpecialKeyword(const QString &line)
+{
+    static const QStringList keywords = {
+        "else", "elseif", "catch", "finally", "then"
+    };
+    
+    for (const QString &keyword : keywords) {
+        if (line.startsWith(keyword + " ") || line.startsWith(keyword + "\t") || 
+            line == keyword || line.startsWith(keyword + "{")) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Alternative: Use parser-based formatting when available
+QString EssCodeEditor::formatTclCodeWithParser(const QString &code, int baseIndent)
+{
+    // For now, just use the robust formatter
+    // The parser-based approach has proven problematic with complex Tcl structures
+    return formatTclCodeRobust(code, baseIndent);
+}
+
+void EssCodeEditor::formatCode()
+{
+    if (!m_editor || m_language != Tcl) return;
+    
+    // Save detailed cursor context
+    int line, column;
+    m_editor->getCursorPosition(&line, &column);
+    
+    // Get the current line text before formatting
+    QString currentLineText;
+    if (line < m_editor->lines()) {
+        currentLineText = m_editor->text(line);
+    }
+    
+    // Find position context - what token/word is the cursor in?
+    QString beforeCursor = currentLineText.left(column);
+    QString afterCursor = currentLineText.mid(column);
+    
+    // Find the word/token at cursor position
+    int wordStart = column;
+    int wordEnd = column;
+    
+    // Find start of current word
+    for (int i = column - 1; i >= 0; i--) {
+        QChar ch = currentLineText[i];
+        if (ch.isLetterOrNumber() || ch == '_' || ch == ':' || ch == '$') {
+            wordStart = i;
+        } else {
+            break;
+        }
+    }
+    
+    // Find end of current word
+    for (int i = column; i < currentLineText.length(); i++) {
+        QChar ch = currentLineText[i];
+        if (ch.isLetterOrNumber() || ch == '_' || ch == ':' || ch == '$') {
+            wordEnd = i + 1;
+        } else {
+            break;
+        }
+    }
+    
+    // Extract the word at cursor and offset within it
+    QString wordAtCursor;
+    int offsetInWord = 0;
+    if (wordEnd > wordStart) {
+        wordAtCursor = currentLineText.mid(wordStart, wordEnd - wordStart);
+        offsetInWord = column - wordStart;
+    }
+    
+    // Get the entire document content
+    QString code = m_editor->text();
+    if (code.isEmpty()) return;
+    
+    // Format using the enhanced formatter
+    QString formatted = formatTclCodeRobust(code, 0);
+    
+    // Only update if formatting actually changed something
+    if (formatted != code && !formatted.isEmpty()) {
+        // Begin undo action for the entire format operation
+        m_editor->beginUndoAction();
+        
+        // Replace all text
+        m_editor->setText(formatted);
+        
+        // End undo action
+        m_editor->endUndoAction();
+        
+        // Restore cursor position intelligently
+        if (line < m_editor->lines()) {
+            QString newLineText = m_editor->text(line);
+            int newColumn = column; // Default to same column
+            
+            // Strategy 1: Try to find the same word
+            if (!wordAtCursor.isEmpty()) {
+                int wordPos = newLineText.indexOf(wordAtCursor);
+                if (wordPos >= 0) {
+                    // Found the word, restore position within it
+                    newColumn = wordPos + qMin(offsetInWord, wordAtCursor.length());
+                } else {
+                    // Word not found on this line, try adjacent lines
+                    bool found = false;
+                    
+                    // Check line above
+                    if (line > 0) {
+                        QString prevLine = m_editor->text(line - 1);
+                        wordPos = prevLine.indexOf(wordAtCursor);
+                        if (wordPos >= 0) {
+                            m_editor->setCursorPosition(line - 1, wordPos + offsetInWord);
+                            found = true;
+                        }
+                    }
+                    
+                    // Check line below
+                    if (!found && line < m_editor->lines() - 1) {
+                        QString nextLine = m_editor->text(line + 1);
+                        wordPos = nextLine.indexOf(wordAtCursor);
+                        if (wordPos >= 0) {
+                            m_editor->setCursorPosition(line + 1, wordPos + offsetInWord);
+                            found = true;
+                        }
+                    }
+                    
+                    if (found) {
+                        m_editor->ensureCursorVisible();
+                        return;
+                    }
+                }
+            }
+            
+            // Strategy 2: If no word or word not found, try to maintain relative position
+            if (wordAtCursor.isEmpty() || newColumn == column) {
+                // Find first non-whitespace in old and new lines
+                int oldFirstNonSpace = 0;
+                int newFirstNonSpace = 0;
+                
+                for (int i = 0; i < currentLineText.length(); i++) {
+                    if (!currentLineText[i].isSpace()) {
+                        oldFirstNonSpace = i;
+                        break;
+                    }
+                }
+                
+                for (int i = 0; i < newLineText.length(); i++) {
+                    if (!newLineText[i].isSpace()) {
+                        newFirstNonSpace = i;
+                        break;
+                    }
+                }
+                
+                // Calculate relative position from first non-space
+                if (column >= oldFirstNonSpace) {
+                    int relativePos = column - oldFirstNonSpace;
+                    newColumn = newFirstNonSpace + relativePos;
+                    newColumn = qMin(newColumn, newLineText.length());
+                } else {
+                    // Cursor was in leading whitespace
+                    newColumn = qMin(column, newFirstNonSpace);
+                }
+            }
+            
+            m_editor->setCursorPosition(line, newColumn);
+        } else {
+            // Line doesn't exist anymore, go to last line
+            int lastLine = m_editor->lines() - 1;
+            if (lastLine >= 0) {
+                m_editor->setCursorPosition(lastLine, m_editor->text(lastLine).length());
+            }
+        }
+        
+        // Ensure cursor is visible
+        m_editor->ensureCursorVisible();
+    }
+}
+
+
+
+void EssCodeEditor::formatSelection()
+{
+    if (!m_editor || m_language != Tcl || !m_editor->hasSelectedText()) return;
+    
+    // Get selection boundaries
+    int startLine, startCol, endLine, endCol;
+    m_editor->getSelection(&startLine, &startCol, &endLine, &endCol);
+    
+    if (startLine < 0 || endLine >= m_editor->lines()) return;
+    
+    // Extend selection to complete lines
+    startCol = 0;
+    endCol = m_editor->text(endLine).length();
+    
+    // Get the selected text
+    m_editor->setSelection(startLine, startCol, endLine, endCol);
+    QString selected = m_editor->selectedText();
+    if (selected.isEmpty()) return;
+    
+    // Calculate base indentation from the first line
+    QString firstLine = m_editor->text(startLine);
+    int baseIndent = 0;
+    for (QChar ch : firstLine) {
+        if (ch == ' ') baseIndent++;
+        else if (ch == '\t') baseIndent += m_editor->indentationWidth();
+        else break;
+    }
+    
+    // Format the selection with the base indent
+    QString formatted = formatTclCodeRobust(selected, baseIndent);
+    
+    // Only update if formatting actually changed something
+    if (!formatted.isEmpty() && formatted != selected) {
+        // Begin undo action
+        m_editor->beginUndoAction();
+        
+        // Replace selected text
+        m_editor->replaceSelectedText(formatted);
+        
+        // End undo action
+        m_editor->endUndoAction();
+        
+        // Calculate new end position
+        int newEndLine = startLine + formatted.count('\n');
+        int newEndCol = 0;
+        
+        // If there are lines, get the length of the last line
+        if (newEndLine < m_editor->lines()) {
+            newEndCol = m_editor->text(newEndLine).length();
+        }
+        
+        // Reselect the formatted text
+        m_editor->setSelection(startLine, 0, newEndLine, newEndCol);
+        
+        // Ensure selection is visible
+        m_editor->ensureCursorVisible();
+    }
+}
+
+
+void EssCodeEditor::contextMenuEvent(QContextMenuEvent *event)
+{
+    if (!m_editor) {
+        QWidget::contextMenuEvent(event);
+        return;
+    }
+    
+    QMenu *menu = m_editor->createStandardContextMenu();
+    if (!menu) {
+        QWidget::contextMenuEvent(event);
+        return;
+    }
+    
+    if (m_language == Tcl && m_formatAction) {
+        menu->addSeparator();
+        menu->addAction(m_formatAction);
+        if (m_formatSelectionAction && m_editor->hasSelectedText()) {
+            menu->addAction(m_formatSelectionAction);
+        }
+    }
+    
+    menu->exec(event->globalPos());
+    delete menu;
 }
 
 void EssCodeEditor::onCursorPositionChanged(int line, int column)

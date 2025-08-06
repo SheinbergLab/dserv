@@ -2,6 +2,9 @@
 
 #include <QWidget>
 #include <QString>
+#include <QMenu>
+#include <QContextMenuEvent>
+#include <QRegularExpression>
 #include <memory>
 
 class QsciScintilla;
@@ -9,6 +12,7 @@ class QsciLexer;
 class QAction;
 class QToolBar;
 class QLabel;
+class TclUtils;
 
 /**
  * @brief Generic code editor widget based on QScintilla
@@ -88,6 +92,10 @@ public:
     void setUseTabs(bool useTabs);
     bool useTabs() const;
   
+    // Formatting
+  	void formatCode();
+    void formatSelection();
+  
     // Toolbar visibility
     void setToolbarVisible(bool visible);
     bool isToolbarVisible() const;
@@ -107,6 +115,8 @@ protected:
     virtual bool handleCustomKeyEvent(QKeyEvent *event) { return false; }
     virtual void onLanguageChanged(Language /*lang*/) {}
     
+    void contextMenuEvent(QContextMenuEvent *event) override;
+     
     // Utilities for derived classes
     QsciScintilla* editor() const { return m_editor; }
     QToolBar* toolbar() const { return m_toolbar; }
@@ -150,13 +160,34 @@ private:
     Language m_language;
     bool m_showToolbar;
   
+ // Line analysis structure
+    struct LineAnalysis {
+        int openBraces = 0;
+        int closeBraces = 0;
+        int openBrackets = 0;
+        int closeBrackets = 0;
+        bool hasContinuation = false;
+        bool startsWithCloseBrace = false;
+        int leadingCloseBraces = 0;
+    };
+    
+    // Tcl formatting methods
+    QString formatTclCodeRobust(const QString &code, int baseIndent = 0);
+    QString formatTclCodeWithParser(const QString &code, int baseIndent = 0);
+    LineAnalysis analyzeTclLine(const QString &line);
+    bool endsWithContinuation(const QString &line);
+    bool startsWithSpecialKeyword(const QString &line);
+    bool looksLikeProcParameterList(const QString &line);
+    
     // Common actions
     QAction *m_saveAction;
     QAction *m_findAction;
     QAction *m_toggleBookmarkAction;
     QAction *m_nextBookmarkAction;
     QAction *m_prevBookmarkAction;
-    
+    QAction *m_formatAction;
+    QAction *m_formatSelectionAction;
+        
     // Constants
     static constexpr int MARGIN_LINE_NUMBERS = 0;
     static constexpr int MARGIN_FOLDING = 1;
