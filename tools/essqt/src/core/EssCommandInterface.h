@@ -64,6 +64,9 @@ public:
     bool isConnected() const;
     QString currentHost() const { return m_currentHost; }
     
+    // dlsh/qtcgwin package testing
+    void checkPackagesAndEmit();
+     
     // Listener management
     bool startListener();
     void stopListener();
@@ -127,6 +130,7 @@ signals:
     					  qint64 timestamp, int dtype = -1);
     					  
     void tclInitialized();    					  
+    void packagesLoaded();
 
 private slots:
     void onEventReceived(const QString &event);

@@ -223,6 +223,21 @@ void EssCommandInterface::initializeTcl()
     emit tclInitialized();
 }    
 
+void EssCommandInterface::checkPackagesAndEmit()
+{
+    if (!m_tclInterp) return;
+    
+    // Check if packages are loaded
+    if (Tcl_Eval(m_tclInterp, "package present qtcgwin") == TCL_OK) {
+        EssConsoleManager::instance()->logSuccess(
+            "Packages confirmed loaded, emitting signal", "CommandInterface");
+        emit packagesLoaded();
+    } else {
+        EssConsoleManager::instance()->logWarning(
+            "Packages not yet loaded", "CommandInterface");
+    }
+}
+
 
 void EssCommandInterface::registerTclCommands()
 {

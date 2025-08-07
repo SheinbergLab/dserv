@@ -14,6 +14,7 @@
 #include "visualization/EssEyeTouchVisualizerWidget.h"
 #include "state_system/EssStateSystemWidget.h"
 #include "cgraph/EssCGraphWidget.h"
+#include "cgraph/EssStandaloneCGraph.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -234,6 +235,29 @@ void EssWorkspaceManager::createDocks()
 	m_docks["CGraph"] = cgraphDock;
 
         
+    m_testStandaloneWidget = new EssStandaloneCGraph("stimview");
+    
+    // Add as a dock
+    QDockWidget* standaloneDock = 
+        new QDockWidget(tr("Standalone CGraph Test"), m_mainWindow);
+    standaloneDock->setObjectName("StandaloneCGraphDock");
+    standaloneDock->setWidget(m_testStandaloneWidget);
+    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, standaloneDock);
+    m_docks["StandaloneCGraph"] = standaloneDock;
+    
+    // Connect signals
+    connect(m_testStandaloneWidget, &EssStandaloneCGraph::initialized,
+            [this]() {
+        EssConsoleManager::instance()->logSuccess(
+            "Standalone CGraph widget ready", "WorkspaceManager");
+    });
+    
+    connect(m_testStandaloneWidget, &EssStandaloneCGraph::initializationFailed,
+            [this](const QString& error) {
+        EssConsoleManager::instance()->logError(
+            QString("Standalone init failed: %1").arg(error), "WorkspaceManager");
+    });
+        
     // Create Script Editor dock
     QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"), m_mainWindow);
     scriptDock->setObjectName("ScriptEditorDock");
@@ -276,6 +300,17 @@ QWidget* EssWorkspaceManager::createControlPanel()
     return container;
 }
 
+void EssWorkspaceManager::initializeStandaloneWidgets()
+{
+    auto cmdInterface = EssApplication::instance()->commandInterface();
+    
+    if (m_testStandaloneWidget && !m_testStandaloneWidget->isInitialized()) {
+        m_testStandaloneWidget->initialize(cmdInterface);
+    }
+    
+    // Initialize other standalone widgets here...
+}
+
 void EssWorkspaceManager::applyDefaultLayout()
 {
     // Clear current layout and hide all docks
@@ -313,13 +348,17 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["stateSystem"]); 
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
-    
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StandaloneCGraph"]);
+
+ 
     // Tab them together
     m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
     m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
     m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
     m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["CGraph"]);
-    
+    m_mainWindow->tabifyDockWidget(m_docks["CGraph"], m_docks["StandaloneCGraph"]);
+
+   
     // Set constraints for docked state only
     
     // Control Panel: prefer ~300px but flexible

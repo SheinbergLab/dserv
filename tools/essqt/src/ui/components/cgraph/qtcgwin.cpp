@@ -1,7 +1,10 @@
 #include "qtcgwin.hpp"
+#include "qtcgmanager.hpp"
 #include <QMouseEvent>
 #include <QFontDatabase>
 #include <QFontMetrics>
+#include <QFileDialog>
+#include <QMessageBox>
 #include <QDebug>
 #include <cmath>
 
@@ -82,6 +85,78 @@ void QtCGWin::refresh()
     update();  // Schedule a repaint
 }
 
+bool QtCGWin::exportToPDF(const QString& filename)
+{
+    if (!interp || !gbuf) {
+        qWarning() << "Cannot export: no interpreter or graphics buffer";
+        return false;
+    }
+    
+    // Make sure this window is current
+    QtCGManager::getInstance().setCurrentCGWin(this);
+    
+    // Set the graphics buffer as current
+    if (gbuf) {
+        QString cmd = QString("qtcgwin_set_current %1").arg((quintptr)gbuf);
+        Tcl_Eval(interp, cmd.toUtf8().constData());
+    }
+    
+    // Use the dumpwin command
+    QString dumpCmd = QString("dumpwin pdf {%1}").arg(filename);
+    int result = Tcl_Eval(interp, dumpCmd.toUtf8().constData());
+    
+    if (result != TCL_OK) {
+        qWarning() << "PDF export failed:" << Tcl_GetStringResult(interp);
+        return false;
+    }
+    
+    return true;
+}
+
+bool QtCGWin::exportToPDFDialog(const QString& suggestedName)
+{
+    // Build suggested filename
+    QString suggestion = suggestedName;
+    if (suggestion.isEmpty()) {
+        // Use manager to get our name
+        QString winName = QtCGManager::getInstance().findCGWinName(this);
+        if (!winName.isEmpty()) {
+            suggestion = winName + ".pdf";
+        } else {
+            suggestion = "cgraph_export.pdf";
+        }
+    }
+    
+    QString filename = QFileDialog::getSaveFileName(
+        this, 
+        tr("Export Graph to PDF"),
+        suggestion,
+        tr("PDF Files (*.pdf);;All Files (*)")
+    );
+    
+    if (filename.isEmpty()) {
+        return false;
+    }
+    
+    // Ensure .pdf extension
+    if (!filename.endsWith(".pdf", Qt::CaseInsensitive)) {
+        filename += ".pdf";
+    }
+    
+    bool success = exportToPDF(filename);
+    
+    if (success) {
+        // Optional: show success message
+        QMessageBox::information(this, tr("Export Successful"), 
+                               tr("Graph exported to %1").arg(filename));
+    } else {
+        QMessageBox::warning(this, tr("Export Failed"), 
+                           tr("Failed to export graph to PDF"));
+    }
+    
+    return success;
+}
+
 void QtCGWin::paintEvent(QPaintEvent *event)
 {
     if (!initialized) init();
@@ -89,7 +164,7 @@ void QtCGWin::paintEvent(QPaintEvent *event)
     QPainter painter(this);
     currentPainter = &painter;
     currentCG = this;
-    QtCGTabManager::getInstance().setCurrentCGWin(this);
+    QtCGManager::getInstance().setCurrentCGWin(this);
     
     // Clear background
     painter.fillRect(rect(), Qt::white);
@@ -134,7 +209,7 @@ void QtCGWin::mouseMoveEvent(QMouseEvent *event)
 
 QtCGWin* QtCGWin::getCurrentInstance()
 {
-    return currentCG;
+    return QtCGManager::getInstance().getCurrentCGWin();
 }
 
 // Static cgraph callbacks
@@ -185,12 +260,11 @@ int QtCGWin::Char(float x, float y, char *string)
     return 0;
 }
 
-// Remove static storage
 int QtCGWin::Text(float x, float y, char *string)
 {
     if (!currentCG || !currentCG->currentPainter || !string) return 0;
     
-    float h = currentCG->height();  // Use widget height directly
+    float h = currentCG->height();
     y = h - y;
     
     QString text = QString::fromUtf8(string);
@@ -285,7 +359,7 @@ int QtCGWin::Setcolor(int index)
 {
     if (!currentCG || !currentCG->currentPainter) return 0;
     
-    static int oldcolor = 0;  // Track color locally
+    static int oldcolor = 0;
     int returnColor = oldcolor;
     
     if (index < NColorVals) {
@@ -343,125 +417,4 @@ int QtCGWin::Circle(float x, float y, float width, int filled)
     }
     
     return 0;
-}
-
-// QtCGTabManager implementation
-QtCGTabManager& QtCGTabManager::getInstance()
-{
-    static QtCGTabManager instance;
-    return instance;
-}
-
-void QtCGTabManager::addCGWin(const QString& name, QtCGWin* widget)
-{
-    cgwin_map[name] = widget;
-}
-
-QtCGWin* QtCGTabManager::getCGWin(const QString& name)
-{
-    return cgwin_map.value(name, nullptr);
-}
-
-void QtCGTabManager::removeCGWin(const QString& name)
-{
-    cgwin_map.remove(name);
-}
-
-QString QtCGTabManager::getNextTabName()
-{
-    return QString("cg%1").arg(next_tab_index++);
-}
-
-// QtCGTabWidget implementation
-QtCGTabWidget::QtCGTabWidget(Tcl_Interp *interp, QWidget *parent)
-    : QTabWidget(parent)
-    , interp(interp)
-{
-    setTabsClosable(true);
-    setMovable(true);
-    
-    connect(this, &QTabWidget::currentChanged, this, &QtCGTabWidget::onTabChanged);
-    connect(this, &QTabWidget::tabCloseRequested, this, &QtCGTabWidget::onTabCloseRequested);
-}
-
-QString QtCGTabWidget::addCGTab(const QString& label)
-{
-    QString tabName = QtCGTabManager::getInstance().getNextTabName();
-    QString tabLabel = label.isEmpty() ? tabName : label;
-    
-    auto cgwin = new QtCGWin(interp, this);
-    QtCGTabManager::getInstance().addCGWin(tabName, cgwin);
-    
-    addTab(cgwin, tabLabel);
-    setCurrentWidget(cgwin);
-    
-    // Connect graph update signal
-    connect(cgwin, &QtCGWin::graphUpdated, this, &QtCGTabWidget::cgraphUpdated);
-    
-    return tabName;
-}
-
-bool QtCGTabWidget::selectCGTab(const QString& name)
-{
-    QtCGWin* widget = QtCGTabManager::getInstance().getCGWin(name);
-    if (widget) {
-        setCurrentWidget(widget);
-        return true;
-    }
-    return false;
-}
-
-bool QtCGTabWidget::deleteCGTab(const QString& name)
-{
-    QtCGWin* widget = QtCGTabManager::getInstance().getCGWin(name);
-    if (widget) {
-        int index = indexOf(widget);
-        if (index >= 0) {
-            removeTab(index);
-            QtCGTabManager::getInstance().removeCGWin(name);
-            widget->deleteLater();
-            return true;
-        }
-    }
-    return false;
-}
-
-void QtCGTabWidget::onTabChanged(int index)
-{
-    if (index >= 0) {
-        QtCGWin* widget = qobject_cast<QtCGWin*>(this->widget(index));
-        if (widget) {
-            currentCG = widget;
-            QtCGTabManager::getInstance().setCurrentCGWin(widget);
-            
-            // Call Tcl to set the current buffer
-            if (interp && widget->getGraphicsBuffer()) {
-                QString cmd = QString("qtcgwin_set_current %1").arg((quintptr)widget->getGraphicsBuffer());
-                Tcl_Eval(interp, cmd.toUtf8().constData());
-            }
-            
-            widget->refresh();
-        }
-    }
-}
-
-void QtCGTabWidget::onTabCloseRequested(int index)
-{
-    QWidget* widget = this->widget(index);
-    if (widget) {
-        // Find the tab name
-        QString tabName;
-        auto& manager = QtCGTabManager::getInstance();
-        QList<QString> names = manager.getAllNames();
-        for (const QString& name : names) {
-            if (manager.getCGWin(name) == widget) {
-                tabName = name;
-                break;
-            }
-        }
-        
-        if (!tabName.isEmpty()) {
-            deleteCGTab(tabName);
-        }
-    }
 }

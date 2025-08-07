@@ -6,6 +6,8 @@
 
 QT_BEGIN_NAMESPACE
 class QToolBar;
+class QToolButton;
+class QMenu;
 QT_END_NAMESPACE
 
 class EssCommandInterface;
@@ -42,6 +44,7 @@ private:
 
     EssCommandInterface *m_commandInterface;
     QtCGTabWidget *m_tabWidget;
+    QToolButton *m_exportButton;
 };
 
 #endif // ESS_CGRAPH_WIDGET_H

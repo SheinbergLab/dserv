@@ -1,17 +1,20 @@
 #include "EssCGraphWidget.h"
-#include "qtcgwin.hpp"
+#include "qtcgmanager.hpp"  // Include manager instead of qtcgwin.hpp
+#include "qtcgwin.hpp"      // Still need this for QtCGWin class
 #include "core/EssCommandInterface.h"
 #include "console/EssOutputConsole.h"
 #include <QVBoxLayout>
 #include <QToolBar>
 #include <QAction>
-#include <QComboBox>
-#include <QPushButton>
+#include <QToolButton>
+#include <QMenu>
+#include <tcl.h>
 
 EssCGraphWidget::EssCGraphWidget(QWidget *parent)
     : QWidget(parent)
     , m_commandInterface(nullptr)
     , m_tabWidget(nullptr)
+    , m_exportButton(nullptr)
 {
     setupUi();
 }
@@ -57,11 +60,13 @@ void EssCGraphWidget::setupUi()
     connect(addTabAction, &QAction::triggered, this, &EssCGraphWidget::onAddTab);
     toolbar->addAction(addTabAction);
     
-    // Export action
-    QAction *exportAction = new QAction(QIcon::fromTheme("document-save"), tr("Export"), this);
-    exportAction->setToolTip(tr("Export current graph"));
-    connect(exportAction, &QAction::triggered, this, &EssCGraphWidget::onExportGraph);
-    toolbar->addAction(exportAction);
+    // Export button with menu
+    m_exportButton = new QToolButton(this);
+    m_exportButton->setText(tr("Export"));
+    m_exportButton->setIcon(QIcon::fromTheme("document-save-as"));
+    m_exportButton->setToolTip(tr("Export current graph to PDF"));
+    connect(m_exportButton, &QToolButton::clicked, this, &EssCGraphWidget::onExportGraph);
+    toolbar->addWidget(m_exportButton);
     
     toolbar->addSeparator();
     
@@ -92,7 +97,7 @@ void EssCGraphWidget::registerWithTcl()
     QString widgetId = QString("essqt_cgtabs");
     Tcl_SetAssocData(interp, widgetId.toUtf8().constData(), NULL, m_tabWidget);
     
-    // Create convenience Tcl procedures
+    // Create convenience Tcl procedures using new manager
     QString tclScript = R"(
         # Convenience procedures for essqt cgraph
         proc cgraph_add {{label ""}} {
@@ -100,21 +105,48 @@ void EssCGraphWidget::registerWithTcl()
         }
         
         proc cgraph_select {name} {
-            qtCgSelectTab essqt_cgtabs $name
+            # Use the new manager to select
+            qtcg_select $name
         }
         
         proc cgraph_delete {name} {
             qtCgDeleteTab essqt_cgtabs $name
         }
         
+        proc cgraph_list {} {
+            # List all cgraph windows
+            qtcg_list
+        }
+        
+        proc cgraph_current {} {
+            # Get current cgraph window
+            qtcg_current
+        }
+        
         # Override plot command to use current graph
         proc plot {args} {
             # Ensure we have a graph tab
-            if {[qtCgGetCurrent] eq ""} {
+            if {[qtcg_current] eq ""} {
                 cgraph_add "Plot"
             }
             # Call the original plot command
             uplevel 1 plot $args
+        }
+        
+        # Export helper
+        proc cgraph_export_pdf {{filename ""}} {
+            set current [qtcg_current]
+            if {$current eq ""} {
+                error "No current graph window"
+            }
+            
+            if {$filename eq ""} {
+                # Use Qt dialog via C++ binding
+                qtcg_export_dialog
+            } else {
+                # Direct export using dumpwin
+                dumpwin pdf $filename
+            }
         }
     )";
     
@@ -132,21 +164,25 @@ void EssCGraphWidget::onAddTab()
 
 void EssCGraphWidget::onExportGraph()
 {
-    QtCGWin* current = QtCGTabManager::getInstance().getCurrentCGWin();
-    if (!current) {
-        EssConsoleManager::instance()->logWarning("No active graph to export", "CGraph");
+    if (!m_tabWidget) {
+        EssConsoleManager::instance()->logWarning("No tab widget available", "CGraph");
         return;
     }
     
-    // TODO: Implement export functionality
-    // Options: PDF, PNG, SVG, or raw cgraph commands
-    EssConsoleManager::instance()->logInfo("Export not yet implemented", "CGraph");
+    // Use the tab widget's export dialog
+    if (m_tabWidget->exportCurrentToPDF()) {
+        EssConsoleManager::instance()->logSuccess("Graph exported to PDF", "CGraph");
+    }
+    // No need to log failure - the export dialog handles user feedback
 }
 
 void EssCGraphWidget::onClearGraph()
 {
-    QtCGWin* current = QtCGTabManager::getInstance().getCurrentCGWin();
-    if (!current) return;
+    QtCGWin* current = QtCGManager::getInstance().getCurrentCGWin();
+    if (!current) {
+        EssConsoleManager::instance()->logWarning("No active graph", "CGraph");
+        return;
+    }
     
     // Clear via Tcl command
     if (m_commandInterface && m_commandInterface->tclInterp()) {
@@ -160,9 +196,12 @@ void EssCGraphWidget::onClearGraph()
 
 void EssCGraphWidget::onRefreshGraph()
 {
-    QtCGWin* current = QtCGTabManager::getInstance().getCurrentCGWin();
+    QtCGWin* current = QtCGManager::getInstance().getCurrentCGWin();
     if (current) {
         current->refresh();
+        EssConsoleManager::instance()->logInfo("Graph refreshed", "CGraph");
+    } else {
+        EssConsoleManager::instance()->logWarning("No active graph", "CGraph");
     }
 }
 
@@ -172,8 +211,12 @@ void EssCGraphWidget::onGraphUpdated()
     emit graphUpdated();
 }
 
-// In EssWorkspaceManager.cpp, add this to createDocks():
+// Example of how to use this in EssWorkspaceManager.cpp:
 /*
+void EssWorkspaceManager::createDocks()
+{
+    // ... other docks ...
+    
     // Create CGraph dock
     QDockWidget *cgraphDock = new QDockWidget(tr("Graphs"), m_mainWindow);
     cgraphDock->setObjectName("CGraphDock");
@@ -185,4 +228,22 @@ void EssCGraphWidget::onGraphUpdated()
     
     cgraphDock->setWidget(m_cgraphWidget);
     m_docks["CGraph"] = cgraphDock;
+    
+    // Add to main window
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, cgraphDock);
+}
+
+// Later, if you want to create a standalone window:
+void EssWorkspaceManager::createRealtimeMonitor()
+{
+    auto commandInterface = EssApplication::instance()->commandInterface();
+    auto* monitor = new QtCGStandaloneWidget("realtime", 
+                                            commandInterface->tclInterp());
+    monitor->setWindowTitle("Real-time Monitor");
+    monitor->resize(600, 400);
+    monitor->show();
+    
+    // The standalone widget is automatically registered with QtCGManager
+    // and can be accessed via Tcl commands
+}
 */

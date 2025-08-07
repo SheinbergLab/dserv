@@ -146,8 +146,10 @@ set(UI_SOURCES
     src/ui/components/visualization/EssEyeTouchVisualizerWidget.cpp
     src/ui/components/state_system/EssStateSystemWidget.cpp
     src/ui/components/state_system/EssStateDebugData.cpp
-    src/ui/components/cgraph/qtcgwin.cpp
+    src/ui/components/cgraph/qtcgmanager.cpp
+    src/ui/components/cgraph/qtcgwin.cpp    
     src/ui/components/cgraph/EssCGraphWidget.cpp
+    src/ui/components/cgraph/EssStandaloneCGraph.cpp
 )
 
 

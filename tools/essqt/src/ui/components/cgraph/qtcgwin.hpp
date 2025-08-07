@@ -2,12 +2,9 @@
 #define QTCGWIN_HPP
 
 #include <QWidget>
-#include <QTabWidget>
 #include <QPainter>
-#include <QHash>
 #include <QString>
 #include <memory>
-#include <vector>
 
 // Undefine any macros that might conflict
 #ifdef LEFT_JUST
@@ -21,6 +18,9 @@
 #endif
 
 #include <tcl.h>
+
+// Forward declaration
+class QtCGManager;
 
 // Minimal FRAME structure - just the fields we need
 // This must match the layout in cgraph.h
@@ -44,8 +44,6 @@ struct FRAME_MINIMAL {
     // ... rest of the struct we don't need
 };
 
-class QtCGWin;
-
 // Qt-based cgraph rendering widget
 class QtCGWin : public QWidget {
     Q_OBJECT
@@ -60,12 +58,19 @@ public:
     // Force a redraw
     void refresh();
     
+    // Export to PDF
+    bool exportToPDF(const QString& filename);
+    bool exportToPDFDialog(const QString& suggestedName = QString());
+    
     // Text justification constants (matching cgraph.h values)
     enum Justification {
         JustLeft = -1,    // LEFT_JUST
         JustCenter = 0,   // CENTER_JUST
         JustRight = 1     // RIGHT_JUST
     };
+    
+    // Helper to get current instance from manager
+    static QtCGWin* getCurrentInstance();
     
 signals:
     void graphUpdated();
@@ -107,59 +112,7 @@ private:
     static int FilledPolygon(float *verts, int nverts);
     static int Circle(float x, float y, float width, int filled);
     
-    // Helper to get current instance
-    static QtCGWin* getCurrentInstance();
-    
     friend class QtCGWinBridge;  // Allow the bridge to set callbacks and access private members
-};
-
-// Tab manager singleton (similar to FLTK version)
-class QtCGTabManager {
-public:
-    static QtCGTabManager& getInstance();
-    
-    void addCGWin(const QString& name, QtCGWin* widget);
-    QtCGWin* getCGWin(const QString& name);
-    void removeCGWin(const QString& name);
-    QString getNextTabName();
-    
-    // Set/get the current active widget
-    void setCurrentCGWin(QtCGWin* widget) { currentWidget = widget; }
-    QtCGWin* getCurrentCGWin() { return currentWidget; }
-    
-    // Get all registered widgets (for iteration)
-    QList<QString> getAllNames() const { return cgwin_map.keys(); }
-    
-private:
-    QtCGTabManager() = default;
-    QtCGTabManager(const QtCGTabManager&) = delete;
-    QtCGTabManager& operator=(const QtCGTabManager&) = delete;
-    
-    QHash<QString, QtCGWin*> cgwin_map;
-    QtCGWin* currentWidget = nullptr;
-    int next_tab_index = 0;
-};
-
-// Widget to hold cgraph tabs (can be added to dock)
-class QtCGTabWidget : public QTabWidget {
-    Q_OBJECT
-    
-public:
-    QtCGTabWidget(Tcl_Interp *interp, QWidget *parent = nullptr);
-    
-    QString addCGTab(const QString& label = QString());
-    bool selectCGTab(const QString& name);
-    bool deleteCGTab(const QString& name);
-    
-signals:
-    void cgraphUpdated();
-    
-private slots:
-    void onTabChanged(int index);
-    void onTabCloseRequested(int index);
-    
-private:
-    Tcl_Interp *interp;
 };
 
 #endif // QTCGWIN_HPP

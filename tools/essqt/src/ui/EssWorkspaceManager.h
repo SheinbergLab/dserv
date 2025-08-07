@@ -22,6 +22,7 @@ class EssStimDgWidget;
 class EssEyeTouchVisualizerWidget;
 class EssStateSystemWidget;
 class EssCGraphWidget;
+class EssStandaloneCGraph;
 
 class EssWorkspaceManager : public QObject
 {
@@ -38,6 +39,8 @@ public:
     void resetToDefaultLayout();
     void saveLayout();
     bool restoreLayout();
+    
+    void initializeStandaloneWidgets();
     
     // Dock visibility
     void setDockVisible(const QString &dockName, bool visible);
@@ -77,4 +80,5 @@ private:
     EssEyeTouchVisualizerWidget *m_eyeTouchVisualizer;
     EssStateSystemWidget *m_stateSystemWidget;
     EssCGraphWidget *m_cgraphWidget;
+    EssStandaloneCGraph *m_testStandaloneWidget;
 };
