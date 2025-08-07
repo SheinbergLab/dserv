@@ -6,6 +6,7 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
+#include <QClipboard>
 #include <QApplication>
 
 EssOutputConsole::EssOutputConsole(QWidget *parent)
@@ -317,9 +318,96 @@ bool EssOutputConsole::saveToFile(const QString &filename)
     return true;
 }
 
+void EssOutputConsole::keyPressEvent(QKeyEvent *event)
+{
+    // Since this is a read-only console, we mainly need to handle copy
+    
+#ifdef Q_OS_MAC
+    // Use native modifiers on macOS to avoid Qt's Cmd/Ctrl swapping
+    quint32 native = event->nativeModifiers();
+    bool isRealCmd = (native & 0x100000);   // NSEventModifierFlagCommand
+    bool isRealCtrl = (native & 0x40000);   // NSEventModifierFlagControl
+    bool isShift = (native & 0x20000);      // NSEventModifierFlagShift
+    
+    // Handle Mac system copy (Cmd+C)
+    if (isRealCmd && !isRealCtrl && !isShift) {
+        if (event->key() == Qt::Key_C) {
+            handleCopy();
+            event->accept();
+            return;
+        }
+    }
+#else
+    // On other platforms, use standard Ctrl+C
+    Qt::KeyboardModifiers modifiers = event->modifiers();
+    if ((modifiers & Qt::ControlModifier) && !(modifiers & Qt::ShiftModifier)) {
+        if (event->key() == Qt::Key_C) {
+            handleCopy();
+            event->accept();
+            return;
+        }
+    }
+    
+    // Also support Ctrl+Shift+C on Linux/Unix terminals
+    if ((modifiers & Qt::ControlModifier) && (modifiers & Qt::ShiftModifier)) {
+        if (event->key() == Qt::Key_C) {
+            handleCopy();
+            event->accept();
+            return;
+        }
+    }
+#endif
+    
+    // For a read-only console, we can also add some useful shortcuts:
+    switch (event->key()) {
+        case Qt::Key_Home:
+            if (event->modifiers() & Qt::ControlModifier) {
+                // Ctrl+Home - go to beginning
+                moveCursor(QTextCursor::Start);
+                event->accept();
+                return;
+            }
+            break;
+            
+        case Qt::Key_End:
+            if (event->modifiers() & Qt::ControlModifier) {
+                // Ctrl+End - go to end
+                moveCursor(QTextCursor::End);
+                event->accept();
+                return;
+            }
+            break;
+    }
+    
+    // Let QPlainTextEdit handle other keys (like arrows, page up/down, etc.)
+    QPlainTextEdit::keyPressEvent(event);
+}
+
+void EssOutputConsole::handleCopy()
+{
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection()) {
+        QString selectedText = cursor.selectedText();
+        // Convert QChar::ParagraphSeparator to newlines for proper copying
+        selectedText.replace(QChar::ParagraphSeparator, '\n');
+        QApplication::clipboard()->setText(selectedText);
+    }
+}
 void EssOutputConsole::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu *menu = createStandardContextMenu();
+    
+    // The standard context menu already has Copy, but let's ensure it shows the right shortcut
+    QList<QAction*> actions = menu->actions();
+    for (QAction *action : actions) {
+        if (action->text().contains("Copy", Qt::CaseInsensitive)) {
+#ifdef Q_OS_MAC
+            action->setShortcut(QKeySequence(Qt::META | Qt::Key_C));
+#else
+            action->setShortcut(QKeySequence::Copy);
+#endif
+        }
+    }
     
     menu->addSeparator();
     
