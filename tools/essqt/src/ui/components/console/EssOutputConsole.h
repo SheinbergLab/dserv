@@ -70,7 +70,8 @@ signals:
 
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
-
+    void keyPressEvent(QKeyEvent *event) override;
+    
 private slots:
     void processPendingMessages();
     void updateDisplay();
@@ -88,6 +89,9 @@ private:
     bool m_showTimestamps;
     bool m_showSource;
     bool m_autoScroll;
+    
+    // Copy text
+    void handleCopy();
     
     // Filtering
     QHash<OutputType, bool> m_typeFilters;
