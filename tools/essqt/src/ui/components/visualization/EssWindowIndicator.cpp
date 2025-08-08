@@ -43,7 +43,10 @@ void EssWindowIndicator::paintEvent(QPaintEvent *event) {
     // Draw label
     if (!m_label.isEmpty()) {
         painter.setPen(palette().color(QPalette::Text));
-        painter.setFont(QFont("sans-serif", 9));
+        QFont font;
+		font.setStyleHint(QFont::SansSerif);
+		font.setPointSize(9);
+		painter.setFont(font);
         painter.drawText(x, 0, 50, height(), Qt::AlignVCenter, m_label + ":");
         x += 55;
     }
@@ -70,13 +73,19 @@ void EssWindowIndicator::paintEvent(QPaintEvent *event) {
             painter.setPen(QPen(QColor(102, 102, 102), 1)); // Gray, 1px
         }
         painter.drawRect(rect);
-        
+
+		QFont font;
+		font.setStyleHint(QFont::Monospace);
+		font.setPointSize(8);
+
         // Number - bold for active windows
         if (m_windows[i].active) {
-            painter.setFont(QFont("monospace", 8, QFont::Bold));
+			font.setWeight(QFont::Bold);
+            painter.setFont(font);
             painter.setPen(m_windows[i].inside ? Qt::white : Qt::white);
         } else {
-            painter.setFont(QFont("monospace", 8, QFont::Normal));
+  			font.setWeight(QFont::Normal);
+            painter.setFont(font);
             painter.setPen(QColor(153, 153, 153));  // Dimmed for inactive
         }
         

@@ -410,7 +410,10 @@ void EssEyeTouchVisualizer::drawWindow(QPainter& painter, const Window& window,
     
     // Draw label
     if (m_showLabels) {
-        painter.setFont(QFont("monospace", 10));
+		QFont font;
+		font.setStyleHint(QFont::Monospace);
+		font.setPointSize(10);    
+        painter.setFont(font);
         QString label = QString("%1%2")
                        .arg(window.id < m_eyeWindows.size() ? "E" : "T")
                        .arg(window.id);
@@ -489,7 +492,12 @@ void EssEyeTouchVisualizer::drawVirtualEye(QPainter& painter) {
     painter.drawLine(pos.x(), pos.y() - 6, pos.x(), pos.y() + 6);
     
     // "V" indicator
-    painter.setFont(QFont("monospace", 10, QFont::Bold));
+	QFont font;
+	font.setStyleHint(QFont::Monospace);
+	font.setPointSize(10);    
+	font.setWeight(QFont::Bold);
+	painter.setFont(font);
+
     painter.setPen(QColor(255, 140, 0));
     painter.drawText(pos.x() - 3, pos.y() - 12, "V");
 }
@@ -517,8 +525,12 @@ void EssEyeTouchVisualizer::drawVirtualTouch(QPainter& painter) {
     painter.drawPolygon(diamond);
     
     // "V" indicator
-    painter.setFont(QFont("monospace", 8, QFont::Bold));
-    painter.setPen(Qt::white);
+	QFont font;
+	font.setStyleHint(QFont::Monospace);
+	font.setPointSize(8);    
+	font.setWeight(QFont::Bold);
+	painter.setFont(font);    
+	painter.setPen(Qt::white);
     painter.drawText(pos.x() - 2, pos.y() + 2, "V");
 }
 
