@@ -7,11 +7,16 @@
 #include <QRegularExpression>
 #include <memory>
 
+// Add these includes for the search bar
+#include <QLineEdit>
+#include <QPushButton>
+#include <QCheckBox>
+#include <QLabel>
+
 class QsciScintilla;
 class QsciLexer;
 class QAction;
 class QToolBar;
-class QLabel;
 class TclUtils;
 
 /**
@@ -63,11 +68,6 @@ public:
     void setShowFolding(bool show);
     void setWordWrap(bool wrap);
     
-    // Find/Replace
-    void showFindDialog();
-    void findNext();
-    void findPrevious();
-    
     // Selection
     QString selectedText() const;
     bool hasSelectedText() const;
@@ -93,12 +93,15 @@ public:
     bool useTabs() const;
   
     // Formatting
-  	void formatCode();
+    void formatCode();
     void formatSelection();
   
     // Toolbar visibility
     void setToolbarVisible(bool visible);
     bool isToolbarVisible() const;
+    
+    // Search functionality
+    void showFindDialog();
 
 signals:
     void modificationChanged(bool modified);
@@ -134,6 +137,14 @@ private slots:
     void onCursorPositionChanged(int line, int index);
     void onMarginClicked(int margin, int line, Qt::KeyboardModifiers state);
     void updateLineNumberMarginWidth();
+    
+    // Search bar slots
+    void onSearchTextChanged(const QString &text);
+    void findNext();
+    void findPrevious();
+    void updateSearchResults();
+    void clearSearchHighlights();
+    void hideSearchBar();
 
 private:
     void setupUi();
@@ -148,19 +159,37 @@ private:
     bool shouldIncreaseIndent(const QString &line) const;
     bool shouldDecreaseIndent(const QString &line) const;
     
+    // Search bar methods
+    void createSearchBar();
+    void highlightAllMatches();
+    
     // Core components
     QsciScintilla *m_editor;
     std::unique_ptr<QsciLexer> m_lexer;
     QToolBar *m_toolbar;
     QLabel *m_statusLabel;
     
+    // Search bar components
+    QWidget *m_searchBar;
+    QLineEdit *m_searchEdit;
+    QLabel *m_searchResultLabel;
+    QPushButton *m_findPrevButton;
+    QPushButton *m_findNextButton;
+    QCheckBox *m_caseSensitiveCheck;
+    QCheckBox *m_wholeWordCheck;
+    
     // State
     QString m_currentFile;
     QString m_originalContent;
     Language m_language;
     bool m_showToolbar;
-  
- // Line analysis structure
+    
+    // Search state
+    QString m_lastSearchText;
+    QList<int> m_searchResultLines;
+    int m_currentSearchResult;
+    
+    // Line analysis structure
     struct LineAnalysis {
         int openBraces = 0;
         int closeBraces = 0;
@@ -193,4 +222,6 @@ private:
     static constexpr int MARGIN_FOLDING = 1;
     static constexpr int MARGIN_BOOKMARKS = 2;
     static constexpr int BOOKMARK_MARKER = 1;
+    static constexpr int SEARCH_INDICATOR = 1;
+    static constexpr int CURRENT_SEARCH_INDICATOR = 2;
 };

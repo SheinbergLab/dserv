@@ -12,6 +12,7 @@
 #include <QVBoxLayout>
 #include <QToolBar>
 #include <QAction>
+#include <QTimer>
 #include <QKeyEvent>
 #include <QRegularExpression>
 #include <QDragEnterEvent>
@@ -19,6 +20,7 @@
 #include <QMimeData>
 #include <QFileInfo>
 #include <QLabel>
+#include <QStyle>
 #include <QMenu>
 #include <QContextMenuEvent>
 
@@ -49,7 +51,12 @@ void EssCodeEditor::setupUi()
     
     m_toolbar->setMovable(false);
     m_toolbar->setIconSize(QSize(16, 16));
+    
+    // Create search bar (hidden by default)
+    createSearchBar();
+    
     layout->addWidget(m_toolbar);
+    layout->addWidget(m_searchBar); 
     layout->addWidget(m_editor);
     
     // Allow derived classes to customize toolbar
@@ -79,6 +86,15 @@ void EssCodeEditor::setupEditor()
     m_editor->setMarginWidth(MARGIN_BOOKMARKS, 20);
     m_editor->setMarginSensitivity(MARGIN_BOOKMARKS, true);
     
+    // Define search indicators
+    m_editor->indicatorDefine(QsciScintilla::BoxIndicator, SEARCH_INDICATOR);
+    m_editor->setIndicatorForegroundColor(QColor(255, 220, 0, 50), SEARCH_INDICATOR);
+    m_editor->setIndicatorDrawUnder(true, SEARCH_INDICATOR);
+    
+    m_editor->indicatorDefine(QsciScintilla::BoxIndicator, CURRENT_SEARCH_INDICATOR);
+    m_editor->setIndicatorForegroundColor(QColor(255, 150, 0, 100), CURRENT_SEARCH_INDICATOR);
+    m_editor->setIndicatorDrawUnder(true, CURRENT_SEARCH_INDICATOR);
+
     // Visual settings
     m_editor->setCaretLineVisible(true);
     m_editor->setBraceMatching(QsciScintilla::SloppyBraceMatch);
@@ -226,13 +242,22 @@ void EssCodeEditor::applyTheme()
 void EssCodeEditor::createActions()
 {
     m_saveAction = new QAction(tr("Save"), this);
-    m_saveAction->setShortcut(QKeySequence::Save);
+    // Use native shortcuts that work correctly on each platform
+#ifdef Q_OS_MAC
+    m_saveAction->setShortcut(QKeySequence(Qt::META | Qt::Key_S));  // Cmd+S on Mac
+#else
+    m_saveAction->setShortcut(QKeySequence::Save);  // Ctrl+S on other platforms
+#endif
     m_saveAction->setIcon(QIcon::fromTheme("document-save"));
-    m_saveAction->setEnabled(false);  // Disabled until content is modified
+    m_saveAction->setEnabled(false);
     connect(m_saveAction, &QAction::triggered, this, &EssCodeEditor::saveRequested);
     
     m_findAction = new QAction(tr("Find"), this);
-    m_findAction->setShortcut(QKeySequence::Find);
+#ifdef Q_OS_MAC
+    m_findAction->setShortcut(QKeySequence(Qt::META | Qt::Key_F));  // Cmd+F on Mac
+#else
+    m_findAction->setShortcut(QKeySequence::Find);  // Ctrl+F on other platforms
+#endif
     m_findAction->setIcon(QIcon::fromTheme("edit-find"));
     connect(m_findAction, &QAction::triggered, this, &EssCodeEditor::showFindDialog);
     
@@ -378,15 +403,99 @@ void EssCodeEditor::updateModificationState()
 }
 
 bool EssCodeEditor::eventFilter(QObject *obj, QEvent *event)
-{
+{    
+	// Process search bar events here
     if (event->type() == QEvent::KeyPress) {
         QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
         
+        // Handle Escape key from ANY widget when search bar is visible
+        if (keyEvent->key() == Qt::Key_Escape && m_searchBar && m_searchBar->isVisible()) {
+            hideSearchBar();
+            return true;
+        }
+        
+        // Handle F3 from any widget
+        if (keyEvent->key() == Qt::Key_F3) {
+            if (keyEvent->modifiers() & Qt::ShiftModifier) {
+                findPrevious();
+            } else {
+                findNext();
+            }
+            return true;
+        }
+        
+#ifdef Q_OS_MAC
+        // Just handle Cmd+S and Cmd+F on Mac
+        quint32 native = keyEvent->nativeModifiers();
+        bool isRealCmd = (native & 0x100000);   // NSEventModifierFlagCommand
+        bool isRealCtrl = (native & 0x40000);   // NSEventModifierFlagControl
+        
+      // Handle Cmd+F for find
+		if (isRealCmd && !isRealCtrl && keyEvent->key() == Qt::Key_F) {
+			// Toggle search bar
+			if (m_searchBar && m_searchBar->isVisible()) {
+				hideSearchBar();
+			} else {
+				showFindDialog();
+			}
+			return true;
+		}
+#else
+    // Handle Ctrl+F on non-Mac platforms from anywhere
+    if ((keyEvent->modifiers() & Qt::ControlModifier) && keyEvent->key() == Qt::Key_F) {
+        // Toggle search bar
+        if (m_searchBar && m_searchBar->isVisible()) {
+            hideSearchBar();
+        } else {
+            showFindDialog();
+        }
+        return true;
+    }	
+#endif
+    }
+    
+
+    if (obj == m_editor && event->type() == QEvent::KeyPress) {
+        QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
+           
+    if (keyEvent->key() == Qt::Key_Escape && m_searchBar->isVisible()) {
+	    hideSearchBar();
+    	return true;
+	}
+
+#ifdef Q_OS_MAC
+        // Just handle Cmd+S and Cmd+F on Mac
+        quint32 native = keyEvent->nativeModifiers();
+        bool isRealCmd = (native & 0x100000);   // NSEventModifierFlagCommand
+        bool isRealCtrl = (native & 0x40000);   // NSEventModifierFlagControl
+        
+        if (isRealCmd && !isRealCtrl) {
+            // Handle Cmd+S for save
+            if (keyEvent->key() == Qt::Key_S) {
+                if (!isReadOnly() && isModified()) {
+                    emit saveRequested();
+                }
+                return true;
+            }
+            
+            // Handle Cmd+F for find
+            if (keyEvent->key() == Qt::Key_F) {
+                // Toggle search bar
+                if (m_searchBar && m_searchBar->isVisible()) {
+                    hideSearchBar();
+                } else {
+                    showFindDialog();
+                }
+                return true;
+            }
+        }
+#endif
         // Let derived classes handle first
         if (handleCustomKeyEvent(keyEvent)) {
             return true;
         }
-    // Handle Enter/Return key for auto-indent
+        
+        // Handle Enter/Return key for auto-indent
         if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
          // Only intercept if no modifiers (plain Enter)
             if (keyEvent->modifiers() == Qt::NoModifier) {
@@ -1177,6 +1286,263 @@ void EssCodeEditor::formatSelection()
 }
 
 
+void EssCodeEditor::createSearchBar()
+{
+    m_searchBar = new QWidget(this);
+    m_searchBar->setVisible(false);  // Hidden by default
+    
+    QHBoxLayout *layout = new QHBoxLayout(m_searchBar);
+    layout->setContentsMargins(5, 2, 5, 2);
+    
+    // Close button
+    QPushButton *closeBtn = new QPushButton(this);
+    closeBtn->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
+    closeBtn->setFlat(true);
+    closeBtn->setMaximumSize(20, 20);
+    connect(closeBtn, &QPushButton::clicked, this, &EssCodeEditor::hideSearchBar);
+    
+    // Search label
+    QLabel *findLabel = new QLabel(tr("Find:"), this);
+    
+    // Search input
+    m_searchEdit = new QLineEdit(this);
+    m_searchEdit->setPlaceholderText(tr("Search..."));
+    m_searchEdit->setClearButtonEnabled(true);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, &EssCodeEditor::onSearchTextChanged);
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, &EssCodeEditor::findNext);
+    
+    // Previous/Next buttons
+    m_findPrevButton = new QPushButton(this);
+    m_findPrevButton->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+    m_findPrevButton->setToolTip(tr("Find Previous (Shift+F3)"));
+    m_findPrevButton->setFlat(true);
+    m_findPrevButton->setMaximumSize(24, 24);
+    connect(m_findPrevButton, &QPushButton::clicked, this, &EssCodeEditor::findPrevious);
+    
+    m_findNextButton = new QPushButton(this);
+    m_findNextButton->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));
+    m_findNextButton->setToolTip(tr("Find Next (F3)"));
+    m_findNextButton->setFlat(true);
+    m_findNextButton->setMaximumSize(24, 24);
+    connect(m_findNextButton, &QPushButton::clicked, this, &EssCodeEditor::findNext);
+    
+    // Options
+    m_caseSensitiveCheck = new QCheckBox(tr("Case"), this);
+    m_caseSensitiveCheck->setToolTip(tr("Case sensitive"));
+    connect(m_caseSensitiveCheck, &QCheckBox::toggled, this, &EssCodeEditor::updateSearchResults);
+    
+    m_wholeWordCheck = new QCheckBox(tr("Word"), this);
+    m_wholeWordCheck->setToolTip(tr("Whole word"));
+    connect(m_wholeWordCheck, &QCheckBox::toggled, this, &EssCodeEditor::updateSearchResults);
+    
+    // Result label
+    m_searchResultLabel = new QLabel(this);
+    m_searchResultLabel->setStyleSheet("QLabel { color: #666; margin: 0 10px; }");
+    
+    // Add widgets to layout
+    layout->addWidget(closeBtn);
+    layout->addWidget(findLabel);
+    layout->addWidget(m_searchEdit);
+    layout->addWidget(m_findPrevButton);
+    layout->addWidget(m_findNextButton);
+    layout->addWidget(m_caseSensitiveCheck);
+    layout->addWidget(m_wholeWordCheck);
+    layout->addWidget(m_searchResultLabel);
+    layout->addStretch();
+    
+    // Style the search bar
+    m_searchBar->setStyleSheet(
+        "QWidget { background-color: #2b2b2b; border-bottom: 1px solid #555; }"
+        "QLineEdit { padding: 4px; border: 1px solid #555; border-radius: 3px; "
+        "           background-color: #3c3c3c; color: #ddd; }"
+        "QLineEdit:focus { border-color: #0d7fd3; }"
+        "QPushButton { border: none; }"
+        "QPushButton:hover { background-color: #3c3c3c; border-radius: 3px; }"
+        "QCheckBox { color: #ddd; }"
+    );
+    
+    m_searchEdit->installEventFilter(this);
+    m_caseSensitiveCheck->installEventFilter(this);
+    m_wholeWordCheck->installEventFilter(this);
+    m_searchBar->installEventFilter(this);
+}
+    
+void EssCodeEditor::showFindDialog()
+{
+    if (!m_searchBar->isVisible()) {
+        m_searchBar->setVisible(true);
+        m_searchEdit->setFocus();
+        m_searchEdit->selectAll();
+        
+        // If there's selected text, use it as search text
+        if (m_editor->hasSelectedText()) {
+            m_searchEdit->setText(m_editor->selectedText());
+        }
+    } else {
+        // Already visible, just focus
+        m_searchEdit->setFocus();
+        m_searchEdit->selectAll();
+    }
+}
+
+void EssCodeEditor::hideSearchBar()
+{
+    m_searchBar->setVisible(false);
+    clearSearchHighlights();
+    m_editor->setFocus();
+}
+
+void EssCodeEditor::onSearchTextChanged(const QString &text)
+{
+    m_lastSearchText = text;
+    updateSearchResults();
+}
+
+void EssCodeEditor::updateSearchResults()
+{
+    clearSearchHighlights();
+    m_searchResultLines.clear();
+    m_currentSearchResult = -1;
+    
+    QString searchText = m_searchEdit->text();
+    if (searchText.isEmpty()) {
+        m_searchResultLabel->clear();
+        m_findPrevButton->setEnabled(false);
+        m_findNextButton->setEnabled(false);
+        return;
+    }
+    
+    highlightAllMatches();
+    
+    // Update result count
+    int count = m_searchResultLines.size();
+    if (count > 0) {
+        m_currentSearchResult = 0;
+        m_searchResultLabel->setText(tr("1 of %1").arg(count));
+        m_findPrevButton->setEnabled(true);
+        m_findNextButton->setEnabled(true);
+        
+        // Jump to first result
+        if (!m_searchResultLines.isEmpty()) {
+            m_editor->setCursorPosition(m_searchResultLines.first(), 0);
+            m_editor->ensureLineVisible(m_searchResultLines.first());
+        }
+    } else {
+        m_searchResultLabel->setText(tr("No results"));
+        m_findPrevButton->setEnabled(false);
+        m_findNextButton->setEnabled(false);
+    }
+}
+
+void EssCodeEditor::highlightAllMatches()
+{
+    QString searchText = m_searchEdit->text();
+    if (searchText.isEmpty()) return;
+    
+    bool caseSensitive = m_caseSensitiveCheck->isChecked();
+    bool wholeWord = m_wholeWordCheck->isChecked();
+    
+    // Search through entire document
+    int line = 0;
+    int index = 0;
+    
+    while (true) {
+        // Find next occurrence
+        int foundLine = -1, foundIndex = -1, foundEnd = -1;
+        
+        bool found = m_editor->findFirst(searchText, 
+                                        false,      // re
+                                        caseSensitive, 
+                                        wholeWord, 
+                                        false,      // wrap
+                                        true,       // forward
+                                        line,       // start line
+                                        index);     // start index
+        
+        if (!found) break;
+        
+        // Get the position of the match
+        m_editor->getSelection(&foundLine, &foundIndex, &line, &index);
+        
+        // Highlight this match
+        m_editor->SendScintilla(QsciScintillaBase::SCI_SETINDICATORCURRENT, SEARCH_INDICATOR);
+        int startPos = m_editor->positionFromLineIndex(foundLine, foundIndex);
+        int endPos = m_editor->positionFromLineIndex(line, index);
+        m_editor->SendScintilla(QsciScintillaBase::SCI_INDICATORFILLRANGE, startPos, endPos - startPos);
+        
+        // Store line number
+        if (!m_searchResultLines.contains(foundLine)) {
+            m_searchResultLines.append(foundLine);
+        }
+        
+        // Continue searching from end of this match
+        if (line == foundLine && index == foundIndex) {
+            // Avoid infinite loop
+            index++;
+        }
+    }
+    
+    // Clear selection after search
+    m_editor->selectAll(false);
+}
+
+void EssCodeEditor::clearSearchHighlights()
+{
+    // Clear all search indicators
+    int length = m_editor->length();
+    m_editor->SendScintilla(QsciScintillaBase::SCI_SETINDICATORCURRENT, SEARCH_INDICATOR);
+    m_editor->SendScintilla(QsciScintillaBase::SCI_INDICATORCLEARRANGE, 0, length);
+    
+    m_editor->SendScintilla(QsciScintillaBase::SCI_SETINDICATORCURRENT, CURRENT_SEARCH_INDICATOR);
+    m_editor->SendScintilla(QsciScintillaBase::SCI_INDICATORCLEARRANGE, 0, length);
+}
+
+void EssCodeEditor::findNext()
+{
+    if (m_searchResultLines.isEmpty()) return;
+    
+    m_currentSearchResult = (m_currentSearchResult + 1) % m_searchResultLines.size();
+    
+    int line = m_searchResultLines[m_currentSearchResult];
+    m_editor->setCursorPosition(line, 0);
+    m_editor->ensureLineVisible(line);
+    
+    // Update counter
+    m_searchResultLabel->setText(tr("%1 of %2")
+        .arg(m_currentSearchResult + 1)
+        .arg(m_searchResultLines.size()));
+        
+    // Set focus to editor after button event completes
+    QTimer::singleShot(0, [this]() {
+        m_editor->setFocus();
+    });    
+}
+
+void EssCodeEditor::findPrevious()
+{
+    if (m_searchResultLines.isEmpty()) return;
+    
+    m_currentSearchResult--;
+    if (m_currentSearchResult < 0) {
+        m_currentSearchResult = m_searchResultLines.size() - 1;
+    }
+    
+    int line = m_searchResultLines[m_currentSearchResult];
+    m_editor->setCursorPosition(line, 0);
+    m_editor->ensureLineVisible(line);
+    
+    // Update counter
+    m_searchResultLabel->setText(tr("%1 of %2")
+        .arg(m_currentSearchResult + 1)
+        .arg(m_searchResultLines.size()));
+        
+    // Set focus to editor after button event completes
+    QTimer::singleShot(0, [this]() {
+        m_editor->setFocus();
+    });    
+}
+
+
 void EssCodeEditor::contextMenuEvent(QContextMenuEvent *event)
 {
     if (!m_editor) {
@@ -1295,11 +1661,6 @@ void EssCodeEditor::setReadOnly(bool readOnly)
 bool EssCodeEditor::isReadOnly() const
 {
     return m_editor->isReadOnly();
-}
-
-void EssCodeEditor::showFindDialog()
-{
-    m_editor->findFirst(QString(), false, false, false, true);
 }
 
 void EssCodeEditor::setToolbarVisible(bool visible)

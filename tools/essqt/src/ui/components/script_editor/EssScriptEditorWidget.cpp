@@ -125,7 +125,11 @@ void EssScriptEditorWidget::createGlobalToolbar()
     
     // Save current script - with both icon and text for clarity
     m_saveAction = new QAction(tr("Save"), this);
-    m_saveAction->setShortcut(QKeySequence::Save);
+#ifdef Q_OS_MAC
+    m_saveAction->setShortcut(QKeySequence(Qt::META | Qt::Key_S));  // Cmd+S
+#else
+    m_saveAction->setShortcut(QKeySequence::Save);  // Ctrl+S
+#endif
     m_saveAction->setToolTip(tr("Save current script (Ctrl+S)"));
     // Try theme icon first, but set text as fallback
     QIcon saveIcon = QIcon::fromTheme("document-save");
@@ -137,7 +141,11 @@ void EssScriptEditorWidget::createGlobalToolbar()
     
     // Save all scripts - with both icon and text
     m_saveAllAction = new QAction(tr("Save All"), this);
-    m_saveAllAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
+#ifdef Q_OS_MAC
+    m_saveAllAction->setShortcut(QKeySequence(Qt::META | Qt::SHIFT | Qt::Key_S));  // Cmd+Shift+S
+#else
+    m_saveAllAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));  // Ctrl+Shift+S
+#endif
     m_saveAllAction->setToolTip(tr("Save all modified scripts (Ctrl+Shift+S)"));
     QIcon saveAllIcon = QIcon::fromTheme("document-save-all");
     if (!saveAllIcon.isNull()) {
