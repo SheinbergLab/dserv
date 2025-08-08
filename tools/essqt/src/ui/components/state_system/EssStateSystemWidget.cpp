@@ -611,7 +611,7 @@ void EssStateSystemWidget::loadStateTable(const QString &stateTableStr)
     
     if (newStates != m_allStates) {
         m_allStates = newStates;
-        qDebug() << "Loaded" << m_allStates.size() << "states:" << m_allStates;
+        //qDebug() << "Loaded" << m_allStates.size() << "states:" << m_allStates;
     }
 }
 
@@ -657,14 +657,11 @@ void EssStateSystemWidget::onSystemStateChanged(int state)
 
 void EssStateSystemWidget::onExperimentStateChanged(const QString &newState)
 {
-    // This might be more detailed state information
-    qDebug() << "Experiment state changed to:" << newState;
-    
+        
     // Check for states that indicate system changes
     if (newState == "Loading" || newState == "Unloading") {
         // System is being reloaded
         clear();
-        qDebug() << "System loading/unloading - clearing state widget";
         return;
     }
     
@@ -705,7 +702,6 @@ void EssStateSystemWidget::onDatapointUpdate(const QString &name, const QVariant
     else if (name == "ess/system" || name == "ess/protocol" || name == "ess/variant") {
         // System change detected - clear everything
         clear();
-        qDebug() << "System change detected, clearing state widget";
     }
     else if (name == "ess/user_reset") {
         // User reset - only clear debug data and trace, keep state table
@@ -713,7 +709,6 @@ void EssStateSystemWidget::onDatapointUpdate(const QString &name, const QVariant
         m_viewingObsIndex = -1;
         m_traceTable->setRowCount(0);
         updateObservationNavigation();
-        qDebug() << "User reset - cleared debug data";
         
         // Clear current state
         setCurrentState("");
@@ -777,8 +772,6 @@ void EssStateSystemWidget::onHostConnected(const QString &host)
             }
         }
     }
-    
-    qDebug() << "StateSystemWidget: Connected to host";
 }
 
 void EssStateSystemWidget::onHostDisconnected()
@@ -791,8 +784,6 @@ void EssStateSystemWidget::onHostDisconnected()
     m_backendDebugEnabled = false;
     
     clear();
-    
-    qDebug() << "StateSystemWidget: Disconnected from host";
 }
 
 void EssStateSystemWidget::onRefreshClicked()
@@ -810,7 +801,6 @@ void EssStateSystemWidget::onRefreshClicked()
             if (result.status != EssCommandInterface::StatusSuccess) {
                 qWarning() << "Failed to refresh state table:" << result.response;
             } else {
-                qDebug() << "Requested state table refresh";
             }
         }
     }

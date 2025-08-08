@@ -53,8 +53,6 @@ void StateDebugSession::startObservation(int obsNum, qint64 timestamp)
     
     // Clear current state tracking
     m_currentState.clear();
-    
-    qDebug() << "Started observation" << obsNum << "at" << timestamp;
 }
 
 void StateDebugSession::endObservation(qint64 timestamp)
@@ -72,10 +70,6 @@ void StateDebugSession::endObservation(qint64 timestamp)
         for (auto& stats : m_currentStateStats) {
             stats.currentlyActive = false;
         }
-        
-        qDebug() << "Ended observation" << currentObs.observationNumber 
-                 << "duration:" << (currentObs.duration() / 1000) << "ms"
-                 << "with" << currentObs.events.size() << "debug events";
     }
     
     cleanupOldObservations();
