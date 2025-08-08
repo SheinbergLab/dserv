@@ -4,6 +4,7 @@
 #include "core/EssConfig.h"
 #include "core/EssCommandInterface.h"
 #include "core/EssDataProcessor.h"
+#include "ui/components/script_editor/EssCodeEditor.h"
 
 #include <QMenuBar>
 #include <QMenu>
@@ -214,7 +215,23 @@ void EssMainWindow::onOpen()
 
 void EssMainWindow::onSave()
 {
-    updateStatus("Save functionality not yet implemented", 3000);
+    // Check if a script editor has focus
+    QWidget* focused = QApplication::focusWidget();
+    
+    // Walk up the parent chain to find an EssCodeEditor
+    while (focused) {
+        if (auto* codeEditor = qobject_cast<EssCodeEditor*>(focused)) {
+            // Found a code editor - trigger its save
+            if (codeEditor->isModified() && !codeEditor->isReadOnly()) {
+                emit codeEditor->saveRequested();
+                return;
+            }
+        }
+        focused = focused->parentWidget();
+    }
+    
+    // No code editor focused - show the generic message
+    updateStatus("Save...", 3000);
 }
 
 void EssMainWindow::onSaveAs()
