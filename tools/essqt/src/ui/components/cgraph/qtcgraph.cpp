@@ -7,6 +7,9 @@
 #include <QApplication>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QToolBar>
+#include <QVBoxLayout>
+#include <QAction>
 #include <QDebug>
 #include <QTimer>
 
@@ -30,22 +33,175 @@ QtCGraph::QtCGraph(const QString& name, QWidget* parent)
         m_name = QString("cgraph_%1").arg(++counter);
     }
     
-    // Set up widget properties
-    setMinimumSize(400, 300);
-    setAttribute(Qt::WA_OpaquePaintEvent);
-    setAutoFillBackground(true);
-    setFocusPolicy(Qt::ClickFocus);
+    // Create main layout
+    QVBoxLayout* mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+    
+    // Create toolbar
+    m_toolbar = new QToolBar();
+    m_toolbar->setIconSize(QSize(16, 16));
+    m_toolbar->setMaximumHeight(24);  // Keep it compact
+    m_toolbar->setMovable(false);
+    
+    // Add actions to toolbar
+    QAction* clearAction = m_toolbar->addAction(QIcon::fromTheme("edit-clear", 
+        style()->standardIcon(QStyle::SP_DialogResetButton)), tr("Clear"));
+    clearAction->setToolTip(tr("Clear the graph"));
+    connect(clearAction, &QAction::triggered, this, &QtCGraph::clear);
+    
+    m_toolbar->addSeparator();
+    
+    QAction* exportAction = m_toolbar->addAction(QIcon::fromTheme("document-save-as",
+        style()->standardIcon(QStyle::SP_DialogSaveButton)), tr("Export"));
+    exportAction->setToolTip(tr("Export to PDF"));
+    connect(exportAction, &QAction::triggered, [this]() {
+        exportToPDFDialog();
+    });
+    
+    m_toolbar->addSeparator();
+    
+    // Add "return to tabs" action (only visible when in a floating dock)
+    m_returnToTabsAction = m_toolbar->addAction(QIcon::fromTheme("go-home",
+        style()->standardIcon(QStyle::SP_ArrowBack)), tr("To Tabs"));
+    m_returnToTabsAction->setToolTip(tr("Return to tab container"));
+    m_returnToTabsAction->setVisible(false);  // Hidden by default
+    connect(m_returnToTabsAction, &QAction::triggered, [this]() {
+        emit returnToTabsRequested();
+    });
+    
+    // Add spacer to push any additional actions to the right
+    QWidget* spacer = new QWidget();
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_toolbar->addWidget(spacer);
+    
+    // Create the actual graph widget
+    m_graphWidget = new QWidget();
+    m_graphWidget->setMinimumSize(400, 300);
+    m_graphWidget->setAttribute(Qt::WA_OpaquePaintEvent);
+    m_graphWidget->setAutoFillBackground(true);
+    m_graphWidget->setFocusPolicy(Qt::ClickFocus);
+    
+    // Install event filter on the graph widget to handle paint/mouse events
+    m_graphWidget->installEventFilter(this);
+    
+    // Add to layout
+    mainLayout->addWidget(m_toolbar);
+    mainLayout->addWidget(m_graphWidget, 1);  // Graph widget takes remaining space
     
     // Set background
-    QPalette pal = palette();
+    QPalette pal = m_graphWidget->palette();
     pal.setColor(QPalette::Window, m_backgroundColor);
-    setPalette(pal);
+    m_graphWidget->setPalette(pal);
     
     // Initialize interpreter
     initializeInterpreter();
     
     // Register with manager
     QtCGManager::getInstance().registerGraph(m_name, this);
+}
+
+bool QtCGraph::eventFilter(QObject* obj, QEvent* event)
+{
+    if (obj == m_graphWidget) {
+        if (event->type() == QEvent::Paint) {
+            // Create painter for the graph widget
+            QPainter painter(m_graphWidget);
+            m_currentPainter = &painter;
+            s_currentInstance = this;
+            
+            // Clear background
+            painter.fillRect(m_graphWidget->rect(), m_backgroundColor);
+            
+            // Initialize pen and brush
+            painter.setPen(m_currentColor);
+            painter.setBrush(m_currentColor);
+            
+            // Call Tcl to playback the graphics
+            if (m_interp && m_gbuf) {
+                QString cmd = QString("qtcgraph_playback %1").arg((quintptr)m_gbuf);
+                Tcl_Eval(m_interp, cmd.toUtf8().constData());
+            }
+            
+            m_currentPainter = nullptr;
+            s_currentInstance = nullptr;
+            emit graphUpdated();
+            
+            return true;
+        }
+        else if (event->type() == QEvent::MouseButtonPress) {
+            onMousePressEvent(static_cast<QMouseEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::MouseButtonRelease) {
+            onMouseReleaseEvent(static_cast<QMouseEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::MouseMove) {
+            onMouseMoveEvent(static_cast<QMouseEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::MouseButtonDblClick) {
+            onMouseDoubleClickEvent(static_cast<QMouseEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::Wheel) {
+            onWheelEvent(static_cast<QWheelEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::KeyPress) {
+            onKeyPressEvent(static_cast<QKeyEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::KeyRelease) {
+            onKeyReleaseEvent(static_cast<QKeyEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::FocusIn) {
+            onFocusInEvent(static_cast<QFocusEvent*>(event));
+            return true;
+        }
+        else if (event->type() == QEvent::FocusOut) {
+            onFocusOutEvent(static_cast<QFocusEvent*>(event));
+            return true;
+        }
+    }
+    return false;
+}
+void QtCGraph::paintEvent(QPaintEvent* event)
+{
+    if (!m_initialized) {
+        initializeGraphics();
+        if (!m_initialized) return;
+    }
+    
+    QPainter painter(this);
+    m_currentPainter = &painter;
+    s_currentInstance = this;
+    
+    // Clear background
+    painter.fillRect(rect(), m_backgroundColor);
+    
+    // Initialize pen and brush
+    painter.setPen(m_currentColor);
+    painter.setBrush(m_currentColor);
+    
+    // Call Tcl to playback the graphics
+    if (m_interp && m_gbuf) {
+        QString cmd = QString("qtcgraph_playback %1").arg((quintptr)m_gbuf);
+        Tcl_Eval(m_interp, cmd.toUtf8().constData());
+    }
+    
+    m_currentPainter = nullptr;
+    s_currentInstance = nullptr;
+    emit graphUpdated();
+}
+
+void QtCGraph::setFloatingMode(bool floating)
+{
+    if (m_returnToTabsAction) {
+        m_returnToTabsAction->setVisible(floating);
+    }
 }
 
 void QtCGraph::cleanupGraphicsBuffer()
@@ -127,19 +283,19 @@ void QtCGraph::initializeGraphics()
     if (m_initialized || !m_interp) return;
     
     // Make sure widget has a size
-    if (width() <= 0 || height() <= 0) {
+    if (m_graphWidget->width() <= 0 || m_graphWidget->height() <= 0) {
         // Widget not ready yet, will retry on next paint
         return;
     }
-    
+ 
     // Clean any old buffers
     cleanupGraphicsBuffer();
      
     // Call Tcl to initialize the graphics buffer
     QString cmd = QString("qtcgraph_init_widget %1 %2 %3")
                     .arg((quintptr)this)
-                    .arg(width())
-                    .arg(height());
+                    .arg(m_graphWidget->width())
+                    .arg(m_graphWidget->height());
     
     if (Tcl_Eval(m_interp, cmd.toUtf8().constData()) != TCL_OK) {
         emit error(QString("Failed to initialize graphics: %1")
@@ -148,14 +304,21 @@ void QtCGraph::initializeGraphics()
     }
     
     m_initialized = true;
-    
+  
+    // Force a resize to ensure cgraph has the correct dimensions
+    QString resizeCmd = QString("qtcgraph_resize %1 %2 %3")
+                        .arg((quintptr)this)
+                        .arg(m_graphWidget->width())
+                        .arg(m_graphWidget->height());
+    Tcl_Eval(m_interp, resizeCmd.toUtf8().constData());
+        
     // Schedule a clearwin after the widget is fully shown
     QTimer::singleShot(100, this, [this]() {
         if (m_interp && m_initialized) {
             Tcl_Eval(m_interp, "clearwin; flushwin");
         }
     });
-    
+
     // Execute init script if set
     if (!m_initScript.isEmpty()) {
         executeInitScript();
@@ -185,7 +348,11 @@ QString QtCGraph::result() const
 
 void QtCGraph::refresh()
 {
-    update();
+    if (m_graphWidget) {
+        m_graphWidget->update();
+    } else {
+        update();  // fallback to main widget
+    }
 }
 
 void QtCGraph::clear()
@@ -228,35 +395,6 @@ void QtCGraph::setBackgroundColor(const QColor& color)
     update();
 }
 
-void QtCGraph::paintEvent(QPaintEvent* event)
-{
-    if (!m_initialized) {
-        initializeGraphics();
-        if (!m_initialized) return;
-    }
-    
-    QPainter painter(this);
-    m_currentPainter = &painter;
-    s_currentInstance = this;
-    
-    // Clear background
-    painter.fillRect(rect(), m_backgroundColor);
-    
-    // Initialize pen and brush
-    painter.setPen(m_currentColor);
-    painter.setBrush(m_currentColor);
-    
-    // Call Tcl to playback the graphics
-    if (m_interp && m_gbuf) {
-        QString cmd = QString("qtcgraph_playback %1").arg((quintptr)m_gbuf);
-        Tcl_Eval(m_interp, cmd.toUtf8().constData());
-    }
-    
-    m_currentPainter = nullptr;
-    s_currentInstance = nullptr;
-    emit graphUpdated();
-}
-
 void QtCGraph::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
@@ -264,8 +402,8 @@ void QtCGraph::resizeEvent(QResizeEvent* event)
     if (m_initialized && m_interp) {
         QString cmd = QString("qtcgraph_resize %1 %2 %3")
                         .arg((quintptr)this)
-                        .arg(width())
-                        .arg(height());
+                        .arg(m_graphWidget->width())
+                        .arg(m_graphWidget->height());
         Tcl_Eval(m_interp, cmd.toUtf8().constData());
         update();
     }
@@ -317,8 +455,8 @@ QString QtCGraph::substituteEventData(const QString& script, QEvent* event,
     }
     
     // Widget info
-    result.replace("%w", QString::number(width()));
-    result.replace("%h", QString::number(height()));
+    result.replace("%w", QString::number(m_graphWidget->width()));
+    result.replace("%h", QString::number(m_graphWidget->height()));
     result.replace("%W", m_name);
     
     // Event type
@@ -396,8 +534,7 @@ QString QtCGraph::keyToString(QKeyEvent* event) const
     return modifiers + key;
 }
 
-// Mouse and keyboard event handlers remain the same...
-void QtCGraph::mousePressEvent(QMouseEvent *event)
+void QtCGraph::onMousePressEvent(QMouseEvent *event)
 {
     if (!m_mouseDownScript.isEmpty() && m_interp) {
         int button = event->button() == Qt::LeftButton ? 1 : 
@@ -411,7 +548,7 @@ void QtCGraph::mousePressEvent(QMouseEvent *event)
     emit mousePressed(event->position());
 }
 
-void QtCGraph::mouseReleaseEvent(QMouseEvent *event)
+void QtCGraph::onMouseReleaseEvent(QMouseEvent *event)
 {
     if (!m_mouseUpScript.isEmpty() && m_interp) {
         int button = event->button() == Qt::LeftButton ? 1 : 
@@ -425,7 +562,7 @@ void QtCGraph::mouseReleaseEvent(QMouseEvent *event)
     emit mouseReleased(event->position());
 }
 
-void QtCGraph::mouseMoveEvent(QMouseEvent *event)
+void QtCGraph::onMouseMoveEvent(QMouseEvent *event)
 {
     if (!m_mouseMoveScript.isEmpty() && m_interp) {
         QString cmd = substituteEventData(m_mouseMoveScript, event, 
@@ -435,7 +572,7 @@ void QtCGraph::mouseMoveEvent(QMouseEvent *event)
     emit mouseMoved(event->position());
 }
 
-void QtCGraph::mouseDoubleClickEvent(QMouseEvent *event)
+void QtCGraph::onMouseDoubleClickEvent(QMouseEvent *event)
 {
     if (!m_mouseDoubleClickScript.isEmpty() && m_interp) {
         int button = event->button() == Qt::LeftButton ? 1 : 
@@ -449,7 +586,7 @@ void QtCGraph::mouseDoubleClickEvent(QMouseEvent *event)
     emit mouseDoubleClicked(event->position());
 }
 
-void QtCGraph::wheelEvent(QWheelEvent *event)
+void QtCGraph::onWheelEvent(QWheelEvent *event)
 {
     if (!m_mouseWheelScript.isEmpty() && m_interp) {
         int delta = event->angleDelta().y();
@@ -459,7 +596,7 @@ void QtCGraph::wheelEvent(QWheelEvent *event)
     }
 }
 
-void QtCGraph::keyPressEvent(QKeyEvent *event)
+void QtCGraph::onKeyPressEvent(QKeyEvent *event)
 {
     if (!m_keyPressScript.isEmpty() && m_interp) {
         QString cmd = substituteEventData(m_keyPressScript, event);
@@ -467,7 +604,7 @@ void QtCGraph::keyPressEvent(QKeyEvent *event)
     }
 }
 
-void QtCGraph::keyReleaseEvent(QKeyEvent *event)
+void QtCGraph::onKeyReleaseEvent(QKeyEvent *event)
 {
     if (!m_keyReleaseScript.isEmpty() && m_interp) {
         QString cmd = substituteEventData(m_keyReleaseScript, event);
@@ -475,7 +612,7 @@ void QtCGraph::keyReleaseEvent(QKeyEvent *event)
     }
 }
 
-void QtCGraph::focusInEvent(QFocusEvent *event)
+void QtCGraph::onFocusInEvent(QFocusEvent *event)
 {
     if (!m_focusInScript.isEmpty() && m_interp) {
         QString cmd = substituteEventData(m_focusInScript, event);
@@ -484,7 +621,7 @@ void QtCGraph::focusInEvent(QFocusEvent *event)
     QWidget::focusInEvent(event);
 }
 
-void QtCGraph::focusOutEvent(QFocusEvent *event)
+void QtCGraph::onFocusOutEvent(QFocusEvent *event)
 {
     if (!m_focusOutScript.isEmpty() && m_interp) {
         QString cmd = substituteEventData(m_focusOutScript, event);
@@ -551,7 +688,7 @@ int QtCGraph::Clearwin()
     if (!s_currentInstance || !s_currentInstance->m_currentPainter) return 0;
     
     s_currentInstance->m_currentPainter->fillRect(
-        s_currentInstance->rect(), 
+        s_currentInstance->m_graphWidget->rect(),
         s_currentInstance->m_backgroundColor);
     return 0;
 }
@@ -560,7 +697,7 @@ int QtCGraph::Line(float x0, float y0, float x1, float y1)
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter) return 0;
     
-    float h = s_currentInstance->height();
+    float h = s_currentInstance->m_graphWidget->height(); 
     s_currentInstance->m_currentPainter->setPen(s_currentInstance->m_currentColor);
     s_currentInstance->m_currentPainter->drawLine(QPointF(x0, h - y0), QPointF(x1, h - y1));
     return 0;
@@ -570,7 +707,7 @@ int QtCGraph::Point(float x, float y)
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter) return 0;
     
-    float h = s_currentInstance->height();
+    float h = s_currentInstance->m_graphWidget->height();
     s_currentInstance->m_currentPainter->drawPoint(QPointF(x, h - y));
     return 0;
 }
@@ -612,7 +749,7 @@ int QtCGraph::Char(float x, float y, char *string)
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter || !string) return 0;
     
-    float h = s_currentInstance->height();
+    float h = s_currentInstance->m_graphWidget->height();
     y = h - y;
     
     // Get orientation from frame
@@ -632,7 +769,8 @@ int QtCGraph::Text(float x, float y, char *string)
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter || !string) return 0;
     
-    float h = s_currentInstance->height();
+    float h = s_currentInstance->m_graphWidget->height();
+
     y = h - y;
     
     QString text = QString::fromUtf8(string);
@@ -729,7 +867,7 @@ int QtCGraph::FilledPolygon(float *verts, int nverts)
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter || !verts) return 0;
     
-    float h = s_currentInstance->height();
+    float h = s_currentInstance->m_graphWidget->height();  // Change this
     
     QPolygonF polygon;
     for (int i = 0; i < nverts; i++) {
@@ -745,7 +883,8 @@ int QtCGraph::Circle(float x, float y, float width, int filled)
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter) return 0;
     
-    float h = s_currentInstance->height();
+    float h = s_currentInstance->m_graphWidget->height();  // Change this
+
     y = h - y;
     
     if (filled) {

@@ -15,6 +15,7 @@
 #include "state_system/EssStateSystemWidget.h"
 #include "cgraph/qtcgraph.hpp"
 #include "cgraph/qtcgmanager.hpp"
+#include "cgraph/DraggableTabWidget.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -22,6 +23,7 @@
 #include <QAction>
 #include <QLineEdit>
 #include <QInputDialog>
+#include <QMessageBox>
 
 EssWorkspaceManager::EssWorkspaceManager(QMainWindow *mainWindow, QObject *parent)
     : QObject(parent)
@@ -36,6 +38,8 @@ EssWorkspaceManager::EssWorkspaceManager(QMainWindow *mainWindow, QObject *paren
     , m_stimDgViewer(nullptr)
     , m_eyeTouchVisualizer(nullptr)
     , m_stateSystemWidget(nullptr) 
+	, m_cgraphTabWidget(nullptr)
+	, m_cgraphDock(nullptr)    
 {
 }
 
@@ -69,19 +73,140 @@ void EssWorkspaceManager::setupWorkspace()
 
 void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString& title)
 {
-    // Just create the widget - it registers itself
+    // Create the graph widget
     QtCGraph* graph = new QtCGraph(name);
+    m_cgraphs[name] = graph;
     
-    // Create dock for it
-    QDockWidget* dock = new QDockWidget(title, m_mainWindow);
-    dock->setObjectName(QString("%1Dock").arg(name));
-    dock->setWidget(graph);
+    // Add to tab widget
+    int index = m_cgraphTabWidget->addTab(graph, title.isEmpty() ? name : title);
+    m_cgraphTabWidget->setCurrentIndex(index);
     
-    // Add to docks
-    m_docks[name] = dock;
+    // Graph dock should already be visible, but make sure
+    m_cgraphDock->show();
+    m_cgraphDock->raise();
     
-    // Add to main window
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+    // Connect graph signals
+    connect(graph, &QObject::destroyed, [this, name]() {
+        m_cgraphs.remove(name);
+    });
+    
+    // Connect the return to tabs signal
+    connect(graph, &QtCGraph::returnToTabsRequested, [this, name]() {
+        // Find the dock containing this graph
+        if (m_docks.contains(name)) {
+            returnCGraphToTabs(m_docks[name], name);
+        }
+    });
+    
+    updateCGraphMenu();
+}
+
+void EssWorkspaceManager::onCGraphTabCloseRequested(int index)
+{
+    QWidget* widget = m_cgraphTabWidget->widget(index);
+    if (QtCGraph* graph = qobject_cast<QtCGraph*>(widget)) {
+        QString name = graph->name();
+        
+        // Ask for confirmation if graph has content
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            m_mainWindow, 
+            tr("Close CGraph"),
+            tr("Close graph '%1'?").arg(name),
+            QMessageBox::Yes | QMessageBox::No
+        );
+        
+        if (reply == QMessageBox::Yes) {
+            m_cgraphTabWidget->removeTab(index);
+            m_cgraphs.remove(name);
+            graph->deleteLater();
+            
+            updateCGraphMenu();
+        }
+    }
+}
+
+// Add method to detach a tab into a floating window:
+void EssWorkspaceManager::detachCGraphTab(int index)
+{
+    QWidget* widget = m_cgraphTabWidget->widget(index);
+    if (QtCGraph* graph = qobject_cast<QtCGraph*>(widget)) {
+        QString name = graph->name();
+        QString title = m_cgraphTabWidget->tabText(index);
+        
+        // Remove from tab widget
+        m_cgraphTabWidget->removeTab(index);
+        
+        // Create a new dock for this graph
+        QDockWidget* dock = new QDockWidget(title, m_mainWindow);
+        dock->setObjectName(QString("%1Dock").arg(name));
+        dock->setWidget(graph);
+        dock->setFloating(true);
+        
+        // Set a good size for floating window
+        dock->resize(600, 400);
+        
+        // Add custom context menu for re-docking
+        dock->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(dock, &QDockWidget::customContextMenuRequested,
+                [this, dock, name](const QPoint& pos) {
+                    QMenu menu;
+                    QAction* retabAction = menu.addAction(tr("Return to Tabs"));
+                    connect(retabAction, &QAction::triggered, [this, dock, name]() {
+                        returnCGraphToTabs(dock, name);
+                    });
+                    menu.exec(dock->mapToGlobal(pos));
+                });
+        
+        // Install event filter for double-click handling
+        dock->installEventFilter(this);
+        
+        // Track in our docks
+        m_docks[name] = dock;
+        
+        // Add to main window and show
+        m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+        dock->show();
+        
+        updateCGraphMenu();
+    }
+}
+void EssWorkspaceManager::returnCGraphToTabs(QDockWidget* dock, const QString& name)
+{
+    if (!dock) return;
+    
+    QtCGraph* graph = qobject_cast<QtCGraph*>(dock->widget());
+    if (!graph) return;
+    
+    graph->setFloatingMode(false);
+        
+    // Remove from dock
+    dock->setWidget(nullptr);
+    
+    // Add back to tabs
+    QString title = dock->windowTitle();
+    int index = m_cgraphTabWidget->addTab(graph, title);
+    m_cgraphTabWidget->setCurrentIndex(index);
+    
+    // Clean up dock
+    m_mainWindow->removeDockWidget(dock);
+    m_docks.remove(name);
+    dock->deleteLater();
+    
+    // Make sure tab container is visible and raised
+    m_cgraphDock->show();
+    m_cgraphDock->raise();
+    
+    // If the CGraph dock itself is floating, dock it first
+    if (m_cgraphDock->isFloating()) {
+        m_cgraphDock->setFloating(false);
+    }
+    
+    // Switch to the CGraph tab in the tabbed dock area
+    // Find which tab contains the CGraph dock and activate it
+    QList<QDockWidget*> tabifiedDocks = m_mainWindow->tabifiedDockWidgets(m_cgraphDock);
+    if (!tabifiedDocks.isEmpty()) {
+        m_cgraphDock->raise();  // This should make it the active tab
+    }
     
     updateCGraphMenu();
 }
@@ -216,6 +341,50 @@ void EssWorkspaceManager::createDocks()
     
     m_docks["stateSystem"] = stateSystemDock;
 
+    // Create CGraph tabbed dock
+    m_cgraphDock = new QDockWidget(tr("CGraph Windows"), m_mainWindow);
+    m_cgraphDock->setObjectName("CGraphDock");
+    
+    // Create a container widget to ensure proper spacing and consistent dock title height
+    QWidget* container = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);  // No margins on container
+    layout->setSpacing(0);
+    
+    // Create draggable tab widget for CGraphs
+    m_cgraphTabWidget = new DraggableTabWidget();
+    
+    // Add tab widget to container layout
+    layout->addWidget(m_cgraphTabWidget);
+    
+    // Set the container as the dock widget (not the tab widget directly)
+    m_cgraphDock->setWidget(container);
+    
+    // Connect signals for drag-out functionality
+    connect(m_cgraphTabWidget, &DraggableTabWidget::tabDetached,
+            this, &EssWorkspaceManager::onCGraphTabDetached);
+    
+    // Connect tab close signal
+    connect(m_cgraphTabWidget, &QTabWidget::tabCloseRequested,
+            this, &EssWorkspaceManager::onCGraphTabCloseRequested);
+    
+    m_docks["CGraphContainer"] = m_cgraphDock;
+    
+    // Enable floating behavior for the entire dock
+    m_cgraphDock->setFeatures(QDockWidget::DockWidgetMovable | 
+                              QDockWidget::DockWidgetFloatable | 
+                              QDockWidget::DockWidgetClosable);
+    
+    // Handle when the entire dock is floated
+    connect(m_cgraphDock, &QDockWidget::topLevelChanged, [this](bool floating) {
+        if (floating) {
+            // When the entire tab container is floated, give it a good size
+            if (m_cgraphDock->width() < 600) {
+                m_cgraphDock->resize(800, 600);
+            }
+        }
+    });
+
     // Create Script Editor dock
     QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"),
 					      m_mainWindow);
@@ -299,12 +468,13 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["stateSystem"]); 
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
+ 	m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["CGraphContainer"]);
 
- 
     // Tab them together
     m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
     m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
     m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
+	m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["CGraphContainer"]);
    
     // Set constraints for docked state only
     
@@ -409,6 +579,9 @@ void EssWorkspaceManager::connectSignals()
     auto& cgManager = QtCGManager::getInstance();
     connect(&cgManager, &QtCGManager::graphUnregistered,
             this, &EssWorkspaceManager::onCGraphRemoved);
+
+    connect(m_cgraphMenu, &QMenu::aboutToShow,
+            this, &EssWorkspaceManager::updateCGraphMenu);
 }
 
 void EssWorkspaceManager::resetToDefaultLayout()
@@ -416,25 +589,113 @@ void EssWorkspaceManager::resetToDefaultLayout()
     applyDefaultLayout();
 }
 
+void EssWorkspaceManager::onCGraphTabDetached(QWidget* widget, const QString& title, const QPoint& globalPos)
+{
+    QtCGraph* graph = qobject_cast<QtCGraph*>(widget);
+    if (!graph) return;
+    
+    QString name = graph->name();
+    
+    graph->setFloatingMode(true);
+    
+    // Create a new floating dock for this graph
+    QDockWidget* dock = new QDockWidget(title, m_mainWindow);
+    dock->setObjectName(QString("%1Dock").arg(name));
+    dock->setWidget(graph);
+    dock->setFloating(true);
+    
+    // Position at mouse location
+    dock->move(globalPos - QPoint(100, 30)); // Offset so title bar is near mouse
+    
+    // Set a good size for floating window
+    dock->resize(600, 400);
+    
+    // Enable all dock features
+    dock->setFeatures(QDockWidget::DockWidgetMovable | 
+                      QDockWidget::DockWidgetFloatable | 
+                      QDockWidget::DockWidgetClosable);
+    
+    // Add custom context menu for re-docking
+    dock->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(dock, &QDockWidget::customContextMenuRequested,
+            [this, dock, name](const QPoint& pos) {
+                QMenu menu;
+                QAction* retabAction = menu.addAction(tr("Return to Tabs"));
+                connect(retabAction, &QAction::triggered, [this, dock, name]() {
+                    returnCGraphToTabs(dock, name);
+                });
+                menu.exec(dock->mapToGlobal(pos));
+            });
+    
+    // Also support double-click on title bar to return to tabs
+    dock->installEventFilter(this);
+    
+    // Track in our docks
+    m_docks[name] = dock;
+    
+    // Add to main window and show
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+    dock->show();
+    dock->raise();
+    dock->activateWindow();
+    
+    updateCGraphMenu();
+}
+
+bool EssWorkspaceManager::eventFilter(QObject* obj, QEvent* event)
+{
+    // Handle double-click on floating CGraph dock title bars
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        if (QDockWidget* dock = qobject_cast<QDockWidget*>(obj)) {
+            // Check if this is a CGraph dock
+            QString dockName = dock->objectName();
+            if (dockName.endsWith("Dock")) {
+                QString possibleName = dockName.left(dockName.length() - 4);
+                if (m_cgraphs.contains(possibleName)) {
+                    QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
+                    
+                    // Check if click is on title bar area (not on the content)
+                    if (mouseEvent->position().y() < 30) {  // Approximate title bar height
+                        // If it's floating, return to tabs
+                        // If it's docked, also return to tabs (your desired behavior)
+                        returnCGraphToTabs(dock, possibleName);
+                        return true;  // Consume the event to prevent default dock behavior
+                    }
+                }
+            }
+        }
+    }
+    return QObject::eventFilter(obj, event);
+}
+
 void EssWorkspaceManager::onCGraphRemoved(const QString& name)
 {
-    // Remove from our docks map
-    if (m_docks.contains(name)) {
-        QDockWidget* dock = m_docks.take(name);  // Removes and returns
-        if (dock && !dock->isHidden()) {
-            dock->deleteLater();  // Safe deletion
+    // Remove from tabs if present
+    for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
+        if (QtCGraph* graph = qobject_cast<QtCGraph*>(m_cgraphTabWidget->widget(i))) {
+            if (graph->name() == name) {
+                m_cgraphTabWidget->removeTab(i);
+                break;
+            }
         }
     }
     
-    // Menu will update automatically next time it's shown
-    // due to aboutToShow connection
+    // Remove from docks if floating
+    if (m_docks.contains(name)) {
+        QDockWidget* dock = m_docks.take(name);
+        if (dock && !dock->isHidden()) {
+            dock->deleteLater();
+        }
+    }
+    
+    // Remove from our tracking
+    m_cgraphs.remove(name);
 }
 
 void EssWorkspaceManager::updateCGraphMenu()
 {
     m_cgraphMenu->clear();
     
-    // Get all graphs from manager
     auto& cgManager = QtCGManager::getInstance();
     QStringList graphNames = cgManager.getAllGraphNames();
     
@@ -444,51 +705,128 @@ void EssWorkspaceManager::updateCGraphMenu()
         return;
     }
     
-    // Add toggle action for each graph
-    for (const QString& name : graphNames) {
-        QDockWidget* dock = m_docks.value(name);
-        if (dock) {
-            QAction* toggleAction = dock->toggleViewAction();
-            toggleAction->setText(name);  // Use graph name instead of dock title
-            m_cgraphMenu->addAction(toggleAction);
+    // Section for tabbed graphs
+    bool hasTabbed = false;
+    for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
+        if (QtCGraph* graph = qobject_cast<QtCGraph*>(m_cgraphTabWidget->widget(i))) {
+            QString name = graph->name();
+            QAction* action = m_cgraphMenu->addAction(name);
+            action->setCheckable(true);
+            action->setChecked(m_cgraphTabWidget->currentWidget() == graph);
+            
+            // Connect to show and select the tab when clicked
+            connect(action, &QAction::triggered, [this, i]() {
+                m_cgraphTabWidget->setCurrentIndex(i);
+                m_cgraphDock->show();
+                m_cgraphDock->raise();
+            });
+            hasTabbed = true;
         }
     }
     
-    // Add separator and management actions
+    // Section for floating graphs
+    bool hasFloating = false;
+    for (const QString& name : graphNames) {
+        if (m_docks.contains(name)) {
+            if (!hasFloating && hasTabbed) {
+                m_cgraphMenu->addSeparator();
+            }
+            QDockWidget* dock = m_docks[name];
+            QAction* toggleAction = dock->toggleViewAction();
+            toggleAction->setText(name + tr(" (floating)"));
+            m_cgraphMenu->addAction(toggleAction);
+            hasFloating = true;
+        }
+    }
+    
+    // Management actions
     m_cgraphMenu->addSeparator();
     
     QAction* newGraphAction = m_cgraphMenu->addAction(tr("New Graph..."));
     connect(newGraphAction, &QAction::triggered, [this]() {
-        // Simple dialog to get name
         bool ok;
         QString name = QInputDialog::getText(m_mainWindow, 
             tr("New CGraph"), tr("Graph name:"), 
-            QLineEdit::Normal, "graph", &ok);
+            QLineEdit::Normal, QString("graph_%1").arg(m_cgraphs.size() + 1), &ok);
         
         if (ok && !name.isEmpty()) {
             createCGraphWidget(name, name);
         }
     });
     
-    QAction* closeAllAction = m_cgraphMenu->addAction(tr("Close All Graphs"));
-    connect(closeAllAction, &QAction::triggered, [this]() {
-        auto& cgManager = QtCGManager::getInstance();
-        QStringList names = cgManager.getAllGraphNames();
-        for (const QString& name : names) {
-            if (m_docks.contains(name)) {
-                m_docks[name]->close();
-                m_docks.remove(name);
-            }
+    if (hasTabbed || hasFloating) {
+        m_cgraphMenu->addSeparator();
+        
+        if (hasTabbed) {
+            QAction* detachAllAction = m_cgraphMenu->addAction(tr("Detach All Tabs"));
+            connect(detachAllAction, &QAction::triggered, [this]() {
+                while (m_cgraphTabWidget->count() > 0) {
+                    detachCGraphTab(0);
+                }
+            });
         }
-    });
+        
+        if (hasFloating) {
+            QAction* dockAllAction = m_cgraphMenu->addAction(tr("Return All to Tabs"));
+            connect(dockAllAction, &QAction::triggered, [this]() {
+                QList<QString> floatingNames;
+                for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+                    if (m_cgraphs.contains(it.key())) {
+                        floatingNames.append(it.key());
+                    }
+                }
+                for (const QString& name : floatingNames) {
+                    returnCGraphToTabs(m_docks[name], name);
+                }
+            });
+        }
+        
+        QAction* closeAllAction = m_cgraphMenu->addAction(tr("Close All Graphs"));
+        connect(closeAllAction, &QAction::triggered, [this]() {
+            if (QMessageBox::question(m_mainWindow, tr("Close All Graphs"), 
+                    tr("Close all CGraph windows?"), 
+                    QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+                // Close all tabbed graphs
+                while (m_cgraphTabWidget->count() > 0) {
+                    QtCGraph* graph = qobject_cast<QtCGraph*>(m_cgraphTabWidget->widget(0));
+                    m_cgraphTabWidget->removeTab(0);
+                    if (graph) {
+                        m_cgraphs.remove(graph->name());
+                        graph->deleteLater();
+                    }
+                }
+                
+                // Close all floating graphs
+                QList<QString> floatingNames;
+                for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+                    if (m_cgraphs.contains(it.key())) {
+                        floatingNames.append(it.key());
+                    }
+                }
+                for (const QString& name : floatingNames) {
+                    QDockWidget* dock = m_docks.take(name);
+                    m_mainWindow->removeDockWidget(dock);
+                    dock->deleteLater();
+                    m_cgraphs.remove(name);
+                }
+                
+                updateCGraphMenu();
+            }
+        });
+    }
 }
 
 QList<QAction*> EssWorkspaceManager::viewMenuActions() const
 {
     QList<QAction*> actions;
     
-    // Create toggle actions for each dock
+    // Create toggle actions for each dock (skip CGraph individual docks)
     for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+        // Skip individual CGraph docks - they'll be in the submenu
+        if (m_cgraphs.contains(it.key())) {
+            continue;
+        }
+        
         QDockWidget *dock = it.value();
         QAction *action = dock->toggleViewAction();
         actions.append(action);
@@ -500,10 +838,6 @@ QList<QAction*> EssWorkspaceManager::viewMenuActions() const
     
     // Add the CGraph submenu
     actions.append(m_cgraphMenu->menuAction());
-    
-    // Update the menu whenever it's about to show
-    connect(m_cgraphMenu, &QMenu::aboutToShow, 
-            this, &EssWorkspaceManager::updateCGraphMenu);
             
     // Add separator and reset action
     QAction *separator = new QAction(m_mainWindow);

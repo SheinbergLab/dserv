@@ -123,8 +123,9 @@ static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
         gbSetGeventBuffer(gbuf);
         
         // Make sure resolution matches widget size
-        int width = widget->width();
-        int height = widget->height();
+		int width = widget->graphWidget()->width();  // You'll need to add a getter
+		int height = widget->graphWidget()->height();
+
         FRAME* f = getframe();
         if (f && (f->xsres != width || f->ysres != height)) {
             setresol(width, height);

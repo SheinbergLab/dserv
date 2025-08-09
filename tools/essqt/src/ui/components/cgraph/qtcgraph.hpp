@@ -4,7 +4,14 @@
 #include <QWidget>
 #include <QString>
 #include <QColor>
+#include <QStyle>
+
 #include <tcl.h>
+
+QT_BEGIN_NAMESPACE
+class QToolBar;
+class QAction;
+QT_END_NAMESPACE
 
 extern "C" {
 #include <cgraph.h>
@@ -62,6 +69,14 @@ public:
     FRAME* getFrame() { return m_frame; }
     void setFrame(FRAME* frame) { m_frame = frame; }
 
+	// Getter for bridge
+    QWidget* graphWidget() const { return m_graphWidget; }
+    
+    // Floating or docked    
+    void setFloatingMode(bool floating);
+    bool isFloating() const { return m_isFloating; }
+
+
 signals:
     void initialized();
     void graphUpdated();
@@ -71,20 +86,13 @@ signals:
     void mouseReleased(const QPointF& pos);
     void mouseMoved(const QPointF& pos);
     void mouseDoubleClicked(const QPointF& pos);
-
+    void returnToTabsRequested();
+    
 protected:
     // Qt event handling
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseReleaseEvent(QMouseEvent* event) override;
-    void mouseDoubleClickEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void wheelEvent(QWheelEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
-    void keyReleaseEvent(QKeyEvent* event) override;
-    void focusInEvent(QFocusEvent* event) override;
-    void focusOutEvent(QFocusEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
     
 private slots:
     void initializeGraphics();
@@ -97,6 +105,12 @@ private:
     bool m_initialized;
     QString m_initScript;
     QColor m_backgroundColor;
+    
+    QToolBar* m_toolbar;
+    QWidget* m_graphWidget;
+    QAction* m_returnToTabsAction;
+    
+    bool m_isFloating = false;
     
     // Event binding scripts
     QString m_mouseDownScript;
@@ -121,6 +135,16 @@ private:
                                const QPointF& pos = QPointF(),
                                int button = -1, int delta = 0) const;
     QString keyToString(QKeyEvent* event) const;
+    
+    void onMousePressEvent(QMouseEvent* event);
+    void onMouseReleaseEvent(QMouseEvent* event);
+    void onMouseDoubleClickEvent(QMouseEvent* event);
+    void onMouseMoveEvent(QMouseEvent* event);
+    void onWheelEvent(QWheelEvent* event);
+    void onKeyPressEvent(QKeyEvent* event);
+    void onKeyReleaseEvent(QKeyEvent* event);
+    void onFocusInEvent(QFocusEvent* event);
+    void onFocusOutEvent(QFocusEvent* event);
     
     // Static callbacks for cgraph
     static int Clearwin();

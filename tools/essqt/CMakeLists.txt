@@ -148,6 +148,8 @@ set(UI_SOURCES
     src/ui/components/state_system/EssStateDebugData.cpp
     src/ui/components/cgraph/qtcgmanager.cpp
     src/ui/components/cgraph/qtcgraph.cpp    
+    src/ui/components/cgraph/DraggableTabWidget.cpp
+	src/ui/components/cgraph/DraggableTabBar.cpp
 )
 
 

@@ -22,6 +22,8 @@ class EssScriptEditorWidget;
 class EssStimDgWidget;
 class EssEyeTouchVisualizerWidget;
 class EssStateSystemWidget;
+class DraggableTabWidget;
+class QtCGraph;
 
 class EssWorkspaceManager : public QObject
 {
@@ -61,11 +63,21 @@ private:
     QWidget* getWidget(const QString &id) const;
     QWidget* createControlPanel();
     
-    QMenu* m_cgraphMenu;
+	// CGraph support
+	QDockWidget* m_cgraphDock;
+	QMap<QString, QtCGraph*> m_cgraphs;
+	QMenu* m_cgraphMenu;
     void updateCGraphMenu();
 
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
+    
 private slots:
 	void onCGraphRemoved(const QString& name);
+    void onCGraphTabDetached(QWidget* widget, const QString& title, const QPoint& globalPos);
+    void onCGraphTabCloseRequested(int index);
+    void detachCGraphTab(int index);
+    void returnCGraphToTabs(QDockWidget* dock, const QString& name);
 
 private:
     QMainWindow *m_mainWindow;
@@ -84,4 +96,5 @@ private:
     EssStimDgWidget *m_stimDgViewer;
     EssEyeTouchVisualizerWidget *m_eyeTouchVisualizer;
     EssStateSystemWidget *m_stateSystemWidget;
+    DraggableTabWidget* m_cgraphTabWidget; 
 };
