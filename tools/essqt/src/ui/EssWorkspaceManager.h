@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QMap>
 #include <QList>
+#include <QMenu>
 
 QT_BEGIN_NAMESPACE
 class QMainWindow;
@@ -21,8 +22,6 @@ class EssScriptEditorWidget;
 class EssStimDgWidget;
 class EssEyeTouchVisualizerWidget;
 class EssStateSystemWidget;
-class EssCGraphWidget;
-class EssStandaloneCGraph;
 
 class EssWorkspaceManager : public QObject
 {
@@ -40,7 +39,7 @@ public:
     void saveLayout();
     bool restoreLayout();
     
-    void initializeStandaloneWidgets();
+	void createCGraphWidget(const QString& name, const QString& title);
     
     // Dock visibility
     void setDockVisible(const QString &dockName, bool visible);
@@ -51,7 +50,7 @@ public:
      
 signals:
     void statusMessage(const QString &message, int timeout = 0);
-
+    
 private:
     // Setup methods
     void createDocks();
@@ -62,6 +61,12 @@ private:
     QWidget* getWidget(const QString &id) const;
     QWidget* createControlPanel();
     
+    QMenu* m_cgraphMenu;
+    void updateCGraphMenu();
+
+private slots:
+	void onCGraphRemoved(const QString& name);
+
 private:
     QMainWindow *m_mainWindow;
     
@@ -79,6 +84,4 @@ private:
     EssStimDgWidget *m_stimDgViewer;
     EssEyeTouchVisualizerWidget *m_eyeTouchVisualizer;
     EssStateSystemWidget *m_stateSystemWidget;
-    EssCGraphWidget *m_cgraphWidget;
-    EssStandaloneCGraph *m_testStandaloneWidget;
 };

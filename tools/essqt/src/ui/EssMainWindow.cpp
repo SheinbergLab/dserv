@@ -154,26 +154,12 @@ void EssMainWindow::connectCommandInterface()
     connect(cmdInterface, &EssCommandInterface::connectionError,
             this, &EssMainWindow::onConnectionError);
     
-    // Connect to packagesLoaded signal
-    //  Allow widgets that need dlsh to be loaded to initialize
-    connect(cmdInterface, &EssCommandInterface::packagesLoaded,
-            this, [this]() {
-                updateStatus("Tcl packages loaded - initializing standalone widgets", 3000);
-                
-                // Initialize any standalone CGraph widgets
-                if (m_workspace) {
-                    m_workspace->initializeStandaloneWidgets();
-                }
-            });
-    
     // Connect to data processor for system status updates
     EssDataProcessor *dataProc = EssApplication::instance()->dataProcessor();
     connect(dataProc, &EssDataProcessor::systemStatusUpdated,
             this, [this](const QString &status) {
                 updateStatus(QString("System: %1").arg(status), 5000);
-            });
-            
-    cmdInterface->checkPackagesAndEmit();
+            });            
 }
 
 void EssMainWindow::readSettings()

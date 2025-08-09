@@ -13,13 +13,15 @@
 #include "dg_viewer/EssStimDgWidget.h"
 #include "visualization/EssEyeTouchVisualizerWidget.h"
 #include "state_system/EssStateSystemWidget.h"
-#include "cgraph/EssCGraphWidget.h"
-#include "cgraph/EssStandaloneCGraph.h"
+#include "cgraph/qtcgraph.hpp"
+#include "cgraph/qtcgmanager.hpp"
 
 #include <QMainWindow>
 #include <QDockWidget>
 #include <QVBoxLayout>
 #include <QAction>
+#include <QLineEdit>
+#include <QInputDialog>
 
 EssWorkspaceManager::EssWorkspaceManager(QMainWindow *mainWindow, QObject *parent)
     : QObject(parent)
@@ -63,6 +65,25 @@ void EssWorkspaceManager::setupWorkspace()
     if (m_console) {
         m_console->logSystem("EssQt Workspace Initialized", "Workspace");
     }
+}
+
+void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString& title)
+{
+    // Just create the widget - it registers itself
+    QtCGraph* graph = new QtCGraph(name);
+    
+    // Create dock for it
+    QDockWidget* dock = new QDockWidget(title, m_mainWindow);
+    dock->setObjectName(QString("%1Dock").arg(name));
+    dock->setWidget(graph);
+    
+    // Add to docks
+    m_docks[name] = dock;
+    
+    // Add to main window
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+    
+    updateCGraphMenu();
 }
 
 void EssWorkspaceManager::createDocks()
@@ -180,7 +201,7 @@ void EssWorkspaceManager::createDocks()
             m_stateSystemWidget->setMinimumSize(600, 400);
             m_stateSystemWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
         } else {
-            // When docked, allow more flexibility than Event Table since it has more content
+            // When docked, allow more flexibility 
             stateSystemDock->setMinimumWidth(400);
             stateSystemDock->setMaximumWidth(600);
             stateSystemDock->setMinimumHeight(300);
@@ -195,77 +216,15 @@ void EssWorkspaceManager::createDocks()
     
     m_docks["stateSystem"] = stateSystemDock;
 
-	// CGraph Widget
-	QDockWidget *cgraphDock = new QDockWidget(tr("Graphs"), m_mainWindow);
-	cgraphDock->setObjectName("CGraphDock");
-	m_cgraphWidget = new EssCGraphWidget();
-	
-	// Set the command interface
-	auto commandInterface = EssApplication::instance()->commandInterface();
-	m_cgraphWidget->setCommandInterface(commandInterface);
-	
-	cgraphDock->setWidget(m_cgraphWidget);
-	
-	// Handle floating behavior similar to other docks
-	connect(cgraphDock, &QDockWidget::topLevelChanged, [this, cgraphDock](bool floating) {
-		if (floating) {
-			cgraphDock->setMinimumSize(600, 400);
-			cgraphDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-			
-			if (cgraphDock->width() < 600) {
-				cgraphDock->resize(800, 600);
-			}
-			
-			m_cgraphWidget->setMinimumSize(600, 400);
-			m_cgraphWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-		} else {
-			// When docked, use reasonable constraints
-			cgraphDock->setMinimumWidth(400);
-			cgraphDock->setMaximumWidth(800);
-			cgraphDock->setMinimumHeight(300);
-			cgraphDock->setMaximumHeight(QWIDGETSIZE_MAX);
-			
-			m_cgraphWidget->setMinimumWidth(400);
-			m_cgraphWidget->setMaximumWidth(800);
-			m_cgraphWidget->setMinimumHeight(300);
-			m_cgraphWidget->setMaximumHeight(QWIDGETSIZE_MAX);
-		}
-	});
-	
-	m_docks["CGraph"] = cgraphDock;
-
-        
-    m_testStandaloneWidget = new EssStandaloneCGraph("stimview");
-    
-    // Add as a dock
-    QDockWidget* standaloneDock = 
-        new QDockWidget(tr("Standalone CGraph Test"), m_mainWindow);
-    standaloneDock->setObjectName("StandaloneCGraphDock");
-    standaloneDock->setWidget(m_testStandaloneWidget);
-    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, standaloneDock);
-    m_docks["StandaloneCGraph"] = standaloneDock;
-    
-    // Connect signals
-    connect(m_testStandaloneWidget, &EssStandaloneCGraph::initialized,
-            [this]() {
-        EssConsoleManager::instance()->logSuccess(
-            "Standalone CGraph widget ready", "WorkspaceManager");
-    });
-    
-    connect(m_testStandaloneWidget, &EssStandaloneCGraph::initializationFailed,
-            [this](const QString& error) {
-        EssConsoleManager::instance()->logError(
-            QString("Standalone init failed: %1").arg(error), "WorkspaceManager");
-    });
-        
     // Create Script Editor dock
-    QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"), m_mainWindow);
+    QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"),
+					      m_mainWindow);
     scriptDock->setObjectName("ScriptEditorDock");
     m_scriptEditor = new EssScriptEditorWidget();
     scriptDock->setWidget(m_scriptEditor);
     m_docks["ScriptEditor"] = scriptDock;
     
-    // Create Stim Viewer dock
+    // Create Stimdg table viewer dock
     QDockWidget *stimDock = new QDockWidget(tr("Stimdg"), m_mainWindow);
     stimDock->setObjectName("StimDgDock");
     m_stimDgViewer = new EssStimDgWidget();
@@ -273,11 +232,14 @@ void EssWorkspaceManager::createDocks()
     m_docks["StimDgViewer"] = stimDock;
     
     // Create Datapoint Table dock
-    QDockWidget *dpointDock = new QDockWidget(tr("Datapoint Monitor"), m_mainWindow);
+    QDockWidget *dpointDock = new QDockWidget(tr("Datapoint Monitor"),
+					      m_mainWindow);
     dpointDock->setObjectName("DatapointDock");
     m_datapointTable = new EssDatapointTableWidget();
     dpointDock->setWidget(m_datapointTable);
     m_docks["DatapointTable"] = dpointDock;
+    
+    m_cgraphMenu = new QMenu(tr("CGraph Windows"), m_mainWindow);
 }
 
 QWidget* EssWorkspaceManager::createControlPanel()
@@ -298,17 +260,6 @@ QWidget* EssWorkspaceManager::createControlPanel()
     layout->addWidget(m_experimentControl, 1);
     
     return container;
-}
-
-void EssWorkspaceManager::initializeStandaloneWidgets()
-{
-    auto cmdInterface = EssApplication::instance()->commandInterface();
-    
-    if (m_testStandaloneWidget && !m_testStandaloneWidget->isInitialized()) {
-        m_testStandaloneWidget->initialize(cmdInterface);
-    }
-    
-    // Initialize other standalone widgets here...
 }
 
 void EssWorkspaceManager::applyDefaultLayout()
@@ -348,16 +299,12 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["stateSystem"]); 
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StandaloneCGraph"]);
 
  
     // Tab them together
     m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
     m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
     m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
-    m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["CGraph"]);
-    m_mainWindow->tabifyDockWidget(m_docks["CGraph"], m_docks["StandaloneCGraph"]);
-
    
     // Set constraints for docked state only
     
@@ -452,11 +399,88 @@ void EssWorkspaceManager::connectSignals()
         connect(m_experimentControl, &EssExperimentControlWidget::experimentStopped,
                 [this]() { emit statusMessage("Experiment stopped", 3000); });
     }
+
+    // Cgraph widget requests    
+    auto cmdInterface = EssApplication::instance()->commandInterface();
+    connect(cmdInterface, &EssCommandInterface::createCGraphRequested,
+        this, &EssWorkspaceManager::createCGraphWidget);
+
+    // Connect to manager's graph removal signal
+    auto& cgManager = QtCGManager::getInstance();
+    connect(&cgManager, &QtCGManager::graphUnregistered,
+            this, &EssWorkspaceManager::onCGraphRemoved);
 }
 
 void EssWorkspaceManager::resetToDefaultLayout()
 {
     applyDefaultLayout();
+}
+
+void EssWorkspaceManager::onCGraphRemoved(const QString& name)
+{
+    // Remove from our docks map
+    if (m_docks.contains(name)) {
+        QDockWidget* dock = m_docks.take(name);  // Removes and returns
+        if (dock && !dock->isHidden()) {
+            dock->deleteLater();  // Safe deletion
+        }
+    }
+    
+    // Menu will update automatically next time it's shown
+    // due to aboutToShow connection
+}
+
+void EssWorkspaceManager::updateCGraphMenu()
+{
+    m_cgraphMenu->clear();
+    
+    // Get all graphs from manager
+    auto& cgManager = QtCGManager::getInstance();
+    QStringList graphNames = cgManager.getAllGraphNames();
+    
+    if (graphNames.isEmpty()) {
+        QAction* emptyAction = m_cgraphMenu->addAction(tr("(No graphs)"));
+        emptyAction->setEnabled(false);
+        return;
+    }
+    
+    // Add toggle action for each graph
+    for (const QString& name : graphNames) {
+        QDockWidget* dock = m_docks.value(name);
+        if (dock) {
+            QAction* toggleAction = dock->toggleViewAction();
+            toggleAction->setText(name);  // Use graph name instead of dock title
+            m_cgraphMenu->addAction(toggleAction);
+        }
+    }
+    
+    // Add separator and management actions
+    m_cgraphMenu->addSeparator();
+    
+    QAction* newGraphAction = m_cgraphMenu->addAction(tr("New Graph..."));
+    connect(newGraphAction, &QAction::triggered, [this]() {
+        // Simple dialog to get name
+        bool ok;
+        QString name = QInputDialog::getText(m_mainWindow, 
+            tr("New CGraph"), tr("Graph name:"), 
+            QLineEdit::Normal, "graph", &ok);
+        
+        if (ok && !name.isEmpty()) {
+            createCGraphWidget(name, name);
+        }
+    });
+    
+    QAction* closeAllAction = m_cgraphMenu->addAction(tr("Close All Graphs"));
+    connect(closeAllAction, &QAction::triggered, [this]() {
+        auto& cgManager = QtCGManager::getInstance();
+        QStringList names = cgManager.getAllGraphNames();
+        for (const QString& name : names) {
+            if (m_docks.contains(name)) {
+                m_docks[name]->close();
+                m_docks.remove(name);
+            }
+        }
+    });
 }
 
 QList<QAction*> EssWorkspaceManager::viewMenuActions() const
@@ -470,6 +494,17 @@ QList<QAction*> EssWorkspaceManager::viewMenuActions() const
         actions.append(action);
     }
     
+    QAction *separator1 = new QAction(m_mainWindow);
+    separator1->setSeparator(true);
+    actions.append(separator1);
+    
+    // Add the CGraph submenu
+    actions.append(m_cgraphMenu->menuAction());
+    
+    // Update the menu whenever it's about to show
+    connect(m_cgraphMenu, &QMenu::aboutToShow, 
+            this, &EssWorkspaceManager::updateCGraphMenu);
+            
     // Add separator and reset action
     QAction *separator = new QAction(m_mainWindow);
     separator->setSeparator(true);

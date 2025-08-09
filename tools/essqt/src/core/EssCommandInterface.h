@@ -63,16 +63,13 @@ public:
     void disconnectFromHost();
     bool isConnected() const;
     QString currentHost() const { return m_currentHost; }
-    
-    // dlsh/qtcgwin package testing
-    void checkPackagesAndEmit();
      
     // Listener management
     bool startListener();
     void stopListener();
     bool isListening() const;
     quint16 listenerPort() const;
-    
+  
     // Subscription management
     bool subscribe(const QString &pattern, int every = 1);
     bool unsubscribe(const QString &pattern);
@@ -117,6 +114,8 @@ signals:
     void commandCompleted(const CommandResult &result);
     void connectionError(const QString &error);
     
+    void createCGraphRequested(const QString &name, const QString &title);
+     
     // UI action requests
     void clearRequested();
     void aboutRequested();
@@ -130,7 +129,6 @@ signals:
     					  qint64 timestamp, int dtype = -1);
     					  
     void tclInitialized();    					  
-    void packagesLoaded();
 
 private slots:
     void onEventReceived(const QString &event);
@@ -140,7 +138,7 @@ private:
     void initializeTcl();
     void shutdownTcl();
     void registerTclCommands();
-
+	
     // Static Tcl command callbacks
     static int TclConnectCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
     static int TclDisconnectCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
@@ -153,6 +151,8 @@ private:
     static int TclHelpCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
     static int TclEssCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
     static int TclDservCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+    static int TclCreateCGraphCmd(ClientData clientData, Tcl_Interp *interp,
+                                           int objc, Tcl_Obj *const objv[]);
     
     // Helper to emit signals from static context
     static void emitSignal(EssCommandInterface *obj, const char *signal);
