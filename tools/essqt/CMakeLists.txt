@@ -149,11 +149,15 @@ set(UI_SOURCES
     src/ui/components/state_system/EssStateDebugData.cpp
 	src/ui/components/scriptable_widget/EssScriptableWidget.cpp
     src/ui/components/scriptable_widget/EssScriptableManager.cpp
+    src/ui/components/scriptable_widget/EssScriptPrototypeStore.cpp
+    src/ui/components/scriptable_widget/EssWidgetTerminal.cpp    
+    src/ui/components/scriptable_widget/EssWidgetConsole.cpp    
     src/ui/components/cgraph/qtcgmanager.cpp
     src/ui/components/cgraph/qtcgraph.cpp    
     src/ui/components/cgraph/DraggableTabWidget.cpp
 	src/ui/components/cgraph/DraggableTabBar.cpp
     src/ui/components/cgraph/EssGraphicsWidget.cpp
+    src/ui/components/behavmon/EssBehavmonWidget.cpp
 )
 
 
