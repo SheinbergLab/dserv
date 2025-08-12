@@ -16,14 +16,22 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QLineEdit>
 #include <QDialog>
 #include <QTimer>
+#include <QInputDialog>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QApplication>
+#include <QClipboard>
 #include <tcl.h>
 #include "core/EssEventProcessor.h"
-
+#include "EssScriptPrototypeStore.h" 
 #include "EssEvent.h"
 
 class EssCodeEditor;
+class EssWidgetTerminal;
+class EssWidgetConsole;
 
 /**
  * @brief Base scriptable widget - handles Tcl interpreter and event binding
@@ -61,17 +69,17 @@ public:
     // Shared data access
     void setMainInterpreter(Tcl_Interp* mainInterp) { m_mainInterp = mainInterp; }
     
-    // Development mode interface
-    enum DevLayoutMode {
-        DevHidden,           // No development UI
-        DevBottomPanel,      // Script editor below main widget
-        DevTabbed,           // Script editor in tabs with main widget
-    };
+	enum DevLayoutMode {
+		DevBottomPanel,      // Script editor below main widget (tabbed)
+		DevTabbed,           // Script editor in tabs with main widget
+    	DevThreePanel,       // Main | Script | Terminal+Console (all visible)
+	};
     
     void setDevelopmentMode(bool enabled);
     bool isDevelopmentMode() const { return m_developmentMode; }
     void setDevelopmentLayout(DevLayoutMode mode);
     DevLayoutMode developmentLayout() const { return m_devLayoutMode; }
+  	void cleanupDevelopmentLayout();
     void showScriptEditor(bool show = true);
     void showLocalConsole(bool show = true);
 
@@ -85,7 +93,6 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     virtual void onSetupComplete() {}
     virtual void onDatapointReceived(const QString& name, const QVariant& value, qint64 timestamp) {}
-    
     virtual void onEventReceived(const EssEvent& event);
      
     // Utility methods for derived classes
@@ -106,13 +113,23 @@ private slots:
     void onTestScript();
     void onResetScript();
     void onGenerateCode();
-    void onCommandLineExecute();
-    void onCommandLineTextChanged();
+    
+    void onSavePrototypeRequested();
+    void onQuickSaveRequested();
+    void onLoadPrototypeRequested(); 
+    void onMarkProductionRequested();
+    void onResetInterpreterRequested();
+    void onTestFromScratchRequested();
+    void onGenerateEmbeddableRequested();
+    
 private:
     void initializeInterpreter();
     void registerCoreCommands();
+    void initializeCorePackages();
     void setupDevelopmentUI();
     void connectToDataProcessor();
+    void initializeMainInterpreterReference();
+	
     
     bool matchesEventPattern(const QString& pattern, const EssEvent& event) const;
     QString substituteEventData(const QString& script, const EssEvent& event) const;
@@ -120,13 +137,44 @@ private:
     
     // Development UI layout methods
     void applyDevelopmentLayout();
-    void setupSideBySideLayout();
     void setupBottomPanelLayout();
     void setupTabbedLayout();
-    void setupFloatingLayout();
+    void setupThreePanelLayout();
     void createScriptEditor();
-    void createLocalConsole();
+    void createWidgetTerminal();
+    void createWidgetConsole();
     void createDevelopmentToolbar();
+
+    // Prototype development interface  
+    void saveCurrentAsPrototype(const QString& name, const QString& description = QString());
+    void loadPrototype(const QString& name);
+    QStringList getAvailablePrototypes() const;
+    void markCurrentAsProduction();
+    QString generateEmbeddableScript() const;
+    
+    // Interpreter reset functionality
+    void resetInterpreter();
+    bool validateInterpreterState() const;
+    
+    // Development mode enhancements
+    void setupPrototypeDevelopmentUI();
+    void updatePrototypeUI();
+    
+    // Prototype state
+    QString m_currentPrototypeName;
+    ScriptPrototype m_currentPrototype;
+    
+    // New development actions
+    QAction* m_savePrototypeAction = nullptr;
+    QAction* m_loadPrototypeAction = nullptr;
+    QAction* m_markProductionAction = nullptr;
+    QAction* m_resetInterpreterAction = nullptr;
+    QAction* m_testFromScratchAction = nullptr;
+    QAction* m_quickSaveAction = nullptr;
+    QComboBox* m_prototypeSelector = nullptr;
+    QLabel* m_interpreterStatusLabel = nullptr;
+    QLabel* m_prototypeStatusLabel = nullptr;
+
     
     // Core Tcl commands (minimal set)
     static int tcl_bind_datapoint(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
@@ -158,15 +206,11 @@ private:
     bool m_developmentMode;
     DevLayoutMode m_devLayoutMode;
     
-    QWidget* m_functionalWidget;      // The actual component UI
-    EssCodeEditor* m_scriptEditor;    // Script editor
-    QTextEdit* m_localConsole;        // Local console
-    QLineEdit* m_commandLine;         // Command line
-    QToolBar* m_devToolbar;           // Development toolbar
-    
-    void createCommandLine(); 
-    QStringList m_commandHistory;
-    int m_historyIndex;
+    QWidget* m_functionalWidget;          // The actual component UI
+    EssCodeEditor* m_scriptEditor;        // Script editor
+    EssWidgetTerminal* m_widgetTerminal;  // Widget-specific terminal
+    EssWidgetConsole* m_widgetConsole;    // Widget-specific console
+    QToolBar* m_devToolbar;               // Development toolbar
     
     // Layout containers
     QVBoxLayout* m_mainLayout;        // Main container layout
