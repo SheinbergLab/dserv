@@ -101,6 +101,9 @@ public:
     static EssGraphicsWidget* getCurrentInstance();
 
 signals:
+    void widgetReady();          // Emitted when widget is ready for graphics init
+    void graphicsReady();        // Emitted when graphics system is initialized
+
     void graphUpdated();
     void mousePressed(const QPointF& pos);
     void mouseReleased(const QPointF& pos);
@@ -123,11 +126,17 @@ protected:
     // Qt event handling
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     
 private slots:
+    void onWidgetReady();        // Handle widget ready for initialization
+
     void initializeGraphics();
     
 private:
+    bool m_widgetFullyConstructed = false;
+    bool m_pendingGraphicsInit = false;
+
     // Layout state (for future Qt controls integration)
     LayoutMode m_layoutMode;
     ControlPanelType m_controlType;

@@ -27,14 +27,14 @@ static QMap<QString, int> colorNameToIndex = {
 
 EssGraphicsWidget::EssGraphicsWidget(const QString& name, QWidget* parent)
     : EssScriptableWidget(name.isEmpty() ? QString("graphics_%1").arg(QDateTime::currentMSecsSinceEpoch()) : name, parent)
-    , m_layoutMode(WithToolbar)        // Default to current behavior
-    , m_controlType(NoControls)        // No controls initially  
-    , m_controlsVisible(true)          // Controls visible when present
-    , m_mainSplitter(nullptr)          // Initialize layout containers
+    , m_layoutMode(WithToolbar)        
+    , m_controlType(NoControls)        
+    , m_controlsVisible(true)          
+    , m_mainSplitter(nullptr)          
     , m_sideControlsContainer(nullptr)
     , m_bottomControlsContainer(nullptr)
-    , m_gbuf(nullptr)
-    , m_frame(nullptr)
+    , m_gbuf(nullptr)                  
+    , m_frame(nullptr)                 
     , m_graphicsInitialized(false)
     , m_backgroundColor(Qt::white)
     , m_toolbar(nullptr)
@@ -42,19 +42,32 @@ EssGraphicsWidget::EssGraphicsWidget(const QString& name, QWidget* parent)
     , m_returnToTabsAction(nullptr)
     , m_currentPainter(nullptr)
     , m_currentColor(Qt::black)
+    , m_widgetFullyConstructed(false)
+    , m_pendingGraphicsInit(false)
 {
-    // Set default setup script for graphics widgets
+    // Connect the signal for delayed initialization
+    connect(this, &EssGraphicsWidget::widgetReady, 
+            this, &EssGraphicsWidget::onWidgetReady, Qt::QueuedConnection);
+    
+    // Set default setup script - but don't call graphics_init immediately
     setSetupScript(R"tcl(
 # Graphics Widget Setup Script
-local_log "Initializing graphics widget..."
+local_log "Graphics widget script loaded - waiting for widget ready signal"
 
-# Initialize the graphics system
-graphics_init
+# Don't initialize graphics here - wait for the widget ready signal
+proc graphics_init_when_ready {} {
+    local_log "Initializing graphics system..."
+    graphics_init
+    local_log "Graphics system initialized"
+}
 
-local_log "Graphics widget setup complete"
+local_log "Graphics widget setup script complete"
 )tcl");
     
     initializeWidget();
+    
+    // Mark as fully constructed - this will trigger initialization
+    m_widgetFullyConstructed = true;
 }
 
 EssGraphicsWidget::~EssGraphicsWidget()
@@ -67,21 +80,14 @@ void EssGraphicsWidget::registerCustomCommands()
 {
     if (!interpreter()) return;
     
-    // CRITICAL: Load the qtcgraph package which provides all the bridge commands
+    // Load the qtcgraph package which provides all the bridge commands
     const char* packageScript = R"tcl(
-        # Load required packages
-        set f [file dirname [info nameofexecutable]]
-        if { [file exists [file join $f dlsh.zip]] } { 
-            set dlshzip [file join $f dlsh.zip] 
+       # Load graphics-specific package (core packages already loaded)
+        if {[catch {package require qtcgraph} err]} {
+            local_log "Warning: Could not load qtcgraph package: $err"
         } else {
-            set dlshzip /usr/local/dlsh/dlsh.zip
+            local_log "qtcgraph package loaded successfully"
         }
-        set dlshroot [file join [zipfs root] dlsh]
-        zipfs unmount $dlshroot
-        zipfs mount $dlshzip $dlshroot
-        set ::auto_path [linsert $::auto_path 0 [file join $dlshroot/lib]]
-        package require dlsh
-        package require qtcgraph
     )tcl";
     
     if (Tcl_Eval(interpreter(), packageScript) != TCL_OK) {
@@ -230,7 +236,13 @@ QWidget* EssGraphicsWidget::createContentArea()
 
 void EssGraphicsWidget::onSetupComplete()
 {
-    localLog("Graphics widget setup completed - graphics system will initialize when ready");
+    localLog("Graphics widget setup completed");
+    
+    // If widget is ready and we have a pending init request, do it now
+    if (m_widgetFullyConstructed && m_pendingGraphicsInit) {
+        initializeGraphics();
+        m_pendingGraphicsInit = false;
+    }
 }
 
 bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
@@ -303,18 +315,34 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
     return EssScriptableWidget::eventFilter(obj, event);
 }
 
+void EssGraphicsWidget::showEvent(QShowEvent* event)
+{
+    EssScriptableWidget::showEvent(event);
+    
+    // Only trigger initialization once when widget becomes visible with valid size
+    if (!m_graphicsInitialized && m_widgetFullyConstructed && m_graphWidget && 
+        m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
+        
+        localLog("Widget shown with valid size - triggering graphics initialization");
+        emit widgetReady();
+    }
+}
+
 void EssGraphicsWidget::initializeGraphics()
 {
     if (m_graphicsInitialized || !interpreter()) return;
     
     // Make sure widget has a size
-    if (m_graphWidget->width() <= 0 || m_graphWidget->height() <= 0) {
-        // Widget not ready yet, will retry on next call
+    if (!m_graphWidget || m_graphWidget->width() <= 0 || m_graphWidget->height() <= 0) {
+        localLog("Widget not ready for graphics initialization");
         return;
     }
  
-    // Clean any old buffers
-    cleanupGraphicsBuffer();
+    // ONLY cleanup if we have an existing buffer
+    if (m_gbuf != nullptr) {
+        localLog("Cleaning up existing graphics buffer");
+        cleanupGraphicsBuffer();
+    }
      
     // Call Tcl to initialize the graphics buffer
     QString cmd = QString("qtcgraph_init_widget %1 %2 %3")
@@ -336,25 +364,30 @@ void EssGraphicsWidget::initializeGraphics()
                         .arg(m_graphWidget->height());
     Tcl_Eval(interpreter(), resizeCmd.toUtf8().constData());
         
-    // Schedule a clearwin after the widget is fully shown
-    QTimer::singleShot(100, this, [this]() {
-        if (interpreter() && m_graphicsInitialized) {
-            Tcl_Eval(interpreter(), "clearwin; flushwin");
-        }
-    });
+    // Clear the window
+    if (interpreter() && m_graphicsInitialized) {
+        Tcl_Eval(interpreter(), "clearwin; flushwin");
+    }
 
     localLog("Graphics system initialized successfully");
 }
 
 void EssGraphicsWidget::cleanupGraphicsBuffer()
 {
-    if (!interpreter()) return;
+    if (!interpreter() || m_gbuf == nullptr) {
+        // Clear pointers even if we can't do proper cleanup
+        m_gbuf = nullptr;
+        m_frame = nullptr;
+        return;
+    }
     
-    // Use Tcl to do the cleanup since cgraph functions are loaded there
     QString cmd = QString("qtcgraph_cleanup %1").arg((quintptr)this);
-    Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+    int result = Tcl_Eval(interpreter(), cmd.toUtf8().constData());
     
-    // Clear our pointers
+    if (result != TCL_OK) {
+        localLog(QString("Warning: Graphics cleanup failed: %1").arg(this->result()));
+    }
+    
     m_gbuf = nullptr;
     m_frame = nullptr;
 }
@@ -394,6 +427,15 @@ void EssGraphicsWidget::resizeEvent(QResizeEvent* event)
 {
     EssScriptableWidget::resizeEvent(event);
     
+    // Also handle case where widget was shown but had zero size initially
+    if (!m_graphicsInitialized && m_widgetFullyConstructed && m_graphWidget && 
+        m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
+        
+        localLog("Widget resized to valid size - triggering graphics initialization");
+        emit widgetReady();
+    }
+    
+    // Handle resize for already-initialized graphics
     if (m_graphicsInitialized && interpreter()) {
         QString cmd = QString("qtcgraph_resize %1 %2 %3")
                         .arg((quintptr)this)
@@ -401,6 +443,25 @@ void EssGraphicsWidget::resizeEvent(QResizeEvent* event)
                         .arg(m_graphWidget->height());
         Tcl_Eval(interpreter(), cmd.toUtf8().constData());
         refresh();
+    }
+}
+
+void EssGraphicsWidget::onWidgetReady()
+{
+    // This is called via queued connection when widget is ready
+    if (m_graphicsInitialized) {
+        return; // Already initialized
+    }
+    
+    localLog("Widget ready signal received - initializing graphics");
+    
+    // Call the Tcl initialization function
+    if (interpreter()) {
+        eval("graphics_init_when_ready");
+        emit graphicsReady();
+    } else {
+        localLog("Interpreter not ready - marking pending");
+        m_pendingGraphicsInit = true;
     }
 }
 
@@ -962,6 +1023,17 @@ int EssGraphicsWidget::tcl_graphics_init(ClientData clientData, Tcl_Interp* inte
     if (objc != 1) {
         Tcl_WrongNumArgs(interp, 1, objv, "");
         return TCL_ERROR;
+    }
+    
+    // Safety checks
+    if (!widget->m_graphWidget) {
+        Tcl_SetResult(interp, "Graphics widget not ready", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (widget->m_graphicsInitialized) {
+        Tcl_SetResult(interp, "Graphics already initialized", TCL_STATIC);
+        return TCL_OK;  // Not an error
     }
     
     widget->initializeGraphics();
