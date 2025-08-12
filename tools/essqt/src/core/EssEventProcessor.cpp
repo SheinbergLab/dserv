@@ -51,40 +51,60 @@ void EssEventProcessor::processEvent(const EssEvent &event)
             emit fileIOEventReceived(event);
             break;
             
-        case EVT_NAMESET:
-            // Set the name for an event type
-            // IMPORTANT: event.subtype contains the TYPE to name, not a subtype!
-            if (event.params.isString()) {
-                QString name = event.params.toString();
-                uint8_t typeToName = event.subtype;  // This is the type we're naming
-                m_eventTypeNames[typeToName] = name;
-                emit eventTypeNameSet(typeToName, name);
+case EVT_NAMESET:
+    // Your existing code...
+    if (event.params.isString()) {
+        QString name = event.params.toString();
+        uint8_t typeToName = event.subtype;
+        
+        // Remove old inverse mapping if it exists
+        QString oldName = m_eventTypeNames[typeToName];
+        if (!oldName.isEmpty() && !oldName.startsWith("Reserved") && 
+            !oldName.startsWith("System") && !oldName.startsWith("User")) {
+            m_typeNameToId.remove(oldName);
+        }
+        
+        m_eventTypeNames[typeToName] = name;
+        
+        // ADD THIS LINE: Update inverse mapping
+        m_typeNameToId[name] = typeToName;
+        
+        emit eventTypeNameSet(typeToName, name);
+    }
+    return;
+
+case EVT_SUBTYPE_NAMES:
+    // Your existing code...
+    if (event.params.isString()) {
+        QStringList parts = event.params.toString().split(' ');
+        QMap<uint8_t, QString> subtypeMap;
+        
+        // ADD THIS: Clear old inverse mappings for this type
+        auto it = m_subtypeNameToId.begin();
+        while (it != m_subtypeNameToId.end()) {
+            if (it.value().first == event.subtype) {
+                it = m_subtypeNameToId.erase(it);
+            } else {
+                ++it;
             }
-            return; // Don't add to observation
+        }
+        
+        for (int i = 0; i < parts.size() - 1; i += 2) {
+            QString subtypeName = parts[i];
+            uint8_t subtypeId = parts[i + 1].toUInt();
             
-        case EVT_SUBTYPE_NAMES:
-            // Parse space-separated subtype names for a given event type
-            // event.subtype contains the event TYPE whose subtypes we're naming
-            if (event.params.isString()) {
-                QStringList parts = event.params.toString().split(' ');
-                QMap<uint8_t, QString> subtypeMap;
-                
-                // Parts come in pairs: NAME first, then ID
-                // Example: "DURATION 0 TYPE 1 MICROLITERS 2"
-                for (int i = 0; i < parts.size() - 1; i += 2) {
-                    QString subtypeName = parts[i];      // NAME is first
-                    uint8_t subtypeId = parts[i + 1].toUInt();  // ID is second
-                    
-                    // Key format is "type:subtype"
-                    QString key = QString("%1:%2").arg(event.subtype).arg(subtypeId);
-                    m_eventSubtypeNames[key] = subtypeName;
-                    subtypeMap[subtypeId] = subtypeName;
-                }
-                
-                emit eventSubtypeNamesSet(event.subtype, subtypeMap);
-            }
-            return; // Don't add to observation
+            QString key = QString("%1:%2").arg(event.subtype).arg(subtypeId);
+            m_eventSubtypeNames[key] = subtypeName;
+            subtypeMap[subtypeId] = subtypeName;
             
+            // ADD THIS LINE: Update inverse mapping
+            m_subtypeNameToId[subtypeName] = qMakePair(event.subtype, subtypeId);
+        }
+        
+        emit eventSubtypeNamesSet(event.subtype, subtypeMap);
+    }
+    return;
+                        
         case EVT_BEGINOBS:
             m_obsInfo.start(event);
             emit observationStarted(event.timestamp);
@@ -138,4 +158,63 @@ QString EssEventProcessor::getEventSubtypeName(uint8_t type, uint8_t subtype) co
     }
     
     return QString::number(subtype);
+}
+
+uint8_t EssEventProcessor::getEventTypeId(const QString& name) const
+{
+    return m_typeNameToId.value(name, 255);  // 255 as invalid marker
+}
+
+QPair<uint8_t, uint8_t> EssEventProcessor::getEventSubtypeId(const QString& name) const
+{
+    return m_subtypeNameToId.value(name, qMakePair(uint8_t(255), uint8_t(255)));
+}
+
+QPair<uint8_t, uint8_t> EssEventProcessor::getEventSubtypeId(uint8_t type, const QString& subtypeName) const
+{
+    auto it = m_subtypeNameToId.find(subtypeName);
+    if (it != m_subtypeNameToId.end() && it.value().first == type) {
+        return it.value();
+    }
+    return qMakePair(uint8_t(255), uint8_t(255));
+}
+
+bool EssEventProcessor::isValidEventTypeName(const QString& name) const
+{
+    return m_typeNameToId.contains(name);
+}
+
+bool EssEventProcessor::isValidEventSubtypeName(const QString& name) const
+{
+    return m_subtypeNameToId.contains(name);
+}
+
+bool EssEventProcessor::isValidEventSubtypeName(uint8_t type, const QString& subtypeName) const
+{
+    auto pair = getEventSubtypeId(type, subtypeName);
+    return pair.first != 255 && pair.second != 255;
+}
+
+QStringList EssEventProcessor::getAvailableEventTypeNames() const
+{
+    QStringList names;
+    for (auto it = m_typeNameToId.begin(); it != m_typeNameToId.end(); ++it) {
+        if (!it.key().startsWith("Reserved") && 
+            !it.key().startsWith("System") && 
+            !it.key().startsWith("User")) {
+            names.append(it.key());
+        }
+    }
+    return names;
+}
+
+QStringList EssEventProcessor::getAvailableEventSubtypeNames(uint8_t type) const
+{
+    QStringList names;
+    for (auto it = m_subtypeNameToId.begin(); it != m_subtypeNameToId.end(); ++it) {
+        if (it.value().first == type) {
+            names.append(it.key());
+        }
+    }
+    return names;
 }

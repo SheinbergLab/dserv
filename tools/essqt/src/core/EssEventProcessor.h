@@ -23,6 +23,18 @@ public:
     QString getEventTypeName(uint8_t type) const;
     QString getEventSubtypeName(uint8_t type, uint8_t subtype) const;
     
+    uint8_t getEventTypeId(const QString& name) const;
+    QPair<uint8_t, uint8_t> getEventSubtypeId(const QString& name) const;
+    QPair<uint8_t, uint8_t> getEventSubtypeId(uint8_t type, const QString& subtypeName) const;
+    
+    bool isValidEventTypeName(const QString& name) const;
+    bool isValidEventSubtypeName(const QString& name) const;
+    bool isValidEventSubtypeName(uint8_t type, const QString& subtypeName) const;
+    
+    QStringList getAvailableEventTypeNames() const;
+    QStringList getAvailableEventSubtypeNames(uint8_t type) const;
+
+
     // Get current system state
     SystemState systemState() const { return m_systemState; }
     
@@ -50,6 +62,9 @@ private:
     
     // Event type names (256 possible types)
     QString m_eventTypeNames[256];
+    
+    QMap<QString, uint8_t> m_typeNameToId;
+    QMap<QString, QPair<uint8_t, uint8_t>> m_subtypeNameToId;
     
     // Event subtype names: key is "type:subtype"
     QMap<QString, QString> m_eventSubtypeNames;
