@@ -72,8 +72,19 @@ local_log "Graphics widget setup script complete"
 
 EssGraphicsWidget::~EssGraphicsWidget()
 {
+   disconnect();
+   
+    if (s_currentInstance == this) {
+        s_currentInstance = nullptr;
+    }
+    
     // Clean up graphics buffer BEFORE base class destructor
     cleanupGraphicsBuffer();
+    
+    // Additional cleanup 
+    m_currentPainter = nullptr;
+    m_gbuf = nullptr;
+    m_frame = nullptr;
 }
 
 void EssGraphicsWidget::registerCustomCommands()
