@@ -23,7 +23,7 @@ class EssStimDgWidget;
 class EssEyeTouchVisualizerWidget;
 class EssStateSystemWidget;
 class DraggableTabWidget;
-class QtCGraph;
+class EssGraphicsWidget;
 
 class EssWorkspaceManager : public QObject
 {
@@ -42,6 +42,10 @@ public:
     bool restoreLayout();
     
 	void createCGraphWidget(const QString& name, const QString& title);
+    void createGraphicsWidgetWithTemplate(const QString& name, 
+    	const QString& templateName);
+
+    void sendScriptToCurrentGraphicsWidget(const QString& script);
     
     // Dock visibility
     void setDockVisible(const QString &dockName, bool visible);
@@ -65,7 +69,7 @@ private:
     
 	// CGraph support
 	QDockWidget* m_cgraphDock;
-	QMap<QString, QtCGraph*> m_cgraphs;
+	QMap<QString, EssGraphicsWidget*> m_cgraphs;
 	QMenu* m_cgraphMenu;
     void updateCGraphMenu();
 

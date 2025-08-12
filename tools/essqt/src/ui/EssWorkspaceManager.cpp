@@ -1,3 +1,5 @@
+// EssWorkspaceManager.cpp
+
 #include "EssWorkspaceManager.h"
 #include "core/EssApplication.h"
 #include "core/EssDataProcessor.h"
@@ -13,9 +15,9 @@
 #include "dg_viewer/EssStimDgWidget.h"
 #include "visualization/EssEyeTouchVisualizerWidget.h"
 #include "state_system/EssStateSystemWidget.h"
-#include "cgraph/qtcgraph.hpp"
-#include "cgraph/qtcgmanager.hpp"
+#include "scriptable_widget/EssScriptableManager.h"
 #include "cgraph/DraggableTabWidget.h"
+#include "cgraph/EssGraphicsWidget.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -73,30 +75,41 @@ void EssWorkspaceManager::setupWorkspace()
 
 void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString& title)
 {
-    // Create the graph widget
-    QtCGraph* graph = new QtCGraph(name);
+    // Create EssGraphicsWidget
+    EssGraphicsWidget* graph = new EssGraphicsWidget(name);
+    
+    // Enable development mode by default for new widgets
+    graph->setDevelopmentMode(true);
+    graph->setDevelopmentLayout(EssScriptableWidget::DevBottomPanel);
+    
+    // Store in map (now properly typed)
     m_cgraphs[name] = graph;
+    
+    // Register with scriptable manager
+    EssScriptableManager::getInstance().registerWidget(name, graph);
     
     // Add to tab widget
     int index = m_cgraphTabWidget->addTab(graph, title.isEmpty() ? name : title);
     m_cgraphTabWidget->setCurrentIndex(index);
     
-    // Graph dock should already be visible, but make sure
+    // Show and raise
     m_cgraphDock->show();
     m_cgraphDock->raise();
     
-    // Connect graph signals
+    // Connect signals
     connect(graph, &QObject::destroyed, [this, name]() {
         m_cgraphs.remove(name);
+        EssScriptableManager::getInstance().unregisterWidget(name);
     });
     
-    // Connect the return to tabs signal
-    connect(graph, &QtCGraph::returnToTabsRequested, [this, name]() {
-        // Find the dock containing this graph
+    connect(graph, &EssGraphicsWidget::returnToTabsRequested, [this, name]() {
         if (m_docks.contains(name)) {
             returnCGraphToTabs(m_docks[name], name);
         }
     });
+    
+    connect(graph, &EssScriptableWidget::statusMessage,
+            this, &EssWorkspaceManager::statusMessage);
     
     updateCGraphMenu();
 }
@@ -104,87 +117,101 @@ void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString&
 void EssWorkspaceManager::onCGraphTabCloseRequested(int index)
 {
     QWidget* widget = m_cgraphTabWidget->widget(index);
-    if (QtCGraph* graph = qobject_cast<QtCGraph*>(widget)) {
-        QString name = graph->name();
-        
-        // Ask for confirmation if graph has content
-        QMessageBox::StandardButton reply = QMessageBox::question(
-            m_mainWindow, 
-            tr("Close CGraph"),
-            tr("Close graph '%1'?").arg(name),
-            QMessageBox::Yes | QMessageBox::No
-        );
-        
-        if (reply == QMessageBox::Yes) {
-            m_cgraphTabWidget->removeTab(index);
-            m_cgraphs.remove(name);
-            graph->deleteLater();
-            
-            updateCGraphMenu();
-        }
+    
+    // Only handle EssGraphicsWidget now
+    auto essgraph = qobject_cast<EssGraphicsWidget*>(widget);
+    if (!essgraph) {
+        return; // Not a graphics widget
     }
-}
-
-// Add method to detach a tab into a floating window:
-void EssWorkspaceManager::detachCGraphTab(int index)
-{
-    QWidget* widget = m_cgraphTabWidget->widget(index);
-    if (QtCGraph* graph = qobject_cast<QtCGraph*>(widget)) {
-        QString name = graph->name();
-        QString title = m_cgraphTabWidget->tabText(index);
-        
-        // Remove from tab widget
+    
+    QString name = essgraph->name();
+    
+    // Ask for confirmation
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        m_mainWindow, 
+        tr("Close Graphics Widget"),
+        tr("Close graphics widget '%1'?").arg(name),
+        QMessageBox::Yes | QMessageBox::No
+    );
+    
+    if (reply == QMessageBox::Yes) {
         m_cgraphTabWidget->removeTab(index);
+        m_cgraphs.remove(name);
         
-        // Create a new dock for this graph
-        QDockWidget* dock = new QDockWidget(title, m_mainWindow);
-        dock->setObjectName(QString("%1Dock").arg(name));
-        dock->setWidget(graph);
-        dock->setFloating(true);
+        // Unregister from scriptable manager
+        EssScriptableManager::getInstance().unregisterWidget(name);
         
-        // Set a good size for floating window
-        dock->resize(600, 400);
-        
-        // Add custom context menu for re-docking
-        dock->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(dock, &QDockWidget::customContextMenuRequested,
-                [this, dock, name](const QPoint& pos) {
-                    QMenu menu;
-                    QAction* retabAction = menu.addAction(tr("Return to Tabs"));
-                    connect(retabAction, &QAction::triggered, [this, dock, name]() {
-                        returnCGraphToTabs(dock, name);
-                    });
-                    menu.exec(dock->mapToGlobal(pos));
-                });
-        
-        // Install event filter for double-click handling
-        dock->installEventFilter(this);
-        
-        // Track in our docks
-        m_docks[name] = dock;
-        
-        // Add to main window and show
-        m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
-        dock->show();
-        
+        widget->deleteLater();
         updateCGraphMenu();
     }
 }
+void EssWorkspaceManager::detachCGraphTab(int index)
+{
+    QWidget* widget = m_cgraphTabWidget->widget(index);
+    
+    // Only handle EssGraphicsWidget now
+    auto essgraph = qobject_cast<EssGraphicsWidget*>(widget);
+    if (!essgraph) {
+        return; // Not a graphics widget
+    }
+    
+    QString name = essgraph->name();
+    QString title = m_cgraphTabWidget->tabText(index);
+    
+    // Set floating mode
+    essgraph->setFloatingMode(true);
+    
+    // Remove from tab widget
+    m_cgraphTabWidget->removeTab(index);
+    
+    // Create floating dock
+    QDockWidget* dock = new QDockWidget(title, m_mainWindow);
+    dock->setObjectName(QString("%1Dock").arg(name));
+    dock->setWidget(widget);
+    dock->setFloating(true);
+//    dock->resize(600, 400);
+    
+    // Add context menu for re-docking
+    dock->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(dock, &QDockWidget::customContextMenuRequested,
+            [this, dock, name](const QPoint& pos) {
+                QMenu menu;
+                QAction* retabAction = menu.addAction(tr("Return to Tabs"));
+                connect(retabAction, &QAction::triggered, [this, dock, name]() {
+                    returnCGraphToTabs(dock, name);
+                });
+                menu.exec(dock->mapToGlobal(pos));
+            });
+    
+    dock->installEventFilter(this);
+    m_docks[name] = dock;
+    
+    // Add to main window and show
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+    dock->show();
+    
+    updateCGraphMenu();
+}
+
 void EssWorkspaceManager::returnCGraphToTabs(QDockWidget* dock, const QString& name)
 {
     if (!dock) return;
     
-    QtCGraph* graph = qobject_cast<QtCGraph*>(dock->widget());
-    if (!graph) return;
+    QWidget* widget = dock->widget();
+    if (!widget) return;
     
-    graph->setFloatingMode(false);
+    // Only handle EssGraphicsWidget now
+    auto essgraph = qobject_cast<EssGraphicsWidget*>(widget);
+    if (essgraph) {
+        essgraph->setFloatingMode(false);
+    }
         
     // Remove from dock
     dock->setWidget(nullptr);
     
     // Add back to tabs
     QString title = dock->windowTitle();
-    int index = m_cgraphTabWidget->addTab(graph, title);
+    int index = m_cgraphTabWidget->addTab(widget, title);
     m_cgraphTabWidget->setCurrentIndex(index);
     
     // Clean up dock
@@ -192,24 +219,22 @@ void EssWorkspaceManager::returnCGraphToTabs(QDockWidget* dock, const QString& n
     m_docks.remove(name);
     dock->deleteLater();
     
-    // Make sure tab container is visible and raised
+    // Make sure tab container is visible
     m_cgraphDock->show();
     m_cgraphDock->raise();
     
-    // If the CGraph dock itself is floating, dock it first
     if (m_cgraphDock->isFloating()) {
         m_cgraphDock->setFloating(false);
     }
     
-    // Switch to the CGraph tab in the tabbed dock area
-    // Find which tab contains the CGraph dock and activate it
     QList<QDockWidget*> tabifiedDocks = m_mainWindow->tabifiedDockWidgets(m_cgraphDock);
     if (!tabifiedDocks.isEmpty()) {
-        m_cgraphDock->raise();  // This should make it the active tab
+        m_cgraphDock->raise();
     }
     
     updateCGraphMenu();
 }
+
 
 void EssWorkspaceManager::createDocks()
 {
@@ -384,7 +409,7 @@ void EssWorkspaceManager::createDocks()
             }
         }
     });
-
+          
     // Create Script Editor dock
     QDockWidget *scriptDock = new QDockWidget(tr("Script Editor"),
 					      m_mainWindow);
@@ -469,13 +494,13 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
  	m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["CGraphContainer"]);
-
+ 	
     // Tab them together
     m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
     m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
     m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
 	m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["CGraphContainer"]);
-   
+    
     // Set constraints for docked state only
     
     // Control Panel: prefer ~300px but flexible
@@ -496,6 +521,22 @@ void EssWorkspaceManager::applyDefaultLayout()
         m_docks["EventTable"]->setMaximumWidth(350);
         m_eventTable->setMinimumWidth(300);
         m_eventTable->setMaximumWidth(350);
+    }
+    
+        // Position behavior monitor with datapoint table for data analysis grouping
+    if (m_docks.contains("behavmon")) {
+        // Stack below datapoint table if it exists
+        if (m_docks.contains("datapointTable")) {
+            m_mainWindow->splitDockWidget(m_docks["datapointTable"], 
+                                        m_docks["behavmon"], 
+                                        Qt::Vertical);
+        }
+        // Or below event table as fallback
+        else if (m_docks.contains("eventTable")) {
+            m_mainWindow->splitDockWidget(m_docks["eventTable"], 
+                                        m_docks["behavmon"], 
+                                        Qt::Vertical);
+        }
     }
     
     // Terminal/Console: limit height to prevent taking too much space
@@ -570,18 +611,22 @@ void EssWorkspaceManager::connectSignals()
                 [this]() { emit statusMessage("Experiment stopped", 3000); });
     }
 
-    // Cgraph widget requests    
+    // Graphics widget requests from command interface (legacy)
     auto cmdInterface = EssApplication::instance()->commandInterface();
     connect(cmdInterface, &EssCommandInterface::createCGraphRequested,
-        this, &EssWorkspaceManager::createCGraphWidget);
+            this, &EssWorkspaceManager::createCGraphWidget);
 
-    // Connect to manager's graph removal signal
-    auto& cgManager = QtCGManager::getInstance();
-    connect(&cgManager, &QtCGManager::graphUnregistered,
-            this, &EssWorkspaceManager::onCGraphRemoved);
+    // Graphics widget requests from scriptable manager (new system)
+    auto& scriptableManager = EssScriptableManager::getInstance();
+	connect(&scriptableManager, &EssScriptableManager::graphicsWidgetCreationRequested,
+        this, [this](const QString& name) {
+            createCGraphWidget(name, name);
+        });
 
+            
+    // Menu update signal
     connect(m_cgraphMenu, &QMenu::aboutToShow,
-            this, &EssWorkspaceManager::updateCGraphMenu);
+            this, &EssWorkspaceManager::updateCGraphMenu); 
 }
 
 void EssWorkspaceManager::resetToDefaultLayout()
@@ -589,58 +634,6 @@ void EssWorkspaceManager::resetToDefaultLayout()
     applyDefaultLayout();
 }
 
-void EssWorkspaceManager::onCGraphTabDetached(QWidget* widget, const QString& title, const QPoint& globalPos)
-{
-    QtCGraph* graph = qobject_cast<QtCGraph*>(widget);
-    if (!graph) return;
-    
-    QString name = graph->name();
-    
-    graph->setFloatingMode(true);
-    
-    // Create a new floating dock for this graph
-    QDockWidget* dock = new QDockWidget(title, m_mainWindow);
-    dock->setObjectName(QString("%1Dock").arg(name));
-    dock->setWidget(graph);
-    dock->setFloating(true);
-    
-    // Position at mouse location
-    dock->move(globalPos - QPoint(100, 30)); // Offset so title bar is near mouse
-    
-    // Set a good size for floating window
-    dock->resize(600, 400);
-    
-    // Enable all dock features
-    dock->setFeatures(QDockWidget::DockWidgetMovable | 
-                      QDockWidget::DockWidgetFloatable | 
-                      QDockWidget::DockWidgetClosable);
-    
-    // Add custom context menu for re-docking
-    dock->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(dock, &QDockWidget::customContextMenuRequested,
-            [this, dock, name](const QPoint& pos) {
-                QMenu menu;
-                QAction* retabAction = menu.addAction(tr("Return to Tabs"));
-                connect(retabAction, &QAction::triggered, [this, dock, name]() {
-                    returnCGraphToTabs(dock, name);
-                });
-                menu.exec(dock->mapToGlobal(pos));
-            });
-    
-    // Also support double-click on title bar to return to tabs
-    dock->installEventFilter(this);
-    
-    // Track in our docks
-    m_docks[name] = dock;
-    
-    // Add to main window and show
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
-    dock->show();
-    dock->raise();
-    dock->activateWindow();
-    
-    updateCGraphMenu();
-}
 
 bool EssWorkspaceManager::eventFilter(QObject* obj, QEvent* event)
 {
@@ -668,11 +661,63 @@ bool EssWorkspaceManager::eventFilter(QObject* obj, QEvent* event)
     return QObject::eventFilter(obj, event);
 }
 
+void EssWorkspaceManager::onCGraphTabDetached(QWidget* widget, const QString& title, const QPoint& globalPos)
+{
+    // Only handle EssGraphicsWidget now
+    auto essgraph = qobject_cast<EssGraphicsWidget*>(widget);
+    if (!essgraph) {
+        return; // Not a graphics widget
+    }
+    
+    QString name = essgraph->name();
+    
+    // Set floating mode
+    essgraph->setFloatingMode(true);
+    
+    // Create floating dock
+    QDockWidget* dock = new QDockWidget(title, m_mainWindow);
+    dock->setObjectName(QString("%1Dock").arg(name));
+    dock->setWidget(widget);
+    dock->setFloating(true);
+    dock->setWindowFlags(Qt::Tool);
+    
+    // Position at mouse location
+    dock->move(globalPos - QPoint(100, 30));
+    dock->resize(600, 400);
+    
+    dock->setFeatures(QDockWidget::DockWidgetMovable | 
+                      QDockWidget::DockWidgetFloatable | 
+                      QDockWidget::DockWidgetClosable);
+    
+    // Add context menu
+    dock->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(dock, &QDockWidget::customContextMenuRequested,
+            [this, dock, name](const QPoint& pos) {
+                QMenu menu;
+                QAction* retabAction = menu.addAction(tr("Return to Tabs"));
+                connect(retabAction, &QAction::triggered, [this, dock, name]() {
+                    returnCGraphToTabs(dock, name);
+                });
+                menu.exec(dock->mapToGlobal(pos));
+            });
+    
+    dock->installEventFilter(this);
+    m_docks[name] = dock;
+    
+    // Add to main window and show
+    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+    dock->show();
+    dock->raise();
+    dock->activateWindow();
+    
+    updateCGraphMenu();
+}
+
 void EssWorkspaceManager::onCGraphRemoved(const QString& name)
 {
     // Remove from tabs if present
     for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
-        if (QtCGraph* graph = qobject_cast<QtCGraph*>(m_cgraphTabWidget->widget(i))) {
+        if (auto graph = qobject_cast<EssGraphicsWidget*>(m_cgraphTabWidget->widget(i))) {
             if (graph->name() == name) {
                 m_cgraphTabWidget->removeTab(i);
                 break;
@@ -688,7 +733,7 @@ void EssWorkspaceManager::onCGraphRemoved(const QString& name)
         }
     }
     
-    // Remove from our tracking
+    // Remove from tracking
     m_cgraphs.remove(name);
 }
 
@@ -696,23 +741,33 @@ void EssWorkspaceManager::updateCGraphMenu()
 {
     m_cgraphMenu->clear();
     
-    auto& cgManager = QtCGManager::getInstance();
-    QStringList graphNames = cgManager.getAllGraphNames();
-    
-    if (graphNames.isEmpty()) {
-        QAction* emptyAction = m_cgraphMenu->addAction(tr("(No graphs)"));
-        emptyAction->setEnabled(false);
-        return;
+    // Get widget names from tabs (only EssGraphicsWidget now)
+    QStringList allGraphNames;
+    for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
+        if (auto essgraph = qobject_cast<EssGraphicsWidget*>(m_cgraphTabWidget->widget(i))) {
+            allGraphNames.append(essgraph->name());
+        }
     }
     
-    // Section for tabbed graphs
     bool hasTabbed = false;
-    for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
-        if (QtCGraph* graph = qobject_cast<QtCGraph*>(m_cgraphTabWidget->widget(i))) {
-            QString name = graph->name();
+    bool hasFloating = false;
+    
+    // Only show the "no widgets" message if we truly have no widgets
+    // But don't return early - continue to show the creation option
+    if (allGraphNames.isEmpty()) {
+        QAction* emptyAction = m_cgraphMenu->addAction(tr("(No graphics widgets)"));
+        emptyAction->setEnabled(false);
+        // Don't return here - continue to show creation options
+    } else {
+        // Section for tabbed graphs
+        for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
+            auto essgraph = qobject_cast<EssGraphicsWidget*>(m_cgraphTabWidget->widget(i));
+            if (!essgraph) continue;
+            
+            QString name = essgraph->name();
             QAction* action = m_cgraphMenu->addAction(name);
             action->setCheckable(true);
-            action->setChecked(m_cgraphTabWidget->currentWidget() == graph);
+            action->setChecked(m_cgraphTabWidget->currentWidget() == essgraph);
             
             // Connect to show and select the tab when clicked
             connect(action, &QAction::triggered, [this, i]() {
@@ -722,38 +777,56 @@ void EssWorkspaceManager::updateCGraphMenu()
             });
             hasTabbed = true;
         }
-    }
-    
-    // Section for floating graphs
-    bool hasFloating = false;
-    for (const QString& name : graphNames) {
-        if (m_docks.contains(name)) {
-            if (!hasFloating && hasTabbed) {
-                m_cgraphMenu->addSeparator();
+        
+        // Section for floating graphs
+        for (const QString& name : allGraphNames) {
+            if (m_docks.contains(name)) {
+                if (!hasFloating && hasTabbed) {
+                    m_cgraphMenu->addSeparator();
+                }
+                QDockWidget* dock = m_docks[name];
+                QAction* toggleAction = dock->toggleViewAction();
+                toggleAction->setText(name + tr(" (floating)"));
+                m_cgraphMenu->addAction(toggleAction);
+                hasFloating = true;
             }
-            QDockWidget* dock = m_docks[name];
-            QAction* toggleAction = dock->toggleViewAction();
-            toggleAction->setText(name + tr(" (floating)"));
-            m_cgraphMenu->addAction(toggleAction);
-            hasFloating = true;
         }
     }
     
-    // Management actions
+    // Always show creation and management actions (whether we have widgets or not)
     m_cgraphMenu->addSeparator();
     
-    QAction* newGraphAction = m_cgraphMenu->addAction(tr("New Graph..."));
+    // Single simplified creation action - ALWAYS available
+    QAction* newGraphAction = m_cgraphMenu->addAction(tr("New Graphics Widget"));
     connect(newGraphAction, &QAction::triggered, [this]() {
         bool ok;
         QString name = QInputDialog::getText(m_mainWindow, 
-            tr("New CGraph"), tr("Graph name:"), 
-            QLineEdit::Normal, QString("graph_%1").arg(m_cgraphs.size() + 1), &ok);
+            tr("New Graphics Widget"), tr("Widget name:"), 
+            QLineEdit::Normal, QString("graphics_%1").arg(m_cgraphs.size() + 1), &ok);
         
         if (ok && !name.isEmpty()) {
             createCGraphWidget(name, name);
         }
     });
     
+    // Development mode toggle - only show if we have tabbed widgets
+    if (hasTabbed) {
+        m_cgraphMenu->addSeparator();
+        
+        QAction* toggleDevAction = m_cgraphMenu->addAction(tr("Toggle Development Mode"));
+        connect(toggleDevAction, &QAction::triggered, [this]() {
+            QWidget* currentWidget = m_cgraphTabWidget->currentWidget();
+            if (auto graph = qobject_cast<EssGraphicsWidget*>(currentWidget)) {
+                bool devMode = graph->isDevelopmentMode();
+                graph->setDevelopmentMode(!devMode);
+                
+                QString mode = devMode ? "disabled" : "enabled";
+                emit statusMessage(QString("Development mode %1 for %2").arg(mode, graph->name()), 3000);
+            }
+        });
+    }
+    
+    // Management actions for existing widgets - only show if we have widgets
     if (hasTabbed || hasFloating) {
         m_cgraphMenu->addSeparator();
         
@@ -781,18 +854,22 @@ void EssWorkspaceManager::updateCGraphMenu()
             });
         }
         
-        QAction* closeAllAction = m_cgraphMenu->addAction(tr("Close All Graphs"));
+        QAction* closeAllAction = m_cgraphMenu->addAction(tr("Close All Graphics Widgets"));
         connect(closeAllAction, &QAction::triggered, [this]() {
-            if (QMessageBox::question(m_mainWindow, tr("Close All Graphs"), 
-                    tr("Close all CGraph windows?"), 
+            if (QMessageBox::question(m_mainWindow, tr("Close All Graphics Widgets"), 
+                    tr("Close all graphics widgets?"), 
                     QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+                
                 // Close all tabbed graphs
                 while (m_cgraphTabWidget->count() > 0) {
-                    QtCGraph* graph = qobject_cast<QtCGraph*>(m_cgraphTabWidget->widget(0));
-                    m_cgraphTabWidget->removeTab(0);
-                    if (graph) {
-                        m_cgraphs.remove(graph->name());
-                        graph->deleteLater();
+                    QWidget* widget = m_cgraphTabWidget->widget(0);
+                    
+                    if (auto essgraph = qobject_cast<EssGraphicsWidget*>(widget)) {
+                        QString name = essgraph->name();
+                        m_cgraphTabWidget->removeTab(0);
+                        m_cgraphs.remove(name);
+                        EssScriptableManager::getInstance().unregisterWidget(name);
+                        widget->deleteLater();
                     }
                 }
                 
@@ -806,6 +883,7 @@ void EssWorkspaceManager::updateCGraphMenu()
                 for (const QString& name : floatingNames) {
                     QDockWidget* dock = m_docks.take(name);
                     m_mainWindow->removeDockWidget(dock);
+                    EssScriptableManager::getInstance().unregisterWidget(name);
                     dock->deleteLater();
                     m_cgraphs.remove(name);
                 }
@@ -813,6 +891,21 @@ void EssWorkspaceManager::updateCGraphMenu()
                 updateCGraphMenu();
             }
         });
+    }
+}
+
+void EssWorkspaceManager::sendScriptToCurrentGraphicsWidget(const QString& script)
+{
+    QWidget* currentWidget = m_cgraphTabWidget->currentWidget();
+    if (auto graph = qobject_cast<EssGraphicsWidget*>(currentWidget)) {
+        int result = graph->eval(script);
+        QString output = graph->result();
+        
+        if (result == TCL_OK) {
+            emit statusMessage(QString("Script executed successfully"), 2000);
+        } else {
+            emit statusMessage(QString("Script error: %1").arg(output), 5000);
+        }
     }
 }
 
