@@ -6,6 +6,7 @@
 #include "communication/DservListener.h"
 #include "communication/DservEventParser.h"
 #include "console/EssOutputConsole.h"
+#include "scriptable_widget/EssScriptableManager.h"
 
 #include <QDebug>
 #include <QMetaObject>
@@ -207,7 +208,6 @@ void EssCommandInterface::initializeTcl()
             zipfs mount $dlshzip $dlshroot
             set ::auto_path [linsert $::auto_path 0 [file join $dlshroot/lib]]
             package require dlsh
-            package require qtcgmanager
         }
         
         load_dlsh
@@ -244,9 +244,8 @@ void EssCommandInterface::registerTclCommands()
     Tcl_CreateObjCommand(m_tclInterp, "ess", TclEssCmd, this, nullptr);
     Tcl_CreateObjCommand(m_tclInterp, "dserv", TclDservCmd, this, nullptr);
     
-    // Create new cgraph widgets
-    Tcl_Eval(m_tclInterp, "namespace eval ::cg {}");
-	Tcl_CreateObjCommand(m_tclInterp, "cg::create", TclCreateCGraphCmd, this, nullptr);
+	// Add commands from scriptable interface
+	EssScriptableManager::getInstance().registerTclCommands(m_tclInterp);
 }
 
 void EssCommandInterface::shutdownTcl()
@@ -475,27 +474,6 @@ int EssCommandInterface::TclAboutCmd(ClientData clientData, Tcl_Interp *interp,
 {
     auto *self = static_cast<EssCommandInterface*>(clientData);
     emit self->aboutRequested();
-    return TCL_OK;
-}
-
-int EssCommandInterface::TclCreateCGraphCmd(ClientData clientData, Tcl_Interp *interp,
-                                           int objc, Tcl_Obj *const objv[])
-{
-    auto *self = static_cast<EssCommandInterface*>(clientData);
-    
-    if (objc < 2 || objc > 3) {
-        Tcl_WrongNumArgs(interp, 1, objv, "name ?title?");
-        return TCL_ERROR;
-    }
-    
-    QString name = Tcl_GetString(objv[1]);
-    QString title = (objc > 2) ? Tcl_GetString(objv[2]) : name;
-    
-    // Emit signal to create the widget in the main thread
-    QMetaObject::invokeMethod(self, [self, name, title]() {
-        emit self->createCGraphRequested(name, title);
-    }, Qt::QueuedConnection);
-    
     return TCL_OK;
 }
 
