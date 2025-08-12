@@ -24,6 +24,7 @@ class EssEyeTouchVisualizerWidget;
 class EssStateSystemWidget;
 class DraggableTabWidget;
 class EssGraphicsWidget;
+class EssBehavmonWidget;
 
 class EssWorkspaceManager : public QObject
 {
@@ -61,6 +62,10 @@ private:
     // Setup methods
     void createDocks();
     void applyDefaultLayout();
+    void clearCurrentLayout();
+    bool validateAllDocks();
+    void applySizeConstraints();
+    void applyFloatingConstraints();    
     void connectSignals();
     
     // Helper methods
@@ -100,5 +105,6 @@ private:
     EssStimDgWidget *m_stimDgViewer;
     EssEyeTouchVisualizerWidget *m_eyeTouchVisualizer;
     EssStateSystemWidget *m_stateSystemWidget;
-    DraggableTabWidget* m_cgraphTabWidget; 
+    DraggableTabWidget* m_cgraphTabWidget;
+    EssBehavmonWidget *m_behavmonWidget; 
 };

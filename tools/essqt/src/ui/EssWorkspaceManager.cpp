@@ -18,6 +18,7 @@
 #include "scriptable_widget/EssScriptableManager.h"
 #include "cgraph/DraggableTabWidget.h"
 #include "cgraph/EssGraphicsWidget.h"
+#include "behavmon/EssBehavmonWidget.h"
 
 #include <QMainWindow>
 #include <QDockWidget>
@@ -336,6 +337,13 @@ void EssWorkspaceManager::createDocks()
     
     m_docks["EventTable"] = eventDock;
     
+    // BehavMon dock
+    QDockWidget *behavmonDock = new QDockWidget(tr("Performance Monitor"), m_mainWindow);
+	behavmonDock->setObjectName("BehavmonDock");
+	m_behavmonWidget = new EssBehavmonWidget();
+	behavmonDock->setWidget(m_behavmonWidget);
+	m_docks["BehavMon"] = behavmonDock;
+
     // Create State Debug dock
     QDockWidget *stateSystemDock = new QDockWidget(tr("State System"), m_mainWindow);
     stateSystemDock->setObjectName("stateSystemDock");
@@ -461,11 +469,25 @@ QWidget* EssWorkspaceManager::createControlPanel()
 
 void EssWorkspaceManager::applyDefaultLayout()
 {
-    // Clear current layout and hide all docks
-    for (auto dock : m_docks) {
-        dock->setVisible(false);
-        dock->setFloating(false);
-        m_mainWindow->removeDockWidget(dock);
+    // CRITICAL: Clean up and validate all docks before using them
+    
+    // 1. First, clean up any existing layout state
+    clearCurrentLayout();
+    
+    // 2. Validate all docks exist before proceeding
+    if (!validateAllDocks()) {
+        // If any docks are missing, recreate them
+        createDocks();
+    }
+    
+    // 3. Remove all docks from main window safely
+    for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+        QDockWidget* dock = it.value();
+        if (dock && !dock->isHidden()) {
+            dock->setVisible(false);
+            dock->setFloating(false);
+            m_mainWindow->removeDockWidget(dock);
+        }
     }
     
     // Set up corners
@@ -474,106 +496,171 @@ void EssWorkspaceManager::applyDefaultLayout()
     m_mainWindow->setCorner(Qt::BottomLeftCorner, Qt::BottomDockWidgetArea);
     m_mainWindow->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
     
-    // Build the layout structure
+    // Build the layout structure with null checks
     
     // 1. Bottom area first - Terminal and Console tabbed
-    m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Terminal"]);
-    m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Console"]);
-    m_mainWindow->tabifyDockWidget(m_docks["Terminal"], m_docks["Console"]);
+    if (m_docks.contains("Terminal") && m_docks.contains("Console") && 
+        m_docks["Terminal"] && m_docks["Console"]) {
+        
+        m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Terminal"]);
+        m_mainWindow->addDockWidget(Qt::BottomDockWidgetArea, m_docks["Console"]);
+        m_mainWindow->tabifyDockWidget(m_docks["Terminal"], m_docks["Console"]);
+    }
     
     // 2. Left area - Control Panel
-    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ControlPanel"]);
+    if (m_docks.contains("ControlPanel") && m_docks["ControlPanel"]) {
+        m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["ControlPanel"]);
+    }
     
-    // 3. Center-left - Eye/Touch above Event
-    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["EyeTouchVisualizer"]);
-    m_mainWindow->splitDockWidget(m_docks["ControlPanel"], m_docks["EyeTouchVisualizer"], Qt::Horizontal);
+    // 3. Center-left - Eye/Touch above Event above behavmon
+    if (m_docks.contains("ControlPanel") && m_docks.contains("EyeTouchVisualizer") &&
+        m_docks["ControlPanel"] && m_docks["EyeTouchVisualizer"]) {
+        
+        m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["EyeTouchVisualizer"]);
+        m_mainWindow->splitDockWidget(m_docks["ControlPanel"], m_docks["EyeTouchVisualizer"], Qt::Horizontal);
+    }
     
-    m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["EventTable"]);
-    m_mainWindow->splitDockWidget(m_docks["EyeTouchVisualizer"], m_docks["EventTable"], Qt::Vertical);
+    if (m_docks.contains("EyeTouchVisualizer") && m_docks.contains("EventTable") &&
+        m_docks["EyeTouchVisualizer"] && m_docks["EventTable"]) {
+        
+        m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["EventTable"]);
+        m_mainWindow->splitDockWidget(m_docks["EyeTouchVisualizer"], m_docks["EventTable"], Qt::Vertical);
+    }
     
-    // 4. Right area - Script Editor, Stim Viewer, and Datapoint Monitor (tabbed)
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["ScriptEditor"]);
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["stateSystem"]); 
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["StimDgViewer"]);
-    m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["DatapointTable"]);
- 	m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_docks["CGraphContainer"]);
- 	
-    // Tab them together
-    m_mainWindow->tabifyDockWidget(m_docks["ScriptEditor"], m_docks["stateSystem"]);
-    m_mainWindow->tabifyDockWidget(m_docks["stateSystem"], m_docks["StimDgViewer"]);
-    m_mainWindow->tabifyDockWidget(m_docks["StimDgViewer"], m_docks["DatapointTable"]);
-	m_mainWindow->tabifyDockWidget(m_docks["DatapointTable"], m_docks["CGraphContainer"]);
+    // FIXED: Check for BehavMon dock properly
+    if (m_docks.contains("EventTable") && m_docks.contains("BehavMon") &&
+        m_docks["EventTable"] && m_docks["BehavMon"]) {
+        
+        m_mainWindow->addDockWidget(Qt::LeftDockWidgetArea, m_docks["BehavMon"]);
+        m_mainWindow->splitDockWidget(m_docks["EventTable"], m_docks["BehavMon"], Qt::Vertical);
+    }
     
-    // Set constraints for docked state only
+    // 4. Right area - Script Editor, State System, etc. (all with null checks)
+    QStringList rightDocks = {"ScriptEditor", "stateSystem", "StimDgViewer", "DatapointTable", "CGraphContainer"};
+    QDockWidget* previousDock = nullptr;
     
-    // Control Panel: prefer ~300px but flexible
-    m_docks["ControlPanel"]->setMinimumWidth(250);
-    m_docks["ControlPanel"]->setMaximumWidth(400);
+    for (const QString& dockName : rightDocks) {
+        if (m_docks.contains(dockName) && m_docks[dockName]) {
+            QDockWidget* dock = m_docks[dockName];
+            m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+            
+            if (previousDock) {
+                m_mainWindow->tabifyDockWidget(previousDock, dock);
+            }
+            previousDock = dock;
+        }
+    }
     
-    // Eye/Touch and Event: constrain width only when docked
-    // The topLevelChanged handlers will manage these dynamically
-    if (!m_docks["EyeTouchVisualizer"]->isFloating()) {
+    // Apply size constraints with null checks
+    applySizeConstraints();
+    
+    // Show all valid docks
+    for (auto dock : m_docks) {
+        if (dock) {
+            dock->setVisible(true);
+        }
+    }
+    
+    // Set active tabs safely
+    if (m_docks.contains("ScriptEditor") && m_docks["ScriptEditor"]) {
+        m_docks["ScriptEditor"]->raise();
+    }
+    if (m_docks.contains("Terminal") && m_docks["Terminal"]) {
+        m_docks["Terminal"]->raise();
+    }
+}
+
+// NEW: Add validation and cleanup methods
+void EssWorkspaceManager::clearCurrentLayout()
+{
+    // Clear any pending layout operations
+    QApplication::processEvents();
+    
+    // Remove all docks from main window
+    for (auto dock : m_docks) {
+        if (dock) {
+            m_mainWindow->removeDockWidget(dock);
+        }
+    }
+}
+
+bool EssWorkspaceManager::validateAllDocks()
+{
+    QStringList requiredDocks = {
+        "Terminal", "Console", "ControlPanel", "EyeTouchVisualizer", 
+        "EventTable", "BehavMon", "ScriptEditor", "stateSystem", 
+        "StimDgViewer", "DatapointTable", "CGraphContainer"
+    };
+    
+    for (const QString& dockName : requiredDocks) {
+        if (!m_docks.contains(dockName) || !m_docks[dockName]) {
+            qWarning() << "Missing dock:" << dockName;
+            return false;
+        }
+        
+        // Check if the dock's widget is valid
+        QDockWidget* dock = m_docks[dockName];
+        if (!dock->widget()) {
+            qWarning() << "Dock widget missing for:" << dockName;
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+void EssWorkspaceManager::applySizeConstraints()
+{
+    // Apply size constraints with null checks
+    if (m_docks.contains("Terminal") && m_docks["Terminal"] && m_terminal) {
+        m_docks["Terminal"]->setMinimumHeight(80);
+        m_docks["Terminal"]->setMaximumHeight(300);
+        m_docks["Terminal"]->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+        
+        m_terminal->setMinimumHeight(80);
+        m_terminal->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    }
+    
+    if (m_docks.contains("Console") && m_docks["Console"] && m_console) {
+        m_docks["Console"]->setMinimumHeight(80);
+        m_docks["Console"]->setMaximumHeight(300);
+        m_docks["Console"]->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+        
+        m_console->setMinimumHeight(80);
+        m_console->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+    }
+    
+    // Apply other constraints...
+    if (m_docks.contains("ControlPanel") && m_docks["ControlPanel"]) {
+        m_docks["ControlPanel"]->setMinimumWidth(250);
+        m_docks["ControlPanel"]->setMaximumWidth(400);
+    }
+    
+    // Apply floating constraints for Eye/Touch and Event docks
+    applyFloatingConstraints();
+}
+
+void EssWorkspaceManager::applyFloatingConstraints()
+{
+    // Eye/Touch constraints (only if not floating)
+    if (m_docks.contains("EyeTouchVisualizer") && m_docks["EyeTouchVisualizer"] && 
+        m_eyeTouchVisualizer && !m_docks["EyeTouchVisualizer"]->isFloating()) {
+        
         m_docks["EyeTouchVisualizer"]->setMinimumWidth(300);
         m_docks["EyeTouchVisualizer"]->setMaximumWidth(350);
         m_eyeTouchVisualizer->setMinimumWidth(300);
         m_eyeTouchVisualizer->setMaximumWidth(350);
     }
     
-    if (!m_docks["EventTable"]->isFloating()) {
+    // Event table constraints (only if not floating)
+    if (m_docks.contains("EventTable") && m_docks["EventTable"] && 
+        m_eventTable && !m_docks["EventTable"]->isFloating()) {
+        
         m_docks["EventTable"]->setMinimumWidth(300);
         m_docks["EventTable"]->setMaximumWidth(350);
         m_eventTable->setMinimumWidth(300);
         m_eventTable->setMaximumWidth(350);
     }
-    
-        // Position behavior monitor with datapoint table for data analysis grouping
-    if (m_docks.contains("behavmon")) {
-        // Stack below datapoint table if it exists
-        if (m_docks.contains("datapointTable")) {
-            m_mainWindow->splitDockWidget(m_docks["datapointTable"], 
-                                        m_docks["behavmon"], 
-                                        Qt::Vertical);
-        }
-        // Or below event table as fallback
-        else if (m_docks.contains("eventTable")) {
-            m_mainWindow->splitDockWidget(m_docks["eventTable"], 
-                                        m_docks["behavmon"], 
-                                        Qt::Vertical);
-        }
-    }
-    
-    // Terminal/Console: limit height to prevent taking too much space
-    m_docks["Terminal"]->setMinimumHeight(80);
-    m_docks["Terminal"]->setMaximumHeight(200);
-    m_docks["Console"]->setMinimumHeight(80);
-    m_docks["Console"]->setMaximumHeight(200);
-    
-    // Restrict Terminal/Console to bottom only
-    m_docks["Terminal"]->setAllowedAreas(Qt::BottomDockWidgetArea);
-    m_docks["Console"]->setAllowedAreas(Qt::BottomDockWidgetArea);
-    
-    // Set reasonable initial sizes as hints (Qt will adjust for screen size)
-    QSize mainSize = m_mainWindow->size();
-    if (mainSize.width() > 100 && mainSize.height() > 100) {
-        // Use proportions from your layout
-        int controlWidth = mainSize.width() * 0.24;  // ~24% for control panel
-        int centerWidth = mainSize.width() * 0.24;   // ~24% for eye/event column
-        int terminalHeight = mainSize.height() * 0.18; // ~18% for terminal
-        
-        m_docks["ControlPanel"]->resize(controlWidth, m_docks["ControlPanel"]->height());
-        m_docks["EyeTouchVisualizer"]->resize(centerWidth, m_docks["EyeTouchVisualizer"]->height());
-        m_docks["EventTable"]->resize(centerWidth, m_docks["EventTable"]->height());
-        m_docks["Terminal"]->resize(m_docks["Terminal"]->width(), terminalHeight);
-    }
-    
-    // Show all docks
-    for (auto dock : m_docks) {
-        dock->setVisible(true);
-    }
-    
-    // Set active tabs
-    m_docks["ScriptEditor"]->raise();
-    m_docks["Terminal"]->raise();
 }
 
 void EssWorkspaceManager::connectSignals()
@@ -627,6 +714,11 @@ void EssWorkspaceManager::connectSignals()
         });
 
             
+	if (m_behavmonWidget) {
+    	connect(m_behavmonWidget, &EssBehavmonWidget::statusMessage,
+        	    this, &EssWorkspaceManager::statusMessage);
+	}
+            
     // Menu update signal
     connect(m_cgraphMenu, &QMenu::aboutToShow,
             this, &EssWorkspaceManager::updateCGraphMenu); 
@@ -634,9 +726,19 @@ void EssWorkspaceManager::connectSignals()
 
 void EssWorkspaceManager::resetToDefaultLayout()
 {
+    // Add debug logging
+    qDebug() << "Resetting layout...";
+    
+    // Ensure all widgets are valid before resetting
+    if (!validateAllDocks()) {
+        qWarning() << "Some docks are invalid - recreating all docks";
+        createDocks();
+    }
+    
     applyDefaultLayout();
+    
+    qDebug() << "Layout reset complete";
 }
-
 
 bool EssWorkspaceManager::eventFilter(QObject* obj, QEvent* event)
 {
