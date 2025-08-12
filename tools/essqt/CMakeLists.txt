@@ -106,6 +106,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/visualization
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/state_system
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/cgraph
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/scriptable_widget
     ${CMAKE_CURRENT_SOURCE_DIR}/src/communication
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl
 )
@@ -146,10 +147,13 @@ set(UI_SOURCES
     src/ui/components/visualization/EssEyeTouchVisualizerWidget.cpp
     src/ui/components/state_system/EssStateSystemWidget.cpp
     src/ui/components/state_system/EssStateDebugData.cpp
+	src/ui/components/scriptable_widget/EssScriptableWidget.cpp
+    src/ui/components/scriptable_widget/EssScriptableManager.cpp
     src/ui/components/cgraph/qtcgmanager.cpp
     src/ui/components/cgraph/qtcgraph.cpp    
     src/ui/components/cgraph/DraggableTabWidget.cpp
 	src/ui/components/cgraph/DraggableTabBar.cpp
+    src/ui/components/cgraph/EssGraphicsWidget.cpp
 )
 
 
