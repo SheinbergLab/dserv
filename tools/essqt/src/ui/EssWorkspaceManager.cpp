@@ -78,6 +78,9 @@ void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString&
     // Create EssGraphicsWidget
     EssGraphicsWidget* graph = new EssGraphicsWidget(name);
     
+    auto cmdInterface = EssApplication::instance()->commandInterface();
+    graph->mainInterp(cmdInterface->tclInterp());
+      
     // Enable development mode by default for new widgets
     graph->setDevelopmentMode(true);
     graph->setDevelopmentLayout(EssScriptableWidget::DevBottomPanel);

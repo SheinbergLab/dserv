@@ -19,6 +19,9 @@
 #include <QDialog>
 #include <QTimer>
 #include <tcl.h>
+#include "core/EssEventProcessor.h"
+
+#include "EssEvent.h"
 
 class EssCodeEditor;
 
@@ -42,6 +45,7 @@ public:
     // Core identity and scripting
     QString name() const { return m_name; }
     Tcl_Interp* interpreter() { return m_interp; }
+    void mainInterp(Tcl_Interp *interp) { m_mainInterp = interp; }
     int eval(const QString& command);
     QString result() const;
     
@@ -82,6 +86,8 @@ protected:
     virtual void onSetupComplete() {}
     virtual void onDatapointReceived(const QString& name, const QVariant& value, qint64 timestamp) {}
     
+    virtual void onEventReceived(const EssEvent& event);
+     
     // Utility methods for derived classes
     void localLog(const QString& message);
     QString substituteDatapointData(const QString& script, const QString& name,
@@ -108,6 +114,10 @@ private:
     void setupDevelopmentUI();
     void connectToDataProcessor();
     
+    bool matchesEventPattern(const QString& pattern, const EssEvent& event) const;
+    QString substituteEventData(const QString& script, const EssEvent& event) const;
+    EssEventProcessor* getEventProcessor() const;
+    
     // Development UI layout methods
     void applyDevelopmentLayout();
     void setupSideBySideLayout();
@@ -120,10 +130,15 @@ private:
     
     // Core Tcl commands (minimal set)
     static int tcl_bind_datapoint(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int tcl_shared_dg(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_get_dg(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_local_log(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_test_datapoint(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 
+    static int tcl_bind_event(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_list_event_types(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_list_event_subtypes(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_test_event(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    
 private:
     // Core state
     QString m_name;
@@ -137,6 +152,8 @@ private:
     QMap<QString, QString> m_datapointBindings;
     QMap<QString, QString> m_eventBindings;
     
+    bool matchesNumericPattern(const QString& pattern, const EssEvent& event) const;
+     
     // Development mode components
     bool m_developmentMode;
     DevLayoutMode m_devLayoutMode;

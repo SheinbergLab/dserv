@@ -3,6 +3,7 @@
 #include "EssCodeEditor.h"
 #include "core/EssApplication.h"
 #include "core/EssDataProcessor.h"
+#include "core/EssEventProcessor.h"
 #include "console/EssOutputConsole.h"
 #include "scriptable_widget/EssScriptableManager.h"
 
@@ -12,6 +13,7 @@
 #include <QDebug>
 #include <QTextCursor>
 #include <QMessageBox>
+#include <QTimer>
 
 extern "C" {
 #include "dlfuncs.h"
@@ -168,9 +170,18 @@ void EssScriptableWidget::registerCoreCommands()
     
     // Core commands available to all scriptable widgets
     Tcl_CreateObjCommand(m_interp, "bind_datapoint", tcl_bind_datapoint, this, nullptr);
-    Tcl_CreateObjCommand(m_interp, "shared_dg", tcl_shared_dg, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "get_dg", tcl_get_dg, this, nullptr);
     Tcl_CreateObjCommand(m_interp, "local_log", tcl_local_log, this, nullptr);
     Tcl_CreateObjCommand(m_interp, "test_datapoint", tcl_test_datapoint, this, nullptr);
+    
+    // Add new event commands
+    Tcl_CreateObjCommand(m_interp, "bind_event", tcl_bind_event, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "list_event_types", tcl_list_event_types, 
+    	this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "list_event_subtypes", tcl_list_event_subtypes,
+    	this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "test_event", tcl_test_event, this, nullptr);
+
 }
 
 void EssScriptableWidget::connectToDataProcessor()
@@ -185,6 +196,13 @@ void EssScriptableWidget::connectToDataProcessor()
     connect(processor, &EssDataProcessor::genericDatapointReceived,
             this, &EssScriptableWidget::onDatapointReceived_internal);
     
+    auto* eventProcessor = processor->eventProcessor();
+    if (eventProcessor) {
+        connect(eventProcessor, &EssEventProcessor::eventReceived,
+                this, &EssScriptableWidget::onEventReceived);
+    }
+
+
     // Connect to specific data types that might be relevant
     connect(processor, &EssDataProcessor::stimulusDataReceived,
             this, [this](const QByteArray&, qint64 timestamp) {
@@ -307,6 +325,143 @@ QString EssScriptableWidget::substituteDatapointData(const QString& script, cons
     result.replace("$widget_type", getWidgetTypeName());
     
     return result;
+}
+
+void EssScriptableWidget::onEventReceived(const EssEvent& event)
+{
+    // Check for matching event bindings
+    for (auto it = m_eventBindings.begin(); it != m_eventBindings.end(); ++it) {
+        QString pattern = it.key();
+        
+        if (matchesEventPattern(pattern, event)) {
+            QString script = substituteEventData(it.value(), event);
+            eval(script);
+        }
+    }
+}
+
+bool EssScriptableWidget::matchesEventPattern(const QString& pattern, const EssEvent& event) const
+{
+    if (pattern == "*") return true;
+    
+    auto* eventProc = getEventProcessor();
+    if (!eventProc) {
+        // Fall back to numeric only
+        return matchesNumericPattern(pattern, event);
+    }
+    
+    if (pattern.contains(':')) {
+        QStringList parts = pattern.split(':');
+        if (parts.size() == 2) {
+            QString typePart = parts[0];
+            QString subtypePart = parts[1];
+            
+            // Try type by name first, then by number
+            uint8_t typeId = 255;
+            if (eventProc->isValidEventTypeName(typePart)) {
+                typeId = eventProc->getEventTypeId(typePart);
+            } else {
+                bool ok;
+                typeId = typePart.toUInt(&ok);
+                if (!ok) typeId = 255;
+            }
+            
+            if (typeId == 255 || typeId != event.type) {
+                return false;
+            }
+            
+            // Handle wildcard subtype
+            if (subtypePart == "*") {
+                return true;
+            }
+            
+            // Try subtype by name first, then by number
+            if (eventProc->isValidEventSubtypeName(typeId, subtypePart)) {
+                auto pair = eventProc->getEventSubtypeId(typeId, subtypePart);
+                return pair.second == event.subtype;
+            } else {
+                bool ok;
+                uint8_t subtypeId = subtypePart.toUInt(&ok);
+                return ok && subtypeId == event.subtype;
+            }
+        }
+    } else {
+        // Type-only pattern
+        if (eventProc->isValidEventTypeName(pattern)) {
+            return eventProc->getEventTypeId(pattern) == event.type;
+        } else {
+            bool ok;
+            uint8_t typeId = pattern.toUInt(&ok);
+            return ok && typeId == event.type;
+        }
+    }
+    
+    return false;
+}
+
+QString EssScriptableWidget::substituteEventData(const QString& script, const EssEvent& event) const
+{
+    QString result = script;
+    
+    // Basic event variables
+    result.replace("$event_type", QString::number(event.type));
+    result.replace("$event_subtype", QString::number(event.subtype));
+    result.replace("$event_timestamp", QString::number(event.timestamp));
+    result.replace("$event_params", event.paramsAsString());
+    
+    // Add friendly names if available
+    auto* eventProc = getEventProcessor();
+    if (eventProc) {
+        result.replace("$event_type_name", eventProc->getEventTypeName(event.type));
+        result.replace("$event_subtype_name", eventProc->getEventSubtypeName(event.type, event.subtype));
+        
+        // Add formatted name for logging
+        QString friendlyName = QString("%1:%2")
+            .arg(eventProc->getEventTypeName(event.type))
+            .arg(eventProc->getEventSubtypeName(event.type, event.subtype));
+        result.replace("$event_friendly_name", friendlyName);
+    }
+    
+    // Widget info
+    result.replace("$widget_name", m_name);
+    result.replace("$widget_type", getWidgetTypeName());
+    
+    return result;
+}
+
+EssEventProcessor* EssScriptableWidget::getEventProcessor() const
+{
+    auto* app = EssApplication::instance();
+    if (app && app->dataProcessor()) {
+        return app->dataProcessor()->eventProcessor();
+    }
+    return nullptr;
+}
+bool EssScriptableWidget::matchesNumericPattern(const QString& pattern, const EssEvent& event) const
+{
+    if (pattern == "*") return true;
+    
+    QStringList parts = pattern.split(':');
+    
+    if (parts.size() == 1) {
+        // Just type matching (numeric)
+        bool ok;
+        uint8_t typeNum = parts[0].toUInt(&ok);
+        return ok && typeNum == event.type;
+    } else if (parts.size() == 2) {
+        // Type and subtype matching (numeric)
+        bool ok1, ok2;
+        uint8_t typeNum = parts[0].toUInt(&ok1);
+        
+        if (parts[1] == "*") {
+            return ok1 && typeNum == event.type;
+        }
+        
+        uint8_t subtypeNum = parts[1].toUInt(&ok2);
+        return ok1 && ok2 && typeNum == event.type && subtypeNum == event.subtype;
+    }
+    
+    return false;
 }
 
 void EssScriptableWidget::setDevelopmentMode(bool enabled)
@@ -742,7 +897,7 @@ int EssScriptableWidget::tcl_bind_datapoint(ClientData clientData, Tcl_Interp* i
     return TCL_OK;
 }
 
-int EssScriptableWidget::tcl_shared_dg(ClientData clientData, Tcl_Interp* interp,
+int EssScriptableWidget::tcl_get_dg(ClientData clientData, Tcl_Interp* interp,
                                        int objc, Tcl_Obj* const objv[])
 {
     auto* widget = static_cast<EssScriptableWidget*>(clientData);
@@ -756,18 +911,31 @@ int EssScriptableWidget::tcl_shared_dg(ClientData clientData, Tcl_Interp* interp
         return TCL_ERROR;
     }
     
-    const char* dgName = Tcl_GetString(objv[1]);
+	char* dgName = Tcl_GetString(objv[1]);
     
-    // Look up the DynGroup in the main interpreter
+    // Look up the dg in the main interpreter
     DYN_GROUP* dg = nullptr;
-    if (tclFindDynGroup(widget->m_mainInterp, const_cast<char*>(dgName), &dg) != TCL_OK) {
-        Tcl_SetObjResult(interp, Tcl_NewStringObj("DynGroup not found", -1));
+    if (tclFindDynGroup(widget->m_mainInterp, dgName, &dg) != TCL_OK) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("dg not found", -1));
         return TCL_ERROR;
     }
     
-    // Reference it in this interpreter
-    if (tclPutDynGroup(interp, dg) != TCL_OK) {
-        Tcl_SetResult(interp, "Failed to reference shared DynGroup", TCL_STATIC);
+    // Copy if found
+    DYN_GROUP *copy_dg = dfuCopyDynGroup(dg, DYN_GROUP_NAME(dg));
+	if (!copy_dg) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("error copying dg", -1));
+        return TCL_ERROR;
+	}
+	
+	// Delete if exists in current interp
+    if (tclFindDynGroup(interp, dgName, NULL) == TCL_OK) {
+        QString deleteCmd = QString("catch {dg_delete %1}").arg(dgName);
+        Tcl_Eval(interp, deleteCmd.toUtf8().constData());
+  	}
+  
+    // Add to this interpreter
+    if (tclPutDynGroup(interp, copy_dg) != TCL_OK) {
+        Tcl_SetResult(interp, "error adding copied dg", TCL_STATIC);
         return TCL_ERROR;
     }
     
@@ -815,3 +983,109 @@ int EssScriptableWidget::tcl_test_datapoint(ClientData clientData, Tcl_Interp* i
     return TCL_OK;
 }
 
+int EssScriptableWidget::tcl_bind_event(ClientData clientData, Tcl_Interp* interp,
+                                        int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "event_pattern script");
+        return TCL_ERROR;
+    }
+    
+    QString pattern = QString::fromUtf8(Tcl_GetString(objv[1]));
+    QString script = QString::fromUtf8(Tcl_GetString(objv[2]));
+    
+    widget->bindEvent(pattern, script);
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("event binding created", -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_list_event_types(ClientData clientData, Tcl_Interp* interp,
+                                              int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    auto* eventProc = widget->getEventProcessor();
+    
+    if (!eventProc) {
+        Tcl_SetResult(interp, "Event processor not available", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    QStringList typeNames = eventProc->getAvailableEventTypeNames();
+    
+    widget->localLog(QString("Available event types:\n%1").arg(typeNames.join("\n")));
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(typeNames.join(" ").toUtf8().constData(), -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_list_event_subtypes(ClientData clientData, Tcl_Interp* interp,
+                                                 int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    auto* eventProc = widget->getEventProcessor();
+    
+    if (!eventProc || objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "event_type");
+        return TCL_ERROR;
+    }
+    
+    QString typeStr = QString::fromUtf8(Tcl_GetString(objv[1]));
+    
+    // Look up type ID
+    uint8_t typeId = 255;
+    if (eventProc->isValidEventTypeName(typeStr)) {
+        typeId = eventProc->getEventTypeId(typeStr);
+    } else {
+        bool ok;
+        typeId = typeStr.toUInt(&ok);
+        if (!ok) typeId = 255;
+    }
+    
+    if (typeId == 255) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Invalid event type", -1));
+        return TCL_ERROR;
+    }
+    
+    QStringList subtypeNames = eventProc->getAvailableEventSubtypeNames(typeId);
+    
+    widget->localLog(QString("Available subtypes for type %1:\n%2")
+                    .arg(typeStr, subtypeNames.join("\n")));
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(subtypeNames.join(" ").toUtf8().constData(), -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_test_event(ClientData clientData, Tcl_Interp* interp,
+                                        int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 4) {
+        Tcl_WrongNumArgs(interp, 1, objv, "type subtype params");
+        return TCL_ERROR;
+    }
+    
+    uint8_t type = QString::fromUtf8(Tcl_GetString(objv[1])).toUInt();
+    uint8_t subtype = QString::fromUtf8(Tcl_GetString(objv[2])).toUInt();
+    QString params = QString::fromUtf8(Tcl_GetString(objv[3]));
+    
+    // Create test event
+    EssEvent testEvent;
+    testEvent.type = type;
+    testEvent.subtype = subtype;
+    testEvent.timestamp = QDateTime::currentMSecsSinceEpoch();
+    testEvent.ptype = PTYPE_STRING;
+    testEvent.params = QJsonValue(params);
+    
+    widget->localLog(QString("Testing event: %1:%2").arg(type).arg(subtype));
+    
+    // Simulate event with slight delay
+    QTimer::singleShot(100, [widget, testEvent]() {
+        widget->onEventReceived(testEvent);
+    });
+    
+    return TCL_OK;
+}
