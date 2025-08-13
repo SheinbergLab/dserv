@@ -338,10 +338,43 @@ void EssWorkspaceManager::createDocks()
     m_docks["EventTable"] = eventDock;
     
     // BehavMon dock
-    QDockWidget *behavmonDock = new QDockWidget(tr("Performance Monitor"), m_mainWindow);
+	QDockWidget *behavmonDock = new QDockWidget(tr("Performance Monitor"), m_mainWindow);
 	behavmonDock->setObjectName("BehavmonDock");
 	m_behavmonWidget = new EssBehavmonWidget();
 	behavmonDock->setWidget(m_behavmonWidget);
+
+	behavmonDock->setMinimumWidth(220);  // Reduced from default
+	behavmonDock->setMaximumWidth(280);  // Allow it to be narrow
+	behavmonDock->setMinimumHeight(250); // Minimum functional height
+
+	connect(behavmonDock, &QDockWidget::topLevelChanged, [this, behavmonDock](bool floating) {
+		if (floating) {
+			// When floating, remove width constraints but keep reasonable minimums
+			behavmonDock->setMinimumSize(250, 300);
+			behavmonDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+			
+			if (behavmonDock->width() < 300) {
+				behavmonDock->resize(350, 400);
+			}
+			
+			m_behavmonWidget->setMinimumSize(250, 300);
+			m_behavmonWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+		} else {
+			// When docked, apply compact constraints
+#if 0
+			behavmonDock->setMinimumWidth(220);
+			behavmonDock->setMaximumWidth(280);
+			behavmonDock->setMinimumHeight(250);
+			behavmonDock->setMaximumHeight(QWIDGETSIZE_MAX);
+			
+			m_behavmonWidget->setMinimumWidth(220);
+			m_behavmonWidget->setMaximumWidth(280);
+			m_behavmonWidget->setMinimumHeight(250);
+			m_behavmonWidget->setMaximumHeight(QWIDGETSIZE_MAX);
+#endif
+		}
+	});
+
 	m_docks["BehavMon"] = behavmonDock;
 
     // Create State Debug dock

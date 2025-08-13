@@ -284,6 +284,9 @@ void EssBehavmonWidget::registerCustomCommands()
 QWidget* EssBehavmonWidget::createMainWidget()
 {
     m_mainWidget = new QWidget();
+
+    // Set size policy to expand and fill available space
+    m_mainWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     
     // Create main layout
     QVBoxLayout* mainLayout = new QVBoxLayout(m_mainWidget);
@@ -295,10 +298,15 @@ QWidget* EssBehavmonWidget::createMainWidget()
     setupDetailedPerformanceArea();
     setupControlsArea();
     
+    m_generalGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_detailedGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_controlsGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    
     // Add to main layout with proper sizing
     mainLayout->addWidget(m_generalGroup, 0);      // Fixed size
     mainLayout->addWidget(m_detailedGroup, 1);     // Expanding
     mainLayout->addWidget(m_controlsGroup, 0);     // Fixed size
+
     
     return m_mainWidget;
 }
@@ -306,101 +314,67 @@ QWidget* EssBehavmonWidget::createMainWidget()
 void EssBehavmonWidget::setupGeneralPerformanceArea()
 {
     m_generalGroup = new QGroupBox("Performance Overview");
-    m_generalGroup->setMaximumHeight(140);
+    m_generalGroup->setMaximumHeight(120); // Reduced from 140
     
     QVBoxLayout* mainLayout = new QVBoxLayout(m_generalGroup);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-    mainLayout->setSpacing(8);
+    mainLayout->setContentsMargins(6, 6, 6, 6); // Reduced from 8
+    mainLayout->setSpacing(6);
     
-    // Create card container
+    // Create more compact card container
     QHBoxLayout* cardsLayout = new QHBoxLayout();
-    cardsLayout->setSpacing(6);
+    cardsLayout->setSpacing(4); // Reduced from 6
     
-    // Percent Correct Card
-    QFrame* correctCard = new QFrame();
-    correctCard->setFrameStyle(QFrame::StyledPanel);
-    correctCard->setStyleSheet(
-        "QFrame { "
-        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4CAF50, stop:1 #45a049);"
-        "  border-radius: 8px;"
-        "  border: 1px solid #45a049;"
-        "}"
-        "QLabel { background: transparent; color: white; }"
-    );
+    // Helper function to create compact cards
+    auto createCompactCard = [this](const QString& title, const QString& color1, const QString& color2) -> QFrame* {
+        QFrame* card = new QFrame();
+        card->setFrameStyle(QFrame::StyledPanel);
+        card->setStyleSheet(QString(
+            "QFrame { "
+            "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %1, stop:1 %2);"
+            "  border-radius: 6px;" // Reduced from 8px
+            "  border: 1px solid %2;"
+            "}"
+            "QLabel { background: transparent; color: white; }"
+        ).arg(color1, color2));
+        
+        QVBoxLayout* layout = new QVBoxLayout(card);
+        layout->setContentsMargins(4, 3, 4, 3); // Reduced padding
+        layout->setSpacing(1); // Reduced spacing
+        
+        QLabel* titleLabel = new QLabel(title);
+        titleLabel->setAlignment(Qt::AlignCenter);
+        titleLabel->setStyleSheet("font-weight: bold; font-size: 9px;"); // Smaller font
+        
+        QLabel* valueLabel = new QLabel("0");
+        valueLabel->setAlignment(Qt::AlignCenter);
+        valueLabel->setStyleSheet("font-weight: bold; font-size: 12px;"); // Slightly smaller
+        
+        layout->addWidget(titleLabel);
+        layout->addWidget(valueLabel);
+        
+        // Store value label for updates
+        if (title == "% Correct") m_percentCorrectLabel = valueLabel;
+        else if (title == "% Complete") m_percentCompleteLabel = valueLabel;
+        else if (title == "Trials") m_totalTrialsLabel = valueLabel;
+        
+        return card;
+    };
     
-    QVBoxLayout* correctLayout = new QVBoxLayout(correctCard);
-    correctLayout->setContentsMargins(6, 4, 6, 4);
-    correctLayout->setSpacing(2);
+    // Create compact cards with shorter title
+    QFrame* correctCard = createCompactCard("% Correct", "#4CAF50", "#45a049");
+    QFrame* completeCard = createCompactCard("% Complete", "#2196F3", "#1976D2");
+    QFrame* trialsCard = createCompactCard("Trials", "#FF9800", "#F57C00"); // Shorter title
     
-    QLabel* correctTitle = new QLabel("% Correct");
-    correctTitle->setAlignment(Qt::AlignCenter);
-    correctTitle->setStyleSheet("font-weight: bold; font-size: 10px;");
+    // Make all cards the same size and fill available space equally
+    correctCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    completeCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    trialsCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     
-    m_percentCorrectLabel = new QLabel("0%");
-    m_percentCorrectLabel->setAlignment(Qt::AlignCenter);
-    m_percentCorrectLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
-    
-    correctLayout->addWidget(correctTitle);
-    correctLayout->addWidget(m_percentCorrectLabel);
-    
-    // Percent Complete Card
-    QFrame* completeCard = new QFrame();
-    completeCard->setFrameStyle(QFrame::StyledPanel);
-    completeCard->setStyleSheet(
-        "QFrame { "
-        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2196F3, stop:1 #1976D2);"
-        "  border-radius: 8px;"
-        "  border: 1px solid #1976D2;"
-        "}"
-        "QLabel { background: transparent; color: white; }"
-    );
-    
-    QVBoxLayout* completeLayout = new QVBoxLayout(completeCard);
-    completeLayout->setContentsMargins(6, 4, 6, 4);
-    completeLayout->setSpacing(2);
-    
-    QLabel* completeTitle = new QLabel("% Complete");
-    completeTitle->setAlignment(Qt::AlignCenter);
-    completeTitle->setStyleSheet("font-weight: bold; font-size: 10px;");
-    
-    m_percentCompleteLabel = new QLabel("0%");
-    m_percentCompleteLabel->setAlignment(Qt::AlignCenter);
-    m_percentCompleteLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
-    
-    completeLayout->addWidget(completeTitle);
-    completeLayout->addWidget(m_percentCompleteLabel);
-    
-    // Total Trials Card
-    QFrame* trialsCard = new QFrame();
-    trialsCard->setFrameStyle(QFrame::StyledPanel);
-    trialsCard->setStyleSheet(
-        "QFrame { "
-        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FF9800, stop:1 #F57C00);"
-        "  border-radius: 8px;"
-        "  border: 1px solid #F57C00;"
-        "}"
-        "QLabel { background: transparent; color: white; }"
-    );
-    
-    QVBoxLayout* trialsLayout = new QVBoxLayout(trialsCard);
-    trialsLayout->setContentsMargins(6, 4, 6, 4);
-    trialsLayout->setSpacing(2);
-    
-    QLabel* trialsTitle = new QLabel("Total Trials");
-    trialsTitle->setAlignment(Qt::AlignCenter);
-    trialsTitle->setStyleSheet("font-weight: bold; font-size: 10px;");
-    
-    m_totalTrialsLabel = new QLabel("0");
-    m_totalTrialsLabel->setAlignment(Qt::AlignCenter);
-    m_totalTrialsLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
-    
-    trialsLayout->addWidget(trialsTitle);
-    trialsLayout->addWidget(m_totalTrialsLabel);
-    
-    // Add cards to layout
-    cardsLayout->addWidget(correctCard);
-    cardsLayout->addWidget(completeCard);
-    cardsLayout->addWidget(trialsCard);
+    // Add cards to layout with equal stretch
+    cardsLayout->addWidget(correctCard, 1);    // Equal stretch factor
+    cardsLayout->addWidget(completeCard, 1);   // Equal stretch factor  
+    cardsLayout->addWidget(trialsCard, 1);     // Equal stretch factor
+    // No addStretch() - let the cards fill the space
     
     mainLayout->addLayout(cardsLayout);
     
@@ -419,22 +393,32 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
     m_detailedGroup = new QGroupBox("Detailed Performance");
     
     QVBoxLayout* layout = new QVBoxLayout(m_detailedGroup);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(6);
+    layout->setContentsMargins(6, 6, 6, 6); // Reduced from 8
+    layout->setSpacing(4); // Reduced from 6
     
-    // Sorting controls
+    // More compact sorting controls
     QHBoxLayout* sortLayout = new QHBoxLayout();
-    m_sortLabel = new QLabel("Sort by:");
+    sortLayout->setSpacing(4); // Reduced spacing
+    
+    QLabel* sortLabel = new QLabel("Sort:");  // Shorter label
+    sortLabel->setStyleSheet("font-size: 9px; font-weight: bold;"); // Smaller font
     
     m_primarySortCombo = new QComboBox();
     m_primarySortCombo->addItem("(none)", "");
-    m_primarySortCombo->setMinimumWidth(90);
+    m_primarySortCombo->setMinimumWidth(70); // Reduced from 90
+    m_primarySortCombo->setMaximumWidth(90);
+    m_primarySortCombo->setStyleSheet("font-size: 9px;"); // Smaller font
     
     m_secondarySortCombo = new QComboBox();
     m_secondarySortCombo->addItem("(none)", "");
-    m_secondarySortCombo->setMinimumWidth(90);
+    m_secondarySortCombo->setMinimumWidth(70); // Reduced from 90
+    m_secondarySortCombo->setMaximumWidth(90);
+    m_secondarySortCombo->setStyleSheet("font-size: 9px;"); // Smaller font
     
-    // Connect to Tcl callback
+    QLabel* thenLabel = new QLabel("then:");  // Shorter label
+    thenLabel->setStyleSheet("font-size: 9px;"); // Smaller font
+    
+    // Connect to Tcl callback (same as before)
     connect(m_primarySortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [this]() {
         emit sortSelectionChanged(
             m_primarySortCombo->currentData().toString(),
@@ -455,15 +439,15 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
         }
     });
     
-    sortLayout->addWidget(m_sortLabel);
+    sortLayout->addWidget(sortLabel);
     sortLayout->addWidget(m_primarySortCombo);
-    sortLayout->addWidget(new QLabel("then by:"));
+    sortLayout->addWidget(thenLabel);
     sortLayout->addWidget(m_secondarySortCombo);
     sortLayout->addStretch();
     
     layout->addLayout(sortLayout);
     
-    // Performance table
+    // Performance table with better scrolling
     m_detailedTable = new QTableWidget();
     m_detailedTable->setAlternatingRowColors(true);
     m_detailedTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -471,16 +455,31 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
     m_detailedTable->setSortingEnabled(false); // Sorting handled by Tcl
     m_detailedTable->verticalHeader()->setVisible(false);
     
-    // Configure headers to look nice
-    m_detailedTable->horizontalHeader()->setStretchLastSection(true);
-    m_detailedTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    // Configure headers for compact display
+    m_detailedTable->horizontalHeader()->setStretchLastSection(false); // Changed to false
+    m_detailedTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_detailedTable->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
+    m_detailedTable->horizontalHeader()->setMinimumSectionSize(30); // Minimum column width
     
-    // Set nice styling
+    // Enable scrolling for both directions
+    m_detailedTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_detailedTable->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    
+    // Set nice styling with smaller fonts
     m_detailedTable->setStyleSheet(
-        "QTableWidget { gridline-color: #d0d0d0; }"
-        "QTableWidget::item { padding: 4px; }"
-        "QHeaderView::section { background-color: #f0f0f0; font-weight: bold; }"
+        "QTableWidget { "
+        "  gridline-color: #d0d0d0; "
+        "  font-size: 9px;"  // Smaller font for table
+        "}"
+        "QTableWidget::item { "
+        "  padding: 2px;" // Reduced padding
+        "}"
+        "QHeaderView::section { "
+        "  background-color: #f0f0f0; "
+        "  font-weight: bold; "
+        "  font-size: 9px;"  // Smaller header font
+        "  padding: 2px;"    // Reduced header padding
+        "}"
     );
     
     layout->addWidget(m_detailedTable);
@@ -489,23 +488,25 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
 void EssBehavmonWidget::setupControlsArea()
 {
     m_controlsGroup = new QGroupBox("Controls");
-    m_controlsGroup->setMaximumHeight(60);
+    m_controlsGroup->setMaximumHeight(50); // Reduced from 60
     
     QHBoxLayout* layout = new QHBoxLayout(m_controlsGroup);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(6);
+    layout->setContentsMargins(6, 6, 6, 6); // Reduced from 8
+    layout->setSpacing(4); // Reduced from 6
     
-    // Development mode toggle button
-    QPushButton* devModeButton = new QPushButton("Dev Mode");
+    // Smaller development mode toggle button
+    QPushButton* devModeButton = new QPushButton("Dev");  // Shorter text
     devModeButton->setCheckable(true);
     devModeButton->setToolTip("Toggle development mode");
+    devModeButton->setMaximumWidth(40); // Constrain width
     devModeButton->setStyleSheet(
         "QPushButton { "
         "  background-color: #f0f0f0; "
         "  border: 1px solid #ccc; "
-        "  border-radius: 4px; "
-        "  padding: 4px 8px; "
+        "  border-radius: 3px;"  // Slightly smaller radius
+        "  padding: 2px 4px;"    // Reduced padding
         "  font-weight: bold; "
+        "  font-size: 9px;"      // Smaller font
         "}"
         "QPushButton:checked { "
         "  background-color: #4CAF50; "
@@ -531,8 +532,11 @@ void EssBehavmonWidget::setupControlsArea()
         }
     });
     
-    m_resetButton = new QPushButton("Reset Performance");
+    // Smaller control buttons
+    m_resetButton = new QPushButton("Reset");  // Shorter text
     m_resetButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+    m_resetButton->setStyleSheet("font-size: 9px; padding: 2px 4px;");
+    m_resetButton->setMaximumWidth(60);
     connect(m_resetButton, &QPushButton::clicked, [this]() {
         emit resetRequested();
         if (interpreter()) {
@@ -540,8 +544,10 @@ void EssBehavmonWidget::setupControlsArea()
         }
     });
     
-    m_exportButton = new QPushButton("Export Data");
+    m_exportButton = new QPushButton("Export");  // Shorter text
     m_exportButton->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    m_exportButton->setStyleSheet("font-size: 9px; padding: 2px 4px;");
+    m_exportButton->setMaximumWidth(60);
     connect(m_exportButton, &QPushButton::clicked, [this]() {
         emit exportRequested();
         // Could add Tcl export callback here
