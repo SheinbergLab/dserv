@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=EssQt
+Comment=Laboratory Experiment Control GUI
+Exec=/usr/local/bin/essqt
+Icon=essqt
+Terminal=false
+Type=Application
+Categories=Science;Education;
