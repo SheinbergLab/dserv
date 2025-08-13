@@ -270,38 +270,6 @@ void EssWorkspaceManager::createDocks()
     m_eyeTouchVisualizer = new EssEyeTouchVisualizerWidget();
     eyeTouchDock->setWidget(m_eyeTouchVisualizer);
     
-    // Connect to handle floating state changes
-    connect(eyeTouchDock, &QDockWidget::topLevelChanged, [this, eyeTouchDock](bool floating) {
-        if (floating) {
-            // When floating, remove constraints and set a good default size
-            eyeTouchDock->setMinimumSize(400, 500);
-            eyeTouchDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-            
-            // If currently too narrow from being docked, resize to a nice square
-            if (eyeTouchDock->width() < 500) {
-                // Set a nice default floating size
-                // The widget will be square-ish accounting for controls
-                eyeTouchDock->resize(600, 700);
-            }
-            
-            // Ensure the widget can be freely resized
-            m_eyeTouchVisualizer->setMinimumSize(400, 500);
-            m_eyeTouchVisualizer->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-        } else {
-            // When docking, restore the narrow constraints
-            eyeTouchDock->setMinimumWidth(300);
-            eyeTouchDock->setMaximumWidth(350);
-            eyeTouchDock->setMinimumHeight(300);
-            eyeTouchDock->setMaximumHeight(QWIDGETSIZE_MAX);
-            
-            // Also update the widget constraints
-            m_eyeTouchVisualizer->setMinimumWidth(300);
-            m_eyeTouchVisualizer->setMaximumWidth(350);
-            m_eyeTouchVisualizer->setMinimumHeight(300);
-            m_eyeTouchVisualizer->setMaximumHeight(QWIDGETSIZE_MAX);
-        }
-    });
-    
     m_docks["EyeTouchVisualizer"] = eyeTouchDock;
     
     // Create Event Table dock with similar floating behavior
@@ -309,31 +277,6 @@ void EssWorkspaceManager::createDocks()
     eventDock->setObjectName("EventDock");
     m_eventTable = new EssEventTableWidget();
     eventDock->setWidget(m_eventTable);
-    
-    // Also handle Event Table floating
-    connect(eventDock, &QDockWidget::topLevelChanged, [this, eventDock](bool floating) {
-        if (floating) {
-            eventDock->setMinimumSize(400, 300);
-            eventDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-            
-            if (eventDock->width() < 500) {
-                eventDock->resize(600, 400);
-            }
-            
-            m_eventTable->setMinimumSize(400, 300);
-            m_eventTable->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-        } else {
-            eventDock->setMinimumWidth(300);
-            eventDock->setMaximumWidth(350);
-            eventDock->setMinimumHeight(200);
-            eventDock->setMaximumHeight(QWIDGETSIZE_MAX);
-            
-            m_eventTable->setMinimumWidth(300);
-            m_eventTable->setMaximumWidth(350);
-            m_eventTable->setMinimumHeight(200);
-            m_eventTable->setMaximumHeight(QWIDGETSIZE_MAX);
-        }
-    });
     
     m_docks["EventTable"] = eventDock;
     
@@ -344,36 +287,7 @@ void EssWorkspaceManager::createDocks()
 	behavmonDock->setWidget(m_behavmonWidget);
 
 	behavmonDock->setMinimumWidth(220);  // Reduced from default
-	behavmonDock->setMaximumWidth(280);  // Allow it to be narrow
 	behavmonDock->setMinimumHeight(250); // Minimum functional height
-
-	connect(behavmonDock, &QDockWidget::topLevelChanged, [this, behavmonDock](bool floating) {
-		if (floating) {
-			// When floating, remove width constraints but keep reasonable minimums
-			behavmonDock->setMinimumSize(250, 300);
-			behavmonDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-			
-			if (behavmonDock->width() < 300) {
-				behavmonDock->resize(350, 400);
-			}
-			
-			m_behavmonWidget->setMinimumSize(250, 300);
-			m_behavmonWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-		} else {
-			// When docked, apply compact constraints
-#if 0
-			behavmonDock->setMinimumWidth(220);
-			behavmonDock->setMaximumWidth(280);
-			behavmonDock->setMinimumHeight(250);
-			behavmonDock->setMaximumHeight(QWIDGETSIZE_MAX);
-			
-			m_behavmonWidget->setMinimumWidth(220);
-			m_behavmonWidget->setMaximumWidth(280);
-			m_behavmonWidget->setMinimumHeight(250);
-			m_behavmonWidget->setMaximumHeight(QWIDGETSIZE_MAX);
-#endif
-		}
-	});
 
 	m_docks["BehavMon"] = behavmonDock;
 
@@ -382,32 +296,7 @@ void EssWorkspaceManager::createDocks()
     stateSystemDock->setObjectName("stateSystemDock");
     m_stateSystemWidget = new EssStateSystemWidget();
     stateSystemDock->setWidget(m_stateSystemWidget);
-
-  connect(stateSystemDock, &QDockWidget::topLevelChanged, [this, stateSystemDock](bool floating) {
-        if (floating) {
-            stateSystemDock->setMinimumSize(600, 400);
-            stateSystemDock->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-            
-            if (stateSystemDock->width() < 700) {
-                stateSystemDock->resize(800, 600);
-            }
-            
-            m_stateSystemWidget->setMinimumSize(600, 400);
-            m_stateSystemWidget->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
-        } else {
-            // When docked, allow more flexibility 
-            stateSystemDock->setMinimumWidth(400);
-            stateSystemDock->setMaximumWidth(600);
-            stateSystemDock->setMinimumHeight(300);
-            stateSystemDock->setMaximumHeight(QWIDGETSIZE_MAX);
-            
-            m_stateSystemWidget->setMinimumWidth(400);
-            m_stateSystemWidget->setMaximumWidth(600);
-            m_stateSystemWidget->setMinimumHeight(300);
-            m_stateSystemWidget->setMaximumHeight(QWIDGETSIZE_MAX);
-        }
-    });
-    
+  
     m_docks["stateSystem"] = stateSystemDock;
 
     // Create CGraph tabbed dock
@@ -680,9 +569,7 @@ void EssWorkspaceManager::applyFloatingConstraints()
         m_eyeTouchVisualizer && !m_docks["EyeTouchVisualizer"]->isFloating()) {
         
         m_docks["EyeTouchVisualizer"]->setMinimumWidth(300);
-        m_docks["EyeTouchVisualizer"]->setMaximumWidth(350);
         m_eyeTouchVisualizer->setMinimumWidth(300);
-        m_eyeTouchVisualizer->setMaximumWidth(350);
     }
     
     // Event table constraints (only if not floating)
@@ -690,10 +577,46 @@ void EssWorkspaceManager::applyFloatingConstraints()
         m_eventTable && !m_docks["EventTable"]->isFloating()) {
         
         m_docks["EventTable"]->setMinimumWidth(300);
-        m_docks["EventTable"]->setMaximumWidth(350);
         m_eventTable->setMinimumWidth(300);
-        m_eventTable->setMaximumWidth(350);
     }
+}
+
+void EssWorkspaceManager::resetDockConstraints()
+{
+    // Reset all docks to reasonable defaults
+    for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+        QDockWidget* dock = it.value();
+        if (!dock) continue;
+        
+        QString dockName = it.key();
+        
+        // Reset dock constraints
+        dock->setMinimumSize(QSize(0, 0));
+        dock->setMaximumSize(QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+        
+        // Reset widget constraints  
+        if (dock->widget()) {
+            dock->widget()->setMinimumSize(QSize(0, 0));
+            dock->widget()->setMaximumSize(QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+        }
+        
+        // Apply sensible minimums only
+        if (dockName == "BehavMon") {
+            dock->setMinimumWidth(200);
+            dock->setMinimumHeight(250);
+        } else if (dockName == "EyeTouchVisualizer" || dockName == "EventTable") {
+            dock->setMinimumWidth(250);
+            dock->setMinimumHeight(200);
+        } else if (dockName == "Terminal" || dockName == "Console") {
+            dock->setMinimumHeight(80);
+            dock->setMaximumHeight(300);  // Keep this one for bottom docks
+        } else if (dockName == "ControlPanel") {
+            dock->setMinimumWidth(250);
+            dock->setMaximumWidth(300);   // Keep this one - it's a control panel
+        }
+    }
+    
+    qDebug() << "Dock constraints reset to defaults";
 }
 
 void EssWorkspaceManager::connectSignals()
@@ -761,6 +684,8 @@ void EssWorkspaceManager::resetToDefaultLayout()
 {
     // Add debug logging
     qDebug() << "Resetting layout...";
+    
+    resetDockConstraints();
     
     // Ensure all widgets are valid before resetting
     if (!validateAllDocks()) {

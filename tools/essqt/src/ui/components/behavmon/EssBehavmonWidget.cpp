@@ -45,6 +45,12 @@ bind_datapoint "ess/reset" {
     clear_behavmon_data
 }
 
+# Bind to system load event (ESS is new system)
+bind_event 18:ESS { 
+    local_log "New system loaded"
+    clear_behavmon_data
+}
+
 proc normalizePair {a b} {
     if {$a eq "" && $b eq ""} {
         return ""
@@ -286,7 +292,7 @@ QWidget* EssBehavmonWidget::createMainWidget()
     m_mainWidget = new QWidget();
 
     // Set size policy to expand and fill available space
-    m_mainWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    //m_mainWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     
     // Create main layout
     QVBoxLayout* mainLayout = new QVBoxLayout(m_mainWidget);
@@ -297,11 +303,7 @@ QWidget* EssBehavmonWidget::createMainWidget()
     setupGeneralPerformanceArea();
     setupDetailedPerformanceArea();
     setupControlsArea();
-    
-    m_generalGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_detailedGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_controlsGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    
+      
     // Add to main layout with proper sizing
     mainLayout->addWidget(m_generalGroup, 0);      // Fixed size
     mainLayout->addWidget(m_detailedGroup, 1);     // Expanding
@@ -314,7 +316,6 @@ QWidget* EssBehavmonWidget::createMainWidget()
 void EssBehavmonWidget::setupGeneralPerformanceArea()
 {
     m_generalGroup = new QGroupBox("Performance Overview");
-    m_generalGroup->setMaximumHeight(120); // Reduced from 140
     
     QVBoxLayout* mainLayout = new QVBoxLayout(m_generalGroup);
     mainLayout->setContentsMargins(6, 6, 6, 6); // Reduced from 8
@@ -406,13 +407,11 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
     m_primarySortCombo = new QComboBox();
     m_primarySortCombo->addItem("(none)", "");
     m_primarySortCombo->setMinimumWidth(70); // Reduced from 90
-    m_primarySortCombo->setMaximumWidth(90);
     m_primarySortCombo->setStyleSheet("font-size: 9px;"); // Smaller font
     
     m_secondarySortCombo = new QComboBox();
     m_secondarySortCombo->addItem("(none)", "");
     m_secondarySortCombo->setMinimumWidth(70); // Reduced from 90
-    m_secondarySortCombo->setMaximumWidth(90);
     m_secondarySortCombo->setStyleSheet("font-size: 9px;"); // Smaller font
     
     QLabel* thenLabel = new QLabel("then:");  // Shorter label
@@ -488,7 +487,6 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
 void EssBehavmonWidget::setupControlsArea()
 {
     m_controlsGroup = new QGroupBox("Controls");
-    m_controlsGroup->setMaximumHeight(50); // Reduced from 60
     
     QHBoxLayout* layout = new QHBoxLayout(m_controlsGroup);
     layout->setContentsMargins(6, 6, 6, 6); // Reduced from 8
@@ -498,7 +496,6 @@ void EssBehavmonWidget::setupControlsArea()
     QPushButton* devModeButton = new QPushButton("Dev");  // Shorter text
     devModeButton->setCheckable(true);
     devModeButton->setToolTip("Toggle development mode");
-    devModeButton->setMaximumWidth(40); // Constrain width
     devModeButton->setStyleSheet(
         "QPushButton { "
         "  background-color: #f0f0f0; "
@@ -536,7 +533,6 @@ void EssBehavmonWidget::setupControlsArea()
     m_resetButton = new QPushButton("Reset");  // Shorter text
     m_resetButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
     m_resetButton->setStyleSheet("font-size: 9px; padding: 2px 4px;");
-    m_resetButton->setMaximumWidth(60);
     connect(m_resetButton, &QPushButton::clicked, [this]() {
         emit resetRequested();
         if (interpreter()) {
@@ -547,7 +543,6 @@ void EssBehavmonWidget::setupControlsArea()
     m_exportButton = new QPushButton("Export");  // Shorter text
     m_exportButton->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
     m_exportButton->setStyleSheet("font-size: 9px; padding: 2px 4px;");
-    m_exportButton->setMaximumWidth(60);
     connect(m_exportButton, &QPushButton::clicked, [this]() {
         emit exportRequested();
         // Could add Tcl export callback here
@@ -559,7 +554,6 @@ void EssBehavmonWidget::setupControlsArea()
     QFrame* separator = new QFrame();
     separator->setFrameShape(QFrame::VLine);
     separator->setFrameShadow(QFrame::Sunken);
-    separator->setMaximumWidth(2);
     layout->addWidget(separator);
     
     layout->addWidget(m_resetButton);

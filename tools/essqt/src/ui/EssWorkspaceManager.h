@@ -67,7 +67,8 @@ private:
     void applySizeConstraints();
     void applyFloatingConstraints();    
     void connectSignals();
-    
+	void resetDockConstraints();    
+	
     // Helper methods
     QWidget* getWidget(const QString &id) const;
     QWidget* createControlPanel();
