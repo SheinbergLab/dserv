@@ -1023,6 +1023,9 @@ namespace eval ess {
             set_loading_progress "complete" "System loaded (no trials)" 100
             ess_warning "No trials found in stimdg after loading" "system"
         }
+
+	# initialize obs status (also found as ess/obs_active)
+	dservSet ess/in_obs 0
         
         # Mark loading as complete
         finish_loading_operation true
