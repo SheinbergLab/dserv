@@ -17,8 +17,9 @@ EssBehavmonWidget::EssBehavmonWidget(const QString& name, QWidget* parent)
     , m_resetButton(nullptr)
     , m_exportButton(nullptr)
 {
-    // Set default setup script - all business logic here
+    // Set default setup script
     setSetupScript(R"tcl(
+
 # Behavior Monitor Widget Setup Script
 local_log "Behavmon widget script loaded"
 
@@ -44,8 +45,36 @@ bind_datapoint "ess/reset" {
     clear_behavmon_data
 }
 
+proc normalizePair {a b} {
+    if {$a eq "" && $b eq ""} {
+        return ""
+    } elseif {$a eq ""} {
+        return $b
+    } elseif {$b eq ""} {
+        return $a
+    } else {
+        return "$a $b"
+    }
+}
+
+proc transposeList {matrix} {
+    set result {}
+    set numCols [llength [lindex $matrix 0]]
+    for {set col 0} {$col < $numCols} {incr col} {
+        set newRow {}
+        foreach row $matrix {
+            lappend newRow [lindex $row $col]
+        }
+        lappend result $newRow
+    }
+    return $result
+}
+
 # Main function to process trial data and update display
 proc process_trial_data {} {
+    # copy trialdg from main interpreter
+    get_dg trialdg
+    
     if {![dg_exists trialdg]} {
         local_log "No trialdg available"
         return
@@ -82,6 +111,10 @@ proc process_trial_data {} {
 
 # Update sort options from stimdg
 proc update_sort_options {} {
+
+    # get a local copy of stimdg for ourselves
+    get_dg stimdg
+
     if {![dg_exists stimdg]} {
         local_log "No stimdg available for sort options"
         return
@@ -91,7 +124,8 @@ proc update_sort_options {} {
     set n_trials [dl_length stimdg:stimtype]
     
     # Find suitable columns for sorting
-    foreach list_name [dg_listnames stimdg] {
+    foreach list_name [dg_tclListnames stimdg] {
+        if { [dl_datatype stimdg:$list_name] == "list" } { continue }
         if {[dl_length stimdg:$list_name] == $n_trials && $list_name ne "remaining"} {
             # Check if this list has reasonable number of unique values for sorting
             set unique_vals [dl_tcllist [dl_unique stimdg:$list_name]]
@@ -113,130 +147,81 @@ proc update_performance_table {} {
     if {![dg_exists trialdg]} return
     
     # Get current sort selection from UI
-    set sort_selection [get_sort_selection]
-    set primary_sort [lindex $sort_selection 0]
-    set secondary_sort [lindex $sort_selection 1]
+    lassign [get_sort_selection] primary_sort secondary_sort
     
     local_log "Updating table with sort: primary='$primary_sort' secondary='$secondary_sort'"
     
     # Calculate and display performance data
-    set table_data [calculate_performance_data $primary_sort $secondary_sort]
-    set headers [lindex $table_data 0]
-    set rows [lindex $table_data 1]
+    set table_data [calculate_performance_data {*}[normalizePair $primary_sort $secondary_sort]]
+    lassign $table_data headers rows nrows
     
     # Update the table display
+    if { $nrows == 1 } { set rows [list $rows] }
     set_performance_table $headers $rows
 }
 
-# Calculate performance data with sorting (similar to your FLTK do_sortby)
-proc calculate_performance_data {primary_sort secondary_sort} {
-    if {![dg_exists trialdg]} {
-        return [list {} {}]
-    }
-    
-    # Create current trial subset (status 0 or 1)
+proc calculate_performance_data { args } {
+    set nargs [llength $args]
+    if { $nargs > 2 } return
     set curdg [dg_copySelected trialdg [dl_oneof trialdg:status [dl_ilist 0 1]]]
-    
-    if {$primary_sort eq ""} {
-        # No sorting - overall stats
-        set pc [format %d [expr int(100*[dl_mean $curdg:status])]]
-        set rt [format %.2f [dl_mean $curdg:rt]]
-        set n [dl_length $curdg:status]
-        set headers [list "% Correct" "RT" "N"]
-        set rows [list [list $pc $rt $n]]
-        
+    if { $nargs == 0 } {
+	set pc [format %d [expr int(100*[dl_mean $curdg:status])]]
+	set rt [format %.2f [dl_mean $curdg:rt]]
+	set  n [dl_length $curdg:status]
+	set headers "{% correct} rt n"
         dg_delete $curdg
-        return [list $headers $rows]
-        
-    } elseif {$secondary_sort eq ""} {
-        # Single-level sorting
-        dl_local pc [dl_selectSortedFunc $curdg:status \
-                         "$curdg:$primary_sort" \
-                         "stimdg:$primary_sort" \
-                         dl_means]
-        dl_local rt [dl_selectSortedFunc $curdg:rt \
-                         "$curdg:$primary_sort" \
-                         "stimdg:$primary_sort" \
-                         dl_means]
-        dl_local n [dl_selectSortedFunc $curdg:status \
-                        "$curdg:$primary_sort" \
-                        "stimdg:$primary_sort" \
-                        dl_lengths]
-        
-        # Get unique values for labels
-        dl_local labels [dl_unique stimdg:$primary_sort]
-        
-        # Format data
-        dl_local pc_formatted [dl_slist \
-                                {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:1]]] {format %d $v}]]
-        dl_local rt_formatted [dl_slist \
-                                {*}[lmap v [dl_tcllist $rt:1] {format %.2f $v}]]
-        
-        # Build result table
-        set headers [list $primary_sort "% Correct" "RT" "N"]
-        set rows {}
-        set label_list [dl_tcllist $labels]
-        set pc_list [dl_tcllist $pc_formatted]
-        set rt_list [dl_tcllist $rt_formatted]
-        set n_list [dl_tcllist $n:1]
-        
-        for {set i 0} {$i < [llength $label_list]} {incr i} {
-            lappend rows [list [lindex $label_list $i] \
-                              [lindex $pc_list $i] \
-                              [lindex $rt_list $i] \
-                              [lindex $n_list $i]]
-        }
-        
+	return [list $headers [list $pc $rt $n] 1]
+    } elseif { $nargs == 1 } {
+	set sortby $args
+	dl_local pc [dl_selectSortedFunc $curdg:status \
+			 "$curdg:$sortby" \
+			 "stimdg:$sortby" \
+			 dl_means]
+	dl_local rt [dl_selectSortedFunc $curdg:rt \
+			 "$curdg:$sortby" \
+			 "stimdg:$sortby" \
+			 dl_means]
+	dl_local n [dl_selectSortedFunc $curdg:status \
+			"$curdg:$sortby" \
+			"stimdg:$sortby" \
+			dl_lengths]
+	dl_local result [dl_llist [dl_unique stimdg:$sortby]]
+	dl_local pc [dl_slist \
+                        {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:1]]] {format %d $v}]]
+	dl_local rt [dl_slist {*}[lmap v [dl_tcllist $rt:1] {format %.2f $v}]]
+	dl_append $result $pc
+	dl_append $result $rt
+	dl_append $result $n:1
+	
+	set headers "$sortby {% correct} rt n"
         dg_delete $curdg
-        return [list $headers $rows]
-        
+	return [list $headers [transposeList [dl_tcllist $result]] [dl_length $pc]]
     } else {
-        # Two-level sorting
-        dl_local pc [dl_selectSortedFunc $curdg:status \
-                         "$curdg:$secondary_sort $curdg:$primary_sort" \
-                         "stimdg:$secondary_sort stimdg:$primary_sort" \
-                         dl_means]
-        dl_local rt [dl_selectSortedFunc $curdg:rt \
-                         "$curdg:$secondary_sort $curdg:$primary_sort" \
-                         "stimdg:$secondary_sort stimdg:$primary_sort" \
-                         dl_means]
-        dl_local n [dl_selectSortedFunc $curdg:status \
-                        "$curdg:$secondary_sort $curdg:$primary_sort" \
-                        "stimdg:$secondary_sort stimdg:$primary_sort" \
-                        dl_lengths]
-        
-        # Get cross-product labels
-        dl_local labels [dl_reverse [dl_uniqueCross stimdg:$primary_sort stimdg:$secondary_sort]]
-        
-        # Format data
-        dl_local pc_formatted [dl_slist \
-                                {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:2]]] {format %d $v}]]
-        dl_local rt_formatted [dl_slist \
-                                {*}[lmap v [dl_tcllist $rt:2] {format %.2f $v}]]
-        
-        # Build result table
-        set headers [list $primary_sort $secondary_sort "% Correct" "RT" "N"]
-        set rows {}
-        set label_list [dl_tcllist $labels]
-        set pc_list [dl_tcllist $pc_formatted]
-        set rt_list [dl_tcllist $rt_formatted]
-        set n_list [dl_tcllist $n:2]
-        
-        for {set i 0} {$i < [llength $label_list]} {incr i} {
-            set cross_label [lindex $label_list $i]
-            # Split cross label (assumes space separation)
-            set label_parts [split $cross_label " "]
-            if {[llength $label_parts] >= 2} {
-                lappend rows [list [lindex $label_parts 0] \
-                                  [lindex $label_parts 1] \
-                                  [lindex $pc_list $i] \
-                                  [lindex $rt_list $i] \
-                                  [lindex $n_list $i]]
-            }
-        }
-        
+	lassign $args s1 s2
+	dl_local pc [dl_selectSortedFunc $curdg:status \
+			 "$curdg:$s2 $curdg:$s1" \
+			 "stimdg:$s2 stimdg:$s1" \
+			 dl_means]
+	dl_local rt [dl_selectSortedFunc $curdg:rt \
+			 "$curdg:$s2 $curdg:$s1" \
+			 "stimdg:$s2 stimdg:$s1" \
+			 dl_means]
+	dl_local n [dl_selectSortedFunc $curdg:status \
+			 "$curdg:$s2 $curdg:$s1" \
+			 "stimdg:$s2 stimdg:$s1" \
+			 dl_lengths]
+	dl_local result [dl_reverse [dl_uniqueCross stimdg:$s1 stimdg:$s2]]
+
+	dl_local pc [dl_slist \
+                         {*}[lmap v [dl_tcllist [dl_int [dl_mult 100 $pc:2]]] {format %d $v}]]
+	dl_local rt [dl_slist {*}[lmap v [dl_tcllist $rt:2] {format %.2f $v}]]
+	dl_append $result $pc
+	dl_append $result $rt
+	dl_append $result $n:2
+
+	set headers "$s1 $s2 {% correct} rt n"
         dg_delete $curdg
-        return [list $headers $rows]
+	return [list $headers [transposeList [dl_tcllist $result]] [dl_length $pc]]
     }
 }
 
@@ -273,6 +258,7 @@ proc on_sort_changed {} {
 }
 
 local_log "Behavmon widget setup complete"
+
 )tcl");
     
     initializeWidget();
@@ -328,7 +314,7 @@ void EssBehavmonWidget::setupGeneralPerformanceArea()
     
     // Create card container
     QHBoxLayout* cardsLayout = new QHBoxLayout();
-    cardsLayout->setSpacing(8);
+    cardsLayout->setSpacing(6);
     
     // Percent Correct Card
     QFrame* correctCard = new QFrame();
@@ -343,16 +329,16 @@ void EssBehavmonWidget::setupGeneralPerformanceArea()
     );
     
     QVBoxLayout* correctLayout = new QVBoxLayout(correctCard);
-    correctLayout->setContentsMargins(12, 8, 12, 8);
+    correctLayout->setContentsMargins(6, 4, 6, 4);
     correctLayout->setSpacing(2);
     
     QLabel* correctTitle = new QLabel("% Correct");
     correctTitle->setAlignment(Qt::AlignCenter);
-    correctTitle->setStyleSheet("font-weight: bold; font-size: 11px;");
+    correctTitle->setStyleSheet("font-weight: bold; font-size: 10px;");
     
     m_percentCorrectLabel = new QLabel("0%");
     m_percentCorrectLabel->setAlignment(Qt::AlignCenter);
-    m_percentCorrectLabel->setStyleSheet("font-weight: bold; font-size: 18px;");
+    m_percentCorrectLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
     
     correctLayout->addWidget(correctTitle);
     correctLayout->addWidget(m_percentCorrectLabel);
@@ -370,16 +356,16 @@ void EssBehavmonWidget::setupGeneralPerformanceArea()
     );
     
     QVBoxLayout* completeLayout = new QVBoxLayout(completeCard);
-    completeLayout->setContentsMargins(12, 8, 12, 8);
+    completeLayout->setContentsMargins(6, 4, 6, 4);
     completeLayout->setSpacing(2);
     
     QLabel* completeTitle = new QLabel("% Complete");
     completeTitle->setAlignment(Qt::AlignCenter);
-    completeTitle->setStyleSheet("font-weight: bold; font-size: 11px;");
+    completeTitle->setStyleSheet("font-weight: bold; font-size: 10px;");
     
     m_percentCompleteLabel = new QLabel("0%");
     m_percentCompleteLabel->setAlignment(Qt::AlignCenter);
-    m_percentCompleteLabel->setStyleSheet("font-weight: bold; font-size: 18px;");
+    m_percentCompleteLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
     
     completeLayout->addWidget(completeTitle);
     completeLayout->addWidget(m_percentCompleteLabel);
@@ -397,16 +383,16 @@ void EssBehavmonWidget::setupGeneralPerformanceArea()
     );
     
     QVBoxLayout* trialsLayout = new QVBoxLayout(trialsCard);
-    trialsLayout->setContentsMargins(12, 8, 12, 8);
+    trialsLayout->setContentsMargins(6, 4, 6, 4);
     trialsLayout->setSpacing(2);
     
     QLabel* trialsTitle = new QLabel("Total Trials");
     trialsTitle->setAlignment(Qt::AlignCenter);
-    trialsTitle->setStyleSheet("font-weight: bold; font-size: 11px;");
+    trialsTitle->setStyleSheet("font-weight: bold; font-size: 10px;");
     
     m_totalTrialsLabel = new QLabel("0");
     m_totalTrialsLabel->setAlignment(Qt::AlignCenter);
-    m_totalTrialsLabel->setStyleSheet("font-weight: bold; font-size: 18px;");
+    m_totalTrialsLabel->setStyleSheet("font-weight: bold; font-size: 13px;");
     
     trialsLayout->addWidget(trialsTitle);
     trialsLayout->addWidget(m_totalTrialsLabel);
@@ -442,11 +428,11 @@ void EssBehavmonWidget::setupDetailedPerformanceArea()
     
     m_primarySortCombo = new QComboBox();
     m_primarySortCombo->addItem("(none)", "");
-    m_primarySortCombo->setMinimumWidth(120);
+    m_primarySortCombo->setMinimumWidth(90);
     
     m_secondarySortCombo = new QComboBox();
     m_secondarySortCombo->addItem("(none)", "");
-    m_secondarySortCombo->setMinimumWidth(120);
+    m_secondarySortCombo->setMinimumWidth(90);
     
     // Connect to Tcl callback
     connect(m_primarySortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [this]() {
