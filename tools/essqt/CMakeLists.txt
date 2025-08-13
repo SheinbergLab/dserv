@@ -290,3 +290,54 @@ if(WIN32)
         )
     ")
 endif()
+
+set(CPACK_PACKAGE_NAME essqt)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GUI app to go with dserv and related tools.")
+set(CPACK_PACKAGE_CONTACT SheinbergLab)
+set(CPACK_PACKAGE_VENDOR SheinbergLab)
+set(CPACK_COMPONENTS_ALL essqt)
+
+if(WIN32)
+    # TODO
+elseif(APPLE)
+	# TODO
+else()
+    INSTALL(TARGETS essqt RUNTIME)
+    install(FILES resources/essqt.desktop DESTINATION share/applications)
+	set(CPACK_DEBIAN_PACKAGE_SUGGESTS "")
+	
+	# Control file description (more detailed)
+	set(CPACK_DEBIAN_PACKAGE_DESCRIPTION 
+		"EssQt - Laboratory Experiment Control GUI
+	 A Qt6-based graphical user interface application designed for laboratory
+	 experiment control and data visualization. Features include:
+	 .
+	  * Real-time data visualization
+	  * Experiment control interface
+	  * Host discovery capabilities
+	  * Script editing with syntax highlighting
+	  * Terminal and console integration
+	  * State system monitoring
+	 .
+	 This application is designed to work with dserv and related laboratory
+	 control tools developed by SheinbergLab.")
+	
+	# Post-installation and pre-removal scripts (if needed)
+	# set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA 
+	#     "${CMAKE_CURRENT_SOURCE_DIR}/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/debian/prerm")
+	
+	# Installation directory
+	set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
+	
+	# Component setup
+	set(CPACK_COMPONENTS_ALL essqt)
+	set(CPACK_COMPONENT_ESSQT_DISPLAY_NAME "EssQt Application")
+	set(CPACK_COMPONENT_ESSQT_DESCRIPTION "Main EssQt application and dependencies")
+    
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-base-dev, qt6-base-dev-tools, qt6-tools-dev-tools, qt6-wayland-dev-tools, libqt6network6, libqt6widgets6")
+endif()
+
+include(CPack)
+cpack_add_component(essqt REQUIRED)
