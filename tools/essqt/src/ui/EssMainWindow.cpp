@@ -5,7 +5,7 @@
 #include "core/EssCommandInterface.h"
 #include "core/EssDataProcessor.h"
 #include "ui/components/script_editor/EssCodeEditor.h"
-
+#include "ui/components/scriptable_widget/EssScriptableWidget.h"
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -85,7 +85,7 @@ void EssMainWindow::createMenus()
     QAction *saveAction = m_fileMenu->addAction(tr("&Save"));
     saveAction->setShortcuts(QKeySequence::Save);
     connect(saveAction, &QAction::triggered, this, &EssMainWindow::onSave);
-    
+
     QAction *saveAsAction = m_fileMenu->addAction(tr("Save &As..."));
     saveAsAction->setShortcuts(QKeySequence::SaveAs);
     connect(saveAsAction, &QAction::triggered, this, &EssMainWindow::onSaveAs);
@@ -199,13 +199,15 @@ void EssMainWindow::onOpen()
     updateStatus("Open project functionality not yet implemented", 3000);
 }
 
+// Clean EssMainWindow::onSave() - remove all debug statements
 void EssMainWindow::onSave()
 {
     // Check if a script editor has focus
     QWidget* focused = QApplication::focusWidget();
     
-    // Walk up the parent chain to find an EssCodeEditor
+    // Walk up the parent chain to find relevant widgets
     while (focused) {
+        // Check for EssCodeEditor first (existing logic)
         if (auto* codeEditor = qobject_cast<EssCodeEditor*>(focused)) {
             // Found a code editor - trigger its save
             if (codeEditor->isModified() && !codeEditor->isReadOnly()) {
@@ -213,10 +215,20 @@ void EssMainWindow::onSave()
                 return;
             }
         }
+        
+        // Check for EssScriptableWidget
+        if (auto* scriptableWidget = qobject_cast<EssScriptableWidget*>(focused)) {
+            // Found a scriptable widget - trigger its quick save
+            if (scriptableWidget->isDevelopmentMode()) {
+                scriptableWidget->triggerQuickSave();
+                return;
+            }
+        }
+        
         focused = focused->parentWidget();
     }
     
-    // No code editor focused - show the generic message
+    // No relevant widget focused - show the generic message
     updateStatus("Save...", 3000);
 }
 
