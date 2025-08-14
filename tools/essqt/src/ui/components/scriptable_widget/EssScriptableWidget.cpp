@@ -301,6 +301,7 @@ void EssScriptableWidget::registerCoreCommands()
     // Core commands available to all scriptable widgets
     Tcl_CreateObjCommand(m_interp, "bind_datapoint", tcl_bind_datapoint, this, nullptr);
     Tcl_CreateObjCommand(m_interp, "get_dg", tcl_get_dg, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "put_dg", tcl_put_dg, this, nullptr);
     Tcl_CreateObjCommand(m_interp, "local_log", tcl_local_log, this, nullptr);
     Tcl_CreateObjCommand(m_interp, "test_datapoint", tcl_test_datapoint, this, nullptr);
     
@@ -856,13 +857,20 @@ void EssScriptableWidget::createScriptEditor()
     m_scriptEditor = new EssCodeEditor();
     m_scriptEditor->setLanguage(EssCodeEditor::Tcl);
     m_scriptEditor->setContent(m_setupScript.isEmpty() ? 
-        "# Component setup script\n# Use 'bind_datapoint' to connect to data\n\nlocal_log \"Component initialized\"\n" : 
+        "# Component setup script\n# Use 'bind_datapoint' or 'bind_event' to connect to data or events\n\nlocal_log \"Component initialized\"\n" : 
         m_setupScript);
     m_scriptEditor->setToolbarVisible(false); // Keep it compact
     
     connect(m_scriptEditor, &EssCodeEditor::contentChanged, 
             [this](const QString& content) {
                 m_setupScript = content;
+            });
+    
+    // Connect the editor's save signal to our quick save
+    connect(m_scriptEditor, &EssCodeEditor::saveRequested,
+            this, [this]() {
+                localLog("Save triggered from script editor");
+                onQuickSaveRequested();
             });
 }
 
@@ -1172,6 +1180,21 @@ void EssScriptableWidget::onSavePrototypeRequested()
     }
 }
 
+void EssScriptableWidget::triggerQuickSave()
+{
+    // This is called from the main window when Cmd+S is pressed
+    // and this widget (or a child) has focus
+    
+    if (!m_developmentMode) {
+        localLog("Save requested but development mode is disabled");
+        emit statusMessage("Development mode disabled - cannot save", 2000);
+        return;
+    }
+    
+    localLog("Save triggered from main window (Cmd+S)");
+    onQuickSaveRequested();
+}
+
 void EssScriptableWidget::onQuickSaveRequested()
 {
     if (!m_currentPrototypeName.isEmpty()) {
@@ -1462,6 +1485,52 @@ int EssScriptableWidget::tcl_get_dg(ClientData clientData, Tcl_Interp* interp,
   
     // Add to this interpreter
     if (tclPutDynGroup(interp, copy_dg) != TCL_OK) {
+        Tcl_SetResult(interp, "error adding copied dg", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(dgName, -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_put_dg(ClientData clientData, Tcl_Interp* interp,
+                                       int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    if (!widget->m_mainInterp) {
+        Tcl_SetResult(interp, "No shared interpreter available", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "dgname");
+        return TCL_ERROR;
+    }
+    
+	char* dgName = Tcl_GetString(objv[1]);
+    
+    // Look up the dg in the local interpreter
+    DYN_GROUP* dg = nullptr;
+    if (tclFindDynGroup(interp, dgName, &dg) != TCL_OK) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("dg not found", -1));
+        return TCL_ERROR;
+    }
+    
+    // Copy if found
+    DYN_GROUP *copy_dg = dfuCopyDynGroup(dg, DYN_GROUP_NAME(dg));
+	if (!copy_dg) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("error copying dg", -1));
+        return TCL_ERROR;
+	}
+	
+	// Delete if exists in current interp
+    if (tclFindDynGroup(widget->m_mainInterp, dgName, NULL) == TCL_OK) {
+        QString deleteCmd = QString("catch {dg_delete %1}").arg(dgName);
+        Tcl_Eval(widget->m_mainInterp, deleteCmd.toUtf8().constData());
+  	}
+  
+    // Add to this interpreter
+    if (tclPutDynGroup(widget->m_mainInterp, copy_dg) != TCL_OK) {
         Tcl_SetResult(interp, "error adding copied dg", TCL_STATIC);
         return TCL_ERROR;
     }

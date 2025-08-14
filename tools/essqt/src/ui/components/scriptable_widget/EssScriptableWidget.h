@@ -82,7 +82,8 @@ public:
   	void cleanupDevelopmentLayout();
     void showScriptEditor(bool show = true);
     void showLocalConsole(bool show = true);
-
+    void triggerQuickSave();
+    
 protected:
     // Pure virtual interface for subclasses
     virtual void registerCustomCommands() = 0;
@@ -179,6 +180,7 @@ private:
     // Core Tcl commands (minimal set)
     static int tcl_bind_datapoint(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_get_dg(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_put_dg(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);    
     static int tcl_local_log(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_test_datapoint(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 
