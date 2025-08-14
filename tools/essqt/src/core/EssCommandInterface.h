@@ -11,6 +11,8 @@ class DservListener;
 class DservEventParser;
 class QThread;
 
+class EssDgViewerWidget;
+
 // Forward declare Tcl types for MOC
 struct Tcl_Interp;
 struct Tcl_Obj;
@@ -108,6 +110,8 @@ public:
   QStringList getDynGroupNames() const;
   QStringList getDynListNames(const QString &groupName) const;
 
+   void setDgViewer(EssDgViewerWidget* dgViewer);
+   
 signals:
     void connected(const QString &host);
     void disconnected();
@@ -139,6 +143,8 @@ private:
     void shutdownTcl();
     void registerTclCommands();
 	
+	EssDgViewerWidget* m_dgViewer;
+	    
     // Static Tcl command callbacks
     static int TclConnectCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
     static int TclDisconnectCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
@@ -153,7 +159,9 @@ private:
     static int TclDservCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
     static int TclCreateCGraphCmd(ClientData clientData, Tcl_Interp *interp,
                                            int objc, Tcl_Obj *const objv[]);
-    
+    static int TclDgViewCmd(ClientData clientData, Tcl_Interp* interp,
+							 int objc, Tcl_Obj* const objv[]);
+							 
     // Helper to emit signals from static context
     static void emitSignal(EssCommandInterface *obj, const char *signal);
 
