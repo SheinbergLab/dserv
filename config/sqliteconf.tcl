@@ -10,6 +10,8 @@ package require yajltcl
 
 set db_path "$dspath/db/dserv.db"
 
+set last_load_time {}
+
 # Function to handle database setup and corruption detection
 proc setup_database {db_path} {
     set dir_path [file dirname $db_path]
@@ -96,40 +98,31 @@ proc process_trialdg { dpoint data } {
 }
 
 proc process_ess { dpoint data } {
+    global last_load_time
     set host [dservGet system/hostaddr]
     set domain ess
 
     # if the system has changed, update the blockid
-    if { [string equal $dpoint ess/variant_info] } {
-	set maxblockid [db eval { SELECT max(block_id) from trials; }]
-	if { $maxblockid == "{}" } {
-	    dservSet ess/block_id 0
-	} else {
-	    dservSet ess/block_id [expr { $maxblockid+1 }]
-	}
+    if { [string equal $dpoint ess/last_load_time] } {
+    	if { $last_load_time == {} || 
+    	     $last_load_time != $data} {
+			set maxblockid [db eval { SELECT max(block_id) from trials; }]
+			if { $maxblockid == "{}" } {
+				dservSet ess/block_id 0
+			} else {
+				dservSet ess/block_id [expr { $maxblockid+1 }]
+			}
+			set last_load_time $data
+		}
     }
 
     if { [string equal $dpoint ess/trialinfo] } {
-	if { 0 } {
-	    set d [::yajl::json2dict $data]
-	    
-	    foreach v "trialid project system protocol variant version subject status rt" {
-		set $v [dict get $d $v]
-	    }
-	    
-	    set blockid [dservGet ess/block_id]
-	    db eval {
-		INSERT into trial (host, block_id, trial_id, project, state_system, protocol, variant, version, subject, status, rt, trialinfo)
-		VALUES($host, $blockid, $trialid, $project, $system, $protocol, $variant, $version, $subject, $status, $rt, jsonb($data))
-	    }
-	}
-    } else {
-	set key [file tail $dpoint]
-	db eval { INSERT INTO status (host, status_source, status_type, status_value, sys_time)
-	    VALUES($host, $domain, $key, $data, current_timestamp)
-	    ON CONFLICT(host, status_source, status_type) DO UPDATE SET
-	    host=$host, status_source=$domain, status_type=$key, status_value=$data, sys_time=current_timestamp;
-	}
+		set key [file tail $dpoint]
+		db eval { INSERT INTO status (host, status_source, status_type, status_value, sys_time)
+			VALUES($host, $domain, $key, $data, current_timestamp)
+			ON CONFLICT(host, status_source, status_type) DO UPDATE SET
+			host=$host, status_source=$domain, status_type=$key, status_value=$data, sys_time=current_timestamp;
+		}
     }
 }
 
