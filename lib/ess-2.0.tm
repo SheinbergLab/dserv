@@ -842,13 +842,7 @@ namespace eval ess {
         } else {
             set_loading_progress "error" "Loading failed: $error_msg" 0
         }
-        
-        # Clear loading state after a brief delay
-        after 1000 {
-            catch {dservClear ess/loading_progress}
-            catch {dservClear ess/loading_operation_id}  
-            catch {dservClear ess/loading_start_time}
-        }
+        dservSet ess/last_load_time $loading_start_time
     }
     
     proc loading_dict_to_json {dict_data} {
@@ -1024,8 +1018,8 @@ namespace eval ess {
             ess_warning "No trials found in stimdg after loading" "system"
         }
 
-	# initialize obs status (also found as ess/obs_active)
-	dservSet ess/in_obs 0
+		# initialize obs status (also found as ess/obs_active)
+		dservSet ess/in_obs 0
         
         # Mark loading as complete
         finish_loading_operation true
@@ -1033,68 +1027,72 @@ namespace eval ess {
     }
     
     proc reload_system {} {
-	variable current
-	if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
-	    if {[query_state] == "running"} {return}
-	    return
-	}
-	
-	# NEW: Add progress tracking
-	set operation_id [start_loading_operation "system_reload"]
-	
-	if {[catch {
-	    load_system $current(system) $current(protocol) $current(variant)
-	} error]} {
-	    finish_loading_operation false "Reload failed: $error"
-	    error $error
-	}
+		variable current
+		if { $current(system) == {} || 
+		     $current(protocol) == {} || 
+		     $current(variant) == {} } {
+			if {[query_state] == "running"} {return}
+			return
+		}
+		
+		# Add progress tracking
+		set operation_id [start_loading_operation "system_reload"]
+		
+		if {[catch {
+			load_system $current(system) $current(protocol) $current(variant)
+		} error]} {
+			finish_loading_operation false "Reload failed: $error"
+			error $error
+		}
     }
 
     proc reload_protocol {} {
-	variable current
-	if {$current(system) == {} || $current(protocol) == {}} {
-	    if {[query_state] == "running"} {return}
-	    return
-	}
-	
-	set operation_id [start_loading_operation "protocol_reload"]
-	
-	if {[catch {
-	    load_system $current(system) $current(protocol)
-	} error]} {
-	    finish_loading_operation false "Protocol reload failed: $error"
-	    error $error
-	}
+		variable current
+		if {$current(system) == {} || $current(protocol) == {}} {
+			if {[query_state] == "running"} {return}
+			return
+		}
+		
+		set operation_id [start_loading_operation "protocol_reload"]
+		
+		if {[catch {
+			load_system $current(system) $current(protocol)
+		} error]} {
+			finish_loading_operation false "Protocol reload failed: $error"
+			error $error
+		}
     }
     
     proc reload_variant {} {
-	variable current
-	if {$current(system) == {} || $current(protocol) == {} || $current(variant) == {}} {
-	    if {[query_state] == "running"} {return}
-	    return
+		variable current
+		if { $current(system) == {} || 
+		     $current(protocol) == {} || 
+	  	     $current(variant) == {}} {
+			if {[query_state] == "running"} {return}
+			return
+		}
+		
+		set operation_id [start_loading_operation "variant_reload"] 
+		set_loading_progress "variant_init" "Reloading variant: $current(variant)" 50
+		
+		if {[catch {
+			# initialize the variant by calling the appropriate loader
+			variant_init $current(system) $current(protocol) $current(variant)
+			
+			# reset counters
+			reset
+			
+			set current(trialid) 0
+			if {[dg_exists trialdg]} {dg_delete trialdg}
+			reset_trial_info
+			
+			finish_loading_operation true
+			
+		} error]} {
+			finish_loading_operation false "Variant reload failed: $error"
+			error $error
+		}
 	}
-	
-	set operation_id [start_loading_operation "variant_reload"] 
-	set_loading_progress "variant_init" "Reloading variant: $current(variant)" 50
-	
-	if {[catch {
-	    # initialize the variant by calling the appropriate loader
-	    variant_init $current(system) $current(protocol) $current(variant)
-	    
-	    # reset counters
-	    reset
-	    
-	    set current(trialid) 0
-	    if {[dg_exists trialdg]} {dg_delete trialdg}
-	    reset_trial_info
-	    
-	    finish_loading_operation true
-	    
-	} error]} {
-	    finish_loading_operation false "Variant reload failed: $error"
-	    error $error
-	}
-    }
     
     proc set_system {system} {
         variable current
