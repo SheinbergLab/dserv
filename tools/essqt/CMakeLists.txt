@@ -141,6 +141,7 @@ set(UI_SOURCES
     src/ui/components/script_editor/EssScriptEditorWidget.cpp
     src/ui/components/dg_viewer/EssDynGroupViewer.cpp
     src/ui/components/dg_viewer/EssStimDgWidget.cpp
+    src/ui/components/dg_viewer/EssDgViewerWidget.cpp
     src/ui/components/visualization/EssVisualizationWidget.cpp
     src/ui/components/visualization/EssWindowIndicator.cpp
     src/ui/components/visualization/EssEyeTouchVisualizer.cpp
@@ -293,8 +294,8 @@ endif()
 
 set(CPACK_PACKAGE_NAME essqt)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "GUI app to go with dserv and related tools.")
-set(CPACK_PACKAGE_CONTACT SheinbergLab)
-set(CPACK_PACKAGE_VENDOR SheinbergLab)
+set(CPACK_PACKAGE_CONTACT "SheinbergLab <David_Sheinberg@brown.edu>")
+set(CPACK_PACKAGE_VENDOR "SheinbergLab")
 set(CPACK_COMPONENTS_ALL essqt)
 
 if(WIN32)
@@ -304,6 +305,8 @@ elseif(APPLE)
 else()
     INSTALL(TARGETS essqt RUNTIME)
     install(FILES resources/essqt.desktop DESTINATION share/applications)
+	set(CPACK_DEBIAN_PACKAGE_SECTION "science")
+	set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")    
 	set(CPACK_DEBIAN_PACKAGE_SUGGESTS "")
 	
 	# Control file description (more detailed)
@@ -336,7 +339,7 @@ else()
     
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-base-dev, qt6-base-dev-tools, qt6-tools-dev-tools, qt6-wayland-dev-tools, libqt6network6, libqt6widgets6")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6")
 endif()
 
 include(CPack)
