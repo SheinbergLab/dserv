@@ -10,6 +10,9 @@ set dbname base;	       # name of database to write to
 set insert_trialinfo_cmd    "insert_trialinfo"
 set insert_status_cmd  "insert_status"
 
+# use this to track block_id updates
+set last_load_time {}
+
 # Function to handle database setup and corruption detection
 proc setup_database { db { overwrite 0 } } {
     global conn dbname insert_trialinfo_cmd insert_status_cmd
@@ -71,16 +74,20 @@ proc setup_database { db { overwrite 0 } } {
 }
 
 proc process_ess { dpoint data } {
-    global conn insert_trialinfo_cmd insert_status_cmd
+    global conn insert_trialinfo_cmd insert_status_cmd last_load_time
 
     set host [dservGet system/hostaddr]
     set domain ess
 
     # if the system has changed, update the blockid
-    if { [string equal $dpoint ess/system] } {
-	set maxblockid [postgres::query $conn { SELECT max(block_id) from trial; }]
-	dservSet ess/block_id [expr $maxblockid+1]
-    }
+    if { [string equal $dpoint last_load_time] } {
+    	if { $last_load_time == {} ||
+    	     $last_load_time != $data } {
+			set maxblockid [postgres::query $conn { SELECT max(block_id) from trial; }]
+			dservSet ess/block_id [expr $maxblockid+1]
+			set last_load_time $data
+		}
+	}
     
     if { [string equal $dpoint ess/trialinfo] } {
 	set d [::yajl::json2dict $data]
