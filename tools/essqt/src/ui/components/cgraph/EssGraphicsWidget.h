@@ -50,8 +50,11 @@ public:
 
     // EssScriptableWidget interface
     QString getWidgetTypeName() const override { return "GraphicsWidget"; }
-
-    // Layout management (stubs for future enhancement)
+    
+    // Resize management
+    void forceGraphicsResize();
+        
+    // Layout management
     void setLayoutMode(LayoutMode mode);
     LayoutMode layoutMode() const { return m_layoutMode; }
     
@@ -96,6 +99,7 @@ public:
     // Floating or docked state   
     void setFloatingMode(bool floating);
     bool isFloating() const { return m_isFloating; }
+	QAction* getFloatingAction() const { return m_floatingAction; }
 
     // Current instance tracking (for cgraph callbacks)
     static EssGraphicsWidget* getCurrentInstance();
@@ -111,6 +115,7 @@ signals:
     void mouseDoubleClicked(const QPointF& pos);
     void returnToTabsRequested();
     void layoutModeChanged(LayoutMode mode);  // For future use
+    void floatingRequested(bool floating);
     
 protected:
     // EssScriptableWidget interface implementation
@@ -130,9 +135,10 @@ protected:
     
 private slots:
     void onWidgetReady();        // Handle widget ready for initialization
-
+	void onGraphicsWidgetResized();  
     void initializeGraphics();
-    
+    void onFloatingToggled(bool floating);  
+     
 private:
     bool m_widgetFullyConstructed = false;
     bool m_pendingGraphicsInit = false;
@@ -157,6 +163,8 @@ private:
     QToolBar* m_toolbar;
     QWidget* m_graphWidget;
     QAction* m_returnToTabsAction;
+    QAction* m_floatingAction;              // Float/dock toggle button
+    QLabel* m_statusLabel;                  // Status indicator
     
     bool m_isFloating = false;
     

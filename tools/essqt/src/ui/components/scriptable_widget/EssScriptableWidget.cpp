@@ -719,7 +719,6 @@ void EssScriptableWidget::applyDevelopmentLayout()
 
 void EssScriptableWidget::setupThreePanelLayout()
 {
-   
     if (!m_scriptEditor || !m_widgetTerminal || !m_widgetConsole) {
         localLog(QString("ERROR: Missing widgets - Script: %1, Terminal: %2, Console: %3")
                 .arg(m_scriptEditor ? "OK" : "NULL")
@@ -762,15 +761,22 @@ void EssScriptableWidget::setupThreePanelLayout()
     bottomLayout->addWidget(bottomSplitter);
     m_splitter->addWidget(bottomPanel);
     
-    // Set proportions for the three main sections
-    m_splitter->setStretchFactor(0, 5);  // Main widget
-    m_splitter->setStretchFactor(1, 3);  // Script editor  
-    m_splitter->setStretchFactor(2, 2);  // Terminal + Console
+    // IMPORTANT: Set proportions that ensure graphics gets priority
+    m_splitter->setStretchFactor(0, 6);  // Main widget gets 60% priority
+    m_splitter->setStretchFactor(1, 2);  // Script editor gets 20%  
+    m_splitter->setStretchFactor(2, 2);  // Terminal + Console get 20%
     
-    // Set reasonable minimum sizes
-    m_functionalWidget->setMinimumHeight(200);
-    m_scriptEditor->setMinimumHeight(150);
-    bottomPanel->setMinimumHeight(100);
+    // Set ONLY essential minimum sizes to prevent unusable states
+    m_functionalWidget->setMinimumHeight(150);  // Graphics needs to be usable
+    m_scriptEditor->setMinimumHeight(60);       // Script editor needs basic visibility
+    bottomPanel->setMinimumHeight(60);          // Terminal needs basic visibility
+    
+    // NO maximum sizes - let user decide what they want
+    
+    // Set collapsible behavior - graphics widget should NOT be collapsible
+    m_splitter->setCollapsible(0, false);  // Graphics cannot be collapsed
+    m_splitter->setCollapsible(1, true);   // Script editor can be collapsed
+    m_splitter->setCollapsible(2, true);   // Terminal area can be collapsed
     
     m_mainLayout->addWidget(m_splitter);
     

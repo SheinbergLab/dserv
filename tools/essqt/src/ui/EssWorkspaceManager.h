@@ -89,7 +89,8 @@ private slots:
     void onCGraphTabCloseRequested(int index);
     void detachCGraphTab(int index);
     void returnCGraphToTabs(QDockWidget* dock, const QString& name);
-
+ 	void handleGraphicsFloatingRequest(const QString& name, bool floating);
+ 	
 private:
     QMainWindow *m_mainWindow;
     

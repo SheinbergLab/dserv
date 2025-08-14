@@ -114,10 +114,39 @@ void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString&
         }
     });
     
+    // Connect floating request to existing dock system
+    connect(graph, &EssGraphicsWidget::floatingRequested, [this, name](bool floating) {
+        handleGraphicsFloatingRequest(name, floating);
+    });
+    
     connect(graph, &EssScriptableWidget::statusMessage,
             this, &EssWorkspaceManager::statusMessage);
     
     updateCGraphMenu();
+}
+
+void EssWorkspaceManager::handleGraphicsFloatingRequest(const QString& name, bool floating)
+{
+    if (!m_cgraphs.contains(name)) {
+        return;
+    }
+    
+    EssGraphicsWidget* graph = m_cgraphs[name];
+    
+    if (floating) {
+        // Find the tab index and detach it
+        for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
+            if (m_cgraphTabWidget->widget(i) == graph) {
+                detachCGraphTab(i);
+                break;
+            }
+        }
+    } else {
+        // Return from floating to tabs
+        if (m_docks.contains(name)) {
+            returnCGraphToTabs(m_docks[name], name);
+        }
+    }
 }
 
 void EssWorkspaceManager::onCGraphTabCloseRequested(int index)
@@ -151,6 +180,7 @@ void EssWorkspaceManager::onCGraphTabCloseRequested(int index)
         updateCGraphMenu();
     }
 }
+
 void EssWorkspaceManager::detachCGraphTab(int index)
 {
     QWidget* widget = m_cgraphTabWidget->widget(index);
@@ -164,7 +194,7 @@ void EssWorkspaceManager::detachCGraphTab(int index)
     QString name = essgraph->name();
     QString title = m_cgraphTabWidget->tabText(index);
     
-    // Set floating mode
+    // Set floating mode BEFORE removing from tab widget
     essgraph->setFloatingMode(true);
     
     // Remove from tab widget
@@ -175,7 +205,6 @@ void EssWorkspaceManager::detachCGraphTab(int index)
     dock->setObjectName(QString("%1Dock").arg(name));
     dock->setWidget(widget);
     dock->setFloating(true);
-//    dock->resize(600, 400);
     
     // Add context menu for re-docking
     dock->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -194,6 +223,15 @@ void EssWorkspaceManager::detachCGraphTab(int index)
     
     // Add to main window and show
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+    
+    // Use Qt's signal to know when floating is complete
+    connect(dock, &QDockWidget::topLevelChanged, [essgraph](bool floating) {
+        if (floating && essgraph) {
+            // Use Qt's proper deferred execution
+            QMetaObject::invokeMethod(essgraph, "forceGraphicsResize", Qt::QueuedConnection);
+        }
+    });
+    
     dock->show();
     
     updateCGraphMenu();
@@ -210,6 +248,12 @@ void EssWorkspaceManager::returnCGraphToTabs(QDockWidget* dock, const QString& n
     auto essgraph = qobject_cast<EssGraphicsWidget*>(widget);
     if (essgraph) {
         essgraph->setFloatingMode(false);
+        
+        // Update the floating button state to unchecked using public accessor
+        QAction* floatingAction = essgraph->getFloatingAction();
+        if (floatingAction) {
+            floatingAction->setChecked(false);
+        }
     }
         
     // Remove from dock
@@ -240,7 +284,6 @@ void EssWorkspaceManager::returnCGraphToTabs(QDockWidget* dock, const QString& n
     
     updateCGraphMenu();
 }
-
 
 void EssWorkspaceManager::createDocks()
 {

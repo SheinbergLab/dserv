@@ -158,38 +158,63 @@ QWidget* EssGraphicsWidget::createMainWidget()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     
-    // Create toolbar
+      // Create toolbar
     m_toolbar = new QToolBar();
     m_toolbar->setIconSize(QSize(16, 16));
     m_toolbar->setMaximumHeight(24);
     m_toolbar->setMovable(false);
     
-    // Add actions to toolbar
-    QAction* clearAction = m_toolbar->addAction(QIcon::fromTheme("edit-clear", 
-        style()->standardIcon(QStyle::SP_DialogResetButton)), tr("Clear"));
-    clearAction->setToolTip(tr("Clear the graph"));
-    connect(clearAction, &QAction::triggered, this, &EssGraphicsWidget::clear);
+    // Clear action
+	QAction* clearAction = m_toolbar->addAction(
+		QIcon::fromTheme("edit-clear-all", 
+			QIcon::fromTheme("view-refresh", 
+				style()->standardIcon(QStyle::SP_BrowserReload))), 
+		tr("Clear"));
+	clearAction->setToolTip(tr("Clear the graphics canvas"));
+	connect(clearAction, &QAction::triggered, this, &EssGraphicsWidget::clear);
+	
+	m_toolbar->addSeparator();
     
-    m_toolbar->addSeparator();
+    // Export action
+	QAction* exportAction = m_toolbar->addAction(
+		QIcon::fromTheme("document-export", 
+			QIcon::fromTheme("document-send", 
+				QIcon::fromTheme("go-down", 
+					style()->standardIcon(QStyle::SP_ArrowDown)))), 
+		tr("Export"));
+	exportAction->setToolTip(tr("Export graphics to PDF file"));
+	connect(exportAction, &QAction::triggered, [this]() {
+		exportToPDFDialog();
+	});
+	
+	m_toolbar->addSeparator();
+		
+    // Floating action
+	m_floatingAction = m_toolbar->addAction(
+		QIcon::fromTheme("window-new", 
+			QIcon::fromTheme("view-fullscreen", 
+				style()->standardIcon(QStyle::SP_TitleBarMaxButton))), 
+		tr("Float"));
+	m_floatingAction->setToolTip(tr("Detach widget to floating window"));
+	m_floatingAction->setCheckable(true);
+	connect(m_floatingAction, &QAction::toggled, this, 
+		&EssGraphicsWidget::onFloatingToggled);
+
+    // Add "return to tabs" action (only visible when floating)
+	m_returnToTabsAction = m_toolbar->addAction(
+		QIcon::fromTheme("go-home",
+			style()->standardIcon(QStyle::SP_ArrowBack)), tr("To Tabs"));
+	m_returnToTabsAction->setToolTip(tr("Return to tab container"));
+	m_returnToTabsAction->setVisible(false);
+	connect(m_returnToTabsAction, &QAction::triggered, [this]() {
+		emit returnToTabsRequested();
+	});
     
-    QAction* exportAction = m_toolbar->addAction(QIcon::fromTheme("document-save-as",
-        style()->standardIcon(QStyle::SP_DialogSaveButton)), tr("Export"));
-    exportAction->setToolTip(tr("Export to PDF"));
-    connect(exportAction, &QAction::triggered, [this]() {
-        exportToPDFDialog();
-    });
-    
-    m_toolbar->addSeparator();
-    
-    // Add "return to tabs" action (only visible when in a floating dock)
-    m_returnToTabsAction = m_toolbar->addAction(QIcon::fromTheme("go-home",
-        style()->standardIcon(QStyle::SP_ArrowBack)), tr("To Tabs"));
-    m_returnToTabsAction->setToolTip(tr("Return to tab container"));
-    m_returnToTabsAction->setVisible(false);
-    connect(m_returnToTabsAction, &QAction::triggered, [this]() {
-        emit returnToTabsRequested();
-    });
-    
+	m_statusLabel = new QLabel();
+	m_statusLabel->setStyleSheet("QLabel { color: #666; font-size: 11px; }");
+	m_statusLabel->setText("Ready");
+	m_toolbar->addWidget(m_statusLabel);
+		
     // Add spacer
     QWidget* spacer = new QWidget();
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -210,7 +235,7 @@ QWidget* EssGraphicsWidget::createContentArea()
     // Create the actual graph widget if not already created
     if (!m_graphWidget) {
         m_graphWidget = new QWidget();
-        m_graphWidget->setMinimumSize(400, 300);
+        m_graphWidget->setMinimumSize(200, 150);  // Set reasonable minimum
         m_graphWidget->setAttribute(Qt::WA_OpaquePaintEvent);
         m_graphWidget->setAutoFillBackground(true);
         m_graphWidget->setFocusPolicy(Qt::ClickFocus);
@@ -222,6 +247,9 @@ QWidget* EssGraphicsWidget::createContentArea()
         QPalette pal = m_graphWidget->palette();
         pal.setColor(QPalette::Window, m_backgroundColor);
         m_graphWidget->setPalette(pal);
+        
+        // Install resize event monitoring
+        m_graphWidget->installEventFilter(this);
     }
     
     switch (m_layoutMode) {
@@ -244,6 +272,21 @@ QWidget* EssGraphicsWidget::createContentArea()
             return m_graphWidget;
     }
 }
+
+void EssGraphicsWidget::onFloatingToggled(bool floating)
+{
+    // Update button states first
+    m_floatingAction->setVisible(!floating);
+    m_returnToTabsAction->setVisible(floating);
+    
+    if (m_statusLabel) {
+        m_statusLabel->setText(floating ? "Floating" : "Docked");
+    }
+    
+    // Emit signal for workspace manager to handle the actual floating
+    emit floatingRequested(floating);
+}
+
 
 void EssGraphicsWidget::onSetupComplete()
 {
@@ -283,6 +326,22 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
             emit graphUpdated();
             
             return true;
+        }
+        else if (event->type() == QEvent::Resize) {
+            // IMPORTANT: Handle graphics widget resize
+            QResizeEvent* resizeEvent = static_cast<QResizeEvent*>(event);
+            
+            // Only handle if this is a meaningful size change
+            QSize newSize = resizeEvent->size();
+            QSize oldSize = resizeEvent->oldSize();
+            
+            if (newSize != oldSize && newSize.width() > 0 && newSize.height() > 0) {
+                // Direct resize - no debouncing needed for lightweight graphics ops
+                onGraphicsWidgetResized();
+            }
+            
+            // Let the widget handle its own resize
+            return false;
         }
         else if (event->type() == QEvent::MouseButtonPress) {
             onMousePressEvent(static_cast<QMouseEvent*>(event));
@@ -324,6 +383,11 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
     
     // Let the base class handle it
     return EssScriptableWidget::eventFilter(obj, event);
+}
+
+void EssGraphicsWidget::forceGraphicsResize()
+{
+    onGraphicsWidgetResized();
 }
 
 void EssGraphicsWidget::showEvent(QShowEvent* event)
@@ -447,14 +511,48 @@ void EssGraphicsWidget::resizeEvent(QResizeEvent* event)
     }
     
     // Handle resize for already-initialized graphics
-    if (m_graphicsInitialized && interpreter()) {
-        QString cmd = QString("qtcgraph_resize %1 %2 %3")
-                        .arg((quintptr)this)
-                        .arg(m_graphWidget->width())
-                        .arg(m_graphWidget->height());
-        Tcl_Eval(interpreter(), cmd.toUtf8().constData());
-        refresh();
+    if (m_graphicsInitialized && interpreter() && m_graphWidget) {
+        // Use the actual visible size of the graphics widget
+        QSize graphicsSize = m_graphWidget->size();
+        
+        // Only resize if we have a meaningful size
+        if (graphicsSize.width() > 0 && graphicsSize.height() > 0) {
+            QString cmd = QString("qtcgraph_resize %1 %2 %3")
+                            .arg((quintptr)this)
+                            .arg(graphicsSize.width())
+                            .arg(graphicsSize.height());
+            Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+            
+            // Force a refresh after resize
+            QTimer::singleShot(10, this, &EssGraphicsWidget::refresh);
+        }
     }
+}
+
+void EssGraphicsWidget::onGraphicsWidgetResized()
+{
+    if (!m_graphicsInitialized || !interpreter() || !m_graphWidget) {
+        return;
+    }
+    
+    QSize newSize = m_graphWidget->size();
+    
+    // Only proceed if size is meaningful
+    if (newSize.width() <= 0 || newSize.height() <= 0) {
+        return;
+    }
+    
+    localLog(QString("Graphics area resized to: %1x%2").arg(newSize.width()).arg(newSize.height()));
+    
+    // Notify cgraph system of the size change
+    QString resizeCmd = QString("qtcgraph_resize %1 %2 %3")
+                        .arg((quintptr)this)
+                        .arg(newSize.width())
+                        .arg(newSize.height());
+    Tcl_Eval(interpreter(), resizeCmd.toUtf8().constData());
+    
+    // Force immediate refresh
+    refresh();
 }
 
 void EssGraphicsWidget::onWidgetReady()
