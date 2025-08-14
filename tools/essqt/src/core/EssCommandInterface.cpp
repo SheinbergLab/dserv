@@ -7,6 +7,7 @@
 #include "communication/DservEventParser.h"
 #include "console/EssOutputConsole.h"
 #include "scriptable_widget/EssScriptableManager.h"
+#include "dg_viewer/EssDgViewerWidget.h"
 
 #include <QDebug>
 #include <QMetaObject>
@@ -243,7 +244,7 @@ void EssCommandInterface::registerTclCommands()
     // Backend command proxies
     Tcl_CreateObjCommand(m_tclInterp, "ess", TclEssCmd, this, nullptr);
     Tcl_CreateObjCommand(m_tclInterp, "dserv", TclDservCmd, this, nullptr);
-    
+     
 	// Add commands from scriptable interface
 	EssScriptableManager::getInstance().registerTclCommands(m_tclInterp);
 }
@@ -253,6 +254,20 @@ void EssCommandInterface::shutdownTcl()
     if (m_tclInterp) {
         Tcl_DeleteInterp(m_tclInterp);
         m_tclInterp = nullptr;
+    }
+}
+
+void EssCommandInterface::setDgViewer(EssDgViewerWidget* dgViewer)
+{
+    m_dgViewer = dgViewer;
+    
+    // Re-register the command with the new viewer
+    if (m_tclInterp && m_dgViewer) {
+        // Remove old command if it exists
+        Tcl_DeleteCommand(m_tclInterp, "dg_view");
+        
+        // Register new command
+        Tcl_CreateObjCommand(m_tclInterp, "dg_view", TclDgViewCmd, m_dgViewer, nullptr);
     }
 }
 
@@ -590,6 +605,28 @@ int EssCommandInterface::TclDservCmd(ClientData clientData, Tcl_Interp *interp,
         Tcl_SetResult(interp, error.toUtf8().data(), TCL_VOLATILE);
         return TCL_ERROR;
     }
+}
+
+int EssCommandInterface::TclDgViewCmd(ClientData clientData, Tcl_Interp* interp,
+							 int objc, Tcl_Obj* const objv[])
+{
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "dg_name");
+        return TCL_ERROR;
+    }
+    
+    QString dgName = QString::fromUtf8(Tcl_GetString(objv[1]));
+    
+    EssDgViewerWidget* dgViewer = static_cast<EssDgViewerWidget*>(clientData);
+    if (!dgViewer) {
+        Tcl_SetResult(interp, "DG viewer not available", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    // Load the DG in the viewer
+    dgViewer->showDynGroupFromTcl(dgName);
+    
+    return TCL_OK;
 }
 
 
