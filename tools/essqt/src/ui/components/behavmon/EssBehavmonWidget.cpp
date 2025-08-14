@@ -17,8 +17,9 @@ EssBehavmonWidget::EssBehavmonWidget(const QString& name, QWidget* parent)
     , m_resetButton(nullptr)
     , m_exportButton(nullptr)
 {
-    // Set default setup script
+     // Set default setup script
     setSetupScript(R"tcl(
+
 
 # Behavior Monitor Widget Setup Script
 local_log "Behavmon widget script loaded"
@@ -145,6 +146,8 @@ proc update_sort_options {} {
     if {[llength $::behavmon_sort_columns] > 0} {
         set_sort_options $::behavmon_sort_columns
         local_log "Sort options updated: $::behavmon_sort_columns"
+    } else {
+        set_sort_options { {} {} }
     }
 }
 
@@ -264,6 +267,7 @@ proc on_sort_changed {} {
 }
 
 local_log "Behavmon widget setup complete"
+
 
 )tcl");
     

@@ -107,12 +107,12 @@ void EssEventTableWidget::setupUi()
     // Column sizing
     QHeaderView *header = m_tableWidget->horizontalHeader();
     header->setDefaultSectionSize(60);  // Default smaller width
-    header->setSectionResizeMode(0, QHeaderView::Fixed);  // Time
-    header->setSectionResizeMode(1, QHeaderView::Fixed);  // Elapsed
-    header->setSectionResizeMode(2, QHeaderView::Interactive);  // Type
-    header->setSectionResizeMode(3, QHeaderView::Interactive);  // Subtype
-    header->setSectionResizeMode(4, QHeaderView::Stretch);  // Parameters
-    
+    header->setSectionResizeMode(0, QHeaderView::ResizeToContents);  // Time
+	header->setSectionResizeMode(1, QHeaderView::ResizeToContents);  // Elapsed
+	header->setSectionResizeMode(2, QHeaderView::ResizeToContents);  // Type
+	header->setSectionResizeMode(3, QHeaderView::ResizeToContents);  // Subtype
+	header->setSectionResizeMode(4, QHeaderView::Stretch);  // Parameters
+
     // Set specific column widths
     m_tableWidget->setColumnWidth(0, 60);  // Time
     m_tableWidget->setColumnWidth(1, 50);  // Elapsed
@@ -122,7 +122,6 @@ void EssEventTableWidget::setupUi()
     mainLayout->addWidget(m_tableWidget);
     
     setLayout(mainLayout);
-    resize(700, 400);
 }
 
 void EssEventTableWidget::connectToEventProcessor()

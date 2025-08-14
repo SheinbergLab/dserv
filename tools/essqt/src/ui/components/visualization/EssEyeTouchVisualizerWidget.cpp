@@ -479,14 +479,3 @@ void EssEyeTouchVisualizerWidget::sendVirtualTouchData(int screenX, int screenY)
     
     emit virtualTouchData(data);
 }
-
-QSize EssEyeTouchVisualizerWidget::sizeHint() const {
-    // Suggest a square-ish size that accounts for controls
-    // Visualizer wants to be square, plus ~100 pixels for controls
-    return QSize(600, 700);
-}
-
-QSize EssEyeTouchVisualizerWidget::minimumSizeHint() const {
-    // Minimum reasonable size for the widget
-    return QSize(400, 500);
-}

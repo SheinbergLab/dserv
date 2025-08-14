@@ -24,10 +24,6 @@ public:
     void updateEyePosition(const QString& data);
     void updateScreenDimensions(const QVariant& data, const QString& param);
     
-    // Size hint overrides for better floating behavior
-    QSize sizeHint() const override;
-    QSize minimumSizeHint() const override;
-    
 signals:
     void virtualEyeData(const QByteArray& data);
     void virtualTouchData(const QByteArray& data);
