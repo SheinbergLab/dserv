@@ -63,6 +63,7 @@ private:
     // Clipboard operations
     void handleCopy();
     void handlePaste();
+    void handleCut(); 
     
 private:
     EssScriptableWidget* m_parentWidget;

@@ -254,6 +254,23 @@ void EssWidgetTerminal::handlePaste()
     }
 }
 
+void EssWidgetTerminal::handleCut()
+{
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection() && cursor.position() >= m_promptPosition) {
+        // Only cut if selection is in editable area
+        int selStart = cursor.selectionStart();
+        int selEnd = cursor.selectionEnd();
+        
+        if (selStart >= m_promptPosition) {
+            QString selectedText = cursor.selectedText();
+            selectedText.replace(QChar::ParagraphSeparator, '\n');
+            QApplication::clipboard()->setText(selectedText);
+            cursor.removeSelectedText();
+        }
+    }
+}
+
 void EssWidgetTerminal::keyPressEvent(QKeyEvent *event)
 {
     if (m_isExecutingCommand) {
@@ -262,25 +279,44 @@ void EssWidgetTerminal::keyPressEvent(QKeyEvent *event)
     
     Qt::KeyboardModifiers modifiers = event->modifiers();
     
-    // Handle common shortcuts
-    if (modifiers & Qt::ControlModifier) {
+#ifdef Q_OS_MAC
+    // On macOS, use native modifiers to get the real keys pressed
+    // because Qt swaps Cmd and Ctrl by default
+    quint32 native = event->nativeModifiers();
+    bool isRealCmd = (native & 0x100000);   // NSEventModifierFlagCommand
+    bool isRealCtrl = (native & 0x40000);   // NSEventModifierFlagControl
+    bool isShift = (native & 0x20000);      // NSEventModifierFlagShift
+    bool isAlt = (native & 0x80000);        // NSEventModifierFlagOption
+    
+    // Handle Mac system shortcuts (Real Cmd+C/V/X/A)
+    if (isRealCmd && !isRealCtrl && !isShift) {
         switch (event->key()) {
             case Qt::Key_C:
-                if (textCursor().hasSelection()) {
-                    handleCopy();
-                } else {
-                    // Ctrl+C to cancel current line
-                    appendOutput("^C\n");
-                    updatePrompt();
-                }
+                handleCopy();
                 event->accept();
                 return;
-                
             case Qt::Key_V:
                 handlePaste();
                 event->accept();
                 return;
-                
+            case Qt::Key_X:
+                handleCut();
+                event->accept();
+                return;
+            case Qt::Key_A:
+                selectAll();  // or move to beginning of line if you prefer
+                event->accept();
+                return;
+        }
+    }
+    
+    // Handle Emacs key bindings with real Ctrl key
+    if (isRealCtrl && !isRealCmd && !isShift) {
+#else
+    // On other platforms, use Qt's modifiers as normal
+    if ((modifiers & Qt::ControlModifier) && !(modifiers & Qt::ShiftModifier)) {
+#endif
+        switch (event->key()) {
             case Qt::Key_A: // Beginning of line
                 {
                     QTextCursor cursor = textCursor();
@@ -289,17 +325,135 @@ void EssWidgetTerminal::keyPressEvent(QKeyEvent *event)
                     event->accept();
                     return;
                 }
-                
             case Qt::Key_E: // End of line
                 {
                     moveCursor(QTextCursor::End);
                     event->accept();
                     return;
                 }
-                
+            case Qt::Key_K: // Kill to end of line
+                {
+                    QTextCursor cursor = textCursor();
+                    if (cursor.position() >= m_promptPosition) {
+                        cursor.movePosition(QTextCursor::End, QTextCursor::KeepAnchor);
+                        cursor.removeSelectedText();
+                    }
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_U: // Kill to beginning of line
+                {
+                    QTextCursor cursor = textCursor();
+                    if (cursor.position() > m_promptPosition) {
+                        int currentPos = cursor.position();
+                        cursor.setPosition(m_promptPosition);
+                        cursor.setPosition(currentPos, QTextCursor::KeepAnchor);
+                        cursor.removeSelectedText();
+                    }
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_W: // Kill word backward
+                {
+                    QTextCursor cursor = textCursor();
+                    cursor.movePosition(QTextCursor::PreviousWord, QTextCursor::KeepAnchor);
+                    if (cursor.position() < m_promptPosition) {
+                        cursor.setPosition(m_promptPosition);
+                        cursor.setPosition(textCursor().position(), QTextCursor::KeepAnchor);
+                    }
+                    cursor.removeSelectedText();
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_D: // Delete character forward
+                {
+                    if (getCurrentCommand().isEmpty()) {
+                        appendOutput("Use 'close_terminal' or disable development mode to close\n");
+                        updatePrompt();
+                    } else {
+                        QTextCursor cursor = textCursor();
+                        cursor.deleteChar();
+                    }
+                    event->accept();
+                    return;
+                }
             case Qt::Key_L: // Clear screen
                 {
                     clearTerminal();
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_P: // Previous history
+                {
+                    navigateHistory(-1);
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_N: // Next history
+                {
+                    navigateHistory(1);
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_C: // Cancel current line (Ctrl+C)
+                {
+                    if (textCursor().hasSelection()) {
+                        handleCopy();
+                    } else {
+                        appendOutput("^C\n");
+                        updatePrompt();
+                    }
+                    event->accept();
+                    return;
+                }
+        }
+    }
+    
+#ifndef Q_OS_MAC
+    // On non-Mac platforms, handle Ctrl+Shift+C/V for copy/paste
+    if ((modifiers & Qt::ControlModifier) && (modifiers & Qt::ShiftModifier)) {
+        switch (event->key()) {
+            case Qt::Key_C:
+                handleCopy();
+                event->accept();
+                return;
+            case Qt::Key_V:
+                handlePaste();
+                event->accept();
+                return;
+        }
+    }
+#endif
+    
+    // Alt key bindings
+#ifdef Q_OS_MAC
+    if (isAlt) {
+#else
+    if (modifiers & Qt::AltModifier) {
+#endif
+        switch (event->key()) {
+            case Qt::Key_B: // Alt+B - Word backward
+                {
+                    QTextCursor cursor = textCursor();
+                    cursor.movePosition(QTextCursor::PreviousWord);
+                    if (cursor.position() < m_promptPosition) {
+                        cursor.setPosition(m_promptPosition);
+                    }
+                    setTextCursor(cursor);
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_F: // Alt+F - Word forward
+                {
+                    moveCursor(QTextCursor::NextWord);
+                    event->accept();
+                    return;
+                }
+            case Qt::Key_D: // Alt+D - Kill word forward
+                {
+                    QTextCursor cursor = textCursor();
+                    cursor.movePosition(QTextCursor::NextWord, QTextCursor::KeepAnchor);
+                    cursor.removeSelectedText();
                     event->accept();
                     return;
                 }
