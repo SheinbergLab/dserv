@@ -667,6 +667,9 @@ namespace eval ess {
     variable loading_operation_id  
     variable loading_start_time
     
+    # juicer tracking
+    variable juicer_last_trial_ml
+    
     proc version_string {} {
         if {[dservExists ess/git/branch] && [dservExists ess/git/tag]} {
             set branch [dservGet ess/git/branch]
@@ -1295,6 +1298,7 @@ namespace eval ess {
         variable current
         variable subject_id
         variable open_datafile
+        variable juicer_last_trial_ml
         set obj [yajl create #auto]
         set parseobj [yajl create #auto]
         $obj map_open
@@ -1309,6 +1313,7 @@ namespace eval ess {
         $obj string subject string $subject_id
         $obj string status number $status
         $obj string rt number $rt
+        $obj string juice_ml $juicer_last_trial_ml
         $obj string filename string $open_datafile
 
         # if a trial id is supplied, add addition info
@@ -1382,11 +1387,16 @@ namespace eval ess {
     proc end_obs {{status 1}} {
         variable in_obs
         variable obs_pin
+        variable juicer_last_trial_ml
         if {!$in_obs} {return}
         rpioPinOff $obs_pin
         ::ess::evt_put ENDOBS $status [now]
         set in_obs 0
         dservSet ess/in_obs 0
+        
+        # track reward amount
+        dservSet ess/juicer_last_trial_ml $juicer_last_trial_ml
+        set_juicer_last_trial_ml 0
     }
 
     proc query_state {} {
@@ -2802,12 +2812,13 @@ namespace eval ess {
 
 namespace eval ess {
     # initially no juicer is connected
-    variable current
+    variable current 
     package require juicer
     set current(juicer) {}
 
     proc juicer_init {} {
         variable current
+        variable juicer_last_trial_ml
         if {$current(juicer) != {}} {$current(juicer) destroy}
         set j [Juicer new]
         if {[set jpath [$j find]] != {}} {
@@ -2817,10 +2828,12 @@ namespace eval ess {
             $j use_gpio
         }
         set current(juicer) $j
+        set juicer_last_trial_ml 0
     }
 
     proc reward {ml} {
         variable current
+        variable juicer_last_trial_ml
         set j $current(juicer)
         if {$j == ""} {return}
         if {[$j using_gpio]} {
@@ -2829,6 +2842,7 @@ namespace eval ess {
         } else {
             $j reward $ml
         }
+        set juicer_last_trial_ml [expr $juicer_last_trial_ml]
     }
 }
 ###############################################################################
