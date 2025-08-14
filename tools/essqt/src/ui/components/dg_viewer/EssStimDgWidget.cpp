@@ -6,6 +6,7 @@
 #include <QHeaderView>
 #include <QMenu>
 #include <QInputDialog>
+#include <QScrollBar>
 #include <QMessageBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -102,8 +103,70 @@ void EssStimDgWidget::onStimDgReceived()
     emit stimulusDataUpdated();
 }
 
+// Add this method to save current position
+void EssStimDgWidget::saveCurrentPosition()
+{
+    QTableWidget* table = tableWidget();
+    
+    // Save current cell position
+    m_savedPosition.currentRow = table->currentRow();
+    m_savedPosition.currentColumn = table->currentColumn();
+    
+    // Save scroll positions
+    m_savedPosition.scrollX = table->horizontalScrollBar()->value();
+    m_savedPosition.scrollY = table->verticalScrollBar()->value();
+}
+
+// Add this method to restore saved position
+void EssStimDgWidget::restorePosition()
+{
+    if (!m_savedPosition.isValid()) return;
+    
+    QTableWidget* table = tableWidget();
+    
+    // Check if the saved position is still valid
+    if (m_savedPosition.currentRow >= 0 && 
+        m_savedPosition.currentRow < table->rowCount() &&
+        m_savedPosition.currentColumn >= 0 && 
+        m_savedPosition.currentColumn < table->columnCount()) {
+        
+        // Restore cell selection
+        table->setCurrentCell(m_savedPosition.currentRow, m_savedPosition.currentColumn);
+        
+        // Restore scroll positions (do this after setting current cell)
+        table->horizontalScrollBar()->setValue(m_savedPosition.scrollX);
+        table->verticalScrollBar()->setValue(m_savedPosition.scrollY);
+        
+        // Log the restoration for development feedback
+        EssConsoleManager::instance()->logDebug(
+            QString("Restored position: row %1, col %2")
+                .arg(m_savedPosition.currentRow)
+                .arg(m_savedPosition.currentColumn),
+            "StimDG"
+        );
+    } else {
+        // Position is no longer valid, try to get as close as possible
+        int targetRow = qMin(m_savedPosition.currentRow, table->rowCount() - 1);
+        int targetCol = qMin(m_savedPosition.currentColumn, table->columnCount() - 1);
+        
+        if (targetRow >= 0 && targetCol >= 0) {
+            table->setCurrentCell(targetRow, targetCol);
+            
+            EssConsoleManager::instance()->logDebug(
+                QString("Adjusted position: row %1→%2, col %3→%4")
+                    .arg(m_savedPosition.currentRow).arg(targetRow)
+                    .arg(m_savedPosition.currentColumn).arg(targetCol),
+                "StimDG"
+            );
+        }
+    }
+}
+
 void EssStimDgWidget::refreshStimDg()
 {
+    // Save current position before refresh
+    saveCurrentPosition();
+    
     // Try to get stimdg from Tcl
     auto* app = EssApplication::instance();
     if (!app) return;
@@ -151,6 +214,10 @@ void EssStimDgWidget::refreshStimDg()
         if (numTrials > 0) {
             updateStatistics();
         }
+        
+        // Restore position after refresh
+        restorePosition();
+        
     } else {
         // Log that no stimdg is available yet
         EssConsoleManager::instance()->logDebug(
@@ -161,6 +228,9 @@ void EssStimDgWidget::refreshStimDg()
         // Update status label to show no data
         m_statusLabel->setText("No data");
         m_statusLabel->setToolTip("No stimulus data loaded");
+        
+        // Reset saved position when no data
+        m_savedPosition.reset();
     }
 }
 

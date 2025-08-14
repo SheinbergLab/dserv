@@ -28,6 +28,19 @@ private:
     void applyColumnVisibility();
     void updateRowDetails(int row);
     
+    // Position preservation for development mode
+    struct ViewPosition {
+        int currentRow = -1;
+        int currentColumn = -1;
+        int scrollX = 0;
+        int scrollY = 0;
+        bool isValid() const { return currentRow >= 0; }
+        void reset() { currentRow = -1; currentColumn = -1; scrollX = 0; scrollY = 0; }
+    };
+    ViewPosition m_savedPosition;
+    void saveCurrentPosition();
+    void restorePosition();
+    
 private slots:
     void onStimDgReceived();
     void refreshStimDg();
