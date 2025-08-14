@@ -13,6 +13,7 @@
 #include "experiment_control/EssExperimentControlWidget.h"
 #include "script_editor/EssScriptEditorWidget.h"
 #include "dg_viewer/EssStimDgWidget.h"
+#include "dg_viewer/EssDgViewerWidget.h"
 #include "visualization/EssEyeTouchVisualizerWidget.h"
 #include "state_system/EssStateSystemWidget.h"
 #include "scriptable_widget/EssScriptableManager.h"
@@ -42,7 +43,8 @@ EssWorkspaceManager::EssWorkspaceManager(QMainWindow *mainWindow, QObject *paren
     , m_eyeTouchVisualizer(nullptr)
     , m_stateSystemWidget(nullptr) 
 	, m_cgraphTabWidget(nullptr)
-	, m_cgraphDock(nullptr)    
+	, m_cgraphDock(nullptr) 
+	, m_dgViewerWidget(nullptr)   
 {
 }
 
@@ -358,6 +360,19 @@ void EssWorkspaceManager::createDocks()
     stimDock->setWidget(m_stimDgViewer);
     m_docks["StimDgViewer"] = stimDock;
     
+    // DG Viewer dock
+    QDockWidget *dgViewerDock = new QDockWidget("Dynamic Group Viewer", m_mainWindow);
+	dgViewerDock->setObjectName("DgViewerDock");
+    m_dgViewerWidget = new EssDgViewerWidget();
+    dgViewerDock->setWidget(m_dgViewerWidget);
+    m_docks["DgViewer"] = dgViewerDock;
+  
+    // Let our command interpreter connect to the dgViewer
+    auto* cmdInterface = EssApplication::instance()->commandInterface();
+    if (cmdInterface) {
+        cmdInterface->setDgViewer(m_dgViewerWidget);
+    }
+    
     // Create Datapoint Table dock
     QDockWidget *dpointDock = new QDockWidget(tr("Datapoint Monitor"),
 					      m_mainWindow);
@@ -458,7 +473,7 @@ void EssWorkspaceManager::applyDefaultLayout()
     }
     
     // 4. Right area - Script Editor, State System, etc. (all with null checks)
-    QStringList rightDocks = {"ScriptEditor", "stateSystem", "StimDgViewer", "DatapointTable", "CGraphContainer"};
+    QStringList rightDocks = {"ScriptEditor", "stateSystem", "StimDgViewer", "DatapointTable", "CGraphContainer", "DgViewer"};
     QDockWidget* previousDock = nullptr;
     
     for (const QString& dockName : rightDocks) {
@@ -511,7 +526,7 @@ bool EssWorkspaceManager::validateAllDocks()
     QStringList requiredDocks = {
         "Terminal", "Console", "ControlPanel", "EyeTouchVisualizer", 
         "EventTable", "BehavMon", "ScriptEditor", "stateSystem", 
-        "StimDgViewer", "DatapointTable", "CGraphContainer"
+        "StimDgViewer", "DatapointTable", "CGraphContainer", "DgViewer"
     };
     
     for (const QString& dockName : requiredDocks) {
@@ -535,8 +550,6 @@ void EssWorkspaceManager::applySizeConstraints()
 {
     // Apply size constraints with null checks
     if (m_docks.contains("Terminal") && m_docks["Terminal"] && m_terminal) {
-        m_docks["Terminal"]->setMinimumHeight(80);
-        m_docks["Terminal"]->setMaximumHeight(300);
         m_docks["Terminal"]->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
         
         m_terminal->setMinimumHeight(80);
@@ -544,8 +557,6 @@ void EssWorkspaceManager::applySizeConstraints()
     }
     
     if (m_docks.contains("Console") && m_docks["Console"] && m_console) {
-        m_docks["Console"]->setMinimumHeight(80);
-        m_docks["Console"]->setMaximumHeight(300);
         m_docks["Console"]->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
         
         m_console->setMinimumHeight(80);
@@ -555,7 +566,7 @@ void EssWorkspaceManager::applySizeConstraints()
     // Apply other constraints...
     if (m_docks.contains("ControlPanel") && m_docks["ControlPanel"]) {
         m_docks["ControlPanel"]->setMinimumWidth(250);
-        m_docks["ControlPanel"]->setMaximumWidth(400);
+        m_docks["ControlPanel"]->setMaximumWidth(310);
     }
     
     // Apply floating constraints for Eye/Touch and Event docks
@@ -568,16 +579,16 @@ void EssWorkspaceManager::applyFloatingConstraints()
     if (m_docks.contains("EyeTouchVisualizer") && m_docks["EyeTouchVisualizer"] && 
         m_eyeTouchVisualizer && !m_docks["EyeTouchVisualizer"]->isFloating()) {
         
-        m_docks["EyeTouchVisualizer"]->setMinimumWidth(300);
-        m_eyeTouchVisualizer->setMinimumWidth(300);
+ //       m_docks["EyeTouchVisualizer"]->setMinimumWidth(300);
+ //       m_eyeTouchVisualizer->setMinimumWidth(300);
     }
     
     // Event table constraints (only if not floating)
     if (m_docks.contains("EventTable") && m_docks["EventTable"] && 
         m_eventTable && !m_docks["EventTable"]->isFloating()) {
         
-        m_docks["EventTable"]->setMinimumWidth(300);
-        m_eventTable->setMinimumWidth(300);
+ //       m_docks["EventTable"]->setMinimumWidth(300);
+ //       m_eventTable->setMinimumWidth(300);
     }
 }
 
@@ -602,17 +613,17 @@ void EssWorkspaceManager::resetDockConstraints()
         
         // Apply sensible minimums only
         if (dockName == "BehavMon") {
-            dock->setMinimumWidth(200);
-            dock->setMinimumHeight(250);
+//            dock->setMinimumWidth(200);
+//            dock->setMinimumHeight(250);
         } else if (dockName == "EyeTouchVisualizer" || dockName == "EventTable") {
-            dock->setMinimumWidth(250);
-            dock->setMinimumHeight(200);
+//            dock->setMinimumWidth(250);
+//            dock->setMinimumHeight(200);
         } else if (dockName == "Terminal" || dockName == "Console") {
             dock->setMinimumHeight(80);
             dock->setMaximumHeight(300);  // Keep this one for bottom docks
         } else if (dockName == "ControlPanel") {
-            dock->setMinimumWidth(250);
-            dock->setMaximumWidth(300);   // Keep this one - it's a control panel
+//            dock->setMinimumWidth(200);
+//            dock->setMaximumWidth(300);   // Keep this one - it's a control panel
         }
     }
     
