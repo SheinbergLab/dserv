@@ -37,6 +37,9 @@ public:
     void setShowRowDetails(bool show);
     bool isShowingRowDetails() const { return m_showRowDetails; }
 
+    QTableWidget* tableWidget() { return m_tableWidget; }
+    QTreeWidget* treeWidget() { return m_treeWidget; }
+    
 signals:
     void cellDoubleClicked(int row, int col, const QString& listName);
     void itemSelected(const QString& path, const QVariant& value);
@@ -44,8 +47,7 @@ signals:
 protected:
     // Protected so subclasses can access
     QToolBar* toolbar() { return m_toolbar; }
-    QTableWidget* tableWidget() { return m_tableWidget; }
-    QTreeWidget* treeWidget() { return m_treeWidget; }
+
     
     // Const versions for const methods
     const QTableWidget* tableWidget() const { return m_tableWidget; }
