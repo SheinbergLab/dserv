@@ -25,6 +25,7 @@ class EssStateSystemWidget;
 class DraggableTabWidget;
 class EssGraphicsWidget;
 class EssBehavmonWidget;
+class EssDgViewerWidget;
 
 class EssWorkspaceManager : public QObject
 {
@@ -108,4 +109,5 @@ private:
     EssStateSystemWidget *m_stateSystemWidget;
     DraggableTabWidget* m_cgraphTabWidget;
     EssBehavmonWidget *m_behavmonWidget; 
+    EssDgViewerWidget *m_dgViewerWidget;
 };
