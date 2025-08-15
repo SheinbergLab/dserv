@@ -96,6 +96,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/dialogs    
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/terminal    
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/components/console 
@@ -130,6 +131,7 @@ set(COMM_SOURCES
 set(UI_SOURCES
     src/ui/EssMainWindow.cpp
     src/ui/EssWorkspaceManager.cpp
+    src/ui/dialogs/EssFileDialog.cpp
     src/ui/components/terminal/EssTerminalWidget.cpp
     src/ui/components/terminal/CommandHistory.cpp
     src/ui/components/console/EssOutputConsole.cpp
