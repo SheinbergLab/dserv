@@ -26,6 +26,7 @@ public:
     QString currentSystem() const;
     QString currentProtocol() const;
     QString currentVariant() const;
+    QString currentDatafile() const; 
     
     // Control state
     bool isRunning() const { return m_isRunning; }
@@ -58,6 +59,9 @@ private slots:
     void onExperimentStateChanged(const QString &state);
     void onGenericDatapointReceived(const QString &name, const QVariant &value, qint64 timestamp);
     
+    void onDatafileChanged(const QString &filename);
+    void onDatafileProcessed(const QString &filename);
+    
     // UI control slots
     void onStartClicked();
     void onStopClicked();
@@ -86,6 +90,7 @@ private:
     
     void updateButtonStates();
     void updateStatusDisplay();
+    void updateDatafileDisplay();
     
     // Helper to update combo without triggering signals
     void setComboBoxValue(QComboBox *combo, const QString &value);
@@ -105,6 +110,8 @@ private:
     void clearVariantOptions();
     
     // UI Elements
+    QFont m_monoFont;
+    
     // Control section
     QGroupBox *m_controlGroup;
     QPushButton *m_startBtn;
@@ -116,7 +123,8 @@ private:
     QLabel *m_statusLabel;
     QLabel *m_obsCountLabel;
     QLabel *m_obsIndicator;
-    QLabel *m_progressLabel;  // Added for loading progress
+    QLabel *m_datafileLabel;
+    QLabel *m_progressLabel; 
     
     // System configuration section
     QGroupBox *m_systemConfigGroup;
@@ -143,6 +151,9 @@ private:
     QGroupBox *m_settingsGroup;
     QPushButton *m_saveSettingsBtn;
     QPushButton *m_resetSettingsBtn;
+    
+    // Filename tracking
+    QString m_currentDatafile; 
     
     // State tracking
     bool m_isRunning;

@@ -132,6 +132,30 @@ void EssDataProcessor::routeEssData(const QString &name, const QVariant &value, 
     else if (name == "ess/state") {
         emit experimentStateChanged(value.toString());
     }
+    else if (name == "ess/datafile") {
+        // Current datafile status - emit specific signal
+        QString filename = value.toString();
+               
+        emit datafileChanged(filename);
+        
+        // Also emit generic for any other listeners
+        emit genericDatapointReceived(name, value, timestamp);
+    }
+    else if (name == "ess/lastfile") {
+        // File was processed/closed - emit specific signal
+        QString filename = value.toString();
+        if (!filename.isEmpty()) {
+            emit datafileProcessed(filename);
+            
+            EssConsoleManager::instance()->logSuccess(
+                QString("File processed: %1").arg(filename), 
+                "DataProcessor"
+            );
+        }
+        
+        // Also emit generic
+        emit genericDatapointReceived(name, value, timestamp);
+    }    
     else if (name == "ess/system" || name == "ess/protocol" || name == "ess/variant") {
         // Collect all three to emit systemConnected
         // For now, just emit generic

@@ -161,6 +161,10 @@ private:
                                            int objc, Tcl_Obj *const objv[]);
     static int TclDgViewCmd(ClientData clientData, Tcl_Interp* interp,
 							 int objc, Tcl_Obj* const objv[]);
+	static int TclLogCmd(ClientData clientData, 
+		Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);		
+	static int TclPutsCmd(ClientData clientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+		
 							 
     // Helper to emit signals from static context
     static void emitSignal(EssCommandInterface *obj, const char *signal);

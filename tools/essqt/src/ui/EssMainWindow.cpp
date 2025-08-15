@@ -6,6 +6,8 @@
 #include "core/EssDataProcessor.h"
 #include "ui/components/script_editor/EssCodeEditor.h"
 #include "ui/components/scriptable_widget/EssScriptableWidget.h"
+#include "ui/components/experiment_control/EssExperimentControlWidget.h"
+#include "ui/dialogs/EssFileDialog.h"
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
@@ -52,6 +54,7 @@ EssMainWindow::EssMainWindow(QWidget *parent)
     readSettings();
     
     updateStatus("Ready", 5000);
+	updateMenuState();     
 }
 
 EssMainWindow::~EssMainWindow()
@@ -74,13 +77,14 @@ void EssMainWindow::createMenus()
     // File menu
     m_fileMenu = menuBar()->addMenu(tr("&File"));
     
-    QAction *newAction = m_fileMenu->addAction(tr("&New Project..."));
-    newAction->setShortcuts(QKeySequence::New);
-    connect(newAction, &QAction::triggered, this, &EssMainWindow::onNew);
-    
-    QAction *openAction = m_fileMenu->addAction(tr("&Open Project..."));
+    QAction *openAction = m_fileMenu->addAction(tr("&Open Datafile..."));
     openAction->setShortcuts(QKeySequence::Open);
-    connect(openAction, &QAction::triggered, this, &EssMainWindow::onOpen);
+    connect(openAction, &QAction::triggered, this, &EssMainWindow::onOpenDatafile);
+    
+    // Add close datafile action
+    QAction *closeDatafileAction = m_fileMenu->addAction(tr("&Close Datafile"));
+    closeDatafileAction->setShortcut(QKeySequence::Close);
+    connect(closeDatafileAction, &QAction::triggered, this, &EssMainWindow::onCloseDatafile);
     
     QAction *saveAction = m_fileMenu->addAction(tr("&Save"));
     saveAction->setShortcuts(QKeySequence::Save);
@@ -127,6 +131,43 @@ void EssMainWindow::createMenus()
     connect(aboutQtAction, &QAction::triggered, this, &EssMainWindow::onAboutQt);
 }
 
+void EssMainWindow::updateMenuState()
+{
+  bool isConnected = false;
+    bool hasDatafile = false;
+    
+    if (EssApplication::instance() && EssApplication::instance()->commandInterface()) {
+        isConnected = EssApplication::instance()->commandInterface()->isConnected();
+    }
+    
+    // Get datafile status from experiment control widget
+    if (m_workspace) {
+        auto* experimentControl = m_workspace->experimentControlWidget();
+        if (experimentControl) {
+            hasDatafile = !experimentControl->currentDatafile().isEmpty();
+        }
+    }
+    
+    if (hasDatafile) {
+		for (QAction *action : m_fileMenu->actions()) {
+			if (action->text().contains("Open Datafile")) {
+				action->setEnabled(0);
+			} else if (action->text().contains("Close Datafile")) {
+				action->setEnabled(isConnected);
+			}
+		}
+    }
+    else {
+ 		for (QAction *action : m_fileMenu->actions()) {
+			if (action->text().contains("Open Datafile")) {
+				action->setEnabled(isConnected);
+			} else if (action->text().contains("Close Datafile")) {
+				action->setEnabled(0);
+			}
+		}   
+    }
+}
+
 void EssMainWindow::createStatusBar()
 {
     // Main status message
@@ -153,13 +194,20 @@ void EssMainWindow::connectCommandInterface()
             this, &EssMainWindow::onDisconnected);
     connect(cmdInterface, &EssCommandInterface::connectionError,
             this, &EssMainWindow::onConnectionError);
-    
+                
     // Connect to data processor for system status updates
     EssDataProcessor *dataProc = EssApplication::instance()->dataProcessor();
+
     connect(dataProc, &EssDataProcessor::systemStatusUpdated,
             this, [this](const QString &status) {
                 updateStatus(QString("System: %1").arg(status), 5000);
-            });            
+            });
+            
+    // For menu state, get datafile status from experiment control widget
+    connect(dataProc, &EssDataProcessor::datafileChanged,
+            this, [this](const QString &filename) {
+                updateMenuState();
+            });
 }
 
 void EssMainWindow::readSettings()
@@ -188,18 +236,67 @@ void EssMainWindow::writeSettings()
     config->sync();
 }
 
-// Slot implementations
-void EssMainWindow::onNew()
+void EssMainWindow::onOpenDatafile()
 {
-    updateStatus("New project functionality not yet implemented", 3000);
+    // Check if we're connected first
+    EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
+    if (!cmdInterface || !cmdInterface->isConnected()) {
+        QMessageBox::warning(this, tr("Not Connected"), 
+                           tr("Please connect to a server before opening a datafile."));
+        return;
+    }
+    
+    QString filename = EssFileDialog::getDatafileName(this);
+    if (!filename.isEmpty()) {
+        updateStatus(QString("Opened datafile: %1").arg(filename), 5000);
+        updateMenuState(); // Menu will get status from experiment control
+    }
 }
 
-void EssMainWindow::onOpen()
+void EssMainWindow::onCloseDatafile()
 {
-    updateStatus("Open project functionality not yet implemented", 3000);
+    EssCommandInterface *cmdInterface = EssApplication::instance()->commandInterface();
+    if (!cmdInterface || !cmdInterface->isConnected()) {
+        updateStatus("Not connected to server", 3000);
+        return;
+    }
+    
+    // Get current datafile from experiment control widget
+    QString currentDatafile;
+    if (m_workspace) {
+            currentDatafile = m_workspace->experimentControlWidget()->currentDatafile();
+    }
+    
+    if (currentDatafile.isEmpty()) {
+        updateStatus("No datafile is currently open", 3000);
+        return;
+    }
+    
+    // Confirm close
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this,
+        tr("Close Datafile"),
+        tr("Close the current datafile '%1'?").arg(currentDatafile),
+        QMessageBox::Yes | QMessageBox::No
+    );
+    
+    if (reply == QMessageBox::Yes) {
+        auto result = cmdInterface->executeEss("::ess::file_close");
+        
+        if (result.status == EssCommandInterface::StatusSuccess) {
+            QString response = result.response.trimmed();
+            if (response == "1") {
+                updateStatus("Datafile closed successfully", 3000);
+                updateMenuState();
+            } else {
+                updateStatus("No datafile was open", 3000);
+            }
+        } else {
+            updateStatus(QString("Failed to close datafile: %1").arg(result.error), 5000);
+        }
+    }
 }
 
-// Clean EssMainWindow::onSave() - remove all debug statements
 void EssMainWindow::onSave()
 {
     // Check if a script editor has focus
@@ -267,18 +364,21 @@ void EssMainWindow::onConnected(const QString &host)
 {
     updateConnectionStatus(true, host);
     updateStatus(QString("Connected to %1").arg(host), 3000);
+    updateMenuState();
 }
 
 void EssMainWindow::onDisconnected()
 {
     updateConnectionStatus(false, "");
     updateStatus("Disconnected", 3000);
+    updateMenuState();
 }
 
 void EssMainWindow::onConnectionError(const QString &error)
 {
     updateConnectionStatus(false, "");
     updateStatus(QString("Connection error: %1").arg(error), 5000);
+    updateMenuState();    
 }
 
 void EssMainWindow::updateConnectionStatus(bool connected, const QString &host)

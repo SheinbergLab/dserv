@@ -14,6 +14,8 @@
 #include <QFormLayout>
 #include <QScrollArea>
 #include <QLineEdit>
+#include <QFont>
+#include <QFontDatabase>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -30,10 +32,13 @@ EssExperimentControlWidget::EssExperimentControlWidget(QWidget *parent)
     , m_totalObs(0)
     , m_observationActive(false)
     , m_blockSignals(false)
+    , m_currentDatafile("")
 {
     setupUi();
     connectSignals();
+    resetToDisconnectedState();
 }
+
 
 EssExperimentControlWidget::~EssExperimentControlWidget()
 {
@@ -100,6 +105,10 @@ void EssExperimentControlWidget::createStatusSection()
     m_statusGroup = new QGroupBox("Status", this);
     QVBoxLayout *layout = new QVBoxLayout(m_statusGroup);
     
+    // Set up monospace font once
+    m_monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+	m_monoFont.setPointSize(10);
+
     // Status row
     QHBoxLayout *statusLayout = new QHBoxLayout();
     statusLayout->addWidget(new QLabel("Status:"));
@@ -116,6 +125,18 @@ void EssExperimentControlWidget::createStatusSection()
     progressLayout->addWidget(m_progressLabel);
     progressLayout->addStretch();
     
+    // Datafile row
+    QHBoxLayout *datafileLayout = new QHBoxLayout();
+    datafileLayout->addWidget(new QLabel("File:"));
+    m_datafileLabel = new QLabel("No file open");
+    
+    // Apply monospace font and styling
+    m_datafileLabel->setFont(m_monoFont);
+    m_datafileLabel->setStyleSheet("QLabel { color: #666; }");
+    
+    datafileLayout->addWidget(m_datafileLabel);
+    datafileLayout->addStretch();
+    
     // Observation count row
     QHBoxLayout *obsLayout = new QHBoxLayout();
     obsLayout->addWidget(new QLabel("Observation:"));
@@ -129,7 +150,8 @@ void EssExperimentControlWidget::createStatusSection()
     obsLayout->addStretch();
     
     layout->addLayout(statusLayout);
-    layout->addLayout(progressLayout);  // Add progress layout
+    layout->addLayout(progressLayout);
+    layout->addLayout(datafileLayout);
     layout->addLayout(obsLayout);
 }
 
@@ -240,6 +262,11 @@ void EssExperimentControlWidget::connectSignals()
                 this, &EssExperimentControlWidget::onExperimentStateChanged);
         connect(dataProc, &EssDataProcessor::genericDatapointReceived,
                 this, &EssExperimentControlWidget::onGenericDatapointReceived);
+                
+        connect(dataProc, &EssDataProcessor::datafileChanged,
+                this, &EssExperimentControlWidget::onDatafileChanged);
+        connect(dataProc, &EssDataProcessor::datafileProcessed,
+                this, &EssExperimentControlWidget::onDatafileProcessed);
     }
     
     // Connect to command interface for connection state
@@ -285,9 +312,6 @@ void EssExperimentControlWidget::connectSignals()
             this, &EssExperimentControlWidget::onReloadProtocolClicked);
     connect(m_reloadVariantBtn, &QPushButton::clicked,
             this, &EssExperimentControlWidget::onReloadVariantClicked);
-    
-    // Start in disconnected state
-    resetToDisconnectedState();
 }
 
 void EssExperimentControlWidget::onSystemStatusUpdated(const QString &status)
@@ -301,6 +325,20 @@ void EssExperimentControlWidget::onExperimentStateChanged(const QString &state)
     m_isRunning = (state == "Running");
     updateButtonStates();
     updateStatusDisplay();
+}
+
+void EssExperimentControlWidget::onDatafileChanged(const QString &filename)
+{
+    m_currentDatafile = filename;
+    updateDatafileDisplay();
+}
+
+void EssExperimentControlWidget::onDatafileProcessed(const QString &filename)
+{ 
+    EssConsoleManager::instance()->logSuccess(
+        QString("File processed: %1").arg(filename), 
+        "ExperimentControl"
+    );
 }
 
 void EssExperimentControlWidget::onGenericDatapointReceived(const QString &name, 
@@ -689,6 +727,10 @@ void EssExperimentControlWidget::resetToDisconnectedState()
     m_pendingProtocol.clear();
     m_pendingVariant.clear();
     
+    // Clear datafile
+    m_currentDatafile.clear();
+    updateDatafileDisplay();  // ADD THIS CALL
+    
     // Update display to show disconnected state
     m_statusLabel->setText("Not Connected");
     m_statusLabel->setStyleSheet("QLabel { color: #666; font-weight: bold; }");
@@ -715,7 +757,6 @@ void EssExperimentControlWidget::resetToDisconnectedState()
     
     m_blockSignals = false;
 }
-
 void EssExperimentControlWidget::setComboBoxValue(QComboBox *combo, const QString &value)
 {
     combo->blockSignals(true);
@@ -740,6 +781,43 @@ void EssExperimentControlWidget::setComboBoxItems(QComboBox *combo, const QStrin
         }
     }
     combo->blockSignals(false);
+}
+
+QString EssExperimentControlWidget::currentDatafile() const
+{
+    return m_currentDatafile;
+}
+
+void EssExperimentControlWidget::updateDatafileDisplay()
+{
+    // Safety check - make sure UI is created
+    if (!m_datafileLabel) {
+        return;
+    }
+    
+    if (m_currentDatafile.isEmpty()) {
+        m_datafileLabel->setText("No file open");
+        m_datafileLabel->setStyleSheet("QLabel { color: #666; }");
+    } else {
+        // Extract just the filename without .ess extension
+        QString displayName = m_currentDatafile;
+        if (displayName.endsWith(".ess")) {
+            displayName = displayName.left(displayName.length() - 4);
+        }
+        
+        // Extract just filename from path if present
+        int lastSlash = displayName.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            displayName = displayName.mid(lastSlash + 1);
+        }
+        
+        m_datafileLabel->setText(displayName);
+        m_datafileLabel->setStyleSheet("QLabel { color: #52c41a; font-weight: bold; }");
+        m_datafileLabel->setToolTip(QString("Full path: %1").arg(m_currentDatafile));
+    }
+    
+    // Ensure monospace font is always applied
+    m_datafileLabel->setFont(m_monoFont);
 }
 
 void EssExperimentControlWidget::updateButtonStates()

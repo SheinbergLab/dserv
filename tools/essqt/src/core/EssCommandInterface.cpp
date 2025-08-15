@@ -13,7 +13,6 @@
 #include <QMetaObject>
 #include <tcl.h>
 
-
 // Static member initialization
 const QStringList EssCommandInterface::s_essCommands = {
     "::ess::load_system", "::ess::reload_system", "::ess::start", "::ess::stop", 
@@ -178,6 +177,7 @@ void EssCommandInterface::initializeTcl()
                 ess/system_script ess/protocol_script ess/variants_script
                 ess/loaders_script ess/stim_script
                 ess/state_table ess/rmt_cmds
+                ess/datafile ess/lastfile
                 stimdg trialdg
                 system/hostname system/os
             }
@@ -240,6 +240,17 @@ void EssCommandInterface::registerTclCommands()
     Tcl_CreateObjCommand(m_tclInterp, "clear", TclClearCmd, this, nullptr);
     Tcl_CreateObjCommand(m_tclInterp, "about", TclAboutCmd, this, nullptr);
     Tcl_CreateObjCommand(m_tclInterp, "help", TclHelpCmd, this, nullptr);
+    
+    // Logging
+    Tcl_CreateObjCommand(m_tclInterp, "log", TclLogCmd, this, nullptr);
+
+	// Puts using console with fallback
+    if (Tcl_Eval(m_tclInterp, "rename puts __original_puts") != TCL_OK) {
+        EssConsoleManager::instance()->logWarning(
+            "Failed to rename original puts command", "CommandInterface");
+    }
+    Tcl_CreateObjCommand(m_tclInterp, "puts", TclPutsCmd, this, nullptr);
+
     
     // Backend command proxies
     Tcl_CreateObjCommand(m_tclInterp, "ess", TclEssCmd, this, nullptr);
@@ -737,6 +748,117 @@ void EssCommandInterface::disconnectFromHost()
     }
     
     emit disconnected();
+}
+
+int EssCommandInterface::TclPutsCmd(ClientData clientData, Tcl_Interp *interp,
+                                         int objc, Tcl_Obj *const objv[])
+{
+   auto *self = static_cast<EssCommandInterface*>(clientData);
+    
+    // Use Tcl's own argument parsing by checking what the original would do
+    // First, let's see if this looks like a channel operation
+    
+    bool isChannelOperation = false;
+    
+    if (objc >= 3) {
+        // Could be puts channel string or puts -nonewline channel string
+        int channelIndex = 1;
+        
+        if (objc >= 4) {
+            QString firstArg = QString::fromUtf8(Tcl_GetString(objv[1]));
+            if (firstArg == "-nonewline") {
+                channelIndex = 2;
+            }
+        }
+        
+        if (channelIndex < objc - 1) {
+            QString potentialChannel = QString::fromUtf8(Tcl_GetString(objv[channelIndex]));
+            
+            // Test if it's a valid channel by trying to get its configuration
+            QString testCmd = QString("catch {fconfigure %1}").arg(potentialChannel);
+            if (Tcl_Eval(interp, testCmd.toUtf8().constData()) == TCL_OK) {
+                QString result = QString::fromUtf8(Tcl_GetStringResult(interp));
+                if (result == "0") {  // fconfigure succeeded
+                    isChannelOperation = true;
+                }
+            }
+        }
+    }
+    
+    // If it's a channel operation, use original puts
+    if (isChannelOperation) {
+        QString originalCmd = "__original_puts";
+        for (int i = 1; i < objc; ++i) {
+            originalCmd += " ";
+            // Properly quote arguments that might contain spaces
+            QString arg = QString::fromUtf8(Tcl_GetString(objv[i]));
+            if (arg.contains(' ') || arg.contains('\t') || arg.contains('\n')) {
+                originalCmd += "{" + arg + "}";
+            } else {
+                originalCmd += arg;
+            }
+        }
+        
+        return Tcl_Eval(interp, originalCmd.toUtf8().constData());
+    }
+    
+    // Handle console output
+    bool nonewline = false;
+    int stringIndex = 1;
+    
+    if (objc >= 2) {
+        QString firstArg = QString::fromUtf8(Tcl_GetString(objv[1]));
+        if (firstArg == "-nonewline") {
+            nonewline = true;
+            stringIndex = 2;
+        }
+    }
+    
+    if (objc < stringIndex + 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "?-nonewline? ?channelId? string");
+        return TCL_ERROR;
+    }
+    
+    QString message = QString::fromUtf8(Tcl_GetString(objv[stringIndex]));
+    
+    // Log to console using the same pattern as other commands
+    EssConsoleManager::instance()->logInfo(message, "Tcl");
+    
+    return TCL_OK;
+}
+
+int EssCommandInterface::TclLogCmd(ClientData clientData, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *const objv[])
+{
+    if (objc < 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "level message ?category?");
+        return TCL_ERROR;
+    }
+    
+    QString level = QString::fromUtf8(Tcl_GetString(objv[1]));
+    QString message = QString::fromUtf8(Tcl_GetString(objv[2]));
+    QString category = "Tcl";  // Default category
+    
+    // Optional category parameter
+    if (objc >= 4) {
+        category = QString::fromUtf8(Tcl_GetString(objv[3]));
+    }
+    
+    // Log based on level
+    if (level.toLower() == "error") {
+        EssConsoleManager::instance()->logError(message, category);
+    } else if (level.toLower() == "warning" || level.toLower() == "warn") {
+        EssConsoleManager::instance()->logWarning(message, category);
+    } else if (level.toLower() == "success") {
+        EssConsoleManager::instance()->logSuccess(message, category);
+    } else if (level.toLower() == "info") {
+        EssConsoleManager::instance()->logInfo(message, category);
+    } else {
+        // Default to info level
+        EssConsoleManager::instance()->logInfo(message, category);
+    }
+    
+    return TCL_OK;
 }
 
 bool EssCommandInterface::isConnected() const

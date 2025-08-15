@@ -76,6 +76,11 @@ void EssWorkspaceManager::setupWorkspace()
     }
 }
 
+EssExperimentControlWidget* EssWorkspaceManager::experimentControlWidget() const
+{
+    return m_experimentControl;
+}
+
 void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString& title)
 {
     // Create EssGraphicsWidget
@@ -308,6 +313,8 @@ void EssWorkspaceManager::createDocks()
     m_console = new EssOutputConsole();
     consoleDock->setWidget(m_console);
     m_docks["Console"] = consoleDock;
+    
+    EssConsoleManager::instance()->registerConsole("main", m_console);
     
     // Create Eye/Touch Visualizer dock with special floating behavior
     QDockWidget *eyeTouchDock = new QDockWidget(tr("Eye/Touch Monitor"), m_mainWindow);

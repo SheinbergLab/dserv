@@ -33,7 +33,11 @@ signals:
     // Experiment events
     void experimentEventReceived(const QString &eventType, const QString &eventData, qint64 timestamp);
     void experimentStateChanged(const QString &state);
-    
+
+	// Datafile    
+    void datafileChanged(const QString &filename);
+    void datafileProcessed(const QString &filename);
+
     // System status
     void systemStatusUpdated(const QString &status);
     void systemConnected(const QString &system, const QString &protocol, const QString &variant);

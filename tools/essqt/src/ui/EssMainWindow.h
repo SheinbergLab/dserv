@@ -20,8 +20,8 @@ protected:
 
 private slots:
     // File menu
-    void onNew();
-    void onOpen();
+	void onOpenDatafile();
+    void onCloseDatafile();
     void onSave();
     void onSaveAs();
     void onPreferences();
@@ -46,6 +46,7 @@ private:
     void readSettings();
     void writeSettings();
     void updateConnectionStatus(bool connected, const QString &host);
+    void updateMenuState();
     
     // Workspace manager handles all docks
     EssWorkspaceManager *m_workspace;

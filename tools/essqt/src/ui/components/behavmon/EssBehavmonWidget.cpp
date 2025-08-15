@@ -30,25 +30,21 @@ set ::behavmon_sort_columns {}
 
 # Bind to trial data updates
 bind_datapoint "trialdg" {
-    local_log "Trial data received - updating performance display"
     process_trial_data
 }
 
 # Bind to stimdg updates for sort options
 bind_datapoint "stimdg" {
-    local_log "Stimulus data received - updating sort options"
     update_sort_options
 }
 
 # Bind to reset events
 bind_datapoint "ess/reset" {
-    local_log "System reset - clearing performance data"
     clear_behavmon_data
 }
 
 # Bind to system load event (ESS is new system)
 bind_event 18:ESS { 
-    local_log "New system loaded"
     clear_behavmon_data
 }
 
@@ -83,13 +79,11 @@ proc process_trial_data {} {
     get_dg trialdg
     
     if {![dg_exists trialdg]} {
-        local_log "No trialdg available"
         return
     }
     
     # Get trial data lists
     if {![dl_exists trialdg:status] || ![dl_exists trialdg:rt]} {
-        local_log "Required trial data not found"
         return
     }
     
@@ -97,7 +91,6 @@ proc process_trial_data {} {
     set rt_list [dl_tcllist trialdg:rt]
     
     if {[llength $status_list] == 0} {
-        local_log "No trials in trialdg"
         return
     }
     

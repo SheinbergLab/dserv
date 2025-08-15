@@ -43,6 +43,9 @@ public:
     void saveLayout();
     bool restoreLayout();
     
+    EssExperimentControlWidget* experimentControlWidget() const;    
+    QWidget* getWidget(const QString &id) const;
+     
 	void createCGraphWidget(const QString& name, const QString& title);
     void createGraphicsWidgetWithTemplate(const QString& name, 
     	const QString& templateName);
@@ -71,7 +74,7 @@ private:
 	void resetDockConstraints();    
 	
     // Helper methods
-    QWidget* getWidget(const QString &id) const;
+   
     QWidget* createControlPanel();
     
 	// CGraph support
