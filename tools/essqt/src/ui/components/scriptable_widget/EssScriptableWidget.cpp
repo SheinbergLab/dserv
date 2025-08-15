@@ -1339,10 +1339,7 @@ void EssScriptableWidget::localLog(const QString& message)
     // Log to widget console if in development mode
     if (m_widgetConsole && m_developmentMode) {
         m_widgetConsole->logMessage(message, OutputType::Info);
-    }
-    
-    // Also log to main console for debugging
-    EssConsoleManager::instance()->logDebug(logLine, QString("Widget:%1").arg(m_name));
+    }    
 }
 
 // Slots
@@ -1355,7 +1352,6 @@ void EssScriptableWidget::onLayoutModeChanged()
 {
     if (m_layoutModeCombo) {
         DevLayoutMode mode = static_cast<DevLayoutMode>(m_layoutModeCombo->currentData().toInt());
-        localLog(QString("Layout mode changed to: %1").arg(mode));  // Debug
         setDevelopmentLayout(mode);
     }
 }
