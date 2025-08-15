@@ -1270,6 +1270,7 @@ namespace eval ess {
     proc append_trialdg {status rt {stimid {}}} {
         variable current
         variable subject_id
+        variable juicer_last_trial_ml
         set g trialdg
         dl_append $g:trialid $current(trialid)
         dl_append $g:project $current(project)
@@ -1313,7 +1314,6 @@ namespace eval ess {
         $obj string subject string $subject_id
         $obj string status number $status
         $obj string rt number $rt
-        $obj string juice_ml $juicer_last_trial_ml
         $obj string filename string $open_datafile
 
         # if a trial id is supplied, add addition info
@@ -1390,13 +1390,10 @@ namespace eval ess {
         variable juicer_last_trial_ml
         if {!$in_obs} {return}
         rpioPinOff $obs_pin
+        ::ess::juicer_update
         ::ess::evt_put ENDOBS $status [now]
         set in_obs 0
         dservSet ess/in_obs 0
-        
-        # track reward amount
-        dservSet ess/juicer_last_trial_ml $juicer_last_trial_ml
-        set_juicer_last_trial_ml 0
     }
 
     proc query_state {} {
@@ -2843,6 +2840,14 @@ namespace eval ess {
             $j reward $ml
         }
         set juicer_last_trial_ml [expr $juicer_last_trial_ml]
+    }
+
+    proc juicer_update {} {
+	variable juicer_last_trial_ml
+
+        # track reward amount
+        dservSet ess/juicer_last_trial_ml $juicer_last_trial_ml
+        set juicer_last_trial_ml 0
     }
 }
 ###############################################################################
