@@ -113,7 +113,7 @@ bool EssClient::sendMessage(const QString& message) {
     
     return true;
 }
-
+#if 0
 bool EssClient::receiveMessage(QString& response, int timeoutMs) {
     // Wait for data to arrive
     if (!socket->waitForReadyRead(timeoutMs)) {
@@ -152,3 +152,50 @@ bool EssClient::receiveMessage(QString& response, int timeoutMs) {
     
     return true;
 }
+#else
+bool EssClient::receiveMessage(QString& response, int timeoutMs) {
+    // Wait for initial data to arrive
+    if (!socket->waitForReadyRead(timeoutMs)) {
+        qDebug() << "[receiveMessage] Timeout waiting for data:" << socket->errorString();
+        qDebug() << "[receiveMessage] Socket state:" << socket->state();
+        return false;
+    }
+    
+    // Read all available data
+    QByteArray rawData = socket->readAll();
+    
+    // If we don't have enough for a header, try to get more
+    while (rawData.size() < 4) {
+        if (!socket->waitForReadyRead(1000)) { // Short timeout for additional data
+            qDebug() << "[receiveMessage] Incomplete header: have" << rawData.size() << "bytes";
+            return false;
+        }
+        rawData.append(socket->readAll());
+    }
+    
+    // Extract message length
+    quint32 messageLength;
+    memcpy(&messageLength, rawData.constData(), 4);
+    messageLength = ntohl(messageLength);
+    
+    if (messageLength == 0) {
+        response.clear();
+        return true;
+    }
+    
+    // If we don't have the complete message, try to get more
+    qint32 expectedTotal = 4 + messageLength;
+    while (rawData.size() < expectedTotal) {
+        if (!socket->waitForReadyRead(1000)) { // Short timeout for additional data
+            qDebug() << "[receiveMessage] Incomplete message: need" << expectedTotal 
+                     << "bytes, have" << rawData.size();
+            return false;
+        }
+        rawData.append(socket->readAll());
+    }
+    
+    // Extract the message content
+    response = QString::fromUtf8(rawData.mid(4, messageLength));
+    return true;
+}
+#endif
