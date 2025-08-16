@@ -261,14 +261,10 @@ void EssStandaloneWindow::setupFocusTracking()
 //                             qDebug() << "Main app got focus! Window visible:" << isVisible() << "minimized:" << isMinimized();
                             
                             if (!isVisible() || isMinimized()) {
-//                                 qDebug() << "Restoring standalone window";
                                 show();
                                 raise();
-                                activateWindow();
                             } else {
-                                // Even if visible, make sure it's raised
-//                                 qDebug() << "Raising standalone window";
-                                raise();
+
                             }
                         }
                     }

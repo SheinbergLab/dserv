@@ -48,6 +48,16 @@ EssMainWindow::EssMainWindow(QWidget *parent)
     connect(m_workspace, &EssWorkspaceManager::statusMessage,
             this, &EssMainWindow::updateStatus);
     
+    connect(m_workspace, &EssWorkspaceManager::standaloneStateChanged,
+        this, [this]() {
+            // Rebuild the View menu
+            m_viewMenu->clear();
+            QList<QAction*> viewActions = m_workspace->viewMenuActions();
+            for (QAction *action : viewActions) {
+                m_viewMenu->addAction(action);
+            }
+        });
+        
     // Connect to command interface
     connectCommandInterface();
     

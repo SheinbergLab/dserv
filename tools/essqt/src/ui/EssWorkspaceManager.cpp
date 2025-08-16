@@ -306,7 +306,8 @@ void EssWorkspaceManager::detachToStandalone(const QString& dockName,
     detachToStandalone(m_docks[dockName], behavior);
 }
 void EssWorkspaceManager::detachToStandalone(QDockWidget* dock, 
-                                            EssStandaloneWindow::WindowBehavior behavior)
+                                            EssStandaloneWindow::WindowBehavior behavior,
+                                            bool activateWindow)
 {
     if (!dock || !dock->widget()) {
         qWarning() << "Invalid dock or missing widget";
@@ -317,6 +318,8 @@ void EssWorkspaceManager::detachToStandalone(QDockWidget* dock,
     QWidget* widget = dock->widget();
     QString title = dock->windowTitle();
     QString dockName;
+    
+    qDebug() << "Detaching widget:" << widget << "with title:" << title;
     
     // Find the dock name for later restoration
     for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
@@ -349,6 +352,7 @@ void EssWorkspaceManager::detachToStandalone(QDockWidget* dock,
                 m_standaloneWindows.removeAll(standalone);
                 m_standaloneToOriginalDock.remove(standalone);
                 standalone->deleteLater();
+                emit standaloneStateChanged(); // Emit when window closes
             });
     
     // Track the standalone window
@@ -361,10 +365,15 @@ void EssWorkspaceManager::detachToStandalone(QDockWidget* dock,
     standalone->move(mainPos + QPoint(mainSize.width() + 20, 50));
     
     standalone->show();
-    standalone->raise();
-    standalone->activateWindow();
+    
+    // Only raise and activate if requested (default true for user-initiated detach)
+    if (activateWindow) {
+        standalone->raise();
+        standalone->activateWindow();
+    }
     
     emit statusMessage(QString("Detached %1 to standalone window").arg(title), 3000);
+    emit standaloneStateChanged(); // Emit when new standalone window is created
 }
 
 void EssWorkspaceManager::returnFromStandalone(EssStandaloneWindow* window)
@@ -389,6 +398,8 @@ void EssWorkspaceManager::returnFromStandalone(EssStandaloneWindow* window)
     
     QDockWidget* dock = m_docks[dockName];
     
+    qDebug() << "Returning to dock:" << dockName;
+    
     // Recreate the widget instead of trying to reparent
     QWidget* newContent = nullptr;
     
@@ -404,6 +415,7 @@ void EssWorkspaceManager::returnFromStandalone(EssStandaloneWindow* window)
         // Create new widget
         m_eyeTouchVisualizer = new EssEyeTouchVisualizerWidget();
         newContent = m_eyeTouchVisualizer;
+        qDebug() << "Recreated EyeTouchVisualizerWidget";
     }
     // Add cases for other widget types as needed
     else {
@@ -428,7 +440,7 @@ void EssWorkspaceManager::returnFromStandalone(EssStandaloneWindow* window)
     dock->show();
     dock->raise();
     
-//    qDebug() << "New widget created and added to dock";
+    qDebug() << "New widget created and added to dock";
     
     // Clear persistence data for this window
     EssConfig *config = EssApplication::instance()->config();
@@ -442,7 +454,9 @@ void EssWorkspaceManager::returnFromStandalone(EssStandaloneWindow* window)
     window->deleteLater();
     
     emit statusMessage(QString("Returned %1 to main window").arg(dock->windowTitle()), 3000);
+    emit standaloneStateChanged(); // Emit when window returns to dock
 }
+
 void EssWorkspaceManager::detachEyeTouchVisualizer(EssStandaloneWindow::WindowBehavior behavior)
 {
     detachToStandalone("EyeTouchVisualizer", behavior);
@@ -1236,16 +1250,29 @@ QList<QAction*> EssWorkspaceManager::viewMenuActions()
 {
     QList<QAction*> actions;
     
-    // Create toggle actions for each dock (skip CGraph individual docks)
+    // Create toggle actions for each dock (skip those that are currently standalone)
     for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+        QString dockName = it.key();
+        QDockWidget *dock = it.value();
+        
         // Skip individual CGraph docks - they'll be in the submenu
-        if (m_cgraphs.contains(it.key())) {
+        if (m_cgraphs.contains(dockName)) {
             continue;
         }
         
-        QDockWidget *dock = it.value();
-        QAction *action = dock->toggleViewAction();
-        actions.append(action);
+        // Skip docks that are currently standalone
+        bool isStandalone = false;
+        for (EssStandaloneWindow* window : m_standaloneWindows) {
+            if (m_standaloneToOriginalDock.value(window) == dockName) {
+                isStandalone = true;
+                break;
+            }
+        }
+        
+        if (!isStandalone) {
+            QAction *action = dock->toggleViewAction();
+            actions.append(action);
+        }
     }
     
     QAction *separator1 = new QAction(m_mainWindow);
@@ -1255,54 +1282,65 @@ QList<QAction*> EssWorkspaceManager::viewMenuActions()
     // Add the CGraph submenu
     actions.append(m_cgraphMenu->menuAction());
     
-  if (!m_standaloneWindows.isEmpty()) {
-    QAction *standaloneSeparator = new QAction(m_mainWindow);
-    standaloneSeparator->setSeparator(true);
-    actions.append(standaloneSeparator);
-    
-    // Add actions for each standalone window
-    for (EssStandaloneWindow* window : m_standaloneWindows) {
-        // Create our own toggle action
-        QAction* windowAction = new QAction(window->windowTitle() + " (standalone)", m_mainWindow);
-        windowAction->setCheckable(true);
-        windowAction->setChecked(window->isVisible());
-        
-        connect(windowAction, &QAction::triggered, [window](bool checked) {
-            window->setVisible(checked);
-            if (checked) {
-                window->raise();
-                window->activateWindow();
-            }
-        });
-        
-        // Update the action when window visibility changes
-        connect(window, &QWidget::windowTitleChanged, [windowAction, window](const QString& title) {
-            windowAction->setText(title + " (standalone)");
-        });
-        
-        actions.append(windowAction);
-    }
-}
-
-// Quick access action for eye/touch visualizer (only show if not already detached)
-bool eyeTouchDetached = false;
-for (EssStandaloneWindow* window : m_standaloneWindows) {
-    if (m_standaloneToOriginalDock.value(window) == "EyeTouchVisualizer") {
-        eyeTouchDetached = true;
-        break;
-    }
-}
-
-if (!eyeTouchDetached && m_docks.contains("EyeTouchVisualizer") && 
-    m_docks["EyeTouchVisualizer"]->widget()) {
-    QAction *detachEyeTouchAction = new QAction(tr("Detach Eye/Touch Monitor"), m_mainWindow);
-    connect(detachEyeTouchAction, &QAction::triggered, [this]() {
-        // Cast away const since this should be a non-const method anyway
-        const_cast<EssWorkspaceManager*>(this)->detachEyeTouchVisualizer(EssStandaloneWindow::UtilityWindow);
-    });
-    actions.append(detachEyeTouchAction);
-}  
-     
+	if (!m_standaloneWindows.isEmpty()) {
+	QAction *standaloneSeparator = new QAction(m_mainWindow);
+	standaloneSeparator->setSeparator(true);
+	actions.append(standaloneSeparator);
+	
+	// Add actions for each standalone window
+	for (EssStandaloneWindow* window : m_standaloneWindows) {
+		// Create our own toggle action
+		QAction* windowAction = new QAction(window->windowTitle() + " (standalone)", m_mainWindow);
+		windowAction->setCheckable(true);
+		windowAction->setChecked(window->isVisible());
+		
+		connect(windowAction, &QAction::triggered, [window](bool checked) {
+			window->setVisible(checked);
+			if (checked) {
+				window->raise();
+				window->activateWindow();
+			}
+		});
+		
+		// Update the action when window visibility changes
+		connect(window, &QWidget::windowTitleChanged, [windowAction, window](const QString& title) {
+			windowAction->setText(title + " (standalone)");
+		});
+		
+		actions.append(windowAction);
+	}
+	}
+	
+	// Quick access action for widgets that can be detached but aren't currently standalone
+	QStringList detachableWidgets = {"EyeTouchVisualizer", "BehavMon", "EventTable"}; // Add others as needed
+	
+	for (const QString& dockName : detachableWidgets) {
+	// Check if this widget is currently standalone
+	bool isStandalone = false;
+	for (EssStandaloneWindow* window : m_standaloneWindows) {
+		if (m_standaloneToOriginalDock.value(window) == dockName) {
+			isStandalone = true;
+			break;
+		}
+	}
+	
+	// Only show detach option if not already standalone and dock has content
+	if (!isStandalone && m_docks.contains(dockName) && 
+		m_docks[dockName]->widget()) {
+		
+		QString prettyName = dockName;
+		if (dockName == "EyeTouchVisualizer") prettyName = "Eye/Touch Monitor";
+		else if (dockName == "BehavMon") prettyName = "Performance Monitor";
+		else if (dockName == "EventTable") prettyName = "Event Log";
+		
+		QAction *detachAction = new QAction(tr("Detach %1").arg(prettyName), m_mainWindow);
+		connect(detachAction, &QAction::triggered, [this, dockName]() {
+			detachToStandalone(dockName, EssStandaloneWindow::UtilityWindow);
+		});
+		actions.append(detachAction);
+	}
+	}
+            
     // Add separator and reset action
     QAction *separator = new QAction(m_mainWindow);
     separator->setSeparator(true);
@@ -1378,8 +1416,14 @@ void EssWorkspaceManager::restoreStandaloneWindows()
     QStringList standaloneList = config->standaloneWindows();
     
     if (standaloneList.isEmpty()) {
+        qDebug() << "No standalone windows to restore";
         return;
     }
+    
+    qDebug() << "Restoring" << standaloneList.size() << "standalone windows";
+    
+    // Store the currently active window before we start creating standalone windows
+    QWidget* originalActiveWindow = QApplication::activeWindow();
     
     for (const QString& dockName : standaloneList) {
         if (!m_docks.contains(dockName)) {
@@ -1397,7 +1441,7 @@ void EssWorkspaceManager::restoreStandaloneWindows()
         int behaviorInt = config->standaloneWindowBehavior(dockName);
         auto behavior = static_cast<EssStandaloneWindow::WindowBehavior>(behaviorInt);
         
-        // Detach to standalone
+        // Detach to standalone (this will create and show the window)
         detachToStandalone(dock, behavior);
         
         // Wait for the standalone window to be created
@@ -1409,6 +1453,30 @@ void EssWorkspaceManager::restoreStandaloneWindows()
             if (!geometry.isEmpty()) {
                 window->restoreGeometry(geometry);
             }
+            
+            // IMPORTANT: Don't activate the standalone window during restoration
+            // Just show it but don't give it focus
+            window->show();
+            // Don't call raise() or activateWindow() here
+            
+            qDebug() << "Restored standalone window:" << dockName;
+        }
+    }
+    
+    // Emit signal after all windows are restored
+    if (!standaloneList.isEmpty()) {
+        emit standaloneStateChanged();
+        
+        // Restore focus to the original window (main window)
+        if (originalActiveWindow) {
+            originalActiveWindow->raise();
+            originalActiveWindow->activateWindow();
+            qDebug() << "Restored focus to original active window";
+        } else {
+            // Fallback to main window
+            m_mainWindow->raise();
+            m_mainWindow->activateWindow();
+            qDebug() << "Restored focus to main window";
         }
     }
 }

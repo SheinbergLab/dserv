@@ -65,10 +65,11 @@ public:
 
     // Stand alone window support
     void detachToStandalone(const QString& dockName, 
-	   EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
-	void detachToStandalone(QDockWidget* dock, 
-	   EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
-	void returnFromStandalone(EssStandaloneWindow* window);
+                           EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
+    void detachToStandalone(QDockWidget* dock, 
+                           EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow,
+                           bool activateWindow = true);
+    void returnFromStandalone(EssStandaloneWindow* window);
     
     // Convenience methods
     void detachEyeTouchVisualizer(EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
@@ -76,7 +77,7 @@ public:
          
 signals:
     void statusMessage(const QString &message, int timeout = 0);
-    
+    void standaloneStateChanged();    
 private:
     // Setup methods
     void createDocks();
