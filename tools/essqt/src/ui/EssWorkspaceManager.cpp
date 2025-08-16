@@ -70,6 +70,9 @@ void EssWorkspaceManager::setupWorkspace()
         applyDefaultLayout();
     }
     
+    // Restore standalone windows AFTER the main layout is restored
+    QTimer::singleShot(100, this, &EssWorkspaceManager::restoreStandaloneWindows);
+        
     // Log initialization
     if (m_console) {
         m_console->logSystem("EssQt Workspace Initialized", "Workspace");
@@ -290,6 +293,163 @@ void EssWorkspaceManager::returnCGraphToTabs(QDockWidget* dock, const QString& n
     updateCGraphMenu();
 }
 
+// Stand alone window support
+
+void EssWorkspaceManager::detachToStandalone(const QString& dockName, 
+                                            EssStandaloneWindow::WindowBehavior behavior)
+{
+    if (!m_docks.contains(dockName)) {
+        qWarning() << "Dock not found:" << dockName;
+        return;
+    }
+    
+    detachToStandalone(m_docks[dockName], behavior);
+}
+void EssWorkspaceManager::detachToStandalone(QDockWidget* dock, 
+                                            EssStandaloneWindow::WindowBehavior behavior)
+{
+    if (!dock || !dock->widget()) {
+        qWarning() << "Invalid dock or missing widget";
+        return;
+    }
+    
+    // Get the widget and dock info
+    QWidget* widget = dock->widget();
+    QString title = dock->windowTitle();
+    QString dockName;
+    
+    // Find the dock name for later restoration
+    for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
+        if (it.value() == dock) {
+            dockName = it.key();
+            break;
+        }
+    }
+    
+    if (dockName.isEmpty()) {
+        qWarning() << "Could not find dock name for" << title;
+        return;
+    }
+    
+    // Remove widget from dock and hide the dock
+    dock->setWidget(nullptr);
+    dock->hide();
+    
+    // Create standalone window
+    EssStandaloneWindow* standalone = new EssStandaloneWindow(widget, title, behavior, m_mainWindow);
+    
+    // Connect signals
+    connect(standalone, &EssStandaloneWindow::returnToMainRequested,
+            [this, standalone]() {
+                returnFromStandalone(standalone);
+            });
+    
+    connect(standalone, &EssStandaloneWindow::windowClosing,
+            [this, standalone]() {
+                m_standaloneWindows.removeAll(standalone);
+                m_standaloneToOriginalDock.remove(standalone);
+                standalone->deleteLater();
+            });
+    
+    // Track the standalone window
+    m_standaloneWindows.append(standalone);
+    m_standaloneToOriginalDock[standalone] = dockName;
+    
+    // Position and show standalone window
+    QPoint mainPos = m_mainWindow->pos();
+    QSize mainSize = m_mainWindow->size();
+    standalone->move(mainPos + QPoint(mainSize.width() + 20, 50));
+    
+    standalone->show();
+    standalone->raise();
+    standalone->activateWindow();
+    
+    emit statusMessage(QString("Detached %1 to standalone window").arg(title), 3000);
+}
+
+void EssWorkspaceManager::returnFromStandalone(EssStandaloneWindow* window)
+{
+    if (!window) return;
+    
+    QWidget* content = window->releaseContent();
+    if (!content) return;
+    
+    QString dockName = m_standaloneToOriginalDock.value(window);
+    if (dockName.isEmpty()) {
+        qWarning() << "Could not find original dock for standalone window";
+        content->deleteLater();
+        return;
+    }
+    
+    if (!m_docks.contains(dockName)) {
+        qWarning() << "Original dock no longer exists:" << dockName;
+        content->deleteLater();
+        return;
+    }
+    
+    QDockWidget* dock = m_docks[dockName];
+    
+    // Recreate the widget instead of trying to reparent
+    QWidget* newContent = nullptr;
+    
+    if (dockName == "EyeTouchVisualizer") {
+        // Safely delete the old widget and update our pointer
+        if (m_eyeTouchVisualizer) {
+            m_eyeTouchVisualizer->disconnect();
+            m_eyeTouchVisualizer->setParent(nullptr);
+            m_eyeTouchVisualizer->deleteLater();
+            m_eyeTouchVisualizer = nullptr;
+        }
+        
+        // Create new widget
+        m_eyeTouchVisualizer = new EssEyeTouchVisualizerWidget();
+        newContent = m_eyeTouchVisualizer;
+    }
+    // Add cases for other widget types as needed
+    else {
+        qWarning() << "Don't know how to recreate widget for dock:" << dockName;
+        if (content) {
+            content->disconnect();
+            content->setParent(nullptr);
+            content->deleteLater();
+        }
+        return;
+    }
+    
+    // Safely delete the old content after ensuring it's not connected to anything
+    if (content) {
+        content->disconnect();
+        content->setParent(nullptr);
+        content->deleteLater();
+    }
+    
+    // Put the new widget in the dock and show it
+    dock->setWidget(newContent);
+    dock->show();
+    dock->raise();
+    
+//    qDebug() << "New widget created and added to dock";
+    
+    // Clear persistence data for this window
+    EssConfig *config = EssApplication::instance()->config();
+    QStringList standaloneList = config->standaloneWindows();
+    standaloneList.removeAll(dockName);
+    config->setStandaloneWindows(standaloneList);
+    
+    // Clean up standalone window
+    m_standaloneWindows.removeAll(window);
+    m_standaloneToOriginalDock.remove(window);
+    window->deleteLater();
+    
+    emit statusMessage(QString("Returned %1 to main window").arg(dock->windowTitle()), 3000);
+}
+void EssWorkspaceManager::detachEyeTouchVisualizer(EssStandaloneWindow::WindowBehavior behavior)
+{
+    detachToStandalone("EyeTouchVisualizer", behavior);
+}
+
+
+
 void EssWorkspaceManager::createDocks()
 {
     // Create Control Panel dock
@@ -323,6 +483,45 @@ void EssWorkspaceManager::createDocks()
     eyeTouchDock->setWidget(m_eyeTouchVisualizer);
     
     m_docks["EyeTouchVisualizer"] = eyeTouchDock;
+    
+    eyeTouchDock->setContextMenuPolicy(Qt::CustomContextMenu);
+connect(eyeTouchDock, &QDockWidget::customContextMenuRequested,
+        [this, eyeTouchDock](const QPoint& pos) {
+            QMenu menu;
+            
+            // Existing dock actions
+            menu.addAction("Float", [eyeTouchDock]() {
+                eyeTouchDock->setFloating(true);
+            });
+            
+            menu.addSeparator();
+            
+            // New standalone options
+            menu.addAction("🔧 Detach as Tool Window", [this, eyeTouchDock]() {
+                detachToStandalone(eyeTouchDock, EssStandaloneWindow::UtilityWindow);
+            });
+            
+            menu.addAction("👁 Always Visible", [this, eyeTouchDock]() {
+                detachToStandalone(eyeTouchDock, EssStandaloneWindow::StayVisible);
+            });
+            
+            menu.addAction("📌 Always on Top", [this, eyeTouchDock]() {
+                detachToStandalone(eyeTouchDock, EssStandaloneWindow::AlwaysOnTop);
+            });
+            
+            menu.addSeparator();
+            
+            // Show count of current standalone windows
+            if (!m_standaloneWindows.isEmpty()) {
+                QAction* infoAction = menu.addAction(QString("(%1 standalone windows)")
+                                                   .arg(m_standaloneWindows.size()));
+                infoAction->setEnabled(false);
+            }
+            
+            menu.exec(eyeTouchDock->mapToGlobal(pos));
+        });
+    
+    
     
     // Create Event Table dock with similar floating behavior
     QDockWidget *eventDock = new QDockWidget(tr("Event Log"), m_mainWindow);
@@ -677,7 +876,7 @@ void EssWorkspaceManager::resetDockConstraints()
         }
     }
     
-    qDebug() << "Dock constraints reset to defaults";
+//    qDebug() << "Dock constraints reset to defaults";
 }
 
 void EssWorkspaceManager::connectSignals()
@@ -744,7 +943,7 @@ void EssWorkspaceManager::connectSignals()
 void EssWorkspaceManager::resetToDefaultLayout()
 {
     // Add debug logging
-    qDebug() << "Resetting layout...";
+//    qDebug() << "Resetting layout...";
     
     resetDockConstraints();
     
@@ -756,7 +955,7 @@ void EssWorkspaceManager::resetToDefaultLayout()
     
     applyDefaultLayout();
     
-    qDebug() << "Layout reset complete";
+//    qDebug() << "Layout reset complete";
 }
 
 bool EssWorkspaceManager::eventFilter(QObject* obj, QEvent* event)
@@ -1033,7 +1232,7 @@ void EssWorkspaceManager::sendScriptToCurrentGraphicsWidget(const QString& scrip
     }
 }
 
-QList<QAction*> EssWorkspaceManager::viewMenuActions() const
+QList<QAction*> EssWorkspaceManager::viewMenuActions()
 {
     QList<QAction*> actions;
     
@@ -1055,7 +1254,55 @@ QList<QAction*> EssWorkspaceManager::viewMenuActions() const
     
     // Add the CGraph submenu
     actions.append(m_cgraphMenu->menuAction());
-            
+    
+  if (!m_standaloneWindows.isEmpty()) {
+    QAction *standaloneSeparator = new QAction(m_mainWindow);
+    standaloneSeparator->setSeparator(true);
+    actions.append(standaloneSeparator);
+    
+    // Add actions for each standalone window
+    for (EssStandaloneWindow* window : m_standaloneWindows) {
+        // Create our own toggle action
+        QAction* windowAction = new QAction(window->windowTitle() + " (standalone)", m_mainWindow);
+        windowAction->setCheckable(true);
+        windowAction->setChecked(window->isVisible());
+        
+        connect(windowAction, &QAction::triggered, [window](bool checked) {
+            window->setVisible(checked);
+            if (checked) {
+                window->raise();
+                window->activateWindow();
+            }
+        });
+        
+        // Update the action when window visibility changes
+        connect(window, &QWidget::windowTitleChanged, [windowAction, window](const QString& title) {
+            windowAction->setText(title + " (standalone)");
+        });
+        
+        actions.append(windowAction);
+    }
+}
+
+// Quick access action for eye/touch visualizer (only show if not already detached)
+bool eyeTouchDetached = false;
+for (EssStandaloneWindow* window : m_standaloneWindows) {
+    if (m_standaloneToOriginalDock.value(window) == "EyeTouchVisualizer") {
+        eyeTouchDetached = true;
+        break;
+    }
+}
+
+if (!eyeTouchDetached && m_docks.contains("EyeTouchVisualizer") && 
+    m_docks["EyeTouchVisualizer"]->widget()) {
+    QAction *detachEyeTouchAction = new QAction(tr("Detach Eye/Touch Monitor"), m_mainWindow);
+    connect(detachEyeTouchAction, &QAction::triggered, [this]() {
+        // Cast away const since this should be a non-const method anyway
+        const_cast<EssWorkspaceManager*>(this)->detachEyeTouchVisualizer(EssStandaloneWindow::UtilityWindow);
+    });
+    actions.append(detachEyeTouchAction);
+}  
+     
     // Add separator and reset action
     QAction *separator = new QAction(m_mainWindow);
     separator->setSeparator(true);
@@ -1072,6 +1319,10 @@ void EssWorkspaceManager::saveLayout()
 {
     EssConfig *config = EssApplication::instance()->config();
     config->setWindowState(m_mainWindow->saveState());
+    
+    // Save standalone windows
+    saveStandaloneWindows();
+    
     config->sync();
 }
 
@@ -1096,6 +1347,70 @@ bool EssWorkspaceManager::restoreLayout()
         return restored;
     }
     return false;
+}
+
+void EssWorkspaceManager::saveStandaloneWindows()
+{
+    EssConfig *config = EssApplication::instance()->config();
+    
+    QStringList standaloneList;
+    
+    for (auto it = m_standaloneToOriginalDock.begin(); it != m_standaloneToOriginalDock.end(); ++it) {
+        EssStandaloneWindow* window = it.key();
+        QString dockName = it.value();
+        
+        standaloneList.append(dockName);
+        
+        // Save window geometry
+        config->setStandaloneWindowGeometry(dockName, window->saveGeometry());
+        
+        // Save window behavior
+        config->setStandaloneWindowBehavior(dockName, static_cast<int>(window->behavior()));
+        
+    }
+    
+    config->setStandaloneWindows(standaloneList);
+}
+
+void EssWorkspaceManager::restoreStandaloneWindows()
+{
+    EssConfig *config = EssApplication::instance()->config();
+    QStringList standaloneList = config->standaloneWindows();
+    
+    if (standaloneList.isEmpty()) {
+        return;
+    }
+    
+    for (const QString& dockName : standaloneList) {
+        if (!m_docks.contains(dockName)) {
+            qWarning() << "Cannot restore standalone window - dock not found:" << dockName;
+            continue;
+        }
+        
+        QDockWidget* dock = m_docks[dockName];
+        if (!dock->widget()) {
+            qWarning() << "Cannot restore standalone window - no widget in dock:" << dockName;
+            continue;
+        }
+        
+        // Get saved behavior
+        int behaviorInt = config->standaloneWindowBehavior(dockName);
+        auto behavior = static_cast<EssStandaloneWindow::WindowBehavior>(behaviorInt);
+        
+        // Detach to standalone
+        detachToStandalone(dock, behavior);
+        
+        // Wait for the standalone window to be created
+        if (!m_standaloneWindows.isEmpty()) {
+            EssStandaloneWindow* window = m_standaloneWindows.last();
+            
+            // Restore geometry
+            QByteArray geometry = config->standaloneWindowGeometry(dockName);
+            if (!geometry.isEmpty()) {
+                window->restoreGeometry(geometry);
+            }
+        }
+    }
 }
 
 void EssWorkspaceManager::setDockVisible(const QString &dockName, bool visible)

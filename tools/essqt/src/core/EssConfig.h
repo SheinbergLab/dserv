@@ -36,6 +36,16 @@ public:
     
     void sync();
 
+    // Standalone window persistence
+    void setStandaloneWindows(const QStringList& standaloneWindows);
+    QStringList standaloneWindows() const;
+    
+    void setStandaloneWindowGeometry(const QString& dockName, const QByteArray& geometry);
+    QByteArray standaloneWindowGeometry(const QString& dockName) const;
+    
+    void setStandaloneWindowBehavior(const QString& dockName, int behavior);
+    int standaloneWindowBehavior(const QString& dockName) const;
+
 signals:
     void settingChanged(const QString &key, const QVariant &value);
 

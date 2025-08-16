@@ -5,6 +5,8 @@
 #include <QList>
 #include <QMenu>
 
+#include "EssStandaloneWindow.h"
+
 QT_BEGIN_NAMESPACE
 class QMainWindow;
 class QDockWidget;
@@ -42,6 +44,8 @@ public:
     void resetToDefaultLayout();
     void saveLayout();
     bool restoreLayout();
+    void saveStandaloneWindows();
+    void restoreStandaloneWindows();
     
     EssExperimentControlWidget* experimentControlWidget() const;    
     QWidget* getWidget(const QString &id) const;
@@ -57,8 +61,19 @@ public:
     bool isDockVisible(const QString &dockName) const;
     
     // Menu actions
-    QList<QAction*> viewMenuActions() const;
-     
+    QList<QAction*> viewMenuActions();
+
+    // Stand alone window support
+    void detachToStandalone(const QString& dockName, 
+	   EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
+	void detachToStandalone(QDockWidget* dock, 
+	   EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
+	void returnFromStandalone(EssStandaloneWindow* window);
+    
+    // Convenience methods
+    void detachEyeTouchVisualizer(EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
+    QList<EssStandaloneWindow*> standaloneWindows() const { return m_standaloneWindows; }
+         
 signals:
     void statusMessage(const QString &message, int timeout = 0);
     
@@ -74,7 +89,6 @@ private:
 	void resetDockConstraints();    
 	
     // Helper methods
-   
     QWidget* createControlPanel();
     
 	// CGraph support
@@ -82,6 +96,11 @@ private:
 	QMap<QString, EssGraphicsWidget*> m_cgraphs;
 	QMenu* m_cgraphMenu;
     void updateCGraphMenu();
+
+    // Stand alone window support
+    QList<EssStandaloneWindow*> m_standaloneWindows;
+    QMap<EssStandaloneWindow*, QString> m_standaloneToOriginalDock; // Track original dock names
+
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;

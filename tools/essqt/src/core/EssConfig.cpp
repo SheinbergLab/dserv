@@ -1,4 +1,6 @@
 #include "EssConfig.h"
+#include "EssStandaloneWindow.h"
+#include <QSettings>
 
 EssConfig::EssConfig(QObject *parent)
     : QObject(parent)
@@ -80,4 +82,35 @@ void EssConfig::setDarkMode(bool enabled)
 void EssConfig::sync()
 {
     m_settings.sync();
+}
+
+void EssConfig::setStandaloneWindows(const QStringList& standaloneWindows)
+{
+    m_settings.setValue("standalone/windows", standaloneWindows);
+}
+
+QStringList EssConfig::standaloneWindows() const
+{
+    return m_settings.value("standalone/windows", QStringList()).toStringList();
+}
+
+void EssConfig::setStandaloneWindowGeometry(const QString& dockName, const QByteArray& geometry)
+{
+    m_settings.setValue(QString("standalone/%1/geometry").arg(dockName), geometry);
+}
+
+QByteArray EssConfig::standaloneWindowGeometry(const QString& dockName) const
+{
+    return m_settings.value(QString("standalone/%1/geometry").arg(dockName), QByteArray()).toByteArray();
+}
+
+void EssConfig::setStandaloneWindowBehavior(const QString& dockName, int behavior)
+{
+    m_settings.setValue(QString("standalone/%1/behavior").arg(dockName), behavior);
+}
+
+int EssConfig::standaloneWindowBehavior(const QString& dockName) const
+{
+    return m_settings.value(QString("standalone/%1/behavior").arg(dockName), 
+                            static_cast<int>(EssStandaloneWindow::UtilityWindow)).toInt();
 }

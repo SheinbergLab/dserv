@@ -131,6 +131,7 @@ set(COMM_SOURCES
 set(UI_SOURCES
     src/ui/EssMainWindow.cpp
     src/ui/EssWorkspaceManager.cpp
+	src/ui/EssStandaloneWindow.cpp     
     src/ui/dialogs/EssFileDialog.cpp
     src/ui/components/terminal/EssTerminalWidget.cpp
     src/ui/components/terminal/CommandHistory.cpp
