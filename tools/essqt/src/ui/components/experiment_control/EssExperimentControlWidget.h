@@ -91,7 +91,8 @@ private:
     void updateButtonStates();
     void updateStatusDisplay();
     void updateDatafileDisplay();
-    
+	bool hasOpenDatafile() const;    
+	
     // Helper to update combo without triggering signals
     void setComboBoxValue(QComboBox *combo, const QString &value);
     void setComboBoxItems(QComboBox *combo, const QStringList &items, const QString &currentValue);
@@ -110,7 +111,6 @@ private:
     void clearVariantOptions();
     
     // UI Elements
-    QFont m_monoFont;
     
     // Control section
     QGroupBox *m_controlGroup;

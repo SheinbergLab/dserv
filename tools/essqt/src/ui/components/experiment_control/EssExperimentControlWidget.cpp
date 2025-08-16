@@ -104,10 +104,6 @@ void EssExperimentControlWidget::createStatusSection()
 {
     m_statusGroup = new QGroupBox("Status", this);
     QVBoxLayout *layout = new QVBoxLayout(m_statusGroup);
-    
-    // Set up monospace font once
-    m_monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-	m_monoFont.setPointSize(10);
 
     // Status row
     QHBoxLayout *statusLayout = new QHBoxLayout();
@@ -130,8 +126,7 @@ void EssExperimentControlWidget::createStatusSection()
     datafileLayout->addWidget(new QLabel("File:"));
     m_datafileLabel = new QLabel("No file open");
     
-    // Apply monospace font and styling
-    m_datafileLabel->setFont(m_monoFont);
+    // Apply styling
     m_datafileLabel->setStyleSheet("QLabel { color: #666; }");
     
     datafileLayout->addWidget(m_datafileLabel);
@@ -331,6 +326,7 @@ void EssExperimentControlWidget::onDatafileChanged(const QString &filename)
 {
     m_currentDatafile = filename;
     updateDatafileDisplay();
+	updateButtonStates();     
 }
 
 void EssExperimentControlWidget::onDatafileProcessed(const QString &filename)
@@ -497,17 +493,17 @@ void EssExperimentControlWidget::processEssDatapoint(const QString &name, const 
 	  else if (dataType == "float") {
 	    lineEdit->setValidator(new QDoubleValidator(lineEdit));
 	  }
-	  else if (dataType == "bool") {
-	    // Create a validator that only allows 0 or 1
-	    QRegularExpressionValidator* boolValidator = 
-	      new QRegularExpressionValidator(QRegularExpression("^[01]$"), lineEdit);
-	    lineEdit->setValidator(boolValidator);
-	    lineEdit->setToolTip("Enter 0 or 1");
-	  }
-	  else if (dataType == "ipaddr") {
-	    lineEdit->setToolTip("Enter IP address (e.g., 192.168.1.1) or hostname");
-	  }
-	  // No validator needed for string type
+	else if (dataType == "bool") {
+		QRegularExpressionValidator* boolValidator = 
+			new QRegularExpressionValidator(QRegularExpression("^[01]$"), lineEdit);
+		lineEdit->setValidator(boolValidator);
+		lineEdit->setToolTip("Enter 0 or 1");
+		lineEdit->setProperty("originalTooltip", "Enter 0 or 1"); // Store original
+	}
+	else if (dataType == "ipaddr") {
+		lineEdit->setToolTip("Enter IP address (e.g., 192.168.1.1) or hostname");
+		lineEdit->setProperty("originalTooltip", "Enter IP address (e.g., 192.168.1.1) or hostname"); // Store original
+	}	  // No validator needed for string type
           
 	  // Store original value to detect changes
 	  lineEdit->setProperty("originalValue", paramValue);
@@ -788,6 +784,11 @@ QString EssExperimentControlWidget::currentDatafile() const
     return m_currentDatafile;
 }
 
+bool EssExperimentControlWidget::hasOpenDatafile() const
+{
+    return !m_currentDatafile.isEmpty();
+}
+
 void EssExperimentControlWidget::updateDatafileDisplay()
 {
     // Safety check - make sure UI is created
@@ -797,7 +798,8 @@ void EssExperimentControlWidget::updateDatafileDisplay()
     
     if (m_currentDatafile.isEmpty()) {
         m_datafileLabel->setText("No file open");
-        m_datafileLabel->setStyleSheet("QLabel { color: #666; }");
+        m_datafileLabel->setStyleSheet("QLabel { color: palette(disabled-text); }");
+        m_datafileLabel->setToolTip(""); // Clear tooltip when no file
     } else {
         // Extract just the filename without .ess extension
         QString displayName = m_currentDatafile;
@@ -812,35 +814,56 @@ void EssExperimentControlWidget::updateDatafileDisplay()
         }
         
         m_datafileLabel->setText(displayName);
-        m_datafileLabel->setStyleSheet("QLabel { color: #52c41a; font-weight: bold; }");
+        m_datafileLabel->setStyleSheet(""); // Use default text color
         m_datafileLabel->setToolTip(QString("Full path: %1").arg(m_currentDatafile));
     }
     
-    // Ensure monospace font is always applied
-    m_datafileLabel->setFont(m_monoFont);
+    // Use compact UI font instead of monospace
+    QFont compactFont = this->font();  // Use widget's default font
+    compactFont.setPointSize(10);
+    m_datafileLabel->setFont(compactFont);
 }
 
 void EssExperimentControlWidget::updateButtonStates()
 {
+    bool hasDatafile = hasOpenDatafile();
+    
+    // Prepare tooltip messages
+    QString loadingTooltip = "Disabled while loading...";
+    QString datafileTooltip = "Disabled while datafile is open";
+    QString runningTooltip = "Disabled while experiment is running";
+    
     // During loading, disable all controls except progress indication
     if (m_isLoading) {
         m_startBtn->setEnabled(false);
         m_stopBtn->setEnabled(false);
         m_resetBtn->setEnabled(false);
+        
         m_systemCombo->setEnabled(false);
+        m_systemCombo->setToolTip(loadingTooltip);
         m_protocolCombo->setEnabled(false);
+        m_protocolCombo->setToolTip(loadingTooltip);
         m_variantCombo->setEnabled(false);
+        m_variantCombo->setToolTip(loadingTooltip);
+        
         m_reloadSystemBtn->setEnabled(false);
+        m_reloadSystemBtn->setToolTip(loadingTooltip);
         m_reloadProtocolBtn->setEnabled(false);
+        m_reloadProtocolBtn->setToolTip(loadingTooltip);
         m_reloadVariantBtn->setEnabled(false);
+        m_reloadVariantBtn->setToolTip(loadingTooltip);
+        
         m_saveSettingsBtn->setEnabled(false);
+        m_saveSettingsBtn->setToolTip(loadingTooltip);
         m_resetSettingsBtn->setEnabled(false);
+        m_resetSettingsBtn->setToolTip(loadingTooltip);
         
         // Also disable all parameter inputs
         for (int i = 0; i < m_parameterLayout->rowCount(); ++i) {
             QLayoutItem* item = m_parameterLayout->itemAt(i, QFormLayout::FieldRole);
             if (item && item->widget()) {
                 item->widget()->setEnabled(false);
+                item->widget()->setToolTip(loadingTooltip);
             }
         }
         
@@ -849,6 +872,7 @@ void EssExperimentControlWidget::updateButtonStates()
             QLayoutItem* item = m_variantOptionsLayout->itemAt(i, QFormLayout::FieldRole);
             if (item && item->widget()) {
                 item->widget()->setEnabled(false);
+                item->widget()->setToolTip(loadingTooltip);
             }
         }
     }
@@ -858,8 +882,9 @@ void EssExperimentControlWidget::updateButtonStates()
         m_stopBtn->setEnabled(m_isRunning);
         m_resetBtn->setEnabled(!m_isRunning);
         
-        // Re-enable config controls when not running and not loading
-        bool configEnabled = !m_isRunning && !m_isLoading;
+        // Configuration controls: disabled when running OR when datafile is open
+        bool configEnabled = !m_isRunning && !m_isLoading && !hasDatafile;
+        
         m_systemCombo->setEnabled(configEnabled);
         m_protocolCombo->setEnabled(configEnabled);
         m_variantCombo->setEnabled(configEnabled);
@@ -869,24 +894,61 @@ void EssExperimentControlWidget::updateButtonStates()
         m_saveSettingsBtn->setEnabled(configEnabled);
         m_resetSettingsBtn->setEnabled(configEnabled);
         
-        // Re-enable all parameter inputs when not running
+        // Set appropriate tooltips for disabled controls
+        if (!configEnabled) {
+            QString tooltip = m_isRunning ? runningTooltip : datafileTooltip;
+            m_systemCombo->setToolTip(tooltip);
+            m_protocolCombo->setToolTip(tooltip);
+            m_variantCombo->setToolTip(tooltip);
+            m_reloadSystemBtn->setToolTip(tooltip);
+            m_reloadProtocolBtn->setToolTip(tooltip);
+            m_reloadVariantBtn->setToolTip(tooltip);
+            m_saveSettingsBtn->setToolTip(tooltip);
+            m_resetSettingsBtn->setToolTip(tooltip);
+        } else {
+            // Clear tooltips when enabled
+            m_systemCombo->setToolTip("");
+            m_protocolCombo->setToolTip("");
+            m_variantCombo->setToolTip("");
+            m_reloadSystemBtn->setToolTip("Reload system list");
+            m_reloadProtocolBtn->setToolTip("Reload protocol list");
+            m_reloadVariantBtn->setToolTip("Reload variant list");
+            m_saveSettingsBtn->setToolTip("");
+            m_resetSettingsBtn->setToolTip("");
+        }
+        
+        // Parameter inputs: disabled when running OR when datafile is open
+        bool paramEnabled = !m_isRunning && !hasDatafile;
+        QString paramTooltip = m_isRunning ? runningTooltip : datafileTooltip;
+        
         for (int i = 0; i < m_parameterLayout->rowCount(); ++i) {
             QLayoutItem* item = m_parameterLayout->itemAt(i, QFormLayout::FieldRole);
             if (item && item->widget()) {
-                item->widget()->setEnabled(!m_isRunning);
+                item->widget()->setEnabled(paramEnabled);
+                if (!paramEnabled) {
+                    item->widget()->setToolTip(paramTooltip);
+                } else {
+                    // Restore original tooltip if any (for bool type, etc.)
+                    QString originalTooltip = item->widget()->property("originalTooltip").toString();
+                    item->widget()->setToolTip(originalTooltip);
+                }
             }
         }
         
-        // Re-enable all variant option combos when not running
+        // Variant option combos: disabled when running OR when datafile is open
         for (int i = 0; i < m_variantOptionsLayout->rowCount(); ++i) {
             QLayoutItem* item = m_variantOptionsLayout->itemAt(i, QFormLayout::FieldRole);
             if (item && item->widget()) {
-                item->widget()->setEnabled(!m_isRunning);
+                item->widget()->setEnabled(paramEnabled);
+                if (!paramEnabled) {
+                    item->widget()->setToolTip(paramTooltip);
+                } else {
+                    item->widget()->setToolTip("");
+                }
             }
         }
     }
 }
-
 void EssExperimentControlWidget::updateStatusDisplay()
 {
     // Update status label based on state
