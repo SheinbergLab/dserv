@@ -82,6 +82,7 @@ else()
     # Linux
     link_directories(/usr/local/lib)
     find_library(LIBZ z)
+    find_library(LIBXXHASH NAMES "libxxhash.a")
     find_library(LIBLZ4 NAMES "liblz4.a")
     find_library(LIBTCL "tcl9.0")
     set(LIBTCLSTUB "/usr/local/lib/libtclstub.a")
@@ -242,7 +243,8 @@ else()
     target_link_libraries(essqt PRIVATE
         ${LIBDG} 
         ${LIBZ} 
-        ${LIBLZ4} 
+        ${LIBLZ4}
+	${LIBXXHASH}
         ${LIBTCL} 
         ${LIBTCLSTUB}
         ${QSCI_LIB_NAME}

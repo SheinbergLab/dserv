@@ -73,7 +73,7 @@ void EssStandaloneWindow::setupWindowBehavior()
 #ifdef Q_OS_MACOS
         flags |= Qt::Tool;
 #else
-        flags |= Qt::Tool | Qt::WindowStaysOnBehindHint;
+        flags |= Qt::Tool | Qt::WindowStaysOnBottomHint;
 #endif
         break;
         
@@ -84,7 +84,7 @@ void EssStandaloneWindow::setupWindowBehavior()
         // Use a regular window but we'll manage its behavior
         flags = Qt::Window;
 #else
-        flags |= Qt::WindowStaysOnBehindHint;
+        flags |= Qt::WindowStaysOnBottomHint;
 #endif
         break;
         
