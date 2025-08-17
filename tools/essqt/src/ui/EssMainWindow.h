@@ -15,6 +15,8 @@ public:
     explicit EssMainWindow(QWidget *parent = nullptr);
     ~EssMainWindow();
 
+    EssWorkspaceManager* workspace() const { return m_workspace; }
+
 protected:
     void closeEvent(QCloseEvent *event) override;
 

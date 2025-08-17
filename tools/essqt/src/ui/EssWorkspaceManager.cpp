@@ -133,6 +133,89 @@ void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString&
     updateCGraphMenu();
 }
 
+void EssWorkspaceManager::createStandaloneCGraphWidget(const QString& name, const QString& title,
+                                                      int behavior, const QString& script,
+                                                      const QString& geometry)
+{
+    // Parse geometry string
+    QSize windowSize(600, 400);  // default
+    QPoint windowPos(-1, -1);    // -1 means "don't set position"
+    bool hasPosition = false;
+    
+    if (!geometry.isEmpty()) {
+        // Parse X11-style geometry: WIDTHxHEIGHT[+/-X+/-Y]
+        QRegularExpression geomRegex(R"((\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?)");
+        QRegularExpressionMatch match = geomRegex.match(geometry);
+        
+        if (match.hasMatch()) {
+            windowSize.setWidth(match.captured(1).toInt());
+            windowSize.setHeight(match.captured(2).toInt());
+            
+            if (!match.captured(3).isEmpty() && !match.captured(4).isEmpty()) {
+                windowPos.setX(match.captured(3).toInt());
+                windowPos.setY(match.captured(4).toInt());
+                hasPosition = true;
+            }
+        } else {
+            qWarning() << "Invalid geometry format:" << geometry << "- using defaults";
+        }
+    }
+    
+    EssStandaloneWindow::WindowBehavior windowBehavior = 
+        static_cast<EssStandaloneWindow::WindowBehavior>(behavior);
+    
+    // Create the widget normally first
+    createCGraphWidget(name, title.isEmpty() ? name : title);
+    
+    if (!m_cgraphs.contains(name)) {
+        qWarning() << "Failed to create cgraph widget:" << name;
+        return;
+    }
+    
+    EssGraphicsWidget* graph = m_cgraphs[name];
+    
+    // Execute the script if provided
+    if (!script.isEmpty()) {
+        graph->eval(script);
+    }
+    
+    // Find and detach the widget
+    for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
+        QWidget* tabWidget = m_cgraphTabWidget->widget(i);
+        
+        if (tabWidget == graph) {
+            // Remove from tabs
+            m_cgraphTabWidget->removeTab(i);
+            
+            // Create temporary dock for detachment
+            QDockWidget* tempDock = new QDockWidget(title.isEmpty() ? name : title, m_mainWindow);
+            tempDock->setWidget(graph);
+            m_docks[name] = tempDock;
+            
+            // Detach to standalone
+            detachToStandalone(tempDock, windowBehavior, true);
+            
+            // Apply geometry to the standalone window
+            for (EssStandaloneWindow* standaloneWindow : m_standaloneWindows) {
+                if (m_standaloneToOriginalDock.value(standaloneWindow) == name) {
+                    standaloneWindow->resize(windowSize);
+                    
+                    if (hasPosition) {
+                        standaloneWindow->move(windowPos);
+                    }
+                    break;
+                }
+            }
+            
+            emit statusMessage(QString("Created standalone graphics widget: %1 (%2)")
+                             .arg(name).arg(geometry), 3000);
+            return;
+        }
+    }
+    
+    qWarning() << "Widget not found in any tab!";
+}
+
 void EssWorkspaceManager::handleGraphicsFloatingRequest(const QString& name, bool floating)
 {
     if (!m_cgraphs.contains(name)) {
@@ -319,7 +402,7 @@ void EssWorkspaceManager::detachToStandalone(QDockWidget* dock,
     QString title = dock->windowTitle();
     QString dockName;
     
-    qDebug() << "Detaching widget:" << widget << "with title:" << title;
+  //  qDebug() << "Detaching widget:" << widget << "with title:" << title;
     
     // Find the dock name for later restoration
     for (auto it = m_docks.begin(); it != m_docks.end(); ++it) {
@@ -1419,9 +1502,7 @@ void EssWorkspaceManager::restoreStandaloneWindows()
         qDebug() << "No standalone windows to restore";
         return;
     }
-    
-    qDebug() << "Restoring" << standaloneList.size() << "standalone windows";
-    
+        
     // Store the currently active window before we start creating standalone windows
     QWidget* originalActiveWindow = QApplication::activeWindow();
     
@@ -1454,12 +1535,10 @@ void EssWorkspaceManager::restoreStandaloneWindows()
                 window->restoreGeometry(geometry);
             }
             
-            // IMPORTANT: Don't activate the standalone window during restoration
+            // Don't activate the standalone window during restoration
             // Just show it but don't give it focus
             window->show();
-            // Don't call raise() or activateWindow() here
             
-            qDebug() << "Restored standalone window:" << dockName;
         }
     }
     
@@ -1471,12 +1550,12 @@ void EssWorkspaceManager::restoreStandaloneWindows()
         if (originalActiveWindow) {
             originalActiveWindow->raise();
             originalActiveWindow->activateWindow();
-            qDebug() << "Restored focus to original active window";
+//            qDebug() << "Restored focus to original active window";
         } else {
             // Fallback to main window
             m_mainWindow->raise();
             m_mainWindow->activateWindow();
-            qDebug() << "Restored focus to main window";
+//            qDebug() << "Restored focus to main window";
         }
     }
 }

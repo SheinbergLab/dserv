@@ -56,7 +56,6 @@ public:
     void clearSharedData();
     
     // Development helpers
-    void enableDevelopmentMode(bool enabled);
     void setDevelopmentLayout(const QString& widgetName, int layoutMode);
     void broadcastDevelopmentMode(bool enabled);
     

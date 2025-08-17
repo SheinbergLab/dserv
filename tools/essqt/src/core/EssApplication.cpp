@@ -2,9 +2,10 @@
 #include "EssApplication.h"
 #include "EssConfig.h"
 #include "EssCommandInterface.h"
+#include "EssMainWindow.h"
 #include "EssDataProcessor.h"
-#include "EssScriptEditorWidget.h"  // Add this include
-#include "console/EssOutputConsole.h"  // Add for logging
+#include "EssScriptEditorWidget.h"
+#include "console/EssOutputConsole.h"
 #include <QDebug>
 
 const QString EssApplication::Version = "0.1.0";
@@ -45,6 +46,8 @@ void EssApplication::initializeServices()
     // Connect disconnect request to handler
     connect(m_commandInterface.get(), &EssCommandInterface::disconnectRequested,
             this, &EssApplication::handleDisconnectRequest);
+    
+    m_mainWindow = new EssMainWindow();
     
     qDebug() << "ESS Application services initialized";
 }

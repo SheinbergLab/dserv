@@ -189,6 +189,14 @@ private:
     static int tcl_list_event_subtypes(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_test_event(ClientData cd, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     
+    static int tcl_widget_set_script(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_widget_get_script(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_widget_resize(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_widget_set_title(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_widget_move(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);  // Add this
+    static int tcl_widget_dev_mode(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_widget_close(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    
 private:
     // Core state
     QString m_name;

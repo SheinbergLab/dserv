@@ -1,6 +1,11 @@
 // EssScriptableManager.cpp
 #include "EssScriptableManager.h"
 #include "EssScriptableWidget.h"
+#include "EssApplication.h"
+#include "EssStandaloneWindow.h"
+#include "EssWorkspaceManager.h"
+#include "EssMainWindow.h"
+
 #include "console/EssOutputConsole.h"
 
 #include <QDebug>
@@ -8,6 +13,8 @@
 
 static int tcl_create_graphics_widget(ClientData clientData, 
 	Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+static int tcl_cgraph_standalone(ClientData clientData, Tcl_Interp* interp,
+                                int objc, Tcl_Obj* const objv[]);
 static int tcl_list_graphics_widgets(ClientData clientData,
  	Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 static int tcl_send_to_graphics_widget(ClientData clientData, 
@@ -302,39 +309,11 @@ void EssScriptableManager::clearSharedData()
     EssConsoleManager::instance()->logInfo("Shared data cleared", "ScriptableManager");
 }
 
-void EssScriptableManager::enableDevelopmentMode(bool enabled)
-{
-    for (auto widget : m_widgets) {
-        if (widget) {
-            widget->setDevelopmentMode(enabled);
-        }
-    }
-    
-    EssConsoleManager::instance()->logInfo(
-        QString("Development mode %1 for all widgets").arg(enabled ? "enabled" : "disabled"),
-        "ScriptableManager"
-    );
-}
-
 void EssScriptableManager::setDevelopmentLayout(const QString& widgetName, int layoutMode)
 {
     EssScriptableWidget* widget = getWidget(widgetName);
     if (widget) {
         widget->setDevelopmentLayout(static_cast<EssScriptableWidget::DevLayoutMode>(layoutMode));
-    }
-}
-
-void EssScriptableManager::broadcastDevelopmentMode(bool enabled)
-{
-    enableDevelopmentMode(enabled);
-}
-
-void EssScriptableManager::setWidgetScript(const QString& widgetName, const QString& script)
-{
-    EssScriptableWidget* widget = getWidget(widgetName);
-    if (widget) {
-        widget->setSetupScript(script);
-        widget->executeSetupScript();
     }
 }
 
@@ -658,27 +637,6 @@ int EssScriptableManager::tcl_list_groups(ClientData clientData, Tcl_Interp* int
     return TCL_OK;
 }
 
-int EssScriptableManager::tcl_set_dev_mode(ClientData clientData, Tcl_Interp* interp,
-                                           int objc, Tcl_Obj* const objv[])
-{
-    Q_UNUSED(clientData)
-    
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "enable");
-        return TCL_ERROR;
-    }
-    
-    int enable;
-    if (Tcl_GetBooleanFromObj(interp, objv[1], &enable) != TCL_OK) {
-        return TCL_ERROR;
-    }
-    
-    auto& manager = EssScriptableManager::getInstance();
-    manager.enableDevelopmentMode(enable != 0);
-    
-    return TCL_OK;
-}
-
 int EssScriptableManager::tcl_set_shared_data(ClientData clientData, Tcl_Interp* interp,
                                               int objc, Tcl_Obj* const objv[])
 {
@@ -719,7 +677,7 @@ int EssScriptableManager::tcl_get_shared_data(ClientData clientData, Tcl_Interp*
     return TCL_OK;
 }
 
-// Additional command implementations...
+
 int EssScriptableManager::tcl_remove_from_group(ClientData clientData, Tcl_Interp* interp,
                                                 int objc, Tcl_Obj* const objv[])
 {
@@ -827,6 +785,40 @@ int EssScriptableManager::tcl_widget_exists(ClientData clientData, Tcl_Interp* i
     return TCL_OK;
 }
 
+int EssScriptableManager::tcl_set_dev_mode(ClientData clientData, Tcl_Interp* interp,
+                                           int objc, Tcl_Obj* const objv[])
+{
+    Q_UNUSED(clientData)
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "widget_name enable");
+        return TCL_ERROR;
+    }
+    
+    auto& manager = EssScriptableManager::getInstance();
+    QString widgetName = QString::fromUtf8(Tcl_GetString(objv[1]));
+    
+    int enable;
+    if (Tcl_GetBooleanFromObj(interp, objv[2], &enable) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    
+    EssScriptableWidget* widget = manager.getWidget(widgetName);
+    if (!widget) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Widget not found", -1));
+        return TCL_ERROR;
+    }
+    
+    widget->setDevelopmentMode(enable != 0);
+    
+    QString message = QString("Development mode %1 for widget '%2'")
+                     .arg(enable ? "enabled" : "disabled")
+                     .arg(widgetName);
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(message.toUtf8().constData(), -1));
+    
+    return TCL_OK;
+}
+
 int EssScriptableManager::tcl_set_dev_layout(ClientData clientData, Tcl_Interp* interp,
                                              int objc, Tcl_Obj* const objv[])
 {
@@ -883,6 +875,8 @@ static void registerCgraphCommands(Tcl_Interp* interp)
 {
     // Graphics widget specific commands
     Tcl_CreateObjCommand(interp, "create_graphics_widget", tcl_create_graphics_widget, nullptr, nullptr);
+    Tcl_CreateObjCommand(interp, "cgraph_standalone", tcl_cgraph_standalone, nullptr, nullptr);
+
     Tcl_CreateObjCommand(interp, "list_graphics_widgets", tcl_list_graphics_widgets, nullptr, nullptr);
     Tcl_CreateObjCommand(interp, "send_to_graphics_widget", tcl_send_to_graphics_widget, nullptr, nullptr);
     Tcl_CreateObjCommand(interp, "broadcast_to_graphics_widgets", tcl_broadcast_to_graphics_widgets, nullptr, nullptr);
@@ -963,6 +957,64 @@ static int tcl_create_graphics_widget(ClientData clientData, Tcl_Interp* interp,
     }
     
     Tcl_SetObjResult(interp, Tcl_NewStringObj(actualName.toUtf8().constData(), -1));
+    return TCL_OK;
+}
+
+static int tcl_cgraph_standalone(ClientData clientData, Tcl_Interp* interp,
+                                int objc, Tcl_Obj* const objv[])
+{
+    if (objc < 2 || objc > 6) {  // name, mode, title, script, geometry
+        Tcl_WrongNumArgs(interp, 1, objv, "name ?mode? ?title? ?script? ?geometry?");
+        return TCL_ERROR;
+    }
+    
+    QString name = QString::fromUtf8(Tcl_GetString(objv[1]));
+    
+    // Parse mode (default to normal)
+    EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::Normal;
+    if (objc >= 3) {
+        QString mode = QString::fromUtf8(Tcl_GetString(objv[2])).toLower();
+        if (mode == "tool") behavior = EssStandaloneWindow::UtilityWindow;
+        else if (mode == "ontop") behavior = EssStandaloneWindow::AlwaysOnTop;
+        else if (mode == "visible") behavior = EssStandaloneWindow::StayVisible;
+    }
+    
+    int behaviorInt = static_cast<int>(behavior);
+    
+    // Optional title (defaults to name)
+    QString title = name;
+    if (objc >= 4) {
+        title = QString::fromUtf8(Tcl_GetString(objv[3]));
+    }
+    
+    // Optional script
+    QString script;
+    if (objc >= 5) {
+        script = QString::fromUtf8(Tcl_GetString(objv[4]));
+    }
+    
+    // Optional geometry string (X11 format)
+    QString geometry = "600x400";  // default
+    if (objc >= 6) {
+        geometry = QString::fromUtf8(Tcl_GetString(objv[5]));
+    }
+    
+    // Get workspace manager via main window
+    auto* app = EssApplication::instance();
+    if (app && app->mainWindow() && app->mainWindow()->workspace()) {
+        QMetaObject::invokeMethod(app->mainWindow()->workspace(), 
+                                "createStandaloneCGraphWidget",
+                                Qt::QueuedConnection,
+                                Q_ARG(QString, name),
+                                Q_ARG(QString, title), 
+                                Q_ARG(int, behaviorInt),
+                                Q_ARG(QString, script),
+                                Q_ARG(QString, geometry));
+    } else {
+        Tcl_SetResult(interp, "Application or workspace manager not available", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
     return TCL_OK;
 }
 

@@ -35,7 +35,7 @@ EssMainWindow::EssMainWindow(QWidget *parent)
         "}"
     );
     
-    // Create workspace manager FIRST
+    // Create workspace manager
     m_workspace = new EssWorkspaceManager(this, this);
     m_workspace->setupWorkspace();
     

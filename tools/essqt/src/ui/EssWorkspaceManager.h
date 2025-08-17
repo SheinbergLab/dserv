@@ -74,7 +74,13 @@ public:
     // Convenience methods
     void detachEyeTouchVisualizer(EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::UtilityWindow);
     QList<EssStandaloneWindow*> standaloneWindows() const { return m_standaloneWindows; }
-         
+      
+public slots:
+   void createStandaloneCGraphWidget(const QString& name, const QString& title = QString(),
+                                     int behavior = 0,
+                                     const QString& script = QString(),
+                                     const QString& geometry = QString("600x400"));
+   
 signals:
     void statusMessage(const QString &message, int timeout = 0);
     void standaloneStateChanged();    

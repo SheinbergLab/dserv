@@ -222,7 +222,7 @@ void EssCommandInterface::initializeTcl()
     }
     
     emit tclInitialized();
-}    
+}
 
 void EssCommandInterface::registerTclCommands()
 {
@@ -239,7 +239,7 @@ void EssCommandInterface::registerTclCommands()
     // UI commands
     Tcl_CreateObjCommand(m_tclInterp, "clear", TclClearCmd, this, nullptr);
     Tcl_CreateObjCommand(m_tclInterp, "about", TclAboutCmd, this, nullptr);
-    Tcl_CreateObjCommand(m_tclInterp, "help", TclHelpCmd, this, nullptr);
+	Tcl_CreateObjCommand(m_tclInterp, "help", TclHelpCmd, this, nullptr);
     
     // Logging
     Tcl_CreateObjCommand(m_tclInterp, "log", TclLogCmd, this, nullptr);

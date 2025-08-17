@@ -7,6 +7,7 @@
 class EssConfig;
 class EssCommandInterface;
 class EssDataProcessor;
+class EssMainWindow;
 
 class EssApplication : public QApplication
 {
@@ -27,7 +28,8 @@ public:
     EssConfig* config() const { return m_config.get(); }
     EssCommandInterface* commandInterface() const { return m_commandInterface.get(); }
     EssDataProcessor* dataProcessor() const { return m_dataProcessor.get(); }
-
+    EssMainWindow* mainWindow() const { return m_mainWindow; } 
+    
 signals:
     void disconnectCancelled();  // Emitted when user cancels disconnect due to unsaved changes
 
@@ -42,4 +44,5 @@ private:
     std::unique_ptr<EssConfig> m_config;
     std::unique_ptr<EssCommandInterface> m_commandInterface;
     std::unique_ptr<EssDataProcessor> m_dataProcessor;
+    EssMainWindow* m_mainWindow;
 };

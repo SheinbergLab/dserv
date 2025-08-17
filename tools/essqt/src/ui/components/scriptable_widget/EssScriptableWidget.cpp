@@ -4,6 +4,7 @@
 #include "EssWidgetTerminal.h"
 #include "EssWidgetConsole.h"
 #include "EssScriptableManager.h"
+#include "EssStandaloneWindow.h" 
 #include "core/EssApplication.h"
 #include "core/EssDataProcessor.h"
 #include "core/EssEventProcessor.h"
@@ -312,6 +313,14 @@ void EssScriptableWidget::registerCoreCommands()
     Tcl_CreateObjCommand(m_interp, "list_event_subtypes", tcl_list_event_subtypes,
     	this, nullptr);
     Tcl_CreateObjCommand(m_interp, "test_event", tcl_test_event, this, nullptr);
+
+    Tcl_CreateObjCommand(m_interp, "widget_set_script", tcl_widget_set_script, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_get_script", tcl_widget_get_script, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_dev_mode", tcl_widget_dev_mode, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_resize", tcl_widget_resize, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_set_title", tcl_widget_set_title, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_move", tcl_widget_move, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_close", tcl_widget_close, this, nullptr);
 
 }
 
@@ -1272,7 +1281,6 @@ void EssScriptableWidget::onMarkProductionRequested()
     }
 }
 
-// NEW: Slot implementations
 void EssScriptableWidget::onResetInterpreterRequested()
 {
     QMessageBox::StandardButton reply = QMessageBox::question(this, 
@@ -1684,6 +1692,176 @@ int EssScriptableWidget::tcl_test_event(ClientData clientData, Tcl_Interp* inter
     QTimer::singleShot(100, [widget, testEvent]() {
         widget->onEventReceived(testEvent);
     });
+    
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_set_script(ClientData clientData, Tcl_Interp* interp,
+                                              int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "script");
+        return TCL_ERROR;
+    }
+    
+    QString script = QString::fromUtf8(Tcl_GetString(objv[1]));
+    widget->setSetupScript(script);
+    widget->executeSetupScript();
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("Script set and executed", -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_get_script(ClientData clientData, Tcl_Interp* interp,
+                                              int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
+        return TCL_ERROR;
+    }
+    
+    QString script = widget->getSetupScript();
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(script.toUtf8().constData(), -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_resize(ClientData clientData, Tcl_Interp* interp,
+                                          int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "width height");
+        return TCL_ERROR;
+    }
+    
+    int width, height;
+    if (Tcl_GetIntFromObj(interp, objv[1], &width) != TCL_OK ||
+        Tcl_GetIntFromObj(interp, objv[2], &height) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    
+    // Find the standalone window containing this widget
+    QWidget* current = widget;
+    while (current && !qobject_cast<EssStandaloneWindow*>(current)) {
+        current = current->parentWidget();
+    }
+    
+    if (auto* standaloneWindow = qobject_cast<EssStandaloneWindow*>(current)) {
+        standaloneWindow->resize(width, height);
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Window resized", -1));
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Widget not in standalone window", -1));
+    }
+    
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_set_title(ClientData clientData, Tcl_Interp* interp,
+                                             int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "title");
+        return TCL_ERROR;
+    }
+    
+    QString title = QString::fromUtf8(Tcl_GetString(objv[1]));
+    
+    // Find the standalone window containing this widget
+    QWidget* current = widget;
+    while (current && !qobject_cast<EssStandaloneWindow*>(current)) {
+        current = current->parentWidget();
+    }
+    
+    if (auto* standaloneWindow = qobject_cast<EssStandaloneWindow*>(current)) {
+        standaloneWindow->setWindowTitle(title);
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Title set", -1));
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Widget not in standalone window", -1));
+    }
+    
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_move(ClientData clientData, Tcl_Interp* interp,
+                                        int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "x y");
+        return TCL_ERROR;
+    }
+    
+    int x, y;
+    if (Tcl_GetIntFromObj(interp, objv[1], &x) != TCL_OK ||
+        Tcl_GetIntFromObj(interp, objv[2], &y) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    
+    // Find the standalone window containing this widget
+    QWidget* current = widget;
+    while (current && !qobject_cast<EssStandaloneWindow*>(current)) {
+        current = current->parentWidget();
+    }
+    
+    if (auto* standaloneWindow = qobject_cast<EssStandaloneWindow*>(current)) {
+        standaloneWindow->move(x, y);
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Window moved", -1));
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Widget not in standalone window", -1));
+    }
+    
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_dev_mode(ClientData clientData, Tcl_Interp* interp,
+                                            int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "on|off");
+        return TCL_ERROR;
+    }
+    
+    QString mode = QString::fromUtf8(Tcl_GetString(objv[1])).toLower();
+    bool enabled = (mode == "on" || mode == "true" || mode == "1");
+    
+    widget->setDevelopmentMode(enabled);
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(enabled ? "Development mode enabled" : "Development mode disabled", -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_close(ClientData clientData, Tcl_Interp* interp,
+                                         int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
+        return TCL_ERROR;
+    }
+    
+    // Find the standalone window and close it
+    QWidget* current = widget;
+    while (current && !qobject_cast<EssStandaloneWindow*>(current)) {
+        current = current->parentWidget();
+    }
+    
+    if (auto* standaloneWindow = qobject_cast<EssStandaloneWindow*>(current)) {
+        standaloneWindow->close();
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Window closing", -1));
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Widget not in standalone window", -1));
+    }
     
     return TCL_OK;
 }
