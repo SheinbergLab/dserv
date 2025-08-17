@@ -82,14 +82,17 @@ signals:
     void groupModified(const QString& groupTag);
     void sharedDataChanged(const QString& key, const QVariant& value);
     void graphicsWidgetCreationRequested(const QString& name); 
-    
+    void widgetCreationFailed(const QString& name, const QString& message);
+
+public:
+    bool isWidgetNameAvailable(const QString& name);
+        
 private:
     EssScriptableManager() = default;
     ~EssScriptableManager() = default;
     EssScriptableManager(const EssScriptableManager&) = delete;
     EssScriptableManager& operator=(const EssScriptableManager&) = delete;
     
-    QString generateUniqueName(const QString& prefix = "widget");
     void connectWidgetSignals(EssScriptableWidget* widget);
     void disconnectWidgetSignals(EssScriptableWidget* widget);
 

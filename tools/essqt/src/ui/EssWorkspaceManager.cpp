@@ -86,21 +86,23 @@ EssExperimentControlWidget* EssWorkspaceManager::experimentControlWidget() const
 
 void EssWorkspaceManager::createCGraphWidget(const QString& name, const QString& title)
 {
-    // Create EssGraphicsWidget
+    // Create widget with the exact name requested (no modifications)
     EssGraphicsWidget* graph = new EssGraphicsWidget(name);
     
+    // Set main interpreter reference (for data sharing only)
     auto cmdInterface = EssApplication::instance()->commandInterface();
     graph->mainInterp(cmdInterface->tclInterp());
-      
-    // Enable development mode by default for new widgets
-    graph->setDevelopmentMode(true);
-    graph->setDevelopmentLayout(EssScriptableWidget::DevBottomPanel);
     
-    // Store in map (now properly typed)
+    // Store in map with exact name
     m_cgraphs[name] = graph;
     
     // Register with scriptable manager
     EssScriptableManager::getInstance().registerWidget(name, graph);
+      
+    // Enable development mode by default for new widgets
+    // TODO: Consider moving this out or pass in as argument?
+    graph->setDevelopmentMode(true);
+    graph->setDevelopmentLayout(EssScriptableWidget::DevThreePanel);
     
     // Add to tab widget
     int index = m_cgraphTabWidget->addTab(graph, title.isEmpty() ? name : title);
@@ -164,7 +166,6 @@ void EssWorkspaceManager::createStandaloneCGraphWidget(const QString& name, cons
     EssStandaloneWindow::WindowBehavior windowBehavior = 
         static_cast<EssStandaloneWindow::WindowBehavior>(behavior);
     
-    // Create the widget normally first
     createCGraphWidget(name, title.isEmpty() ? name : title);
     
     if (!m_cgraphs.contains(name)) {
@@ -174,20 +175,13 @@ void EssWorkspaceManager::createStandaloneCGraphWidget(const QString& name, cons
     
     EssGraphicsWidget* graph = m_cgraphs[name];
     
-    // Execute the script if provided
-    if (!script.isEmpty()) {
-        graph->eval(script);
-    }
-    
-    // Find and detach the widget
+    // Find and detach the widget FIRST
     for (int i = 0; i < m_cgraphTabWidget->count(); ++i) {
         QWidget* tabWidget = m_cgraphTabWidget->widget(i);
         
         if (tabWidget == graph) {
-            // Remove from tabs
+            // Remove from tabs and create standalone
             m_cgraphTabWidget->removeTab(i);
-            
-            // Create temporary dock for detachment
             QDockWidget* tempDock = new QDockWidget(title.isEmpty() ? name : title, m_mainWindow);
             tempDock->setWidget(graph);
             m_docks[name] = tempDock;
@@ -195,24 +189,33 @@ void EssWorkspaceManager::createStandaloneCGraphWidget(const QString& name, cons
             // Detach to standalone
             detachToStandalone(tempDock, windowBehavior, true);
             
-            // Apply geometry to the standalone window
+            // IMPORTANT: Apply geometry BEFORE script execution
             for (EssStandaloneWindow* standaloneWindow : m_standaloneWindows) {
                 if (m_standaloneToOriginalDock.value(standaloneWindow) == name) {
                     standaloneWindow->resize(windowSize);
-                    
                     if (hasPosition) {
                         standaloneWindow->move(windowPos);
                     }
+                    
+                    // Force a resize event to update graphics buffer
+                    QCoreApplication::processEvents();
                     break;
                 }
             }
+            
+            // execute the script with correct window size
+			if (!script.isEmpty()) {
+			// Execute script on next event loop iteration (after resize events processed)
+				QMetaObject::invokeMethod(graph, [graph, script]() {
+					graph->eval(script);
+				}, Qt::QueuedConnection);
+			}
             
             emit statusMessage(QString("Created standalone graphics widget: %1 (%2)")
                              .arg(name).arg(geometry), 3000);
             return;
         }
-    }
-    
+    }   
     qWarning() << "Widget not found in any tab!";
 }
 
@@ -431,11 +434,19 @@ void EssWorkspaceManager::detachToStandalone(QDockWidget* dock,
             });
     
     connect(standalone, &EssStandaloneWindow::windowClosing,
-            [this, standalone]() {
+            [this, standalone, dockName]() {  // dockName is already available here
+                // Clean up widget if it's a graphics widget
+                if (m_cgraphs.contains(dockName)) {
+                    EssGraphicsWidget* widget = m_cgraphs.take(dockName);
+                    EssScriptableManager::getInstance().unregisterWidget(dockName);
+                    updateCGraphMenu();
+                }
+                
+                // Existing cleanup
                 m_standaloneWindows.removeAll(standalone);
                 m_standaloneToOriginalDock.remove(standalone);
                 standalone->deleteLater();
-                emit standaloneStateChanged(); // Emit when window closes
+                emit standaloneStateChanged();
             });
     
     // Track the standalone window
@@ -1216,18 +1227,18 @@ void EssWorkspaceManager::updateCGraphMenu()
     // Always show creation and management actions (whether we have widgets or not)
     m_cgraphMenu->addSeparator();
     
-    // Single simplified creation action - ALWAYS available
-    QAction* newGraphAction = m_cgraphMenu->addAction(tr("New Graphics Widget"));
-    connect(newGraphAction, &QAction::triggered, [this]() {
-        bool ok;
-        QString name = QInputDialog::getText(m_mainWindow, 
-            tr("New Graphics Widget"), tr("Widget name:"), 
-            QLineEdit::Normal, QString("graphics_%1").arg(m_cgraphs.size() + 1), &ok);
-        
-        if (ok && !name.isEmpty()) {
-            createCGraphWidget(name, name);
-        }
-    });
+	QAction* newGraphAction = m_cgraphMenu->addAction(tr("New Graphics Widget"));
+	connect(newGraphAction, &QAction::triggered, [this]() {
+		bool ok;
+		QString name = QInputDialog::getText(m_mainWindow, 
+			tr("New Graphics Widget"), tr("Widget name:"), 
+			QLineEdit::Normal, QString("graphics_%1").arg(m_cgraphs.size() + 1), &ok);
+		
+		if (ok && !name.isEmpty()) {
+			// createCGraphWidget will now handle the uniqueness check and show error if needed
+			createCGraphWidget(name, name);
+		}
+	});
     
     // Development mode toggle - only show if we have tabbed widgets
     if (hasTabbed) {

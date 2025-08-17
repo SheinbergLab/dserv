@@ -209,13 +209,15 @@ static int qtcgraph_init_widget_cmd(ClientData data, Tcl_Interp *interp,
     if (Tcl_GetIntFromObj(interp, objv[3], &height) != TCL_OK) return TCL_ERROR;
     
     EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
-    
+
+    Cgraph_InitInterp(interp);
+
     // Create and initialize the graphics buffer
     GBUF_DATA* gbuf = (GBUF_DATA*) calloc(1, sizeof(GBUF_DATA));
-    gbDisableGevents();
+    gbDisableGeventBuffer(gbuf);
     gbInitGeventBuffer(gbuf);
     gbSetGeventBuffer(gbuf);
-    gbEnableGevents();
+    gbEnableGeventBuffer(gbuf);
     
     // Store in widget using bridge
     EssGraphicsBridge::setGraphicsBuffer(widget, gbuf);
@@ -225,12 +227,41 @@ static int qtcgraph_init_widget_cmd(ClientData data, Tcl_Interp *interp,
     setwindow(0, 0, width-1, height-1);
     setfviewport(0, 0, 1, 1);
     setcolor(0);
-    gbInitGevents();
-    
+
+    gbInitGeventBuffer(gbuf);
+    gbEnableGeventBuffer(gbuf);
+            
     // Get the current frame pointer for read-only access
     FRAME* currentFrame = getframe();
     if (currentFrame) {
         EssGraphicsBridge::setFrame(widget, currentFrame);
+    }
+    
+    EssGraphicsBridge::setupCallbacks();
+    
+    return TCL_OK;
+}
+
+static int qtcgraph_set_current_buffer_cmd(ClientData data, Tcl_Interp *interp,
+                                           int objc, Tcl_Obj *const objv[])
+{
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "widget_ptr");  // Pass widget, not just gbuf
+        return TCL_ERROR;
+    }
+    
+    void* ptr = nullptr;
+    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) return TCL_ERROR;
+    
+    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
+    
+    Cgraph_SetInterp(interp);
+    
+    // Get both buffer and frame from the widget
+    GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(widget->getGraphicsBuffer());
+    
+    if (gbuf) {
+        gbSetGeventBuffer(gbuf);
     }
     
     return TCL_OK;
@@ -251,8 +282,10 @@ static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
     EssGraphicsWidget* widget = EssGraphicsWidget::getCurrentInstance();
     
     if (gbuf && widget) {
-        // Set the graphics buffer
-        gbSetGeventBuffer(gbuf);
+        Cgraph_SetInterp(interp);
+    
+        // This prevents multiple widgets from interfering with each other
+        GBUF_DATA* oldBuffer = gbSetGeventBuffer(gbuf);
         
         // Make sure resolution matches widget size
         int width = widget->graphWidget()->width();
@@ -267,6 +300,9 @@ static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
         
         // Playback the events
         gbPlaybackGevents();
+        
+        // Restore the previous graphics buffer
+        gbSetGeventBuffer(oldBuffer);
     }
     
     return TCL_OK;
@@ -321,7 +357,7 @@ static int qtcgraph_clear_cmd(ClientData data, Tcl_Interp *interp,
     if (widget->getGraphicsBuffer()) {
         GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(widget->getGraphicsBuffer());
         gbSetGeventBuffer(gbuf);
-        gbResetGevents();
+        gbResetGeventBuffer(gbuf);
     }
     
     return TCL_OK;
@@ -346,9 +382,9 @@ static int qtcgraph_cleanup_cmd(ClientData data, Tcl_Interp *interp,
         GBUF_DATA* gbufData = static_cast<GBUF_DATA*>(gbuf);
         
         // Disable and clear any pending events
-        gbDisableGevents();
+        gbDisableGeventBuffer(gbufData);
         gbSetGeventBuffer(gbufData);
-        gbResetGevents();
+        gbCleanupGeventBuffer(gbufData);
         
         // Free the GBUF_DATA
         free(gbufData);
@@ -607,13 +643,13 @@ extern "C" int Qtcgraph_Init(Tcl_Interp *interp)
         return TCL_ERROR;
     }
 
-    // Set up the cgraph callbacks (now for EssGraphicsWidget)
-    EssGraphicsBridge::setupCallbacks();
-
     // Register bridge commands that EssGraphicsWidget needs
     Tcl_CreateObjCommand(interp, "qtcgraph_init_widget",
                         (Tcl_ObjCmdProc *) qtcgraph_init_widget_cmd,
                         (ClientData) NULL, NULL);
+    Tcl_CreateObjCommand(interp, "qtcgraph_set_current_buffer",
+                        (Tcl_ObjCmdProc *) qtcgraph_set_current_buffer_cmd,
+                        (ClientData) NULL, NULL);                        
     Tcl_CreateObjCommand(interp, "qtcgraph_playback",
                         (Tcl_ObjCmdProc *) qtcgraph_playback_cmd,
                         (ClientData) NULL, NULL);

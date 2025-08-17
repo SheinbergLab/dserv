@@ -186,7 +186,8 @@ typedef struct {
 #endif
 
 extern void Cgraph_InitInterp(Tcl_Interp *interp);
-  
+extern void Cgraph_SetInterp(Tcl_Interp *interp);
+
 /*
  * Video handlers
  */

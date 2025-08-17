@@ -41,11 +41,6 @@ QString EssScriptableManager::registerWidget(const QString& name,
     
     QString widgetName = name;
     
-    // Ensure unique name
-    if (widgetName.isEmpty() || m_widgets.contains(widgetName)) {
-        widgetName = generateUniqueName(name.isEmpty() ? "widget" : name);
-    }
-    
     m_widgets[widgetName] = widget;
     
     // Connect widget signals
@@ -334,28 +329,29 @@ void EssScriptableManager::reloadAllScripts()
     EssConsoleManager::instance()->logInfo("All widget scripts reloaded", "ScriptableManager");
 }
 
-QString EssScriptableManager::generateUniqueName(const QString& prefix)
+bool EssScriptableManager::isWidgetNameAvailable(const QString& name)
 {
-    return QString("%1_%2").arg(prefix).arg(++m_nameCounter);
+    return !m_widgets.contains(name);
 }
 
 QString EssScriptableManager::createGraphicsWidget(const QString& name)
 {
-    // Generate unique name if empty or already exists
-    QString widgetName = name;
-    if (widgetName.isEmpty() || m_widgets.contains(widgetName)) {
-        widgetName = generateUniqueName(name.isEmpty() ? "graphics" : name);
+     if (!isWidgetNameAvailable(name)) {
+        QString message = QString("Widget '%1' already exists (any type). Please choose a different name.").arg(name);
+        // Show error and return empty string to indicate failure
+        emit widgetCreationFailed(name, message);
+        return QString();
     }
-    
+       
     // Emit simplified signal
-    emit graphicsWidgetCreationRequested(widgetName);  // Remove "basic" parameter
+    emit graphicsWidgetCreationRequested(name);  // Remove "basic" parameter
     
     EssConsoleManager::instance()->logInfo(
-        QString("Graphics widget creation requested: %1").arg(widgetName),
+        QString("Graphics widget creation requested: %1").arg(name),
         "ScriptableManager"
     );
     
-    return widgetName;
+    return name;
 }
 
 bool EssScriptableManager::sendScriptToGraphicsWidget(const QString& widgetName, const QString& script)
@@ -949,6 +945,13 @@ static int tcl_create_graphics_widget(ClientData clientData, Tcl_Interp* interp,
     auto& manager = EssScriptableManager::getInstance();
     QString name = QString::fromUtf8(Tcl_GetString(objv[1]));
     
+    // Check if widget already exists
+    if (manager.getWidget(name)) {
+        QString errorMsg = QString("widget '%1' already exists").arg(name);
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(errorMsg.toUtf8().constData(), -1));
+        return TCL_ERROR;
+    }
+    
     QString actualName = manager.createGraphicsWidget(name);
     
     if (actualName.isEmpty()) {
@@ -969,6 +972,13 @@ static int tcl_cgraph_standalone(ClientData clientData, Tcl_Interp* interp,
     }
     
     QString name = QString::fromUtf8(Tcl_GetString(objv[1]));
+
+    auto& manager = EssScriptableManager::getInstance();
+    if (!manager.isWidgetNameAvailable(name)) {
+        QString errorMsg = QString("widget '%1' already exists").arg(name);
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(errorMsg.toUtf8().constData(), -1));
+        return TCL_ERROR;
+    }
     
     // Parse mode (default to normal)
     EssStandaloneWindow::WindowBehavior behavior = EssStandaloneWindow::Normal;

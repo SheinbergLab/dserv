@@ -38,8 +38,10 @@ typedef struct {
   int gbufsize;
   GBUF_IMAGES images;
   int empty;
+  char record_events;  // Per-buffer recording state
 } GBUF_DATA;
 
+#define GB_RECORD_EVENTS(g)  ((g)->record_events)
 #define GB_GBUF(g)          ((g)->gbuf)
 #define GB_GBUFSIZE(g)      ((g)->gbufsize)
 #define GB_GBUFINDEX(g)     ((g)->gbufindex)
@@ -166,9 +168,20 @@ GBUF_DATA *gbSetGeventBuffer(GBUF_DATA *);
 GBUF_DATA *gbGetGeventBuffer();
 
 void gbInitGevents();
-void gbCloseGevents();
 void gbResetGevents();
+void gbCloseGevents();
 void gbRecordDefaults();
+
+void gbEnableGeventBuffer(GBUF_DATA *gb);
+void gbDisableGeventBuffer(GBUF_DATA *gb);
+void gbEnableCurrentBuffer();
+void gbDisableCurrentBuffer();
+void gbResetCurrentBuffer();
+void gbResetGeventBuffer(GBUF_DATA *gb);
+void gbCleanupGeventBuffer(GBUF_DATA *gb);
+void gbFreeImagesBuffer(GBUF_DATA *gb);
+int gbIsRecordingEnabled();
+  
 int gbAddImage(int w, int h, int d, unsigned char *data,
 	       float x0, float y0, float x1, float y1);
 GBUF_IMAGE *gbFindImage(int ref);

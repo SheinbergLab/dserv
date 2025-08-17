@@ -314,11 +314,16 @@ void EssScriptableWidget::registerCoreCommands()
     	this, nullptr);
     Tcl_CreateObjCommand(m_interp, "test_event", tcl_test_event, this, nullptr);
 
-    Tcl_CreateObjCommand(m_interp, "widget_set_script", tcl_widget_set_script, this, nullptr);
-    Tcl_CreateObjCommand(m_interp, "widget_get_script", tcl_widget_get_script, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_set_script", tcl_widget_set_script, 
+    	this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_get_script", tcl_widget_get_script, 
+    	this, nullptr);
     Tcl_CreateObjCommand(m_interp, "widget_dev_mode", tcl_widget_dev_mode, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_dev_layout", tcl_widget_dev_layout, 
+    	this, nullptr);    
     Tcl_CreateObjCommand(m_interp, "widget_resize", tcl_widget_resize, this, nullptr);
-    Tcl_CreateObjCommand(m_interp, "widget_set_title", tcl_widget_set_title, this, nullptr);
+    Tcl_CreateObjCommand(m_interp, "widget_set_title", tcl_widget_set_title, 
+    	this, nullptr);
     Tcl_CreateObjCommand(m_interp, "widget_move", tcl_widget_move, this, nullptr);
     Tcl_CreateObjCommand(m_interp, "widget_close", tcl_widget_close, this, nullptr);
 
@@ -1837,6 +1842,36 @@ int EssScriptableWidget::tcl_widget_dev_mode(ClientData clientData, Tcl_Interp* 
     widget->setDevelopmentMode(enabled);
     
     Tcl_SetObjResult(interp, Tcl_NewStringObj(enabled ? "Development mode enabled" : "Development mode disabled", -1));
+    return TCL_OK;
+}
+
+int EssScriptableWidget::tcl_widget_dev_layout(ClientData clientData, Tcl_Interp* interp,
+                                               int objc, Tcl_Obj* const objv[])
+{
+    auto* widget = static_cast<EssScriptableWidget*>(clientData);
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "layout_mode");
+        return TCL_ERROR;
+    }
+    
+    QString modeStr = QString::fromUtf8(Tcl_GetString(objv[1])).toLower();
+    
+    DevLayoutMode mode;
+    if (modeStr == "bottom" || modeStr == "bottom_panel") {
+        mode = DevBottomPanel;
+    } else if (modeStr == "tabbed" || modeStr == "tabs") {
+        mode = DevTabbed;
+    } else if (modeStr == "three_panel" || modeStr == "threepanel" || modeStr == "three") {
+        mode = DevThreePanel;
+    } else {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj("Invalid layout mode. Use: bottom, tabbed, or three_panel", -1));
+        return TCL_ERROR;
+    }
+    
+    widget->setDevelopmentLayout(mode);
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj("Layout mode set", -1));
     return TCL_OK;
 }
 

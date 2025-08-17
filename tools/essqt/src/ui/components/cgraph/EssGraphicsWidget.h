@@ -48,6 +48,8 @@ public:
     explicit EssGraphicsWidget(const QString& name = QString(), QWidget* parent = nullptr);
     virtual ~EssGraphicsWidget();
 
+    int eval(const QString& command) override;
+ 
     // EssScriptableWidget interface
     QString getWidgetTypeName() const override { return "GraphicsWidget"; }
     
@@ -122,6 +124,8 @@ protected:
     void registerCustomCommands() override;
     QWidget* createMainWidget() override;
     void onSetupComplete() override;
+    
+    void applyDevelopmentLayout() override;
     
     // Layout creation methods (stubs for future enhancement)
     virtual QWidget* createContentArea();

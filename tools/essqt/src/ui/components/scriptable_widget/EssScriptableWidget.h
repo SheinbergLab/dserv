@@ -53,8 +53,9 @@ public:
     // Core identity and scripting
     QString name() const { return m_name; }
     Tcl_Interp* interpreter() { return m_interp; }
+    Tcl_Interp* mainInterpreter() const { return m_mainInterp; }
     void mainInterp(Tcl_Interp *interp) { m_mainInterp = interp; }
-    int eval(const QString& command);
+    virtual int eval(const QString& command);
     QString result() const;
     
     // Script management
@@ -122,7 +123,10 @@ private slots:
     void onResetInterpreterRequested();
     void onTestFromScratchRequested();
     void onGenerateEmbeddableRequested();
-    
+  
+protected:
+      virtual void applyDevelopmentLayout();
+  
 private:
     void initializeInterpreter();
     void registerCoreCommands();
@@ -137,7 +141,6 @@ private:
     EssEventProcessor* getEventProcessor() const;
     
     // Development UI layout methods
-    void applyDevelopmentLayout();
     void setupBottomPanelLayout();
     void setupTabbedLayout();
     void setupThreePanelLayout();
@@ -193,8 +196,9 @@ private:
     static int tcl_widget_get_script(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_widget_resize(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_widget_set_title(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int tcl_widget_move(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);  // Add this
+    static int tcl_widget_move(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_widget_dev_mode(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_widget_dev_layout(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);    
     static int tcl_widget_close(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     
 private:

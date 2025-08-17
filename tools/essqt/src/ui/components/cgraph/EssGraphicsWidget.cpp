@@ -72,19 +72,40 @@ local_log "Graphics widget setup script complete"
 
 EssGraphicsWidget::~EssGraphicsWidget()
 {
-   disconnect();
-   
+    // CRITICAL: Stop all event processing FIRST
+    if (m_graphWidget) {
+        m_graphWidget->setVisible(false);
+        m_graphWidget->removeEventFilter(this);
+        // Force immediate processing of any pending events
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
+
+    // Clear static instance BEFORE any cleanup that might trigger callbacks
     if (s_currentInstance == this) {
         s_currentInstance = nullptr;
     }
     
-    // Clean up graphics buffer BEFORE base class destructor
-    cleanupGraphicsBuffer();
-    
-    // Additional cleanup 
+    // Disable painting completely
     m_currentPainter = nullptr;
+    
+    // SAFETY: Clear pointers BEFORE cleanup to prevent double-free
+    // The Tcl cleanup will handle the actual memory deallocation
+    void* savedGbuf = m_gbuf;
+    void* savedFrame = m_frame;
     m_gbuf = nullptr;
     m_frame = nullptr;
+    
+    // Clean up graphics buffer with original pointers
+    // but don't access m_gbuf/m_frame after this
+    if (savedGbuf && interpreter()) {
+        cleanupGraphicsBuffer();
+    }
+    
+    // Disconnect ALL signals to prevent any delayed signal delivery
+    disconnect();
+    
+    // Note: The base class EssScriptableWidget destructor will handle
+    // interpreter cleanup, so we don't need to do it here
 }
 
 void EssGraphicsWidget::registerCustomCommands()
@@ -290,7 +311,7 @@ void EssGraphicsWidget::onFloatingToggled(bool floating)
 
 void EssGraphicsWidget::onSetupComplete()
 {
-    localLog("Graphics widget setup completed");
+//    localLog("Graphics widget setup completed");
     
     // If widget is ready and we have a pending init request, do it now
     if (m_widgetFullyConstructed && m_pendingGraphicsInit) {
@@ -301,9 +322,21 @@ void EssGraphicsWidget::onSetupComplete()
 
 bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
 {
-    if (obj == m_graphWidget) {
-        if (event->type() == QEvent::Paint) {
-            // Create painter for the graph widget
+   if (obj == m_graphWidget) {
+     if (event->type() == QEvent::Paint) {
+            // SAFETY: Check if we're in destruction or interpreter is gone
+            if (!interpreter() || !m_gbuf) {
+                // Widget is being destroyed or not ready - just paint background
+                QPainter painter(m_graphWidget);
+                painter.fillRect(m_graphWidget->rect(), m_backgroundColor);
+                return true;
+            }
+            
+            // SAFETY: Don't paint if we're already painting (prevent recursion)
+            if (m_currentPainter != nullptr) {
+                return true;
+            }
+            
             QPainter painter(m_graphWidget);
             m_currentPainter = &painter;
             s_currentInstance = this;
@@ -315,10 +348,14 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
             painter.setPen(m_currentColor);
             painter.setBrush(m_currentColor);
             
-            // Call Tcl to playback the graphics
+            // SAFE: Only call Tcl if interpreter appears valid
             if (interpreter() && m_gbuf) {
                 QString cmd = QString("qtcgraph_playback %1").arg((quintptr)m_gbuf);
-                Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+                int result = Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+                if (result != TCL_OK) {
+                    // If Tcl fails, just continue without graphics playback
+                    qDebug() << "Graphics playback failed during paint event";
+                }
             }
             
             m_currentPainter = nullptr;
@@ -398,11 +435,12 @@ void EssGraphicsWidget::showEvent(QShowEvent* event)
     if (!m_graphicsInitialized && m_widgetFullyConstructed && m_graphWidget && 
         m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
         
-        localLog("Widget shown with valid size - triggering graphics initialization");
+ //       localLog("Widget shown with valid size - triggering graphics initialization");
         emit widgetReady();
     }
 }
 
+// Update initializeGraphics() to call this
 void EssGraphicsWidget::initializeGraphics()
 {
     if (m_graphicsInitialized || !interpreter()) return;
@@ -415,7 +453,6 @@ void EssGraphicsWidget::initializeGraphics()
  
     // ONLY cleanup if we have an existing buffer
     if (m_gbuf != nullptr) {
-        localLog("Cleaning up existing graphics buffer");
         cleanupGraphicsBuffer();
     }
      
@@ -447,22 +484,53 @@ void EssGraphicsWidget::initializeGraphics()
     localLog("Graphics system initialized successfully");
 }
 
+int EssGraphicsWidget::eval(const QString& command)
+{
+    if (!interpreter()) {
+        localLog("No interpreter available");
+        return TCL_ERROR;
+    }
+    
+	QString contextCmd = QString("qtcgraph_set_current_buffer %1").arg((quintptr)this);
+	Tcl_Eval(interpreter(), contextCmd.toUtf8().constData());
+    
+    // Call base class eval() to do the work
+    return EssScriptableWidget::eval(command);
+}
+
 void EssGraphicsWidget::cleanupGraphicsBuffer()
 {
-    if (!interpreter() || m_gbuf == nullptr) {
-        // Clear pointers even if we can't do proper cleanup
+    // Clear static instance FIRST if it points to us
+    if (s_currentInstance == this) {
+        s_currentInstance = nullptr;
+    }
+    
+    // Early exit if already cleaned up
+    if (m_gbuf == nullptr) {
+        m_frame = nullptr;
+        return;
+    }
+    
+    // Don't try to clean up if interpreter is gone or invalid
+    if (!interpreter()) {
+        // Just clear our local pointers if interpreter is gone
+        // The Tcl cleanup will handle the actual memory deallocation
         m_gbuf = nullptr;
         m_frame = nullptr;
         return;
     }
     
+    // Try the cleanup command, but handle failure gracefully
     QString cmd = QString("qtcgraph_cleanup %1").arg((quintptr)this);
     int result = Tcl_Eval(interpreter(), cmd.toUtf8().constData());
     
     if (result != TCL_OK) {
-        localLog(QString("Warning: Graphics cleanup failed: %1").arg(this->result()));
+        qDebug() << "Graphics cleanup failed (this may be normal during shutdown):" 
+                 << Tcl_GetStringResult(interpreter());
     }
-    
+         
+    // Always clear our pointers regardless of Tcl result
+    // Let the Tcl interpreter cleanup handle the actual memory deallocation
     m_gbuf = nullptr;
     m_frame = nullptr;
 }
@@ -506,7 +574,6 @@ void EssGraphicsWidget::resizeEvent(QResizeEvent* event)
     if (!m_graphicsInitialized && m_widgetFullyConstructed && m_graphWidget && 
         m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
         
-        localLog("Widget resized to valid size - triggering graphics initialization");
         emit widgetReady();
     }
     
@@ -542,8 +609,6 @@ void EssGraphicsWidget::onGraphicsWidgetResized()
         return;
     }
     
-    localLog(QString("Graphics area resized to: %1x%2").arg(newSize.width()).arg(newSize.height()));
-    
     // Notify cgraph system of the size change
     QString resizeCmd = QString("qtcgraph_resize %1 %2 %3")
                         .arg((quintptr)this)
@@ -561,8 +626,6 @@ void EssGraphicsWidget::onWidgetReady()
     if (m_graphicsInitialized) {
         return; // Already initialized
     }
-    
-    localLog("Widget ready signal received - initializing graphics");
     
     // Call the Tcl initialization function
     if (interpreter()) {
@@ -585,6 +648,19 @@ void EssGraphicsWidget::setFloatingMode(bool floating)
 EssGraphicsWidget* EssGraphicsWidget::getCurrentInstance()
 {
     return s_currentInstance;
+}
+
+void EssGraphicsWidget::applyDevelopmentLayout()
+{
+    // Call base class implementation first
+    EssScriptableWidget::applyDevelopmentLayout();
+    
+    // After layout change, update graphics buffer size
+    // Use queued connection to ensure layout is fully applied first
+    if (m_graphicsInitialized && m_graphWidget) {
+        QMetaObject::invokeMethod(this, &EssGraphicsWidget::onGraphicsWidgetResized, 
+                                  Qt::QueuedConnection);
+    }
 }
 
 // Event handling methods (preserve QtCGraph event system)
@@ -847,8 +923,6 @@ void EssGraphicsWidget::setLayoutMode(LayoutMode mode)
         case SideControls: modeStr = "Side Controls"; break;
         case BottomControls: modeStr = "Bottom Controls"; break;
     }
-    
-    localLog(QString("Layout mode changed to: %1").arg(modeStr));
 }
 
 void EssGraphicsWidget::setControlPanelType(ControlPanelType type)
@@ -916,7 +990,7 @@ int EssGraphicsWidget::Clearwin()
 }
 
 int EssGraphicsWidget::Line(float x0, float y0, float x1, float y1)
-{
+{    
     if (!s_currentInstance || !s_currentInstance->m_currentPainter) return 0;
     
     float h = s_currentInstance->m_graphWidget->height(); 

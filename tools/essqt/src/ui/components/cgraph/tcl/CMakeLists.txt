@@ -31,6 +31,7 @@ if(WIN32)
 elseif(APPLE)
     add_definitions(-fPIC)
     include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tcl
         ${CMAKE_CURRENT_SOURCE_DIR}/../  # EssGraphicsWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../../scriptable_widget 
         ${CMAKE_CURRENT_SOURCE_DIR}/../../src  # lablib
