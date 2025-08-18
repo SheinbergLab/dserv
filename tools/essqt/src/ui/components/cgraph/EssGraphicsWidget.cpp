@@ -468,7 +468,7 @@ void EssGraphicsWidget::renderToPixmap()
     }
     
     // Clear the pixmap
-    m_pixmapPainter->fillRect(m_pixmap.rect(), m_backgroundColor);
+    // m_pixmapPainter->fillRect(m_pixmap.rect(), m_backgroundColor);
     
     // Set up painter state
     m_pixmapPainter->setPen(m_currentColor);
@@ -585,6 +585,9 @@ int EssGraphicsWidget::eval(const QString& command)
         localLog("No interpreter available");
         return TCL_ERROR;
     }
+    
+    s_currentInstance = this;
+    m_currentPainter = m_pixmapPainter;
     
 	QString contextCmd = QString("qtcgraph_set_current_buffer %1").arg((quintptr)this);
 	Tcl_Eval(interpreter(), contextCmd.toUtf8().constData());
