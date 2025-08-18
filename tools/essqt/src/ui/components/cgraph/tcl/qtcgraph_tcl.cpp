@@ -7,6 +7,19 @@ extern "C" {
 #include <gbuf.h>
 }
 
+static EssGraphicsWidget* getAssociatedWidget(Tcl_Interp* interp) 
+{
+    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(
+        Tcl_GetAssocData(interp, "graphics_widget", nullptr));
+    
+    if (!widget) {
+        Tcl_SetResult(interp, 
+        "No graphics widget associated with interpreter", TCL_STATIC);
+    }
+    
+    return widget;
+}
+
 // Bridge class implementation - NOW IN TCL PACKAGE where cgraph functions are available
 void EssGraphicsBridge::setupCallbacks() {
     // Set cgraph callbacks to use EssGraphicsWidget methods
@@ -114,13 +127,8 @@ static int qtcgraph_export_cmd(ClientData data, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(
-        Tcl_GetAssocData(interp, "scriptable_widget", nullptr));
-    
-    if (!widget) {
-        Tcl_SetResult(interp, "No widget associated with interpreter", TCL_STATIC);
-        return TCL_ERROR;
-    }
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
     bool success;
     if (objc == 2) {
@@ -144,14 +152,9 @@ static int qtcgraph_bind_cmd(ClientData data, Tcl_Interp *interp,
         Tcl_WrongNumArgs(interp, 1, objv, "event script");
         return TCL_ERROR;
     }
-    
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(
-        Tcl_GetAssocData(interp, "scriptable_widget", nullptr));
-    
-    if (!widget) {
-        Tcl_SetResult(interp, "No widget associated with interpreter", TCL_STATIC);
-        return TCL_ERROR;
-    }
+
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
     const char* event = Tcl_GetString(objv[1]);
     const char* script = Tcl_GetString(objv[2]);
@@ -192,24 +195,32 @@ static int qtcgraph_bind_cmd(ClientData data, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-// Updated Tcl command implementations that work with EssGraphicsWidget
 static int qtcgraph_init_widget_cmd(ClientData data, Tcl_Interp *interp,
                                    int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 4) {
-        Tcl_WrongNumArgs(interp, 1, objv, "widget_ptr width height");
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
+        return TCL_ERROR;
+    }
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
+    
+    // Get dimensions directly from the widget
+    QWidget* graphWidget = widget->graphWidget();
+    if (!graphWidget) {
+        Tcl_SetResult(interp, "Graphics widget not ready", TCL_STATIC);
         return TCL_ERROR;
     }
     
-    void* ptr = nullptr;
-    int width, height;
+    int width = graphWidget->width();
+    int height = graphWidget->height();
     
-    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[2], &width) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[3], &height) != TCL_OK) return TCL_ERROR;
+    if (width <= 0 || height <= 0) {
+        Tcl_SetResult(interp, "Graphics widget has invalid size", TCL_STATIC);
+        return TCL_ERROR;
+    }
     
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
-
+    // This will allocate a new context and new frame for our widget
     Cgraph_InitInterp(interp);
 
     // Create and initialize the graphics buffer
@@ -222,7 +233,7 @@ static int qtcgraph_init_widget_cmd(ClientData data, Tcl_Interp *interp,
     // Store in widget using bridge
     EssGraphicsBridge::setGraphicsBuffer(widget, gbuf);
     
-    // Set up resolution
+    // Set up resolution using widget's actual size
     setresol(width, height);
     setwindow(0, 0, width-1, height-1);
     setfviewport(0, 0, 1, 1);
@@ -245,15 +256,12 @@ static int qtcgraph_init_widget_cmd(ClientData data, Tcl_Interp *interp,
 static int qtcgraph_set_current_buffer_cmd(ClientData data, Tcl_Interp *interp,
                                            int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "widget_ptr");  // Pass widget, not just gbuf
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
         return TCL_ERROR;
     }
-    
-    void* ptr = nullptr;
-    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) return TCL_ERROR;
-    
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
     Cgraph_SetInterp(interp);
     
@@ -270,18 +278,11 @@ static int qtcgraph_set_current_buffer_cmd(ClientData data, Tcl_Interp *interp,
 static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
                                 int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "gbuf_ptr");
-        return TCL_ERROR;
-    }
-    
-    void* ptr = nullptr;
-    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) return TCL_ERROR;
-    
-    GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(ptr);
-    EssGraphicsWidget* widget = EssGraphicsWidget::getCurrentInstance();
-    
-    if (gbuf && widget) {
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
+    if (widget && widget->getGraphicsBuffer()) {
+    	GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(widget->getGraphicsBuffer());
+  	
         Cgraph_SetInterp(interp);
     
         // This prevents multiple widgets from interfering with each other
@@ -311,19 +312,22 @@ static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
 static int qtcgraph_resize_cmd(ClientData data, Tcl_Interp *interp,
                               int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 4) {
-        Tcl_WrongNumArgs(interp, 1, objv, "widget_ptr width height");
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
         return TCL_ERROR;
     }
     
-    void* ptr = nullptr;
-    int width, height;
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
-    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[2], &width) != TCL_OK) return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[3], &height) != TCL_OK) return TCL_ERROR;
+    // Get current dimensions from widget
+    int width = widget->graphWidget()->width();
+    int height = widget->graphWidget()->height();
     
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
+    if (width <= 0 || height <= 0) {
+        Tcl_SetResult(interp, "Widget has invalid dimensions for resize", TCL_STATIC);
+        return TCL_ERROR;
+    }
     
     if (widget->getGraphicsBuffer()) {
         GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(widget->getGraphicsBuffer());
@@ -344,15 +348,13 @@ static int qtcgraph_resize_cmd(ClientData data, Tcl_Interp *interp,
 static int qtcgraph_clear_cmd(ClientData data, Tcl_Interp *interp,
                              int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "widget_ptr");
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
         return TCL_ERROR;
     }
-    
-    void* ptr = nullptr;
-    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) return TCL_ERROR;
-    
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
+      
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
     if (widget->getGraphicsBuffer()) {
         GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(widget->getGraphicsBuffer());
@@ -367,16 +369,13 @@ static int qtcgraph_clear_cmd(ClientData data, Tcl_Interp *interp,
 static int qtcgraph_cleanup_cmd(ClientData data, Tcl_Interp *interp,
                                int objc, Tcl_Obj *const objv[])
 {
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "widget_ptr");
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
         return TCL_ERROR;
     }
     
-    void* ptr = nullptr;
-    if (Tcl_GetLongFromObj(interp, objv[1], (long*)&ptr) != TCL_OK) 
-        return TCL_ERROR;
-    
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(ptr);
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
     void* gbuf = widget->getGraphicsBuffer();
     if (gbuf) {
@@ -399,13 +398,16 @@ static int qtcgraph_cleanup_cmd(ClientData data, Tcl_Interp *interp,
 static int cgFlushwinCmd(ClientData data, Tcl_Interp *interp,
                         int objc, Tcl_Obj * const objv[])
 {
-    // Get widget from interpreter
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(
-        Tcl_GetAssocData(interp, "scriptable_widget", nullptr));
-    
-    if (widget) {
-        widget->requestRedraw(); 
+    if (objc != 1) {
+        Tcl_WrongNumArgs(interp, 1, objv, "");
+        return TCL_ERROR;
     }
+    
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
+    
+    widget->requestRedraw(); 
+
     return TCL_OK;
 }
 
@@ -519,13 +521,8 @@ static int qtcgraph_setbgcolor_cmd(ClientData data, Tcl_Interp *interp,
         return TCL_ERROR;
     }
     
-    EssGraphicsWidget* widget = static_cast<EssGraphicsWidget*>(
-        Tcl_GetAssocData(interp, "scriptable_widget", nullptr));
-    
-    if (!widget) {
-        Tcl_SetResult(interp, "No widget associated with interpreter", TCL_STATIC);
-        return TCL_ERROR;
-    }
+    EssGraphicsWidget* widget = getAssociatedWidget(interp);
+    if (!widget) return TCL_ERROR;
     
     QString colorString = QString::fromUtf8(Tcl_GetString(objv[1]));
     QString errorMsg;

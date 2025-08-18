@@ -365,6 +365,7 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
 					
 					// Invalidate and re-render
 					invalidatePixmap();
+					//QTimer::singleShot(10, this, &EssGraphicsWidget::renderToPixmap);
 					renderToPixmap();
 				}
 			}
@@ -468,7 +469,7 @@ void EssGraphicsWidget::renderToPixmap()
     }
     
     // Clear the pixmap
-    // m_pixmapPainter->fillRect(m_pixmap.rect(), m_backgroundColor);
+    m_pixmapPainter->fillRect(m_pixmap.rect(), m_backgroundColor);
     
     // Set up painter state
     m_pixmapPainter->setPen(m_currentColor);
@@ -480,8 +481,8 @@ void EssGraphicsWidget::renderToPixmap()
     s_currentInstance = this;
     
     // Execute the graphics playback
-    QString cmd = QString("qtcgraph_playback %1").arg((quintptr)m_gbuf);
-    int result = Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+    QString cmd = QString("qtcgraph_playback");
+    int result = eval(cmd.toUtf8().constData());
     
     if (result != TCL_OK) {
         localLog(QString("Graphics playback failed: %1").arg(Tcl_GetStringResult(interpreter())));
@@ -509,8 +510,6 @@ void EssGraphicsWidget::requestRedraw()
     }
 }
 
-
-
 void EssGraphicsWidget::forceGraphicsResize()
 {
     onGraphicsWidgetResized();
@@ -529,56 +528,6 @@ void EssGraphicsWidget::showEvent(QShowEvent* event)
     }
 }
 
-void EssGraphicsWidget::initializeGraphics()
-{
-    if (m_graphicsInitialized || !interpreter()) return;
-    
-    // Make sure widget has a size
-    if (!m_graphWidget || m_graphWidget->width() <= 0 || m_graphWidget->height() <= 0) {
-        localLog("Widget not ready for graphics initialization");
-        return;
-    }
- 
-    // ONLY cleanup if we have an existing buffer
-    if (m_gbuf != nullptr) {
-        cleanupGraphicsBuffer();
-    }
-     
-    // Call Tcl to initialize the graphics buffer
-    QString cmd = QString("qtcgraph_init_widget %1 %2 %3")
-                    .arg((quintptr)this)
-                    .arg(m_graphWidget->width())
-                    .arg(m_graphWidget->height());
-    
-    if (Tcl_Eval(interpreter(), cmd.toUtf8().constData()) != TCL_OK) {
-        localLog(QString("Failed to initialize graphics: %1").arg(result()));
-        return;
-    }
-    
-    m_graphicsInitialized = true;
-  
-    // Force a resize to ensure cgraph has the correct dimensions
-    QString resizeCmd = QString("qtcgraph_resize %1 %2 %3")
-                        .arg((quintptr)this)
-                        .arg(m_graphWidget->width())
-                        .arg(m_graphWidget->height());
-    Tcl_Eval(interpreter(), resizeCmd.toUtf8().constData());
-    
-    // ADD: Initialize pixmap AFTER cgraph is set up
-    ensurePixmapSize();
-    
-    // MODIFY: Instead of direct Tcl clearwin/flushwin, use the pixmap-aware clear method
-    // This ensures the pixmap gets properly initialized and rendered
-    if (interpreter() && m_graphicsInitialized) {
-        // Clear the cgraph buffer
-        Tcl_Eval(interpreter(), "clearwin");
-        // The flushwin will be handled by our clear() method which triggers pixmap rendering
-        clear();  // This will invalidate pixmap and re-render
-    }
-
-    localLog("Pixmap-based graphics system initialized successfully");
-}
-
 int EssGraphicsWidget::eval(const QString& command)
 {
     if (!interpreter()) {
@@ -589,12 +538,64 @@ int EssGraphicsWidget::eval(const QString& command)
     s_currentInstance = this;
     m_currentPainter = m_pixmapPainter;
     
-	QString contextCmd = QString("qtcgraph_set_current_buffer %1").arg((quintptr)this);
+	QString contextCmd = QString("qtcgraph_set_current_buffer");
 	Tcl_Eval(interpreter(), contextCmd.toUtf8().constData());
     
     // Call base class eval() to do the work
     return EssScriptableWidget::eval(command);
 }
+
+void EssGraphicsWidget::initializeGraphics()
+{
+    if (m_graphicsInitialized || !interpreter()) return;
+    
+    // Make sure widget has a size
+    if (!m_graphWidget || m_graphWidget->width() <= 0 || m_graphWidget->height() <= 0) {
+        localLog("Widget not ready for graphics initialization");
+        return;
+    }
+ 
+    // cleanup if we have an existing buffer
+    if (m_gbuf != nullptr) {
+        cleanupGraphicsBuffer();
+    }
+    
+    Tcl_SetAssocData(interpreter(), "graphics_widget", nullptr, this);
+    
+    // Initialize cgraph - now bridge commands can find the widget via assoc data
+    if (Tcl_Eval(interpreter(), "package require qtcgraph") != TCL_OK) {
+        localLog(QString("Failed to load qtcgraph: %1").arg(result()));
+        return;
+    }
+     
+    // Call Tcl to initialize the graphics buffer
+    QString cmd = QString("qtcgraph_init_widget");
+    
+    if (Tcl_Eval(interpreter(), cmd.toUtf8().constData()) != TCL_OK) {
+        localLog(QString("Failed to initialize graphics: %1").arg(result()));
+        return;
+    }
+    
+    m_graphicsInitialized = true;
+  
+    // Force a resize to ensure cgraph has the correct dimensions
+    QString resizeCmd = QString("qtcgraph_resize");
+    eval(resizeCmd.toUtf8().constData());
+    
+    ensurePixmapSize();
+    
+    // Use the pixmap-aware clear method
+    // This ensures the pixmap gets properly initialized and rendered
+    if (interpreter() && m_graphicsInitialized) {
+        // Clear the cgraph buffer
+        eval("clearwin");
+        clear();  // This will invalidate pixmap and re-render
+    }
+
+    localLog("Pixmap-based graphics system initialized successfully");
+}
+
+
 
 void EssGraphicsWidget::cleanupGraphicsBuffer()
 {
@@ -619,8 +620,8 @@ void EssGraphicsWidget::cleanupGraphicsBuffer()
     }
     
     // Try the cleanup command, but handle failure gracefully
-    QString cmd = QString("qtcgraph_cleanup %1").arg((quintptr)this);
-    int result = Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+    QString cmd = QString("qtcgraph_cleanup");
+    int result = eval(cmd.toUtf8().constData());
     
     if (result != TCL_OK) {
         qDebug() << "Graphics cleanup failed (this may be normal during shutdown):" 
@@ -649,12 +650,23 @@ void EssGraphicsWidget::clear()
 {
     if (!interpreter() || !m_gbuf) return;
     
-    QString cmd = QString("qtcgraph_clear %1").arg((quintptr)this);
-    Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+    // Clear the cgraph buffer
+    QString cmd = QString("qtcgraph_clear");
+    eval(cmd.toUtf8().constData());
     
-    // Clear pixmap and re-render
-    invalidatePixmap();
-    renderToPixmap();
+    // Explicitly clear the pixmap immediately
+    QMutexLocker locker(&m_pixmapMutex);
+    if (m_pixmapPainter) {
+        m_pixmapPainter->fillRect(m_pixmap.rect(), m_backgroundColor);
+    }
+    
+    // Mark as valid since we just cleared it
+    m_pixmapValid = true;
+    
+    // Trigger widget update to show the cleared pixmap
+    if (m_graphWidget) {
+        m_graphWidget->update();
+    }
 }
 
 void EssGraphicsWidget::setBackgroundColor(const QColor& color)
@@ -693,11 +705,8 @@ void EssGraphicsWidget::resizeEvent(QResizeEvent* event)
         
         // Only resize if we have a meaningful size
         if (graphicsSize.width() > 0 && graphicsSize.height() > 0) {
-            QString cmd = QString("qtcgraph_resize %1 %2 %3")
-                            .arg((quintptr)this)
-                            .arg(graphicsSize.width())
-                            .arg(graphicsSize.height());
-            Tcl_Eval(interpreter(), cmd.toUtf8().constData());
+            QString cmd = QString("qtcgraph_resize");
+            eval(cmd.toUtf8().constData());
             
             // Force a refresh after resize
             QTimer::singleShot(10, this, &EssGraphicsWidget::refresh);
@@ -719,11 +728,8 @@ void EssGraphicsWidget::onGraphicsWidgetResized()
     }
     
     // Notify cgraph system of the size change
-    QString resizeCmd = QString("qtcgraph_resize %1 %2 %3")
-                        .arg((quintptr)this)
-                        .arg(newSize.width())
-                        .arg(newSize.height());
-    Tcl_Eval(interpreter(), resizeCmd.toUtf8().constData());
+    QString resizeCmd = QString("qtcgraph_resize");
+    eval(resizeCmd.toUtf8().constData());
     
     // Force immediate refresh
     refresh();
@@ -1092,9 +1098,14 @@ int EssGraphicsWidget::Clearwin()
 {
     if (!s_currentInstance || !s_currentInstance->m_currentPainter) return 0;
     
+    // Clear the drawing surface with background color
     s_currentInstance->m_currentPainter->fillRect(
-        s_currentInstance->m_graphWidget->rect(),
+        s_currentInstance->m_pixmap.rect(),  // Use pixmap rect, not widget rect
         s_currentInstance->m_backgroundColor);
+        
+    // Also invalidate the pixmap to ensure it gets updated
+    s_currentInstance->invalidatePixmap();
+    
     return 0;
 }
 
