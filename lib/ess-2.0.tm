@@ -1372,7 +1372,13 @@ namespace eval ess {
         set n_complete [dl_length $completed_status]
         dservSet ess/block_n_complete $n_complete
 
-        dservSet ess/block_pct_complete [expr {double($n_complete) / $n_trials}]
+	# track time of last trial completed
+	if { $status != -1 } {
+	    dservSet ess/last_trial_time [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+	    dservSet ess/last_trial_time_ms [clock milliseconds]
+	}
+	
+	dservSet ess/block_pct_complete [expr {double($n_complete) / $n_trials}]
         dservSet ess/block_pct_correct [dl_mean $completed_status]
 
         # store trialdg in dserv
