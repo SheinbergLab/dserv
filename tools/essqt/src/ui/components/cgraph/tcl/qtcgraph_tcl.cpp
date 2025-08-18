@@ -335,7 +335,7 @@ static int qtcgraph_resize_cmd(ClientData data, Tcl_Interp *interp,
         setfviewport(0, 0, 1, 1);
         
         // Trigger a repaint
-        widget->refresh();
+        widget->requestRedraw();
     }
     
     return TCL_OK;
@@ -358,6 +358,7 @@ static int qtcgraph_clear_cmd(ClientData data, Tcl_Interp *interp,
         GBUF_DATA* gbuf = static_cast<GBUF_DATA*>(widget->getGraphicsBuffer());
         gbSetGeventBuffer(gbuf);
         gbResetGeventBuffer(gbuf);
+        widget->requestRedraw();
     }
     
     return TCL_OK;
@@ -403,7 +404,7 @@ static int cgFlushwinCmd(ClientData data, Tcl_Interp *interp,
         Tcl_GetAssocData(interp, "scriptable_widget", nullptr));
     
     if (widget) {
-        widget->refresh();
+        widget->requestRedraw(); 
     }
     return TCL_OK;
 }

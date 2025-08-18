@@ -9,6 +9,8 @@
 #include <QPainter>
 #include <QToolBar>
 #include <QAction>
+#include <QPixmap>
+#include <QMutex>
 
 #include <tcl.h>
 
@@ -106,6 +108,9 @@ public:
     // Current instance tracking (for cgraph callbacks)
     static EssGraphicsWidget* getCurrentInstance();
 
+	// for pixmap updates
+	void requestRedraw();
+	
 signals:
     void widgetReady();          // Emitted when widget is ready for graphics init
     void graphicsReady();        // Emitted when graphics system is initialized
@@ -146,6 +151,16 @@ private slots:
 private:
     bool m_widgetFullyConstructed = false;
     bool m_pendingGraphicsInit = false;
+
+	// pixmap support
+	QPixmap m_pixmap;
+	QPainter* m_pixmapPainter;
+	bool m_pixmapValid;
+	QMutex m_pixmapMutex;
+
+	void ensurePixmapSize();
+	void invalidatePixmap();
+	void renderToPixmap();
 
     // Layout state (for future Qt controls integration)
     LayoutMode m_layoutMode;
