@@ -108,7 +108,7 @@ public:
     // Current instance tracking (for cgraph callbacks)
     static EssGraphicsWidget* getCurrentInstance();
 
-	// for pixmap updates
+	// Rendering control
 	void requestRedraw();
 	
 signals:
@@ -152,9 +152,8 @@ private:
     bool m_widgetFullyConstructed = false;
     bool m_pendingGraphicsInit = false;
 
-	// pixmap support
+	// Simplified pixmap rendering system
 	QPixmap m_pixmap;
-	QPainter* m_pixmapPainter;
 	bool m_pixmapValid;
 	QMutex m_pixmapMutex;
 
@@ -199,7 +198,6 @@ private:
     QString m_focusOutScript;
     
     // For painting
-    QPainter* m_currentPainter;
     QColor m_currentColor;
     
     // Private methods
@@ -219,7 +217,7 @@ private:
     void onFocusInEvent(QFocusEvent* event);
     void onFocusOutEvent(QFocusEvent* event);
     
-    // Static callbacks for cgraph (preserve existing callback system)
+    // Static callbacks for cgraph (self-contained, QCgraph style)
     static int Clearwin();
     static int Line(float x0, float y0, float x1, float y1);
     static int Point(float x, float y);

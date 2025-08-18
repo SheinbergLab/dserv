@@ -299,7 +299,7 @@ static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
             setfviewport(0, 0, 1, 1);
         }
         
-        // Playback the events
+        // Playback the events - callbacks will draw directly to pixmap
         gbPlaybackGevents();
         
         // Restore the previous graphics buffer
@@ -309,6 +309,7 @@ static int qtcgraph_playback_cmd(ClientData data, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+// UPDATED: Don't trigger recursive redraw
 static int qtcgraph_resize_cmd(ClientData data, Tcl_Interp *interp,
                               int objc, Tcl_Obj *const objv[])
 {
@@ -338,8 +339,8 @@ static int qtcgraph_resize_cmd(ClientData data, Tcl_Interp *interp,
         setwindow(0, 0, width-1, height-1);
         setfviewport(0, 0, 1, 1);
         
-        // Trigger a repaint
-        widget->requestRedraw();
+        // DON'T trigger redraw here to prevent recursion
+        // The C++ resize event handler will handle the redraw
     }
     
     return TCL_OK;
@@ -563,7 +564,6 @@ static int qtcgraph_colornames_cmd(ClientData data, Tcl_Interp *interp,
     return TCL_OK;
 }
 
-
 // Create namespace and convenience commands
 static void createConvenienceCommands(Tcl_Interp *interp)
 {
@@ -691,4 +691,3 @@ extern "C" int Qtcgraph_Init(Tcl_Interp *interp)
 
     return TCL_OK;
 }
-
