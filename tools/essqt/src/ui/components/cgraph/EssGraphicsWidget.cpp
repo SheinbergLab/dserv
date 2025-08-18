@@ -365,7 +365,7 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
 					
 					// Invalidate and re-render
 					invalidatePixmap();
-					QTimer::singleShot(10, this, &EssGraphicsWidget::renderToPixmap);
+					renderToPixmap();
 				}
 			}
 			return false;  // Let widget handle its own resize
