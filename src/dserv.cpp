@@ -77,7 +77,7 @@ int main(int argc, char *argv[])
 {
   bool version = false;
   bool help = false;
-  bool enable_mesh = false;
+  bool enable_mesh = true;
   int mesh_port = 12348;
   int mesh_discovery_port = 12346;
   std::string mesh_appliance_id;
@@ -93,7 +93,7 @@ int main(int argc, char *argv[])
     ("c,cscript", "Configuration script path",
      cxxopts::value<std::string>(configuration_script))
     ("v,version", "Version", cxxopts::value<bool>(version))
-    ("m,mesh", "Enable mesh networking", cxxopts::value<bool>(enable_mesh))
+    ("m,mesh", "Enable/disable mesh networking", cxxopts::value<bool>(enable_mesh))
     ("mesh-port", "Mesh HTTP port", cxxopts::value<int>(mesh_port)->default_value("12348"))
     ("mesh-discovery-port", "Mesh discovery port", cxxopts::value<int>(mesh_discovery_port)->default_value("12346"))
     ("mesh-id", "Mesh appliance ID (defaults to hostname)", cxxopts::value<std::string>(mesh_appliance_id))
