@@ -191,12 +191,6 @@ void MeshManager::listenForHeartbeats() {
     struct sockaddr_in fromAddr;
     socklen_t fromLen = sizeof(fromAddr);
     
-    // Set socket timeout
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(udpSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    
     ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
                                     (struct sockaddr*)&fromAddr, &fromLen);
     
@@ -219,6 +213,10 @@ void MeshManager::listenForHeartbeats() {
             
             json_decref(message);
         }
+    } else {
+        // No data available or error - sleep to avoid busy loop
+        // Use a longer sleep since this is low priority
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 }
 
@@ -273,7 +271,7 @@ void MeshManager::cleanupExpiredPeers() {
 void MeshManager::updateStatus(const std::string& status) {
     if (myStatus != status) {
         myStatus = status;
-        std::cout << "Mesh status updated to: " << status << std::endl;
+	//        std::cout << "Mesh status updated to: " << status << std::endl;
         sendHeartbeat();
         broadcastMeshUpdate();
     }
@@ -283,7 +281,7 @@ void MeshManager::updateStatus(const std::string& status) {
 void MeshManager::updateExperiment(const std::string& experiment) {
     if (currentExperiment != experiment) {
         currentExperiment = experiment;
-        std::cout << "Mesh experiment updated to: " << experiment << std::endl;
+	//        std::cout << "Mesh experiment updated to: " << experiment << std::endl;
         sendHeartbeat();
         broadcastMeshUpdate();
     }
@@ -292,7 +290,7 @@ void MeshManager::updateExperiment(const std::string& experiment) {
 void MeshManager::updateParticipant(const std::string& participant) {
     if (participantId != participant) {
         participantId = participant;
-        std::cout << "Mesh participant updated to: " << participant << std::endl;
+	//        std::cout << "Mesh participant updated to: " << participant << std::endl;
         sendHeartbeat();
         broadcastMeshUpdate();
     }
@@ -432,13 +430,13 @@ std::string MeshManager::getMeshHTML() {
 void MeshManager::addMeshSubscriber(uWS::WebSocket<false, true, WSPerSocketData>* ws) {
     std::lock_guard<std::mutex> lock(subscribersMutex);
     meshSubscribers.insert(ws);
-    std::cout << "Added mesh WebSocket subscriber (total: " << meshSubscribers.size() << ")" << std::endl;
+    //    std::cout << "Added mesh WebSocket subscriber (total: " << meshSubscribers.size() << ")" << std::endl;
 }
 
 void MeshManager::removeMeshSubscriber(uWS::WebSocket<false, true, WSPerSocketData>* ws) {
     std::lock_guard<std::mutex> lock(subscribersMutex);
     meshSubscribers.erase(ws);
-    std::cout << "Removed mesh WebSocket subscriber (total: " << meshSubscribers.size() << ")" << std::endl;
+    //    std::cout << "Removed mesh WebSocket subscriber (total: " << meshSubscribers.size() << ")" << std::endl;
 }
 
 void MeshManager::broadcastMeshUpdate() {
