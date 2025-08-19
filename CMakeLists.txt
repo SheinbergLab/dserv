@@ -342,7 +342,6 @@ add_executable(dserv
     src/LogTable.cpp 
     src/TclServer.cpp 
     src/MeshManager.cpp
-    src/TemplateEngine.cpp
     src/dpoint_process.c 
     src/mdns.c 
     src/mdns_advertise.c

@@ -10,7 +10,6 @@
 #include <fnmatch.h>  // Add this include for pattern matching
 
 #include "MeshManager.h"
-#include "TemplateEngine.h"
 
 // our minified html pages (in www/*.html)
 #include "embedded_terminal.h"
@@ -1453,96 +1452,6 @@ static int print_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
-// Add these static functions before the add_tcl_commands function:
-
-static int template_render_command(ClientData data, Tcl_Interp *interp,
-                                  int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  
-  if (objc != 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "template_file");
-    return TCL_ERROR;
-  }
-  
-  std::string templateFile = Tcl_GetString(objv[1]);
-  
-  TemplateEngine engine;
-  engine.setTclInterpreter(interp);
-  
-  std::string result = engine.render(templateFile);
-  if (result.empty()) {
-    Tcl_AppendResult(interp, "Failed to render template: ", templateFile.c_str(), NULL);
-    return TCL_ERROR;
-  }
-  
-  Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
-  return TCL_OK;
-}
-
-static int template_render_string_command(ClientData data, Tcl_Interp *interp,
-                                         int objc, Tcl_Obj *objv[])
-{
-  TclServer *tclserver = (TclServer *) data;
-  
-  if (objc != 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "template_string");
-    return TCL_ERROR;
-  }
-  
-  std::string templateString = Tcl_GetString(objv[1]);
-  
-  TemplateEngine engine;
-  engine.setTclInterpreter(interp);
-  
-  std::string result = engine.renderString(templateString);
-  Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
-  return TCL_OK;
-}
-
-static int template_engine_command(ClientData data, Tcl_Interp *interp,
-                                  int objc, Tcl_Obj *objv[])
-{
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "subcommand ?args?");
-    return TCL_ERROR;
-  }
-  
-  std::string subcommand = Tcl_GetString(objv[1]);
-  
-  // Get or create template engine instance
-  static TemplateEngine* engine = nullptr;
-  if (!engine) {
-    engine = new TemplateEngine();
-    engine->setTclInterpreter(interp);
-  }
-  
-  if (subcommand == "setVar" && objc == 4) {
-    std::string key = Tcl_GetString(objv[2]);
-    std::string value = Tcl_GetString(objv[3]);
-    engine->setVar(key, value);
-    return TCL_OK;
-  }
-  else if (subcommand == "setConditional" && objc == 4) {
-    std::string key = Tcl_GetString(objv[2]);
-    int boolValue;
-    if (Tcl_GetBooleanFromObj(interp, objv[3], &boolValue) != TCL_OK) {
-      return TCL_ERROR;
-    }
-    engine->setConditional(key, boolValue);
-    return TCL_OK;
-  }
-  else if (subcommand == "render" && objc == 3) {
-    std::string templateFile = Tcl_GetString(objv[2]);
-    std::string result = engine->render(templateFile);
-    Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
-    return TCL_OK;
-  }
-  
-  Tcl_AppendResult(interp, "Unknown subcommand: ", subcommand.c_str(), NULL);
-  return TCL_ERROR;
-}
-
 // Mesh manager commands available to all interpreters
 static int mesh_set_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
     MeshManager* mesh = get_mesh_manager();
@@ -1756,17 +1665,6 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                (Tcl_ObjCmdProc *) send_noreply_command,
                tserv, NULL);
   
-  Tcl_CreateObjCommand(interp, "templateEngine", 
-                     (Tcl_ObjCmdProc *) template_engine_command, 
-                     tserv, NULL);
-  Tcl_CreateObjCommand(interp, "templateRender", 
-                     (Tcl_ObjCmdProc *) template_render_command, 
-                     tserv, NULL);
-  Tcl_CreateObjCommand(interp, "templateRenderString", 
-                      (Tcl_ObjCmdProc *) template_render_string_command, 
-                      tserv, NULL);
-                         
-
   // Mesh commands (fail gracefully if mesh manager not running)
   Tcl_CreateObjCommand(interp, "meshSetStatus", mesh_set_status_command, tserv, nullptr);
   Tcl_CreateObjCommand(interp, "meshGetPeers", mesh_get_peers_command, tserv, nullptr);
