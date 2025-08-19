@@ -120,7 +120,7 @@ private:
   void sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
 			const std::string& message,
 			const std::string& client_name);
-  
+
 public:
   int argc;
   char **argv;
@@ -253,6 +253,7 @@ public:
   TclServer(int argc, char **argv, Dataserver *dserv,
 	    std::string name, int newline_port, int message_port, int websocket_port);
   ~TclServer();
+   
   void shutdown(void);
   bool isDone();
   void start_tcp_server(void);

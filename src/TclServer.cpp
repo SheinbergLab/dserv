@@ -9,6 +9,9 @@
 
 #include <fnmatch.h>  // Add this include for pattern matching
 
+#include "MeshManager.h"
+#include "TemplateEngine.h"
+
 // our minified html pages (in www/*.html)
 #include "embedded_terminal.h"
 #include "embedded_datapoint_explorer.h"
@@ -18,6 +21,9 @@
 #include "embedded_essgui_index_html.h"
 #include "embedded_essgui_index_js.h"
 #include "embedded_essgui_index_css.h"
+
+// defined in dserv.cpp
+extern MeshManager* get_mesh_manager(void);
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
@@ -71,7 +77,7 @@ TclServer::TclServer(int argc, char **argv,
     // Start the WebSocket server thread
     websocket_thread = std::thread(&TclServer::start_websocket_server, this);
   }
-  
+   
   // the process thread
   process_thread = std::thread(&process_requests, this);
 }
@@ -654,9 +660,48 @@ void TclServer::start_websocket_server(void)
         json_decref(response);
           }
         }
-          
+      	else if (strcmp(cmd, "mesh_subscribe") == 0) {
+			// Subscribe this WebSocket client to mesh updates
+			MeshManager* mesh = get_mesh_manager();
+			if (mesh) {
+				mesh->addMeshSubscriber(ws);
+				
+				json_t* response = json_object();
+				json_object_set_new(response, "status", json_string("ok"));
+				json_object_set_new(response, "type", json_string("mesh_subscribed"));
+				
+				char* response_str = json_dumps(response, 0);
+				ws->send(response_str, uWS::OpCode::TEXT);
+				free(response_str);
+				json_decref(response);
+			} else {
+				json_t* error_response = json_object();
+				json_object_set_new(error_response, "error", json_string("Mesh networking not enabled"));
+				char* error_str = json_dumps(error_response, 0);
+				ws->send(error_str, uWS::OpCode::TEXT);
+				free(error_str);
+				json_decref(error_response);
+			}
+		}
+		
+		else if (strcmp(cmd, "mesh_unsubscribe") == 0) {
+			MeshManager* mesh = get_mesh_manager();
+			if (mesh) {
+				mesh->removeMeshSubscriber(ws);
+				
+				json_t* response = json_object();
+				json_object_set_new(response, "status", json_string("ok"));
+				json_object_set_new(response, "type", json_string("mesh_unsubscribed"));
+				
+				char* response_str = json_dumps(response, 0);
+				ws->send(response_str, uWS::OpCode::TEXT);
+				free(response_str);
+				json_decref(response);
+			}
+		}    
         json_decref(root);
       }
+
       else {
         // Handle legacy text protocol (newline-terminated commands)
         std::string script(message);
@@ -708,6 +753,13 @@ void TclServer::start_websocket_server(void)
       }
 
       try {
+      
+        // Clean up mesh subscription
+        MeshManager* mesh = get_mesh_manager();
+        if (mesh) {
+            mesh->removeMeshSubscriber(ws);
+        }
+
         // Remove from active connections
         {
           std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
@@ -1401,6 +1453,249 @@ static int print_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+// Add these static functions before the add_tcl_commands function:
+
+static int template_render_command(ClientData data, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+  
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "template_file");
+    return TCL_ERROR;
+  }
+  
+  std::string templateFile = Tcl_GetString(objv[1]);
+  
+  TemplateEngine engine;
+  engine.setTclInterpreter(interp);
+  
+  std::string result = engine.render(templateFile);
+  if (result.empty()) {
+    Tcl_AppendResult(interp, "Failed to render template: ", templateFile.c_str(), NULL);
+    return TCL_ERROR;
+  }
+  
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
+  return TCL_OK;
+}
+
+static int template_render_string_command(ClientData data, Tcl_Interp *interp,
+                                         int objc, Tcl_Obj *objv[])
+{
+  TclServer *tclserver = (TclServer *) data;
+  
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "template_string");
+    return TCL_ERROR;
+  }
+  
+  std::string templateString = Tcl_GetString(objv[1]);
+  
+  TemplateEngine engine;
+  engine.setTclInterpreter(interp);
+  
+  std::string result = engine.renderString(templateString);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
+  return TCL_OK;
+}
+
+static int template_engine_command(ClientData data, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *objv[])
+{
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "subcommand ?args?");
+    return TCL_ERROR;
+  }
+  
+  std::string subcommand = Tcl_GetString(objv[1]);
+  
+  // Get or create template engine instance
+  static TemplateEngine* engine = nullptr;
+  if (!engine) {
+    engine = new TemplateEngine();
+    engine->setTclInterpreter(interp);
+  }
+  
+  if (subcommand == "setVar" && objc == 4) {
+    std::string key = Tcl_GetString(objv[2]);
+    std::string value = Tcl_GetString(objv[3]);
+    engine->setVar(key, value);
+    return TCL_OK;
+  }
+  else if (subcommand == "setConditional" && objc == 4) {
+    std::string key = Tcl_GetString(objv[2]);
+    int boolValue;
+    if (Tcl_GetBooleanFromObj(interp, objv[3], &boolValue) != TCL_OK) {
+      return TCL_ERROR;
+    }
+    engine->setConditional(key, boolValue);
+    return TCL_OK;
+  }
+  else if (subcommand == "render" && objc == 3) {
+    std::string templateFile = Tcl_GetString(objv[2]);
+    std::string result = engine->render(templateFile);
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
+    return TCL_OK;
+  }
+  
+  Tcl_AppendResult(interp, "Unknown subcommand: ", subcommand.c_str(), NULL);
+  return TCL_ERROR;
+}
+
+// Mesh manager commands available to all interpreters
+static int mesh_set_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 4) {
+        Tcl_WrongNumArgs(interp, 1, objv, "status experiment participant");
+        return TCL_ERROR;
+    }
+    
+    std::string status = Tcl_GetString(objv[1]);
+    std::string experiment = Tcl_GetString(objv[2]);
+    std::string participant = Tcl_GetString(objv[3]);
+    
+    mesh->updateStatus(status);
+    mesh->updateExperiment(experiment);
+    mesh->updateParticipant(participant);
+    
+    return TCL_OK;
+}
+
+static int mesh_update_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "status");
+        return TCL_ERROR;
+    }
+    
+    std::string status = Tcl_GetString(objv[1]);
+    mesh->updateStatus(status);
+    
+    return TCL_OK;
+}
+
+static int mesh_update_experiment_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "experiment");
+        return TCL_ERROR;
+    }
+    
+    std::string experiment = Tcl_GetString(objv[1]);
+    mesh->updateExperiment(experiment);
+    
+    return TCL_OK;
+}
+
+static int mesh_update_participant_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "participant");
+        return TCL_ERROR;
+    }
+    
+    std::string participant = Tcl_GetString(objv[1]);
+    mesh->updateParticipant(participant);
+    
+    return TCL_OK;
+}
+
+static int mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    std::vector<MeshManager::PeerInfo> peers = mesh->getPeers();
+    
+    Tcl_Obj* peerList = Tcl_NewListObj(0, nullptr);
+    for (const auto& peer : peers) {
+        Tcl_Obj* peerDict = Tcl_NewDictObj();
+        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("id", -1), 
+                       Tcl_NewStringObj(peer.applianceId.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("name", -1), 
+                       Tcl_NewStringObj(peer.name.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("status", -1), 
+                       Tcl_NewStringObj(peer.status.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("ip", -1), 
+                       Tcl_NewStringObj(peer.ipAddress.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("experiment", -1), 
+                       Tcl_NewStringObj(peer.currentExperiment.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("participant", -1), 
+                       Tcl_NewStringObj(peer.participantId.c_str(), -1));
+        
+        Tcl_ListObjAppendElement(interp, peerList, peerDict);
+    }
+    
+    Tcl_SetObjResult(interp, peerList);
+    return TCL_OK;
+}
+
+static int mesh_get_cluster_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    return mesh_get_peers_command(clientData, interp, objc, objv);
+}
+
+static int mesh_get_appliance_id_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(mesh->getApplianceId().c_str(), -1));
+    return TCL_OK;
+}
+
+static int mesh_broadcast_custom_update_command(ClientData data, Tcl_Interp *interp, 
+	int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "standard_json custom_json");
+        return TCL_ERROR;
+    }
+    
+    std::string standardJson = Tcl_GetString(objv[1]);
+    std::string customJson = Tcl_GetString(objv[2]);
+    
+    mesh->broadcastCustomUpdate(standardJson, customJson);
+    
+    return TCL_OK;
+}
+
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
@@ -1461,6 +1756,28 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                (Tcl_ObjCmdProc *) send_noreply_command,
                tserv, NULL);
   
+  Tcl_CreateObjCommand(interp, "templateEngine", 
+                     (Tcl_ObjCmdProc *) template_engine_command, 
+                     tserv, NULL);
+  Tcl_CreateObjCommand(interp, "templateRender", 
+                     (Tcl_ObjCmdProc *) template_render_command, 
+                     tserv, NULL);
+  Tcl_CreateObjCommand(interp, "templateRenderString", 
+                      (Tcl_ObjCmdProc *) template_render_string_command, 
+                      tserv, NULL);
+                         
+
+  // Mesh commands (fail gracefully if mesh manager not running)
+  Tcl_CreateObjCommand(interp, "meshSetStatus", mesh_set_status_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshGetPeers", mesh_get_peers_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshGetClusterStatus", mesh_get_cluster_status_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshUpdateStatus", mesh_update_status_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshUpdateExperiment", mesh_update_experiment_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshUpdateParticipant", mesh_update_participant_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshGetApplianceId", mesh_get_appliance_id_command, 
+     tserv, nullptr);                       
+  Tcl_CreateObjCommand(interp, "meshBroadcastCustomUpdate", mesh_broadcast_custom_update_command, tserv, NULL);
+                  
   Tcl_CreateObjCommand(interp, "dservAddMatch",
                dserv_add_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservAddExactMatch",
@@ -1608,7 +1925,7 @@ static int process_requests(TclServer *tserv)
   int retcode;
   client_request_t req;
 
-  /* create a unique interpreter for this process queue */
+  // create a private interpreter for this process
   Tcl_Interp *interp = setup_tcl(tserv);
   
   /* process until receive a message saying we are done */
@@ -1683,8 +2000,8 @@ static int process_requests(TclServer *tserv)
   }
 
   Tcl_DeleteInterp(interp);
-//  std::cout << "TclServer process thread ended" << std::endl;
-  
+  //  std::cout << "TclServer process thread ended" << std::endl;
+
   return 0;
 }
   
