@@ -209,6 +209,12 @@ else()
     message(WARNING "welcome.html NOT FOUND") 
 endif()
 
+if(EXISTS ${WEB_ASSETS_DIR}/mesh_dashboard.html)
+    message(STATUS "Found mesh_dashboard.html")
+else()
+    message(WARNING "mesh_dashboard.html NOT FOUND") 
+endif()
+
 if(EXISTS ${CMAKE_SOURCE_DIR}/essgui-web/dist/index.html)
     message(STATUS "Found ESS GUI index.html")
 else()
@@ -220,6 +226,12 @@ embed_resource(
     ${WEB_ASSETS_DIR}/datapoint_explorer.html
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
     datapoint_explorer_html
+)
+
+embed_resource(
+    ${WEB_ASSETS_DIR}/mesh_dashboard.html
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
+    mesh_dashboard_html
 )
 
 embed_resource(
@@ -302,6 +314,7 @@ set(EMBEDDED_HEADERS
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
     ${CMAKE_BINARY_DIR}/embedded_essgui_index_html.h
 )
 

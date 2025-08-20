@@ -21,6 +21,9 @@
 #include "embedded_essgui_index_js.h"
 #include "embedded_essgui_index_css.h"
 
+// Mesh dashboard
+#include "embedded_mesh_dashboard.h"
+
 // defined in dserv.cpp
 extern MeshManager* get_mesh_manager(void);
 
@@ -323,6 +326,20 @@ void TclServer::start_websocket_server(void)
     res->writeHeader("Content-Type", "text/html; charset=utf-8")
       ->writeHeader("Cache-Control", "no-cache")
       ->end(embedded::terminal_html);
+  });
+  
+  app.get("/mesh", [](auto *res, auto *req) {
+    res->writeHeader("Content-Type", "text/html; charset=utf-8")
+      ->writeHeader("Cache-Control", "no-cache")
+      ->end(embedded::mesh_dashboard_html);
+  });
+
+
+  // and an alias
+  app.get("/dashboard", [](auto *res, auto *req) {
+    res->writeStatus("302 Found")
+      ->writeHeader("Location", "/mesh")
+      ->end();
   });
   
   app.get("/explorer", [](auto *res, auto *req) {
