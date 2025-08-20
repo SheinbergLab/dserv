@@ -215,8 +215,7 @@ void MeshManager::listenForHeartbeats() {
         }
     } else {
         // No data available or error - sleep to avoid busy loop
-        // Use a longer sleep since this is low priority
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 }
 
