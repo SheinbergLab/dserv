@@ -67,14 +67,6 @@ proc set_hostinfo {} {
 
 set_hostinfo
 
-# Auto-load mesh configuration if mesh is enabled
-if { [info exists ::mesh_enabled] } {
-    puts "Mesh networking detected - loading mesh configuration"
-    source [file join $dspath config/meshconf.tcl]
-} else {
-    puts "Mesh networking not enabled"
-}
-
 # start analog input if available
 catch { ainStart 1 }
 # if we didn't find an A/D still setup 2 channels for virtual inputs
@@ -307,6 +299,13 @@ if { [lsearch $hbs $host] >= 0 } {
 
 # start a "git" interpreter
 subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
+
+# start our mesh dispatcher
+if { [info exists ::mesh_enabled] } {
+    puts "Mesh networking detected - loading mesh configuration"
+    subprocess mesh 2575 "source [file join $dspath config/meshconf.tcl]"
+}
+
 
 # and finally load a default system
 ess::load_system
