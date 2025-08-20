@@ -249,9 +249,6 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
     
     json_t* webPort = json_object_get(data, "webPort");
     if (json_is_integer(webPort)) peer.webPort = json_integer_value(webPort);
-    
-    // and notify our peers! 
-    broadcastMeshUpdate(); 
 }
 
 void MeshManager::cleanupExpiredPeers() {
