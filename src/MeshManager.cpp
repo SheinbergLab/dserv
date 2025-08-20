@@ -5,8 +5,19 @@
 #include <sstream>
 #include <cstring>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#ifdef __APPLE__
+    #include <sys/types.h>
+    #include <sys/socket.h>
+    #include <ifaddrs.h>
+    #include <net/if.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+#else
+    #include <ifaddrs.h>
+    #include <net/if.h>
+    #include <arpa/inet.h>
+    #include <sys/socket.h>
+#endif
 #include <fcntl.h>
 #include <chrono>
 #include <errno.h>
@@ -71,14 +82,14 @@ void MeshManager::setupUDP() {
     
     // Enable broadcast
     int broadcast = 1;
-    setsockopt(udpSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+    if (setsockopt(udpSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
+        std::cerr << "Failed to enable broadcast: " << strerror(errno) << std::endl;
+    }
     
-    // Setup broadcast address
-    broadcastAddr.sin_family = AF_INET;
-    broadcastAddr.sin_port = htons(discoveryPort);
-    broadcastAddr.sin_addr.s_addr = INADDR_BROADCAST;
+    // Initialize broadcast address cache
+    refreshBroadcastCache();
     
-    // Bind for receiving
+    // Bind for receiving (existing code)
     struct sockaddr_in bindAddr;
     bindAddr.sin_family = AF_INET;
     bindAddr.sin_port = htons(discoveryPort);
@@ -90,6 +101,14 @@ void MeshManager::setupUDP() {
         udpSocket = -1;
     } else {
         std::cout << "Mesh UDP socket bound to port " << discoveryPort << std::endl;
+        
+        // Show discovered broadcast addresses
+        auto addresses = getBroadcastAddresses();
+        std::cout << "Broadcasting to " << addresses.size() << " networks: ";
+        for (const auto& addr : addresses) {
+            std::cout << addr << " ";
+        }
+        std::cout << std::endl;
     }
 }
 
@@ -157,9 +176,129 @@ void MeshManager::stop() {
     std::cout << "Mesh networking stopped" << std::endl;
 }
 
+
+std::vector<std::string> MeshManager::scanNetworkBroadcastAddresses() {
+    std::vector<std::string> addresses;
+    
+#ifdef __APPLE__
+    // macOS/BSD implementation
+    struct ifaddrs *ifap, *ifa;
+    if (getifaddrs(&ifap) == 0) {
+        for (ifa = ifap; ifa != nullptr; ifa = ifa->ifa_next) {
+            // Skip if no address or not IPv4
+            if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+            
+            // Skip if interface is down or doesn't support broadcast
+            if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_BROADCAST)) continue;
+            
+            // Skip loopback interfaces
+            if (ifa->ifa_flags & IFF_LOOPBACK) continue;
+            
+            // Get broadcast address
+            if (ifa->ifa_broadaddr) {
+                struct sockaddr_in* broadcast_addr = (struct sockaddr_in*)ifa->ifa_broadaddr;
+                std::string broadcastStr = inet_ntoa(broadcast_addr->sin_addr);
+                
+                // Skip invalid broadcast addresses
+                if (broadcastStr != "0.0.0.0") {
+                    addresses.push_back(broadcastStr);
+//                    std::cout << "Found broadcast address: " << broadcastStr 
+//                              << " (interface: " << ifa->ifa_name << ")" << std::endl;
+                }
+            }
+        }
+        freeifaddrs(ifap);
+    } else {
+        std::cerr << "Failed to get network interfaces: " << strerror(errno) << std::endl;
+    }
+#else
+    // Linux implementation
+    struct ifaddrs *ifap, *ifa;
+    if (getifaddrs(&ifap) == 0) {
+        for (ifa = ifap; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+            if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_BROADCAST)) continue;
+            if (ifa->ifa_flags & IFF_LOOPBACK) continue;
+            
+            if (ifa->ifa_ifu.ifu_broadaddr) {
+                struct sockaddr_in* broadcast_addr = (struct sockaddr_in*)ifa->ifa_ifu.ifu_broadaddr;
+                std::string broadcastStr = inet_ntoa(broadcast_addr->sin_addr);
+                
+                if (broadcastStr != "0.0.0.0") {
+                    addresses.push_back(broadcastStr);
+//                    std::cout << "Found broadcast address: " << broadcastStr 
+//                              << " (interface: " << ifa->ifa_name << ")" << std::endl;
+                }
+            }
+        }
+        freeifaddrs(ifap);
+    } else {
+        std::cerr << "Failed to get network interfaces: " << strerror(errno) << std::endl;
+    }
+#endif
+
+    // Remove duplicates and sort
+    std::sort(addresses.begin(), addresses.end());
+    addresses.erase(std::unique(addresses.begin(), addresses.end()), addresses.end());
+    
+    // Fallback to global broadcast if no interfaces found
+    if (addresses.empty()) {
+        std::cout << "No broadcast interfaces found, using global broadcast" << std::endl;
+        addresses.push_back("255.255.255.255");
+    }
+    
+    return addresses;
+}
+
+void MeshManager::refreshBroadcastCache() {
+    auto now = std::chrono::steady_clock::now();
+    
+    std::lock_guard<std::mutex> lock(broadcastCacheMutex);
+    
+    // Check if we need to refresh (first time or interval expired)
+    if (cachedBroadcastAddresses.empty() || 
+        (now - lastNetworkScan) > NETWORK_SCAN_INTERVAL) {
+        
+//        std::cout << "Refreshing network interface cache..." << std::endl;
+        
+        auto newAddresses = scanNetworkBroadcastAddresses();
+        
+        // Check if addresses changed
+        if (newAddresses != cachedBroadcastAddresses) {
+            std::cout << "Network configuration changed:" << std::endl;
+            std::cout << "  Old addresses: ";
+            for (const auto& addr : cachedBroadcastAddresses) {
+                std::cout << addr << " ";
+            }
+            std::cout << std::endl;
+            
+            std::cout << "  New addresses: ";
+            for (const auto& addr : newAddresses) {
+                std::cout << addr << " ";
+            }
+            std::cout << std::endl;
+            
+            cachedBroadcastAddresses = std::move(newAddresses);
+        }
+        
+        lastNetworkScan = now;
+    }
+}
+
+std::vector<std::string> MeshManager::getBroadcastAddresses() {
+    refreshBroadcastCache();
+    
+    std::lock_guard<std::mutex> lock(broadcastCacheMutex);
+    return cachedBroadcastAddresses; // Return copy
+}
+
 void MeshManager::sendHeartbeat() {
     if (udpSocket < 0) return;
     
+    // Get current broadcast addresses (cached, refreshed every 30 seconds)
+    auto broadcastAddresses = getBroadcastAddresses();
+    
+    // Create JSON heartbeat (existing code)
     json_t* heartbeat = json_object();
     json_object_set_new(heartbeat, "type", json_string("heartbeat"));
     json_object_set_new(heartbeat, "applianceId", json_string(myApplianceId.c_str()));
@@ -177,8 +316,37 @@ void MeshManager::sendHeartbeat() {
     json_object_set_new(heartbeat, "data", data);
     
     char* message = json_dumps(heartbeat, JSON_COMPACT);
-    sendto(udpSocket, message, strlen(message), 0,
-           (struct sockaddr*)&broadcastAddr, sizeof(broadcastAddr));
+    size_t messageLen = strlen(message);
+    
+    // Send to all broadcast addresses
+    int successfulSends = 0;
+    for (const auto& broadcastAddrStr : broadcastAddresses) {
+        struct sockaddr_in addr;
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(discoveryPort);
+        
+        if (inet_aton(broadcastAddrStr.c_str(), &addr.sin_addr) != 0) {
+            ssize_t result = sendto(udpSocket, message, messageLen, 0,
+                                   (struct sockaddr*)&addr, sizeof(addr));
+            
+            if (result >= 0) {
+                successfulSends++;
+            } else {
+                std::cerr << "Failed to send heartbeat to " << broadcastAddrStr 
+                          << ": " << strerror(errno) << std::endl;
+            }
+        } else {
+            std::cerr << "Invalid broadcast address: " << broadcastAddrStr << std::endl;
+        }
+    }
+    
+    // Optional: Log successful sends for debugging
+    if (successfulSends > 0) {
+        // Uncomment for debugging
+        // std::cout << "Sent heartbeat to " << successfulSends << " networks" << std::endl;
+    } else {
+        std::cerr << "Failed to send heartbeat to any network!" << std::endl;
+    }
     
     free(message);
     json_decref(heartbeat);

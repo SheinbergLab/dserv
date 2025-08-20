@@ -71,6 +71,17 @@ private:
     std::set<uWS::WebSocket<false, true, WSPerSocketData>*> meshSubscribers;
     std::mutex subscribersMutex;
 
+    // Network interface caching
+    std::vector<std::string> cachedBroadcastAddresses;
+    std::chrono::steady_clock::time_point lastNetworkScan;
+    static constexpr std::chrono::seconds NETWORK_SCAN_INTERVAL{30}; // Refresh every 30 seconds
+    std::mutex broadcastCacheMutex;
+    
+    // Methods
+    std::vector<std::string> scanNetworkBroadcastAddresses();
+    std::vector<std::string> getBroadcastAddresses();
+    void refreshBroadcastCache();
+    
 public:
     MeshManager(Dataserver* ds, TclServer* tclserver);
     ~MeshManager();
