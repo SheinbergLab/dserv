@@ -42,6 +42,35 @@ void MeshManager::init(const std::string& applianceId, const std::string& name) 
     std::cout << "  HTTP Port: " << httpPort << std::endl;
 }
 
+void MeshManager::setHeartbeatInterval(int seconds) {
+    if (seconds < 1 || seconds > 300) {
+        std::cerr << "Heartbeat interval must be between 1 and 300 seconds" << std::endl;
+        return;
+    }
+    
+    int oldInterval = heartbeatInterval.exchange(seconds);
+    if (oldInterval != seconds) {
+        std::cout << "Mesh heartbeat interval changed from " 
+                  << oldInterval << " to " << seconds << " seconds" << std::endl;
+        
+        // Signal the heartbeat thread to wake up and use new interval
+        intervalChanged = true;
+        heartbeatCV.notify_one();
+    }
+}
+
+void MeshManager::setPeerTimeoutMultiplier(int multiplier) {
+    if (multiplier < 2 || multiplier > 20) {
+        std::cerr << "Peer timeout multiplier must be between 2 and 20" << std::endl;
+        return;
+    }
+    
+    peerTimeoutMultiplier = multiplier;
+    std::cout << "Mesh peer timeout set to " 
+              << getPeerTimeoutSeconds() << " seconds "
+              << "(" << multiplier << " heartbeats)" << std::endl;
+}
+
 void MeshManager::start() {
     setupUDP();
     setupHTTP();
@@ -51,8 +80,22 @@ void MeshManager::start() {
             while (running) {
                 sendHeartbeat();
                 cleanupExpiredPeers();
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-            }
+                
+                // Check if we need to broadcast updates
+                if (broadcastPending.exchange(false)) {
+                    broadcastMeshUpdate();
+                }
+
+            // Interruptible sleep that respects interval changes
+            std::unique_lock<std::mutex> lock(heartbeatMutex);
+            intervalChanged = false;
+            
+            // Wait for either the interval to pass or a signal to wake up
+            heartbeatCV.wait_for(lock, 
+                std::chrono::seconds(heartbeatInterval.load()),
+                [this] { return !running || intervalChanged.load(); });
+
+            }            
         });
         
         discoveryThread = std::thread([this]() {
@@ -417,21 +460,36 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
     
     json_t* webPort = json_object_get(data, "webPort");
     if (json_is_integer(webPort)) peer.webPort = json_integer_value(webPort);
+    
+    broadcastPending = true;
 }
 
 void MeshManager::cleanupExpiredPeers() {
-    std::lock_guard<std::mutex> lock(peersMutex);
-    auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    
-    auto it = peers.begin();
-    while (it != peers.end()) {
-        if (now - it->second.lastHeartbeat > 30000) { // 30 second timeout
-//            std::cout << "Peer " << it->first << " (" << it->second.name << ") timed out" << std::endl;
-            it = peers.erase(it);
-        } else {
-            ++it;
+    bool peersRemoved = false;
+    {
+        std::lock_guard<std::mutex> lock(peersMutex);
+        auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        
+        // Use the configurable timeout
+        int timeoutMs = getPeerTimeoutSeconds() * 1000;
+        
+        auto it = peers.begin();
+        while (it != peers.end()) {
+            if (now - it->second.lastHeartbeat > timeoutMs) {
+//                std::cout << "Peer " << it->first << " (" << it->second.name 
+//                          << ") timed out after " << getPeerTimeoutSeconds() 
+//                          << " seconds" << std::endl;
+                it = peers.erase(it);
+                peersRemoved = true;
+            } else {
+                ++it;
+            }
         }
+    }
+    
+    if (peersRemoved) {
+        broadcastPending = true;  // Will broadcast on next heartbeat cycle
     }
 }
 

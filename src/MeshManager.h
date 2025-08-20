@@ -48,6 +48,15 @@ private:
     int httpPort;
     int discoveryPort;
     
+    // Heartbeat configuration with sensible defaults
+    std::atomic<int> heartbeatInterval{5};        // seconds between heartbeats
+    std::atomic<int> peerTimeoutMultiplier{6};    // heartbeats missed before timeout
+    
+    // For interrupting the heartbeat thread when interval changes
+    std::condition_variable heartbeatCV;
+    std::mutex heartbeatMutex;
+    std::atomic<bool> intervalChanged{false};
+    
     // Current state
     std::string myStatus;
     std::string currentExperiment;
@@ -56,6 +65,7 @@ private:
     // Peer management
     std::map<std::string, PeerInfo> peers;
     std::mutex peersMutex;
+    std::atomic<bool> broadcastPending{false};
     
     // Network components
     int udpSocket;
@@ -112,6 +122,19 @@ public:
     void removeMeshSubscriber(uWS::WebSocket<false, true, WSPerSocketData>* ws);
     void broadcastMeshUpdate();
     void broadcastCustomUpdate(const std::string& standardJson, const std::string& customJson);
+    
+    // Configuration methods
+    void setHeartbeatInterval(int seconds);
+    int getHeartbeatInterval() const { return heartbeatInterval.load(); }
+    
+    void setPeerTimeoutMultiplier(int multiplier);
+    int getPeerTimeoutMultiplier() const { return peerTimeoutMultiplier.load(); }
+    
+    // Get computed timeout (interval * multiplier)
+    int getPeerTimeoutSeconds() const { 
+        return heartbeatInterval.load() * peerTimeoutMultiplier.load(); 
+    }
+
     
 private:
     // Network setup and management

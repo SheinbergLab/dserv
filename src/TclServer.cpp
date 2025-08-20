@@ -1605,6 +1605,112 @@ static int mesh_broadcast_custom_update_command(ClientData data, Tcl_Interp *int
     return TCL_OK;
 }
 
+static int mesh_config_command(ClientData clientData, Tcl_Interp* interp, 
+                               int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "option ?value?");
+        return TCL_ERROR;
+    }
+    
+    const char* option = Tcl_GetString(objv[1]);
+    
+    // GET operations (2 arguments)
+    if (objc == 2) {
+        if (strcmp(option, "heartbeatInterval") == 0) {
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(mesh->getHeartbeatInterval()));
+            return TCL_OK;
+        }
+        else if (strcmp(option, "peerTimeout") == 0) {
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(mesh->getPeerTimeoutSeconds()));
+            return TCL_OK;
+        }
+        else if (strcmp(option, "timeoutMultiplier") == 0) {
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(mesh->getPeerTimeoutMultiplier()));
+            return TCL_OK;
+        }
+        else {
+            Tcl_AppendResult(interp, "unknown option \"", option, 
+                           "\", must be heartbeatInterval, peerTimeout, or timeoutMultiplier", NULL);
+            return TCL_ERROR;
+        }
+    }
+    
+    // SET operations (3 arguments)
+    if (objc == 3) {
+        int value;
+        if (Tcl_GetIntFromObj(interp, objv[2], &value) != TCL_OK) {
+            return TCL_ERROR;
+        }
+        
+        if (strcmp(option, "heartbeatInterval") == 0) {
+            if (value < 1 || value > 300) {
+                Tcl_AppendResult(interp, "heartbeatInterval must be between 1 and 300 seconds", NULL);
+                return TCL_ERROR;
+            }
+            mesh->setHeartbeatInterval(value);
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(value));
+            return TCL_OK;
+        }
+        else if (strcmp(option, "timeoutMultiplier") == 0) {
+            if (value < 2 || value > 20) {
+                Tcl_AppendResult(interp, "timeoutMultiplier must be between 2 and 20", NULL);
+                return TCL_ERROR;
+            }
+            mesh->setPeerTimeoutMultiplier(value);
+            Tcl_SetObjResult(interp, Tcl_NewIntObj(mesh->getPeerTimeoutSeconds()));
+            return TCL_OK;
+        }
+        else {
+            Tcl_AppendResult(interp, "cannot set \"", option, "\"", NULL);
+            return TCL_ERROR;
+        }
+    }
+    
+    Tcl_WrongNumArgs(interp, 1, objv, "option ?value?");
+    return TCL_ERROR;
+}
+
+// Convenience command to get all mesh settings
+static int mesh_info_command(ClientData clientData, Tcl_Interp* interp, 
+                             int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_Obj* dict = Tcl_NewDictObj();
+    
+    Tcl_DictObjPut(interp, dict, 
+        Tcl_NewStringObj("heartbeatInterval", -1),
+        Tcl_NewIntObj(mesh->getHeartbeatInterval()));
+    
+    Tcl_DictObjPut(interp, dict, 
+        Tcl_NewStringObj("timeoutMultiplier", -1),
+        Tcl_NewIntObj(mesh->getPeerTimeoutMultiplier()));
+    
+    Tcl_DictObjPut(interp, dict, 
+        Tcl_NewStringObj("peerTimeout", -1),
+        Tcl_NewIntObj(mesh->getPeerTimeoutSeconds()));
+    
+    Tcl_DictObjPut(interp, dict, 
+        Tcl_NewStringObj("applianceId", -1),
+        Tcl_NewStringObj(mesh->getApplianceId().c_str(), -1));
+    
+    Tcl_DictObjPut(interp, dict, 
+        Tcl_NewStringObj("peerCount", -1),
+        Tcl_NewIntObj(mesh->getPeers().size()));
+    
+    Tcl_SetObjResult(interp, dict);
+    return TCL_OK;
+}
+
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
@@ -1675,6 +1781,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "meshGetApplianceId", mesh_get_appliance_id_command, 
      tserv, nullptr);                       
   Tcl_CreateObjCommand(interp, "meshBroadcastCustomUpdate", mesh_broadcast_custom_update_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "meshConfig", mesh_config_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshInfo", mesh_info_command, tserv, nullptr);
                   
   Tcl_CreateObjCommand(interp, "dservAddMatch",
                dserv_add_match_command, tserv, NULL);
