@@ -348,7 +348,6 @@ void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
     return;
 
   QString cmd = parts[0];
-  QColor currentColor;
   
   if (cmd == "setwindow" && parts.size() >= 5) {
     float x0 = parts[1].toFloat();
@@ -379,9 +378,9 @@ void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
     painter->setFont(font);
   } else if (cmd == "setcolor" && parts.size() >= 2) {
     int colorIndex = parts[1].trimmed().toInt();
-    currentColor = cgraphColorToQt(colorIndex);
-    painter->setPen(currentColor);
-    painter->setBrush(currentColor);
+    m_currentColor = cgraphColorToQt(colorIndex);
+    painter->setPen(m_currentColor);
+    painter->setBrush(m_currentColor);
   } else if (cmd == "setlstyle" && parts.size() >= 2) {
     int style = parts[1].trimmed().toInt();
     Qt::PenStyle penStyle = (style == 0) ? Qt::NoPen : Qt::SolidLine;
@@ -436,8 +435,11 @@ void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
       float width = qAbs(x1 - x0);
       float height = qAbs(qtY0 - qtY1);
 
+
       QRectF rect(left, top, width, height);
       if (width > 0 && height > 0) {
+	  	painter->setBrush(m_currentColor);
+      	painter->setPen(Qt::NoPen);
         painter->fillRect(rect, painter->brush());
       }
     }
@@ -470,6 +472,7 @@ void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
       float radius = coords[2].toFloat()/2;
       bool filled = coords[3].toInt();
 
+      painter->setPen(m_currentColor);
 	  painter->setBrush(Qt::NoBrush);
 	  painter->drawEllipse(QPointF(x, y), radius, radius);
     }
@@ -481,7 +484,7 @@ void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
       float radius = coords[2].toFloat()/2;
       bool filled = coords[3].toInt();
 
-	  painter->setBrush(currentColor);
+	  painter->setBrush(m_currentColor);
       painter->setPen(Qt::NoPen);
       painter->drawEllipse(QPointF(x, y), radius, radius);
      }
@@ -529,6 +532,8 @@ void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
     }
 
     painter->save();
+
+	painter->setPen(m_currentColor);
 
     // Draw a small cross at the current point for reference
 #if 0 
