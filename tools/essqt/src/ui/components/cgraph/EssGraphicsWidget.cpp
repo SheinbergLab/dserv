@@ -35,10 +35,7 @@ EssGraphicsWidget::EssGraphicsWidget(const QString& name, QWidget* parent)
     , m_controlsVisible(true)          
     , m_mainSplitter(nullptr)          
     , m_sideControlsContainer(nullptr)
-    , m_bottomControlsContainer(nullptr)
-    , m_gbuf(nullptr)                  
-    , m_frame(nullptr)                 
-    , m_graphicsInitialized(false)
+    , m_bottomControlsContainer(nullptr)                             
     , m_backgroundColor(Qt::white)
     , m_toolbar(nullptr)
     , m_graphWidget(nullptr)
@@ -47,10 +44,6 @@ EssGraphicsWidget::EssGraphicsWidget(const QString& name, QWidget* parent)
     , m_widgetFullyConstructed(false)
     , m_pendingGraphicsInit(false)
 {
-    // Connect the signal for delayed initialization
-    connect(this, &EssGraphicsWidget::widgetReady, 
-            this, &EssGraphicsWidget::onWidgetReady, Qt::QueuedConnection);
-    
     // Set default setup script - but don't call graphics_init immediately
     setSetupScript(R"tcl(
 # Graphics Widget Setup Script
@@ -72,8 +65,7 @@ local_log "Graphics widget setup script complete"
     m_widgetFullyConstructed = true;
 }
 
-EssGraphicsWidget::~EssGraphicsWidget()
-{
+EssGraphicsWidget::~EssGraphicsWidget() {
     QMutexLocker locker(&m_pixmapMutex);
     
     if (m_graphWidget) {
@@ -82,55 +74,40 @@ EssGraphicsWidget::~EssGraphicsWidget()
         QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
 
-    // Clear static instance BEFORE any cleanup that might trigger callbacks
+    // Clear static instance if it points to us
     if (s_currentInstance == this) {
         s_currentInstance = nullptr;
     }
     
-    // SAFETY: Clear pointers BEFORE cleanup to prevent double-free
-    void* savedGbuf = m_gbuf;
-    void* savedFrame = m_frame;
-    m_gbuf = nullptr;
-    m_frame = nullptr;
-    
-    // Clean up graphics buffer with original pointers
-    if (savedGbuf && interpreter()) {
-        cleanupGraphicsBuffer();
-    }
-    
+    // That's it! No gbuf cleanup needed since we don't manage it directly
     disconnect();
+}
+
+// In registerCustomCommands(), replace existing flushwin:
+static int qt_flushwin_cmd(ClientData clientData, Tcl_Interp* interp, 
+                          int objc, Tcl_Obj* const objv[]) {
+    auto* widget = static_cast<EssGraphicsWidget*>(clientData);
+    widget->flushGBufToWidget();
+    return TCL_OK;
 }
 
 void EssGraphicsWidget::registerCustomCommands()
 {
     if (!interpreter()) return;
     
-    // Load the qtcgraph package which provides all the bridge commands
-    const char* packageScript = R"tcl(
-       # Load graphics-specific package (core packages already loaded)
-        if {[catch {package require qtcgraph} err]} {
-            local_log "Warning: Could not load qtcgraph package: $err"
-        } else {
-            local_log "qtcgraph package loaded successfully"
-        }
-    )tcl";
-    
-    if (Tcl_Eval(interpreter(), packageScript) != TCL_OK) {
-        localLog(QString("Warning: Failed to load packages: %1").arg(result()));
-    }
-    
     // Register enhanced graphics commands
     Tcl_CreateObjCommand(interpreter(), "graphics_init", tcl_graphics_init, this, nullptr);
     Tcl_CreateObjCommand(interpreter(), "graphics_clear", tcl_graphics_clear, this, nullptr);
     Tcl_CreateObjCommand(interpreter(), "graphics_export", tcl_graphics_export, this, nullptr);
     Tcl_CreateObjCommand(interpreter(), "graphics_bind", tcl_graphics_bind, this, nullptr);
-    Tcl_CreateObjCommand(interpreter(), "graphics_setcolor", tcl_graphics_setcolor, this, nullptr);
-    Tcl_CreateObjCommand(interpreter(), "graphics_colorlist", tcl_graphics_colorlist, this, nullptr);
-    
+   
     // Layout control commands (stubs for future enhancement)
     Tcl_CreateObjCommand(interpreter(), "graphics_layout", tcl_graphics_layout, this, nullptr);
     Tcl_CreateObjCommand(interpreter(), "graphics_controls", tcl_graphics_controls, this, nullptr);
+    Tcl_CreateObjCommand(interpreter(), "graphics_reset_buffer", tcl_reset_gbuf, this, nullptr);
     
+    Tcl_CreateObjCommand(interpreter(), "flushwin", qt_flushwin_cmd, this, nullptr);
+
     // Create aliases for standard cgraph commands
     const char* aliasScript = R"tcl(
         # Create standard cgraph command aliases
@@ -142,10 +119,6 @@ void EssGraphicsWidget::registerCustomCommands()
                 graphics_export $filename 
             } 
         }
-        
-        # Enhanced setcolor that supports names
-        rename setcolor _original_setcolor
-        proc setcolor {color} { graphics_setcolor $color }
         
         # Convenience binding command
         proc cgbind {event script} { graphics_bind $event $script }
@@ -292,52 +265,352 @@ void EssGraphicsWidget::onFloatingToggled(bool floating)
     emit floatingRequested(floating);
 }
 
-void EssGraphicsWidget::onSetupComplete()
-{
-    // If widget is ready and we have a pending init request, do it now
-    if (m_widgetFullyConstructed && m_pendingGraphicsInit) {
-        initializeGraphics();
-        m_pendingGraphicsInit = false;
+void EssGraphicsWidget::showEvent(QShowEvent* event) {
+    EssScriptableWidget::showEvent(event);
+    
+    // Initialize graphics when widget is first shown with valid size
+    static bool initialized = false;
+    if (!initialized && m_graphWidget && 
+        m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
+        
+        if (interpreter()) {
+            // Set initial resolution
+            QString cmd = QString("setresol %1 %2; gbufreset")
+                         .arg(m_graphWidget->width())
+                         .arg(m_graphWidget->height());
+            eval(cmd);
+            clear();
+            
+            initialized = true;
+            localLog("Graphics initialized on first show");
+        }
     }
 }
 
-bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
-{
-   if (obj == m_graphWidget) {
-        if (event->type() == QEvent::Paint) {
-            QPainter widgetPainter(m_graphWidget);
-            
-            QMutexLocker locker(&m_pixmapMutex);
-            if (!m_pixmap.isNull()) {
-                widgetPainter.drawPixmap(0, 0, m_pixmap);
-            } else {
-                widgetPainter.fillRect(m_graphWidget->rect(), m_backgroundColor);
-            }
-            
-            emit graphUpdated();
-            return true;
+void EssGraphicsWidget::flushGBufToWidget() {
+    if (!interpreter()) return;
+    
+    // Use Tcl to dump gbuf to string - result goes directly to interpreter result
+    int result = Tcl_Eval(interpreter(), "dumpwin string");
+    
+    if (result == TCL_OK) {
+        // Get the result string directly
+        const char* commands = Tcl_GetStringResult(interpreter());
+        
+        if (commands && strlen(commands) > 0) {
+            renderCommands(QString(commands));
         }
-        else if (event->type() == QEvent::Resize) {
-            QResizeEvent* resizeEvent = static_cast<QResizeEvent*>(event);
-            QSize newSize = resizeEvent->size();
-            QSize oldSize = resizeEvent->oldSize();
+    } else {
+        localLog(QString("Failed to dump gbuf: %1").arg(Tcl_GetStringResult(interpreter())));
+    }
+}
+
+void EssGraphicsWidget::renderCommands(const QString& commands) {
+    m_lastGBCommands = commands;
+    
+    ensurePixmapSize();
+    QMutexLocker locker(&m_pixmapMutex);
+    m_pixmap.fill(m_backgroundColor);
+    
+    QPainter painter(&m_pixmap);
+    //painter.setRenderHint(QPainter::Antialiasing);
+    
+    painter.setPen(Qt::black);
+    painter.setBrush(Qt::black);
+    painter.setFont(QFont("Helvetica", 10));
+    
+    // Initialize drawing state
+    m_currentPos = QPointF(0, 0);
             
-            if (newSize != oldSize && newSize.width() > 0 && newSize.height() > 0) {
-                // Ensure pixmap matches new size
-                ensurePixmapSize();
-                
-                // Update cgraph dimensions - direct call
-                if (m_graphicsInitialized && interpreter()) {
-                    QString resizeCmd = QString("qtcgraph_resize");
-                    Tcl_Eval(interpreter(), resizeCmd.toUtf8().constData());
-                    
-                    // Direct redraw - callbacks are self-contained so no recursion risk
-                    invalidatePixmap();
-                    requestRedraw();
-                }
-            }
-            return false;  // Let widget handle its own resize
-        }
+    QStringList lines = commands.split('\n', Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        if (line.startsWith('#')) continue;
+        QStringList parts = line.split('\t', Qt::SkipEmptyParts);
+        executeGBCommand(parts, &painter);
+    }
+    
+    locker.unlock();
+    if (m_graphWidget) m_graphWidget->update();
+
+    if (m_graphWidget) {
+        m_graphWidget->update();
+    }
+}
+
+float EssGraphicsWidget::flipY(float y) const {
+    // Use the same approach as bridge callbacks: h - y
+    return m_graphWidget ? m_graphWidget->height() - y : y;
+}
+
+void EssGraphicsWidget::executeGBCommand(const QStringList &parts,
+                                         QPainter *painter) {
+  if (parts.isEmpty())
+    return;
+
+  QString cmd = parts[0];
+  QColor currentColor;
+  
+  if (cmd == "setwindow" && parts.size() >= 5) {
+    float x0 = parts[1].toFloat();
+    float y0 = parts[2].toFloat();
+    float x1 = parts[3].toFloat();
+    float y1 = parts[4].toFloat();
+
+    float originalWidth = x1 - x0;
+    float originalHeight = y1 - y0;
+
+    if (originalWidth > 0 && originalHeight > 0 && m_graphWidget) {
+      float currentWidth = (float)m_graphWidget->width();
+      float currentHeight = (float)m_graphWidget->height();
+
+      float scaleX = currentWidth / originalWidth;
+      float scaleY = currentHeight / originalHeight;
+
+      if (scaleX != 1.0 || scaleY != 1.0) {
+        // Simple scaling only - no coordinate system changes
+        painter->scale(scaleX, scaleY);
+      } else {
+      }
+    }
+  } else if (cmd == "setfont" && parts.size() >= 3) {
+    QString fontName = parts[1];
+    float size = parts[2].trimmed().toFloat();
+    QFont font(fontName, (int)size);
+    painter->setFont(font);
+  } else if (cmd == "setcolor" && parts.size() >= 2) {
+    int colorIndex = parts[1].trimmed().toInt();
+    currentColor = cgraphColorToQt(colorIndex);
+    painter->setPen(currentColor);
+    painter->setBrush(currentColor);
+  } else if (cmd == "setlstyle" && parts.size() >= 2) {
+    int style = parts[1].trimmed().toInt();
+    Qt::PenStyle penStyle = (style == 0) ? Qt::NoPen : Qt::SolidLine;
+    QPen pen = painter->pen();
+    pen.setStyle(penStyle);
+    painter->setPen(pen);
+  } else if (cmd == "setlwidth" && parts.size() >= 2) {
+    int width = parts[1].trimmed().toInt();
+    QPen pen = painter->pen();
+    pen.setWidth(qMax(1, width / 100)); // Convert from cgraph units, minimum 1
+    painter->setPen(pen);
+  } else if (cmd == "setorientation" && parts.size() >= 2) {
+    m_textOrientation = parts[1].trimmed().toInt();
+  } else if (cmd == "setjust" && parts.size() >= 2) {
+    m_textJustification = parts[1].trimmed().toInt();
+  } else if (cmd == "setclipregion" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 4) {
+      float x0 = coords[0].toFloat();
+      float y0 = coords[1].toFloat();
+      float x1 = coords[2].toFloat();
+      float y1 = coords[3].toFloat();
+
+      // Convert to Qt coordinates with flipY
+      float qtY0 = flipY(y0);
+      float qtY1 = flipY(y1);
+
+      // Create clip rectangle from corners
+      float left = qMin(x0, x1);
+      float top = qMin(qtY0, qtY1);
+      float width = qAbs(x1 - x0);
+      float height = qAbs(qtY0 - qtY1);
+
+      QRectF clipRect(left, top, width, height);
+      painter->setClipRect(clipRect);
+    }
+  } else if (cmd == "filledrect" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 4) {
+      float x0 = coords[0].toFloat();
+      float y0 = coords[1].toFloat();
+      float x1 = coords[2].toFloat();
+      float y1 = coords[3].toFloat();
+
+      // Convert to Qt coordinates with flipY
+      float qtY0 = flipY(y0);
+      float qtY1 = flipY(y1);
+
+      // Create rectangle from corners
+      float left = qMin(x0, x1);
+      float top = qMin(qtY0, qtY1);
+      float width = qAbs(x1 - x0);
+      float height = qAbs(qtY0 - qtY1);
+
+      QRectF rect(left, top, width, height);
+      if (width > 0 && height > 0) {
+        painter->fillRect(rect, painter->brush());
+      }
+    }
+  } else if (cmd == "moveto" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 2) {
+      m_currentPos = QPointF(coords[0].toFloat(), flipY(coords[1].toFloat()));
+    }
+  } else if (cmd == "lineto" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 2) {
+      QPointF newPos(coords[0].toFloat(), flipY(coords[1].toFloat()));
+      painter->drawLine(m_currentPos, newPos);
+      m_currentPos = newPos;
+    }
+  } else if (cmd == "line" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 4) {
+      float x0 = coords[0].toFloat();
+      float y0 = flipY(coords[1].toFloat());
+      float x1 = coords[2].toFloat();
+      float y1 = flipY(coords[3].toFloat());
+      painter->drawLine(QPointF(x0, y0), QPointF(x1, y1));
+    }
+  } else if (cmd == "circle" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 4) {
+      float x = coords[0].toFloat();
+      float y = flipY(coords[1].toFloat());
+      float radius = coords[2].toFloat()/2;
+      bool filled = coords[3].toInt();
+
+	  painter->setBrush(Qt::NoBrush);
+	  painter->drawEllipse(QPointF(x, y), radius, radius);
+    }
+  } else if (cmd == "fcircle" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 4) {
+      float x = coords[0].toFloat();
+      float y = flipY(coords[1].toFloat());
+      float radius = coords[2].toFloat()/2;
+      bool filled = coords[3].toInt();
+
+	  painter->setBrush(currentColor);
+      painter->setPen(Qt::NoPen);
+      painter->drawEllipse(QPointF(x, y), radius, radius);
+     }
+  }
+
+  else if (cmd == "drawtext" && parts.size() >= 2) {
+    QString text = parts[1];
+    if (text.startsWith('"') && text.endsWith('"')) {
+      text = text.mid(1, text.length() - 2);
+    }
+
+    QFontMetrics fm(painter->font());
+    QRectF textRect = fm.boundingRect(text);
+
+    float hoff = 0, voff = 0;
+    int ori = m_textOrientation;
+    int just = m_textJustification;
+
+    if (ori == 0 || ori == 2) { // horizontal
+      switch (just) {
+      case -1:
+        hoff = 0;
+        break;
+      case 1:
+        hoff = textRect.width();
+        break;
+      case 0:
+        hoff = textRect.width() * 0.5;
+        break;
+      }
+      voff = (textRect.height()) * 0.5;
+    } else { // vertical
+      switch (just) {
+      case -1:
+        voff = 0;
+        break;
+      case 1:
+        voff = textRect.width();
+        break;
+      case 0:
+        voff = textRect.width() * 0.5;
+        break;
+      }
+      hoff = (textRect.height()) * 0.5;
+    }
+
+    painter->save();
+
+    // Draw a small cross at the current point for reference
+#if 0 
+    painter->setPen(QPen(Qt::red, 1));
+    painter->drawLine(m_currentPos.x() - 5, m_currentPos.y(),
+                      m_currentPos.x() + 5, m_currentPos.y());
+    painter->drawLine(m_currentPos.x(), m_currentPos.y() - 5, m_currentPos.x(),
+                      m_currentPos.y() + 5);
+    painter->setPen(QPen(Qt::black, 1));
+#endif
+    if (ori == 0) {
+      painter->translate(m_currentPos.x() - hoff,
+                         m_currentPos.y() + textRect.height() * 0.5);
+      painter->rotate(-ori * 90);
+      painter->drawText(0, 0, text);
+    } else if (ori == 1) {
+      painter->translate(m_currentPos.x() + (textRect.height() * .5),
+                         m_currentPos.y() + voff);
+      painter->rotate(-ori * 90);
+      painter->drawText(0, 0, text);
+    } else if (ori == 2) {
+      painter->translate(m_currentPos.x() + hoff, m_currentPos.y() - voff);
+      painter->rotate(-ori * 90);
+      painter->drawText(0, 0, text);
+    } else if (ori == 3) {
+      painter->translate(m_currentPos.x() - hoff, m_currentPos.y() - voff);
+      painter->rotate(-ori * 90);
+      painter->drawText(0, 0, text);
+    }
+    painter->restore();
+  } else if (cmd == "point" && parts.size() >= 2) {
+    QStringList coords = parts[1].split(' ', Qt::SkipEmptyParts);
+    if (coords.size() >= 2) {
+      float x = coords[0].toFloat();
+      float y = flipY(coords[1].toFloat());
+      painter->drawPoint(QPointF(x, y));
+    }
+  }
+  // Skip header and other non-drawing commands
+  else if (cmd.startsWith('#') || cmd == "setversion") {
+    // Ignore comments and version info
+  }
+}
+
+void EssGraphicsWidget::resizeEvent(QResizeEvent* event) {
+    EssScriptableWidget::resizeEvent(event);
+	// handle cgraph pixmap resize in eventFilter()
+}
+
+
+bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == m_graphWidget) {
+		if (event->type() == QEvent::Paint) {
+			QPainter widgetPainter(m_graphWidget);  // Make sure this is the RIGHT widget
+			
+			QMutexLocker locker(&m_pixmapMutex);
+			if (!m_pixmap.isNull()) {
+				widgetPainter.drawPixmap(0, 0, m_pixmap);
+			} else {
+				widgetPainter.fillRect(m_graphWidget->rect(), m_backgroundColor);
+			}
+			
+			return true;
+		}
+		else if (event->type() == QEvent::Resize) {
+			QResizeEvent* resizeEvent = static_cast<QResizeEvent*>(event);
+			QSize newSize = resizeEvent->size();
+			
+			if (newSize.width() > 0 && newSize.height() > 0) {
+				// Update resolution, and reset gbuf only if it's empty
+				if (interpreter()) {
+					QString cmd = QString("setresol %1 %2; if { [gbufisempty] } { gbufreset }")
+								 .arg(newSize.width())
+								 .arg(newSize.height());
+					eval(cmd);
+				}
+				
+				// Re-render with new scaling
+				flushGBufToWidget();
+			}
+			return false;  // Let widget handle its own resize
+		}
         else if (event->type() == QEvent::MouseButtonPress) {
             onMousePressEvent(static_cast<QMouseEvent*>(event));
             return true;
@@ -380,7 +653,6 @@ bool EssGraphicsWidget::eventFilter(QObject* obj, QEvent* event)
     return EssScriptableWidget::eventFilter(obj, event);
 }
 
-// Simplified pixmap support
 void EssGraphicsWidget::ensurePixmapSize()
 {
     if (!m_graphWidget) return;
@@ -392,14 +664,14 @@ void EssGraphicsWidget::ensurePixmapSize()
     
     QMutexLocker locker(&m_pixmapMutex);
     
-    // Check if pixmap needs to be resized
+    // Check if pixmap needs to be resized  
     if (m_pixmap.size() != currentSize) {
-        // Create new pixmap with device pixel ratio support
-        m_pixmap = QPixmap(currentSize * devicePixelRatio());
-        m_pixmap.setDevicePixelRatio(devicePixelRatio());
+        // Use logical size, not device pixel ratio scaled
+        m_pixmap = QPixmap(currentSize);
+        // m_pixmap.setDevicePixelRatio(devicePixelRatio());  // Comment out for now
         m_pixmap.fill(m_backgroundColor);
         
-        m_pixmapValid = false;  // Need to redraw
+        m_pixmapValid = false;
     }
 }
 
@@ -409,55 +681,6 @@ void EssGraphicsWidget::invalidatePixmap()
     m_pixmapValid = false;
 }
 
-// Simplified rendering - just delegate to cgraph callbacks
-void EssGraphicsWidget::renderToPixmap()
-{
-    if (!interpreter() || !m_gbuf) {
-        return;
-    }
-    
-    if (!m_graphWidget || m_graphWidget->size().isEmpty()) {
-        return;
-    }
-    
-    // Ensure pixmap is the right size
-    ensurePixmapSize();
-    
-    // Set this widget as the current instance for callbacks
-    s_currentInstance = this;
-    
-    // Execute the graphics playback - callbacks will draw directly to pixmap
-    QString cmd = QString("qtcgraph_playback");
-    eval(cmd.toUtf8().constData());
-    
-    m_pixmapValid = true;
-}
-
-void EssGraphicsWidget::requestRedraw()
-{
-    if (m_graphicsInitialized) {
-        invalidatePixmap();
-        renderToPixmap();
-    }
-}
-
-void EssGraphicsWidget::forceGraphicsResize()
-{
-    onGraphicsWidgetResized();
-}
-
-void EssGraphicsWidget::showEvent(QShowEvent* event)
-{
-    EssScriptableWidget::showEvent(event);
-    
-    // Only trigger initialization once when widget becomes visible with valid size
-    if (!m_graphicsInitialized && m_widgetFullyConstructed && m_graphWidget && 
-        m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
-        
-        emit widgetReady();
-    }
-}
-
 int EssGraphicsWidget::eval(const QString& command)
 {
     if (!interpreter()) {
@@ -465,205 +688,59 @@ int EssGraphicsWidget::eval(const QString& command)
         return TCL_ERROR;
     }
     
-    s_currentInstance = this;
-    
-	QString contextCmd = QString("qtcgraph_set_current_buffer");
-	Tcl_Eval(interpreter(), contextCmd.toUtf8().constData());
-    
     // Call base class eval() to do the work
     return EssScriptableWidget::eval(command);
 }
 
-void EssGraphicsWidget::initializeGraphics()
-{
-    if (m_graphicsInitialized || !interpreter()) return;
-    
-    // Make sure widget has a size
-    if (!m_graphWidget || m_graphWidget->width() <= 0 || m_graphWidget->height() <= 0) {
-        localLog("Widget not ready for graphics initialization");
-        return;
-    }
- 
-    // cleanup if we have an existing buffer
-    if (m_gbuf != nullptr) {
-        cleanupGraphicsBuffer();
-    }
-    
-    Tcl_SetAssocData(interpreter(), "graphics_widget", nullptr, this);
-    
-    // Initialize cgraph - now bridge commands can find the widget via assoc data
-    if (Tcl_Eval(interpreter(), "package require qtcgraph") != TCL_OK) {
-        localLog(QString("Failed to load qtcgraph: %1").arg(result()));
-        return;
-    }
-     
-    // Call Tcl to initialize the graphics buffer
-    QString cmd = QString("qtcgraph_init_widget");
-    
-    if (Tcl_Eval(interpreter(), cmd.toUtf8().constData()) != TCL_OK) {
-        localLog(QString("Failed to initialize graphics: %1").arg(result()));
-        return;
-    }
-    
-    m_graphicsInitialized = true;
-  
-    // Force a resize to ensure cgraph has the correct dimensions
-    QString resizeCmd = QString("qtcgraph_resize");
-    eval(resizeCmd.toUtf8().constData());
-    
-    ensurePixmapSize();
-    
-    // Clear and initialize
-    if (interpreter() && m_graphicsInitialized) {
-        eval("clearwin");
-        clear();
-    }
-
-    localLog("Graphics system initialized successfully");
-}
-
-void EssGraphicsWidget::cleanupGraphicsBuffer()
-{
-    // Clear static instance FIRST if it points to us
-    if (s_currentInstance == this) {
-        s_currentInstance = nullptr;
-    }
-    
-    // Early exit if already cleaned up
-    if (m_gbuf == nullptr) {
-        m_frame = nullptr;
-        return;
-    }
-    
-    // Don't try to clean up if interpreter is gone or invalid
-    if (!interpreter()) {
-        m_gbuf = nullptr;
-        m_frame = nullptr;
-        return;
-    }
-    
-    // Try the cleanup command, but handle failure gracefully
-    QString cmd = QString("qtcgraph_cleanup");
-    int result = eval(cmd.toUtf8().constData());
-    
-    if (result != TCL_OK) {
-        qDebug() << "Graphics cleanup failed (this may be normal during shutdown):" 
-                 << Tcl_GetStringResult(interpreter());
-    }
-         
-    // Always clear our pointers regardless of Tcl result
-    m_gbuf = nullptr;
-    m_frame = nullptr;
-}
-
 void EssGraphicsWidget::refresh()
 {
-    if (m_graphicsInitialized) {
-        invalidatePixmap();
-        renderToPixmap();
-    } else if (m_graphWidget) {
-        m_graphWidget->update();
-    }
+    flushGBufToWidget();
 }
 
-void EssGraphicsWidget::clear()
-{
-    if (!interpreter() || !m_gbuf) return;
+void EssGraphicsWidget::clear() {
+    // Clear the cgraph buffer via a different command or direct call
+    if (interpreter()) {
+        eval("setfviewport 0 0 1 1; gbufreset");  // if this exists
+    }
     
-    // Clear the cgraph buffer
-    QString cmd = QString("qtcgraph_clear");
-    eval(cmd.toUtf8().constData());
-    
-    // Explicitly clear the pixmap immediately
+    // Clear cached commands
+    m_lastGBCommands.clear();
+
+    // Clear our pixmap directly
     QMutexLocker locker(&m_pixmapMutex);
     if (!m_pixmap.isNull()) {
         m_pixmap.fill(m_backgroundColor);
     }
-    
-    m_pixmapValid = true;
-    
-    // Trigger widget update to show the cleared pixmap
+        
+    // Trigger widget update
     if (m_graphWidget) {
         m_graphWidget->update();
     }
 }
 
-void EssGraphicsWidget::setBackgroundColor(const QColor& color)
-{
+void EssGraphicsWidget::setBackgroundColor(const QColor& color) {
     m_backgroundColor = color;
     
-    // Update the palette
+    // Update the widget palette
     if (m_graphWidget) {
         QPalette pal = m_graphWidget->palette();
         pal.setColor(QPalette::Window, m_backgroundColor);
         m_graphWidget->setPalette(pal);
     }
     
-    // Clear pixmap and trigger re-render
-    invalidatePixmap();
-    if (m_graphicsInitialized) {
-        renderToPixmap();
-    }
-}
-
-void EssGraphicsWidget::resizeEvent(QResizeEvent* event)
-{
-    EssScriptableWidget::resizeEvent(event);
-    
-    // Handle case where widget was shown but had zero size initially
-    if (!m_graphicsInitialized && m_widgetFullyConstructed && m_graphWidget && 
-        m_graphWidget->width() > 0 && m_graphWidget->height() > 0) {
-        
-        emit widgetReady();
-    }
-    
-    // Handle resize for already-initialized graphics
-    if (m_graphicsInitialized && interpreter() && m_graphWidget) {
-        QSize graphicsSize = m_graphWidget->size();
-        
-        if (graphicsSize.width() > 0 && graphicsSize.height() > 0) {
-            QString cmd = QString("qtcgraph_resize");
-            eval(cmd.toUtf8().constData());
-            
-            // Direct call instead of timer - callbacks handle their own updates
-            refresh();
-        }
-    }
-}
-
-void EssGraphicsWidget::onGraphicsWidgetResized()
-{
-    if (!m_graphicsInitialized || !interpreter() || !m_graphWidget) {
-        return;
-    }
-    
-    QSize newSize = m_graphWidget->size();
-    
-    if (newSize.width() <= 0 || newSize.height() <= 0) {
-        return;
-    }
-    
-    QString resizeCmd = QString("qtcgraph_resize");
-    eval(resizeCmd.toUtf8().constData());
-    
-    // Direct call - no timer needed
-    refresh();
-}
-
-void EssGraphicsWidget::onWidgetReady()
-{
-    // This is called via queued connection when widget is ready
-    if (m_graphicsInitialized) {
-        return; // Already initialized
-    }
-    
-    // Call the Tcl initialization function
-    if (interpreter()) {
-        eval("graphics_init_when_ready");
-        emit graphicsReady();
+    // If we have cached commands, re-render with new background
+    if (!m_lastGBCommands.isEmpty()) {
+        renderCommands(m_lastGBCommands);
     } else {
-        localLog("Interpreter not ready - marking pending");
-        m_pendingGraphicsInit = true;
+        // Just clear to new background color
+        QMutexLocker locker(&m_pixmapMutex);
+        if (!m_pixmap.isNull()) {
+            m_pixmap.fill(m_backgroundColor);
+        }
+        
+        if (m_graphWidget) {
+            m_graphWidget->update();
+        }
     }
 }
 
@@ -675,50 +752,65 @@ void EssGraphicsWidget::setFloatingMode(bool floating)
     }
 }
 
-EssGraphicsWidget* EssGraphicsWidget::getCurrentInstance()
-{
-    return s_currentInstance;
-}
 
 void EssGraphicsWidget::applyDevelopmentLayout()
 {
     // Call base class implementation first
     EssScriptableWidget::applyDevelopmentLayout();
-    
-    // After layout change, update graphics buffer size
-    if (m_graphicsInitialized && m_graphWidget) {
-        QMetaObject::invokeMethod(this, &EssGraphicsWidget::onGraphicsWidgetResized, 
-                                  Qt::QueuedConnection);
-    }
 }
 
 // Event handling methods (preserve QtCGraph event system)
 QString EssGraphicsWidget::substituteEventData(const QString& script, QEvent* event,
-                                              const QPointF& pos, int button, int delta) const
+                                              const QPointF& pos, int button, int delta)
 {
     QString result = script;
     
     // Basic position substitutions
     if (pos != QPointF()) {
-        // Get pixel coordinates from Qt
         int pixelX = (int)pos.x();
         int pixelY = (int)pos.y();
         
-        // Transform coordinates if we have a frame
-        if (m_frame) {
-            // First flip Y (Qt uses top-left, cgraph uses bottom-left)
-            float screenX = pixelX;
-            float screenY = (m_frame->ysres - 1) - pixelY;
-            
-            // Then apply the SCREEN transformation to get window coordinates
-            float winX = m_frame->xul + ((screenX - m_frame->xl) * m_frame->xus) / m_frame->xs;
-            float winY = m_frame->yub + ((screenY - m_frame->yb) * m_frame->yus) / m_frame->ys;
-            
-            // %x, %y - window coordinates
-            result.replace("%x", QString::number(winX, 'f', 2));
-            result.replace("%y", QString::number(winY, 'f', 2));
+        // Get window coordinates from cgraph via Tcl
+        if (interpreter()) {
+            // Get window bounds: llx lly urx ury
+            if (Tcl_Eval(interpreter(), "getwindow") == TCL_OK) {
+                QString windowStr = Tcl_GetStringResult(interpreter());
+                QStringList coords = windowStr.split(' ', Qt::SkipEmptyParts);
+                
+                if (coords.size() >= 4) {
+                    float llx = coords[0].toFloat();  // lower left x
+                    float lly = coords[1].toFloat();  // lower left y  
+                    float urx = coords[2].toFloat();  // upper right x
+                    float ury = coords[3].toFloat();  // upper right y
+                    
+                    // Get widget/pixmap size
+                    int widgetWidth = m_graphWidget ? m_graphWidget->width() : 400;
+                    int widgetHeight = m_graphWidget ? m_graphWidget->height() : 300;
+                    
+                    // Transform pixel coordinates to window coordinates
+                    // First flip Y (Qt top-left to cgraph bottom-left)
+                    float screenY = (widgetHeight - 1) - pixelY;
+                    float screenX = pixelX;
+                    
+                    // Scale to window coordinates
+                    float winX = llx + (screenX / (float)widgetWidth) * (urx - llx);
+                    float winY = lly + (screenY / (float)widgetHeight) * (ury - lly);
+                    
+                    // %x, %y - window coordinates
+                    result.replace("%x", QString::number(winX, 'f', 2));
+                    result.replace("%y", QString::number(winY, 'f', 2));
+                } else {
+                    // Fallback to pixel coordinates
+                    result.replace("%x", QString::number(pixelX));
+                    result.replace("%y", QString::number(pixelY));
+                }
+            } else {
+                // Tcl call failed, use pixel coordinates
+                result.replace("%x", QString::number(pixelX));
+                result.replace("%y", QString::number(pixelY));
+            }
         } else {
-            // No frame, just use pixel coordinates
+            // No interpreter, use pixel coordinates
             result.replace("%x", QString::number(pixelX));
             result.replace("%y", QString::number(pixelY));
         }
@@ -727,6 +819,7 @@ QString EssGraphicsWidget::substituteEventData(const QString& script, QEvent* ev
         result.replace("%X", QString::number(pixelX));
         result.replace("%Y", QString::number(pixelY));
     }
+    
     
     // Mouse button
     if (button >= 0) {
@@ -914,7 +1007,7 @@ void EssGraphicsWidget::onFocusOutEvent(QFocusEvent *event)
 
 bool EssGraphicsWidget::exportToPDF(const QString& filename)
 {
-    if (!interpreter() || !m_gbuf) {
+    if (!interpreter()) {
         localLog("Cannot export: not initialized");
         return false;
     }
@@ -1003,347 +1096,50 @@ bool EssGraphicsWidget::exportToPDFDialog(const QString& suggestedName)
     return exportToPDF(filename);
 }
 
-// Self-contained cgraph callbacks (QCgraph style)
-int EssGraphicsWidget::Clearwin()
-{
-    if (!s_currentInstance) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    s_currentInstance->m_pixmap.fill(s_currentInstance->m_backgroundColor);
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
-}
 
-int EssGraphicsWidget::Line(float x0, float y0, float x1, float y1)
-{    
-    if (!s_currentInstance) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    // Create painter directly on the pixmap
-    QPainter painter(&s_currentInstance->m_pixmap);
-    if (!painter.isActive()) return 0;
-    
-    // Set up painter
-    painter.setPen(QPen(s_currentInstance->m_currentColor, 1));
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    
-    // Flip Y coordinate (cgraph uses bottom-left, Qt uses top-left)
-    float h = s_currentInstance->m_pixmap.height();
-    float qt_y0 = h - y0 - 1;
-    float qt_y1 = h - y1 - 1;
-    
-    painter.drawLine(QPointF(x0, qt_y0), QPointF(x1, qt_y1));
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
-}
-
-int EssGraphicsWidget::Point(float x, float y)
-{
-    if (!s_currentInstance) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    QPainter painter(&s_currentInstance->m_pixmap);
-    painter.setPen(QPen(s_currentInstance->m_currentColor, 1));
-    
-    float h = s_currentInstance->m_pixmap.height();
-    float qt_y = h - y - 1;
-    
-    painter.drawPoint(QPointF(x, qt_y));
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
-}
-
-int EssGraphicsWidget::Setcolor(int index)
-{
-    if (!s_currentInstance) return 0;
-    
-    // Use the same color table as QCgraph
+QColor EssGraphicsWidget::cgraphColorToQt(int colorIndex) const {
+    // Standard cgraph color table
     static const QColor colorTable[] = {
-        Qt::black, Qt::blue, Qt::darkGreen, Qt::cyan,
-        Qt::red, Qt::magenta, QColor(165, 42, 42), Qt::white,
-        Qt::gray, QColor(173, 216, 230), Qt::green, QColor(224, 255, 255),
-        QColor(255, 20, 147), QColor(147, 112, 219), Qt::yellow,
-        QColor(0, 0, 128), Qt::white, Qt::lightGray
+        Qt::black,              // 0
+        Qt::blue,               // 1
+        Qt::darkGreen,          // 2
+        Qt::cyan,               // 3
+        Qt::red,                // 4
+        Qt::magenta,            // 5
+        QColor(165, 42, 42),    // 6 - brown
+        Qt::white,              // 7
+        Qt::gray,               // 8
+        QColor(173, 216, 230),  // 9 - light blue
+        Qt::green,              // 10
+        QColor(224, 255, 255),  // 11 - light cyan
+        QColor(255, 20, 147),   // 12 - deep pink
+        QColor(147, 112, 219),  // 13 - medium purple
+        Qt::yellow,             // 14
+        QColor(0, 0, 128),      // 15 - navy
+        Qt::white,              // 16 - bright white
+        Qt::lightGray           // 17
     };
     
-    int oldcolor = 0;
+    if (colorIndex >= 0 && colorIndex < 18) {
+        return colorTable[colorIndex];
+    }
     
-    if (index < 18) {
-        s_currentInstance->m_currentColor = colorTable[index];
-    } else {
-        // Handle RGB colors encoded in upper bits
-        unsigned int shifted = index >> 5;
+    // Handle RGB colors encoded in upper bits (if you use them)
+    if (colorIndex > 18) {
+        unsigned int shifted = colorIndex >> 5;
         int r = (shifted & 0xff0000) >> 16;
         int g = (shifted & 0xff00) >> 8;
         int b = (shifted & 0xff);
-        s_currentInstance->m_currentColor = QColor(r, g, b);
+        return QColor(r, g, b);
     }
     
-    return oldcolor;
-}
-
-int EssGraphicsWidget::Char(float x, float y, char *string)
-{
-    if (!s_currentInstance || !string) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    QPainter painter(&s_currentInstance->m_pixmap);
-    painter.setPen(QPen(s_currentInstance->m_currentColor));
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    
-    float h = s_currentInstance->m_pixmap.height();
-    float qt_y = h - y - 1;
-    
-    int ori = s_currentInstance->m_frame ? s_currentInstance->m_frame->orientation : 0;
-    
-    painter.save();
-    painter.translate(x, qt_y);
-    painter.rotate(-ori * 90);
-    painter.drawText(0, 0, QString::fromUtf8(string));
-    painter.restore();
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
-}
-
-int EssGraphicsWidget::Text(float x, float y, char *string)
-{
-    if (!s_currentInstance || !string) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    QPainter painter(&s_currentInstance->m_pixmap);
-    painter.setPen(QPen(s_currentInstance->m_currentColor));
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    
-    float h = s_currentInstance->m_pixmap.height();
-    float qt_y = h - y - 1;
-    
-    QString text = QString::fromUtf8(string);
-    QFontMetrics fm(painter.font());
-    QRectF textRect = fm.boundingRect(text);
-    
-    float hoff = 0, voff = 0;
-    int ori = s_currentInstance->m_frame ? s_currentInstance->m_frame->orientation : 0;
-    int just = s_currentInstance->m_frame ? s_currentInstance->m_frame->just : -1;
-    
-    if (ori == 0 || ori == 2) {  // horizontal
-        switch (just) {
-        case -1:  // JustLeft
-            hoff = 0; 
-            break;
-        case 1:   // JustRight
-            hoff = textRect.width(); 
-            break;
-        case 0:   // JustCenter
-            hoff = textRect.width() * 0.5; 
-            break;
-        }
-        voff = textRect.height() * 0.5;
-    } else {  // vertical
-        switch (just) {
-        case -1:  // JustLeft
-            voff = 0; 
-            break;
-        case 1:   // JustRight
-            voff = textRect.width(); 
-            break;
-        case 0:   // JustCenter
-            voff = textRect.width() * 0.5; 
-            break;
-        }
-        hoff = -textRect.height() * 0.5;
-    }
-    
-    painter.save();
-    painter.translate(x - hoff, qt_y + voff);
-    painter.rotate(-ori * 90);
-    painter.drawText(0, 0, text);
-    painter.restore();
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
-}
-
-int EssGraphicsWidget::Setfont(char *fontname, float size)
-{
-    if (!s_currentInstance) return 0;
-    
-    QString fname(fontname);
-    QFont font;
-    
-    if (fname == "HELVETICA") {
-        font.setFamily("Helvetica");
-    } else if (fname == "TIMES") {
-        font.setFamily("Times");
-    } else if (fname == "COURIER") {
-        font.setFamily("Courier");
-    } else if (fname == "SYMBOL") {
-        font.setFamily("Arial Unicode MS");
-    } else {
-        font.setFamily(fname);
-    }
-    
-    font.setPointSizeF(size);
-    // Note: Font is applied per-painter, so this sets it for future text operations
-    
-    return 0;
-}
-
-int EssGraphicsWidget::Strwidth(char *str)
-{
-    if (!s_currentInstance || !str) return 0;
-    
-    QFont currentFont;  // Use default font or could store current font in widget
-    QFontMetrics fm(currentFont);
-    return fm.horizontalAdvance(QString::fromUtf8(str));
-}
-
-int EssGraphicsWidget::Strheight(char *str)
-{
-    if (!s_currentInstance || !str) return 0;
-    
-    QFont currentFont;
-    QFontMetrics fm(currentFont);
-    return fm.height();
-}
-
-int EssGraphicsWidget::FilledPolygon(float *verts, int nverts)
-{
-    if (!s_currentInstance || !verts) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    QPainter painter(&s_currentInstance->m_pixmap);
-    painter.setBrush(QBrush(s_currentInstance->m_currentColor));
-    painter.setPen(QPen(Qt::NoPen));
-    
-    float h = s_currentInstance->m_pixmap.height();
-    
-    QPolygonF polygon;
-    for (int i = 0; i < nverts; i++) {
-        polygon << QPointF(verts[i*2], h - verts[i*2+1] - 1);
-    }
-    
-    painter.drawPolygon(polygon);
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
-}
-
-int EssGraphicsWidget::Circle(float x, float y, float width, int filled)
-{
-    if (!s_currentInstance) return 0;
-    
-    QMutexLocker locker(&s_currentInstance->m_pixmapMutex);
-    if (s_currentInstance->m_pixmap.isNull()) return 0;
-    
-    QPainter painter(&s_currentInstance->m_pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    
-    float h = s_currentInstance->m_pixmap.height();
-    float qt_y = h - y - 1;
-    
-    if (filled) {
-        painter.setBrush(QBrush(s_currentInstance->m_currentColor));
-        painter.setPen(QPen(Qt::NoPen));
-    } else {
-        painter.setBrush(QBrush(Qt::NoBrush));
-        painter.setPen(QPen(s_currentInstance->m_currentColor, 1));
-    }
-    
-    painter.drawEllipse(QPointF(x + width/2, qt_y + width/2), width/2, width/2);
-    
-    locker.unlock();
-    
-    QMetaObject::invokeMethod(s_currentInstance, [instance = s_currentInstance]() {
-        if (instance->m_graphWidget) {
-            instance->m_graphWidget->update();
-        }
-    }, Qt::QueuedConnection);
-    
-    return 0;
+    return Qt::black; // Default
 }
 
 // Tcl command implementations
 int EssGraphicsWidget::tcl_graphics_init(ClientData clientData, Tcl_Interp* interp,
                                          int objc, Tcl_Obj* const objv[])
-{
-    auto* widget = static_cast<EssGraphicsWidget*>(clientData);
-    
-    if (objc != 1) {
-        Tcl_WrongNumArgs(interp, 1, objv, "");
-        return TCL_ERROR;
-    }
-    
-    // Safety checks
-    if (!widget->m_graphWidget) {
-        Tcl_SetResult(interp, "Graphics widget not ready", TCL_STATIC);
-        return TCL_ERROR;
-    }
-    
-    if (widget->m_graphicsInitialized) {
-        Tcl_SetResult(interp, "Graphics already initialized", TCL_STATIC);
-        return TCL_OK;  // Not an error
-    }
-    
-    widget->initializeGraphics();
-    
+{   
     Tcl_SetObjResult(interp, Tcl_NewStringObj("graphics initialized", -1));
     return TCL_OK;
 }
@@ -1438,30 +1234,30 @@ int EssGraphicsWidget::tcl_graphics_bind(ClientData clientData, Tcl_Interp* inte
     return TCL_OK;
 }
 
-int EssGraphicsWidget::tcl_graphics_setcolor(ClientData clientData, Tcl_Interp* interp,
-                                            int objc, Tcl_Obj* const objv[])
+int EssGraphicsWidget::tcl_reset_gbuf(ClientData clientData, Tcl_Interp* interp, 
+                       		  int objc, Tcl_Obj* const objv[]) 
 {
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "color_index_or_name");
+    auto* widget = static_cast<EssGraphicsWidget*>(clientData);
+    
+    if (!widget->graphWidget()) {
+        Tcl_SetResult(interp, "Graphics widget not ready", TCL_STATIC);
         return TCL_ERROR;
     }
     
-    // Delegate to the qtcgraph_setcolor command
-    QString colorArg = Tcl_GetString(objv[1]);
-    QString cmd = QString("qtcgraph_setcolor {%1}").arg(colorArg);
+    int width = widget->graphWidget()->width();
+    int height = widget->graphWidget()->height();
     
-    int result = Tcl_Eval(interp, cmd.toUtf8().constData());
+    if (width <= 0 || height <= 0) {
+        Tcl_SetResult(interp, "Graphics widget has invalid size", TCL_STATIC);
+        return TCL_ERROR;
+    }
     
-    return result;
+    // Update cgraph resolution
+    QString cmd = QString("setresol %1 %2; gbResetCurrentBuffer").arg(width).arg(height);
+    widget->eval(cmd);
+    
+    return TCL_OK;
 }
-
-int EssGraphicsWidget::tcl_graphics_colorlist(ClientData clientData, Tcl_Interp* interp,
-                                             int objc, Tcl_Obj* const objv[])
-{
-    // Delegate to the qtcgraph_colorlist command
-    return Tcl_Eval(interp, "qtcgraph_colorlist");
-}
-
 // Layout control Tcl commands (stubs for future enhancement)
 int EssGraphicsWidget::tcl_graphics_layout(ClientData clientData, Tcl_Interp* interp,
                                           int objc, Tcl_Obj* const objv[])

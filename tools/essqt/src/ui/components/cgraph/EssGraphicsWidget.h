@@ -17,6 +17,7 @@
 extern "C" {
 #include <cgraph.h>
 #include <gbuf.h>
+#include <gbufutl.h>
 }
 
 /**
@@ -54,9 +55,6 @@ public:
  
     // EssScriptableWidget interface
     QString getWidgetTypeName() const override { return "GraphicsWidget"; }
-    
-    // Resize management
-    void forceGraphicsResize();
         
     // Layout management
     void setLayoutMode(LayoutMode mode);
@@ -88,15 +86,7 @@ public:
     void setMouseDoubleClickScript(const QString& script) { m_mouseDoubleClickScript = script; }
     void setFocusInScript(const QString& script) { m_focusInScript = script; }
     void setFocusOutScript(const QString& script) { m_focusOutScript = script; }
-
-    // Graphics buffer access (for cgraph integration)
-    void* getGraphicsBuffer() { return m_gbuf; }
-    void setGraphicsBuffer(void* gbuf) { m_gbuf = gbuf; }
     
-    // Frame access (read-only for coordinate transformation and text properties)
-    FRAME* getFrame() { return m_frame; }
-    void setFrame(FRAME* frame) { m_frame = frame; }
-
     // Getter for bridge and manager integration
     QWidget* graphWidget() const { return m_graphWidget; }
     
@@ -111,6 +101,8 @@ public:
 	// Rendering control
 	void requestRedraw();
 	
+    void flushGBufToWidget();
+	 
 signals:
     void widgetReady();          // Emitted when widget is ready for graphics init
     void graphicsReady();        // Emitted when graphics system is initialized
@@ -128,7 +120,7 @@ protected:
     // EssScriptableWidget interface implementation
     void registerCustomCommands() override;
     QWidget* createMainWidget() override;
-    void onSetupComplete() override;
+    void showEvent(QShowEvent *event) override;
     
     void applyDevelopmentLayout() override;
     
@@ -140,12 +132,8 @@ protected:
     // Qt event handling
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
-    void showEvent(QShowEvent* event) override;
     
 private slots:
-    void onWidgetReady();        // Handle widget ready for initialization
-	void onGraphicsWidgetResized();  
-    void initializeGraphics();
     void onFloatingToggled(bool floating);  
      
 private:
@@ -160,7 +148,7 @@ private:
 	void ensurePixmapSize();
 	void invalidatePixmap();
 	void renderToPixmap();
-
+    
     // Layout state (for future Qt controls integration)
     LayoutMode m_layoutMode;
     ControlPanelType m_controlType;
@@ -172,9 +160,6 @@ private:
     QWidget* m_bottomControlsContainer;
     
     // Graphics state
-    void* m_gbuf;
-    FRAME* m_frame;
-    bool m_graphicsInitialized;
     QColor m_backgroundColor;
     
     // UI components
@@ -199,12 +184,15 @@ private:
     
     // For painting
     QColor m_currentColor;
+    QPointF m_currentPos;
+    int m_textOrientation = 0;
+    int m_textJustification = 0;
     
     // Private methods
     void cleanupGraphicsBuffer();
     QString substituteEventData(const QString& script, QEvent* event,
                                const QPointF& pos = QPointF(),
-                               int button = -1, int delta = 0) const;
+                               int button = -1, int delta = 0);
     QString keyToString(QKeyEvent* event) const;
     
     void onMousePressEvent(QMouseEvent* event);
@@ -217,18 +205,14 @@ private:
     void onFocusInEvent(QFocusEvent* event);
     void onFocusOutEvent(QFocusEvent* event);
     
-    // Static callbacks for cgraph (self-contained, QCgraph style)
-    static int Clearwin();
-    static int Line(float x0, float y0, float x1, float y1);
-    static int Point(float x, float y);
-    static int Char(float x, float y, char *string);
-    static int Text(float x, float y, char *string);
-    static int Setfont(char *fontname, float size);
-    static int Strwidth(char *str);
-    static int Strheight(char *str);
-    static int Setcolor(int index);
-    static int FilledPolygon(float *verts, int nverts);
-    static int Circle(float x, float y, float width, int filled);
+    // For gbuf playback
+    QString m_lastGBCommands;   // Cache for resize events
+    
+    // Command processing
+    void renderCommands(const QString& commands);
+    void executeGBCommand(const QStringList& parts, QPainter* painter);
+    QColor cgraphColorToQt(int colorIndex) const;
+    float flipY(float y) const;
     
     // Tcl command implementations (graphics-specific)
     static int tcl_graphics_init(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
@@ -241,16 +225,9 @@ private:
     // Layout control commands (stubs for future enhancement)
     static int tcl_graphics_layout(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     static int tcl_graphics_controls(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+    static int tcl_reset_gbuf(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
     
     friend class EssGraphicsBridge;
-};
-
-// Bridge class for cgraph integration (renamed from QtCGraphBridge)
-class EssGraphicsBridge {
-public:
-    static void setupCallbacks();
-    static void setGraphicsBuffer(EssGraphicsWidget* widget, void* gbuf);
-    static void setFrame(EssGraphicsWidget* widget, void* frame);
 };
 
 #endif // ESSGRAPHICSWIDGET_H
