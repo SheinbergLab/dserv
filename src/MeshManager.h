@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <memory>
+#include <condition_variable>
 #include <set>
 #include <sys/socket.h>
 #include <netinet/in.h>
