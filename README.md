@@ -1,5 +1,13 @@
 # dserv
 
+## Intro
+dserv is a program for storing and sharing data between connected threads and TCP/IP and Web clients. A key part of the program are interconnected threads each running their own Tcl interpreter for allowing extensive scripting while retaining the core C/C++ backend. All dserv clients have embedded http and websocket support. Clients programs on connected subnets will be able to see each other and a dashboard allows inspection of which clients are active and links to a web based gui for control and visualization. Endpoints include:
+
+* http://localhost:2565/
+* http://localhost:2565/dashboard
+* http://localhost:2565/terminal
+* http://localhost:2565/explorer
+
 ## Git Submodules
 
 This repo uses [git submodules](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to obtain source code for several dependencies (and specific commits/versions of each):
