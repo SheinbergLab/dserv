@@ -249,6 +249,9 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
     
     json_t* webPort = json_object_get(data, "webPort");
     if (json_is_integer(webPort)) peer.webPort = json_integer_value(webPort);
+    
+    // and notify our peers! 
+    broadcastMeshUpdate(); 
 }
 
 void MeshManager::cleanupExpiredPeers() {
@@ -259,7 +262,7 @@ void MeshManager::cleanupExpiredPeers() {
     auto it = peers.begin();
     while (it != peers.end()) {
         if (now - it->second.lastHeartbeat > 30000) { // 30 second timeout
-            std::cout << "Peer " << it->first << " (" << it->second.name << ") timed out" << std::endl;
+//            std::cout << "Peer " << it->first << " (" << it->second.name << ") timed out" << std::endl;
             it = peers.erase(it);
         } else {
             ++it;
