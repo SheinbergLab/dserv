@@ -382,9 +382,15 @@ void MeshManager::sendHeartbeat() {
     json_t* data = json_object();
     json_object_set_new(data, "name", json_string(myName.c_str()));
     json_object_set_new(data, "status", json_string(myStatus.c_str()));
-    json_object_set_new(data, "currentExperiment", json_string(currentExperiment.c_str()));
-    json_object_set_new(data, "participantId", json_string(participantId.c_str()));
     json_object_set_new(data, "webPort", json_integer(httpPort));
+    
+    // Everything else is custom (including system/protocol/variant and subject)
+    {
+        std::lock_guard<std::mutex> lock(customFieldsMutex);
+        for (const auto& [key, value] : customFields) {
+            json_object_set_new(data, key.c_str(), json_string(value.c_str()));
+        }
+    }
     
     json_object_set_new(heartbeat, "data", data);
     
@@ -477,50 +483,48 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
         if (!json_is_string(applianceId) || !json_is_object(data)) return;
         
         std::string peerId = json_string_value(applianceId);
-        
-        // Check if this is new or changed
         bool isNew = (peers.find(peerId) == peers.end());
         
         PeerInfo& peer = peers[peerId];
         
-        // Store old values to detect changes
+        // Store old values for comparison
+        auto oldCustomFields = peer.customFields;
         std::string oldStatus = peer.status;
-        std::string oldExperiment = peer.currentExperiment;
-        std::string oldParticipant = peer.participantId;
         
         peer.applianceId = peerId;
         peer.ipAddress = ip;
         peer.lastHeartbeat = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         
-        json_t* name = json_object_get(data, "name");
-        if (json_is_string(name)) peer.name = json_string_value(name);
+        // Clear and rebuild fields
+        peer.customFields.clear();
         
-        json_t* status = json_object_get(data, "status");
-        if (json_is_string(status)) {
-            peer.status = json_string_value(status);
-            if (peer.status != oldStatus) shouldBroadcast = true;
+        // Process all fields from data
+        const char *key;
+        json_t *value;
+        json_object_foreach(data, key, value) {
+            if (json_is_string(value)) {
+                std::string strValue = json_string_value(value);
+                
+                if (strcmp(key, "name") == 0) {
+                    peer.name = strValue;
+                } else if (strcmp(key, "status") == 0) {
+                    peer.status = strValue;
+                } else if (strcmp(key, "webPort") != 0) {  // Skip webPort
+                    peer.customFields[key] = strValue;
+                }
+            }
+            else if (json_is_integer(value) && strcmp(key, "webPort") == 0) {
+                peer.webPort = json_integer_value(value);
+            }
         }
         
-        json_t* experiment = json_object_get(data, "currentExperiment");
-        if (json_is_string(experiment)) {
-            peer.currentExperiment = json_string_value(experiment);
-            if (peer.currentExperiment != oldExperiment) shouldBroadcast = true;
+        // Check if anything changed
+        if (isNew || oldStatus != peer.status || oldCustomFields != peer.customFields) {
+            shouldBroadcast = true;
         }
-        
-        json_t* participant = json_object_get(data, "participantId");
-        if (json_is_string(participant)) {
-            peer.participantId = json_string_value(participant);
-            if (peer.participantId != oldParticipant) shouldBroadcast = true;
-        }
-        
-        json_t* webPort = json_object_get(data, "webPort");
-        if (json_is_integer(webPort)) peer.webPort = json_integer_value(webPort);
-        
-        if (isNew) shouldBroadcast = true;
-    }  // Lock released here
+    }
     
-    // Trigger immediate broadcast if something changed
     if (shouldBroadcast) {
         triggerBroadcast();
     }
@@ -552,33 +556,69 @@ void MeshManager::cleanupExpiredPeers() {
         triggerBroadcast();  // Immediate notification
     }
 }
+
 void MeshManager::updateStatus(const std::string& status) {
     if (myStatus != status) {
         myStatus = status;
-	//        std::cout << "Mesh status updated to: " << status << std::endl;
         sendHeartbeat();
-        broadcastMeshUpdate();
+        triggerBroadcast();
     }
 }
 
-
-void MeshManager::updateExperiment(const std::string& experiment) {
-    if (currentExperiment != experiment) {
-        currentExperiment = experiment;
-	//        std::cout << "Mesh experiment updated to: " << experiment << std::endl;
+void MeshManager::setCustomField(const std::string& key, const std::string& value) {
+    bool shouldUpdate = false;
+    
+    {
+        std::lock_guard<std::mutex> lock(customFieldsMutex);
+        
+        if (key.length() > 64 || customFields.size() >= 20) {
+            std::cerr << "Custom field rejected: " << key << " (limits exceeded)" << std::endl;
+            return;
+        }
+        
+        auto it = customFields.find(key);
+        if (it != customFields.end() && it->second == value) {
+            return;  // No change needed
+        }
+        
+        customFields[key] = value;
+        shouldUpdate = true;
+    }
+    
+    if (shouldUpdate) {
         sendHeartbeat();
-        broadcastMeshUpdate();
+        triggerBroadcast();
     }
 }
 
-void MeshManager::updateParticipant(const std::string& participant) {
-    if (participantId != participant) {
-        participantId = participant;
-	//        std::cout << "Mesh participant updated to: " << participant << std::endl;
+void MeshManager::removeCustomField(const std::string& key) {
+    bool removed = false;
+    {
+        std::lock_guard<std::mutex> lock(customFieldsMutex);
+        removed = (customFields.erase(key) > 0);
+    }
+    
+    if (removed) {
         sendHeartbeat();
-        broadcastMeshUpdate();
+        triggerBroadcast();
     }
 }
+
+void MeshManager::clearCustomFields() {
+    {
+        std::lock_guard<std::mutex> lock(customFieldsMutex);
+        customFields.clear();
+    }
+    
+    sendHeartbeat();
+    triggerBroadcast();
+}
+
+std::map<std::string, std::string> MeshManager::getCustomFields() {
+    std::lock_guard<std::mutex> lock(customFieldsMutex);
+    return customFields;  // Return copy
+}
+
 
 std::vector<MeshManager::PeerInfo> MeshManager::getPeers() {
     std::lock_guard<std::mutex> lock(peersMutex);
@@ -602,22 +642,35 @@ std::string MeshManager::getPeersJSON() {
     json_object_set_new(self, "applianceId", json_string(myApplianceId.c_str()));
     json_object_set_new(self, "name", json_string(myName.c_str()));
     json_object_set_new(self, "status", json_string(myStatus.c_str()));
-    json_object_set_new(self, "currentExperiment", json_string(currentExperiment.c_str()));
-    json_object_set_new(self, "participantId", json_string(participantId.c_str()));
     json_object_set_new(self, "isLocal", json_true());
+    
+    // Add all custom fields
+    {
+        std::lock_guard<std::mutex> customLock(customFieldsMutex);
+        for (const auto& [key, value] : customFields) {
+            json_object_set_new(self, key.c_str(), json_string(value.c_str()));
+        }
+    }
+    
     json_array_append_new(appliances_array, self);
     
     // Add peers
     for (const auto& [id, peer] : peers) {
         json_t* peerObj = json_object();
+        
+        // Core fields
         json_object_set_new(peerObj, "applianceId", json_string(peer.applianceId.c_str()));
         json_object_set_new(peerObj, "name", json_string(peer.name.c_str()));
         json_object_set_new(peerObj, "status", json_string(peer.status.c_str()));
-        json_object_set_new(peerObj, "currentExperiment", json_string(peer.currentExperiment.c_str()));
-        json_object_set_new(peerObj, "participantId", json_string(peer.participantId.c_str()));
         json_object_set_new(peerObj, "ipAddress", json_string(peer.ipAddress.c_str()));
         json_object_set_new(peerObj, "webPort", json_integer(peer.webPort));
         json_object_set_new(peerObj, "isLocal", json_false());
+        
+        // Add all custom fields
+        for (const auto& [fieldKey, fieldValue] : peer.customFields) {
+            json_object_set_new(peerObj, fieldKey.c_str(), json_string(fieldValue.c_str()));
+        }
+        
         json_array_append_new(appliances_array, peerObj);
     }
     
@@ -724,46 +777,44 @@ void MeshManager::removeMeshSubscriber(uWS::WebSocket<false, true, WSPerSocketDa
 }
 
 void MeshManager::broadcastMeshUpdate() {
-    std::lock_guard<std::mutex> lock(subscribersMutex);
-    
-    if (meshSubscribers.empty()) return;
-    
+    // Prepare the message
     json_t* update = json_object();
     json_object_set_new(update, "type", json_string("mesh_update"));
     json_object_set_new(update, "data", json_loads(getPeersJSON().c_str(), 0, nullptr));
     
     char* message = json_dumps(update, 0);
     std::string messageStr(message);
-    
-    // Broadcast to all subscribers
-    auto it = meshSubscribers.begin();
-    while (it != meshSubscribers.end()) {
-        try {
-            bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
-            if (!sent) {
-                it = meshSubscribers.erase(it);
-                continue;
-            }
-        } catch (...) {
-            it = meshSubscribers.erase(it);
-            continue;
-        }
-        ++it;
-    }
-    
     free(message);
     json_decref(update);
+    
+    // Defer to the WebSocket event loop
+    if (tclserver && tclserver->hasWebSocketLoop()) {
+        tclserver->deferToWebSocketLoop([this, messageStr]() {
+            std::lock_guard<std::mutex> lock(subscribersMutex);
+            
+            auto it = meshSubscribers.begin();
+            while (it != meshSubscribers.end()) {
+                try {
+                    bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
+                    if (!sent) {
+                        it = meshSubscribers.erase(it);
+                        continue;
+                    }
+                } catch (...) {
+                    it = meshSubscribers.erase(it);
+                    continue;
+                }
+                ++it;
+            }
+        });
+    }
 }
 
 void MeshManager::broadcastCustomUpdate(const std::string& standardJson, const std::string& customJson) {
-    std::lock_guard<std::mutex> lock(subscribersMutex);
-    
-    if (meshSubscribers.empty()) return;
-    
+    // Prepare the message
     json_t* update = json_object();
     json_object_set_new(update, "type", json_string("mesh_custom_update"));
     
-    // Parse the JSON strings from Tcl
     json_error_t error;
     json_t* standardData = json_loads(standardJson.c_str(), 0, &error);
     json_t* customData = json_loads(customJson.c_str(), 0, &error);
@@ -773,23 +824,28 @@ void MeshManager::broadcastCustomUpdate(const std::string& standardJson, const s
     
     char* message = json_dumps(update, 0);
     std::string messageStr(message);
-    
-    // Broadcast to all subscribers
-    auto it = meshSubscribers.begin();
-    while (it != meshSubscribers.end()) {
-        try {
-            bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
-            if (!sent) {
-                it = meshSubscribers.erase(it);
-                continue;
-            }
-        } catch (...) {
-            it = meshSubscribers.erase(it);
-            continue;
-        }
-        ++it;
-    }
-    
     free(message);
     json_decref(update);
+    
+    // Defer to the WebSocket event loop
+    if (tclserver && tclserver->hasWebSocketLoop()) {
+        tclserver->deferToWebSocketLoop([this, messageStr]() {
+            std::lock_guard<std::mutex> lock(subscribersMutex);
+            
+            auto it = meshSubscribers.begin();
+            while (it != meshSubscribers.end()) {
+                try {
+                    bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
+                    if (!sent) {
+                        it = meshSubscribers.erase(it);
+                        continue;
+                    }
+                } catch (...) {
+                    it = meshSubscribers.erase(it);
+                    continue;
+                }
+                ++it;
+            }
+        });
+    }
 }

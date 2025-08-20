@@ -1453,30 +1453,9 @@ static int print_command (ClientData data, Tcl_Interp *interp,
 }
 
 // Mesh manager commands available to all interpreters
-static int mesh_set_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
-    MeshManager* mesh = get_mesh_manager();
-    if (!mesh) {
-        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
-        return TCL_ERROR;
-    }
-    
-    if (objc != 4) {
-        Tcl_WrongNumArgs(interp, 1, objv, "status experiment participant");
-        return TCL_ERROR;
-    }
-    
-    std::string status = Tcl_GetString(objv[1]);
-    std::string experiment = Tcl_GetString(objv[2]);
-    std::string participant = Tcl_GetString(objv[3]);
-    
-    mesh->updateStatus(status);
-    mesh->updateExperiment(experiment);
-    mesh->updateParticipant(participant);
-    
-    return TCL_OK;
-}
 
-static int mesh_update_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+static int mesh_update_status_command(ClientData clientData, Tcl_Interp* interp, 
+                                      int objc, Tcl_Obj* const objv[]) {
     MeshManager* mesh = get_mesh_manager();
     if (!mesh) {
         Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
@@ -1488,13 +1467,41 @@ static int mesh_update_status_command(ClientData clientData, Tcl_Interp* interp,
         return TCL_ERROR;
     }
     
-    std::string status = Tcl_GetString(objv[1]);
-    mesh->updateStatus(status);
-    
+    mesh->updateStatus(Tcl_GetString(objv[1]));
     return TCL_OK;
 }
 
-static int mesh_update_experiment_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+// Add custom field management commands
+
+static int mesh_set_field_command(ClientData clientData, Tcl_Interp* interp, 
+                                  int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "field value");
+        return TCL_ERROR;
+    }
+    
+    std::string field = Tcl_GetString(objv[1]);
+    std::string value = Tcl_GetString(objv[2]);
+    
+    // Validate field name (no spaces, reasonable length)
+    if (field.empty() || field.length() > 64 || 
+        field.find(' ') != std::string::npos) {
+        Tcl_AppendResult(interp, "Invalid field name: ", field.c_str(), NULL);
+        return TCL_ERROR;
+    }
+    
+    mesh->setCustomField(field, value);
+    return TCL_OK;
+}
+
+static int mesh_remove_field_command(ClientData clientData, Tcl_Interp* interp, 
+                                     int objc, Tcl_Obj* const objv[]) {
     MeshManager* mesh = get_mesh_manager();
     if (!mesh) {
         Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
@@ -1502,35 +1509,49 @@ static int mesh_update_experiment_command(ClientData clientData, Tcl_Interp* int
     }
     
     if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "experiment");
+        Tcl_WrongNumArgs(interp, 1, objv, "field");
         return TCL_ERROR;
     }
     
-    std::string experiment = Tcl_GetString(objv[1]);
-    mesh->updateExperiment(experiment);
-    
+    mesh->removeCustomField(Tcl_GetString(objv[1]));
     return TCL_OK;
 }
 
-static int mesh_update_participant_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+static int mesh_get_fields_command(ClientData clientData, Tcl_Interp* interp, 
+                                   int objc, Tcl_Obj* const objv[]) {
     MeshManager* mesh = get_mesh_manager();
     if (!mesh) {
         Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
         return TCL_ERROR;
     }
     
-    if (objc != 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "participant");
-        return TCL_ERROR;
+    auto fields = mesh->getCustomFields();
+    Tcl_Obj* dict = Tcl_NewDictObj();
+    
+    for (const auto& [key, value] : fields) {
+        Tcl_DictObjPut(interp, dict,
+            Tcl_NewStringObj(key.c_str(), -1),
+            Tcl_NewStringObj(value.c_str(), -1));
     }
     
-    std::string participant = Tcl_GetString(objv[1]);
-    mesh->updateParticipant(participant);
-    
+    Tcl_SetObjResult(interp, dict);
     return TCL_OK;
 }
 
-static int mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]) {
+static int mesh_clear_fields_command(ClientData clientData, Tcl_Interp* interp, 
+                                     int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = get_mesh_manager();
+    if (!mesh) {
+        Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
+        return TCL_ERROR;
+    }
+    
+    mesh->clearCustomFields();
+    return TCL_OK;
+}
+
+static int mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, 
+                                  int objc, Tcl_Obj* const objv[]) {
     MeshManager* mesh = get_mesh_manager();
     if (!mesh) {
         Tcl_AppendResult(interp, "Mesh networking not enabled", NULL);
@@ -1540,23 +1561,65 @@ static int mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, int
     std::vector<MeshManager::PeerInfo> peers = mesh->getPeers();
     
     Tcl_Obj* peerList = Tcl_NewListObj(0, nullptr);
+    
+    // Add each peer as a dictionary
     for (const auto& peer : peers) {
         Tcl_Obj* peerDict = Tcl_NewDictObj();
-        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("id", -1), 
-                       Tcl_NewStringObj(peer.applianceId.c_str(), -1));
-        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("name", -1), 
-                       Tcl_NewStringObj(peer.name.c_str(), -1));
-        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("status", -1), 
-                       Tcl_NewStringObj(peer.status.c_str(), -1));
-        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("ip", -1), 
-                       Tcl_NewStringObj(peer.ipAddress.c_str(), -1));
-        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("experiment", -1), 
-                       Tcl_NewStringObj(peer.currentExperiment.c_str(), -1));
-        Tcl_DictObjPut(interp, peerDict, Tcl_NewStringObj("participant", -1), 
-                       Tcl_NewStringObj(peer.participantId.c_str(), -1));
+        
+        // Core fields
+        Tcl_DictObjPut(interp, peerDict, 
+            Tcl_NewStringObj("id", -1), 
+            Tcl_NewStringObj(peer.applianceId.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, 
+            Tcl_NewStringObj("name", -1), 
+            Tcl_NewStringObj(peer.name.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, 
+            Tcl_NewStringObj("status", -1), 
+            Tcl_NewStringObj(peer.status.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, 
+            Tcl_NewStringObj("ip", -1), 
+            Tcl_NewStringObj(peer.ipAddress.c_str(), -1));
+        Tcl_DictObjPut(interp, peerDict, 
+            Tcl_NewStringObj("webPort", -1), 
+            Tcl_NewIntObj(peer.webPort));
+        
+        // Add all custom fields
+        for (const auto& [key, value] : peer.customFields) {
+            Tcl_DictObjPut(interp, peerDict, 
+                Tcl_NewStringObj(key.c_str(), -1), 
+                Tcl_NewStringObj(value.c_str(), -1));
+        }
         
         Tcl_ListObjAppendElement(interp, peerList, peerDict);
     }
+    
+    // Also add self as a peer entry
+    Tcl_Obj* selfDict = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, selfDict, 
+        Tcl_NewStringObj("id", -1), 
+        Tcl_NewStringObj(mesh->getApplianceId().c_str(), -1));
+    Tcl_DictObjPut(interp, selfDict, 
+        Tcl_NewStringObj("name", -1), 
+        Tcl_NewStringObj(mesh->getName().c_str(), -1));  // Need to add getName() method
+    Tcl_DictObjPut(interp, selfDict, 
+        Tcl_NewStringObj("status", -1), 
+        Tcl_NewStringObj(mesh->getStatus().c_str(), -1));  // Need to add getStatus() method
+    Tcl_DictObjPut(interp, selfDict, 
+        Tcl_NewStringObj("ip", -1), 
+        Tcl_NewStringObj("local", -1));
+    Tcl_DictObjPut(interp, selfDict, 
+        Tcl_NewStringObj("isLocal", -1), 
+        Tcl_NewBooleanObj(1));
+    
+    // Add our own custom fields
+    auto customFields = mesh->getCustomFields();
+    for (const auto& [key, value] : customFields) {
+        Tcl_DictObjPut(interp, selfDict, 
+            Tcl_NewStringObj(key.c_str(), -1), 
+            Tcl_NewStringObj(value.c_str(), -1));
+    }
+    
+    Tcl_ListObjAppendElement(interp, peerList, selfDict);
     
     Tcl_SetObjResult(interp, peerList);
     return TCL_OK;
@@ -1772,17 +1835,19 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                tserv, NULL);
   
   // Mesh commands (fail gracefully if mesh manager not running)
-  Tcl_CreateObjCommand(interp, "meshSetStatus", mesh_set_status_command, tserv, nullptr);
   Tcl_CreateObjCommand(interp, "meshGetPeers", mesh_get_peers_command, tserv, nullptr);
   Tcl_CreateObjCommand(interp, "meshGetClusterStatus", mesh_get_cluster_status_command, tserv, nullptr);
   Tcl_CreateObjCommand(interp, "meshUpdateStatus", mesh_update_status_command, tserv, nullptr);
-  Tcl_CreateObjCommand(interp, "meshUpdateExperiment", mesh_update_experiment_command, tserv, nullptr);
-  Tcl_CreateObjCommand(interp, "meshUpdateParticipant", mesh_update_participant_command, tserv, nullptr);
   Tcl_CreateObjCommand(interp, "meshGetApplianceId", mesh_get_appliance_id_command, 
      tserv, nullptr);                       
   Tcl_CreateObjCommand(interp, "meshBroadcastCustomUpdate", mesh_broadcast_custom_update_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "meshConfig", mesh_config_command, tserv, nullptr);
   Tcl_CreateObjCommand(interp, "meshInfo", mesh_info_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshSetField", mesh_set_field_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshRemoveField", mesh_remove_field_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshGetFields", mesh_get_fields_command, tserv, nullptr);
+  Tcl_CreateObjCommand(interp, "meshClearFields", mesh_clear_fields_command, tserv, nullptr);
+
                   
   Tcl_CreateObjCommand(interp, "dservAddMatch",
                dserv_add_match_command, tserv, NULL);

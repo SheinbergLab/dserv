@@ -153,6 +153,18 @@ public:
   int message_port(void) { return _message_port; }
   int websocket_port(void) { return _websocket_port; }
 
+	// Add this method to allow deferred execution on the WebSocket event loop
+  void deferToWebSocketLoop(std::function<void()> func) {
+	if (ws_loop) {
+		ws_loop->defer(func);
+	}
+   }
+	
+	bool hasWebSocketLoop() const {
+		return ws_loop != nullptr;
+	}
+
+
   bool accept_new_connection(const std::string& client_ip) {
     std::lock_guard<std::mutex> lock(connection_mutex);
     

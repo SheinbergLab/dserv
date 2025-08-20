@@ -28,17 +28,18 @@ struct WSPerSocketData; // Forward declare
 
 class MeshManager {
 public:
-    struct PeerInfo {
-        std::string applianceId;
-        std::string name;
-        std::string status;
-        std::string currentExperiment;
-        std::string participantId;
-        long long lastHeartbeat;
-        std::string ipAddress;
-        int webPort;
-    };
-
+struct PeerInfo {
+    // Core fields
+    std::string applianceId;
+    std::string name;
+    std::string status;
+    std::string ipAddress;
+    int webPort = 0;
+    long long lastHeartbeat = 0;
+    
+    // ALL other fields stored generically
+    std::map<std::string, std::string> customFields;
+};
 private:
     Dataserver* ds;
     TclServer* tclserver;  // Access to main TclServer instead of own interp
@@ -68,10 +69,12 @@ private:
     std::mutex heartbeatMutex;
     std::atomic<bool> intervalChanged{false};
     
-    // Current state
-    std::string myStatus;
-    std::string currentExperiment;
-    std::string participantId;
+    // Current state (always included)
+    std::string myStatus = "Stopped";
+
+    // All other fields are custom
+    std::mutex customFieldsMutex;
+    std::map<std::string, std::string> customFields;
     
     // Peer management
     std::map<std::string, PeerInfo> peers;
@@ -117,8 +120,12 @@ public:
     
     // Status management (called from Tcl)
     void updateStatus(const std::string& status);
-    void updateExperiment(const std::string& experiment);
-    void updateParticipant(const std::string& participant);
+
+    // Custom field management
+    void setCustomField(const std::string& key, const std::string& value);
+    void removeCustomField(const std::string& key);
+    void clearCustomFields();
+    std::map<std::string, std::string> getCustomFields();
     
     // Getters for Tcl
     std::string getApplianceId() const { return myApplianceId; }
