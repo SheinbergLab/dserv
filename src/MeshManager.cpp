@@ -81,26 +81,50 @@ void MeshManager::start() {
                 sendHeartbeat();
                 cleanupExpiredPeers();
                 
-                // Check if we need to broadcast updates
+                // Still check broadcastPending for compatibility
                 if (broadcastPending.exchange(false)) {
-                    broadcastMeshUpdate();
+                    triggerBroadcast();
                 }
-
-            // Interruptible sleep that respects interval changes
-            std::unique_lock<std::mutex> lock(heartbeatMutex);
-            intervalChanged = false;
-            
-            // Wait for either the interval to pass or a signal to wake up
-            heartbeatCV.wait_for(lock, 
-                std::chrono::seconds(heartbeatInterval.load()),
-                [this] { return !running || intervalChanged.load(); });
-
-            }            
+                
+                // Interruptible sleep
+                std::unique_lock<std::mutex> lock(heartbeatMutex);
+                intervalChanged = false;
+                heartbeatCV.wait_for(lock, 
+                    std::chrono::seconds(heartbeatInterval.load()),
+                    [this] { return !running || intervalChanged.load(); });
+            }
         });
         
         discoveryThread = std::thread([this]() {
             while (running) {
                 listenForHeartbeats();
+            }
+        });
+        
+        // Broadcast thread
+        broadcastThread = std::thread([this]() {
+            while (running) {
+                std::unique_lock<std::mutex> lock(broadcastMutex);
+                broadcastCV.wait(lock, [this] { 
+                    return needsBroadcast.load() || !running; 
+                });
+                
+                if (!running) break;
+                
+                needsBroadcast = false;
+                lock.unlock();
+                
+                // Rate limit broadcasts
+                auto now = std::chrono::steady_clock::now();
+                auto timeSinceLastBroadcast = now - lastBroadcastTime;
+                
+                if (timeSinceLastBroadcast < MIN_BROADCAST_INTERVAL) {
+                    std::this_thread::sleep_for(
+                        MIN_BROADCAST_INTERVAL - timeSinceLastBroadcast);
+                }
+                
+                broadcastMeshUpdate();
+                lastBroadcastTime = std::chrono::steady_clock::now();
             }
         });
     }
@@ -192,6 +216,10 @@ void MeshManager::stop() {
     
     running = false;
     
+    // Wake up all threads
+    broadcastCV.notify_one();
+    heartbeatCV.notify_one();
+    
     // Close sockets to unblock any blocking calls
     if (udpSocket >= 0) {
         close(udpSocket);
@@ -212,13 +240,15 @@ void MeshManager::stop() {
     if (discoveryThread.joinable()) {
         discoveryThread.join();
     }
+    if (broadcastThread.joinable()) {  // NEW
+        broadcastThread.join();
+    }
     if (httpThread.joinable()) {
         httpThread.join();
     }
     
     std::cout << "Mesh networking stopped" << std::endl;
 }
-
 
 std::vector<std::string> MeshManager::scanNetworkBroadcastAddresses() {
     std::vector<std::string> addresses;
@@ -395,6 +425,11 @@ void MeshManager::sendHeartbeat() {
     json_decref(heartbeat);
 }
 
+void MeshManager::triggerBroadcast() {
+    needsBroadcast = true;
+    broadcastCV.notify_one();
+}
+
 void MeshManager::listenForHeartbeats() {
     if (udpSocket < 0) return;
     
@@ -431,37 +466,64 @@ void MeshManager::listenForHeartbeats() {
 }
 
 void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
-    std::lock_guard<std::mutex> lock(peersMutex);
+    bool shouldBroadcast = false;
     
-    json_t* applianceId = json_object_get(heartbeat, "applianceId");
-    json_t* data = json_object_get(heartbeat, "data");
+    {
+        std::lock_guard<std::mutex> lock(peersMutex);
+        
+        json_t* applianceId = json_object_get(heartbeat, "applianceId");
+        json_t* data = json_object_get(heartbeat, "data");
+        
+        if (!json_is_string(applianceId) || !json_is_object(data)) return;
+        
+        std::string peerId = json_string_value(applianceId);
+        
+        // Check if this is new or changed
+        bool isNew = (peers.find(peerId) == peers.end());
+        
+        PeerInfo& peer = peers[peerId];
+        
+        // Store old values to detect changes
+        std::string oldStatus = peer.status;
+        std::string oldExperiment = peer.currentExperiment;
+        std::string oldParticipant = peer.participantId;
+        
+        peer.applianceId = peerId;
+        peer.ipAddress = ip;
+        peer.lastHeartbeat = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        
+        json_t* name = json_object_get(data, "name");
+        if (json_is_string(name)) peer.name = json_string_value(name);
+        
+        json_t* status = json_object_get(data, "status");
+        if (json_is_string(status)) {
+            peer.status = json_string_value(status);
+            if (peer.status != oldStatus) shouldBroadcast = true;
+        }
+        
+        json_t* experiment = json_object_get(data, "currentExperiment");
+        if (json_is_string(experiment)) {
+            peer.currentExperiment = json_string_value(experiment);
+            if (peer.currentExperiment != oldExperiment) shouldBroadcast = true;
+        }
+        
+        json_t* participant = json_object_get(data, "participantId");
+        if (json_is_string(participant)) {
+            peer.participantId = json_string_value(participant);
+            if (peer.participantId != oldParticipant) shouldBroadcast = true;
+        }
+        
+        json_t* webPort = json_object_get(data, "webPort");
+        if (json_is_integer(webPort)) peer.webPort = json_integer_value(webPort);
+        
+        if (isNew) shouldBroadcast = true;
+    }  // Lock released here
     
-    if (!json_is_string(applianceId) || !json_is_object(data)) return;
-    
-    std::string peerId = json_string_value(applianceId);
-    PeerInfo& peer = peers[peerId];
-    
-    peer.applianceId = peerId;
-    peer.ipAddress = ip;
-    peer.lastHeartbeat = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    
-    json_t* name = json_object_get(data, "name");
-    if (json_is_string(name)) peer.name = json_string_value(name);
-    
-    json_t* status = json_object_get(data, "status");
-    if (json_is_string(status)) peer.status = json_string_value(status);
-    
-    json_t* experiment = json_object_get(data, "currentExperiment");
-    if (json_is_string(experiment)) peer.currentExperiment = json_string_value(experiment);
-    
-    json_t* participant = json_object_get(data, "participantId");
-    if (json_is_string(participant)) peer.participantId = json_string_value(participant);
-    
-    json_t* webPort = json_object_get(data, "webPort");
-    if (json_is_integer(webPort)) peer.webPort = json_integer_value(webPort);
-    
-    broadcastPending = true;
+    // Trigger immediate broadcast if something changed
+    if (shouldBroadcast) {
+        triggerBroadcast();
+    }
 }
 
 void MeshManager::cleanupExpiredPeers() {
@@ -471,16 +533,14 @@ void MeshManager::cleanupExpiredPeers() {
         auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         
-        // Use the configurable timeout
         int timeoutMs = getPeerTimeoutSeconds() * 1000;
         
         auto it = peers.begin();
         while (it != peers.end()) {
             if (now - it->second.lastHeartbeat > timeoutMs) {
 //                std::cout << "Peer " << it->first << " (" << it->second.name 
-//                          << ") timed out after " << getPeerTimeoutSeconds() 
-//                          << " seconds" << std::endl;
-                it = peers.erase(it);
+//                          << ") timed out" << std::endl;
+//                it = peers.erase(it);
                 peersRemoved = true;
             } else {
                 ++it;
@@ -489,10 +549,9 @@ void MeshManager::cleanupExpiredPeers() {
     }
     
     if (peersRemoved) {
-        broadcastPending = true;  // Will broadcast on next heartbeat cycle
+        triggerBroadcast();  // Immediate notification
     }
 }
-
 void MeshManager::updateStatus(const std::string& status) {
     if (myStatus != status) {
         myStatus = status;

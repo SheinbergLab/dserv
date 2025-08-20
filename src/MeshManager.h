@@ -53,6 +53,16 @@ private:
     std::atomic<int> heartbeatInterval{5};        // seconds between heartbeats
     std::atomic<int> peerTimeoutMultiplier{6};    // heartbeats missed before timeout
     
+    // Rate limiting for broadcasts
+    std::chrono::steady_clock::time_point lastBroadcastTime;
+    static constexpr auto MIN_BROADCAST_INTERVAL = std::chrono::milliseconds(100);
+    
+    // Dedicated broadcast thread
+    std::thread broadcastThread;
+    std::condition_variable broadcastCV;
+    std::mutex broadcastMutex;
+    std::atomic<bool> needsBroadcast{false};
+    
     // For interrupting the heartbeat thread when interval changes
     std::condition_variable heartbeatCV;
     std::mutex heartbeatMutex;
@@ -92,6 +102,7 @@ private:
     std::vector<std::string> scanNetworkBroadcastAddresses();
     std::vector<std::string> getBroadcastAddresses();
     void refreshBroadcastCache();
+    void triggerBroadcast();
     
 public:
     MeshManager(Dataserver* ds, TclServer* tclserver);
