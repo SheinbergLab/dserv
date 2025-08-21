@@ -162,8 +162,17 @@ void MeshManager::setupUDP() {
     int reuse = 1;
     setsockopt(udpSocket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     
-    // Initialize broadcast address cache
-    refreshBroadcastCache();
+    // Scan network interfaces ONCE at startup
+    cachedBroadcastAddresses = scanNetworkBroadcastAddresses();
+    lastNetworkScan = std::chrono::steady_clock::now();
+    
+    // Show discovered broadcast addresses
+    std::cout << "Broadcasting to " << cachedBroadcastAddresses.size() << " networks: ";
+    for (const auto& addr : cachedBroadcastAddresses) {
+        std::cout << addr << " ";
+    }
+    std::cout << std::endl;
+
     
     // Bind for receiving (existing code)
     struct sockaddr_in bindAddr;
@@ -223,56 +232,36 @@ void MeshManager::setupHTTP() {
 void MeshManager::listenForHeartbeats() {
     if (udpSocket < 0) return;
     
-    // Use select with a short timeout for ALL platforms
-    // This allows checking the running flag frequently
-    while (running) {  // Check running flag in the loop
-        fd_set readfds;
-        struct timeval tv;
+    char buffer[1024];
+    struct sockaddr_in fromAddr;
+    socklen_t fromLen = sizeof(fromAddr);
+    
+    while (running) {
+        ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
+                                        (struct sockaddr*)&fromAddr, &fromLen);
         
-        FD_ZERO(&readfds);
-        FD_SET(udpSocket, &readfds);
-        
-        // Short timeout to check running flag frequently
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000; // 100ms - short enough to be responsive
-        
-        int rv = select(udpSocket + 1, &readfds, NULL, NULL, &tv);
-        
-        if (!running) break;  // Check again after select
-        
-        if (rv > 0 && FD_ISSET(udpSocket, &readfds)) {
-            char buffer[1024];
-            struct sockaddr_in fromAddr;
-            socklen_t fromLen = sizeof(fromAddr);
+        if (bytesReceived > 0) {
+            buffer[bytesReceived] = '\0';
             
-            ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
-                                            (struct sockaddr*)&fromAddr, &fromLen);
+            json_error_t error;
+            json_t* message = json_loads(buffer, 0, &error);
             
-            if (bytesReceived > 0) {
-                buffer[bytesReceived] = '\0';
+            if (message && json_is_object(message)) {
+                json_t* type = json_object_get(message, "type");
+                json_t* applianceId = json_object_get(message, "applianceId");
                 
-                json_error_t error;
-                json_t* message = json_loads(buffer, 0, &error);
-                
-                if (message && json_is_object(message)) {
-                    json_t* type = json_object_get(message, "type");
-                    json_t* applianceId = json_object_get(message, "applianceId");
+                if (json_is_string(type) && json_is_string(applianceId) &&
+                    strcmp(json_string_value(type), "heartbeat") == 0 &&
+                    strcmp(json_string_value(applianceId), myApplianceId.c_str()) != 0) {
                     
-                    if (json_is_string(type) && json_is_string(applianceId) &&
-                        strcmp(json_string_value(type), "heartbeat") == 0 &&
-                        strcmp(json_string_value(applianceId), myApplianceId.c_str()) != 0) {
-                        
-                        updatePeer(message, inet_ntoa(fromAddr.sin_addr));
-                    }
-                    
-                    json_decref(message);
+                    updatePeer(message, inet_ntoa(fromAddr.sin_addr));
                 }
+                
+                json_decref(message);
             }
-        } else if (rv < 0) {
-            if (errno != EINTR) {
-                std::cerr << "Select error: " << strerror(errno) << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
+        } else {
+            // Check for messages only twice per second - plenty for discovery
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     }
 }
@@ -425,8 +414,7 @@ void MeshManager::refreshBroadcastCache() {
 }
 
 std::vector<std::string> MeshManager::getBroadcastAddresses() {
-    refreshBroadcastCache();
-    
+	// could rescan, but will just use the initial cache
     std::lock_guard<std::mutex> lock(broadcastCacheMutex);
     return cachedBroadcastAddresses; // Return copy
 }
