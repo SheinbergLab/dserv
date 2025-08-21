@@ -76,18 +76,12 @@ private:
     int discoveryPort;
     
     // Heartbeat configuration with sensible defaults
-    std::atomic<int> heartbeatInterval{5};        // seconds between heartbeats
+    std::atomic<int> heartbeatInterval{1};        // seconds between heartbeats
     std::atomic<int> peerTimeoutMultiplier{6};    // heartbeats missed before timeout
     
     // Rate limiting for broadcasts
     std::chrono::steady_clock::time_point lastBroadcastTime;
     static constexpr auto MIN_BROADCAST_INTERVAL = std::chrono::milliseconds(100);
-    
-    // Dedicated broadcast thread
-    std::thread broadcastThread;
-    std::condition_variable broadcastCV;
-    std::mutex broadcastMutex;
-    std::atomic<bool> needsBroadcast{false};
     
     // For interrupting the heartbeat thread when interval changes
     std::condition_variable heartbeatCV;
@@ -104,7 +98,6 @@ private:
     // Peer management
     std::map<std::string, PeerInfo> peers;
     std::mutex peersMutex;
-    std::atomic<bool> broadcastPending{false};
     
     // Network components
     int udpSocket;
@@ -132,6 +125,7 @@ private:
     void triggerBroadcast();
     void handleMeshWebSocketMessage(auto *ws, std::string_view message);
     void addTclCommands();
+    void notifyWebSocketClients();
     
     // passed from main
     int argc;
