@@ -12,6 +12,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+
+#ifdef __linux__
+    #include <poll.h>
+#endif
+
 #include <tcl.h>
 #include <jansson.h>
 
@@ -106,7 +111,8 @@ private:
     std::vector<std::string> getBroadcastAddresses();
     void refreshBroadcastCache();
     void triggerBroadcast();
-    
+    void processHeartbeatMessage(const char* buffer, const std::string& fromIP);
+      
 public:
     MeshManager(Dataserver* ds, TclServer* tclserver);
     ~MeshManager();

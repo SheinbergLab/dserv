@@ -143,15 +143,19 @@ void MeshManager::setupUDP() {
         return;
     }
     
-    // Remove the non-blocking flag setting
-    // Instead, set a receive timeout
+#ifdef __APPLE__
+    // macOS: Keep non-blocking with select/poll
+    int flags = fcntl(udpSocket, F_GETFL, 0);
+    fcntl(udpSocket, F_SETFL, flags | O_NONBLOCK);
+#else
+    // Linux: Use blocking with timeout
     struct timeval tv;
-    tv.tv_sec = 1;  // 1 second timeout
-    tv.tv_usec = 0;
+    tv.tv_sec = 0;
+    tv.tv_usec = 500000;  // 500ms timeout
     setsockopt(udpSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
     
-    
-    // Enable broadcast
+    // Enable broadcast (common for all platforms)
     int broadcast = 1;
     if (setsockopt(udpSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
         std::cerr << "Failed to enable broadcast: " << strerror(errno) << std::endl;
@@ -443,6 +447,61 @@ void MeshManager::triggerBroadcast() {
 void MeshManager::listenForHeartbeats() {
     if (udpSocket < 0) return;
     
+#ifdef __APPLE__
+    // macOS: Use select with non-blocking socket
+    fd_set readfds;
+    struct timeval tv;
+    
+    FD_ZERO(&readfds);
+    FD_SET(udpSocket, &readfds);
+    
+    tv.tv_sec = 0;
+    tv.tv_usec = 500000; // 500ms timeout
+    
+    int rv = select(udpSocket + 1, &readfds, NULL, NULL, &tv);
+    
+    if (rv > 0 && FD_ISSET(udpSocket, &readfds)) {
+        char buffer[1024];
+        struct sockaddr_in fromAddr;
+        socklen_t fromLen = sizeof(fromAddr);
+        
+        ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
+                                        (struct sockaddr*)&fromAddr, &fromLen);
+        
+        if (bytesReceived > 0) {
+            buffer[bytesReceived] = '\0';
+            processHeartbeatMessage(buffer, inet_ntoa(fromAddr.sin_addr));
+        }
+    }
+    // No sleep needed - select handles the wait
+    
+#elif defined(__arm__) || defined(__aarch64__)
+    // ARM/RPi: Use poll() which tends to be more efficient on ARM
+    struct pollfd pfd;
+    pfd.fd = udpSocket;
+    pfd.events = POLLIN;
+    
+    int rv = poll(&pfd, 1, 500); // 500ms timeout
+    
+    if (rv > 0 && (pfd.revents & POLLIN)) {
+        char buffer[1024];
+        struct sockaddr_in fromAddr;
+        socklen_t fromLen = sizeof(fromAddr);
+        
+        ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
+                                        (struct sockaddr*)&fromAddr, &fromLen);
+        
+        if (bytesReceived > 0) {
+            buffer[bytesReceived] = '\0';
+            processHeartbeatMessage(buffer, inet_ntoa(fromAddr.sin_addr));
+        }
+    } else if (rv < 0 && errno != EINTR) {
+        std::cerr << "Poll error: " << strerror(errno) << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+#else
+    // Linux x86/x64: Use blocking with timeout
     char buffer[1024];
     struct sockaddr_in fromAddr;
     socklen_t fromLen = sizeof(fromAddr);
@@ -452,26 +511,30 @@ void MeshManager::listenForHeartbeats() {
     
     if (bytesReceived > 0) {
         buffer[bytesReceived] = '\0';
+        processHeartbeatMessage(buffer, inet_ntoa(fromAddr.sin_addr));
+    } else if (bytesReceived < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        std::cerr << "recvfrom error: " << strerror(errno) << std::endl;
+    }
+    // Timeout handles the wait - no sleep needed
+#endif
+}
+
+void MeshManager::processHeartbeatMessage(const char* buffer, const std::string& fromIP) {
+    json_error_t error;
+    json_t* message = json_loads(buffer, 0, &error);
+    
+    if (message && json_is_object(message)) {
+        json_t* type = json_object_get(message, "type");
+        json_t* applianceId = json_object_get(message, "applianceId");
         
-        json_error_t error;
-        json_t* message = json_loads(buffer, 0, &error);
-        
-        if (message && json_is_object(message)) {
-            json_t* type = json_object_get(message, "type");
-            json_t* applianceId = json_object_get(message, "applianceId");
+        if (json_is_string(type) && json_is_string(applianceId) &&
+            strcmp(json_string_value(type), "heartbeat") == 0 &&
+            strcmp(json_string_value(applianceId), myApplianceId.c_str()) != 0) {
             
-            if (json_is_string(type) && json_is_string(applianceId) &&
-                strcmp(json_string_value(type), "heartbeat") == 0 &&
-                strcmp(json_string_value(applianceId), myApplianceId.c_str()) != 0) {
-                
-                updatePeer(message, inet_ntoa(fromAddr.sin_addr));
-            }
-            
-            json_decref(message);
+            updatePeer(message, fromIP);
         }
-    } else {
-        // No data available or error - sleep to avoid busy loop
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        json_decref(message);
     }
 }
 
