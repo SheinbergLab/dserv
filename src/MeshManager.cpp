@@ -55,19 +55,21 @@ MeshManager::~MeshManager() {
         udpSocket = -1;
     }
     
-    // Give threads time to exit, then force detach if needed
-    if (mesh_ws_thread.joinable()) {
-//        std::cout << "Waiting for mesh WebSocket thread..." << std::endl;
-        if (mesh_ws_thread.joinable()) {
-            auto future = std::async(std::launch::async, [&]() {
-                mesh_ws_thread.join();
-            });
-            if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-                std::cout << "WebSocket thread hanging, detaching..." << std::endl;
-                mesh_ws_thread.detach();
-            }
-        }
-    }
+	// Give WebSocket thread time to exit
+	if (mesh_ws_thread.joinable()) {
+		// The uWS loop should have been stopped by closing the listen socket
+		// Give it a moment to finish
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		
+		if (mesh_ws_thread.joinable()) {
+			try {
+				mesh_ws_thread.join();
+			} catch (...) {
+				std::cout << "WebSocket thread hanging, detaching..." << std::endl;
+				mesh_ws_thread.detach();
+			}
+		}
+	}
     
     // Clean up TclServer subprocess
     if (mesh_tclserver) {
@@ -811,7 +813,7 @@ void MeshManager::cleanupExpiredPeers() {
             if (now - it->second.lastHeartbeat > timeoutMs) {
 //                std::cout << "Peer " << it->first << " (" << it->second.name 
 //                          << ") timed out" << std::endl;
-//                it = peers.erase(it);
+                it = peers.erase(it);
                 peersRemoved = true;
             } else {
                 ++it;
