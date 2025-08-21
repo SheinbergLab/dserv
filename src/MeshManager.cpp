@@ -143,9 +143,13 @@ void MeshManager::setupUDP() {
         return;
     }
     
-    // Set socket to non-blocking
-    int flags = fcntl(udpSocket, F_GETFL, 0);
-    fcntl(udpSocket, F_SETFL, flags | O_NONBLOCK);
+    // Remove the non-blocking flag setting
+    // Instead, set a receive timeout
+    struct timeval tv;
+    tv.tv_sec = 1;  // 1 second timeout
+    tv.tv_usec = 0;
+    setsockopt(udpSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    
     
     // Enable broadcast
     int broadcast = 1;
