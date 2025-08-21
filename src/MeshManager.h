@@ -68,7 +68,8 @@ private:
     std::mutex mesh_ws_connections_mutex;
     std::map<std::string, uWS::WebSocket<false, true, MeshWSData>*> mesh_ws_connections;
     us_listen_socket_t *mesh_listen_socket = nullptr;
-
+    std::atomic<bool> ws_should_stop{false};
+    
     // Configuration
     std::string myApplianceId;
     std::string myName;
@@ -98,7 +99,16 @@ private:
     // Peer management
     std::map<std::string, PeerInfo> peers;
     std::mutex peersMutex;
+
+	struct LostPeerInfo {
+        PeerInfo peer;
+        long long lostTime;  // When we detected the loss
+    };
     
+    std::deque<LostPeerInfo> lostPeers;  // Recent lost peers
+    static constexpr size_t MAX_LOST_PEERS = 20;  // Keep last 20
+    static constexpr int LOST_PEER_RETENTION_MINUTES = 30;  // Keep for 30 mins
+        
     // Network components
     int udpSocket;
     int httpSocket;
@@ -119,6 +129,8 @@ private:
     std::mutex broadcastCacheMutex;
     
     // Methods
+    bool joinThreadWithTimeout(std::thread& t, std::chrono::seconds timeout); 
+    
     std::vector<std::string> scanNetworkBroadcastAddresses();
     std::vector<std::string> getBroadcastAddresses();
     void refreshBroadcastCache();
@@ -171,6 +183,7 @@ public:
     std::string getStatus() const { return myStatus; }
     std::vector<PeerInfo> getPeers();
     std::string getPeersJSON();
+    std::string getLostPeersJSON();
     
     // Register Tcl commands with the main interpreter
     void registerTclCommands();
@@ -222,4 +235,7 @@ private:
 	static int mesh_remove_field_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 	static int mesh_get_fields_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 	static int mesh_clear_fields_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_get_lost_peers_command(ClientData clientData, 
+                                             Tcl_Interp* interp, 
+                                             int objc, Tcl_Obj* const objv[]);	
 };

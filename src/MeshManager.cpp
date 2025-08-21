@@ -41,35 +41,16 @@ int http_port, int discovery_port, int websocket_port)
 }
 
 MeshManager::~MeshManager() {
-//    std::cout << "MeshManager destructor starting..." << std::endl;
+    stop();  // This now handles all the thread cleanup
     
-    stop();
-    
-    // Force close sockets to unblock any blocking calls
-    if (httpSocket >= 0) {
-        close(httpSocket);
-        httpSocket = -1;
+    // Handle WebSocket thread separately since it's often the problem
+    if (mesh_ws_thread.joinable()) {
+        std::cout << "Waiting for WebSocket thread to exit..." << std::endl;
+        if (!joinThreadWithTimeout(mesh_ws_thread, std::chrono::seconds(2))) {
+            std::cout << "WebSocket thread hanging, detaching..." << std::endl;
+            mesh_ws_thread.detach();
+        }
     }
-    if (udpSocket >= 0) {
-        close(udpSocket);
-        udpSocket = -1;
-    }
-    
-	// Give WebSocket thread time to exit
-	if (mesh_ws_thread.joinable()) {
-		// The uWS loop should have been stopped by closing the listen socket
-		// Give it a moment to finish
-		std::this_thread::sleep_for(std::chrono::milliseconds(100));
-		
-		if (mesh_ws_thread.joinable()) {
-			try {
-				mesh_ws_thread.join();
-			} catch (...) {
-				std::cout << "WebSocket thread hanging, detaching..." << std::endl;
-				mesh_ws_thread.detach();
-			}
-		}
-	}
     
     // Clean up TclServer subprocess
     if (mesh_tclserver) {
@@ -79,8 +60,6 @@ MeshManager::~MeshManager() {
         TclServerRegistry.unregisterObject("mesh");
         mesh_tclserver.reset();
     }
-    
-//    std::cout << "MeshManager destructor complete" << std::endl;
 }
 
 std::unique_ptr<MeshManager> MeshManager::createAndStart(
@@ -222,6 +201,13 @@ void MeshManager::startMeshWebSocketServer(int port) {
               ->end(getPeersJSON());
         });
         
+        // API endpoint for lost peers
+		app.get("/api/lost-peers", [this](auto *res, auto *req) {
+			res->writeHeader("Content-Type", "application/json")
+			   ->writeHeader("Access-Control-Allow-Origin", "*")
+			   ->end(getLostPeersJSON());
+		});
+
         // Health check
         app.get("/health", [](auto *res, auto *req) {
             res->writeHeader("Content-Type", "application/json")
@@ -511,7 +497,10 @@ void MeshManager::listenForHeartbeats() {
 void MeshManager::stop() {
     if (!running) return;
     
+    std::cout << "Stopping mesh networking..." << std::endl;
+    
     running = false;
+    ws_should_stop = true;  // Signal WebSocket thread to stop
     
     // Close WebSocket listen socket to break the event loop
     if (mesh_listen_socket) {
@@ -519,34 +508,54 @@ void MeshManager::stop() {
         mesh_listen_socket = nullptr;
     }
     
-    // Wake up all threads
+    // Wake up heartbeat thread
     heartbeatCV.notify_one();
     
     // Close sockets to unblock any blocking calls
     if (udpSocket >= 0) {
+        shutdown(udpSocket, SHUT_RDWR);  // More forceful than close
         close(udpSocket);
         udpSocket = -1;
     }
     if (httpSocket >= 0) {
+        shutdown(httpSocket, SHUT_RDWR);  // More forceful
         close(httpSocket);
         httpSocket = -1;
     }
     
-    // Give threads time to exit gracefully
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
-    // Join threads
+    // Join threads with individual timeouts
     if (heartbeatThread.joinable()) {
-        heartbeatThread.join();
+        if (!joinThreadWithTimeout(heartbeatThread, std::chrono::seconds(1))) {
+            std::cerr << "Warning: Heartbeat thread didn't exit cleanly" << std::endl;
+            heartbeatThread.detach();
+        }
     }
+    
     if (discoveryThread.joinable()) {
-        discoveryThread.join();
+        if (!joinThreadWithTimeout(discoveryThread, std::chrono::seconds(1))) {
+            std::cerr << "Warning: Discovery thread didn't exit cleanly" << std::endl;
+            discoveryThread.detach();
+        }
     }
+    
     if (httpThread.joinable()) {
-        httpThread.join();
+        if (!joinThreadWithTimeout(httpThread, std::chrono::seconds(1))) {
+            std::cerr << "Warning: HTTP thread didn't exit cleanly" << std::endl;
+            httpThread.detach();
+        }
     }
     
     std::cout << "Mesh networking stopped" << std::endl;
+}
+
+bool MeshManager::joinThreadWithTimeout(std::thread& t, std::chrono::seconds timeout) {
+    auto future = std::async(std::launch::async, [&t]() {
+        if (t.joinable()) {
+            t.join();
+        }
+    });
+    
+    return future.wait_for(timeout) != std::future_status::timeout;
 }
 
 std::vector<std::string> MeshManager::scanNetworkBroadcastAddresses() {
@@ -771,6 +780,24 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
     if (!json_is_string(applianceId) || !json_is_object(data)) return;
 
     std::string peerId = json_string_value(applianceId);
+    
+    // Check if this peer was in the lost list
+    auto lostIt = std::remove_if(lostPeers.begin(), lostPeers.end(),
+        [&peerId](const LostPeerInfo& lost) {
+            return lost.peer.applianceId == peerId;
+        });
+    
+    if (lostIt != lostPeers.end()) {
+ //       std::cout << "Peer " << peerId << " has reconnected" << std::endl;
+        lostPeers.erase(lostIt, lostPeers.end());
+    }
+    
+    // Check if this is a new peer or returning peer
+    bool isNew = (peers.find(peerId) == peers.end());
+    if (isNew && lostIt == lostPeers.end()) {
+        std::cout << "New peer discovered: " << peerId << std::endl;
+    }
+    
     PeerInfo& peer = peers[peerId];  // Creates if not exists
 
     peer.applianceId = peerId;
@@ -800,26 +827,93 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
 }
 
 void MeshManager::cleanupExpiredPeers() {
-    bool peersRemoved = false;
-    {
-        std::lock_guard<std::mutex> lock(peersMutex);
-        auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        
-        int timeoutMs = getPeerTimeoutSeconds() * 1000;
-        
-        auto it = peers.begin();
-        while (it != peers.end()) {
-            if (now - it->second.lastHeartbeat > timeoutMs) {
-//                std::cout << "Peer " << it->first << " (" << it->second.name 
-//                          << ") timed out" << std::endl;
-                it = peers.erase(it);
-                peersRemoved = true;
-            } else {
-                ++it;
+    std::lock_guard<std::mutex> lock(peersMutex);
+    auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    
+    int timeoutMs = getPeerTimeoutSeconds() * 1000;
+    
+    auto it = peers.begin();
+    while (it != peers.end()) {
+        if (now - it->second.lastHeartbeat > timeoutMs) {
+            // Save to lost peers list
+            LostPeerInfo lost;
+            lost.peer = it->second;
+            lost.lostTime = now;
+            
+            lostPeers.push_back(lost);
+            
+            // Trim if too many
+            if (lostPeers.size() > MAX_LOST_PEERS) {
+                lostPeers.pop_front();
             }
+            
+//            std::cout << "Peer " << it->first << " (" << it->second.name 
+//                      << ") timed out" << std::endl;
+            
+            it = peers.erase(it);
+        } else {
+            ++it;
         }
     }
+    
+    // Clean up old lost peers (older than retention time)
+    int retentionMs = LOST_PEER_RETENTION_MINUTES * 60 * 1000;
+    while (!lostPeers.empty() && 
+           (now - lostPeers.front().lostTime) > retentionMs) {
+        lostPeers.pop_front();
+    }
+}
+
+std::string MeshManager::getLostPeersJSON() {
+    std::lock_guard<std::mutex> lock(peersMutex);
+    
+    json_t* result = json_object();
+    json_t* lost_array = json_array();
+    
+    auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    
+    for (const auto& lost : lostPeers) {
+        json_t* lostObj = json_object();
+        
+        // Include peer info
+        json_object_set_new(lostObj, "applianceId", 
+            json_string(lost.peer.applianceId.c_str()));
+        json_object_set_new(lostObj, "name", 
+            json_string(lost.peer.name.c_str()));
+        json_object_set_new(lostObj, "lastStatus", 
+            json_string(lost.peer.status.c_str()));
+        json_object_set_new(lostObj, "lastIpAddress", 
+            json_string(lost.peer.ipAddress.c_str()));
+        
+        // Add timing info
+        json_object_set_new(lostObj, "lostTime", json_integer(lost.lostTime));
+        
+        // Add human-readable time ago
+        int secondsAgo = (now - lost.lostTime) / 1000;
+        std::string timeAgo;
+        if (secondsAgo < 60) {
+            timeAgo = std::to_string(secondsAgo) + " seconds ago";
+        } else if (secondsAgo < 3600) {
+            timeAgo = std::to_string(secondsAgo / 60) + " minutes ago";
+        } else {
+            timeAgo = std::to_string(secondsAgo / 3600) + " hours ago";
+        }
+        json_object_set_new(lostObj, "timeAgo", json_string(timeAgo.c_str()));
+        
+        json_array_append_new(lost_array, lostObj);
+    }
+    
+    json_object_set_new(result, "lostPeers", lost_array);
+    json_object_set_new(result, "count", json_integer(lostPeers.size()));
+    
+    char* resultStr = json_dumps(result, 0);
+    std::string returnValue(resultStr);
+    free(resultStr);
+    json_decref(result);
+    
+    return returnValue;
 }
 
 void MeshManager::updateStatus(const std::string& status) {
@@ -924,6 +1018,19 @@ std::string MeshManager::getPeersJSON() {
     
     json_object_set_new(result, "appliances", appliances_array);
     
+    if (!lostPeers.empty()) {
+        json_t* lost_array = json_array();
+        for (const auto& lost : lostPeers) {
+            json_t* lostObj = json_object();
+            json_object_set_new(lostObj, "applianceId", 
+                json_string(lost.peer.applianceId.c_str()));
+            json_object_set_new(lostObj, "name", 
+                json_string(lost.peer.name.c_str()));
+            json_array_append_new(lost_array, lostObj);
+        }
+        json_object_set_new(result, "recentlyLost", lost_array);
+    }
+    
     char* resultStr = json_dumps(result, 0);
     std::string returnValue(resultStr);
     free(resultStr);
@@ -985,6 +1092,9 @@ void MeshManager::handleHttpRequest(int clientSocket) {
     } else if (path == "/api/mesh/peers") {
         response = getPeersJSON();
         contentType = "application/json";
+    } else if (path == "/api/lost-peers") {
+		response = getLostPeersJSON();
+		contentType = "application/json";
     } else {
         response = "404 Not Found";
         contentType = "text/plain";
@@ -1362,6 +1472,31 @@ int MeshManager::mesh_info_command(ClientData clientData, Tcl_Interp* interp,
     return TCL_OK;
 }
 
+int MeshManager::mesh_get_lost_peers_command(ClientData clientData, 
+                                             Tcl_Interp* interp, 
+                                             int objc, Tcl_Obj* const objv[]) {
+    MeshManager* mesh = static_cast<MeshManager*>(clientData);
+    
+    Tcl_Obj* lostList = Tcl_NewListObj(0, nullptr);
+    
+    for (const auto& lost : mesh->lostPeers) {
+        Tcl_Obj* lostDict = Tcl_NewDictObj();
+        
+        Tcl_DictObjPut(interp, lostDict,
+            Tcl_NewStringObj("id", -1),
+            Tcl_NewStringObj(lost.peer.applianceId.c_str(), -1));
+        Tcl_DictObjPut(interp, lostDict,
+            Tcl_NewStringObj("name", -1),
+            Tcl_NewStringObj(lost.peer.name.c_str(), -1));
+        // Add other fields as needed
+        
+        Tcl_ListObjAppendElement(interp, lostList, lostDict);
+    }
+    
+    Tcl_SetObjResult(interp, lostList);
+    return TCL_OK;
+}
+
 void MeshManager::addTclCommands(Tcl_Interp* interp)
 {
     if (!interp) {
@@ -1381,6 +1516,8 @@ void MeshManager::addTclCommands(Tcl_Interp* interp)
     Tcl_CreateObjCommand(interp, "meshRemoveField", mesh_remove_field_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshGetFields", mesh_get_fields_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshClearFields", mesh_clear_fields_command, this, nullptr);
+    Tcl_CreateObjCommand(interp, "meshGetLostPeers", mesh_get_lost_peers_command, this, nullptr);
+
     
     std::cout << "Mesh Tcl commands registered successfully" << std::endl;
 }
