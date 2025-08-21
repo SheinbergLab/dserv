@@ -111,7 +111,6 @@ private:
     std::vector<std::string> getBroadcastAddresses();
     void refreshBroadcastCache();
     void triggerBroadcast();
-    void processHeartbeatMessage(const char* buffer, const std::string& fromIP);
       
 public:
     MeshManager(Dataserver* ds, TclServer* tclserver);

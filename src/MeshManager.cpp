@@ -72,10 +72,18 @@ void MeshManager::setPeerTimeoutMultiplier(int multiplier) {
 }
 
 void MeshManager::start() {
+    // Prevent multiple starts
+    if (running.exchange(true)) {
+        std::cerr << "MeshManager already running" << std::endl;
+        return;
+    }
+    
+    // Setup sockets first
     setupUDP();
     setupHTTP();
     
     if (udpSocket >= 0) {
+        // Start heartbeat thread
         heartbeatThread = std::thread([this]() {
             while (running) {
                 sendHeartbeat();
@@ -95,13 +103,7 @@ void MeshManager::start() {
             }
         });
         
-        discoveryThread = std::thread([this]() {
-            while (running) {
-                listenForHeartbeats();
-            }
-        });
-        
-        // Broadcast thread
+        // Start broadcast thread
         broadcastThread = std::thread([this]() {
             while (running) {
                 std::unique_lock<std::mutex> lock(broadcastMutex);
@@ -127,6 +129,9 @@ void MeshManager::start() {
                 lastBroadcastTime = std::chrono::steady_clock::now();
             }
         });
+        
+        // Start discovery thread
+        discoveryThread = std::thread(&MeshManager::listenForHeartbeats, this);
     }
     
     if (httpSocket >= 0) {
@@ -143,23 +148,19 @@ void MeshManager::setupUDP() {
         return;
     }
     
-#ifdef __APPLE__
-    // macOS: Keep non-blocking with select/poll
+    // Keep socket non-blocking for all platforms
     int flags = fcntl(udpSocket, F_GETFL, 0);
     fcntl(udpSocket, F_SETFL, flags | O_NONBLOCK);
-#else
-    // Linux: Use blocking with timeout
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 500000;  // 500ms timeout
-    setsockopt(udpSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
     
-    // Enable broadcast (common for all platforms)
+    // Enable broadcast
     int broadcast = 1;
     if (setsockopt(udpSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
         std::cerr << "Failed to enable broadcast: " << strerror(errno) << std::endl;
     }
+    
+    // Enable reuse
+    int reuse = 1;
+    setsockopt(udpSocket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     
     // Initialize broadcast address cache
     refreshBroadcastCache();
@@ -217,6 +218,63 @@ void MeshManager::setupHTTP() {
     }
     
     std::cout << "Mesh HTTP server bound to port " << httpPort << std::endl;
+}
+
+void MeshManager::listenForHeartbeats() {
+    if (udpSocket < 0) return;
+    
+    // Use select with a short timeout for ALL platforms
+    // This allows checking the running flag frequently
+    while (running) {  // Check running flag in the loop
+        fd_set readfds;
+        struct timeval tv;
+        
+        FD_ZERO(&readfds);
+        FD_SET(udpSocket, &readfds);
+        
+        // Short timeout to check running flag frequently
+        tv.tv_sec = 0;
+        tv.tv_usec = 100000; // 100ms - short enough to be responsive
+        
+        int rv = select(udpSocket + 1, &readfds, NULL, NULL, &tv);
+        
+        if (!running) break;  // Check again after select
+        
+        if (rv > 0 && FD_ISSET(udpSocket, &readfds)) {
+            char buffer[1024];
+            struct sockaddr_in fromAddr;
+            socklen_t fromLen = sizeof(fromAddr);
+            
+            ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
+                                            (struct sockaddr*)&fromAddr, &fromLen);
+            
+            if (bytesReceived > 0) {
+                buffer[bytesReceived] = '\0';
+                
+                json_error_t error;
+                json_t* message = json_loads(buffer, 0, &error);
+                
+                if (message && json_is_object(message)) {
+                    json_t* type = json_object_get(message, "type");
+                    json_t* applianceId = json_object_get(message, "applianceId");
+                    
+                    if (json_is_string(type) && json_is_string(applianceId) &&
+                        strcmp(json_string_value(type), "heartbeat") == 0 &&
+                        strcmp(json_string_value(applianceId), myApplianceId.c_str()) != 0) {
+                        
+                        updatePeer(message, inet_ntoa(fromAddr.sin_addr));
+                    }
+                    
+                    json_decref(message);
+                }
+            }
+        } else if (rv < 0) {
+            if (errno != EINTR) {
+                std::cerr << "Select error: " << strerror(errno) << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+    }
 }
 
 void MeshManager::stop() {
@@ -442,100 +500,6 @@ void MeshManager::sendHeartbeat() {
 void MeshManager::triggerBroadcast() {
     needsBroadcast = true;
     broadcastCV.notify_one();
-}
-
-void MeshManager::listenForHeartbeats() {
-    if (udpSocket < 0) return;
-    
-#ifdef __APPLE__
-    // macOS: Use select with non-blocking socket
-    fd_set readfds;
-    struct timeval tv;
-    
-    FD_ZERO(&readfds);
-    FD_SET(udpSocket, &readfds);
-    
-    tv.tv_sec = 0;
-    tv.tv_usec = 500000; // 500ms timeout
-    
-    int rv = select(udpSocket + 1, &readfds, NULL, NULL, &tv);
-    
-    if (rv > 0 && FD_ISSET(udpSocket, &readfds)) {
-        char buffer[1024];
-        struct sockaddr_in fromAddr;
-        socklen_t fromLen = sizeof(fromAddr);
-        
-        ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
-                                        (struct sockaddr*)&fromAddr, &fromLen);
-        
-        if (bytesReceived > 0) {
-            buffer[bytesReceived] = '\0';
-            processHeartbeatMessage(buffer, inet_ntoa(fromAddr.sin_addr));
-        }
-    }
-    // No sleep needed - select handles the wait
-    
-#elif defined(__arm__) || defined(__aarch64__)
-    // ARM/RPi: Use poll() which tends to be more efficient on ARM
-    struct pollfd pfd;
-    pfd.fd = udpSocket;
-    pfd.events = POLLIN;
-    
-    int rv = poll(&pfd, 1, 500); // 500ms timeout
-    
-    if (rv > 0 && (pfd.revents & POLLIN)) {
-        char buffer[1024];
-        struct sockaddr_in fromAddr;
-        socklen_t fromLen = sizeof(fromAddr);
-        
-        ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
-                                        (struct sockaddr*)&fromAddr, &fromLen);
-        
-        if (bytesReceived > 0) {
-            buffer[bytesReceived] = '\0';
-            processHeartbeatMessage(buffer, inet_ntoa(fromAddr.sin_addr));
-        }
-    } else if (rv < 0 && errno != EINTR) {
-        std::cerr << "Poll error: " << strerror(errno) << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    
-#else
-    // Linux x86/x64: Use blocking with timeout
-    char buffer[1024];
-    struct sockaddr_in fromAddr;
-    socklen_t fromLen = sizeof(fromAddr);
-    
-    ssize_t bytesReceived = recvfrom(udpSocket, buffer, sizeof(buffer) - 1, 0,
-                                    (struct sockaddr*)&fromAddr, &fromLen);
-    
-    if (bytesReceived > 0) {
-        buffer[bytesReceived] = '\0';
-        processHeartbeatMessage(buffer, inet_ntoa(fromAddr.sin_addr));
-    } else if (bytesReceived < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-        std::cerr << "recvfrom error: " << strerror(errno) << std::endl;
-    }
-    // Timeout handles the wait - no sleep needed
-#endif
-}
-
-void MeshManager::processHeartbeatMessage(const char* buffer, const std::string& fromIP) {
-    json_error_t error;
-    json_t* message = json_loads(buffer, 0, &error);
-    
-    if (message && json_is_object(message)) {
-        json_t* type = json_object_get(message, "type");
-        json_t* applianceId = json_object_get(message, "applianceId");
-        
-        if (json_is_string(type) && json_is_string(applianceId) &&
-            strcmp(json_string_value(type), "heartbeat") == 0 &&
-            strcmp(json_string_value(applianceId), myApplianceId.c_str()) != 0) {
-            
-            updatePeer(message, fromIP);
-        }
-        
-        json_decref(message);
-    }
 }
 
 void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
