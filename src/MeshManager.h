@@ -92,7 +92,7 @@ private:
     struct sockaddr_in broadcastAddr;
     
     // Threading
-    std::atomic<bool> running{true};
+    std::atomic<bool> running{false};
     std::thread heartbeatThread;
     std::thread discoveryThread;
     std::thread httpThread;

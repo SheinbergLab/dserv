@@ -72,12 +72,10 @@ void MeshManager::setPeerTimeoutMultiplier(int multiplier) {
 }
 
 void MeshManager::start() {
-    // Prevent multiple starts
-    if (running.exchange(true)) {
+    if (running.exchange(true)) {  // ← This will ALWAYS be true on first call!
         std::cerr << "MeshManager already running" << std::endl;
-        return;
+        return;  // ← Always exits early!
     }
-    
     // Setup sockets first
     setupUDP();
     setupHTTP();
@@ -198,6 +196,7 @@ void MeshManager::setupUDP() {
 }
 
 void MeshManager::setupHTTP() {
+
     httpSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (httpSocket < 0) {
         std::cerr << "HTTP socket creation failed: " << strerror(errno) << std::endl;
