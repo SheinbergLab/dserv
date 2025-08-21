@@ -80,6 +80,8 @@ int main(int argc, char *argv[])
   bool enable_mesh = true;
   int mesh_port = 12348;
   int mesh_discovery_port = 12346;
+  int mesh_websocket_port = 2569;
+  int mesh_tcl_port = 2575;
   std::string mesh_appliance_id;
   std::string mesh_appliance_name;
   std::string trigger_script;
@@ -132,52 +134,11 @@ int main(int argc, char *argv[])
 
   // Initialize mesh networking if enabled
   if (enable_mesh) {
-    // Default appliance ID to hostname if not specified
-    if (mesh_appliance_id.empty()) {
-      mesh_appliance_id = getHostname();
-    }
-    
-    // Default name
-    if (mesh_appliance_name.empty()) {
-      mesh_appliance_name = "Lab Station " + mesh_appliance_id;
-    }
-    
-    std::cout << "Initializing mesh networking..." << std::endl;
-    
-    try {
-	  meshManager = std::make_unique<MeshManager>(dserver, tclserver);
-	  meshManager->setHttpPort(mesh_port);
-	  meshManager->setDiscoveryPort(mesh_discovery_port);
-	  meshManager->init(mesh_appliance_id, mesh_appliance_name);
-	  meshManager->start();
-	  
-	  std::cout << "Mesh networking enabled:" << std::endl;
-	  std::cout << "  Appliance: " << mesh_appliance_name << " (" << mesh_appliance_id << ")" << std::endl;
-	  std::cout << "  HTTP Dashboard: http://localhost:" << mesh_port << "/mesh" << std::endl;
-	  std::cout << "  Discovery Port: " << mesh_discovery_port << std::endl;
-      
-		// Set mesh enabled flag via Tcl eval
-		std::string meshConfigScript = R"(
-		set ::mesh_enabled 1
-		set ::mesh_appliance_id ")" + mesh_appliance_id + R"("
-		set ::mesh_appliance_name ")" + mesh_appliance_name + R"("
-		set ::mesh_http_port )" + std::to_string(mesh_port) + R"(
-		set ::mesh_discovery_port )" + std::to_string(mesh_discovery_port) + R"(
-		)";
-		
-		auto result = tclserver->eval(meshConfigScript);
-		if (result.starts_with("!TCL_ERROR ")) {
-		  std::cerr << "Failed to set mesh variables: " << result << std::endl;
-		}
-      
-    } catch (const std::exception& e) {
-      std::cerr << "Failed to initialize mesh networking: " << e.what() << std::endl;
-      // Continue without mesh - don't fail the entire server
-      meshManager.reset();
-    }
-  } else {
-    std::cout << "Mesh networking disabled (use --mesh to enable)" << std::endl;
-  }
+    meshManager = MeshManager::createAndStart(dserver, tclserver, argc, argv,
+                                             mesh_appliance_id, mesh_appliance_name,
+                                             mesh_port, mesh_discovery_port,
+                                             mesh_websocket_port);
+   }
 
   // Run initialization scripts
   if (!trigger_script.empty()) {

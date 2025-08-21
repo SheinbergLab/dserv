@@ -20,6 +20,12 @@
 #include <tcl.h>
 #include <jansson.h>
 
+#include "TclServer.h"
+#include "ObjectRegistry.h"
+#include <tcl.h>
+
+#include <App.h> 
+
 // Forward declarations
 class Dataserver;
 class TclServer;
@@ -29,7 +35,13 @@ namespace uWS {
     struct WebSocket;
 }
 
-struct WSPerSocketData; // Forward declare
+struct MeshWSData {
+    SharedQueue<std::string>* rqueue;
+    std::string client_name;
+    std::vector<std::string> subscriptions;
+    SharedQueue<client_request_t>* notification_queue;
+    std::string dataserver_client_id;
+};
 
 class MeshManager {
 public:
@@ -47,8 +59,16 @@ struct PeerInfo {
 };
 private:
     Dataserver* ds;
-    TclServer* tclserver;  // Access to main TclServer instead of own interp
     
+    std::unique_ptr<TclServer> mesh_tclserver;
+    std::thread mesh_ws_thread;
+    int mesh_websocket_port;
+    
+    uWS::Loop *mesh_ws_loop = nullptr;  
+    std::mutex mesh_ws_connections_mutex;
+    std::map<std::string, uWS::WebSocket<false, true, MeshWSData>*> mesh_ws_connections;
+    us_listen_socket_t *mesh_listen_socket = nullptr;
+
     // Configuration
     std::string myApplianceId;
     std::string myName;
@@ -97,7 +117,6 @@ private:
     std::thread discoveryThread;
     std::thread httpThread;
     
-    std::set<uWS::WebSocket<false, true, WSPerSocketData>*> meshSubscribers;
     std::mutex subscribersMutex;
 
     // Network interface caching
@@ -111,17 +130,37 @@ private:
     std::vector<std::string> getBroadcastAddresses();
     void refreshBroadcastCache();
     void triggerBroadcast();
-      
-public:
-    MeshManager(Dataserver* ds, TclServer* tclserver);
-    ~MeshManager();
+    void handleMeshWebSocketMessage(auto *ws, std::string_view message);
+    void addTclCommands();
     
+    // passed from main
+    int argc;
+    char **argv;
+public:
+    MeshManager(Dataserver* ds, int argc, char *argv[], 
+        int http_port = 12348, int discovery_port = 12346, int websocket_port = 2577);
+
+    ~MeshManager();
+
+    // factory for our manager    
+	static std::unique_ptr<MeshManager> createAndStart(
+        Dataserver* ds, TclServer* main_tclserver, int argc, char** argv,
+        const std::string& appliance_id = "", const std::string& appliance_name = "",
+        int http_port = 12348, int discovery_port = 12346, int websocket_port = 2569);
+
+
     // Configuration and startup
-    void init(const std::string& applianceId, const std::string& name);
+	void init(const std::string& applianceId, const std::string& name, 
+	          int mesh_tcl_port = 2575);
     void setHttpPort(int port) { httpPort = port; }
     void setDiscoveryPort(int port) { discoveryPort = port; }
     void start();
     void stop();
+    
+    // Tcl support
+    void addTclCommands(Tcl_Interp* interp);
+    void startMeshWebSocketServer(int port);
+    void setWebSocketPort(int port) { mesh_websocket_port = port; }
     
     // Status management (called from Tcl)
     void updateStatus(const std::string& status);
@@ -142,8 +181,10 @@ public:
     // Register Tcl commands with the main interpreter
     void registerTclCommands();
 
-    void addMeshSubscriber(uWS::WebSocket<false, true, WSPerSocketData>* ws);
-    void removeMeshSubscriber(uWS::WebSocket<false, true, WSPerSocketData>* ws);
+    std::set<uWS::WebSocket<false, true, MeshWSData>*> meshSubscribers;
+
+    void addMeshSubscriber(uWS::WebSocket<false, true, MeshWSData>* ws);
+    void removeMeshSubscriber(uWS::WebSocket<false, true, MeshWSData>* ws);
     void broadcastMeshUpdate();
     void broadcastCustomUpdate(const std::string& standardJson, const std::string& customJson);
     
@@ -168,6 +209,7 @@ private:
     void listenForHeartbeats();
     void updatePeer(json_t* heartbeat, const std::string& ip);
     void cleanupExpiredPeers();
+    static std::string getHostname();
     
     // HTTP API server
     void runHttpServer();
@@ -175,11 +217,15 @@ private:
     std::string getMeshHTML();
     
     // Tcl command implementations (static callbacks)
-    static int meshSetStatusCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int meshUpdateStatusCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int meshUpdateExperimentCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int meshUpdateParticipantCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int meshGetPeersCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int meshGetClusterStatusCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
-    static int meshGetApplianceIdCommand(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_get_cluster_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_update_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_get_appliance_id_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_broadcast_custom_update_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_config_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_info_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_set_field_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_remove_field_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_get_fields_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_clear_fields_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 };

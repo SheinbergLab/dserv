@@ -300,12 +300,11 @@ if { [lsearch $hbs $host] >= 0 } {
 # start a "git" interpreter
 subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
 
-# start our mesh dispatcher
+# configure our mesh dispatcher (started on 2575 if enabled)
 if { [info exists ::mesh_enabled] } {
     puts "Mesh networking detected - loading mesh configuration"
-    subprocess mesh 2575 "source [file join $dspath config/meshconf.tcl]"
+     send mesh "source [file join $dspath config/meshconf.tcl]"
 }
-
 
 # and finally load a default system
 ess::load_system

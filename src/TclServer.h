@@ -121,6 +121,10 @@ private:
 			const std::string& message,
 			const std::string& client_name);
 
+ using CommandRegistrationCallback = std::function<void(Tcl_Interp*, void*)>;
+ CommandRegistrationCallback command_callback = nullptr;
+ void* command_callback_data = nullptr;
+    
 public:
   int argc;
   char **argv;
@@ -273,6 +277,15 @@ public:
   void start_websocket_server(void);  // Add WebSocket server
   std::string get_connection_stats(void);
 
+  void setCommandCallback(CommandRegistrationCallback callback, void* data) {
+        command_callback = callback;
+        command_callback_data = data;
+    }
+  bool hasCommandCallback() const { return command_callback != nullptr; }
+  void callCommandCallback(Tcl_Interp* interp) { 
+        if (command_callback) command_callback(interp, command_callback_data); 
+  }
+    
   void process_websocket_client_notifications(uWS::WebSocket<false, true, WSPerSocketData>* ws, WSPerSocketData* userData);
   
   int sourceFile(const char *filename);
