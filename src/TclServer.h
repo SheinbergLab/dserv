@@ -291,6 +291,9 @@ public:
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }
   
+  // supported on some platforms
+  void setPriority(int priority);
+  
   void set_point(ds_datapoint_t *dp);
   int queue_size(void);
   void shutdown_message(SharedQueue<client_request_t> *queue);

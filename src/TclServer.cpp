@@ -94,6 +94,40 @@ TclServer::~TclServer()
   process_thread.join();
 }
 
+void TclServer::setPriority(int priority) {
+#ifdef __linux__
+    struct sched_param param;
+    param.sched_priority = priority;
+    
+    // Set priority for the process thread (most critical)
+    if (process_thread.joinable()) {
+        int result = pthread_setschedparam(process_thread.native_handle(), SCHED_FIFO, &param);
+        if (result != 0) {
+            std::cerr << "Warning: Failed to set process thread priority: " << strerror(result) << std::endl;
+        }
+    }
+    
+    // Lower priority for network threads (if they exist)
+    param.sched_priority = std::max(1, priority - 1);  // Ensure priority >= 1
+    if (newline_net_thread.joinable()) {
+        pthread_setschedparam(newline_net_thread.native_handle(), SCHED_FIFO, &param);
+    }
+    if (message_net_thread.joinable()) {
+        pthread_setschedparam(message_net_thread.native_handle(), SCHED_FIFO, &param);
+    }
+    
+    std::cout << "Set thread priorities for " << name << " (priority: " << priority << ")" << std::endl;
+    
+#elif defined(_WIN32)
+    // Windows implementation if needed
+    std::cout << "Thread priority setting not implemented on Windows" << std::endl;
+    
+#else
+    // macOS, other Unix variants
+    std::cout << "Thread priority setting not implemented on this platform" << std::endl;
+    
+#endif
+}
 
 void TclServer::shutdown(void)
 {
@@ -1123,6 +1157,34 @@ static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp,
 }
 
 
+static int set_priority_command(ClientData data, Tcl_Interp *interp,
+                                int objc, Tcl_Obj *objv[])
+{
+    TclServer *tclserver = (TclServer *) data;
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "priority");
+        return TCL_ERROR;
+    }
+    
+    int priority;
+    if (Tcl_GetIntFromObj(interp, objv[1], &priority) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    
+    // Validate priority range (1-99 for SCHED_FIFO on Linux)
+    if (priority < 1 || priority > 99) {
+        Tcl_AppendResult(interp, "Priority must be between 1 and 99", NULL);
+        return TCL_ERROR;
+    }
+    
+    tclserver->setPriority(priority);
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(priority));
+    return TCL_OK;
+}
+
+
 static int dserv_add_match_command(ClientData data, Tcl_Interp * interp,
                        int objc,
                        Tcl_Obj * const objv[])
@@ -1452,7 +1514,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "subprocessInfo",
                (Tcl_ObjCmdProc *) getsubprocesses_command,
                tserv, NULL);
-
+  Tcl_CreateObjCommand(interp, "setPriority",
+               (Tcl_ObjCmdProc *) set_priority_command, tserv, NULL);
+                     
   Tcl_CreateObjCommand(interp, "evalNoReply",
                (Tcl_ObjCmdProc *) eval_noreply_command,
                tserv, NULL);
