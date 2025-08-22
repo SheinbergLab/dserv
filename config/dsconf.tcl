@@ -67,3 +67,5 @@ if { [info exists ::mesh_enabled] } {
      send mesh "source [file join $dspath config/meshconf.tcl]"
 }
 
+# auto update support
+source config/update.conf
