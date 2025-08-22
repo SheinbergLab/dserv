@@ -12,10 +12,10 @@ if [file exists $dlshlib] {
 tcl::tm::add $dspath/lib
 
 # start our isolated ess thread
-subprocess ess { source config/essconf.tcl }
+subprocess ess "source [file join $dspath config/essconf.tcl]"
 
 # add ability to call ess functions from main tclserver
-source config/essctrl.tcl
+source [file join $dspath config/essctrl.tcl]
 
 proc set_hostinfo {} {
     # target_host allows us to connect using NIC
@@ -68,4 +68,4 @@ if { [info exists ::mesh_enabled] } {
 }
 
 # auto update support
-source config/updateconf.tcl
+source [file join $dspath config/updateconf.tcl]
