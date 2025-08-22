@@ -216,8 +216,9 @@ private:
     void listenForHeartbeats();
     void updatePeer(json_t* heartbeat, const std::string& ip);
     void cleanupExpiredPeers();
+    std::string getLocalIPAddress();
     static std::string getHostname();
-    
+
     // HTTP API server
     void runHttpServer();
     void handleHttpRequest(int clientSocket);

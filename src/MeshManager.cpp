@@ -795,7 +795,7 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
     // Check if this is a new peer or returning peer
     bool isNew = (peers.find(peerId) == peers.end());
     if (isNew && lostIt == lostPeers.end()) {
-        std::cout << "New peer discovered: " << peerId << std::endl;
+//        std::cout << "New peer discovered: " << peerId << std::endl;
     }
     
     PeerInfo& peer = peers[peerId];  // Creates if not exists
@@ -973,6 +973,29 @@ std::vector<MeshManager::PeerInfo> MeshManager::getPeers() {
     return peerList;
 }
 
+std::string MeshManager::getLocalIPAddress() {
+    struct ifaddrs *ifap, *ifa;
+    char ip[INET_ADDRSTRLEN];
+    
+    if (getifaddrs(&ifap) == 0) {
+        for (ifa = ifap; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+            if (ifa->ifa_flags & IFF_LOOPBACK) continue;  // Skip loopback
+            if (!(ifa->ifa_flags & IFF_UP)) continue;     // Skip down interfaces
+            
+            struct sockaddr_in* addr = (struct sockaddr_in*)ifa->ifa_addr;
+            if (inet_ntop(AF_INET, &addr->sin_addr, ip, INET_ADDRSTRLEN)) {
+                freeifaddrs(ifap);
+                return std::string(ip);
+            }
+        }
+        freeifaddrs(ifap);
+    }
+    
+    // Fallback - this shouldn't happen in normal operation
+    return "127.0.0.1";
+}
+
 std::string MeshManager::getPeersJSON() {
     std::lock_guard<std::mutex> lock(peersMutex);
     
@@ -984,6 +1007,8 @@ std::string MeshManager::getPeersJSON() {
     json_object_set_new(self, "applianceId", json_string(myApplianceId.c_str()));
     json_object_set_new(self, "name", json_string(myName.c_str()));
     json_object_set_new(self, "status", json_string(myStatus.c_str()));
+    json_object_set_new(self, "ipAddress", json_string(getLocalIPAddress().c_str()));
+	json_object_set_new(self, "webPort", json_integer(httpPort));
     json_object_set_new(self, "isLocal", json_true());
     
     // Add all custom fields
