@@ -208,6 +208,56 @@ void MeshManager::startMeshWebSocketServer(int port) {
 			   ->end(getLostPeersJSON());
 		});
 
+		app.post("/api/lost-peers/clear", [this](auto *res, auto *req) {
+			{
+				std::lock_guard<std::mutex> lock(peersMutex);
+				lostPeers.clear();
+			}
+			res->writeHeader("Content-Type", "application/json")
+			   ->writeHeader("Access-Control-Allow-Origin", "*")
+			   ->end("{\"status\":\"cleared\"}");
+		});
+
+		// forced refresh and immediate heartbeat
+		app.post("/api/mesh/refresh", [this](auto *res, auto *req) {
+			// Force immediate heartbeat send + network rescan
+			sendHeartbeat();
+			refreshBroadcastCache();
+			res->writeHeader("Content-Type", "application/json")
+			   ->end("{\"status\":\"refreshed\"}");
+		});
+		
+		// Status
+		app.get("/api/mesh/status", [this](auto *res, auto *req) {
+		  json_t* status = json_object();
+		  json_object_set_new(status, "running", json_boolean(running));
+		  json_object_set_new(status, "heartbeatInterval", json_integer(heartbeatInterval.load()));
+		  json_object_set_new(status, "peerTimeoutSeconds", json_integer(getPeerTimeoutSeconds()));
+		  json_object_set_new(status, "applianceId", json_string(myApplianceId.c_str()));
+		  json_object_set_new(status, "name", json_string(myName.c_str()));
+		  
+		  {
+		    std::lock_guard<std::mutex> lock(peersMutex);
+		    json_object_set_new(status, "peerCount", json_integer(peers.size()));
+		    json_object_set_new(status, "lostPeerCount", json_integer(lostPeers.size()));
+		  }
+		  
+		  // Add broadcast addresses
+		  auto addresses = getBroadcastAddresses();
+		  json_t* addr_array = json_array();
+		  for (const auto& addr : addresses) {
+		    json_array_append_new(addr_array, json_string(addr.c_str()));
+		  }
+		  json_object_set_new(status, "broadcastAddresses", addr_array);
+		  
+		  char* result = json_dumps(status, 0);
+		  res->writeHeader("Content-Type", "application/json")
+		    ->writeHeader("Access-Control-Allow-Origin", "*")
+		    ->end(result);
+		  free(result);
+		  json_decref(status);
+		});
+		
         // Health check
         app.get("/health", [](auto *res, auto *req) {
             res->writeHeader("Content-Type", "application/json")
@@ -318,8 +368,72 @@ void MeshManager::handleMeshWebSocketMessage(auto *ws, std::string_view message)
         free(response_str);
         json_decref(response);
     }
-    // Add other mesh-specific commands as needed
-    
+	else if (strcmp(cmd, "clear_lost_peers") == 0) {
+		{
+			std::lock_guard<std::mutex> lock(peersMutex);
+			lostPeers.clear();
+		}		
+		json_t *response = json_object();
+		json_object_set_new(response, "status", json_string("ok"));
+		json_object_set_new(response, "action", json_string("lost_peers_cleared"));
+		char *response_str = json_dumps(response, 0);
+		ws->send(response_str, uWS::OpCode::TEXT);
+		free(response_str);
+		json_decref(response);
+	}
+    // In handleMeshWebSocketMessage, add:
+	else if (strcmp(cmd, "force_refresh") == 0) {
+		// Force immediate heartbeat send + network rescan
+		sendHeartbeat();
+		refreshBroadcastCache();
+		
+		json_t *response = json_object();
+		json_object_set_new(response, "type", json_string("refresh_complete"));
+		json_object_set_new(response, "status", json_string("ok"));
+		json_object_set_new(response, "timestamp", json_integer(
+			std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::system_clock::now().time_since_epoch()).count()));
+		
+		char *response_str = json_dumps(response, 0);
+		ws->send(response_str, uWS::OpCode::TEXT);
+		free(response_str);
+		json_decref(response);
+		
+		// Also broadcast updated mesh state to all subscribers
+		notifyWebSocketClients();
+	}
+	else if (strcmp(cmd, "get_status") == 0) {
+		json_t* response = json_object();
+		json_object_set_new(response, "type", json_string("mesh_status"));
+		
+		json_t* status = json_object();
+		json_object_set_new(status, "running", json_boolean(running));
+		json_object_set_new(status, "heartbeatInterval", json_integer(heartbeatInterval.load()));
+		json_object_set_new(status, "peerTimeoutSeconds", json_integer(getPeerTimeoutSeconds()));
+		json_object_set_new(status, "applianceId", json_string(myApplianceId.c_str()));
+		json_object_set_new(status, "name", json_string(myName.c_str()));
+		
+		{
+			std::lock_guard<std::mutex> lock(peersMutex);
+			json_object_set_new(status, "peerCount", json_integer(peers.size()));
+			json_object_set_new(status, "lostPeerCount", json_integer(lostPeers.size()));
+		}
+		
+		// Add broadcast addresses
+		auto addresses = getBroadcastAddresses();
+		json_t* addr_array = json_array();
+		for (const auto& addr : addresses) {
+			json_array_append_new(addr_array, json_string(addr.c_str()));
+		}
+		json_object_set_new(status, "broadcastAddresses", addr_array);
+		
+		json_object_set_new(response, "data", status);
+		
+		char *response_str = json_dumps(response, 0);
+		ws->send(response_str, uWS::OpCode::TEXT);
+		free(response_str);
+		json_decref(response);
+	}
     json_decref(root);
 }
 
