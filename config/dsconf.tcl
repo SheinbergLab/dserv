@@ -68,4 +68,4 @@ if { [info exists ::mesh_enabled] } {
 }
 
 # auto update support
-source config/update.conf
+source config/updateconf.tcl

@@ -343,6 +343,25 @@ add_subdirectory(modules)
 add_subdirectory(processors)
 add_subdirectory(tools/essctrl)
 
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_TAG_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(GIT_TAG_VERSION)
+        set(dserv_VERSION ${GIT_TAG_VERSION})
+    else()
+        set(dserv_VERSION "0.0.0")
+    endif()
+else()
+    set(dserv_VERSION "0.0.0")
+endif()
+
+# Configure the version header
 configure_file(src/dservConfig.h.in ../src/dservConfig.h)
 
 add_executable(dserv 

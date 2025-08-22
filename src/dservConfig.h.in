@@ -1,3 +1,2 @@
 // the configured options and settings for dserv
-#define dserv_VERSION_MAJOR @dserv_VERSION_MAJOR@
-#define dserv_VERSION_MINOR @dserv_VERSION_MINOR@
+#define dserv_VERSION "@dserv_VERSION@"

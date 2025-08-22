@@ -62,6 +62,19 @@ void signalHandler(int signum) {
   exit(0);
 }
 
+void setVersionInfo(TclServer* tclserver) {
+    std::string version_str = dserv_VERSION;
+    
+    // Set as a datapoint
+    tclserver->eval("dservSet system/version \"" + version_str + "\"");
+    
+    // Also set as a Tcl variable for direct access
+    tclserver->eval("set ::dserv_version \"" + version_str + "\"");
+    
+    std::cout << "dserv version " << version_str << " initialized" << std::endl;
+}
+
+
 std::string getHostname() {
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -110,7 +123,7 @@ int main(int argc, char *argv[])
   }
 
   if (version) {
-    std::cout << dserv_VERSION_MAJOR << "." << dserv_VERSION_MINOR << std::endl;
+    std::cout << dserv_VERSION << std::endl;
     exit(0);
   }
   
@@ -131,6 +144,8 @@ int main(int argc, char *argv[])
   dserver = new Dataserver(argc, argv);
   tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560, 2565);
   TclServerRegistry.registerObject("ess", tclserver);
+
+  setVersionInfo(tclserver);
 
   // Initialize mesh networking if enabled
   if (enable_mesh) {
