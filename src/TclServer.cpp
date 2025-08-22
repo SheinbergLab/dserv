@@ -2,6 +2,7 @@
 #include "TclCommands.h"
 #include "ObjectRegistry.h"
 #include "dserv.h"
+#include "dservConfig.h"
 #include <vector>
 
 // JSON support
@@ -1193,6 +1194,11 @@ static int set_priority_command(ClientData data, Tcl_Interp *interp,
     return TCL_OK;
 }
 
+static int dserv_version_command(ClientData data, Tcl_Interp *interp,
+                                int objc, Tcl_Obj *objv[]) {
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(dserv_VERSION, -1));
+    return TCL_OK;
+}
 
 static int dserv_add_match_command(ClientData data, Tcl_Interp * interp,
                        int objc,
@@ -1529,7 +1535,11 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "evalNoReply",
                (Tcl_ObjCmdProc *) eval_noreply_command,
                tserv, NULL);
-  
+ 
+  Tcl_CreateObjCommand(interp, "dservVersion",
+                    (Tcl_ObjCmdProc *) dserv_version_command,
+                    tserv, NULL);
+                     
   Tcl_CreateObjCommand(interp, "send",
                (Tcl_ObjCmdProc *) send_command,
                tserv, NULL);
