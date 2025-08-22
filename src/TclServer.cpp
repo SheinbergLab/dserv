@@ -24,6 +24,12 @@
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
 
+// For no-network subprocess
+TclServer::TclServer(int argc, char **argv, Dataserver *dserv, std::string name)
+  : TclServer(argc, argv, dserv, TclServerConfig(name, -1, -1, -1))
+{
+}
+
 TclServer::TclServer(int argc, char **argv, Dataserver *dserv,
                      std::string name, int port)
   : TclServer(argc, argv, dserv, TclServerConfig(name, port, -1))
@@ -82,13 +88,13 @@ TclServer::~TclServer()
 {
   shutdown();
   
-  if (websocket_port() > 0)
+  if (websocket_port() >= 0)
     websocket_thread.detach();
   
-  if (message_port() > 0) 
+  if (message_port() >= 0) 
     message_net_thread.detach();
     
-  if (newline_port() > 0) 
+  if (newline_port() >= 0) 
     newline_net_thread.detach();
   
   process_thread.join();
@@ -1084,24 +1090,27 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
                    int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
-  int port;
+  int port = -1;
   
-  if (objc < 3) {
-    Tcl_WrongNumArgs(interp, 1, objv, "name port [startup_script]");
-    return TCL_ERROR;
-  }
-  
-  if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
-    return TCL_ERROR;
+ if (objc > 3) {
+    if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
+      return TCL_ERROR;
+    }
   }
 
   TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
                    tclserver->ds,
                    Tcl_GetString(objv[1]), port);
+                   
   TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
 
-  if (objc > 2) {
-    std::string script = std::string(Tcl_GetString(objv[3]));
+  std::string script;
+  if (objc > 3) {
+    script = std::string(Tcl_GetString(objv[3]));
+  } else if (objc > 2) {
+    script = std::string(Tcl_GetString(objv[2]));  
+  }
+  if (!script.empty()) {
     auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
       Tcl_AppendResult(interp, result.c_str(), NULL);
