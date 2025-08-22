@@ -667,7 +667,7 @@ void MeshManager::refreshBroadcastCache() {
 }
 
 std::vector<std::string> MeshManager::getBroadcastAddresses() {
-	// could rescan, but will just use the initial cache
+    refreshBroadcastCache();
     std::lock_guard<std::mutex> lock(broadcastCacheMutex);
     return cachedBroadcastAddresses; // Return copy
 }
@@ -1018,18 +1018,41 @@ std::string MeshManager::getPeersJSON() {
     
     json_object_set_new(result, "appliances", appliances_array);
     
-    if (!lostPeers.empty()) {
-        json_t* lost_array = json_array();
-        for (const auto& lost : lostPeers) {
-            json_t* lostObj = json_object();
-            json_object_set_new(lostObj, "applianceId", 
-                json_string(lost.peer.applianceId.c_str()));
-            json_object_set_new(lostObj, "name", 
-                json_string(lost.peer.name.c_str()));
-            json_array_append_new(lost_array, lostObj);
-        }
-        json_object_set_new(result, "recentlyLost", lost_array);
-    }
+	if (!lostPeers.empty()) {
+		json_t* lost_array = json_array();
+		auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::system_clock::now().time_since_epoch()).count();
+		
+		for (const auto& lost : lostPeers) {
+			json_t* lostObj = json_object();
+			
+			// Include all the same fields as getLostPeersJSON()
+			json_object_set_new(lostObj, "applianceId", 
+				json_string(lost.peer.applianceId.c_str()));
+			json_object_set_new(lostObj, "name", 
+				json_string(lost.peer.name.c_str()));
+			json_object_set_new(lostObj, "lastStatus", 
+				json_string(lost.peer.status.c_str()));
+			json_object_set_new(lostObj, "lastIpAddress", 
+				json_string(lost.peer.ipAddress.c_str()));
+			json_object_set_new(lostObj, "lostTime", json_integer(lost.lostTime));
+			
+			// Add human-readable time ago
+			int secondsAgo = (now - lost.lostTime) / 1000;
+			std::string timeAgo;
+			if (secondsAgo < 60) {
+				timeAgo = std::to_string(secondsAgo) + " seconds ago";
+			} else if (secondsAgo < 3600) {
+				timeAgo = std::to_string(secondsAgo / 60) + " minutes ago";
+			} else {
+				timeAgo = std::to_string(secondsAgo / 3600) + " hours ago";
+			}
+			json_object_set_new(lostObj, "timeAgo", json_string(timeAgo.c_str()));
+			
+			json_array_append_new(lost_array, lostObj);
+		}
+		json_object_set_new(result, "recentlyLost", lost_array);
+	}
     
     char* resultStr = json_dumps(result, 0);
     std::string returnValue(resultStr);
