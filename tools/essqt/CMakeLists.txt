@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(essqt VERSION 0.1.0 LANGUAGES CXX C)  # Include C for dlfuncs.c and mdns if needed
+project(essqt VERSION 0.1.0 LANGUAGES CXX C)  # Include C for dlfuncs.c if needed
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -166,8 +166,6 @@ set(UI_SOURCES
 
 set(OPTIONAL_SOURCES
     # src/tcl/TclInterp.cpp
-    src/communication/mdns_query.c
-    src/communication/mdns.c
     src/tcl/dlfuncs.c
     src/tcl/b64.c
     src/tcl/TclUtils.cpp

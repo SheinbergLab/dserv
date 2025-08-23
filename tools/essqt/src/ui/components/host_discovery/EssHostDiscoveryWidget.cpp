@@ -5,38 +5,74 @@
 #include "communication/DservClient.h"
 
 #include <QMessageBox>
-#include <QRegularExpression>
 #include <QThread>
-#include <cstring>
-
-// Include the mDNS discovery function
-extern "C" {
-    int send_mdns_query_service(const char* service_name, char* result_buf, 
-                               int result_len, int timeout_ms);
-}
+#include <QDateTime>
+#include <QNetworkInterface>
+#include <QHostAddress>
+#include <QJsonParseError>
 
 EssHostDiscoveryWidget::EssHostDiscoveryWidget(QWidget *parent)
     : QWidget(parent)
     , m_isRefreshing(false)
     , m_commandInterface(nullptr)
+    , m_meshSocket(nullptr)
 {
     setupUi();
     connectSignals();
     
-    // Setup refresh timer
+    // Setup mesh discovery
+    setupMeshSocket();
+    
+    // Setup timers
     m_refreshTimer = new QTimer(this);
     m_refreshTimer->setSingleShot(true);
     connect(m_refreshTimer, &QTimer::timeout, this, &EssHostDiscoveryWidget::onRefreshTimeout);
     
-    // Log initialization
-    EssConsoleManager::instance()->logSystem("Host Discovery widget initialized", "Discovery");
+    // Mesh discovery timer - listens for heartbeats during refresh periods
+    m_meshDiscoveryTimer = new QTimer(this);
+    m_meshDiscoveryTimer->setSingleShot(true);
     
-    // Auto-refresh on startup after a longer delay to ensure network is ready
+    // Peer cleanup timer - runs continuously to remove stale entries
+    m_peerCleanupTimer = new QTimer(this);
+    m_peerCleanupTimer->setInterval(CLEANUP_INTERVAL_MS);
+    connect(m_peerCleanupTimer, &QTimer::timeout, this, &EssHostDiscoveryWidget::cleanupExpiredPeers);
+    m_peerCleanupTimer->start();
+    
+    // Log initialization
+    EssConsoleManager::instance()->logSystem("Host Discovery widget initialized with mesh discovery", "Discovery");
+    
+    // Auto-refresh on startup
     QTimer::singleShot(100, this, &EssHostDiscoveryWidget::refreshHosts);
 }
 
 EssHostDiscoveryWidget::~EssHostDiscoveryWidget()
 {
+    stopMeshDiscovery();
+}
+
+void EssHostDiscoveryWidget::setupMeshSocket()
+{
+    m_meshSocket = new QUdpSocket(this);
+    
+    // Bind to the mesh discovery port to listen for heartbeats
+    if (m_meshSocket->bind(QHostAddress::Any, MESH_DISCOVERY_PORT, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
+        EssConsoleManager::instance()->logSuccess(
+            QString("Mesh discovery listening on port %1").arg(MESH_DISCOVERY_PORT), 
+            "Discovery"
+        );
+        
+        connect(m_meshSocket, &QUdpSocket::readyRead, 
+                this, &EssHostDiscoveryWidget::onMeshHeartbeatReceived);
+    } else {
+        EssConsoleManager::instance()->logError(
+            QString("Failed to bind mesh discovery socket: %1").arg(m_meshSocket->errorString()), 
+            "Discovery"
+        );
+        
+        // Try to continue without mesh discovery
+        m_meshSocket->deleteLater();
+        m_meshSocket = nullptr;
+    }
 }
 
 void EssHostDiscoveryWidget::setupUi()
@@ -56,7 +92,7 @@ void EssHostDiscoveryWidget::setupUi()
     // Compact buttons
     m_refreshButton = new QToolButton();
     m_refreshButton->setText("↻");
-    m_refreshButton->setToolTip("Refresh - Search for available ESS/dserv hosts");
+    m_refreshButton->setToolTip("Refresh - Search for available lab systems via mesh heartbeats");
     m_refreshButton->setAutoRaise(true);
     
     m_connectButton = new QToolButton();
@@ -77,19 +113,11 @@ void EssHostDiscoveryWidget::setupUi()
     m_connectionIndicator->setToolTip("Disconnected");
     updateConnectionIndicator(false);
     
-    // Progress bar
-    m_progressBar = new QProgressBar();
-    m_progressBar->setVisible(false);
-    m_progressBar->setRange(0, 0);
-    m_progressBar->setMaximumHeight(16);
-    m_progressBar->setTextVisible(false);
-    
     // Add all to layout
-    layout->addWidget(m_hostCombo);
+    layout->addWidget(m_hostCombo, 1);  // Combo box takes stretch space
     layout->addWidget(m_refreshButton);
     layout->addWidget(m_connectButton);
     layout->addWidget(m_disconnectButton);
-    layout->addWidget(m_progressBar, 1);  // Progress bar takes available space when visible
     layout->addStretch();  // Push indicator to the right
     layout->addWidget(m_connectionIndicator);
     
@@ -166,83 +194,48 @@ void EssHostDiscoveryWidget::refreshHosts()
     }
     
     m_isRefreshing = true;
-    m_progressBar->setVisible(true);
     m_refreshButton->setEnabled(false);
     
-    EssConsoleManager::instance()->logInfo("Starting mDNS discovery for _dserv._tcp", "Discovery");
+    EssConsoleManager::instance()->logInfo("Starting mesh heartbeat discovery", "Discovery");
     
     emit refreshStarted();
     
-    // Start the discovery process
-    startMdnsDiscovery();
+    // Start mesh discovery for a limited time
+    startMeshDiscovery();
 }
 
-void EssHostDiscoveryWidget::startMdnsDiscovery()
+void EssHostDiscoveryWidget::startMeshDiscovery()
 {
-    // Use a very short timer to make it async but not threaded
-    m_refreshTimer->start(50);
+    if (!m_meshSocket) {
+        // No mesh socket available, finish immediately
+        onRefreshTimeout();
+        return;
+    }
+    
+    // Listen for heartbeats for DISCOVERY_INTERVAL_MS
+    m_meshDiscoveryTimer->start(DISCOVERY_INTERVAL_MS);
+    connect(m_meshDiscoveryTimer, &QTimer::timeout, this, &EssHostDiscoveryWidget::onRefreshTimeout, Qt::UniqueConnection);
+    
+    EssConsoleManager::instance()->logDebug(
+        QString("Listening for mesh heartbeats for %1 seconds").arg(DISCOVERY_INTERVAL_MS / 1000.0, 0, 'f', 1), 
+        "Discovery"
+    );
+}
+
+void EssHostDiscoveryWidget::stopMeshDiscovery()
+{
+    if (m_meshDiscoveryTimer) {
+        m_meshDiscoveryTimer->stop();
+    }
 }
 
 void EssHostDiscoveryWidget::onRefreshTimeout()
 {
-    QString result;
-    bool success = callMdnsDiscovery(result);
-    
-    // On initial startup, try once more if first attempt failed
-    static bool isInitialRefresh = true;
-    if (!success && isInitialRefresh) {
-        EssConsoleManager::instance()->logInfo(
-            "Initial discovery failed, retrying...", 
-            "Discovery"
-        );
-        
-        // Short delay before retry
-        QThread::msleep(200);
-        
-        // Try again
-        success = callMdnsDiscovery(result);
-        
-        if (success) {
-            EssConsoleManager::instance()->logSuccess(
-                "Retry successful - found hosts", 
-                "Discovery"
-            );
-        }
-    }
-    isInitialRefresh = false;
-    
     m_isRefreshing = false;
-    m_progressBar->setVisible(false);
     m_refreshButton->setEnabled(true);
     
-    if (success && !result.isEmpty()) {
-        parseHostsFromMdns(result);
-        
-        EssConsoleManager::instance()->logSuccess(
-            QString("Discovery complete: found %1 host(s)").arg(m_hostCombo->count()), 
-            "Discovery"
-        );
-    } else {
-        // Clear combo first
-        m_hostCombo->clear();
-        
-        // Add localhost as fallback if available
-        if (isLocalhostRunning()) {
-            m_hostCombo->addItem("localhost");
-            
-            EssConsoleManager::instance()->logWarning(
-                "mDNS discovery failed - using localhost as fallback", 
-                "Discovery"
-            );
-        } else {
-            m_hostCombo->setPlaceholderText("No hosts found");
-            
-            EssConsoleManager::instance()->logWarning(
-                "No hosts discovered and localhost dserv not running", 
-                "Discovery"
-            );
-        }
-    }
+    // Update the host combo with discovered peers
+    updateHostsFromMeshPeers();
     
     // Update connected host highlighting
     updateConnectionStatus();
@@ -250,119 +243,251 @@ void EssHostDiscoveryWidget::onRefreshTimeout()
     emit refreshFinished();
 }
 
-bool EssHostDiscoveryWidget::callMdnsDiscovery(QString &result)
+void EssHostDiscoveryWidget::onMeshHeartbeatReceived()
 {
-    const char* service = "_dserv._tcp";
-    char buffer[4096];
-    int timeout_ms = 250;  
-    
-    // Clear buffer first
-    memset(buffer, 0, sizeof(buffer));
-    
-    int returnValue = send_mdns_query_service(service, buffer, sizeof(buffer), timeout_ms);
-    
-    // Success if buffer has content, regardless of return value
-    if (strlen(buffer) > 0) {
-        result = QString::fromUtf8(buffer);
-        EssConsoleManager::instance()->logDebug(
-            QString("mDNS response: %1").arg(result.left(100) + "..."), 
-            "Discovery"
-        );
-        return true;
+    while (m_meshSocket->hasPendingDatagrams()) {
+        QByteArray datagram;
+        datagram.resize(m_meshSocket->pendingDatagramSize());
+        
+        QHostAddress sender;
+        quint16 senderPort;
+        
+        if (m_meshSocket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort) > 0) {
+            processMeshHeartbeat(datagram, sender);
+        }
     }
-    
-    return false;
 }
 
-void EssHostDiscoveryWidget::parseHostsFromMdns(const QString &mdnsResponse)
+void EssHostDiscoveryWidget::processMeshHeartbeat(const QByteArray &data, const QHostAddress &senderAddress)
 {
-    // Save current selection
+    // Parse JSON heartbeat message
+    QJsonParseError error;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &error);
+    
+    if (error.error != QJsonParseError::NoError) {
+        return; // Invalid JSON, ignore
+    }
+    
+    QJsonObject heartbeat = doc.object();
+    
+    // Validate this is a heartbeat message
+    if (heartbeat["type"].toString() != "heartbeat") {
+        return;
+    }
+    
+    QString applianceId = heartbeat["applianceId"].toString();
+    if (applianceId.isEmpty()) {
+        return;
+    }
+    
+    QJsonObject heartbeatData = heartbeat["data"].toObject();
+    
+    // Create or update peer info
+    MeshPeerInfo peer;
+    peer.applianceId = applianceId;
+    peer.name = heartbeatData["name"].toString();
+    peer.status = heartbeatData["status"].toString();
+    peer.ipAddress = senderAddress.toString();
+    peer.webPort = heartbeatData["webPort"].toInt();
+    peer.isLocal = false; // Remote peers only
+    peer.lastSeen = QDateTime::currentMSecsSinceEpoch();
+    
+    // Store custom fields
+    QJsonObject customFields;
+    for (auto it = heartbeatData.begin(); it != heartbeatData.end(); ++it) {
+        QString key = it.key();
+        if (key != "name" && key != "status" && key != "webPort") {
+            customFields[key] = it.value();
+        }
+    }
+    peer.customFields = customFields;
+    
+    // Add to discovered peers
+    m_discoveredPeers[applianceId] = peer;
+    
+    // Only log new peers or status changes, not every heartbeat
+    static QMap<QString, QString> lastStatus;
+    if (!lastStatus.contains(applianceId) || lastStatus[applianceId] != peer.status) {
+        lastStatus[applianceId] = peer.status;
+        EssConsoleManager::instance()->logDebug(
+            QString("Mesh peer %1 (%2) at %3 - status: %4")
+            .arg(peer.name)
+            .arg(peer.applianceId)
+            .arg(peer.ipAddress)
+            .arg(peer.status), 
+            "Discovery"
+        );
+    }
+}
+
+void EssHostDiscoveryWidget::cleanupExpiredPeers()
+{
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    
+    auto it = m_discoveredPeers.begin();
+    while (it != m_discoveredPeers.end()) {
+        if (now - it->lastSeen > PEER_TIMEOUT_MS) {
+            EssConsoleManager::instance()->logDebug(
+                QString("Peer %1 (%2) timed out").arg(it->name).arg(it->applianceId), 
+                "Discovery"
+            );
+            it = m_discoveredPeers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    
+    // Update UI if we removed any peers
+    if (!m_isRefreshing) {
+        updateHostsFromMeshPeers();
+    }
+}
+
+void EssHostDiscoveryWidget::updateHostsFromMeshPeers()
+{
+    // Save current selection (now we need to extract IP from display text)
     QString currentSelection = m_hostCombo->currentText();
+    QString currentIp;
+    if (currentSelection.contains(" (") && currentSelection.endsWith(")")) {
+        // Extract IP from "Name (IP)" format
+        int start = currentSelection.lastIndexOf("(") + 1;
+        int end = currentSelection.lastIndexOf(")");
+        currentIp = currentSelection.mid(start, end - start);
+    } else {
+        currentIp = currentSelection; // Fallback for localhost or plain IP
+    }
+    
+    // Track what we had before to avoid redundant logging
+    static QStringList lastDiscoveredIps;
+    static bool lastHadLocalhost = false;
     
     // Clear combo
     m_hostCombo->clear();
     
-    if (mdnsResponse.isEmpty()) {
-        return;
-    }
+    QStringList addedIps; // Track IPs to avoid duplicates
+    bool hasLocalhost = false;
     
-    QStringList uniqueHosts;
-    
-    // Parse the Tcl list format: { IP { dsport 4620 essport 2570 } }
-    // Use regex to extract IP addresses
-    QRegularExpression regex(R"(\{\s*(\d+\.\d+\.\d+\.\d+)\s*\{)");
-    QRegularExpressionMatchIterator iterator = regex.globalMatch(mdnsResponse);
-    
-    while (iterator.hasNext()) {
-        QRegularExpressionMatch match = iterator.next();
-        QString ip = match.captured(1);
+    // Check if localhost should be added
+    if (isLocalhostRunning()) {
+        m_hostCombo->addItem("localhost");
+        m_hostCombo->setItemData(m_hostCombo->count() - 1, "localhost", Qt::UserRole); // Store IP in UserRole
+        addedIps.append("localhost");
+        hasLocalhost = true;
         
-        if (!uniqueHosts.contains(ip)) {
-            uniqueHosts << ip;
+        // Only log if localhost status changed
+        if (!lastHadLocalhost) {
+            EssConsoleManager::instance()->logInfo(
+                "Added localhost (verified dserv is running)", 
+                "Discovery"
+            );
         }
     }
     
-    // If regex fails, try simpler parsing
-    if (uniqueHosts.isEmpty()) {
-        QStringList parts = mdnsResponse.split(QRegularExpression("[{}\\s]+"), Qt::SkipEmptyParts);
+    // Add mesh-discovered systems - be much more permissive
+    for (const MeshPeerInfo &peer : m_discoveredPeers) {
+        // Clean up IPv6-mapped IPv4 addresses (::ffff:192.168.x.x -> 192.168.x.x)
+        QString cleanIpAddress = peer.ipAddress;
+        if (cleanIpAddress.startsWith("::ffff:")) {
+            cleanIpAddress = cleanIpAddress.mid(7); // Remove "::ffff:" prefix
+        }
         
-        for (const QString &part : parts) {
-            // Check if this looks like an IP address
-            QStringList octets = part.split('.');
-            if (octets.size() == 4) {
-                bool validIP = true;
-                for (const QString &octet : octets) {
-                    bool ok;
-                    int val = octet.toInt(&ok);
-                    if (!ok || val < 0 || val > 255) {
-                        validIP = false;
-                        break;
-                    }
-                }
-                
-                if (validIP && !uniqueHosts.contains(part)) {
-                    uniqueHosts << part;
-                }
+        // Include any peer that's broadcasting heartbeats - they're part of the mesh
+        // Skip localhost variants since we handle that separately
+        if (!cleanIpAddress.isEmpty() && 
+            cleanIpAddress != "127.0.0.1" && 
+            cleanIpAddress != "localhost" &&
+            !addedIps.contains(cleanIpAddress)) {
+            
+            // Create display text: "Name (IP)" or just "IP" if no name
+            QString displayText;
+            if (!peer.name.isEmpty() && peer.name != cleanIpAddress) {
+                displayText = QString("%1 (%2)").arg(peer.name).arg(cleanIpAddress);
+            } else {
+                displayText = cleanIpAddress;
+            }
+            
+            m_hostCombo->addItem(displayText);
+            m_hostCombo->setItemData(m_hostCombo->count() - 1, cleanIpAddress, Qt::UserRole); // Store actual IP
+            addedIps.append(cleanIpAddress);
+            
+            // Only log if this is a new discovery
+            if (!lastDiscoveredIps.contains(cleanIpAddress)) {
+                EssConsoleManager::instance()->logSuccess(
+                    QString("Discovered mesh system: %1 (%2) at %3 - %4")
+                    .arg(peer.name)
+                    .arg(peer.applianceId)
+                    .arg(cleanIpAddress)
+                    .arg(peer.status), 
+                    "Discovery"
+                );
             }
         }
     }
     
-    // Check if localhost should be added (not already in list and is running)
-    bool hasLocalhost = uniqueHosts.contains("localhost") || 
-                       uniqueHosts.contains("127.0.0.1");
-    
-    if (!hasLocalhost && isLocalhostRunning()) {
-        uniqueHosts.prepend("localhost");
-        EssConsoleManager::instance()->logInfo(
-            "Added localhost (verified dserv is running)", 
-            "Discovery"
-        );
-    }
-    
     // Add hosts to combo box
-    if (!uniqueHosts.isEmpty()) {
-        m_hostCombo->addItems(uniqueHosts);
-        
-        // Try to restore previous selection only if we're still connected
+    if (m_hostCombo->count() > 0) {
+        // Try to restore previous selection by matching IP
         if (!m_connectedHost.isEmpty()) {
-            int index = m_hostCombo->findText(m_connectedHost);
-            if (index >= 0) {
-                m_hostCombo->setCurrentIndex(index);
-                // Style the connected item
-                m_hostCombo->setItemData(index, QColor(87, 199, 135), Qt::ForegroundRole);
-                m_hostCombo->setItemData(index, QFont("", -1, QFont::Bold), Qt::FontRole);
+            // Find item by IP stored in UserRole
+            for (int i = 0; i < m_hostCombo->count(); i++) {
+                QString itemIp = m_hostCombo->itemData(i, Qt::UserRole).toString();
+                if (itemIp == m_connectedHost) {
+                    m_hostCombo->setCurrentIndex(i);
+                    // Style the connected item
+                    m_hostCombo->setItemData(i, QColor(87, 199, 135), Qt::ForegroundRole);
+                    m_hostCombo->setItemData(i, QFont("", -1, QFont::Bold), Qt::FontRole);
+                    break;
+                }
+            }
+        } else if (!currentIp.isEmpty()) {
+            // Try to restore previous selection by IP
+            for (int i = 0; i < m_hostCombo->count(); i++) {
+                QString itemIp = m_hostCombo->itemData(i, Qt::UserRole).toString();
+                if (itemIp == currentIp) {
+                    m_hostCombo->setCurrentIndex(i);
+                    break;
+                }
             }
         } else {
             // Not connected - set to placeholder state
             m_hostCombo->setCurrentIndex(-1);
         }
+        
+        // Only log summary if the list actually changed
+        if (addedIps != lastDiscoveredIps || hasLocalhost != lastHadLocalhost) {
+            EssConsoleManager::instance()->logSuccess(
+                QString("Mesh discovery complete: found %1 system(s)").arg(m_hostCombo->count()), 
+                "Discovery"
+            );
+        }
+    } else {
+        // Only log if we previously had systems but now have none
+        if (!lastDiscoveredIps.isEmpty() || lastHadLocalhost) {
+            m_hostCombo->setPlaceholderText("No mesh systems found");
+            
+            EssConsoleManager::instance()->logWarning(
+                "No systems discovered via mesh heartbeats", 
+                "Discovery"
+            );
+        }
     }
+    
+    // Update our tracking variables
+    lastDiscoveredIps = addedIps;
+    lastHadLocalhost = hasLocalhost;
 }
 
 void EssHostDiscoveryWidget::connectToSelected()
 {
-    QString host = m_hostCombo->currentText();
-    if (host.isEmpty()) return;
+    QString selectedText = m_hostCombo->currentText();
+    if (selectedText.isEmpty()) return;
+    
+    // Extract the actual IP address from the UserRole data
+    QString host = m_hostCombo->currentData(Qt::UserRole).toString();
+    if (host.isEmpty()) {
+        // Fallback to the display text (for localhost or plain IP entries)
+        host = selectedText;
+    }
     
     if (!m_commandInterface) {
         EssConsoleManager::instance()->logError("Command interface not available", "Discovery");
@@ -410,21 +535,33 @@ void EssHostDiscoveryWidget::onHostSelectionChanged(int index)
     m_connectButton->setEnabled(hasSelection && currentHost.isEmpty());
     
     // If user selects a different host while connected, offer to switch
+    // Only do this if we actually have a valid selection and we're connected to something different
     if (hasSelection && !currentHost.isEmpty()) {
-        QString selectedHost = m_hostCombo->currentText();
-        if (selectedHost != currentHost) {
+        QString selectedIp = m_hostCombo->currentData(Qt::UserRole).toString();
+        if (selectedIp.isEmpty()) {
+            selectedIp = m_hostCombo->currentText(); // Fallback for localhost
+        }
+        
+        // Only ask if they're selecting a genuinely different host
+        if (selectedIp != currentHost && !selectedIp.isEmpty()) {
+            QString selectedDisplayName = m_hostCombo->currentText();
+            
             int ret = QMessageBox::question(this, "Already Connected",
                                            QString("Already connected to %1. Disconnect and connect to %2?")
-                                           .arg(currentHost).arg(selectedHost),
+                                           .arg(currentHost).arg(selectedDisplayName),
                                            QMessageBox::Yes | QMessageBox::No);
             if (ret == QMessageBox::Yes) {
-                m_pendingConnectionHost = selectedHost;
+                m_pendingConnectionHost = selectedIp;
                 disconnectFromHost();
             } else {
-                // Restore the connected host in the combo
-                int connectedIndex = m_hostCombo->findText(currentHost);
-                if (connectedIndex >= 0) {
-                    m_hostCombo->setCurrentIndex(connectedIndex);
+                // Restore the connected host in the combo by finding it by IP
+                for (int i = 0; i < m_hostCombo->count(); i++) {
+                    QString itemIp = m_hostCombo->itemData(i, Qt::UserRole).toString();
+                    if (itemIp.isEmpty()) itemIp = m_hostCombo->itemText(i); // Fallback
+                    if (itemIp == currentHost) {
+                        m_hostCombo->setCurrentIndex(i);
+                        break;
+                    }
                 }
             }
         }
@@ -558,12 +695,7 @@ bool EssHostDiscoveryWidget::isLocalhostRunning()
     // This tests both connectivity and verifies it's actually dserv
     bool available = testClient.isHostAvailable("localhost", 4620, 500);
     
-    if (available) {
-        EssConsoleManager::instance()->logDebug(
-            "Localhost dserv is available", 
-            "Discovery"
-        );
-    }
+    // Removed debug logging since this runs frequently
     
     return available;
 }
