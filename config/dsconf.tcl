@@ -9,6 +9,9 @@ if [file exists $dlshlib] {
    set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 }
 
+package require dlsh
+package require qpcs
+
 tcl::tm::add $dspath/lib
 
 # start our isolated ess thread
