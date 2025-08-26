@@ -561,17 +561,8 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
       }
       break;
     case DSERV_DG:
-      {
-	/* turn to b64 data */
-	int b64_need = dpoint_b64_size(dpoint);
-	char *buf = (char *) malloc(b64_need);
-	base64encode(dpoint->data.buf, dpoint->data.len, buf, b64_need);
-	json_object_set_new(json_dpoint, "data",
-			    json_stringn(buf, b64_need));
-	free(buf);
-      }
-      break;
     case DSERV_ARROW:
+    case DSERV_MSGPACK:
       {
 	/* turn to b64 data */
 	int b64_need = dpoint_b64_size(dpoint);
