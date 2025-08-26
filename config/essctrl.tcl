@@ -48,23 +48,23 @@ namespace eval ess {
     proc stop {} { send ess ::ess::stop }
     
     # Blocked when running + file open
-    proc reset args { _protected_call reset 1 {*}$args }
-    proc set_subject args { _protected_call set_subject 1 {*}$args }
-    proc file_open args { _protected_call file_open 1 {*}$args }
-    proc load_system args { _protected_call load_system 1 {*}$args }
-    proc reload_system args { _protected_call reload_system 1 {*}$args }
-    proc reload_protocol args { _protected_call reload_protocol 1 {*}$args }
-    proc reload_variant args { _protected_call reload_variant 1 {*}$args }
-    proc save_settings args { _protected_call save_settings 1 {*}$args }
-    proc reset_settings args { _protected_call reset_settings 1 {*}$args }
-    proc set_param args { _protected_call set_param 1 {*}$args }
-    proc set_variant_args args { _protected_call set_variant_args 1 {*}$args }
-    proc save_script args { _protected_call save_script 1 {*}$args }
-    proc get_lib_files args { _protected_call get_lib_files 1 {*}$args }
+    proc reset args { _protected_call reset 1 $args }
+    proc set_subject args { _protected_call set_subject 1 $args }
+    proc file_open args { _protected_call file_open 1 $args }
+    proc load_system args { _protected_call load_system 1 $args }
+    proc reload_system args { _protected_call reload_system 1 $args }
+    proc reload_protocol args { _protected_call reload_protocol 1 $args }
+    proc reload_variant args { _protected_call reload_variant 1 $args }
+    proc save_settings args { _protected_call save_settings 1 $args }
+    proc reset_settings args { _protected_call reset_settings 1 $args }
+    proc set_param args { _protected_call set_param 1 $args }
+    proc set_variant_args args { _protected_call set_variant_args 1 $args }
+    proc save_script args { _protected_call save_script 1 $args }
+    proc get_lib_files args { _protected_call get_lib_files 1 $args }
     proc validate_script_minimal s { _protected_call validate_script_minimal $s }
     
     # Blocked when running only
-    proc file_suggest args { _protected_call file_suggest 0 {*}$args }
-    proc file_close args { _protected_call file_close 0 {*}$args }
+    proc file_suggest args { _protected_call file_suggest 0 $args }
+    proc file_close args { _protected_call file_close 0 $args }
 }
 
