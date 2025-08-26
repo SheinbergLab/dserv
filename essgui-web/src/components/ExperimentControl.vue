@@ -386,6 +386,17 @@ onMounted(() => {
     }
   }, 'ExperimentControl') // Add component ID
 
+  // Listen for parameter updates
+  dserv.on('datapoint:ess/params', (data) => {
+    console.log('Received params update:', data.data)
+    updateSystemParametersFromString(data.data)
+  }, 'ExperimentControl')
+
+  dserv.on('datapoint:ess/param', (data) => {
+    console.log('Received single param update:', data.data)
+    updateSystemParametersFromString(data.data)
+  }, 'ExperimentControl')
+  
   dserv.on('trialsLoaded', (data) => {
     trialCount.value = data.count
     lastLoadedTrials.value = data.count
@@ -689,6 +700,48 @@ async function setSystemParameter(paramName, value) {
   } catch (error) {
     console.error('Failed to set system parameter:', error)
     logToConsole(`Failed to set parameter: ${error.message}`, 'error')
+  }
+}
+
+function updateSystemParametersFromString(paramString) {
+  try {
+    console.log('Updating system parameters from string:', paramString)
+    
+    // Parse space-separated parameter name-value pairs
+    // Format: "param1 value1 param2 value2 ..."
+    const parts = paramString.trim().split(/\s+/)
+    
+    if (parts.length % 2 !== 0) {
+      console.warn('Invalid parameter string format - must have even number of elements')
+      return
+    }
+
+    // Update existing parameters with new values
+    for (let i = 0; i < parts.length; i += 2) {
+      const paramName = parts[i]
+      const newValue = parts[i + 1]
+      
+      const param = systemParameters.value.find(p => p.name === paramName)
+      if (param) {
+        // Convert value based on data type
+        if (param.dataType === 'int') {
+          param.value = parseInt(newValue, 10)
+        } else if (param.dataType === 'float') {
+          param.value = parseFloat(newValue)
+        } else {
+          param.value = newValue
+        }
+        
+        console.log(`Updated parameter ${paramName} to ${param.value}`)
+      } else {
+        console.warn(`Parameter ${paramName} not found in current parameters`)
+      }
+    }
+    
+    logToConsole(`Updated ${parts.length / 2} parameter(s)`, 'success')
+  } catch (error) {
+    console.error('Failed to update parameters from string:', error)
+    logToConsole(`Failed to update parameters: ${error.message}`, 'error')
   }
 }
 

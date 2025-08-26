@@ -333,6 +333,7 @@ handleChunkedMessage(chunk) {
           ess/git/branches ess/git/branch
           ess/system_script ess/protocol_script
           ess/variants_script ess/loaders_script
+          ess/params
           ess/stim_script ess/rmt_connected
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           system/hostname system/os
