@@ -14,6 +14,12 @@ package require qpcs
 
 tcl::tm::add $dspath/lib
 
+# configure our mesh dispatcher (started on 2575 if enabled)
+if { [info exists ::mesh_enabled] } {
+    puts "Mesh networking detected - loading mesh configuration"
+     send mesh "source [file join $dspath config/meshconf.tcl]"
+}
+
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
 
@@ -63,12 +69,6 @@ if { [lsearch $hbs $host] >= 0 } {
 
 # start a "git" interpreter
 subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
-
-# configure our mesh dispatcher (started on 2575 if enabled)
-if { [info exists ::mesh_enabled] } {
-    puts "Mesh networking detected - loading mesh configuration"
-     send mesh "source [file join $dspath config/meshconf.tcl]"
-}
 
 # auto update support
 source [file join $dspath config/updateconf.tcl]
