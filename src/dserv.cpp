@@ -48,17 +48,31 @@ uint64_t tclserver_now(tclserver_t *tclserver)
   return ((TclServer *) tclserver)->now();
 }
 
+static std::atomic<bool> shutdownInProgress{false};
+
 void signalHandler(int signum) {
-  std::cout << "Shutting down..." << std::endl;
+  // Prevent double execution
+  if (shutdownInProgress.exchange(true)) {
+    std::cout << "\nForced exit (second signal)" << std::endl;
+    std::_Exit(1);  // Immediate exit without destructors
+    return;
+  }
+  
+  std::cout << "\nShutting down gracefully..." << std::endl;
   
   // Stop mesh networking first
   if (meshManager) {
+    std::cout << "Stopping mesh manager..." << std::endl;
     meshManager->stop();
+    std::cout << "Resetting mesh manager..." << std::endl;
     meshManager.reset();
   }
   
+  std::cout << "Deleting TclServer..." << std::endl;
   delete tclserver;
+  std::cout << "Deleting Dataserver..." << std::endl;
   delete dserver;
+  std::cout << "Clean shutdown complete." << std::endl;
   exit(0);
 }
 
