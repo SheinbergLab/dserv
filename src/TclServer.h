@@ -114,7 +114,7 @@ private:
   std::map<std::string, uWS::WebSocket<false, true, WSPerSocketData>*> ws_connections;
   uWS::Loop *ws_loop = nullptr;  // Store the loop reference
 
-  static const size_t LARGE_MESSAGE_THRESHOLD = 1024 * 1024; // 1MB
+  static const size_t LARGE_MESSAGE_THRESHOLD = 2 * 1024 * 1024; // 2MB
   static const size_t CHUNK_SIZE = 512 * 1024; // 512KB chunks
   
   void sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
