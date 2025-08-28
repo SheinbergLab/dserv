@@ -264,6 +264,12 @@ void MeshManager::startMeshWebSocketServer(int port) {
               ->end("{\"status\":\"ok\",\"service\":\"mesh-manager\"}");
         });
         
+        app.get("/*", [this](auto *res, auto *req) {
+		    res->writeHeader("Content-Type", "text/html; charset=utf-8")
+		    ->writeHeader("Cache-Control", "no-cache")  
+	        ->end(embedded::mesh_dashboard_html);
+		});
+		
         // WebSocket for mesh updates
         app.ws<MeshWSData>("/ws", {
             .upgrade = [](auto *res, auto *req, auto *context) {
