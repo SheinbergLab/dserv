@@ -3,7 +3,7 @@
     <h1>Datapoint Component Lab</h1>
     <nav>
       <router-link to="/terminal">Tcl Terminal</router-link>
-      <router-link to="/graphics">Graphics Tester</router-link>
+      <router-link to="/minimal-graphics">Graphics Tester</router-link>
     </nav>
   </div>
 </template>
