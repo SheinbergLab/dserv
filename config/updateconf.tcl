@@ -1,8 +1,9 @@
 package require yajltcl
 
 # service (systemctl) oriented help functions
+
 proc check_service_status {} {
-    if {[catch {exec systemctl is-active dserv 2>&1} status]} {
+    if {[catch {exec |& systemctl is-active dserv} status]} {
         return "unknown"
     }
     return [string trim $status]
@@ -16,7 +17,7 @@ proc get_service_info {} {
         $obj string "service_name" string "dserv"
         $obj string "status" string $active
         
-        if {[catch {exec systemctl show dserv --property=MainPID --value 2>&1} pid]} {
+        if {[catch {exec |& systemctl show dserv --property=MainPID --value } pid]} {
             $obj string "pid" string "unknown"
         } else {
             $obj string "pid" string [string trim $pid]
@@ -143,7 +144,7 @@ namespace eval update {
         # Method 3: Try the executable --version flag
         try {
             set exe [info nameofexecutable]
-            if {[catch {exec $exe --version 2>&1} version_output]} {
+            if {[catch {exec |& $exe --version} version_output]} {
                 # Version command failed
             } else {
                 set version_output [string trim $version_output]
@@ -165,31 +166,31 @@ namespace eval update {
     }
     
     proc get_version_from_package {} {
-        lassign [detect_platform_and_arch] platform arch format
-        
-        switch $format {
-            "deb" {
-                # Query dpkg for installed version
-                if {[catch {exec dpkg-query -W -f='${Version}' dserv 2>/dev/null} version]} {
-                    return ""
-                }
-                return [string trim $version]
-            }
-            "pkg" {
-                # On macOS, try to get version from package receipt
-                if {[catch {exec pkgutil --pkg-info com.sheinberglab.dserv 2>/dev/null} pkg_info]} {
-                    return ""
-                }
-                # Parse version from pkg_info output
-                if {[regexp {version: ([^\s]+)} $pkg_info -> version]} {
-                    return $version
-                }
-                return ""
-            }
-            default {
-                return ""
-            }
-        }
+	lassign [detect_platform_and_arch] platform arch format
+	
+	switch $format {
+	    "deb" {
+		# Query dpkg for installed version, suppress stderr
+		if {[catch {exec dpkg-query -W -f=${Version} dserv} version]} {
+		    return ""
+		}
+		return [string trim $version]
+	    }
+	    "pkg" {
+		# On macOS, try to get version from package receipt
+		if {[catch {exec pkgutil --pkg-info com.sheinberglab.dserv} pkg_info]} {
+		    return ""
+		}
+		# Parse version from pkg_info output
+		if {[regexp {version: ([^\s]+)} $pkg_info -> version]} {
+		    return $version
+		}
+		return ""
+	    }
+	    default {
+		return ""
+	    }
+	}
     }
     
     proc dict_to_json {dict_data} {
@@ -269,7 +270,7 @@ namespace eval update {
             
             # Use curl for download (more reliable than wget)
             puts "Downloading $filename..."
-            if {[catch {exec curl -L -f --progress-bar -o $filename $download_url 2>&1} curl_output]} {
+            if {[catch {exec |& curl -L -f --progress-bar -o $filename $download_url} curl_output]} {
                 # Check if file exists despite curl error
                 if {[file exists $filename] && [file size $filename] > 1000} {
                     puts "curl reported error but file appears downloaded: $curl_output"
@@ -328,80 +329,80 @@ namespace eval update {
     }
     
     proc install_update {filename} {
-        lassign [detect_platform_and_arch] platform arch format
-        
-        dservSet system/update_status "installing"
-        
-        try {
-            switch $format {
-                "deb" {
-                    puts "Installing .deb package: $filename"
-                    
-                    # First, inspect the package
-                    if {[catch {exec dpkg -I $filename 2>&1} package_info]} {
-                        puts "Warning: Could not inspect package: $package_info"
-                    } else {
-                        puts "Package info:\n$package_info"
-                    }
-                    
-                    # Install the package
-                    if {[catch {exec sudo dpkg -i $filename 2>&1} result]} {
-                        puts "dpkg install failed, trying to fix dependencies..."
-                        catch {exec sudo apt-get install -f -y 2>&1}
-                        if {[catch {exec sudo dpkg -i $filename 2>&1} result2]} {
-                            error "Failed to install .deb package: $result2"
-                        }
-                    }
-                    puts "Successfully installed .deb package"
-                    
-                    # For systemd service, restart via systemctl
-                    puts "Restarting dserv service..."
-                    if {[catch {exec sudo systemctl restart dserv 2>&1} restart_result]} {
-                        puts "Warning: Could not restart service via systemctl: $restart_result"
-                        puts "You may need to restart the service manually"
-                        dservSet system/update_status "installed_manual_restart_needed"
-                    } else {
-                        puts "Service restarted successfully"
-                        dservSet system/update_status "installed_and_restarted"
-                        # The service restart will terminate this process
-                    }
-                    return 1
-                }
-                "pkg" {
-                    puts "Installing .pkg package: $filename"
-                    if {[catch {exec sudo installer -pkg $filename -target / 2>&1} result]} {
-                        error "Failed to install .pkg package: $result"
-                    }
-                    puts "Successfully installed .pkg package"
-                    dservSet system/update_status "installed"
-                    return 1
-                }
-                "binary" {
-                    puts "Replacing binary: $filename"
-                    set current_exe [info nameofexecutable]
-                    set backup_exe "${current_exe}.backup"
-                    
-                    # Create backup
-                    file copy $current_exe $backup_exe
-                    
-                    # Replace with new binary
-                    file copy -force $filename $current_exe
-                    file attributes $current_exe -permissions 0755
-                    
-                    puts "Successfully replaced binary"
-                    dservSet system/update_status "installed"
-                    return 1
-                }
-                default {
-                    error "Unsupported package format: $format"
-                }
-            }
-        } on error {msg} {
-            dservSet system/update_status "install_failed"
-            dservSet system/update_error $msg
-            error $msg
-        }
-        return 0
+	lassign [detect_platform_and_arch] platform arch format
+	
+	dservSet system/update_status "installing"
+	
+	try {
+	    switch $format {
+		"deb" {
+		    puts "Installing .deb package: $filename"
+		    
+		    # First, inspect the package
+		    if {[catch {exec |& dpkg -I $filename} package_info]} {
+			puts "Warning: Could not inspect package: $package_info"
+		    } else {
+			puts "Package info:\n$package_info"
+		    }
+		    
+		    # Install the package
+		    if {[catch {exec |& sudo dpkg -i $filename} result]} {
+			puts "dpkg install failed, trying to fix dependencies..."
+			catch {exec |& sudo apt-get install -f -y}
+			if {[catch {exec |& sudo dpkg -i $filename} result2]} {
+			    error "Failed to install .deb package: $result2"
+			}
+		    }
+		    puts "Successfully installed .deb package"
+		    
+		    # For systemd service, restart via systemctl
+		    puts "Restarting dserv service..."
+		    if {[catch {exec |& sudo systemctl restart dserv} restart_result]} {
+			puts "Warning: Could not restart service via systemctl: $restart_result"
+			puts "You may need to restart the service manually"
+			dservSet system/update_status "installed_manual_restart_needed"
+		    } else {
+			puts "Service restarted successfully"
+			dservSet system/update_status "installed_and_restarted"
+			# The service restart will terminate this process
+		    }
+		    return 1
+		}
+		"pkg" {
+		    puts "Installing .pkg package: $filename"
+		    if {[catch {exec |& sudo installer -pkg $filename -target /} result]} {
+			error "Failed to install .pkg package: $result"
+		    }
+		    puts "Successfully installed .pkg package"
+		    dservSet system/update_status "installed"
+		    return 1
+		}
+		"binary" {
+		    puts "Replacing binary: $filename"
+		    set current_exe [info nameofexecutable]
+		    set backup_exe "${current_exe}.backup"
+		    
+		    # Create backup
+		    file copy $current_exe $backup_exe
+		    
+		    # Replace with new binary
+		    file copy -force $filename $current_exe
+		    file attributes $current_exe -permissions 0755
+		    
+		    puts "Successfully replaced binary"
+		    dservSet system/update_status "installed"
+		    return 1
+		}
+		default {
+		    error "Unsupported package format: $format"
+		}
+	    }
+	} on error {msg} {
+	    dservSet system/update_status "install_failed"
+	    dservSet system/update_error $msg
+	    error $msg
+	}
+	return 0
     }
     
     proc perform_full_update {} {
