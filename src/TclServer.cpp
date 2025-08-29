@@ -1084,6 +1084,59 @@ static int send_noreply_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/******************************* get_var *******************************/
+
+static int get_var_command(ClientData data, Tcl_Interp *interp,
+                          int objc, Tcl_Obj *objv[])
+{
+    TclServer *this_server = (TclServer *) data;
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "server_name var_name");
+        return TCL_ERROR;
+    }
+    
+    std::string server_name = Tcl_GetString(objv[1]);
+    std::string var_name = Tcl_GetString(objv[2]);
+    
+    // Check if target server exists
+    auto target_server = TclServerRegistry.getObject(server_name);
+    if (!target_server) {
+        Tcl_AppendResult(interp, "server \"", server_name.c_str(), "\" not found", NULL);
+        return TCL_ERROR;
+    }
+    
+    if (target_server == this_server) {
+        Tcl_AppendResult(interp, "cannot get variable from self", NULL);
+        return TCL_ERROR;
+    }
+    
+    // Build a Tcl command to get the variable value
+    std::string get_command = "set " + var_name;
+    
+    // Use the existing send infrastructure
+    SharedQueue<std::string> rqueue;
+    client_request_t client_request;
+    client_request.type = REQ_SCRIPT;
+    client_request.rqueue = &rqueue;
+    client_request.script = get_command;
+    
+    target_server->queue.push_back(client_request);
+    
+    // Wait for response
+    std::string result = client_request.rqueue->front();
+    client_request.rqueue->pop_front();
+    
+    // Handle errors
+    if (result.starts_with("!TCL_ERROR ")) {
+        Tcl_AppendResult(interp, result.substr(11).c_str(), NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), -1));
+    return TCL_OK;
+}
+
 
 /******************************* process *******************************/
 
@@ -1546,7 +1599,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "sendNoReply",
                (Tcl_ObjCmdProc *) send_noreply_command,
                tserv, NULL);
-                  
+
+  Tcl_CreateObjCommand(interp, "getVar",
+                    (Tcl_ObjCmdProc *) get_var_command, tserv, NULL);
+                                      
   Tcl_CreateObjCommand(interp, "dservAddMatch",
                dserv_add_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservAddExactMatch",
