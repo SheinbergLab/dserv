@@ -26,6 +26,11 @@ const DATAPOINT_CONFIG = {
   'ess/protocol': { expectedHz: 0.01, maxHz: 0.1, priority: 'low', category: 'configuration' },
   'ess/variant': { expectedHz: 0.01, maxHz: 0.1, priority: 'low', category: 'configuration' },
   'ess/status': { expectedHz: 0.1, maxHz: 1, priority: 'low', category: 'state' },
+  'graphics/main': { expectedHz: 30, maxHz: 60, priority: 'medium', category: 'graphics' },
+  'graphics/dev': { expectedHz: 30, maxHz: 60, priority: 'medium', category: 'graphics' },
+  'gbuf/main': { expectedHz: 30, maxHz: 60, priority: 'medium', category: 'graphics' },
+  'gbuf/dev': { expectedHz: 30, maxHz: 60, priority: 'medium', category: 'graphics' },
+
 };
 
 class DservWebSocket {
@@ -315,6 +320,9 @@ handleChunkedMessage(chunk) {
     this.send({ cmd: 'subscribe', match: 'ess/loading_progress', every: 1 });
     this.send({ cmd: 'subscribe', match: 'ess/loading_operation_id', every: 1 });
     this.send({ cmd: 'subscribe', match: 'ess/loading_start_time', every: 1 });
+
+    this.send({ cmd: 'subscribe', match: 'graphics/*', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'gbuf/*', every: 1 });
 
     console.log('All global subscriptions established');
     }
