@@ -23,6 +23,9 @@ if { [info exists ::mesh_enabled] } {
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
 
+# helper functions for our main interp
+source [file join $dspath config/commands.tcl]
+
 # add ability to call ess functions from main tclserver
 source [file join $dspath config/essctrl.tcl]
 
