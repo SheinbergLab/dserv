@@ -17,7 +17,7 @@ proc dg_view { g } {
   # if so, process/dg manes get dg from process
   if { [llength $splitname] == 2 } {
       lassign $splitname p dg
-      dg_rename [getDg $p $dg] $p/$dg
+      dg_rename [dg_get $p $dg] $p/$dg
       dservSet ess/dev_dg_data [dg_toHybridJSON $p/$dg]
       dg_delete $p/$dg
    } else {
