@@ -1,11 +1,11 @@
 <template>
   <a-layout style="height: 100vh; font-size: 13px;">
-    
+
     <!-- Top Bar with Development Mode Toggle - FULL WIDTH -->
     <div
       style="flex-shrink: 0; height: 32px; background: #fafafa; border-bottom: 1px solid #d9d9d9; display: flex; justify-content: space-between; align-items: center; padding: 0 12px;">
       <div style="display: flex; align-items: center; gap: 8px;">
-        
+
         <!-- Existing system status (hide in dev mode) -->
         <template v-if="!developmentMode">
           <span style="font-size: 11px; color: #666;">System:</span>
@@ -17,10 +17,10 @@
             {{ stimConnectionStatus }}
           </a-tag>
         </template>
-        
+
         <!-- Development Mode Toggle -->
         <a-divider type="vertical" style="margin: 0 8px;" />
-        <a-switch 
+        <a-switch
           v-model:checked="developmentMode"
           size="small"
           checked-children="Dev"
@@ -29,7 +29,7 @@
         <span style="font-size: 11px; color: #666;">
           {{ developmentMode ? 'Development' : 'Experiment' }} Mode
         </span>
-        
+
         <!-- Development mode indicator -->
         <template v-if="developmentMode">
           <a-tag color="processing" size="small" style="margin: 0; font-size: 10px;">
@@ -40,22 +40,22 @@
 
       <div style="display: flex; align-items: center; gap: 4px;">
         <!-- System monitor toggle (hide in dev mode) -->
-        <a-button 
+        <a-button
           v-if="!developmentMode"
-          size="small" 
-          type="text" 
+          size="small"
+          type="text"
           :icon="h(isStatusSidebarVisible ? EyeInvisibleOutlined : EyeOutlined)"
-          @click="toggleStatusSidebar" 
+          @click="toggleStatusSidebar"
           style="font-size: 11px; height: 24px; padding: 0 8px;"
           :title="isStatusSidebarVisible ? 'Hide System Monitor' : 'Show System Monitor'"
         >
           {{ isStatusSidebarVisible ? 'Hide Monitor' : 'Show Monitor' }}
         </a-button>
-        
+
         <!-- Development mode help -->
-        <a-button 
+        <a-button
           v-if="developmentMode"
-          size="small" 
+          size="small"
           type="text"
           :icon="h(QuestionCircleOutlined)"
           @click="showDevHelp = true"
@@ -69,22 +69,22 @@
 
     <!-- Main Content Area Below Header -->
     <a-layout style="height: calc(100vh - 56px);"> <!-- 56px = 32px header + 24px status bar -->
-      
+
       <!-- Control Panel - Left Sidebar (Hide in dev mode) -->
-      <a-layout-sider 
+      <a-layout-sider
         v-if="!developmentMode"
-        width="290" 
-        theme="light" 
+        width="290"
+        theme="light"
         style="border-right: 1px solid #d9d9d9;"
       >
         <experiment-control ref="experimentControlRef" />
       </a-layout-sider>
 
       <!-- Middle Column - Eye/Touch Viewer + Performance (Hide in dev mode) -->
-      <a-layout-sider 
+      <a-layout-sider
         v-if="!developmentMode"
-        width="320" 
-        theme="light" 
+        width="320"
+        theme="light"
         style="border-right: 1px solid #d9d9d9; background: white;"
       >
         <div style="height: 100%; display: flex; flex-direction: column;">
@@ -133,22 +133,31 @@
 
       <!-- Main Content Area with Tabs -->
       <a-layout style="display: flex; flex-direction: column; height: 100%; overflow: hidden;">
-        
+
         <!-- Main Content with Optional Right Sidebar -->
         <div style="flex: 1; display: flex; overflow: hidden;">
-          
+
           <!-- Main Content Area -->
           <a-layout-content
             style="background: white; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-            
+
             <!-- Development Workspace (Full Screen in Dev Mode) -->
             <div v-if="developmentMode" style="height: 100%; overflow: hidden;">
               <development-workspace ref="developmentWorkspaceRef" />
             </div>
-            
+
             <!-- Regular Tabs (Experiment Mode) -->
             <div v-else style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
               <a-tabs size="small" style="height: 100%; display: flex; flex-direction: column;" tab-position="top">
+
+                <a-tab-pane key="graphics" tab="Graphics" style="height: 100%; overflow: hidden;">
+                <div style="height: 100%; overflow: hidden;">
+                  <graphics-viewer
+                    stream-id="graphics/stimulus"
+                    title="Stimulus Graphics"
+                  />
+                </div>
+                </a-tab-pane>
 
                 <a-tab-pane key="scripts" tab="Scripts" style="height: 100%; overflow: hidden;">
                   <div style="height: 100%; overflow: hidden;">
@@ -228,14 +237,14 @@
             <ess-terminal ref="bottomTerminalRef" />
           </div>
         </template>
-        
+
         <!-- Note: Development mode has its own integrated terminal in DevelopmentWorkspace -->
       </a-layout>
     </a-layout>
-    
+
     <!-- Status Bar at Bottom - FULL WIDTH -->
     <status-bar :status-message="statusMessage" />
-    
+
     <!-- Development Help Modal -->
     <a-modal
       v-model:open="showDevHelp"
@@ -251,20 +260,20 @@
           <li><strong>Terminal:</strong> View script output and system messages</li>
           <li><strong>Data Groups:</strong> Load and visualize dynamic groups (DGs)</li>
         </ul>
-        
+
         <h4>⌨️ Keyboard Shortcuts</h4>
         <ul>
           <li><kbd>Ctrl+Enter</kbd> - Run script</li>
           <li><kbd>Ctrl+S</kbd> - Save script</li>
         </ul>
-        
+
         <h4>📊 Working with Data Groups</h4>
         <ul>
           <li>Enter DG name (e.g., "stimdg") in the Data Groups tab</li>
           <li>Use script templates like "Load StimDG" for quick access</li>
           <li>Click array cells to view detailed content</li>
         </ul>
-        
+
         <h4>🔄 Switching Modes</h4>
         <p>Toggle the <strong>Dev/Exp</strong> switch to return to experiment mode. Your development work is preserved.</p>
       </div>
@@ -477,7 +486,7 @@ watch(isStatusSidebarVisible, (visible) => {
 
 watch(developmentMode, (newValue) => {
   localStorage.setItem('essgui-development-mode', newValue.toString())
-  
+
   // When entering dev mode, hide system sidebar to give more space
   if (newValue) {
     isStatusSidebarVisible.value = false
@@ -509,7 +518,7 @@ onMounted(() => {
   if (savedVisible) {
     isStatusSidebarVisible.value = savedVisible === 'true'
   }
-  
+
   const savedMode = localStorage.getItem('essgui-development-mode')
   if (savedMode) {
     developmentMode.value = savedMode === 'true'

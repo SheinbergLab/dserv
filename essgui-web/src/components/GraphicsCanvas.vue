@@ -1,9 +1,7 @@
 <template>
-  <div class="graphics-canvas-container">
+  <div class="graphics-canvas-container" ref="containerRef">
     <canvas
       ref="canvasRef"
-      :width="canvasWidth"
-      :height="canvasHeight"
       :class="canvasClass"
       @mousemove="handleMouseMove"
       @click="handleClick"
@@ -20,9 +18,9 @@
       </div>
     </div>
 
-    <!-- Debug panel for development -->
     <div v-if="showDebug" class="debug-panel">
       <div class="debug-line">Canvas: {{ canvasWidth }}×{{ canvasHeight }}</div>
+      <div class="debug-line">Container: {{ containerSize.width }}×{{ containerSize.height }}</div>
       <div class="debug-line">Stream: {{ streamId }}</div>
       <div class="debug-line">Auto-scale: {{ autoScale ? 'ON' : 'OFF' }}</div>
       <div class="debug-line">Connected: {{ isConnected ? 'YES' : 'NO' }}</div>
@@ -32,28 +30,109 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useGraphicsRenderer } from '@/composables/useGraphicsRenderer'
 
 const props = defineProps({
-  width: { type: Number, default: 640 },
-  height: { type: Number, default: 480 },
+  width: { type: Number, default: null }, // null = responsive
+  height: { type: Number, default: null }, // null = responsive
   streamId: { type: String, required: true },
   showStats: { type: Boolean, default: false },
   showDebug: { type: Boolean, default: false },
   canvasClass: { type: String, default: 'graphics-canvas' },
   autoScale: { type: Boolean, default: true },
-  resizable: { type: Boolean, default: false }
+  aspectRatio: { type: Number, default: null }, // 4/3, 16/9, etc.
+  minWidth: { type: Number, default: 320 },
+  minHeight: { type: Number, default: 240 },
+  maxWidth: { type: Number, default: 1920 },
+  maxHeight: { type: Number, default: 1080 }
 })
 
-const emit = defineEmits(['mousemove', 'click', 'canvasReady'])
+const emit = defineEmits(['mousemove', 'click', 'canvasReady', 'resize'])
 
-// Canvas ref and reactive dimensions
+// Refs
 const canvasRef = ref(null)
-const canvasWidth = ref(props.width)
-const canvasHeight = ref(props.height)
+const containerRef = ref(null)
+const canvasWidth = ref(props.width || 640)
+const canvasHeight = ref(props.height || 480)
+const containerSize = ref({ width: 0, height: 0 })
 
-// Use the graphics renderer composable
+// Resize observer
+let resizeObserver = null
+
+// Calculate responsive canvas size
+const calculateCanvasSize = () => {
+  if (!containerRef.value) return
+
+  const rect = containerRef.value.getBoundingClientRect()
+  containerSize.value = { width: rect.width, height: rect.height }
+
+  // If explicit dimensions provided, use those
+  if (props.width && props.height) {
+    canvasWidth.value = props.width
+    canvasHeight.value = props.height
+    return
+  }
+
+  // Skip if container has no size
+  if (rect.width <= 0 || rect.height <= 0) {
+    console.log('Container has no size, skipping resize')
+    return
+  }
+
+  let width = Math.floor(rect.width)
+  let height = Math.floor(rect.height)
+
+  // Apply aspect ratio if specified
+  if (props.aspectRatio) {
+    const containerAspect = width / height
+    if (containerAspect > props.aspectRatio) {
+      // Container is wider than desired aspect
+      width = Math.floor(height * props.aspectRatio)
+    } else {
+      // Container is taller than desired aspect
+      height = Math.floor(width / props.aspectRatio)
+    }
+  }
+
+  // Apply min/max constraints
+  width = Math.max(props.minWidth, Math.min(props.maxWidth, width))
+  height = Math.max(props.minHeight, Math.min(props.maxHeight, height))
+
+  // Only update if size actually changed
+  if (width !== canvasWidth.value || height !== canvasHeight.value) {
+    console.log(`Canvas resizing: ${canvasWidth.value}×${canvasHeight.value} → ${width}×${height}`)
+
+    canvasWidth.value = width
+    canvasHeight.value = height
+
+    // Update actual canvas element
+    if (canvasRef.value) {
+      canvasRef.value.width = width
+      canvasRef.value.height = height
+    }
+
+    // Notify renderer of size change
+    if (renderer && renderer.resizeCanvas) {
+      renderer.resizeCanvas(width, height)
+    }
+
+    emit('resize', { width, height })
+  }
+}
+
+// Setup resize observer
+const setupResizeObserver = () => {
+  if (!containerRef.value) return
+
+  resizeObserver = new ResizeObserver(() => {
+    requestAnimationFrame(calculateCanvasSize)
+  })
+
+  resizeObserver.observe(containerRef.value)
+}
+
+// Initialize graphics renderer
 const {
   renderStats,
   lastUpdate,
@@ -61,14 +140,16 @@ const {
   isConnected,
   renderData,
   resizeCanvas,
-  config
+  dispose
 } = useGraphicsRenderer(canvasRef, {
   width: canvasWidth.value,
   height: canvasHeight.value,
   streamId: props.streamId,
-  autoScale: props.autoScale,
-  watchSize: props.resizable
+  autoScale: props.autoScale
 })
+
+// Store renderer reference for resizing
+let renderer = null
 
 // Handle mouse events with coordinate conversion
 const handleMouseMove = (event) => {
@@ -76,7 +157,6 @@ const handleMouseMove = (event) => {
   const canvasX = event.clientX - rect.left
   const canvasY = event.clientY - rect.top
 
-  // Convert to canvas coordinates if needed
   const x = (canvasX / rect.width) * canvasWidth.value
   const y = (canvasY / rect.height) * canvasHeight.value
 
@@ -106,30 +186,17 @@ const handleClick = (event) => {
   })
 }
 
-// Watch for prop changes and update canvas accordingly
-watch(() => props.width, (newWidth) => {
-  if (newWidth !== canvasWidth.value) {
-    canvasWidth.value = newWidth
-    if (props.resizable) {
-      resizeCanvas(newWidth, canvasHeight.value)
-    }
-  }
-})
-
-watch(() => props.height, (newHeight) => {
-  if (newHeight !== canvasHeight.value) {
-    canvasHeight.value = newHeight
-    if (props.resizable) {
-      resizeCanvas(canvasWidth.value, newHeight)
-    }
-  }
-})
-
 // Manual resize method (for parent components)
 const resize = (width, height) => {
   canvasWidth.value = width
   canvasHeight.value = height
-  resizeCanvas(width, height)
+  if (canvasRef.value) {
+    canvasRef.value.width = width
+    canvasRef.value.height = height
+  }
+  if (renderer && renderer.resizeCanvas) {
+    renderer.resizeCanvas(width, height)
+  }
 }
 
 // Expose methods for parent components
@@ -140,39 +207,74 @@ defineExpose({
   getCanvasSize: () => ({ width: canvasWidth.value, height: canvasHeight.value })
 })
 
-onMounted(() => {
+onMounted(async () => {
+  await nextTick()
+
+  // Store renderer reference
+  renderer = { resizeCanvas }
+
+  // Calculate initial size
+  calculateCanvasSize()
+
+  // Setup resize observer
+  setTimeout(() => {
+    setupResizeObserver()
+    calculateCanvasSize() // Recalculate after observer setup
+  }, 100)
+
   emit('canvasReady', {
     canvas: canvasRef.value,
     width: canvasWidth.value,
     height: canvasHeight.value
   })
 })
+
+onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+  }
+  if (dispose) {
+    dispose()
+  }
+})
 </script>
 
 <style scoped>
 .graphics-canvas-container {
-  display: inline-block;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   position: relative;
 }
 
-.graphics-canvas {
+canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
   border: 1px solid #e5e7eb;
   border-radius: 4px;
   background: white;
   cursor: crosshair;
-  display: block;
 }
 
-.graphics-canvas:hover {
+canvas:hover {
   border-color: #3b82f6;
 }
 
 .render-stats {
-  margin-top: 8px;
-  font-size: 0.8rem;
-  color: #6b7280;
-  text-align: center;
-  min-height: 20px;
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #00ff00;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 10;
 }
 
 .stats-line {
@@ -190,37 +292,25 @@ onMounted(() => {
 }
 
 .debug-panel {
-  margin-top: 8px;
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
   padding: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: rgba(0, 0, 0, 0.8);
+  color: #00ff00;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
   border-radius: 4px;
-  font-size: 0.75rem;
-  color: #475569;
+  pointer-events: none;
+  z-index: 10;
 }
 
 .debug-line {
   margin-bottom: 2px;
-  font-family: 'Courier New', monospace;
+  white-space: nowrap;
 }
 
 .debug-line:last-child {
   margin-bottom: 0;
-}
-
-/* Resizable canvas container */
-.graphics-canvas-container.resizable {
-  resize: both;
-  overflow: auto;
-  min-width: 200px;
-  min-height: 150px;
-  max-width: 1200px;
-  max-height: 900px;
-}
-
-.graphics-canvas-container.resizable .graphics-canvas {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 </style>

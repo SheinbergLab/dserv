@@ -1,5 +1,5 @@
-// useGraphicsRenderer.js - Updated for new dserv architecture
-import { ref, onMounted, onUnmounted, nextTick, readonly, watch } from 'vue'
+// useGraphicsRenderer.js - Enhanced with proper responsive support
+import { ref, onUnmounted, nextTick, readonly } from 'vue'
 import { dserv } from '@/services/dserv.js'
 
 export function useGraphicsRenderer(canvasRef, options = {}) {
@@ -9,12 +9,12 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
   const dataReceived = ref(false)
   const isConnected = ref(false)
 
-  // Configuration with defaults
+  // Configuration - now mutable to support resizing
   const config = {
     width: options.width || 640,
     height: options.height || 480,
     streamId: options.streamId || 'graphics/main',
-    autoScale: options.autoScale !== false, // Default to true
+    autoScale: options.autoScale !== false,
     ...options
   }
 
@@ -29,19 +29,16 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
   let windowBounds = null
   let scaleX = 1
   let scaleY = 1
-  let lastGbufData = null  // Store last graphics data for redraws
+  let lastGbufData = null
 
   // Cleanup tracking
   const cleanupFunctions = []
 
-  // Y coordinate flip helper
-  const flipY = (y) => config.height - y
-
-  // Scaling helpers
-  const scaleX_coord = (x) => x * scaleX
-  const scaleY_coord = (y) => y * scaleY
-  const scaleWidth = (w) => w * scaleX
-  const scaleHeight = (h) => h * scaleY
+  // Coordinate transformation with current canvas size
+  const transformX = (x) => x * scaleX
+  const transformY = (y) => config.height - (y * scaleY)
+  const transformWidth = (w) => w * scaleX
+  const transformHeight = (h) => h * scaleY
 
   // Color mapping
   const colorToHex = (colorIndex) => {
@@ -53,19 +50,19 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     return colors[colorIndex] || '#000000'
   }
 
-  // Calculate scaling factors
+  // Calculate scaling factors with current canvas dimensions
   const updateScaling = (sourceWidth, sourceHeight) => {
     if (config.autoScale && sourceWidth && sourceHeight) {
       scaleX = config.width / sourceWidth
       scaleY = config.height / sourceHeight
-      console.log(`Graphics scaling: ${scaleX.toFixed(3)}x, ${scaleY.toFixed(3)}y`)
+      console.log(`Graphics scaling updated: source ${sourceWidth}×${sourceHeight} → canvas ${config.width}×${config.height} (${scaleX.toFixed(3)}x, ${scaleY.toFixed(3)}y)`)
     } else {
       scaleX = 1
       scaleY = 1
     }
   }
 
-  // Execute individual graphics command with scaling
+  // Execute graphics commands (unchanged)
   const executeGBCommand = (commandObj) => {
     const { cmd, args } = commandObj
 
@@ -76,7 +73,6 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
             llx: args[0], lly: args[1],
             urx: args[2], ury: args[3]
           }
-          // Update scaling based on window bounds if auto-scaling enabled
           if (config.autoScale && windowBounds) {
             const sourceWidth = windowBounds.urx - windowBounds.llx
             const sourceHeight = windowBounds.ury - windowBounds.lly
@@ -93,13 +89,13 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
         case 'setjust':
           const justValue = args[0]
           if (justValue === -1) {
-            currentJustification = 0  // left
+            currentJustification = 0
           } else if (justValue === 0) {
-            currentJustification = 1  // center
+            currentJustification = 1
           } else if (justValue === 1) {
-            currentJustification = 2  // right
+            currentJustification = 2
           } else {
-            currentJustification = 1  // default to center
+            currentJustification = 1
           }
           break
 
@@ -111,7 +107,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
 
         case 'setfont':
           currentFont = args[0] || 'Helvetica'
-          currentFontSize = (args[1] || 10) * Math.min(scaleX, scaleY) // Scale font size
+          currentFontSize = (args[1] || 10) * Math.min(scaleX, scaleY)
           ctx.font = `${currentFontSize}px ${currentFont}`
           break
 
@@ -121,24 +117,22 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
 
         case 'grestore':
           ctx.restore()
-          // Re-apply current state after restore
           ctx.strokeStyle = currentColor
           ctx.fillStyle = currentColor
           ctx.font = `${currentFontSize}px ${currentFont}`
           break
 
         case 'setclipregion':
-          // Clipping disabled for now - can cause issues without proper save/restore bracketing
-          // TODO: Implement proper clipping support when backend graphics are updated
+          // Clipping disabled for stability
           break
 
         case 'circle':
         case 'fcircle':
           ctx.beginPath()
           ctx.arc(
-            scaleX_coord(args[0]),
-            flipY(scaleY_coord(args[1])),
-            scaleWidth(args[2]),
+            transformX(args[0]),
+            transformY(args[1]),
+            transformWidth(args[2]),
             0, 2 * Math.PI
           )
           const filled = (cmd === 'fcircle') || args[3]
@@ -151,34 +145,38 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
 
         case 'line':
           ctx.beginPath()
-          ctx.moveTo(scaleX_coord(args[0]), flipY(scaleY_coord(args[1])))
-          ctx.lineTo(scaleX_coord(args[2]), flipY(scaleY_coord(args[3])))
+          ctx.moveTo(transformX(args[0]), transformY(args[1]))
+          ctx.lineTo(transformX(args[2]), transformY(args[3]))
           ctx.stroke()
           break
 
         case 'moveto':
           currentPos = {
-            x: scaleX_coord(args[0]),
-            y: flipY(scaleY_coord(args[1]))
+            x: transformX(args[0]),
+            y: transformY(args[1])
           }
           break
 
         case 'lineto':
           ctx.beginPath()
           ctx.moveTo(currentPos.x, currentPos.y)
-          const newX = scaleX_coord(args[0])
-          const newY = flipY(scaleY_coord(args[1]))
+          const newX = transformX(args[0])
+          const newY = transformY(args[1])
           ctx.lineTo(newX, newY)
           ctx.stroke()
           currentPos = { x: newX, y: newY }
           break
 
         case 'filledrect':
-          const width = scaleWidth(args[2] - args[0])
-          const height = scaleHeight(args[3] - args[1])
+          const x1 = transformX(args[0])
+          const y1 = transformY(args[1])
+          const x2 = transformX(args[2])
+          const y2 = transformY(args[3])
+          const width = Math.abs(x2 - x1)
+          const height = Math.abs(y2 - y1)
           ctx.fillRect(
-            scaleX_coord(args[0]),
-            flipY(scaleY_coord(args[3])),
+            Math.min(x1, x2),
+            Math.min(y1, y2),
             width,
             height
           )
@@ -189,8 +187,6 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
             const text = String(args[0])
 
             ctx.save()
-
-            // Set text properties
             ctx.font = `${currentFontSize}px ${currentFont}`
             ctx.fillStyle = currentColor
             ctx.textAlign = ['left', 'center', 'right'][currentJustification] || 'left'
@@ -228,10 +224,9 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
   const renderGbufCommands = (gbufData) => {
     if (!ctx || !gbufData) return
 
-    // Store the data for potential redraws
     lastGbufData = gbufData
 
-    // Clear canvas
+    // Clear canvas with current size
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, config.width, config.height)
 
@@ -272,7 +267,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
         }
       }
 
-      const statsMessage = `Rendered ${commandCount} commands (${textCommandCount} text) at ${new Date().toLocaleTimeString()}`
+      const statsMessage = `Rendered ${commandCount} commands (${textCommandCount} text) at ${new Date().toLocaleTimeString()} [${config.width}×${config.height}]`
       renderStats.value = statsMessage
       lastUpdate.value = new Date().toLocaleTimeString()
 
@@ -282,7 +277,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     }
   }
 
-  // Handle incoming graphics data from new dserv system
+  // Handle incoming graphics data
   const handleGraphicsData = (data) => {
     dataReceived.value = true
     lastUpdate.value = new Date().toLocaleTimeString()
@@ -290,7 +285,6 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     try {
       let gbufData
 
-      // Handle different data formats
       if (typeof data.data === 'string') {
         try {
           gbufData = JSON.parse(data.data)
@@ -308,7 +302,6 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
       }
 
       if (gbufData && gbufData.commands && Array.isArray(gbufData.commands)) {
-        // Store the data from datapoint for redraws
         lastGbufData = gbufData
         renderGbufCommands(gbufData)
       } else {
@@ -322,7 +315,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     }
   }
 
-  // Initialize canvas and event listeners
+  // Initialize renderer
   const initializeRenderer = async () => {
     await nextTick()
 
@@ -337,13 +330,13 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     ctx.fillStyle = 'white'
     ctx.fillRect(0, 0, config.width, config.height)
 
-    console.log(`Graphics renderer initialized for ${config.streamId} (${config.width}x${config.height})`)
+    console.log(`Graphics renderer initialized for ${config.streamId} (${config.width}×${config.height})`)
 
-    // Register component with new dserv system
+    // Register with dserv
     const componentCleanup = dserv.registerComponent(`GraphicsRenderer-${config.streamId}`)
     cleanupFunctions.push(componentCleanup)
 
-    // Subscribe to graphics data using new dserv event system
+    // Subscribe to graphics data
     const dataUnsubscribe = dserv.on(
       `datapoint:${config.streamId}`,
       handleGraphicsData,
@@ -366,74 +359,93 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     )
     cleanupFunctions.push(connectionUnsubscribe)
 
-    // Set initial connection status
     isConnected.value = dserv.state.connected
-
     console.log(`Graphics renderer listening for: datapoint:${config.streamId}`)
   }
 
-  // Cleanup function
+  // Enhanced resize function for responsive support
+  const resizeCanvas = (newWidth, newHeight) => {
+    if (!canvasRef.value) {
+      console.warn('Cannot resize: canvas ref not available')
+      return
+    }
+
+    const oldWidth = config.width
+    const oldHeight = config.height
+
+    // Update config
+    config.width = newWidth
+    config.height = newHeight
+
+    // Update actual canvas element
+    canvasRef.value.width = newWidth
+    canvasRef.value.height = newHeight
+
+    console.log(`Canvas resized from ${oldWidth}×${oldHeight} to ${newWidth}×${newHeight}`)
+
+    // Get fresh context after resize
+    ctx = canvasRef.value.getContext('2d')
+
+    // Recalculate scaling if we have window bounds
+    if (windowBounds && config.autoScale) {
+      const sourceWidth = windowBounds.urx - windowBounds.llx
+      const sourceHeight = windowBounds.ury - windowBounds.lly
+      updateScaling(sourceWidth, sourceHeight)
+    }
+
+    // Redraw last graphics data with new size
+    if (lastGbufData) {
+      console.log('Redrawing graphics data after resize...')
+      renderGbufCommands(lastGbufData)
+    } else {
+      // Clear to white if no data to redraw
+      ctx.fillStyle = 'white'
+      ctx.fillRect(0, 0, newWidth, newHeight)
+    }
+  }
+
+  // Cleanup
   const cleanup = () => {
     cleanupFunctions.forEach(fn => fn && fn())
     cleanupFunctions.length = 0
     console.log(`Graphics renderer cleaned up: ${config.streamId}`)
   }
 
-  // Manual rendering function (for testing)
+  // Get scaling info
+  const getScaleInfo = () => {
+    return { x: scaleX, y: scaleY }
+  }
+
+  // Get source dimensions
+  const getSourceDimensions = () => {
+    if (windowBounds) {
+      return {
+        width: windowBounds.urx - windowBounds.llx,
+        height: windowBounds.ury - windowBounds.lly
+      }
+    }
+    return null
+  }
+
+  // Manual render function
   const renderData = (gbufData) => {
     renderGbufCommands(gbufData)
   }
 
-  // Resize canvas and update scaling
-  const resizeCanvas = (newWidth, newHeight) => {
-    if (canvasRef.value) {
-      config.width = newWidth
-      config.height = newHeight
-      canvasRef.value.width = newWidth
-      canvasRef.value.height = newHeight
+  // Initialize immediately
+  initializeRenderer()
 
-      // Recalculate scaling if we have window bounds
-      if (windowBounds && config.autoScale) {
-        const sourceWidth = windowBounds.urx - windowBounds.llx
-        const sourceHeight = windowBounds.ury - windowBounds.lly
-        updateScaling(sourceWidth, sourceHeight)
-      }
-
-      console.log(`Canvas resized to ${newWidth}x${newHeight}`)
-
-      // Redraw the last graphics data if available
-      if (lastGbufData) {
-        renderGbufCommands(lastGbufData)
-      } else {
-        // Just clear to white if no data to redraw
-        if (ctx) {
-          ctx.fillStyle = 'white'
-          ctx.fillRect(0, 0, newWidth, newHeight)
-        }
-      }
-    }
-  }
-
-  // Watch for canvas size changes if reactive
-  if (options.watchSize) {
-    watch(() => [options.width, options.height], ([newWidth, newHeight]) => {
-      if (newWidth && newHeight) {
-        resizeCanvas(newWidth, newHeight)
-      }
-    })
-  }
-
-  // Lifecycle hooks
-  onMounted(initializeRenderer)
-  onUnmounted(cleanup)
-
+  // Return API
   return {
     renderStats: readonly(renderStats),
     lastUpdate: readonly(lastUpdate),
     dataReceived: readonly(dataReceived),
     isConnected: readonly(isConnected),
-    renderData, // For manual testing
-    resizeCanvas, // For dynamic resizing
-    config: readonly(config)
+    renderData,
+    resizeCanvas, // Enhanced for responsive support
+    getScaleInfo,
+    getSourceDimensions,
+    dispose: cleanup,
+    config // Mutable config for size tracking
   }
 }
