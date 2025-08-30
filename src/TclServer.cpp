@@ -1599,6 +1599,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "sendNoReply",
                (Tcl_ObjCmdProc *) send_noreply_command,
                tserv, NULL);
+  Tcl_CreateObjCommand(interp, "sendAsync",
+               (Tcl_ObjCmdProc *) send_noreply_command,
+               tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "getVar",
                     (Tcl_ObjCmdProc *) get_var_command, tserv, NULL);
