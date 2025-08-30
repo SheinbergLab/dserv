@@ -15,6 +15,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     height: options.height || 480,
     streamId: options.streamId || 'graphics/main',
     autoScale: options.autoScale !== false,
+    backgroundColor: options.backgroundColor || '#ffffff',
     ...options
   }
 
@@ -30,6 +31,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
   let scaleX = 1
   let scaleY = 1
   let lastGbufData = null
+  let currentBackgroundColor = config.backgroundColor // Track current background
 
   // Cleanup tracking
   const cleanupFunctions = []
@@ -83,6 +85,15 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
         case 'setcolor':
           currentColor = colorToHex(args[0])
           ctx.strokeStyle = currentColor
+          ctx.fillStyle = currentColor
+          break
+
+        case 'setbackground':
+          const bgColor = colorToHex(args[0])
+          currentBackgroundColor = bgColor // Store new background color
+          ctx.fillStyle = bgColor
+          ctx.fillRect(0, 0, config.width, config.height)
+          // Restore current drawing color after background fill
           ctx.fillStyle = currentColor
           break
 
@@ -226,8 +237,8 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
 
     lastGbufData = gbufData
 
-    // Clear canvas with current size
-    ctx.fillStyle = 'white'
+    // Clear canvas with current background color
+    ctx.fillStyle = currentBackgroundColor
     ctx.fillRect(0, 0, config.width, config.height)
 
     // Reset transform and clipping
@@ -326,8 +337,8 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
 
     ctx = canvasRef.value.getContext('2d')
 
-    // Clear initial canvas
-    ctx.fillStyle = 'white'
+    // Clear initial canvas with background color
+    ctx.fillStyle = config.backgroundColor
     ctx.fillRect(0, 0, config.width, config.height)
 
     console.log(`Graphics renderer initialized for ${config.streamId} (${config.width}×${config.height})`)
