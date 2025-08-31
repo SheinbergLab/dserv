@@ -43,13 +43,37 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
   const transformHeight = (h) => h * scaleY
 
   // Color mapping
+  // Color mapping
   const colorToHex = (colorIndex) => {
+    // Standard palette colors (0-14)
     const colors = [
       '#000000', '#0000FF', '#008000', '#00FFFF', '#FF0000',
       '#FF00FF', '#A52A2A', '#FFFFFF', '#808080', '#ADD8E6',
       '#00FF00', '#E0FFFF', '#FF1493', '#9370DB', '#FFFF00'
     ]
-    return colors[colorIndex] || '#000000'
+
+    // If it's a standard palette color, return it
+    if (colorIndex >= 0 && colorIndex < colors.length) {
+      return colors[colorIndex]
+    }
+
+    // Handle packed RGB colors (special colors > 18)
+    // Format: (r << 21) + (g << 13) + (b << 5)
+    if (colorIndex > 18) {
+      const r = (colorIndex >> 21) & 0xFF
+      const g = (colorIndex >> 13) & 0xFF
+      const b = (colorIndex >> 5) & 0xFF
+
+      // Convert to hex string
+      const rHex = r.toString(16).padStart(2, '0')
+      const gHex = g.toString(16).padStart(2, '0')
+      const bHex = b.toString(16).padStart(2, '0')
+
+      return `#${rHex}${gHex}${bHex}`
+    }
+
+    // Default to black for unknown colors
+    return '#000000'
   }
 
   // Calculate scaling factors with current canvas dimensions
