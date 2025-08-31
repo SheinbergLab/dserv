@@ -73,5 +73,8 @@ if { [lsearch $hbs $host] >= 0 } {
 # start a "git" interpreter
 subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
 
+# start a visualization process
+subprocess viz "source [file join $dspath config/vizconf.tcl]"
+
 # auto update support
 source [file join $dspath config/updateconf.tcl]
