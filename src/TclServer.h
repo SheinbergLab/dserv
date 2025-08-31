@@ -38,6 +38,9 @@
 #include <mutex>
 #include <set>
 #include <unordered_map>
+#include <map>
+#include <utility>
+
 #include <sstream>
 #include <arpa/inet.h>  // for inet_ntop
 
@@ -90,6 +93,22 @@ public:
     message_listener_port(message_port), websocket_listener_port(websocket_port) {};
 };
   
+// For dispatching script on per event basis  
+class EventDispatcher {
+private:
+    std::map<std::pair<int, int>, std::string> eventHandlers; // (type,subtype) -> script
+    Tcl_Interp* interp;
+
+public:
+    static const int EVT_SUBTYPE_ALL = -1;
+    
+    EventDispatcher(Tcl_Interp* tcl_interp) : interp(tcl_interp) {}
+    
+    void registerEventHandler(int type, int subtype, const std::string& script);
+    void processEvent(ds_datapoint_t *dpoint);
+    void removeEventHandler(int type, int subtype);
+    void removeAllEventHandlers();
+};
 class TclServer
 {
   std::thread newline_net_thread;
@@ -124,7 +143,7 @@ private:
  using CommandRegistrationCallback = std::function<void(Tcl_Interp*, void*)>;
  CommandRegistrationCallback command_callback = nullptr;
  void* command_callback_data = nullptr;
-    
+ 
 public:
   int argc;
   char **argv;
@@ -144,6 +163,9 @@ public:
   // scripts attached to dpoints
   TriggerDict dpoint_scripts;
   
+  // for special event scripts
+  EventDispatcher* eventDispatcher;
+   
   // for client requests
   SharedQueue<client_request_t> queue;
 

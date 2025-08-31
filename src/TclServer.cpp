@@ -87,6 +87,8 @@ TclServer::TclServer(int argc, char **argv,
 
 TclServer::~TclServer()
 {
+  delete eventDispatcher;
+  
   shutdown();
   
   if (websocket_port() >= 0)
@@ -1506,6 +1508,63 @@ static int dpoint_remove_all_scripts_command (ClientData data,
   return TCL_OK;
 }
 
+static int evt_set_script_command(ClientData data, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *objv[])
+{
+    TclServer *tclserver = (TclServer *) data;
+    
+    if (objc != 4) {
+        Tcl_WrongNumArgs(interp, 1, objv, "type subtype script");
+        return TCL_ERROR;
+    }
+    
+    int type, subtype;
+    if (Tcl_GetIntFromObj(interp, objv[1], &type) != TCL_OK ||
+        Tcl_GetIntFromObj(interp, objv[2], &subtype) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    
+    std::string script = Tcl_GetString(objv[3]);
+    
+    try {
+        tclserver->eventDispatcher->registerEventHandler(type, subtype, script);
+    } catch (const std::exception& e) {
+        Tcl_AppendResult(interp, "evtSetScript: ", e.what(), NULL);
+        return TCL_ERROR;
+    }
+    
+    return TCL_OK;
+}
+
+static int evt_remove_script_command(ClientData data, Tcl_Interp *interp,
+                                     int objc, Tcl_Obj *objv[])
+{
+    TclServer *tclserver = (TclServer *) data;
+    
+    if (objc != 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "type subtype");
+        return TCL_ERROR;
+    }
+    
+    int type, subtype;
+    if (Tcl_GetIntFromObj(interp, objv[1], &type) != TCL_OK ||
+        Tcl_GetIntFromObj(interp, objv[2], &subtype) != TCL_OK) {
+        return TCL_ERROR;
+    }
+    
+    tclserver->eventDispatcher->removeEventHandler(type, subtype);
+    return TCL_OK;
+}
+
+static int evt_remove_all_scripts_command(ClientData data, Tcl_Interp *interp,
+                                          int objc, Tcl_Obj *objv[])
+{
+    TclServer *tclserver = (TclServer *) data;
+    tclserver->eventDispatcher->removeAllEventHandlers();
+    return TCL_OK;
+}
+
+
 static int print_command (ClientData data, Tcl_Interp *interp,
               int objc, Tcl_Obj *objv[])
 {
@@ -1614,6 +1673,13 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                dserv_remove_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservRemoveAllMatches",
                dserv_remove_all_matches_command, tserv, NULL);
+
+  Tcl_CreateObjCommand(interp, "evtSetScript",
+			 (Tcl_ObjCmdProc *) evt_set_script_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "evtRemoveScript", 
+			 (Tcl_ObjCmdProc *) evt_remove_script_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "evtRemoveAllScripts",
+			 (Tcl_ObjCmdProc *) evt_remove_all_scripts_command, tserv, NULL);
   
   Tcl_CreateObjCommand(interp, "dservLoggerClients",
                dserv_logger_clients_command, tserv, NULL);
@@ -1683,6 +1749,8 @@ static Tcl_Interp *setup_tcl(TclServer *tserv)
   
   TclZipfs_AppHook(&tserv->argc, &tserv->argv);
 
+  // initialize specialize event dispatcher
+  tserv->eventDispatcher = new EventDispatcher(interp);
   
   /*
    * Invoke application-specific initialization.
@@ -1752,6 +1820,68 @@ static int dpoint_tcl_script(Tcl_Interp *interp,
   return retcode;
 }
 
+// event-specific script execution 
+static int event_tcl_script(Tcl_Interp *interp,
+                           const char *script,
+                           ds_datapoint_t *dpoint)
+{
+    // Event handling - pass script, type, subtype, params
+    Tcl_Obj *commandArray[4];
+    commandArray[0] = Tcl_NewStringObj(script, -1);
+    commandArray[1] = Tcl_NewIntObj(dpoint->data.e.type);
+    commandArray[2] = Tcl_NewIntObj(dpoint->data.e.subtype);
+    
+    // Create temporary datapoint for parameters
+    ds_datapoint_t e_dpoint;
+    e_dpoint.data.type = (ds_datatype_t) dpoint->data.e.puttype;
+    e_dpoint.data.len = dpoint->data.len;
+    e_dpoint.data.buf = dpoint->data.buf;
+    
+    commandArray[3] = dpoint_to_tclobj(interp, &e_dpoint);
+    
+    for (int i = 0; i < 4; i++) { Tcl_IncrRefCount(commandArray[i]); }
+    int retcode = Tcl_EvalObjv(interp, 4, commandArray, 0);
+    for (int i = 0; i < 4; i++) { Tcl_DecrRefCount(commandArray[i]); }
+    return retcode;
+}
+
+void EventDispatcher::registerEventHandler(int type, int subtype, const std::string& script) {
+    if (type < 0 || type > 255 || subtype < -1 || subtype > 255) {
+        throw std::invalid_argument("Invalid event type/subtype");
+    }
+    eventHandlers[{type, subtype}] = script;
+}
+
+void EventDispatcher::processEvent(ds_datapoint_t *dpoint) {
+    if (dpoint->data.e.dtype != DSERV_EVT) return;
+    
+    int eventType = dpoint->data.e.type;
+    int eventSubtype = dpoint->data.e.subtype;
+    
+    // Check specific type/subtype first
+    auto specificKey = std::make_pair(eventType, eventSubtype);
+    auto it = eventHandlers.find(specificKey);
+    if (it != eventHandlers.end()) {
+        event_tcl_script(interp, it->second.c_str(), dpoint);  // Use event_tcl_script
+        return;
+    }
+    
+    // Check wildcard subtype (-1)
+    auto wildcardKey = std::make_pair(eventType, EVT_SUBTYPE_ALL);
+    it = eventHandlers.find(wildcardKey);
+    if (it != eventHandlers.end()) {
+        event_tcl_script(interp, it->second.c_str(), dpoint);  // Use event_tcl_script
+    }
+}
+
+void EventDispatcher::removeEventHandler(int type, int subtype) {
+    eventHandlers.erase({type, subtype});
+}
+
+void EventDispatcher::removeAllEventHandlers() {
+    eventHandlers.clear();
+}
+
 static int process_requests(TclServer *tserv)
 {
   int retcode;
@@ -1809,10 +1939,15 @@ static int process_requests(TclServer *tserv)
     case REQ_DPOINT_SCRIPT:
       {
     ds_datapoint_t *dpoint = req.dpoint;
-    std::string script;
     std::string varname(dpoint->varname);
+    
+    // Process events through EventDispatcher first
+    if (varname == "eventlog/events" && tserv->eventDispatcher) {
+        tserv->eventDispatcher->processEvent(dpoint);
+    }
+        
     // evaluate a dpoint script
-
+    std::string script;
     if (tserv->dpoint_scripts.find(varname, script)) {
       ds_datapoint_t *dpoint = req.dpoint;
       const char *dpoint_script = script.c_str();
