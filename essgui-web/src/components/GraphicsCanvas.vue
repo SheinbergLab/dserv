@@ -23,6 +23,8 @@
       <div class="debug-line">Container: {{ containerSize.width }}×{{ containerSize.height }}</div>
       <div class="debug-line">Stream: {{ streamId }}</div>
       <div class="debug-line">Auto-scale: {{ autoScale ? 'ON' : 'OFF' }}</div>
+      <div class="debug-line">Aspect Mode: {{ aspectRatioMode }}</div>
+      <div class="debug-line">Backend Ratio: {{ backendAspectRatio ? backendAspectRatio.toFixed(3) : 'N/A' }}</div>
       <div class="debug-line">Connected: {{ isConnected ? 'YES' : 'NO' }}</div>
       <div class="debug-line">Last Update: {{ lastUpdate || 'Never' }}</div>
     </div>
@@ -30,7 +32,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useGraphicsRenderer } from '@/composables/useGraphicsRenderer'
 
 const props = defineProps({
@@ -41,14 +43,27 @@ const props = defineProps({
   showDebug: { type: Boolean, default: false },
   canvasClass: { type: String, default: 'graphics-canvas' },
   autoScale: { type: Boolean, default: true },
+
+  // Legacy aspect ratio prop (for backward compatibility)
   aspectRatio: { type: Number, default: null }, // 4/3, 16/9, etc.
+
+  // New aspect ratio mode system
+  aspectRatioMode: {
+    type: String,
+    default: 'auto', // 'auto' | 'container' | 'backend' | 'fixed'
+    validator: value => ['auto', 'container', 'backend', 'fixed'].includes(value)
+  },
+  fixedAspectRatio: { type: Number, default: null }, // for 'fixed' mode
+
+  // Size constraints
   minWidth: { type: Number, default: 320 },
   minHeight: { type: Number, default: 240 },
   maxWidth: { type: Number, default: 1920 },
-  maxHeight: { type: Number, default: 1080 }
+  maxHeight: { type: Number, default: 1080 },
+  enableInputDatapoints: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['mousemove', 'click', 'canvasReady', 'resize'])
+const emit = defineEmits(['mousemove', 'click', 'canvasReady', 'resize', 'aspectRatioChanged'])
 
 // Refs
 const canvasRef = ref(null)
@@ -57,8 +72,44 @@ const canvasWidth = ref(props.width || 640)
 const canvasHeight = ref(props.height || 480)
 const containerSize = ref({ width: 0, height: 0 })
 
+// Backend aspect ratio tracking
+const backendAspectRatio = ref(null)
+const sourceWindowBounds = ref(null)
+
 // Resize observer
 let resizeObserver = null
+
+// Determine effective aspect ratio mode
+const effectiveAspectRatioMode = computed(() => {
+  // Handle legacy aspectRatio prop
+  if (props.aspectRatio && props.aspectRatioMode === 'auto') {
+    return 'fixed'
+  }
+
+  // Handle auto mode
+  if (props.aspectRatioMode === 'auto') {
+    return backendAspectRatio.value ? 'backend' : 'container'
+  }
+
+  return props.aspectRatioMode
+})
+
+// Get target aspect ratio based on current mode
+const getTargetAspectRatio = () => {
+  const mode = effectiveAspectRatioMode.value
+
+  switch (mode) {
+    case 'backend':
+      return backendAspectRatio.value || props.fixedAspectRatio
+
+    case 'fixed':
+      return props.aspectRatio || props.fixedAspectRatio
+
+    case 'container':
+    default:
+      return null // Use container aspect ratio
+  }
+}
 
 // Calculate responsive canvas size
 const calculateCanvasSize = () => {
@@ -83,15 +134,18 @@ const calculateCanvasSize = () => {
   let width = Math.floor(rect.width)
   let height = Math.floor(rect.height)
 
-  // Apply aspect ratio if specified
-  if (props.aspectRatio) {
+  // Get target aspect ratio
+  const targetAspectRatio = getTargetAspectRatio()
+
+  // Apply aspect ratio constraints if specified
+  if (targetAspectRatio) {
     const containerAspect = width / height
-    if (containerAspect > props.aspectRatio) {
-      // Container is wider than desired aspect
-      width = Math.floor(height * props.aspectRatio)
+    if (containerAspect > targetAspectRatio) {
+      // Container is wider than target aspect - constrain width
+      width = Math.floor(height * targetAspectRatio)
     } else {
-      // Container is taller than desired aspect
-      height = Math.floor(width / props.aspectRatio)
+      // Container is taller than target aspect - constrain height
+      height = Math.floor(width / targetAspectRatio)
     }
   }
 
@@ -101,7 +155,9 @@ const calculateCanvasSize = () => {
 
   // Only update if size actually changed
   if (width !== canvasWidth.value || height !== canvasHeight.value) {
+    const mode = effectiveAspectRatioMode.value
     console.log(`Canvas resizing: ${canvasWidth.value}×${canvasHeight.value} → ${width}×${height}`)
+    console.log(`Mode: ${mode}, Target Aspect: ${targetAspectRatio?.toFixed(3) || 'none'}`)
 
     canvasWidth.value = width
     canvasHeight.value = height
@@ -117,7 +173,7 @@ const calculateCanvasSize = () => {
       renderer.resizeCanvas(width, height)
     }
 
-    emit('resize', { width, height })
+    emit('resize', { width, height, aspectRatio: width / height })
   }
 }
 
@@ -132,7 +188,7 @@ const setupResizeObserver = () => {
   resizeObserver.observe(containerRef.value)
 }
 
-// Initialize graphics renderer
+// Initialize graphics renderer with backend aspect ratio capture
 const {
   renderStats,
   lastUpdate,
@@ -145,7 +201,32 @@ const {
   width: canvasWidth.value,
   height: canvasHeight.value,
   streamId: props.streamId,
-  autoScale: props.autoScale
+  autoScale: props.autoScale,
+
+  // Callback for when backend sends setwindow command
+  onWindowBoundsChange: (windowBounds) => {
+    if (windowBounds) {
+      sourceWindowBounds.value = windowBounds
+      const sourceWidth = windowBounds.urx - windowBounds.llx
+      const sourceHeight = windowBounds.ury - windowBounds.lly
+      const newAspectRatio = sourceWidth / sourceHeight
+
+      if (Math.abs(newAspectRatio - (backendAspectRatio.value || 0)) > 0.001) {
+        console.log(`Backend aspect ratio changed: ${backendAspectRatio.value?.toFixed(3) || 'none'} → ${newAspectRatio.toFixed(3)}`)
+        backendAspectRatio.value = newAspectRatio
+
+        emit('aspectRatioChanged', {
+          aspectRatio: newAspectRatio,
+          windowBounds: windowBounds
+        })
+
+        // Trigger canvas resize if in backend mode
+        if (effectiveAspectRatioMode.value === 'backend') {
+          nextTick(() => calculateCanvasSize())
+        }
+      }
+    }
+  }
 })
 
 // Store renderer reference for resizing
@@ -174,16 +255,16 @@ const handleClick = (event) => {
   const canvasX = event.clientX - rect.left
   const canvasY = event.clientY - rect.top
 
-  const x = (canvasX / rect.width) * canvasWidth.value
-  const y = (canvasY / rect.height) * canvasHeight.value
+  // Existing emit for parent components
+  emit('click', { canvasX, canvasY, normalizedX: canvasX, normalizedY: canvasY, originalEvent: event })
 
-  emit('click', {
-    canvasX,
-    canvasY,
-    normalizedX: x,
-    normalizedY: y,
-    originalEvent: event
-  })
+  // Send click datapoint directly as TCL dict
+  if (props.enableInputDatapoints) {
+    const inputString = `{x ${canvasX} y ${Math.floor(canvasHeight.value - canvasY)} w ${canvasWidth.value} h ${canvasHeight.value}}`;
+
+    dserv.essCommand(`dservSet ${props.streamId}/input "${inputString}"`)
+      .catch(error => console.error('Failed to send click datapoint:', error))
+  }
 }
 
 // Manual resize method (for parent components)
@@ -199,12 +280,27 @@ const resize = (width, height) => {
   }
 }
 
+// Force recalculate canvas size (useful when aspect ratio mode changes)
+const recalculateCanvasSize = () => {
+  calculateCanvasSize()
+}
+
+// Watch for aspect ratio mode changes
+watch(() => effectiveAspectRatioMode.value, (newMode) => {
+  console.log(`Aspect ratio mode changed to: ${newMode}`)
+  calculateCanvasSize()
+})
+
 // Expose methods for parent components
 defineExpose({
   resize,
   renderData,
   canvasRef,
-  getCanvasSize: () => ({ width: canvasWidth.value, height: canvasHeight.value })
+  recalculateCanvasSize,
+  getCanvasSize: () => ({ width: canvasWidth.value, height: canvasHeight.value }),
+  getBackendAspectRatio: () => backendAspectRatio.value,
+  getSourceWindowBounds: () => sourceWindowBounds.value,
+  getEffectiveAspectRatioMode: () => effectiveAspectRatioMode.value
 })
 
 onMounted(async () => {

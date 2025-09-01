@@ -44,9 +44,12 @@
         :show-stats="false"
         :show-debug="false"
         :auto-scale="true"
+        aspect-ratio-mode="backend"
+        :fixed-aspect-ratio="16/9"
         canvas-class="graphics-viewer-canvas"
         @mousemove="handleMouseMove"
         @click="handleClick"
+        :enable-input-datapoints="true"
       />
     </div>
 
@@ -122,7 +125,7 @@ const handleMouseMove = (mouseData) => {
 }
 
 const handleClick = (clickData) => {
-  console.log('Graphics click:', clickData)
+ // console.log('Graphics click:', clickData)
 }
 
 // Update canvas size from child component

@@ -19,6 +19,8 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     ...options
   }
 
+  const onWindowBoundsChange = options.onWindowBoundsChange || (() => {})
+
   // Internal state
   let ctx = null
   let currentColor = '#000000'
@@ -99,6 +101,10 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
             llx: args[0], lly: args[1],
             urx: args[2], ury: args[3]
           }
+
+          // Notify component about window bounds change
+          onWindowBoundsChange(windowBounds)
+
           if (config.autoScale && windowBounds) {
             const sourceWidth = windowBounds.urx - windowBounds.llx
             const sourceHeight = windowBounds.ury - windowBounds.lly
@@ -202,6 +208,7 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
           currentPos = { x: newX, y: newY }
           break
 
+        case 'frect':
         case 'filledrect':
           const x1 = transformX(args[0])
           const y1 = transformY(args[1])
@@ -215,6 +222,33 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
             width,
             height
           )
+          break
+
+        case 'poly':
+        case 'fpoly':
+          if (args.length >= 6 && args.length % 2 === 0) {
+            ctx.beginPath()
+
+            // Move to first point
+            ctx.moveTo(transformX(args[0]), transformY(args[1]))
+
+            // Draw lines to subsequent points
+            for (let i = 2; i < args.length; i += 2) {
+              ctx.lineTo(transformX(args[i]), transformY(args[i + 1]))
+            }
+
+            // Close the polygon
+            ctx.closePath()
+
+            // Fill or stroke based on command
+            if (cmd === 'fpoly') {
+              ctx.fill()
+            } else {
+              ctx.stroke()
+            }
+          } else {
+            console.warn(`Invalid ${cmd} command: need even number of args >= 6, got ${args.length}`, args)
+          }
           break
 
         case 'drawtext':
