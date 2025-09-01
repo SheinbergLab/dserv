@@ -7,7 +7,6 @@ import { onMounted } from 'vue'
 import MainLayout from './layouts/MainLayout.vue'
 import { dserv } from './services/dserv.js'
 import { initializeErrorTracking } from './services/errorService.js'
-import { scriptExecutionService } from './services/scriptExecutionService.js'
 
 onMounted(async () => {
   // Initialize global error tracking
@@ -16,14 +15,6 @@ onMounted(async () => {
     console.log('Global error tracking initialized')
   } catch (error) {
     console.error('Failed to initialize error tracking:', error)
-  }
-
-  // Initialize script execution service
-  try {
-    await scriptExecutionService.initialize()
-    console.log('Script execution service initialized')
-  } catch (error) {
-    console.error('Failed to initialize script execution service:', error)
   }
 
   window.dserv = dserv
