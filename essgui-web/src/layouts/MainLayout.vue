@@ -150,7 +150,7 @@
             <div v-else style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
               <a-tabs size="small" style="height: 100%; display: flex; flex-direction: column;" tab-position="top">
 
-                <a-tab-pane key="graphics" tab="Graphics" style="height: 100%; overflow: hidden;">
+                <a-tab-pane key="graphics" tab="Viz" style="height: 100%; overflow: hidden;">
                 <div style="height: 100%; overflow: hidden;">
                   <graphics-viewer
                     stream-id="graphics/stimulus"

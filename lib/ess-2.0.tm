@@ -280,17 +280,21 @@ oo::class create System {
         dservSet ess/stiminfo [dg_toHybridJSON stimdg]
     }
 
-    method set_visualization_scripts {scripts_dict} {
-	my variable _visualization_scripts
-	set _visualization_scripts $scripts_dict
+    #
+    # visualization scripts are configured for each protocol
+    #  and get forwarded to the viz subprocess
+    #
+    method set_viz_config { s } {
+	my variable _viz_config
+	set _viz_config $s
     }
-    
-    method get_visualization_scripts {} {
-	my variable _visualization_scripts
-	if {[info exists _visualization_scripts]} {
-	    return $_visualization_scripts
+
+    method get_viz_config {} {
+	my variable _viz_config
+	if {[info exists _viz_config]} {
+	    return $_viz_config
 	} else {
-	    return [dict create]
+	    return
 	}
     }
     
@@ -3375,7 +3379,10 @@ namespace eval ess {
     proc variant_init {system protocol variant} {
         variable current
         set s [::ess::find_system $system]
-        
+
+	# set a visualization script for visualizing trials
+        dservSet ess/viz_config [$s get_viz_config]
+
         # let clients know we are loading a new set of trials
         $current(state_system) set_status loading
         set_loading_progress "variant_loading" "Loading variant: $variant" 50
@@ -3388,7 +3395,7 @@ namespace eval ess {
         set_loading_progress "stimdg_update" "Updating stimulus data" 70
         $s update_stimdg
         
-        # ENHANCED: Count trials immediately after stimdg update
+        # count trials after stimdg update
         set trial_count 0
         if {[dg_exists stimdg]} {
             if {[catch {set trial_count [dl_length stimdg:stimtype]} error]} {
@@ -3431,36 +3438,7 @@ namespace eval ess {
         
         dservSet ess/param_settings [ess::get_params]
 
-        set_loading_progress "event_mappings" "Sending event mappings" 90
-        # Send event mappings to frontend
-        send_event_mappings
-        
-        set_loading_progress "visualization" "Loading visualization scripts" 95
-        # Send raw visualization scripts WITHOUT preprocessing
-        set s [::ess::find_system $system]
-        set raw_scripts [$s get_visualization_scripts]
-        
-        if {[dict size $raw_scripts] > 0} {
-            ess_info "Sending [dict size $raw_scripts] raw visualization scripts" "visualization"
-            
-            # Convert to JSON and publish WITHOUT any Tcl processing
-            set json_obj [yajl create #auto]
-            $json_obj map_open
-            dict for {k v} $raw_scripts {
-                $json_obj string $k string $v
-            }
-            $json_obj map_close
-            set json_result [$json_obj get]
-            $json_obj delete
-            
-            dservSet ess/visualization_scripts $json_result
-            ess_info "Published raw visualization scripts" "visualization"
-        } else {
-            dservSet ess/visualization_scripts "{}"
-            ess_debug "No visualization scripts found" "visualization"
-        }
-        
-        # ENHANCED: Update obs counts with trial information
+        # update obs counts with trial information
         if {$trial_count > 0} {
             dservSet ess/obs_total $trial_count
             dservSet ess/obs_id 0
@@ -3474,53 +3452,8 @@ namespace eval ess {
         
         # loading is complete, so return status to stopped
         $current(state_system) set_status stopped
-        
-        if {$trial_count > 0} {
-            ess_info "Variant initialization complete: $trial_count trials ready" "variant"
-        } else {
-            ess_warning "Variant initialization complete: no trials found" "variant"
-        }
     }
 
-    # Helper function to shared event mappings to interested listeners
-    proc send_event_mappings {} {
-	variable current
-	if {$current(state_system) == ""} {return}
-	
-	set s $current(state_system)
-	set evt_type_ids [set ${s}::_evt_type_ids]
-	set evt_subtype_ids [set ${s}::_evt_subtype_ids]
-	
-	# Create JSON mapping of event names to IDs
-	set json_obj [yajl create #auto]
-	$json_obj map_open
-	
-	# Add type mappings
-	$json_obj string "types" map_open
-	dict for {name id} $evt_type_ids {
-	    $json_obj string $name number $id
-	}
-	$json_obj map_close
-	
-	# Add subtype mappings
-	$json_obj string "subtypes" map_open
-	dict for {type_name subtypes} $evt_subtype_ids {
-	    $json_obj string $type_name map_open
-	    dict for {subtype_name subtype_id} $subtypes {
-		$json_obj string $subtype_name number $subtype_id
-	    }
-	    $json_obj map_close
-	}
-	$json_obj map_close
-	
-	$json_obj map_close
-	set result [$json_obj get]
-	$json_obj delete
-	
-	dservSet ess/event_mappings $result
-	ess_info "Sent event mappings to frontend" "visualization"
-    }
-    
     proc find_systems {} {
         variable current
         set systems {}

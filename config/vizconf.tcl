@@ -16,22 +16,21 @@ namespace eval viz {
     variable current_system ""
     variable current_protocol ""
     variable graphics_output "graphics/stimulus"
-    variable event_subscriptions [list]
     
     # Trial state
     variable current_trial_id -1
     variable stimulus_visible 0
     variable response_made [dict create]
     variable trial_result -1
-
+    
     proc log { level message {category "visualization"}} {
 	variable current
-
+	
 	
 	# Pre-format timestamp once
 	set timestamp [clock format [clock seconds] -format "%H:%M:%S"]
 	set formatted_msg "\[$timestamp\] \[$category\] $message"
-
+	
 	switch -- $level {
 	    error {
 		dservSet ess/errorInfo $formatted_msg
@@ -78,7 +77,8 @@ namespace eval viz {
 	
         # Initialize graphics
         clearwin
-        setwindow -10 -10 10 10  ;# Default viewport
+	setbackground 0
+        setwindow -10 -10 10 10
         update_display
         
         log info "Visualization framework initialized - awaiting configuration"
@@ -92,8 +92,6 @@ namespace eval viz {
         variable current_system
         if {$current_system ne $data} {
             set current_system $data
-            cleanup_namespace
-            log info "System changed to: $data - awaiting visualization config"
         }
     }
     
@@ -101,21 +99,22 @@ namespace eval viz {
         variable current_protocol  
         if {$current_protocol ne $data} {
             set current_protocol $data
-            cleanup_namespace
-            log info "Protocol changed to: $data - awaiting visualization config"
         }
     }
     
     proc on_viz_config_received {dpoint data} {
-        # Configuration comes as Tcl script defining how to visualize
-        log info "Received visualization configuration"
+	variable current_system
+	
+	# clear out previous subscriptions and children
+	cleanup_namespace
 
 	# add path to find system modules that may be required
 	set syspath [getVar ess ::ess::system_path]
 	set project [getVar ess ::ess::current(project)]
 	::tcl::tm::add [file join $syspath $project lib]
-        
-        if {[catch {eval $data} error]} {
+
+	# now evaluate the configuration script in the ::viz::${system} ns
+        if {[catch {namespace eval ::viz::$current_system $data} error]} {
             log error "Error setting up visualization config: $error"
         } else {
             log info "Visualization configuration applied successfully"
@@ -137,64 +136,25 @@ namespace eval viz {
     #########################################################################
     
     proc subscribe_to_event {event_id callback} {
-        variable event_subscriptions
-        
-        # Set up event listener
         evtSetScript $event_id -1 $callback
-        
-        # Track subscription for cleanup
-        lappend event_subscriptions [list $event_id $callback]
-        
-        log info "Subscribed to event $event_id"
     }
-    
-    proc clear_event_subscriptions {} {
-        variable event_subscriptions
-	evtRemoveAllScripts
-        set event_subscriptions [list]
-        log info "Cleared all event subscriptions"
-    }
-    
-    #########################################################################
-    # Namespace Cleanup
-    #########################################################################
     
     proc cleanup_namespace {} {
-        # Clear event subscriptions
-        clear_event_subscriptions
+	evtRemoveAllScripts
         
-        # Reset trial state
+        # reset trial state
         variable current_trial_id -1
         variable stimulus_visible 0
         variable response_made [dict create]
         variable trial_result -1
         
-        # Clear display
+        # clear display
         clear_display
-        
-        # Remove system-specific procedures
-        cleanup_system_procedures
-        
-        log info "Visualization namespace cleaned"
-    }
-    
-    proc cleanup_system_procedures {} {
-        # Delete entire system namespace if it exists
-        variable current_system
-        if {$current_system ne ""} {
-            set system_ns "::viz::${current_system}"
-            if {[namespace exists $system_ns]} {
-                namespace delete $system_ns
-                log debug "Deleted system namespace: $system_ns"
-            }
-        }
-        
-        # Clean up any system-specific variables in main viz namespace
-        foreach var [info vars ::viz::system_*] {
-            if {[info exists $var]} {
-                unset $var
-            }
-        }
+
+	# clean up all children of parent ::viz
+	foreach child [namespace children ::viz] {
+	    namespace delete $child
+	}
     }
     
     #########################################################################
@@ -215,6 +175,11 @@ namespace eval viz {
     proc update_display {} {
         variable graphics_output
         dservSet $graphics_output [dumpwin json]
+    }
+
+    # scripts can just call flushwin
+    namespace inscope :: {
+	proc flushwin {} { ::viz::update_display }
     }
     
     #########################################################################
@@ -258,82 +223,8 @@ namespace eval viz {
         variable trial_result
         set trial_result $result
     }
-    
-    #########################################################################
-    # Utility Functions
-    #########################################################################
-    
-    proc get_trial_info {trial_id} {
-        # Helper to extract trial data from stimdg
-        if {![dg_exists stimdg]} {
-            return [dict create]
-        }
-        
-        set trial_data [dict create]
-        set lists [dg_tclListnames stimdg]
-        
-        foreach list_name $lists {
-	    dict set trial_data $list_name [dl_tcllist stimdg:$list_name:$trial_id]
-        }
-        
-        return $trial_data
-    }
-
-    proc get_attr { trial_id attr } {
-	if {![dg_exists stimdg]} {
-            return
-	}
-	if { [lsearch [dg_tclListnames stimdg] $attr] == -1 } {
-	    return
-	}
-	return [dl_tcllist stimdg:$attr:$trial_id]
-    }
-    
-    proc response_color {response_type} {
-        switch $response_type {
-            1 { return "0.5 0.5 0.9" }  ;# Left
-            2 { return "0.9 0.5 0.5" }  ;# Right
-            default { return "0.7 0.7 0.7" }
-        }
-    }
-    
-    proc correctness_color {correct} {
-        switch $correct {
-            1 { return "0.2 0.8 0.2" }  ;# Correct
-            0 { return "0.8 0.2 0.2" }  ;# Incorrect
-            2 { return "0.8 0.6 0.2" }  ;# Aborted
-            default { return "0.7 0.7 0.7" }
-        }
-    }
 }
 
 # Initialize the visualization framework
 viz::init
 
-
-### Original - to be removed
-proc get_stimdg { name data } {
-	dg_fromString $data
-}
-
-proc init {} {
-	dservAddExactMatch eventlog/events
-	dservAddExactMatch stimdg
-	dservSetScript stimdg get_stimdg
-	evtSetScript 19 -1 beginobs
-	evtSetScript 20 -1 endobs
-}
-
-proc beginobs { type subtype data }	{
-	clearwin
-	setwindow 0 0 1 1
-	dlg_text 0.5 0.5 "Beginobs $data" -size 24 -just 0
-	dservSet graphics/stimulus [dumpwin json]
-}
-
-proc endobs { type subtype data }	{
-	clearwin
-	setwindow 0 0 1 1
-	dlg_text 0.5 0.5 "Endobs $subtype" -size 24 -just 0
-	dservSet graphics/stimulus [dumpwin json]
-}

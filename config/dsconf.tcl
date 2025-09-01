@@ -29,6 +29,9 @@ source [file join $dspath config/commands.tcl]
 # add ability to call ess functions from main tclserver
 source [file join $dspath config/essctrl.tcl]
 
+# start a visualization process
+subprocess viz "source [file join $dspath config/vizconf.tcl]"
+
 proc set_hostinfo {} {
     # target_host allows us to connect using NIC
     set target_host google.com
@@ -72,9 +75,6 @@ if { [lsearch $hbs $host] >= 0 } {
 
 # start a "git" interpreter
 subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
-
-# start a visualization process
-subprocess viz "source [file join $dspath config/vizconf.tcl]"
 
 # auto update support
 source [file join $dspath config/updateconf.tcl]
