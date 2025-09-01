@@ -80,10 +80,9 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { ReloadOutlined, SyncOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined } from '@ant-design/icons-vue'
 import { h } from 'vue'
 import { dserv } from '../services/dserv.js'
-import { useScriptExecution } from '../services/scriptExecutionService.js'
 
 // Conversion constants
 const ADC_CENTER = 2048
@@ -94,12 +93,6 @@ const eyePosition = ref({ x: 0, y: 0 })
 const eyePositionRaw = ref({ x: 2048, y: 2048 })
 const touchPosition = ref({ x: 0, y: 0 })
 const showTouchPosition = ref(false)
-
-// script execution support
-const { registerCanvas, renderCanvas } = useScriptExecution()
-
-// At the top of setup()
-console.log('EyeTouchVisualizer: useScriptExecution result:', { registerCanvas, renderCanvas })
 
 // Virtual input state
 const virtualInputEnabled = ref(false)
@@ -239,7 +232,7 @@ function touchPixelsToDegrees(pixX, pixY) {
   const screen = screenDimensions.value
   const screenPixPerDegX = screen.width / (2 * screen.halfX)
   const screenPixPerDegY = screen.height / (2 * screen.halfY)
-  
+
   return {
     x: (pixX - screen.width / 2) / screenPixPerDegX,
     y: -1 * (pixY - screen.height / 2) / screenPixPerDegY
@@ -251,7 +244,7 @@ function degreesToTouchPixels(degX, degY) {
   const screen = screenDimensions.value
   const screenPixPerDegX = screen.width / (2 * screen.halfX)
   const screenPixPerDegY = screen.height / (2 * screen.halfY)
-  
+
   return {
     x: Math.round(degX * screenPixPerDegX + screen.width / 2),
     y: Math.round(-degY * screenPixPerDegY + screen.height / 2)
@@ -262,11 +255,11 @@ function degreesToTouchPixels(degX, degY) {
 function updateVirtualEyePosition(degX, degY) {
   virtualEye.x = degX
   virtualEye.y = degY
-  
+
   const adc = degreesToADC(degX, degY)
   virtualEye.adcX = adc.x
   virtualEye.adcY = adc.y
-  
+
   // Send to dserv
   sendVirtualEyeData()
 }
@@ -295,17 +288,17 @@ async function sendVirtualTouchData(x, y) {
 // Mouse event handlers
 function handleMouseDown(event) {
   if (!virtualInputEnabled.value) return
-  
+
   const rect = canvasRef.value.getBoundingClientRect()
   const mouseX = event.clientX - rect.left
   const mouseY = event.clientY - rect.top
-  
+
   // Check if clicking on virtual eye marker
   const eyePos = degreesToCanvas(virtualEye.x, virtualEye.y)
   const eyeDistance = Math.sqrt(
     Math.pow(mouseX - eyePos.x, 2) + Math.pow(mouseY - eyePos.y, 2)
   )
-  
+
   if (eyeDistance <= 8 + 5) { // 8px radius + 5px tolerance
     virtualEye.isDragging = true
     virtualEye.dragOffset = {
@@ -319,24 +312,24 @@ function handleMouseDown(event) {
 
 function handleMouseMove(event) {
   if (!virtualInputEnabled.value) return
-  
+
   if (virtualEye.isDragging) {
     const rect = canvasRef.value.getBoundingClientRect()
     const mouseX = event.clientX - rect.left
     const mouseY = event.clientY - rect.top
-    
+
     // Calculate new position with drag offset
     const newCanvasX = mouseX + virtualEye.dragOffset.x
     const newCanvasY = mouseY + virtualEye.dragOffset.y
-    
+
     // Convert to degrees and constrain
     const degPos = canvasToDegrees(newCanvasX, newCanvasY)
     const maxX = visualRange.horizontal / 2
     const maxY = visualRange.vertical / 2
-    
+
     degPos.x = Math.max(-maxX, Math.min(maxX, degPos.x))
     degPos.y = Math.max(-maxY, Math.min(maxY, degPos.y))
-    
+
     updateVirtualEyePosition(degPos.x, degPos.y)
   }
 }
@@ -349,35 +342,35 @@ function handleMouseUp() {
 
 function handleCanvasClick(event) {
   if (!virtualInputEnabled.value || virtualEye.isDragging) return
-  
+
   const rect = canvasRef.value.getBoundingClientRect()
   const mouseX = event.clientX - rect.left
   const mouseY = event.clientY - rect.top
-  
+
   // Convert click position to degrees
   const degPos = canvasToDegrees(mouseX, mouseY)
-  
+
   // Convert to touch screen coordinates
   const touchPixels = degreesToTouchPixels(degPos.x, degPos.y)
-  
+
   // Send virtual touch event
   virtualTouch.x = touchPixels.x
   virtualTouch.y = touchPixels.y
   virtualTouch.active = true
-  
+
   sendVirtualTouchData(touchPixels.x, touchPixels.y)
-  
+
   // Clear virtual touch after a brief delay
   setTimeout(() => {
     virtualTouch.active = false
   }, 200)
 }
 
-// Data handlers (unchanged from original, but with virtual mode awareness)
+// Data handlers
 function handleEyePosition(data) {
   // Skip real eye data if in virtual mode
   if (virtualMode.value && virtualInputEnabled.value) return
-  
+
   try {
     const value = data.value || data.data
 
@@ -394,7 +387,7 @@ function handleEyePosition(data) {
       }
 
       const [rx, ry, x, y] = parts.map(Number);
-      
+
       if (isNaN(rx) || isNaN(ry) || isNaN(x) || isNaN(y)) {
         console.warn('Invalid ess/em_pos coordinates:', { rx, ry, x, y, value });
         return;
@@ -416,7 +409,6 @@ function handleEyePosition(data) {
   }
 }
 
-// All other data handlers remain the same...
 function handleTouchPosition(data) {
   try {
     const value = data.value || data.data
@@ -441,7 +433,7 @@ function handleTouchPosition(data) {
         console.warn('Invalid mtouch/touchvals data format (expected array or string):', value);
         return;
       }
-      
+
       if (isNaN(x) || isNaN(y)) {
         console.warn('Invalid mtouch/touchvals coordinates:', { x, y, value });
         return;
@@ -449,7 +441,7 @@ function handleTouchPosition(data) {
 
       touchPosition.value = { x, y };
       showTouchPosition.value = true;
-      
+
       if (touchClearTimeout.value) {
         clearTimeout(touchClearTimeout.value);
         touchClearTimeout.value = null;
@@ -460,7 +452,168 @@ function handleTouchPosition(data) {
   }
 }
 
-// ... (other handlers remain the same)
+// Touch window settings handler
+function handleTouchWindowSetting(data) {
+  try {
+    const value = data.value || data.data
+
+    if (data.name === 'ess/touch_region_setting') {
+      if (!value || typeof value !== 'string') {
+        console.warn('Invalid ess/touch_region_setting data:', value);
+        return;
+      }
+
+      const parts = value.split(' ');
+      if (parts.length < 8) {
+        console.warn('Insufficient ess/touch_region_setting data parts:', parts);
+        return;
+      }
+
+      const [reg, active, state, type, cx, cy, dx, dy] = parts.map(Number);
+
+      if (parts.some(p => isNaN(Number(p)))) {
+        console.warn('Invalid ess/touch_region_setting data:', { reg, active, state, type, cx, cy, dx, dy, value });
+        return;
+      }
+
+      if (reg >= 0 && reg < 8) {
+        if (!dserv.state.touchWindows) {
+          dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
+            id: i,
+            active: false,
+            state: 0,
+            type: 'rectangle',
+            center: { x: 0, y: 0 },
+            centerRaw: { x: 400, y: 320 },
+            size: { width: 2, height: 2 },
+            sizeRaw: { width: 100, height: 100 }
+          }))
+        }
+
+        dserv.state.touchWindows[reg] = {
+          id: reg,
+          active: active === 1,
+          state: state,
+          type: type === 1 ? 'ellipse' : 'rectangle',
+          center: touchPixelsToDegrees(cx, cy),
+          centerRaw: { x: cx, y: cy },
+          size: {
+            width: Math.abs(dx / screenDimensions.value.width * (2 * screenDimensions.value.halfX)),
+            height: Math.abs(dy / screenDimensions.value.height * (2 * screenDimensions.value.halfY))
+          },
+          sizeRaw: { width: dx, height: dy }
+        };
+      }
+    }
+  } catch (error) {
+    console.error('Error handling touch window setting:', error, data);
+  }
+}
+
+// Touch window status handler
+function handleTouchWindowStatus(data) {
+  try {
+    const value = data.value || data.data
+
+    if (data.name === 'ess/touch_region_status') {
+      if (!value || typeof value !== 'string') {
+        console.warn('Invalid ess/touch_region_status data:', value);
+        return;
+      }
+
+      const parts = value.split(' ');
+      if (parts.length < 4) {
+        console.warn('Insufficient ess/touch_region_status data parts:', parts);
+        return;
+      }
+
+      const [changes, states, touch_x, touch_y] = parts.map(Number);
+
+      if (parts.some(p => isNaN(Number(p)))) {
+        console.warn('Invalid ess/touch_region_status data:', { changes, states, touch_x, touch_y, value });
+        return;
+      }
+
+      if (!dserv.state.touchWindowStatusMask) {
+        dserv.state.touchWindowStatusMask = 0;
+      }
+
+      const previousMask = dserv.state.touchWindowStatusMask;
+      dserv.state.touchWindowStatusMask = states;
+
+      if (!dserv.state.touchWindows) {
+        dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
+          id: i,
+          active: false,
+          state: 0,
+          type: 'rectangle',
+          center: { x: 0, y: 0 },
+          centerRaw: { x: 400, y: 320 },
+          size: { width: 2, height: 2 },
+          sizeRaw: { width: 100, height: 100 }
+        }))
+      }
+
+      for (let i = 0; i < 8; i++) {
+        dserv.state.touchWindows[i].state = ((states & (1 << i)) !== 0) && dserv.state.touchWindows[i].active;
+      }
+
+      const anyTouchWindowsActive = dserv.state.touchWindows.some(window => window.active);
+      const anyTouchesInWindows = states !== 0;
+
+      if (!anyTouchWindowsActive || !anyTouchesInWindows) {
+        if (touchClearTimeout.value) {
+          clearTimeout(touchClearTimeout.value);
+        }
+
+        touchClearTimeout.value = setTimeout(() => {
+          showTouchPosition.value = false;
+          touchPosition.value = { x: 0, y: 0 };
+          touchClearTimeout.value = null;
+        }, TOUCH_CLEAR_DELAY);
+      } else {
+        if (touchClearTimeout.value) {
+          clearTimeout(touchClearTimeout.value);
+          touchClearTimeout.value = null;
+        }
+        showTouchPosition.value = true;
+      }
+
+      if (touch_x !== undefined && touch_y !== undefined && !isNaN(touch_x) && !isNaN(touch_y)) {
+        touchPosition.value = { x: touch_x, y: touch_y };
+        if (anyTouchesInWindows) {
+          showTouchPosition.value = true;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error handling touch window status:', error, data);
+  }
+}
+
+// Screen dimension handlers
+function handleScreenDimensions(data) {
+  const value = data.value || data.data
+
+  switch (data.name) {
+    case 'ess/screen_w':
+      if (!dserv.state.screenWidth) dserv.state.screenWidth = 800;
+      dserv.state.screenWidth = parseInt(value, 10);
+      break;
+    case 'ess/screen_h':
+      if (!dserv.state.screenHeight) dserv.state.screenHeight = 600;
+      dserv.state.screenHeight = parseInt(value, 10);
+      break;
+    case 'ess/screen_halfx':
+      if (!dserv.state.screenHalfX) dserv.state.screenHalfX = 10.0;
+      dserv.state.screenHalfX = parseFloat(value);
+      break;
+    case 'ess/screen_halfy':
+      if (!dserv.state.screenHalfY) dserv.state.screenHalfY = 7.5;
+      dserv.state.screenHalfY = parseFloat(value);
+      break;
+  }
+}
 
 // Robust canvas setup
 function setupCanvas() {
@@ -468,14 +621,14 @@ function setupCanvas() {
     console.warn('Canvas ref not available')
     return false
   }
-  
+
   try {
     ctx = canvasRef.value.getContext('2d')
     if (!ctx) {
       console.error('Failed to get canvas context')
       return false
     }
-    
+
     canvasReady.value = true
     return true
   } catch (error) {
@@ -490,23 +643,23 @@ function startAnimation() {
   if (animationId) {
     cancelAnimationFrame(animationId)
   }
-  
+
   if (!ctx || !canvasRef.value) {
     return
   }
-  
+
   animationRunning.value = true
-  
+
   function animate() {
     if (!animationRunning.value) {
       return
     }
-    
+
     if (!ctx || !canvasRef.value) {
       animationRunning.value = false
       return
     }
-    
+
     render()
     animationId = requestAnimationFrame(animate)
   }
@@ -521,8 +674,7 @@ function stopAnimation() {
   }
 }
 
-// Replace the render function in EyeTouchVisualizer.vue with this fixed version:
-
+// Cleaned up render function
 function render() {
   if (!ctx || !canvasRef.value) {
     return
@@ -534,7 +686,7 @@ function render() {
     ctx.fillRect(0, 0, canvasSize.value.width, canvasSize.value.height)
 
     // Draw layers in order
-    drawGrid() // Always show grid
+    drawGrid()
 
     if (displayOptions.showTrails) {
       drawTrails()
@@ -573,32 +725,6 @@ function render() {
       drawVirtualTouch()
     }
 
-    // call renderCanvas for script elements directed to eyeTouch
-    if (renderCanvas) {
-      renderCanvas('eyeTouch')
-    }
-
-    // Check for cross-canvas test data
-    if (window.scriptExecutionService) {
-      const crossCanvasData = window.scriptExecutionService.globalScriptData.crossCanvasTest
-      if (crossCanvasData && crossCanvasData.timestamp > (window.lastCrossCanvasRender || 0)) {
-        console.log('EyeTouchVisualizer: Rendering cross-canvas test elements')
-        window.lastCrossCanvasRender = crossCanvasData.timestamp
-        
-        // Draw cross-canvas test elements
-        crossCanvasData.drawElements.forEach(element => {
-          if (element.type === 'circle') {
-            drawTestCircle(element.x, element.y, element.radius, element.color)
-          } else if (element.type === 'text') {
-            drawTestText(element.x, element.y, element.text, element.fontSize, element.color)
-          }
-        })
-        
-        // Also draw the message
-        drawTestText(-7, 7, crossCanvasData.message, 10, '#ffff00')
-      }
-    }
-     
   } catch (error) {
     console.error('Render error:', error)
     setTimeout(() => {
@@ -612,32 +738,7 @@ function render() {
   }
 }
 
-// Add these helper functions for test drawing
-function drawTestCircle(x, y, radius, color) {
-  const pos = degreesToCanvas(x, y)
-  ctx.save()
-  ctx.fillStyle = color
-  ctx.strokeStyle = '#ffffff'
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.arc(pos.x, pos.y, radius, 0, 2 * Math.PI)
-  ctx.fill()
-  ctx.stroke()
-  ctx.restore()
-}
-
-function drawTestText(x, y, text, fontSize, color) {
-  const pos = degreesToCanvas(x, y)
-  ctx.save()
-  ctx.fillStyle = color
-  ctx.font = `${fontSize}px monospace`
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(text, pos.x, pos.y)
-  ctx.restore()
-}
-
-// Drawing functions (most remain the same, with additions for virtual input)
+// Drawing functions
 function drawGrid() {
   ctx.strokeStyle = '#333333'
   ctx.lineWidth = 1
@@ -909,7 +1010,7 @@ function resetView() {
 function resetVirtualInput() {
   // Reset virtual eye to center
   updateVirtualEyePosition(0, 0)
-  
+
   // Clear virtual touch
   virtualTouch.active = false
   virtualTouch.x = 0
@@ -934,175 +1035,12 @@ function handleResize() {
     if (canvasRef.value && !ctx) {
       setupCanvas()
     }
-    
+
     // Restart animation if it's not running but should be
     if (canvasReady.value && !animationRunning.value) {
       startAnimation()
     }
   })
-}
-
-// Touch window settings handler (keep all existing handlers)
-function handleTouchWindowSetting(data) {
-  try {
-    const value = data.value || data.data
-    
-    if (data.name === 'ess/touch_region_setting') {
-      if (!value || typeof value !== 'string') {
-        console.warn('Invalid ess/touch_region_setting data:', value);
-        return;
-      }
-
-      const parts = value.split(' ');
-      if (parts.length < 8) {
-        console.warn('Insufficient ess/touch_region_setting data parts:', parts);
-        return;
-      }
-
-      const [reg, active, state, type, cx, cy, dx, dy] = parts.map(Number);
-      
-      if (parts.some(p => isNaN(Number(p)))) {
-        console.warn('Invalid ess/touch_region_setting data:', { reg, active, state, type, cx, cy, dx, dy, value });
-        return;
-      }
-
-      if (reg >= 0 && reg < 8) {
-        if (!dserv.state.touchWindows) {
-          dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
-            id: i,
-            active: false,
-            state: 0,
-            type: 'rectangle',
-            center: { x: 0, y: 0 },
-            centerRaw: { x: 400, y: 320 },
-            size: { width: 2, height: 2 },
-            sizeRaw: { width: 100, height: 100 }
-          }))
-        }
-
-        dserv.state.touchWindows[reg] = {
-          id: reg,
-          active: active === 1,
-          state: state,
-          type: type === 1 ? 'ellipse' : 'rectangle',
-          center: touchPixelsToDegrees(cx, cy),
-          centerRaw: { x: cx, y: cy },
-          size: {
-            width: Math.abs(dx / screenDimensions.value.width * (2 * screenDimensions.value.halfX)),
-            height: Math.abs(dy / screenDimensions.value.height * (2 * screenDimensions.value.halfY))
-          },
-          sizeRaw: { width: dx, height: dy }
-        };
-      }
-    }
-  } catch (error) {
-    console.error('Error handling touch window setting:', error, data);
-  }
-}
-
-// Touch window status handler
-function handleTouchWindowStatus(data) {
-  try {
-    const value = data.value || data.data
-    
-    if (data.name === 'ess/touch_region_status') {
-      if (!value || typeof value !== 'string') {
-        console.warn('Invalid ess/touch_region_status data:', value);
-        return;
-      }
-
-      const parts = value.split(' ');
-      if (parts.length < 4) {
-        console.warn('Insufficient ess/touch_region_status data parts:', parts);
-        return;
-      }
-
-      const [changes, states, touch_x, touch_y] = parts.map(Number);
-      
-      if (parts.some(p => isNaN(Number(p)))) {
-        console.warn('Invalid ess/touch_region_status data:', { changes, states, touch_x, touch_y, value });
-        return;
-      }
-      
-      if (!dserv.state.touchWindowStatusMask) {
-        dserv.state.touchWindowStatusMask = 0;
-      }
-      
-      const previousMask = dserv.state.touchWindowStatusMask;
-      dserv.state.touchWindowStatusMask = states;
-      
-      if (!dserv.state.touchWindows) {
-        dserv.state.touchWindows = Array(8).fill(null).map((_, i) => ({
-          id: i,
-          active: false,
-          state: 0,
-          type: 'rectangle',
-          center: { x: 0, y: 0 },
-          centerRaw: { x: 400, y: 320 },
-          size: { width: 2, height: 2 },
-          sizeRaw: { width: 100, height: 100 }
-        }))
-      }
-
-      for (let i = 0; i < 8; i++) {
-        dserv.state.touchWindows[i].state = ((states & (1 << i)) !== 0) && dserv.state.touchWindows[i].active;
-      }
-      
-      const anyTouchWindowsActive = dserv.state.touchWindows.some(window => window.active);
-      const anyTouchesInWindows = states !== 0;
-      
-      if (!anyTouchWindowsActive || !anyTouchesInWindows) {
-        if (touchClearTimeout.value) {
-          clearTimeout(touchClearTimeout.value);
-        }
-        
-        touchClearTimeout.value = setTimeout(() => {
-          showTouchPosition.value = false;
-          touchPosition.value = { x: 0, y: 0 };
-          touchClearTimeout.value = null;
-        }, TOUCH_CLEAR_DELAY);
-      } else {
-        if (touchClearTimeout.value) {
-          clearTimeout(touchClearTimeout.value);
-          touchClearTimeout.value = null;
-        }
-        showTouchPosition.value = true;
-      }
-      
-      if (touch_x !== undefined && touch_y !== undefined && !isNaN(touch_x) && !isNaN(touch_y)) {
-        touchPosition.value = { x: touch_x, y: touch_y };
-        if (anyTouchesInWindows) {
-          showTouchPosition.value = true;
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error handling touch window status:', error, data);
-  }
-}
-
-// Screen dimension handlers
-function handleScreenDimensions(data) {
-  const value = data.value || data.data
-  
-  switch (data.name) {
-    case 'ess/screen_w':
-      if (!dserv.state.screenWidth) dserv.state.screenWidth = 800;
-      dserv.state.screenWidth = parseInt(value, 10);
-      break;
-    case 'ess/screen_h':
-      if (!dserv.state.screenHeight) dserv.state.screenHeight = 600;
-      dserv.state.screenHeight = parseInt(value, 10);
-      break;
-    case 'ess/screen_halfx':
-      if (!dserv.state.screenHalfX) dserv.state.screenHalfX = 10.0;
-      dserv.state.screenHalfX = parseFloat(value);
-      break;
-    case 'ess/screen_halfy':
-      if (!dserv.state.screenHalfY) dserv.state.screenHalfY = 7.5;
-      dserv.state.screenHalfY = parseFloat(value);
-      break;
-  }
 }
 
 // Component lifecycle
@@ -1118,18 +1056,18 @@ onMounted(() => {
 
       // Listen for eye events
       dserv.on('datapoint:ess/em_pos', handleEyePosition, 'EyeTouchVisualizer')
-      
+
       // Listen for touch events
       dserv.on('datapoint:mtouch/touchvals', handleTouchPosition, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/touch_region_setting', handleTouchWindowSetting, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/touch_region_status', handleTouchWindowStatus, 'EyeTouchVisualizer')
-      
+
       // Listen for screen dimension events
       dserv.on('datapoint:ess/screen_w', handleScreenDimensions, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/screen_h', handleScreenDimensions, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/screen_halfx', handleScreenDimensions, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/screen_halfy', handleScreenDimensions, 'EyeTouchVisualizer')
-      
+
       dserv.on('connection', (data) => {
         connected.value = data.connected
       }, 'EyeTouchVisualizer')
@@ -1156,41 +1094,6 @@ onMounted(() => {
 
       // Initialize virtual eye at center
       updateVirtualEyePosition(0, 0)
-
-      // FIX: Register with script execution service - make sure this happens AFTER canvas is ready
-      console.log('EyeTouchVisualizer: Registering canvas with script service')
-      console.log('Canvas context available:', !!ctx)
-      console.log('Canvas size:', canvasSize.value)
-      
-      const scriptCleanup = registerCanvas('eyeTouch', ctx, {
-        width: canvasSize.value.width,
-        height: canvasSize.value.height,
-        degreesHorizontal: visualRange.horizontal,
-        degreesVertical: visualRange.vertical,
-        type: 'eyeTracking'
-      })
-
-      // Store cleanup function properly
-      window.eyeTouchScriptCleanup = scriptCleanup
-
-    // FORCE global service availability for debugging
-    const { service } = useScriptExecution()
-    window.scriptExecutionService = service
-    console.log('ScriptTestCanvas: Forced global service availability:', !!window.scriptExecutionService)
-    
-    // Add a simple test function
-    window.quickEyeTouchTest = () => {
-      console.log('Quick eyeTouch test from ScriptTestCanvas...')
-      if (service && service.canvasRegistry.has('eyeTouch')) {
-        service.executeScript(`
-          draw.drawCircle(0, 0, 15, { fillColor: '#ff0000' });
-          draw.drawText(0, -3, 'QUICK TEST', { fontSize: 12, color: '#ffffff' });
-        `, 'quickTest', 'eyeTouch')
-        console.log('Quick test executed - check EyeTouch visualizer!')
-      } else {
-        console.error('EyeTouch canvas not available')
-      }
-    }
     }
   })
 
@@ -1199,7 +1102,6 @@ onMounted(() => {
   document.addEventListener('mouseup', handleMouseUp)
 })
 
-// Also fix the onUnmounted to clean up properly:
 onUnmounted(() => {
   // Stop animation first
   stopAnimation()
@@ -1221,12 +1123,6 @@ onUnmounted(() => {
 
   // Clean up dserv
   if (cleanupDserv) cleanupDserv()
-
-  // FIX: Clean up script registration properly
-  if (window.eyeTouchScriptCleanup) {
-    window.eyeTouchScriptCleanup()
-    window.eyeTouchScriptCleanup = null
-  }
 
   // Clear canvas state
   canvasReady.value = false

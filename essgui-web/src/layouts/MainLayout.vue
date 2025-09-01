@@ -185,7 +185,7 @@
 
                 <a-tab-pane key="console" tab="Console" style="height: 100%; overflow: hidden;">
                   <div style="height: 100%; overflow: hidden;">
-                    <ess-console />
+                    <simple-text-console />
                   </div>
                 </a-tab-pane>
 
@@ -295,7 +295,7 @@ import StateSystemDiagram from '../components/StateSystemDiagram.vue'
 import EventTracker from '../components/EventTracker.vue'
 import EyeTouchVisualizer from '../components/EyeTouchVisualizer.vue'
 import SystemStatus from '../components/SystemStatus.vue'
-import EssConsole from '../components/EssConsole.vue'
+import SimpleTextConsole from '../components/SimpleTextConsole.vue'
 import DevelopmentWorkspace from '../components/DevelopmentWorkspace.vue'
 
 // Import dserv for system health monitoring
