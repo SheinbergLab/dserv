@@ -4,17 +4,17 @@
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/fl_draw.H>
-#include <FL/Fl_Box.H>
+#include <FL/Fl_Group.H>
 
 #include <iostream>
 #include <vector>
-#include <sstream>
 #include <string>
 #include <cmath>
+#include <jansson.h>
 
-class CGWin : public Fl_Box {
+class CGWin : public Fl_Group {
 private:
-    std::string m_lastCommands;
+    std::string m_lastJsonData;
     float m_currentPosX = 0;
     float m_currentPosY = 0;
     int m_currentColor = 0;
@@ -29,16 +29,103 @@ private:
     float m_windowLLX = 0, m_windowLLY = 0;
     float m_windowURX = 640, m_windowURY = 480;
     float m_scaleX = 1.0, m_scaleY = 1.0;
-
+	json_t *m_cachedCommands = nullptr;  // Cache parsed commands
+	
 public:
-    CGWin(int X, int Y, int W, int H, const char*L=0) : Fl_Box(X,Y,W,H,L) {
-        // Initialize with white background
+    CGWin(int X, int Y, int W, int H, const char*L=0) : Fl_Group(X,Y,W,H,L) {
         color(FL_WHITE);
+        end();  // Important for Fl_Group
     }
 
-    void processDrawingCommands(const std::string& commands) {
-        m_lastCommands = commands;
-        redraw();
+   void dumpCachedCommands() const {
+        if (!m_cachedCommands) {
+            std::cout << "No cached commands to dump" << std::endl;
+            return;
+        }
+        
+        std::cout << "=== DUMPING CACHED COMMANDS ===" << std::endl;
+        std::cout << "Total commands: " << json_array_size(m_cachedCommands) << std::endl;
+        std::cout << "Widget size: " << w() << "x" << h() << std::endl;
+        std::cout << "Window bounds: (" << m_windowLLX << "," << m_windowLLY << ") to (" 
+                  << m_windowURX << "," << m_windowURY << ")" << std::endl;
+        std::cout << "Scale factors: " << m_scaleX << "x, " << m_scaleY << "y" << std::endl;
+        std::cout << "Background color index: " << m_backgroundColor << std::endl;
+        std::cout << std::endl;
+        
+        size_t index;
+        json_t *command;
+        
+        json_array_foreach(m_cachedCommands, index, command) {
+            json_t *cmd_obj = json_object_get(command, "cmd");
+            json_t *args_obj = json_object_get(command, "args");
+            
+            if (json_is_string(cmd_obj) && json_is_array(args_obj)) {
+                const char *cmd = json_string_value(cmd_obj);
+                std::cout << "[" << index << "] " << cmd << "(";
+                
+                // Print arguments with types
+                for (size_t i = 0; i < json_array_size(args_obj); i++) {
+                    json_t *arg = json_array_get(args_obj, i);
+                    if (json_is_string(arg)) {
+                        std::cout << "\"" << json_string_value(arg) << "\"";
+                    } else if (json_is_real(arg)) {
+                        std::cout << json_real_value(arg);
+                    } else if (json_is_integer(arg)) {
+                        std::cout << json_integer_value(arg);
+                    } else {
+                        std::cout << "unknown_type";
+                    }
+                    if (i < json_array_size(args_obj) - 1) std::cout << ", ";
+                }
+                std::cout << ")";
+                
+                // Add coordinate transformation preview for drawing commands
+                if (strcmp(cmd, "line") == 0 && json_array_size(args_obj) >= 4) {
+                    float x1 = transformX(json_number_value(json_array_get(args_obj, 0)));
+                    float y1 = transformY(json_number_value(json_array_get(args_obj, 1)));
+                    float x2 = transformX(json_number_value(json_array_get(args_obj, 2)));
+                    float y2 = transformY(json_number_value(json_array_get(args_obj, 3)));
+                    std::cout << " -> screen coords: (" << x1 << "," << y1 << ") to (" << x2 << "," << y2 << ")";
+                }
+                else if (strcmp(cmd, "moveto") == 0 && json_array_size(args_obj) >= 2) {
+                    float x = transformX(json_number_value(json_array_get(args_obj, 0)));
+                    float y = transformY(json_number_value(json_array_get(args_obj, 1)));
+                    std::cout << " -> screen coords: (" << x << "," << y << ")";
+                }
+                
+                std::cout << std::endl;
+            } else {
+                std::cout << "[" << index << "] MALFORMED COMMAND" << std::endl;
+            }
+        }
+        std::cout << "=== END DUMP ===" << std::endl;
+    }
+
+
+    void processGraphicsData(const std::string& jsonData) {
+        m_lastJsonData = jsonData;
+        
+        // Free previous cached commands
+        if (m_cachedCommands) {
+            json_decref(m_cachedCommands);
+        }
+        
+        json_error_t error;
+        json_t *root = json_loads(jsonData.c_str(), 0, &error);
+        
+        if (!root) {
+            std::cerr << "JSON parse error: " << error.text << std::endl;
+            return;
+        }
+        
+        // Cache the commands for drawing
+        json_t *commands = json_object_get(root, "commands");
+        if (json_is_array(commands)) {
+            m_cachedCommands = json_incref(commands);  // Keep reference
+        }
+        
+        json_decref(root);
+        redraw();  // Trigger FLTK redraw
     }
 
     virtual void draw() FL_OVERRIDE {
@@ -46,34 +133,50 @@ public:
         fl_color(m_backgroundColor);
         fl_rectf(x(), y(), w(), h());
         
-        if (!m_lastCommands.empty()) {
-            executeCommands(m_lastCommands);
+        if (m_cachedCommands) {
+            //dumpCachedCommands();
+        }
+        
+        // Now execute drawing commands in proper FLTK drawing context
+        if (m_cachedCommands) {
+            executeJsonCommands(m_cachedCommands);
+        }
+        
+        // Draw any child widgets
+        Fl_Group::draw();
+    }
+    
+     ~CGWin() {
+        if (m_cachedCommands) {
+            json_decref(m_cachedCommands);
         }
     }
 
 private:
-    void executeCommands(const std::string& commands) {
-        std::istringstream stream(commands);
-        std::string line;
+    void executeJsonCommands(json_t *commands) {
+        size_t index;
+        json_t *command;
         
-        while (std::getline(stream, line)) {
-            if (line.empty() || line[0] == '#') continue;
-            
-            std::vector<std::string> parts = splitString(line, '\t');
-            executeCommand(parts);
+        json_array_foreach(commands, index, command) {
+            executeJsonCommand(command);
         }
     }
 
-    void executeCommand(const std::vector<std::string>& parts) {
-        if (parts.empty()) return;
+    void executeJsonCommand(json_t *command) {
+        json_t *cmd_obj = json_object_get(command, "cmd");
+        json_t *args_obj = json_object_get(command, "args");
         
-        std::string cmd = parts[0];
+        if (!json_is_string(cmd_obj) || !json_is_array(args_obj)) {
+            return;
+        }
         
-        if (cmd == "setwindow" && parts.size() >= 5) {
-            m_windowLLX = std::stof(parts[1]);
-            m_windowLLY = std::stof(parts[2]);
-            m_windowURX = std::stof(parts[3]);
-            m_windowURY = std::stof(parts[4]);
+        const char *cmd = json_string_value(cmd_obj);
+        
+        if (strcmp(cmd, "setwindow") == 0 && json_array_size(args_obj) >= 4) {
+            m_windowLLX = json_number_value(json_array_get(args_obj, 0));
+            m_windowLLY = json_number_value(json_array_get(args_obj, 1));
+            m_windowURX = json_number_value(json_array_get(args_obj, 2));
+            m_windowURY = json_number_value(json_array_get(args_obj, 3));
             
             // Calculate scaling
             float sourceWidth = m_windowURX - m_windowLLX;
@@ -83,143 +186,110 @@ private:
                 m_scaleY = h() / sourceHeight;
             }
         }
-        else if (cmd == "setcolor" && parts.size() >= 2) {
-            m_currentColor = std::stoi(parts[1]);
+        else if (strcmp(cmd, "setcolor") == 0 && json_array_size(args_obj) >= 1) {
+            m_currentColor = json_integer_value(json_array_get(args_obj, 0));
             fl_color(cgraphColorToFL(m_currentColor));
         }
-        else if (cmd == "setbackground" && parts.size() >= 2) {
-            m_backgroundColor = cgraphColorToFL(std::stoi(parts[1]));
+        else if (strcmp(cmd, "setbackground") == 0 && json_array_size(args_obj) >= 1) {
+            m_backgroundColor = cgraphColorToFL(json_integer_value(json_array_get(args_obj, 0)));
         }
-        else if (cmd == "setfont" && parts.size() >= 3) {
-            m_currentFont = parts[1];
-            m_currentFontSize = static_cast<int>(std::stof(parts[2]) * std::min(m_scaleX, m_scaleY));
+        else if (strcmp(cmd, "setfont") == 0 && json_array_size(args_obj) >= 2) {
+            const char *fontName = json_string_value(json_array_get(args_obj, 0));
+            if (fontName) {
+                m_currentFont = fontName;
+            }
+            m_currentFontSize = static_cast<int>(json_number_value(json_array_get(args_obj, 1)) * std::min(m_scaleX, m_scaleY));
             fl_font(getFLFont(m_currentFont), m_currentFontSize);
         }
-        else if (cmd == "setjust" && parts.size() >= 2) {
-            m_textJustification = std::stoi(parts[1]);
+        else if (strcmp(cmd, "setjust") == 0 && json_array_size(args_obj) >= 1) {
+            m_textJustification = json_integer_value(json_array_get(args_obj, 0));
         }
-        else if (cmd == "setorientation" && parts.size() >= 2) {
-            m_textOrientation = std::stoi(parts[1]);
+        else if (strcmp(cmd, "setorientation") == 0 && json_array_size(args_obj) >= 1) {
+            m_textOrientation = json_integer_value(json_array_get(args_obj, 0));
         }
-        else if (cmd == "setlwidth" && parts.size() >= 2) {
-            m_lineWidth = std::max(1, std::stoi(parts[1]) / 100);
+        else if (strcmp(cmd, "setlwidth") == 0 && json_array_size(args_obj) >= 1) {
+            m_lineWidth = std::max(1, static_cast<int>(json_integer_value(json_array_get(args_obj, 0))) / 100);
             fl_line_style(FL_SOLID, m_lineWidth);
         }
-        else if (cmd == "gsave") {
+        else if (strcmp(cmd, "gsave") == 0) {
             fl_push_matrix();
         }
-        else if (cmd == "grestore") {
+        else if (strcmp(cmd, "grestore") == 0) {
             fl_pop_matrix();
             fl_color(cgraphColorToFL(m_currentColor));
             fl_font(getFLFont(m_currentFont), m_currentFontSize);
             fl_line_style(FL_SOLID, m_lineWidth);
         }
-        else if (cmd == "setclipregion" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 4) {
-                float x1 = transformX(std::stof(coords[0]));
-                float y1 = transformY(std::stof(coords[1]));
-                float x2 = transformX(std::stof(coords[2]));
-                float y2 = transformY(std::stof(coords[3]));
-                
-                fl_push_clip(static_cast<int>(std::min(x1, x2)), 
-                           static_cast<int>(std::min(y1, y2)),
-                           static_cast<int>(std::abs(x2 - x1)), 
-                           static_cast<int>(std::abs(y2 - y1)));
-            }
+        else if (strcmp(cmd, "circle") == 0 && json_array_size(args_obj) >= 3) {
+            float cx = transformX(json_number_value(json_array_get(args_obj, 0)));
+            float cy = transformY(json_number_value(json_array_get(args_obj, 1)));
+            float radius = transformWidth(json_number_value(json_array_get(args_obj, 2)) / 2);
+            
+            fl_arc(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
         }
-        else if (cmd == "circle" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 3) {
-                float cx = transformX(std::stof(coords[0]));
-                float cy = transformY(std::stof(coords[1]));
-                float radius = transformWidth(std::stof(coords[2]) / 2);
-                
-                fl_arc(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
-            }
+        else if (strcmp(cmd, "fcircle") == 0 && json_array_size(args_obj) >= 3) {
+            float cx = transformX(json_number_value(json_array_get(args_obj, 0)));
+            float cy = transformY(json_number_value(json_array_get(args_obj, 1)));
+            float radius = transformWidth(json_number_value(json_array_get(args_obj, 2)) / 2);
+            
+            fl_pie(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
         }
-        else if (cmd == "fcircle" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 3) {
-                float cx = transformX(std::stof(coords[0]));
-                float cy = transformY(std::stof(coords[1]));
-                float radius = transformWidth(std::stof(coords[2]) / 2);
-                
-                fl_pie(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
-            }
+        else if (strcmp(cmd, "line") == 0 && json_array_size(args_obj) >= 4) {
+            float x1 = transformX(json_number_value(json_array_get(args_obj, 0)));
+            float y1 = transformY(json_number_value(json_array_get(args_obj, 1)));
+            float x2 = transformX(json_number_value(json_array_get(args_obj, 2)));
+            float y2 = transformY(json_number_value(json_array_get(args_obj, 3)));
+            
+            fl_line(x1, y1, x2, y2);
         }
-        else if (cmd == "line" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 4) {
-                float x1 = transformX(std::stof(coords[0]));
-                float y1 = transformY(std::stof(coords[1]));
-                float x2 = transformX(std::stof(coords[2]));
-                float y2 = transformY(std::stof(coords[3]));
-                
-                fl_line(x1, y1, x2, y2);
-            }
+        else if (strcmp(cmd, "moveto") == 0 && json_array_size(args_obj) >= 2) {
+            m_currentPosX = json_number_value(json_array_get(args_obj, 0));
+            m_currentPosY = json_number_value(json_array_get(args_obj, 1));
         }
-        else if (cmd == "moveto" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 2) {
-                m_currentPosX = std::stof(coords[0]);
-                m_currentPosY = std::stof(coords[1]);
-            }
+        else if (strcmp(cmd, "lineto") == 0 && json_array_size(args_obj) >= 2) {
+            float x1 = transformX(m_currentPosX);
+            float y1 = transformY(m_currentPosY);
+            float x2 = transformX(json_number_value(json_array_get(args_obj, 0)));
+            float y2 = transformY(json_number_value(json_array_get(args_obj, 1)));
+            
+            fl_line(x1, y1, x2, y2);
+            m_currentPosX = json_number_value(json_array_get(args_obj, 0));
+            m_currentPosY = json_number_value(json_array_get(args_obj, 1));
         }
-        else if (cmd == "lineto" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 2) {
-                float x1 = transformX(m_currentPosX);
-                float y1 = transformY(m_currentPosY);
-                float x2 = transformX(std::stof(coords[0]));
-                float y2 = transformY(std::stof(coords[1]));
-                
-                fl_line(x1, y1, x2, y2);
-                m_currentPosX = std::stof(coords[0]);
-                m_currentPosY = std::stof(coords[1]);
-            }
-        }
-        else if (cmd == "filledrect" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 4) {
-                float x1 = transformX(std::stof(coords[0]));
-                float y1 = transformY(std::stof(coords[1]));
-                float x2 = transformX(std::stof(coords[2]));
-                float y2 = transformY(std::stof(coords[3]));
-                
-                fl_rectf(std::min(x1, x2), std::min(y1, y2), 
-                        std::abs(x2 - x1), std::abs(y2 - y1));
-            }
-        }
-        else if (cmd == "poly" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 6 && coords.size() % 2 == 0) {
-                fl_begin_line();
-                for (size_t i = 0; i < coords.size(); i += 2) {
-                    float x = transformX(std::stof(coords[i]));
-                    float y = transformY(std::stof(coords[i + 1]));
+		else if (strcmp(cmd, "filledrect") == 0 && json_array_size(args_obj) >= 4) {  // Add this handler
+			float x1 = transformX(json_number_value(json_array_get(args_obj, 0)));
+			float y1 = transformY(json_number_value(json_array_get(args_obj, 1)));
+			float x2 = transformX(json_number_value(json_array_get(args_obj, 2)));
+			float y2 = transformY(json_number_value(json_array_get(args_obj, 3)));
+			
+			fl_rectf(std::min(x1, x2), std::min(y1, y2), 
+					std::abs(x2 - x1), std::abs(y2 - y1));
+		}
+        else if (strcmp(cmd, "poly") == 0) {
+            fl_begin_line();
+            for (size_t i = 0; i < json_array_size(args_obj); i += 2) {
+                if (i + 1 < json_array_size(args_obj)) {
+                    float x = transformX(json_number_value(json_array_get(args_obj, i)));
+                    float y = transformY(json_number_value(json_array_get(args_obj, i + 1)));
                     fl_vertex(x, y);
                 }
-                fl_end_line();
             }
+            fl_end_line();
         }
-        else if (cmd == "fpoly" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 6 && coords.size() % 2 == 0) {
-                fl_begin_polygon();
-                for (size_t i = 0; i < coords.size(); i += 2) {
-                    float x = transformX(std::stof(coords[i]));
-                    float y = transformY(std::stof(coords[i + 1]));
+        else if (strcmp(cmd, "fpoly") == 0) {
+            fl_begin_polygon();
+            for (size_t i = 0; i < json_array_size(args_obj); i += 2) {
+                if (i + 1 < json_array_size(args_obj)) {
+                    float x = transformX(json_number_value(json_array_get(args_obj, i)));
+                    float y = transformY(json_number_value(json_array_get(args_obj, i + 1)));
                     fl_vertex(x, y);
                 }
-                fl_end_polygon();
             }
+            fl_end_polygon();
         }
-        else if (cmd == "drawtext" && parts.size() >= 2) {
-            std::string text = parts[1];
-            if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-                text = text.substr(1, text.size() - 2);
-            }
+        else if (strcmp(cmd, "drawtext") == 0 && json_array_size(args_obj) >= 1) {
+            const char *text = json_string_value(json_array_get(args_obj, 0));
+            if (!text) return;
             
             float tx = transformX(m_currentPosX);
             float ty = transformY(m_currentPosY);
@@ -236,7 +306,7 @@ private:
             
             // Adjust position based on justification
             int textWidth = 0, textHeight = 0;
-            fl_measure(text.c_str(), textWidth, textHeight);
+            fl_measure(text, textWidth, textHeight);
             
             switch (m_textJustification) {
                 case -1: // left
@@ -248,82 +318,47 @@ private:
                     tx -= textWidth;
                     break;
             }
-            
-            fl_draw(text.c_str(), tx, ty);
+            fl_color(cgraphColorToFL(m_currentColor));
+            fl_draw(text, tx, ty);
             fl_pop_matrix();
         }
-        else if (cmd == "point" && parts.size() >= 2) {
-            auto coords = splitString(parts[1], ' ');
-            if (coords.size() >= 2) {
-                float x = transformX(std::stof(coords[0]));
-                float y = transformY(std::stof(coords[1]));
-                fl_point(x, y);
-            }
+        else if (strcmp(cmd, "point") == 0 && json_array_size(args_obj) >= 2) {
+            float x = transformX(json_number_value(json_array_get(args_obj, 0)));
+            float y = transformY(json_number_value(json_array_get(args_obj, 1)));
+            fl_point(x, y);
         }
     }
 
-    // Coordinate transformation helpers
-    float transformX(float x) const {
-        return x * m_scaleX;
-    }
-    
-    float transformY(float y) const {
-        return h() - (y * m_scaleY);  // Flip Y coordinate
-    }
-    
-    float transformWidth(float w) const {
-        return w * m_scaleX;
-    }
-    
-    float transformHeight(float h) const {
-        return h * m_scaleY;
-    }
+    // Transform helpers (same as before)
+    float transformX(float xx) const { return x() + (xx * m_scaleX); }
+    float transformY(float yy) const { return y() + (h() - (yy * m_scaleY)); }
+    float transformWidth(float w) const { return w * m_scaleX; }
+    float transformHeight(float h) const { return h * m_scaleY; }
 
-    // Utility methods
-    std::vector<std::string> splitString(const std::string& str, char delimiter) {
-        std::vector<std::string> tokens;
-        std::stringstream ss(str);
-        std::string token;
-        while (std::getline(ss, token, delimiter)) {
-            tokens.push_back(token);
-        }
-        return tokens;
-    }
-
-    Fl_Color cgraphColorToFL(int colorIndex) {
-        static const Fl_Color colors[] = {
-            FL_BLACK,      // 0
-            FL_BLUE,       // 1
-            FL_DARK_GREEN, // 2
-            FL_CYAN,       // 3
-            FL_RED,        // 4
-            FL_MAGENTA,    // 5
-            FL_DARK_YELLOW,// 6 - brown
-            FL_WHITE,      // 7
-            FL_GRAY,       // 8
-            FL_DARK_BLUE,  // 9 - light blue (approximation)
-            FL_GREEN,      // 10
-            FL_DARK_CYAN,  // 11 - light cyan (approximation)
-            FL_DARK_RED,   // 12 - deep pink (approximation)
-            FL_DARK_MAGENTA, // 13 - medium purple (approximation)
-            FL_YELLOW,     // 14
-        };
-
-        if (colorIndex >= 0 && colorIndex < 15) {
-            return colors[colorIndex];
-        }
-
-        // Handle RGB colors (packed format)
-        if (colorIndex > 18) {
-            unsigned int shifted = colorIndex >> 5;
-            int r = (shifted & 0xff0000) >> 16;
-            int g = (shifted & 0xff00) >> 8;
-            int b = (shifted & 0xff);
-            return fl_rgb_color(r, g, b);
-        }
-
-        return FL_BLACK;
-    }
+    // Color and font helpers (same as before)
+	Fl_Color cgraphColorToFL(int colorIndex) {
+		static const Fl_Color colors[] = {
+			FL_BLACK, FL_BLUE, FL_DARK_GREEN, FL_CYAN, FL_RED,
+			FL_MAGENTA, FL_DARK_YELLOW, FL_WHITE, FL_GRAY, FL_DARK_BLUE,
+			FL_GREEN, FL_DARK_CYAN, FL_DARK_RED, FL_DARK_MAGENTA, FL_YELLOW,
+		};
+	
+		if (colorIndex >= 0 && colorIndex < 15) {
+			return colors[colorIndex];
+		}
+	
+		// Handle RGB colors (these are the big numbers you're seeing)
+		if (colorIndex > 31) {  // Changed from 18 to catch more RGB colors
+			unsigned int shifted = colorIndex >> 5;
+			int r = (shifted & 0xff0000) >> 16;
+			int g = (shifted & 0xff00) >> 8;
+			int b = (shifted & 0xff);
+			
+			return fl_rgb_color(r, g, b);
+		}
+	
+		return FL_BLACK;
+	}
 
     Fl_Font getFLFont(const std::string& fontName) {
         if (fontName == "TIMES") return FL_TIMES;
@@ -331,7 +366,7 @@ private:
         if (fontName == "SCREEN") return FL_SCREEN;
         if (fontName == "SYMBOL") return FL_SYMBOL;
         if (fontName == "ZAPF") return FL_ZAPF_DINGBATS;
-        return FL_HELVETICA; // default
+        return FL_HELVETICA;
     }
 };
 

@@ -100,7 +100,7 @@ PerfTable *perftable_widget=(PerfTable *)0;
 
 PerfTable *general_perf_widget=(PerfTable *)0;
 
-Fl_Group *plot_widget=(Fl_Group *)0;
+CGWin *plot_widget=(CGWin *)0;
 
 VirtualEye *virtual_eye_widget=(VirtualEye *)0;
 
@@ -430,10 +430,18 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 } // PerfTable* general_perf_widget
                 o->end();
               } // Fl_Group* o
-              { plot_widget = new Fl_Group(763, 119, 488, 304, "Plot Window");
+              { plot_widget = new CGWin(763, 119, 488, 304, "Plot Window");
+                plot_widget->box(FL_NO_BOX);
+                plot_widget->color(FL_BACKGROUND_COLOR);
+                plot_widget->selection_color(FL_BACKGROUND_COLOR);
                 plot_widget->labeltype(FL_NO_LABEL);
+                plot_widget->labelfont(0);
+                plot_widget->labelsize(14);
+                plot_widget->labelcolor(FL_FOREGROUND_COLOR);
+                plot_widget->align(Fl_Align(FL_ALIGN_TOP));
+                plot_widget->when(FL_WHEN_RELEASE);
                 plot_widget->end();
-              } // Fl_Group* plot_widget
+              } // CGWin* plot_widget
               { Fl_Group* o = new Fl_Group(514, 407, 246, 298, "Input");
                 o->color(FL_BLACK);
                 o->vertical_label_margin(3);
@@ -742,8 +750,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       { Fl_Group* o = new Fl_Group(0, 709, 1280, 88);
         o->box(FL_FLAT_BOX);
         { output_term = new Fl_Console(0, 709, 1279, 88);
-          output_term->box(FL_DOWN_FRAME);
-          output_term->color(FL_BLACK);
+          output_term->box(FL_DOWN_BOX);
+          output_term->color(FL_FOREGROUND_COLOR);
           output_term->selection_color(FL_BACKGROUND_COLOR);
           output_term->labeltype(FL_NORMAL_LABEL);
           output_term->labelfont(0);

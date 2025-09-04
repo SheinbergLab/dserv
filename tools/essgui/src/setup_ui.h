@@ -56,7 +56,7 @@ extern Fl_Choice *sortby_1;
 extern Fl_Choice *sortby_2;
 extern PerfTable *perftable_widget;
 extern PerfTable *general_perf_widget;
-extern Fl_Group *plot_widget;
+extern CGWin *plot_widget;
 extern void virtual_eye_cb(VirtualEye*, void*);
 extern VirtualEye *virtual_eye_widget;
 extern void virtual_joystick_cb(VirtualJoystick*, void*);

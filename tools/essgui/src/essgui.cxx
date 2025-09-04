@@ -365,6 +365,7 @@ public:
     ds_sock->add_match(hoststr.c_str(), "trialdg");
     ds_sock->add_match(hoststr.c_str(), "openiris/settings");
     ds_sock->add_match(hoststr.c_str(), "print");
+    ds_sock->add_match(hoststr.c_str(), "graphics/*");
 
     /* touch variables to update interface (check spaces at EOL!) */
     std::string rstr;
@@ -2001,6 +2002,13 @@ void process_dpoint_cb(void *cbdata) {
     do_sortby();
   }
 
+  else if (!strcmp(json_string_value(name), "graphics/stimulus")) {
+    const char *gbuf_commands = json_string_value(data);
+    if (plot_widget) {
+      plot_widget->processGraphicsData(std::string(gbuf_commands));
+    }
+  }
+  
   else if (!strcmp(json_string_value(name), "print")) {
     const char *msg = json_string_value(data);
     output_term->append(msg);
