@@ -8,265 +8,331 @@
 
 #include <iostream>
 #include <vector>
-#include <algorithm>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-#include <df.h>
-#include <dynio.h>
-
-#include <cgraph.h>
-#include <gbuf.h>
-
-static const int NColorVals = 18;
-static float colorvals[] = {
-  /* R    G    B   Grey -- currently we use the grey approx. */
-  0.0, 0.0, 0.0, 0.0, 
-  0.1, 0.1, 0.4, 0.4,
-  0.0, 0.35, 0.0, 0.1,
-  0.0, 0.7, 0.7, 0.7,
-  0.8, 0.05, 0.0, 0.3,
-  0.8, 0.0, 0.8, 0.0,
-  0.0, 0.0, 0.0, 0.0,
-  0.0, 0.0, 0.0, 0.0,
-  0.7, 0.7, 0.7, 0.7,
-  0.3, 0.45, 0.9, 0.0,
-  0.05, 0.95, 0.1, 0.0,
-  0.0, 0.9, 0.9, 0.9,
-  0.0, 0.0, 0.0, 0.0,
-  0.0, 0.0, 0.0, 0.0,
-  0.94, 0.94, 0.05, 0.8,
-  0.0, 0.0, 0.0, 0.2,
-  1.0, 1.0, 1.0, 1.0,
-  0.96, 0.96, 0.96, 0.96,
-};
-
-class CGWin;
-static CGWin *currentCG;
+#include <sstream>
+#include <string>
+#include <cmath>
 
 class CGWin : public Fl_Box {
 private:
-  FRAME *frame;
-  GBUF_DATA *gbuf;
-  int linestyle;
-  int clipregion[4];
-  bool initialized;
+    std::string m_lastCommands;
+    float m_currentPosX = 0;
+    float m_currentPosY = 0;
+    int m_currentColor = 0;
+    int m_textOrientation = 0;
+    int m_textJustification = 0;  // -1=left, 0=center, 1=right
+    std::string m_currentFont = "Helvetica";
+    int m_currentFontSize = 10;
+    int m_lineWidth = 1;
+    Fl_Color m_backgroundColor = FL_WHITE;
+    
+    // Window bounds for coordinate transformation
+    float m_windowLLX = 0, m_windowLLY = 0;
+    float m_windowURX = 640, m_windowURY = 480;
+    float m_scaleX = 1.0, m_scaleY = 1.0;
+
 public:
+    CGWin(int X, int Y, int W, int H, const char*L=0) : Fl_Box(X,Y,W,H,L) {
+        // Initialize with white background
+        color(FL_WHITE);
+    }
 
-  virtual void draw() FL_OVERRIDE {
+    void processDrawingCommands(const std::string& commands) {
+        m_lastCommands = commands;
+        redraw();
+    }
 
-    /* we waited to intialized the gb buffer until the window is mapped */
-    if (!initialized) init();
+    virtual void draw() FL_OVERRIDE {
+        // Clear background
+        fl_color(m_backgroundColor);
+        fl_rectf(x(), y(), w(), h());
+        
+        if (!m_lastCommands.empty()) {
+            executeCommands(m_lastCommands);
+        }
+    }
+
+private:
+    void executeCommands(const std::string& commands) {
+        std::istringstream stream(commands);
+        std::string line;
+        
+        while (std::getline(stream, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            
+            std::vector<std::string> parts = splitString(line, '\t');
+            executeCommand(parts);
+        }
+    }
+
+    void executeCommand(const std::vector<std::string>& parts) {
+        if (parts.empty()) return;
+        
+        std::string cmd = parts[0];
+        
+        if (cmd == "setwindow" && parts.size() >= 5) {
+            m_windowLLX = std::stof(parts[1]);
+            m_windowLLY = std::stof(parts[2]);
+            m_windowURX = std::stof(parts[3]);
+            m_windowURY = std::stof(parts[4]);
+            
+            // Calculate scaling
+            float sourceWidth = m_windowURX - m_windowLLX;
+            float sourceHeight = m_windowURY - m_windowLLY;
+            if (sourceWidth > 0 && sourceHeight > 0) {
+                m_scaleX = w() / sourceWidth;
+                m_scaleY = h() / sourceHeight;
+            }
+        }
+        else if (cmd == "setcolor" && parts.size() >= 2) {
+            m_currentColor = std::stoi(parts[1]);
+            fl_color(cgraphColorToFL(m_currentColor));
+        }
+        else if (cmd == "setbackground" && parts.size() >= 2) {
+            m_backgroundColor = cgraphColorToFL(std::stoi(parts[1]));
+        }
+        else if (cmd == "setfont" && parts.size() >= 3) {
+            m_currentFont = parts[1];
+            m_currentFontSize = static_cast<int>(std::stof(parts[2]) * std::min(m_scaleX, m_scaleY));
+            fl_font(getFLFont(m_currentFont), m_currentFontSize);
+        }
+        else if (cmd == "setjust" && parts.size() >= 2) {
+            m_textJustification = std::stoi(parts[1]);
+        }
+        else if (cmd == "setorientation" && parts.size() >= 2) {
+            m_textOrientation = std::stoi(parts[1]);
+        }
+        else if (cmd == "setlwidth" && parts.size() >= 2) {
+            m_lineWidth = std::max(1, std::stoi(parts[1]) / 100);
+            fl_line_style(FL_SOLID, m_lineWidth);
+        }
+        else if (cmd == "gsave") {
+            fl_push_matrix();
+        }
+        else if (cmd == "grestore") {
+            fl_pop_matrix();
+            fl_color(cgraphColorToFL(m_currentColor));
+            fl_font(getFLFont(m_currentFont), m_currentFontSize);
+            fl_line_style(FL_SOLID, m_lineWidth);
+        }
+        else if (cmd == "setclipregion" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 4) {
+                float x1 = transformX(std::stof(coords[0]));
+                float y1 = transformY(std::stof(coords[1]));
+                float x2 = transformX(std::stof(coords[2]));
+                float y2 = transformY(std::stof(coords[3]));
+                
+                fl_push_clip(static_cast<int>(std::min(x1, x2)), 
+                           static_cast<int>(std::min(y1, y2)),
+                           static_cast<int>(std::abs(x2 - x1)), 
+                           static_cast<int>(std::abs(y2 - y1)));
+            }
+        }
+        else if (cmd == "circle" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 3) {
+                float cx = transformX(std::stof(coords[0]));
+                float cy = transformY(std::stof(coords[1]));
+                float radius = transformWidth(std::stof(coords[2]) / 2);
+                
+                fl_arc(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
+            }
+        }
+        else if (cmd == "fcircle" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 3) {
+                float cx = transformX(std::stof(coords[0]));
+                float cy = transformY(std::stof(coords[1]));
+                float radius = transformWidth(std::stof(coords[2]) / 2);
+                
+                fl_pie(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
+            }
+        }
+        else if (cmd == "line" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 4) {
+                float x1 = transformX(std::stof(coords[0]));
+                float y1 = transformY(std::stof(coords[1]));
+                float x2 = transformX(std::stof(coords[2]));
+                float y2 = transformY(std::stof(coords[3]));
+                
+                fl_line(x1, y1, x2, y2);
+            }
+        }
+        else if (cmd == "moveto" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 2) {
+                m_currentPosX = std::stof(coords[0]);
+                m_currentPosY = std::stof(coords[1]);
+            }
+        }
+        else if (cmd == "lineto" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 2) {
+                float x1 = transformX(m_currentPosX);
+                float y1 = transformY(m_currentPosY);
+                float x2 = transformX(std::stof(coords[0]));
+                float y2 = transformY(std::stof(coords[1]));
+                
+                fl_line(x1, y1, x2, y2);
+                m_currentPosX = std::stof(coords[0]);
+                m_currentPosY = std::stof(coords[1]);
+            }
+        }
+        else if (cmd == "filledrect" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 4) {
+                float x1 = transformX(std::stof(coords[0]));
+                float y1 = transformY(std::stof(coords[1]));
+                float x2 = transformX(std::stof(coords[2]));
+                float y2 = transformY(std::stof(coords[3]));
+                
+                fl_rectf(std::min(x1, x2), std::min(y1, y2), 
+                        std::abs(x2 - x1), std::abs(y2 - y1));
+            }
+        }
+        else if (cmd == "poly" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 6 && coords.size() % 2 == 0) {
+                fl_begin_line();
+                for (size_t i = 0; i < coords.size(); i += 2) {
+                    float x = transformX(std::stof(coords[i]));
+                    float y = transformY(std::stof(coords[i + 1]));
+                    fl_vertex(x, y);
+                }
+                fl_end_line();
+            }
+        }
+        else if (cmd == "fpoly" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 6 && coords.size() % 2 == 0) {
+                fl_begin_polygon();
+                for (size_t i = 0; i < coords.size(); i += 2) {
+                    float x = transformX(std::stof(coords[i]));
+                    float y = transformY(std::stof(coords[i + 1]));
+                    fl_vertex(x, y);
+                }
+                fl_end_polygon();
+            }
+        }
+        else if (cmd == "drawtext" && parts.size() >= 2) {
+            std::string text = parts[1];
+            if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
+                text = text.substr(1, text.size() - 2);
+            }
+            
+            float tx = transformX(m_currentPosX);
+            float ty = transformY(m_currentPosY);
+            
+            // Handle text orientation and justification
+            fl_push_matrix();
+            
+            if (m_textOrientation != 0) {
+                fl_translate(tx, ty);
+                fl_rotate(-m_textOrientation * 90.0);
+                tx = 0;
+                ty = 0;
+            }
+            
+            // Adjust position based on justification
+            int textWidth = 0, textHeight = 0;
+            fl_measure(text.c_str(), textWidth, textHeight);
+            
+            switch (m_textJustification) {
+                case -1: // left
+                    break;
+                case 0:  // center
+                    tx -= textWidth / 2.0;
+                    break;
+                case 1:  // right
+                    tx -= textWidth;
+                    break;
+            }
+            
+            fl_draw(text.c_str(), tx, ty);
+            fl_pop_matrix();
+        }
+        else if (cmd == "point" && parts.size() >= 2) {
+            auto coords = splitString(parts[1], ' ');
+            if (coords.size() >= 2) {
+                float x = transformX(std::stof(coords[0]));
+                float y = transformY(std::stof(coords[1]));
+                fl_point(x, y);
+            }
+        }
+    }
+
+    // Coordinate transformation helpers
+    float transformX(float x) const {
+        return x * m_scaleX;
+    }
     
-    setresol (currentCG->w(), currentCG->h());
-    setfviewport(0,0,1,1);
-    setwindow(0, 0, currentCG->w()-1, currentCG->h()-1);
-    fl_color(FL_BLACK);
-    fl_rectf(currentCG->x(),currentCG->y(),currentCG->w(),currentCG->h());
-
-    gbPlaybackGevents();
-  }
-  
-  GBUF_DATA *getGbuf(void) { return gbuf; }
-  FRAME *getFrame(void) { return frame; }
-  
-  static int Clearwin(void) {
-    fl_color(FL_WHITE);// should be background color
-    fl_rectf(currentCG->x(), currentCG->y(), currentCG->w(), currentCG->h());
-    return 0;
-  }
-  
-  static int Line(float x0, float y0, float x1, float y1) 
-  {
-    fl_line(currentCG->x()+x0, currentCG->y()+currentCG->h()-y0,
-	    currentCG->x()+x1, currentCG->y()+currentCG->h()-y1);
-    return 0;
-  }
-
-  static int Point(float x, float y)
-  {
-    fl_point(currentCG->x()+x, currentCG->y()+y);
-    return 0;
-  }
-
-  static int Char(float x, float y, char *string)
-  {
-    FRAME *f = getframe();
-    y = f->ysres - y;
-    fl_draw(f->orientation*90, string, currentCG->x()+x, currentCG->y()+y);
-    return 0;
-  }
-
-  static int Text(float x, float y, char *string)
-  {
-    FRAME *f = getframe();
-    y = f->ysres - y;
-    int dx, dy, W, H;
-
-    fl_text_extents(string, dx, dy, W, H);  // get width and height of string
+    float transformY(float y) const {
+        return h() - (y * m_scaleY);  // Flip Y coordinate
+    }
     
-    float voff = 0, hoff = 0;
-    int ori;
+    float transformWidth(float w) const {
+        return w * m_scaleX;
+    }
     
-    ori = getframe()->orientation;
-    if (ori == 0 || ori == 2) {	/* horizontal */
-      switch (getframe()->just) {
-      case LEFT_JUST:     hoff = 0.0; break;
-      case RIGHT_JUST:    hoff = W; break;
-      case CENTER_JUST :  hoff = 0.5*W; break;
-      }
-      voff = (H*0.5);
+    float transformHeight(float h) const {
+        return h * m_scaleY;
     }
-    else {
-      switch (getframe()->just) {
-      case LEFT_JUST:     voff = 0*W; break;
-      case RIGHT_JUST:    voff = 1.*W; break;
-      case CENTER_JUST :  voff = .5*W; break;
-      }
-      hoff = -(H*0.5);
-    } 
-    
-    fl_draw(f->orientation*90, string, currentCG->x()+(x-hoff), currentCG->y()+(y+voff));
-    return 0;
-  }
-  
-  static int Setfont(char *fontname, float size)
-  {
-    Fl_Font font = FL_HELVETICA;
-    std::string fname(fontname);
-    if (fname == "SYMBOL")      font = FL_SYMBOL;
-    if (fname == "HELVETICA")   font = FL_HELVETICA;
-    if (fname == "TIMES")       font = FL_TIMES;
-    if (fname == "SYMBOL")      font = FL_SYMBOL;
-    if (fname == "ZAPF")        font = FL_ZAPF_DINGBATS;
-    if (fname == "SCREEN")      font = FL_SCREEN;
-    
-    //    currentCG->window()->make_current();
-    fl_font(font, size);
-    return 0;
-  }
 
-  static int Strwidth(char *str)
-  {
-    int wi, hi;
-    //    currentCG->window()->make_current();
-    fl_measure(str, wi, hi);       // returns pixel width/height of string in current font
-    return wi;
-  }
-
-  static int Strheight(char *str)
-  {
-    int wi, hi;
-    //    currentCG->window()->make_current();
-    fl_measure(str, wi, hi);       // returns pixel width/height of string in current font
-    return hi;
-  }
-  
-
-  static int Setcolor(int index)
-  {
-    int oldcolor = getcolor();
-    if (index < NColorVals) {
-      //      currentCG->window()->make_current();
-      fl_color((uchar) (colorvals[index*4+0]*255),
-	       (uchar) (colorvals[index*4+1]*255),
-	       (uchar) (colorvals[index*4+2]*255));
+    // Utility methods
+    std::vector<std::string> splitString(const std::string& str, char delimiter) {
+        std::vector<std::string> tokens;
+        std::stringstream ss(str);
+        std::string token;
+        while (std::getline(ss, token, delimiter)) {
+            tokens.push_back(token);
+        }
+        return tokens;
     }
-    else {
-      unsigned int shifted = index >> 5;	/* RGB colors are store in bits 6-30 */
-      uchar r, g, b;
-      r = (shifted & 0xff0000) >> 16;
-      g = (shifted & 0xff00) >> 8;
-      b = (shifted & 0xff);
-      //      currentCG->window()->make_current();
-      fl_color(r, g, b);
+
+    Fl_Color cgraphColorToFL(int colorIndex) {
+        static const Fl_Color colors[] = {
+            FL_BLACK,      // 0
+            FL_BLUE,       // 1
+            FL_DARK_GREEN, // 2
+            FL_CYAN,       // 3
+            FL_RED,        // 4
+            FL_MAGENTA,    // 5
+            FL_DARK_YELLOW,// 6 - brown
+            FL_WHITE,      // 7
+            FL_GRAY,       // 8
+            FL_DARK_BLUE,  // 9 - light blue (approximation)
+            FL_GREEN,      // 10
+            FL_DARK_CYAN,  // 11 - light cyan (approximation)
+            FL_DARK_RED,   // 12 - deep pink (approximation)
+            FL_DARK_MAGENTA, // 13 - medium purple (approximation)
+            FL_YELLOW,     // 14
+        };
+
+        if (colorIndex >= 0 && colorIndex < 15) {
+            return colors[colorIndex];
+        }
+
+        // Handle RGB colors (packed format)
+        if (colorIndex > 18) {
+            unsigned int shifted = colorIndex >> 5;
+            int r = (shifted & 0xff0000) >> 16;
+            int g = (shifted & 0xff00) >> 8;
+            int b = (shifted & 0xff);
+            return fl_rgb_color(r, g, b);
+        }
+
+        return FL_BLACK;
     }
-    return oldcolor;
-  }
 
-  static int FilledPolygon(float *verts, int nverts)
-  {
-    FRAME *f = getframe();
-
-    //    currentCG->window()->make_current();
-    if (nverts == 4) {
-      fl_polygon(currentCG->x()+verts[0], currentCG->y()+f->ysres-verts[1],
-		 currentCG->x()+verts[2], currentCG->y()+f->ysres-verts[3],
-		 currentCG->x()+verts[4], currentCG->y()+f->ysres-verts[5],
-		 currentCG->x()+verts[6], currentCG->y()+f->ysres-verts[7]);
-      return 0;
+    Fl_Font getFLFont(const std::string& fontName) {
+        if (fontName == "TIMES") return FL_TIMES;
+        if (fontName == "COURIER") return FL_COURIER;
+        if (fontName == "SCREEN") return FL_SCREEN;
+        if (fontName == "SYMBOL") return FL_SYMBOL;
+        if (fontName == "ZAPF") return FL_ZAPF_DINGBATS;
+        return FL_HELVETICA; // default
     }
-    if (nverts == 3) {
-      fl_polygon(currentCG->x()+verts[0], currentCG->y()+f->ysres-verts[1],
-		 currentCG->x()+verts[2], currentCG->y()+f->ysres-verts[3],
-		 currentCG->x()+verts[4], currentCG->y()+f->ysres-verts[5]);
-	return 0;
-    }
-    return 0;
-  }
-
-  static int Circle(float x, float y, float width, int filled)
-  {
-    //    currentCG->window()->make_current();
-    FRAME *f = getframe();
-
-    y = f->ysres-y;
-
-    if (!filled) {
-      fl_circle(currentCG->x()+x+width/2, currentCG->y()+y+width/2, width/2);
-    }
-    else {
-      fl_begin_polygon();
-      fl_arc(currentCG->x()+x+width/2, currentCG->y()+y+width/2, width/2, 0.0, 360.0);
-      fl_end_polygon();
-    }
-    return 0;
-  }
-
-  void init(void)
-  {
-    setresol(w(), h());
-    setwindow(0, 0, w()-1, h()-1);
-    setfviewport(0, 0, 1, 1) ;
-    setcolor(16);		// bright white
-    gbInitGevents();
-    initialized = true;
-  }
-  
-  CGWin(int X, int Y, int W, int H, const char*L=0) : Fl_Box(X,Y,W,H,L) {
-    currentCG = this;
-
-    frame = (FRAME *) calloc(1, sizeof(FRAME));
-    gbuf = (GBUF_DATA *) calloc(1, sizeof(GBUF_DATA));
-
-    gbDisableGevents();				  /* valid data */
-    gbInitGeventBuffer(gbuf);
-    gbSetGeventBuffer(gbuf);
-    gbEnableGevents();
-    
-    setline((LHANDLER) CGWin::Line);
-    setclearfunc((HANDLER) CGWin::Clearwin);
-    setpoint((PHANDLER) CGWin::Point);
-    setcolorfunc((COHANDLER) CGWin::Setcolor);
-    setchar((THANDLER) CGWin::Char);
-    strwidthfunc((SWHANDLER) CGWin::Strwidth);
-    strheightfunc((SHHANDLER) CGWin::Strheight);
-    settext((THANDLER) CGWin::Text);
-    setfontfunc((SFHANDLER) CGWin::Setfont);
-    setfilledpoly((FHANDLER) CGWin::FilledPolygon);
-    setcircfunc((CHANDLER) CGWin::Circle);
-
-    initialized = false;
-  }
-
-  ~CGWin()
-  {
-    if (gbuf) free(gbuf);
-    if (frame) free(frame);
-  }
 };
-
-
 
 #endif
