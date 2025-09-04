@@ -138,6 +138,8 @@ jobs:
       - name: Install cmake build tool and tcl9.0 dependency.
         run: |
           brew update
+          # Remove any existing cmake installation
+          brew uninstall cmake --ignore-dependencies || true
           brew install cmake tcl-tk@9
 
       - name: Check out our code
