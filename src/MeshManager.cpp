@@ -503,10 +503,6 @@ void MeshManager::setupUDP() {
         return;
     }
     
-    // Keep socket non-blocking for all platforms
-    int flags = fcntl(udpSocket, F_GETFL, 0);
-    fcntl(udpSocket, F_SETFL, flags | O_NONBLOCK);
-    
     // Enable broadcast
     int broadcast = 1;
     if (setsockopt(udpSocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
@@ -516,6 +512,17 @@ void MeshManager::setupUDP() {
     // Enable reuse
     int reuse = 1;
     setsockopt(udpSocket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    
+#ifdef SO_REUSEPORT
+    // ADD THIS SECTION - Required for macOS port sharing
+    if (setsockopt(udpSocket, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
+        std::cerr << "Warning: SO_REUSEPORT failed: " << strerror(errno) << std::endl;
+    }
+#endif
+    
+    // Set non-blocking AFTER socket options
+    int flags = fcntl(udpSocket, F_GETFL, 0);
+    fcntl(udpSocket, F_SETFL, flags | O_NONBLOCK);
     
     // Scan network interfaces ONCE at startup
     cachedBroadcastAddresses = scanNetworkBroadcastAddresses();
@@ -543,7 +550,6 @@ void MeshManager::setupUDP() {
         std::cout << std::endl;
     }
 }
-
 void MeshManager::setupHTTP() {
 
     httpSocket = socket(AF_INET, SOCK_STREAM, 0);
