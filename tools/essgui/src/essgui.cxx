@@ -29,6 +29,8 @@
 #include "Fl_DgTable.h"
 #include "Fl_PerfTable.h"
 
+#include "MeshDiscovery.h"
+
 #include "EyeTouchWin.hpp"
 
 #include "TclEditor.h"
@@ -140,7 +142,7 @@ private:
   std::unordered_map<std::string, std::vector<Fl_Widget *>> stim_params;
   std::unordered_map<std::string, Fl_Text_Buffer *> text_buffers;
   std::string current_prompt;
-  
+
 public:
   typedef enum {
     TERM_LOCAL, TERM_STIM, TERM_ESS, TERM_GIT, TERM_OPENIRIS, TERM_MSG
@@ -154,7 +156,8 @@ public:
   std::string host = std::string();
   void *drawable = nullptr;
   TerminalMode terminal_mode = TERM_LOCAL;
-  
+  MeshDiscovery *meshDiscovery;
+
 public:
   App (int argc, char *argv[]) {
     // set the global app pointer
@@ -174,6 +177,17 @@ public:
 
     ds_sock = new DservSocket();
     dsnet_thread = ds_sock->start_server();
+    
+    meshDiscovery = new MeshDiscovery();
+    
+    meshDiscovery->setDiscoveryCallback([this](const MeshDiscovery::PeerInfo& peer) {
+        output_term->append("Found: ");
+        output_term->append(peer.name.c_str());
+        output_term->append("\n");
+        output_term->redraw();
+        Fl::check();
+    });
+    
     
     win = setup_ui(argc, argv);
 
@@ -198,6 +212,7 @@ public:
 
   ~App() {
     delete ds_sock;
+    delete meshDiscovery;
     delete _interp;
   }
 
@@ -569,16 +584,21 @@ void file_suggest_cb(Fl_Button*, void*)
 }
 		  
 void host_cb(Fl_Tree*, void*) {
-  Fl_Tree_Item *item = host_widget->callback_item();
-  if ( item ) {
-    if (host_widget->callback_reason() == FL_TREE_REASON_DESELECTED) {
-      g_App->disconnect_from_host(item->label());
-      clear_widgets();
-    }
-    else if (host_widget->callback_reason() == FL_TREE_REASON_SELECTED) {
-      g_App->connect_to_host(item->label());
-      std::string system_name = get_system_name(item->label());
-    }
+    Fl_Tree_Item *item = host_widget->callback_item();
+    if (item) {
+        if (host_widget->callback_reason() == FL_TREE_REASON_DESELECTED) {
+            g_App->disconnect_from_host(item->label());
+            clear_widgets();
+        }
+        else if (host_widget->callback_reason() == FL_TREE_REASON_SELECTED) {
+            std::string selectedText = item->label();
+            
+            // Extract IP address from display text
+            std::string host = MeshDiscovery::extractIpFromDisplayText(selectedText);
+            
+            g_App->connect_to_host(host);
+            std::string system_name = get_system_name(host.c_str());
+        }
 #if 0  
     output_term->printf("TREE CALLBACK: label='%s' userdata=%ld reason=%s, changed=%d",
 			item->label(),
@@ -974,45 +994,46 @@ void select_host(const char *host)
   }
 }
 
-int refresh_hosts(int timeout = 500)
+int refresh_hosts(int timeout = 2000)
 {
-  int timeout_ms = 500;
-  const char *service = "_dserv._tcp";
-  
-  char buf[4096];
-  send_mdns_query_service((char *) service, buf, sizeof(buf), timeout_ms);
-
-  host_widget->clear();
-  host_widget->showroot(0);
-
-  /* no hosts found */
-  if (!strlen(buf)) return 0;
-  
-  /* parse hosts */
-  Tcl_Size argc;
-  char *string;
-  const char **argv;
-  if (Tcl_SplitList(g_App->interp(), buf, &argc, &argv) == TCL_OK) {
-    for (int i = 0; i < argc; i++) {
-      char host[32];
-      int in_addr, k;
-      for (int j = 0, k = 0, in_addr = 0; k < sizeof(host); j++) {
-	if (argv[i][j] == ' ') {
-	  if (in_addr) {
-	    host[k] = '\0';
-	    break;
-	  }
-	}
-	else {
-	  in_addr = 1;
-	  host[k++] = argv[i][j];
-	}
-      }
-      host_widget->add(host);
+    output_term->append("Starting mesh discovery...\n");
+    output_term->redraw();
+    Fl::check();
+    
+    // Discover peers
+    int result = g_App->meshDiscovery->discoverPeers(timeout);  // Assumes you made it public
+    
+    // Clear and rebuild host widget
+    host_widget->clear();
+    host_widget->showroot(0);
+    
+    // Add localhost if available
+    if (g_App->meshDiscovery->isLocalhostAvailable()) {
+        host_widget->add("localhost");
     }
-    Tcl_Free((char *) argv);
-  }
-  return 0;
+    
+    // Add discovered peers
+    auto displayTexts = g_App->meshDiscovery->getPeerDisplayTexts();
+    for (const auto& displayText : displayTexts) {
+        host_widget->add(displayText.c_str());
+    }
+    
+    // Count items
+    int itemCount = 0;
+    for (Fl_Tree_Item *item = host_widget->first(); item; item = host_widget->next(item)) {
+        itemCount++;
+    }
+    
+    if (itemCount > 0) {
+        output_term->append("Discovery complete: found ");
+        output_term->append(std::to_string(itemCount).c_str());
+        output_term->append(" system(s)\n");
+    } else {
+        output_term->append("No systems discovered\n");
+    }
+    
+    output_term->redraw();
+    return result;
 }
 
 void refresh_cb(Fl_Button *, void *)
