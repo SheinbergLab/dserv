@@ -398,6 +398,7 @@ public:
 				"ess/stim_script ess/param_settings "
 				"ess/state_table ess/params stimdg trialdg "
 				"ess/git/branches ess/git/branch "
+				"ess/viz_config "
 				"system/hostname system/os openiris/settings} "
 				"{ dservTouch $v }"),
 		    rstr);
