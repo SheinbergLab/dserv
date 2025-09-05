@@ -25,7 +25,7 @@ class TclFormatter {
 	// Handle comments
 	if (trimmed[0] === '#') {
 	    let commentIndent;
-	    
+
 	    if (inContinuation) {
 		// If we're in a continuation, comments should align with the continuation
 		commentIndent = this.calculateContinuationIndent(continuationContext, indentSize);
@@ -33,9 +33,9 @@ class TclFormatter {
 		// Normal comment - just use the current block indent level
 		commentIndent = indentLevel * indentSize;
 	    }
-	    
+
 	    formattedLines.push(' '.repeat(commentIndent) + trimmed);
-	    
+
 	    // Comments don't affect continuation state unless they end with backslash
 	    const endsWithBackslash = trimmed.endsWith('\\');
 	    if (!inContinuation && endsWithBackslash) {
@@ -47,26 +47,26 @@ class TclFormatter {
 	    }
 	    continue;
 	}
-	
+
 	// Check for line continuation
 	const endsWithBackslash = trimmed.endsWith('\\');
-	
+
 	// Count braces and brackets in current line
 	const openBraces = this.countUnquotedChar(trimmed, '{');
 	const closeBraces = this.countUnquotedChar(trimmed, '}');
-	
+
 	// Calculate current line indent
 	let currentIndent;
-	
+
 	if (!inContinuation) {
 	    // Normal line - convert indent LEVEL to SPACES
 	    currentIndent = indentLevel * indentSize;  // ← Convert to spaces
-	    
+
 	    // Adjust for closing braces at start of line
 	    if (trimmed[0] === '}') {
 		currentIndent = Math.max(0, (indentLevel - 1) * indentSize);  // ← Convert to spaces
 	    }
-	    
+
 	    // Handle special keywords
 	    if (this.startsWithKeyword(trimmed, ['else', 'elseif', 'catch'])) {
 		currentIndent = Math.max(0, (indentLevel - 1) * indentSize);  // ← Convert to spaces
@@ -75,7 +75,7 @@ class TclFormatter {
 	    // Continuation line - this already returns SPACES
 	    currentIndent = this.calculateContinuationIndent(continuationContext, indentSize, trimmed);
 	}
-	
+
       // Format the line with current indentation
       const formattedLine = this.formatLine(trimmed, currentIndent);
       formattedLines.push(formattedLine);
@@ -125,7 +125,7 @@ class TclFormatter {
     // Analyze the first line to determine alignment strategy
     context.alignmentColumn = this.findAlignmentColumn(firstLine);
     context.bracketDepth = this.countOpeningBrackets(firstLine) - this.countClosingBrackets(firstLine);
-    
+
     return context;
   }
 
@@ -134,11 +134,11 @@ class TclFormatter {
    */
   static updateContinuationContext(context, line) {
     if (!context) return;
-    
+
     const openBrackets = this.countOpeningBrackets(line);
     const closeBrackets = this.countClosingBrackets(line);
     context.bracketDepth += (openBrackets - closeBrackets);
-    
+
     // Ensure bracket depth doesn't go negative
     if (context.bracketDepth < 0) context.bracketDepth = 0;
   }
@@ -148,14 +148,14 @@ class TclFormatter {
    */
 static calculateContinuationIndent(context, indentSize, currentLine = '') {
   if (!context) return indentSize;
-  
+
   // If we found a specific alignment point, use it with minimal extra indentation
   if (context.alignmentColumn !== null) {
     // Use simple alignment - just align to the position after the opening bracket
     const result = context.alignmentColumn;
     return result;
   }
-  
+
   // Fallback: base + continuation + bracket nesting
   const baseIndent = context.baseIndentLevel * indentSize;
   const continuationIndent = indentSize;
@@ -170,27 +170,27 @@ static calculateContinuationIndent(context, indentSize, currentLine = '') {
 static findAlignmentColumn(line) {
   const trimmed = line.trim();
   const leadingSpaces = line.length - line.trimStart().length;
-  
+
   // Pattern: dl_local var [command \
   const dlLocalMatch = trimmed.match(/^dl_local\s+\S+\s+\[/);
   if (dlLocalMatch) {
     const bracketPos = trimmed.indexOf('[');
     return leadingSpaces + bracketPos + 1;
   }
-  
+
   // Pattern: set var [command \
   const setMatch = trimmed.match(/^set\s+\S+\s+\[/);
   if (setMatch) {
     const bracketPos = trimmed.indexOf('[');
     return leadingSpaces + bracketPos + 1;
   }
-  
+
   // General pattern: look for opening bracket
   const bracketIndex = trimmed.indexOf('[');
   if (bracketIndex !== -1) {
     return leadingSpaces + bracketIndex + 1;
   }
-  
+
   return null;
 }
 
@@ -238,11 +238,11 @@ static findAlignmentColumn(line) {
 
     // Calculate indent for the current line
     const currentTrimmed = this.trim(lines[currentLineIndex]);
-    
+
     if (inContinuation) {
       return this.calculateContinuationIndent(continuationContext, indentSize, currentTrimmed);
     }
-    
+
     let currentIndent = indentLevel;
 
     if (currentTrimmed.length > 0) {
@@ -376,6 +376,10 @@ static findAlignmentColumn(line) {
 static formatLine(line, indentSpaces) {
   // indentSpaces is already the total number of spaces needed
   const indent = ' '.repeat(Math.max(0, indentSpaces));
+
+  // Check if line ends with continuation before processing
+  const endsWithContinuation = line.trimEnd().endsWith('\\');
+
   let normalized = '';
   let inQuotes = false;
   let escaped = false;
@@ -419,9 +423,19 @@ static formatLine(line, indentSpaces) {
     }
   }
 
-  normalized = normalized.replace(/\s+$/, '');
+  // Remove trailing whitespace BUT preserve line continuation
+  if (endsWithContinuation) {
+    // Remove trailing whitespace except for the final backslash
+    normalized = normalized.replace(/\s+\\$/, ' \\');
+    // Handle case where there might be multiple spaces before backslash
+    normalized = normalized.replace(/\s{2,}\\$/, ' \\');
+  } else {
+    // Normal case - remove all trailing whitespace
+    normalized = normalized.replace(/\s+$/, '');
+  }
+
   return indent + normalized;
-}    
+}
 }
 
 export default TclFormatter;

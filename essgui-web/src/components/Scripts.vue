@@ -12,11 +12,11 @@
       <a-select-option v-for="script in scriptTabs" :key="script.name" :value="script.name">
         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
           <!-- SHORTENED LABELS -->
-          <span>{{ script.name === 'system' ? 'System' : 
-                   script.name === 'protocol' ? 'Protocol' : 
-                   script.name === 'loaders' ? 'Loaders' : 
-                   script.name === 'variants' ? 'Variants' : 
-                   script.name === 'stim' ? 'Stim' : 
+          <span>{{ script.name === 'system' ? 'System' :
+                   script.name === 'protocol' ? 'Protocol' :
+                   script.name === 'loaders' ? 'Loaders' :
+                   script.name === 'variants' ? 'Variants' :
+                   script.name === 'stim' ? 'Stim' :
                    script.name === 'lib' ? 'Libs' : script.label }}</span>
           <div style="display: flex; align-items: center; gap: 4px;">
             <!-- Modified indicator for regular scripts -->
@@ -33,12 +33,12 @@
         </div>
       </a-select-option>
     </a-select>
-    
+
     <!-- Lib file selector (only show when lib tab active) - MADE SMALLER -->
     <div v-if="isLibMode" style="display: flex; align-items: center; gap: 6px;">
-      <a-select 
-        v-model:value="selectedLibFile" 
-        size="small" 
+      <a-select
+        v-model:value="selectedLibFile"
+        size="small"
         style="width: 140px;"
         placeholder="Select .tm file"
         @change="loadLibFile"
@@ -55,12 +55,12 @@
           </div>
         </a-select-option>
       </a-select>
-      
+
       <a-tooltip title="Refresh lib files">
         <a-button size="small" @click="loadLibFiles" :loading="loadingLibFiles"
           :icon="h(ReloadOutlined)" style="width: 28px; height: 22px;" />
       </a-tooltip>
-      
+
       <a-tooltip title="Create new lib file">
         <a-button size="small" @click="showCreateLibFile = true"
           :icon="h(PlusOutlined)" style="width: 28px; height: 22px;" />
@@ -170,7 +170,7 @@
       <div v-if="showDebugMode" style="flex-shrink: 0; background: #fafafa; border-top: 1px solid #d9d9d9;">
         <backup-debugger />
       </div>
-      
+
       <!-- Errors -->
       <div v-if="validationResult.errors.length > 0" style="margin-bottom: 8px;">
         <div style="font-weight: 500; color: #ff4d4f; font-size: 11px; margin-bottom: 4px;">
@@ -211,7 +211,7 @@
         <span v-else>
           {{ currentScript?.name?.toUpperCase() }} Script
         </span>
-        
+
         <span v-if="currentScript?.modified" style="color: #ff9500;">Modified</span>
 
         <!-- Validation status - show ONLY ONE status -->
@@ -249,8 +249,8 @@
     <!-- NEW: Create Lib File Modal -->
     <a-modal v-model:open="showCreateLibFile" title="Create New Lib File" width="400px">
       <div style="margin: 16px 0;">
-        <a-input 
-          v-model:value="newLibFileName" 
+        <a-input
+          v-model:value="newLibFileName"
           placeholder="Enter filename (e.g., mymodule.tm)"
           @keyup.enter="createLibFile"
           style="width: 100%;"
@@ -259,7 +259,7 @@
           File will be created in the lib/ directory. Extension .tm will be added if not provided.
         </div>
       </div>
-      
+
       <template #footer>
         <a-button @click="showCreateLibFile = false">Cancel</a-button>
         <a-button type="primary" @click="createLibFile" :disabled="!newLibFileName.trim()">
@@ -329,6 +329,7 @@ const keyBindings = ref('emacs')
 const isSaving = ref(false)
 const isGitBusy = ref(false)
 const isUpdatingContent = ref(false)
+const isSavingInProgress = ref(false)
 
 // Validation state
 const validationResult = ref(null)
@@ -434,7 +435,8 @@ watch(scripts, (newScripts) => {
 // Auto-validation watcher (debounced)
 let validationTimeout = null
 watch(() => currentScript.value?.content, (newContent) => {
-  if (!autoValidate.value || !newContent) return
+  // Don't auto-validate during save operations
+  if (!autoValidate.value || !newContent || isSavingInProgress.value) return
 
   if (validationTimeout) {
     clearTimeout(validationTimeout)
@@ -473,11 +475,11 @@ async function loadLibFile(filename) {
     }
     return
   }
-  
+
   try {
     console.log('Loading lib file:', filename)
     const content = await dserv.essCommand(`ess::get_lib_file_content {${filename}}`)
-    
+
     // Create/update lib script entry
     scripts.value.lib = {
       name: 'lib',
@@ -488,12 +490,12 @@ async function loadLibFile(filename) {
       loaded: true,
       unchangedHistoryDepth: 0
     }
-    
+
     selectedLibFile.value = filename
     updateEditorContent(content, true)
-    
+
     console.log('Loaded lib file successfully:', filename)
-    
+
   } catch (error) {
     console.error('Failed to load lib file:', error)
     message.error(`Failed to load lib file: ${error.message}`)
@@ -510,7 +512,7 @@ async function saveLibFile() {
     // Validate first (same as regular scripts)
     const linter = new TclLinter()
     const frontendResult = linter.lint(scripts.value.lib.content)
-    
+
     if (!frontendResult.isValid) {
       const criticalErrors = frontendResult.errors.filter(e =>
         e.message.includes('syntax') ||
@@ -530,20 +532,20 @@ async function saveLibFile() {
             onCancel: () => resolve(false)
           })
         })
-        
+
         if (!shouldContinue) return
       }
     }
 
     isSaving.value = true
-    
+
     console.log('Saving lib file:', selectedLibFile.value)
     await dserv.essCommand(`ess::save_lib_file {${selectedLibFile.value}} {${scripts.value.lib.content}}`)
-    
+
     // Mark as saved
     scripts.value.lib.modified = false
     scripts.value.lib.originalContent = scripts.value.lib.content
-    
+
     // Update undo/redo state
     if (editorView) {
       const histState = editorView.state.field(historyField, false)
@@ -551,10 +553,10 @@ async function saveLibFile() {
         scripts.value.lib.unchangedHistoryDepth = histState.done.length
       }
     }
-    
+
     updateUndoRedoState()
     message.success(`Lib file ${selectedLibFile.value} saved`)
-    
+
   } catch (error) {
     console.error('Failed to save lib file:', error)
     message.error(`Failed to save lib file: ${error.message}`)
@@ -565,38 +567,38 @@ async function saveLibFile() {
 
 async function createLibFile() {
   let filename = newLibFileName.value.trim()
-  
+
   if (!filename) {
     message.error('Please enter a filename')
     return
   }
-  
+
   if (!filename.endsWith('.tm')) {
     filename += '.tm'
   }
-  
+
   // Basic validation
   if (!/^[a-zA-Z0-9._-]+\.tm$/.test(filename)) {
     message.error('Invalid filename. Use only letters, numbers, dots, dashes, and underscores.')
     return
   }
-  
+
   try {
     // Create empty file with basic template
     const template = `# ${filename}\n# Tcl Module\n\npackage require Tcl 8.5\npackage provide ${filename.replace('.tm', '')} 1.0\n\n# Add your procedures here\n`
-    
+
     await dserv.essCommand(`ess::save_lib_file {${filename}} {${template}}`)
-    
+
     // Refresh list and select new file
     await loadLibFiles()
     selectedLibFile.value = filename
     await loadLibFile(filename)
-    
+
     showCreateLibFile.value = false
     newLibFileName.value = ''
-    
+
     message.success(`Created lib file: ${filename}`)
-    
+
   } catch (error) {
     console.error('Failed to create lib file:', error)
     message.error(`Failed to create lib file: ${error.message}`)
@@ -605,12 +607,12 @@ async function createLibFile() {
 
 function switchToLibMode() {
   activeScript.value = 'lib'
-  
+
   // Load lib files list if not already loaded
   if (libFiles.value.length === 0) {
     loadLibFiles()
   }
-  
+
   // If no lib file selected, clear editor
   if (!selectedLibFile.value) {
     if (editorView) {
@@ -627,7 +629,7 @@ function switchToLibMode() {
 function switchScriptWithValidation(scriptName) {
   validationResult.value = null
   showValidationPanel.value = false
-  
+
   // Handle lib files specially
   if (scriptName === 'lib') {
     switchToLibMode()
@@ -647,13 +649,13 @@ function switchScriptWithValidation(scriptName) {
   }
 }
 
-// UPDATED: Save script with lib file support
+// Save script with lib file support
 async function saveScriptWithErrorHandling() {
   // Handle lib files
   if (activeScript.value === 'lib') {
     return await saveLibFile()
   }
-  
+
   // Existing script save logic for regular scripts
   if (!currentScript.value?.modified) return
 
@@ -750,7 +752,7 @@ function updateUndoRedoState() {
     // Get raw history state
     const doneLength = histState.done.length
     const undoneLength = histState.undone.length
-    
+
     // Base undo/redo availability on CodeMirror's history
     const cmCanUndo = doneLength > 0
     const cmCanRedo = undoneLength > 0
@@ -768,7 +770,7 @@ function updateUndoRedoState() {
       if (isBackToOriginalContent) {
         // We're back to the unchanged state by content match
         script.modified = false
-        
+
         // If we're back to original content, don't allow further undo
         // (we shouldn't undo past the loaded state)
         canUndo.value = false
@@ -820,24 +822,24 @@ function updateUndoRedoState() {
 function undoEdit() {
   if (editorView && canUndo.value) {
     console.log('undoEdit called')
-    
+
     // Check if we're already at original content before undoing
     const currentContent = editorView.state.doc.toString()
     const script = currentScript.value
-    
+
     if (script && currentContent === script.originalContent) {
       console.log('Already at original content - undo blocked')
       return false
     }
-    
+
     const result = undo(editorView)
-    
+
     // Ensure state update happens after undo
     nextTick(() => {
       updateUndoRedoState()
       debugHistoryState('after undoEdit')
     })
-    
+
     return result
   }
   return false
@@ -847,13 +849,13 @@ function redoEdit() {
   if (editorView && canRedo.value) {
     console.log('redoEdit called')
     const result = redo(editorView)
-    
+
     // Ensure state update happens after redo
     nextTick(() => {
       updateUndoRedoState()
       debugHistoryState('after redoEdit')
     })
-    
+
     return result
   }
   return false
@@ -929,7 +931,7 @@ async function validateAllScripts() {
       results[scriptTab.name] = linter.lint(scripts.value[scriptTab.name].content)
     }
   }
-  
+
   // Also validate current lib file if one is selected
   if (scripts.value.lib?.content) {
     const linter = new TclLinter()
@@ -990,7 +992,7 @@ function switchScript(scriptName) {
         if (histState) {
           // For script switching, we want a clean slate
           scripts.value[scriptName].unchangedHistoryDepth = 0
-          
+
           // Only mark as modified if the script was actually modified before
           // (this preserves the modified state when switching between tabs)
           console.log(`switchScript: Set ${scriptName} unchangedDepth=0, preserving modified=${scripts.value[scriptName].modified}`)
@@ -1091,24 +1093,24 @@ function createEditorWithContent(initialContent = '') {
     key: 'Ctrl-z',
     run: (view) => {
       console.log('Undo command triggered')
-      
+
       // Check if we're already at original content
       const currentContent = view.state.doc.toString()
       const script = currentScript.value
-      
+
       if (script && currentContent === script.originalContent) {
         console.log('Already at original content - undo blocked')
         return true // Return true to indicate we handled it (even though we blocked it)
       }
-      
+
       const result = undo(view)
-      
+
       // Use nextTick to ensure state is updated after undo completes
       nextTick(() => {
         updateUndoRedoState()
         debugHistoryState('after undo command')
       })
-      
+
       return result
     }
   }
@@ -1118,13 +1120,13 @@ function createEditorWithContent(initialContent = '') {
     run: (view) => {
       console.log('Redo command triggered')
       const result = redo(view)
-      
+
       // Use nextTick to ensure state is updated after redo completes
       nextTick(() => {
         updateUndoRedoState()
         debugHistoryState('after redo command')
       })
-      
+
       return result
     }
   }
@@ -1134,13 +1136,13 @@ function createEditorWithContent(initialContent = '') {
     run: (view) => {
       console.log('Redo alt command triggered')
       const result = redo(view)
-      
+
       // Use nextTick to ensure state is updated after redo completes
       nextTick(() => {
         updateUndoRedoState()
         debugHistoryState('after redo alt command')
       })
-      
+
       return result
     }
   }
@@ -1201,7 +1203,7 @@ function createEditorWithContent(initialContent = '') {
       EditorState.tabSize.of(4),
       EditorView.lineWrapping,
       keymap.of(allKeybindings),
-      
+
       // More careful update listener
       EditorView.updateListener.of((update) => {
         // Handle content changes ONLY
@@ -1349,7 +1351,7 @@ function updateEditorContent(content, clearHistory = false) {
      // For fresh content from backend, destroy and recreate the editor
      const parent = editorView.dom.parentNode
      editorView.destroy()
-     
+
      // Recreate with fresh content and history
      createEditorWithContent(content)
    } else {
@@ -1398,7 +1400,7 @@ function formatScript() {
 
  try {
    const formattedContent = TclFormatter.formatTclCode(currentScript.value.content, 4)
-   
+
    if (activeScript.value === 'lib' && scripts.value.lib) {
      scripts.value.lib.content = formattedContent
      scripts.value.lib.modified = true
@@ -1406,7 +1408,7 @@ function formatScript() {
      scripts.value[activeScript.value].content = formattedContent
      scripts.value[activeScript.value].modified = true
    }
-   
+
    updateEditorContent(formattedContent)
  } catch (error) {
    console.error('Error formatting script:', error)
@@ -1433,7 +1435,7 @@ function formatScript() {
    }
 
    const formattedContent = formatted.join('\n')
-   
+
    if (activeScript.value === 'lib' && scripts.value.lib) {
      scripts.value.lib.content = formattedContent
      scripts.value.lib.modified = true
@@ -1441,54 +1443,57 @@ function formatScript() {
      scripts.value[activeScript.value].content = formattedContent
      scripts.value[activeScript.value].modified = true
    }
-   
+
    updateEditorContent(formattedContent)
  }
 }
 
 // saveScript with unchanged history depth tracking and original content update
 async function saveScript() {
- if (!currentScript.value?.modified) return
+  if (!currentScript.value?.modified) return
 
- isSaving.value = true
- try {
-   const scriptContent = currentScript.value.content
-   const cmd = `ess::save_script ${activeScript.value} {${scriptContent}}`
+  isSaving.value = true
+  isSavingInProgress.value = true // Prevent auto-validation
 
-   console.log(`Saving ${activeScript.value} script...`)
-   await dserv.essCommand(cmd)
+  try {
+    const scriptContent = currentScript.value.content
+    const cmd = `ess::save_script ${activeScript.value} {${scriptContent}}`
 
-   // Mark as unchanged and record history depth
-   scripts.value[activeScript.value].modified = false
-   
-   // Update the original content baseline to the current content
-   scripts.value[activeScript.value].originalContent = scriptContent
+    console.log(`Saving ${activeScript.value} script...`)
+    await dserv.essCommand(cmd)
 
-   // Record the current history depth as the "unchanged" point
-   if (editorView) {
-     const histState = editorView.state.field(historyField, false)
-     if (histState) {
-       scripts.value[activeScript.value].unchangedHistoryDepth = histState.done.length
-       console.log(`saveScript: Set ${activeScript.value} unchangedDepth=${histState.done.length}, updated originalContent`)
-     }
-   }
+    // Mark as unchanged and record history depth
+    scripts.value[activeScript.value].modified = false
 
-   console.log(`${activeScript.value} script saved successfully`)
+    // Update the original content baseline to the current content
+    scripts.value[activeScript.value].originalContent = scriptContent
 
-   validationResult.value = null
-   showValidationPanel.value = false
+    // Record the current history depth as the "unchanged" point
+    if (editorView) {
+      const histState = editorView.state.field(historyField, false)
+      if (histState) {
+        scripts.value[activeScript.value].unchangedHistoryDepth = histState.done.length
+        console.log(`saveScript: Set ${activeScript.value} unchangedDepth=${histState.done.length}, updated originalContent`)
+      }
+    }
 
-   // Update undo/redo state after save
-   updateUndoRedoState()
-   debugHistoryState('after saveScript')
+    console.log(`${activeScript.value} script saved successfully`)
 
- } catch (error) {
-   console.error(`Failed to save ${activeScript.value} script:`, error)
- } finally {
-   isSaving.value = false
- }
+    // Clear validation without triggering watchers
+    validationResult.value = null
+    showValidationPanel.value = false
+
+    // Update undo/redo state after save
+    updateUndoRedoState()
+    debugHistoryState('after saveScript')
+
+  } catch (error) {
+    console.error(`Failed to save ${activeScript.value} script:`, error)
+  } finally {
+    isSaving.value = false
+    isSavingInProgress.value = false // Re-enable auto-validation
+  }
 }
-
 async function pullScripts() {
  isGitBusy.value = true
  try {

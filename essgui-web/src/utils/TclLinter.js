@@ -4,7 +4,7 @@ export class TclLinter {
   constructor() {
     this.errors = [];
     this.warnings = [];
-    
+
     // Comprehensive ESS system methods
     this.essSystemMethods = new Set([
       'add_state', 'add_action', 'add_transition', 'add_param', 'add_variable', 'add_method',
@@ -22,7 +22,7 @@ export class TclLinter {
       'get_variable', 'set_variable', 'set_parameters', 'set_default_param_vals',
       'protocol_init', 'protocol_deinit', 'final_init'
     ]);
-    
+
     // ESS event types
     this.essEventTypes = new Set([
       'MAGIC', 'NAME', 'FILE', 'USER', 'TRACE', 'PARAM', 'SUBTYPES', 'SYSTEM_STATE',
@@ -32,9 +32,9 @@ export class TclLinter {
       'SACCADE', 'DECIDE', 'ENDTRIAL', 'ABORT', 'REWARD', 'DELAY', 'PUNISH', 'PHYS',
       'MRI', 'STIMULATOR', 'TOUCH', 'TARGNAME', 'SCENENAME', 'SACCADE_INFO',
       'STIM_TRIGGER', 'MOVIENAME', 'STIMULATION', 'SECOND_CHANCE', 'SECOND_RESP',
-      'SWAPBUFFER', 'STIM_DATA', 'DIGITAL_LINES'
+      'SWAPBUFFER', 'STIM_DATA', 'DIGITAL_LINES', 'STATE_DEBUG'
     ]);
-    
+
     // ESS functions
     this.essFunctions = new Set([
       'timerTick', 'timerExpired', 'now', 'dservSet', 'dservGet', 'dservTouch', 'dservClear',
@@ -50,13 +50,13 @@ export class TclLinter {
   lint(code) {
     this.errors = [];
     this.warnings = [];
-    
+
     try {
       this.checkBasicSyntax(code);
       this.checkBraceBalance(code);
       this.checkQuoteBalance(code);
       this.checkEssPatterns(code);
-      
+
       return {
         isValid: this.errors.length === 0,
         errors: this.errors,
@@ -70,7 +70,7 @@ export class TclLinter {
         message: `Linter error: ${error.message}`,
         severity: 'error'
       });
-      
+
       return {
         isValid: false,
         errors: this.errors,
@@ -85,7 +85,7 @@ checkEssPatterns(code) {
   let hasTimerTick = false;
   let hasTimerExpired = false;
   const timerTickLines = [];
-  
+
   // First pass: collect timer usage
   lines.forEach((line, lineNum) => {
     if (line.includes('timerTick')) {
@@ -96,21 +96,21 @@ checkEssPatterns(code) {
       hasTimerExpired = true;
     }
   });
-  
+
   // Second pass: analyze patterns
   lines.forEach((line, lineNum) => {
     const trimmed = line.trim();
-    
+
     // Skip empty lines and comments
     if (!trimmed || trimmed.startsWith('#')) {
       return;
     }
-    
+
     // Check for ESS system method calls
     const sysMethodMatch = line.match(/\$sys(?:tem)?\s+(\w+)/);
     if (sysMethodMatch) {
       const method = sysMethodMatch[1];
-      
+
       if (!this.essSystemMethods.has(method)) {
         this.warnings.push({
           line: lineNum + 1,
@@ -120,12 +120,12 @@ checkEssPatterns(code) {
         });
       }
     }
-    
+
     // Check for event types
     const eventMatch = line.match(/::ess::evt_put\s+(\w+)/);
     if (eventMatch) {
       const eventType = eventMatch[1];
-      
+
       if (!this.essEventTypes.has(eventType)) {
         this.warnings.push({
           line: lineNum + 1,
@@ -135,7 +135,7 @@ checkEssPatterns(code) {
         });
       }
     }
-    
+
     // FIXED: Check for state transitions
     const transitionMatch = line.match(/\$sys\s+add_transition\s+\w+/);
     if (transitionMatch) {
@@ -144,26 +144,26 @@ checkEssPatterns(code) {
         // One-liner with return - this is fine, no warning needed
         return;
       }
-      
+
       // Check if this starts a block with braces
       if (line.includes('{')) {
         // Look for return in the transition block
         let blockHasReturn = false;
         let braceCount = (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
         let searchLine = lineNum + 1;
-        
+
         // Search through the block
         while (searchLine < lines.length && braceCount > 0) {
           const searchText = lines[searchLine];
           braceCount += (searchText.match(/\{/g) || []).length - (searchText.match(/\}/g) || []).length;
-          
+
           if (searchText.includes('return')) {
             blockHasReturn = true;
             break;
           }
           searchLine++;
         }
-        
+
         if (!blockHasReturn) {
           this.warnings.push({
             line: lineNum + 1,
@@ -181,7 +181,7 @@ checkEssPatterns(code) {
             break;
           }
         }
-        
+
         if (!hasReturnNearby) {
           this.warnings.push({
             line: lineNum + 1,
@@ -193,7 +193,7 @@ checkEssPatterns(code) {
       }
     }
   });
-  
+
   // Timer analysis: only warn if timerTick without timerExpired
   if (hasTimerTick && !hasTimerExpired && timerTickLines.length > 0) {
     this.warnings.push({
@@ -203,19 +203,19 @@ checkEssPatterns(code) {
       severity: 'warning'
     });
   }
-}    
+}
 
   checkBasicSyntax(code) {
     const lines = code.split('\n');
-    
+
     lines.forEach((line, lineNum) => {
       const trimmed = line.trim();
-      
+
       // Skip empty lines and comments
       if (!trimmed || trimmed.startsWith('#')) {
         return;
       }
-      
+
       // Check for unterminated strings on single line
       if (this.hasUnterminatedString(line)) {
         this.errors.push({
@@ -232,34 +232,34 @@ checkEssPatterns(code) {
     let braceStack = [];
     let braceCount = 0;
     const lines = code.split('\n');
-    
+
     lines.forEach((line, lineNum) => {
       let inString = false;
       let escapeNext = false;
-      
+
       for (let i = 0; i < line.length; i++) {
         const char = line[i];
         const actualLineNum = lineNum + 1;
-        
+
         if (escapeNext) {
           escapeNext = false;
           continue;
         }
-        
+
         if (char === '\\') {
           escapeNext = true;
           continue;
         }
-        
+
         if (char === '"' && !escapeNext) {
           inString = !inString;
           continue;
         }
-        
+
         if (inString) {
           continue;
         }
-        
+
         if (char === '{') {
           braceCount++;
           braceStack.push({ line: actualLineNum, column: i + 1, type: 'open' });
@@ -279,7 +279,7 @@ checkEssPatterns(code) {
         }
       }
     });
-    
+
     if (braceCount > 0) {
       const lastOpen = braceStack[braceStack.length - 1];
       this.errors.push({
@@ -294,27 +294,27 @@ checkEssPatterns(code) {
   checkQuoteBalance(code) {
     const lines = code.split('\n');
     let inMultiLineString = false;
-    
+
     lines.forEach((line, lineNum) => {
       let quoteCount = 0;
       let escapeNext = false;
-      
+
       for (let char of line) {
         if (escapeNext) {
           escapeNext = false;
           continue;
         }
-        
+
         if (char === '\\') {
           escapeNext = true;
           continue;
         }
-        
+
         if (char === '"') {
           quoteCount++;
         }
       }
-      
+
       if (quoteCount % 2 !== 0) {
         if (!inMultiLineString) {
           inMultiLineString = true;
@@ -323,7 +323,7 @@ checkEssPatterns(code) {
         }
       }
     });
-    
+
     if (inMultiLineString) {
       this.errors.push({
         line: lines.length,
@@ -337,34 +337,34 @@ checkEssPatterns(code) {
   hasUnterminatedString(line) {
     let quoteCount = 0;
     let escapeNext = false;
-    
+
     for (let char of line) {
       if (escapeNext) {
         escapeNext = false;
         continue;
       }
-      
+
       if (char === '\\') {
         escapeNext = true;
         continue;
       }
-      
+
       if (char === '"') {
         quoteCount++;
       }
     }
-    
+
     return quoteCount % 2 !== 0;
   }
 
   getSummary() {
     const errorCount = this.errors.length;
     const warningCount = this.warnings.length;
-    
+
     if (errorCount === 0 && warningCount === 0) {
       return 'No issues found';
     }
-    
+
     const parts = [];
     if (errorCount > 0) {
       parts.push(`${errorCount} error${errorCount > 1 ? 's' : ''}`);
@@ -372,7 +372,7 @@ checkEssPatterns(code) {
     if (warningCount > 0) {
       parts.push(`${warningCount} warning${warningCount > 1 ? 's' : ''}`);
     }
-    
+
     return parts.join(', ');
   }
 
