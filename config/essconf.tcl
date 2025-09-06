@@ -19,7 +19,9 @@ dservSet ess/ipaddr ""
 
 # load extra modules
 set dllspec modules/*[info sharedlibextension]
-foreach f [glob [file join $dspath $dllspec]] {
+set ess_modules "ain eventlog gpio_input gpio_output juicer rmt sound timer touch usbio"
+
+foreach f $ess_modules {
     load $f
 }
 
