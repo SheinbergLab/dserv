@@ -41,6 +41,7 @@ typedef struct camera_info_s {
   CameraCapture *capture;
   tclserver_t *tclserver;
   char *dpoint_prefix;
+  int camera_index;  // Which camera to use
   int initialized;
   int configured;
   int jpeg_quality;
@@ -115,19 +116,21 @@ public:
     }
   }
 
-  bool initialize() {
+  bool initialize(int index = -1) {
     int ret = cm_->start();
-    if (ret) {
-      return false;
-    }
-
+    if (ret) return false;
+    
     auto cameras = cm_->cameras();
-    if (cameras.empty()) {
-      return false;
-    }
+    if (cameras.empty()) return false;
+    
+    // Use specified index or default to 0
+    int use_index = (index >= 0 && index < cameras.size()) ? index : 0;
+    
+    std::cout << "Using camera " << use_index << ": " 
+              << cameras[use_index]->id() << std::endl;
+    
+    camera_ = cm_->get(cameras[use_index]->id());
 
-    std::string camera_id = cameras[0]->id();
-    camera_ = cm_->get(camera_id);
     if (!camera_) {
       return false;
     }
@@ -194,58 +197,65 @@ public:
 
       // Set controls
       ControlList &controls = request->controls();
-        // Set controls only if supported
-        ControlList &controls = request->controls();
-        
-        // Check what controls are actually available
-        const ControlInfoMap &available_controls = camera_->controls();
-        
-        // Only set controls that exist
-        if (available_controls.find(&controls::AeEnable) !=
-	    available_controls.end()) {
-	  controls.set(controls::AeEnable, true);
-        }
-        if (available_controls.find(&controls::AwbEnable) !=
-	    available_controls.end()) {
-	  controls.set(controls::AwbEnable, true);
-        }
-        if (available_controls.find(&controls::AeExposureMode) !=
-	    available_controls.end()) {
-	  controls.set(controls::AeExposureMode, controls::ExposureNormal);
-        }
-        if (available_controls.find(&controls::AeMeteringMode) !=
-	    available_controls.end()) {
-	  controls.set(controls::AeMeteringMode,
-		       controls::MeteringCentreWeighted);
-        }
-        if (available_controls.find(&controls::Brightness) !=
-	    available_controls.end()) {
-	  controls.set(controls::Brightness, brightness_);
-        }
-        if (available_controls.find(&controls::Contrast) !=
-	    available_controls.end()) {
-	  controls.set(controls::Contrast, contrast_);
-        }
-	
-	requests_.push_back(std::move(request));
+      
+      // Check what controls are actually available
+      const ControlInfoMap &available_controls = camera_->controls();
+      
+      // Only set controls that exist
+      if (available_controls.find(&controls::AeEnable) !=
+	  available_controls.end()) {
+	controls.set(controls::AeEnable, true);
+      }
+      if (available_controls.find(&controls::AwbEnable) !=
+	  available_controls.end()) {
+	controls.set(controls::AwbEnable, true);
+      }
+      if (available_controls.find(&controls::AeExposureMode) !=
+	  available_controls.end()) {
+	controls.set(controls::AeExposureMode, controls::ExposureNormal);
+      }
+      if (available_controls.find(&controls::AeMeteringMode) !=
+	  available_controls.end()) {
+	controls.set(controls::AeMeteringMode,
+		     controls::MeteringCentreWeighted);
+      }
+      if (available_controls.find(&controls::Brightness) !=
+	  available_controls.end()) {
+	controls.set(controls::Brightness, brightness_);
+      }
+      if (available_controls.find(&controls::Contrast) !=
+	  available_controls.end()) {
+	controls.set(controls::Contrast, contrast_);
+      }
+      
+      requests_.push_back(std::move(request));
     }
     
     return true;
   }
-
+  
   bool capture_image() {
     target_frames_ = settling_frames_;
     capture_frame_ = settling_frames_ + 1;
     frames_captured_ = 0;
     capture_complete_ = false;
-        
-    camera_->requestCompleted.connect(this, &CameraCapture::request_complete);
+    
+    // Make sure we're not in streaming mode
+    if (streaming_mode_) {
+      return false;  // Can't do regular capture while streaming
+    }
 
+    // Disconnect only streaming callback if it exists
+    camera_->requestCompleted.disconnect(this, &CameraCapture::streaming_request_complete);
+    
+    // Connect the regular capture callback
+    camera_->requestCompleted.connect(this, &CameraCapture::request_complete);
+    
     int ret = camera_->start();
     if (ret) {
       return false;
     }
-
+    
     for (auto &request : requests_) {
       ret = camera_->queueRequest(request.get());
       if (ret) {
@@ -253,22 +263,23 @@ public:
 	return false;
       }
     }
-
+    
     auto start = std::chrono::steady_clock::now();
     while (!capture_complete_) {
       std::this_thread::sleep_for(10ms);
-            
+      
       auto elapsed = std::chrono::steady_clock::now() - start;
       if (elapsed > 10s) {
 	camera_->stop();
 	return false;
       }
     }
-
+    
     camera_->stop();
+    
     return !image_data_.empty();
   }
-
+  
   bool save_ppm(const std::string &filename) {
     if (!stream_ || image_data_.empty()) {
       return false;
@@ -291,6 +302,19 @@ public:
   }
 
   bool save_jpeg(const std::string &filename) {
+    const StreamConfiguration &cfg = stream_->configuration();
+    
+    if (cfg.pixelFormat == formats::MJPEG) {
+        // Already JPEG - write directly
+        std::ofstream file(filename, std::ios::binary);
+        if (!file) return false;
+        
+        file.write(reinterpret_cast<const char*>(image_data_.data()), 
+                   image_data_.size());
+        file.close();
+        return true;
+    }
+    
     if (!encode_jpeg()) {
       return false;
     }
@@ -360,45 +384,61 @@ public:
 #endif
   }
 
-  bool start_streaming() {
+bool start_streaming() {
     if (!stream_ || !allocator_) return false;
     
     streaming_mode_ = true;
     frames_captured_ = 0;
     frame_ready_ = false;
     
-    camera_->requestCompleted.connect(this, &CameraCapture::streaming_request_complete);
-    
     int ret = camera_->start();
-    if (ret) return false;
-    
-    // Queue all requests
-    for (auto &request : requests_) {
-      ret = camera_->queueRequest(request.get());
-      if (ret) {
-	camera_->stop();
-	return false;
-      }
+    if (ret) {
+        std::cerr << "Failed to start camera" << std::endl;
+        return false;
     }
     
-    // Only settle once at startup if requested
+    // Disconnect regular callback if it exists
+    camera_->requestCompleted.disconnect(this, &CameraCapture::request_complete);
+    
+    // Connect streaming callback
+    camera_->requestCompleted.connect(this, &CameraCapture::streaming_request_complete);
+    
+    // Now queue requests
+    for (auto &request : requests_) {
+        ret = camera_->queueRequest(request.get());
+        if (ret) {
+            std::cerr << "Failed to queue request" << std::endl;
+            camera_->stop();
+            return false;
+        }
+    }
+    
+    // Let it settle
     if (settling_frames_ > 0) {
-      // Wait for initial settling
-      std::this_thread::sleep_for(std::chrono::milliseconds(settling_frames_ * 33));
+        std::this_thread::sleep_for(std::chrono::milliseconds(settling_frames_ * 33));
     }
     
     return true;
-  }
-
+}
 
   bool stop_streaming() {
     if (!streaming_mode_) return false;
     
+    // Set flag first
     streaming_mode_ = false;
+    
+    // Small delay to let callbacks finish
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    
+    // Disconnect the streaming callback
+    camera_->requestCompleted.disconnect(this, &CameraCapture::streaming_request_complete);
+    
+    // Now stop the camera
     camera_->stop();
+    
     return true;
   }
-
+  
   bool grab_frame() {
     if (!streaming_mode_) return false;
     
@@ -411,16 +451,26 @@ public:
   }
 
   void streaming_request_complete(Request *request) {
+    // Check if we're still streaming before doing anything
+    if (!streaming_mode_) {
+      return;  // Don't requeue if we're stopping
+    }
+    
     if (request->status() == Request::RequestCancelled) {
-      request->reuse(Request::ReuseBuffers);
-      camera_->queueRequest(request);
+      // Only requeue if still streaming
+      if (streaming_mode_) {
+	request->reuse(Request::ReuseBuffers);
+	camera_->queueRequest(request);
+      }
       return;
     }
     
     // Skip frames if configured
     if (++frame_skip_counter_ < frame_skip_rate_) {
-      request->reuse(Request::ReuseBuffers);
-      camera_->queueRequest(request);
+      if (streaming_mode_) {  // Check again
+	request->reuse(Request::ReuseBuffers);
+	camera_->queueRequest(request);
+      }
       return;
     }
     frame_skip_counter_ = 0;
@@ -444,9 +494,11 @@ public:
       munmap(data, plane.length);
       break;
     }
-    
-    request->reuse(Request::ReuseBuffers);
-    camera_->queueRequest(request);
+
+    if (streaming_mode_) {
+        request->reuse(Request::ReuseBuffers);
+        camera_->queueRequest(request);
+    }    
   }
 
   void set_frame_skip_rate(int rate) {
@@ -473,43 +525,45 @@ private:
     if (request->status() == Request::RequestCancelled) {
       return;
     }
-
+    
     frames_captured_++;
-
+    
     if (frames_captured_ == capture_frame_) {
       const Request::BufferMap &buffers = request->buffers();
-            
+      
       for (auto buffer_pair : buffers) {
 	FrameBuffer *buffer = buffer_pair.second;
 	const FrameMetadata &metadata = buffer->metadata();
 	const FrameBuffer::Plane &plane = buffer->planes()[0];
-                
+	
+	// Check the stream configuration to see format
+	const StreamConfiguration &cfg = stream_->configuration();
+	
 	void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
 			  plane.fd.get(), 0);
-                
+	
 	if (data == MAP_FAILED) {
+	  std::cerr << "mmap failed" << std::endl;
 	  continue;
 	}
-
+	
+	// Store the data regardless of format
 	image_data_.resize(plane.length);
 	std::memcpy(image_data_.data(), data, plane.length);
 	munmap(data, plane.length);
-                
-	// Print metadata if available
-	const ControlList &requestMetadata = request->metadata();
-	if (requestMetadata.contains(controls::ExposureTime.id())) {
-	  auto exp_time = requestMetadata.get(controls::ExposureTime);
-	  std::cout << "  Exposure: " << *exp_time << " µs" << std::endl;
+	
+	// If it's MJPEG, the data is already JPEG compressed
+	if (cfg.pixelFormat == formats::MJPEG) {
+	  // Already JPEG data - just copy to jpeg_data_
+	  jpeg_data_ = image_data_;
+	  capture_complete_ = true;
+	  return;
 	}
-	if (requestMetadata.contains(controls::AnalogueGain.id())) {
-	  auto gain = requestMetadata.get(controls::AnalogueGain);
-	  std::cout << "  Gain: " << *gain << "x" << std::endl;
-	}
-                
+	
 	capture_complete_ = true;
       }
     }
-        
+    
     if (frames_captured_ < capture_frame_) {
       request->reuse(Request::ReuseBuffers);
       camera_->queueRequest(request);
@@ -564,14 +618,45 @@ public:
 
 extern "C" {
 
+  static int camera_list_command(ClientData data,
+				 Tcl_Interp *interp,
+				 int objc, Tcl_Obj *objv[])
+  {
+    CameraManager cm;
+    cm.start();
+    auto cameras = cm.cameras();
+    
+    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
+    for (size_t i = 0; i < cameras.size(); i++) {
+      Tcl_Obj *cam_info = Tcl_NewDictObj();
+      Tcl_DictObjPut(interp, cam_info, 
+		     Tcl_NewStringObj("index", -1),
+		     Tcl_NewIntObj(i));
+      Tcl_DictObjPut(interp, cam_info,
+		     Tcl_NewStringObj("id", -1),
+		     Tcl_NewStringObj(cameras[i]->id().c_str(), -1));
+      Tcl_ListObjAppendElement(interp, list, cam_info);
+    }
+    
+    Tcl_SetObjResult(interp, list);
+    return TCL_OK;
+  }
+  
   static int camera_init_command(ClientData data,
 				 Tcl_Interp *interp,
 				 int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
+    int camera_index = 0; 
+    
+    if (objc > 1) {
+        if (Tcl_GetIntFromObj(interp, objv[1], &camera_index) != TCL_OK)
+            return TCL_ERROR;
+    }
     
     if (!info->available) {
-      Tcl_AppendResult(interp, "Camera support not available on this platform", NULL);
+      Tcl_AppendResult(interp,
+		       "Camera support not available on this platform", NULL);
       return TCL_ERROR;
     }
     
@@ -579,23 +664,24 @@ extern "C" {
       Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
       return TCL_OK;
     }
-
+    
     try {
       info->capture = new CameraCapture();
         
-      if (!info->capture->initialize()) {
+      if (!info->capture->initialize(camera_index)) {
 	delete info->capture;
 	info->capture = nullptr;
 	Tcl_AppendResult(interp, "Failed to initialize camera", NULL);
 	return TCL_ERROR;
       }
-        
+      
       info->initialized = 1;
       Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
       return TCL_OK;
-        
+      
     } catch (const std::exception& e) {
-      Tcl_AppendResult(interp, "Exception during initialization: ", e.what(), NULL);
+      Tcl_AppendResult(interp, "Exception during initialization: ",
+		       e.what(), NULL);
       return TCL_ERROR;
     }
   }
@@ -1119,6 +1205,9 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     g_cameraInfo.available = 0;
 #endif
     
+    Tcl_CreateObjCommand(interp, "cameraList",
+			 (Tcl_ObjCmdProc *) camera_list_command,
+			 &g_cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraInit",
 			 (Tcl_ObjCmdProc *) camera_init_command,
 			 &g_cameraInfo, NULL);
