@@ -1308,6 +1308,350 @@ static int camera_set_frame_skip_rate_command(ClientData data,
 #endif
   }  
   
+  
+  // Add these 8 new Tcl command implementations to your camera.cpp file
+// Replace the existing versions with these properly #ifdef-guarded ones
+
+#ifdef HAS_LIBCAMERA
+  static int camera_start_continuous_command(ClientData data,
+                                            Tcl_Interp *interp,
+                                            int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (info->capture->get_state() != CameraState::STREAMING) {
+      Tcl_AppendResult(interp, "Camera must be streaming to start continuous mode", NULL);
+      return TCL_ERROR;
+    }
+    
+    // Parse arguments: save_to_disk publish_to_dataserver [save_directory] [datapoint_prefix] [interval]
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "save_to_disk publish_to_dataserver ?save_directory? ?datapoint_prefix? ?interval?");
+      return TCL_ERROR;
+    }
+    
+    int save_to_disk, publish_to_dataserver;
+    if (Tcl_GetBooleanFromObj(interp, objv[1], &save_to_disk) != TCL_OK)
+      return TCL_ERROR;
+    if (Tcl_GetBooleanFromObj(interp, objv[2], &publish_to_dataserver) != TCL_OK)
+      return TCL_ERROR;
+    
+    std::string save_directory = "/tmp/camera_frames/";
+    if (objc > 3) {
+      save_directory = Tcl_GetString(objv[3]);
+    }
+    
+    std::string datapoint_prefix = "camera";
+    if (objc > 4) {
+      datapoint_prefix = Tcl_GetString(objv[4]);
+    }
+    
+    int interval = 1;
+    if (objc > 5) {
+      if (Tcl_GetIntFromObj(interp, objv[5], &interval) != TCL_OK)
+        return TCL_ERROR;
+    }
+    
+    if (!info->capture->start_continuous_mode(save_to_disk, publish_to_dataserver, 
+                                             save_directory, datapoint_prefix, interval)) {
+      Tcl_AppendResult(interp, "Failed to start continuous mode", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    return TCL_OK;
+  }
+
+  static int camera_start_continuous_callback_command(ClientData data,
+                                                     Tcl_Interp *interp,
+                                                     int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (info->capture->get_state() != CameraState::STREAMING) {
+      Tcl_AppendResult(interp, "Camera must be streaming to start continuous callback mode", NULL);
+      return TCL_ERROR;
+    }
+    
+    // Parse arguments: tcl_proc [datapoint_prefix] [interval]
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "tcl_proc ?datapoint_prefix? ?interval?");
+      return TCL_ERROR;
+    }
+    
+    const char *tcl_proc = Tcl_GetString(objv[1]);
+    
+    std::string datapoint_prefix = "camera";
+    if (objc > 2) {
+      datapoint_prefix = Tcl_GetString(objv[2]);
+    }
+    
+    int interval = 1;
+    if (objc > 3) {
+      if (Tcl_GetIntFromObj(interp, objv[3], &interval) != TCL_OK)
+        return TCL_ERROR;
+    }
+    
+    if (!info->capture->start_continuous_callback_mode(tcl_proc, datapoint_prefix, interval)) {
+      Tcl_AppendResult(interp, "Failed to start continuous callback mode", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    return TCL_OK;
+  }
+
+  static int camera_stop_continuous_command(ClientData data,
+                                           Tcl_Interp *interp,
+                                           int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      return TCL_OK;
+    }
+    
+    info->capture->stop_continuous_mode();
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    return TCL_OK;
+  }
+
+  static int camera_set_target_fps_command(ClientData data,
+                                          Tcl_Interp *interp,
+                                          int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "fps");
+      return TCL_ERROR;
+    }
+    
+    double fps;
+    if (Tcl_GetDoubleFromObj(interp, objv[1], &fps) != TCL_OK)
+      return TCL_ERROR;
+    
+    if (fps < 0.0 || fps > 120.0) {
+      Tcl_AppendResult(interp, "Invalid FPS (0.0-120.0)", NULL);
+      return TCL_ERROR;
+    }
+    
+    info->capture->set_target_fps(fps);
+    Tcl_SetObjResult(interp, Tcl_NewDoubleObj(fps));
+    return TCL_OK;
+  }
+
+  static int camera_get_callback_frame_command(ClientData data,
+                                              Tcl_Interp *interp,
+                                              int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    std::vector<uint8_t> frame_data;
+    int64_t timestamp_ms;
+    
+    if (!info->capture->get_frame_by_id(frame_id, frame_data, timestamp_ms)) {
+      Tcl_AppendResult(interp, "Frame not found in ring buffer (too old or invalid frame_id)", NULL);
+      return TCL_ERROR;
+    }
+    
+    // Return the JPEG data as a Tcl byte array
+    Tcl_SetObjResult(interp, Tcl_NewByteArrayObj(frame_data.data(), frame_data.size()));
+    return TCL_OK;
+  }
+
+  static int camera_save_callback_frame_command(ClientData data,
+                                               Tcl_Interp *interp,
+                                               int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id filename");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    const char *filename = Tcl_GetString(objv[2]);
+    
+    if (!info->capture->save_callback_frame(frame_id, filename)) {
+      Tcl_AppendResult(interp, "Failed to save frame (not found or I/O error)", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(filename, -1));
+    return TCL_OK;
+  }
+
+  static int camera_publish_callback_frame_command(ClientData data,
+                                                  Tcl_Interp *interp,
+                                                  int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id datapoint_name");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    const char *datapoint_name = Tcl_GetString(objv[2]);
+    
+    if (!info->capture->publish_callback_frame(frame_id, datapoint_name)) {
+      Tcl_AppendResult(interp, "Failed to publish frame (not found or dataserver error)", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(datapoint_name, -1));
+    return TCL_OK;
+  }
+
+  static int camera_get_ring_buffer_status_command(ClientData data,
+                                                  Tcl_Interp *interp,
+                                                  int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    int oldest_frame_id, newest_frame_id, valid_frames;
+    info->capture->get_ring_buffer_status(oldest_frame_id, newest_frame_id, valid_frames);
+    
+    Tcl_Obj *result = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("oldest_frame_id", -1),
+                   Tcl_NewIntObj(oldest_frame_id));
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("newest_frame_id", -1), 
+                   Tcl_NewIntObj(newest_frame_id));
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("valid_frames", -1),
+                   Tcl_NewIntObj(valid_frames));
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("buffer_size", -1),
+                   Tcl_NewIntObj(16));  // RING_BUFFER_SIZE
+    
+    Tcl_SetObjResult(interp, result);
+    return TCL_OK;
+  }
+
+#else  // !HAS_LIBCAMERA - Stub implementations for systems without libcamera
+
+  static int camera_start_continuous_command(ClientData data,
+                                            Tcl_Interp *interp,
+                                            int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_start_continuous_callback_command(ClientData data,
+                                                     Tcl_Interp *interp,
+                                                     int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_stop_continuous_command(ClientData data,
+                                           Tcl_Interp *interp,
+                                           int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_set_target_fps_command(ClientData data,
+                                          Tcl_Interp *interp,
+                                          int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_get_callback_frame_command(ClientData data,
+                                              Tcl_Interp *interp,
+                                              int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_save_callback_frame_command(ClientData data,
+                                               Tcl_Interp *interp,
+                                               int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_publish_callback_frame_command(ClientData data,
+                                                  Tcl_Interp *interp,
+                                                  int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_get_ring_buffer_status_command(ClientData data,
+                                                  Tcl_Interp *interp,
+                                                  int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+#endif  // HAS_LIBCAMERA
+  
+  
   /*****************************************************************************
    * MODULE INITIALIZATION
    *****************************************************************************/
@@ -1385,6 +1729,30 @@ static int camera_set_frame_skip_rate_command(ClientData data,
                          &g_cameraInfo, NULL);    
     Tcl_CreateObjCommand(interp, "cameraSetFrameSkipRate",
                          (Tcl_ObjCmdProc *) camera_set_frame_skip_rate_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraStartContinuous",
+                         (Tcl_ObjCmdProc *) camera_start_continuous_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraStartContinuousCallback",
+                         (Tcl_ObjCmdProc *) camera_start_continuous_callback_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraStopContinuous",
+                         (Tcl_ObjCmdProc *) camera_stop_continuous_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetTargetFPS",
+                         (Tcl_ObjCmdProc *) camera_set_target_fps_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraGetCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_get_callback_frame_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSaveCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_save_callback_frame_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraPublishCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_publish_callback_frame_command,
+                         &g_cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraGetRingBufferStatus",
+                         (Tcl_ObjCmdProc *) camera_get_ring_buffer_status_command,
                          &g_cameraInfo, NULL);
     return TCL_OK;
   }
