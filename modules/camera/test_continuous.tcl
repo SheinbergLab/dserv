@@ -13,8 +13,8 @@ proc my_frame_handler {frame_id timestamp_ms width height jpeg_size ae_settled d
     puts "  Auto-exposure settled: $ae_settled"
     puts "  Datapoint prefix: $datapoint_prefix"
     
-    # Optional: Save every 10th frame to disk for testing
-    if {$frame_id % 10 == 0} {
+    # Save every 60th frame to disk for testing
+    if {$frame_id % 60 == 0} {
         if {[catch {cameraSaveCallbackFrame $frame_id "/tmp/test_frame_${frame_id}.jpg"} result]} {
             puts "  Warning: Could not save frame $frame_id: $result"
         } else {
@@ -22,16 +22,14 @@ proc my_frame_handler {frame_id timestamp_ms width height jpeg_size ae_settled d
         }
     }
     
-    # Optional: Publish every 5th frame to dataserver  
-    if {$frame_id % 5 == 0} {
-        if {[catch {cameraPublishCallbackFrame $frame_id "test_stream/frame"} result]} {
+    # Publish every 10th frame to dataserver  
+    if {$frame_id % 10 == 0} {
+        if {[catch {cameraPublishCallbackFrame $frame_id $datapoint_prefix/frame} result]} {
             puts "  Warning: Could not publish frame $frame_id: $result"
         } else {
             puts "  Published frame $frame_id to: $result"
         }
     }
-    
-    puts "---"
 }
 
 # Main setup function
@@ -60,7 +58,7 @@ proc setup_1fps_test {} {
     puts "Camera streaming started"
     
     # Start continuous callback mode with 1fps (every frame since camera is at 1fps)
-    if {[catch {cameraStartContinuousCallback my_frame_handler "test_camera" 1} result]} {
+    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 1} result]} {
         puts "Error starting continuous callback: $result"
         return
     }
