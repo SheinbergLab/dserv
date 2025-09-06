@@ -116,12 +116,49 @@ private:
   int ae_settle_count_ = 0;
   static constexpr int AE_SETTLE_FRAMES = 5;  // Frames to wait for AE to settle
   
+    // Continuous mode parameters
+  bool continuous_mode_ = false;
+  bool save_to_disk_ = false;
+  bool publish_to_dataserver_ = false;
+  bool use_tcl_callback_ = false;
+  std::string save_directory_ = "/tmp/camera_frames/";
+  std::string datapoint_prefix_ = "camera";
+  std::string tcl_callback_proc_ = "";
+  std::atomic<int> frame_counter_{0};
+  int publish_interval_ = 1;  // Publish every Nth frame
+  double target_fps_ = 0.0;  // 0 = use camera default
+  
+  // Tcl interpreter for callbacks
+  Tcl_Interp *tcl_interp_ = nullptr;
+  
+  // Ring buffer for frame storage
+  struct FrameBuffer {
+    std::vector<uint8_t> jpeg_data;
+    int frame_id;
+    int64_t timestamp_ms;
+    bool valid;
+    
+    FrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false) {}
+  };
+  
+  static constexpr int RING_BUFFER_SIZE = 16;  // Adjustable
+  std::array<FrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
+  std::atomic<int> ring_write_index_{0};
+  std::mutex ring_buffer_mutex_;
+  
+  // Background save thread for continuous mode
+  std::queue<std::pair<std::vector<uint8_t>, std::string>> save_queue_;
+  std::thread save_worker_thread_;
+  std::mutex save_queue_mutex_;
+  std::atomic<bool> save_worker_running_{false};
+
 public:
   CameraCapture() {
     cm_ = std::make_unique<CameraManager>();
   }
 
   ~CameraCapture() {
+    stop_continuous_mode();
     cleanup();
   }
 
@@ -496,66 +533,71 @@ public:
 #endif
   }
 
-  void streaming_request_complete(Request *request) {
-    // Early exit if not streaming
-    if (state_ != CameraState::STREAMING) {
-      return;
-    }
-    
-    if (request->status() == Request::RequestCancelled) {
-      if (state_ == CameraState::STREAMING) {
-        request->reuse(Request::ReuseBuffers);
-        camera_->queueRequest(request);
-      }
-      return;
-    }
-    
-    frames_captured_++;
-    
-    // Check auto-exposure convergence
-    check_ae_convergence(request);
-    
-    // Skip frames if configured and not yet settled
-    if (!ae_settled_ || (++frame_skip_counter_ < frame_skip_rate_)) {
-      if (frame_skip_counter_ >= frame_skip_rate_) {
-        frame_skip_counter_ = 0;
-      }
-      
-      if (state_ == CameraState::STREAMING) {
-        request->reuse(Request::ReuseBuffers);
-        camera_->queueRequest(request);
-      }
-      return;
-    }
-    frame_skip_counter_ = 0;
-    
-    // Process frame
-    const Request::BufferMap &buffers = request->buffers();
-    for (auto buffer_pair : buffers) {
-      FrameBuffer *buffer = buffer_pair.second;
-      const FrameBuffer::Plane &plane = buffer->planes()[0];
-        
-      void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
-                        plane.fd.get(), 0);
-      if (data == MAP_FAILED) continue;
-        
-      {
-        std::lock_guard<std::mutex> lock(capture_mutex_);
-        image_data_.resize(plane.length);
-        std::memcpy(image_data_.data(), data, plane.length);
-        frame_ready_ = true;
-      }
-      capture_cv_.notify_one();
-        
-      munmap(data, plane.length);
-      break;
-    }
-
-    if (state_ == CameraState::STREAMING) {
-        request->reuse(Request::ReuseBuffers);
-        camera_->queueRequest(request);
-    }    
+ void streaming_request_complete(Request *request) {
+  // Early exit if not streaming
+  if (state_ != CameraState::STREAMING) {
+    return;
   }
+  
+  if (request->status() == Request::RequestCancelled) {
+    if (state_ == CameraState::STREAMING) {
+      request->reuse(Request::ReuseBuffers);
+      camera_->queueRequest(request);
+    }
+    return;
+  }
+  
+  frames_captured_++;
+  
+  // Check auto-exposure convergence
+  check_ae_convergence(request);
+  
+  // Skip frames if configured and not yet settled
+  if (!ae_settled_ || (++frame_skip_counter_ < frame_skip_rate_)) {
+    if (frame_skip_counter_ >= frame_skip_rate_) {
+      frame_skip_counter_ = 0;
+    }
+    
+    if (state_ == CameraState::STREAMING) {
+      request->reuse(Request::ReuseBuffers);
+      camera_->queueRequest(request);
+    }
+    return;
+  }
+  frame_skip_counter_ = 0;
+  
+  // Process frame
+  const Request::BufferMap &buffers = request->buffers();
+  for (auto buffer_pair : buffers) {
+    FrameBuffer *buffer = buffer_pair.second;
+    const FrameBuffer::Plane &plane = buffer->planes()[0];
+      
+    void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
+                      plane.fd.get(), 0);
+    if (data == MAP_FAILED) continue;
+      
+    {
+      std::lock_guard<std::mutex> lock(capture_mutex_);
+      image_data_.resize(plane.length);
+      std::memcpy(image_data_.data(), data, plane.length);
+      frame_ready_ = true;
+    }
+    capture_cv_.notify_one();
+      
+    munmap(data, plane.length);
+    break;
+  }
+
+  // Handle continuous mode operations
+  if (continuous_mode_ && ae_settled_) {
+    handle_continuous_frame();
+  }
+
+  if (state_ == CameraState::STREAMING) {
+      request->reuse(Request::ReuseBuffers);
+      camera_->queueRequest(request);
+  }    
+}
 
   void capture_request_complete(Request *request) {
     if (request->status() == Request::RequestCancelled) {
@@ -606,6 +648,199 @@ public:
       camera_->queueRequest(request);
     }
   }
+  
+  void handle_continuous_frame() {
+  // Check if we should process this frame based on interval
+  if ((frame_counter_ % publish_interval_) != 0) {
+    frame_counter_++;
+    return;
+  }
+  
+  // Encode to JPEG for saving/publishing/callback
+  if (!encode_jpeg()) {
+    std::cerr << "Failed to encode JPEG for continuous mode" << std::endl;
+    frame_counter_++;
+    return;
+  }
+  
+  // Store frame in ring buffer for callback access
+  store_frame_in_ring_buffer();
+  
+  // Handle via Tcl callback if specified
+  if (use_tcl_callback_ && !tcl_callback_proc_.empty() && tcl_interp_) {
+    call_tcl_frame_callback();
+  } else {
+    // Use built-in handlers
+    if (save_to_disk_) {
+      queue_frame_for_save();
+    }
+    
+    if (publish_to_dataserver_ && tclserver_) {
+      publish_frame_to_dataserver();
+    }
+  }
+  
+  frame_counter_++;
+}
+
+  bool start_continuous_mode(bool save_disk, bool publish_dataserver, 
+                          const std::string& save_dir,
+                          const std::string& datapoint_prefix,
+                          int interval) {
+  if (state_ != CameraState::STREAMING) {
+    std::cerr << "Must be streaming to start continuous mode" << std::endl;
+    return false;
+  }
+  
+  continuous_mode_ = true;
+  save_to_disk_ = save_disk;
+  publish_to_dataserver_ = publish_dataserver;
+  use_tcl_callback_ = false;  // Using built-in handlers
+  save_directory_ = save_dir;
+  datapoint_prefix_ = datapoint_prefix;
+  publish_interval_ = std::max(1, interval);
+  frame_counter_ = 0;
+  
+  // Create save directory if needed
+  if (save_to_disk_) {
+    std::system(("mkdir -p " + save_directory_).c_str());
+    start_save_worker();
+  }
+  
+  return true;
+}
+
+bool start_continuous_callback_mode(const std::string& tcl_proc,
+                                   const std::string& datapoint_prefix,
+                                   int interval) {
+  if (state_ != CameraState::STREAMING) {
+    std::cerr << "Must be streaming to start continuous callback mode" << std::endl;
+    return false;
+  }
+  
+  if (tcl_proc.empty() || !tcl_interp_) {
+    std::cerr << "Tcl callback proc name required and Tcl interpreter must be set" << std::endl;
+    return false;
+  }
+  
+  continuous_mode_ = true;
+  save_to_disk_ = false;
+  publish_to_dataserver_ = false;
+  use_tcl_callback_ = true;
+  tcl_callback_proc_ = tcl_proc;
+  datapoint_prefix_ = datapoint_prefix;
+  publish_interval_ = std::max(1, interval);
+  frame_counter_ = 0;
+  
+  return true;
+}
+
+bool stop_continuous_mode() {
+  if (!continuous_mode_) return true;
+  
+  continuous_mode_ = false;
+  stop_save_worker();
+  return true;
+}
+
+bool get_frame_by_id(int frame_id, std::vector<uint8_t> &frame_data, int64_t &timestamp_ms) {
+  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+  // Search ring buffer for the requested frame_id
+  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+    if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+      frame_data = frame_ring_buffer_[i].jpeg_data;
+      timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
+      return true;
+    }
+  }
+  
+  return false;  // Frame not found (too old or invalid frame_id)
+}
+
+bool save_callback_frame(int frame_id, const std::string& filename) {
+  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+  // Find the frame in ring buffer
+  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+    if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+      // Direct write to disk - no intermediate copying
+      std::ofstream file(filename, std::ios::binary);
+      if (!file) {
+        return false;
+      }
+      
+      file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].jpeg_data.data()),
+                 frame_ring_buffer_[i].jpeg_data.size());
+      file.close();
+      return true;
+    }
+  }
+  
+  return false;  // Frame not found
+}
+
+bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
+  if (!tclserver_) return false;
+  
+  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+  // Find the frame in ring buffer
+  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+    if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+      // Safe to pass ring buffer pointer because dpoint_new() makes internal copy
+      ds_datapoint_t *dp = dpoint_new(
+          (char*)datapoint_name.c_str(),
+          frame_ring_buffer_[i].timestamp_ms * 1000, // Convert to microseconds
+          (ds_datatype_t)DSERV_JPEG,
+          frame_ring_buffer_[i].jpeg_data.size(),
+          (unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
+      );
+      
+      tclserver_set_point(tclserver_, dp);
+      return true;
+    }
+  }
+  
+  return false;  // Frame not found
+}
+
+void get_ring_buffer_status(int &oldest_frame_id, int &newest_frame_id, int &valid_frames) {
+  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+  oldest_frame_id = -1;
+  newest_frame_id = -1;
+  valid_frames = 0;
+  
+  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+    if (frame_ring_buffer_[i].valid) {
+      valid_frames++;
+      if (oldest_frame_id == -1 || frame_ring_buffer_[i].frame_id < oldest_frame_id) {
+        oldest_frame_id = frame_ring_buffer_[i].frame_id;
+      }
+      if (newest_frame_id == -1 || frame_ring_buffer_[i].frame_id > newest_frame_id) {
+        newest_frame_id = frame_ring_buffer_[i].frame_id;
+      }
+    }
+  }
+}
+
+void set_target_fps(double fps) { 
+  target_fps_ = fps; 
+}
+
+void set_tcl_interp(Tcl_Interp *interp) { 
+  tcl_interp_ = interp; 
+}
+
+int get_frame_count() const { 
+  return frame_counter_; 
+}
+
+bool is_continuous_mode() const { 
+  return continuous_mode_; 
+}
+
 
 private:
   void check_ae_convergence(Request *request) {
@@ -621,20 +856,183 @@ private:
     }
   }
 
-  void cleanup() {
-    stop_streaming();
+void cleanup() {
+  stop_continuous_mode();
+  stop_streaming();
+  
+  if (camera_) {
+    camera_->requestCompleted.disconnect();
+    if (state_ != CameraState::IDLE) {
+      camera_->stop();
+    }
+    camera_->release();
+  }
+  
+  state_ = CameraState::IDLE;
+}
+
+// Helper method for queuing frames for background save
+void queue_frame_for_save() {
+  // Create filename with timestamp and frame number
+  auto now = std::chrono::system_clock::now();
+  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+  char filename[512];
+  snprintf(filename, sizeof(filename), "%s/frame_%06d_%lld.jpg", 
+           save_directory_.c_str(), frame_counter_.load(), timestamp);
+  
+  // Queue for background saving
+  {
+    std::lock_guard<std::mutex> lock(save_queue_mutex_);
+    save_queue_.push({jpeg_data_, std::string(filename)});
+  }
+}
+
+// Helper method for publishing frames to dataserver
+void publish_frame_to_dataserver() {
+  if (!tclserver_) return;
+  
+  // Create datapoint name
+  char point_name[256];
+  snprintf(point_name, sizeof(point_name), "%s/live_frame", datapoint_prefix_.c_str());
+  
+  // Create and publish frame datapoint
+  ds_datapoint_t *dp = dpoint_new(
+      point_name,
+      tclserver_now(tclserver_),
+      (ds_datatype_t)DSERV_JPEG,
+      jpeg_data_.size(),
+      (unsigned char *)jpeg_data_.data()
+  );
+  
+  tclserver_set_point(tclserver_, dp);
+  
+  // Also publish metadata
+  publish_frame_metadata(point_name);
+}
+
+// Helper method for publishing frame metadata
+void publish_frame_metadata(const char* base_name) {
+  char meta_name[256];
+  snprintf(meta_name, sizeof(meta_name), "%s/meta", base_name);
+  
+  auto now = std::chrono::system_clock::now();
+  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+  char meta_json[512];
+  snprintf(meta_json, sizeof(meta_json), 
+          "{\"frame_id\":%d,\"timestamp\":%lld,\"width\":%d,\"height\":%d,"
+          "\"size\":%zu,\"fps\":%.2f,\"ae_settled\":%s,\"continuous_mode\":%s}",
+          frame_counter_.load(), timestamp,
+          width_, height_, jpeg_data_.size(),
+          target_fps_ > 0 ? target_fps_ : 30.0,
+          ae_settled_ ? "true" : "false",
+          continuous_mode_ ? "true" : "false");
+  
+  ds_datapoint_t *meta_dp = dpoint_new(meta_name,
+                                      tclserver_now(tclserver_),
+                                      DSERV_STRING,
+                                      strlen(meta_json) + 1,
+                                      (unsigned char *)meta_json);
+  
+  tclserver_set_point(tclserver_, meta_dp);
+}
+void store_frame_in_ring_buffer() {
+  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+  int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
+  
+  auto now = std::chrono::system_clock::now();
+  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+  // Store frame data
+  frame_ring_buffer_[write_idx].jpeg_data = jpeg_data_;
+  frame_ring_buffer_[write_idx].frame_id = frame_counter_.load();
+  frame_ring_buffer_[write_idx].timestamp_ms = timestamp;
+  frame_ring_buffer_[write_idx].valid = true;
+  
+  // Advance write index
+  ring_write_index_++;
+}
+
+void call_tcl_frame_callback() {
+  if (!tcl_interp_ || tcl_callback_proc_.empty()) return;
+  
+  auto now = std::chrono::system_clock::now();
+  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+  // Create a Tcl command to call the callback with frame information
+  char tcl_command[1024];
+  snprintf(tcl_command, sizeof(tcl_command),
+           "%s %d %lld %d %d %zu %s %s",
+           tcl_callback_proc_.c_str(),
+           frame_counter_.load(),           // frame_id
+           timestamp,                       // timestamp_ms
+           width_,                         // width
+           height_,                        // height
+           jpeg_data_.size(),              // jpeg_size
+           ae_settled_ ? "true" : "false", // ae_settled
+           datapoint_prefix_.c_str()       // datapoint_prefix
+  );
+  
+  // Evaluate the Tcl callback
+  int result = Tcl_Eval(tcl_interp_, tcl_command);
+  if (result != TCL_OK) {
+    std::cerr << "Tcl callback error: " << Tcl_GetStringResult(tcl_interp_) << std::endl;
+  }
+}
+
+void start_save_worker() {
+  if (save_worker_running_) return;
+  
+  save_worker_running_ = true;
+  save_worker_thread_ = std::thread(&CameraCapture::save_worker_loop, this);
+}
+
+void stop_save_worker() {
+  if (!save_worker_running_) return;
+  
+  save_worker_running_ = false;
+  if (save_worker_thread_.joinable()) {
+    save_worker_thread_.join();
+  }
+  
+  // Clear any remaining items in queue
+  std::lock_guard<std::mutex> lock(save_queue_mutex_);
+  while (!save_queue_.empty()) {
+    save_queue_.pop();
+  }
+}
+
+void save_worker_loop() {
+  while (save_worker_running_) {
+    std::pair<std::vector<uint8_t>, std::string> save_item;
+    bool has_item = false;
     
-    if (camera_) {
-      camera_->requestCompleted.disconnect();
-      if (state_ != CameraState::IDLE) {
-        camera_->stop();
+    {
+      std::lock_guard<std::mutex> lock(save_queue_mutex_);
+      if (!save_queue_.empty()) {
+        save_item = save_queue_.front();
+        save_queue_.pop();
+        has_item = true;
       }
-      camera_->release();
     }
     
-    state_ = CameraState::IDLE;
+    if (has_item) {
+      // Write to disk
+      std::ofstream file(save_item.second, std::ios::binary);
+      if (file) {
+        file.write(reinterpret_cast<const char*>(save_item.first.data()), 
+                  save_item.first.size());
+        file.close();
+      } else {
+        std::cerr << "Failed to save frame: " << save_item.second << std::endl;
+      }
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   }
-
+}
 public:
   // Getters and setters
   void set_frame_skip_rate(int rate) {
