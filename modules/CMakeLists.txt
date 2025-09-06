@@ -37,6 +37,7 @@ else()
 	set(TCLLIB tclstub)
 endif()
 
+
 include_directories(${TCL_INCLUDE_DIR} .)
 
 ##
@@ -137,6 +138,44 @@ project(${MODULE})
 add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
+
+##
+## camera
+##
+set(MODULE camera)
+project(${MODULE})
+
+# Check for libcamera availability
+set(CAMERA_LIBS ${DLSH} ${TCLLIB} pthread)
+set(CAMERA_DEFINES -DUSE_TCL_STUBS)
+
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBCAMERA libcamera)
+        if(LIBCAMERA_FOUND)
+            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_LIBCAMERA)
+            set(CAMERA_LIBS ${CAMERA_LIBS} camera camera-base)
+            set(CAMERA_INCLUDES ${LIBCAMERA_INCLUDE_DIRS})
+        endif()
+    endif()
+    
+    # Check for JPEG library
+    find_package(JPEG)
+    if(JPEG_FOUND)
+        set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+        set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
+        set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
+    endif()
+endif()
+
+add_library(${MODULE} MODULE ${MODULE}/${MODULE}.cpp)
+set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+target_compile_definitions(${MODULE} PRIVATE ${CAMERA_DEFINES})
+if(CAMERA_INCLUDES)
+    target_include_directories(${MODULE} PRIVATE ${CAMERA_INCLUDES})
+endif()
+target_link_libraries(${MODULE} ${CAMERA_LIBS})
 
 ##
 ## touch
