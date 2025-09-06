@@ -130,21 +130,22 @@ private:
   
   // Tcl interpreter for callbacks
   Tcl_Interp *tcl_interp_ = nullptr;
+  tclserver_t *tclserver_ = nullptr;
   
-  // Ring buffer for frame storage
-  struct FrameBuffer {
+struct CameraFrameBuffer {
     std::vector<uint8_t> jpeg_data;
     int frame_id;
     int64_t timestamp_ms;
     bool valid;
     
-    FrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false) {}
-  };
+    CameraFrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false) {}
+};
   
-  static constexpr int RING_BUFFER_SIZE = 16;  // Adjustable
-  std::array<FrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
-  std::atomic<int> ring_write_index_{0};
-  std::mutex ring_buffer_mutex_;
+	static constexpr int RING_BUFFER_SIZE = 16;
+	std::array<CameraFrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
+	std::atomic<int> ring_write_index_{0};
+	std::mutex ring_buffer_mutex_;
+
   
   // Background save thread for continuous mode
   std::queue<std::pair<std::vector<uint8_t>, std::string>> save_queue_;
@@ -229,7 +230,7 @@ public:
     return allocate_buffers();
   }
 
-  bool allocate_buffers() {
+bool allocate_buffers() {
     allocator_ = std::make_unique<FrameBufferAllocator>(camera_);
 
     int ret = allocator_->allocate(stream_);
@@ -237,7 +238,8 @@ public:
       return false;
     }
 
-    const std::vector<std::unique_ptr<FrameBuffer>> &buffers = 
+    // Use libcamera::FrameBuffer correctly
+    const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = 
       allocator_->buffers(stream_);
     
     requests_.clear();
@@ -248,20 +250,20 @@ public:
         return false;
       }
 
-      const std::unique_ptr<FrameBuffer> &buffer = buffers[i];
+      const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[i];
       ret = request->addBuffer(stream_, buffer.get());
       if (ret < 0) {
         return false;
       }
 
-      // Set camera controls
+      // Set camera controls including FPS if specified
       set_camera_controls(request->controls());
       
       requests_.push_back(std::move(request));
     }
     
     return true;
-  }
+}
   
   void set_camera_controls(ControlList &controls) {
     const ControlInfoMap &available_controls = camera_->controls();
@@ -566,11 +568,11 @@ public:
   }
   frame_skip_counter_ = 0;
   
-  // Process frame
+  // Process frame - use libcamera::FrameBuffer correctly
   const Request::BufferMap &buffers = request->buffers();
   for (auto buffer_pair : buffers) {
-    FrameBuffer *buffer = buffer_pair.second;
-    const FrameBuffer::Plane &plane = buffer->planes()[0];
+    libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
+    const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
       
     void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
                       plane.fd.get(), 0);
@@ -599,7 +601,7 @@ public:
   }    
 }
 
-  void capture_request_complete(Request *request) {
+void capture_request_complete(Request *request) {
     if (request->status() == Request::RequestCancelled) {
       return;
     }
@@ -614,8 +616,8 @@ public:
       const Request::BufferMap &buffers = request->buffers();
       
       for (auto buffer_pair : buffers) {
-        FrameBuffer *buffer = buffer_pair.second;
-        const FrameBuffer::Plane &plane = buffer->planes()[0];
+        libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
+        const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
         
         const StreamConfiguration &cfg = stream_->configuration();
         
@@ -647,8 +649,8 @@ public:
       request->reuse(Request::ReuseBuffers);
       camera_->queueRequest(request);
     }
-  }
-  
+}
+
   void handle_continuous_frame() {
   // Check if we should process this frame based on interval
   if ((frame_counter_ % publish_interval_) != 0) {
