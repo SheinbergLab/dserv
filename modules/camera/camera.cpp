@@ -19,6 +19,7 @@
 #include <sstream>
 #include <atomic>
 #include <mutex>
+#include <queue>
 #include <condition_variable>
 
 // Tcl and dataserver headers
