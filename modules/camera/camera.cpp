@@ -194,16 +194,42 @@ public:
 
       // Set controls
       ControlList &controls = request->controls();
-      controls.set(controls::AeEnable, true);
-      controls.set(controls::AwbEnable, true);
-      controls.set(controls::AeExposureMode, controls::ExposureNormal);
-      controls.set(controls::AeMeteringMode, controls::MeteringCentreWeighted);
-      controls.set(controls::Brightness, brightness_);
-      controls.set(controls::Contrast, contrast_);
-
-      requests_.push_back(std::move(request));
+        // Set controls only if supported
+        ControlList &controls = request->controls();
+        
+        // Check what controls are actually available
+        const ControlInfoMap &available_controls = camera_->controls();
+        
+        // Only set controls that exist
+        if (available_controls.find(&controls::AeEnable) !=
+	    available_controls.end()) {
+	  controls.set(controls::AeEnable, true);
+        }
+        if (available_controls.find(&controls::AwbEnable) !=
+	    available_controls.end()) {
+	  controls.set(controls::AwbEnable, true);
+        }
+        if (available_controls.find(&controls::AeExposureMode) !=
+	    available_controls.end()) {
+	  controls.set(controls::AeExposureMode, controls::ExposureNormal);
+        }
+        if (available_controls.find(&controls::AeMeteringMode) !=
+	    available_controls.end()) {
+	  controls.set(controls::AeMeteringMode,
+		       controls::MeteringCentreWeighted);
+        }
+        if (available_controls.find(&controls::Brightness) !=
+	    available_controls.end()) {
+	  controls.set(controls::Brightness, brightness_);
+        }
+        if (available_controls.find(&controls::Contrast) !=
+	    available_controls.end()) {
+	  controls.set(controls::Contrast, contrast_);
+        }
+	
+	requests_.push_back(std::move(request));
     }
-
+    
     return true;
   }
 
