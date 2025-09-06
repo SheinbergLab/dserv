@@ -142,7 +142,7 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
 ##
 ## camera
 ##
-set(MODULE camera)
+set(MODULE camera_capture)  # Changed from 'camera' to avoid conflicts
 project(${MODULE})
 
 # Check for libcamera availability
@@ -155,7 +155,7 @@ if(UNIX AND NOT APPLE)
         pkg_check_modules(LIBCAMERA libcamera)
         if(LIBCAMERA_FOUND)
             set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_LIBCAMERA)
-            set(CAMERA_LIBS ${CAMERA_LIBS} camera camera-base)
+            set(CAMERA_LIBS ${CAMERA_LIBS} ${LIBCAMERA_LIBRARIES})
             set(CAMERA_INCLUDES ${LIBCAMERA_INCLUDE_DIRS})
         endif()
     endif()
@@ -169,8 +169,9 @@ if(UNIX AND NOT APPLE)
     endif()
 endif()
 
-add_library(${MODULE} MODULE ${MODULE}/${MODULE}.cpp)
+add_library(${MODULE} MODULE camera/camera.cpp)  # Keep source path as camera/camera.cpp
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+set_target_properties(${MODULE} PROPERTIES OUTPUT_NAME "camera")  # Output file will still be dserv_camera.so
 target_compile_definitions(${MODULE} PRIVATE ${CAMERA_DEFINES})
 if(CAMERA_INCLUDES)
     target_include_directories(${MODULE} PRIVATE ${CAMERA_INCLUDES})
@@ -193,5 +194,5 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
 install(TARGETS
 	ain juicer gpio_input gpio_output touch
-	rmt eventlog sound timer usbio ina226 joystick4
+	rmt eventlog sound timer usbio ina226 joystick4 camera_capture
 	DESTINATION dserv/modules COMPONENT dserv)
