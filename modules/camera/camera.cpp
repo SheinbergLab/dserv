@@ -28,6 +28,7 @@ extern "C" {
 #include "Datapoint.h"
 #include "tclserver_api.h"
 }
+#include "TclServer.h"
 
 // Add JPEG type if not already defined
 #ifndef DSERV_JPEG
@@ -40,7 +41,7 @@ class CameraCapture;
 // Camera info structure used by both implementations
 typedef struct camera_info_s {
   CameraCapture *capture;
-  tclserver_t *tclserver;
+  TclServer *tclserver;
   char *dpoint_prefix;
   int camera_index;  // Which camera to use
   int initialized;
@@ -117,7 +118,7 @@ private:
   int ae_settle_count_ = 0;
   static constexpr int AE_SETTLE_FRAMES = 5;  // Frames to wait for AE to settle
   
-    // Continuous mode parameters
+  // Continuous mode parameters
   bool continuous_mode_ = false;
   bool save_to_disk_ = false;
   bool publish_to_dataserver_ = false;
@@ -127,13 +128,21 @@ private:
   std::string tcl_callback_proc_ = "";
   std::atomic<int> frame_counter_{0};
   int publish_interval_ = 1;  // Publish every Nth frame
+
+  // FPS management
   double target_fps_ = 0.0;  // 0 = use camera default
+  double configured_fps_ = 0.0;
+  bool hardware_fps_supported_ = false;
+  double actual_fps_ = 0.0;  // Measured FPS for fallback calculations
+  bool software_throttling_active_ = false;
+  std::chrono::steady_clock::time_point last_frame_time_;
+  std::chrono::microseconds target_frame_interval_{0};
   
   // Tcl interpreter for callbacks
   Tcl_Interp *tcl_interp_ = nullptr;
-  tclserver_t *tclserver_ = nullptr;
+  TclServer *tclserver_ = nullptr;
   
-struct CameraFrameBuffer {
+  struct CameraFrameBuffer {
     std::vector<uint8_t> jpeg_data;
     int frame_id;
     int64_t timestamp_ms;
@@ -164,6 +173,10 @@ public:
     cleanup();
   }
 
+  void set_tclserver(TclServer *server) { 
+    tclserver_ = server; 
+  }
+  
   bool initialize(int index = -1) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     
@@ -270,23 +283,47 @@ bool allocate_buffers() {
     const ControlInfoMap &available_controls = camera_->controls();
     
     // Only set controls that exist
-    if (available_controls.find(&controls::AeEnable) != available_controls.end()) {
+    if (available_controls.find(&controls::AeEnable) !=
+	available_controls.end()) {
       controls.set(controls::AeEnable, true);
     }
-    if (available_controls.find(&controls::AwbEnable) != available_controls.end()) {
+    if (available_controls.find(&controls::AwbEnable) !=
+	available_controls.end()) {
       controls.set(controls::AwbEnable, true);
     }
-    if (available_controls.find(&controls::AeExposureMode) != available_controls.end()) {
+    if (available_controls.find(&controls::AeExposureMode) !=
+	available_controls.end()) {
       controls.set(controls::AeExposureMode, controls::ExposureNormal);
     }
-    if (available_controls.find(&controls::AeMeteringMode) != available_controls.end()) {
+    if (available_controls.find(&controls::AeMeteringMode) !=
+	available_controls.end()) {
       controls.set(controls::AeMeteringMode, controls::MeteringCentreWeighted);
     }
-    if (available_controls.find(&controls::Brightness) != available_controls.end()) {
+    if (available_controls.find(&controls::Brightness) !=
+	available_controls.end()) {
       controls.set(controls::Brightness, brightness_);
     }
-    if (available_controls.find(&controls::Contrast) != available_controls.end()) {
+    if (available_controls.find(&controls::Contrast) !=
+	available_controls.end()) {
       controls.set(controls::Contrast, contrast_);
+    }
+    
+    // Add FPS control if target_fps_ is set
+    if (target_fps_ > 0.0) {
+      configured_fps_ = target_fps_;
+      if (available_controls.find(&controls::FrameDurationLimits) !=
+	  available_controls.end()) {
+	int64_t frame_duration_us =
+	  static_cast<int64_t>(1000000.0 / target_fps_);
+	controls.set(controls::FrameDurationLimits, 
+		     Span<const int64_t, 2>({frame_duration_us,
+			 frame_duration_us}));
+	hardware_fps_supported_ = true;
+	software_throttling_active_ = false;
+      } else {
+	hardware_fps_supported_ = false;
+	software_throttling_active_ = true;
+      }
     }
   }
   
@@ -367,7 +404,8 @@ bool allocate_buffers() {
     frame_skip_counter_ = 0;
     ae_settled_ = false;
     ae_settle_count_ = 0;
-    
+    last_frame_time_ = std::chrono::steady_clock::now();
+ 
     // Disconnect any existing callbacks
     camera_->requestCompleted.disconnect();
     
@@ -483,13 +521,33 @@ bool allocate_buffers() {
   }
 
   bool encode_jpeg() {
+    //  std::cerr << "DEBUG: Entering encode_jpeg()" << std::endl;
+    
 #ifdef HAS_JPEG
-    if (!stream_ || image_data_.empty()) {
-      return false;
-    }
+  if (!stream_) {
+    //    std::cerr << "DEBUG: stream_ is null!" << std::endl;
+    return false;
+  }
+  
+  if (image_data_.empty()) {
+    //    std::cerr << "DEBUG: image_data_ is empty!" << std::endl;
+    return false;
+  }
+  
+  //  std::cerr << "DEBUG: stream_ = " << stream_ << std::endl;
+  //  std::cerr << "DEBUG: image_data_.size() = " << image_data_.size() << std::endl;
 
     const StreamConfiguration &cfg = stream_->configuration();
-        
+    // std::cerr << "DEBUG: Got stream configuration" << std::endl;
+
+  if (cfg.pixelFormat == formats::MJPEG) {
+    //    std::cerr << "DEBUG: Already MJPEG format, copying directly" << std::endl;
+    jpeg_data_ = image_data_;
+    return true;
+  }
+  
+  //  std::cerr << "DEBUG: About to create JPEG compression structures" << std::endl;   
+ 
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
         
@@ -537,6 +595,8 @@ bool allocate_buffers() {
   }
 
  void streaming_request_complete(Request *request) {
+   // std::cerr << "DEBUG: Entering streaming_request_complete" << std::endl;
+   
   // Early exit if not streaming
   if (state_ != CameraState::STREAMING) {
     return;
@@ -591,17 +651,32 @@ bool allocate_buffers() {
     break;
   }
 
-  // Handle continuous mode operations
   if (continuous_mode_ && ae_settled_) {
+    // If hardware FPS isn't supported and we have a target FPS, throttle in software
+    if (!hardware_fps_supported_ && target_fps_ > 0.0) {
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed = now - last_frame_time_;
+      
+      if (elapsed < target_frame_interval_) {
+        // Skip this frame - too soon for target FPS
+        if (state_ == CameraState::STREAMING) {
+          request->reuse(Request::ReuseBuffers);
+          camera_->queueRequest(request);
+        }
+        return;
+      }
+      last_frame_time_ = now;
+    }
+    
     handle_continuous_frame();
   }
-
+  
   if (state_ == CameraState::STREAMING) {
-      request->reuse(Request::ReuseBuffers);
-      camera_->queueRequest(request);
-  }    
-}
-
+    request->reuse(Request::ReuseBuffers);
+    camera_->queueRequest(request);
+  }
+ }
+  
 void capture_request_complete(Request *request) {
     if (request->status() == Request::RequestCancelled) {
       return;
@@ -652,23 +727,36 @@ void capture_request_complete(Request *request) {
     }
 }
 
-  void handle_continuous_frame() {
+void handle_continuous_frame() {
+  //   std::cerr << "DEBUG: FIRST LINE of handle_continuous_frame" << std::endl;
+  
   // Check if we should process this frame based on interval
-  if ((frame_counter_ % publish_interval_) != 0) {
+  int current_frame = frame_counter_.load();
+  int interval = publish_interval_;
+  
+  if (interval <= 0) {
+    std::cerr << "ERROR: Invalid publish_interval_: " << interval << std::endl;
+    return;
+  }
+  
+  if ((current_frame % interval) != 0) {
     frame_counter_++;
     return;
   }
   
-  // Encode to JPEG for saving/publishing/callback
+  //  std::cerr << "DEBUG: Past interval check" << std::endl;
+  
+  // Add back encode_jpeg() to test
+  //  std::cerr << "DEBUG: About to call encode_jpeg()" << std::endl;
   if (!encode_jpeg()) {
     std::cerr << "Failed to encode JPEG for continuous mode" << std::endl;
     frame_counter_++;
     return;
   }
+  //  std::cerr << "DEBUG: encode_jpeg() completed successfully" << std::endl;
   
-  // Store frame in ring buffer for callback access
   store_frame_in_ring_buffer();
-  
+
   // Handle via Tcl callback if specified
   if (use_tcl_callback_ && !tcl_callback_proc_.empty() && tcl_interp_) {
     call_tcl_frame_callback();
@@ -682,10 +770,12 @@ void capture_request_complete(Request *request) {
       publish_frame_to_dataserver();
     }
   }
+
   
   frame_counter_++;
+  //  std::cerr << "DEBUG: handle_continuous_frame completed" << std::endl;
 }
-
+  
   bool start_continuous_mode(bool save_disk, bool publish_dataserver, 
                           const std::string& save_dir,
                           const std::string& datapoint_prefix,
@@ -807,39 +897,42 @@ bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
   
   return false;  // Frame not found
 }
-
-void get_ring_buffer_status(int &oldest_frame_id, int &newest_frame_id, int &valid_frames) {
-  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
   
-  oldest_frame_id = -1;
-  newest_frame_id = -1;
-  valid_frames = 0;
-  
-  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-    if (frame_ring_buffer_[i].valid) {
-      valid_frames++;
-      if (oldest_frame_id == -1 || frame_ring_buffer_[i].frame_id < oldest_frame_id) {
-        oldest_frame_id = frame_ring_buffer_[i].frame_id;
-      }
-      if (newest_frame_id == -1 || frame_ring_buffer_[i].frame_id > newest_frame_id) {
-        newest_frame_id = frame_ring_buffer_[i].frame_id;
+  void get_ring_buffer_status(int &oldest_frame_id, int &newest_frame_id, int &valid_frames) {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
+    oldest_frame_id = -1;
+    newest_frame_id = -1;
+    valid_frames = 0;
+    
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid) {
+	valid_frames++;
+	if (oldest_frame_id == -1 || frame_ring_buffer_[i].frame_id < oldest_frame_id) {
+	  oldest_frame_id = frame_ring_buffer_[i].frame_id;
+	}
+	if (newest_frame_id == -1 || frame_ring_buffer_[i].frame_id > newest_frame_id) {
+	  newest_frame_id = frame_ring_buffer_[i].frame_id;
+	}
       }
     }
   }
-}
-
-void set_target_fps(double fps) { 
-  target_fps_ = fps; 
-}
-
-void set_tcl_interp(Tcl_Interp *interp) { 
-  tcl_interp_ = interp; 
-}
-
-int get_frame_count() const { 
-  return frame_counter_; 
-}
-
+  
+  void set_target_fps(double fps) { 
+    target_fps_ = fps;
+    if (fps > 0.0) {
+      target_frame_interval_ = std::chrono::microseconds(static_cast<int64_t>(1000000.0 / fps));
+    }
+  }
+  
+  void set_tcl_interp(Tcl_Interp *interp) { 
+    tcl_interp_ = interp; 
+  }
+  
+  int get_frame_count() const { 
+    return frame_counter_; 
+  }
+  
 bool is_continuous_mode() const { 
   return continuous_mode_; 
 }
@@ -959,14 +1052,14 @@ void store_frame_in_ring_buffer() {
 }
 
 void call_tcl_frame_callback() {
-  if (!tcl_interp_ || tcl_callback_proc_.empty()) return;
+  if (!tclserver_ || tcl_callback_proc_.empty()) return;
   
   auto now = std::chrono::system_clock::now();
   auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
   
-  // Create a Tcl command to call the callback with frame information
-  char tcl_command[1024];
-  snprintf(tcl_command, sizeof(tcl_command),
+  // Create a Tcl script that calls the callback
+  char tcl_command[2048];
+  int len = snprintf(tcl_command, sizeof(tcl_command),
            "%s %d %lld %d %d %zu %s %s",
            tcl_callback_proc_.c_str(),
            frame_counter_.load(),           // frame_id
@@ -978,11 +1071,22 @@ void call_tcl_frame_callback() {
            datapoint_prefix_.c_str()       // datapoint_prefix
   );
   
-  // Evaluate the Tcl callback
-  int result = Tcl_Eval(tcl_interp_, tcl_command);
-  if (result != TCL_OK) {
-    std::cerr << "Tcl callback error: " << Tcl_GetStringResult(tcl_interp_) << std::endl;
+  if (len >= sizeof(tcl_command)) {
+    std::cerr << "Tcl command too long, truncated" << std::endl;
+    return;
   }
+
+  // std::cerr << "DEBUG: About to queue tcl command: " << tcl_command << std::endl;
+  
+  // Use TclServer's existing REQ_SCRIPT_NOREPLY mechanism
+  client_request_t req;
+  req.type = REQ_SCRIPT_NOREPLY;  // No reply needed for callbacks
+  req.script = std::string(tcl_command);
+  
+  // Push directly to the TclServer queue - this is thread-safe
+  tclserver_->queue.push_back(req);
+  //  std::cerr << "DEBUG: Tcl command queued successfully" << std::endl;
+  
 }
 
 void start_save_worker() {
@@ -1060,6 +1164,9 @@ public:
   
   CameraState get_state() const { return state_; }
   bool is_ae_settled() const { return ae_settled_; }
+  bool is_hardware_fps_supported() const { return hardware_fps_supported_; }
+  bool is_software_throttling_active() const { return software_throttling_active_; }
+  double get_configured_fps() const { return configured_fps_; }  
 };
 
 /*****************************************************************************
@@ -1180,7 +1287,10 @@ extern "C" {
         Tcl_AppendResult(interp, "Failed to initialize camera", NULL);
         return TCL_ERROR;
       }
-      
+
+      info->capture->set_tcl_interp(interp);
+      info->capture->set_tclserver(info->tclserver);
+  
       info->initialized = 1;
       Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
       return TCL_OK;
@@ -1192,54 +1302,64 @@ extern "C" {
     }
   }
 
-  static int camera_configure_command(ClientData data,
-                                      Tcl_Interp *interp,
-                                      int objc, Tcl_Obj *objv[])
-  {
-    camera_info_t *info = (camera_info_t *) data;
-    int width = 1920;
-    int height = 1080;
-    
-    if (!info->available) {
-      Tcl_AppendResult(interp, "Camera support not available", NULL);
-      return TCL_ERROR;
-    }
-    
-    if (!info->initialized || !info->capture) {
-      Tcl_AppendResult(interp, "Camera not initialized", NULL);
-      return TCL_ERROR;
-    }
-    
-    // Check if camera is busy
-    if (info->capture->get_state() != CameraState::IDLE) {
-      Tcl_AppendResult(interp, "Camera is busy - stop streaming first", NULL);
-      return TCL_ERROR;
-    }
-    
-    if (objc > 1) {
-      if (Tcl_GetIntFromObj(interp, objv[1], &width) != TCL_OK)
-        return TCL_ERROR;
-    }
-    if (objc > 2) {
-      if (Tcl_GetIntFromObj(interp, objv[2], &height) != TCL_OK)
-        return TCL_ERROR;
-    }
-
-    try {
-      if (!info->capture->configure(width, height)) {
-        Tcl_AppendResult(interp, "Failed to configure camera", NULL);
-        return TCL_ERROR;
-      }
-        
-      info->configured = 1;
-      Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
-      return TCL_OK;
-        
-    } catch (const std::exception& e) {
-      Tcl_AppendResult(interp, "Exception during configuration: ", e.what(), NULL);
-      return TCL_ERROR;
-    }
+static int camera_configure_command(ClientData data,
+                                    Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *objv[])
+{
+  camera_info_t *info = (camera_info_t *) data;
+  int width = 1920;
+  int height = 1080;
+  double fps = 0.0;  // 0 = use camera default
+  
+  if (!info->available) {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
   }
+  
+  if (!info->initialized || !info->capture) {
+    Tcl_AppendResult(interp, "Camera not initialized", NULL);
+    return TCL_ERROR;
+  }
+  
+  // Check if camera is busy
+  if (info->capture->get_state() != CameraState::IDLE) {
+    Tcl_AppendResult(interp, "Camera is busy - stop streaming first", NULL);
+    return TCL_ERROR;
+  }
+  
+  if (objc > 1) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &width) != TCL_OK)
+      return TCL_ERROR;
+  }
+  if (objc > 2) {
+    if (Tcl_GetIntFromObj(interp, objv[2], &height) != TCL_OK)
+      return TCL_ERROR;
+  }
+  if (objc > 3) {
+    if (Tcl_GetDoubleFromObj(interp, objv[3], &fps) != TCL_OK)
+      return TCL_ERROR;
+  }
+
+  try {
+    // Set target FPS before configuring
+    if (fps > 0.0) {
+      info->capture->set_target_fps(fps);
+    }
+    
+    if (!info->capture->configure(width, height)) {
+      Tcl_AppendResult(interp, "Failed to configure camera", NULL);
+      return TCL_ERROR;
+    }
+      
+    info->configured = 1;
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    return TCL_OK;
+      
+  } catch (const std::exception& e) {
+    Tcl_AppendResult(interp, "Exception during configuration: ", e.what(), NULL);
+    return TCL_ERROR;
+  }
+}
 
   static int camera_capture_command(ClientData data,
                                     Tcl_Interp *interp,
@@ -1557,18 +1677,38 @@ extern "C" {
     if (info->capture) {
       const char* state_str = "idle";
       switch (info->capture->get_state()) {
-        case CameraState::STREAMING: state_str = "streaming"; break;
-        case CameraState::CAPTURING: state_str = "capturing"; break;
-        default: state_str = "idle"; break;
+      case CameraState::STREAMING: state_str = "streaming"; break;
+      case CameraState::CAPTURING: state_str = "capturing"; break;
+      default: state_str = "idle"; break;
       }
       
       Tcl_DictObjPut(interp, result,
                      Tcl_NewStringObj("state", -1),
                      Tcl_NewStringObj(state_str, -1));
-                     
+      
       Tcl_DictObjPut(interp, result,
                      Tcl_NewStringObj("ae_settled", -1),
                      Tcl_NewBooleanObj(info->capture->is_ae_settled()));
+      double configured_fps = info->capture->get_configured_fps();
+      if (configured_fps > 0.0) {
+	Tcl_DictObjPut(interp, result,
+		       Tcl_NewStringObj("configured_fps", -1),
+		       Tcl_NewDoubleObj(configured_fps));
+	
+	Tcl_DictObjPut(interp, result,
+		       Tcl_NewStringObj("hardware_fps_supported", -1),
+		       Tcl_NewBooleanObj(info->capture->is_hardware_fps_supported()));
+	
+	Tcl_DictObjPut(interp, result,
+		       Tcl_NewStringObj("software_throttling_active", -1),
+		       Tcl_NewBooleanObj(info->capture->is_software_throttling_active()));
+	
+	const char* fps_method = info->capture->is_hardware_fps_supported() ? 
+	  "hardware" : "software_throttling";
+	Tcl_DictObjPut(interp, result,
+		       Tcl_NewStringObj("fps_control_method", -1),
+		       Tcl_NewStringObj(fps_method, -1));
+      }
     }
     
 #ifdef HAS_LIBCAMERA
@@ -2073,7 +2213,7 @@ static int camera_set_frame_skip_rate_command(ClientData data,
       return TCL_ERROR;
     }
 
-    g_cameraInfo.tclserver = tclserver_get();
+    g_cameraInfo.tclserver = (TclServer *) tclserver_get();
     g_cameraInfo.dpoint_prefix = (char *)"camera";
     g_cameraInfo.capture = nullptr;
     g_cameraInfo.initialized = 0;
