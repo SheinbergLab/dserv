@@ -1053,7 +1053,7 @@ bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
           (unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
       );
       
-      tclserver_->set_point(dp);
+      tclserver_set_point(tclserver, dp);
       return true;
     }
   }
