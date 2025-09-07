@@ -27,8 +27,8 @@
 extern "C" {
 #include <tcl.h>
 #include "Datapoint.h"
+#include "tclserver_api.h" 
 }
-#include "TclServer.h"
 
 // Add JPEG type if not already defined
 #ifndef DSERV_JPEG
@@ -41,7 +41,7 @@ class CameraCapture;
 // Camera info structure used by both implementations
 typedef struct camera_info_s {
   CameraCapture *capture;
-  TclServer *tclserver;
+  tclserver_t *tclserver; 
   char *dpoint_prefix;
   int camera_index;  // Which camera to use
   int initialized;
@@ -137,7 +137,7 @@ private:
   
   // Tcl interpreter for callbacks
   Tcl_Interp *tcl_interp_ = nullptr;
-  TclServer *tclserver_ = nullptr;
+  tclserver_t *tclserver = nullptr;
   
   struct CameraFrameBuffer {
     std::vector<uint8_t> jpeg_data;
@@ -170,8 +170,8 @@ public:
     cleanup();
   }
 
-  void set_tclserver(TclServer *server) { 
-    tclserver_ = server; 
+  void set_tclserver(tclserver_t *server) { 
+    tclserver = server; 
   }
   
   bool initialize(int index = -1) {
@@ -929,7 +929,7 @@ void handle_continuous_frame() {
       queue_frame_for_save();
     }
     
-    if (publish_to_dataserver_ && tclserver_) {
+    if (publish_to_dataserver_ && tclserver) {
       publish_frame_to_dataserver();
     }
   }
@@ -1037,7 +1037,7 @@ bool save_callback_frame(int frame_id, const std::string& filename) {
 }
 
 bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
-  if (!tclserver_) return false;
+  if (!tclserver) return false;
   
   std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
   
@@ -1149,7 +1149,7 @@ void queue_frame_for_save() {
 
 // Helper method for publishing frames to dataserver
 void publish_frame_to_dataserver() {
-  if (!tclserver_) return;
+  if (!tclserver) return;
   
   // Create datapoint name
   char point_name[256];
@@ -1158,13 +1158,13 @@ void publish_frame_to_dataserver() {
   // Create and publish frame datapoint
   ds_datapoint_t *dp = dpoint_new(
       point_name,
-      tclserver_->now(),
+      tclserver_now(tclserver),
       (ds_datatype_t)DSERV_JPEG,
       jpeg_data_.size(),
       (unsigned char *)jpeg_data_.data()
   );
   
-  tclserver_->set_point(dp);
+  tclserver_set_point(tclserver, dp);
   
   // Also publish metadata
   publish_frame_metadata(point_name);
@@ -1189,12 +1189,12 @@ void publish_frame_metadata(const char* base_name) {
           continuous_mode_ ? "true" : "false");
   
   ds_datapoint_t *meta_dp = dpoint_new(meta_name,
-				       tclserver_->now(),
+				       tclserver_now(tclserver),
                                       DSERV_STRING,
                                       strlen(meta_json) + 1,
                                       (unsigned char *)meta_json);
   
-  tclserver_->set_point(meta_dp);
+  tclserver_set_point(tclserver, meta_dp);
 }
 void store_frame_in_ring_buffer() {
   std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
@@ -1215,7 +1215,7 @@ void store_frame_in_ring_buffer() {
 }
 
 void call_tcl_frame_callback() {
-  if (!tclserver_ || tcl_callback_proc_.empty()) return;
+  if (!tclserver || tcl_callback_proc_.empty()) return;
   
   auto now = std::chrono::system_clock::now();
   auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -1242,13 +1242,7 @@ void call_tcl_frame_callback() {
   // std::cerr << "DEBUG: About to queue tcl command: " << tcl_command << std::endl;
   
   // Use TclServer's existing REQ_SCRIPT_NOREPLY mechanism
-  client_request_t req;
-  req.type = REQ_SCRIPT_NOREPLY;  // No reply needed for callbacks
-  req.script = std::string(tcl_command);
-  
-  // Push directly to the TclServer queue - this is thread-safe
-  tclserver_->queue.push_back(req);
-  //  std::cerr << "DEBUG: Tcl command queued successfully" << std::endl;
+  tclserver_queue_script(tclserver, tcl_command, 1); 
   
 }
 
@@ -1377,7 +1371,7 @@ public:
   void set_frame_skip_rate(int rate) {}
 
   void set_tcl_interp(Tcl_Interp *interp) {}
-  void set_tclserver(TclServer *server) {}
+  void set_tclserver(tclserver_t *server) {}
   void set_target_fps(double fps) {}
   double get_configured_fps() const { return 0.0; }
   bool is_hardware_fps_supported() const { return false; }
@@ -1638,14 +1632,15 @@ static int camera_configure_command(ClientData data,
         return TCL_ERROR;
       }
         
-      ds_datapoint_t *dp = dpoint_new((char *)point_name,
-                                      info->tclserver->now(),
-                                      (ds_datatype_t)DSERV_JPEG,
-                                      info->capture->get_jpeg_size(),
-                                      (unsigned char *)info->capture->get_jpeg_data());
-        
-      info->tclserver->set_point(dp);
-        
+      ds_datapoint_t *dp =
+	dpoint_new((char *)point_name,
+		   tclserver_now(info->tclserver),
+		   (ds_datatype_t)DSERV_JPEG,
+		   info->capture->get_jpeg_size(),
+		   (unsigned char *)info->capture->get_jpeg_data());
+      
+      tclserver_set_point(info->tclserver, dp);
+      
       char meta_name[256];
       snprintf(meta_name, sizeof(meta_name), "%s/meta", point_name);
         
@@ -1658,12 +1653,12 @@ static int camera_configure_command(ClientData data,
                info->capture->is_ae_settled() ? "true" : "false");
         
       ds_datapoint_t *meta_dp = dpoint_new(meta_name,
-                                           info->tclserver->now(),
+                                           tclserver_now(info->tclserver),
                                            DSERV_STRING,
                                            strlen(meta_str) + 1,
                                            (unsigned char *)meta_str);
         
-      info->tclserver->set_point(meta_dp);
+      tclserver_set_point(info->tclserver, meta_dp);
         
       Tcl_SetObjResult(interp, Tcl_NewIntObj(info->capture->get_jpeg_size()));
       return TCL_OK;
@@ -2399,7 +2394,7 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     camera_info_t *cameraInfo =
       (camera_info_t*) calloc(1, sizeof(camera_info_t));
     cameraInfo->tclserver = 
-      (TclServer*)Tcl_GetAssocData(interp, "tclserver_instance", NULL);
+      (tclserver_t *)Tcl_GetAssocData(interp, "tclserver_instance", NULL);
     cameraInfo->dpoint_prefix = strdup("camera");
     cameraInfo->capture = nullptr;
     cameraInfo->initialized = 0;
