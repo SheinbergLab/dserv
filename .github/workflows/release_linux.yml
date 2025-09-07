@@ -27,7 +27,6 @@ jobs:
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
           sudo apt install -y libevdev-dev zlib1g-dev
           sudo apt install -y libcamera-dev libcamera-tools libjpeg-dev
-          sudo apt install -y libcamera0.3 python3-libcamera
 
       - name: Check out our dserv code for the current tag.
         uses: actions/checkout@v4
@@ -47,6 +46,20 @@ jobs:
           cmake -B build
           cmake --build build
           sudo cmake --install build
+
+      - name: Verify libcamera installation
+        run: |
+          echo "=== Checking libcamera packages ==="
+          dpkg -l | grep libcamera || echo "No libcamera packages found"
+        
+          echo "=== Checking pkg-config for libcamera ==="
+          pkg-config --exists libcamera && echo "libcamera found via pkg-config" || echo "libcamera NOT found via pkg-config"
+          pkg-config --modversion libcamera 2>/dev/null || echo "No version info available"
+          pkg-config --cflags libcamera 2>/dev/null || echo "No cflags available"
+          pkg-config --libs libcamera 2>/dev/null || echo "No libs available"
+        
+          echo "=== Looking for libcamera files ==="
+          find /usr -name "*libcamera*" -type f 2>/dev/null | head -10
 
       - name: Build dserv itself and package it for release.
         run: |
