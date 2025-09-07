@@ -11,7 +11,6 @@ jobs:
 
     strategy:
       matrix:
-        # Build on not-the-latest to keep dependency versions modest.
         os: [ubuntu-22.04, ubuntu-22.04-arm]
 
     runs-on: ${{ matrix.os }}
@@ -31,53 +30,6 @@ jobs:
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
           sudo apt install -y libevdev-dev zlib1g-dev pkg-config
-          sudo apt install -y libjpeg-dev python3-yaml python3-ply python3-jinja2
-
-      - name: Set architecture-specific paths
-        run: |
-          if [ "$(dpkg --print-architecture)" = "arm64" ]; then
-            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-          else
-            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-          fi
-
-      - name: Cache libcamera build
-        uses: actions/cache@v3
-        id: cache-libcamera
-        with:
-          path: |
-            /usr/local/lib/libcamera*
-            /usr/local/include/libcamera
-            /usr/local/lib/pkgconfig/libcamera.pc
-            /usr/local/lib/x86_64-linux-gnu/pkgconfig/libcamera.pc
-            /usr/local/lib/aarch64-linux-gnu/pkgconfig/libcamera.pc
-          key: libcamera-v0.5.1-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Install modern libcamera from source
-        if: steps.cache-libcamera.outputs.cache-hit != 'true'
-        run: |
-          # Install ninja build system
-          sudo apt install -y ninja-build
-          
-          # Install newer meson via pip (Ubuntu 22.04's meson is too old)
-          sudo apt install -y python3-pip
-          sudo pip3 install meson
-          
-          # Verify meson version
-          meson --version
-        
-          # Clone and build libcamera
-          git clone https://git.libcamera.org/libcamera/libcamera.git
-          cd libcamera
-          git checkout v0.5.1  # Use a stable version
-        
-          # Configure and build
-          meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
-          ninja -C build
-          sudo ninja -C build install
-        
-          # Update library cache
-          sudo ldconfig
 
       - name: Install TCL 9 to the build environment.
         run: |
@@ -93,24 +45,6 @@ jobs:
           cmake --build build
           sudo cmake --install build
 
-      - name: Verify libcamera installation
-        run: |
-          echo "=== PKG_CONFIG_PATH ==="
-          echo $PKG_CONFIG_PATH
-        
-          echo "=== Checking pkg-config for libcamera ==="
-          pkg-config --exists libcamera && echo "libcamera found via pkg-config" || echo "libcamera NOT found via pkg-config"
-          pkg-config --modversion libcamera 2>/dev/null || echo "No version info available"
-          pkg-config --cflags libcamera 2>/dev/null || echo "No cflags available"
-          pkg-config --libs libcamera 2>/dev/null || echo "No libs available"
-        
-          echo "=== Looking for libcamera pkg-config files ==="
-          ls -la /usr/local/lib/pkgconfig/ | grep camera || echo "No camera pkg-config files found"
-          ls -la /usr/local/lib/x86_64-linux-gnu/pkgconfig/ | grep camera || echo "No camera pkg-config files in x86_64 dir"
-        
-          echo "=== Looking for libcamera headers ==="
-          ls -la /usr/local/include/ | grep camera || echo "No camera headers found"
-
       - name: Build dserv itself and package it for release.
         run: |
           cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
@@ -125,11 +59,131 @@ jobs:
           generateReleaseNotes: true
           allowUpdates: true
 
+  release-camera:
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux
+            libcamera_version: "0.4.0"
+          - os: ubuntu-22.04-arm  
+            target: rpi
+            libcamera_version: "0.5.1"
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up a build environment.
+        run: |
+          sudo apt update
+          sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
+          sudo apt install -y libevdev-dev zlib1g-dev pkg-config libjpeg-dev
+          
+          # Check what JPEG libraries are available for packaging
+          echo "Available JPEG packages:"
+          apt list --installed | grep jpeg || echo "No JPEG packages found"
+          apt-cache search libjpeg | grep -E "libjpeg[0-9]+" || echo "No libjpeg runtime packages found"
+
+      - name: Set architecture-specific paths
+        run: |
+          if [ "$(dpkg --print-architecture)" = "arm64" ]; then
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          else
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          fi
+
+      - name: Install platform-specific libcamera
+        run: |
+          if [ "${{ matrix.target }}" = "rpi" ]; then
+            # Build from source for RPi compatibility
+            sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
+            sudo pip3 install meson
+            git clone https://git.libcamera.org/libcamera/libcamera.git
+            cd libcamera
+            git checkout v${{ matrix.libcamera_version }}
+            meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
+            ninja -C build
+            sudo ninja -C build install
+            sudo ldconfig
+          else
+            # Use system packages for generic Linux (if available)
+            # For now, also build from source for consistency
+            sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
+            sudo pip3 install meson
+            git clone https://git.libcamera.org/libcamera/libcamera.git
+            cd libcamera
+            git checkout v${{ matrix.libcamera_version }}
+            meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
+            ninja -C build
+            sudo ninja -C build install
+            sudo ldconfig
+          fi
+
+      - name: Install TCL 9 (needed for camera module)
+        run: |
+          cd deps/tcl/unix/
+          ./configure
+          make
+          sudo make install
+
+      - name: Install Jansson (needed for camera module)
+        run: |
+          cd deps/jansson/
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Build camera module only
+        run: |
+          cd modules
+          cmake -DBUILD_CAMERA=ON -DCMAKE_BUILD_TYPE=Release -B build
+          cmake --build build --target camera_capture
+
+      - name: Package camera module
+        run: |
+          mkdir -p camera-pkg/usr/local/dserv/modules
+          cp modules/build/dserv_camera.so camera-pkg/usr/local/dserv/modules/
+          
+          # Create package metadata
+          mkdir -p camera-pkg/DEBIAN
+          LIBCAMERA_DEP="libcamera0.5 (>= 0.5.0)"
+          if [ "${{ matrix.target }}" = "linux" ]; then
+            LIBCAMERA_DEP="libcamera0.4 (>= 0.4.0)"
+          fi
+          
+          cat > camera-pkg/DEBIAN/control << EOF
+          Package: dserv-camera-${{ matrix.target }}
+          Version: ${{ github.ref_name }}
+          Architecture: $(dpkg --print-architecture)
+          Depends: dserv (>= ${{ github.ref_name }}), ${LIBCAMERA_DEP}, libjpeg8
+          Description: Camera module for dserv
+          Maintainer: SheinbergLab
+          EOF
+          
+          dpkg-deb --build camera-pkg dserv-camera-${{ matrix.target }}_${{ github.ref_name }}_$(dpkg --print-architecture).deb
+
+      - name: Upload camera package
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "dserv-camera-*.deb"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
   release-essgui:
 
     strategy:
       matrix:
-        # Build on not-the-latest to keep dependency versions modest.
         os: [ubuntu-22.04, ubuntu-22.04-arm]
 
     runs-on: ${{ matrix.os }}
@@ -175,14 +229,11 @@ jobs:
           cmake --build build
           sudo cmake --install build
 
-      # TODO: obtain dlsh from SheinbergLab, not benjamin-heasly
       - name: Install our dlsh libs and headers into the build environment.
         run: |
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
+          sudo unzip -o dlsh.zip -d /usr/local/
+          sudo chmod +x /usr/local/bin/dlsh*
 
       - name: Install essgui itself and package for release.
         run: |
@@ -205,7 +256,6 @@ jobs:
 
     strategy:
       matrix:
-        # Check on latest to confirm compatibility.
         os: [ubuntu-24.04, ubuntu-24.04-arm]
 
     runs-on: ${{ matrix.os }}
@@ -219,8 +269,7 @@ jobs:
 
       - name: Install dlsh packages.
         run: |
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
@@ -238,7 +287,6 @@ jobs:
 
     strategy:
       matrix:
-        # Check on latest to confirm compatibility.
         os: [ubuntu-24.04, ubuntu-24.04-arm]
 
     runs-on: ${{ matrix.os }}
@@ -252,8 +300,7 @@ jobs:
 
       - name: Install dlsh packages.
         run: |
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
+          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
