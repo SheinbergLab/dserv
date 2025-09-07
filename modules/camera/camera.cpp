@@ -1022,7 +1022,7 @@ void publish_frame_metadata(const char* base_name) {
           continuous_mode_ ? "true" : "false");
   
   ds_datapoint_t *meta_dp = dpoint_new(meta_name,
-                                      tclserver_->now,
+				       tclserver_->now(),
                                       DSERV_STRING,
                                       strlen(meta_json) + 1,
                                       (unsigned char *)meta_json);
