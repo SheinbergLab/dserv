@@ -69,7 +69,7 @@ jobs:
           # Clone and build libcamera
           git clone https://git.libcamera.org/libcamera/libcamera.git
           cd libcamera
-          git checkout v0.3.2  # Use a stable version
+          git checkout v0.5.1
         
           # Configure and build
           meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
