@@ -168,27 +168,26 @@ if(UNIX AND NOT APPLE)
         message(WARNING "pkg-config not found - cannot detect libcamera")
     endif()
     
-    # Check for JPEG library
+# Check for JPEG library - prefer our custom static build
+find_library(JPEG_STATIC_PIC_LIB 
+    NAMES libjpeg.a
+    PATHS /usr/local/lib
+    NO_DEFAULT_PATH)  # Only check our custom location first
+
+if(JPEG_STATIC_PIC_LIB)
+    message(STATUS "Using custom static PIC JPEG library: ${JPEG_STATIC_PIC_LIB}")
+    set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+    set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_STATIC_PIC_LIB})
+else()
+    # Fallback to system JPEG
     find_package(JPEG)
     if(JPEG_FOUND)
-        # Try to find static library first
-        find_library(JPEG_STATIC_LIB 
-            NAMES libjpeg.a
-            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
-    
-        if(JPEG_STATIC_LIB)
-            message(STATUS "Using static JPEG library: ${JPEG_STATIC_LIB}")
-            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
-            set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_STATIC_LIB})
-        else()
-            message(STATUS "Using dynamic JPEG library: ${JPEG_LIBRARIES}")
-            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
-            set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
-            set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
-        endif()
-    else()
-        message(WARNING "JPEG library not found - JPEG support disabled")
+        message(STATUS "Using system dynamic JPEG library: ${JPEG_LIBRARIES}")
+        set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+        set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
+        set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
     endif()
+endif()
 else()
     message(STATUS "Skipping libcamera detection (not Linux)")
 endif()
