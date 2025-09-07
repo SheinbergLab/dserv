@@ -18,18 +18,17 @@ tcl::tm::add $dspath/lib
 dservSet ess/ipaddr ""
 
 # load extra modules
-set dllspec modules/*[info sharedlibextension]
-set ess_modules "ain eventlog gpio_input gpio_output juicer rmt sound timer touch usbio"
-
+set ess_modules \
+    "ain eventlog gpio_input gpio_output \
+    juicer rmt sound timer touch usbio"
 foreach f $ess_modules {
-    load $f
+    load ${dspath}/modules/dserv_${f}[sharedlibextension]
 }
 
 # look for any .tcl configs in local/*.tcl
 foreach f [glob [file join $dspath local pre-*.tcl]] {
     source $f
 }
-
 
 # now ready to start ess
 if { ![info exists ::env(ESS_SYSTEM_PATH)] } {

@@ -50,9 +50,6 @@ typedef struct camera_info_s {
   int available;
 } camera_info_t;
 
-// Global camera info
-static camera_info_t g_cameraInfo;
-
 /*****************************************************************************
  * LIBCAMERA IMPLEMENTATION
  * Full implementation when libcamera is available
@@ -1212,6 +1209,13 @@ public:
   bool stop_streaming() { return false; }
   bool grab_frame() { return false; }
   void set_frame_skip_rate(int rate) {}
+
+  void set_tcl_interp(Tcl_Interp *interp) {}
+  void set_tclserver(TclServer *server) {}
+  void set_target_fps(double fps) {}
+  double get_configured_fps() const { return 0.0; }
+  bool is_hardware_fps_supported() const { return false; }
+  bool is_software_throttling_active() const { return false; }
   
   CameraState get_state() const { return CameraState::IDLE; }
   bool is_ae_settled() const { return false; }
@@ -2192,10 +2196,22 @@ static int camera_set_frame_skip_rate_command(ClientData data,
 
 #endif  // HAS_LIBCAMERA
   
+
+  // Called when the interpreter exits
+  static void camera_cleanup(ClientData clientData, Tcl_Interp *interp) {
+    camera_info_t *info = (camera_info_t *)clientData;
+    if (info->capture) {
+      delete info->capture;
+    }
+    if (info->dpoint_prefix) {
+      free(info->dpoint_prefix);
+    }
+    free(info);
+  }
   
-  /*****************************************************************************
+  /**************************************************************************
    * MODULE INITIALIZATION
-   *****************************************************************************/
+   **************************************************************************/
 
 #ifdef WIN32
   EXPORT(int,Dserv_camera_Init) (Tcl_Interp *interp)
@@ -2213,88 +2229,94 @@ static int camera_set_frame_skip_rate_command(ClientData data,
       return TCL_ERROR;
     }
 
-    g_cameraInfo.tclserver = (TclServer *) tclserver_get();
-    g_cameraInfo.dpoint_prefix = (char *)"camera";
-    g_cameraInfo.capture = nullptr;
-    g_cameraInfo.initialized = 0;
-    g_cameraInfo.configured = 0;
-    g_cameraInfo.jpeg_quality = 85;
+    // Allocate camera info dynamically
+    camera_info_t *cameraInfo =
+      (camera_info_t*) calloc(1, sizeof(camera_info_t));
+    cameraInfo->tclserver = (TclServer*)tclserver_get();
+    cameraInfo->dpoint_prefix = strdup("camera");
+    cameraInfo->capture = nullptr;
+    cameraInfo->initialized = 0;
+    cameraInfo->configured = 0;
+    cameraInfo->jpeg_quality = 85;
     
 #ifdef HAS_LIBCAMERA
-    g_cameraInfo.available = 1;
+    cameraInfo->available = 1;
 #else
-    g_cameraInfo.available = 0;
+    cameraInfo->available = 0;
 #endif
+
+    // Store with cleanup function
+    Tcl_SetAssocData(interp, "camera_info", camera_cleanup, cameraInfo);
     
     Tcl_CreateObjCommand(interp, "cameraList",
                          (Tcl_ObjCmdProc *) camera_list_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraInit",
                          (Tcl_ObjCmdProc *) camera_init_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraConfigure",
                          (Tcl_ObjCmdProc *) camera_configure_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraCapture",
                          (Tcl_ObjCmdProc *) camera_capture_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraCaptureDatapoint",
                          (Tcl_ObjCmdProc *) camera_capture_datapoint_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetSettlingFrames",
                          (Tcl_ObjCmdProc *) camera_set_settling_frames_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetJpegQuality",
                          (Tcl_ObjCmdProc *) camera_set_jpeg_quality_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetBrightness",
                          (Tcl_ObjCmdProc *) camera_set_brightness_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetContrast",
                          (Tcl_ObjCmdProc *) camera_set_contrast_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraRelease",
                          (Tcl_ObjCmdProc *) camera_release_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStatus",
                          (Tcl_ObjCmdProc *) camera_status_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStartStreaming",
                          (Tcl_ObjCmdProc *) camera_start_streaming_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStopStreaming",
                          (Tcl_ObjCmdProc *) camera_stop_streaming_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraGrabFrame",
                          (Tcl_ObjCmdProc *) camera_grab_frame_command,
-                         &g_cameraInfo, NULL);    
+                         cameraInfo, NULL);    
     Tcl_CreateObjCommand(interp, "cameraSetFrameSkipRate",
                          (Tcl_ObjCmdProc *) camera_set_frame_skip_rate_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStartContinuous",
                          (Tcl_ObjCmdProc *) camera_start_continuous_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStartContinuousCallback",
                          (Tcl_ObjCmdProc *) camera_start_continuous_callback_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStopContinuous",
                          (Tcl_ObjCmdProc *) camera_stop_continuous_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSetTargetFPS",
                          (Tcl_ObjCmdProc *) camera_set_target_fps_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraGetCallbackFrame",
                          (Tcl_ObjCmdProc *) camera_get_callback_frame_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSaveCallbackFrame",
                          (Tcl_ObjCmdProc *) camera_save_callback_frame_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraPublishCallbackFrame",
                          (Tcl_ObjCmdProc *) camera_publish_callback_frame_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraGetRingBufferStatus",
                          (Tcl_ObjCmdProc *) camera_get_ring_buffer_status_command,
-                         &g_cameraInfo, NULL);
+                         cameraInfo, NULL);
     return TCL_OK;
   }
 

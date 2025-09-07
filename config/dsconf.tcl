@@ -78,3 +78,11 @@ subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
 
 # auto update support
 source [file join $dspath config/updateconf.tcl]
+
+# if we have camera support (libcamera), start a camera process
+load [file join $dspath modules/dserv_camera[info sharedlibextension]]
+if { [dict get [cameraStatus libcamera]] == "yes" } {
+    subprocess camera "source [file join $dspath config/camconf.tcl]"
+}
+
+  
