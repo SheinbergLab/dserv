@@ -1,0 +1,90 @@
+#
+# Local camera commands
+#
+
+#
+# can set desired resolution here and use below in start
+#
+
+# Define a callback function that will be called for each frame
+proc my_frame_handler {frame_id timestamp_ms width height jpeg_size ae_settled datapoint_prefix} {
+    # Convert timestamp to readable format
+    set timestamp_sec [expr $timestamp_ms / 1000]
+    set datetime [clock format $timestamp_sec -format "%Y-%m-%d %H:%M:%S"]
+    
+    # Print frame information
+    #puts "Frame $frame_id captured at $datetime"
+    #puts "  Resolution: ${width}x${height}"
+    #puts "  JPEG size: $jpeg_size bytes ([expr $jpeg_size/1024]KB)"
+
+    # to save frames to disk call:
+    #  cameraSaveJpegCallbackFrame $frame_id $filename
+
+    # to push to dataserver call:
+    set datapoint_name $datapoint_prefix/frame
+    cameraPublishRawCallbackFrame $frame_id $datapoint_name
+}
+
+# start streaming
+proc start { { camera_id 0 } } {
+   
+    # Initialize camera
+    if {[catch {cameraInit $camera_id} result]} {
+        puts "Error initializing camera: $result"
+        return
+    }
+    
+    # Configure camera at native 1536x864, 30fps
+    if {[catch {cameraConfigure 1536 864 30.0} result]} {
+        puts "Error configuring camera: $result"
+        return
+    }
+
+    # Start streaming
+    if {[catch {cameraStartStreaming} result]} {
+        puts "Error starting streaming: $result"
+        return
+    }
+    
+    # Start continuous callback mode on every (30th) frame (1fps)
+    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 30} result]} {
+        puts "Error starting continuous callback: $result"
+        return
+    }
+    dservSet camera/status continuous
+}
+
+# stop streaming
+proc stop {} {
+    dservSet camera/status stopped
+
+    if {[catch {cameraStopContinuous} result]} {
+        puts "Error stopping continuous mode: $result"
+    } 
+
+    if {[catch {cameraStopStreaming} result]} {
+        puts "Error stopping streaming: $result"
+    }
+}
+
+# Status check function
+proc check_status {} {
+    if {[catch {cameraStatus} status]} {
+        puts "Error getting status: $status"
+        return
+    }
+
+    return $status
+}
+
+proc check_ring_buffer {} {
+    if {[catch {cameraGetRingBufferStatus} ring_status]} {
+        puts "Error getting ring buffer status: $ring_status"
+        return
+    }
+
+    return $ring_status
+}
+
+puts "configured camera using local conf"
+
