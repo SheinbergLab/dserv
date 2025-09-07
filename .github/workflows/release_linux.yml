@@ -51,7 +51,7 @@ jobs:
             /usr/local/lib/pkgconfig/libcamera.pc
             /usr/local/lib/x86_64-linux-gnu/pkgconfig/libcamera.pc
             /usr/local/lib/aarch64-linux-gnu/pkgconfig/libcamera.pc
-          key: libcamera-v0.3.2-${{ runner.os }}-${{ runner.arch }}
+          key: libcamera-v0.5.1-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install modern libcamera from source
         if: steps.cache-libcamera.outputs.cache-hit != 'true'
