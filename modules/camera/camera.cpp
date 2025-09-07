@@ -21,6 +21,7 @@
 #include <mutex>
 #include <queue>
 #include <condition_variable>
+#include <algorithm>
 
 // Tcl and dataserver headers
 extern "C" {
@@ -202,45 +203,284 @@ public:
     return true;
   }
 
-  bool configure(unsigned int width, unsigned int height) {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    if (state_ != CameraState::IDLE) {
-      std::cerr << "Cannot configure camera while in use" << std::endl;
-      return false;
-    }
-    
-    width_ = width;
-    height_ = height;
-    ae_settled_ = false;
-    ae_settle_count_ = 0;
-        
-    config_ = camera_->generateConfiguration({ StreamRole::StillCapture });
-    if (!config_ || config_->size() == 0) {
-      return false;
-    }
-
-    StreamConfiguration &stream_config = config_->at(0);
-    stream_config.size.width = width;
-    stream_config.size.height = height;
-    stream_config.pixelFormat = formats::RGB888;
-    stream_config.bufferCount = 4;
-
-    CameraConfiguration::Status validation = config_->validate();
-    if (validation == CameraConfiguration::Invalid) {
-      return false;
-    }
-
-    int ret = camera_->configure(config_.get());
-    if (ret) {
-      return false;
-    }
-
-    stream_ = stream_config.stream();
-    return allocate_buffers();
+bool configure(unsigned int width, unsigned int height) {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  
+  if (state_ != CameraState::IDLE) {
+    std::cerr << "Cannot configure camera while in use" << std::endl;
+    return false;
+  }
+  
+  width_ = width;
+  height_ = height;
+  ae_settled_ = false;
+  ae_settle_count_ = 0;
+      
+  config_ = camera_->generateConfiguration({ StreamRole::StillCapture });
+  if (!config_ || config_->size() == 0) {
+    return false;
   }
 
-bool allocate_buffers() {
+  StreamConfiguration &stream_config = config_->at(0);
+  
+  // Check what formats are available
+  const StreamFormats &formats = stream_config.formats();
+  auto format_list = formats.pixelformats();
+  
+  std::cout << "Available formats for this camera:" << std::endl;
+  for (const auto& format : format_list) {
+    std::cout << "  " << format.toString() << std::endl;
+  }
+  
+  // Detect camera type based on ID and available formats
+  std::string camera_id = camera_->id();
+  bool is_usb_camera = (camera_id.find("PCI0") != std::string::npos ||  // USB via PCI
+                       camera_id.find("usb") != std::string::npos);      // Direct USB
+  bool is_csi_camera = (camera_id.find("csi") != std::string::npos ||   // CSI interface
+                       camera_id.find("ov") != std::string::npos ||      // OmniVision sensors
+                       camera_id.find("imx") != std::string::npos);      // Sony IMX sensors
+  
+  std::cout << "Camera ID: " << camera_id << std::endl;
+  std::cout << "Detected as: " << (is_usb_camera ? "USB" : is_csi_camera ? "CSI" : "Unknown") << " camera" << std::endl;
+  
+  PixelFormat preferred_format;
+  bool found_format = false;
+  
+  if (is_usb_camera) {
+    // USB cameras: Prefer MJPEG (already compressed), fall back to YUV formats, avoid RGB888
+    std::cout << "Using USB camera strategy..." << std::endl;
+    
+    if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
+      preferred_format = formats::MJPEG;
+      found_format = true;
+      std::cout << "Selected MJPEG (optimal for USB cameras)" << std::endl;
+    }
+    else if (std::find(format_list.begin(), format_list.end(), formats::YUYV) != format_list.end()) {
+      preferred_format = formats::YUYV;
+      found_format = true;
+      std::cout << "Selected YUYV (good for USB cameras)" << std::endl;
+    }
+    else if (std::find(format_list.begin(), format_list.end(), formats::RGB888) != format_list.end()) {
+      preferred_format = formats::RGB888;
+      found_format = true;
+      std::cout << "Selected RGB888 (may be slow for USB)" << std::endl;
+    }
+  } else {
+    // CSI/Pi cameras: Prefer RGB888 (ISP processed), avoid compressed formats
+    std::cout << "Using CSI camera strategy..." << std::endl;
+    
+    if (std::find(format_list.begin(), format_list.end(), formats::RGB888) != format_list.end()) {
+      preferred_format = formats::RGB888;
+      found_format = true;
+      std::cout << "Selected RGB888 (optimal for CSI cameras)" << std::endl;
+    }
+    else if (std::find(format_list.begin(), format_list.end(), formats::YUV420) != format_list.end()) {
+      preferred_format = formats::YUV420;
+      found_format = true;
+      std::cout << "Selected YUV420 (good for CSI cameras)" << std::endl;
+    }
+    else if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
+      preferred_format = formats::MJPEG;
+      found_format = true;
+      std::cout << "Selected MJPEG (fallback for CSI)" << std::endl;
+    }
+  }
+  
+  // Last resort: use first available format
+  if (!found_format && !format_list.empty()) {
+    preferred_format = format_list[0];
+    found_format = true;
+    std::cout << "WARNING: Using first available format " << preferred_format.toString() 
+              << " - may cause issues!" << std::endl;
+  }
+
+  if (!found_format) {
+    std::cerr << "No pixel formats available" << std::endl;
+    return false;
+  }
+
+  stream_config.size.width = width;
+  stream_config.size.height = height;
+  stream_config.pixelFormat = preferred_format;
+  stream_config.bufferCount = 4;
+
+  CameraConfiguration::Status validation = config_->validate();
+  if (validation == CameraConfiguration::Invalid) {
+    std::cerr << "Camera configuration invalid" << std::endl;
+    return false;
+  }
+  
+  if (validation == CameraConfiguration::Adjusted) {
+    std::cout << "Configuration adjusted:" << std::endl;
+    std::cout << "  Size: " << stream_config.size.width << "x" << stream_config.size.height << std::endl;
+    std::cout << "  Format: " << stream_config.pixelFormat.toString() << std::endl;
+    
+    // Update our stored dimensions
+    width_ = stream_config.size.width;
+    height_ = stream_config.size.height;
+  }
+
+  int ret = camera_->configure(config_.get());
+  if (ret) {
+    std::cerr << "Camera configure failed: " << ret << std::endl;
+    return false;
+  }
+
+  stream_ = stream_config.stream();
+  return allocate_buffers();
+}
+
+bool encode_jpeg() {
+#ifdef HAS_JPEG
+  if (!stream_) {
+    return false;
+  }
+  
+  if (image_data_.empty()) {
+    return false;
+  }
+  
+  const StreamConfiguration &cfg = stream_->configuration();
+  
+  // If already MJPEG, just copy directly (your existing logic)
+  if (cfg.pixelFormat == formats::MJPEG) {
+    jpeg_data_ = image_data_;
+    return true;
+  }
+  
+  // For RGB888, use your existing JPEG compression code
+  if (cfg.pixelFormat == formats::RGB888) {
+    return encode_rgb888_to_jpeg(cfg);
+  }
+  
+  // For YUYV (common USB format), convert to RGB first then compress
+  if (cfg.pixelFormat == formats::YUYV) {
+    std::vector<uint8_t> rgb_data;
+    if (!convert_yuyv_to_rgb(image_data_, rgb_data, cfg.size.width, cfg.size.height)) {
+      std::cerr << "Failed to convert YUYV to RGB" << std::endl;
+      return false;
+    }
+    
+    // Temporarily swap the data for encoding
+    std::vector<uint8_t> original_data = image_data_;
+    image_data_ = rgb_data;
+    
+    bool result = encode_rgb888_to_jpeg(cfg);
+    
+    // Restore original data
+    image_data_ = original_data;
+    return result;
+  }
+  
+  // Add more formats as needed
+  std::cerr << "JPEG encoding not supported for format: " << cfg.pixelFormat.toString() << std::endl;
+  return false;
+#else
+  return false;  // No JPEG support
+#endif
+}
+
+// Extract your existing JPEG compression code into a separate method
+bool encode_rgb888_to_jpeg(const StreamConfiguration &cfg) {
+#ifdef HAS_JPEG
+  struct jpeg_compress_struct cinfo;
+  struct jpeg_error_mgr jerr;
+      
+  cinfo.err = jpeg_std_error(&jerr);
+  jpeg_create_compress(&cinfo);
+      
+  unsigned char *jpeg_buffer = nullptr;
+  unsigned long jpeg_size = 0;
+      
+  jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+      
+  cinfo.image_width = cfg.size.width;
+  cinfo.image_height = cfg.size.height;
+  cinfo.input_components = 3;
+  cinfo.in_color_space = JCS_RGB;
+      
+  jpeg_set_defaults(&cinfo);
+  jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
+      
+  jpeg_start_compress(&cinfo, TRUE);
+      
+  JSAMPROW row_pointer[1];
+  int row_stride = cfg.size.width * 3;
+      
+  while (cinfo.next_scanline < cinfo.image_height) {
+    row_pointer[0] = &image_data_[cinfo.next_scanline * row_stride];
+    jpeg_write_scanlines(&cinfo, row_pointer, 1);
+  }
+      
+  jpeg_finish_compress(&cinfo);
+      
+  jpeg_data_.clear();
+  jpeg_data_.resize(jpeg_size);
+  std::memcpy(jpeg_data_.data(), jpeg_buffer, jpeg_size);
+      
+  if (jpeg_buffer) {
+    free(jpeg_buffer);
+  }
+  jpeg_destroy_compress(&cinfo);
+      
+  return true;
+#else
+  return false;
+#endif
+}
+
+// YUYV to RGB conversion helper
+bool convert_yuyv_to_rgb(const std::vector<uint8_t>& yuyv_data, 
+                        std::vector<uint8_t>& rgb_data,
+                        unsigned int width, unsigned int height) {
+  
+  if (yuyv_data.size() < width * height * 2) {
+    std::cerr << "YUYV data too small" << std::endl;
+    return false;
+  }
+  
+  rgb_data.resize(width * height * 3);
+  
+  for (unsigned int i = 0; i < height; i++) {
+    for (unsigned int j = 0; j < width; j += 2) {
+      unsigned int yuyv_idx = (i * width + j) * 2;
+      unsigned int rgb_idx1 = (i * width + j) * 3;
+      unsigned int rgb_idx2 = (i * width + j + 1) * 3;
+      
+      if (yuyv_idx + 3 >= yuyv_data.size()) break;
+      
+      uint8_t y1 = yuyv_data[yuyv_idx];
+      uint8_t u  = yuyv_data[yuyv_idx + 1];
+      uint8_t y2 = yuyv_data[yuyv_idx + 2];
+      uint8_t v  = yuyv_data[yuyv_idx + 3];
+      
+      // Convert YUV to RGB for both pixels
+      yuv_to_rgb(y1, u, v, rgb_data[rgb_idx1], rgb_data[rgb_idx1+1], rgb_data[rgb_idx1+2]);
+      if (j + 1 < width) {
+        yuv_to_rgb(y2, u, v, rgb_data[rgb_idx2], rgb_data[rgb_idx2+1], rgb_data[rgb_idx2+2]);
+      }
+    }
+  }
+  
+  return true;
+}
+
+// YUV to RGB color space conversion
+void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t& b) {
+  int c = y - 16;
+  int d = u - 128;
+  int e = v - 128;
+  
+  int r_val = (298 * c + 409 * e + 128) >> 8;
+  int g_val = (298 * c - 100 * d - 208 * e + 128) >> 8;
+  int b_val = (298 * c + 516 * d + 128) >> 8;
+  
+  r = (uint8_t)std::max(0, std::min(255, r_val));
+  g = (uint8_t)std::max(0, std::min(255, g_val));
+  b = (uint8_t)std::max(0, std::min(255, b_val));
+}  
+
+  bool allocate_buffers() {
     allocator_ = std::make_unique<FrameBufferAllocator>(camera_);
 
     int ret = allocator_->allocate(stream_);
@@ -516,79 +756,6 @@ bool allocate_buffers() {
     return true;
   }
 
-  bool encode_jpeg() {
-    //  std::cerr << "DEBUG: Entering encode_jpeg()" << std::endl;
-    
-#ifdef HAS_JPEG
-  if (!stream_) {
-    //    std::cerr << "DEBUG: stream_ is null!" << std::endl;
-    return false;
-  }
-  
-  if (image_data_.empty()) {
-    //    std::cerr << "DEBUG: image_data_ is empty!" << std::endl;
-    return false;
-  }
-  
-  //  std::cerr << "DEBUG: stream_ = " << stream_ << std::endl;
-  //  std::cerr << "DEBUG: image_data_.size() = " << image_data_.size() << std::endl;
-
-    const StreamConfiguration &cfg = stream_->configuration();
-    // std::cerr << "DEBUG: Got stream configuration" << std::endl;
-
-  if (cfg.pixelFormat == formats::MJPEG) {
-    //    std::cerr << "DEBUG: Already MJPEG format, copying directly" << std::endl;
-    jpeg_data_ = image_data_;
-    return true;
-  }
-  
-  //  std::cerr << "DEBUG: About to create JPEG compression structures" << std::endl;   
- 
-    struct jpeg_compress_struct cinfo;
-    struct jpeg_error_mgr jerr;
-        
-    cinfo.err = jpeg_std_error(&jerr);
-    jpeg_create_compress(&cinfo);
-        
-    unsigned char *jpeg_buffer = nullptr;
-    unsigned long jpeg_size = 0;
-        
-    jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
-        
-    cinfo.image_width = cfg.size.width;
-    cinfo.image_height = cfg.size.height;
-    cinfo.input_components = 3;
-    cinfo.in_color_space = JCS_RGB;
-        
-    jpeg_set_defaults(&cinfo);
-    jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
-        
-    jpeg_start_compress(&cinfo, TRUE);
-        
-    JSAMPROW row_pointer[1];
-    int row_stride = cfg.size.width * 3;
-        
-    while (cinfo.next_scanline < cinfo.image_height) {
-      row_pointer[0] = &image_data_[cinfo.next_scanline * row_stride];
-      jpeg_write_scanlines(&cinfo, row_pointer, 1);
-    }
-        
-    jpeg_finish_compress(&cinfo);
-        
-    jpeg_data_.clear();
-    jpeg_data_.resize(jpeg_size);
-    std::memcpy(jpeg_data_.data(), jpeg_buffer, jpeg_size);
-        
-    if (jpeg_buffer) {
-      free(jpeg_buffer);
-    }
-    jpeg_destroy_compress(&cinfo);
-        
-    return true;
-#else
-    return false;  // No JPEG support
-#endif
-  }
 
  void streaming_request_complete(Request *request) {
    // std::cerr << "DEBUG: Entering streaming_request_complete" << std::endl;
