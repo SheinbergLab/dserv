@@ -181,7 +181,7 @@ jobs:
           Package: dserv-camera-${{ matrix.target }}
           Version: ${{ github.ref_name }}
           Architecture: $(dpkg --print-architecture)
-          Depends: dserv (>= ${{ github.ref_name }}), ${LIBCAMERA_DEP}, libjpeg8
+          Depends: dserv (>= ${{ github.ref_name }}), ${LIBCAMERA_DEP}
           Description: Camera module for dserv
           Maintainer: SheinbergLab
           EOF
