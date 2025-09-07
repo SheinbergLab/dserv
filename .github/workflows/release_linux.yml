@@ -56,8 +56,15 @@ jobs:
       - name: Install modern libcamera from source
         if: steps.cache-libcamera.outputs.cache-hit != 'true'
         run: |
-          # Install meson build system
-          sudo apt install -y meson ninja-build
+          # Install ninja build system
+          sudo apt install -y ninja-build
+          
+          # Install newer meson via pip (Ubuntu 22.04's meson is too old)
+          sudo apt install -y python3-pip
+          sudo pip3 install meson
+          
+          # Verify meson version
+          meson --version
         
           # Clone and build libcamera
           git clone https://git.libcamera.org/libcamera/libcamera.git
