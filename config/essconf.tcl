@@ -20,9 +20,9 @@ dservSet ess/ipaddr ""
 # load extra modules
 set ess_modules \
     "ain eventlog gpio_input gpio_output \
-    juicer rmt sound timer touch usbio"
+    juicer joystick4 rmt sound timer touch usbio"
 foreach f $ess_modules {
-    load ${dspath}/modules/dserv_${f}[sharedlibextension]
+    load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }
 
 # look for any .tcl configs in local/*.tcl
@@ -254,10 +254,6 @@ proc connect_touchscreen {} {
 
 
 connect_touchscreen
-
-# connect to battery power circuits
-ina226Add 0x45 system 12v
-ina226Add 0x44 system 24v
 
 # and finally load a default system
 ess::load_system

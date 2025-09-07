@@ -81,8 +81,14 @@ source [file join $dspath config/updateconf.tcl]
 
 # if we have camera support (libcamera), start a camera process
 load [file join $dspath modules/dserv_camera[info sharedlibextension]]
-if { [dict get [cameraStatus libcamera]] == "yes" } {
-    subprocess camera "source [file join $dspath config/camconf.tcl]"
+if { [dict get [cameraStatus] libcamera] == "yes" } {
+    subprocess camera "source [file join $dspath config/cameraconf.tcl]"
 }
+
+# connect to battery power circuits
+load [file join $dspath modules/dserv_ina226[info sharedlibextension]]
+ina226Add 0x45 system 12v
+ina226Add 0x44 system 24v
+
 
   
