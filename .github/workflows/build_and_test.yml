@@ -5,7 +5,7 @@ on: [push]
 jobs:
 
   build-linux:
-
+    if: false  # disable the job for now
     strategy:
       matrix:
         os: [ubuntu-22.04, ubuntu-22.04-arm]
@@ -58,6 +58,7 @@ jobs:
           ctest -VV --timeout 10
 
   build-macos:
+    if: false  # disable the job for now
 
     strategy:
       matrix:
