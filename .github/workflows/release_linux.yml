@@ -21,6 +21,11 @@ jobs:
       
     steps:
 
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
       - name: Set up a build environment.
         run: |
           sudo apt update
@@ -28,8 +33,29 @@ jobs:
           sudo apt install -y libevdev-dev zlib1g-dev pkg-config
           sudo apt install -y libjpeg-dev python3-yaml python3-ply python3-jinja2
 
-     - name: Install modern libcamera from source
-       run: |
+      - name: Set architecture-specific paths
+        run: |
+          if [ "$(dpkg --print-architecture)" = "arm64" ]; then
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          else
+            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          fi
+
+      - name: Cache libcamera build
+        uses: actions/cache@v3
+        id: cache-libcamera
+        with:
+          path: |
+            /usr/local/lib/libcamera*
+            /usr/local/include/libcamera
+            /usr/local/lib/pkgconfig/libcamera.pc
+            /usr/local/lib/x86_64-linux-gnu/pkgconfig/libcamera.pc
+            /usr/local/lib/aarch64-linux-gnu/pkgconfig/libcamera.pc
+          key: libcamera-v0.3.2-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install modern libcamera from source
+        if: steps.cache-libcamera.outputs.cache-hit != 'true'
+        run: |
           # Install meson build system
           sudo apt install -y meson ninja-build
         
@@ -45,15 +71,6 @@ jobs:
         
           # Update library cache
           sudo ldconfig
-        
-          # Verify installation
-          pkg-config --exists libcamera && echo "libcamera pkg-config OK" || echo "libcamera pkg-config FAILED"
-        
-      - name: Check out our dserv code for the current tag.
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
 
       - name: Install TCL 9 to the build environment.
         run: |
@@ -71,8 +88,8 @@ jobs:
 
       - name: Verify libcamera installation
         run: |
-          echo "=== Checking libcamera packages ==="
-          dpkg -l | grep libcamera || echo "No libcamera packages found"
+          echo "=== PKG_CONFIG_PATH ==="
+          echo $PKG_CONFIG_PATH
         
           echo "=== Checking pkg-config for libcamera ==="
           pkg-config --exists libcamera && echo "libcamera found via pkg-config" || echo "libcamera NOT found via pkg-config"
@@ -80,13 +97,16 @@ jobs:
           pkg-config --cflags libcamera 2>/dev/null || echo "No cflags available"
           pkg-config --libs libcamera 2>/dev/null || echo "No libs available"
         
-          echo "=== Looking for libcamera files ==="
-          find /usr -name "*libcamera*" -type f 2>/dev/null | head -10
+          echo "=== Looking for libcamera pkg-config files ==="
+          find /usr/local -name "*.pc" | grep camera || echo "No camera pkg-config files found"
+        
+          echo "=== Looking for libcamera headers ==="
+          find /usr/local/include -name "*camera*" -type d 2>/dev/null || echo "No camera headers found"
 
       - name: Build dserv itself and package it for release.
         run: |
           cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
-          cmake --build build
+          cmake --build build --verbose
           cpack -G DEB --config build/CPackConfig.cmake
 
       - name: Create a GitHub release for the current tag and package.
@@ -108,16 +128,16 @@ jobs:
 
     steps:
 
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+        with:
+            submodules: true
+
       - name: Set up a build environment.
         run: |
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
           sudo apt install -y libpango1.0-dev libwayland-dev wayland-protocols libxkbcommon-dev libxinerama-dev libdbus-1-dev libglew-dev  libdecor-0-dev libgtk-3-dev liblz4-dev
-
-      - name: Check out our dserv code for the current tag.
-        uses: actions/checkout@v4
-        with:
-            submodules: true
 
       - name: Install TCL 9 to the build environment.
         run: |
