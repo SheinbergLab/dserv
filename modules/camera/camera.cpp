@@ -959,8 +959,12 @@ void handle_continuous_frame() {
   
   // Create save directory if needed
   if (save_to_disk_) {
-    std::system(("mkdir -p " + save_directory_).c_str());
-    start_save_worker();
+	if (std::system(("mkdir -p " + save_directory_).c_str()) != 0) {
+		std::cerr << "Failed to create directory: " << save_directory_ << std::endl;
+	}
+    else {
+    	start_save_worker();
+    }
   }
   
   return true;
@@ -1172,7 +1176,7 @@ void publish_frame_to_dataserver() {
 
 // Helper method for publishing frame metadata
 void publish_frame_metadata(const char* base_name) {
-  char meta_name[256];
+  char meta_name[512];
   snprintf(meta_name, sizeof(meta_name), "%s/meta", base_name);
   
   auto now = std::chrono::system_clock::now();
