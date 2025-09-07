@@ -563,6 +563,8 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
     case DSERV_DG:
     case DSERV_ARROW:
     case DSERV_MSGPACK:
+    case DSERV_JPEG:
+    case DSERV_PPM:
       {
 	/* turn to b64 data */
 	int b64_need = dpoint_b64_size(dpoint);

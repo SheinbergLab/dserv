@@ -21,6 +21,8 @@ typedef enum {
   DSERV_JSON = 11,
   DSERV_ARROW = 12,
   DSERV_MSGPACK = 13,
+  DSERV_JPEG = 14,
+  DSERV_PPM = 15,
   DSERV_UNKNOWN,
 } ds_datatype_t;
 

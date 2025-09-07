@@ -497,6 +497,8 @@ Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,
   case DSERV_DG:
   case DSERV_MSGPACK:
   case DSERV_ARROW:
+  case DSERV_JPEG:
+  case DSERV_PPM:
     obj = Tcl_NewByteArrayObj(dpoint->data.buf, dpoint->data.len);
     break;
   case DSERV_SCRIPT:
@@ -2196,7 +2198,7 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 			     (ds_datatype_t) datatype,
 			     datalen, (unsigned char *) databuf);
 		}
-	      else // (DG, MSGPACK, ARROW binary formats)
+	      else // (DG, MSGPACK, ARROW, JPEG, PPM binary formats)
 		{
 		  inlen = datalen + 2;
 		  inbuf = (char *) malloc(inlen);
