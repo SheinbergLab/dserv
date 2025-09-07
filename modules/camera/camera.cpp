@@ -30,11 +30,6 @@ extern "C" {
 #include "tclserver_api.h" 
 }
 
-// Add JPEG type if not already defined
-#ifndef DSERV_JPEG
-#define DSERV_JPEG 14
-#endif
-
 // Forward declaration
 class CameraCapture;
 
@@ -893,22 +888,18 @@ public:
   }
 
   void handle_continuous_frame() {
-    // Check interval as before...
-    if ((current_frame % interval) != 0) {
+    if ((frame_counter_ % publish_interval_) != 0) {
       frame_counter_++;
       return;
     }
-  
-    // Store raw frame data directly - no JPEG encoding
+    
     store_frame_in_ring_buffer();
-
-    // Handle via Tcl callback (raw data)
+    
     if (use_tcl_callback_ && !tcl_callback_proc_.empty() && tcl_interp_) {
       call_tcl_frame_callback();
     } else {
-      // Built-in handlers
       if (save_to_disk_) {
-	// Only encode JPEG when actually saving to disk
+	// Save as JPEG to disk (smaller files)
 	if (!encode_jpeg()) {
 	  std::cerr << "Failed to encode JPEG for disk save" << std::endl;
 	  frame_counter_++;
@@ -916,15 +907,18 @@ public:
 	}
 	queue_frame_for_save();
       }
-    
+      
       if (publish_to_dataserver_ && tclserver) {
-	// Publish raw data or add flag to choose format
-	publish_raw_frame_to_dataserver();
+	// Default: publish PPM (lossless, self-describing)
+	publish_ppm_frame_to_dataserver();
+	// Alternative: just publish notification
+	// publish_frame_notification();
       }
     }
-  
+    
     frame_counter_++;
   }
+  
   
   bool start_continuous_mode(bool save_disk, bool publish_dataserver, 
 			     const std::string& save_dir,
@@ -981,24 +975,59 @@ public:
   
     return true;
   }
-
+  
   bool stop_continuous_mode() {
     if (!continuous_mode_) return true;
-  
+    
     continuous_mode_ = false;
     stop_save_worker();
+    
+    // invalidate all frames when stopping
+    {
+      std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+      for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+	frame_ring_buffer_[i].valid = false;
+	frame_ring_buffer_[i].has_jpeg = false;
+      }
+    }
+    
     return true;
   }
-
-  bool get_raw_frame_by_id(int frame_id, std::vector<uint8_t> &frame_data,
-			   int64_t &timestamp_ms)
-  {
+  
+  // reinitialize
+  void invalidate_ring_buffer_frame(int frame_id) {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+	frame_ring_buffer_[i].valid = false;
+	frame_ring_buffer_[i].has_jpeg = false;
+	break;
+      }
+    }
+  }
+  
+  bool get_ppm_frame_by_id(int frame_id, std::vector<uint8_t> &ppm_data,
+			   int64_t &timestamp_ms) {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
     
     for (int i = 0; i < RING_BUFFER_SIZE; i++) {
       if (frame_ring_buffer_[i].valid &&
 	  frame_ring_buffer_[i].frame_id == frame_id) {
-	frame_data = frame_ring_buffer_[i].raw_data;  // Return raw RGB
+	
+	const StreamConfiguration &cfg = stream_->configuration();
+	
+	// Create PPM data
+	std::string ppm_header = "P6\n" + 
+	  std::to_string(cfg.size.width) + " " + 
+	  std::to_string(cfg.size.height) + "\n255\n";
+	
+	ppm_data.clear();
+	ppm_data.resize(ppm_header.size() + frame_ring_buffer_[i].raw_data.size());
+	std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+	std::memcpy(ppm_data.data() + ppm_header.size(), 
+		    frame_ring_buffer_[i].raw_data.data(), 
+		    frame_ring_buffer_[i].raw_data.size());
+	
 	timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
 	return true;
       }
@@ -1032,37 +1061,114 @@ public:
     return false;
   }  
 
-  bool save_callback_frame(int frame_id, const std::string& filename) {
-    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  // Updated frame notification with clearer format names
+  void publish_frame_notification() {
+    if (!tclserver) return;
+    
+    const StreamConfiguration &cfg = stream_->configuration();
+    
+    char point_name[256];
+    snprintf(point_name, sizeof(point_name), "%s/frame_notify", 
+	     datapoint_prefix_.c_str());
+    
+    char notification_json[512];
+    snprintf(notification_json, sizeof(notification_json), 
+	     "{\"frame_id\":%d,\"timestamp\":%lld,\"width\":%d,\"height\":%d,"
+	     "\"pixel_format\":\"RGB888\",\"ppm_size\":%zu,\"ae_settled\":%s,"
+	     "\"available_formats\":[\"ppm\",\"jpeg\"],"
+	     "\"ring_buffer_retention_frames\":16}",
+	     frame_counter_.load(),
+	     std::chrono::duration_cast<std::chrono::milliseconds>(
+								   std::chrono::system_clock::now().time_since_epoch()).count(),
+	     cfg.size.width, cfg.size.height, 
+	     image_data_.size() + 20, // rough PPM size estimate
+	     ae_settled_ ? "true" : "false");
+    
+    ds_datapoint_t *dp = dpoint_new(point_name,
+				    tclserver_now(tclserver),
+				    DSERV_STRING,
+				    strlen(notification_json) + 1,
+				    (unsigned char *)notification_json);
+    tclserver_set_point(tclserver, dp);
+  }
   
-    // Find the frame in ring buffer
+
+  
+  bool save_ppm_callback_frame(int frame_id, const std::string& filename) {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
     for (int i = 0; i < RING_BUFFER_SIZE; i++) {
       if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-	// Direct write to disk - no intermediate copying
+	const StreamConfiguration &cfg = stream_->configuration();
+	
+	// Write PPM file directly
 	std::ofstream file(filename, std::ios::binary);
-	if (!file) {
-	  return false;
-	}
-      
-	file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].jpeg_data.data()),
-		   frame_ring_buffer_[i].jpeg_data.size());
+	if (!file) return false;
+	
+	file << "P6\n" << cfg.size.width << " " << cfg.size.height << "\n255\n";
+	file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].raw_data.data()),
+		   frame_ring_buffer_[i].raw_data.size());
 	file.close();
 	return true;
       }
     }
+    return false;
+  }
   
-    return false;  // Frame not found
+  bool publish_ppm_callback_frame(int frame_id, const std::string& datapoint_name) {
+    if (!tclserver) return false;
+    
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+	const StreamConfiguration &cfg = stream_->configuration();
+	
+	// Create PPM data
+	std::string ppm_header = "P6\n" + 
+	  std::to_string(cfg.size.width) + " " + 
+	  std::to_string(cfg.size.height) + "\n255\n";
+	
+	std::vector<uint8_t> ppm_data(ppm_header.size() + frame_ring_buffer_[i].raw_data.size());
+	std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+	std::memcpy(ppm_data.data() + ppm_header.size(), 
+		    frame_ring_buffer_[i].raw_data.data(), 
+		    frame_ring_buffer_[i].raw_data.size());
+	
+	ds_datapoint_t *dp = dpoint_new(
+					(char*)datapoint_name.c_str(),
+					frame_ring_buffer_[i].timestamp_ms * 1000,
+					DSERV_PPM,
+					ppm_data.size(),
+					ppm_data.data()
+					);
+	
+	tclserver_set_point(tclserver, dp);
+	return true;
+      }
+    }
+    return false;
   }
 
-  bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
+  bool publish_jpeg_callback_frame(int frame_id, const std::string& datapoint_name) {
     if (!tclserver) return false;
-  
+    
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-  
+    
     // Find the frame in ring buffer
     for (int i = 0; i < RING_BUFFER_SIZE; i++) {
       if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-	// Safe to pass ring buffer pointer because dpoint_new() makes internal copy
+	// Check if JPEG already encoded for this frame
+	if (!frame_ring_buffer_[i].has_jpeg) {
+	  // Encode on-demand from raw data
+	  if (!encode_frame_to_jpeg(frame_ring_buffer_[i].raw_data,
+				    frame_ring_buffer_[i].jpeg_data)) {
+	    return false;
+	  }
+	  frame_ring_buffer_[i].has_jpeg = true;
+	}
+	
+	// Publish JPEG data
 	ds_datapoint_t *dp = dpoint_new(
 					(char*)datapoint_name.c_str(),
 					frame_ring_buffer_[i].timestamp_ms * 1000, // Convert to microseconds
@@ -1070,15 +1176,139 @@ public:
 					frame_ring_buffer_[i].jpeg_data.size(),
 					(unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
 					);
-      
+	
 	tclserver_set_point(tclserver, dp);
 	return true;
       }
     }
-  
+    
+    return false;  // Frame not found
+  }
+
+  bool save_jpeg_callback_frame(int frame_id, const std::string& filename) {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
+    // Find the frame in ring buffer
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+	// Check if JPEG already encoded for this frame
+	if (!frame_ring_buffer_[i].has_jpeg) {
+	  // Encode on-demand from raw data
+	  if (!encode_frame_to_jpeg(frame_ring_buffer_[i].raw_data,
+				    frame_ring_buffer_[i].jpeg_data)) {
+	    return false;
+	  }
+	  frame_ring_buffer_[i].has_jpeg = true;
+	}
+	
+	// Write JPEG data to disk
+	std::ofstream file(filename, std::ios::binary);
+	if (!file) {
+	  return false;
+	}
+	
+	file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].jpeg_data.data()),
+		   frame_ring_buffer_[i].jpeg_data.size());
+	file.close();
+	return true;
+      }
+    }
+    
     return false;  // Frame not found
   }
   
+  void publish_ppm_frame_to_dataserver() {
+    if (!tclserver) return;
+    
+    const StreamConfiguration &cfg = stream_->configuration();
+    
+    // Create PPM data with header
+    std::string ppm_header = "P6\n" + 
+      std::to_string(cfg.size.width) + " " + 
+      std::to_string(cfg.size.height) + "\n255\n";
+    
+    std::vector<uint8_t> ppm_data(ppm_header.size() + image_data_.size());
+    std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+    std::memcpy(ppm_data.data() + ppm_header.size(), 
+		image_data_.data(), image_data_.size());
+    
+    char point_name[256];
+    snprintf(point_name, sizeof(point_name), "%s/live_frame_ppm", 
+	     datapoint_prefix_.c_str());
+    
+    ds_datapoint_t *dp = dpoint_new(
+				    point_name,
+				    tclserver_now(tclserver),
+				    DSERV_PPM,
+				    ppm_data.size(),
+				    ppm_data.data()
+				    );
+    tclserver_set_point(tclserver, dp);
+    
+    // Publish metadata
+    publish_frame_metadata(point_name);
+  }
+
+  
+  bool encode_frame_to_jpeg(const std::vector<uint8_t>& rgb_data, 
+			    std::vector<uint8_t>& jpeg_output) {
+#ifdef HAS_JPEG
+    if (!stream_) {
+      return false;
+    }
+    
+    if (rgb_data.empty()) {
+      return false;
+    }
+    
+    const StreamConfiguration &cfg = stream_->configuration();
+    
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+    
+    unsigned char *jpeg_buffer = nullptr;
+    unsigned long jpeg_size = 0;
+    
+    jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+    
+    cinfo.image_width = cfg.size.width;
+    cinfo.image_height = cfg.size.height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+    
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
+    
+    jpeg_start_compress(&cinfo, TRUE);
+    
+    JSAMPROW row_pointer[1];
+    int row_stride = cfg.size.width * 3;
+    
+    while (cinfo.next_scanline < cinfo.image_height) {
+      row_pointer[0] = const_cast<uint8_t*>(&rgb_data[cinfo.next_scanline * row_stride]);
+      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+    
+    jpeg_finish_compress(&cinfo);
+    
+    jpeg_output.clear();
+    jpeg_output.resize(jpeg_size);
+    std::memcpy(jpeg_output.data(), jpeg_buffer, jpeg_size);
+    
+    if (jpeg_buffer) {
+      free(jpeg_buffer);
+    }
+    jpeg_destroy_compress(&cinfo);
+    
+    return true;
+#else
+    return false;
+#endif
+  }
+    
   void get_ring_buffer_status(int &oldest_frame_id, int &newest_frame_id, int &valid_frames) {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
     
@@ -1165,55 +1395,34 @@ private:
     }
   }
 
-  // Helper method for publishing frames to dataserver
-  void publish_frame_to_dataserver() {
-    if (!tclserver) return;
-  
-    // Create datapoint name
-    char point_name[256];
-    snprintf(point_name, sizeof(point_name), "%s/live_frame", datapoint_prefix_.c_str());
-  
-    // Create and publish frame datapoint
-    ds_datapoint_t *dp = dpoint_new(
-				    point_name,
-				    tclserver_now(tclserver),
-				    (ds_datatype_t)DSERV_JPEG,
-				    jpeg_data_.size(),
-				    (unsigned char *)jpeg_data_.data()
-				    );
-  
-    tclserver_set_point(tclserver, dp);
-  
-    // Also publish metadata
-    publish_frame_metadata(point_name);
-  }
-
   // Helper method for publishing frame metadata
   void publish_frame_metadata(const char* base_name) {
     char meta_name[512];
     snprintf(meta_name, sizeof(meta_name), "%s/meta", base_name);
-  
+    
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
+    
+    // Fixed: consistent metadata for PPM-first approach
     char meta_json[512];
     snprintf(meta_json, sizeof(meta_json), 
 	     "{\"frame_id\":%d,\"timestamp\":%lld,\"width\":%d,\"height\":%d,"
-	     "\"size\":%zu,\"fps\":%.2f,\"ae_settled\":%s,\"continuous_mode\":%s}",
+	     "\"ppm_size\":%zu,\"format\":\"ppm\",\"fps\":%.2f,\"ae_settled\":%s,\"continuous_mode\":%s}",
 	     frame_counter_.load(), timestamp,
-	     width_, height_, jpeg_data_.size(),
+	     width_, height_, image_data_.size() + 20, // PPM size estimate
 	     target_fps_ > 0 ? target_fps_ : 30.0,
 	     ae_settled_ ? "true" : "false",
 	     continuous_mode_ ? "true" : "false");
-  
+    
     ds_datapoint_t *meta_dp = dpoint_new(meta_name,
 					 tclserver_now(tclserver),
 					 DSERV_STRING,
 					 strlen(meta_json) + 1,
 					 (unsigned char *)meta_json);
-  
+    
     tclserver_set_point(tclserver, meta_dp);
   }
+  
   void store_frame_in_ring_buffer() {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
   
@@ -1232,11 +1441,12 @@ private:
 
   void call_tcl_frame_callback() {
     if (!tclserver || tcl_callback_proc_.empty()) return;
-  
+    
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
-    // Create a Tcl script that calls the callback
+    
+    size_t ppm_size_estimate = image_data_.size() + 20; // raw + ~20 byte header
+    
     char tcl_command[2048];
     int len = snprintf(tcl_command, sizeof(tcl_command),
 		       "%s %d %lld %d %d %zu %s %s",
@@ -1245,23 +1455,20 @@ private:
 		       timestamp,                       // timestamp_ms
 		       width_,                         // width
 		       height_,                        // height
-		       jpeg_data_.size(),              // jpeg_size
+		       ppm_size_estimate,              // estimated PPM size (not JPEG)
 		       ae_settled_ ? "true" : "false", // ae_settled
 		       datapoint_prefix_.c_str()       // datapoint_prefix
 		       );
-  
+    
     if (len >= sizeof(tcl_command)) {
       std::cerr << "Tcl command too long, truncated" << std::endl;
       return;
     }
-
-    // std::cerr << "DEBUG: About to queue tcl command: " << tcl_command << std::endl;
-  
-    // Use TclServer's existing REQ_SCRIPT_NOREPLY mechanism
+    
     tclserver_queue_script(tclserver, tcl_command, 1); 
-  
   }
-
+  
+  
   void start_save_worker() {
     if (save_worker_running_) return;
   
@@ -2178,11 +2385,12 @@ extern "C" {
     return TCL_OK;
   }
 
-  // Raw RGB data access commands
-  static int camera_get_raw_callback_frame_command(ClientData data,
+
+  static int camera_get_ppm_callback_frame_command(ClientData data,
 						   Tcl_Interp *interp,
 						   int objc, Tcl_Obj *objv[])
   {
+#ifdef HAS_LIBCAMERA
     camera_info_t *info = (camera_info_t *) data;
     
     if (!info->capture) {
@@ -2199,23 +2407,28 @@ extern "C" {
     if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
       return TCL_ERROR;
     
-    std::vector<uint8_t> frame_data;
+    std::vector<uint8_t> ppm_data;
     int64_t timestamp_ms;
     
-    if (!info->capture->get_raw_frame_by_id(frame_id, frame_data, timestamp_ms)) {
-      Tcl_AppendResult(interp, "Frame not found in ring buffer (too old or invalid frame_id)", NULL);
+    if (!info->capture->get_ppm_frame_by_id(frame_id, ppm_data, timestamp_ms)) {
+      Tcl_AppendResult(interp, "Frame not found in ring buffer", NULL);
       return TCL_ERROR;
     }
     
-    // Return the raw RGB data as a Tcl byte array
-    Tcl_SetObjResult(interp, Tcl_NewByteArrayObj(frame_data.data(), frame_data.size()));
+    // Return the PPM data as a Tcl byte array
+    Tcl_SetObjResult(interp, Tcl_NewByteArrayObj(ppm_data.data(), ppm_data.size()));
     return TCL_OK;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
   }
-
-  static int camera_save_raw_callback_frame_command(ClientData data,
+  
+  static int camera_save_ppm_callback_frame_command(ClientData data,
 						    Tcl_Interp *interp,
 						    int objc, Tcl_Obj *objv[])
   {
+#ifdef HAS_LIBCAMERA
     camera_info_t *info = (camera_info_t *) data;
     
     if (!info->capture) {
@@ -2234,19 +2447,24 @@ extern "C" {
     
     const char *filename = Tcl_GetString(objv[2]);
     
-    if (!info->capture->save_raw_callback_frame(frame_id, filename)) {
-      Tcl_AppendResult(interp, "Failed to save raw frame (not found or I/O error)", NULL);
+    if (!info->capture->save_ppm_callback_frame(frame_id, filename)) {
+      Tcl_AppendResult(interp, "Failed to save PPM frame", NULL);
       return TCL_ERROR;
     }
     
     Tcl_SetObjResult(interp, Tcl_NewStringObj(filename, -1));
     return TCL_OK;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
   }
-
-  static int camera_publish_raw_callback_frame_command(ClientData data,
+  
+  static int camera_publish_ppm_callback_frame_command(ClientData data,
 						       Tcl_Interp *interp,
 						       int objc, Tcl_Obj *objv[])
   {
+#ifdef HAS_LIBCAMERA
     camera_info_t *info = (camera_info_t *) data;
     
     if (!info->capture) {
@@ -2265,15 +2483,19 @@ extern "C" {
     
     const char *datapoint_name = Tcl_GetString(objv[2]);
     
-    if (!info->capture->publish_raw_callback_frame(frame_id, datapoint_name)) {
-      Tcl_AppendResult(interp, "Failed to publish raw frame (not found or dataserver error)", NULL);
+    if (!info->capture->publish_ppm_callback_frame(frame_id, datapoint_name)) {
+      Tcl_AppendResult(interp, "Failed to publish PPM frame", NULL);
       return TCL_ERROR;
     }
     
     Tcl_SetObjResult(interp, Tcl_NewStringObj(datapoint_name, -1));
     return TCL_OK;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
   }
-
+  
   // JPEG data access commands (on-demand encoding)
   static int camera_get_jpeg_callback_frame_command(ClientData data,
 						    Tcl_Interp *interp,
@@ -2436,30 +2658,6 @@ extern "C" {
     return TCL_ERROR;
   }
 
-  static int camera_get_raw_callback_frame_command(ClientData data,
-					       Tcl_Interp *interp,
-					       int objc, Tcl_Obj *objv[])
-  {
-    Tcl_AppendResult(interp, "Camera support not available", NULL);
-    return TCL_ERROR;
-  }
-
-  static int camera_save_raw_callback_frame_command(ClientData data,
-						Tcl_Interp *interp,
-						int objc, Tcl_Obj *objv[])
-  {
-    Tcl_AppendResult(interp, "Camera support not available", NULL);
-    return TCL_ERROR;
-  }
-
-  static int camera_publish_raw_callback_frame_command(ClientData data,
-						   Tcl_Interp *interp,
-						   int objc, Tcl_Obj *objv[])
-  {
-    Tcl_AppendResult(interp, "Camera support not available", NULL);
-    return TCL_ERROR;
-  }
-
   static int camera_get_jpeg_callback_frame_command(ClientData data,
 					       Tcl_Interp *interp,
 					       int objc, Tcl_Obj *objv[])
@@ -2484,6 +2682,28 @@ extern "C" {
     return TCL_ERROR;
   }
 
+  static int camera_get_ppm_callback_frame_command(ClientData data,
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[]) {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+  
+  static int camera_save_ppm_callback_frame_command(ClientData data,
+						    Tcl_Interp *interp,
+						    int objc, Tcl_Obj *objv[]) {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+  
+  static int camera_publish_ppm_callback_frame_command(ClientData data,
+						       Tcl_Interp *interp,
+						       int objc,
+						       Tcl_Obj *objv[]) {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+  
   static int camera_get_ring_buffer_status_command(ClientData data,
 						   Tcl_Interp *interp,
 						   int objc, Tcl_Obj *objv[])
@@ -2605,14 +2825,14 @@ extern "C" {
                          (Tcl_ObjCmdProc *) camera_set_target_fps_command,
                          cameraInfo, NULL);
 
-    Tcl_CreateObjCommand(interp, "cameraGetRawCallbackFrame",
-                         (Tcl_ObjCmdProc *) camera_get_raw_callback_frame_command,
+    Tcl_CreateObjCommand(interp, "cameraGetPpmCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_get_ppm_callback_frame_command,
                          cameraInfo, NULL);
-    Tcl_CreateObjCommand(interp, "cameraSaveRawCallbackFrame",
-                         (Tcl_ObjCmdProc *) camera_save_raw_callback_frame_command,
+    Tcl_CreateObjCommand(interp, "cameraSavePpmCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_save_ppm_callback_frame_command,
                          cameraInfo, NULL);
-    Tcl_CreateObjCommand(interp, "cameraPublishRawCallbackFrame",
-                         (Tcl_ObjCmdProc *) camera_publish_raw_callback_frame_command,
+    Tcl_CreateObjCommand(interp, "cameraPublishPpmCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_publish_ppm_callback_frame_command,
                          cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraGetJpegCallbackFrame",
                          (Tcl_ObjCmdProc *) camera_get_jpeg_callback_frame_command,
