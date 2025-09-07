@@ -171,10 +171,21 @@ if(UNIX AND NOT APPLE)
     # Check for JPEG library
     find_package(JPEG)
     if(JPEG_FOUND)
-        message(STATUS "JPEG library found - enabling JPEG support")
-        set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
-        set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
-        set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
+        # Try to find static library first
+        find_library(JPEG_STATIC_LIB 
+            NAMES libjpeg.a
+            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
+    
+        if(JPEG_STATIC_LIB)
+            message(STATUS "Using static JPEG library: ${JPEG_STATIC_LIB}")
+            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+            set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_STATIC_LIB})
+        else()
+            message(STATUS "Using dynamic JPEG library: ${JPEG_LIBRARIES}")
+            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+            set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
+            set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
+        endif()
     else()
         message(WARNING "JPEG library not found - JPEG support disabled")
     endif()

@@ -31,7 +31,7 @@ jobs:
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
           sudo apt install -y libevdev-dev zlib1g-dev pkg-config
-          sudo apt install -y libjpeg-dev python3-yaml python3-ply python3-jinja2
+          sudo apt install -y libjpeg-dev libjpeg62-turbo-dev python3-yaml python3-ply python3-jinja2
 
       - name: Set architecture-specific paths
         run: |
@@ -69,7 +69,7 @@ jobs:
           # Clone and build libcamera
           git clone https://git.libcamera.org/libcamera/libcamera.git
           cd libcamera
-          git checkout v0.5.1
+          git checkout v0.3.2  # Use a stable version
         
           # Configure and build
           meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
@@ -105,10 +105,11 @@ jobs:
           pkg-config --libs libcamera 2>/dev/null || echo "No libs available"
         
           echo "=== Looking for libcamera pkg-config files ==="
-          find /usr/local -name "*.pc" | grep camera || echo "No camera pkg-config files found"
+          ls -la /usr/local/lib/pkgconfig/ | grep camera || echo "No camera pkg-config files found"
+          ls -la /usr/local/lib/x86_64-linux-gnu/pkgconfig/ | grep camera || echo "No camera pkg-config files in x86_64 dir"
         
           echo "=== Looking for libcamera headers ==="
-          find /usr/local/include -name "*camera*" -type d 2>/dev/null || echo "No camera headers found"
+          ls -la /usr/local/include/ | grep camera || echo "No camera headers found"
 
       - name: Build dserv itself and package it for release.
         run: |
