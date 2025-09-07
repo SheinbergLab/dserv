@@ -238,8 +238,17 @@ jobs:
 
       - name: Install our dlsh libs and headers into the build environment.
         run: |
+          # Install .deb packages for build dependencies (libdg, etc.)
+          DLSH_VERSION=0.0.48
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          
+          # Also download the dlsh.zip for runtime use
           wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
-          sudo unzip -o dlsh.zip -d /usr/local/
+          sudo mkdir -p /usr/local/dlsh
+          sudo cp dlsh.zip /usr/local/dlsh/
 
       - name: Install essgui itself and package for release.
         run: |
