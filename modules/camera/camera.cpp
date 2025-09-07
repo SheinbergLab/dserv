@@ -26,7 +26,6 @@
 extern "C" {
 #include <tcl.h>
 #include "Datapoint.h"
-#include "tclserver_api.h"
 }
 #include "TclServer.h"
 
@@ -887,7 +886,7 @@ bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
           (unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
       );
       
-      tclserver_set_point(tclserver_, dp);
+      tclserver_->set_point(dp);
       return true;
     }
   }
@@ -992,13 +991,13 @@ void publish_frame_to_dataserver() {
   // Create and publish frame datapoint
   ds_datapoint_t *dp = dpoint_new(
       point_name,
-      tclserver_now(tclserver_),
+      tclserver_->now(),
       (ds_datatype_t)DSERV_JPEG,
       jpeg_data_.size(),
       (unsigned char *)jpeg_data_.data()
   );
   
-  tclserver_set_point(tclserver_, dp);
+  tclserver_->set_point(dp);
   
   // Also publish metadata
   publish_frame_metadata(point_name);
@@ -1023,12 +1022,12 @@ void publish_frame_metadata(const char* base_name) {
           continuous_mode_ ? "true" : "false");
   
   ds_datapoint_t *meta_dp = dpoint_new(meta_name,
-                                      tclserver_now(tclserver_),
+                                      tclserver_->now,
                                       DSERV_STRING,
                                       strlen(meta_json) + 1,
                                       (unsigned char *)meta_json);
   
-  tclserver_set_point(tclserver_, meta_dp);
+  tclserver_->set_point(meta_dp);
 }
 void store_frame_in_ring_buffer() {
   std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
@@ -1473,12 +1472,12 @@ static int camera_configure_command(ClientData data,
       }
         
       ds_datapoint_t *dp = dpoint_new((char *)point_name,
-                                      tclserver_now(info->tclserver),
+                                      info->tclserver->now(),
                                       (ds_datatype_t)DSERV_JPEG,
                                       info->capture->get_jpeg_size(),
                                       (unsigned char *)info->capture->get_jpeg_data());
         
-      tclserver_set_point(info->tclserver, dp);
+      info->tclserver->set_point(dp);
         
       char meta_name[256];
       snprintf(meta_name, sizeof(meta_name), "%s/meta", point_name);
@@ -1492,12 +1491,12 @@ static int camera_configure_command(ClientData data,
                info->capture->is_ae_settled() ? "true" : "false");
         
       ds_datapoint_t *meta_dp = dpoint_new(meta_name,
-                                           tclserver_now(info->tclserver),
+                                           info->tclserver->now(),
                                            DSERV_STRING,
                                            strlen(meta_str) + 1,
                                            (unsigned char *)meta_str);
         
-      tclserver_set_point(info->tclserver, meta_dp);
+      info->tclserver->set_point(meta_dp);
         
       Tcl_SetObjResult(interp, Tcl_NewIntObj(info->capture->get_jpeg_size()));
       return TCL_OK;
@@ -2232,7 +2231,8 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     // Allocate camera info dynamically
     camera_info_t *cameraInfo =
       (camera_info_t*) calloc(1, sizeof(camera_info_t));
-    cameraInfo->tclserver = (TclServer*)tclserver_get();
+    cameraInfo->tclserver = 
+      (TclServer*)Tcl_GetAssocData(interp, "tclserver_instance", NULL);
     cameraInfo->dpoint_prefix = strdup("camera");
     cameraInfo->capture = nullptr;
     cameraInfo->initialized = 0;
