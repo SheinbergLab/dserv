@@ -40,6 +40,9 @@ endif()
 
 include_directories(${TCL_INCLUDE_DIR} .)
 
+# Add option to control camera build
+option(BUILD_CAMERA "Build camera module" OFF)
+
 ##
 ## timer
 ##
@@ -140,67 +143,75 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
 
 ##
-## camera
+## camera (optional)
 ##
-set(MODULE camera_capture)
-project(${MODULE})
+if(BUILD_CAMERA)
+    set(MODULE camera_capture)
+    project(${MODULE})
 
-# Check for libcamera availability
-set(CAMERA_LIBS ${DLSH} ${TCLLIB} pthread)
-set(CAMERA_DEFINES -DUSE_TCL_STUBS)
+    # Check for libcamera availability
+    set(CAMERA_LIBS ${DLSH} ${TCLLIB} pthread)
+    set(CAMERA_DEFINES -DUSE_TCL_STUBS)
 
-if(UNIX AND NOT APPLE)
-    find_package(PkgConfig)
-    if(PKG_CONFIG_FOUND)
-        message(STATUS "pkg-config found, checking for libcamera...")
-        pkg_check_modules(LIBCAMERA libcamera)
-        if(LIBCAMERA_FOUND)
-            message(STATUS "libcamera found - enabling camera support")
-            message(STATUS "libcamera include dirs: ${LIBCAMERA_INCLUDE_DIRS}")
-            message(STATUS "libcamera libraries: ${LIBCAMERA_LIBRARIES}")
-            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_LIBCAMERA)
-            set(CAMERA_LIBS ${CAMERA_LIBS} ${LIBCAMERA_LIBRARIES})
-            set(CAMERA_INCLUDES ${LIBCAMERA_INCLUDE_DIRS})
+    if(UNIX AND NOT APPLE)
+        find_package(PkgConfig)
+        if(PKG_CONFIG_FOUND)
+            message(STATUS "pkg-config found, checking for libcamera...")
+            pkg_check_modules(LIBCAMERA libcamera)
+            if(LIBCAMERA_FOUND)
+                message(STATUS "libcamera found - enabling camera support")
+                message(STATUS "libcamera include dirs: ${LIBCAMERA_INCLUDE_DIRS}")
+                message(STATUS "libcamera libraries: ${LIBCAMERA_LIBRARIES}")
+                set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_LIBCAMERA)
+                set(CAMERA_LIBS ${CAMERA_LIBS} ${LIBCAMERA_LIBRARIES})
+                set(CAMERA_INCLUDES ${LIBCAMERA_INCLUDE_DIRS})
+            else()
+                message(WARNING "libcamera NOT found - camera support will be disabled")
+            endif()
         else()
-            message(WARNING "libcamera NOT found - camera support will be disabled")
+            message(WARNING "pkg-config not found - cannot detect libcamera")
+        endif()
+        
+        # Check for JPEG library
+        find_package(JPEG)
+        if(JPEG_FOUND)
+            # Try to find static library first
+            find_library(JPEG_STATIC_LIB 
+                NAMES libjpeg.a
+                PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
+        
+            if(JPEG_STATIC_LIB)
+                message(STATUS "Using static JPEG library: ${JPEG_STATIC_LIB}")
+                set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+                set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_STATIC_LIB})
+            else()
+                message(STATUS "Using dynamic JPEG library: ${JPEG_LIBRARIES}")
+                set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
+                set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
+                set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
+            endif()
+        else()
+            message(WARNING "JPEG library not found - JPEG support disabled")
         endif()
     else()
-        message(WARNING "pkg-config not found - cannot detect libcamera")
+        message(STATUS "Skipping libcamera detection (not Linux)")
     endif()
-    
-    # Check for JPEG library
-    find_package(JPEG)
-    if(JPEG_FOUND)
-        # Try to find static library first
-        find_library(JPEG_STATIC_LIB 
-            NAMES libjpeg.a
-            PATHS /usr/lib /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu)
-    
-        if(JPEG_STATIC_LIB)
-            message(STATUS "Using static JPEG library: ${JPEG_STATIC_LIB}")
-            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
-            set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_STATIC_LIB})
-        else()
-            message(STATUS "Using dynamic JPEG library: ${JPEG_LIBRARIES}")
-            set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
-            set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
-            set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
-        endif()
-    else()
-        message(WARNING "JPEG library not found - JPEG support disabled")
+
+    add_library(${MODULE} MODULE camera/camera.cpp)
+    set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+    set_target_properties(${MODULE} PROPERTIES OUTPUT_NAME "camera")
+    target_compile_definitions(${MODULE} PRIVATE ${CAMERA_DEFINES})
+    if(CAMERA_INCLUDES)
+        target_include_directories(${MODULE} PRIVATE ${CAMERA_INCLUDES})
     endif()
+    target_link_libraries(${MODULE} ${CAMERA_LIBS})
+    
+    message(STATUS "Camera module will be built")
+    set(CAMERA_TARGET camera_capture)
 else()
-    message(STATUS "Skipping libcamera detection (not Linux)")
+    message(STATUS "Camera module disabled (use -DBUILD_CAMERA=ON to enable)")
+    set(CAMERA_TARGET "")
 endif()
-
-add_library(${MODULE} MODULE camera/camera.cpp)
-set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
-set_target_properties(${MODULE} PROPERTIES OUTPUT_NAME "camera")
-target_compile_definitions(${MODULE} PRIVATE ${CAMERA_DEFINES})
-if(CAMERA_INCLUDES)
-    target_include_directories(${MODULE} PRIVATE ${CAMERA_INCLUDES})
-endif()
-target_link_libraries(${MODULE} ${CAMERA_LIBS})
 
 ##
 ## touch
@@ -215,8 +226,15 @@ add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
-
-install(TARGETS
-	ain juicer gpio_input gpio_output touch
-	rmt eventlog sound timer usbio ina226 joystick4 camera_capture
-	DESTINATION dserv/modules COMPONENT dserv)
+# Install targets - conditionally include camera
+if(BUILD_CAMERA)
+    install(TARGETS
+        ain juicer gpio_input gpio_output touch
+        rmt eventlog sound timer usbio ina226 joystick4 camera_capture
+        DESTINATION dserv/modules COMPONENT dserv)
+else()
+    install(TARGETS
+        ain juicer gpio_input gpio_output touch
+        rmt eventlog sound timer usbio ina226 joystick4
+        DESTINATION dserv/modules COMPONENT dserv)
+endif()

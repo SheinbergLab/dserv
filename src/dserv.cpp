@@ -34,22 +34,40 @@ MeshManager* get_mesh_manager(void) {
   return meshManager.get(); 
 }
 
-Dataserver *get_ds(void) { return dserver; }
-TclServer *get_tclserver(void) { return tclserver; }
+// These should be part of an api 
+extern "C" {
 
-tclserver_t* tclserver_get_from_interp(Tcl_Interp *interp) {
-    TclServer* server = (TclServer*)Tcl_GetAssocData(interp, "tclserver_instance", NULL);
-    return server ? (tclserver_t*)server : nullptr; // fallback to main
-}
-
-void tclserver_set_point(tclserver_t *tclserver, ds_datapoint_t *dp)
-{
-  ((TclServer *) tclserver)->set_point(dp);
-}
-
-uint64_t tclserver_now(tclserver_t *tclserver)
-{
-  return ((TclServer *) tclserver)->now();
+	Dataserver *get_ds(void) { return dserver; }
+	TclServer *get_tclserver(void) { return tclserver; }
+	
+	tclserver_t* tclserver_get_from_interp(Tcl_Interp *interp) {
+		TclServer* server = (TclServer*)Tcl_GetAssocData(interp, 
+		       "tclserver_instance", NULL);
+		return server ? (tclserver_t*)server : nullptr; // fallback to main
+	}
+	
+	void tclserver_set_point(tclserver_t *tclserver, ds_datapoint_t *dp)
+	{
+	  ((TclServer *) tclserver)->set_point(dp);
+	}
+	
+	uint64_t tclserver_now(tclserver_t *tclserver)
+	{
+	  return ((TclServer *) tclserver)->now();
+	}
+	
+	
+  void tclserver_queue_script(tclserver_t *tclserver,
+			      const char *script, int no_reply) 
+	{
+	  TclServer *ts = static_cast<TclServer*>(tclserver);
+	  
+	  client_request_t req;
+	  req.type = (request_t) (no_reply ? REQ_SCRIPT_NOREPLY : REQ_SCRIPT);
+	  req.script = std::string(script);
+	  
+	  ts->queue.push_back(req);
+	}
 }
 
 static std::atomic<bool> shutdownInProgress{false};
