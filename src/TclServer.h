@@ -143,6 +143,8 @@ private:
  using CommandRegistrationCallback = std::function<void(Tcl_Interp*, void*)>;
  CommandRegistrationCallback command_callback = nullptr;
  void* command_callback_data = nullptr;
+
+ Tcl_Interp *process_interp = nullptr;
  
 public:
   int argc;
@@ -160,6 +162,10 @@ public:
   // our dataserver
   Dataserver *ds;
   
+  // provide access to our interpreter
+  Tcl_Interp* getInterp() const { return process_interp; }
+  void setInterp(Tcl_Interp *interp) { process_interp = interp; }
+   
   // scripts attached to dpoints
   TriggerDict dpoint_scripts;
   

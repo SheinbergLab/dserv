@@ -1157,7 +1157,7 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
                    tclserver->ds,
                    Tcl_GetString(objv[1]), port);
-                   
+                  
   TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
 
   std::string script;
@@ -1890,6 +1890,12 @@ static int process_requests(TclServer *tserv)
   // create a private interpreter for this process
   Tcl_Interp *interp = setup_tcl(tserv);
   
+  // store our interp in the TclServer instance
+  tserv->setInterp(interp); 
+  
+  // Set the association data for modules to find
+  Tcl_SetAssocData(interp, "tclserver_instance", NULL, (ClientData)tserv);
+    
   /* process until receive a message saying we are done */
   while (!tserv->m_bDone) {
     
@@ -1966,6 +1972,7 @@ static int process_requests(TclServer *tserv)
     }
   }
 
+  tserv->setInterp(nullptr);
   Tcl_DeleteInterp(interp);
   //  std::cout << "TclServer process thread ended" << std::endl;
 
