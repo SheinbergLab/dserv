@@ -282,7 +282,7 @@ int Dserv_ain_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
 
-  g_ainInfo.tclserver = tclserver_get();
+  g_ainInfo.tclserver = tclserver_get_from_interp(interp);
   g_ainInfo.dpoint_prefix = malloc(strlen(DEFAULT_ADC_DPOINT_PREFIX)+1);
   strcpy(g_ainInfo.dpoint_prefix, DEFAULT_ADC_DPOINT_PREFIX);
 

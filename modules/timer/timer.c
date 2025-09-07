@@ -514,7 +514,7 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
   }
 
   int ntimers = 8;
-  g_timerInfo.tclserver = tclserver_get();
+  g_timerInfo.tclserver = tclserver_get_from_interp(interp);
   g_timerInfo.ntimers = ntimers;
   
 #ifdef __linux__

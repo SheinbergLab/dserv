@@ -37,7 +37,11 @@ MeshManager* get_mesh_manager(void) {
 Dataserver *get_ds(void) { return dserver; }
 TclServer *get_tclserver(void) { return tclserver; }
 
-tclserver_t *tclserver_get(void) { return (tclserver_t *) tclserver; }
+tclserver_t* tclserver_get_from_interp(Tcl_Interp *interp) {
+    TclServer* server = (TclServer*)Tcl_GetAssocData(interp, "tclserver_instance", NULL);
+    return server ? (tclserver_t*)server : nullptr; // fallback to main
+}
+
 void tclserver_set_point(tclserver_t *tclserver, ds_datapoint_t *dp)
 {
   ((TclServer *) tclserver)->set_point(dp);

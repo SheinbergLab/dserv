@@ -579,7 +579,7 @@ int Dserv_gpio_input_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
 
-  g_gpioInfo.tclserver = tclserver_get();
+  g_gpioInfo.tclserver = tclserver_get_from_interp(interp);
   g_gpioInfo.dpoint_prefix = "gpio/input";
   g_gpioInfo.fd = -1;
       

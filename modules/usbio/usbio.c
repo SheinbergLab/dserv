@@ -236,7 +236,7 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
     return TCL_ERROR;
   }
   g_usbioInfo.usbio_fd = -1;
-  g_usbioInfo.tclserver = tclserver_get();
+  g_usbioInfo.tclserver = tclserver_get_from_interp(interp);
   
   Tcl_CreateObjCommand(interp, "usbioOpen",
 		       (Tcl_ObjCmdProc *) usbio_open_command,

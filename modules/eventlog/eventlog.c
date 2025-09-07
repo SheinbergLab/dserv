@@ -301,7 +301,7 @@ int Dserv_eventlog_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
 
-  tclserver_t *tclserver = tclserver_get();
+  tclserver_t *tclserver = tclserver_get_from_interp(interp);
 
   // initialize names
   initialize_names();

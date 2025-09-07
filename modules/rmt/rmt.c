@@ -379,7 +379,7 @@ int Dserv_rmt_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
 
-  tclserver_t *tclserver = tclserver_get();
+  tclserver_t *tclserver = tclserver_get_from_interp(interp);
   rmt_socket_recv_buf = calloc(1, SOCK_BUF_SIZE);
   rmt_socket_send_buf = calloc(1, SOCK_BUF_SIZE);
   

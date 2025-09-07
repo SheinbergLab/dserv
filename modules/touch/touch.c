@@ -307,7 +307,7 @@ int Dserv_touch_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
 
-  g_touchInfo.tclserver = tclserver_get();
+  g_touchInfo.tclserver = tclserver_get_from_interp(interp);
   g_touchInfo.dpoint_prefix = "mtouch";
   g_touchInfo.fd = -1;
 #ifdef __linux__

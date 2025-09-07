@@ -316,7 +316,7 @@ EXPORT(int,Dserv_joystick_Init) (Tcl_Interp *interp)
     return TCL_ERROR;
   }
   
-  g_joystick4Info.tclserver = tclserver_get();
+  g_joystick4Info.tclserver = tclserver_get_from_interp(interp);
   g_joystick4Info.bus_number = 1;
   
   char i2cpath[255];

@@ -263,7 +263,7 @@ int Dserv_gpio_output_Init(Tcl_Interp *interp)
     return TCL_ERROR;
   }
 
-  tclserver_t *tclserver = tclserver_get();
+  tclserver_t *tclserver = tclserver_get_from_interp(interp);
 
   g_gpioInfo.fd = -1;
   

@@ -433,7 +433,7 @@ EXPORT(int,Dserv_ina_Init) (Tcl_Interp *interp)
     return TCL_ERROR;
   }
   
-  g_ina226Info.tclserver = tclserver_get();
+  g_ina226Info.tclserver = tclserver_get_from_interp(interp);
   g_ina226Info.bus_number = 1;
   
   char i2cpath[255];
