@@ -74,9 +74,9 @@ using namespace libcamera;
 using namespace std::chrono_literals;
 
 enum class CameraState {
-    IDLE,
-    STREAMING,
-    CAPTURING
+  IDLE,
+  STREAMING,
+  CAPTURING
 };
 
 class CameraCapture {
@@ -140,18 +140,20 @@ private:
   tclserver_t *tclserver = nullptr;
   
   struct CameraFrameBuffer {
-    std::vector<uint8_t> jpeg_data;
+    std::vector<uint8_t> raw_data;     // Raw RGB data
+    std::vector<uint8_t> jpeg_data;    // JPEG data (only when needed)
     int frame_id;
     int64_t timestamp_ms;
     bool valid;
+    bool has_jpeg;                     // Flag if JPEG version exists
     
-    CameraFrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false) {}
-};
+    CameraFrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false), has_jpeg(false) {}
+  };
   
-	static constexpr int RING_BUFFER_SIZE = 16;
-	std::array<CameraFrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
-	std::atomic<int> ring_write_index_{0};
-	std::mutex ring_buffer_mutex_;
+  static constexpr int RING_BUFFER_SIZE = 16;
+  std::array<CameraFrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
+  std::atomic<int> ring_write_index_{0};
+  std::mutex ring_buffer_mutex_;
 
   
   // Background save thread for continuous mode
@@ -203,282 +205,282 @@ public:
     return true;
   }
 
-bool configure(unsigned int width, unsigned int height) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  bool configure(unsigned int width, unsigned int height) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
   
-  if (state_ != CameraState::IDLE) {
-    std::cerr << "Cannot configure camera while in use" << std::endl;
-    return false;
-  }
-  
-  width_ = width;
-  height_ = height;
-  ae_settled_ = false;
-  ae_settle_count_ = 0;
-      
-  config_ = camera_->generateConfiguration({ StreamRole::StillCapture });
-  if (!config_ || config_->size() == 0) {
-    return false;
-  }
-
-  StreamConfiguration &stream_config = config_->at(0);
-  
-  // Check what formats are available
-  const StreamFormats &formats = stream_config.formats();
-  auto format_list = formats.pixelformats();
-  
-  std::cout << "Available formats for this camera:" << std::endl;
-  for (const auto& format : format_list) {
-    std::cout << "  " << format.toString() << std::endl;
-  }
-  
-  // Detect camera type based on ID and available formats
-  std::string camera_id = camera_->id();
-  bool is_usb_camera = (camera_id.find("PCI0") != std::string::npos ||  // USB via PCI
-                       camera_id.find("usb") != std::string::npos);      // Direct USB
-  bool is_csi_camera = (camera_id.find("csi") != std::string::npos ||   // CSI interface
-                       camera_id.find("ov") != std::string::npos ||      // OmniVision sensors
-                       camera_id.find("imx") != std::string::npos);      // Sony IMX sensors
-  
-  std::cout << "Camera ID: " << camera_id << std::endl;
-  std::cout << "Detected as: " << (is_usb_camera ? "USB" : is_csi_camera ? "CSI" : "Unknown") << " camera" << std::endl;
-  
-  PixelFormat preferred_format;
-  bool found_format = false;
-  
-  if (is_usb_camera) {
-    // USB cameras: Prefer MJPEG (already compressed), fall back to YUV formats, avoid RGB888
-    std::cout << "Using USB camera strategy..." << std::endl;
-    
-    if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
-      preferred_format = formats::MJPEG;
-      found_format = true;
-      std::cout << "Selected MJPEG (optimal for USB cameras)" << std::endl;
-    }
-    else if (std::find(format_list.begin(), format_list.end(), formats::YUYV) != format_list.end()) {
-      preferred_format = formats::YUYV;
-      found_format = true;
-      std::cout << "Selected YUYV (good for USB cameras)" << std::endl;
-    }
-    else if (std::find(format_list.begin(), format_list.end(), formats::RGB888) != format_list.end()) {
-      preferred_format = formats::RGB888;
-      found_format = true;
-      std::cout << "Selected RGB888 (may be slow for USB)" << std::endl;
-    }
-  } else {
-    // CSI/Pi cameras: Prefer RGB888 (ISP processed), avoid compressed formats
-    std::cout << "Using CSI camera strategy..." << std::endl;
-    
-    if (std::find(format_list.begin(), format_list.end(), formats::RGB888) != format_list.end()) {
-      preferred_format = formats::RGB888;
-      found_format = true;
-      std::cout << "Selected RGB888 (optimal for CSI cameras)" << std::endl;
-    }
-    else if (std::find(format_list.begin(), format_list.end(), formats::YUV420) != format_list.end()) {
-      preferred_format = formats::YUV420;
-      found_format = true;
-      std::cout << "Selected YUV420 (good for CSI cameras)" << std::endl;
-    }
-    else if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
-      preferred_format = formats::MJPEG;
-      found_format = true;
-      std::cout << "Selected MJPEG (fallback for CSI)" << std::endl;
-    }
-  }
-  
-  // Last resort: use first available format
-  if (!found_format && !format_list.empty()) {
-    preferred_format = format_list[0];
-    found_format = true;
-    std::cout << "WARNING: Using first available format " << preferred_format.toString() 
-              << " - may cause issues!" << std::endl;
-  }
-
-  if (!found_format) {
-    std::cerr << "No pixel formats available" << std::endl;
-    return false;
-  }
-
-  stream_config.size.width = width;
-  stream_config.size.height = height;
-  stream_config.pixelFormat = preferred_format;
-  stream_config.bufferCount = 4;
-
-  CameraConfiguration::Status validation = config_->validate();
-  if (validation == CameraConfiguration::Invalid) {
-    std::cerr << "Camera configuration invalid" << std::endl;
-    return false;
-  }
-  
-  if (validation == CameraConfiguration::Adjusted) {
-    std::cout << "Configuration adjusted:" << std::endl;
-    std::cout << "  Size: " << stream_config.size.width << "x" << stream_config.size.height << std::endl;
-    std::cout << "  Format: " << stream_config.pixelFormat.toString() << std::endl;
-    
-    // Update our stored dimensions
-    width_ = stream_config.size.width;
-    height_ = stream_config.size.height;
-  }
-
-  int ret = camera_->configure(config_.get());
-  if (ret) {
-    std::cerr << "Camera configure failed: " << ret << std::endl;
-    return false;
-  }
-
-  stream_ = stream_config.stream();
-  return allocate_buffers();
-}
-
-bool encode_jpeg() {
-#ifdef HAS_JPEG
-  if (!stream_) {
-    return false;
-  }
-  
-  if (image_data_.empty()) {
-    return false;
-  }
-  
-  const StreamConfiguration &cfg = stream_->configuration();
-  
-  // If already MJPEG, just copy directly (your existing logic)
-  if (cfg.pixelFormat == formats::MJPEG) {
-    jpeg_data_ = image_data_;
-    return true;
-  }
-  
-  // For RGB888, use your existing JPEG compression code
-  if (cfg.pixelFormat == formats::RGB888) {
-    return encode_rgb888_to_jpeg(cfg);
-  }
-  
-  // For YUYV (common USB format), convert to RGB first then compress
-  if (cfg.pixelFormat == formats::YUYV) {
-    std::vector<uint8_t> rgb_data;
-    if (!convert_yuyv_to_rgb(image_data_, rgb_data, cfg.size.width, cfg.size.height)) {
-      std::cerr << "Failed to convert YUYV to RGB" << std::endl;
+    if (state_ != CameraState::IDLE) {
+      std::cerr << "Cannot configure camera while in use" << std::endl;
       return false;
     }
-    
-    // Temporarily swap the data for encoding
-    std::vector<uint8_t> original_data = image_data_;
-    image_data_ = rgb_data;
-    
-    bool result = encode_rgb888_to_jpeg(cfg);
-    
-    // Restore original data
-    image_data_ = original_data;
-    return result;
-  }
   
-  // Add more formats as needed
-  std::cerr << "JPEG encoding not supported for format: " << cfg.pixelFormat.toString() << std::endl;
-  return false;
-#else
-  return false;  // No JPEG support
-#endif
-}
+    width_ = width;
+    height_ = height;
+    ae_settled_ = false;
+    ae_settle_count_ = 0;
+      
+    config_ = camera_->generateConfiguration({ StreamRole::StillCapture });
+    if (!config_ || config_->size() == 0) {
+      return false;
+    }
 
-// Extract your existing JPEG compression code into a separate method
-bool encode_rgb888_to_jpeg(const StreamConfiguration &cfg) {
-#ifdef HAS_JPEG
-  struct jpeg_compress_struct cinfo;
-  struct jpeg_error_mgr jerr;
-      
-  cinfo.err = jpeg_std_error(&jerr);
-  jpeg_create_compress(&cinfo);
-      
-  unsigned char *jpeg_buffer = nullptr;
-  unsigned long jpeg_size = 0;
-      
-  jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
-      
-  cinfo.image_width = cfg.size.width;
-  cinfo.image_height = cfg.size.height;
-  cinfo.input_components = 3;
-  cinfo.in_color_space = JCS_RGB;
-      
-  jpeg_set_defaults(&cinfo);
-  jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
-      
-  jpeg_start_compress(&cinfo, TRUE);
-      
-  JSAMPROW row_pointer[1];
-  int row_stride = cfg.size.width * 3;
-      
-  while (cinfo.next_scanline < cinfo.image_height) {
-    row_pointer[0] = &image_data_[cinfo.next_scanline * row_stride];
-    jpeg_write_scanlines(&cinfo, row_pointer, 1);
-  }
-      
-  jpeg_finish_compress(&cinfo);
-      
-  jpeg_data_.clear();
-  jpeg_data_.resize(jpeg_size);
-  std::memcpy(jpeg_data_.data(), jpeg_buffer, jpeg_size);
-      
-  if (jpeg_buffer) {
-    free(jpeg_buffer);
-  }
-  jpeg_destroy_compress(&cinfo);
-      
-  return true;
-#else
-  return false;
-#endif
-}
-
-// YUYV to RGB conversion helper
-bool convert_yuyv_to_rgb(const std::vector<uint8_t>& yuyv_data, 
-                        std::vector<uint8_t>& rgb_data,
-                        unsigned int width, unsigned int height) {
+    StreamConfiguration &stream_config = config_->at(0);
   
-  if (yuyv_data.size() < width * height * 2) {
-    std::cerr << "YUYV data too small" << std::endl;
-    return false;
-  }
+    // Check what formats are available
+    const StreamFormats &formats = stream_config.formats();
+    auto format_list = formats.pixelformats();
   
-  rgb_data.resize(width * height * 3);
+    std::cout << "Available formats for this camera:" << std::endl;
+    for (const auto& format : format_list) {
+      std::cout << "  " << format.toString() << std::endl;
+    }
   
-  for (unsigned int i = 0; i < height; i++) {
-    for (unsigned int j = 0; j < width; j += 2) {
-      unsigned int yuyv_idx = (i * width + j) * 2;
-      unsigned int rgb_idx1 = (i * width + j) * 3;
-      unsigned int rgb_idx2 = (i * width + j + 1) * 3;
-      
-      if (yuyv_idx + 3 >= yuyv_data.size()) break;
-      
-      uint8_t y1 = yuyv_data[yuyv_idx];
-      uint8_t u  = yuyv_data[yuyv_idx + 1];
-      uint8_t y2 = yuyv_data[yuyv_idx + 2];
-      uint8_t v  = yuyv_data[yuyv_idx + 3];
-      
-      // Convert YUV to RGB for both pixels
-      yuv_to_rgb(y1, u, v, rgb_data[rgb_idx1], rgb_data[rgb_idx1+1], rgb_data[rgb_idx1+2]);
-      if (j + 1 < width) {
-        yuv_to_rgb(y2, u, v, rgb_data[rgb_idx2], rgb_data[rgb_idx2+1], rgb_data[rgb_idx2+2]);
+    // Detect camera type based on ID and available formats
+    std::string camera_id = camera_->id();
+    bool is_usb_camera = (camera_id.find("PCI0") != std::string::npos ||  // USB via PCI
+			  camera_id.find("usb") != std::string::npos);      // Direct USB
+    bool is_csi_camera = (camera_id.find("csi") != std::string::npos ||   // CSI interface
+			  camera_id.find("ov") != std::string::npos ||      // OmniVision sensors
+			  camera_id.find("imx") != std::string::npos);      // Sony IMX sensors
+  
+    std::cout << "Camera ID: " << camera_id << std::endl;
+    std::cout << "Detected as: " << (is_usb_camera ? "USB" : is_csi_camera ? "CSI" : "Unknown") << " camera" << std::endl;
+  
+    PixelFormat preferred_format;
+    bool found_format = false;
+  
+    if (is_usb_camera) {
+      // USB cameras: Prefer MJPEG (already compressed), fall back to YUV formats, avoid RGB888
+      std::cout << "Using USB camera strategy..." << std::endl;
+    
+      if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
+	preferred_format = formats::MJPEG;
+	found_format = true;
+	std::cout << "Selected MJPEG (optimal for USB cameras)" << std::endl;
+      }
+      else if (std::find(format_list.begin(), format_list.end(), formats::YUYV) != format_list.end()) {
+	preferred_format = formats::YUYV;
+	found_format = true;
+	std::cout << "Selected YUYV (good for USB cameras)" << std::endl;
+      }
+      else if (std::find(format_list.begin(), format_list.end(), formats::RGB888) != format_list.end()) {
+	preferred_format = formats::RGB888;
+	found_format = true;
+	std::cout << "Selected RGB888 (may be slow for USB)" << std::endl;
+      }
+    } else {
+      // CSI/Pi cameras: Prefer RGB888 (ISP processed), avoid compressed formats
+      std::cout << "Using CSI camera strategy..." << std::endl;
+    
+      if (std::find(format_list.begin(), format_list.end(), formats::RGB888) != format_list.end()) {
+	preferred_format = formats::RGB888;
+	found_format = true;
+	std::cout << "Selected RGB888 (optimal for CSI cameras)" << std::endl;
+      }
+      else if (std::find(format_list.begin(), format_list.end(), formats::YUV420) != format_list.end()) {
+	preferred_format = formats::YUV420;
+	found_format = true;
+	std::cout << "Selected YUV420 (good for CSI cameras)" << std::endl;
+      }
+      else if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
+	preferred_format = formats::MJPEG;
+	found_format = true;
+	std::cout << "Selected MJPEG (fallback for CSI)" << std::endl;
       }
     }
-  }
   
-  return true;
-}
+    // Last resort: use first available format
+    if (!found_format && !format_list.empty()) {
+      preferred_format = format_list[0];
+      found_format = true;
+      std::cout << "WARNING: Using first available format " << preferred_format.toString() 
+		<< " - may cause issues!" << std::endl;
+    }
 
-// YUV to RGB color space conversion
-void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t& b) {
-  int c = y - 16;
-  int d = u - 128;
-  int e = v - 128;
+    if (!found_format) {
+      std::cerr << "No pixel formats available" << std::endl;
+      return false;
+    }
+
+    stream_config.size.width = width;
+    stream_config.size.height = height;
+    stream_config.pixelFormat = preferred_format;
+    stream_config.bufferCount = 4;
+
+    CameraConfiguration::Status validation = config_->validate();
+    if (validation == CameraConfiguration::Invalid) {
+      std::cerr << "Camera configuration invalid" << std::endl;
+      return false;
+    }
   
-  int r_val = (298 * c + 409 * e + 128) >> 8;
-  int g_val = (298 * c - 100 * d - 208 * e + 128) >> 8;
-  int b_val = (298 * c + 516 * d + 128) >> 8;
+    if (validation == CameraConfiguration::Adjusted) {
+      std::cout << "Configuration adjusted:" << std::endl;
+      std::cout << "  Size: " << stream_config.size.width << "x" << stream_config.size.height << std::endl;
+      std::cout << "  Format: " << stream_config.pixelFormat.toString() << std::endl;
+    
+      // Update our stored dimensions
+      width_ = stream_config.size.width;
+      height_ = stream_config.size.height;
+    }
+
+    int ret = camera_->configure(config_.get());
+    if (ret) {
+      std::cerr << "Camera configure failed: " << ret << std::endl;
+      return false;
+    }
+
+    stream_ = stream_config.stream();
+    return allocate_buffers();
+  }
+
+  bool encode_jpeg() {
+#ifdef HAS_JPEG
+    if (!stream_) {
+      return false;
+    }
   
-  r = (uint8_t)std::max(0, std::min(255, r_val));
-  g = (uint8_t)std::max(0, std::min(255, g_val));
-  b = (uint8_t)std::max(0, std::min(255, b_val));
-}  
+    if (image_data_.empty()) {
+      return false;
+    }
+  
+    const StreamConfiguration &cfg = stream_->configuration();
+  
+    // If already MJPEG, just copy directly (your existing logic)
+    if (cfg.pixelFormat == formats::MJPEG) {
+      jpeg_data_ = image_data_;
+      return true;
+    }
+  
+    // For RGB888, use your existing JPEG compression code
+    if (cfg.pixelFormat == formats::RGB888) {
+      return encode_rgb888_to_jpeg(cfg);
+    }
+  
+    // For YUYV (common USB format), convert to RGB first then compress
+    if (cfg.pixelFormat == formats::YUYV) {
+      std::vector<uint8_t> rgb_data;
+      if (!convert_yuyv_to_rgb(image_data_, rgb_data, cfg.size.width, cfg.size.height)) {
+	std::cerr << "Failed to convert YUYV to RGB" << std::endl;
+	return false;
+      }
+    
+      // Temporarily swap the data for encoding
+      std::vector<uint8_t> original_data = image_data_;
+      image_data_ = rgb_data;
+    
+      bool result = encode_rgb888_to_jpeg(cfg);
+    
+      // Restore original data
+      image_data_ = original_data;
+      return result;
+    }
+  
+    // Add more formats as needed
+    std::cerr << "JPEG encoding not supported for format: " << cfg.pixelFormat.toString() << std::endl;
+    return false;
+#else
+    return false;  // No JPEG support
+#endif
+  }
+
+  // Extract your existing JPEG compression code into a separate method
+  bool encode_rgb888_to_jpeg(const StreamConfiguration &cfg) {
+#ifdef HAS_JPEG
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+      
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+      
+    unsigned char *jpeg_buffer = nullptr;
+    unsigned long jpeg_size = 0;
+      
+    jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+      
+    cinfo.image_width = cfg.size.width;
+    cinfo.image_height = cfg.size.height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+      
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
+      
+    jpeg_start_compress(&cinfo, TRUE);
+      
+    JSAMPROW row_pointer[1];
+    int row_stride = cfg.size.width * 3;
+      
+    while (cinfo.next_scanline < cinfo.image_height) {
+      row_pointer[0] = &image_data_[cinfo.next_scanline * row_stride];
+      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+      
+    jpeg_finish_compress(&cinfo);
+      
+    jpeg_data_.clear();
+    jpeg_data_.resize(jpeg_size);
+    std::memcpy(jpeg_data_.data(), jpeg_buffer, jpeg_size);
+      
+    if (jpeg_buffer) {
+      free(jpeg_buffer);
+    }
+    jpeg_destroy_compress(&cinfo);
+      
+    return true;
+#else
+    return false;
+#endif
+  }
+
+  // YUYV to RGB conversion helper
+  bool convert_yuyv_to_rgb(const std::vector<uint8_t>& yuyv_data, 
+			   std::vector<uint8_t>& rgb_data,
+			   unsigned int width, unsigned int height) {
+  
+    if (yuyv_data.size() < width * height * 2) {
+      std::cerr << "YUYV data too small" << std::endl;
+      return false;
+    }
+  
+    rgb_data.resize(width * height * 3);
+  
+    for (unsigned int i = 0; i < height; i++) {
+      for (unsigned int j = 0; j < width; j += 2) {
+	unsigned int yuyv_idx = (i * width + j) * 2;
+	unsigned int rgb_idx1 = (i * width + j) * 3;
+	unsigned int rgb_idx2 = (i * width + j + 1) * 3;
+      
+	if (yuyv_idx + 3 >= yuyv_data.size()) break;
+      
+	uint8_t y1 = yuyv_data[yuyv_idx];
+	uint8_t u  = yuyv_data[yuyv_idx + 1];
+	uint8_t y2 = yuyv_data[yuyv_idx + 2];
+	uint8_t v  = yuyv_data[yuyv_idx + 3];
+      
+	// Convert YUV to RGB for both pixels
+	yuv_to_rgb(y1, u, v, rgb_data[rgb_idx1], rgb_data[rgb_idx1+1], rgb_data[rgb_idx1+2]);
+	if (j + 1 < width) {
+	  yuv_to_rgb(y2, u, v, rgb_data[rgb_idx2], rgb_data[rgb_idx2+1], rgb_data[rgb_idx2+2]);
+	}
+      }
+    }
+  
+    return true;
+  }
+
+  // YUV to RGB color space conversion
+  void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t& b) {
+    int c = y - 16;
+    int d = u - 128;
+    int e = v - 128;
+  
+    int r_val = (298 * c + 409 * e + 128) >> 8;
+    int g_val = (298 * c - 100 * d - 208 * e + 128) >> 8;
+    int b_val = (298 * c + 516 * d + 128) >> 8;
+  
+    r = (uint8_t)std::max(0, std::min(255, r_val));
+    g = (uint8_t)std::max(0, std::min(255, g_val));
+    b = (uint8_t)std::max(0, std::min(255, b_val));
+  }  
 
   bool allocate_buffers() {
     allocator_ = std::make_unique<FrameBufferAllocator>(camera_);
@@ -513,7 +515,7 @@ void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t
     }
     
     return true;
-}
+  }
   
   void set_camera_controls(ControlList &controls) {
     const ControlInfoMap &available_controls = camera_->controls();
@@ -731,14 +733,14 @@ void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t
     const StreamConfiguration &cfg = stream_->configuration();
     
     if (cfg.pixelFormat == formats::MJPEG) {
-        // Already JPEG - write directly
-        std::ofstream file(filename, std::ios::binary);
-        if (!file) return false;
+      // Already JPEG - write directly
+      std::ofstream file(filename, std::ios::binary);
+      if (!file) return false;
         
-        file.write(reinterpret_cast<const char*>(image_data_.data()), 
-                   image_data_.size());
-        file.close();
-        return true;
+      file.write(reinterpret_cast<const char*>(image_data_.data()), 
+		 image_data_.size());
+      file.close();
+      return true;
     }
     
     if (!encode_jpeg()) {
@@ -757,90 +759,90 @@ void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t
   }
 
 
- void streaming_request_complete(Request *request) {
-   // std::cerr << "DEBUG: Entering streaming_request_complete" << std::endl;
+  void streaming_request_complete(Request *request) {
+    // std::cerr << "DEBUG: Entering streaming_request_complete" << std::endl;
    
-  // Early exit if not streaming
-  if (state_ != CameraState::STREAMING) {
-    return;
-  }
-  
-  if (request->status() == Request::RequestCancelled) {
-    if (state_ == CameraState::STREAMING) {
-      request->reuse(Request::ReuseBuffers);
-      camera_->queueRequest(request);
+    // Early exit if not streaming
+    if (state_ != CameraState::STREAMING) {
+      return;
     }
-    return;
-  }
   
-  frames_captured_++;
-  
-  // Check auto-exposure convergence
-  check_ae_convergence(request);
-  
-  // Skip frames if configured and not yet settled
-  if (!ae_settled_ || (++frame_skip_counter_ < frame_skip_rate_)) {
-    if (frame_skip_counter_ >= frame_skip_rate_) {
-      frame_skip_counter_ = 0;
-    }
-    
-    if (state_ == CameraState::STREAMING) {
-      request->reuse(Request::ReuseBuffers);
-      camera_->queueRequest(request);
-    }
-    return;
-  }
-  frame_skip_counter_ = 0;
-  
-  // Process frame - use libcamera::FrameBuffer correctly
-  const Request::BufferMap &buffers = request->buffers();
-  for (auto buffer_pair : buffers) {
-    libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
-    const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
-      
-    void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
-                      plane.fd.get(), 0);
-    if (data == MAP_FAILED) continue;
-      
-    {
-      std::lock_guard<std::mutex> lock(capture_mutex_);
-      image_data_.resize(plane.length);
-      std::memcpy(image_data_.data(), data, plane.length);
-      frame_ready_ = true;
-    }
-    capture_cv_.notify_one();
-      
-    munmap(data, plane.length);
-    break;
-  }
-
-  if (continuous_mode_ && ae_settled_) {
-    // If hardware FPS isn't supported and we have a target FPS, throttle in software
-    if (!hardware_fps_supported_ && target_fps_ > 0.0) {
-      auto now = std::chrono::steady_clock::now();
-      auto elapsed = now - last_frame_time_;
-      
-      if (elapsed < target_frame_interval_) {
-        // Skip this frame - too soon for target FPS
-        if (state_ == CameraState::STREAMING) {
-          request->reuse(Request::ReuseBuffers);
-          camera_->queueRequest(request);
-        }
-        return;
+    if (request->status() == Request::RequestCancelled) {
+      if (state_ == CameraState::STREAMING) {
+	request->reuse(Request::ReuseBuffers);
+	camera_->queueRequest(request);
       }
-      last_frame_time_ = now;
+      return;
     }
+  
+    frames_captured_++;
+  
+    // Check auto-exposure convergence
+    check_ae_convergence(request);
+  
+    // Skip frames if configured and not yet settled
+    if (!ae_settled_ || (++frame_skip_counter_ < frame_skip_rate_)) {
+      if (frame_skip_counter_ >= frame_skip_rate_) {
+	frame_skip_counter_ = 0;
+      }
     
-    handle_continuous_frame();
+      if (state_ == CameraState::STREAMING) {
+	request->reuse(Request::ReuseBuffers);
+	camera_->queueRequest(request);
+      }
+      return;
+    }
+    frame_skip_counter_ = 0;
+  
+    // Process frame - use libcamera::FrameBuffer correctly
+    const Request::BufferMap &buffers = request->buffers();
+    for (auto buffer_pair : buffers) {
+      libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
+      const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
+      
+      void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
+			plane.fd.get(), 0);
+      if (data == MAP_FAILED) continue;
+      
+      {
+	std::lock_guard<std::mutex> lock(capture_mutex_);
+	image_data_.resize(plane.length);
+	std::memcpy(image_data_.data(), data, plane.length);
+	frame_ready_ = true;
+      }
+      capture_cv_.notify_one();
+      
+      munmap(data, plane.length);
+      break;
+    }
+
+    if (continuous_mode_ && ae_settled_) {
+      // If hardware FPS isn't supported and we have a target FPS, throttle in software
+      if (!hardware_fps_supported_ && target_fps_ > 0.0) {
+	auto now = std::chrono::steady_clock::now();
+	auto elapsed = now - last_frame_time_;
+      
+	if (elapsed < target_frame_interval_) {
+	  // Skip this frame - too soon for target FPS
+	  if (state_ == CameraState::STREAMING) {
+	    request->reuse(Request::ReuseBuffers);
+	    camera_->queueRequest(request);
+	  }
+	  return;
+	}
+	last_frame_time_ = now;
+      }
+    
+      handle_continuous_frame();
+    }
+  
+    if (state_ == CameraState::STREAMING) {
+      request->reuse(Request::ReuseBuffers);
+      camera_->queueRequest(request);
+    }
   }
   
-  if (state_ == CameraState::STREAMING) {
-    request->reuse(Request::ReuseBuffers);
-    camera_->queueRequest(request);
-  }
- }
-  
-void capture_request_complete(Request *request) {
+  void capture_request_complete(Request *request) {
     if (request->status() == Request::RequestCancelled) {
       return;
     }
@@ -888,182 +890,194 @@ void capture_request_complete(Request *request) {
       request->reuse(Request::ReuseBuffers);
       camera_->queueRequest(request);
     }
-}
+  }
 
-void handle_continuous_frame() {
-  //   std::cerr << "DEBUG: FIRST LINE of handle_continuous_frame" << std::endl;
-  
-  // Check if we should process this frame based on interval
-  int current_frame = frame_counter_.load();
-  int interval = publish_interval_;
-  
-  if (interval <= 0) {
-    std::cerr << "ERROR: Invalid publish_interval_: " << interval << std::endl;
-    return;
-  }
-  
-  if ((current_frame % interval) != 0) {
-    frame_counter_++;
-    return;
-  }
-  
-  //  std::cerr << "DEBUG: Past interval check" << std::endl;
-  
-  // Add back encode_jpeg() to test
-  //  std::cerr << "DEBUG: About to call encode_jpeg()" << std::endl;
-  if (!encode_jpeg()) {
-    std::cerr << "Failed to encode JPEG for continuous mode" << std::endl;
-    frame_counter_++;
-    return;
-  }
-  //  std::cerr << "DEBUG: encode_jpeg() completed successfully" << std::endl;
-  
-  store_frame_in_ring_buffer();
-
-  // Handle via Tcl callback if specified
-  if (use_tcl_callback_ && !tcl_callback_proc_.empty() && tcl_interp_) {
-    call_tcl_frame_callback();
-  } else {
-    // Use built-in handlers
-    if (save_to_disk_) {
-      queue_frame_for_save();
+  void handle_continuous_frame() {
+    // Check interval as before...
+    if ((current_frame % interval) != 0) {
+      frame_counter_++;
+      return;
     }
+  
+    // Store raw frame data directly - no JPEG encoding
+    store_frame_in_ring_buffer();
+
+    // Handle via Tcl callback (raw data)
+    if (use_tcl_callback_ && !tcl_callback_proc_.empty() && tcl_interp_) {
+      call_tcl_frame_callback();
+    } else {
+      // Built-in handlers
+      if (save_to_disk_) {
+	// Only encode JPEG when actually saving to disk
+	if (!encode_jpeg()) {
+	  std::cerr << "Failed to encode JPEG for disk save" << std::endl;
+	  frame_counter_++;
+	  return;
+	}
+	queue_frame_for_save();
+      }
     
-    if (publish_to_dataserver_ && tclserver) {
-      publish_frame_to_dataserver();
+      if (publish_to_dataserver_ && tclserver) {
+	// Publish raw data or add flag to choose format
+	publish_raw_frame_to_dataserver();
+      }
     }
-  }
-
   
-  frame_counter_++;
-  //  std::cerr << "DEBUG: handle_continuous_frame completed" << std::endl;
-}
+    frame_counter_++;
+  }
   
   bool start_continuous_mode(bool save_disk, bool publish_dataserver, 
-                          const std::string& save_dir,
-                          const std::string& datapoint_prefix,
-                          int interval) {
-  if (state_ != CameraState::STREAMING) {
-    std::cerr << "Must be streaming to start continuous mode" << std::endl;
-    return false;
-  }
-  
-  continuous_mode_ = true;
-  save_to_disk_ = save_disk;
-  publish_to_dataserver_ = publish_dataserver;
-  use_tcl_callback_ = false;  // Using built-in handlers
-  save_directory_ = save_dir;
-  datapoint_prefix_ = datapoint_prefix;
-  publish_interval_ = std::max(1, interval);
-  frame_counter_ = 0;
-  
-  // Create save directory if needed
-  if (save_to_disk_) {
-	if (std::system(("mkdir -p " + save_directory_).c_str()) != 0) {
-		std::cerr << "Failed to create directory: " << save_directory_ << std::endl;
-	}
-    else {
-    	start_save_worker();
+			     const std::string& save_dir,
+			     const std::string& datapoint_prefix,
+			     int interval) {
+    if (state_ != CameraState::STREAMING) {
+      std::cerr << "Must be streaming to start continuous mode" << std::endl;
+      return false;
     }
-  }
   
-  return true;
-}
-
-bool start_continuous_callback_mode(const std::string& tcl_proc,
-                                   const std::string& datapoint_prefix,
-                                   int interval) {
-  if (state_ != CameraState::STREAMING) {
-    std::cerr << "Must be streaming to start continuous callback mode" << std::endl;
-    return false;
-  }
+    continuous_mode_ = true;
+    save_to_disk_ = save_disk;
+    publish_to_dataserver_ = publish_dataserver;
+    use_tcl_callback_ = false;  // Using built-in handlers
+    save_directory_ = save_dir;
+    datapoint_prefix_ = datapoint_prefix;
+    publish_interval_ = std::max(1, interval);
+    frame_counter_ = 0;
   
-  if (tcl_proc.empty() || !tcl_interp_) {
-    std::cerr << "Tcl callback proc name required and Tcl interpreter must be set" << std::endl;
-    return false;
-  }
-  
-  continuous_mode_ = true;
-  save_to_disk_ = false;
-  publish_to_dataserver_ = false;
-  use_tcl_callback_ = true;
-  tcl_callback_proc_ = tcl_proc;
-  datapoint_prefix_ = datapoint_prefix;
-  publish_interval_ = std::max(1, interval);
-  frame_counter_ = 0;
-  
-  return true;
-}
-
-bool stop_continuous_mode() {
-  if (!continuous_mode_) return true;
-  
-  continuous_mode_ = false;
-  stop_save_worker();
-  return true;
-}
-
-bool get_frame_by_id(int frame_id, std::vector<uint8_t> &frame_data, int64_t &timestamp_ms) {
-  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-  
-  // Search ring buffer for the requested frame_id
-  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-    if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-      frame_data = frame_ring_buffer_[i].jpeg_data;
-      timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
-      return true;
-    }
-  }
-  
-  return false;  // Frame not found (too old or invalid frame_id)
-}
-
-bool save_callback_frame(int frame_id, const std::string& filename) {
-  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-  
-  // Find the frame in ring buffer
-  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-    if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-      // Direct write to disk - no intermediate copying
-      std::ofstream file(filename, std::ios::binary);
-      if (!file) {
-        return false;
+    // Create save directory if needed
+    if (save_to_disk_) {
+      if (std::system(("mkdir -p " + save_directory_).c_str()) != 0) {
+	std::cerr << "Failed to create directory: " << save_directory_ << std::endl;
       }
-      
-      file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].jpeg_data.data()),
-                 frame_ring_buffer_[i].jpeg_data.size());
-      file.close();
-      return true;
+      else {
+    	start_save_worker();
+      }
     }
-  }
   
-  return false;  // Frame not found
-}
+    return true;
+  }
 
-bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
-  if (!tclserver) return false;
-  
-  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-  
-  // Find the frame in ring buffer
-  for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-    if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
-      // Safe to pass ring buffer pointer because dpoint_new() makes internal copy
-      ds_datapoint_t *dp = dpoint_new(
-          (char*)datapoint_name.c_str(),
-          frame_ring_buffer_[i].timestamp_ms * 1000, // Convert to microseconds
-          (ds_datatype_t)DSERV_JPEG,
-          frame_ring_buffer_[i].jpeg_data.size(),
-          (unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
-      );
-      
-      tclserver_set_point(tclserver, dp);
-      return true;
+  bool start_continuous_callback_mode(const std::string& tcl_proc,
+				      const std::string& datapoint_prefix,
+				      int interval) {
+    if (state_ != CameraState::STREAMING) {
+      std::cerr << "Must be streaming to start continuous callback mode" << std::endl;
+      return false;
     }
+  
+    if (tcl_proc.empty() || !tcl_interp_) {
+      std::cerr << "Tcl callback proc name required and Tcl interpreter must be set" << std::endl;
+      return false;
+    }
+  
+    continuous_mode_ = true;
+    save_to_disk_ = false;
+    publish_to_dataserver_ = false;
+    use_tcl_callback_ = true;
+    tcl_callback_proc_ = tcl_proc;
+    datapoint_prefix_ = datapoint_prefix;
+    publish_interval_ = std::max(1, interval);
+    frame_counter_ = 0;
+  
+    return true;
+  }
+
+  bool stop_continuous_mode() {
+    if (!continuous_mode_) return true;
+  
+    continuous_mode_ = false;
+    stop_save_worker();
+    return true;
+  }
+
+  bool get_raw_frame_by_id(int frame_id, std::vector<uint8_t> &frame_data,
+			   int64_t &timestamp_ms)
+  {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid &&
+	  frame_ring_buffer_[i].frame_id == frame_id) {
+	frame_data = frame_ring_buffer_[i].raw_data;  // Return raw RGB
+	timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
+	return true;
+      }
+    }
+    return false;
   }
   
-  return false;  // Frame not found
-}
+  bool get_jpeg_frame_by_id(int frame_id, std::vector<uint8_t> &jpeg_data,
+			    int64_t &timestamp_ms)
+  {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid &&
+	  frame_ring_buffer_[i].frame_id == frame_id) {
+	// Check if JPEG already encoded for this frame
+	if (!frame_ring_buffer_[i].has_jpeg) {
+	  // Encode on-demand from raw data
+	  if (!encode_frame_to_jpeg(frame_ring_buffer_[i].raw_data,
+				    frame_ring_buffer_[i].jpeg_data)) {
+	    return false;
+	  }
+	  frame_ring_buffer_[i].has_jpeg = true;
+	}
+	
+	jpeg_data = frame_ring_buffer_[i].jpeg_data;
+	timestamp_ms = frame_ring_buffer_[i].timestamp_ms;
+	return true;
+      }
+    }
+    return false;
+  }  
+
+  bool save_callback_frame(int frame_id, const std::string& filename) {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+    // Find the frame in ring buffer
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+	// Direct write to disk - no intermediate copying
+	std::ofstream file(filename, std::ios::binary);
+	if (!file) {
+	  return false;
+	}
+      
+	file.write(reinterpret_cast<const char*>(frame_ring_buffer_[i].jpeg_data.data()),
+		   frame_ring_buffer_[i].jpeg_data.size());
+	file.close();
+	return true;
+      }
+    }
+  
+    return false;  // Frame not found
+  }
+
+  bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
+    if (!tclserver) return false;
+  
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+    // Find the frame in ring buffer
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      if (frame_ring_buffer_[i].valid && frame_ring_buffer_[i].frame_id == frame_id) {
+	// Safe to pass ring buffer pointer because dpoint_new() makes internal copy
+	ds_datapoint_t *dp = dpoint_new(
+					(char*)datapoint_name.c_str(),
+					frame_ring_buffer_[i].timestamp_ms * 1000, // Convert to microseconds
+					(ds_datatype_t)DSERV_JPEG,
+					frame_ring_buffer_[i].jpeg_data.size(),
+					(unsigned char *)frame_ring_buffer_[i].jpeg_data.data()
+					);
+      
+	tclserver_set_point(tclserver, dp);
+	return true;
+      }
+    }
+  
+    return false;  // Frame not found
+  }
   
   void get_ring_buffer_status(int &oldest_frame_id, int &newest_frame_id, int &valid_frames) {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
@@ -1100,9 +1114,9 @@ bool publish_callback_frame(int frame_id, const std::string& datapoint_name) {
     return frame_counter_; 
   }
   
-bool is_continuous_mode() const { 
-  return continuous_mode_; 
-}
+  bool is_continuous_mode() const { 
+    return continuous_mode_; 
+  }
 
 
 private:
@@ -1119,188 +1133,186 @@ private:
     }
   }
 
-void cleanup() {
-  stop_continuous_mode();
-  stop_streaming();
+  void cleanup() {
+    stop_continuous_mode();
+    stop_streaming();
   
-  if (camera_) {
-    camera_->requestCompleted.disconnect();
-    if (state_ != CameraState::IDLE) {
-      camera_->stop();
+    if (camera_) {
+      camera_->requestCompleted.disconnect();
+      if (state_ != CameraState::IDLE) {
+	camera_->stop();
+      }
+      camera_->release();
     }
-    camera_->release();
-  }
   
-  state_ = CameraState::IDLE;
-}
-
-// Helper method for queuing frames for background save
-void queue_frame_for_save() {
-  // Create filename with timestamp and frame number
-  auto now = std::chrono::system_clock::now();
-  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
-  char filename[512];
-  snprintf(filename, sizeof(filename), "%s/frame_%06d_%lld.jpg", 
-           save_directory_.c_str(), frame_counter_.load(), timestamp);
-  
-  // Queue for background saving
-  {
-    std::lock_guard<std::mutex> lock(save_queue_mutex_);
-    save_queue_.push({jpeg_data_, std::string(filename)});
-  }
-}
-
-// Helper method for publishing frames to dataserver
-void publish_frame_to_dataserver() {
-  if (!tclserver) return;
-  
-  // Create datapoint name
-  char point_name[256];
-  snprintf(point_name, sizeof(point_name), "%s/live_frame", datapoint_prefix_.c_str());
-  
-  // Create and publish frame datapoint
-  ds_datapoint_t *dp = dpoint_new(
-      point_name,
-      tclserver_now(tclserver),
-      (ds_datatype_t)DSERV_JPEG,
-      jpeg_data_.size(),
-      (unsigned char *)jpeg_data_.data()
-  );
-  
-  tclserver_set_point(tclserver, dp);
-  
-  // Also publish metadata
-  publish_frame_metadata(point_name);
-}
-
-// Helper method for publishing frame metadata
-void publish_frame_metadata(const char* base_name) {
-  char meta_name[512];
-  snprintf(meta_name, sizeof(meta_name), "%s/meta", base_name);
-  
-  auto now = std::chrono::system_clock::now();
-  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
-  char meta_json[512];
-  snprintf(meta_json, sizeof(meta_json), 
-          "{\"frame_id\":%d,\"timestamp\":%lld,\"width\":%d,\"height\":%d,"
-          "\"size\":%zu,\"fps\":%.2f,\"ae_settled\":%s,\"continuous_mode\":%s}",
-          frame_counter_.load(), timestamp,
-          width_, height_, jpeg_data_.size(),
-          target_fps_ > 0 ? target_fps_ : 30.0,
-          ae_settled_ ? "true" : "false",
-          continuous_mode_ ? "true" : "false");
-  
-  ds_datapoint_t *meta_dp = dpoint_new(meta_name,
-				       tclserver_now(tclserver),
-                                      DSERV_STRING,
-                                      strlen(meta_json) + 1,
-                                      (unsigned char *)meta_json);
-  
-  tclserver_set_point(tclserver, meta_dp);
-}
-void store_frame_in_ring_buffer() {
-  std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
-  
-  int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
-  
-  auto now = std::chrono::system_clock::now();
-  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
-  // Store frame data
-  frame_ring_buffer_[write_idx].jpeg_data = jpeg_data_;
-  frame_ring_buffer_[write_idx].frame_id = frame_counter_.load();
-  frame_ring_buffer_[write_idx].timestamp_ms = timestamp;
-  frame_ring_buffer_[write_idx].valid = true;
-  
-  // Advance write index
-  ring_write_index_++;
-}
-
-void call_tcl_frame_callback() {
-  if (!tclserver || tcl_callback_proc_.empty()) return;
-  
-  auto now = std::chrono::system_clock::now();
-  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
-  // Create a Tcl script that calls the callback
-  char tcl_command[2048];
-  int len = snprintf(tcl_command, sizeof(tcl_command),
-           "%s %d %lld %d %d %zu %s %s",
-           tcl_callback_proc_.c_str(),
-           frame_counter_.load(),           // frame_id
-           timestamp,                       // timestamp_ms
-           width_,                         // width
-           height_,                        // height
-           jpeg_data_.size(),              // jpeg_size
-           ae_settled_ ? "true" : "false", // ae_settled
-           datapoint_prefix_.c_str()       // datapoint_prefix
-  );
-  
-  if (len >= sizeof(tcl_command)) {
-    std::cerr << "Tcl command too long, truncated" << std::endl;
-    return;
+    state_ = CameraState::IDLE;
   }
 
-  // std::cerr << "DEBUG: About to queue tcl command: " << tcl_command << std::endl;
+  // Helper method for queuing frames for background save
+  void queue_frame_for_save() {
+    // Create filename with timestamp and frame number
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
   
-  // Use TclServer's existing REQ_SCRIPT_NOREPLY mechanism
-  tclserver_queue_script(tclserver, tcl_command, 1); 
+    char filename[512];
+    snprintf(filename, sizeof(filename), "%s/frame_%06d_%lld.jpg", 
+	     save_directory_.c_str(), frame_counter_.load(), timestamp);
   
-}
-
-void start_save_worker() {
-  if (save_worker_running_) return;
-  
-  save_worker_running_ = true;
-  save_worker_thread_ = std::thread(&CameraCapture::save_worker_loop, this);
-}
-
-void stop_save_worker() {
-  if (!save_worker_running_) return;
-  
-  save_worker_running_ = false;
-  if (save_worker_thread_.joinable()) {
-    save_worker_thread_.join();
-  }
-  
-  // Clear any remaining items in queue
-  std::lock_guard<std::mutex> lock(save_queue_mutex_);
-  while (!save_queue_.empty()) {
-    save_queue_.pop();
-  }
-}
-
-void save_worker_loop() {
-  while (save_worker_running_) {
-    std::pair<std::vector<uint8_t>, std::string> save_item;
-    bool has_item = false;
-    
+    // Queue for background saving
     {
       std::lock_guard<std::mutex> lock(save_queue_mutex_);
-      if (!save_queue_.empty()) {
-        save_item = save_queue_.front();
-        save_queue_.pop();
-        has_item = true;
-      }
-    }
-    
-    if (has_item) {
-      // Write to disk
-      std::ofstream file(save_item.second, std::ios::binary);
-      if (file) {
-        file.write(reinterpret_cast<const char*>(save_item.first.data()), 
-                  save_item.first.size());
-        file.close();
-      } else {
-        std::cerr << "Failed to save frame: " << save_item.second << std::endl;
-      }
-    } else {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      save_queue_.push({jpeg_data_, std::string(filename)});
     }
   }
-}
+
+  // Helper method for publishing frames to dataserver
+  void publish_frame_to_dataserver() {
+    if (!tclserver) return;
+  
+    // Create datapoint name
+    char point_name[256];
+    snprintf(point_name, sizeof(point_name), "%s/live_frame", datapoint_prefix_.c_str());
+  
+    // Create and publish frame datapoint
+    ds_datapoint_t *dp = dpoint_new(
+				    point_name,
+				    tclserver_now(tclserver),
+				    (ds_datatype_t)DSERV_JPEG,
+				    jpeg_data_.size(),
+				    (unsigned char *)jpeg_data_.data()
+				    );
+  
+    tclserver_set_point(tclserver, dp);
+  
+    // Also publish metadata
+    publish_frame_metadata(point_name);
+  }
+
+  // Helper method for publishing frame metadata
+  void publish_frame_metadata(const char* base_name) {
+    char meta_name[512];
+    snprintf(meta_name, sizeof(meta_name), "%s/meta", base_name);
+  
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+    char meta_json[512];
+    snprintf(meta_json, sizeof(meta_json), 
+	     "{\"frame_id\":%d,\"timestamp\":%lld,\"width\":%d,\"height\":%d,"
+	     "\"size\":%zu,\"fps\":%.2f,\"ae_settled\":%s,\"continuous_mode\":%s}",
+	     frame_counter_.load(), timestamp,
+	     width_, height_, jpeg_data_.size(),
+	     target_fps_ > 0 ? target_fps_ : 30.0,
+	     ae_settled_ ? "true" : "false",
+	     continuous_mode_ ? "true" : "false");
+  
+    ds_datapoint_t *meta_dp = dpoint_new(meta_name,
+					 tclserver_now(tclserver),
+					 DSERV_STRING,
+					 strlen(meta_json) + 1,
+					 (unsigned char *)meta_json);
+  
+    tclserver_set_point(tclserver, meta_dp);
+  }
+  void store_frame_in_ring_buffer() {
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+  
+    int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+    // Store raw RGB data instead of JPEG
+    frame_ring_buffer_[write_idx].raw_data = image_data_;  // Add this field
+    frame_ring_buffer_[write_idx].frame_id = frame_counter_.load();
+    frame_ring_buffer_[write_idx].timestamp_ms = timestamp;
+    frame_ring_buffer_[write_idx].valid = true;
+  
+    ring_write_index_++;
+  }
+
+  void call_tcl_frame_callback() {
+    if (!tclserver || tcl_callback_proc_.empty()) return;
+  
+    auto now = std::chrono::system_clock::now();
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  
+    // Create a Tcl script that calls the callback
+    char tcl_command[2048];
+    int len = snprintf(tcl_command, sizeof(tcl_command),
+		       "%s %d %lld %d %d %zu %s %s",
+		       tcl_callback_proc_.c_str(),
+		       frame_counter_.load(),           // frame_id
+		       timestamp,                       // timestamp_ms
+		       width_,                         // width
+		       height_,                        // height
+		       jpeg_data_.size(),              // jpeg_size
+		       ae_settled_ ? "true" : "false", // ae_settled
+		       datapoint_prefix_.c_str()       // datapoint_prefix
+		       );
+  
+    if (len >= sizeof(tcl_command)) {
+      std::cerr << "Tcl command too long, truncated" << std::endl;
+      return;
+    }
+
+    // std::cerr << "DEBUG: About to queue tcl command: " << tcl_command << std::endl;
+  
+    // Use TclServer's existing REQ_SCRIPT_NOREPLY mechanism
+    tclserver_queue_script(tclserver, tcl_command, 1); 
+  
+  }
+
+  void start_save_worker() {
+    if (save_worker_running_) return;
+  
+    save_worker_running_ = true;
+    save_worker_thread_ = std::thread(&CameraCapture::save_worker_loop, this);
+  }
+
+  void stop_save_worker() {
+    if (!save_worker_running_) return;
+  
+    save_worker_running_ = false;
+    if (save_worker_thread_.joinable()) {
+      save_worker_thread_.join();
+    }
+  
+    // Clear any remaining items in queue
+    std::lock_guard<std::mutex> lock(save_queue_mutex_);
+    while (!save_queue_.empty()) {
+      save_queue_.pop();
+    }
+  }
+
+  void save_worker_loop() {
+    while (save_worker_running_) {
+      std::pair<std::vector<uint8_t>, std::string> save_item;
+      bool has_item = false;
+    
+      {
+	std::lock_guard<std::mutex> lock(save_queue_mutex_);
+	if (!save_queue_.empty()) {
+	  save_item = save_queue_.front();
+	  save_queue_.pop();
+	  has_item = true;
+	}
+      }
+    
+      if (has_item) {
+	// Write to disk
+	std::ofstream file(save_item.second, std::ios::binary);
+	if (file) {
+	  file.write(reinterpret_cast<const char*>(save_item.first.data()), 
+		     save_item.first.size());
+	  file.close();
+	} else {
+	  std::cerr << "Failed to save frame: " << save_item.second << std::endl;
+	}
+      } else {
+	std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+  }
 public:
   // Getters and setters
   void set_frame_skip_rate(int rate) {
@@ -1337,9 +1349,9 @@ public:
 #else  // !HAS_LIBCAMERA
 
 enum class CameraState {
-    IDLE,
-    STREAMING,
-    CAPTURING
+  IDLE,
+  STREAMING,
+  CAPTURING
 };
 
 class CameraCapture {
@@ -1431,8 +1443,8 @@ extern "C" {
     int camera_index = 0; 
     
     if (objc > 1) {
-        if (Tcl_GetIntFromObj(interp, objv[1], &camera_index) != TCL_OK)
-            return TCL_ERROR;
+      if (Tcl_GetIntFromObj(interp, objv[1], &camera_index) != TCL_OK)
+	return TCL_ERROR;
     }
     
     if (!info->available) {
@@ -1470,64 +1482,64 @@ extern "C" {
     }
   }
 
-static int camera_configure_command(ClientData data,
-                                    Tcl_Interp *interp,
-                                    int objc, Tcl_Obj *objv[])
-{
-  camera_info_t *info = (camera_info_t *) data;
-  int width = 1920;
-  int height = 1080;
-  double fps = 0.0;  // 0 = use camera default
+  static int camera_configure_command(ClientData data,
+				      Tcl_Interp *interp,
+				      int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    int width = 1920;
+    int height = 1080;
+    double fps = 0.0;  // 0 = use camera default
   
-  if (!info->available) {
-    Tcl_AppendResult(interp, "Camera support not available", NULL);
-    return TCL_ERROR;
-  }
-  
-  if (!info->initialized || !info->capture) {
-    Tcl_AppendResult(interp, "Camera not initialized", NULL);
-    return TCL_ERROR;
-  }
-  
-  // Check if camera is busy
-  if (info->capture->get_state() != CameraState::IDLE) {
-    Tcl_AppendResult(interp, "Camera is busy - stop streaming first", NULL);
-    return TCL_ERROR;
-  }
-  
-  if (objc > 1) {
-    if (Tcl_GetIntFromObj(interp, objv[1], &width) != TCL_OK)
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
       return TCL_ERROR;
-  }
-  if (objc > 2) {
-    if (Tcl_GetIntFromObj(interp, objv[2], &height) != TCL_OK)
+    }
+  
+    if (!info->initialized || !info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
       return TCL_ERROR;
-  }
-  if (objc > 3) {
-    if (Tcl_GetDoubleFromObj(interp, objv[3], &fps) != TCL_OK)
+    }
+  
+    // Check if camera is busy
+    if (info->capture->get_state() != CameraState::IDLE) {
+      Tcl_AppendResult(interp, "Camera is busy - stop streaming first", NULL);
       return TCL_ERROR;
-  }
+    }
+  
+    if (objc > 1) {
+      if (Tcl_GetIntFromObj(interp, objv[1], &width) != TCL_OK)
+	return TCL_ERROR;
+    }
+    if (objc > 2) {
+      if (Tcl_GetIntFromObj(interp, objv[2], &height) != TCL_OK)
+	return TCL_ERROR;
+    }
+    if (objc > 3) {
+      if (Tcl_GetDoubleFromObj(interp, objv[3], &fps) != TCL_OK)
+	return TCL_ERROR;
+    }
 
-  try {
-    // Set target FPS before configuring
-    if (fps > 0.0) {
-      info->capture->set_target_fps(fps);
-    }
+    try {
+      // Set target FPS before configuring
+      if (fps > 0.0) {
+	info->capture->set_target_fps(fps);
+      }
     
-    if (!info->capture->configure(width, height)) {
-      Tcl_AppendResult(interp, "Failed to configure camera", NULL);
+      if (!info->capture->configure(width, height)) {
+	Tcl_AppendResult(interp, "Failed to configure camera", NULL);
+	return TCL_ERROR;
+      }
+      
+      info->configured = 1;
+      Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+      return TCL_OK;
+      
+    } catch (const std::exception& e) {
+      Tcl_AppendResult(interp, "Exception during configuration: ", e.what(), NULL);
       return TCL_ERROR;
     }
-      
-    info->configured = 1;
-    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
-    return TCL_OK;
-      
-  } catch (const std::exception& e) {
-    Tcl_AppendResult(interp, "Exception during configuration: ", e.what(), NULL);
-    return TCL_ERROR;
   }
-}
 
   static int camera_capture_command(ClientData data,
                                     Tcl_Interp *interp,
@@ -1948,10 +1960,10 @@ static int camera_configure_command(ClientData data,
 #endif
   }
 
-static int camera_set_frame_skip_rate_command(ClientData data,
-                                              Tcl_Interp *interp,
-                                              int objc, Tcl_Obj *objv[])
-{
+  static int camera_set_frame_skip_rate_command(ClientData data,
+						Tcl_Interp *interp,
+						int objc, Tcl_Obj *objv[])
+  {
     camera_info_t *info = (camera_info_t *) data;
     
 #ifndef HAS_LIBCAMERA
@@ -1959,29 +1971,29 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     return TCL_ERROR;
 #else
     if (!info->capture) {
-        Tcl_AppendResult(interp, "Camera not initialized", NULL);
-        return TCL_ERROR;
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
     }
     
     if (objc < 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "skip_rate");
-        return TCL_ERROR;
+      Tcl_WrongNumArgs(interp, 1, objv, "skip_rate");
+      return TCL_ERROR;
     }
     
     int rate;
     if (Tcl_GetIntFromObj(interp, objv[1], &rate) != TCL_OK)
-        return TCL_ERROR;
+      return TCL_ERROR;
     
     if (rate < 1 || rate > 100) {
-        Tcl_AppendResult(interp, "Invalid skip rate (1-100)", NULL);
-        return TCL_ERROR;
+      Tcl_AppendResult(interp, "Invalid skip rate (1-100)", NULL);
+      return TCL_ERROR;
     }
     
     info->capture->set_frame_skip_rate(rate);
     Tcl_SetObjResult(interp, Tcl_NewIntObj(rate));
     return TCL_OK;
 #endif
-}
+  }
   
   static int camera_grab_frame_command(ClientData data,
                                        Tcl_Interp *interp,
@@ -2020,12 +2032,12 @@ static int camera_set_frame_skip_rate_command(ClientData data,
   
   
   // Add these 8 new Tcl command implementations to your camera.cpp file
-// Replace the existing versions with these properly #ifdef-guarded ones
+  // Replace the existing versions with these properly #ifdef-guarded ones
 
 #ifdef HAS_LIBCAMERA
   static int camera_start_continuous_command(ClientData data,
-                                            Tcl_Interp *interp,
-                                            int objc, Tcl_Obj *objv[])
+					     Tcl_Interp *interp,
+					     int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2068,7 +2080,7 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     }
     
     if (!info->capture->start_continuous_mode(save_to_disk, publish_to_dataserver, 
-                                             save_directory, datapoint_prefix, interval)) {
+					      save_directory, datapoint_prefix, interval)) {
       Tcl_AppendResult(interp, "Failed to start continuous mode", NULL);
       return TCL_ERROR;
     }
@@ -2078,8 +2090,8 @@ static int camera_set_frame_skip_rate_command(ClientData data,
   }
 
   static int camera_start_continuous_callback_command(ClientData data,
-                                                     Tcl_Interp *interp,
-                                                     int objc, Tcl_Obj *objv[])
+						      Tcl_Interp *interp,
+						      int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2122,8 +2134,8 @@ static int camera_set_frame_skip_rate_command(ClientData data,
   }
 
   static int camera_stop_continuous_command(ClientData data,
-                                           Tcl_Interp *interp,
-                                           int objc, Tcl_Obj *objv[])
+					    Tcl_Interp *interp,
+					    int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2137,8 +2149,8 @@ static int camera_set_frame_skip_rate_command(ClientData data,
   }
 
   static int camera_set_target_fps_command(ClientData data,
-                                          Tcl_Interp *interp,
-                                          int objc, Tcl_Obj *objv[])
+					   Tcl_Interp *interp,
+					   int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2166,9 +2178,10 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     return TCL_OK;
   }
 
-  static int camera_get_callback_frame_command(ClientData data,
-                                              Tcl_Interp *interp,
-                                              int objc, Tcl_Obj *objv[])
+  // Raw RGB data access commands
+  static int camera_get_raw_callback_frame_command(ClientData data,
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2189,19 +2202,19 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     std::vector<uint8_t> frame_data;
     int64_t timestamp_ms;
     
-    if (!info->capture->get_frame_by_id(frame_id, frame_data, timestamp_ms)) {
+    if (!info->capture->get_raw_frame_by_id(frame_id, frame_data, timestamp_ms)) {
       Tcl_AppendResult(interp, "Frame not found in ring buffer (too old or invalid frame_id)", NULL);
       return TCL_ERROR;
     }
     
-    // Return the JPEG data as a Tcl byte array
+    // Return the raw RGB data as a Tcl byte array
     Tcl_SetObjResult(interp, Tcl_NewByteArrayObj(frame_data.data(), frame_data.size()));
     return TCL_OK;
   }
 
-  static int camera_save_callback_frame_command(ClientData data,
-                                               Tcl_Interp *interp,
-                                               int objc, Tcl_Obj *objv[])
+  static int camera_save_raw_callback_frame_command(ClientData data,
+						    Tcl_Interp *interp,
+						    int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2221,8 +2234,8 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     
     const char *filename = Tcl_GetString(objv[2]);
     
-    if (!info->capture->save_callback_frame(frame_id, filename)) {
-      Tcl_AppendResult(interp, "Failed to save frame (not found or I/O error)", NULL);
+    if (!info->capture->save_raw_callback_frame(frame_id, filename)) {
+      Tcl_AppendResult(interp, "Failed to save raw frame (not found or I/O error)", NULL);
       return TCL_ERROR;
     }
     
@@ -2230,9 +2243,9 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     return TCL_OK;
   }
 
-  static int camera_publish_callback_frame_command(ClientData data,
-                                                  Tcl_Interp *interp,
-                                                  int objc, Tcl_Obj *objv[])
+  static int camera_publish_raw_callback_frame_command(ClientData data,
+						       Tcl_Interp *interp,
+						       int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2252,8 +2265,104 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     
     const char *datapoint_name = Tcl_GetString(objv[2]);
     
-    if (!info->capture->publish_callback_frame(frame_id, datapoint_name)) {
-      Tcl_AppendResult(interp, "Failed to publish frame (not found or dataserver error)", NULL);
+    if (!info->capture->publish_raw_callback_frame(frame_id, datapoint_name)) {
+      Tcl_AppendResult(interp, "Failed to publish raw frame (not found or dataserver error)", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(datapoint_name, -1));
+    return TCL_OK;
+  }
+
+  // JPEG data access commands (on-demand encoding)
+  static int camera_get_jpeg_callback_frame_command(ClientData data,
+						    Tcl_Interp *interp,
+						    int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    std::vector<uint8_t> jpeg_data;
+    int64_t timestamp_ms;
+    
+    if (!info->capture->get_jpeg_frame_by_id(frame_id, jpeg_data, timestamp_ms)) {
+      Tcl_AppendResult(interp, "Frame not found or JPEG encoding failed", NULL);
+      return TCL_ERROR;
+    }
+    
+    // Return the JPEG data as a Tcl byte array
+    Tcl_SetObjResult(interp, Tcl_NewByteArrayObj(jpeg_data.data(), jpeg_data.size()));
+    return TCL_OK;
+  }
+
+  static int camera_save_jpeg_callback_frame_command(ClientData data,
+						     Tcl_Interp *interp,
+						     int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id filename");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    const char *filename = Tcl_GetString(objv[2]);
+    
+    if (!info->capture->save_jpeg_callback_frame(frame_id, filename)) {
+      Tcl_AppendResult(interp, "Failed to save JPEG frame (not found, encoding failed, or I/O error)", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(filename, -1));
+    return TCL_OK;
+  }
+
+  static int camera_publish_jpeg_callback_frame_command(ClientData data,
+							Tcl_Interp *interp,
+							int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id datapoint_name");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    const char *datapoint_name = Tcl_GetString(objv[2]);
+    
+    if (!info->capture->publish_jpeg_callback_frame(frame_id, datapoint_name)) {
+      Tcl_AppendResult(interp, "Failed to publish JPEG frame (not found, encoding failed, or dataserver error)", NULL);
       return TCL_ERROR;
     }
     
@@ -2262,8 +2371,8 @@ static int camera_set_frame_skip_rate_command(ClientData data,
   }
 
   static int camera_get_ring_buffer_status_command(ClientData data,
-                                                  Tcl_Interp *interp,
-                                                  int objc, Tcl_Obj *objv[])
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
     
@@ -2296,64 +2405,88 @@ static int camera_set_frame_skip_rate_command(ClientData data,
 #else  // !HAS_LIBCAMERA - Stub implementations for systems without libcamera
 
   static int camera_start_continuous_command(ClientData data,
-                                            Tcl_Interp *interp,
-                                            int objc, Tcl_Obj *objv[])
+					     Tcl_Interp *interp,
+					     int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
   static int camera_start_continuous_callback_command(ClientData data,
-                                                     Tcl_Interp *interp,
-                                                     int objc, Tcl_Obj *objv[])
+						      Tcl_Interp *interp,
+						      int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
   static int camera_stop_continuous_command(ClientData data,
-                                           Tcl_Interp *interp,
-                                           int objc, Tcl_Obj *objv[])
+					    Tcl_Interp *interp,
+					    int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
   static int camera_set_target_fps_command(ClientData data,
-                                          Tcl_Interp *interp,
-                                          int objc, Tcl_Obj *objv[])
+					   Tcl_Interp *interp,
+					   int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
-  static int camera_get_callback_frame_command(ClientData data,
-                                              Tcl_Interp *interp,
-                                              int objc, Tcl_Obj *objv[])
+  static int camera_get_raw_callback_frame_command(ClientData data,
+					       Tcl_Interp *interp,
+					       int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
-  static int camera_save_callback_frame_command(ClientData data,
-                                               Tcl_Interp *interp,
-                                               int objc, Tcl_Obj *objv[])
+  static int camera_save_raw_callback_frame_command(ClientData data,
+						Tcl_Interp *interp,
+						int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
-  static int camera_publish_callback_frame_command(ClientData data,
-                                                  Tcl_Interp *interp,
-                                                  int objc, Tcl_Obj *objv[])
+  static int camera_publish_raw_callback_frame_command(ClientData data,
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_get_jpeg_callback_frame_command(ClientData data,
+					       Tcl_Interp *interp,
+					       int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_save_jpeg_callback_frame_command(ClientData data,
+						Tcl_Interp *interp,
+						int objc, Tcl_Obj *objv[])
+  {
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+  }
+
+  static int camera_publish_jpeg_callback_frame_command(ClientData data,
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
   static int camera_get_ring_buffer_status_command(ClientData data,
-                                                  Tcl_Interp *interp,
-                                                  int objc, Tcl_Obj *objv[])
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
@@ -2471,15 +2604,26 @@ static int camera_set_frame_skip_rate_command(ClientData data,
     Tcl_CreateObjCommand(interp, "cameraSetTargetFPS",
                          (Tcl_ObjCmdProc *) camera_set_target_fps_command,
                          cameraInfo, NULL);
-    Tcl_CreateObjCommand(interp, "cameraGetCallbackFrame",
-                         (Tcl_ObjCmdProc *) camera_get_callback_frame_command,
+
+    Tcl_CreateObjCommand(interp, "cameraGetRawCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_get_raw_callback_frame_command,
                          cameraInfo, NULL);
-    Tcl_CreateObjCommand(interp, "cameraSaveCallbackFrame",
-                         (Tcl_ObjCmdProc *) camera_save_callback_frame_command,
+    Tcl_CreateObjCommand(interp, "cameraSaveRawCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_save_raw_callback_frame_command,
                          cameraInfo, NULL);
-    Tcl_CreateObjCommand(interp, "cameraPublishCallbackFrame",
-                         (Tcl_ObjCmdProc *) camera_publish_callback_frame_command,
+    Tcl_CreateObjCommand(interp, "cameraPublishRawCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_publish_raw_callback_frame_command,
                          cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraGetJpegCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_get_jpeg_callback_frame_command,
+                         cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSaveJpegCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_save_jpeg_callback_frame_command,
+                         cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraPublishJpegCallbackFrame",
+                         (Tcl_ObjCmdProc *) camera_publish_jpeg_callback_frame_command,
+                         cameraInfo, NULL);
+    
     Tcl_CreateObjCommand(interp, "cameraGetRingBufferStatus",
                          (Tcl_ObjCmdProc *) camera_get_ring_buffer_status_command,
                          cameraInfo, NULL);
