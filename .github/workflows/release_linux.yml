@@ -25,13 +25,35 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
-          sudo apt install -y libevdev-dev zlib1g-dev
-          sudo apt install -y libcamera-dev libcamera-tools libjpeg-dev
+          sudo apt install -y libevdev-dev zlib1g-dev pkg-config
+          sudo apt install -y libjpeg-dev python3-yaml python3-ply python3-jinja2
 
+     - name: Install modern libcamera from source
+       run: |
+          # Install meson build system
+          sudo apt install -y meson ninja-build
+        
+          # Clone and build libcamera
+          git clone https://git.libcamera.org/libcamera/libcamera.git
+          cd libcamera
+          git checkout v0.3.2  # Use a stable version
+        
+          # Configure and build
+          meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
+          ninja -C build
+          sudo ninja -C build install
+        
+          # Update library cache
+          sudo ldconfig
+        
+          # Verify installation
+          pkg-config --exists libcamera && echo "libcamera pkg-config OK" || echo "libcamera pkg-config FAILED"
+        
       - name: Check out our dserv code for the current tag.
         uses: actions/checkout@v4
         with:
           submodules: true
+
 
       - name: Install TCL 9 to the build environment.
         run: |
