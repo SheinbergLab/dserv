@@ -136,6 +136,15 @@ jobs:
             sudo ldconfig
           fi
 
+      - name: Build JPEG library with PIC for static linking
+        run: |
+          wget http://www.ijg.org/files/jpegsrc.v9e.tar.gz
+          tar xzf jpegsrc.v9e.tar.gz
+          cd jpeg-9e
+          ./configure --prefix=/usr/local --enable-static --disable-shared CFLAGS="-fPIC"
+          make
+          sudo make install
+
       - name: Install TCL 9 (needed for camera module)
         run: |
           cd deps/tcl/unix/
