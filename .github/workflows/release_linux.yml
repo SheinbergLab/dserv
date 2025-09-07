@@ -31,7 +31,7 @@ jobs:
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
           sudo apt install -y libevdev-dev zlib1g-dev pkg-config
-          sudo apt install -y libjpeg-dev python3-yaml python3-ply python3-jinja2
+          sudo apt install -y libjpeg-dev libjpeg62-turbo-dev python3-yaml python3-ply python3-jinja2
 
       - name: Set architecture-specific paths
         run: |
@@ -78,6 +78,23 @@ jobs:
         
           # Update library cache
           sudo ldconfig
+
+      - name: Build position-independent JPEG library
+        run: |
+          # Download and build libjpeg-turbo with -fPIC
+          wget https://github.com/libjpeg-turbo/libjpeg-turbo/archive/3.0.1.tar.gz
+          tar -xzf 3.0.1.tar.gz
+          cd libjpeg-turbo-3.0.1
+          
+          cmake -B build \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_STATIC=ON
+          
+          cmake --build build
+          sudo cmake --install build
 
       - name: Install TCL 9 to the build environment.
         run: |
