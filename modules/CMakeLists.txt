@@ -142,7 +142,7 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
 ##
 ## camera
 ##
-set(MODULE camera_capture)  # Changed from 'camera' to avoid conflicts
+set(MODULE camera_capture)
 project(${MODULE})
 
 # Check for libcamera availability
@@ -152,26 +152,39 @@ set(CAMERA_DEFINES -DUSE_TCL_STUBS)
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig)
     if(PKG_CONFIG_FOUND)
+        message(STATUS "pkg-config found, checking for libcamera...")
         pkg_check_modules(LIBCAMERA libcamera)
         if(LIBCAMERA_FOUND)
+            message(STATUS "libcamera found - enabling camera support")
+            message(STATUS "libcamera include dirs: ${LIBCAMERA_INCLUDE_DIRS}")
+            message(STATUS "libcamera libraries: ${LIBCAMERA_LIBRARIES}")
             set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_LIBCAMERA)
             set(CAMERA_LIBS ${CAMERA_LIBS} ${LIBCAMERA_LIBRARIES})
             set(CAMERA_INCLUDES ${LIBCAMERA_INCLUDE_DIRS})
+        else()
+            message(WARNING "libcamera NOT found - camera support will be disabled")
         endif()
+    else()
+        message(WARNING "pkg-config not found - cannot detect libcamera")
     endif()
     
     # Check for JPEG library
     find_package(JPEG)
     if(JPEG_FOUND)
+        message(STATUS "JPEG library found - enabling JPEG support")
         set(CAMERA_DEFINES ${CAMERA_DEFINES} -DHAS_JPEG)
         set(CAMERA_LIBS ${CAMERA_LIBS} ${JPEG_LIBRARIES})
         set(CAMERA_INCLUDES ${CAMERA_INCLUDES} ${JPEG_INCLUDE_DIRS})
+    else()
+        message(WARNING "JPEG library not found - JPEG support disabled")
     endif()
+else()
+    message(STATUS "Skipping libcamera detection (not Linux)")
 endif()
 
-add_library(${MODULE} MODULE camera/camera.cpp)  # Keep source path as camera/camera.cpp
+add_library(${MODULE} MODULE camera/camera.cpp)
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
-set_target_properties(${MODULE} PROPERTIES OUTPUT_NAME "camera")  # Output file will still be dserv_camera.so
+set_target_properties(${MODULE} PROPERTIES OUTPUT_NAME "camera")
 target_compile_definitions(${MODULE} PRIVATE ${CAMERA_DEFINES})
 if(CAMERA_INCLUDES)
     target_include_directories(${MODULE} PRIVATE ${CAMERA_INCLUDES})

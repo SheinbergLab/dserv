@@ -26,7 +26,8 @@ jobs:
           sudo apt update
           sudo apt install -y git wget ca-certificates build-essential cmake zip unzip
           sudo apt install -y libevdev-dev zlib1g-dev
-          sudo apt install -y libcamera-dev libjpeg-dev
+          sudo apt install -y libcamera-dev libcamera-tools libjpeg-dev
+          sudo apt install -y libcamera0.3 python3-libcamera
 
       - name: Check out our dserv code for the current tag.
         uses: actions/checkout@v4
