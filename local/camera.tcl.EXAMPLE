@@ -1,28 +1,49 @@
 #
-# Local camera commands
+# Local camera commands - Updated for PPM-first approach
 #
+
+# Available commands:
+#  start ?camera_id?           - Start camera streaming
+#  stop                        - Stop camera streaming
+#  check_status                - Get camera status
+#  check_ring_buffer           - Get ring buffer status
+#  get_frame_ppm frame_id      - Get frame as PPM data
+#  get_frame_jpeg frame_id     - Get frame as JPEG data
+#  save_frame frame_id file    - Save frame (.ppm/.jpg)
+#  publish_frame frame_id datapoint ?format? - Publish frame
 
 #
 # can set desired resolution here and use below in start
 #
 
 # Define a callback function that will be called for each frame
-proc my_frame_handler {frame_id timestamp_ms width height jpeg_size ae_settled datapoint_prefix} {
+proc my_frame_handler {frame_id timestamp_ms width height ppm_size ae_settled datapoint_prefix} {
     # Convert timestamp to readable format
     set timestamp_sec [expr $timestamp_ms / 1000]
     set datetime [clock format $timestamp_sec -format "%Y-%m-%d %H:%M:%S"]
     
-    # Print frame information
-    #puts "Frame $frame_id captured at $datetime"
-    #puts "  Resolution: ${width}x${height}"
-    #puts "  JPEG size: $jpeg_size bytes ([expr $jpeg_size/1024]KB)"
-
-    # to save frames to disk call:
-    #  cameraSaveJpegCallbackFrame $frame_id $filename
-
-    # to push to dataserver call:
-    set datapoint_name $datapoint_prefix/frame
-    cameraPublishRawCallbackFrame $frame_id $datapoint_name
+    set info "Frame $frame_id at $datetime: ${width}x${height}, PPM size: $ppm_size bytes, AE settled: $ae_settled"
+    
+    # Publish as PPM (lossless, self-describing format)
+    set datapoint_name $datapoint_prefix/frame_ppm
+    if {[catch {cameraPublishPpmCallbackFrame $frame_id $datapoint_name} result]} {
+        error "Error publishing PPM frame: $result"
+        return
+    }
+    
+    # Can also publish as JPEG for bandwidth-sensitive clients
+    # Uncomment if you want both formats available:
+    # set jpeg_datapoint_name $datapoint_prefix/frame_jpeg
+    # if {[catch {cameraPublishJpegCallbackFrame $frame_id $jpeg_datapoint_name} result]} {
+    #     puts "Error publishing JPEG frame: $result"
+    # }
+    
+    # Or save frame to disk (choose format)
+    # Uncomment to save frames:
+    # set filename "/tmp/frame_${frame_id}.ppm"
+    # if {[catch {cameraSavePpmCallbackFrame $frame_id $filename} result]} {
+    #     puts "Error saving PPM frame: $result"
+    # }
 }
 
 # start streaming
@@ -39,32 +60,33 @@ proc start { { camera_id 0 } } {
         puts "Error configuring camera: $result"
         return
     }
-
+    
     # Start streaming
     if {[catch {cameraStartStreaming} result]} {
         puts "Error starting streaming: $result"
         return
     }
     
-    # Start continuous callback mode on every (30th) frame (1fps)
+    # Start continuous callback mode on every 30th frame (1fps)
     if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 30} result]} {
         puts "Error starting continuous callback: $result"
         return
     }
+    
     dservSet camera/status continuous
+    puts "Camera started in continuous mode - publishing PPM frames to dataserver"
 }
 
 # stop streaming
 proc stop {} {
     dservSet camera/status stopped
-
     if {[catch {cameraStopContinuous} result]} {
         puts "Error stopping continuous mode: $result"
     } 
-
     if {[catch {cameraStopStreaming} result]} {
         puts "Error stopping streaming: $result"
     }
+    puts "Camera stopped"
 }
 
 # Status check function
@@ -73,7 +95,6 @@ proc check_status {} {
         puts "Error getting status: $status"
         return
     }
-
     return $status
 }
 
@@ -82,9 +103,71 @@ proc check_ring_buffer {} {
         puts "Error getting ring buffer status: $ring_status"
         return
     }
-
     return $ring_status
 }
 
-puts "configured camera using local conf"
+# New helper functions for working with the ring buffer
+
+# Get a specific frame as PPM data
+proc get_frame_ppm {frame_id} {
+    if {[catch {cameraGetPpmCallbackFrame $frame_id} ppm_data]} {
+        puts "Error getting PPM frame $frame_id: $ppm_data"
+        return ""
+    }
+    return $ppm_data
+}
+
+# Get a specific frame as JPEG data (on-demand encoding)
+proc get_frame_jpeg {frame_id} {
+    if {[catch {cameraGetJpegCallbackFrame $frame_id} jpeg_data]} {
+        puts "Error getting JPEG frame $frame_id: $jpeg_data"
+        return ""
+    }
+    return $jpeg_data
+}
+
+# Save a specific frame from ring buffer
+proc save_frame {frame_id filename} {
+    # Determine format from filename extension
+    set ext [string tolower [file extension $filename]]
+    
+    if {$ext eq ".ppm"} {
+        if {[catch {cameraSavePpmCallbackFrame $frame_id $filename} result]} {
+            puts "Error saving PPM frame: $result"
+            return 0
+        }
+    } elseif {$ext eq ".jpg" || $ext eq ".jpeg"} {
+        if {[catch {cameraSaveJpegCallbackFrame $frame_id $filename} result]} {
+            puts "Error saving JPEG frame: $result"
+            return 0
+        }
+    } else {
+        puts "Unsupported file extension: $ext (use .ppm, .jpg, or .jpeg)"
+        return 0
+    }
+    
+    puts "Saved frame $frame_id to $filename"
+    return 1
+}
+
+# Publish a specific frame from ring buffer to a custom datapoint
+proc publish_frame {frame_id datapoint_name {format "ppm"}} {
+    if {$format eq "ppm"} {
+        if {[catch {cameraPublishPpmCallbackFrame $frame_id $datapoint_name} result]} {
+            puts "Error publishing PPM frame: $result"
+            return 0
+        }
+    } elseif {$format eq "jpeg"} {
+        if {[catch {cameraPublishJpegCallbackFrame $frame_id $datapoint_name} result]} {
+            puts "Error publishing JPEG frame: $result"
+            return 0
+        }
+    } else {
+        puts "Unsupported format: $format (use 'ppm' or 'jpeg')"
+        return 0
+    }
+    
+    puts "Published frame $frame_id as $format to $datapoint_name"
+    return 1
+}
 
