@@ -93,11 +93,18 @@ private:
   std::vector<uint8_t> image_data_;
   std::vector<uint8_t> jpeg_data_;
   Stream *stream_ = nullptr;
+  Stream *preview_stream_ = nullptr;
   
   // Camera parameters
   unsigned int width_ = 1920;
   unsigned int height_ = 1080;
-  int settling_frames_ = 10;  // Reduced from 30
+  
+  bool preview_enabled_ = false;
+  unsigned int preview_width_ = 0;
+  unsigned int preview_height_ = 0;
+  std::vector<uint8_t> preview_data_;
+  
+  int settling_frames_ = 10;
   float brightness_ = 0.0f;
   float contrast_ = 1.0f;
   int jpeg_quality_ = 85;
@@ -142,23 +149,29 @@ private:
   struct CameraFrameBuffer {
     std::vector<uint8_t> raw_data;     // Raw RGB data
     std::vector<uint8_t> jpeg_data;    // JPEG data (only when needed)
+
+    std::vector<uint8_t> preview_raw_data;   // Preview RGB data
+    std::vector<uint8_t> preview_jpeg_data;  // Preview JPEG data
+
     int frame_id;
     int64_t timestamp_ms;
     bool valid;
-    bool has_jpeg;                     // Flag if JPEG version exists
-    
-    CameraFrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false), has_jpeg(false) {}
+    bool has_jpeg;
+    bool has_preview;
+    bool has_preview_jpeg;
+    CameraFrameBuffer() : frame_id(-1), timestamp_ms(0), valid(false), 
+			  has_jpeg(false), has_preview(false), 
+			  has_preview_jpeg(false) {}    
   };
   
   static constexpr int RING_BUFFER_SIZE = 16;
   std::array<CameraFrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
   std::atomic<int> ring_write_index_{0};
-  std::mutex ring_buffer_mutex_;
 
+  std::mutex ring_buffer_mutex_;
   
   RingBufferMode ring_buffer_mode_ = RingBufferMode::FULL_RATE;
 
-  
   // Background save thread for continuous mode
   std::queue<std::pair<std::vector<uint8_t>, std::string>> save_queue_;
   std::thread save_worker_thread_;
@@ -177,6 +190,27 @@ public:
 
   void set_tclserver(tclserver_t *server) { 
     tclserver = server; 
+  }
+
+  std::mutex& get_ring_buffer_mutex() { return ring_buffer_mutex_; }
+  const CameraFrameBuffer& get_ring_buffer_frame(int index) const {
+    return frame_ring_buffer_[index];
+  }  
+  
+  struct PreviewConfig {
+    bool enabled;
+    bool hardware_supported;
+    unsigned int width;
+    unsigned int height;
+  };
+  
+  PreviewConfig get_preview_config() const {
+    return {
+      preview_enabled_,
+      preview_stream_ != nullptr,
+      preview_width_,
+      preview_height_
+    };
   }
   
   bool initialize(int index = -1) {
@@ -208,9 +242,11 @@ public:
     return true;
   }
 
-  bool configure(unsigned int width, unsigned int height) {
+  bool configure(unsigned int width, unsigned int height,
+		 unsigned int preview_width = 0, 
+		 unsigned int preview_height = 0) {
     std::lock_guard<std::mutex> lock(state_mutex_);
-  
+    
     if (state_ != CameraState::IDLE) {
       std::cerr << "Cannot configure camera while in use" << std::endl;
       return false;
@@ -218,16 +254,27 @@ public:
   
     width_ = width;
     height_ = height;
+
+    preview_width_ = preview_width;
+    preview_height_ = preview_height;
+    preview_enabled_ = (preview_width > 0 && preview_height > 0);
+    
     ae_settled_ = false;
     ae_settle_count_ = 0;
-      
-    config_ = camera_->generateConfiguration({ StreamRole::StillCapture });
+
+    // Generate configuration with appropriate roles
+    std::vector<StreamRole> roles = { StreamRole::StillCapture };
+    if (preview_enabled_) {
+      roles.push_back(StreamRole::Viewfinder);
+    }
+    
+    config_ = camera_->generateConfiguration(roles);
     if (!config_ || config_->size() == 0) {
       return false;
     }
 
     StreamConfiguration &stream_config = config_->at(0);
-  
+
     // Check what formats are available
     const StreamFormats &formats = stream_config.formats();
     auto format_list = formats.pixelformats();
@@ -240,13 +287,15 @@ public:
     // Detect camera type based on ID and available formats
     std::string camera_id = camera_->id();
     bool is_usb_camera = (camera_id.find("PCI0") != std::string::npos ||  // USB via PCI
-			  camera_id.find("usb") != std::string::npos);      // Direct USB
+			  camera_id.find("usb") != std::string::npos);    // Direct USB
     bool is_csi_camera = (camera_id.find("csi") != std::string::npos ||   // CSI interface
-			  camera_id.find("ov") != std::string::npos ||      // OmniVision sensors
-			  camera_id.find("imx") != std::string::npos);      // Sony IMX sensors
-  
+			  camera_id.find("ov") != std::string::npos ||    // OmniVision sensors
+			  camera_id.find("imx") != std::string::npos);    // Sony IMX sensors
+    
     std::cout << "Camera ID: " << camera_id << std::endl;
-    std::cout << "Detected as: " << (is_usb_camera ? "USB" : is_csi_camera ? "CSI" : "Unknown") << " camera" << std::endl;
+    std::cout << "Detected as: " <<
+      (is_usb_camera ? "USB" : is_csi_camera ? "CSI" : "Unknown") <<
+      " camera" << std::endl;
   
     PixelFormat preferred_format;
     bool found_format = false;
@@ -284,7 +333,8 @@ public:
 	found_format = true;
 	std::cout << "Selected YUV420 (good for CSI cameras)" << std::endl;
       }
-      else if (std::find(format_list.begin(), format_list.end(), formats::MJPEG) != format_list.end()) {
+      else if (std::find(format_list.begin(),
+			 format_list.end(), formats::MJPEG) != format_list.end()) {
 	preferred_format = formats::MJPEG;
 	found_format = true;
 	std::cout << "Selected MJPEG (fallback for CSI)" << std::endl;
@@ -309,6 +359,19 @@ public:
     stream_config.pixelFormat = preferred_format;
     stream_config.bufferCount = 4;
 
+    // Configure preview stream if requested
+    StreamConfiguration *preview_config_ptr = nullptr;
+    if (preview_enabled_ && config_->size() > 1) {
+      StreamConfiguration &preview_config = config_->at(1);
+      preview_config_ptr = &preview_config;
+      
+      // Use same format logic for preview
+      preview_config.size.width = preview_width;
+      preview_config.size.height = preview_height;
+      preview_config.pixelFormat = preferred_format;
+      preview_config.bufferCount = 4;
+    }
+    
     CameraConfiguration::Status validation = config_->validate();
     if (validation == CameraConfiguration::Invalid) {
       std::cerr << "Camera configuration invalid" << std::endl;
@@ -317,7 +380,8 @@ public:
   
     if (validation == CameraConfiguration::Adjusted) {
       std::cout << "Configuration adjusted:" << std::endl;
-      std::cout << "  Size: " << stream_config.size.width << "x" << stream_config.size.height << std::endl;
+      std::cout << "  Size: " << stream_config.size.width << "x" <<
+	stream_config.size.height << std::endl;
       std::cout << "  Format: " << stream_config.pixelFormat.toString() << std::endl;
     
       // Update our stored dimensions
@@ -331,7 +395,11 @@ public:
       return false;
     }
 
+    // store the stream pointers after successful configuration    
     stream_ = stream_config.stream();
+    if (preview_config_ptr) {
+      preview_stream_ = preview_config_ptr->stream();
+    }    
     return allocate_buffers();
   }
 
@@ -389,49 +457,113 @@ public:
 #endif
   }
 
+
+  bool encode_preview_to_jpeg(int buffer_index, std::vector<uint8_t>& jpeg_output) {
+#ifdef HAS_JPEG
+    if (!frame_ring_buffer_[buffer_index].has_preview) {
+      return false;
+    }
+    
+    // Check if already encoded
+    if (frame_ring_buffer_[buffer_index].has_preview_jpeg) {
+      jpeg_output = frame_ring_buffer_[buffer_index].preview_jpeg_data;
+      return true;
+    }
+    
+    // Encode preview data to JPEG
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+    
+    unsigned char *jpeg_buffer = nullptr;
+    unsigned long jpeg_size = 0;
+    
+    jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+    
+    cinfo.image_width = preview_width_;
+    cinfo.image_height = preview_height_;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+    
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
+    
+    jpeg_start_compress(&cinfo, TRUE);
+    
+    const auto& raw_data = frame_ring_buffer_[buffer_index].preview_raw_data;
+    JSAMPROW row_pointer[1];
+    int row_stride = preview_width_ * 3;
+    
+    while (cinfo.next_scanline < cinfo.image_height) {
+      row_pointer[0] = const_cast<uint8_t*>(&raw_data[cinfo.next_scanline * row_stride]);
+      jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+    
+    jpeg_finish_compress(&cinfo);
+    
+    jpeg_output.resize(jpeg_size);
+    std::memcpy(jpeg_output.data(), jpeg_buffer, jpeg_size);
+    
+    // Cache it
+    frame_ring_buffer_[buffer_index].preview_jpeg_data = jpeg_output;
+    frame_ring_buffer_[buffer_index].has_preview_jpeg = true;
+    
+    if (jpeg_buffer) {
+      free(jpeg_buffer);
+    }
+    jpeg_destroy_compress(&cinfo);
+    
+    return true;
+#else
+    return false;
+#endif
+  }
+  
   // Extract your existing JPEG compression code into a separate method
   bool encode_rgb888_to_jpeg(const StreamConfiguration &cfg) {
 #ifdef HAS_JPEG
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
-      
+    
     cinfo.err = jpeg_std_error(&jerr);
     jpeg_create_compress(&cinfo);
-      
+    
     unsigned char *jpeg_buffer = nullptr;
     unsigned long jpeg_size = 0;
-      
+    
     jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
-      
+    
     cinfo.image_width = cfg.size.width;
     cinfo.image_height = cfg.size.height;
     cinfo.input_components = 3;
     cinfo.in_color_space = JCS_RGB;
-      
+    
     jpeg_set_defaults(&cinfo);
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
-      
+    
     jpeg_start_compress(&cinfo, TRUE);
-      
+    
     JSAMPROW row_pointer[1];
     int row_stride = cfg.size.width * 3;
-      
+    
     while (cinfo.next_scanline < cinfo.image_height) {
       row_pointer[0] = &image_data_[cinfo.next_scanline * row_stride];
       jpeg_write_scanlines(&cinfo, row_pointer, 1);
     }
-      
+    
     jpeg_finish_compress(&cinfo);
-      
+    
     jpeg_data_.clear();
     jpeg_data_.resize(jpeg_size);
     std::memcpy(jpeg_data_.data(), jpeg_buffer, jpeg_size);
-      
+    
     if (jpeg_buffer) {
       free(jpeg_buffer);
     }
     jpeg_destroy_compress(&cinfo);
-      
+    
     return true;
 #else
     return false;
@@ -497,6 +629,16 @@ public:
       return false;
     }
 
+    // Allocate for preview stream if enabled
+    if (preview_enabled_ && preview_stream_) {
+      ret = allocator_->allocate(preview_stream_);
+      if (ret < 0) {
+	preview_enabled_ = false;
+	std::cerr << "Failed to allocate preview buffers" << std::endl;
+      }
+    }
+
+    
     // Use libcamera::FrameBuffer correctly
     const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &buffers = 
       allocator_->buffers(stream_);
@@ -506,15 +648,27 @@ public:
     for (unsigned int i = 0; i < buffers.size(); ++i) {
       std::unique_ptr<Request> request = camera_->createRequest();
       if (!request) {
-        return false;
+	return false;
       }
 
       const std::unique_ptr<libcamera::FrameBuffer> &buffer = buffers[i];
       ret = request->addBuffer(stream_, buffer.get());
       if (ret < 0) {
-        return false;
+	return false;
       }
 
+      // Add preview buffer if available
+      if (preview_enabled_ && preview_stream_) {
+	const std::vector<std::unique_ptr<libcamera::FrameBuffer>> &preview_buffers = 
+	  allocator_->buffers(preview_stream_);
+	if (i < preview_buffers.size()) {
+	  ret = request->addBuffer(preview_stream_, preview_buffers[i].get());
+	  if (ret < 0) {
+	    std::cerr << "Warning: Failed to add preview buffer" << std::endl;
+	  }
+	}
+      }
+  
       // Set camera controls including FPS if specified
       set_camera_controls(request->controls());
       
@@ -576,8 +730,8 @@ public:
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (state_ != CameraState::IDLE) {
-        std::cerr << "Camera busy - cannot capture" << std::endl;
-        return false;
+	std::cerr << "Camera busy - cannot capture" << std::endl;
+	return false;
       }
       state_ = CameraState::CAPTURING;
     }
@@ -603,9 +757,9 @@ public:
       request->reuse(Request::ReuseBuffers);
       ret = camera_->queueRequest(request.get());
       if (ret) {
-        camera_->stop();
-        state_ = CameraState::IDLE;
-        return false;
+	camera_->stop();
+	state_ = CameraState::IDLE;
+	return false;
       }
     }
     
@@ -616,10 +770,10 @@ public:
       
       auto elapsed = std::chrono::steady_clock::now() - start;
       if (elapsed > 10s) {
-        std::cerr << "Capture timeout" << std::endl;
-        camera_->stop();
-        state_ = CameraState::IDLE;
-        return false;
+	std::cerr << "Capture timeout" << std::endl;
+	camera_->stop();
+	state_ = CameraState::IDLE;
+	return false;
       }
     }
     
@@ -633,8 +787,8 @@ public:
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (state_ != CameraState::IDLE) {
-        std::cerr << "Camera busy - cannot start streaming" << std::endl;
-        return false;
+	std::cerr << "Camera busy - cannot start streaming" << std::endl;
+	return false;
       }
       state_ = CameraState::STREAMING;
     }
@@ -669,10 +823,10 @@ public:
       request->reuse(Request::ReuseBuffers);
       ret = camera_->queueRequest(request.get());
       if (ret) {
-        std::cerr << "Failed to queue request for streaming" << std::endl;
-        camera_->stop();
-        state_ = CameraState::IDLE;
-        return false;
+	std::cerr << "Failed to queue request for streaming" << std::endl;
+	camera_->stop();
+	state_ = CameraState::IDLE;
+	return false;
       }
     }
     
@@ -688,7 +842,7 @@ public:
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (state_ != CameraState::STREAMING) {
-        return true;  // Already stopped
+	return true;  // Already stopped
       }
       state_ = CameraState::IDLE;
     }
@@ -731,7 +885,7 @@ public:
     file << cfg.size.width << " " << cfg.size.height << "\n";
     file << "255\n";
     file.write(reinterpret_cast<const char*>(image_data_.data()), 
-               image_data_.size());
+	       image_data_.size());
     file.close();
     return true;
   }
@@ -760,16 +914,35 @@ public:
     }
 
     file.write(reinterpret_cast<const char*>(jpeg_data_.data()), 
-               jpeg_data_.size());
+	       jpeg_data_.size());
     file.close();
     return true;
   }
 
+  void process_buffer(libcamera::FrameBuffer *buffer, bool is_preview) {
+    const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];
+    
+    void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
+		      plane.fd.get(), 0);
+    if (data == MAP_FAILED) return;
 
+    {
+      std::lock_guard<std::mutex> lock(capture_mutex_);
+      
+      if (is_preview) {
+	preview_data_.resize(plane.length);
+	std::memcpy(preview_data_.data(), data, plane.length);
+      } else {
+	image_data_.resize(plane.length);
+	std::memcpy(image_data_.data(), data, plane.length);
+	frame_ready_ = true;
+      }
+    }
+      
+    munmap(data, plane.length);
+  }
+  
   void streaming_request_complete(Request *request) {
-    // std::cerr << "DEBUG: Entering streaming_request_complete" << std::endl;
-   
-    // Early exit if not streaming
     if (state_ != CameraState::STREAMING) {
       return;
     }
@@ -803,27 +976,34 @@ public:
   
     // Process frame - use libcamera::FrameBuffer correctly
     const Request::BufferMap &buffers = request->buffers();
-    for (auto buffer_pair : buffers) {
-      libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
-      const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
-      
-      void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
-			plane.fd.get(), 0);
-      if (data == MAP_FAILED) continue;
-      
+    bool got_frame = false;
+
+    // Process main stream
+    auto main_buffer_it = buffers.find(stream_);
+    if (main_buffer_it != buffers.end()) {
+      process_buffer(main_buffer_it->second, false);
+      got_frame = true;
+    }
+    
+    // Process preview stream if available
+    if (preview_enabled_ && preview_stream_) {
+      auto preview_buffer_it = buffers.find(preview_stream_);
+      if (preview_buffer_it != buffers.end()) {
+	process_buffer(preview_buffer_it->second, true);
+      }
+    }
+    
+    // Signal fresh frame availability
+    if (got_frame) {
       {
 	std::lock_guard<std::mutex> lock(capture_mutex_);
-	image_data_.resize(plane.length);
-	std::memcpy(image_data_.data(), data, plane.length);
 	frame_ready_ = true;
       }
       capture_cv_.notify_one();
-      
-      munmap(data, plane.length);
-      break;
     }
+    
 
-    if (continuous_mode_ && ae_settled_) {
+    if (continuous_mode_ && ae_settled_ && got_frame) {
       // If hardware FPS isn't supported and we have a target FPS, throttle in software
       if (!hardware_fps_supported_ && target_fps_ > 0.0) {
 	auto now = std::chrono::steady_clock::now();
@@ -864,31 +1044,31 @@ public:
       const Request::BufferMap &buffers = request->buffers();
       
       for (auto buffer_pair : buffers) {
-        libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
-        const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
+	libcamera::FrameBuffer *buffer = buffer_pair.second;  // Use libcamera::FrameBuffer
+	const libcamera::FrameBuffer::Plane &plane = buffer->planes()[0];  // Use libcamera types
         
-        const StreamConfiguration &cfg = stream_->configuration();
+	const StreamConfiguration &cfg = stream_->configuration();
         
-        void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
-                          plane.fd.get(), 0);
+	void *data = mmap(nullptr, plane.length, PROT_READ, MAP_SHARED,
+			  plane.fd.get(), 0);
         
-        if (data == MAP_FAILED) {
-          std::cerr << "mmap failed" << std::endl;
-          continue;
-        }
+	if (data == MAP_FAILED) {
+	  std::cerr << "mmap failed" << std::endl;
+	  continue;
+	}
         
-        // Store the data regardless of format
-        image_data_.resize(plane.length);
-        std::memcpy(image_data_.data(), data, plane.length);
-        munmap(data, plane.length);
+	// Store the data regardless of format
+	image_data_.resize(plane.length);
+	std::memcpy(image_data_.data(), data, plane.length);
+	munmap(data, plane.length);
         
-        // If it's MJPEG, the data is already JPEG compressed
-        if (cfg.pixelFormat == formats::MJPEG) {
-          jpeg_data_ = image_data_;
-        }
+	// If it's MJPEG, the data is already JPEG compressed
+	if (cfg.pixelFormat == formats::MJPEG) {
+	  jpeg_data_ = image_data_;
+	}
         
-        capture_complete_ = true;
-        return;
+	capture_complete_ = true;
+	return;
       }
     }
     
@@ -963,7 +1143,7 @@ public:
 	std::cerr << "Failed to create directory: " << save_directory_ << std::endl;
       }
       else {
-    	start_save_worker();
+	start_save_worker();
       }
     }
   
@@ -1376,8 +1556,8 @@ private:
     if (!ae_settled_) {
       ae_settle_count_++;
       if (ae_settle_count_ >= AE_SETTLE_FRAMES) {
-        ae_settled_ = true;
-        std::cout << "Auto-exposure settled after " << ae_settle_count_ << " frames" << std::endl;
+	ae_settled_ = true;
+	std::cout << "Auto-exposure settled after " << ae_settle_count_ << " frames" << std::endl;
       }
     }
   }
@@ -1447,14 +1627,25 @@ private:
   
     int write_idx = ring_write_index_.load() % RING_BUFFER_SIZE;
     auto now = std::chrono::system_clock::now();
-    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-  
-    // Store raw RGB data instead of JPEG
-    frame_ring_buffer_[write_idx].raw_data = image_data_;  // Add this field
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+									   now.time_since_epoch()).count();
+
+    // Store main data
+    frame_ring_buffer_[write_idx].raw_data = image_data_;
     frame_ring_buffer_[write_idx].frame_id = frame_counter_.load();
     frame_ring_buffer_[write_idx].timestamp_ms = timestamp;
     frame_ring_buffer_[write_idx].valid = true;
-  
+    frame_ring_buffer_[write_idx].has_jpeg = false;
+    
+    // Store preview data if available
+    if (preview_enabled_ && !preview_data_.empty()) {
+      frame_ring_buffer_[write_idx].preview_raw_data = preview_data_;
+      frame_ring_buffer_[write_idx].has_preview = true;
+      frame_ring_buffer_[write_idx].has_preview_jpeg = false;
+    } else {
+      frame_ring_buffer_[write_idx].has_preview = false;
+    }
+    
     ring_write_index_++;
   }
 
@@ -1713,8 +1904,8 @@ extern "C" {
 				      int objc, Tcl_Obj *objv[])
   {
     camera_info_t *info = (camera_info_t *) data;
-    int width = 1920;
-    int height = 1080;
+    int width = 1920, height = 1080;
+    int preview_width = 0, preview_height = 0;    
     double fps = 0.0;  // 0 = use camera default
   
     if (!info->available) {
@@ -1732,7 +1923,7 @@ extern "C" {
       Tcl_AppendResult(interp, "Camera is busy - stop streaming first", NULL);
       return TCL_ERROR;
     }
-  
+
     if (objc > 1) {
       if (Tcl_GetIntFromObj(interp, objv[1], &width) != TCL_OK)
 	return TCL_ERROR;
@@ -1745,22 +1936,29 @@ extern "C" {
       if (Tcl_GetDoubleFromObj(interp, objv[3], &fps) != TCL_OK)
 	return TCL_ERROR;
     }
-
+    if (objc > 4) {
+      if (Tcl_GetIntFromObj(interp, objv[4], &preview_width) != TCL_OK)
+	return TCL_ERROR;
+    }
+    if (objc > 5) {
+      if (Tcl_GetIntFromObj(interp, objv[5], &preview_height) != TCL_OK)
+	return TCL_ERROR;
+    }
+    
     try {
-      // Set target FPS before configuring
       if (fps > 0.0) {
 	info->capture->set_target_fps(fps);
       }
-    
-      if (!info->capture->configure(width, height)) {
+        
+      if (!info->capture->configure(width, height, preview_width, preview_height)) {
 	Tcl_AppendResult(interp, "Failed to configure camera", NULL);
 	return TCL_ERROR;
       }
-      
+        
       info->configured = 1;
       Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
       return TCL_OK;
-      
+	
     } catch (const std::exception& e) {
       Tcl_AppendResult(interp, "Exception during configuration: ", e.what(), NULL);
       return TCL_ERROR;
@@ -2647,6 +2845,201 @@ extern "C" {
     return TCL_OK;
   }
 
+
+  static int camera_get_preview_frame_command(ClientData data,
+					      Tcl_Interp *interp,
+					      int objc, Tcl_Obj *objv[])
+  {
+#ifdef HAS_LIBCAMERA
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id ?format?");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    // Optional format argument (ppm or raw, default to raw)
+    const char *format = "raw";
+    if (objc > 2) {
+      format = Tcl_GetString(objv[2]);
+    }
+    
+    // Access the ring buffer
+    std::lock_guard<std::mutex> lock(info->capture->get_ring_buffer_mutex());
+    
+    // Find the frame in ring buffer
+    for (int i = 0; i < 16; i++) {  // RING_BUFFER_SIZE
+      const auto& frame = info->capture->get_ring_buffer_frame(i);
+        
+      if (frame.valid && frame.frame_id == frame_id && frame.has_preview) {
+	if (strcmp(format, "ppm") == 0) {
+	  // Return as PPM format
+	  const auto& cfg = info->capture->get_preview_config();
+                
+	  std::string ppm_header = "P6\n" + 
+	    std::to_string(cfg.width) + " " + 
+	    std::to_string(cfg.height) + "\n255\n";
+                
+	  std::vector<uint8_t> ppm_data(ppm_header.size() + 
+					frame.preview_raw_data.size());
+	  std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+	  std::memcpy(ppm_data.data() + ppm_header.size(), 
+		      frame.preview_raw_data.data(), 
+		      frame.preview_raw_data.size());
+                
+	  Tcl_SetObjResult(interp, 
+			   Tcl_NewByteArrayObj(ppm_data.data(), ppm_data.size()));
+	} else {
+	  // Return raw RGB data
+	  Tcl_SetObjResult(interp, 
+			   Tcl_NewByteArrayObj(frame.preview_raw_data.data(), 
+					       frame.preview_raw_data.size()));
+	}
+	return TCL_OK;
+      }
+    }
+    
+    Tcl_AppendResult(interp, "Preview frame not found for frame_id ", 
+                     std::to_string(frame_id).c_str(), NULL);
+    return TCL_ERROR;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
+  }
+
+  // Also add these helper commands for testing
+
+  static int camera_save_preview_frame_command(ClientData data,
+					       Tcl_Interp *interp,
+					       int objc, Tcl_Obj *objv[])
+  {
+#ifdef HAS_LIBCAMERA
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id filename");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    const char *filename = Tcl_GetString(objv[2]);
+    
+    // Access the ring buffer
+    std::lock_guard<std::mutex> lock(info->capture->get_ring_buffer_mutex());
+    
+    for (int i = 0; i < 16; i++) {
+      const auto& frame = info->capture->get_ring_buffer_frame(i);
+        
+      if (frame.valid && frame.frame_id == frame_id && frame.has_preview) {
+	// Determine format from extension
+	std::string fname(filename);
+	bool save_jpeg = (fname.find(".jpg") != std::string::npos || 
+			  fname.find(".jpeg") != std::string::npos);
+            
+	if (save_jpeg) {
+	  // Encode preview to JPEG if not already done
+	  std::vector<uint8_t> jpeg_data;
+	  if (!info->capture->encode_preview_to_jpeg(i, jpeg_data)) {
+	    Tcl_AppendResult(interp, "Failed to encode preview JPEG", NULL);
+	    return TCL_ERROR;
+	  }
+                
+	  std::ofstream file(filename, std::ios::binary);
+	  if (!file) {
+	    Tcl_AppendResult(interp, "Failed to open file", NULL);
+	    return TCL_ERROR;
+	  }
+	  file.write(reinterpret_cast<const char*>(jpeg_data.data()), 
+		     jpeg_data.size());
+	  file.close();
+	} else {
+	  // Save as PPM
+	  const auto& cfg = info->capture->get_preview_config();
+                
+	  std::ofstream file(filename, std::ios::binary);
+	  if (!file) {
+	    Tcl_AppendResult(interp, "Failed to open file", NULL);
+	    return TCL_ERROR;
+	  }
+                
+	  file << "P6\n" << cfg.width << " " << cfg.height << "\n255\n";
+	  file.write(reinterpret_cast<const char*>(frame.preview_raw_data.data()),
+		     frame.preview_raw_data.size());
+	  file.close();
+	}
+            
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(filename, -1));
+	return TCL_OK;
+      }
+    }
+    
+    Tcl_AppendResult(interp, "Preview frame not found", NULL);
+    return TCL_ERROR;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
+  }
+
+  static int camera_get_preview_info_command(ClientData data,
+					     Tcl_Interp *interp,
+					     int objc, Tcl_Obj *objv[])
+  {
+#ifdef HAS_LIBCAMERA
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_Obj *result = Tcl_NewDictObj();
+    
+    auto preview_config = info->capture->get_preview_config();
+    
+    Tcl_DictObjPut(interp, result,
+                   Tcl_NewStringObj("enabled", -1),
+                   Tcl_NewBooleanObj(preview_config.enabled));
+    
+    if (preview_config.enabled) {
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("width", -1),
+		     Tcl_NewIntObj(preview_config.width));
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("height", -1),
+		     Tcl_NewIntObj(preview_config.height));
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("hardware_supported", -1),
+		     Tcl_NewBooleanObj(preview_config.hardware_supported));
+    }
+    
+    Tcl_SetObjResult(interp, result);
+    return TCL_OK;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
+  }
+
+  
   static int camera_get_ring_buffer_status_command(ClientData data,
 						   Tcl_Interp *interp,
 						   int objc, Tcl_Obj *objv[])
@@ -2714,24 +3107,24 @@ extern "C" {
   }
 
   static int camera_get_jpeg_callback_frame_command(ClientData data,
-					       Tcl_Interp *interp,
-					       int objc, Tcl_Obj *objv[])
+						    Tcl_Interp *interp,
+						    int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
   static int camera_save_jpeg_callback_frame_command(ClientData data,
-						Tcl_Interp *interp,
-						int objc, Tcl_Obj *objv[])
+						     Tcl_Interp *interp,
+						     int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
 
   static int camera_publish_jpeg_callback_frame_command(ClientData data,
-						   Tcl_Interp *interp,
-						   int objc, Tcl_Obj *objv[])
+							Tcl_Interp *interp,
+							int objc, Tcl_Obj *objv[])
   {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
@@ -2901,7 +3294,17 @@ extern "C" {
     Tcl_CreateObjCommand(interp, "cameraPublishJpegCallbackFrame",
                          (Tcl_ObjCmdProc *) camera_publish_jpeg_callback_frame_command,
                          cameraInfo, NULL);
-    
+
+    Tcl_CreateObjCommand(interp, "cameraGetPreviewFrame",
+			 (Tcl_ObjCmdProc *) camera_get_preview_frame_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSavePreviewFrame",
+			 (Tcl_ObjCmdProc *) camera_save_preview_frame_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraGetPreviewInfo",
+			 (Tcl_ObjCmdProc *) camera_get_preview_info_command,
+			 cameraInfo, NULL);
+ 
     Tcl_CreateObjCommand(interp, "cameraGetRingBufferStatus",
                          (Tcl_ObjCmdProc *) camera_get_ring_buffer_status_command,
                          cameraInfo, NULL);
