@@ -1384,6 +1384,39 @@ public:
     return false;  // Frame not found
   }
 
+  bool publish_jpeg_preview_frame(int frame_id, const std::string& datapoint_name) {
+    if (!tclserver) return false;
+    
+    std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
+    
+    // Find the frame in ring buffer
+    for (int i = 0; i < RING_BUFFER_SIZE; i++) {
+      const auto& frame = frame_ring_buffer_[i];
+      
+      if (frame.valid && frame.frame_id == frame_id && frame.has_preview) {
+        // Encode preview to JPEG
+        std::vector<uint8_t> jpeg_data;
+        if (!encode_preview_to_jpeg(i, jpeg_data)) {
+          return false;
+        }
+        
+        // Publish JPEG data
+        ds_datapoint_t *dp = dpoint_new(
+                                        (char*)datapoint_name.c_str(),
+                                        frame.timestamp_ms * 1000, // Convert to microseconds
+                                        (ds_datatype_t)DSERV_JPEG,
+                                        jpeg_data.size(),
+                                        (unsigned char *)jpeg_data.data()
+                                        );
+        
+        tclserver_set_point(tclserver, dp);
+        return true;
+      }
+    }
+    
+    return false;  // Frame not found
+  }
+  
   bool save_jpeg_callback_frame(int frame_id, const std::string& filename) {
     std::lock_guard<std::mutex> lock(ring_buffer_mutex_);
     
@@ -2845,7 +2878,37 @@ extern "C" {
     return TCL_OK;
   }
 
-
+  static int camera_publish_preview_frame_command(ClientData data,
+						       Tcl_Interp *interp,
+						       int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 3) {
+      Tcl_WrongNumArgs(interp, 1, objv, "frame_id datapoint_name");
+      return TCL_ERROR;
+    }
+    
+    int frame_id;
+    if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
+      return TCL_ERROR;
+    
+    const char *datapoint_name = Tcl_GetString(objv[2]);
+    
+    if (!info->capture->publish_jpeg_preview_frame(frame_id, datapoint_name)) {
+      Tcl_AppendResult(interp, "Failed to publish JPEG preview frame", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(datapoint_name, -1));
+    return TCL_OK;
+  }
+  
   static int camera_get_preview_frame_command(ClientData data,
 					      Tcl_Interp *interp,
 					      int objc, Tcl_Obj *objv[])
@@ -2867,8 +2930,8 @@ extern "C" {
     if (Tcl_GetIntFromObj(interp, objv[1], &frame_id) != TCL_OK)
       return TCL_ERROR;
     
-    // Optional format argument (ppm or raw, default to raw)
-    const char *format = "raw";
+    // Optional format argument (ppm, jpeg, jpg, or raw - default to jpg)
+    const char *format = "jpg";
     if (objc > 2) {
       format = Tcl_GetString(objv[2]);
     }
@@ -2881,30 +2944,40 @@ extern "C" {
       const auto& frame = info->capture->get_ring_buffer_frame(i);
         
       if (frame.valid && frame.frame_id == frame_id && frame.has_preview) {
-	if (strcmp(format, "ppm") == 0) {
-	  // Return as PPM format
-	  const auto& cfg = info->capture->get_preview_config();
+        if (strcmp(format, "ppm") == 0) {
+          // Return as PPM format
+          const auto& cfg = info->capture->get_preview_config();
                 
-	  std::string ppm_header = "P6\n" + 
-	    std::to_string(cfg.width) + " " + 
-	    std::to_string(cfg.height) + "\n255\n";
+          std::string ppm_header = "P6\n" + 
+            std::to_string(cfg.width) + " " + 
+            std::to_string(cfg.height) + "\n255\n";
                 
-	  std::vector<uint8_t> ppm_data(ppm_header.size() + 
-					frame.preview_raw_data.size());
-	  std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
-	  std::memcpy(ppm_data.data() + ppm_header.size(), 
-		      frame.preview_raw_data.data(), 
-		      frame.preview_raw_data.size());
+          std::vector<uint8_t> ppm_data(ppm_header.size() + 
+                                        frame.preview_raw_data.size());
+          std::memcpy(ppm_data.data(), ppm_header.c_str(), ppm_header.size());
+          std::memcpy(ppm_data.data() + ppm_header.size(), 
+                      frame.preview_raw_data.data(), 
+                      frame.preview_raw_data.size());
                 
-	  Tcl_SetObjResult(interp, 
-			   Tcl_NewByteArrayObj(ppm_data.data(), ppm_data.size()));
-	} else {
-	  // Return raw RGB data
-	  Tcl_SetObjResult(interp, 
-			   Tcl_NewByteArrayObj(frame.preview_raw_data.data(), 
-					       frame.preview_raw_data.size()));
-	}
-	return TCL_OK;
+          Tcl_SetObjResult(interp, 
+                           Tcl_NewByteArrayObj(ppm_data.data(), ppm_data.size()));
+        } else if (strcmp(format, "jpeg") == 0 || strcmp(format, "jpg") == 0) {
+          // Return as JPEG format using existing encode function
+          std::vector<uint8_t> jpeg_data;
+          if (!info->capture->encode_preview_to_jpeg(i, jpeg_data)) {
+            Tcl_AppendResult(interp, "Failed to encode preview JPEG", NULL);
+            return TCL_ERROR;
+          }
+          
+          Tcl_SetObjResult(interp, 
+                           Tcl_NewByteArrayObj(jpeg_data.data(), jpeg_data.size()));
+        } else {
+          // Return raw RGB data (default)
+          Tcl_SetObjResult(interp, 
+                           Tcl_NewByteArrayObj(frame.preview_raw_data.data(), 
+                                               frame.preview_raw_data.size()));
+        }
+        return TCL_OK;
       }
     }
     
@@ -2915,10 +2988,8 @@ extern "C" {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
 #endif
-  }
-
-  // Also add these helper commands for testing
-
+}
+  
   static int camera_save_preview_frame_command(ClientData data,
 					       Tcl_Interp *interp,
 					       int objc, Tcl_Obj *objv[])
@@ -3151,6 +3222,14 @@ extern "C" {
     Tcl_AppendResult(interp, "Camera support not available", NULL);
     return TCL_ERROR;
   }
+
+ static int camera_publish_preview_frame_command(ClientData data,
+							Tcl_Interp *interp,
+							int objc, Tcl_Obj *objv[])
+ {
+   Tcl_AppendResult(interp, "Camera support not available", NULL);
+   return TCL_ERROR;
+ }
   
   static int camera_get_ring_buffer_status_command(ClientData data,
 						   Tcl_Interp *interp,
@@ -3295,8 +3374,12 @@ extern "C" {
                          (Tcl_ObjCmdProc *) camera_publish_jpeg_callback_frame_command,
                          cameraInfo, NULL);
 
+    
     Tcl_CreateObjCommand(interp, "cameraGetPreviewFrame",
 			 (Tcl_ObjCmdProc *) camera_get_preview_frame_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraPublishPreviewFrame",
+			 (Tcl_ObjCmdProc *) camera_publish_preview_frame_command,
 			 cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraSavePreviewFrame",
 			 (Tcl_ObjCmdProc *) camera_save_preview_frame_command,
