@@ -607,6 +607,135 @@ int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
   return TCL_OK;
 }
 
+int dserv_info_command(ClientData data, Tcl_Interp * interp, int objc,
+                       Tcl_Obj * const objv[])
+{
+  Dataserver *ds = (Dataserver *) data;
+  Tcl_Obj *dictObj;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "varname");
+    return TCL_ERROR;
+  }
+  
+  ds_datapoint_t *dpoint;
+  dpoint = ds->get_datapoint(Tcl_GetString(objv[1]));
+  
+  if (!dpoint) {
+    Tcl_AppendResult(interp, "dpoint \"",
+                     Tcl_GetString(objv[1]),
+                     "\" not found", NULL);
+    return TCL_ERROR;
+  }
+  
+  // Create a new dictionary object
+  dictObj = Tcl_NewDictObj();
+  
+  // Add varname
+  Tcl_DictObjPut(interp, dictObj, 
+                 Tcl_NewStringObj("varname", -1),
+                 Tcl_NewStringObj(dpoint->varname, -1));
+  
+  // Add timestamp
+  Tcl_DictObjPut(interp, dictObj,
+                 Tcl_NewStringObj("timestamp", -1),
+                 Tcl_NewWideIntObj(dpoint->timestamp));
+  
+  // Add data type as string
+  const char *typeStr;
+  switch (dpoint->data.type) {
+    case DSERV_BYTE:           typeStr = "BYTE"; break;
+    case DSERV_STRING:         typeStr = "STRING"; break;
+    case DSERV_FLOAT:          typeStr = "FLOAT"; break;
+    case DSERV_DOUBLE:         typeStr = "DOUBLE"; break;
+    case DSERV_SHORT:          typeStr = "SHORT"; break;
+    case DSERV_INT:            typeStr = "INT"; break;
+    case DSERV_DG:             typeStr = "DG"; break;
+    case DSERV_SCRIPT:         typeStr = "SCRIPT"; break;
+    case DSERV_TRIGGER_SCRIPT: typeStr = "TRIGGER_SCRIPT"; break;
+    case DSERV_EVT:            typeStr = "EVT"; break;
+    case DSERV_NONE:           typeStr = "NONE"; break;
+    case DSERV_JSON:           typeStr = "JSON"; break;
+    case DSERV_ARROW:          typeStr = "ARROW"; break;
+    case DSERV_MSGPACK:        typeStr = "MSGPACK"; break;
+    case DSERV_JPEG:           typeStr = "JPEG"; break;
+    case DSERV_PPM:            typeStr = "PPM"; break;
+    default:                   typeStr = "UNKNOWN"; break;
+  }
+  Tcl_DictObjPut(interp, dictObj,
+                 Tcl_NewStringObj("type", -1),
+                 Tcl_NewStringObj(typeStr, -1));
+  
+  // Add type as numeric value
+  Tcl_DictObjPut(interp, dictObj,
+                 Tcl_NewStringObj("type_id", -1),
+                 Tcl_NewIntObj(dpoint->data.type));
+  
+  // Add data length
+  Tcl_DictObjPut(interp, dictObj,
+                 Tcl_NewStringObj("length", -1),
+                 Tcl_NewIntObj(dpoint->data.len));
+  
+  // Add flags if they're meaningful
+  Tcl_DictObjPut(interp, dictObj,
+                 Tcl_NewStringObj("flags", -1),
+                 Tcl_NewIntObj(dpoint->flags));
+  
+  // Special handling for EVT type - add event-specific info
+  if (dpoint->data.e.dtype == DSERV_EVT) {
+    Tcl_DictObjPut(interp, dictObj,
+                   Tcl_NewStringObj("event_type", -1),
+                   Tcl_NewIntObj(dpoint->data.e.type));
+    
+    Tcl_DictObjPut(interp, dictObj,
+                   Tcl_NewStringObj("event_subtype", -1),
+                   Tcl_NewIntObj(dpoint->data.e.subtype));
+    
+    Tcl_DictObjPut(interp, dictObj,
+                   Tcl_NewStringObj("event_puttype", -1),
+                   Tcl_NewIntObj(dpoint->data.e.puttype));
+  }
+  
+  // Calculate element count for array types
+  if (dpoint->data.len > 0 && dpoint->data.buf != NULL) {
+    int element_count = 0;
+    switch (dpoint->data.type) {
+      case DSERV_BYTE:
+        element_count = dpoint->data.len;
+        break;
+      case DSERV_SHORT:
+        element_count = dpoint->data.len / sizeof(uint16_t);
+        break;
+      case DSERV_INT:
+        element_count = dpoint->data.len / sizeof(uint32_t);
+        break;
+      case DSERV_FLOAT:
+        element_count = dpoint->data.len / sizeof(float);
+        break;
+      case DSERV_DOUBLE:
+        element_count = dpoint->data.len / sizeof(double);
+        break;
+      default:
+        element_count = -1;  // Not an array type
+        break;
+    }
+    
+    if (element_count > 0) {
+      Tcl_DictObjPut(interp, dictObj,
+                     Tcl_NewStringObj("element_count", -1),
+                     Tcl_NewIntObj(element_count));
+    }
+  }
+  
+  // Set the dictionary as the result
+  Tcl_SetObjResult(interp, dictObj);
+  
+  // Clean up
+  dpoint_free(dpoint);
+  
+  return TCL_OK;
+}
+
 int dserv_copy_command(ClientData data, Tcl_Interp * interp, int objc,
                        Tcl_Obj * const objv[])
 {
@@ -931,6 +1060,8 @@ static void add_tcl_commands(Tcl_Interp *interp, Dataserver *dserv)
 		       dserv_exists_command, dserv, NULL); 
   Tcl_CreateObjCommand(interp, "dservGet",
 		       dserv_get_command, dserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservInfo",
+		       dserv_info_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservCopy",
 		       dserv_copy_command, dserv, NULL);  
   Tcl_CreateObjCommand(interp, "dservTouch",

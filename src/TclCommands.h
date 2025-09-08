@@ -3,6 +3,8 @@ int dserv_exists_command(ClientData data, Tcl_Interp * interp, int objc,
 		      Tcl_Obj * const objv[]);
 int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
 		      Tcl_Obj * const objv[]);
+int dserv_info_command(ClientData data, Tcl_Interp * interp, int objc,
+		      Tcl_Obj * const objv[]);
 int dserv_copy_command(ClientData data, Tcl_Interp * interp, int objc,
 		       Tcl_Obj * const objv[]);
 int now_command(ClientData data, Tcl_Interp * interp, int objc,

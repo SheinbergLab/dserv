@@ -1604,6 +1604,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 		       dserv_get_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservGet",
 		       dserv_get_command, tserv->ds, NULL);
+  Tcl_CreateObjCommand(interp, "dservInfo",
+		       dserv_info_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservCopy",
 		       dserv_copy_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservSet",
