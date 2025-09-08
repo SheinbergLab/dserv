@@ -74,6 +74,11 @@ enum class CameraState {
   CAPTURING
 };
 
+enum class RingBufferMode {
+  FULL_RATE,      // Store every frame (current behavior)
+  SKIP_RATE_ONLY  // Store only frames that pass skip filter
+};
+
 class CameraCapture {
 private:
   std::unique_ptr<CameraManager> cm_;
@@ -149,6 +154,9 @@ private:
   std::array<CameraFrameBuffer, RING_BUFFER_SIZE> frame_ring_buffer_;
   std::atomic<int> ring_write_index_{0};
   std::mutex ring_buffer_mutex_;
+
+  
+  RingBufferMode ring_buffer_mode_ = RingBufferMode::FULL_RATE;
 
   
   // Background save thread for continuous mode
@@ -327,6 +335,10 @@ public:
     return allocate_buffers();
   }
 
+  void set_ring_buffer_mode(RingBufferMode mode) {
+    ring_buffer_mode_ = mode;
+  }
+  
   bool encode_jpeg() {
 #ifdef HAS_JPEG
     if (!stream_) {
@@ -888,18 +900,26 @@ public:
   }
 
   void handle_continuous_frame() {
+    // Check interval for callbacks
     if ((frame_counter_ % publish_interval_) != 0) {
       frame_counter_++;
+      
+      // In FULL_RATE mode, store every frame regardless of callback timing
+      if (ring_buffer_mode_ == RingBufferMode::FULL_RATE) {
+	store_frame_in_ring_buffer();
+      }
+      
       return;
     }
     
+    // This frame passes the skip filter - always store it
     store_frame_in_ring_buffer();
     
+    // Handle callbacks and other processing
     if (use_tcl_callback_ && !tcl_callback_proc_.empty() && tcl_interp_) {
       call_tcl_frame_callback();
     } else {
       if (save_to_disk_) {
-	// Save as JPEG to disk (smaller files)
 	if (!encode_jpeg()) {
 	  std::cerr << "Failed to encode JPEG for disk save" << std::endl;
 	  frame_counter_++;
@@ -909,7 +929,6 @@ public:
       }
       
       if (publish_to_dataserver_ && tclserver) {
-	// Default: publish PPM (lossless, self-describing)
 	publish_ppm_frame_to_dataserver();
 	// Alternative: just publish notification
 	// publish_frame_notification();
@@ -917,7 +936,7 @@ public:
     }
     
     frame_counter_++;
-  }
+  }  
   
   
   bool start_continuous_mode(bool save_disk, bool publish_dataserver, 
@@ -1747,7 +1766,43 @@ extern "C" {
       return TCL_ERROR;
     }
   }
-
+  
+  static int camera_set_ring_buffer_mode_command(ClientData data,
+						 Tcl_Interp *interp,
+						 int objc, Tcl_Obj *objv[])
+  {
+#ifdef HAS_LIBCAMERA
+    camera_info_t *info = (camera_info_t *) data;
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "mode");
+      return TCL_ERROR;
+    }
+    
+    const char *mode_str = Tcl_GetString(objv[1]);
+    
+    if (strcmp(mode_str, "full") == 0) {
+      info->capture->set_ring_buffer_mode(RingBufferMode::FULL_RATE);
+    } else if (strcmp(mode_str, "skip") == 0) {
+      info->capture->set_ring_buffer_mode(RingBufferMode::SKIP_RATE_ONLY);
+    } else {
+      Tcl_AppendResult(interp, "Invalid mode (use 'full' or 'skip')", NULL);
+      return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(mode_str, -1));
+    return TCL_OK;
+#else
+    Tcl_AppendResult(interp, "Camera support not available", NULL);
+    return TCL_ERROR;
+#endif
+  }
+  
   static int camera_capture_command(ClientData data,
                                     Tcl_Interp *interp,
                                     int objc, Tcl_Obj *objv[])
@@ -2812,6 +2867,9 @@ extern "C" {
     Tcl_CreateObjCommand(interp, "cameraSetFrameSkipRate",
                          (Tcl_ObjCmdProc *) camera_set_frame_skip_rate_command,
                          cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetRingBufferMode",
+			 (Tcl_ObjCmdProc *) camera_set_ring_buffer_mode_command,
+			 cameraInfo, NULL);
     Tcl_CreateObjCommand(interp, "cameraStartContinuous",
                          (Tcl_ObjCmdProc *) camera_start_continuous_command,
                          cameraInfo, NULL);
