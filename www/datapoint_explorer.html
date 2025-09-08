@@ -135,6 +135,48 @@
             color: #2c3e50;
         }
         
+        .search-container {
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+            position: relative;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+            background: white;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
+        .search-clear {
+            position: absolute;
+            right: 22px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #7f8c8d;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0;
+            width: 20px;
+            height: 20px;
+            display: none;
+        }
+        
+        .search-clear:hover {
+            color: #2c3e50;
+        }
+        
         .datapoint-list {
             flex: 1;
             overflow-y: auto;
@@ -195,11 +237,21 @@
             opacity: 1;
         }
         
+        .datapoint-item.hidden {
+            display: none;
+        }
+        
         .datapoint-name {
             font-weight: 600;
             color: #2c3e50;
             margin-bottom: 2px;
             font-size: 11px;
+        }
+        
+        .datapoint-name .highlight {
+            background: #fff3cd;
+            color: #856404;
+            font-weight: bold;
         }
         
         .datapoint-preview {
@@ -452,6 +504,10 @@
                 <div class="sidebar-header">
                     Available Datapoints <span id="datapointCount">(0)</span>
                 </div>
+                <div class="search-container">
+                    <input type="text" class="search-input" id="searchInput" placeholder="Search datapoints..." />
+                    <button class="search-clear" id="searchClear">&times;</button>
+                </div>
                 <div class="datapoint-list" id="datapointList">
                     <div class="placeholder">
                         Connecting to server...
@@ -495,6 +551,204 @@
         let selectedDatapoint = null;
         let updateHistory = new Map();
         let notificationCount = 0;
+        let allDatapointKeys = []; // Store all keys for searching
+        let currentSearchTerm = '';
+        
+        // Datatype mapping based on backend constants
+        function getDatatypeString(dtype) {
+            const typeMap = {
+                0: "BYTE",
+                1: "STRING", 
+                2: "FLOAT",
+                3: "DOUBLE",
+                4: "SHORT",
+                5: "INT",
+                6: "DG",
+                7: "SCRIPT",
+                8: "TRIGGER_SCRIPT",
+                9: "EVT",
+                10: "NONE",
+                11: "JSON",
+                12: "ARROW",
+                13: "MSGPACK",
+                14: "JPEG",
+                15: "PPM"
+            };
+            return typeMap[dtype] || `UNKNOWN(${dtype})`;
+        }
+        
+        // Base64 decode function
+        function base64ToUint8Array(base64) {
+            try {
+                const binaryString = atob(base64);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                return bytes;
+            } catch (e) {
+                console.error('Base64 decode error:', e);
+                return null;
+            }
+        }
+        
+        // PPM image conversion functions
+        function parsePPM(ppmData) {
+            try {
+                let uint8Array;
+                
+                // Handle different input types
+                if (typeof ppmData === 'string') {
+                    // Could be ASCII P3 format or base64-encoded P6
+                    if (ppmData.startsWith('P3\n') || ppmData.startsWith('P6\n')) {
+                        // ASCII P3 format
+                        const lines = ppmData.trim().split('\n');
+                        let lineIndex = 0;
+                        
+                        const magic = lines[lineIndex++].trim();
+                        if (magic !== 'P3') {
+                            throw new Error('Expected P3 format for ASCII data, got: ' + magic);
+                        }
+                        
+                        // Skip comments
+                        while (lineIndex < lines.length && lines[lineIndex].startsWith('#')) {
+                            lineIndex++;
+                        }
+                        
+                        const dimensions = lines[lineIndex++].trim().split(/\s+/);
+                        const width = parseInt(dimensions[0]);
+                        const height = parseInt(dimensions[1]);
+                        const maxVal = parseInt(lines[lineIndex++].trim());
+                        
+                        return { magic, width, height, maxVal, dataStart: lineIndex, lines, isString: true };
+                    } else {
+                        // Assume base64-encoded binary data
+                        uint8Array = base64ToUint8Array(ppmData);
+                        if (!uint8Array) {
+                            throw new Error('Failed to decode base64 data');
+                        }
+                    }
+                } else if (ppmData instanceof ArrayBuffer) {
+                    uint8Array = new Uint8Array(ppmData);
+                } else if (ppmData instanceof Uint8Array) {
+                    uint8Array = ppmData;
+                } else {
+                    throw new Error('Unsupported data type: ' + typeof ppmData);
+                }
+                
+                // Parse binary P6 format
+                if (uint8Array) {
+                    // Find the end of header (after maxval and final newline)
+                    let headerEnd = -1;
+                    let newlineCount = 0;
+                    let i = 0;
+                    
+                    while (i < uint8Array.length && newlineCount < 3) {
+                        if (uint8Array[i] === 0x0A) { // newline
+                            newlineCount++;
+                            if (newlineCount === 3) {
+                                headerEnd = i + 1;
+                                break;
+                            }
+                        }
+                        i++;
+                    }
+                    
+                    if (headerEnd === -1) {
+                        throw new Error('Could not find PPM header end');
+                    }
+                    
+                    // Extract header text
+                    const headerText = new TextDecoder().decode(uint8Array.slice(0, headerEnd));
+                    const lines = headerText.trim().split('\n');
+                    let lineIndex = 0;
+                    
+                    const magic = lines[lineIndex++].trim();
+                    if (magic !== 'P6') {
+                        throw new Error('Expected P6 format for binary data, got: ' + magic);
+                    }
+                    
+                    // Skip comments
+                    while (lineIndex < lines.length && lines[lineIndex].startsWith('#')) {
+                        lineIndex++;
+                    }
+                    
+                    const dimensions = lines[lineIndex++].trim().split(/\s+/);
+                    const width = parseInt(dimensions[0]);
+                    const height = parseInt(dimensions[1]);
+                    const maxVal = parseInt(lines[lineIndex++].trim());
+                    
+                    return { 
+                        magic, width, height, maxVal, 
+                        binaryData: uint8Array.slice(headerEnd),
+                        isString: false 
+                    };
+                }
+                
+            } catch (e) {
+                console.error('PPM parsing error:', e);
+                return null;
+            }
+        }
+        
+        function ppmToDataURL(ppmData) {
+            const parsed = parsePPM(ppmData);
+            if (!parsed) return null;
+            
+            try {
+                const { magic, width, height, maxVal } = parsed;
+                
+                // Create canvas
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                const imageData = ctx.createImageData(width, height);
+                
+                if (magic === 'P3' && parsed.isString) {
+                    // ASCII format - parse RGB values from remaining lines
+                    const pixelData = parsed.lines.slice(parsed.dataStart).join(' ').trim().split(/\s+/).map(v => parseInt(v));
+                    
+                    for (let i = 0; i < width * height; i++) {
+                        const r = Math.round((pixelData[i * 3] / maxVal) * 255);
+                        const g = Math.round((pixelData[i * 3 + 1] / maxVal) * 255);
+                        const b = Math.round((pixelData[i * 3 + 2] / maxVal) * 255);
+                        
+                        imageData.data[i * 4] = r;     // Red
+                        imageData.data[i * 4 + 1] = g; // Green
+                        imageData.data[i * 4 + 2] = b; // Blue
+                        imageData.data[i * 4 + 3] = 255; // Alpha
+                    }
+                } else if (magic === 'P6' && !parsed.isString) {
+                    // Binary format - read RGB bytes directly
+                    const binaryData = parsed.binaryData;
+                    const expectedSize = width * height * 3;
+                    
+                    if (binaryData.length < expectedSize) {
+                        throw new Error(`Insufficient binary data: expected ${expectedSize}, got ${binaryData.length}`);
+                    }
+                    
+                    for (let i = 0; i < width * height; i++) {
+                        const r = Math.round((binaryData[i * 3] / maxVal) * 255);
+                        const g = Math.round((binaryData[i * 3 + 1] / maxVal) * 255);
+                        const b = Math.round((binaryData[i * 3 + 2] / maxVal) * 255);
+                        
+                        imageData.data[i * 4] = r;     // Red
+                        imageData.data[i * 4 + 1] = g; // Green
+                        imageData.data[i * 4 + 2] = b; // Blue
+                        imageData.data[i * 4 + 3] = 255; // Alpha
+                    }
+                } else {
+                    throw new Error(`Unsupported PPM format combination: ${magic}, isString: ${parsed.isString}`);
+                }
+                
+                ctx.putImageData(imageData, 0, 0);
+                return canvas.toDataURL();
+            } catch (e) {
+                console.error('PPM conversion error:', e);
+                return null;
+            }
+        }
         
         function log(message, type = 'info') {
             const logPanel = document.getElementById('logPanel');
@@ -614,13 +868,17 @@
             } else if (data.status === 'ok' && data.action) {
                 log(`${data.action}: ${data.match || ''}`);
             } else if (data.type === 'datapoint') {
+                // Debug logging for datapoint messages
+                console.log('Raw WebSocket datapoint message:', data);
                 handleDatapointUpdate(data);
             } else if (data.name && data.data !== undefined) {
+                console.log('Raw WebSocket name/data message:', data);
                 const fakeDatapointUpdate = {
                     type: 'datapoint',
                     name: data.name,
                     data: data.data,
-                    timestamp: data.timestamp
+                    timestamp: data.timestamp,
+                    dtype: data.dtype  // Preserve dtype if present
                 };
                 handleDatapointUpdate(fakeDatapointUpdate);
             } else if (data.error) {
@@ -633,21 +891,32 @@
             const value = data.data;
             const timestamp = data.timestamp;
             
+            // Debug logging to see what fields we actually have
+            console.log(`Datapoint update for ${name}:`, {
+                name, 
+                value: typeof value === 'string' && value.length > 100 ? value.substring(0, 100) + '...' : value,
+                timestamp,
+                dtype: data.dtype,
+                type: data.type,
+                allFields: Object.keys(data)
+            });
+            
             const normalizedData = {
                 name: name,
                 value: value,
                 timestamp: timestamp,
-                type: data.type
+                type: data.type,
+                dtype: data.dtype  // Add dtype field from backend
             };
             datapoints.set(name, normalizedData);
             
-            if (!updateHistory.has(name)) {
-                updateHistory.set(name, []);
+            if (!updateHistory.has(data.name)) {
+                updateHistory.set(data.name, []);
             }
-            const history = updateHistory.get(name);
+            const history = updateHistory.get(data.name);
             history.unshift({
-                value: value,
-                timestamp: timestamp,
+                value: data.data,
+                timestamp: data.timestamp,
                 time: new Date()
             });
             
@@ -656,25 +925,112 @@
             }
             
             // Add to notifications panel if subscribed (but skip @keys updates)
-            if (subscribedPoints.has(name) && name !== '@keys') {
-                addNotification(name, value, true);
+            if (subscribedPoints.has(data.name) && data.name !== '@keys') {
+                addNotification(data.name, data.data, true);
             }
             
             // Handle @keys updates to refresh datapoint list
-            if (name === '@keys' && typeof value === 'string') {
-                updateDatapointList(value);
+            if (data.name === '@keys' && typeof data.data === 'string') {
+                updateDatapointList(data.data);
                 log(`Datapoint list updated`); // Log this instead of showing in notifications
             }
             
-            if (selectedDatapoint === name) {
-                showDatapointDetail(name);
+            if (selectedDatapoint === data.name) {
+                showDatapointDetail(data.name);
             }
             
-            updateDatapointListItem(name);
+            updateDatapointListItem(data.name);
+        }
+        
+        // Fuzzy search function
+        function fuzzyMatch(text, searchTerm) {
+            if (!searchTerm) return true;
+            
+            text = text.toLowerCase();
+            searchTerm = searchTerm.toLowerCase();
+            
+            // First try exact substring match
+            if (text.includes(searchTerm)) return true;
+            
+            // Then try fuzzy matching - characters can be separated but must be in order
+            let searchIndex = 0;
+            for (let i = 0; i < text.length && searchIndex < searchTerm.length; i++) {
+                if (text[i] === searchTerm[searchIndex]) {
+                    searchIndex++;
+                }
+            }
+            return searchIndex === searchTerm.length;
+        }
+        
+        // Highlight matching characters in text
+        function highlightMatch(text, searchTerm) {
+            if (!searchTerm) return text;
+            
+            const lowerText = text.toLowerCase();
+            const lowerSearch = searchTerm.toLowerCase();
+            
+            // For exact substring matches, highlight the entire match
+            const exactIndex = lowerText.indexOf(lowerSearch);
+            if (exactIndex !== -1) {
+                return text.substring(0, exactIndex) + 
+                       '<span class="highlight">' + text.substring(exactIndex, exactIndex + searchTerm.length) + '</span>' +
+                       text.substring(exactIndex + searchTerm.length);
+            }
+            
+            // For fuzzy matches, highlight individual characters
+            let result = '';
+            let searchIndex = 0;
+            for (let i = 0; i < text.length; i++) {
+                if (searchIndex < lowerSearch.length && lowerText[i] === lowerSearch[searchIndex]) {
+                    result += '<span class="highlight">' + text[i] + '</span>';
+                    searchIndex++;
+                } else {
+                    result += text[i];
+                }
+            }
+            return result;
+        }
+        
+        // Filter and update the datapoint display
+        function filterDatapoints(searchTerm) {
+            currentSearchTerm = searchTerm;
+            let visibleCount = 0;
+            
+            allDatapointKeys.forEach(key => {
+                const item = document.getElementById(`dp-${key}`);
+                if (item) {
+                    const matches = fuzzyMatch(key, searchTerm);
+                    if (matches) {
+                        item.classList.remove('hidden');
+                        // Update highlighted name
+                        const nameDiv = item.querySelector('.datapoint-name');
+                        if (nameDiv) {
+                            nameDiv.innerHTML = highlightMatch(key, searchTerm);
+                        }
+                        visibleCount++;
+                    } else {
+                        item.classList.add('hidden');
+                    }
+                }
+            });
+            
+            // Update count display
+            const totalCount = allDatapointKeys.length;
+            const countText = searchTerm ? `(${visibleCount}/${totalCount})` : `(${totalCount})`;
+            document.getElementById('datapointCount').textContent = countText;
+            
+            // Show/hide clear button
+            const clearButton = document.getElementById('searchClear');
+            clearButton.style.display = searchTerm ? 'block' : 'none';
         }
         
         function updateDatapointList(keysString) {
             const keys = keysString.trim().split(/\s+/).filter(k => k.length > 0);
+            
+            // Sort keys alphabetically
+            keys.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+            
+            allDatapointKeys = keys;
             const listContainer = document.getElementById('datapointList');
             
             listContainer.innerHTML = '';
@@ -684,8 +1040,10 @@
                 listContainer.appendChild(item);
             });
             
-            document.getElementById('datapointCount').textContent = `(${keys.length})`;
-            log(`Found ${keys.length} datapoints`);
+            // Apply current search filter
+            filterDatapoints(currentSearchTerm);
+            
+            log(`Found ${keys.length} datapoints (sorted alphabetically)`);
         }
         
         function createDatapointListItem(name) {
@@ -778,6 +1136,42 @@
             }
             
             const history = updateHistory.get(name) || [];
+            const isPPM = data.dtype === 15;  // Check stored datapoint's dtype
+            let imagePreview = '';
+            
+            // Debug logging
+            console.log(`Showing detail for ${name}:`, {
+                dtype: data.dtype,
+                isPPM: isPPM,
+                valueType: typeof data.value,
+                valueLength: data.value?.length
+            });
+            
+            // Generate image preview for PPM data
+            if (isPPM && typeof data.value === 'string') {
+                console.log('Attempting PPM conversion for:', name);
+                const dataURL = ppmToDataURL(data.value);
+                console.log('PPM conversion result:', dataURL ? 'SUCCESS' : 'FAILED');
+                if (dataURL) {
+                    imagePreview = `
+                        <div class="detail-row">
+                            <div class="detail-label">Preview:</div>
+                            <div class="detail-value">
+                                <img src="${dataURL}" alt="PPM Image" style="max-width: 100%; max-height: 200px; border: 1px solid #ddd; border-radius: 4px; background: white;" />
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    imagePreview = `
+                        <div class="detail-row">
+                            <div class="detail-label">Preview:</div>
+                            <div class="detail-value" style="color: #e74c3c; font-style: italic;">
+                                Failed to parse PPM image data - check console for details
+                            </div>
+                        </div>
+                    `;
+                }
+            }
             
             detailContent.innerHTML = `
                 <div class="datapoint-detail">
@@ -786,16 +1180,19 @@
                         <div class="detail-value">${name}</div>
                     </div>
                     <div class="detail-row">
-                        <div class="detail-label">Type:</div>
-                        <div class="detail-value">${data.type || 'unknown'}</div>
+                        <div class="detail-label">Datatype:</div>
+                        <div class="detail-value">${getDatatypeString(data.dtype)}${isPPM ? ' (Image)' : ''}</div>
                     </div>
                     <div class="detail-row">
                         <div class="detail-label">Timestamp:</div>
                         <div class="detail-value">${data.timestamp || 'unknown'}</div>
                     </div>
+                    ${imagePreview}
                     <div class="detail-row">
                         <div class="detail-label">Value:</div>
-                        <div class="detail-value">${JSON.stringify(data.value, null, 2)}</div>
+                        <div class="detail-value">${isPPM ? 
+                            `PPM Image Data (${data.value.length} chars)${data.value.length < 1000 ? '\n\n' + data.value : '\n\n[Data too large to display - see preview above]'}` : 
+                            JSON.stringify(data.value, null, 2)}</div>
                     </div>
                 </div>
                 
@@ -804,7 +1201,7 @@
                     ${history.map(update => `
                         <div class="update-entry">
                             <div class="update-time">${update.time.toLocaleTimeString()}</div>
-                            <div>${JSON.stringify(update.value)}</div>
+                            <div>${isPPM ? '[PPM Image Update]' : JSON.stringify(update.value)}</div>
                         </div>
                     `).join('')}
                     ${history.length === 0 ? '<div class="placeholder">No updates recorded</div>' : ''}
@@ -904,7 +1301,13 @@
             });
         }
         
+        function clearSearch() {
+            document.getElementById('searchInput').value = '';
+            filterDatapoints('');
+        }
+        
         document.addEventListener('DOMContentLoaded', () => {
+            // Existing event listeners
             document.getElementById('getName').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') getDatapoint();
             });
@@ -916,6 +1319,22 @@
             document.getElementById('touchName').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') touchDatapoint();
             });
+            
+            // Search functionality
+            const searchInput = document.getElementById('searchInput');
+            const searchClear = document.getElementById('searchClear');
+            
+            searchInput.addEventListener('input', (e) => {
+                filterDatapoints(e.target.value);
+            });
+            
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    clearSearch();
+                }
+            });
+            
+            searchClear.addEventListener('click', clearSearch);
             
             connect();
         });
