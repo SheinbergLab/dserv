@@ -551,28 +551,15 @@
         let selectedDatapoint = null;
         let updateHistory = new Map();
         let notificationCount = 0;
-        let allDatapointKeys = []; // Store all keys for searching
+        let allDatapointKeys = [];
         let currentSearchTerm = '';
         
-        // Datatype mapping based on backend constants
+        // Datatype mapping
         function getDatatypeString(dtype) {
             const typeMap = {
-                0: "BYTE",
-                1: "STRING", 
-                2: "FLOAT",
-                3: "DOUBLE",
-                4: "SHORT",
-                5: "INT",
-                6: "DG",
-                7: "SCRIPT",
-                8: "TRIGGER_SCRIPT",
-                9: "EVT",
-                10: "NONE",
-                11: "JSON",
-                12: "ARROW",
-                13: "MSGPACK",
-                14: "JPEG",
-                15: "PPM"
+                0: "BYTE", 1: "STRING", 2: "FLOAT", 3: "DOUBLE", 4: "SHORT",
+                5: "INT", 6: "DG", 7: "SCRIPT", 8: "TRIGGER_SCRIPT", 9: "EVT",
+                10: "NONE", 11: "JSON", 12: "ARROW", 13: "MSGPACK", 14: "JPEG", 15: "PPM"
             };
             return typeMap[dtype] || `UNKNOWN(${dtype})`;
         }
@@ -592,14 +579,12 @@
             }
         }
         
-        // PPM image conversion functions
+        // PPM parsing function
         function parsePPM(ppmData) {
             try {
                 let uint8Array;
                 
-                // Handle different input types
                 if (typeof ppmData === 'string') {
-                    // Could be ASCII P3 format or base64-encoded P6
                     if (ppmData.startsWith('P3\n') || ppmData.startsWith('P6\n')) {
                         // ASCII P3 format
                         const lines = ppmData.trim().split('\n');
@@ -610,7 +595,6 @@
                             throw new Error('Expected P3 format for ASCII data, got: ' + magic);
                         }
                         
-                        // Skip comments
                         while (lineIndex < lines.length && lines[lineIndex].startsWith('#')) {
                             lineIndex++;
                         }
@@ -622,7 +606,6 @@
                         
                         return { magic, width, height, maxVal, dataStart: lineIndex, lines, isString: true };
                     } else {
-                        // Assume base64-encoded binary data
                         uint8Array = base64ToUint8Array(ppmData);
                         if (!uint8Array) {
                             throw new Error('Failed to decode base64 data');
@@ -636,15 +619,13 @@
                     throw new Error('Unsupported data type: ' + typeof ppmData);
                 }
                 
-                // Parse binary P6 format
                 if (uint8Array) {
-                    // Find the end of header (after maxval and final newline)
                     let headerEnd = -1;
                     let newlineCount = 0;
                     let i = 0;
                     
                     while (i < uint8Array.length && newlineCount < 3) {
-                        if (uint8Array[i] === 0x0A) { // newline
+                        if (uint8Array[i] === 0x0A) {
                             newlineCount++;
                             if (newlineCount === 3) {
                                 headerEnd = i + 1;
@@ -658,7 +639,6 @@
                         throw new Error('Could not find PPM header end');
                     }
                     
-                    // Extract header text
                     const headerText = new TextDecoder().decode(uint8Array.slice(0, headerEnd));
                     const lines = headerText.trim().split('\n');
                     let lineIndex = 0;
@@ -668,7 +648,6 @@
                         throw new Error('Expected P6 format for binary data, got: ' + magic);
                     }
                     
-                    // Skip comments
                     while (lineIndex < lines.length && lines[lineIndex].startsWith('#')) {
                         lineIndex++;
                     }
@@ -698,7 +677,6 @@
             try {
                 const { magic, width, height, maxVal } = parsed;
                 
-                // Create canvas
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
@@ -706,7 +684,6 @@
                 const imageData = ctx.createImageData(width, height);
                 
                 if (magic === 'P3' && parsed.isString) {
-                    // ASCII format - parse RGB values from remaining lines
                     const pixelData = parsed.lines.slice(parsed.dataStart).join(' ').trim().split(/\s+/).map(v => parseInt(v));
                     
                     for (let i = 0; i < width * height; i++) {
@@ -714,13 +691,12 @@
                         const g = Math.round((pixelData[i * 3 + 1] / maxVal) * 255);
                         const b = Math.round((pixelData[i * 3 + 2] / maxVal) * 255);
                         
-                        imageData.data[i * 4] = r;     // Red
-                        imageData.data[i * 4 + 1] = g; // Green
-                        imageData.data[i * 4 + 2] = b; // Blue
-                        imageData.data[i * 4 + 3] = 255; // Alpha
+                        imageData.data[i * 4] = r;
+                        imageData.data[i * 4 + 1] = g;
+                        imageData.data[i * 4 + 2] = b;
+                        imageData.data[i * 4 + 3] = 255;
                     }
                 } else if (magic === 'P6' && !parsed.isString) {
-                    // Binary format - read RGB bytes directly
                     const binaryData = parsed.binaryData;
                     const expectedSize = width * height * 3;
                     
@@ -733,10 +709,10 @@
                         const g = Math.round((binaryData[i * 3 + 1] / maxVal) * 255);
                         const b = Math.round((binaryData[i * 3 + 2] / maxVal) * 255);
                         
-                        imageData.data[i * 4] = r;     // Red
-                        imageData.data[i * 4 + 1] = g; // Green
-                        imageData.data[i * 4 + 2] = b; // Blue
-                        imageData.data[i * 4 + 3] = 255; // Alpha
+                        imageData.data[i * 4] = r;
+                        imageData.data[i * 4 + 1] = g;
+                        imageData.data[i * 4 + 2] = b;
+                        imageData.data[i * 4 + 3] = 255;
                     }
                 } else {
                     throw new Error(`Unsupported PPM format combination: ${magic}, isString: ${parsed.isString}`);
@@ -761,7 +737,6 @@
             logPanel.appendChild(entry);
             logPanel.scrollTop = logPanel.scrollHeight;
             
-            // Keep only last 100 entries
             while (logPanel.children.length > 100) {
                 logPanel.removeChild(logPanel.firstChild);
             }
@@ -790,7 +765,6 @@
             
             panel.insertBefore(entry, panel.firstChild);
             
-            // Keep only last 50 notifications
             while (panel.children.length > 50) {
                 panel.removeChild(panel.lastChild);
             }
@@ -830,11 +804,7 @@
             ws.onopen = () => {
                 log('Connected to Dserv WebSocket server');
                 updateStatus(true);
-                
-                // Subscribe to @keys to get list of all datapoints
                 subscribe('@keys');
-                
-                // Get initial @keys value
                 getDatapoint('@keys');
             };
             
@@ -843,7 +813,12 @@
                     const data = JSON.parse(event.data);
                     handleMessage(data);
                 } catch (e) {
-                    log(`Received non-JSON message: ${event.data}`);
+                    console.error('JSON Parse Error:', e);
+                    console.error('Event data type:', typeof event.data);
+                    console.error('Event data length:', event.data.length);
+                    console.error('First 200 chars:', event.data.substring(0, 200));
+                    console.error('Last 200 chars:', event.data.substring(event.data.length - 200));
+                    log(`Received non-JSON message: ${event.data.substring(0, 500)}...`);
                 }
             };
             
@@ -868,7 +843,6 @@
             } else if (data.status === 'ok' && data.action) {
                 log(`${data.action}: ${data.match || ''}`);
             } else if (data.type === 'datapoint') {
-                // Debug logging for datapoint messages
                 console.log('Raw WebSocket datapoint message:', data);
                 handleDatapointUpdate(data);
             } else if (data.name && data.data !== undefined) {
@@ -878,7 +852,7 @@
                     name: data.name,
                     data: data.data,
                     timestamp: data.timestamp,
-                    dtype: data.dtype  // Preserve dtype if present
+                    dtype: data.dtype
                 };
                 handleDatapointUpdate(fakeDatapointUpdate);
             } else if (data.error) {
@@ -887,28 +861,25 @@
         }
         
         function handleDatapointUpdate(data) {
-            const name = data.name;
-            const value = data.data;
-            const timestamp = data.timestamp;
-            
-            // Debug logging to see what fields we actually have
-            console.log(`Datapoint update for ${name}:`, {
-                name, 
-                value: typeof value === 'string' && value.length > 100 ? value.substring(0, 100) + '...' : value,
-                timestamp,
+            console.log(`Datapoint update for ${data.name}:`, {
+                name: data.name, 
+                value: typeof data.data === 'string' && data.data.length > 100 ? data.data.substring(0, 100) + '...' : data.data,
+                timestamp: data.timestamp,
                 dtype: data.dtype,
                 type: data.type,
                 allFields: Object.keys(data)
             });
             
             const normalizedData = {
-                name: name,
-                value: value,
-                timestamp: timestamp,
+                name: data.name,
+                value: data.data,
+                timestamp: data.timestamp,
                 type: data.type,
-                dtype: data.dtype  // Add dtype field from backend
+                dtype: data.dtype
             };
-            datapoints.set(name, normalizedData);
+            
+            console.log("About to store normalizedData:", normalizedData);
+            datapoints.set(data.name, normalizedData);
             
             if (!updateHistory.has(data.name)) {
                 updateHistory.set(data.name, []);
@@ -924,15 +895,13 @@
                 history.splice(50);
             }
             
-            // Add to notifications panel if subscribed (but skip @keys updates)
             if (subscribedPoints.has(data.name) && data.name !== '@keys') {
                 addNotification(data.name, data.data, true);
             }
             
-            // Handle @keys updates to refresh datapoint list
             if (data.name === '@keys' && typeof data.data === 'string') {
                 updateDatapointList(data.data);
-                log(`Datapoint list updated`); // Log this instead of showing in notifications
+                log(`Datapoint list updated`);
             }
             
             if (selectedDatapoint === data.name) {
@@ -942,17 +911,14 @@
             updateDatapointListItem(data.name);
         }
         
-        // Fuzzy search function
         function fuzzyMatch(text, searchTerm) {
             if (!searchTerm) return true;
             
             text = text.toLowerCase();
             searchTerm = searchTerm.toLowerCase();
             
-            // First try exact substring match
             if (text.includes(searchTerm)) return true;
             
-            // Then try fuzzy matching - characters can be separated but must be in order
             let searchIndex = 0;
             for (let i = 0; i < text.length && searchIndex < searchTerm.length; i++) {
                 if (text[i] === searchTerm[searchIndex]) {
@@ -962,14 +928,12 @@
             return searchIndex === searchTerm.length;
         }
         
-        // Highlight matching characters in text
         function highlightMatch(text, searchTerm) {
             if (!searchTerm) return text;
             
             const lowerText = text.toLowerCase();
             const lowerSearch = searchTerm.toLowerCase();
             
-            // For exact substring matches, highlight the entire match
             const exactIndex = lowerText.indexOf(lowerSearch);
             if (exactIndex !== -1) {
                 return text.substring(0, exactIndex) + 
@@ -977,7 +941,6 @@
                        text.substring(exactIndex + searchTerm.length);
             }
             
-            // For fuzzy matches, highlight individual characters
             let result = '';
             let searchIndex = 0;
             for (let i = 0; i < text.length; i++) {
@@ -991,7 +954,6 @@
             return result;
         }
         
-        // Filter and update the datapoint display
         function filterDatapoints(searchTerm) {
             currentSearchTerm = searchTerm;
             let visibleCount = 0;
@@ -1002,7 +964,6 @@
                     const matches = fuzzyMatch(key, searchTerm);
                     if (matches) {
                         item.classList.remove('hidden');
-                        // Update highlighted name
                         const nameDiv = item.querySelector('.datapoint-name');
                         if (nameDiv) {
                             nameDiv.innerHTML = highlightMatch(key, searchTerm);
@@ -1014,12 +975,10 @@
                 }
             });
             
-            // Update count display
             const totalCount = allDatapointKeys.length;
             const countText = searchTerm ? `(${visibleCount}/${totalCount})` : `(${totalCount})`;
             document.getElementById('datapointCount').textContent = countText;
             
-            // Show/hide clear button
             const clearButton = document.getElementById('searchClear');
             clearButton.style.display = searchTerm ? 'block' : 'none';
         }
@@ -1027,7 +986,6 @@
         function updateDatapointList(keysString) {
             const keys = keysString.trim().split(/\s+/).filter(k => k.length > 0);
             
-            // Sort keys alphabetically
             keys.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
             
             allDatapointKeys = keys;
@@ -1040,7 +998,6 @@
                 listContainer.appendChild(item);
             });
             
-            // Apply current search filter
             filterDatapoints(currentSearchTerm);
             
             log(`Found ${keys.length} datapoints (sorted alphabetically)`);
@@ -1063,12 +1020,10 @@
             item.appendChild(previewDiv);
             
             item.onclick = (e) => {
-                // Check if clicking on the unsubscribe area
                 const rect = item.getBoundingClientRect();
                 const clickX = e.clientX - rect.left;
                 const itemWidth = rect.width;
                 
-                // If subscribed and clicking in the right 30px area (where the × is)
                 if (subscribedPoints.has(name) && clickX > itemWidth - 30) {
                     e.stopPropagation();
                     unsubscribe(name);
@@ -1136,77 +1091,144 @@
             }
             
             const history = updateHistory.get(name) || [];
-            const isPPM = data.dtype === 15;  // Check stored datapoint's dtype
-            let imagePreview = '';
+            const isPPM = data.dtype === 15;
+            const isJPEG = data.dtype === 14;
+            const isImageType = isPPM || isJPEG;
             
-            // Debug logging
             console.log(`Showing detail for ${name}:`, {
                 dtype: data.dtype,
                 isPPM: isPPM,
+                isJPEG: isJPEG,
+                isImageType: isImageType,
                 valueType: typeof data.value,
                 valueLength: data.value?.length
             });
             
-            // Generate image preview for PPM data
-            if (isPPM && typeof data.value === 'string') {
-                console.log('Attempting PPM conversion for:', name);
-                const dataURL = ppmToDataURL(data.value);
-                console.log('PPM conversion result:', dataURL ? 'SUCCESS' : 'FAILED');
-                if (dataURL) {
-                    imagePreview = `
-                        <div class="detail-row">
-                            <div class="detail-label">Preview:</div>
-                            <div class="detail-value">
-                                <img src="${dataURL}" alt="PPM Image" style="max-width: 100%; max-height: 200px; border: 1px solid #ddd; border-radius: 4px; background: white;" />
+            const existingDetail = detailContent.querySelector('.datapoint-detail');
+            const currentDatapointName = existingDetail?.querySelector('#name-value')?.textContent;
+            
+            if (!existingDetail || currentDatapointName !== name) {
+                let imagePreview = '';
+                
+                if (isImageType && typeof data.value === 'string') {
+                    let imageDataURL = null;
+                    
+                    if (isPPM) {
+                        console.log('Attempting PPM conversion for:', name);
+                        imageDataURL = ppmToDataURL(data.value);
+                        console.log('PPM conversion result:', imageDataURL ? 'SUCCESS' : 'FAILED');
+                    } else if (isJPEG) {
+                        console.log('Creating JPEG data URL for:', name);
+                        imageDataURL = `data:image/jpeg;base64,${data.value}`;
+                        console.log('JPEG data URL created');
+                    }
+                    
+                    if (imageDataURL) {
+                        imagePreview = `
+                            <div class="detail-row" id="preview-row">
+                                <div class="detail-label">Preview:</div>
+                                <div class="detail-value">
+                                    <img id="image-preview" src="${imageDataURL}" alt="${isPPM ? 'PPM' : 'JPEG'} Image" style="max-width: 100%; max-height: 200px; border: 1px solid #ddd; border-radius: 4px; background: white;" />
+                                </div>
                             </div>
-                        </div>
-                    `;
-                } else {
-                    imagePreview = `
-                        <div class="detail-row">
-                            <div class="detail-label">Preview:</div>
-                            <div class="detail-value" style="color: #e74c3c; font-style: italic;">
-                                Failed to parse PPM image data - check console for details
+                        `;
+                    } else {
+                        imagePreview = `
+                            <div class="detail-row" id="preview-row">
+                                <div class="detail-label">Preview:</div>
+                                <div class="detail-value" style="color: #e74c3c; font-style: italic;">
+                                    Failed to parse ${isPPM ? 'PPM' : 'JPEG'} image data - check console for details
+                                </div>
                             </div>
+                        `;
+                    }
+                }
+                
+                const imageDisplayText = isImageType ? 
+                    `${isPPM ? 'PPM' : 'JPEG'} Image Data (${data.value.length} chars)${data.value.length < 1000 ? '\n\n' + data.value : '\n\n[Data too large to display - see preview above]'}` : 
+                    JSON.stringify(data.value, null, 2);
+                
+                const historyHtml = history.map(update => `
+                    <div class="update-entry">
+                        <div class="update-time">${update.time.toLocaleTimeString()}</div>
+                        <div>${isImageType ? `[${isPPM ? 'PPM' : 'JPEG'} Image Update]` : JSON.stringify(update.value)}</div>
+                    </div>
+                `).join('');
+                
+                detailContent.innerHTML = `
+                    <div class="datapoint-detail">
+                        <div class="detail-row">
+                            <div class="detail-label">Name:</div>
+                            <div class="detail-value" id="name-value">${name}</div>
                         </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Datatype:</div>
+                            <div class="detail-value" id="datatype-value">${getDatatypeString(data.dtype)}${isImageType ? ' (Image)' : ''}</div>
+                        </div>
+                        <div class="detail-row">
+                            <div class="detail-label">Timestamp:</div>
+                            <div class="detail-value" id="timestamp-value">${data.timestamp || 'unknown'}</div>
+                        </div>
+                        ${imagePreview}
+                        <div class="detail-row">
+                            <div class="detail-label">Value:</div>
+                            <div class="detail-value" id="data-value">${imageDisplayText}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="stats">Update History (${history.length} updates)</div>
+                    <div class="update-history" id="update-history">
+                        ${historyHtml}
+                        ${history.length === 0 ? '<div class="placeholder">No updates recorded</div>' : ''}
+                    </div>
+                `;
+            } else {
+                const timestampValue = document.getElementById('timestamp-value');
+                const dataValue = document.getElementById('data-value');
+                const updateHistoryDiv = document.getElementById('update-history');
+                const imagePreview = document.getElementById('image-preview');
+                
+                if (timestampValue) {
+                    timestampValue.textContent = data.timestamp || 'unknown';
+                }
+                
+                const imageDisplayText = isImageType ? 
+                    `${isPPM ? 'PPM' : 'JPEG'} Image Data (${data.value.length} chars)${data.value.length < 1000 ? '\n\n' + data.value : '\n\n[Data too large to display - see preview above]'}` : 
+                    JSON.stringify(data.value, null, 2);
+                
+                if (dataValue) {
+                    dataValue.textContent = imageDisplayText;
+                }
+                
+                if (isImageType && imagePreview && typeof data.value === 'string') {
+                    console.log(`Updating ${isPPM ? 'PPM' : 'JPEG'} image for:`, name);
+                    let newDataURL = null;
+                    
+                    if (isPPM) {
+                        newDataURL = ppmToDataURL(data.value);
+                    } else if (isJPEG) {
+                        newDataURL = `data:image/jpeg;base64,${data.value}`;
+                    }
+                    
+                    if (newDataURL) {
+                        imagePreview.src = newDataURL;
+                    }
+                }
+                
+                if (updateHistoryDiv) {
+                    const historyHtml = history.map(update => `
+                        <div class="update-entry">
+                            <div class="update-time">${update.time.toLocaleTimeString()}</div>
+                            <div>${isImageType ? `[${isPPM ? 'PPM' : 'JPEG'} Image Update]` : JSON.stringify(update.value)}</div>
+                        </div>
+                    `).join('');
+                    
+                    updateHistoryDiv.innerHTML = `
+                        ${historyHtml}
+                        ${history.length === 0 ? '<div class="placeholder">No updates recorded</div>' : ''}
                     `;
                 }
             }
-            
-            detailContent.innerHTML = `
-                <div class="datapoint-detail">
-                    <div class="detail-row">
-                        <div class="detail-label">Name:</div>
-                        <div class="detail-value">${name}</div>
-                    </div>
-                    <div class="detail-row">
-                        <div class="detail-label">Datatype:</div>
-                        <div class="detail-value">${getDatatypeString(data.dtype)}${isPPM ? ' (Image)' : ''}</div>
-                    </div>
-                    <div class="detail-row">
-                        <div class="detail-label">Timestamp:</div>
-                        <div class="detail-value">${data.timestamp || 'unknown'}</div>
-                    </div>
-                    ${imagePreview}
-                    <div class="detail-row">
-                        <div class="detail-label">Value:</div>
-                        <div class="detail-value">${isPPM ? 
-                            `PPM Image Data (${data.value.length} chars)${data.value.length < 1000 ? '\n\n' + data.value : '\n\n[Data too large to display - see preview above]'}` : 
-                            JSON.stringify(data.value, null, 2)}</div>
-                    </div>
-                </div>
-                
-                <div class="stats">Update History (${history.length} updates)</div>
-                <div class="update-history">
-                    ${history.map(update => `
-                        <div class="update-entry">
-                            <div class="update-time">${update.time.toLocaleTimeString()}</div>
-                            <div>${isPPM ? '[PPM Image Update]' : JSON.stringify(update.value)}</div>
-                        </div>
-                    `).join('')}
-                    ${history.length === 0 ? '<div class="placeholder">No updates recorded</div>' : ''}
-                </div>
-            `;
         }
         
         function subscribe(pattern) {
@@ -1295,7 +1317,7 @@
         function unsubscribeAll() {
             const toUnsubscribe = Array.from(subscribedPoints);
             toUnsubscribe.forEach(pattern => {
-                if (pattern !== '@keys') { // Keep @keys subscription
+                if (pattern !== '@keys') {
                     unsubscribe(pattern);
                 }
             });
@@ -1307,7 +1329,6 @@
         }
         
         document.addEventListener('DOMContentLoaded', () => {
-            // Existing event listeners
             document.getElementById('getName').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') getDatapoint();
             });
@@ -1320,7 +1341,6 @@
                 if (e.key === 'Enter') touchDatapoint();
             });
             
-            // Search functionality
             const searchInput = document.getElementById('searchInput');
             const searchClear = document.getElementById('searchClear');
             
