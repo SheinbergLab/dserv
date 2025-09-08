@@ -23,13 +23,18 @@ proc my_frame_handler {frame_id timestamp_ms width height ppm_size ae_settled da
     set datetime [clock format $timestamp_sec -format "%Y-%m-%d %H:%M:%S"]
     
     set info "Frame $frame_id at $datetime: ${width}x${height}, PPM size: $ppm_size bytes, AE settled: $ae_settled"
+
+    dservSet $datapoint_prefix/frame_info $info
+    cameraPublishPreviewFrame $frame_id $datapoint_prefix/preview
+#    set PPM_TYPE 15
+#    dservSetData $datapoint_prefix/preview [now] $PPM_TYPE [cameraGetPreviewFrame $frame_id ppm]
     
     # Publish as PPM (lossless, self-describing format)
-    set datapoint_name $datapoint_prefix/frame_ppm
-    if {[catch {cameraPublishPpmCallbackFrame $frame_id $datapoint_name} result]} {
-        error "Error publishing PPM frame: $result"
-        return
-    }
+    #set datapoint_name $datapoint_prefix/frame_ppm
+    #if {[catch {cameraPublishPpmCallbackFrame $frame_id $datapoint_name} result]} {
+    #    error "Error publishing PPM frame: $result"
+    #    return
+    #}
     
     # Can also publish as JPEG for bandwidth-sensitive clients
     # Uncomment if you want both formats available:
@@ -55,8 +60,8 @@ proc start { { camera_id 0 } } {
         return
     }
     
-    # Configure camera at native 1536x864, 30fps
-    if {[catch {cameraConfigure 1536 864 30.0} result]} {
+    # Configure camera at native 1920x1080 30Hz preview 320x240
+    if {[catch {cameraConfigure 1920 1080 30.0 320 240} result]} {
         puts "Error configuring camera: $result"
         return
     }
@@ -66,9 +71,11 @@ proc start { { camera_id 0 } } {
         puts "Error starting streaming: $result"
         return
     }
+
+    cameraSetFrameSkipRate 30
     
-    # Start continuous callback mode on every 30th frame (1fps)
-    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 30} result]} {
+    # Start continuous callback mode on every non skipped frame (1fps)
+    if {[catch {cameraStartContinuousCallback my_frame_handler "camera" 1} result]} {
         puts "Error starting continuous callback: $result"
         return
     }
