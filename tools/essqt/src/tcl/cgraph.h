@@ -14,6 +14,32 @@ extern "C" {
 #endif
 
 #include <tcl.h>
+
+typedef struct {
+  int w;
+  int h;
+  int d;
+  unsigned char *data;
+  float x0, y0, x1, y1;
+} GBUF_IMAGE;
+
+typedef struct {
+  int nimages;
+  int maximages;
+  int allocinc;
+  GBUF_IMAGE *images;
+} GBUF_IMAGES;
+
+typedef struct {
+  unsigned char *gbuf;
+  int gbufindex;
+  int gbufsize;
+  GBUF_IMAGES images;
+  int empty;
+  char record_events;      // Per-buffer recording state
+  char append_times;       // Per-buffer timing state  
+  int event_time;          // Per-buffer event time
+} GBUF_DATA;
   
 typedef int (*HANDLER)();
 typedef int (*LHANDLER)(float, float, float, float);	/* line */
@@ -96,11 +122,7 @@ typedef struct _FRAME           /* viewport/window graphics environment */
 	struct _FRAME *parent;  /* pointer to frame to grestore */
 	} FRAME;
 
-extern FRAME *contexp;
-
-
 /* viewport stack structure for pushing & popping viewports */
-
 typedef struct {
   int size;
   int index;
@@ -113,7 +135,34 @@ typedef struct {
 #define VW_INC(v)              ((v)->increment)
 #define VW_VIEWPORTS(v)        ((v)->vals)
 
-
+/* Complete per-interpreter context */
+typedef struct CgraphContext {
+  FRAME *current_frame;           /* Current frame */
+  FRAME default_frame;            /* Default frame template */
+  
+  /* Global handlers */
+  HANDLER bframe;
+  HANDLER eframe;
+  
+  GBUF_DATA gbuf_data;           /* Embedded gbuf data - not pointer */
+  int gbuf_initialized;          /* Track initialization */
+  
+  /* Drawing state */
+  float barwidth;
+  int img_preview;
+  
+  /* Viewport stack */
+  VW_STACK *viewport_stack;
+  
+  /* Static buffers and state */
+  char draw_buffer[80];           /* For drawnum, drawfnum, drawf */
+  char old_fontname[64];          /* For setfont */
+  int labeltick;                  /* For tck() */
+  
+  /* Temporary variables */
+  float temp_float;               /* For SWAP macro */
+} CgraphContext;
+  
 /****************************************************************/
 /*                        IO Event Stuff                        */
 /****************************************************************/
@@ -139,19 +188,15 @@ typedef struct {
 #define IO_EVENT_BUTTONS(e)  ((e)->buttons)
 #define IO_EVENT_WINDOW(e)   ((e)->window)
 
-
 /* Event Types */
-
 #define IO_NO_EVENT    0
 #define IO_KEY_EVENT   1
 #define IO_MOUSE_EVENT 2
 
 /* Text justification constants */
-
 #define  LEFT_JUST     (-1)
 #define  CENTER_JUST    (0)
 #define  RIGHT_JUST     (1)
-
 
 #define DIALOG_WIN 101
 #define CGRAPH_WIN 102
@@ -159,7 +204,6 @@ typedef struct {
 #define KEYPRESS 101
 #define MOUSEPRESS 102
 #define EXPOSE   103
-
 
 #define HOME(f) {f->xpos=f->xl;f->ypos=f->yt;f->ypos-=f->linsiz;f->xpos++;}
 #define NXTLIN(f) {f->ypos -= f->linsiz; if(f->ypos < f->yb && f->clipf) f->ypos = f->yt;}
@@ -173,193 +217,184 @@ typedef struct {
 #define TXT_HORIZONTAL 0
 #define TXT_VERTICAL   1
 
-
 #if !defined(__FPOINT__)
-
 #define __FPOINT__
-
 typedef struct {
   float x;
   float y;
 } FPOINT;
-
 #endif
 
-extern void Cgraph_InitInterp(Tcl_Interp *interp);
-extern void Cgraph_SetInterp(Tcl_Interp *interp);
+/* Context management functions */
+CgraphContext *CgraphCreateContext(Tcl_Interp *interp);
+CgraphContext *CgraphGetContext(Tcl_Interp *interp);
 
 /*
  * Video handlers
  */
 extern void noplot(void);
-extern void dotat(float, float);
-extern void BigDotAt(float, float);
-extern void SquareAt(float, float);
-extern void TriangleAt(float, float);
-extern void HbarsAt(float, float);
-extern void VbarsAt(float, float);
+extern void dotat(CgraphContext *ctx, float, float);
+extern void BigDotAt(CgraphContext *ctx, float, float);
+extern void SquareAt(CgraphContext *ctx, float, float);
+extern void TriangleAt(CgraphContext *ctx, float, float);
+extern void HbarsAt(CgraphContext *ctx, float, float);
+extern void VbarsAt(CgraphContext *ctx, float, float);
 
 /*
  * Marker-like functions
  */
-extern void square(float x, float y, float scale);
-extern void fsquare(float x, float y, float scale);
-extern void circle(float xarg, float yarg, float scale);
-extern void fcircle(float xarg, float yarg, float scale);
-extern void vtick(float xarg, float yarg, float scale);
-extern void vtick_up(float xarg, float yarg, float scale);
-extern void vtick_down(float xarg, float yarg, float scale);
-extern void htick(float xarg, float yarg, float scale);
-extern void htick_left(float xarg, float yarg, float scale);
-extern void htick_right(float xarg, float yarg, float scale);
-extern void plus(float xarg, float yarg, float scale);
-extern void triangle(float x, float y, float scale);
-extern void diamond(float x, float y, float scale);
+extern void square(CgraphContext *ctx, float x, float y, float scale);
+extern void fsquare(CgraphContext *ctx, float x, float y, float scale);
+extern void circle(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void fcircle(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void vtick(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void vtick_up(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void vtick_down(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void htick(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void htick_left(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void htick_right(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void plus(CgraphContext *ctx, float xarg, float yarg, float scale);
+extern void triangle(CgraphContext *ctx, float x, float y, float scale);
+extern void diamond(CgraphContext *ctx, float x, float y, float scale);
 
 /*
  * CGRAPH - functions
  */
-
 extern int cgPS_Preview;	/* Render ps images using gs? */
 
-extern FRAME *gsave(void);
-extern FRAME *grestore(void);
+extern FRAME *gsave(CgraphContext *ctx);
+extern FRAME *grestore(CgraphContext *ctx);
 
-void pushviewport(void);
-int popviewport(void);
-void poppushviewport(void);
-void seteframe(HANDLER clearfunc);
-void setbframe(HANDLER clearfunc);
-extern void setresol(float, float);
-extern void getresol(float *, float *);
-extern float getxscale(void);
-extern float getyscale(void);
-extern void getviewport(float *, float *, float *, float *);
-extern HANDLER  setclearfunc(HANDLER);
-extern PHANDLER setpoint(PHANDLER);
-extern PHANDLER setclrpoint(PHANDLER);
-extern LHANDLER setclipfunc(LHANDLER);
-extern THANDLER settext(THANDLER);
-extern THANDLER setchar(THANDLER);
-extern LHANDLER setline(LHANDLER);
-extern FHANDLER setfilledpoly(FHANDLER fillp);
-extern FHANDLER setpolyline(FHANDLER polyl);
-extern CHANDLER setcircfunc(CHANDLER);
-extern LSHANDLER setlstylefunc(LSHANDLER) ;
-extern LWHANDLER setlwidthfunc(LWHANDLER) ;
-extern COHANDLER setcolorfunc(COHANDLER) ;
-extern COHANDLER setbgfunc(COHANDLER) ;
-extern SWHANDLER strwidthfunc(SWHANDLER) ;
-extern SHHANDLER strheightfunc(SHHANDLER) ;
-extern SOHANDLER setorientfunc(SOHANDLER) ;
-extern SFHANDLER setfontfunc(SFHANDLER) ;
-extern IMHANDLER setimagefunc(IMHANDLER) ;
-extern MIMHANDLER setmemimagefunc(MIMHANDLER) ;
-extern int  setuser(int);
-extern void postscript(char *, float, float);
-extern int place_image(int w, int h, int d, unsigned char *data, 
-		       float xsize, float ysize);
-extern int replace_image(int ref, int w, int h, int d, unsigned char *data);
-extern int setimgpreview(int);
-extern void group(void);
-extern void ungroup(void);
-extern int  setcolor(int);
-extern int  getcolor(void);
-extern void clearscreen(void);
-extern int  setbackgroundcolor(int);
-extern int  getbackgroundcolor(void);
-extern int  setgrain(int);
-extern int  setlstyle(int);
-extern int  setlwidth(int);
-extern int strwidth(char *);
-extern int strheight(char *);
-extern float setfontsize(float);
-extern char *setfont(char *, float size);
-extern float setsfont(char *, float size);
-extern float getfontsize();
-extern char *getfontname();
-extern int  setorientation(int);
-extern int getorientation(void) ;
-extern int  setjust(int);
-extern int  setclip(int);
-extern void  setclipregion(float, float, float, float);
-extern int  getclip(void);
-extern void setchrsize(float, float);
-extern void setviewport(float, float, float, float);
-extern void setfviewport(float, float, float, float);
-extern void setpviewport(float, float, float, float);
-extern void setwindow(float, float, float, float);
-extern void getwindow(float  *xul, float *yub, float *xur, float *yut);
-extern float getuaspect(void);
-extern FRAME *setstatus(FRAME *);
-extern FRAME *setframe(FRAME *);
-extern FRAME *getframe(void);
-extern int code(FRAME *, float, float);
-extern void moveto(float, float);
-extern void lineto(float, float);
-extern void moverel(float, float);
-extern void linerel(float, float);
-extern void cleararea(float, float, float, float);
-extern void clearline(float, float, float, float);
-extern void rect(float, float, float, float);
-extern void filledrect(float, float, float, float);
-extern void filledpoly(int, float *);
-extern void polyline(int, float *);
-extern void drawtext(char *);
-extern void cleartext(char *);
-extern void drawtextf(char *, ...);
-extern void cleartextf(char *, ...);
-extern void drawchar(int);
-extern void drawclrchar(int);
-extern void drawnum(char *, float);
-extern void drawfnum(int, float);
-extern void drawclrnum (char *fmt, float n);
-extern void drawf(char *, double);
+extern void pushviewport(CgraphContext *ctx);
+extern int popviewport(CgraphContext *ctx);
+extern void poppushviewport(CgraphContext *ctx);
+extern void seteframe(CgraphContext *ctx, HANDLER clearfunc);
+extern void setbframe(CgraphContext *ctx, HANDLER clearfunc);
+extern void setresol(CgraphContext *ctx, float, float);
+extern void getresol(CgraphContext *ctx, float *, float *);
+extern float getxscale(CgraphContext *ctx);
+extern float getyscale(CgraphContext *ctx);
+extern void getviewport(CgraphContext *ctx, float *, float *, float *, float *);
+extern HANDLER setclearfunc(CgraphContext *ctx, HANDLER);
+extern PHANDLER setpoint(CgraphContext *ctx, PHANDLER);
+extern PHANDLER setclrpnt(CgraphContext *ctx, PHANDLER);
+extern LHANDLER setclipfunc(CgraphContext *ctx, LHANDLER);
+extern THANDLER settext(CgraphContext *ctx, THANDLER);
+extern THANDLER setchar(CgraphContext *ctx, THANDLER);
+extern LHANDLER setline(CgraphContext *ctx, LHANDLER);
+extern FHANDLER setfilledpoly(CgraphContext *ctx, FHANDLER fillp);
+extern FHANDLER setpolyline(CgraphContext *ctx, FHANDLER polyl);
+extern CHANDLER setcircfunc(CgraphContext *ctx, CHANDLER);
+extern LSHANDLER setlstylefunc(CgraphContext *ctx, LSHANDLER);
+extern LWHANDLER setlwidthfunc(CgraphContext *ctx, LWHANDLER);
+extern COHANDLER setcolorfunc(CgraphContext *ctx, COHANDLER);
+extern COHANDLER setbgfunc(CgraphContext *ctx, COHANDLER);
+extern SWHANDLER strwidthfunc(CgraphContext *ctx, SWHANDLER);
+extern SHHANDLER strheightfunc(CgraphContext *ctx, SHHANDLER);
+extern SOHANDLER setorientfunc(CgraphContext *ctx, SOHANDLER);
+extern SFHANDLER setfontfunc(CgraphContext *ctx, SFHANDLER);
+extern IMHANDLER setimagefunc(CgraphContext *ctx, IMHANDLER);
+extern MIMHANDLER setmemimagefunc(CgraphContext *ctx, MIMHANDLER);
+extern int setuser(CgraphContext *ctx, int);
+extern void postscript(CgraphContext *ctx, char *, float, float);
+extern int place_image(CgraphContext *ctx, int w, int h, int d, unsigned char *data, 
+                       float xsize, float ysize);
+extern int replace_image(CgraphContext *ctx, int ref, int w, int h, int d, unsigned char *data);
+extern int setimgpreview(CgraphContext *ctx, int);
+extern void group(CgraphContext *ctx);
+extern void ungroup(CgraphContext *ctx);
+extern int setbackgroundcolor(CgraphContext *ctx, int);
+extern int setcolor(CgraphContext *ctx, int);
+extern int getcolor(CgraphContext *ctx);
+extern void clearscreen(CgraphContext *ctx);
+extern int getbackgroundcolor(CgraphContext *ctx);
+extern int setgrain(CgraphContext *ctx, int);
+extern int setlstyle(CgraphContext *ctx, int);
+extern int setlwidth(CgraphContext *ctx, int);
+extern int strwidth(CgraphContext *ctx, char *);
+extern int strheight(CgraphContext *ctx, char *);
+extern float setfontsize(CgraphContext *ctx, float);
+extern char *setfont(CgraphContext *ctx, char *, float size);
+extern float setsfont(CgraphContext *ctx, char *, float size);
+extern float getfontsize(CgraphContext *ctx);
+extern char *getfontname(CgraphContext *ctx);
+extern int setorientation(CgraphContext *ctx, int);
+extern int getorientation(CgraphContext *ctx);
+extern int setjust(CgraphContext *ctx, int);
+extern int setclip(CgraphContext *ctx, int);
+extern void setclipregion(CgraphContext *ctx, float, float, float, float);
+extern int getclip(CgraphContext *ctx);
+extern void setchrsize(CgraphContext *ctx, float, float);
+extern void setviewport(CgraphContext *ctx, float, float, float, float);
+extern void setfviewport(CgraphContext *ctx, float, float, float, float);
+extern void setpviewport(CgraphContext *ctx, float, float, float, float);
+extern void setwindow(CgraphContext *ctx, float, float, float, float);
+extern void getwindow(CgraphContext *ctx, float *xul, float *yub, float *xur, float *yut);
+extern float getuaspect(CgraphContext *ctx);
+extern FRAME *setstatus(CgraphContext *ctx, FRAME *);
+extern FRAME *setframe(CgraphContext *ctx, FRAME *);
+extern FRAME *getframe(CgraphContext *ctx);
+extern int code(FRAME *, float, float);  /* Stays the same - operates on frame directly */
+extern void moveto(CgraphContext *ctx, float, float);
+extern void lineto(CgraphContext *ctx, float, float);
+extern void moverel(CgraphContext *ctx, float, float);
+extern void linerel(CgraphContext *ctx, float, float);
+extern void cleararea(CgraphContext *ctx, float, float, float, float);
+extern void clearline(CgraphContext *ctx, float, float, float, float);
+extern void rect(CgraphContext *ctx, float, float, float, float);
+extern void filledrect(CgraphContext *ctx, float, float, float, float);
+extern void filledpoly(CgraphContext *ctx, int, float *);
+extern void polyline(CgraphContext *ctx, int, float *);
+extern void drawtext(CgraphContext *ctx, char *);
+extern void cleartext(CgraphContext *ctx, char *);
+extern void drawtextf(CgraphContext *ctx, char *, ...);
+extern void cleartextf(CgraphContext *ctx, char *, ...);
+extern void drawchar(CgraphContext *ctx, int);
+extern void drawclrchar(CgraphContext *ctx, int);
+extern void drawnum(CgraphContext *ctx, char *, float);
+extern void drawfnum(CgraphContext *ctx, int, float);
+extern void drawclrnum(CgraphContext *ctx, char *fmt, float n);
+extern void drawf(CgraphContext *ctx, char *, double);
 
-/* GUTIL1 - functions
-*/
+/* GUTIL1 - functions */
 extern void HitRetKey(void);
-extern void beginframe(void);
-extern PHANDLER getpoint();
-extern float setwidth(float w);
-extern void copyframe(FRAME *from, FRAME *to);
-extern void endframe(void);
-extern void frame(void);
-extern void frameport(void);
-extern void gfill(float xl, float yl, float xh, float yh);
-extern int roundiv(int x, int y);
-extern void tck(char *title);
-extern void tickat(float x, float y, char *title);
-extern void viewmax(void);
-extern void screen(void);
-extern void user(void);
-extern void cross(void);
-extern void drawbox(float xl, float yl, float xh, float yh);
-
+extern void beginframe(CgraphContext *ctx);
+extern PHANDLER getpoint(CgraphContext *ctx);
+extern float setwidth(CgraphContext *ctx, float w);
+extern void copyframe(FRAME *from, FRAME *to);  /* Stays the same - operates on frames directly */
+extern void endframe(CgraphContext *ctx);
+extern void frame(CgraphContext *ctx);
+extern void frameport(CgraphContext *ctx);
+extern void gfill(CgraphContext *ctx, float xl, float yl, float xh, float yh);
+extern int roundiv(int x, int y);  /* Stays the same - pure math */
+extern void tck(CgraphContext *ctx, char *title);
+extern void tickat(CgraphContext *ctx, float x, float y, char *title);
+extern void viewmax(CgraphContext *ctx);
+extern void screen(CgraphContext *ctx);
+extern void user(CgraphContext *ctx);
+extern void cross(CgraphContext *ctx);
+extern void drawbox(CgraphContext *ctx, float xl, float yl, float xh, float yh);
 
 /*
  * AXES - functions
  */
-extern void axes (char *, char *);
-extern void boxaxes (char *, char *);
-extern void uboxaxes (void);
-extern void xaxis (char *);
-extern void yaxis (char *);
-extern void up_xaxis (char *);
-extern void right_yaxis (char *);
-extern int lxaxis(float, float, int, char *);
-extern int lyaxis(float, float, int, char *);
+extern void axes(CgraphContext *ctx, char *, char *);
+extern void boxaxes(CgraphContext *ctx, char *, char *);
+extern void uboxaxes(CgraphContext *ctx);
+extern void xaxis(CgraphContext *ctx, char *);
+extern void yaxis(CgraphContext *ctx, char *);
+extern void up_xaxis(CgraphContext *ctx, char *);
+extern void right_yaxis(CgraphContext *ctx, char *);
+extern int lxaxis(CgraphContext *ctx, float, float, int, char *);
+extern int lyaxis(CgraphContext *ctx, float, float, int, char *);
 
 extern int eventloop(HANDLER, IOEVENT *);
-extern void window2screen(int *px, int *py, float x, float y);
-extern void screen2window(int x, int y, float *px, float *py);
-
-extern void window_to_screen(float x, float y, int *px, int *py);
-extern void screen_to_window(int x, int y, float *px, float *py);
-
-extern void maketitle(char *, float, float);
-extern void makeftitle(char *, float, float);
-
+extern void window2screen(CgraphContext *ctx, int *px, int *py, float x, float y);
+extern void screen2window(CgraphContext *ctx, int x, int y, float *px, float *py);
+extern void window_to_screen(CgraphContext *ctx, float x, float y, int *px, int *py);
+extern void screen_to_window(CgraphContext *ctx, int x, int y, float *px, float *py);
+extern void maketitle(CgraphContext *ctx, char *, float, float);
+extern void makeftitle(CgraphContext *ctx, char *, float, float);
 
 #ifdef __cplusplus
 }
