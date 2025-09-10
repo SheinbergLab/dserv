@@ -390,7 +390,7 @@ public:
 				"ess/variant ess/subject ess/state ess/em_pos "
 				"ess/obs_id ess/obs_total "
 				"ess/block_pct_complete ess/block_pct_correct "
-				"ess/variant_info ess/screen_w ess/screen_h "
+				"ess/variant_info_json ess/screen_w ess/screen_h "
 				"ess/screen_halfx ess/screen_halfy "
 				"ess/state_table ess/rmt_cmds "
 				"ess/system_script ess/protocol_script "
@@ -1000,7 +1000,7 @@ int refresh_hosts(int timeout = 2000)
     output_term->append("Starting mesh discovery...\n");
     output_term->redraw();
     Fl::check();
-    
+
     // Discover peers
     int result = g_App->meshDiscovery->discoverPeers(timeout);  // Assumes you made it public
     
@@ -1294,12 +1294,19 @@ void variant_setting_callback(Fl_Widget* o, void* data) {
 
   general_perf_widget->clear("");
   general_perf_widget->redraw();
+
+  std::string selected_value = setting_info->settings()->at(c->value());
   
-  std::string cmd("ess::set_variant_args {");
-  cmd += std::string(setting_info->arg());
-  cmd += " {";
-  cmd += setting_info->settings()->at(c->value());
-  cmd += "} }";
+  // Use Tcl to properly format the list
+  Tcl_Obj *cmdList = Tcl_NewListObj(0, NULL);
+  Tcl_ListObjAppendElement(NULL, cmdList,
+			   Tcl_NewStringObj(setting_info->arg(), -1));
+  Tcl_ListObjAppendElement(NULL, cmdList,
+			   Tcl_NewStringObj(selected_value.c_str(), -1));
+  
+  std::string cmd("ess::set_variant_args ");
+  cmd += Tcl_GetString(cmdList);
+  Tcl_DecrRefCount(cmdList);  
 
   std::string rstr;
   g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
@@ -1312,78 +1319,101 @@ void variant_setting_callback(Fl_Widget* o, void* data) {
 
 int set_variant_options(Tcl_Obj *loader_args, Tcl_Obj *loader_options)
 {
-  Tcl_DictSearch search;
-  Tcl_Obj *key, *value;
-  int done;
+    Tcl_DictSearch search;
+    Tcl_Obj *key, *value;
+    int done;
 
-  options_widget->clear();
-  options_widget->begin();
+    options_widget->clear();
+    options_widget->begin();
 
-  int row = 0;
-  int height = 30;
-  int xoff = options_widget->x();
-  int yoff = options_widget->y();
-  int label_width = 170;
-  
-  if (Tcl_DictObjFirst(g_App->interp(), loader_options, &search,
-		       &key, &value, &done) != TCL_OK) {
-    return TCL_ERROR;
-  }
-
-  /* split loader args to use below */
-  Tcl_Size la_argc;
-  const char **la_argv;
-  Tcl_SplitList(g_App->interp(), Tcl_GetString(loader_args),
-		&la_argc, &la_argv);
+    int row = 0;
+    int height = 30;
+    int xoff = options_widget->x();
+    int yoff = options_widget->y();
+    int label_width = 170;
     
-  for (; !done ; row++, Tcl_DictObjNext(&search, &key, &value, &done)) {
-    Fl_Choice *choice = new Fl_Choice(xoff+label_width,
-				      yoff+10+row*height,
-				      options_widget->w()-(label_width+20), height, 0);
-    choice->copy_label(Tcl_GetString(key));
-    choice->align(Fl_Align(FL_ALIGN_LEFT));
-    choice->labeltype(FL_NORMAL_LABEL);
-
-    /* now add menu items */
-    VariantSettingUserData *userdata;
-    Tcl_Size argc, argcc;
-    char *string;
-    const char **argv, **argvv;
-    if (Tcl_SplitList(g_App->interp(), Tcl_GetString(value),
-		      &argc, &argv) == TCL_OK) {
-      userdata = new VariantSettingUserData(Tcl_GetString(key));
-      for (int i = 0; i < argc; i++) {
-	if (Tcl_SplitList(g_App->interp(), argv[i],
-			  &argcc, &argvv) == TCL_OK) {
-	  if (argcc == 2) {
-	    choice->add(argvv[0]);
-	    userdata->add_setting(argvv[1]);
-	  }
-	  Tcl_Free((char *) argvv);
-	}
-      }
-      choice->callback(variant_setting_callback, userdata, true);
-      choice->when(FL_WHEN_RELEASE_ALWAYS);
-      Tcl_Free((char *) argv);
+    if (Tcl_DictObjFirst(g_App->interp(), loader_options, &search,
+                         &key, &value, &done) != TCL_OK) {
+        return TCL_ERROR;
     }
 
-    /* now set the input choice to match the current setting */
-    if (la_argc > row) {
-      int val = userdata->find(la_argv[row]);
-      if (val > 0) choice->value(val);
-      else choice->value(0);
+    /* Split loader args to use below */
+    Tcl_Size la_argc;
+    Tcl_Obj **la_argv;
+    if (Tcl_ListObjGetElements(g_App->interp(), loader_args, &la_argc, &la_argv) != TCL_OK) {
+        return TCL_ERROR;
     }
-    else choice->value(0);
-  }
-  
-  Tcl_Free((char *) la_argv);
-  
-  Tcl_DictObjDone(&search);  
+    
+    for (; !done ; row++, Tcl_DictObjNext(&search, &key, &value, &done)) {
+        Fl_Choice *choice = new Fl_Choice(xoff+label_width,
+                                          yoff+10+row*height,
+                                          options_widget->w()-(label_width+20), height, 0);
+        choice->copy_label(Tcl_GetString(key));
+        choice->align(Fl_Align(FL_ALIGN_LEFT));
+        choice->labeltype(FL_NORMAL_LABEL);
 
-  options_widget->end();
-  options_widget->redraw();
+        VariantSettingUserData *userdata = new VariantSettingUserData(Tcl_GetString(key));
+        
+        // Parse the options list
+        Tcl_Size optCount;
+        Tcl_Obj **options;
+        if (Tcl_ListObjGetElements(g_App->interp(), value, &optCount, &options) == TCL_OK) {
+            int selectedIndex = -1;
+            
+            for (int i = 0; i < optCount; i++) {
+                // Each option is a 2-element list: {display_name value}
+                Tcl_Size elemCount;
+                Tcl_Obj **elems;
+                if (Tcl_ListObjGetElements(g_App->interp(), options[i], &elemCount, &elems) == TCL_OK && elemCount == 2) {
+                    const char *displayName = Tcl_GetString(elems[0]);
+                    
+                    choice->add(displayName);
+                    userdata->add_setting(Tcl_GetString(elems[1]));
+                    
+                    // Check if this matches the current value in loader_args
+                    if (row < la_argc && selectedIndex == -1) {
+                        // Use Tcl's string equal which handles dict/list normalization
+                        Tcl_Obj *cmdv[4];
+                        cmdv[0] = Tcl_NewStringObj("string", -1);
+                        cmdv[1] = Tcl_NewStringObj("equal", -1);
+                        cmdv[2] = la_argv[row];  // Current value from loader_args
+                        cmdv[3] = elems[1];       // Option value from loader_arg_options
+                        
+                        Tcl_IncrRefCount(cmdv[0]);
+                        Tcl_IncrRefCount(cmdv[1]);
+                        
+                        if (Tcl_EvalObjv(g_App->interp(), 4, cmdv, 0) == TCL_OK) {
+                            int equal = 0;
+                            Tcl_GetIntFromObj(g_App->interp(), Tcl_GetObjResult(g_App->interp()), &equal);
+                            if (equal) {
+                                selectedIndex = i;
+                            }
+                        }
+                        
+                        Tcl_DecrRefCount(cmdv[0]);
+                        Tcl_DecrRefCount(cmdv[1]);
+                    }
+                }
+            }
+            
+            // Set the current selection
+            if (selectedIndex >= 0) {
+                choice->value(selectedIndex);
+            } else {
+                choice->value(0);
+            }
+        }
+        
+        choice->callback(variant_setting_callback, userdata, true);
+        choice->when(FL_WHEN_RELEASE_ALWAYS);
+    }
+    
+    Tcl_DictObjDone(&search);
 
-  return TCL_OK;
+    options_widget->end();
+    options_widget->redraw();
+
+    return TCL_OK;
 }
 
 void param_setting_callback(Fl_Widget *o, void *data)
@@ -1899,8 +1929,96 @@ void process_dpoint_cb(void *cbdata) {
     g_App->set_editor_buffer(stim_editor, "stim", json_string_value(data));
   }
 
+
+else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
+    // Parse the JSON just like Qt6 does
+    json_error_t error;
+    json_t *root = json_loads(json_string_value(data), 0, &error);
+    if (!root) {
+        return;
+    }
+    
+    json_t *options = json_object_get(root, "options");
+    json_t *loader_arg_names = json_object_get(root, "loader_arg_names");
+    json_t *loader_args = json_object_get(root, "loader_args");
+    
+    if (!options || !loader_arg_names || !loader_args) {
+        json_decref(root);
+        return;
+    }
+    
+    // Clear existing options
+    options_widget->clear();
+    options_widget->begin();
+    
+    int row = 0;
+    int height = 30;
+    int xoff = options_widget->x();
+    int yoff = options_widget->y();
+    int label_width = 170;
+    
+    // Iterate through each argument name
+    size_t arg_index;
+    json_t *arg_name;
+    json_array_foreach(loader_arg_names, arg_index, arg_name) {
+        const char *arg_name_str = json_string_value(arg_name);
+        
+        // Get options for this argument
+        json_t *arg_options = json_object_get(options, arg_name_str);
+        if (!arg_options || !json_is_array(arg_options)) {
+            continue;
+        }
+        
+        Fl_Choice *choice = new Fl_Choice(xoff+label_width,
+                                          yoff+10+row*height,
+                                          options_widget->w()-(label_width+20), height, 0);
+        choice->copy_label(arg_name_str);
+        choice->align(Fl_Align(FL_ALIGN_LEFT));
+        choice->labeltype(FL_NORMAL_LABEL);
+        
+        VariantSettingUserData *userdata = new VariantSettingUserData(arg_name_str);
+        
+        int selected_index = 0;
+        size_t opt_index;
+        json_t *option;
+        
+        // Add each option to the choice widget
+        json_array_foreach(arg_options, opt_index, option) {
+            json_t *label = json_object_get(option, "label");
+            json_t *value = json_object_get(option, "value");
+            json_t *selected = json_object_get(option, "selected");
+            
+            if (label && value) {
+                const char *label_str = json_string_value(label);
+                const char *value_str = json_string_value(value);
+                
+                choice->add(label_str);
+                userdata->add_setting(value_str);
+                
+                // Check if this is the selected option
+                if (selected && json_is_true(selected)) {
+                    selected_index = opt_index;
+                }
+            }
+        }
+        
+        // Set the current selection
+        choice->value(selected_index);
+        
+        choice->callback(variant_setting_callback, userdata, true);
+        choice->when(FL_WHEN_RELEASE_ALWAYS);
+        
+        row++;
+    }
+    
+    options_widget->end();
+    options_widget->redraw();
+    
+    json_decref(root);
+}  
   
   else if (!strcmp(json_string_value(name), "ess/variant_info")) {
+#if 0
     Tcl_Obj *options_key = Tcl_NewStringObj("loader_arg_options", -1);
     Tcl_Obj *args_key = Tcl_NewStringObj("loader_args", -1);
     Tcl_Obj *dict = Tcl_NewStringObj(json_string_value(data), -1);
@@ -1915,6 +2033,7 @@ void process_dpoint_cb(void *cbdata) {
     Tcl_DecrRefCount(dict);
     Tcl_DecrRefCount(args_key);
     Tcl_DecrRefCount(options_key);
+#endif
   }
 
   else if (!strcmp(json_string_value(name), "ess/param_settings")) {
@@ -2335,7 +2454,13 @@ int main(int argc, char *argv[]) {
   add_tcl_code();
 
   initialize_subjects();
+
+  host_widget->clear();
+  host_widget->showroot(0);
+  host_widget->add("Searching...");
+  host_widget->redraw();
   refresh_hosts();
+  
   if (g_App->inithost) {
     add_host(g_App->inithost);
     select_host(g_App->inithost);
