@@ -114,10 +114,6 @@ const virtualTouch = reactive({
   isDragging: false
 })
 
-// Touch clearing system
-const touchClearTimeout = ref(null)
-const TOUCH_CLEAR_DELAY = 500 // ms delay before clearing touch marker
-
 // Animation state tracking for robustness
 const canvasReady = ref(false)
 const animationRunning = ref(false)
@@ -274,11 +270,10 @@ async function sendVirtualEyeData() {
   }
 }
 
-// Send virtual touch data to dserv
-async function sendVirtualTouchData(x, y) {
+async function sendVirtualTouchData(x, y, eventType = 0) {
   try {
-    // Send touch data in the format expected by mtouch/touchvals
-    const cmd = `set d [binary format s2 {${x} ${y}}]; dservSetData mtouch/touchvals 0 4 $d; unset d`
+    // Send touch data in the new unified event format
+    const cmd = `set d [binary format s3 {${x} ${y} ${eventType}}]; dservSetData mtouch/event 0 6 $d; unset d`
     await dserv.essCommand(cmd)
   } catch (error) {
     console.error('Failed to send virtual touch data:', error)
@@ -347,23 +342,22 @@ function handleCanvasClick(event) {
   const mouseX = event.clientX - rect.left
   const mouseY = event.clientY - rect.top
 
-  // Convert click position to degrees
   const degPos = canvasToDegrees(mouseX, mouseY)
-
-  // Convert to touch screen coordinates
   const touchPixels = degreesToTouchPixels(degPos.x, degPos.y)
 
-  // Send virtual touch event
+  // Show virtual touch immediately
   virtualTouch.x = touchPixels.x
   virtualTouch.y = touchPixels.y
   virtualTouch.active = true
 
-  sendVirtualTouchData(touchPixels.x, touchPixels.y)
+  // Send press event
+  sendVirtualTouchData(touchPixels.x, touchPixels.y, 0) // PRESS
 
-  // Clear virtual touch after a brief delay
+  // Send release event after brief delay to simulate realistic touch
   setTimeout(() => {
+    sendVirtualTouchData(touchPixels.x, touchPixels.y, 2) // RELEASE
     virtualTouch.active = false
-  }, 200)
+  }, 100) // Shorter delay since we're not relying on timeouts for display
 }
 
 // Data handlers
@@ -409,46 +403,57 @@ function handleEyePosition(data) {
   }
 }
 
-function handleTouchPosition(data) {
+function handleTouchEvent(data) {
   try {
     const value = data.value || data.data
 
-    if (data.name === 'mtouch/touchvals') {
-      let x, y;
+    if (data.name === 'mtouch/event') {
+      let x, y, eventType;
 
       if (Array.isArray(value)) {
-        if (value.length < 2) {
-          console.warn('Insufficient mtouch/touchvals array elements:', value);
+        if (value.length < 3) {
+          console.warn('Insufficient mtouch/event array elements:', value);
           return;
         }
-        [x, y] = value.map(Number);
+        [x, y, eventType] = value.map(Number);
       } else if (typeof value === 'string') {
         const parts = value.split(' ');
-        if (parts.length < 2) {
-          console.warn('Insufficient mtouch/touchvals data parts:', parts);
+        if (parts.length < 3) {
+          console.warn('Insufficient mtouch/event data parts:', parts);
           return;
         }
-        [x, y] = parts.map(Number);
+        [x, y, eventType] = parts.map(Number);
       } else {
-        console.warn('Invalid mtouch/touchvals data format (expected array or string):', value);
+        console.warn('Invalid mtouch/event data format (expected array or string):', value);
         return;
       }
 
-      if (isNaN(x) || isNaN(y)) {
-        console.warn('Invalid mtouch/touchvals coordinates:', { x, y, value });
+      if (isNaN(x) || isNaN(y) || isNaN(eventType)) {
+        console.warn('Invalid mtouch/event coordinates:', { x, y, eventType, value });
         return;
       }
 
-      touchPosition.value = { x, y };
-      showTouchPosition.value = true;
-
-      if (touchClearTimeout.value) {
-        clearTimeout(touchClearTimeout.value);
-        touchClearTimeout.value = null;
+      // Handle different event types
+      switch (eventType) {
+        case 0: // PRESS
+          touchPosition.value = { x, y };
+          showTouchPosition.value = true;
+          break;
+          
+        case 1: // DRAG
+          if (showTouchPosition.value) {
+            touchPosition.value = { x, y };
+          }
+          break;
+          
+        case 2: // RELEASE
+          showTouchPosition.value = false;
+          touchPosition.value = { x: 0, y: 0 };
+          break;
       }
     }
   } catch (error) {
-    console.error('Error handling touch position data:', error, data);
+    console.error('Error handling touch event data:', error, data);
   }
 }
 
@@ -510,7 +515,6 @@ function handleTouchWindowSetting(data) {
   }
 }
 
-// Touch window status handler
 function handleTouchWindowStatus(data) {
   try {
     const value = data.value || data.data
@@ -554,36 +558,14 @@ function handleTouchWindowStatus(data) {
         }))
       }
 
+      // Update window states based on mask
       for (let i = 0; i < 8; i++) {
         dserv.state.touchWindows[i].state = ((states & (1 << i)) !== 0) && dserv.state.touchWindows[i].active;
       }
 
-      const anyTouchWindowsActive = dserv.state.touchWindows.some(window => window.active);
-      const anyTouchesInWindows = states !== 0;
-
-      if (!anyTouchWindowsActive || !anyTouchesInWindows) {
-        if (touchClearTimeout.value) {
-          clearTimeout(touchClearTimeout.value);
-        }
-
-        touchClearTimeout.value = setTimeout(() => {
-          showTouchPosition.value = false;
-          touchPosition.value = { x: 0, y: 0 };
-          touchClearTimeout.value = null;
-        }, TOUCH_CLEAR_DELAY);
-      } else {
-        if (touchClearTimeout.value) {
-          clearTimeout(touchClearTimeout.value);
-          touchClearTimeout.value = null;
-        }
-        showTouchPosition.value = true;
-      }
-
+      // Update touch position if provided (but don't control display state)
       if (touch_x !== undefined && touch_y !== undefined && !isNaN(touch_x) && !isNaN(touch_y)) {
         touchPosition.value = { x: touch_x, y: touch_y };
-        if (anyTouchesInWindows) {
-          showTouchPosition.value = true;
-        }
       }
     }
   } catch (error) {
@@ -993,10 +975,6 @@ function resetView() {
   // Clear touch position and any pending timeout
   showTouchPosition.value = false
   touchPosition.value = { x: 0, y: 0 }
-  if (touchClearTimeout.value) {
-    clearTimeout(touchClearTimeout.value)
-    touchClearTimeout.value = null
-  }
 
   // Clear virtual touch
   virtualTouch.active = false
@@ -1058,7 +1036,7 @@ onMounted(() => {
       dserv.on('datapoint:ess/em_pos', handleEyePosition, 'EyeTouchVisualizer')
 
       // Listen for touch events
-      dserv.on('datapoint:mtouch/touchvals', handleTouchPosition, 'EyeTouchVisualizer')
+      dserv.on('datapoint:mtouch/event', handleTouchEvent, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/touch_region_setting', handleTouchWindowSetting, 'EyeTouchVisualizer')
       dserv.on('datapoint:ess/touch_region_status', handleTouchWindowStatus, 'EyeTouchVisualizer')
 
@@ -1105,12 +1083,6 @@ onMounted(() => {
 onUnmounted(() => {
   // Stop animation first
   stopAnimation()
-
-  // Clean up touch timeout
-  if (touchClearTimeout.value) {
-    clearTimeout(touchClearTimeout.value)
-    touchClearTimeout.value = null
-  }
 
   // Clean up resize observer
   if (resizeObserver) {
