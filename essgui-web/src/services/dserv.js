@@ -18,7 +18,7 @@ const DATAPOINT_CONFIG = {
   'ess/em_pos': { expectedHz: 60, maxHz: 120, priority: 'high', category: 'eye_tracking' },
   'ess/em_region_status': { expectedHz: 30, maxHz: 60, priority: 'high', category: 'eye_tracking' },
   'ess/touch_region_status': { expectedHz: 30, maxHz: 60, priority: 'high', category: 'touch_tracking' },
-  'mtouch/touchvals': { expectedHz: 60, maxHz: 120, priority: 'high', category: 'touch_tracking' },
+  'mtouch/event': { expectedHz: 60, maxHz: 120, priority: 'high', category: 'touch_tracking' },
   'ess/block_pct_complete': { expectedHz: 2, maxHz: 10, priority: 'medium', category: 'performance' },
   'ess/block_pct_correct': { expectedHz: 2, maxHz: 10, priority: 'medium', category: 'performance' },
   'ess/obs_id': { expectedHz: 0.1, maxHz: 1, priority: 'medium', category: 'experiment' },
@@ -305,7 +305,7 @@ handleChunkedMessage(chunk) {
     // NEW: Touch window subscriptions
     this.send({ cmd: 'subscribe', match: 'ess/touch_region_setting', every: 1 });
     this.send({ cmd: 'subscribe', match: 'ess/touch_region_status', every: 1 });
-    this.send({ cmd: 'subscribe', match: 'mtouch/touchvals', every: 1 });
+    this.send({ cmd: 'subscribe', match: 'mtouch/event', every: 1 });
 
     // Other useful subscriptions
     this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });

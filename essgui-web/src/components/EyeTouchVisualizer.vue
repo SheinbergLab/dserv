@@ -404,6 +404,7 @@ function handleEyePosition(data) {
 }
 
 function handleTouchEvent(data) {
+  console.log('Touch event received:', data);
   try {
     const value = data.value || data.data
 
@@ -836,10 +837,10 @@ function drawTouchWindow(window) {
     ctx.stroke()
   } else {
     ctx.strokeRect(
-      pos.x - size.width / 2,
-      pos.y - size.height / 2,
-      size.width,
-      size.height
+      pos.x - size.width,
+      pos.y - size.height,
+      size.width*2,
+      size.height*2
     )
   }
 
@@ -848,8 +849,8 @@ function drawTouchWindow(window) {
     ctx.font = '12px monospace'
     ctx.fillText(
       `T${window.id}`,
-      pos.x + size.width / 2 - 15,
-      pos.y + size.height / 2 + 15
+      pos.x + size.width / 2 - 22,
+      pos.y + size.height / 2 - 17
     )
   }
 
