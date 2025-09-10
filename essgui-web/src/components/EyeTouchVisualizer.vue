@@ -35,8 +35,14 @@
         :width="canvasSize.width"
         :height="canvasSize.height"
         class="visualization-canvas"
+        :class="{
+          'virtual-eye-enabled': virtualEyeEnabled,
+          'virtual-touch-enabled': virtualTouchEnabled
+        }"
         @mousedown="handleMouseDown"
-        @click="handleCanvasClick"
+        @mousemove="handleMouseMove"
+        @mouseup="handleMouseUp"
+        @mouseleave="handleMouseLeave"
       />
       <div class="info-overlay">
         <div class="coordinate-info">
@@ -44,8 +50,11 @@
           <div v-if="showTouchPosition && (touchPosition.x !== 0 || touchPosition.y !== 0)">
             Touch: {{ touchPosition.x }}, {{ touchPosition.y }}
           </div>
-          <div v-if="virtualMode && virtualInputEnabled">
-            Virtual: {{ virtualEye.x.toFixed(2) }}°, {{ virtualEye.y.toFixed(2) }}°
+          <div v-if="virtualEyeEnabled && virtualEye.active">
+            Virtual Eye: {{ virtualEye.x.toFixed(2) }}°, {{ virtualEye.y.toFixed(2) }}°
+          </div>
+          <div v-if="virtualTouchEnabled && virtualTouch.active">
+            Virtual Touch: {{ virtualTouch.x }}, {{ virtualTouch.y }}
           </div>
         </div>
       </div>
@@ -59,18 +68,30 @@
             <div>
               <a-space size="small">
                 <a-checkbox v-model:checked="displayOptions.showTrails" style="font-size: 11px;">Trails</a-checkbox>
-                <a-checkbox v-model:checked="virtualInputEnabled" style="font-size: 11px;">Virtual Input</a-checkbox>
+                <a-checkbox v-model:checked="virtualEyeEnabled" style="font-size: 11px;">Virtual Eye</a-checkbox>
+                <a-checkbox v-model:checked="virtualTouchEnabled" style="font-size: 11px;">Virtual Touch</a-checkbox>
               </a-space>
             </div>
-            <a-button
-              v-if="virtualInputEnabled"
-              size="small"
-              @click="resetVirtualInput"
-              :icon="h(ReloadOutlined)"
-              style="padding: 1px 6px; font-size: 10px;"
-            >
-              Reset Virtual
-            </a-button>
+            <a-space size="small">
+              <a-button
+                v-if="virtualEyeEnabled"
+                size="small"
+                @click="resetVirtualEye"
+                :icon="h(ReloadOutlined)"
+                style="padding: 1px 6px; font-size: 10px;"
+              >
+                Reset Eye
+              </a-button>
+              <a-button
+                v-if="virtualTouchEnabled"
+                size="small"
+                @click="resetVirtualTouch"
+                :icon="h(ReloadOutlined)"
+                style="padding: 1px 6px; font-size: 10px;"
+              >
+                Clear Touch
+              </a-button>
+            </a-space>
           </a-space>
         </a-col>
       </a-row>
@@ -94,14 +115,17 @@ const eyePositionRaw = ref({ x: 2048, y: 2048 })
 const touchPosition = ref({ x: 0, y: 0 })
 const showTouchPosition = ref(false)
 
-// Virtual input state
-const virtualInputEnabled = ref(false)
-const virtualMode = ref(false) // true when using virtual input instead of real data
+// Separate virtual input states
+const virtualEyeEnabled = ref(false)
+const virtualTouchEnabled = ref(false)
+
+// Virtual eye state
 const virtualEye = reactive({
   x: 0,           // degrees
   y: 0,           // degrees
   adcX: ADC_CENTER,
   adcY: ADC_CENTER,
+  active: false,
   isDragging: false,
   dragOffset: { x: 0, y: 0 }
 })
@@ -111,7 +135,9 @@ const virtualTouch = reactive({
   x: 0,           // screen pixels
   y: 0,           // screen pixels
   active: false,
-  isDragging: false
+  isDragging: false,
+  dragStartPos: { x: 0, y: 0 },
+  lastDragPos: { x: 0, y: 0 }
 })
 
 // Animation state tracking for robustness
@@ -251,6 +277,7 @@ function degreesToTouchPixels(degX, degY) {
 function updateVirtualEyePosition(degX, degY) {
   virtualEye.x = degX
   virtualEye.y = degY
+  virtualEye.active = true
 
   const adc = degreesToADC(degX, degY)
   virtualEye.adcX = adc.x
@@ -273,46 +300,63 @@ async function sendVirtualEyeData() {
 async function sendVirtualTouchData(x, y, eventType = 0) {
   try {
     // Send touch data in the new unified event format
-    const cmd = `set d [binary format s3 {${x} ${y} ${eventType}}]; dservSetData mtouch/event 0 6 $d; unset d`
+//    console.log(`Sending virtual touch: x=${x}, y=${y}, type=${eventType}`)
+    const cmd = `set d [binary format s3 {${x} ${y} ${eventType}}]; dservSetData mtouch/event 0 4 $d; unset d`
     await dserv.essCommand(cmd)
   } catch (error) {
     console.error('Failed to send virtual touch data:', error)
   }
 }
 
-// Mouse event handlers
+// Mouse event handlers - updated for separate virtual controls
 function handleMouseDown(event) {
-  if (!virtualInputEnabled.value) return
-
   const rect = canvasRef.value.getBoundingClientRect()
   const mouseX = event.clientX - rect.left
   const mouseY = event.clientY - rect.top
 
-  // Check if clicking on virtual eye marker
-  const eyePos = degreesToCanvas(virtualEye.x, virtualEye.y)
-  const eyeDistance = Math.sqrt(
-    Math.pow(mouseX - eyePos.x, 2) + Math.pow(mouseY - eyePos.y, 2)
-  )
+  // Check if clicking on virtual eye marker (only if virtual eye is enabled)
+  if (virtualEyeEnabled.value) {
+    const eyePos = degreesToCanvas(virtualEye.x, virtualEye.y)
+    const eyeDistance = Math.sqrt(
+      Math.pow(mouseX - eyePos.x, 2) + Math.pow(mouseY - eyePos.y, 2)
+    )
 
-  if (eyeDistance <= 8 + 5) { // 8px radius + 5px tolerance
-    virtualEye.isDragging = true
-    virtualEye.dragOffset = {
-      x: eyePos.x - mouseX,
-      y: eyePos.y - mouseY
+    if (eyeDistance <= 8 + 5) { // 8px radius + 5px tolerance
+      virtualEye.isDragging = true
+      virtualEye.dragOffset = {
+        x: eyePos.x - mouseX,
+        y: eyePos.y - mouseY
+      }
+      event.preventDefault()
+      return
     }
+  }
+
+  // Handle virtual touch (only if virtual touch is enabled and not dragging eye)
+  if (virtualTouchEnabled.value && !virtualEye.isDragging) {
+    const degPos = canvasToDegrees(mouseX, mouseY)
+    const touchPixels = degreesToTouchPixels(degPos.x, degPos.y)
+
+    virtualTouch.x = touchPixels.x
+    virtualTouch.y = touchPixels.y
+    virtualTouch.active = true
+    virtualTouch.isDragging = true
+    virtualTouch.dragStartPos = { x: touchPixels.x, y: touchPixels.y }
+    virtualTouch.lastDragPos = { x: touchPixels.x, y: touchPixels.y }
+
+    // Send press event
+    sendVirtualTouchData(touchPixels.x, touchPixels.y, 0) // PRESS
     event.preventDefault()
-    return
   }
 }
 
 function handleMouseMove(event) {
-  if (!virtualInputEnabled.value) return
+  const rect = canvasRef.value.getBoundingClientRect()
+  const mouseX = event.clientX - rect.left
+  const mouseY = event.clientY - rect.top
 
-  if (virtualEye.isDragging) {
-    const rect = canvasRef.value.getBoundingClientRect()
-    const mouseX = event.clientX - rect.left
-    const mouseY = event.clientY - rect.top
-
+  // Handle virtual eye dragging
+  if (virtualEyeEnabled.value && virtualEye.isDragging) {
     // Calculate new position with drag offset
     const newCanvasX = mouseX + virtualEye.dragOffset.x
     const newCanvasY = mouseY + virtualEye.dragOffset.y
@@ -327,43 +371,67 @@ function handleMouseMove(event) {
 
     updateVirtualEyePosition(degPos.x, degPos.y)
   }
-}
 
-function handleMouseUp() {
-  if (virtualEye.isDragging) {
-    virtualEye.isDragging = false
+  // Handle virtual touch dragging
+  if (virtualTouchEnabled.value && virtualTouch.isDragging) {
+    const degPos = canvasToDegrees(mouseX, mouseY)
+    const touchPixels = degreesToTouchPixels(degPos.x, degPos.y)
+
+    // Only send drag events if position has changed significantly
+    const dragThreshold = 2 // pixels
+    if (Math.abs(touchPixels.x - virtualTouch.lastDragPos.x) > dragThreshold ||
+        Math.abs(touchPixels.y - virtualTouch.lastDragPos.y) > dragThreshold) {
+
+      virtualTouch.x = touchPixels.x
+      virtualTouch.y = touchPixels.y
+      virtualTouch.lastDragPos = { x: touchPixels.x, y: touchPixels.y }
+
+      // Send drag event
+      sendVirtualTouchData(touchPixels.x, touchPixels.y, 1) // DRAG
+    }
   }
 }
 
-function handleCanvasClick(event) {
-  if (!virtualInputEnabled.value || virtualEye.isDragging) return
+function handleMouseUp(event) {
+  // Handle virtual eye release
+  if (virtualEye.isDragging) {
+    virtualEye.isDragging = false
+  }
 
-  const rect = canvasRef.value.getBoundingClientRect()
-  const mouseX = event.clientX - rect.left
-  const mouseY = event.clientY - rect.top
+  // Handle virtual touch release
+  if (virtualTouch.isDragging) {
+    // Send release event at current position
+    sendVirtualTouchData(virtualTouch.x, virtualTouch.y, 2) // RELEASE
 
-  const degPos = canvasToDegrees(mouseX, mouseY)
-  const touchPixels = degreesToTouchPixels(degPos.x, degPos.y)
+    virtualTouch.isDragging = false
 
-  // Show virtual touch immediately
-  virtualTouch.x = touchPixels.x
-  virtualTouch.y = touchPixels.y
-  virtualTouch.active = true
+    // Keep position visible briefly after release
+    setTimeout(() => {
+      if (!virtualTouch.isDragging) {
+        virtualTouch.active = false
+      }
+    }, 500)
+  }
+}
 
-  // Send press event
-  sendVirtualTouchData(touchPixels.x, touchPixels.y, 0) // PRESS
+function handleMouseLeave(event) {
+  // Cancel any ongoing drags when mouse leaves canvas
+  if (virtualEye.isDragging) {
+    virtualEye.isDragging = false
+  }
 
-  // Send release event after brief delay to simulate realistic touch
-  setTimeout(() => {
-    sendVirtualTouchData(touchPixels.x, touchPixels.y, 2) // RELEASE
+  if (virtualTouch.isDragging) {
+    // Send release event when mouse leaves
+    sendVirtualTouchData(virtualTouch.x, virtualTouch.y, 2) // RELEASE
+    virtualTouch.isDragging = false
     virtualTouch.active = false
-  }, 100) // Shorter delay since we're not relying on timeouts for display
+  }
 }
 
 // Data handlers
 function handleEyePosition(data) {
-  // Skip real eye data if in virtual mode
-  if (virtualMode.value && virtualInputEnabled.value) return
+  // Skip real eye data if virtual eye is enabled
+  if (virtualEyeEnabled.value) return
 
   try {
     const value = data.value || data.data
@@ -404,7 +472,10 @@ function handleEyePosition(data) {
 }
 
 function handleTouchEvent(data) {
-  console.log('Touch event received:', data);
+  // Skip real touch data if virtual touch is enabled and active
+  if (virtualTouchEnabled.value && virtualTouch.active) return
+
+//  console.log('Touch event received:', data);
   try {
     const value = data.value || data.data
 
@@ -440,13 +511,13 @@ function handleTouchEvent(data) {
           touchPosition.value = { x, y };
           showTouchPosition.value = true;
           break;
-          
+
         case 1: // DRAG
           if (showTouchPosition.value) {
             touchPosition.value = { x, y };
           }
           break;
-          
+
         case 2: // RELEASE
           showTouchPosition.value = false;
           touchPosition.value = { x: 0, y: 0 };
@@ -692,20 +763,17 @@ function render() {
     }
 
     // Draw eye position (real or virtual)
-    if (virtualInputEnabled.value) {
+    if (virtualEyeEnabled.value && virtualEye.active) {
       drawVirtualEye()
-    } else {
+    } else if (!virtualEyeEnabled.value) {
       drawEyePosition()
     }
 
-    // Draw touch position
-    if (showTouchPosition.value && (touchPosition.value.x !== 0 || touchPosition.value.y !== 0)) {
-      drawTouchPosition()
-    }
-
-    // Draw virtual touch if active
-    if (virtualInputEnabled.value && virtualTouch.active) {
+    // Draw touch position (real or virtual)
+    if (virtualTouchEnabled.value && virtualTouch.active) {
       drawVirtualTouch()
+    } else if (showTouchPosition.value && (touchPosition.value.x !== 0 || touchPosition.value.y !== 0)) {
+      drawTouchPosition()
     }
 
   } catch (error) {
@@ -933,16 +1001,26 @@ function drawVirtualTouch() {
   const touchDegrees = touchPixelsToDegrees(virtualTouch.x, virtualTouch.y)
   const pos = degreesToCanvas(touchDegrees.x, touchDegrees.y)
 
-  // Draw orange diamond for virtual touch
-  ctx.fillStyle = '#ff8c00'
-  ctx.strokeStyle = '#cc6600'
-  ctx.lineWidth = 2
+  // Different visualization based on state
+  if (virtualTouch.isDragging) {
+    // Active dragging - larger, brighter
+    ctx.fillStyle = '#ff8c00'
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 3
+  } else {
+    // Just active (post-release) - normal size
+    ctx.fillStyle = '#ff8c00'
+    ctx.strokeStyle = '#cc6600'
+    ctx.lineWidth = 2
+  }
 
+  // Draw diamond shape
+  const size = virtualTouch.isDragging ? 11 : 9
   ctx.beginPath()
-  ctx.moveTo(pos.x, pos.y - 9)
-  ctx.lineTo(pos.x + 9, pos.y)
-  ctx.lineTo(pos.x, pos.y + 9)
-  ctx.lineTo(pos.x - 9, pos.y)
+  ctx.moveTo(pos.x, pos.y - size)
+  ctx.lineTo(pos.x + size, pos.y)
+  ctx.lineTo(pos.x, pos.y + size)
+  ctx.lineTo(pos.x - size, pos.y)
   ctx.closePath()
   ctx.fill()
   ctx.stroke()
@@ -951,6 +1029,20 @@ function drawVirtualTouch() {
   ctx.fillStyle = '#ffffff'
   ctx.font = 'bold 8px monospace'
   ctx.fillText('V', pos.x - 2, pos.y + 2)
+
+  // Draw drag line if dragging
+  if (virtualTouch.isDragging) {
+    const startDegrees = touchPixelsToDegrees(virtualTouch.dragStartPos.x, virtualTouch.dragStartPos.y)
+    const startPos = degreesToCanvas(startDegrees.x, startDegrees.y)
+    ctx.strokeStyle = 'rgba(255, 140, 0, 0.3)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([5, 5])
+    ctx.beginPath()
+    ctx.moveTo(startPos.x, startPos.y)
+    ctx.lineTo(pos.x, pos.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
 }
 
 // Actions
@@ -986,12 +1078,15 @@ function resetView() {
   }
 }
 
-function resetVirtualInput() {
+function resetVirtualEye() {
   // Reset virtual eye to center
   updateVirtualEyePosition(0, 0)
+}
 
-  // Clear virtual touch
+function resetVirtualTouch() {
+  // Clear virtual touch state
   virtualTouch.active = false
+  virtualTouch.isDragging = false
   virtualTouch.x = 0
   virtualTouch.y = 0
 }
@@ -1071,14 +1166,12 @@ onMounted(() => {
         refreshWindows()
       }
 
-      // Initialize virtual eye at center
-      updateVirtualEyePosition(0, 0)
+      // Initialize virtual eye at center (but not active until enabled)
+      virtualEye.x = 0
+      virtualEye.y = 0
+      virtualEye.active = false
     }
   })
-
-  // Add global mouse event listeners for dragging
-  document.addEventListener('mousemove', handleMouseMove)
-  document.addEventListener('mouseup', handleMouseUp)
 })
 
 onUnmounted(() => {
@@ -1089,10 +1182,6 @@ onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
-
-  // Remove global event listeners
-  document.removeEventListener('mousemove', handleMouseMove)
-  document.removeEventListener('mouseup', handleMouseUp)
 
   // Clean up dserv
   if (cleanupDserv) cleanupDserv()
@@ -1116,25 +1205,39 @@ watch(() => displayOptions.showTrails, (showTrails) => {
   }
 })
 
-// Watch virtual input mode changes
-watch(virtualInputEnabled, (enabled) => {
+// Watch virtual eye mode changes
+watch(virtualEyeEnabled, (enabled) => {
   if (enabled) {
     // Initialize virtual eye at current real eye position if available
     if (eyePosition.value.x !== 0 || eyePosition.value.y !== 0) {
       updateVirtualEyePosition(eyePosition.value.x, eyePosition.value.y)
+    } else {
+      updateVirtualEyePosition(0, 0)
     }
-    virtualMode.value = true
   } else {
-    virtualMode.value = false
+    virtualEye.active = false
     virtualEye.isDragging = false
+  }
+})
+
+// Watch virtual touch mode changes
+watch(virtualTouchEnabled, (enabled) => {
+  if (!enabled) {
+    // Clean up virtual touch state
+    if (virtualTouch.isDragging) {
+      // Send release event if we were dragging
+      sendVirtualTouchData(virtualTouch.x, virtualTouch.y, 2) // RELEASE
+    }
     virtualTouch.active = false
+    virtualTouch.isDragging = false
   }
 })
 
 // Expose methods for parent components
 defineExpose({
   refreshWindows,
-  resetVirtualInput,
+  resetVirtualEye,
+  resetVirtualTouch,
   getEyePosition: () => eyePosition.value,
   getEyePositionRaw: () => eyePositionRaw.value,
   getTouchPosition: () => touchPosition.value,
@@ -1144,7 +1247,8 @@ defineExpose({
   getTouchWindowStatusMask: () => touchWindowStatusMask.value,
   getVirtualEyePosition: () => ({ x: virtualEye.x, y: virtualEye.y }),
   getVirtualEyeADC: () => ({ x: virtualEye.adcX, y: virtualEye.adcY }),
-  setVirtualInputEnabled: (enabled) => { virtualInputEnabled.value = enabled }
+  setVirtualEyeEnabled: (enabled) => { virtualEyeEnabled.value = enabled },
+  setVirtualTouchEnabled: (enabled) => { virtualTouchEnabled.value = enabled }
 })
 </script>
 
@@ -1179,12 +1283,16 @@ defineExpose({
   user-select: none;
 }
 
-.visualization-canvas.virtual-enabled {
+.visualization-canvas.virtual-eye-enabled {
+  cursor: crosshair;
+}
+
+.visualization-canvas.virtual-touch-enabled {
   cursor: pointer;
 }
 
-.visualization-canvas.virtual-enabled:active {
-  cursor: grabbing;
+.visualization-canvas.virtual-eye-enabled.virtual-touch-enabled {
+  cursor: crosshair;
 }
 
 .info-overlay {
