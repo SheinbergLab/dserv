@@ -237,19 +237,22 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 int onProcess(dpoint_process_info_t *pinfo, void *params)
 {
   process_params_t *p = (process_params_t *) params;
-    if (strcmp(pinfo->input_dpoint->varname, "mtouch/touchvals"))
+  
+  // Accept the unified mtouch/event instead of mtouch/touchvals  
+  if (strcmp(pinfo->input_dpoint->varname, "mtouch/event"))
     return DPOINT_PROCESS_IGNORE;
 
+  // Now expecting 3 uint16_t values: x, y, event_type
   if (pinfo->input_dpoint->data.type != DSERV_SHORT ||
-      pinfo->input_dpoint->data.len < 2*sizeof(uint16_t))
+      pinfo->input_dpoint->data.len < 3*sizeof(uint16_t))
     return DPOINT_PROCESS_IGNORE;
 
   uint16_t *touch_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
-
-  int dx, dy, x, y;
-  x = touch_vals[0];
-  y = touch_vals[1];
-  int i;
+  int x = touch_vals[0];
+  int y = touch_vals[1];
+  int event_type = touch_vals[2]; // 0=press, 1=drag, 2=release
+  
+  int dx, dy, i;
   int inside;
   int retval = DPOINT_PROCESS_IGNORE;
   uint16_t changes = 0, states = 0;
@@ -258,51 +261,76 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
   p->last_x = x;
   p->last_y = y;
   
-  /* check all windows for any changes */
-  for (i = 0; i < NWIN; i++) {
-    if (!p->active[i]) {
-      if (p->state[i] == WINDOW_UNDEFINED) {
-	states &= ~(1 << i);
-	p->state[i] = WINDOW_OUT;
-	retval = DPOINT_PROCESS_DSERV;
+  // Special handling for RELEASE events - force all windows OUT
+  if (event_type == 2) { // RELEASE
+    for (i = 0; i < NWIN; i++) {
+      if (!p->active[i]) {
+        if (p->state[i] == WINDOW_UNDEFINED) {
+          states &= ~(1 << i);
+          p->state[i] = WINDOW_OUT;
+          retval = DPOINT_PROCESS_DSERV;
+        }
+        continue;
       }
-      continue;
-    }
-    
-    switch (p->type[i]) {
-    case WINDOW_ELLIPSE:
-      dx =  x - p->center_x[i];
-      dy =  y - p->center_y[i];
-      inside =
-	(((dx*dx) / (float) (p->plusminus_x[i]*p->plusminus_x[i])) +
-	 ((dy*dy) / (float) (p->plusminus_y[i]*p->plusminus_y[i]))) < 1.0;
-      break;
-    case WINDOW_RECTANGLE:
-      dx =  x - p->center_x[i];
-      dy =  y - p->center_y[i];
-      inside = (abs(dx) < p->plusminus_x[i]) && (abs(dy) < p->plusminus_y[i]);
-	break;
-    }
-        
-    if (inside) {
-      if (p->state[i] != WINDOW_IN) {
-	p->state[i] = WINDOW_IN;
-
-	changes |= (1 << i);
-
-	retval = DPOINT_PROCESS_DSERV;
-      } 
-      states |= (1 << i);
-    }
-    else {
-      if (p->state[i] != WINDOW_OUT) {
-	p->state[i] = WINDOW_OUT;
-	changes |= (1 << i);
-	retval = DPOINT_PROCESS_DSERV;
-      } 
+      
+      // Any active window that was IN should go OUT on release
+      if (p->state[i] == WINDOW_IN) {
+        p->state[i] = WINDOW_OUT;
+        changes |= (1 << i);
+        retval = DPOINT_PROCESS_DSERV;
+      }
+      
+      // All windows are OUT after release
       states &= ~(1 << i);
     }
   }
+  else if (event_type == 0) {
+    // Only PRESS events trigger geometric window entry/exit
+    for (i = 0; i < NWIN; i++) {
+      if (!p->active[i]) {
+        if (p->state[i] == WINDOW_UNDEFINED) {
+          states &= ~(1 << i);
+          p->state[i] = WINDOW_OUT;
+          retval = DPOINT_PROCESS_DSERV;
+        }
+        continue;
+      }
+      
+      // Calculate geometric inside/outside
+      switch (p->type[i]) {
+      case WINDOW_ELLIPSE:
+        dx =  x - p->center_x[i];
+        dy =  y - p->center_y[i];
+        inside =
+          (((dx*dx) / (float) (p->plusminus_x[i]*p->plusminus_x[i])) +
+           ((dy*dy) / (float) (p->plusminus_y[i]*p->plusminus_y[i]))) < 1.0;
+        break;
+      case WINDOW_RECTANGLE:
+        dx =  x - p->center_x[i];
+        dy =  y - p->center_y[i];
+        inside = (abs(dx) < p->plusminus_x[i]) && (abs(dy) < p->plusminus_y[i]);
+        break;
+      }
+          
+      if (inside) {
+        if (p->state[i] != WINDOW_IN) {
+          p->state[i] = WINDOW_IN;
+          changes |= (1 << i);
+          retval = DPOINT_PROCESS_DSERV;
+        } 
+        states |= (1 << i);
+      }
+      else {
+        if (p->state[i] != WINDOW_OUT) {
+          p->state[i] = WINDOW_OUT;
+          changes |= (1 << i);
+          retval = DPOINT_PROCESS_DSERV;
+        } 
+        states &= ~(1 << i);
+      }
+    }
+  }
+  // Ignore DRAG events (type 1) - no window state changes
 
   if (retval == DPOINT_PROCESS_DSERV) {
     uint16_t *vals = (uint16_t *) p->status_dpoint.data.buf;
@@ -313,5 +341,6 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     p->status_dpoint.timestamp = pinfo->input_dpoint->timestamp;
     pinfo->dpoint = &p->status_dpoint;
   }
+  
   return retval;
 }

@@ -15,7 +15,32 @@ proc update_joystick { name data } {
 }
 
 proc update_touch { name data } {
-    dservSet ess/touch "[lindex $data 0] [lindex $data 1]"
+    set x [lindex $data 0]
+    set y [lindex $data 1] 
+    set event_type [lindex $data 2]
+    
+    # Always update the unified touch position for any consumers
+    dservSet ess/touch "$x $y"
+    dservSet ess/touch_event_type $event_type
+    
+    # Fork into specialized events for targeted processing
+    switch $event_type {
+        0 { # TOUCH_PRESS
+            dservSet ess/touch_press "$x $y"
+            dservSet ess/touch_state "press"
+        }
+        1 { # TOUCH_DRAG  
+            dservSet ess/touch_drag "$x $y"
+            dservSet ess/touch_state "drag"
+        }
+        2 { # TOUCH_RELEASE
+            dservSet ess/touch_release "$x $y" 
+            dservSet ess/touch_state "release"
+        }
+        default {
+            dservSet ess/touch_state "unknown"
+        }
+    }
 }
 
 proc update_ain { name data } {
@@ -110,6 +135,10 @@ proc init_vars { } {
     dservSet ess/obs_active 0
     dservSet ess/obs_id 1
     dservSet ess/obs_total 100
+
+    dservSet ess/touch "0 0"
+    dservSet ess/touch_state none
+    dservSet ess/touch_event_type -1
     
     dservSet ess/datafile ""
     dservSet ess/lastfile ""
@@ -124,7 +153,7 @@ init_vars
 triggerAdd rpio/vals                   1  update_dio
 triggerAdd pca9538/vals                1  update_joystick
 triggerAdd ain/vals                    1  update_ain
-triggerAdd mtouch/touchvals            1  update_touch
+triggerAdd mtouch/event                1  update_touch
 triggerAdd proc/windows/status         1  update_ain_window_status
 triggerAdd proc/windows/settings       1  update_ain_window_settings
 triggerAdd proc/touch_windows/status   1  update_touch_window_status
@@ -143,7 +172,7 @@ processAttach windows ain/vals windows
 processLoad [file join \
 		 $path processors touch_windows[info sharedlibextension]] \
     touch_windows
-processAttach touch_windows mtouch/touchvals touch_windows
+processAttach touch_windows mtouch/event touch_windows
 
 # add sampler processor for ain/sampler_vals sampling
 processLoad [file join \
