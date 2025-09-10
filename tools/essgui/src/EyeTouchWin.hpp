@@ -74,7 +74,7 @@ private:
   EyeRegion eye_regions[n_eye_regions];
 
   static const int n_touch_regions = 8;
-  EyeRegion touch_regions[n_touch_regions];
+  TouchRegion touch_regions[n_touch_regions];
 
 public:
 
@@ -139,9 +139,6 @@ public:
     deg_per_pix_x = xextent/w();
     deg_per_pix_y = deg_per_pix_x*((float) h()/w());
 
-    /* draw the eye position */
-    draw_eye_marker();
-
     /* draw eye regions */
     for (int i = 0; i < n_eye_regions; i++) {
       draw_eye_region(&eye_regions[i]);
@@ -157,6 +154,9 @@ public:
 
     /* draw touch status */
     draw_touch_status();
+
+    /* draw the eye position */
+    draw_eye_marker();
         
     fl_pop_clip();
 
@@ -172,11 +172,9 @@ public:
     fl_arc(xpos, ypos, radius, radius, 0.0, 360.0);
   }
 
-  void draw_eye_region(EyeRegion *region)
-  {
+void draw_eye_region(EyeRegion *region)
+{
     if (!region->active) return;
-
-    fl_color(FL_RED);
 
     float cx_deg = (region->center_x-2048)/adc_points_per_deg_x;
     float cy_deg = (region->center_y-2048)/adc_points_per_deg_y;
@@ -187,14 +185,63 @@ public:
     float ypos = y()+h()/2+(cy_deg)/deg_per_pix_y;
     float w = w_deg/deg_per_pix_x;
     float h = h_deg/deg_per_pix_y;
-    if (region->type == WINDOW_ELLIPSE) {
-      fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
-      fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
+    
+    // Draw light fill when inside (simulating transparency)
+    if (region->state == WINDOW_IN) {
+        fl_color(100, 50, 50);  // Dark red fill
+        if (region->type == WINDOW_ELLIPSE) {
+            fl_pie(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+        } else {
+            fl_rectf(xpos-w, ypos-h, 2*w, 2*h);
+        }
     }
-    else
-      fl_rect(xpos-w, ypos-h, 2*w, 2*h);
-  }
+    
+    // Draw the outline (always red for eye regions)
+    fl_color(FL_RED);
+    if (region->type == WINDOW_ELLIPSE) {
+        fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+        fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
+    } else {
+        fl_rect(xpos-w, ypos-h, 2*w, 2*h);
+    }
+}
 
+void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
+{
+    if (!region->active) return;
+
+    float screen_pix_per_deg_x = screen_w()/(2*screen_halfx());
+    float screen_pix_per_deg_y = screen_h()/(2*screen_halfy());
+    float cx_deg = (region->center_x-screen_w()/2)/screen_pix_per_deg_x;
+    float cy_deg = (region->center_y-screen_h()/2)/screen_pix_per_deg_y;
+    float w_deg = region->plusminus_x/screen_pix_per_deg_x;
+    float h_deg = region->plusminus_y/screen_pix_per_deg_y;
+    
+    float xpos = x()+w()/2+(cx_deg)/deg_per_pix_x;
+    float ypos = y()+h()/2+(cy_deg)/deg_per_pix_y;
+    float w = w_deg/deg_per_pix_x;
+    float h = h_deg/deg_per_pix_y;
+    
+    // Draw light fill when inside (simulating transparency)
+    if (region->state == WINDOW_IN) {
+        fl_color(50, 100, 100);  // Dark cyan fill
+        if (region->type == WINDOW_ELLIPSE) {
+            fl_pie(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+        } else {
+            fl_rectf(xpos-w, ypos-h, 2*w, 2*h);
+        }
+    }
+    
+    // Draw the outline (always cyan for touch regions)
+    fl_color(FL_CYAN);
+    if (region->type == WINDOW_ELLIPSE) {
+        fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+        fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
+    } else {
+        fl_rect(xpos-w, ypos-h, 2*w, 2*h);
+    }
+}  
+  
   void draw_eye_status()
   {
     fl_color(FL_RED);
@@ -213,31 +260,6 @@ public:
 	fl_arc(xpos, ypos, radius, radius, 0.0, 360.0);
       }
     }
-  }
-
-  
-  void draw_touch_region(EyeRegion *region)
-  {
-    if (!region->active) return;
-
-    fl_color(FL_CYAN);
-    float screen_pix_per_deg_x = screen_w()/(2*screen_halfx());
-    float screen_pix_per_deg_y = screen_h()/(2*screen_halfy());
-    float cx_deg = (region->center_x-screen_w()/2)/screen_pix_per_deg_x;
-    float cy_deg = (region->center_y-screen_h()/2)/screen_pix_per_deg_y;
-    float w_deg = region->plusminus_x/screen_pix_per_deg_x;
-    float h_deg = region->plusminus_y/screen_pix_per_deg_y;
-    
-    float xpos = x()+w()/2+(cx_deg)/deg_per_pix_x;
-    float ypos = y()+h()/2+(cy_deg)/deg_per_pix_y;
-    float w = w_deg/deg_per_pix_x;
-    float h = h_deg/deg_per_pix_y;
-    if (region->type == WINDOW_ELLIPSE) {
-      fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
-      fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
-    }
-    else
-      fl_rect(xpos-w, ypos-h, 2*w, 2*h);
   }
 
   void draw_touch_status()
