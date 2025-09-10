@@ -242,8 +242,13 @@ oo::class create System {
             namespace inscope :: {
                 proc onMousePress {} {
                     global dservhost
-                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos]
-                    qpcs::dsSetData $dservhost mtouch/touchvals $coords
+                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
+                    qpcs::dsSetData $dservhost mtouch/event $coords
+                }
+                proc onMouseRelease {} {
+                    global dservhost
+                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos 2]
+                    qpcs::dsSetData $dservhost mtouch/event $coords
                 }
             }
         }
