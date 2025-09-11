@@ -256,7 +256,7 @@ proc connect_touchscreen {} {
 connect_touchscreen
 
 # and finally load a default system
-ess::load_system
+ess::load_system emcalib
 
 # set initial subject
 ess::set_subject human
