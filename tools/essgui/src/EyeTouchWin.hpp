@@ -8,6 +8,7 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -114,7 +115,8 @@ private:
       float eye_canvas_x = w()/2 + (virtual_eye.x/deg_per_pix_x);
       float eye_canvas_y = h()/2 - (virtual_eye.y/deg_per_pix_y);
       
-      float dist = sqrt(pow(mx - eye_canvas_x, 2) + pow(my - eye_canvas_y, 2));
+      float dist = std::sqrt(std::pow(mx - eye_canvas_x, 2) +
+			     std::pow(my - eye_canvas_y, 2));
       if (dist <= 13) { // 8px radius + 5px tolerance
 	virtual_eye.dragging = true;
 	virtual_eye.drag_offset_x = eye_canvas_x - mx;
