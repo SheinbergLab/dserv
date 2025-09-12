@@ -19,13 +19,30 @@ class DGTable : public Fl_Table_Row
 protected:
 
   void draw_cell(TableContext context,  		// table cell drawing
-		 int R=0, int C=0, int X=0, int Y=0, int W=0, int H=0);
+		 int R=0, int C=0, int X=0, int Y=0, int W=0, int H=0) override;
   DYN_GROUP *dg;
   //    void callback(TableContext context, 		// callback for table events
   //    		   int R, int C);
  
 public:
 
+  int handle(int event) override {
+    // Always consume mousewheel events to prevent parent scrolling
+    if (event == FL_MOUSEWHEEL) {
+      // Only scroll if we actually have content that needs scrolling
+      if (rows() > 0) {
+        // Let the base class handle it if we have scrollable content
+        int result = Fl_Table_Row::handle(event);
+        if (result) return 1;  // Base class handled it
+      }
+      // Always return 1 to consume the event, preventing parent scrolling
+      return 1;
+    }
+    
+    // Let base class handle all other events
+    return Fl_Table_Row::handle(event);
+  }
+  
   static void table_cb(Fl_Widget* o, void* data)
   {
     Fl_Table *table = (Fl_Table*)data;
