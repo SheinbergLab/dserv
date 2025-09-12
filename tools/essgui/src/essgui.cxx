@@ -1010,6 +1010,46 @@ void select_host(const char *host)
   }
 }
 
+void check_discovery_completion(void*) {
+    if (g_App->meshDiscovery->isDiscoveryComplete()) {
+        // Update the host widget with discovered peers
+        host_widget->clear();
+        host_widget->showroot(0);
+        
+        // Add localhost if available
+        if (g_App->meshDiscovery->isLocalhostAvailable()) {
+            host_widget->add("localhost");
+        }
+        
+        // Add discovered peers
+        auto displayTexts = g_App->meshDiscovery->getPeerDisplayTexts();
+        for (const auto& displayText : displayTexts) {
+            host_widget->add(displayText.c_str());
+        }
+        
+        int itemCount = 0;
+        for (Fl_Tree_Item *item = host_widget->first(); item; item = host_widget->next(item)) {
+            itemCount++;
+        }
+        
+        if (itemCount == 0) {
+            host_widget->add("No systems found");
+        }
+        
+        // Try to reconnect to previous host if it was set
+        std::string reconnectHost = g_App->meshDiscovery->getReconnectHost();
+        if (!reconnectHost.empty()) {
+            select_host(reconnectHost.c_str());
+            g_App->meshDiscovery->clearReconnectHost();
+        }
+        
+        host_widget->redraw();
+    } else {
+        // Check again in 0.5 seconds
+        Fl::repeat_timeout(0.5, check_discovery_completion);
+    }
+}
+
 int refresh_hosts(int timeout = 2000)
 {
     output_term->append("Starting mesh discovery...\n");
@@ -1061,20 +1101,27 @@ void refresh_cb(Fl_Button *, void *)
   if (item) {
     current_host = strdup(item->label());
     g_App->disconnect_from_host(current_host);
-    //    output_term->printf("disconnected from host %s\n", current_host);
   }
 
-  /* refresh host list */
-  refresh_hosts();
-
+  /* start non-blocking refresh */
+  host_widget->clear();
+  host_widget->showroot(0);
+  host_widget->add("Searching...");
+  host_widget->redraw();
+  
+  // Store current_host for restoration after discovery
   if (current_host) {
-    //    output_term->printf("attempting to reconnect to host %s\n", current_host);
-    select_host(current_host);
+    g_App->meshDiscovery->setReconnectHost(current_host);
     free(current_host);
   }
+  
+  g_App->meshDiscovery->startBackgroundDiscovery();
+  
+  // The completion check will handle reconnection
+  Fl::add_timeout(0.5, check_discovery_completion);
+  
   return;
 }
-
 void save_script_cb(Fl_Widget *w, void *cbData)
 {
   TclEditor *editor = nullptr;
@@ -2541,8 +2588,18 @@ int main(int argc, char *argv[]) {
   host_widget->showroot(0);
   host_widget->add("Searching...");
   host_widget->redraw();
-  refresh_hosts();
-  
+ 
+  // Start non-blocking discovery
+  g_App->meshDiscovery->startBackgroundDiscovery();
+   
+  // Show window immediately
+  if (g_App->initfull) g_App->win->fullscreen();
+  g_App->win->show(argc, argv);
+    
+  // Check for discovery completion periodically
+  Fl::add_timeout(0.5, check_discovery_completion);
+    
+    
   if (g_App->inithost) {
     add_host(g_App->inithost);
     select_host(g_App->inithost);

@@ -7,6 +7,8 @@
 #include <mutex>
 #include <functional>
 #include <cstdint>
+#include <thread>
+#include <atomic>
 
 class MeshDiscovery {
 public:
@@ -56,8 +58,15 @@ public:
     
     // Extract IP from display text "Name (IP)" format
     static std::string extractIpFromDisplayText(const std::string& displayText);
-     int createSocket();
-        
+    int createSocket();
+     
+    void startBackgroundDiscovery(int timeoutMs = 2000);
+    bool isDiscoveryComplete() const;
+    
+    void setReconnectHost(const char* host);
+    std::string getReconnectHost() const;
+    void clearReconnectHost();
+       
 private:
     void processMeshHeartbeat(const char* data, const char* senderIP);
 
@@ -70,6 +79,13 @@ private:
     std::map<std::string, PeerInfo> discoveredPeers;
     std::function<void(const PeerInfo&)> discoveryCallback;
     
+    std::thread discoveryThread;
+    std::atomic<bool> discoveryInProgress{false};
+    std::atomic<bool> discoveryComplete{false};
+    
+    std::string reconnectHost;
+    mutable std::mutex reconnectMutex;
+
     static const int PEER_TIMEOUT_MS = 30000;  // 30 seconds
     static const int LOCALHOST_TEST_PORT = 4620;  // Default dserv port
 };

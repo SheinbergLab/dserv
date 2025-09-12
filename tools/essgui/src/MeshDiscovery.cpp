@@ -311,6 +311,45 @@ void MeshDiscovery::closeSocket() {
     }
 }
 
+void MeshDiscovery::startBackgroundDiscovery(int timeoutMs) {
+    if (discoveryInProgress.load()) {
+        return; // Already running
+    }
+    
+    discoveryInProgress = true;
+    discoveryComplete = false;
+    
+    // Detach any existing thread
+    if (discoveryThread.joinable()) {
+        discoveryThread.detach();
+    }
+    
+    discoveryThread = std::thread([this, timeoutMs]() {
+        this->discoverPeers(timeoutMs);
+        discoveryInProgress = false;
+        discoveryComplete = true;
+    });
+}
+
+bool MeshDiscovery::isDiscoveryComplete() const {
+    return discoveryComplete.load();
+}
+
+void MeshDiscovery::setReconnectHost(const char* host) {
+    std::lock_guard<std::mutex> lock(reconnectMutex);
+    reconnectHost = host ? host : "";
+}
+
+std::string MeshDiscovery::getReconnectHost() const {
+    std::lock_guard<std::mutex> lock(reconnectMutex);
+    return reconnectHost;
+}
+
+void MeshDiscovery::clearReconnectHost() {
+    std::lock_guard<std::mutex> lock(reconnectMutex);
+    reconnectHost.clear();
+}
+
 bool MeshDiscovery::testLocalhostConnection() const {
     // Quick test to see if dserv is running locally
     int testSocket = socket(AF_INET, SOCK_STREAM, 0);
