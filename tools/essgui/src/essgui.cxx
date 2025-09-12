@@ -179,15 +179,16 @@ public:
     dsnet_thread = ds_sock->start_server();
     
     meshDiscovery = new MeshDiscovery();
-    
+
+#if 0
     meshDiscovery->setDiscoveryCallback([this](const MeshDiscovery::PeerInfo& peer) {
-        output_term->append("Found: ");
-        output_term->append(peer.name.c_str());
-        output_term->append("\n");
-        output_term->redraw();
-        Fl::check();
+      output_term->append("Found: ");
+      output_term->append(peer.name.c_str());
+      output_term->append("\n");
+      output_term->redraw();
+      Fl::check();
     });
-    
+#endif
     
     win = setup_ui(argc, argv);
 
@@ -277,7 +278,7 @@ public:
   {
     return text_buffers[name]->text();
   }
-  
+
   void clear_params(void) { params.clear(); }
   void add_param(std::string key, Fl_Object *o) { params[key] = o; }
   Fl_Widget *find_param(std::string key)
@@ -487,6 +488,33 @@ void linenoise_write(const char *buf, size_t n) {
   output_term->append(buf, n);
 }
 
+  void set_controls_enabled(bool enabled) {
+    if (enabled) {
+      // Re-enable controls
+      system_widget->activate();
+      protocol_widget->activate();
+      variant_widget->activate();
+      subject_widget->activate();
+      branch_widget->activate();
+      options_widget->activate();
+      settings_widget->activate();
+      rmt_commands_widget->activate();
+      editor_tabs->activate();
+    } else {
+      // Disable controls
+      system_widget->deactivate();
+      protocol_widget->deactivate();
+      variant_widget->deactivate();
+      subject_widget->deactivate();
+      branch_widget->deactivate();
+      options_widget->deactivate();
+      settings_widget->deactivate();
+      rmt_commands_widget->deactivate();
+      editor_tabs->deactivate();
+    }
+    
+    g_App->win->redraw();
+  }
   
 static void clear_counter_widgets(void) {
   obscount_widget->value("");
@@ -773,7 +801,7 @@ int set_subject(void) {
 
 int set_system(void) {
   char cmd[256];
-  snprintf(cmd, sizeof(cmd), "ess::load_system %s",
+  snprintf(cmd, sizeof(cmd), "evalNoReply {ess::load_system %s}",
 	   system_widget->text());
 
   std::string rstr;
@@ -784,7 +812,7 @@ int set_system(void) {
 
 int set_protocol(void) {
   char cmd[256];
-  snprintf(cmd, sizeof(cmd), "ess::load_system %s %s",
+  snprintf(cmd, sizeof(cmd), "evalNoReply {ess::load_system %s %s}",
 	   system_widget->text(),
 	   protocol_widget->text());
   
@@ -796,7 +824,7 @@ int set_protocol(void) {
 
 int set_variant(void) {
   char cmd[256];
-  snprintf(cmd, sizeof(cmd), "ess::load_system %s %s %s",
+  snprintf(cmd, sizeof(cmd), "evalNoReply {ess::load_system %s %s %s}",
 	   system_widget->text(),
 	   protocol_widget->text(),
 	   variant_widget->text());
@@ -807,34 +835,21 @@ int set_variant(void) {
   return 0;
 }
 
-void wait_cursor(void) {
-  // Change to waiting cursor (ess/status will change back)
-  fl_cursor(FL_CURSOR_WAIT);
-  Fl::flush();
-  Fl::check(); // Process pending events
-}
-
 int reload_system(void) {
-  wait_cursor();
-  
   std::string rstr;
-  g_App->ds_sock->esscmd(g_App->host, "ess::reload_system", rstr);
+  g_App->ds_sock->esscmd(g_App->host, "evalNoReply ess::reload_system", rstr);
   return 0;
 }
 
 int reload_protocol(void) {
-  wait_cursor();
-
   std::string rstr;
-  g_App->ds_sock->esscmd(g_App->host, "ess::reload_protocol", rstr);
+  g_App->ds_sock->esscmd(g_App->host, "evalNoReply ess::reload_protocol", rstr);
   return 0;
 }
 
 int reload_variant(void) {
-  wait_cursor();
-
   std::string rstr;
-  g_App->ds_sock->esscmd(g_App->host, "ess::reload_variant", rstr);
+  g_App->ds_sock->esscmd(g_App->host, "evalNoReply ess::reload_variant", rstr);
   return 0;
 }
 
@@ -1182,6 +1197,29 @@ void configure_sorters(DYN_GROUP *dg)
   }
 }
 
+// Functions that EyeTouchWin can call
+void send_virtual_eye_data(int adc_x, int adc_y) {
+  std::string cmd("set d [binary format s2 {");
+  cmd += std::to_string(adc_y) + " " + std::to_string(adc_x) + "}];";
+  cmd += "dservSetData ain/vals 0 4 $d; unset d";
+  
+  std::string rstr;
+  if (!g_App->host.empty()) {
+    g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+  }
+}
+
+void send_virtual_touch_event(int x, int y, int event_type) {
+  std::string cmd("set d [binary format s3 {");
+  cmd += std::to_string(x) + " " + std::to_string(y) + " " + 
+         std::to_string(event_type) + "}];";
+  cmd += "dservSetData mtouch/event 0 4 $d; unset d";
+  
+  std::string rstr;
+  if (!g_App->host.empty()) {
+    g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+  }
+}
 
 void virtual_eye_cb (VirtualEye *w, void *data)
 {
@@ -1202,7 +1240,6 @@ void virtual_eye_cb (VirtualEye *w, void *data)
     result = g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
   }
 }
-
 
 void virtual_joystick_cb (VirtualJoystick *w, void *data)
 {
@@ -1304,8 +1341,10 @@ void variant_setting_callback(Fl_Widget* o, void* data) {
   Tcl_ListObjAppendElement(NULL, cmdList,
 			   Tcl_NewStringObj(selected_value.c_str(), -1));
   
-  std::string cmd("ess::set_variant_args ");
+  std::string cmd("ess::set_variant_args {");
   cmd += Tcl_GetString(cmdList);
+  cmd += "}";
+  
   Tcl_DecrRefCount(cmdList);  
 
   std::string rstr;
@@ -1752,6 +1791,31 @@ void process_dpoint_cb(void *cbdata) {
     }
   }
 
+  else if (!strcmp(json_string_value(name), "ess/touch_press")) {
+    int x, y;
+    if (sscanf(json_string_value(data), "%d %d", &x, &y) == 2) {
+        eyetouch_widget->touch_pos(x, y);
+        eyetouch_widget->show_touch(true);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/touch_release")) {
+    eyetouch_widget->show_touch(false);
+  }
+        
+  else if (!strcmp(json_string_value(name), "ess/touch_drag")) {
+    int x, y;
+    if (sscanf(json_string_value(data), "%d %d", &x, &y) == 2) {
+        eyetouch_widget->touch_pos(x, y);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/touch_state")) {
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/touch_event_type")) {
+  }
+  
   else if (!strcmp(json_string_value(name), "ess/transition_state")) {
     g_App->select_transition_state(json_string_value(data));
   }
@@ -1786,9 +1850,19 @@ void process_dpoint_cb(void *cbdata) {
   }
 
   else if (!strcmp(json_string_value(name), "ess/status")) {
-    // for all but loading, set back to default
-    if (strcmp(json_string_value(data), "loading")) {
+    if (!strcmp(json_string_value(data), "loading")) {
+      fl_cursor(FL_CURSOR_WAIT);
+      set_controls_enabled(false);
+      Fl::flush();
+    }
+    else if (!strcmp(json_string_value(data), "running")) {
       fl_cursor(FL_CURSOR_DEFAULT);
+      set_controls_enabled(false);
+      Fl::flush();
+    }
+    else if (!strcmp(json_string_value(data), "stopped")) {
+      fl_cursor(FL_CURSOR_DEFAULT);
+      set_controls_enabled(true);
       Fl::flush();
     }
   }
@@ -2130,10 +2204,18 @@ else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
     configure_sorters(dg);
   }
 
+  else if (!strcmp(json_string_value(name), "ess/stiminfo")) {
+    // use stimdg instead
+  }
+
   else if (!strcmp(json_string_value(name), "ess/trialinfo")) {
     // use trialdg instead
   }
 
+  // don't need this script, just listen for graphics/stiminfo
+  else if (!strcmp(json_string_value(name), "ess/viz_config")) {
+  }
+  
   else if (!strcmp(json_string_value(name), "trialdg")) {
     const char *dgdata = json_string_value(data);
     DYN_GROUP *dg = decode_dg(dgdata, strlen(dgdata));

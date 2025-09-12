@@ -12,6 +12,9 @@
 #include <string.h>
 #include <stdlib.h>
 
+extern void send_virtual_eye_data(int adc_x, int adc_y);
+extern void send_virtual_touch_event(int x, int y, int event_type);
+
 typedef enum { WINDOW_OUT, WINDOW_IN } WINDOW_STATE;
 typedef enum { WINDOW_RECTANGLE, WINDOW_ELLIPSE } WINDOW_TYPE;
 enum { WINDOW_NOT_INITIALIZED, WINDOW_INITIALIZED };
@@ -76,6 +79,179 @@ private:
   static const int n_touch_regions = 8;
   TouchRegion touch_regions[n_touch_regions];
 
+  // Virtual input states
+  bool virtual_eye_enabled;
+  bool virtual_touch_enabled;
+  
+  // Virtual eye state
+  struct {
+    float x, y;           // degrees
+    int adc_x, adc_y;     // ADC values
+    bool active;
+    bool dragging;
+    float drag_offset_x, drag_offset_y;
+  } virtual_eye;
+  
+  // Virtual touch state  
+  struct {
+    int x, y;             // screen pixels
+    bool active;
+    bool dragging;
+    int drag_start_x, drag_start_y;
+  } virtual_touch;
+
+  bool touch_active = false;
+  
+private:
+  int handle_mouse_down() {
+    if (!virtual_eye_enabled && !virtual_touch_enabled) return 0;
+    
+    int mx = Fl::event_x() - x();
+    int my = Fl::event_y() - y();
+    
+    // Check if clicking on virtual eye marker
+    if (virtual_eye_enabled && virtual_eye.active) {
+      float eye_canvas_x = w()/2 + (virtual_eye.x/deg_per_pix_x);
+      float eye_canvas_y = h()/2 - (virtual_eye.y/deg_per_pix_y);
+      
+      float dist = sqrt(pow(mx - eye_canvas_x, 2) + pow(my - eye_canvas_y, 2));
+      if (dist <= 13) { // 8px radius + 5px tolerance
+	virtual_eye.dragging = true;
+	virtual_eye.drag_offset_x = eye_canvas_x - mx;
+	virtual_eye.drag_offset_y = eye_canvas_y - my;
+	return 1;
+      }
+    }
+    
+    // Handle virtual touch start
+    if (virtual_touch_enabled && !virtual_eye.dragging) {
+      // Convert canvas to degrees then to touch screen coordinates
+      float deg_x = (mx - w()/2) * deg_per_pix_x;
+      float deg_y = -(my - h()/2) * deg_per_pix_y;
+      
+      float screen_pix_per_deg_x = _screen_w / (2 * _screen_halfx);
+      float screen_pix_per_deg_y = _screen_h / (2 * _screen_halfy);
+      
+      virtual_touch.x = deg_x * screen_pix_per_deg_x + _screen_w/2;
+      virtual_touch.y = -deg_y * screen_pix_per_deg_y + _screen_h/2;
+      virtual_touch.active = true;
+      virtual_touch.dragging = true;
+      
+      send_virtual_touch_event(virtual_touch.x, virtual_touch.y, 0); // PRESS
+      return 1;
+    }
+    
+    return 0;
+  }
+  
+  int handle_mouse_drag() {
+   int mx = Fl::event_x() - x();
+    int my = Fl::event_y() - y();
+    
+    if (virtual_eye_enabled && virtual_eye.dragging) {
+      // Calculate new position with drag offset
+      float new_canvas_x = mx + virtual_eye.drag_offset_x;
+      float new_canvas_y = my + virtual_eye.drag_offset_y;
+      
+      // Convert to degrees and constrain
+      float deg_x = (new_canvas_x - w()/2) * deg_per_pix_x;
+      float deg_y = -(new_canvas_y - h()/2) * deg_per_pix_y;
+      
+      // Clamp to visible range based on actual screen dimensions
+      float max_x = xextent / 2;
+      float max_y = yextent / 2;
+      deg_x = std::max(-max_x, std::min(max_x, deg_x));
+      deg_y = std::max(-max_y, std::min(max_y, deg_y));
+      
+      // Update position
+      virtual_eye.x = deg_x;
+      virtual_eye.y = deg_y;
+      virtual_eye.active = true;
+      virtual_eye.adc_x = deg_x * adc_points_per_deg_x + 2048;
+      virtual_eye.adc_y = -deg_y * adc_points_per_deg_y + 2048;
+      
+      send_virtual_eye_data(virtual_eye.adc_x, virtual_eye.adc_y);
+      redraw();
+      return 1;
+    }
+  
+    if (virtual_touch_enabled && virtual_touch.dragging) {
+      // Convert to touch coordinates
+      float deg_x = (mx - w()/2) * deg_per_pix_x;
+      float deg_y = -(my - h()/2) * deg_per_pix_y;
+      
+      float screen_pix_per_deg_x = _screen_w / (2 * _screen_halfx);
+      float screen_pix_per_deg_y = _screen_h / (2 * _screen_halfy);
+      
+      virtual_touch.x = deg_x * screen_pix_per_deg_x + _screen_w/2;
+      virtual_touch.y = -deg_y * screen_pix_per_deg_y + _screen_h/2;
+      
+      send_virtual_touch_event(virtual_touch.x, virtual_touch.y, 1); // DRAG
+      redraw();
+      return 1;
+    }
+    
+    return 0;
+  }
+  
+  int handle_mouse_up() {
+    if (virtual_eye.dragging) {
+      virtual_eye.dragging = false;
+      return 1;
+    }
+    
+    if (virtual_touch.dragging) {
+      send_virtual_touch_event(virtual_touch.x, virtual_touch.y, 2); // RELEASE
+      virtual_touch.dragging = false;
+      
+      // Keep visible briefly after release
+      Fl::add_timeout(0.5, [](void* v) {
+	EyeTouchWin* w = (EyeTouchWin*)v;
+	if (!w->virtual_touch.dragging) {
+	  w->virtual_touch.active = false;
+	  w->redraw();
+	}
+      }, this);
+      
+      return 1;
+    }
+    
+    return 0;
+  }
+  
+  int handle_mouse_leave() {
+    // Cancel drags when mouse leaves
+    if (virtual_eye.dragging) {
+      virtual_eye.dragging = false;
+    }
+    
+    if (virtual_touch.dragging) {
+      send_virtual_touch_event(virtual_touch.x, virtual_touch.y, 2); // RELEASE
+      virtual_touch.dragging = false;
+      virtual_touch.active = false;
+    }
+    
+    return 1;
+  }
+  
+  void update_virtual_eye_position(float deg_x, float deg_y) {
+    virtual_eye.x = deg_x;
+    virtual_eye.y = deg_y;
+    virtual_eye.active = true;
+    
+    // Convert to ADC
+    virtual_eye.adc_x = deg_x * adc_points_per_deg_x + 2048;
+    virtual_eye.adc_y = -deg_y * adc_points_per_deg_y + 2048;
+    
+    // Trigger callback or send data
+    if (callback()) {
+      do_callback();
+    }
+    
+    redraw();
+  }
+
+  
 public:
 
   int screen_w(void) { return _screen_w; }
@@ -155,6 +331,9 @@ public:
     /* draw touch status */
     draw_touch_status();
 
+    /* draw touch marker */
+    draw_touch();
+    
     /* draw the eye position */
     draw_eye_marker();
         
@@ -293,6 +472,32 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
     }
   }
 
+  void draw_virtual_eye() {
+    if (!virtual_eye_enabled || !virtual_eye.active) return;
+    
+    float xpos = x() + w()/2 + (virtual_eye.x/deg_per_pix_x);
+    float ypos = y() + h()/2 - (virtual_eye.y/deg_per_pix_y);
+    
+    // Draw with orange color for virtual
+    fl_color(virtual_eye.dragging ? FL_GREEN : fl_rgb_color(255, 140, 0));
+    fl_circle(xpos, ypos, 8);
+    
+    // Draw crosshair
+    fl_color(FL_BLACK);
+    fl_line(xpos-6, ypos, xpos+6, ypos);
+    fl_line(xpos, ypos-6, xpos, ypos+6);
+    
+    // Draw "V" indicator
+    fl_color(fl_rgb_color(255, 140, 0));
+    fl_font(FL_HELVETICA_BOLD, 10);
+    fl_draw("V", xpos-3, ypos-12);
+  }
+
+  void show_touch(bool show) {
+    touch_active = show;
+    redraw();
+  }
+
   void touch_pos(int x, int y)
   {
     bool do_redraw = false;
@@ -301,6 +506,91 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
 
     if (do_redraw) {
       redraw();
+    }
+  }
+
+  void draw_touch() {
+    if (!touch_active) return;
+    
+    // Convert touch pixels back to degrees for drawing
+    float screen_pix_per_deg_x = _screen_w / (2 * _screen_halfx);
+    float screen_pix_per_deg_y = _screen_h / (2 * _screen_halfy);
+    float deg_x = (touch_pix_x - _screen_w/2) / screen_pix_per_deg_x;
+    float deg_y = -(touch_pix_y - _screen_h/2) / screen_pix_per_deg_y;
+    
+    float xpos = x() + w()/2 + (deg_x/deg_per_pix_x);
+    float ypos = y() + h()/2 - (deg_y/deg_per_pix_y);
+    
+    // Draw diamond shape
+    fl_color(FL_CYAN);
+    int size = 6;
+    
+    fl_begin_polygon();
+    fl_vertex(xpos, ypos - size);
+    fl_vertex(xpos + size, ypos);
+    fl_vertex(xpos, ypos + size);
+    fl_vertex(xpos - size, ypos);
+    fl_end_polygon();
+  }
+
+  void set_virtual_eye_enabled(bool enabled) {
+    virtual_eye_enabled = enabled;
+    if (enabled && !virtual_eye.active) {
+      // Initialize virtual eye at center
+      virtual_eye.x = 0;
+      virtual_eye.y = 0;
+      virtual_eye.adc_x = 2048;
+      virtual_eye.adc_y = 2048;
+      virtual_eye.active = true;  // Make it visible
+      redraw();
+    }
+  }
+  
+  void set_virtual_touch_enabled(bool enabled) {
+    virtual_touch_enabled = enabled;
+    if (enabled && !virtual_touch.active) {
+      // Initialize virtual touch at center
+      virtual_touch.x = 0;
+      virtual_touch.y = 0;
+      virtual_touch.active = true;  // Make it visible
+      redraw();
+    }
+  }
+
+  bool is_virtual_eye_enabled() const { return virtual_eye_enabled; }
+  bool is_virtual_touch_enabled() const { return virtual_touch_enabled; }
+
+// Virtual position getters
+void get_virtual_eye_adc(int& x, int& y) const {
+  x = virtual_eye.adc_x;
+    y = virtual_eye.adc_y;
+  }
+  
+  void get_virtual_touch_pos(int& x, int& y) const {
+    x = virtual_touch.x;
+    y = virtual_touch.y;
+  }
+
+  int handle(int event) FL_OVERRIDE {
+    switch(event) {
+    case FL_PUSH:
+      return handle_mouse_down();
+      
+    case FL_DRAG:
+      return handle_mouse_drag();
+      
+    case FL_RELEASE:
+      return handle_mouse_up();
+      
+    case FL_LEAVE:
+      handle_mouse_leave();
+      return 1;
+      
+    case FL_MOVE:
+      return 0;
+      
+    default:
+      return Fl_Box::handle(event);
     }
   }
   
@@ -319,11 +609,14 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
     em_radius = 0.75;
     flipx = false;
     flipy = false;
+
+    set_virtual_touch_enabled(1);
+    //    set_virtual_eye_enabled(1);
   }
 
     
   ~EyeTouchWin()
-  {
+{
   }
   
 };

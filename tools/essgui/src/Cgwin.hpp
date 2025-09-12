@@ -125,26 +125,32 @@ public:
         }
         
         json_decref(root);
+
+	if (m_cachedCommands) {
+	  extractPersistentSettings(m_cachedCommands);
+	}
+    	
         redraw();  // Trigger FLTK redraw
     }
 
-    virtual void draw() FL_OVERRIDE {
-        // Clear background
-        fl_color(m_backgroundColor);
-        fl_rectf(x(), y(), w(), h());
-        
-        if (m_cachedCommands) {
-            //dumpCachedCommands();
-        }
-        
-        // Now execute drawing commands in proper FLTK drawing context
-        if (m_cachedCommands) {
-            executeJsonCommands(m_cachedCommands);
-        }
-        
-        // Draw any child widgets
-        Fl_Group::draw();
+  virtual void draw() FL_OVERRIDE {
+    
+    // Clear background
+    fl_color(m_backgroundColor);
+    fl_rectf(x(), y(), w(), h());
+    
+    if (m_cachedCommands) {
+      //dumpCachedCommands();
     }
+    
+    // Now execute drawing commands in proper FLTK drawing context
+    if (m_cachedCommands) {
+      executeJsonCommands(m_cachedCommands);
+    }
+    
+    // Draw any child widgets
+    Fl_Group::draw();
+  }
     
      ~CGWin() {
         if (m_cachedCommands) {
@@ -153,7 +159,26 @@ public:
     }
 
 private:
-    void executeJsonCommands(json_t *commands) {
+  void extractPersistentSettings(json_t *commands) {
+    size_t index;
+    json_t *command;
+    
+    json_array_foreach(commands, index, command) {
+      json_t *cmd_obj = json_object_get(command, "cmd");
+      json_t *args_obj = json_object_get(command, "args");
+      
+      if (json_is_string(cmd_obj) && json_is_array(args_obj)) {
+	const char *cmd = json_string_value(cmd_obj);
+        
+	if (strcmp(cmd, "setbackground") == 0 && json_array_size(args_obj) >= 1) {
+	  m_backgroundColor = cgraphColorToFL(json_integer_value(json_array_get(args_obj, 0)));
+	  break; // Found it, can stop looking
+	}
+      }
+    }
+  }
+  
+  void executeJsonCommands(json_t *commands) {
         size_t index;
         json_t *command;
         

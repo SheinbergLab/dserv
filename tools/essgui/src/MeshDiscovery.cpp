@@ -30,7 +30,7 @@ int MeshDiscovery::discoverPeers(int timeoutMs) {
     auto startTime = std::chrono::steady_clock::now();
     auto timeoutDuration = std::chrono::milliseconds(timeoutMs);
     
-    std::cout << "Listening for mesh heartbeats for " << (timeoutMs / 1000.0) << " seconds..." << std::endl;
+    //    std::cout << "Listening for mesh heartbeats for " << (timeoutMs / 1000.0) << " seconds..." << std::endl;
     
     while (std::chrono::steady_clock::now() - startTime < timeoutDuration) {
         char buffer[1024];
@@ -52,7 +52,7 @@ int MeshDiscovery::discoverPeers(int timeoutMs) {
     closeSocket();
     cleanupExpiredPeers();
     
-    std::cout << "Mesh discovery complete, found " << getPeerCount() << " peers" << std::endl;
+    //    std::cout << "Mesh discovery complete, found " << getPeerCount() << " peers" << std::endl;
     return 0;
 }
 
@@ -240,8 +240,8 @@ void MeshDiscovery::processMeshHeartbeat(const char* data, const char* senderIP)
         
         // Log new peer discovery
         if (isNewPeer) {
-            std::cout << "Discovered mesh peer: " << peer.name << " (" << peerId 
-                      << ") at " << cleanIP << " - " << peer.status << std::endl;
+	  //            std::cout << "Discovered mesh peer: " << peer.name << " (" << peerId 
+          //            << ") at " << cleanIP << " - " << peer.status << std::endl;
             
             // Call discovery callback if set
             if (discoveryCallback) {

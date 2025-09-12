@@ -31,6 +31,9 @@ void pull_script_cb(Fl_Widget *, void *);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);
+void send_virtual_eye_data(int adc_x, int adc_y);
+void send_virtual_touch_event(int x, int y, int event_type);
+
 class VirtualJoystick;
 void virtual_joystick_cb(VirtualJoystick *w, void *data);
 
