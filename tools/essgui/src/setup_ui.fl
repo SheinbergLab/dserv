@@ -2,7 +2,6 @@
 version 1.0500
 header_name {.h}
 code_name {.cxx}
-include_guard {}
 decl {\#include "Fl_Console.hpp"
 \#include "Fl_DgFile.h"
 \#include "Fl_DgTable.h"
@@ -14,14 +13,14 @@ decl {\#include "Fl_Console.hpp"
 \#include "WheelSpinner.h"
 \#include "VirtualEye.hpp"
 \#include "VirtualJoystick.hpp"
-\#include "Fl_OpDesk.h"} {selected public global
+\#include "Fl_OpDesk.h"} {public global
 }
 
 Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window *}
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {190 94 1280 800} type Double resizable visible
+    xywh {0 0 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
@@ -73,7 +72,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           Fl_Group {} {open
             xywh {180 64 315 283}
           } {
-            Fl_Group {} {open
+            Fl_Group subject_group {open selected
               xywh {186 69 306 36} box THIN_UP_BOX
             } {
               Fl_Flex {} {open
@@ -125,7 +124,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 xywh {231 163 16 16} box FLAT_BOX selection_color 88 labeltype NO_LABEL
               }
             }
-            Fl_Group {} {open
+            Fl_Group load_combos_group {open
               xywh {186 216 306 128} box THIN_UP_BOX labelsize 20
             } {
               Fl_Flex {} {
@@ -169,7 +168,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               }
             }
           }
-          Fl_Group {} {open
+          Fl_Group settings_group {open
             xywh {184 347 311 360} resizable
           } {
             Fl_Pack {} {open
