@@ -491,26 +491,14 @@ void linenoise_write(const char *buf, size_t n) {
   void set_controls_enabled(bool enabled) {
     if (enabled) {
       // Re-enable controls
-      system_widget->activate();
-      protocol_widget->activate();
-      variant_widget->activate();
-      subject_widget->activate();
-      branch_widget->activate();
-      options_widget->activate();
-      settings_widget->activate();
-      rmt_commands_widget->activate();
-      editor_tabs->activate();
+      settings_group->activate();
+      load_combos_group->activate();
+      subject_group->activate();
     } else {
       // Disable controls
-      system_widget->deactivate();
-      protocol_widget->deactivate();
-      variant_widget->deactivate();
-      subject_widget->deactivate();
-      branch_widget->deactivate();
-      options_widget->deactivate();
-      settings_widget->deactivate();
-      rmt_commands_widget->deactivate();
-      editor_tabs->deactivate();
+      settings_group->deactivate();
+      load_combos_group->deactivate();
+      subject_group->deactivate();
     }
     
     g_App->win->redraw();

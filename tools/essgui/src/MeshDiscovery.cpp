@@ -300,7 +300,7 @@ int MeshDiscovery::createSocket() {
     int flags = fcntl(meshSocket, F_GETFL, 0);
     fcntl(meshSocket, F_SETFL, flags | O_NONBLOCK);
     
-    std::cout << "Successfully bound to port " << discoveryPort << std::endl;
+    //    std::cout << "Successfully bound to port " << discoveryPort << std::endl;
     return 0;
 }
 
