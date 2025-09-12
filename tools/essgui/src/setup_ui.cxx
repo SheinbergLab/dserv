@@ -12,6 +12,8 @@ Fl_Output *sysos_widget=(Fl_Output *)0;
 
 Fl_Tree *host_widget=(Fl_Tree *)0;
 
+Fl_Group *subject_group=(Fl_Group *)0;
+
 Fl_Choice *subject_widget=(Fl_Choice *)0;
 
 static void cb_subject_widget(Fl_Choice*, void*) {
@@ -35,6 +37,8 @@ Fl_Output *system_status_widget=(Fl_Output *)0;
 Fl_Output *obscount_widget=(Fl_Output *)0;
 
 Fl_Box *obs_widget=(Fl_Box *)0;
+
+Fl_Group *load_combos_group=(Fl_Group *)0;
 
 Fl_Choice *system_widget=(Fl_Choice *)0;
 
@@ -73,6 +77,8 @@ Fl_Button *reload_variant_button=(Fl_Button *)0;
 static void cb_reload_variant_button(Fl_Button*, void*) {
   reload_variant();
 }
+
+Fl_Group *settings_group=(Fl_Group *)0;
 
 static void cb_Save(Fl_Button*, void*) {
   save_settings();
@@ -225,8 +231,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           o->labelsize(18);
           o->vertical_label_margin(4);
           { Fl_Group* o = new Fl_Group(180, 64, 315, 283);
-            { Fl_Group* o = new Fl_Group(186, 69, 306, 36);
-              o->box(FL_THIN_UP_BOX);
+            { subject_group = new Fl_Group(186, 69, 306, 36);
+              subject_group->box(FL_THIN_UP_BOX);
               { Fl_Flex* o = new Fl_Flex(261, 73, 210, 28);
                 { subject_widget = new Fl_Choice(261, 73, 210, 28, "Subject:");
                   subject_widget->down_box(FL_BORDER_BOX);
@@ -238,8 +244,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 o->fixed(o->child(0), 28);
                 o->end();
               } // Fl_Flex* o
-              o->end();
-            } // Fl_Group* o
+              subject_group->end();
+            } // Fl_Group* subject_group
             { Fl_Group* o = new Fl_Group(186, 107, 306, 106);
               o->box(FL_THIN_UP_BOX);
               { Fl_Flex* o = new Fl_Flex(225, 114, 240, 40);
@@ -279,9 +285,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Box* obs_widget
               o->end();
             } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(186, 216, 306, 128);
-              o->box(FL_THIN_UP_BOX);
-              o->labelsize(20);
+            { load_combos_group = new Fl_Group(186, 216, 306, 128);
+              load_combos_group->box(FL_THIN_UP_BOX);
+              load_combos_group->labelsize(20);
               { Fl_Flex* o = new Fl_Flex(263, 228, 180, 100);
                 { system_widget = new Fl_Choice(263, 228, 180, 27, "System:");
                   system_widget->down_box(FL_BORDER_BOX);
@@ -321,11 +327,11 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 reload_buttons->spacing(11);
                 reload_buttons->end();
               } // Fl_Pack* reload_buttons
-              o->end();
-            } // Fl_Group* o
+              load_combos_group->end();
+            } // Fl_Group* load_combos_group
             o->end();
           } // Fl_Group* o
-          { Fl_Group* o = new Fl_Group(184, 347, 311, 360);
+          { settings_group = new Fl_Group(184, 347, 311, 360);
             { Fl_Pack* o = new Fl_Pack(200, 347, 280, 26);
               o->type(1);
               { Fl_Button* o = new Fl_Button(200, 348, 124, 23, "Save Settings");
@@ -354,9 +360,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               o->end();
               Fl_Group::current()->resizable(o);
             } // Fl_Group* o
-            o->end();
-            Fl_Group::current()->resizable(o);
-          } // Fl_Group* o
+            settings_group->end();
+            Fl_Group::current()->resizable(settings_group);
+          } // Fl_Group* settings_group
           o->end();
         } // Fl_Group* o
         { Fl_Group* o = new Fl_Group(499, 63, 766, 646, "Info");

@@ -300,7 +300,7 @@ int MeshDiscovery::createSocket() {
     int flags = fcntl(meshSocket, F_GETFL, 0);
     fcntl(meshSocket, F_SETFL, flags | O_NONBLOCK);
     
-    std::cout << "Successfully bound to port " << discoveryPort << std::endl;
+    //    std::cout << "Successfully bound to port " << discoveryPort << std::endl;
     return 0;
 }
 
@@ -309,45 +309,6 @@ void MeshDiscovery::closeSocket() {
         close(meshSocket);
         meshSocket = -1;
     }
-}
-
-void MeshDiscovery::startBackgroundDiscovery(int timeoutMs) {
-    if (discoveryInProgress.load()) {
-        return; // Already running
-    }
-    
-    discoveryInProgress = true;
-    discoveryComplete = false;
-    
-    // Detach any existing thread
-    if (discoveryThread.joinable()) {
-        discoveryThread.detach();
-    }
-    
-    discoveryThread = std::thread([this, timeoutMs]() {
-        this->discoverPeers(timeoutMs);
-        discoveryInProgress = false;
-        discoveryComplete = true;
-    });
-}
-
-bool MeshDiscovery::isDiscoveryComplete() const {
-    return discoveryComplete.load();
-}
-
-void MeshDiscovery::setReconnectHost(const char* host) {
-    std::lock_guard<std::mutex> lock(reconnectMutex);
-    reconnectHost = host ? host : "";
-}
-
-std::string MeshDiscovery::getReconnectHost() const {
-    std::lock_guard<std::mutex> lock(reconnectMutex);
-    return reconnectHost;
-}
-
-void MeshDiscovery::clearReconnectHost() {
-    std::lock_guard<std::mutex> lock(reconnectMutex);
-    reconnectHost.clear();
 }
 
 bool MeshDiscovery::testLocalhostConnection() const {

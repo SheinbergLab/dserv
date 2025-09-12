@@ -30,12 +30,14 @@ extern Fl_Output *sysos_widget;
 #include <FL/Fl_Tree.H>
 extern void host_cb(Fl_Tree*, void*);
 extern Fl_Tree *host_widget;
+extern Fl_Group *subject_group;
 #include <FL/Fl_Choice.H>
 extern Fl_Choice *subject_widget;
 extern Fl_Output *system_status_widget;
 extern Fl_Output *obscount_widget;
 #include <FL/Fl_Box.H>
 extern Fl_Box *obs_widget;
+extern Fl_Group *load_combos_group;
 extern Fl_Choice *system_widget;
 extern Fl_Choice *protocol_widget;
 extern Fl_Choice *variant_widget;
@@ -44,6 +46,7 @@ extern Fl_Pack *reload_buttons;
 extern Fl_Button *reload_system_button;
 extern Fl_Button *reload_protocol_button;
 extern Fl_Button *reload_variant_button;
+extern Fl_Group *settings_group;
 #include <FL/Fl_Scroll.H>
 extern Fl_Scroll *options_widget;
 extern Fl_Scroll *settings_widget;
