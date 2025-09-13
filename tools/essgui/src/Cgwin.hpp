@@ -248,14 +248,16 @@ private:
         else if (strcmp(cmd, "circle") == 0 && json_array_size(args_obj) >= 3) {
             float cx = transformX(json_number_value(json_array_get(args_obj, 0)));
             float cy = transformY(json_number_value(json_array_get(args_obj, 1)));
-            float radius = transformWidth(json_number_value(json_array_get(args_obj, 2)) / 2);
+            float radius =
+	      transformWidth(json_number_value(json_array_get(args_obj, 2)));
             
             fl_arc(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
         }
         else if (strcmp(cmd, "fcircle") == 0 && json_array_size(args_obj) >= 3) {
             float cx = transformX(json_number_value(json_array_get(args_obj, 0)));
             float cy = transformY(json_number_value(json_array_get(args_obj, 1)));
-            float radius = transformWidth(json_number_value(json_array_get(args_obj, 2)) / 2);
+            float radius =
+	      transformWidth(json_number_value(json_array_get(args_obj, 2)));
             
             fl_pie(cx - radius, cy - radius, radius * 2, radius * 2, 0, 360);
         }
