@@ -61,6 +61,7 @@ namespace eval ess {
     proc set_variant_args args { _protected_call set_variant_args 1 $args }
     proc save_script args { _protected_call save_script 1 $args }
     proc get_lib_files args { _protected_call get_lib_files 1 $args }
+    proc get_lib_file_content args { _protected_call get_lib_file_content 1 $args }
     proc validate_script_minimal s { _protected_call validate_script_minimal $s }
     
     # Blocked when running only
