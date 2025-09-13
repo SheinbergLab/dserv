@@ -4301,6 +4301,9 @@ namespace eval ess {
     set subtypes [dict create PRESS 0 RELEASE 1 MOVE 2]
     dict set evt_info TOUCH [list 48 {Touchscreen Press} float $subtypes]
 
+    set subtypes [dict create OFF 0 ON 1 ]
+    dict set evt_info FEEDBACK [list 49 {Feedback} long $subtypes]
+    
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
     dict set evt_info SACCADE_INFO [list 130 {Saccade Data} float]
