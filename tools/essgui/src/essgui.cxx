@@ -235,6 +235,10 @@ public:
       virtual_touch_checkbox->value(false);
       virtual_eye_checkbox->value(false);
       virtual_checkbox_group->deactivate();
+
+      // clear out the current system's param settings
+      clear_params();
+      settings_widget->clear();
     }
     
     win->redraw();
@@ -617,6 +621,12 @@ void host_cb(Fl_Tree*, void*) {
             g_App->disconnect_from_host(item->label());
             clear_widgets();
         }
+        else if (host_widget->callback_reason() == FL_TREE_REASON_RESELECTED) {
+            // User clicked on already selected item - deselect it
+            item->deselect();
+            g_App->disconnect_from_host(item->label());
+            clear_widgets();
+        }	
         else if (host_widget->callback_reason() == FL_TREE_REASON_SELECTED) {
             std::string selectedText = item->label();
             
@@ -2591,7 +2601,10 @@ int main(int argc, char *argv[]) {
 
   initialize_subjects();
 
+  // Finish configuring our system selector
   host_widget->clear();
+  host_widget->selectmode(FL_TREE_SELECT_SINGLE);
+  host_widget->item_reselect_mode(FL_TREE_SELECTABLE_ALWAYS);  
   host_widget->showroot(0);
   host_widget->add("Searching...");
   host_widget->redraw();
