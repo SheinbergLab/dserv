@@ -664,6 +664,9 @@ void get_virtual_eye_adc(int& x, int& y) const {
     em_radius = 0.75;
     flipx = false;
     flipy = false;
+
+    for (int i = 0; i < n_eye_regions; i++) { eye_regions[i].active = false; }
+    for (int i = 0; i < n_touch_regions; i++) { touch_regions[i].active = false; }
   }
 
     
