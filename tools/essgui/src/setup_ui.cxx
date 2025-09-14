@@ -94,7 +94,11 @@ Fl_Scroll *settings_widget=(Fl_Scroll *)0;
 
 EyeTouchWin *eyetouch_widget=(EyeTouchWin *)0;
 
-Fl_Output *eye_settings_label=(Fl_Output *)0;
+Fl_Pack *virtual_checkbox_group=(Fl_Pack *)0;
+
+Fl_Check_Button *virtual_eye_checkbox=(Fl_Check_Button *)0;
+
+Fl_Check_Button *virtual_touch_checkbox=(Fl_Check_Button *)0;
 
 Fl_Flex *sorters_widget=(Fl_Flex *)0;
 
@@ -107,8 +111,6 @@ PerfTable *perftable_widget=(PerfTable *)0;
 PerfTable *general_perf_widget=(PerfTable *)0;
 
 CGWin *plot_widget=(CGWin *)0;
-
-VirtualEye *virtual_eye_widget=(VirtualEye *)0;
 
 VirtualJoystick *virtual_joystick_widget=(VirtualJoystick *)0;
 
@@ -384,12 +386,21 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   eyetouch_widget->align(Fl_Align(FL_ALIGN_CENTER));
                   eyetouch_widget->when(FL_WHEN_RELEASE);
                 } // EyeTouchWin* eyetouch_widget
-                { Fl_Group* o = new Fl_Group(514, 358, 241, 22, "window status");
+                { Fl_Group* o = new Fl_Group(514, 358, 241, 23, "window status");
                   o->box(FL_THIN_DOWN_FRAME);
                   o->labeltype(FL_NO_LABEL);
-                  { eye_settings_label = new Fl_Output(518, 359, 236, 20, "settings");
-                    eye_settings_label->labeltype(FL_NO_LABEL);
-                  } // Fl_Output* eye_settings_label
+                  { virtual_checkbox_group = new Fl_Pack(524, 361, 221, 20);
+                    virtual_checkbox_group->type(1);
+                    { virtual_eye_checkbox = new Fl_Check_Button(532, 363, 96, 17, "Virtual eye");
+                      virtual_eye_checkbox->down_box(FL_DOWN_BOX);
+                      virtual_eye_checkbox->callback((Fl_Callback*)virtual_eye_checkbox_cb);
+                    } // Fl_Check_Button* virtual_eye_checkbox
+                    { virtual_touch_checkbox = new Fl_Check_Button(644, 363, 96, 17, "Virtual touch");
+                      virtual_touch_checkbox->down_box(FL_DOWN_BOX);
+                      virtual_touch_checkbox->callback((Fl_Callback*)virtual_touch_checkbox_cb);
+                    } // Fl_Check_Button* virtual_touch_checkbox
+                    virtual_checkbox_group->end();
+                  } // Fl_Pack* virtual_checkbox_group
                   o->end();
                 } // Fl_Group* o
                 o->end();
@@ -451,29 +462,10 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               { Fl_Group* o = new Fl_Group(514, 407, 246, 298, "Input");
                 o->color(FL_BLACK);
                 o->vertical_label_margin(3);
-                { Fl_Group* o = new Fl_Group(531, 407, 208, 204, "Eye Window");
-                  o->box(FL_FLAT_BOX);
-                  o->color(FL_INACTIVE_COLOR);
-                  o->labeltype(FL_NO_LABEL);
-                  { virtual_eye_widget = new VirtualEye(619, 497, 15, 15, "label");
-                    virtual_eye_widget->box(FL_NO_BOX);
-                    virtual_eye_widget->color(FL_BACKGROUND_COLOR);
-                    virtual_eye_widget->selection_color(FL_BACKGROUND_COLOR);
-                    virtual_eye_widget->labeltype(FL_NORMAL_LABEL);
-                    virtual_eye_widget->labelfont(0);
-                    virtual_eye_widget->labelsize(14);
-                    virtual_eye_widget->labelcolor(FL_FOREGROUND_COLOR);
-                    virtual_eye_widget->callback((Fl_Callback*)virtual_eye_cb);
-                    virtual_eye_widget->align(Fl_Align(FL_ALIGN_CENTER));
-                    virtual_eye_widget->when(FL_WHEN_CHANGED | FL_WHEN_RELEASE_ALWAYS);
-                  } // VirtualEye* virtual_eye_widget
-                  o->end();
-                } // Fl_Group* o
-                { Fl_Group* o = new Fl_Group(531, 619, 80, 76, "Joystick");
+                { Fl_Group* o = new Fl_Group(532, 425, 80, 76, "Joystick");
                   o->box(FL_FLAT_BOX);
                   o->color(FL_DARK3);
-                  o->labeltype(FL_NO_LABEL);
-                  { virtual_joystick_widget = new VirtualJoystick(565, 649, 12, 12, "label");
+                  { virtual_joystick_widget = new VirtualJoystick(566, 455, 12, 12, "label");
                     virtual_joystick_widget->box(FL_NO_BOX);
                     virtual_joystick_widget->color(FL_BACKGROUND_COLOR);
                     virtual_joystick_widget->selection_color(FL_BACKGROUND_COLOR);
@@ -487,12 +479,23 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   } // VirtualJoystick* virtual_joystick_widget
                   o->end();
                 } // Fl_Group* o
-                { Fl_Group* o = new Fl_Group(612, 614, 148, 84);
-                  { Fl_Group* o = new Fl_Group(612, 614, 148, 84);
-                    { Fl_Button* o = new Fl_Button(612, 614, 36, 18, "Bias");
+                { Fl_Group* o = new Fl_Group(622, 425, 130, 74, "Buttons");
+                  { Fl_Pack* o = new Fl_Pack(622, 450, 130, 32);
+                    o->type(1);
+                    { new Fl_Button(622, 451, 65, 22, "Left");
+                    } // Fl_Button* o
+                    { new Fl_Button(687, 451, 65, 22, "Right");
+                    } // Fl_Button* o
+                    o->end();
+                  } // Fl_Pack* o
+                  o->end();
+                } // Fl_Group* o
+                { Fl_Group* o = new Fl_Group(565, 602, 195, 96);
+                  { Fl_Group* o = new Fl_Group(565, 614, 148, 84);
+                    { Fl_Button* o = new Fl_Button(565, 614, 36, 18, "Bias");
                       o->box(FL_NO_BOX);
                     } // Fl_Button* o
-                    { hBias_input = new Wheel_Spinner(627, 632, 55, 22, "h");
+                    { hBias_input = new Wheel_Spinner(580, 632, 55, 22, "h");
                       hBias_input->box(FL_NO_BOX);
                       hBias_input->color(FL_BACKGROUND_COLOR);
                       hBias_input->selection_color(FL_BACKGROUND_COLOR);
@@ -508,7 +511,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                       hBias_input->align(Fl_Align(FL_ALIGN_LEFT));
                       hBias_input->when(FL_WHEN_RELEASE);
                     } // Wheel_Spinner* hBias_input
-                    { vBias_input = new Wheel_Spinner(696, 632, 54, 22, "v");
+                    { vBias_input = new Wheel_Spinner(649, 632, 54, 22, "v");
                       vBias_input->box(FL_NO_BOX);
                       vBias_input->color(FL_BACKGROUND_COLOR);
                       vBias_input->selection_color(FL_BACKGROUND_COLOR);
@@ -524,18 +527,18 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                       vBias_input->align(Fl_Align(FL_ALIGN_LEFT));
                       vBias_input->when(FL_WHEN_RELEASE);
                     } // Wheel_Spinner* vBias_input
-                    { Fl_Button* o = new Fl_Button(614, 656, 36, 18, "Gain");
+                    { Fl_Button* o = new Fl_Button(567, 656, 36, 18, "Gain");
                       o->box(FL_NO_BOX);
                     } // Fl_Button* o
-                    { hInvert_checkbox = new Fl_Check_Button(650, 655, 36, 19, "inv");
+                    { hInvert_checkbox = new Fl_Check_Button(603, 655, 36, 19, "inv");
                       hInvert_checkbox->down_box(FL_DOWN_BOX);
                       hInvert_checkbox->callback((Fl_Callback*)cb_hInvert_checkbox, (void*)(5));
                     } // Fl_Check_Button* hInvert_checkbox
-                    { vInvert_checkbox = new Fl_Check_Button(717, 655, 33, 19, "inv");
+                    { vInvert_checkbox = new Fl_Check_Button(670, 655, 33, 19, "inv");
                       vInvert_checkbox->down_box(FL_DOWN_BOX);
                       vInvert_checkbox->callback((Fl_Callback*)cb_vInvert_checkbox, (void*)(6));
                     } // Fl_Check_Button* vInvert_checkbox
-                    { hGain_input = new Wheel_Spinner(628, 674, 55, 22, "h");
+                    { hGain_input = new Wheel_Spinner(581, 674, 55, 22, "h");
                       hGain_input->type(1);
                       hGain_input->box(FL_NO_BOX);
                       hGain_input->color(FL_BACKGROUND_COLOR);
@@ -553,7 +556,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                       hGain_input->when(FL_WHEN_RELEASE);
                       hGain_input->format("%.2f");
                     } // Wheel_Spinner* hGain_input
-                    { vGain_input = new Wheel_Spinner(696, 674, 54, 22, "v");
+                    { vGain_input = new Wheel_Spinner(649, 674, 54, 22, "v");
                       vGain_input->type(1);
                       vGain_input->box(FL_NO_BOX);
                       vGain_input->color(FL_BACKGROUND_COLOR);
@@ -756,8 +759,8 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       { Fl_Group* o = new Fl_Group(0, 709, 1280, 88);
         o->box(FL_FLAT_BOX);
         { output_term = new Fl_Console(0, 709, 1279, 88);
-          output_term->box(FL_DOWN_BOX);
-          output_term->color(FL_FOREGROUND_COLOR);
+          output_term->box(FL_DOWN_FRAME);
+          output_term->color(FL_BLACK);
           output_term->selection_color(FL_BACKGROUND_COLOR);
           output_term->labeltype(FL_NORMAL_LABEL);
           output_term->labelfont(0);

@@ -126,10 +126,9 @@ Fl_Menu_Item menuitems[] = {
   { 0 }
 };
 
+class App *g_App;
 
 int add_tcl_commands(Tcl_Interp *interp);
-
-class App *g_App;
 
 class App
 {
@@ -217,6 +216,30 @@ public:
     delete _interp;
   }
 
+  void set_controls_enabled(bool enabled, bool disconnect = false) {
+    if (enabled) {
+      subject_group->activate();
+      load_combos_group->activate();
+      settings_group->activate();
+      virtual_checkbox_group->activate();
+    } else {
+      subject_group->deactivate();
+      load_combos_group->deactivate();
+      settings_group->deactivate();
+    }
+
+    if (disconnect) {
+      eyetouch_widget->set_virtual_eye_enabled(false);
+      eyetouch_widget->set_virtual_touch_enabled(false);
+      virtual_touch_checkbox->value(false);
+      virtual_eye_checkbox->value(false);
+      virtual_checkbox_group->deactivate();
+    }
+    
+    win->redraw();
+  }
+
+  
   // Helper function to get the currently active editor
   TclEditor* get_current_editor() {
     if (!editor_tabs) return nullptr;
@@ -337,7 +360,10 @@ public:
   {
     ds_sock->unreg(host.c_str());
 
+    set_controls_enabled(false, true);
+
     host.clear();
+
     
     return 1;
   }
@@ -407,6 +433,8 @@ public:
     update_em_regions();
     update_touch_regions();
 
+    set_controls_enabled(true);
+    
     return 1;
   }
     
@@ -488,20 +516,6 @@ void linenoise_write(const char *buf, size_t n) {
   output_term->append(buf, n);
 }
 
-  void set_controls_enabled(bool enabled) {
-    if (enabled) {
-      subject_group->activate();
-      load_combos_group->activate();
-      settings_group->activate();
-    } else {
-      subject_group->deactivate();
-      load_combos_group->deactivate();
-      settings_group->deactivate();
-    }
-    
-    g_App->win->redraw();
-  }
-  
 static void clear_counter_widgets(void) {
   obscount_widget->value("");
   obscount_widget->redraw();
@@ -544,9 +558,6 @@ static void clear_widgets(void) {
   perftable_widget->clear("");
   perftable_widget->redraw();
   Tcl_VarEval(g_App->interp(), "if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
-
-  virtual_eye_widget->initialized = false;
-
 
   options_widget->clear();
   options_widget->redraw();
@@ -1254,6 +1265,16 @@ void send_virtual_touch_event(int x, int y, int event_type) {
   }
 }
 
+void virtual_eye_checkbox_cb(Fl_Check_Button* b, void*)
+{
+  eyetouch_widget->set_virtual_eye_enabled(b->value());
+}
+
+void virtual_touch_checkbox_cb(Fl_Check_Button* b, void*)
+{
+  eyetouch_widget->set_virtual_touch_enabled(b->value());
+}
+
 void virtual_eye_cb (VirtualEye *w, void *data)
 {
   int result;
@@ -1817,10 +1838,6 @@ void process_dpoint_cb(void *cbdata) {
     if (sscanf(json_string_value(data), "%d %d %f %f",
 	       &d1, &d2, &x, &y) == 4) {
       eyetouch_widget->em_pos(x, y);
-      if (!virtual_eye_widget->initialized) {
-	virtual_eye_widget->set_em_pos(x, y);
-	virtual_eye_widget->initialized = true;
-      }
     }
   }
 
@@ -1885,17 +1902,17 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "ess/status")) {
     if (!strcmp(json_string_value(data), "loading")) {
       fl_cursor(FL_CURSOR_WAIT);
-      set_controls_enabled(false);
+      g_App->set_controls_enabled(false);
       Fl::flush();
     }
     else if (!strcmp(json_string_value(data), "running")) {
       fl_cursor(FL_CURSOR_DEFAULT);
-      set_controls_enabled(false);
+      g_App->set_controls_enabled(false);
       Fl::flush();
     }
     else if (!strcmp(json_string_value(data), "stopped")) {
       fl_cursor(FL_CURSOR_DEFAULT);
-      set_controls_enabled(true);
+      g_App->set_controls_enabled(true);
       Fl::flush();
     }
   }
@@ -2589,6 +2606,10 @@ int main(int argc, char *argv[]) {
   if (g_App->inithost) {
     add_host(g_App->inithost);
     select_host(g_App->inithost);
+  }
+  else {
+    g_App->set_controls_enabled(false);
+    virtual_checkbox_group->deactivate();
   }
 
   Fl::run();

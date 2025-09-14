@@ -92,6 +92,10 @@ private:
     bool dragging;
     float drag_offset_x, drag_offset_y;
   } virtual_eye;
+
+
+  bool virtual_eye_continuous_mode;
+  float virtual_eye_update_rate;  // Hz (e.g., 60.0 for 60Hz)
   
   // Virtual touch state  
   struct {
@@ -171,8 +175,11 @@ private:
       virtual_eye.active = true;
       virtual_eye.adc_x = deg_x * adc_points_per_deg_x + 2048;
       virtual_eye.adc_y = -deg_y * adc_points_per_deg_y + 2048;
+
+      // if we are in continuous mode, this happens automatically
+      if (!virtual_eye_continuous_mode)
+	send_virtual_eye_data(virtual_eye.adc_x, virtual_eye.adc_y);
       
-      send_virtual_eye_data(virtual_eye.adc_x, virtual_eye.adc_y);
       redraw();
       return 1;
     }
@@ -253,6 +260,22 @@ private:
     redraw();
   }
 
+
+  static void virtual_eye_timer_callback(void* data) {
+    EyeTouchWin* self = static_cast<EyeTouchWin*>(data);
+    
+    if (self->virtual_eye_continuous_mode && 
+        self->virtual_eye_enabled && 
+        self->virtual_eye.active) {
+      
+      // Send current position
+      send_virtual_eye_data(self->virtual_eye.adc_x, self->virtual_eye.adc_y);
+
+      // Schedule next update
+      Fl::add_timeout(1.0 / self->virtual_eye_update_rate, 
+                      virtual_eye_timer_callback, self);
+    }
+  }
   
 public:
 
@@ -536,18 +559,47 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
   }
 
   void set_virtual_eye_enabled(bool enabled) {
+    if (!enabled && virtual_eye_enabled) {
+      // Stop continuous updates
+      Fl::remove_timeout(virtual_eye_timer_callback, this);
+      virtual_eye_continuous_mode = false;
+    }
+    
     virtual_eye_enabled = enabled;
-    if (enabled && !virtual_eye.active) {
-      // Initialize virtual eye at center
-      virtual_eye.x = 0;
-      virtual_eye.y = 0;
-      virtual_eye.adc_x = 2048;
-      virtual_eye.adc_y = 2048;
-      virtual_eye.active = true;  // Make it visible
+    if (enabled) {
+      if (!virtual_eye.active) {
+	// Initialize virtual eye at center
+	virtual_eye.x = 0;
+	virtual_eye.y = 0;
+	virtual_eye.adc_x = 2048;
+	virtual_eye.adc_y = 2048;
+	virtual_eye.active = true;
+      }
+      
+      // Always enable continuous mode when enabling virtual eye
+      set_virtual_eye_continuous(true);
       redraw();
+    } else {
+      // Clean up when disabling
+      virtual_eye.active = false;
+      virtual_eye.dragging = false;
     }
   }
   
+  void set_virtual_eye_continuous(bool enabled, float rate_hz = 60.0) {
+    if (!enabled && virtual_eye_continuous_mode) {
+      // Remove existing timeout before disabling
+      Fl::remove_timeout(virtual_eye_timer_callback, this);
+    }
+    
+    virtual_eye_continuous_mode = enabled;
+    virtual_eye_update_rate = rate_hz;
+    
+    if (enabled && virtual_eye_enabled && virtual_eye.active) {
+      Fl::add_timeout(1.0 / rate_hz, virtual_eye_timer_callback, this);
+    }
+  }
+
   void set_virtual_touch_enabled(bool enabled) {
     virtual_touch_enabled = enabled;
     if (enabled && !virtual_touch.active) {
@@ -555,6 +607,7 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
       virtual_touch.x = 0;
       virtual_touch.y = 0;
       virtual_touch.active = true;  // Make it visible
+      
       redraw();
     }
   }
@@ -611,14 +664,12 @@ void get_virtual_eye_adc(int& x, int& y) const {
     em_radius = 0.75;
     flipx = false;
     flipy = false;
-
-    set_virtual_touch_enabled(1);
-    //    set_virtual_eye_enabled(1);
   }
 
     
   ~EyeTouchWin()
-{
+  {
+    Fl::remove_timeout(virtual_eye_timer_callback, this);
   }
   
 };

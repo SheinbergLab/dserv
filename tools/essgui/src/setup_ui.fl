@@ -2,6 +2,7 @@
 version 1.0500
 header_name {.h}
 code_name {.cxx}
+include_guard {}
 decl {\#include "Fl_Console.hpp"
 \#include "Fl_DgFile.h"
 \#include "Fl_DgTable.h"
@@ -20,7 +21,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {0 0 1280 800} type Double resizable visible
+    xywh {190 104 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
@@ -72,7 +73,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           Fl_Group {} {open
             xywh {180 64 315 283}
           } {
-            Fl_Group subject_group {open selected
+            Fl_Group subject_group {open
               xywh {186 69 306 36} box THIN_UP_BOX
             } {
               Fl_Flex {} {open
@@ -127,7 +128,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             Fl_Group load_combos_group {open
               xywh {186 216 306 128} box THIN_UP_BOX labelsize 20
             } {
-              Fl_Flex {} {
+              Fl_Flex {} {open
                 xywh {263 228 180 100} gap 10
               } {
                 Fl_Choice system_widget {
@@ -224,11 +225,21 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 }
                 Fl_Group {} {
                   label {window status} open
-                  xywh {514 358 241 22} box THIN_DOWN_FRAME labeltype NO_LABEL
+                  xywh {514 358 241 23} box THIN_DOWN_FRAME labeltype NO_LABEL
                 } {
-                  Fl_Output eye_settings_label {
-                    label settings
-                    xywh {518 359 236 20} labeltype NO_LABEL
+                  Fl_Pack virtual_checkbox_group {open selected
+                    xywh {524 361 221 20} type HORIZONTAL
+                  } {
+                    Fl_Check_Button virtual_eye_checkbox {
+                      label {Virtual eye}
+                      callback virtual_eye_checkbox_cb
+                      xywh {532 363 96 17} down_box DOWN_BOX
+                    }
+                    Fl_Check_Button virtual_touch_checkbox {
+                      label {Virtual touch}
+                      callback virtual_touch_checkbox_cb
+                      xywh {644 363 96 17} down_box DOWN_BOX
+                    }
                   }
                 }
               }
@@ -269,72 +280,78 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 xywh {514 407 246 298} color 56 v_label_margin 3
               } {
                 Fl_Group {} {
-                  label {Eye Window} open
-                  xywh {531 407 208 204} box FLAT_BOX color 8 labeltype NO_LABEL
-                } {
-                  Fl_Box virtual_eye_widget {
-                    label label
-                    callback virtual_eye_cb
-                    xywh {619 497 15 15} when 7
-                    class VirtualEye
-                  }
-                }
-                Fl_Group {} {
                   label Joystick open
-                  xywh {531 619 80 76} box FLAT_BOX color 39 labeltype NO_LABEL
+                  xywh {532 425 80 76} box FLAT_BOX color 39
                 } {
                   Fl_Box virtual_joystick_widget {
                     label label
                     callback virtual_joystick_cb
-                    xywh {565 649 12 12} when 7
+                    xywh {566 455 12 12} when 7
                     class VirtualJoystick
                   }
                 }
-                Fl_Group {} {open
-                  xywh {612 614 148 84}
+                Fl_Group {} {
+                  label Buttons open
+                  xywh {622 425 130 74}
+                } {
+                  Fl_Pack {} {open
+                    xywh {622 450 130 32} type HORIZONTAL
+                  } {
+                    Fl_Button {} {
+                      label Left
+                      xywh {622 451 65 22}
+                    }
+                    Fl_Button {} {
+                      label Right
+                      xywh {687 451 65 22}
+                    }
+                  }
+                }
+                Fl_Group {} {
+                  xywh {565 602 195 96}
                 } {
                   Fl_Group {} {open
-                    xywh {612 614 148 84}
+                    xywh {565 614 148 84}
                   } {
                     Fl_Button {} {
                       label Bias
-                      xywh {612 614 36 18} box NO_BOX
+                      xywh {565 614 36 18} box NO_BOX
                     }
                     Fl_Spinner hBias_input {
                       label h
                       user_data 1 user_data_type long
                       callback {update_eye_settings(o,v);}
-                      xywh {627 632 55 22} minimum 0 maximum 4095 step 10 value 2047
+                      xywh {580 632 55 22} minimum 0 maximum 4095 step 10 value 2047
                       class Wheel_Spinner
                     }
                     Fl_Spinner vBias_input {
                       label v
                       user_data 2 user_data_type long
                       callback {update_eye_settings(o,v);}
-                      xywh {696 632 54 22} minimum 0 maximum 4095 step 10 value 2047
+                      xywh {649 632 54 22} minimum 0 maximum 4095 step 10 value 2047
                       class Wheel_Spinner
                     }
                     Fl_Button {} {
                       label Gain
-                      xywh {614 656 36 18} box NO_BOX
+                      xywh {567 656 36 18} box NO_BOX
                     }
                     Fl_Check_Button hInvert_checkbox {
                       label inv
                       user_data 5 user_data_type long
                       callback {update_eye_settings(o,v);}
-                      xywh {650 655 36 19} down_box DOWN_BOX
+                      xywh {603 655 36 19} down_box DOWN_BOX
                     }
                     Fl_Check_Button vInvert_checkbox {
                       label inv
                       user_data 6 user_data_type long
                       callback {update_eye_settings(o,v);}
-                      xywh {717 655 33 19} down_box DOWN_BOX
+                      xywh {670 655 33 19} down_box DOWN_BOX
                     }
                     Fl_Spinner hGain_input {
                       label h
                       user_data 3 user_data_type long
                       callback {update_eye_settings(o,v);}
-                      xywh {628 674 55 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
+                      xywh {581 674 55 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
                       code0 {hGain_input->format("%.2f");}
                       class Wheel_Spinner
                     }
@@ -342,7 +359,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                       label v
                       user_data 4 user_data_type long
                       callback {update_eye_settings(o,v);}
-                      xywh {696 674 54 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
+                      xywh {649 674 54 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
                       code0 {vGain_input->format("%.2f");}
                       class Wheel_Spinner
                     }
