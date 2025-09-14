@@ -2871,6 +2871,9 @@ namespace eval ess {
 
 namespace eval ess {
     variable touch_windows
+    variable last_touch_press 0
+    variable last_touch_release 0
+    
     set touch_windows(processor) "touch_windows"
     set touch_windows(dpoint) "proc/touch_windows"
 
@@ -2891,12 +2894,22 @@ namespace eval ess {
     }
 
     proc touch_evt_put { name data } {
+	set min_us 5000
+	set timestamp [dservTimestamp $name]
 	if {!$::ess::in_obs} return
 	lassign $data x y
 	if { $name == "ess/touch_press" } {
-	    ::ess::evt_put TOUCH PRESS [now] $x $y
+	    variable last_touch_press
+	    if { [expr ($timestamp-$last_touch_press)>$min_us] } {
+		::ess::evt_put TOUCH PRESS [now] $x $y
+		set last_touch_press $timestamp
+	    }
 	} elseif { $name == "ess/touch_release" } {
-	    ::ess::evt_put TOUCH RELEASE [now] $x $y
+	    variable last_touch_release
+	    if { [expr ($timestamp-$last_touch_release)>$min_us] } {
+		::ess::evt_put TOUCH RELEASE [now] $x $y
+		set last_touch_release $timestamp
+	    }
 	}
     }
     
