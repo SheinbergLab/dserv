@@ -211,8 +211,9 @@ public:
   }
 
   ~App() {
-    delete ds_sock;
+    meshDiscovery->stopDiscovery();
     delete meshDiscovery;
+    delete ds_sock;
     delete _interp;
   }
 
@@ -1008,89 +1009,92 @@ void select_host(const char *host)
 }
 
 void check_discovery_completion(void*) {
-    if (g_App->meshDiscovery->isDiscoveryComplete()) {
-        // Update the host widget with discovered peers
-        host_widget->clear();
-        host_widget->showroot(0);
-        
-        // Add localhost if available
-        if (g_App->meshDiscovery->isLocalhostAvailable()) {
-            host_widget->add("localhost");
-        }
-        
-        // Add discovered peers
-        auto displayTexts = g_App->meshDiscovery->getPeerDisplayTexts();
-        for (const auto& displayText : displayTexts) {
-            host_widget->add(displayText.c_str());
-        }
-        
-        int itemCount = 0;
-        for (Fl_Tree_Item *item = host_widget->first(); item; item = host_widget->next(item)) {
-            itemCount++;
-        }
-        
-        if (itemCount == 0) {
-            host_widget->add("No systems found");
-        }
-        
-        // Try to reconnect to previous host if it was set
-        std::string reconnectHost = g_App->meshDiscovery->getReconnectHost();
-        if (!reconnectHost.empty()) {
-            select_host(reconnectHost.c_str());
-            g_App->meshDiscovery->clearReconnectHost();
-        }
-        
-        host_widget->redraw();
-    } else {
-        // Check again in 0.5 seconds
-        Fl::repeat_timeout(0.5, check_discovery_completion);
-    }
-}
-
-int refresh_hosts(int timeout = 2000)
-{
-    output_term->append("Starting mesh discovery...\n");
-    output_term->redraw();
-    Fl::check();
-
-    // Discover peers
-    int result = g_App->meshDiscovery->discoverPeers(timeout);  // Assumes you made it public
-    
-    // Clear and rebuild host widget
+  if (g_App->meshDiscovery->isDiscoveryComplete()) {
+    // Update the host widget with discovered peers
     host_widget->clear();
     host_widget->showroot(0);
     
     // Add localhost if available
     if (g_App->meshDiscovery->isLocalhostAvailable()) {
-        host_widget->add("localhost");
+      host_widget->add("localhost");
     }
     
     // Add discovered peers
     auto displayTexts = g_App->meshDiscovery->getPeerDisplayTexts();
     for (const auto& displayText : displayTexts) {
-        host_widget->add(displayText.c_str());
+      host_widget->add(displayText.c_str());
     }
     
-    // Count items
     int itemCount = 0;
     for (Fl_Tree_Item *item = host_widget->first(); item; item = host_widget->next(item)) {
-        itemCount++;
+      itemCount++;
     }
     
-    if (itemCount > 0) {
-        output_term->append("Discovery complete: found ");
-        output_term->append(std::to_string(itemCount).c_str());
-        output_term->append(" system(s)\n");
-    } else {
-        output_term->append("No systems discovered\n");
+    if (itemCount == 0) {
+      host_widget->add("No systems found");
     }
     
-    output_term->redraw();
-    return result;
+    // Try to reconnect to previous host if it was set
+    std::string reconnectHost = g_App->meshDiscovery->getReconnectHost();
+    if (!reconnectHost.empty()) {
+      select_host(reconnectHost.c_str());
+      g_App->meshDiscovery->clearReconnectHost();
+    }
+        
+    host_widget->redraw();
+  } else {
+    // Check again in 0.5 seconds
+    Fl::repeat_timeout(0.5, check_discovery_completion);
+  }
+}
+
+int refresh_hosts(int timeout = 2000)
+{
+  output_term->append("Starting mesh discovery...\n");
+  output_term->redraw();
+  Fl::check();
+  
+  // Discover peers
+  int result = g_App->meshDiscovery->discoverPeers(timeout);  // Assumes you made it public
+  
+  // Clear and rebuild host widget
+  host_widget->clear();
+  host_widget->showroot(0);
+  
+  // Add localhost if available
+  if (g_App->meshDiscovery->isLocalhostAvailable()) {
+    host_widget->add("localhost");
+  }
+  
+  // Add discovered peers
+  auto displayTexts = g_App->meshDiscovery->getPeerDisplayTexts();
+  for (const auto& displayText : displayTexts) {
+    host_widget->add(displayText.c_str());
+  }
+  
+  // Count items
+  int itemCount = 0;
+  for (Fl_Tree_Item *item = host_widget->first(); item; item = host_widget->next(item)) {
+    itemCount++;
+  }
+  
+  if (itemCount > 0) {
+    output_term->append("Discovery complete: found ");
+    output_term->append(std::to_string(itemCount).c_str());
+    output_term->append(" system(s)\n");
+  } else {
+    output_term->append("No systems discovered\n");
+  }
+  
+  output_term->redraw();
+  return result;
 }
 
 void refresh_cb(Fl_Button *, void *)
 {
+  // stop any ongoing discovery
+  g_App->meshDiscovery->stopDiscovery();
+ 
   /* store current host so we can restore if still available */
   char *current_host = NULL;
   Fl_Tree_Item *item = host_widget->first_selected_item();
