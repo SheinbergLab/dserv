@@ -43,7 +43,7 @@ proc update_touch { name data } {
     }
 }
 
-proc update_ain { name data } {
+proc update_ain_ess { name data } {
     set em_pnts_per_deg_x 200
     set em_pnts_per_deg_y 200
     set v1 [expr { [lindex $data 0] & 0xFFFF}]
@@ -51,7 +51,11 @@ proc update_ain { name data } {
     set v2a [format %.3f [expr {(($v2-2048.)/$em_pnts_per_deg_y)}]]
     set v1a [format %.3f [expr {((2048.-$v1)/$em_pnts_per_deg_x)}]]
     dservSet ess/em_pos "$v2 $v1 $v2a $v1a"
+}
+
+proc update_ain { name data } {
     dservCopy ain/vals ain/sampler_vals
+    dservCopy ain/vals ain/ess_vals
 }
 
 proc update_events { name data } {
@@ -153,6 +157,7 @@ init_vars
 triggerAdd rpio/vals                   1  update_dio
 triggerAdd pca9538/vals                1  update_joystick
 triggerAdd ain/vals                    1  update_ain
+triggerAdd ain/ess_vals               20  update_ain_ess
 triggerAdd mtouch/event                1  update_touch
 triggerAdd proc/windows/status         1  update_ain_window_status
 triggerAdd proc/windows/settings       1  update_ain_window_settings
