@@ -2920,8 +2920,34 @@ namespace eval ess {
         variable touch_win_deg_h $h_deg
         variable touch_win_scale_w [expr {$touch_win_w / $touch_win_deg_w}]
         variable touch_win_scale_h [expr {$touch_win_h / $touch_win_deg_h}]
+
+
+	# inject press/release events
+	dservAddExactMatch ess/touch_press
+        dpointSetScript ess/touch_press {
+            if {$::ess::in_obs} {
+                lassign $data x y
+                ::ess::evt_put TOUCH PRESS [now] $x $y
+            }
+        }
+	
+	dservAddExactMatch ess/touch_release  
+        dpointSetScript ess/touch_release {
+            if {$::ess::in_obs} {
+                lassign $data x y
+                ::ess::evt_put TOUCH RELEASE [now] $x $y
+            }
+        }
+
     }
 
+    proc touch_deinit {} {
+        variable touch_windows
+	dservRemoveMatch $touch_windows(dpoint)/status
+	dservRemoveMatch ess/touch_press
+	dservRemoveMatch ess/touch_release
+    }
+    
     proc touch_check_state {win} {
         variable touch_windows
         set state [touchGetIndexedParam $win state]
