@@ -2890,6 +2890,16 @@ namespace eval ess {
         dservTouch mtouch/touchvals
     }
 
+    proc touch_evt_put { name data } {
+	if {!$::ess::in_obs} return
+	lassign $data x y
+	if { $name == "ess/touch_press" } {
+	    ::ess::evt_put TOUCH PRESS [now] $x $y
+	} elseif { $name == "ess/touch_release" } {
+	    ::ess::evt_put TOUCH RELEASE [now] $x $y
+	}
+    }
+    
     proc touch_init {} {
         variable touch_windows
         variable current
@@ -2924,21 +2934,9 @@ namespace eval ess {
 
 	# inject press/release events
 	dservAddExactMatch ess/touch_press
-        dpointSetScript ess/touch_press {
-            if {$::ess::in_obs} {
-                lassign $data x y
-                ::ess::evt_put TOUCH PRESS [now] $x $y
-            }
-        }
-	
+        dpointSetScript ess/touch_press ::ess::touch_evt_put
 	dservAddExactMatch ess/touch_release  
-        dpointSetScript ess/touch_release {
-            if {$::ess::in_obs} {
-                lassign $data x y
-                ::ess::evt_put TOUCH RELEASE [now] $x $y
-            }
-        }
-
+        dpointSetScript ess/touch_release ::ess::touch_evt_put
     }
 
     proc touch_deinit {} {
