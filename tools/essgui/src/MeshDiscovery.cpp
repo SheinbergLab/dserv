@@ -19,7 +19,8 @@ MeshDiscovery::MeshDiscovery(int discoveryPort)
 }
 
 MeshDiscovery::~MeshDiscovery() {
-    closeSocket();
+  stopDiscovery();
+  closeSocket();
 }
 
 int MeshDiscovery::discoverPeers(int timeoutMs) {
@@ -32,21 +33,21 @@ int MeshDiscovery::discoverPeers(int timeoutMs) {
     
     //    std::cout << "Listening for mesh heartbeats for " << (timeoutMs / 1000.0) << " seconds..." << std::endl;
     
-    while (std::chrono::steady_clock::now() - startTime < timeoutDuration) {
-        char buffer[1024];
-        struct sockaddr_in fromAddr;
-        socklen_t fromLen = sizeof(fromAddr);
-        
-        ssize_t bytesReceived = recvfrom(meshSocket, buffer, sizeof(buffer) - 1, 0,
-                                        (struct sockaddr*)&fromAddr, &fromLen);
-        
-        if (bytesReceived > 0) {
-            buffer[bytesReceived] = '\0';
-            processMeshHeartbeat(buffer, inet_ntoa(fromAddr.sin_addr));
-        } else {
-            // Brief sleep to avoid busy waiting
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
+    while (!shouldStop && std::chrono::steady_clock::now() - startTime < timeoutDuration) {
+      char buffer[1024];
+      struct sockaddr_in fromAddr;
+      socklen_t fromLen = sizeof(fromAddr);
+      
+      ssize_t bytesReceived = recvfrom(meshSocket, buffer, sizeof(buffer) - 1, 0,
+				       (struct sockaddr*)&fromAddr, &fromLen);
+      
+      if (bytesReceived > 0) {
+	buffer[bytesReceived] = '\0';
+	processMeshHeartbeat(buffer, inet_ntoa(fromAddr.sin_addr));
+      } else {
+	// Brief sleep to avoid busy waiting
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
     }
     
     closeSocket();
@@ -305,30 +306,31 @@ int MeshDiscovery::createSocket() {
 }
 
 void MeshDiscovery::closeSocket() {
-    if (meshSocket >= 0) {
-        close(meshSocket);
-        meshSocket = -1;
-    }
+  if (meshSocket >= 0) {
+    close(meshSocket);
+    meshSocket = -1;
+  }
 }
 
 void MeshDiscovery::startBackgroundDiscovery(int timeoutMs) {
-    if (discoveryInProgress.load()) {
-        return; // Already running
-    }
-    
-    discoveryInProgress = true;
-    discoveryComplete = false;
-    
-    // Detach any existing thread
-    if (discoveryThread.joinable()) {
-        discoveryThread.detach();
-    }
-    
-    discoveryThread = std::thread([this, timeoutMs]() {
-        this->discoverPeers(timeoutMs);
-        discoveryInProgress = false;
-        discoveryComplete = true;
-    });
+  stopDiscovery();
+  
+  shouldStop = false;
+  discoveryInProgress = true;
+  discoveryComplete = false;
+  
+  discoveryThread = std::thread([this, timeoutMs]() {
+    this->discoverPeers(timeoutMs);
+    discoveryInProgress = false;
+    discoveryComplete = true;
+  });
+}
+
+void MeshDiscovery::stopDiscovery() {
+  shouldStop = true;
+  if (discoveryThread.joinable()) {
+    discoveryThread.join();  // Wait for thread to finish
+  }
 }
 
 bool MeshDiscovery::isDiscoveryComplete() const {
