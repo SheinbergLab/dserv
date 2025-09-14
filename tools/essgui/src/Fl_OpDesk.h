@@ -139,6 +139,7 @@
 
 #include <vector>               // STL vector array
 #include <cstdio>               // stderr
+#include <cstdint>
 
 #include "Fl_OpBox.h"
 #include "Fl_OpConnect.h"
