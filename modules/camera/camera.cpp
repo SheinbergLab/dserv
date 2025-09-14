@@ -220,10 +220,16 @@ public:
     if (ret) return false;
     
     auto cameras = cm_->cameras();
-    if (cameras.empty()) return false;
+    if (cameras.empty()) {
+      cm_->stop();
+      return false;
+    }
     
     // Use specified index or default to 0
-    int use_index = (index >= 0 && index < cameras.size()) ? index : 0;
+    int use_index = 0;
+    if (index >= 0 && index < static_cast<int>(cameras.size())) {
+        use_index = index;
+    }
     
     std::cout << "Using camera " << use_index << ": " 
               << cameras[use_index]->id() << std::endl;
@@ -246,15 +252,28 @@ public:
 		 unsigned int preview_width = 0, 
 		 unsigned int preview_height = 0) {
     std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (!camera_) {
+        std::cerr << "Cannot configure: no camera object" << std::endl;
+        return false;
+    }
     
     if (state_ != CameraState::IDLE) {
       std::cerr << "Cannot configure camera while in use" << std::endl;
       return false;
     }
-  
+
+    stream_ = nullptr;
+    preview_stream_ = nullptr;
+    config_.reset();
+    allocator_.reset();
+    requests_.clear();
+    image_data_.clear();
+    jpeg_data_.clear();
+    preview_data_.clear();
+    
     width_ = width;
     height_ = height;
-
     preview_width_ = preview_width;
     preview_height_ = preview_height;
     preview_enabled_ = (preview_width > 0 && preview_height > 0);
@@ -268,11 +287,13 @@ public:
       roles.push_back(StreamRole::Viewfinder);
     }
     
-    config_ = camera_->generateConfiguration(roles);
-    if (!config_ || config_->size() == 0) {
-      return false;
+    try {
+        config_ = camera_->generateConfiguration(roles);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to generate configuration: " << e.what() << std::endl;
+        return false;
     }
-
+    
     StreamConfiguration &stream_config = config_->at(0);
 
     // Check what formats are available
@@ -372,12 +393,6 @@ public:
       preview_config.bufferCount = 4;
     }
     
-    CameraConfiguration::Status validation = config_->validate();
-    if (validation == CameraConfiguration::Invalid) {
-      std::cerr << "Camera configuration invalid" << std::endl;
-      return false;
-    }
-  
     if (validation == CameraConfiguration::Adjusted) {
       std::cout << "Configuration adjusted:" << std::endl;
       std::cout << "  Size: " << stream_config.size.width << "x" <<
@@ -387,6 +402,12 @@ public:
       // Update our stored dimensions
       width_ = stream_config.size.width;
       height_ = stream_config.size.height;
+    }
+
+    CameraConfiguration::Status validation = config_->validate();
+    if (validation == CameraConfiguration::Invalid) {
+      std::cerr << "Camera configuration invalid" << std::endl;
+      return false;
     }
 
     int ret = camera_->configure(config_.get());
