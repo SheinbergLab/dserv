@@ -321,7 +321,7 @@ public:
 
     return (size > 0);
   }
-  
+
   int ds_command(int sock, std::string cmd, std::string &retstr)
   {
     if (cmd.empty() || cmd.back() != '\n') cmd += '\n';
@@ -330,21 +330,29 @@ public:
     int nwritten = send(sock, cmd.c_str(), cmd.length(), 0);
     if (len != nwritten) return 0;
     
-  #ifndef _MSC_VER
-    retstr.resize(4096);
-    ssize_t n = read(sock, &retstr[0], retstr.length());
-  #else
-    char recvbuf[4096];
-     ssize_t n = recv(sock, recvbuf, sizeof(recvbuf), 0);
-     if (n) retstr = std::string(recvbuf, n);   
-  #endif
-
-    if (!n) {
-      return 0;
+    retstr.clear();
+    
+#ifndef _MSC_VER
+    // Unix/Linux: read byte by byte until newline
+    char c;
+    while (read(sock, &c, 1) == 1) {
+      if (c == '\n') break;
+      retstr += c;
+      if (retstr.length() > 4096) return 0; // Safety check
     }
-    return 1;
+#else
+    // Windows: recv byte by byte until newline  
+    char c;
+    while (recv(sock, &c, 1, 0) == 1) {
+      if (c == '\n') break;
+      retstr += c;
+      if (retstr.length() > 4096) return 0; // Safety check
+    }
+#endif
+    
+    return !retstr.empty();
   }
-
+  
   int get_keys(std::string host, std::string &keys, int port=4620)
   {
     int sock = client_socket(host.c_str(), port);
@@ -394,10 +402,30 @@ public:
     std::string retstr;
     ds_command(sock, s, retstr);
 
-    //std::cout << "reg: " << s << " -> " << retstr;
-
     close_socket(sock);
-  
+    
+    try {
+      if (retstr.empty()) {
+	return -1;  // Connection failed
+      }
+      
+      // Remove any whitespace/newlines that might cause parsing issues
+      retstr.erase(std::remove_if(retstr.begin(), retstr.end(), ::isspace), retstr.end());
+      
+      if (retstr.empty()) {
+	return -1;  // No valid data
+      }
+      
+      return std::stoi(retstr);
+      
+    } catch (const std::invalid_argument& e) {
+      std::cerr << "reg(): Invalid response format: '" << retstr << "'" << std::endl;
+      return -1;
+    } catch (const std::out_of_range& e) {
+      std::cerr << "reg(): Response out of range: '" << retstr << "'" << std::endl;
+      return -1;
+    }
+    
     return (stoi(retstr));
   }
   
@@ -423,6 +451,28 @@ public:
     ds_command(sock, s, retstr);
     
     close_socket(sock);
+    
+    // Same error handling as above
+    try {
+      if (retstr.empty()) {
+	return -1;
+      }
+      
+      retstr.erase(std::remove_if(retstr.begin(), retstr.end(), ::isspace), retstr.end());
+      
+      if (retstr.empty()) {
+	return -1;
+      }
+      
+      return std::stoi(retstr);
+      
+    } catch (const std::invalid_argument& e) {
+      std::cerr << "unreg(): Invalid response format: '" << retstr << "'" << std::endl;
+      return -1;
+    } catch (const std::out_of_range& e) {
+      std::cerr << "unreg(): Response out of range: '" << retstr << "'" << std::endl;
+      return -1;
+    }
     
     return (stoi(retstr));
   }
