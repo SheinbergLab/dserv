@@ -2894,20 +2894,21 @@ namespace eval ess {
     }
 
     proc touch_evt_put { name data } {
-	set min_us 5000
+	# events closer than 15ms aparts skipped
+	set min_us 15000
 	set timestamp [dservTimestamp $name]
 	if {!$::ess::in_obs} return
 	lassign $data x y
 	if { $name == "ess/touch_press" } {
 	    variable last_touch_press
 	    if { [expr ($timestamp-$last_touch_press)>$min_us] } {
-		::ess::evt_put TOUCH PRESS [now] $x $y
+		::ess::evt_put TOUCH PRESS $timestamp $x $y
 		set last_touch_press $timestamp
 	    }
 	} elseif { $name == "ess/touch_release" } {
 	    variable last_touch_release
 	    if { [expr ($timestamp-$last_touch_release)>$min_us] } {
-		::ess::evt_put TOUCH RELEASE [now] $x $y
+		::ess::evt_put TOUCH RELEASE $timestamp $x $y
 		set last_touch_release $timestamp
 	    }
 	}
