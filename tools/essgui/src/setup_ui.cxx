@@ -150,6 +150,10 @@ static void cb_vGain_input(Wheel_Spinner* o, long v) {
   update_eye_settings(o,v);
 }
 
+EssEventTableWidget *event_widget=(EssEventTableWidget *)0;
+
+Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
+
 Fl_Scroll *rmt_commands_widget=(Fl_Scroll *)0;
 
 DGTable *stimdg_widget=(DGTable *)0;
@@ -173,16 +177,6 @@ TclEditor *loaders_editor=(TclEditor *)0;
 TclEditor *variants_editor=(TclEditor *)0;
 
 TclEditor *stim_editor=(TclEditor *)0;
-
-Fl_OpDesk *opdesk_widget=(Fl_OpDesk *)0;
-
-Fl_Input *FileEntry=(Fl_Input *)0;
-
-Fl_Button *FileOpen=(Fl_Button *)0;
-
-Fl_Button *FileClose=(Fl_Button *)0;
-
-Fl_Button *FileSuggest=(Fl_Button *)0;
 
 Fl_Console *output_term=(Fl_Console *)0;
 
@@ -373,6 +367,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           { Fl_Tabs* o = new Fl_Tabs(503, 67, 762, 640);
             { Fl_Group* o = new Fl_Group(504, 91, 747, 614, "behavior");
               o->labelsize(16);
+              o->hide();
               { Fl_Group* o = new Fl_Group(514, 119, 241, 264, "Behavior Monitor");
                 o->box(FL_DOWN_BOX);
                 { eyetouch_widget = new EyeTouchWin(519, 126, 232, 232, "EyeWindow");
@@ -582,6 +577,39 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Group* o
               o->end();
             } // Fl_Group* o
+            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "events");
+              o->labelsize(16);
+              o->hide();
+              { event_widget = new EssEventTableWidget(513, 111, 742, 588, "ESS Events");
+                event_widget->box(FL_NO_BOX);
+                event_widget->color(FL_BACKGROUND_COLOR);
+                event_widget->selection_color(FL_BACKGROUND_COLOR);
+                event_widget->labeltype(FL_NO_LABEL);
+                event_widget->labelfont(0);
+                event_widget->labelsize(14);
+                event_widget->labelcolor(FL_FOREGROUND_COLOR);
+                event_widget->align(Fl_Align(FL_ALIGN_TOP));
+                event_widget->when(FL_WHEN_RELEASE);
+                event_widget->end();
+              } // EssEventTableWidget* event_widget
+              o->end();
+            } // Fl_Group* o
+            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "system");
+              o->labelsize(16);
+              { opdesk_widget = new Fl_OpDesk(513, 121, 466, 580, "State System");
+                opdesk_widget->box(FL_THIN_DOWN_BOX);
+                opdesk_widget->color(FL_BACKGROUND_COLOR);
+                opdesk_widget->selection_color(FL_BACKGROUND_COLOR);
+                opdesk_widget->labeltype(FL_NORMAL_LABEL);
+                opdesk_widget->labelfont(0);
+                opdesk_widget->labelsize(14);
+                opdesk_widget->labelcolor(FL_FOREGROUND_COLOR);
+                opdesk_widget->align(Fl_Align(FL_ALIGN_TOP));
+                opdesk_widget->when(FL_WHEN_RELEASE);
+                opdesk_widget->end();
+              } // Fl_OpDesk* opdesk_widget
+              o->end();
+            } // Fl_Group* o
             { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "stim");
               o->labelsize(16);
               o->hide();
@@ -703,50 +731,6 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                 } // Fl_Group* o
                 editor_tabs->end();
               } // Fl_Tabs* editor_tabs
-              o->end();
-            } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "system");
-              o->labelsize(16);
-              o->hide();
-              { opdesk_widget = new Fl_OpDesk(513, 121, 466, 580, "State System");
-                opdesk_widget->box(FL_THIN_DOWN_BOX);
-                opdesk_widget->color(FL_BACKGROUND_COLOR);
-                opdesk_widget->selection_color(FL_BACKGROUND_COLOR);
-                opdesk_widget->labeltype(FL_NORMAL_LABEL);
-                opdesk_widget->labelfont(0);
-                opdesk_widget->labelsize(14);
-                opdesk_widget->labelcolor(FL_FOREGROUND_COLOR);
-                opdesk_widget->align(Fl_Align(FL_ALIGN_TOP));
-                opdesk_widget->when(FL_WHEN_RELEASE);
-                opdesk_widget->end();
-              } // Fl_OpDesk* opdesk_widget
-              o->end();
-            } // Fl_Group* o
-            { Fl_Group* o = new Fl_Group(503, 92, 762, 611, "data");
-              o->labelsize(16);
-              o->hide();
-              { Fl_Group* o = new Fl_Group(513, 113, 387, 116, "Datafile");
-                { Fl_Group* o = new Fl_Group(524, 123, 376, 92);
-                  o->box(FL_UP_FRAME);
-                  { FileEntry = new Fl_Input(606, 133, 278, 24, "Filename:");
-                  } // Fl_Input* FileEntry
-                  { Fl_Pack* o = new Fl_Pack(606, 171, 226, 32);
-                    o->type(1);
-                    { FileOpen = new Fl_Button(613, 171, 68, 32, "Open");
-                      FileOpen->callback((Fl_Callback*)file_open_cb);
-                    } // Fl_Button* FileOpen
-                    { FileClose = new Fl_Button(685, 171, 68, 32, "Close");
-                      FileClose->callback((Fl_Callback*)file_close_cb);
-                    } // Fl_Button* FileClose
-                    { FileSuggest = new Fl_Button(757, 171, 68, 32, "Suggest");
-                      FileSuggest->callback((Fl_Callback*)file_suggest_cb);
-                    } // Fl_Button* FileSuggest
-                    o->end();
-                  } // Fl_Pack* o
-                  o->end();
-                } // Fl_Group* o
-                o->end();
-              } // Fl_Group* o
               o->end();
             } // Fl_Group* o
             o->end();

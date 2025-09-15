@@ -14,6 +14,7 @@ decl {\#include "Fl_Console.hpp"
 \#include "WheelSpinner.h"
 \#include "VirtualEye.hpp"
 \#include "VirtualJoystick.hpp"
+\#include "EssEventTableWidget.h"
 \#include "Fl_OpDesk.h"} {public global
 }
 
@@ -21,7 +22,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {190 104 1280 800} type Double resizable visible
+    xywh {190 79 1280 800} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
@@ -211,11 +212,11 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             xywh {503 67 762 640}
           } {
             Fl_Group {} {
-              label behavior open
-              xywh {504 91 747 614} labelsize 16
+              label behavior
+              xywh {504 91 747 614} labelsize 16 hide
             } {
               Fl_Group {} {
-                label {Behavior Monitor} open
+                label {Behavior Monitor}
                 xywh {514 119 241 264} box DOWN_BOX
               } {
                 Fl_Box eyetouch_widget {
@@ -227,7 +228,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   label {window status} open
                   xywh {514 358 241 23} box THIN_DOWN_FRAME labeltype NO_LABEL
                 } {
-                  Fl_Pack virtual_checkbox_group {open selected
+                  Fl_Pack virtual_checkbox_group {open
                     xywh {524 361 221 20} type HORIZONTAL
                   } {
                     Fl_Check_Button virtual_eye_checkbox {
@@ -291,7 +292,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   }
                 }
                 Fl_Group {} {
-                  label Buttons open
+                  label Buttons
                   xywh {622 425 130 74}
                 } {
                   Fl_Pack {} {open
@@ -368,6 +369,26 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               }
             }
             Fl_Group {} {
+              label events
+              xywh {503 92 762 611} labelsize 16 hide
+            } {
+              Fl_Group event_widget {
+                label {ESS Events} open
+                xywh {513 111 742 588} labeltype NO_LABEL
+                class EssEventTableWidget
+              } {}
+            }
+            Fl_Group {} {
+              label system selected
+              xywh {503 92 762 611} labelsize 16
+            } {
+              Fl_Scroll opdesk_widget {
+                label {State System} open
+                xywh {513 121 466 580} box THIN_DOWN_BOX
+                class Fl_OpDesk
+              } {}
+            }
+            Fl_Group {} {
               label stim
               xywh {503 92 762 611} labelsize 16 hide
             } {
@@ -382,7 +403,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
             }
             Fl_Group {} {
-              label scripts open
+              label scripts
               xywh {503 92 762 613} labelsize 16 hide
             } {
               Fl_Pack {} {
@@ -460,53 +481,6 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                     label stim
                     xywh {506 172 759 515} selection_color 31 labeltype NO_LABEL
                     class TclEditor
-                  }
-                }
-              }
-            }
-            Fl_Group {} {
-              label system
-              xywh {503 92 762 611} labelsize 16 hide
-            } {
-              Fl_Scroll opdesk_widget {
-                label {State System} open
-                xywh {513 121 466 580} box THIN_DOWN_BOX
-                class Fl_OpDesk
-              } {}
-            }
-            Fl_Group {} {
-              label data
-              xywh {503 92 762 611} labelsize 16 hide
-            } {
-              Fl_Group {} {
-                label Datafile open
-                xywh {513 113 387 116}
-              } {
-                Fl_Group {} {open
-                  xywh {524 123 376 92} box UP_FRAME
-                } {
-                  Fl_Input FileEntry {
-                    label {Filename:}
-                    xywh {606 133 278 24}
-                  }
-                  Fl_Pack {} {open
-                    xywh {606 171 226 32} type HORIZONTAL
-                  } {
-                    Fl_Button FileOpen {
-                      label Open
-                      callback file_open_cb
-                      xywh {613 171 68 32}
-                    }
-                    Fl_Button FileClose {
-                      label Close
-                      callback file_close_cb
-                      xywh {685 171 68 32}
-                    }
-                    Fl_Button FileSuggest {
-                      label Suggest
-                      callback file_suggest_cb
-                      xywh {757 171 68 32}
-                    }
                   }
                 }
               }

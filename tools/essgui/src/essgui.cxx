@@ -365,6 +365,8 @@ public:
   {
     ds_sock->unreg(host.c_str());
 
+    event_widget->onHostDisconnected();
+    
     set_controls_enabled(false, true);
 
     host.clear();
@@ -408,6 +410,7 @@ public:
     ds_sock->reg(hoststr.c_str());
     ds_sock->add_match(hoststr.c_str(), "ess/*");
     ds_sock->add_match(hoststr.c_str(), "system/*");
+    ds_sock->add_match(hoststr.c_str(), "eventlog/events");
     ds_sock->add_match(hoststr.c_str(), "stimdg");
     ds_sock->add_match(hoststr.c_str(), "trialdg");
     ds_sock->add_match(hoststr.c_str(), "openiris/settings");
@@ -439,6 +442,8 @@ public:
     update_touch_regions();
 
     set_controls_enabled(true);
+
+    event_widget->onHostConnected();
     
     return 1;
   }
@@ -605,15 +610,6 @@ void file_close_cb(Fl_Button*, void*)
 
 }
 
-void file_suggest_cb(Fl_Button*, void*)
-{
-  std::string rstr;
-  const char *cmd = "ess::file_suggest";
-  auto result = esscmd((char *) cmd, rstr);
-  if (!rstr.empty() && rstr[0] == '!') return;  
-  FileEntry->value(rstr.c_str());
-}
-		  
 void host_cb(Fl_Tree*, void*) {
     Fl_Tree_Item *item = host_widget->callback_item();
     if (item) {
@@ -1813,18 +1809,13 @@ int update_remote_commands(const char *rmt_cmds)
 
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
-  // JSON parsing variables
+  if (!dpoint) return;
 
-  static int obs_id = 0, obs_total;
-  static int block_percent_correct, block_percent_complete;
-  
   json_error_t error;
   json_t *root;
 
-  // Parse the JSON string
   root = json_loads(dpoint, 0, &error);
 
-  // Check for parsing errors
   if (!root) {
        return;
   }
@@ -1835,17 +1826,30 @@ void process_dpoint_cb(void *cbdata) {
   json_t *timestamp = json_object_get(root, "timestamp");
   json_t *data = json_object_get(root, "data");
 
-  if (!strcmp(json_string_value(name), "ess/obs_active")) {
-   if (!strcmp(json_string_value(data), "0")) {
-   	obscount_widget->textcolor(FL_FOREGROUND_COLOR);
-	//	stimid_widget->value("");
-	//	stimid_widget->redraw_label();
-   } else {
-   	obscount_widget->textcolor(FL_FOREGROUND_COLOR);
-	obscount_widget->redraw();
-   }
+  // Get safe string values
+  const char* name_str = json_string_value(name);
+  const char* data_str = json_string_value(data);
+    
+  static int obs_id = 0, obs_total;
+  static int block_percent_correct, block_percent_complete;
+  
+  if (!strcmp(name_str, "eventlog/events")) {
+    if (event_widget) {
+      // Pass the entire JSON string, not just the data field
+      event_widget->processEventlogData(std::string(dpoint));
+    }
   }
-
+  else if (!strcmp(json_string_value(name), "ess/obs_active")) {
+    if (!strcmp(json_string_value(data), "0")) {
+      obscount_widget->textcolor(FL_FOREGROUND_COLOR);
+      //	stimid_widget->value("");
+      //	stimid_widget->redraw_label();
+    } else {
+      obscount_widget->textcolor(FL_FOREGROUND_COLOR);
+      obscount_widget->redraw();
+    }
+  }
+  
   else if (!strcmp(json_string_value(name), "ess/em_pos")) {
     float x, y;
     int d1, d2;
@@ -1854,7 +1858,7 @@ void process_dpoint_cb(void *cbdata) {
       eyetouch_widget->em_pos(x, y);
     }
   }
-
+  
   else if (!strcmp(json_string_value(name), "ess/touch_press")) {
     int x, y;
     if (sscanf(json_string_value(data), "%d %d", &x, &y) == 2) {
@@ -1883,6 +1887,7 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "ess/transition_state")) {
     g_App->select_transition_state(json_string_value(data));
   }
+
   else if (!strcmp(json_string_value(name), "ess/action_state")) {
     g_App->select_action_state(json_string_value(data));
   }
@@ -1906,8 +1911,10 @@ void process_dpoint_cb(void *cbdata) {
   else if (!strcmp(json_string_value(name), "ess/state")) {
    if (!strcmp(json_string_value(data), "Stopped")) {
    	system_status_widget->textcolor(FL_RED);
+	event_widget->onSystemStateChanged(false);	
    } else if (!strcmp(json_string_value(data),"Running")) {
    	system_status_widget->textcolor(fl_rgb_color(40, 200, 20));
+	event_widget->onSystemStateChanged(true);	
    } else system_status_widget->textcolor(FL_BLACK);
     system_status_widget->value(json_string_value(data));
     system_status_widget->redraw_label();

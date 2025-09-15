@@ -14,6 +14,7 @@
 #include "WheelSpinner.h"
 #include "VirtualEye.hpp"
 #include "VirtualJoystick.hpp"
+#include "EssEventTableWidget.h"
 #include "Fl_OpDesk.h"
 #include <FL/Fl_Double_Window.H>
 extern Fl_Double_Window *main_window;
@@ -73,6 +74,8 @@ extern Fl_Check_Button *hInvert_checkbox;
 extern Fl_Check_Button *vInvert_checkbox;
 extern Wheel_Spinner *hGain_input;
 extern Wheel_Spinner *vGain_input;
+extern EssEventTableWidget *event_widget;
+extern Fl_OpDesk *opdesk_widget;
 extern Fl_Scroll *rmt_commands_widget;
 extern DGTable *stimdg_widget;
 extern void set_branch_cb(Fl_Choice*, void*);
@@ -89,15 +92,6 @@ extern TclEditor *protocol_editor;
 extern TclEditor *loaders_editor;
 extern TclEditor *variants_editor;
 extern TclEditor *stim_editor;
-extern Fl_OpDesk *opdesk_widget;
-#include <FL/Fl_Input.H>
-extern Fl_Input *FileEntry;
-extern void file_open_cb(Fl_Button*, void*);
-extern Fl_Button *FileOpen;
-extern void file_close_cb(Fl_Button*, void*);
-extern Fl_Button *FileClose;
-extern void file_suggest_cb(Fl_Button*, void*);
-extern Fl_Button *FileSuggest;
 extern Fl_Console *output_term;
 Fl_Double_Window * setup_ui(int argc, char *argv[]);
 #endif
