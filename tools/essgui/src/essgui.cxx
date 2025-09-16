@@ -2315,7 +2315,7 @@ void process_dpoint_cb(void *cbdata) {
   
   // Free the JSON object to prevent memory leaks
   json_decref(root);
-  //  free(cbdata);
+  free(cbdata);
   return;
 }
 
