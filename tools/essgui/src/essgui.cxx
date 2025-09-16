@@ -1817,7 +1817,8 @@ void process_dpoint_cb(void *cbdata) {
   root = json_loads(dpoint, 0, &error);
 
   if (!root) {
-       return;
+    free(cbdata);
+    return;
   }
 
   // Extract and print values
@@ -1949,11 +1950,14 @@ void process_dpoint_cb(void *cbdata) {
     obscount_widget->value(buf);
     obscount_widget->redraw_label();
   }
-
+  
   else if (!strcmp(json_string_value(name), "ess/subject")) {
 
     // has happened, not sure why...
-    if (!data) return;
+    if (!data) {
+      free(cbdata);
+      return;
+    }
     
     int idx;
     if ((idx = subject_widget->find_index(json_string_value(data))) >= 0) {
@@ -2075,20 +2079,24 @@ void process_dpoint_cb(void *cbdata) {
   }
 
 
-else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
+  else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
     // Parse the JSON just like Qt6 does
     json_error_t error;
-    json_t *root = json_loads(json_string_value(data), 0, &error);
-    if (!root) {
-        return;
+    json_t *nestedroot = json_loads(json_string_value(data), 0, &error);
+    if (!nestedroot) {
+      json_decref(root);
+      free(cbdata);
+      return;
     }
     
-    json_t *options = json_object_get(root, "options");
-    json_t *loader_arg_names = json_object_get(root, "loader_arg_names");
-    json_t *loader_args = json_object_get(root, "loader_args");
+    json_t *options = json_object_get(nestedroot, "options");
+    json_t *loader_arg_names = json_object_get(nestedroot, "loader_arg_names");
+    json_t *loader_args = json_object_get(nestedroot, "loader_args");
     
     if (!options || !loader_arg_names || !loader_args) {
+        json_decref(nestedroot);
         json_decref(root);
+	free(cbdata);
         return;
     }
     
@@ -2159,26 +2167,11 @@ else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
     options_widget->end();
     options_widget->redraw();
     
-    json_decref(root);
-}  
-  
+    json_decref(nestedroot);
+  }  
+    
   else if (!strcmp(json_string_value(name), "ess/variant_info")) {
-#if 0
-    Tcl_Obj *options_key = Tcl_NewStringObj("loader_arg_options", -1);
-    Tcl_Obj *args_key = Tcl_NewStringObj("loader_args", -1);
-    Tcl_Obj *dict = Tcl_NewStringObj(json_string_value(data), -1);
-    Tcl_Obj *loader_arg_options, *loader_args;
-    if (Tcl_DictObjGet(g_App->interp(), dict, options_key, &loader_arg_options) == TCL_OK) {
-      if (Tcl_DictObjGet(g_App->interp(), dict, args_key, &loader_args) == TCL_OK) {
-	if (loader_arg_options && loader_args) {
-	  set_variant_options(loader_args, loader_arg_options);
-	}
-      }
-    }
-    Tcl_DecrRefCount(dict);
-    Tcl_DecrRefCount(args_key);
-    Tcl_DecrRefCount(options_key);
-#endif
+    // handled by json version above
   }
 
   else if (!strcmp(json_string_value(name), "ess/param_settings")) {
@@ -2319,9 +2312,10 @@ else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
     output_term->append(json_string_value(data));
     output_term->append("\n");
   }
-
+  
   // Free the JSON object to prevent memory leaks
   json_decref(root);
+  //  free(cbdata);
   return;
 }
 
