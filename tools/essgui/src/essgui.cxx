@@ -15,6 +15,8 @@
 #include <locale>
 #include <vector>
 #include <unordered_map>
+#include <queue>
+#include <atomic>
 
 #include <tcl.h>
 #include <df.h>
@@ -36,6 +38,8 @@
 #include "TclEditor.h"
 #include "EssguiFileDialog.h"
 
+#include "MessageQueue.h"
+
 #include "DservSocket.h"
 #include "TclInterp.h"
 #include "setup_ui.h"
@@ -47,7 +51,6 @@
 
 #include "essgui.h"
 #include "mdns.h"
-
 
 void menu_cb(Fl_Widget*, void*) {
 }
@@ -1806,6 +1809,513 @@ int update_remote_commands(const char *rmt_cmds)
   
 }
 
+void process_single_message(const std::string& dpoint) {
+  json_error_t error;
+  json_t *root;
+
+  root = json_loads(dpoint.c_str(), 0, &error);
+
+  if (!root) {
+    return;
+  }
+
+  // Extract and print values
+  json_t *name = json_object_get(root, "name");
+  json_t *dtype = json_object_get(root, "dtype");
+  json_t *timestamp = json_object_get(root, "timestamp");
+  json_t *data = json_object_get(root, "data");
+
+  // Get safe string values
+  const char* name_str = json_string_value(name);
+  const char* data_str = json_string_value(data);
+    
+  static int obs_id = 0, obs_total;
+  static int block_percent_correct, block_percent_complete;
+  
+  if (!strcmp(name_str, "eventlog/events")) {
+    if (event_widget) {
+      // Pass the entire JSON string, not just the data field
+      event_widget->processEventlogData(std::string(dpoint));
+    }
+  }
+  else if (!strcmp(json_string_value(name), "ess/obs_active")) {
+    if (!strcmp(json_string_value(data), "0")) {
+      obscount_widget->textcolor(FL_FOREGROUND_COLOR);
+      //	stimid_widget->value("");
+      //	stimid_widget->redraw_label();
+    } else {
+      obscount_widget->textcolor(FL_FOREGROUND_COLOR);
+      obscount_widget->redraw();
+    }
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/em_pos")) {
+    float x, y;
+    int d1, d2;
+    if (sscanf(json_string_value(data), "%d %d %f %f",
+	       &d1, &d2, &x, &y) == 4) {
+      eyetouch_widget->em_pos(x, y);
+      // Just store values without drawing
+      //static float last_x = 0, last_y = 0;
+      //last_x = x; last_y = y;      
+    }
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/touch_press")) {
+    int x, y;
+    if (sscanf(json_string_value(data), "%d %d", &x, &y) == 2) {
+        eyetouch_widget->touch_pos(x, y);
+        eyetouch_widget->show_touch(true);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/touch_release")) {
+    eyetouch_widget->show_touch(false);
+  }
+        
+  else if (!strcmp(json_string_value(name), "ess/touch_drag")) {
+    int x, y;
+    if (sscanf(json_string_value(data), "%d %d", &x, &y) == 2) {
+        eyetouch_widget->touch_pos(x, y);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/touch_state")) {
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/touch_event_type")) {
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/transition_state")) {
+    g_App->select_transition_state(json_string_value(data));
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/action_state")) {
+    g_App->select_action_state(json_string_value(data));
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/reset")) {
+    clear_counter_widgets();
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/in_obs")) {
+    if (!strcmp(json_string_value(data), "1")) g_App->obs_on();
+    else g_App->obs_off();
+  }
+
+  /* not yet connected to any actions...*/
+  else if (!strcmp(json_string_value(name), "ess/running")) { }
+  else if (!strncmp(json_string_value(name), "ess/user_", 9)) { }
+  else if (!strcmp(json_string_value(name), "ess/block_id")) { }
+  else if (!strcmp(json_string_value(name), "ess/touch")) { }
+  else if (!strncmp(json_string_value(name), "ess/block_n", 11)) { }
+  
+  else if (!strcmp(json_string_value(name), "ess/state")) {
+   if (!strcmp(json_string_value(data), "Stopped")) {
+   	system_status_widget->textcolor(FL_RED);
+	event_widget->onSystemStateChanged(false);	
+   } else if (!strcmp(json_string_value(data),"Running")) {
+   	system_status_widget->textcolor(fl_rgb_color(40, 200, 20));
+	event_widget->onSystemStateChanged(true);	
+   } else system_status_widget->textcolor(FL_BLACK);
+    system_status_widget->value(json_string_value(data));
+    system_status_widget->redraw_label();
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/status")) {
+    if (!strcmp(json_string_value(data), "loading")) {
+      fl_cursor(FL_CURSOR_WAIT);
+      g_App->set_controls_enabled(false);
+      Fl::flush();
+    }
+    else if (!strcmp(json_string_value(data), "running")) {
+      fl_cursor(FL_CURSOR_DEFAULT);
+      g_App->set_controls_enabled(false);
+      Fl::flush();
+    }
+    else if (!strcmp(json_string_value(data), "stopped")) {
+      fl_cursor(FL_CURSOR_DEFAULT);
+      g_App->set_controls_enabled(true);
+      Fl::flush();
+    }
+  }
+
+  // obs_id always precedes obs_total
+  else if (!strcmp(json_string_value(name), "ess/obs_id")) {
+    obs_id = atoi(json_string_value(data));
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/obs_total")) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d/%s", obs_id+1, json_string_value(data));
+    obscount_widget->value(buf);
+    obscount_widget->redraw_label();
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/subject")) {
+
+    // has happened, not sure why...
+    if (!data) {
+      return;
+    }
+    
+    int idx;
+    if ((idx = subject_widget->find_index(json_string_value(data))) >= 0) {
+      subject_widget->value(idx);
+    } else {
+      idx = subject_widget->add(json_string_value(data));
+      subject_widget->value(idx);
+    }
+    subject_widget->redraw();
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/block_pct_complete")) {
+    block_percent_complete = (int) (atof(json_string_value(data))*100);
+    update_general_perf_widget(block_percent_complete, block_percent_correct);
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/block_pct_correct")) {
+    block_percent_correct = (int) (atof(json_string_value(data))*100);
+    update_general_perf_widget(block_percent_complete, block_percent_correct);
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/em_region_setting")) {
+    int settings[8];
+    if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
+	       &settings[0], &settings[1], &settings[2], &settings[3],
+	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
+      eyetouch_widget->eye_region_set(settings);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/em_region_status")) {
+    int status[4];
+    if (sscanf(json_string_value(data), "%d %d %d %d",
+	       &status[0], &status[1], &status[2], &status[3]) == 4) {
+      eyetouch_widget->eye_status_set(status);
+    }
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/touch_region_setting")) {
+    int settings[8];
+    if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
+	       &settings[0], &settings[1], &settings[2], &settings[3],
+	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
+      eyetouch_widget->touch_region_set(settings);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/touch_region_status")) {
+    int status[4];
+    if (sscanf(json_string_value(data), "%d %d %d %d",
+	       &status[0], &status[1], &status[2], &status[3]) == 4) {
+      eyetouch_widget->touch_status_set(status);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/screen_w")) {
+    int w;
+    if (sscanf(json_string_value(data), "%d", &w) == 1)
+      eyetouch_widget->screen_w(w);
+  }
+  else if (!strcmp(json_string_value(name), "ess/screen_h")) {
+    int h;
+    if (sscanf(json_string_value(data), "%d", &h) == 1)
+      eyetouch_widget->screen_h(h);
+  }
+  else if (!strcmp(json_string_value(name), "ess/screen_halfx")) {
+    float halfx;
+    if (sscanf(json_string_value(data), "%f", &halfx) == 1)
+      eyetouch_widget->screen_halfx(halfx);
+  }
+  else if (!strcmp(json_string_value(name), "ess/screen_halfy")) {
+    float halfy;
+    if (sscanf(json_string_value(data), "%f", &halfy) == 1)
+      eyetouch_widget->screen_halfy(halfy);
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/system")) {
+    system_widget->value(system_widget->find_index(json_string_value(data)));
+    clear_counter_widgets();
+
+    /* clear performance widget */
+    perftable_widget->clear("");
+    perftable_widget->redraw();
+
+    /* clear performance widget */
+    general_perf_widget->clear("");
+    general_perf_widget->redraw();
+  }
+  else if (!strcmp(json_string_value(name), "ess/protocol")) {
+    protocol_widget->value(protocol_widget->find_index(json_string_value(data)));
+  }
+  else if (!strcmp(json_string_value(name), "ess/variant")) {
+    variant_widget->value(variant_widget->find_index(json_string_value(data)));
+  }
+  else if (!strcmp(json_string_value(name), "ess/stimtype")) {
+    //    stimid_widget->value(json_string_value(data));
+    //    stimid_widget->redraw_label();
+  }
+
+
+  /* script files for this system */
+  else if (!strcmp(json_string_value(name), "ess/system_script")) {
+    g_App->set_editor_buffer(system_editor, "system", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/protocol_script")) {
+    g_App->set_editor_buffer(protocol_editor, "protocol",
+			     json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/loaders_script")) {
+    g_App->set_editor_buffer(loaders_editor,
+			     "loaders", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/variants_script")) {
+    g_App->set_editor_buffer(variants_editor,
+			     "variants", json_string_value(data));
+  }
+  else if (!strcmp(json_string_value(name), "ess/stim_script")) {
+    g_App->set_editor_buffer(stim_editor, "stim", json_string_value(data));
+  }
+
+
+  else if (!strcmp(json_string_value(name), "ess/variant_info_json")) {
+    // Parse the JSON just like Qt6 does
+    json_error_t error;
+    json_t *nestedroot = json_loads(json_string_value(data), 0, &error);
+    if (!nestedroot) {
+      json_decref(root);
+      return;
+    }
+    
+    json_t *options = json_object_get(nestedroot, "options");
+    json_t *loader_arg_names = json_object_get(nestedroot, "loader_arg_names");
+    json_t *loader_args = json_object_get(nestedroot, "loader_args");
+    
+    if (!options || !loader_arg_names || !loader_args) {
+        json_decref(nestedroot);
+        json_decref(root);
+        return;
+    }
+    
+    // Clear existing options
+    options_widget->clear();
+    options_widget->begin();
+    
+    int row = 0;
+    int height = 30;
+    int xoff = options_widget->x();
+    int yoff = options_widget->y();
+    int label_width = 170;
+    
+    // Iterate through each argument name
+    size_t arg_index;
+    json_t *arg_name;
+    json_array_foreach(loader_arg_names, arg_index, arg_name) {
+        const char *arg_name_str = json_string_value(arg_name);
+        
+        // Get options for this argument
+        json_t *arg_options = json_object_get(options, arg_name_str);
+        if (!arg_options || !json_is_array(arg_options)) {
+            continue;
+        }
+        
+        Fl_Choice *choice = new Fl_Choice(xoff+label_width,
+                                          yoff+10+row*height,
+                                          options_widget->w()-(label_width+20), height, 0);
+        choice->copy_label(arg_name_str);
+        choice->align(Fl_Align(FL_ALIGN_LEFT));
+        choice->labeltype(FL_NORMAL_LABEL);
+        
+        VariantSettingUserData *userdata = new VariantSettingUserData(arg_name_str);
+        
+        int selected_index = 0;
+        size_t opt_index;
+        json_t *option;
+        
+        // Add each option to the choice widget
+        json_array_foreach(arg_options, opt_index, option) {
+            json_t *label = json_object_get(option, "label");
+            json_t *value = json_object_get(option, "value");
+            json_t *selected = json_object_get(option, "selected");
+            
+            if (label && value) {
+                const char *label_str = json_string_value(label);
+                const char *value_str = json_string_value(value);
+                
+                choice->add(label_str);
+                userdata->add_setting(value_str);
+                
+                // Check if this is the selected option
+                if (selected && json_is_true(selected)) {
+                    selected_index = opt_index;
+                }
+            }
+        }
+        
+        // Set the current selection
+        choice->value(selected_index);
+        
+        choice->callback(variant_setting_callback, userdata, true);
+        choice->when(FL_WHEN_RELEASE_ALWAYS);
+        
+        row++;
+    }
+    
+    options_widget->end();
+    options_widget->redraw();
+    
+    json_decref(nestedroot);
+  }  
+    
+  else if (!strcmp(json_string_value(name), "ess/variant_info")) {
+    // handled by json version above
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/param_settings")) {
+    add_params(json_string_value(data));
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/state_table")) {
+    update_system_layout(json_string_value(data));
+  }
+    
+  else if (!strcmp(json_string_value(name), "ess/rmt_cmds")) {
+    update_remote_commands(json_string_value(data));
+  }
+    
+  else if (!strcmp(json_string_value(name), "ess/param")) {
+    update_param(json_string_value(data));
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/params")) {
+    update_param(json_string_value(data));
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/systems")) {
+    Tcl_Size argc;
+    char *string;
+    const char **argv;
+    if (Tcl_SplitList(g_App->interp(),
+		      json_string_value(data), &argc, &argv) == TCL_OK) {
+      system_widget->clear();
+      for (int i = 0; i < argc; i++) {
+	system_widget->add(argv[i]);
+      }
+      Tcl_Free((char *) argv);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/protocols")) {
+    Tcl_Size argc;
+    char *string;
+    const char **argv;
+    if (Tcl_SplitList(g_App->interp(),
+		      json_string_value(data), &argc, &argv) == TCL_OK) {
+      protocol_widget->clear();
+      for (int i = 0; i < argc; i++) protocol_widget->add(argv[i]);
+      Tcl_Free((char *) argv);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/variants")) {
+    Tcl_Size argc;
+    char *string;
+    const char **argv;
+    if (Tcl_SplitList(g_App->interp(),
+		      json_string_value(data), &argc, &argv) == TCL_OK) {
+      variant_widget->clear();
+      for (int i = 0; i < argc; i++) variant_widget->add(argv[i]);
+      Tcl_Free((char *) argv);
+    }
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/git/branch")) {
+    branch_widget->value(branch_widget->find_index(json_string_value(data)));    
+  }
+  
+  else if (!strcmp(json_string_value(name), "ess/git/branches")) {
+    Tcl_Size argc;
+    char *string;
+    const char **argv;
+    if (Tcl_SplitList(g_App->interp(),
+		      json_string_value(data), &argc, &argv) == TCL_OK) {
+      branch_widget->clear();
+      for (int i = 0; i < argc; i++) branch_widget->add(argv[i]);
+      Tcl_Free((char *) argv);
+    }
+  }
+  
+  else if (!strcmp(json_string_value(name), "system/os")) {
+    sysos_widget->value(json_string_value(data));
+    sysos_widget->redraw_label();
+  }
+  
+  else if (!strcmp(json_string_value(name), "system/hostname")) {
+    sysname_widget->value(json_string_value(data));
+    sysname_widget->redraw_label();
+  }
+
+  else if (!strcmp(json_string_value(name), "stimdg")) {
+    const char *dgdata = json_string_value(data);
+    DYN_GROUP *dg = decode_dg(dgdata, strlen(dgdata));
+    Tcl_VarEval(g_App->interp(),
+		"if [dg_exists stimdg] { dg_delete stimdg; }", NULL);
+    g_App->putGroup(dg);
+    stimdg_widget->set(dg);
+    configure_sorters(dg);
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/stiminfo")) {
+    // use stimdg instead
+  }
+
+  else if (!strcmp(json_string_value(name), "ess/trialinfo")) {
+    // use trialdg instead
+  }
+
+  // don't need this script, just listen for graphics/stiminfo
+  else if (!strcmp(json_string_value(name), "ess/viz_config")) {
+  }
+  
+  else if (!strcmp(json_string_value(name), "trialdg")) {
+    const char *dgdata = json_string_value(data);
+    DYN_GROUP *dg = decode_dg(dgdata, strlen(dgdata));
+    Tcl_VarEval(g_App->interp(),
+		"if [dg_exists trialdg] { dg_delete trialdg; }", NULL);
+    g_App->putGroup(dg);
+    do_sortby();
+  }
+
+  else if (!strcmp(json_string_value(name), "graphics/stimulus")) {
+    const char *gbuf_commands = json_string_value(data);
+    if (plot_widget) {
+      plot_widget->processGraphicsData(std::string(gbuf_commands));
+    }
+  }
+  
+  else if (!strcmp(json_string_value(name), "print")) {
+    const char *msg = json_string_value(data);
+    output_term->append(msg);
+    output_term->append("\n");
+  }
+  
+  else if (!strcmp(json_string_value(name), "openiris/settings")) {
+    refresh_eye_settings(g_App->interp(), json_string_value(data));
+  }
+  
+  else {
+    output_term->append(json_string_value(name));
+    output_term->append("=");
+    output_term->append(json_string_value(data));
+    output_term->append("\n");
+  }
+  
+  // Free the JSON object to prevent memory leaks
+  json_decref(root);
+  return;
+}
+
 
 void process_dpoint_cb(void *cbdata) {
   const char *dpoint = (const char *) cbdata;
@@ -1856,7 +2366,10 @@ void process_dpoint_cb(void *cbdata) {
     int d1, d2;
     if (sscanf(json_string_value(data), "%d %d %f %f",
 	       &d1, &d2, &x, &y) == 4) {
-      eyetouch_widget->em_pos(x, y);
+      //      eyetouch_widget->em_pos(x, y);
+      // Just store values without drawing
+      static float last_x = 0, last_y = 0;
+      last_x = x; last_y = y;      
     }
   }
   

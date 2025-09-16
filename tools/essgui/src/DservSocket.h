@@ -623,10 +623,14 @@ DservSocket::ds_client_process(int sockfd)
 
 	if (dpoint_str.length() > 0) {
 
-	  Fl::lock();      // acquire the lock
-	  Fl::unlock();    // release the lock; allow other threads to access FLTK again
+	  //	  Fl::lock();
+	  //      Fl::unlock()
+	  
 	  //	  Fl::awake((void *) strdup(dpoint_str.c_str()));
-	  Fl::awake(process_dpoint_cb, (void *) strdup(dpoint_str.c_str())); 
+	  //Fl::awake(process_dpoint_cb, (void *) strdup(dpoint_str.c_str()));
+
+	  // This gives the string to main message queue
+	  g_message_queue.push(std::move(dpoint_str));
 	}
 	dpoint_str = "";
       }
