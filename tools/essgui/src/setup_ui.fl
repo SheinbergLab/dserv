@@ -22,20 +22,20 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {190 79 1280 800} type Double resizable visible
+    xywh {1042 92 1281 824} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
     } {}
     Fl_Tile {} {open
-      xywh {0 32 1280 765} box FLAT_BOX resizable
+      xywh {0 32 1280 787} box FLAT_BOX resizable
     } {
       Fl_Group {} {open
-        xywh {0 32 1280 677} box FLAT_BOX
+        xywh {0 32 1280 680} box FLAT_BOX
       } {
         Fl_Group {} {
-          label Systems
-          xywh {0 63 180 640} labelsize 18 v_label_margin 4
+          label Systems selected
+          xywh {0 63 180 644} labelsize 18 v_label_margin 4
         } {
           Fl_Flex {} {open
             xywh {16 152 150 32} type HORIZONTAL
@@ -68,10 +68,10 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
         }
         Fl_Group {} {
-          label Control open
+          label Control
           xywh {180 63 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
         } {
-          Fl_Group {} {open
+          Fl_Group {} {
             xywh {180 64 315 283}
           } {
             Fl_Group subject_group {open
@@ -126,7 +126,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                 xywh {231 163 16 16} box FLAT_BOX selection_color 88 labeltype NO_LABEL
               }
             }
-            Fl_Group load_combos_group {open
+            Fl_Group load_combos_group {
               xywh {186 216 306 128} box THIN_UP_BOX labelsize 20
             } {
               Fl_Flex {} {open
@@ -199,173 +199,180 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
               Fl_Scroll settings_widget {
                 label {System Settings} open
-                xywh {186 551 304 150} type BOTH_ALWAYS align 5 v_label_margin 3
+                xywh {185 551 305 148} type BOTH_ALWAYS align 5 v_label_margin 3
               } {}
             }
           }
         }
         Fl_Group {} {
-          label Info open
-          xywh {499 63 766 646} labelsize 18 v_label_margin 4 resizable
+          label Info
+          xywh {499 63 766 644} labelsize 18 v_label_margin 4 resizable
         } {
           Fl_Tabs {} {open
             xywh {503 67 762 640}
           } {
             Fl_Group {} {
-              label behavior
-              xywh {504 91 747 614} labelsize 16 hide
+              label behavior open
+              xywh {503 91 756 612} labelsize 16
             } {
               Fl_Group {} {
-                label {Behavior Monitor}
-                xywh {514 119 241 264} box DOWN_BOX
-              } {
-                Fl_Box eyetouch_widget {
-                  label EyeWindow
-                  xywh {519 126 232 232} box DOWN_FRAME
-                  class EyeTouchWin
-                }
-                Fl_Group {} {
-                  label {window status} open
-                  xywh {514 358 241 23} box THIN_DOWN_FRAME labeltype NO_LABEL
-                } {
-                  Fl_Pack virtual_checkbox_group {open
-                    xywh {524 361 221 20} type HORIZONTAL
-                  } {
-                    Fl_Check_Button virtual_eye_checkbox {
-                      label {Virtual eye}
-                      callback virtual_eye_checkbox_cb
-                      xywh {532 363 96 17} down_box DOWN_BOX
-                    }
-                    Fl_Check_Button virtual_touch_checkbox {
-                      label {Virtual touch}
-                      callback virtual_touch_checkbox_cb
-                      xywh {644 363 96 17} down_box DOWN_BOX
-                    }
-                  }
-                }
-              }
-              Fl_Group {} {
-                label Performance open
-                xywh {763 455 488 248} box UP_BOX v_label_margin 3
+                label Performance
+                xywh {762 455 497 248} box UP_BOX v_label_margin 3
               } {
                 Fl_Flex sorters_widget {open
-                  xywh {1070 602 166 60} hide gap 10
+                  xywh {1069 602 166 60} hide gap 10
                 } {
                   Fl_Choice sortby_1 {
                     label {Sort by:}
                     callback sortby_cb open
-                    xywh {1070 602 166 25} down_box BORDER_BOX
+                    xywh {1069 602 166 25} down_box BORDER_BOX
                   } {}
                   Fl_Choice sortby_2 {
                     label {Sort by:}
                     callback sortby_cb open
-                    xywh {1070 637 166 25} down_box BORDER_BOX
+                    xywh {1069 637 166 25} down_box BORDER_BOX
                   } {}
                 }
                 Fl_Table perftable_widget {open
-                  xywh {779 474 456 120} box NO_BOX
+                  xywh {778 474 456 120} box NO_BOX
                   class PerfTable
                 } {}
                 Fl_Table general_perf_widget {open
-                  xywh {779 609 190 80} box NO_BOX
+                  xywh {778 609 190 80} box NO_BOX
                   class PerfTable
                 } {}
               }
               Fl_Group plot_widget {
                 label {Plot Window} open
-                xywh {763 119 488 304} labeltype NO_LABEL
+                xywh {762 119 497 304} labeltype NO_LABEL
                 class CGWin
               } {}
-              Fl_Group {} {
-                label Input open
-                xywh {514 407 246 298} color 56 v_label_margin 3
+              Fl_Group {} {open
+                xywh {503 116 256 583}
               } {
                 Fl_Group {} {
-                  label Joystick open
-                  xywh {532 425 80 76} box FLAT_BOX color 39
+                  label {Behavior Monitor}
+                  xywh {513 116 236 276} box DOWN_BOX
                 } {
-                  Fl_Box virtual_joystick_widget {
-                    label label
-                    callback virtual_joystick_cb
-                    xywh {566 455 12 12} when 7
-                    class VirtualJoystick
+                  Fl_Box eyetouch_widget {
+                    label EyeWindow
+                    xywh {513 116 236 243} box DOWN_FRAME
+                    class EyeTouchWin
+                  }
+                  Fl_Group {} {
+                    label {window status}
+                    xywh {513 362 236 28} box THIN_DOWN_FRAME labeltype NO_LABEL
+                  } {
+                    Fl_Pack virtual_checkbox_group {open
+                      xywh {523 366 221 24} type HORIZONTAL
+                    } {
+                      Fl_Check_Button virtual_eye_checkbox {
+                        label {Virtual eye}
+                        callback virtual_eye_checkbox_cb
+                        xywh {531 366 96 24} down_box DOWN_BOX
+                      }
+                      Fl_Check_Button virtual_touch_checkbox {
+                        label {Virtual touch}
+                        callback virtual_touch_checkbox_cb
+                        xywh {643 366 96 24} down_box DOWN_BOX
+                      }
+                    }
                   }
                 }
                 Fl_Group {} {
-                  label Buttons
-                  xywh {622 425 130 74}
+                  label Input
+                  xywh {511 421 243 212} color 56 v_label_margin 3
                 } {
-                  Fl_Pack {} {open
-                    xywh {622 450 130 32} type HORIZONTAL
+                  Fl_Group {} {
+                    label Joystick open
+                    xywh {531 425 80 76} box FLAT_BOX color 39
                   } {
-                    Fl_Button {} {
-                      label Left
-                      xywh {622 451 65 22}
+                    Fl_Box virtual_joystick_widget {
+                      label label
+                      callback virtual_joystick_cb
+                      xywh {565 455 12 12} when 7
+                      class VirtualJoystick
                     }
-                    Fl_Button {} {
-                      label Right
-                      xywh {687 451 65 22}
+                  }
+                  Fl_Group {} {
+                    label Buttons
+                    xywh {621 425 130 74}
+                  } {
+                    Fl_Pack {} {open
+                      xywh {621 450 130 32} type HORIZONTAL
+                    } {
+                      Fl_Button {} {
+                        label Left
+                        xywh {621 451 65 22}
+                      }
+                      Fl_Button {} {
+                        label Right
+                        xywh {686 451 65 22}
+                      }
+                    }
+                  }
+                  Fl_Group {} {
+                    xywh {519 537 210 96}
+                  } {
+                    Fl_Group {} {open
+                      xywh {519 537 188 84}
+                    } {
+                      Fl_Button {} {
+                        label Bias
+                        xywh {519 537 76 18} box NO_BOX
+                      }
+                      Fl_Spinner hBias_input {
+                        label h
+                        user_data 1 user_data_type long
+                        callback {update_eye_settings(o,v);}
+                        xywh {574 555 55 22} minimum 0 maximum 4095 step 10 value 2047
+                        class Wheel_Spinner
+                      }
+                      Fl_Spinner vBias_input {
+                        label v
+                        user_data 2 user_data_type long
+                        callback {update_eye_settings(o,v);}
+                        xywh {643 555 54 22} minimum 0 maximum 4095 step 10 value 2047
+                        class Wheel_Spinner
+                      }
+                      Fl_Button {} {
+                        label Gain
+                        xywh {544 579 36 18} box NO_BOX
+                      }
+                      Fl_Check_Button hInvert_checkbox {
+                        label inv
+                        user_data 5 user_data_type long
+                        callback {update_eye_settings(o,v);}
+                        xywh {597 578 36 19} down_box DOWN_BOX
+                      }
+                      Fl_Check_Button vInvert_checkbox {
+                        label inv
+                        user_data 6 user_data_type long
+                        callback {update_eye_settings(o,v);}
+                        xywh {664 578 33 19} down_box DOWN_BOX
+                      }
+                      Fl_Spinner hGain_input {
+                        label h
+                        user_data 3 user_data_type long
+                        callback {update_eye_settings(o,v);}
+                        xywh {575 597 55 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
+                        code0 {hGain_input->format("%.2f");}
+                        class Wheel_Spinner
+                      }
+                      Fl_Spinner vGain_input {
+                        label v
+                        user_data 4 user_data_type long
+                        callback {update_eye_settings(o,v);}
+                        xywh {643 597 54 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
+                        code0 {vGain_input->format("%.2f");}
+                        class Wheel_Spinner
+                      }
                     }
                   }
                 }
-                Fl_Group {} {
-                  xywh {565 602 195 96}
-                } {
-                  Fl_Group {} {open
-                    xywh {565 614 148 84}
-                  } {
-                    Fl_Button {} {
-                      label Bias
-                      xywh {565 614 36 18} box NO_BOX
-                    }
-                    Fl_Spinner hBias_input {
-                      label h
-                      user_data 1 user_data_type long
-                      callback {update_eye_settings(o,v);}
-                      xywh {580 632 55 22} minimum 0 maximum 4095 step 10 value 2047
-                      class Wheel_Spinner
-                    }
-                    Fl_Spinner vBias_input {
-                      label v
-                      user_data 2 user_data_type long
-                      callback {update_eye_settings(o,v);}
-                      xywh {649 632 54 22} minimum 0 maximum 4095 step 10 value 2047
-                      class Wheel_Spinner
-                    }
-                    Fl_Button {} {
-                      label Gain
-                      xywh {567 656 36 18} box NO_BOX
-                    }
-                    Fl_Check_Button hInvert_checkbox {
-                      label inv
-                      user_data 5 user_data_type long
-                      callback {update_eye_settings(o,v);}
-                      xywh {603 655 36 19} down_box DOWN_BOX
-                    }
-                    Fl_Check_Button vInvert_checkbox {
-                      label inv
-                      user_data 6 user_data_type long
-                      callback {update_eye_settings(o,v);}
-                      xywh {670 655 33 19} down_box DOWN_BOX
-                    }
-                    Fl_Spinner hGain_input {
-                      label h
-                      user_data 3 user_data_type long
-                      callback {update_eye_settings(o,v);}
-                      xywh {581 674 55 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
-                      code0 {hGain_input->format("%.2f");}
-                      class Wheel_Spinner
-                    }
-                    Fl_Spinner vGain_input {
-                      label v
-                      user_data 4 user_data_type long
-                      callback {update_eye_settings(o,v);}
-                      xywh {649 674 54 22} type Float minimum 0.1 maximum 25 step 0.1 value 10
-                      code0 {vGain_input->format("%.2f");}
-                      class Wheel_Spinner
-                    }
-                  }
-                }
+                Fl_Group {} {open
+                  xywh {513 647 241 52} resizable
+                } {}
               }
             }
             Fl_Group {} {
@@ -379,8 +386,8 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
               } {}
             }
             Fl_Group {} {
-              label system selected
-              xywh {503 92 762 611} labelsize 16
+              label system
+              xywh {503 92 762 611} labelsize 16 hide
             } {
               Fl_Scroll opdesk_widget {
                 label {State System} open
@@ -489,10 +496,10 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         }
       }
       Fl_Group {} {open
-        xywh {0 709 1280 88} box FLAT_BOX
+        xywh {0 712 1280 100} box FLAT_BOX resizable
       } {
         Fl_Terminal output_term {
-          xywh {0 709 1279 88}
+          xywh {4 722 1276 80}
           class Fl_Console
         }
       }

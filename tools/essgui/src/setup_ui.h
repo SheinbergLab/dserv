@@ -52,13 +52,6 @@ extern Fl_Group *settings_group;
 extern Fl_Scroll *options_widget;
 extern Fl_Scroll *settings_widget;
 #include <FL/Fl_Tabs.H>
-extern EyeTouchWin *eyetouch_widget;
-extern Fl_Pack *virtual_checkbox_group;
-#include <FL/Fl_Check_Button.H>
-extern void virtual_eye_checkbox_cb(Fl_Check_Button*, void*);
-extern Fl_Check_Button *virtual_eye_checkbox;
-extern void virtual_touch_checkbox_cb(Fl_Check_Button*, void*);
-extern Fl_Check_Button *virtual_touch_checkbox;
 extern Fl_Flex *sorters_widget;
 extern void sortby_cb(Fl_Choice*, void*);
 extern Fl_Choice *sortby_1;
@@ -66,6 +59,13 @@ extern Fl_Choice *sortby_2;
 extern PerfTable *perftable_widget;
 extern PerfTable *general_perf_widget;
 extern CGWin *plot_widget;
+extern EyeTouchWin *eyetouch_widget;
+extern Fl_Pack *virtual_checkbox_group;
+#include <FL/Fl_Check_Button.H>
+extern void virtual_eye_checkbox_cb(Fl_Check_Button*, void*);
+extern Fl_Check_Button *virtual_eye_checkbox;
+extern void virtual_touch_checkbox_cb(Fl_Check_Button*, void*);
+extern Fl_Check_Button *virtual_touch_checkbox;
 extern void virtual_joystick_cb(VirtualJoystick*, void*);
 extern VirtualJoystick *virtual_joystick_widget;
 extern Wheel_Spinner *hBias_input;
