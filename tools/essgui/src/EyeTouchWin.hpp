@@ -363,8 +363,6 @@ public:
     draw_eye_marker();
         
     fl_pop_clip();
-
-    redraw();
   }
 
   void draw_eye_marker()
