@@ -393,17 +393,6 @@ public:
       preview_config.bufferCount = 4;
     }
     
-    if (validation == CameraConfiguration::Adjusted) {
-      std::cout << "Configuration adjusted:" << std::endl;
-      std::cout << "  Size: " << stream_config.size.width << "x" <<
-	stream_config.size.height << std::endl;
-      std::cout << "  Format: " << stream_config.pixelFormat.toString() << std::endl;
-    
-      // Update our stored dimensions
-      width_ = stream_config.size.width;
-      height_ = stream_config.size.height;
-    }
-
     CameraConfiguration::Status validation = config_->validate();
     if (validation == CameraConfiguration::Invalid) {
       std::cerr << "Camera configuration invalid" << std::endl;
@@ -414,6 +403,17 @@ public:
     if (ret) {
       std::cerr << "Camera configure failed: " << ret << std::endl;
       return false;
+    }
+
+    if (validation == CameraConfiguration::Adjusted) {
+      std::cout << "Configuration adjusted:" << std::endl;
+      std::cout << "  Size: " << stream_config.size.width << "x" <<
+	stream_config.size.height << std::endl;
+      std::cout << "  Format: " << stream_config.pixelFormat.toString() << std::endl;
+    
+      // Update our stored dimensions
+      width_ = stream_config.size.width;
+      height_ = stream_config.size.height;
     }
 
     // store the stream pointers after successful configuration    
