@@ -22,19 +22,19 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {1042 92 1281 824} type Double resizable visible
+    xywh {0 0 1280 812} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
     } {}
     Fl_Tile {} {open
-      xywh {0 32 1280 787} box FLAT_BOX resizable
+      xywh {0 32 1280 780} box FLAT_BOX resizable
     } {
-      Fl_Group {} {open
+      Fl_Group {} {
         xywh {0 32 1280 680} box FLAT_BOX
       } {
         Fl_Group {} {
-          label Systems selected
+          label Systems
           xywh {0 63 180 644} labelsize 18 v_label_margin 4
         } {
           Fl_Flex {} {open
@@ -233,7 +233,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                     xywh {1069 637 166 25} down_box BORDER_BOX
                   } {}
                 }
-                Fl_Table perftable_widget {open
+                Fl_Table perftable_widget {open selected
                   xywh {778 474 456 120} box NO_BOX
                   class PerfTable
                 } {}
@@ -496,10 +496,10 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
         }
       }
       Fl_Group {} {open
-        xywh {0 712 1280 100} box FLAT_BOX resizable
+        xywh {0 712 1280 100} box FLAT_BOX
       } {
         Fl_Terminal output_term {
-          xywh {4 722 1276 80}
+          xywh {4 712 1276 100} resizable
           class Fl_Console
         }
       }

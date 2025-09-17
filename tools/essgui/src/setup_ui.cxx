@@ -181,10 +181,10 @@ TclEditor *stim_editor=(TclEditor *)0;
 Fl_Console *output_term=(Fl_Console *)0;
 
 Fl_Double_Window * setup_ui(int argc, char *argv[]) {
-  { main_window = new Fl_Double_Window(1281, 824, "EssGUI");
+  { main_window = new Fl_Double_Window(1280, 812, "EssGUI");
     { menu_bar = new Fl_Menu_Bar(0, 0, 1280, 32);
     } // Fl_Menu_Bar* menu_bar
-    { Fl_Tile* o = new Fl_Tile(0, 32, 1280, 787);
+    { Fl_Tile* o = new Fl_Tile(0, 32, 1280, 780);
       o->box(FL_FLAT_BOX);
       { Fl_Group* o = new Fl_Group(0, 32, 1280, 680);
         o->box(FL_FLAT_BOX);
@@ -749,7 +749,7 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
       } // Fl_Group* o
       { Fl_Group* o = new Fl_Group(0, 712, 1280, 100);
         o->box(FL_FLAT_BOX);
-        { output_term = new Fl_Console(4, 722, 1276, 80);
+        { output_term = new Fl_Console(4, 712, 1276, 100);
           output_term->box(FL_DOWN_FRAME);
           output_term->color(FL_BLACK);
           output_term->selection_color(FL_BACKGROUND_COLOR);
@@ -759,9 +759,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           output_term->labelcolor(FL_FOREGROUND_COLOR);
           output_term->align(Fl_Align(FL_ALIGN_TOP));
           output_term->when(FL_WHEN_RELEASE);
+          Fl_Group::current()->resizable(output_term);
         } // Fl_Console* output_term
         o->end();
-        Fl_Group::current()->resizable(o);
       } // Fl_Group* o
       o->end();
       Fl_Group::current()->resizable(o);
