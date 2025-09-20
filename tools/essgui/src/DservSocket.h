@@ -594,7 +594,7 @@ public:
     return dscmd(host, cmd, rstr, 4620);
   }
   int stimcmd(std::string host, std::string cmd, std::string &rstr) {
-    std::string rmtcmd = std::string("rmtSend {")+cmd+"}";
+    std::string rmtcmd = std::string("send ess { rmtSend {")+cmd+"} }";
     return dscmd(host, rmtcmd, rstr, 2570);
   }
   
