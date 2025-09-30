@@ -15,6 +15,8 @@
 #define DB_PORT 2571
 #define DSERV_PROMPT "dserv> "
 #define DSERV_PORT 4620
+#define VSTREAM_PROMPT "vstream> "
+#define VSTREAM_PORT 4630
 #define STIM_PROMPT "stim> "
 #define STIM_PORT 4612
 #define PG_PROMPT "pg> "
@@ -61,6 +63,7 @@ int get_port_for_service(char *service) {
     if (!strcmp(service, "legacy")) return LEGACY_PORT;
     if (!strcmp(service, "db")) return DB_PORT;
     if (!strcmp(service, "dserv")) return DSERV_PORT;
+    if (!strcmp(service, "vstream")) return VSTREAM_PORT;
     if (!strcmp(service, "stim")) return STIM_PORT;
     if (!strcmp(service, "pg")) return PG_PORT;
     if (!strcmp(service, "git")) return GIT_PORT;
@@ -445,6 +448,28 @@ int main (int argc, char *argv[])
       else {
 	tcpport = DB_PORT;
 	prompt = DB_PROMPT;
+      }
+    } else if (!strncmp(line, "/stim", 5)) {
+      if (strlen(line) > 5) {
+	resultstr = do_command(server, STIM_PORT, &line[6], strlen(line)-6);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
+      }
+      else {
+	tcpport = STIM_PORT;
+	prompt = STIM_PROMPT;
+      }
+    } else if (!strncmp(line, "/vstream", 5)) {
+      if (strlen(line) > 8) {
+	resultstr = do_command(server, VSTREAM_PORT, &line[9], strlen(line)-9);
+	if (resultstr && strlen(resultstr)) {
+            process_response(resultstr, 1); // Interactive mode
+        }
+      }
+      else {
+	tcpport = VSTREAM_PORT;
+	prompt = VSTREAM_PROMPT;
       }
     } else if (!strncmp(line, "/pg", 3)) {
       if (strlen(line) > 3) {
