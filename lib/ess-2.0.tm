@@ -3108,7 +3108,7 @@ namespace eval ess {
 
 namespace eval ess {
     variable current
-
+    
     set current(state_system) {}
 
     proc set_project {p} {
