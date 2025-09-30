@@ -441,7 +441,7 @@ public:
   int connect_to_host(std::string hoststr)
   {
     // check 
-    if (!check_connection()) return 0;
+    if (!check_connection(hoststr)) return 0;
     
     host = hoststr;
     ds_sock->reg(hoststr.c_str());
