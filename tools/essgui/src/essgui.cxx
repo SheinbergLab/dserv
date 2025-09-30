@@ -242,6 +242,7 @@ public:
       // clear out the current system's param settings
       clear_params();
       settings_widget->clear();
+      obs_off();
     }
     
     win->redraw();
@@ -406,9 +407,42 @@ public:
     }
   }
   
+
+  int check_connection(std::string hoststr)
+  {
+    // Quick connection test with timeout
+    std::string ping_result;
+    int ping_sock = ds_sock->client_socket(hoststr.c_str(), 4620);
+    if (ping_sock <= 0) {
+      return 0; // Connection failed
+    }
+    
+    // Set socket timeout (platform-specific)
+#ifndef _WIN32
+    struct timeval tv;
+    tv.tv_sec = 2;  // 2 second timeout
+    tv.tv_usec = 0;
+    setsockopt(ping_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#else
+    DWORD timeout = 2000; // 2 seconds in milliseconds
+    setsockopt(ping_sock, SOL_SOCKET, SO_RCVTIMEO,
+	       (char*)&timeout, sizeof(timeout));
+#endif
+    
+    // Try a simple command to verify the connection
+    bool connection_valid =
+      ds_sock->ds_command(ping_sock, "dservGet system/hostname", ping_result);
+    ds_sock->close_socket(ping_sock);
+    
+    return connection_valid;
+  }
+  
   
   int connect_to_host(std::string hoststr)
   {
+    // check 
+    if (!check_connection()) return 0;
+    
     host = hoststr;
     ds_sock->reg(hoststr.c_str());
     ds_sock->add_match(hoststr.c_str(), "ess/*");
