@@ -20,6 +20,9 @@ if { [info exists ::mesh_enabled] } {
      send mesh "source [file join $dspath config/meshconf.tcl]"
 }
 
+# start a juicer subprocess
+subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
+
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
 

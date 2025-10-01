@@ -20,7 +20,7 @@ dservSet ess/ipaddr ""
 # load extra modules
 set ess_modules \
     "ain eventlog gpio_input gpio_output \
-    juicer joystick4 rmt sound timer touch usbio"
+    joystick4 rmt sound timer touch usbio"
 foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }

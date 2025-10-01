@@ -676,9 +676,6 @@ namespace eval ess {
     variable loading_operation_id  
     variable loading_start_time
     
-    # juicer tracking
-    variable juicer_last_trial_ml
-    
     proc version_string {} {
         if {[dservExists ess/git/branch] && [dservExists ess/git/tag]} {
             set branch [dservGet ess/git/branch]
@@ -1279,7 +1276,7 @@ namespace eval ess {
     proc append_trialdg {status rt {stimid {}}} {
         variable current
         variable subject_id
-        variable juicer_last_trial_ml
+
         set g trialdg
         dl_append $g:trialid $current(trialid)
         dl_append $g:project $current(project)
@@ -1308,7 +1305,7 @@ namespace eval ess {
         variable current
         variable subject_id
         variable open_datafile
-        variable juicer_last_trial_ml
+
         set obj [yajl create #auto]
         set parseobj [yajl create #auto]
         $obj map_open
@@ -1402,10 +1399,10 @@ namespace eval ess {
     proc end_obs {{status 1}} {
         variable in_obs
         variable obs_pin
-        variable juicer_last_trial_ml
+
         if {!$in_obs} {return}
         rpioPinOff $obs_pin
-        ::ess::juicer_update
+
         ::ess::evt_put ENDOBS $status [now]
         set in_obs 0
         dservSet ess/in_obs 0
@@ -1840,7 +1837,7 @@ namespace eval ess {
         em_region_on em_region_off em_fixwin_set em_eye_in_region
         em_sampler_enable em_sampler_start em_sampler_status em_sampler_vals
         touch_region_on touch_region_off touch_win_set touch_in_region
-        reward juicer_init print my
+        reward print my
     }
 
 # Fixed analyze_ess_patterns with proper brace counting
@@ -2823,46 +2820,9 @@ namespace eval ess {
 ###############################################################################
 
 namespace eval ess {
-    # initially no juicer is connected
-    variable current 
-    package require juicer
-    set current(juicer) {}
-
-    proc juicer_init {} {
-        variable current
-        variable juicer_last_trial_ml
-        if {$current(juicer) != {}} {$current(juicer) destroy}
-        set j [Juicer new]
-        if {[set jpath [$j find]] != {}} {
-            $j set_path $jpath
-            $j open
-        } else {
-            $j use_gpio
-        }
-        set current(juicer) $j
-        set juicer_last_trial_ml 0
-    }
-
+    proc juicer_init {} {}
     proc reward {ml} {
-        variable current
-        variable juicer_last_trial_ml
-        set j $current(juicer)
-        if {$j == ""} {return}
-        if {[$j using_gpio]} {
-            # currently assume only a single juicer is configured
-            juicerJuiceAmount 0 $ml
-        } else {
-            $j reward $ml
-        }
-        set juicer_last_trial_ml [expr $juicer_last_trial_ml]
-    }
-
-    proc juicer_update {} {
-	variable juicer_last_trial_ml
-
-        # track reward amount
-        dservSet ess/juicer_last_trial_ml $juicer_last_trial_ml
-        set juicer_last_trial_ml 0
+	send juicer "reward $ml"
     }
 }
 ###############################################################################
