@@ -58,6 +58,7 @@ namespace eval ess {
     proc save_settings args { _protected_call save_settings 1 $args }
     proc reset_settings args { _protected_call reset_settings 1 $args }
     proc set_param args { _protected_call set_param 1 $args }
+    proc set_params args { _protected_call set_params 1 $args }
     proc set_variant_args args { _protected_call set_variant_args 1 $args }
     proc save_script args { _protected_call save_script 1 $args }
     proc get_lib_files args { _protected_call get_lib_files 1 $args }
