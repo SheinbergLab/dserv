@@ -40,7 +40,14 @@ namespace eval ess {
         if {$check_file && [query_open_file]} {
             error "Cannot call $cmd while file is open"
         }
-        return [send ess ::ess::$cmd {*}$args]
+	set noreply_functions \
+	    "load_system reload_system reload_protocol reload_variant"
+	
+	if { [lsearch -exact $noreply_functions $cmd] } {
+	    return [send ess evalNoReply \{ ::ess::$cmd {*}$args \}]
+	} else {
+	    return [send ess ::ess::$cmd {*}$args]
+	}
     }
     
     # Always allowed
