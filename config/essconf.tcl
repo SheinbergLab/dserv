@@ -144,7 +144,6 @@ if { $::tcl_platform(os) == "Linux" } {
 
 catch { gpioOutputInit $gpiochip }
 catch { gpioInputInit $gpiochip }
-catch { juicerInit $gpiochip }
 
 ############################### GPIO ##############################
 ###

@@ -182,12 +182,34 @@ oo::class create Juicer {
     }
 }
 
+proc gpio_init {} {
+    # make an educated guess about which gpiochip to use
+    if { $::tcl_platform(os) == "Linux" } {
+	if { $::tcl_platform(machine) == "x86_64" } {
+	    set gpiochip /dev/gpiochip1
+	} else {
+	    if { [file exists /dev/gpiochip4] } {
+		set gpiochip /dev/gpiochip4
+	    } else {
+		set gpiochip /dev/gpiochip0
+	    }
+	}
+    } else {
+	set gpiochip {}
+    }
+    
+    if { $gpiochip != "" } {
+	juicerInit $gpiochip
+    }
+}
+
 proc init {} {
     set ::juicer [Juicer new]
     if {[set jpath [$::juicer find]] != {}} {
 	$::juicer set_path $jpath
 	$::juicer open
     } else {
+	gpio_init
 	$::juicer use_gpio
     }
     set ::juicer_last_trial_ml 0
