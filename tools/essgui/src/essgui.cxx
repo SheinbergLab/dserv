@@ -407,11 +407,9 @@ public:
     }
   }
   
-
   int check_connection(std::string hoststr)
   {
     // Quick connection test with timeout
-    std::string ping_result;
     int ping_sock = ds_sock->client_socket(hoststr.c_str(), 4620);
     if (ping_sock <= 0) {
       return 0; // Connection failed
@@ -425,18 +423,18 @@ public:
     setsockopt(ping_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #else
     DWORD timeout = 2000; // 2 seconds in milliseconds
-    setsockopt(ping_sock, SOL_SOCKET, SO_RCVTIMEO,
-	       (char*)&timeout, sizeof(timeout));
+    setsockopt(ping_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 #endif
     
-    // Try a simple command to verify the connection
-    bool connection_valid =
-      ds_sock->ds_command(ping_sock, "dservGet system/hostname", ping_result);
-    ds_sock->close_socket(ping_sock);
+    // Close the socket before returning
+#ifndef _WIN32
+    close(ping_sock);
+#else
+    closesocket(ping_sock);
+#endif
     
-    return connection_valid;
+    return 1; // Connection successful
   }
-  
   
   int connect_to_host(std::string hoststr)
   {
