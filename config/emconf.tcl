@@ -10,15 +10,6 @@ package require dlsh
 package require yajltcl
 
 namespace eval em {
-    variable frame_counter 0
-    variable process_every 2  ;# Process every nth frame
-    
-    proc set_process_every {n} {
-        variable process_every
-        set process_every $n
-        puts "Eye tracking processing every ${n}th frame ([expr {250.0/$n}] Hz)"
-    }
-    
     # parameters for converting from raw values to [0,4095] (2^12)
     variable settings [dict create \
 			   scale_h 2 \
@@ -53,14 +44,6 @@ namespace eval em {
         variable to_deg_v 200.
 	variable last_valid_h 2048  ;# Remember last valid position
 	variable last_valid_v 2048
-        variable frame_counter
-        variable process_every
-
-        # Increment and check if we should process this frame
-        incr frame_counter
-        if {$frame_counter % $process_every != 0} {
-            return  ;# Skip this frame
-        }	
 
         lassign $data frame_id frame_time pupil_x pupil_y pupil_r p1_x p1_y p4_x p4_y \
             blink p1_detected p4_detected
@@ -78,6 +61,7 @@ namespace eval em {
 	
 	set seconds_binary [binary format d $frame_time]
 	dservSetData em/time 0 3 $seconds_binary
+	
 	foreach v "blink p1_detected p4_detected" {
 	    set val [binary format c [expr {int([set $v])}]]
 	    dservSetData em/$v 0 0 $val
