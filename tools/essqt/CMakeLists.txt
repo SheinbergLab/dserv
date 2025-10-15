@@ -62,7 +62,7 @@ if(WIN32)
 
 elseif(APPLE)
     # Tcl may be installed from source or by homebrew
-    include_directories("/usr/local/include" "/opt/homebrew/include/tcl-tk")
+    include_directories(BEFORE SYSTEM "/usr/local/include")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
     
     find_library(LIBZ z)
