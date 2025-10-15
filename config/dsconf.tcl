@@ -20,6 +20,9 @@ if { [info exists ::mesh_enabled] } {
      send mesh "source [file join $dspath config/meshconf.tcl]"
 }
 
+# start an eye movement subprocess
+subprocess em "source [file join $dspath config/emconf.tcl]"
+
 # start a juicer subprocess
 subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 
