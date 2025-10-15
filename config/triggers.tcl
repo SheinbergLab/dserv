@@ -55,7 +55,7 @@ proc update_ain_ess { name data } {
 
 proc update_ain { name data } {
     dservCopy ain/vals ain/sampler_vals
-    dservCopy ain/vals ain/ess_vals
+#    dservCopy ain/vals ain/ess_vals
 }
 
 proc update_events { name data } {
@@ -157,7 +157,7 @@ init_vars
 triggerAdd rpio/vals                   1  update_dio
 triggerAdd pca9538/vals                1  update_joystick
 triggerAdd ain/vals                    1  update_ain
-triggerAdd ain/ess_vals               20  update_ain_ess
+#triggerAdd ain/ess_vals               20  update_ain_ess
 triggerAdd mtouch/event                1  update_touch
 triggerAdd proc/windows/status         1  update_ain_window_status
 triggerAdd proc/windows/settings       1  update_ain_window_settings
