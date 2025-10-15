@@ -1662,7 +1662,16 @@ namespace eval ess {
             dservLoggerAddMatch $filename ain/vals 1 80 1
             dservLoggerAddMatch $filename em_coeffDG
 
-	    if { [dservExists openiris/frameinfo] } {
+	    if { [dservExists eyetracking/results] } {
+		foreach v "pupil p1 p4" {
+		    dservLoggerAddMatch $filename em/$v 1 40 1
+		}
+		dservLoggerAddMatch $filename em/pupil_r 1 40 1
+		dservLoggerAddMatch $filename em/time 1 40 1
+		dservLoggerAddMatch $filename em/blink 1 40 1
+		dservLoggerAddMatch $filename em/p1_detected 1 40 1
+		dservLoggerAddMatch $filename em/p4_detected 1 40 1
+	    } elseif { [dservExists openiris/frameinfo] } {
 		foreach side "right" {
 		    foreach v "pupil cr1 cr4" {
 			dservLoggerAddMatch $filename openiris/$side/$v 1 40 1
