@@ -155,6 +155,7 @@ void EssCommandInterface::initializeTcl()
             set subscriptions {
                 "ess/*"
                 "system/*"
+                "em/settings"
                 "stimdg"
                 "trialdg"
                 "eventlog/events"
@@ -178,6 +179,7 @@ void EssCommandInterface::initializeTcl()
                 ess/loaders_script ess/stim_script
                 ess/state_table ess/rmt_cmds
                 ess/datafile ess/lastfile
+                em/settings
                 stimdg trialdg
                 system/hostname system/os
             }

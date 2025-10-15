@@ -69,7 +69,14 @@ public:
     // Access to indicators
     EssWindowIndicator* eyeWindowIndicator() const { return m_eyeIndicator; }
     EssWindowIndicator* touchWindowIndicator() const { return m_touchIndicator; }
-    
+
+  // Conversion from eye units to degrees
+  void setPointsPerDegree(double x, double y) {
+    m_pointsPerDegX = x;
+    m_pointsPerDegY = y;
+  }
+  double pointsPerDegreeX() const { return m_pointsPerDegX; }
+  double pointsPerDegreeY() const { return m_pointsPerDegY; }  
 signals:
     void virtualEyePosition(int adcX, int adcY);
     void virtualTouchEvent(int screenX, int screenY);
@@ -90,8 +97,8 @@ private slots:
 private:
     // Conversion constants matching FLTK version
     static constexpr int ADC_CENTER = 2048;
-    static constexpr double ADC_TO_DEG = 200.0;
-    static constexpr double DEG_PER_ADC = 1.0 / 200.0;
+    double m_pointsPerDegX;
+    double m_pointsPerDegY;
     
     // Drawing functions
     void setupDrawLayers();

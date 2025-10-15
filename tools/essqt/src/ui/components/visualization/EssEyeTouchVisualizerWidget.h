@@ -16,6 +16,7 @@ public:
     
     // Data update methods matching your format
     void updateTouchPosition(const QVariant& data);
+    void updateEyeTrackingSettings(const QVariant& value);
     void updateEyeWindowSetting(const QString& data);
     void updateEyeWindowStatus(const QString& data);
     void updateTouchWindowSetting(const QString& data);

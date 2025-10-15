@@ -93,6 +93,9 @@ void EssEyeTouchVisualizerWidget::handleDatapoint(const QString& name,
     else if (name == "mtouch/touchvals") {
         updateTouchPosition(value);
     }
+    else if (name == "em/settings") {
+        updateEyeTrackingSettings(value);
+    }    
     else if (name == "ess/em_region_setting") {
         updateEyeWindowSetting(value.toString());
     }
@@ -333,6 +336,23 @@ void EssEyeTouchVisualizerWidget::updateTouchPosition(const QVariant& data) {
     }
 }
 
+void EssEyeTouchVisualizerWidget::updateEyeTrackingSettings(const QVariant& value) {
+    // Parse the settings dictionary/map
+    QVariantMap settings = value.toMap();
+    
+    if (settings.contains("to_deg_h")) {
+        double pointsPerDegX = settings["to_deg_h"].toDouble();
+        m_visualizer->setPointsPerDegree(pointsPerDegX, 
+                                        m_visualizer->pointsPerDegreeY());
+    }
+    
+    if (settings.contains("to_deg_v")) {
+        double pointsPerDegY = settings["to_deg_v"].toDouble();
+        m_visualizer->setPointsPerDegree(m_visualizer->pointsPerDegreeX(),
+                                        pointsPerDegY);
+    }
+}
+
 void EssEyeTouchVisualizerWidget::updateEyeWindowSetting(const QString& data) {
     // Parse: "reg active state type cx cy dx dy ..."
     QStringList parts = data.split(' ');
@@ -353,15 +373,15 @@ void EssEyeTouchVisualizerWidget::updateEyeWindowSetting(const QString& data) {
             windows[reg].active = active;
             windows[reg].type = (type == 1) ? EssEyeTouchVisualizer::Ellipse : EssEyeTouchVisualizer::Rectangle;
             
-            // Convert from ADC to degrees (matching Tcl conversion)
-            // sx = (cx - 2048) / 200.0
-            // sy = -1 * (cy - 2048) / 200.0
-            float sx = (cx - 2048) / 200.0f;
-            float sy = -1.0f * (cy - 2048) / 200.0f;
+	    // Use dynamic conversion - should match to_deg_h/v from ess
+	    float pointsPerDegX = m_visualizer->pointsPerDegreeX();	    
+	    float pointsPerDegY = m_visualizer->pointsPerDegreeY();   
+            float sx = (cx - 2048) / pointsPerDegX;
+            float sy = -1.0f * (cy - 2048) / pointsPerDegY;
             windows[reg].center = QPointF(sx, sy);
             
             // Size in degrees (dx and dy are half-widths/radii)
-            windows[reg].size = QSizeF(dx / 200.0f, dy / 200.0f);
+            windows[reg].size = QSizeF(dx / pointsPerDegX, dy / pointsPerDegY);
             
             // Store raw values too
             windows[reg].centerRaw = QPointF(cx, cy);

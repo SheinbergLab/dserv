@@ -23,6 +23,7 @@ int reload_protocol(void);
 int reload_variant(void);
 int save_settings(void);
 int reset_settings(void);
+void recenter_eye_position(void);
 void update_eye_settings(Fl_Widget *, long);
 void save_script_cb(Fl_Widget *, void *);
 void set_branch_cb(Fl_Widget *, void *);

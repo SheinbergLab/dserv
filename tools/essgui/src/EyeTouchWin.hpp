@@ -52,8 +52,8 @@ private:
   float deg_per_pix_x;
   float deg_per_pix_y;
 
-  float adc_points_per_deg_x;
-  float adc_points_per_deg_y;
+  float points_per_deg_x;
+  float points_per_deg_y;
 
   float xextent;			/* extent in degrees */
   float yextent;			/* extent in degrees */
@@ -173,8 +173,8 @@ private:
       virtual_eye.x = deg_x;
       virtual_eye.y = deg_y;
       virtual_eye.active = true;
-      virtual_eye.adc_x = deg_x * adc_points_per_deg_x + 2048;
-      virtual_eye.adc_y = -deg_y * adc_points_per_deg_y + 2048;
+      virtual_eye.adc_x = deg_x * points_per_deg_x + 2048;
+      virtual_eye.adc_y = -deg_y * points_per_deg_y + 2048;
 
       // if we are in continuous mode, this happens automatically
       if (!virtual_eye_continuous_mode)
@@ -249,8 +249,8 @@ private:
     virtual_eye.active = true;
     
     // Convert to ADC
-    virtual_eye.adc_x = deg_x * adc_points_per_deg_x + 2048;
-    virtual_eye.adc_y = -deg_y * adc_points_per_deg_y + 2048;
+    virtual_eye.adc_x = deg_x * points_per_deg_x + 2048;
+    virtual_eye.adc_y = -deg_y * points_per_deg_y + 2048;
     
     // Trigger callback or send data
     if (callback()) {
@@ -378,10 +378,10 @@ void draw_eye_region(EyeRegion *region)
 {
     if (!region->active) return;
 
-    float cx_deg = (region->center_x-2048)/adc_points_per_deg_x;
-    float cy_deg = (region->center_y-2048)/adc_points_per_deg_y;
-    float w_deg = (region->plusminus_x/adc_points_per_deg_x);
-    float h_deg = (region->plusminus_y/adc_points_per_deg_y);
+    float cx_deg = (region->center_x-2048)/points_per_deg_x;
+    float cy_deg = (region->center_y-2048)/points_per_deg_y;
+    float w_deg = (region->plusminus_x/points_per_deg_x);
+    float h_deg = (region->plusminus_y/points_per_deg_y);
     
     float xpos = x()+w()/2+(cx_deg)/deg_per_pix_x;
     float ypos = y()+h()/2+(cy_deg)/deg_per_pix_y;
@@ -495,6 +495,12 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
     }
   }
 
+  void set_points_per_deg(float h, float v) {
+    points_per_deg_x = h;
+    points_per_deg_y = v;
+    redraw();  
+  }
+  
   void draw_virtual_eye() {
     if (!virtual_eye_enabled || !virtual_eye.active) return;
     
@@ -649,9 +655,9 @@ void get_virtual_eye_adc(int& x, int& y) const {
   
   EyeTouchWin(int X, int Y, int W, int H, const char*L=0) : Fl_Box(X,Y,W,H,L)
   {
-    /* these should be set dynamically */
-    adc_points_per_deg_x = 200.0;
-    adc_points_per_deg_y = 200.0;
+    /* these will be updated using em/settings */
+    points_per_deg_x = 8.0;
+    points_per_deg_y = 8.0;
     
     xextent = 10*2;
     yextent = 10*2;

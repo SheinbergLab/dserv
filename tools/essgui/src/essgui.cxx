@@ -917,6 +917,12 @@ void set_branch_cb(Fl_Widget *w, void *cbData) {
   reload_variant();
 }
 
+void recenter_eye_position()
+{
+  std::string rstr;
+  g_App->em_eval("::em::set_current_as_center", rstr);  
+}
+
 void update_eye_settings(Fl_Widget *w, long wtype)
 {
   std::string cmd;
@@ -926,14 +932,14 @@ void update_eye_settings(Fl_Widget *w, long wtype)
   case 1:
     {
       Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
-      oss << "::em::set_param offset_h " << spinner->value();
+      oss << "::em::set_param raw_center_h " << spinner->value();
       cmd = oss.str();
     }
     break;
   case 2:
     {
       Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
-      oss << "::em::set_param offset_v " << spinner->value();
+      oss << "::em::set_param raw_center_v " << spinner->value();
       cmd = oss.str();
     }
     break;
@@ -1009,10 +1015,11 @@ int refresh_eye_settings(Tcl_Interp *interp, const char *dictString)
 	if (!strcmp(key, "scale_h")) hGain_input->value(doubleValue);
 	else vGain_input->value(doubleValue);
       }
-    } else if (strcmp(key, "offset_h") == 0 || strcmp(key, "offset_v") == 0) {
+    } else if (strcmp(key, "raw_center_h") == 0 ||
+	       strcmp(key, "raw_center_v") == 0) {
       int intValue;
       if (Tcl_GetIntFromObj(interp, valueObj, &intValue) == TCL_OK) {
-	if (!strcmp(key, "offset_h")) hBias_input->value(intValue);
+	if (!strcmp(key, "raw_center_h")) hBias_input->value(intValue);
 	else vBias_input->value(intValue);
       }
     } else if (strcmp(key, "invert_h") == 0 || strcmp(key, "invert_v") == 0) {
@@ -2334,6 +2341,22 @@ void process_single_message(const std::string& dpoint) {
   
   else if (!strcmp(json_string_value(name), "em/settings")) {
     refresh_eye_settings(g_App->interp(), json_string_value(data));
+
+    // and update eyetouch widget's scaling factors
+    json_error_t error;
+    json_t *settings_root = json_loads(json_string_value(data), 0, &error);
+    if (settings_root) {
+      json_t *to_deg_h = json_object_get(settings_root, "to_deg_h");
+      json_t *to_deg_v = json_object_get(settings_root, "to_deg_v");
+      
+      if (to_deg_h && to_deg_v) {
+	double deg_h = json_number_value(to_deg_h);
+	double deg_v = json_number_value(to_deg_v);
+        
+	eyetouch_widget->set_points_per_deg(deg_h, deg_v);
+      }
+      json_decref(settings_root);
+    }    
   }
   
   else {

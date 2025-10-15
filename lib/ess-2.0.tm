@@ -2725,12 +2725,24 @@ namespace eval ess {
         }
         set em_windows(states) 0
 
-        # these should be loaded per subject
-        variable em_scale_h 200
-        variable em_scale_v 200
+    	# Get the to_deg values from em settings
+		if {[dservExists em/settings]} {
+			set em_settings [dservGet em/settings]
+			if {[dict exists $em_settings to_deg_h]} {
+				variable em_scale_h [dict get $em_settings to_deg_h]
+				variable em_scale_v [dict get $em_settings to_deg_v]
+			} else {
+				# Fallback to defaults
+				variable em_scale_h 8.0
+				variable em_scale_v 8.0
+			}
+		} else {
+			variable em_scale_h 8.0
+			variable em_scale_v 8.0
+		}
 
-		# now initialize the sampler processor (listens to ain/sampler_vals)
-		::ess::em_sampler_init 50
+	# now initialize the sampler processor (listens to ain/sampler_vals)
+	::ess::em_sampler_init 50
 	
     }
 

@@ -112,7 +112,9 @@ class DservWebSocket {
       subject: '',
       systemName: '',
       systemOS: '',
-      inObs: false,
+	inObs: false,
+  pointsPerDegX: 8.0,  // Will be updated from em/settings
+  pointsPerDegY: 8.0,	
       eyeWindows: Array(8).fill(null).map((_, i) => ({
         id: i,
         active: false,
@@ -309,7 +311,8 @@ handleChunkedMessage(chunk) {
 
     // Other useful subscriptions
     this.send({ cmd: 'subscribe', match: 'openiris/settings', every: 1 });
-
+    this.send({ cmd: 'subscribe', match: 'em/settings', every: 1 });
+	
     this.send({ cmd: 'subscribe', match: 'ess/warningInfo', every: 1 });
     this.send({ cmd: 'subscribe', match: 'ess/infoLog', every: 1 });
     this.send({ cmd: 'subscribe', match: 'ess/debugLog', every: 1 });
@@ -343,6 +346,7 @@ handleChunkedMessage(chunk) {
           ess/variants_script ess/loaders_script
           ess/params ess/viz_config
           ess/stim_script ess/rmt_connected
+          em/settings
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           system/hostname system/os
         } {
@@ -415,6 +419,9 @@ handleChunkedMessage(chunk) {
             this.updateObsCount();
             break;
     case 'ess/in_obs': this.state.inObs = value === '1'; break;
+    case 'em/settings':
+	this.updateEyeTrackingSettings(value);
+	break;
     case 'ess/block_pct_complete':
             this.state.blockPctComplete = Math.round(parseFloat(value) * 100);
             break;
@@ -958,6 +965,24 @@ async forceLoadingRecovery() {
     return tclList.split(' ').filter(item => item.length > 0);
   }
 
+updateEyeTrackingSettings(value) {
+  try {
+    const settings = JSON.parse(value);
+    
+    // Update conversion factors from to_deg_h/v
+    if (settings.to_deg_h !== undefined) {
+      this.state.pointsPerDegX = parseFloat(settings.to_deg_h);
+    }
+    if (settings.to_deg_v !== undefined) {
+      this.state.pointsPerDegY = parseFloat(settings.to_deg_v);
+    }
+    
+    console.log(`Eye tracking conversion updated: ${this.state.pointsPerDegX} x ${this.state.pointsPerDegY} points/deg`);
+  } catch (error) {
+    console.error('Failed to parse em/settings:', error);
+  }
+}
+    
   processEyeWindowSetting(value) {
     const [reg, active, state, type, cx, cy, dx, dy] = value.split(' ').map(Number);
     if (reg >= 0 && reg < 8) {
@@ -967,13 +992,13 @@ async forceLoadingRecovery() {
         state: state,
         type: type === 1 ? 'ellipse' : 'rectangle',
         center: {
-          x: (cx - 2048) / 200.0,
-          y: -1 * (cy - 2048) / 200.0
+          x: (cx - 2048) / this.state.pointsPerDegX,
+          y: -1 * (cy - 2048) / this.state.pointsPerDegY
         },
         centerRaw: { x: cx, y: cy },
         size: {
-          width: Math.abs(dx / 200.0),
-          height: Math.abs(dy / 200.0)
+          width: Math.abs(dx / this.state.pointsPerDegX),
+          height: Math.abs(dy / this.state.pointsPerDegY)
         },
         sizeRaw: { width: dx, height: dy }
       };
@@ -1024,6 +1049,7 @@ async forceLoadingRecovery() {
     }
   }
 
+    
   updateObsCount() {
     if (this.state.obsTotal > 0) {
       this.state.obsCount = `${this.state.obsId + 1}/${this.state.obsTotal}`;

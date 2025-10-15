@@ -11,13 +11,21 @@ package require yajltcl
 
 namespace eval em {
     # parameters for converting from raw values to [0,4095] (2^12)
+    # raw_center_h/v define what p1-p4 pixel difference corresponds to center gaze (2048)
+    # scale_h/v define sensitivity (output units per pixel of p1-p4 difference)
     variable settings [dict create \
-			   scale_h 2 \
-			   scale_v 2 \
-			   offset_h 2000 \
-			   offset_v 2000 \
+			   scale_h 1 \
+			   scale_v 1 \
+			   raw_center_h 0.0 \
+			   raw_center_v 0.0 \
 			   invert_h 0 \
-			   invert_v 0]
+			   invert_v 0 \
+			   to_deg_h 8.0 \
+			   to_deg_v 8.0]
+    
+    # Track current raw values for "set center" functionality
+    variable current_raw_h 0.0
+    variable current_raw_v 0.0
 
     proc update_settings {} {
 	variable settings
@@ -33,17 +41,28 @@ namespace eval em {
     
     proc set_scale_h {s} { set_param scale_h $s }
     proc set_scale_v {s} { set_param scale_v $s }
-    proc set_offset_h {o} { set_param offset_h $o }
-    proc set_offset_v {o} { set_param offset_v $o }
+    proc set_raw_center_h {o} { set_param raw_center_h $o }
+    proc set_raw_center_v {o} { set_param raw_center_v $o }
     proc set_invert_h {o} { set_param invert_h $o }
     proc set_invert_v {o} { set_param invert_v $o }
+    proc set_to_deg_h {d} { set_param to_deg_h $d }
+    proc set_to_deg_v {d} { set_param to_deg_v $d }
+
+    # Set current eye position as center - call this when subject is fixating center
+    proc set_current_as_center {} {
+        variable current_raw_h
+        variable current_raw_v
+        
+        set_raw_center_h $current_raw_h
+        set_raw_center_v $current_raw_v
+    }
 
     proc process { dpoint data } {
         variable settings
-        variable to_deg_h 200.
-        variable to_deg_v 200.
 	variable last_valid_h 2048  ;# Remember last valid position
 	variable last_valid_v 2048
+        variable current_raw_h
+        variable current_raw_v
 
         lassign $data frame_id frame_time pupil_x pupil_y pupil_r p1_x p1_y p4_x p4_y \
             blink p1_detected p4_detected
@@ -73,13 +92,26 @@ namespace eval em {
 	    set raw_h [expr {$p1_x - $p4_x}]
 	    set raw_v [expr {$p1_y - $p4_y}]
 	    
-	    # Apply scaling and offset for ain/vals
+	    # Store for "set center" functionality
+	    set current_raw_h $raw_h
+	    set current_raw_v $raw_v
+	    
+	    # Apply scaling relative to center point, then add offset to 2048
 	    dict with settings {
-		if { $invert_h } { set s_h [expr {-1*$scale_h}] } { set s_h $scale_h }
-		if { $invert_v } { set s_v [expr {-1*$scale_v}] } { set s_v $scale_v }
+		if { $invert_h } {
+		    set s_h [expr {-1*$scale_h}]
+		} else {
+		    set s_h $scale_h
+		}
 		
-		set h [expr {int(($s_h * $raw_h) + $offset_h)}]
-		set v [expr {int(($s_v * $raw_v) + $offset_v)}]
+		if { $invert_v } {
+		    set s_v [expr {-1*$scale_v}]
+		} else {
+		    set s_v $scale_v
+		}
+		
+		set h [expr {int(($s_h * ($raw_h - $raw_center_h)) + 2048)}]
+		set v [expr {int(($s_v * ($raw_v - $raw_center_v)) + 2048)}]
 	    }
 	    
 	    # Remember valid position
@@ -96,8 +128,10 @@ namespace eval em {
 	dservSetData ain/vals 0 4 $ainvals
 	
 	# Compute degrees
-	set h_deg [expr {(2048. - $h) / $to_deg_h}]
-	set v_deg [expr {($v - 2048.) / $to_deg_v}]
+	dict with settings {
+	    set h_deg [expr {(2048. - $h) / $to_deg_h}]
+	    set v_deg [expr {($v - 2048.) / $to_deg_v}]
+	}
 
 	dservSet ess/em_pos "$v $h $h_deg $v_deg"
     }    

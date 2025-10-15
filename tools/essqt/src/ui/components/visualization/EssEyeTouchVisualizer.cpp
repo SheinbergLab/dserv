@@ -23,6 +23,8 @@ EssEyeTouchVisualizer::EssEyeTouchVisualizer(QWidget *parent)
     , m_screenSize(800, 600)
     , m_screenHalfDegrees(10.0, 7.5)
     , m_continuousUpdateTimer(new QTimer(this))
+    , m_pointsPerDegX(8.0)  // Default until we get em/settings
+    , m_pointsPerDegY(8.0)
     , m_continuousUpdateEnabled(false)
     , m_updateRate(250)  // Default 250 Hz
 {
@@ -618,18 +620,18 @@ void EssEyeTouchVisualizer::keyPressEvent(QKeyEvent *event) {
     }
 }
 
-// Coordinate conversions matching FLTK exactly
+// Coordinate conversions
 QPointF EssEyeTouchVisualizer::adcToDegrees(int adcX, int adcY) const {
     return QPointF(
-        (adcX - ADC_CENTER) * DEG_PER_ADC,
-        -1.0 * (adcY - ADC_CENTER) * DEG_PER_ADC  // Y inverted
+        (adcX - ADC_CENTER) / m_pointsPerDegX,
+        -1.0 * (adcY - ADC_CENTER) / m_pointsPerDegY  // Y inverted
     );
 }
 
 QPoint EssEyeTouchVisualizer::degreesToAdc(const QPointF& degrees) const {
     return QPoint(
-        qRound(degrees.x() * ADC_TO_DEG + ADC_CENTER),
-        qRound(-degrees.y() * ADC_TO_DEG + ADC_CENTER)  // Y inverted
+        qRound(degrees.x() * m_pointsPerDegX + ADC_CENTER),
+        qRound(-degrees.y() * m_pointsPerDegY + ADC_CENTER)  // Y inverted
     );
 }
 
