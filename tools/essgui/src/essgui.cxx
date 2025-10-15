@@ -147,7 +147,7 @@ private:
 
 public:
   typedef enum {
-    TERM_LOCAL, TERM_STIM, TERM_ESS, TERM_GIT, TERM_OPENIRIS, TERM_MSG
+    TERM_LOCAL, TERM_STIM, TERM_ESS, TERM_GIT, TERM_EM, TERM_MSG
   } TerminalMode;
   bool auto_reload = true; // reload variant immediately upon setting change
   std::thread dsnet_thread;
@@ -196,7 +196,7 @@ public:
 
     // After initialization, you can set up command completion:
     std::vector<std::string> commands = {
-      "exit", "/ess", "/stim", "/essgui", "/git", "/openiris", "/msg"
+      "exit", "/ess", "/stim", "/essgui", "/git", "/em", "/msg"
       // Add other commands as needed
     };
     output_term->update_command_list(commands);
@@ -450,7 +450,7 @@ public:
     ds_sock->add_match(hoststr.c_str(), "eventlog/events");
     ds_sock->add_match(hoststr.c_str(), "stimdg");
     ds_sock->add_match(hoststr.c_str(), "trialdg");
-    ds_sock->add_match(hoststr.c_str(), "openiris/settings");
+    ds_sock->add_match(hoststr.c_str(), "em/settings");
     ds_sock->add_match(hoststr.c_str(), "print");
     ds_sock->add_match(hoststr.c_str(), "graphics/*");
 
@@ -471,7 +471,7 @@ public:
 				"ess/state_table ess/params stimdg trialdg "
 				"ess/git/branches ess/git/branch "
 				"ess/viz_config "
-				"system/hostname system/os openiris/settings} "
+				"system/hostname system/os em/settings} "
 				"{ dservTouch $v }"),
 		    rstr);
 
@@ -514,11 +514,11 @@ public:
     return retval;
   }
   
-  int openiris_eval(const char *command, std::string &resultstr)
+  int em_eval(const char *command, std::string &resultstr)
   {
-    int retval = ds_sock->openiriscmd(g_App->host,
-				      std::string(command),
-				      resultstr);
+    int retval = ds_sock->emcmd(g_App->host,
+				std::string(command),
+				resultstr);
     return retval;
   }
   
@@ -724,9 +724,9 @@ int eval(char *command, void *cbdata) {
     g_App->terminal_mode = App::TERM_GIT;
   }
   
-  else if (!strcmp(command, "/openiris")) {
-    output_term->set_prompt("openiris> ");
-    g_App->terminal_mode = App::TERM_OPENIRIS;
+  else if (!strcmp(command, "/em")) {
+    output_term->set_prompt("em> ");
+    g_App->terminal_mode = App::TERM_EM;
   }
   
   else if (!strcmp(command, "/msg")) {
@@ -771,8 +771,8 @@ int eval(char *command, void *cbdata) {
 	result = TCL_OK;
       }
       break;
-    case App::TERM_OPENIRIS:
-      result = g_App->openiris_eval(command, resultstr);
+    case App::TERM_EM:
+      result = g_App->em_eval(command, resultstr);
       if (resultstr.empty()) result = TCL_OK;
       else if (resultstr.rfind("!TCL_ERROR ", 0) != std::string::npos) {
 	resultstr = resultstr.substr(11);
@@ -928,42 +928,42 @@ void update_eye_settings(Fl_Widget *w, long wtype)
   case 1:
     {
       Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
-      oss << "::openiris::set_param offset_h " << spinner->value();
+      oss << "::em::set_param offset_h " << spinner->value();
       cmd = oss.str();
     }
     break;
   case 2:
     {
       Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
-      oss << "::openiris::set_param offset_v " << spinner->value();
+      oss << "::em::set_param offset_v " << spinner->value();
       cmd = oss.str();
     }
     break;
   case 3:
     {
       Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
-      oss << "::openiris::set_param scale_h " << spinner->value();
+      oss << "::em::set_param scale_h " << spinner->value();
       cmd = oss.str();
     }
     break;
   case 4:
     {
       Wheel_Spinner *spinner = static_cast<Wheel_Spinner *>(w);
-      oss << "::openiris::set_param scale_v " << spinner->value();
+      oss << "::em::set_param scale_v " << spinner->value();
       cmd = oss.str();
     }
     break;
   case 5:
     {
       Fl_Check_Button *check = static_cast<Fl_Check_Button *>(w);
-      oss << "::openiris::set_param invert_h " << std::to_string(check->value());
+      oss << "::em::set_param invert_h " << std::to_string(check->value());
       cmd = oss.str();
     }
     break;
   case 6:
     {
       Fl_Check_Button *check = static_cast<Fl_Check_Button *>(w);
-      oss << "::openiris::set_param invert_v " << std::to_string(check->value());
+      oss << "::em::set_param invert_v " << std::to_string(check->value());
       cmd = oss.str();
     }
     break;
@@ -972,7 +972,7 @@ void update_eye_settings(Fl_Widget *w, long wtype)
   }
   
   std::string rstr;
-  g_App->openiris_eval(cmd.c_str(), rstr);
+  g_App->em_eval(cmd.c_str(), rstr);
 }
 
 // Version for string input
@@ -2334,7 +2334,7 @@ void process_single_message(const std::string& dpoint) {
     output_term->append("\n");
   }
   
-  else if (!strcmp(json_string_value(name), "openiris/settings")) {
+  else if (!strcmp(json_string_value(name), "em/settings")) {
     refresh_eye_settings(g_App->interp(), json_string_value(data));
   }
   
@@ -2849,7 +2849,7 @@ void process_dpoint_cb(void *cbdata) {
     output_term->append("\n");
   }
   
-  else if (!strcmp(json_string_value(name), "openiris/settings")) {
+  else if (!strcmp(json_string_value(name), "em/settings")) {
     refresh_eye_settings(g_App->interp(), json_string_value(data));
   }
   
