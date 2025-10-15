@@ -2,6 +2,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(qscintilla2_wrapper)
 
+if(APPLE)
+    set(CMAKE_OSX_SYSROOT /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
+endif()
+
 # Find Qt6
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport)
 
@@ -44,7 +48,7 @@ set(QSCI_LIB_PATH ${QSCI_SRC_DIR}/${QSCI_LIB_NAME})
 add_custom_command(
     OUTPUT ${QSCI_LIB_PATH}
     COMMAND ${CMAKE_COMMAND} -E echo "Configuring QScintilla..."
-    COMMAND ${QMAKE_EXECUTABLE} CONFIG+=staticlib CONFIG+=c++17 CONFIG+=release TARGET=qscintilla2_qt6
+    COMMAND ${QMAKE_EXECUTABLE} CONFIG+=staticlib CONFIG+=c++17 CONFIG+=release TARGET=qscintilla2_qt6 QMAKE_MAC_SDK=macosx
     COMMAND ${CMAKE_COMMAND} -E echo "Building QScintilla..."
     COMMAND make
     WORKING_DIRECTORY ${QSCI_SRC_DIR}
