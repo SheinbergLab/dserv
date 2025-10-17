@@ -3,7 +3,7 @@
 #
 
 switch $board_type {
-    "rpi4" - "rpi5" - "rpi" - "beagleplay" {
+    "rpi4" - "rpi5" - "rpi" - "beagley-ai" {
         # Raspberry Pi defaults
         # these are hardware debounced input buttons
         gpioLineRequestInput 24
@@ -11,7 +11,7 @@ switch $board_type {
         gpioLineRequestOutput 26  ;# obs sync output
 	::ess::set_obs_pin 26
     }
-    "pocketbeagle" {
+    "pocketbeagle" - "beagleplay" {
         # PocketBeagle 2 defaults (accessible header pins)
         gpioLineRequestInput 49   ;# P2.20 - button 1
         gpioLineRequestInput 51   ;# P2.24 - button 2

@@ -156,6 +156,8 @@ proc detect_board_type {} {
         return "rpi"
     } elseif { [string match "*BeaglePlay*" $model] } {
         return "beagleplay"
+    } elseif { [string match "*BeagleY-AI*" $model] || [string match "*BEAGLEY-AI*" $model] } {
+        return "beagley-ai"
     } elseif { [string match "*PocketBeagle*" $model] } {
         return "pocketbeagle"
     } elseif { [string match "*BeagleBone*" $model] } {
@@ -172,6 +174,7 @@ set gpio_chip_map {
     rpi4         /dev/gpiochip0
     rpi          /dev/gpiochip0
     beagleplay   /dev/gpiochip2
+    beagley-ai   /dev/gpiochip2
     pocketbeagle /dev/gpiochip2
     beaglebone   /dev/gpiochip0
     unknown      /dev/gpiochip0
