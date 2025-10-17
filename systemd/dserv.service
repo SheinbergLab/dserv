@@ -3,12 +3,22 @@ Description=Dataserver Service
 After=network-online.target
 Wants=network-online.target
 
+# Add these for better network readiness
+After=systemd-networkd-wait-online.service
+After=NetworkManager-wait-online.service
+
 [Service]
 Type=simple
 ExecStart=chrt 60 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 Restart=on-failure
 RestartSec=10
 KillMode=process
+
+# Add these for better logging/debugging
+StandardOutput=journal
+StandardError=journal
+# Optional: Add a delay to ensure network is really ready
+# ExecStartPre=/bin/sleep 5
 
 [Install]
 WantedBy=multi-user.target
