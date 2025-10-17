@@ -692,26 +692,22 @@ std::vector<std::string> MeshManager::scanNetworkBroadcastAddresses() {
     struct ifaddrs *ifap, *ifa;
     if (getifaddrs(&ifap) == 0) {
         for (ifa = ifap; ifa != nullptr; ifa = ifa->ifa_next) {
-            // Skip if no address or not IPv4
             if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
-            
-            // Skip if interface is down or doesn't support broadcast
             if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_BROADCAST)) continue;
-            
-            // Skip loopback interfaces
             if (ifa->ifa_flags & IFF_LOOPBACK) continue;
             
-            // Get broadcast address
             if (ifa->ifa_broadaddr) {
                 struct sockaddr_in* broadcast_addr = (struct sockaddr_in*)ifa->ifa_broadaddr;
                 std::string broadcastStr = inet_ntoa(broadcast_addr->sin_addr);
                 
-                // Skip invalid broadcast addresses
-                if (broadcastStr != "0.0.0.0") {
-                    addresses.push_back(broadcastStr);
-//                    std::cout << "Found broadcast address: " << broadcastStr 
-//                              << " (interface: " << ifa->ifa_name << ")" << std::endl;
+                // Skip invalid and link-local broadcast addresses
+                // Link-local (169.254.x.x) is unreliable for broadcast discovery
+                if (broadcastStr == "0.0.0.0" || 
+                    broadcastStr.rfind("169.254.", 0) == 0) {
+                    continue;
                 }
+                
+                addresses.push_back(broadcastStr);
             }
         }
         freeifaddrs(ifap);
@@ -731,11 +727,13 @@ std::vector<std::string> MeshManager::scanNetworkBroadcastAddresses() {
                 struct sockaddr_in* broadcast_addr = (struct sockaddr_in*)ifa->ifa_ifu.ifu_broadaddr;
                 std::string broadcastStr = inet_ntoa(broadcast_addr->sin_addr);
                 
-                if (broadcastStr != "0.0.0.0") {
-                    addresses.push_back(broadcastStr);
-//                    std::cout << "Found broadcast address: " << broadcastStr 
-//                              << " (interface: " << ifa->ifa_name << ")" << std::endl;
+                // Skip invalid and link-local broadcast addresses
+                if (broadcastStr == "0.0.0.0" || 
+                    broadcastStr.rfind("169.254.", 0) == 0) {
+                    continue;
                 }
+                
+                addresses.push_back(broadcastStr);
             }
         }
         freeifaddrs(ifap);
@@ -804,7 +802,7 @@ void MeshManager::sendHeartbeat() {
     // Get current broadcast addresses (cached, refreshed every 30 seconds)
     auto broadcastAddresses = getBroadcastAddresses();
     
-    // Create JSON heartbeat (existing code)
+    // Create JSON heartbeat
     json_t* heartbeat = json_object();
     json_object_set_new(heartbeat, "type", json_string("heartbeat"));
     json_object_set_new(heartbeat, "applianceId", json_string(myApplianceId.c_str()));
@@ -852,11 +850,8 @@ void MeshManager::sendHeartbeat() {
         }
     }
     
-    // Optional: Log successful sends for debugging
-    if (successfulSends > 0) {
-        // Uncomment for debugging
-        // std::cout << "Sent heartbeat to " << successfulSends << " networks" << std::endl;
-    } else {
+    // Warn if all sends failed
+    if (successfulSends == 0 && !broadcastAddresses.empty()) {
         std::cerr << "Failed to send heartbeat to any network!" << std::endl;
     }
     
