@@ -169,12 +169,14 @@ void *input_thread(void *arg)
 
 static int shutdown_input_thread(gpio_input_t *ireq)
 {
-  pthread_cancel(ireq->input_thread_id);
-  close(ireq->epfd);
-  close(ireq->req.fd);
+  if (ireq->input_thread_id) {
+    pthread_cancel(ireq->input_thread_id);
+    pthread_join(ireq->input_thread_id, NULL);  // Wait BEFORE closing FDs
+  }
+  if (ireq->epfd >= 0) close(ireq->epfd);
+  if (ireq->req.fd >= 0) close(ireq->req.fd);
   return 0;
 }
-
 
 static int gpio_input_init_command(ClientData data,
 				   Tcl_Interp *interp,
@@ -239,10 +241,11 @@ static int gpio_line_request_input_command(ClientData data,
   int attr;
   int ret, val;
     
-  if (info->fd < 0) {
-    return TCL_OK;
+  if (info->fd < 0 || info->input_requests == NULL) {
+    Tcl_AppendResult(interp, "GPIO not initialized", NULL);
+    return TCL_ERROR;
   }
-  
+   
   if (objc < 2) {
     Tcl_WrongNumArgs(interp, 1, objv,
 		     "offset [RISING|FALLING|BOTH] [debounce_us] [PULL_UP|PULL_DOWN] [ACTIVE_LOW|ACTIVE_HIGH]");
