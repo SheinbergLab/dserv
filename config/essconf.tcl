@@ -127,20 +127,60 @@ proc samplerConfigure { slot nsamples nchannels {operation 0} } {
     processSetParam "sampler" operation $operation $slot
 }
 
-# make an educated guess about which gpiochip to use
-if { $::tcl_platform(os) == "Linux" } {
+proc detect_board_type {} {
+    if { $::tcl_platform(os) != "Linux" } {
+        return "unknown"
+    }
+    
     if { $::tcl_platform(machine) == "x86_64" } {
-	set gpiochip /dev/gpiochip1
-    } else {
-		if { [file exists /dev/gpiochip4] } {
-			set gpiochip /dev/gpiochip4
-		} else {
-			set gpiochip /dev/gpiochip0
-		}
-	}
-} else {
-    set gpiochip {}
+        return "x86_64"
+    }
+    
+    # Try to read device tree model
+    set model ""
+    if { [file exists /sys/firmware/devicetree/base/model] } {
+        catch {
+            set fp [open /sys/firmware/devicetree/base/model r]
+            set model [read $fp]
+            close $fp
+            set model [string trim $model "\x00"]
+        }
+    }
+    
+    # Match board types
+    if { [string match "*Raspberry Pi 5*" $model] } {
+        return "rpi5"
+    } elseif { [string match "*Raspberry Pi 4*" $model] } {
+        return "rpi4"
+    } elseif { [string match "*Raspberry Pi*" $model] } {
+        return "rpi"
+    } elseif { [string match "*BeaglePlay*" $model] } {
+        return "beagleplay"
+    } elseif { [string match "*PocketBeagle*" $model] } {
+        return "pocketbeagle"
+    } elseif { [string match "*BeagleBone*" $model] } {
+        return "beaglebone"
+    }
+    
+    return "unknown"
 }
+
+# GPIO chip mapping by board type
+set gpio_chip_map {
+    x86_64       /dev/gpiochip1
+    rpi5         /dev/gpiochip4
+    rpi4         /dev/gpiochip0
+    rpi          /dev/gpiochip0
+    beagleplay   /dev/gpiochip2
+    pocketbeagle /dev/gpiochip2
+    beaglebone   /dev/gpiochip0
+    unknown      /dev/gpiochip0
+}
+
+set board_type [detect_board_type]
+set gpiochip [dict get $gpio_chip_map $board_type]
+
+puts "Detected board: $board_type, using GPIO chip: $gpiochip"
 
 catch { gpioOutputInit $gpiochip }
 catch { gpioInputInit $gpiochip }
