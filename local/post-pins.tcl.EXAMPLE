@@ -2,12 +2,28 @@
 # configure local pins
 #
 
-# these are hardware debounced input buttons
-gpioLineRequestInput 24
-gpioLineRequestInput 25
-
-# obs sync output
-gpioLineRequestOutput 26
+switch $board_type {
+    "rpi4" - "rpi5" - "rpi" - "beagleplay" {
+        # Raspberry Pi defaults
+        # these are hardware debounced input buttons
+        gpioLineRequestInput 24
+        gpioLineRequestInput 25
+        gpioLineRequestOutput 26  ;# obs sync output
+	::ess::set_obs_pin 26
+    }
+    "pocketbeagle" {
+        # PocketBeagle 2 defaults (accessible header pins)
+        gpioLineRequestInput 49   ;# P2.20 - button 1
+        gpioLineRequestInput 51   ;# P2.24 - button 2
+        gpioLineRequestOutput 46  ;# P2.04 - obs sync output
+	::ess::set_obs_pin 46
+    }
+    default {
+        # Safe defaults for unknown boards
+        # Don't configure any pins by default
+        puts "Unknown board type - skipping default GPIO configuration"
+    }
+}
 
 # set joystick/lines to dictionary with "pinval pin" key/values
 # joystick_init will use these to setup the joystick
