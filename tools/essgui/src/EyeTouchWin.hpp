@@ -361,7 +361,10 @@ public:
     
     /* draw the eye position */
     draw_eye_marker();
-        
+
+    /* draw virtual eye marker */
+    draw_virtual_eye();
+    
     fl_pop_clip();
   }
 

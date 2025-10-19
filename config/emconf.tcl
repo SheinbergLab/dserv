@@ -135,9 +135,31 @@ namespace eval em {
 
 	dservSet ess/em_pos "$v $h $h_deg $v_deg"
     }    
+
+    # Process virtual eye data (already in ADC format [0-4095])
+    proc process_virtual { dpoint data } {
+        variable settings
+        
+        lassign $data adc_v adc_h
+        
+        # Virtual data is already in ADC space, just pass through
+        set ainvals [binary format ss $adc_v $adc_h]
+        dservSetData ain/vals 0 4 $ainvals
+        
+        # Compute degrees for visualization
+	dict with settings {
+	    set h_deg [expr {($adc_h - 2048.) / $to_deg_h}]
+	    set v_deg [expr {(2048. - $adc_v) / $to_deg_v}]
+	}	
+        
+        dservSet ess/em_pos "$adc_v $adc_h $h_deg $v_deg"
+    }
     
     update_settings
 }
+
+dservAddExactMatch eyetracking/virtual
+dpointSetScript    eyetracking/virtual em::process_virtual
 
 dservAddExactMatch eyetracking/results
 dpointSetScript    eyetracking/results em::process
