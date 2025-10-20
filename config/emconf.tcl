@@ -63,8 +63,6 @@ namespace eval em {
 	variable last_valid_v 2048
         variable current_raw_h
         variable current_raw_v
-	variable invert_h
-	variable invery_v
 
         lassign $data frame_id frame_time pupil_x pupil_y pupil_r p1_x p1_y p4_x p4_y \
             blink p1_detected p4_detected
@@ -89,28 +87,28 @@ namespace eval em {
 	}
 	
 	# Only compute eye position if BOTH reflections detected
-	if {$p1_detected > 0 && $p4_detected > 0} {
-	    # Calculate raw eye position in pixels (P1-P4 difference)
-	    set raw_h [expr {$invert_h ? ($p1_x-$p4_x) : ($p4_x-$p1_x)}]
-	    set raw_v [expr {$invert_v ? ($p1_y-$p4_y) : ($p4_y-$p1_y)}]
-
-	    # Store for "set center" functionality
-	    set current_raw_h $raw_h
-	    set current_raw_v $raw_v
-	    
-	    # Apply scaling relative to center point, then add offset to 2048
-	    dict with settings {
+	dict with settings {
+	    if {$p1_detected > 0 && $p4_detected > 0} {
+		# Calculate raw eye position in pixels (P1-P4 difference)
+		set raw_h [expr {$invert_h ? ($p1_x-$p4_x) : ($p4_x-$p1_x)}]
+		set raw_v [expr {$invert_v ? ($p1_y-$p4_y) : ($p4_y-$p1_y)}]
+		
+		# Store for "set center" functionality
+		set current_raw_h $raw_h
+		set current_raw_v $raw_v
+		
+		# Apply scaling relative to center point, then add offset to 2048
 		set h [expr {int(($scale_h * ($raw_h - $raw_center_h)) + 2048)}]
 		set v [expr {int(($scale_v * ($raw_v - $raw_center_v)) + 2048)}]
-	    }
 	    
 	    # Remember valid position
 	    set last_valid_h $h
 	    set last_valid_v $v
-	} else {
-	    # Use last valid position (hold) or center
-	    set h $last_valid_h
-	    set v $last_valid_v
+	    } else {
+		# Use last valid position (hold) or center
+		set h $last_valid_h
+		set v $last_valid_v
+	    }
 	}
 	
 	# Send ain/vals (even if held)
