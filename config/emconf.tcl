@@ -89,29 +89,17 @@ namespace eval em {
 	# Only compute eye position if BOTH reflections detected
 	if {$p1_detected > 0 && $p4_detected > 0} {
 	    # Calculate raw eye position in pixels (P1-P4 difference)
-	    set raw_h [expr {$p1_x - $p4_x}]
-	    set raw_v [expr {$p1_y - $p4_y}]
-	    
+	    set raw_h [expr {$invert_h ? ($p1_x-$p4_x) : ($p4_x-$p1_x)}]
+	    set raw_v [expr {$invert_v ? ($p1_y-$p4_y) : ($p4_y-$p1_y)}]
+
 	    # Store for "set center" functionality
 	    set current_raw_h $raw_h
 	    set current_raw_v $raw_v
 	    
 	    # Apply scaling relative to center point, then add offset to 2048
 	    dict with settings {
-		if { $invert_h } {
-		    set s_h [expr {-1*$scale_h}]
-		} else {
-		    set s_h $scale_h
-		}
-		
-		if { $invert_v } {
-		    set s_v [expr {-1*$scale_v}]
-		} else {
-		    set s_v $scale_v
-		}
-		
-		set h [expr {int(($s_h * ($raw_h - $raw_center_h)) + 2048)}]
-		set v [expr {int(($s_v * ($raw_v - $raw_center_v)) + 2048)}]
+		set h [expr {int(($scale_h * ($raw_h - $raw_center_h)) + 2048)}]
+		set v [expr {int(($scale_v * ($raw_v - $raw_center_v)) + 2048)}]
 	    }
 	    
 	    # Remember valid position
@@ -129,8 +117,8 @@ namespace eval em {
 	
 	# Compute degrees
 	dict with settings {
-	    set h_deg [expr {(2048. - $h) / $to_deg_h}]
-	    set v_deg [expr {($v - 2048.) / $to_deg_v}]
+	    set h_deg [expr {($h - 2048.) / $to_deg_h}]
+	    set v_deg [expr {(2048. - $v) / $to_deg_v}]
 	}
 
 	dservSet ess/em_pos "$v $h $h_deg $v_deg"
