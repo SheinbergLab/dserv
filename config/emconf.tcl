@@ -63,6 +63,8 @@ namespace eval em {
 	variable last_valid_v 2048
         variable current_raw_h
         variable current_raw_v
+	variable invert_h
+	variable invery_v
 
         lassign $data frame_id frame_time pupil_x pupil_y pupil_r p1_x p1_y p4_x p4_y \
             blink p1_detected p4_detected
