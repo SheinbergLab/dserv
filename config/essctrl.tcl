@@ -46,6 +46,7 @@ namespace eval ess {
 	if { [lsearch -exact $noreply_functions $cmd] } {
 	    return [send ess evalNoReply \{ ::ess::$cmd {*}$args \}]
 	} else {
+	    puts "send ess ::ess::$cmd {*}$args"
 	    return [send ess ::ess::$cmd {*}$args]
 	}
     }
@@ -73,7 +74,7 @@ namespace eval ess {
     proc validate_script_minimal s { _protected_call validate_script_minimal $s }
     
     # Blocked when running only
-    proc file_suggest args { _protected_call file_suggest 0 $args }
     proc file_close args { _protected_call file_close 0 $args }
+    proc file_suggest {} { send ess ::ess::file_suggest }
 }
 
