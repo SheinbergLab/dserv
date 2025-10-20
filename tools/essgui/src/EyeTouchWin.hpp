@@ -593,7 +593,7 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
     }
   }
   
-  void set_virtual_eye_continuous(bool enabled, float rate_hz = 60.0) {
+  void set_virtual_eye_continuous(bool enabled, float rate_hz = 200.0) {
     if (!enabled && virtual_eye_continuous_mode) {
       // Remove existing timeout before disabling
       Fl::remove_timeout(virtual_eye_timer_callback, this);
@@ -607,6 +607,17 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
     }
   }
 
+  void set_virtual_eye_rate(float rate_hz) {
+    if (virtual_eye_continuous_mode) {
+      // Restart timer with new rate
+      Fl::remove_timeout(virtual_eye_timer_callback, this);
+      virtual_eye_update_rate = rate_hz;
+      Fl::add_timeout(1.0 / rate_hz, virtual_eye_timer_callback, this);
+    } else {
+      virtual_eye_update_rate = rate_hz;
+    }
+  }
+  
   void set_virtual_touch_enabled(bool enabled) {
     virtual_touch_enabled = enabled;
     if (enabled && !virtual_touch.active) {
