@@ -43,10 +43,9 @@ namespace eval ess {
 	set noreply_functions \
 	    "load_system reload_system reload_protocol reload_variant"
 	
-	if { [lsearch -exact $noreply_functions $cmd] } {
+	if { [lsearch -exact $noreply_functions $cmd] != -1 } {
 	    return [send ess evalNoReply \{ ::ess::$cmd {*}$args \}]
 	} else {
-	    puts "send ess ::ess::$cmd {*}$args"
 	    return [send ess ::ess::$cmd {*}$args]
 	}
     }
@@ -75,6 +74,6 @@ namespace eval ess {
     
     # Blocked when running only
     proc file_close args { _protected_call file_close 0 $args }
-    proc file_suggest {} { send ess ::ess::file_suggest }
+    proc file_suggest {} { _protected_call file_suggest 0 }
 }
 
