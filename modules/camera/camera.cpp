@@ -60,7 +60,6 @@ typedef struct camera_info_s {
 
 #include <libcamera/libcamera.h>
 #include <libcamera/control_ids.h>
-#include <libcamera/transform.h>
 
 #ifdef HAS_JPEG
 #include <jpeglib.h>
@@ -411,27 +410,6 @@ public:
       preview_config.bufferCount = 4;
     }
 
-    Transform transform = Transform::Identity;
-    switch (rotation_) {
-    case 0:
-      transform = Transform::Identity;
-      break;
-    case 90:
-      transform = Transform::Rot90;
-      break;
-    case 180:
-      transform = Transform::Rot180;
-      break;
-    case 270:
-      transform = Transform::Rot270;
-      break;
-    default:
-      std::cerr << "Invalid rotation: " << rotation_ << ", using 0" << std::endl;
-      transform = Transform::Identity;
-    }
-    
-    config_->transform = transform;
-  
     CameraConfiguration::Status validation = config_->validate();
     if (validation == CameraConfiguration::Invalid) {
       std::cerr << "Camera configuration invalid" << std::endl;
@@ -1876,7 +1854,7 @@ public:
   int32_t get_exposure_time() const { return exposure_time_; }
   float get_analog_gain() const { return analog_gain_; }
   float get_brightness() const { return brightness_; }
-  float get_contrast() const { return contrast
+  float get_contrast() const { return contrast_; }
     
   unsigned int get_width() const { return width_; }
   unsigned int get_height() const { return height_; }
