@@ -60,6 +60,7 @@ typedef struct camera_info_s {
 
 #include <libcamera/libcamera.h>
 #include <libcamera/control_ids.h>
+#include <libcamera/transform.h>
 
 #ifdef HAS_JPEG
 #include <jpeglib.h>
@@ -98,6 +99,11 @@ private:
   // Camera parameters
   unsigned int width_ = 1920;
   unsigned int height_ = 1080;
+
+  bool auto_exposure_enabled_ = true;  // toggle for AE
+  float exposure_time_ = 0.0f;         // in microseconds (0 = auto)
+  float analog_gain_ = 1.0f;           // analog gain value  
+  int rotation_ = 0;
   
   bool preview_enabled_ = false;
   unsigned int preview_width_ = 0;
@@ -248,6 +254,18 @@ public:
     return true;
   }
 
+  void set_auto_exposure(bool enabled) { 
+    auto_exposure_enabled_ = enabled; 
+  }
+  
+  void set_exposure_time(float microseconds) { 
+    exposure_time_ = std::max(0.0f, microseconds); 
+  }
+  
+  void set_analog_gain(float gain) { 
+    analog_gain_ = std::max(1.0f, gain); 
+  }
+  
   bool configure(unsigned int width, unsigned int height,
 		 unsigned int preview_width = 0, 
 		 unsigned int preview_height = 0) {
@@ -392,7 +410,28 @@ public:
       preview_config.pixelFormat = preferred_format;
       preview_config.bufferCount = 4;
     }
+
+    Transform transform = Transform::Identity;
+    switch (rotation_) {
+    case 0:
+      transform = Transform::Identity;
+      break;
+    case 90:
+      transform = Transform::Rot90;
+      break;
+    case 180:
+      transform = Transform::Rot180;
+      break;
+    case 270:
+      transform = Transform::Rot270;
+      break;
+    default:
+      std::cerr << "Invalid rotation: " << rotation_ << ", using 0" << std::endl;
+      transform = Transform::Identity;
+    }
     
+    config_->transform = transform;
+  
     CameraConfiguration::Status validation = config_->validate();
     if (validation == CameraConfiguration::Invalid) {
       std::cerr << "Camera configuration invalid" << std::endl;
@@ -776,6 +815,7 @@ public:
     
     for (auto &request : requests_) {
       request->reuse(Request::ReuseBuffers);
+      apply_controls_to_request(request.get());      
       ret = camera_->queueRequest(request.get());
       if (ret) {
 	camera_->stop();
@@ -842,6 +882,7 @@ public:
     // Queue initial requests
     for (auto &request : requests_) {
       request->reuse(Request::ReuseBuffers);
+      apply_controls_to_request(request.get());      
       ret = camera_->queueRequest(request.get());
       if (ret) {
 	std::cerr << "Failed to queue request for streaming" << std::endl;
@@ -971,6 +1012,7 @@ public:
     if (request->status() == Request::RequestCancelled) {
       if (state_ == CameraState::STREAMING) {
 	request->reuse(Request::ReuseBuffers);
+	apply_controls_to_request(request);	
 	camera_->queueRequest(request);
       }
       return;
@@ -989,6 +1031,7 @@ public:
     
       if (state_ == CameraState::STREAMING) {
 	request->reuse(Request::ReuseBuffers);
+	apply_controls_to_request(request);	
 	camera_->queueRequest(request);
       }
       return;
@@ -1034,6 +1077,7 @@ public:
 	  // Skip this frame - too soon for target FPS
 	  if (state_ == CameraState::STREAMING) {
 	    request->reuse(Request::ReuseBuffers);
+	    apply_controls_to_request(request);	
 	    camera_->queueRequest(request);
 	  }
 	  return;
@@ -1046,6 +1090,7 @@ public:
   
     if (state_ == CameraState::STREAMING) {
       request->reuse(Request::ReuseBuffers);
+      apply_controls_to_request(request);	
       camera_->queueRequest(request);
     }
   }
@@ -1096,6 +1141,7 @@ public:
     // Continue capturing if not done
     if (!capture_complete_) {
       request->reuse(Request::ReuseBuffers);
+      apply_controls_to_request(request);	
       camera_->queueRequest(request);
     }
   }
@@ -1797,7 +1843,36 @@ public:
   void set_contrast(float c) { contrast_ = c; }
   void set_resolution(unsigned int w, unsigned int h) { width_ = w; height_ = h; }
   void set_jpeg_quality(int q) { jpeg_quality_ = q; }
+
+  void apply_controls_to_request(Request *request) {
+    ControlList &controls = request->controls();
     
+    // Apply brightness/contrast (these work with auto-exposure)
+    controls.set(controls::Brightness, brightness_);
+    controls.set(controls::Contrast, contrast_);
+    
+    // Manual exposure control
+    if (!auto_exposure_enabled_ && exposure_time_ > 0.0f) {
+      // Disable AE and set manual values
+      controls.set(controls::AeEnable, false);
+      controls.set(controls::ExposureTime, static_cast<int32_t>(exposure_time_));
+      controls.set(controls::AnalogueGain, analog_gain_);
+    } else {
+      // Enable auto-exposure
+      controls.set(controls::AeEnable, true);
+    }
+  }  
+
+  void set_rotation(int degrees) {   // ADD THIS
+    if (degrees == 0 || degrees == 90 || degrees == 180 || degrees == 270) {
+      rotation_ = degrees;
+    } else {
+      std::cerr << "Invalid rotation: " << degrees << " (must be 0, 90, 180, or 270)" << std::endl;
+    }
+  }
+  
+  int get_rotation() const { return rotation_; }
+  
   unsigned int get_width() const { return width_; }
   unsigned int get_height() const { return height_; }
   size_t get_image_size() const { return image_data_.size(); }
@@ -2332,6 +2407,41 @@ extern "C" {
     return TCL_OK;
   }
 
+  static int camera_set_rotation_command(ClientData data,
+					 Tcl_Interp *interp,
+					 int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    int rotation;
+    
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "rotation");
+      return TCL_ERROR;
+    }
+    
+    if (Tcl_GetIntFromObj(interp, objv[1], &rotation) != TCL_OK)
+      return TCL_ERROR;
+    
+    if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) {
+      Tcl_AppendResult(interp, "Invalid rotation (must be 0, 90, 180, or 270)", NULL);
+      return TCL_ERROR;
+    }
+    
+    info->capture->set_rotation(rotation);
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(rotation));
+    return TCL_OK;
+  }
+  
   static int camera_release_command(ClientData data,
                                     Tcl_Interp *interp,
                                     int objc, Tcl_Obj *objv[])
@@ -2349,6 +2459,7 @@ extern "C" {
     return TCL_OK;
   }
 
+  
   static int camera_status_command(ClientData data,
                                    Tcl_Interp *interp,
                                    int objc, Tcl_Obj *objv[])
@@ -2384,6 +2495,32 @@ extern "C" {
       Tcl_DictObjPut(interp, result,
                      Tcl_NewStringObj("ae_settled", -1),
                      Tcl_NewBooleanObj(info->capture->is_ae_settled()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("auto_exposure", -1),
+		     Tcl_NewBooleanObj(info->capture->get_auto_exposure()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("exposure_time", -1),
+		     Tcl_NewIntObj(info->capture->get_exposure_time()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("analog_gain", -1),
+		     Tcl_NewDoubleObj(info->capture->get_analog_gain()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("brightness", -1),
+		     Tcl_NewDoubleObj(info->capture->get_brightness()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("contrast", -1),
+		     Tcl_NewDoubleObj(info->capture->get_contrast()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("rotation", -1),
+		     Tcl_NewIntObj(info->capture->get_rotation()));
+      
+      
       double configured_fps = info->capture->get_configured_fps();
       if (configured_fps > 0.0) {
 	Tcl_DictObjPut(interp, result,
@@ -3342,6 +3479,18 @@ extern "C" {
     Tcl_CreateObjCommand(interp, "cameraSetContrast",
                          (Tcl_ObjCmdProc *) camera_set_contrast_command,
                          cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetRotation",
+			 (Tcl_ObjCmdProc *) camera_set_rotation_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetAutoExposure",
+			 (Tcl_ObjCmdProc *) camera_set_auto_exposure_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetExposureTime",
+			 (Tcl_ObjCmdProc *) camera_set_exposure_time_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetAnalogGain",
+			 (Tcl_ObjCmdProc *) camera_set_analog_gain_command,
+			 cameraInfo, NULL);    
     Tcl_CreateObjCommand(interp, "cameraRelease",
                          (Tcl_ObjCmdProc *) camera_release_command,
                          cameraInfo, NULL);
