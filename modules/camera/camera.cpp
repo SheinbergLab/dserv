@@ -1872,7 +1872,12 @@ public:
   }
   
   int get_rotation() const { return rotation_; }
-  
+  bool get_auto_exposure() const { return auto_exposure_enabled_; }
+  int32_t get_exposure_time() const { return exposure_time_; }
+  float get_analog_gain() const { return analog_gain_; }
+  float get_brightness() const { return brightness_; }
+  float get_contrast() const { return contrast
+    
   unsigned int get_width() const { return width_; }
   unsigned int get_height() const { return height_; }
   size_t get_image_size() const { return image_data_.size(); }
@@ -2442,6 +2447,106 @@ extern "C" {
     return TCL_OK;
   }
   
+  static int camera_set_auto_exposure_command(ClientData data,
+					      Tcl_Interp *interp,
+					      int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    int enabled;
+  
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
+      return TCL_ERROR;
+    }
+  
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+  
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "enabled");
+      return TCL_ERROR;
+    }
+  
+    if (Tcl_GetBooleanFromObj(interp, objv[1], &enabled) != TCL_OK)
+      return TCL_ERROR;
+  
+    info->capture->set_auto_exposure(enabled != 0);
+    Tcl_SetObjResult(interp, Tcl_NewBooleanObj(enabled));
+    return TCL_OK;
+  }
+
+  static int camera_set_exposure_time_command(ClientData data,
+					      Tcl_Interp *interp,
+					      int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    int exposure_us;
+  
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
+      return TCL_ERROR;
+    }
+  
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+  
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "exposure_time_microseconds");
+      return TCL_ERROR;
+    }
+  
+    if (Tcl_GetIntFromObj(interp, objv[1], &exposure_us) != TCL_OK)
+      return TCL_ERROR;
+  
+    if (exposure_us < 0 || exposure_us > 1000000) {
+      Tcl_AppendResult(interp, "Invalid exposure time (0-1000000 microseconds)", NULL);
+      return TCL_ERROR;
+    }
+  
+    info->capture->set_exposure_time(exposure_us);
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(exposure_us));
+    return TCL_OK;
+  }
+
+  static int camera_set_analog_gain_command(ClientData data,
+					    Tcl_Interp *interp,
+					    int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    double gain;
+  
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
+      return TCL_ERROR;
+    }
+  
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+  
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "gain");
+      return TCL_ERROR;
+    }
+  
+    if (Tcl_GetDoubleFromObj(interp, objv[1], &gain) != TCL_OK)
+      return TCL_ERROR;
+  
+    if (gain < 1.0 || gain > 16.0) {
+      Tcl_AppendResult(interp, "Invalid analog gain (1.0 to 16.0)", NULL);
+      return TCL_ERROR;
+    }
+  
+    info->capture->set_analog_gain(gain);
+    Tcl_SetObjResult(interp, Tcl_NewDoubleObj(gain));
+    return TCL_OK;
+  }
+
   static int camera_release_command(ClientData data,
                                     Tcl_Interp *interp,
                                     int objc, Tcl_Obj *objv[])
