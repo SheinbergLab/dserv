@@ -77,7 +77,10 @@ proc start { { camera_id 0 } } {
 
     # Lock white balance for consistent color
     #cameraSetAutoWhiteBalance 0
-
+    # (green is always 1.0)
+    #cameraSetRedGain 1.8
+    #cameraSetBlueGain 1.5
+    
     # Adjust sharpness
     #cameraSetSharpness 1.3
 
