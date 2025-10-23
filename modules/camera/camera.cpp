@@ -102,6 +102,8 @@ private:
   bool auto_exposure_enabled_ = true;  // toggle for AE
   float exposure_time_ = 0.0f;         // in microseconds (0 = auto)
   float analog_gain_ = 1.0f;           // analog gain value  
+  float sharpness_ = 1.0f;              // (0.0 to 2.0, default 1.0)
+  bool auto_white_balance_ = true; 
   int rotation_ = 0;
   
   bool preview_enabled_ = false;
@@ -1828,6 +1830,10 @@ public:
     // Apply brightness/contrast (these work with auto-exposure)
     controls.set(controls::Brightness, brightness_);
     controls.set(controls::Contrast, contrast_);
+    controls.set(controls::Sharpness, sharpness_);
+
+    // White balance control
+    controls.set(controls::AwbEnable, auto_white_balance_);
     
     // Manual exposure control
     if (!auto_exposure_enabled_ && exposure_time_ > 0.0f) {
@@ -1850,12 +1856,22 @@ public:
   }
   
   int get_rotation() const { return rotation_; }
+
+  void set_sharpness(float s) { sharpness_ = s; }
+  void set_auto_white_balance(bool enabled) {
+    auto_white_balance_ = enabled; 
+  }
+
   bool get_auto_exposure() const { return auto_exposure_enabled_; }
   int32_t get_exposure_time() const { return exposure_time_; }
   float get_analog_gain() const { return analog_gain_; }
   float get_brightness() const { return brightness_; }
   float get_contrast() const { return contrast_; }
-    
+  float get_sharpness() const { return sharpness_; }
+  bool get_auto_white_balance() const {
+    return auto_white_balance_; 
+  }
+  
   unsigned int get_width() const { return width_; }
   unsigned int get_height() const { return height_; }
   size_t get_image_size() const { return image_data_.size(); }
@@ -2390,6 +2406,71 @@ extern "C" {
     return TCL_OK;
   }
 
+  static int camera_set_sharpness_command(ClientData data,
+					  Tcl_Interp *interp,
+					  int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    double sharpness;
+    
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "sharpness");
+      return TCL_ERROR;
+    }
+    
+    if (Tcl_GetDoubleFromObj(interp, objv[1], &sharpness) != TCL_OK)
+      return TCL_ERROR;
+    
+    if (sharpness < 0.0 || sharpness > 2.0) {
+      Tcl_AppendResult(interp, "Invalid sharpness (0.0 to 2.0)", NULL);
+      return TCL_ERROR;
+    }
+    
+    info->capture->set_sharpness(sharpness);
+    Tcl_SetObjResult(interp, Tcl_NewDoubleObj(sharpness));
+    return TCL_OK;
+  }
+  
+  static int camera_set_auto_white_balance_command(ClientData data,
+						   Tcl_Interp *interp,
+						   int objc, Tcl_Obj *objv[])
+  {
+    camera_info_t *info = (camera_info_t *) data;
+    int enabled;
+    
+    if (!info->available) {
+      Tcl_AppendResult(interp, "Camera support not available", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (!info->capture) {
+      Tcl_AppendResult(interp, "Camera not initialized", NULL);
+      return TCL_ERROR;
+    }
+    
+    if (objc < 2) {
+      Tcl_WrongNumArgs(interp, 1, objv, "enabled");
+      return TCL_ERROR;
+    }
+    
+    if (Tcl_GetBooleanFromObj(interp, objv[1], &enabled) != TCL_OK)
+      return TCL_ERROR;
+    
+    info->capture->set_auto_white_balance(enabled != 0);
+    Tcl_SetObjResult(interp, Tcl_NewBooleanObj(enabled));
+    return TCL_OK;
+  }
+  
   static int camera_set_rotation_command(ClientData data,
 					 Tcl_Interp *interp,
 					 int objc, Tcl_Obj *objv[])
@@ -2598,6 +2679,14 @@ extern "C" {
       Tcl_DictObjPut(interp, result,
 		     Tcl_NewStringObj("contrast", -1),
 		     Tcl_NewDoubleObj(info->capture->get_contrast()));
+
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("sharpness", -1),
+		     Tcl_NewDoubleObj(info->capture->get_sharpness()));
+      
+      Tcl_DictObjPut(interp, result,
+		     Tcl_NewStringObj("auto_white_balance", -1),
+		     Tcl_NewBooleanObj(info->capture->get_auto_white_balance()));
       
       Tcl_DictObjPut(interp, result,
 		     Tcl_NewStringObj("rotation", -1),
@@ -3562,6 +3651,12 @@ extern "C" {
     Tcl_CreateObjCommand(interp, "cameraSetContrast",
                          (Tcl_ObjCmdProc *) camera_set_contrast_command,
                          cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetSharpness",
+			 (Tcl_ObjCmdProc *) camera_set_sharpness_command,
+			 cameraInfo, NULL);
+    Tcl_CreateObjCommand(interp, "cameraSetAutoWhiteBalance",
+			 (Tcl_ObjCmdProc *) camera_set_auto_white_balance_command,
+                     cameraInfo, NULL);    
     Tcl_CreateObjCommand(interp, "cameraSetRotation",
 			 (Tcl_ObjCmdProc *) camera_set_rotation_command,
 			 cameraInfo, NULL);
