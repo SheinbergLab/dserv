@@ -398,7 +398,32 @@ public:
     stream_config.size.height = height;
     stream_config.pixelFormat = preferred_format;
     stream_config.bufferCount = 4;
-
+    
+    // Apply rotation using Transform
+    // Convert rotation degrees to Transform enum
+    Transform transform = Transform::Identity;
+    
+    switch(rotation_) {
+    case 0:
+      transform = Transform::Identity;
+      break;
+    case 90:
+      transform = Transform::Rot90;
+      break;
+    case 180:
+      transform = Transform::Rot180;
+      break;
+    case 270:
+      transform = Transform::Rot270;
+      break;
+    default:
+      std::cerr << "Unsupported rotation: " << rotation_ 
+                << ". Using 0 degrees." << std::endl;
+      transform = Transform::Identity;
+    }
+    
+    stream_config.transform = transform;
+    
     // Configure preview stream if requested
     StreamConfiguration *preview_config_ptr = nullptr;
     if (preview_enabled_ && config_->size() > 1) {
