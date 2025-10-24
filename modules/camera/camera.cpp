@@ -188,6 +188,54 @@ private:
   std::mutex save_queue_mutex_;
   std::atomic<bool> save_worker_running_{false};
 
+  void add_exif_orientation_to_jpeg(struct jpeg_compress_struct* cinfo) {
+    if (rotation_ == 0) return;  // No rotation needed
+    
+    // Minimal EXIF data with just orientation
+    // This is a lightweight EXIF that only contains the orientation tag
+    uint8_t exif_data[] = {
+      'E', 'x', 'i', 'f', 0x00, 0x00,  // EXIF identifier
+      // TIFF header
+      0x49, 0x49,  // Little endian (Intel)
+      0x2A, 0x00,  // TIFF magic number (42)
+      0x08, 0x00, 0x00, 0x00,  // Offset to first IFD (8 bytes)
+      // IFD0
+      0x01, 0x00,  // Number of directory entries (1)
+      // Orientation entry
+      0x12, 0x01,  // Tag (0x0112 = Orientation)
+      0x03, 0x00,  // Type (SHORT = 3)
+      0x01, 0x00, 0x00, 0x00,  // Count (1)
+      0x00, 0x00, 0x00, 0x00,  // Value (will be set below)
+      // End of IFD
+      0x00, 0x00, 0x00, 0x00,  // No next IFD
+    };
+    
+    // Set orientation value based on rotation
+    // EXIF uses these standard values:
+    // 1 = normal, 3 = 180°, 6 = 90° CW, 8 = 270° CW (90° CCW)
+    uint16_t orientation = 1;
+    switch(rotation_) {
+      case 90:
+        orientation = 6;  // Rotate 90° CW
+        break;
+      case 180:
+        orientation = 3;  // Rotate 180°
+        break;
+      case 270:
+        orientation = 8;  // Rotate 270° CW (90° CCW)
+        break;
+      default:
+        orientation = 1;  // Normal
+    }
+    
+    // Store orientation value in little-endian format at offset 26
+    exif_data[26] = orientation & 0xFF;
+    exif_data[27] = (orientation >> 8) & 0xFF;
+    
+    // Write APP1 marker with EXIF data
+    jpeg_write_marker(cinfo, JPEG_APP0 + 1, exif_data, sizeof(exif_data));
+  }
+  
 public:
   CameraCapture() {
     cm_ = std::make_unique<CameraManager>();
@@ -536,6 +584,8 @@ public:
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
     
     jpeg_start_compress(&cinfo, TRUE);
+
+    add_exif_orientation_to_jpeg(&cinfo);
     
     const auto& raw_data = frame_ring_buffer_[buffer_index].preview_raw_data;
     JSAMPROW row_pointer[1];
@@ -589,6 +639,8 @@ public:
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
     
     jpeg_start_compress(&cinfo, TRUE);
+
+    add_exif_orientation_to_jpeg(&cinfo);
     
     JSAMPROW row_pointer[1];
     int row_stride = cfg.size.width * 3;
@@ -1567,6 +1619,8 @@ public:
     jpeg_set_quality(&cinfo, jpeg_quality_, TRUE);
     
     jpeg_start_compress(&cinfo, TRUE);
+    
+    add_exif_orientation_to_jpeg(&cinfo);
     
     JSAMPROW row_pointer[1];
     int row_stride = cfg.size.width * 3;
