@@ -291,8 +291,9 @@ const loadingMessage = computed(() => {
 const trialCount = ref(0)
 const lastLoadedTrials = ref(0)
 
+// Show recovery button after 5 minutes 
 const showRecoveryButton = computed(() => {
-  return dserv.loadingState.timeout || (dserv.loadingState.elapsed > 30000)
+  return dserv.loadingState.timeout || (dserv.loadingState.elapsed > 300000)
 })
 
 const displayProtocolValue = computed(() => dserv.state.currentProtocol || null)
