@@ -148,7 +148,6 @@ public:
     
     // Set callback for suggest button
     void set_suggest_callback(void (*callback)(EssguiFileDialog* dialog, void* data), void* data = nullptr) {
-        printf("Setting suggest callback: %p\n", callback);
         suggest_callback_func = callback;
         suggest_callback_data = data;
     }
