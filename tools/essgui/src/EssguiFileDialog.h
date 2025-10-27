@@ -38,17 +38,12 @@ private:
     
     static void suggest_callback(Fl_Widget*, void* data) {
         EssguiFileDialog* dialog = (EssguiFileDialog*)data;
-        printf("Suggest button pressed!\n");
-        printf("Callback function pointer: %p\n", dialog->suggest_callback_func);
         
         // Call user-defined suggest function if set
         if (dialog->suggest_callback_func) {
-            printf("Calling user callback...\n");
-            dialog->suggest_callback_func(dialog, dialog->suggest_callback_data);
-        } else {
-            // Debug: show message if no callback is set
-            fl_message("Suggest button pressed but no callback set!");
-        }
+            dialog->suggest_callback_func(dialog,
+					  dialog->suggest_callback_data);
+        } 
     }
     
     static void input_callback(Fl_Widget*, void* data) {
@@ -156,7 +151,6 @@ public:
         printf("Setting suggest callback: %p\n", callback);
         suggest_callback_func = callback;
         suggest_callback_data = data;
-        printf("Callback set. Function pointer now: %p\n", suggest_callback_func);
     }
     
     // Clear the input field
