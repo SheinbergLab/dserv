@@ -83,7 +83,7 @@ static void show_file_dialog() {
       open_cmd += dialog.filename();
       
       auto result = esscmd(open_cmd, rstr);
-      if (rstr[0] != '1') {
+      if (rstr[0] != '1' && !rstr.empty()) {
 	fl_message("%s", rstr.c_str());
       }
     }
@@ -99,7 +99,7 @@ void close_cb(Fl_Widget*, void*) {
   std::string rstr;
   std::string close_cmd("ess::file_close");
   auto result = esscmd(close_cmd, rstr);
-  if (rstr[0] != '1') {
+  if (rstr[0] != '1' && !rstr.empty()) {
     fl_message("%s", rstr.c_str());
   }
 }
