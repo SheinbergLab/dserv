@@ -241,3 +241,8 @@ proc set_flow_rate { val } {
 }
 
 init
+
+# local system configuration in /usr/local/dserv/local/juicer.tcl
+if { [file exists $dspath/local/juicer.tcl] } {
+    source $dspath/local/juicer.tcl
+}
