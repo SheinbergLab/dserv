@@ -29,6 +29,7 @@ void save_script_cb(Fl_Widget *, void *);
 void set_branch_cb(Fl_Widget *, void *);
 void push_script_cb(Fl_Widget *, void *);
 void pull_script_cb(Fl_Widget *, void *);
+void juice_button_cb(Fl_Widget *, void *);
 
 class VirtualEye;
 void virtual_eye_cb(VirtualEye *w, void *data);

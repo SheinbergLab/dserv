@@ -22,7 +22,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
 } {
   Fl_Window main_window {
     label EssGUI open
-    xywh {640 59 1280 812} type Double resizable visible
+    xywh {836 79 1280 812} type Double resizable visible
   } {
     Fl_Menu_Bar menu_bar {
       xywh {0 0 1280 32}
@@ -68,23 +68,28 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
           }
         }
         Fl_Group {} {
-          label Control
+          label Control open
           xywh {180 63 315 644} box GTK_DOWN_BOX color 47 labelsize 18 v_label_margin 4
         } {
-          Fl_Group {} {
+          Fl_Group {} {open
             xywh {180 64 315 283}
           } {
             Fl_Group subject_group {open
-              xywh {186 69 306 36} box THIN_UP_BOX
+              xywh {186 67 306 36} box THIN_UP_BOX
             } {
               Fl_Flex {} {open
-                xywh {261 73 210 28} fixed_size_tuples {1  0 28 }
+                xywh {261 73 210 24} type HORIZONTAL gap 8 fixed_size_tuples {1  0 110 }
               } {
                 Fl_Choice subject_widget {
                   label {Subject:}
                   callback {set_subject()} open
-                  xywh {261 73 210 28} down_box BORDER_BOX labelsize 16 when 3 textsize 16
+                  xywh {261 73 110 24} down_box BORDER_BOX labelsize 16 when 3 textsize 16
                 } {}
+                Fl_Button {} {
+                  label Juice
+                  callback juice_button_cb selected
+                  xywh {379 73 92 24}
+                }
               }
             }
             Fl_Group {} {
@@ -339,7 +344,7 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                       }
                       Fl_Button recenter_button {
                         label Recenter
-                        callback {recenter_eye_position()} selected
+                        callback {recenter_eye_position()}
                         xywh {590 589 100 21}
                       }
                     }

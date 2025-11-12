@@ -34,6 +34,7 @@ extern Fl_Tree *host_widget;
 extern Fl_Group *subject_group;
 #include <FL/Fl_Choice.H>
 extern Fl_Choice *subject_widget;
+extern void juice_button_cb(Fl_Button*, void*);
 extern Fl_Output *system_status_widget;
 extern Fl_Output *obscount_widget;
 #include <FL/Fl_Box.H>

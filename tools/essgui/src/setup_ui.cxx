@@ -233,17 +233,22 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           o->labelsize(18);
           o->vertical_label_margin(4);
           { Fl_Group* o = new Fl_Group(180, 64, 315, 283);
-            { subject_group = new Fl_Group(186, 69, 306, 36);
+            { subject_group = new Fl_Group(186, 67, 306, 36);
               subject_group->box(FL_THIN_UP_BOX);
-              { Fl_Flex* o = new Fl_Flex(261, 73, 210, 28);
-                { subject_widget = new Fl_Choice(261, 73, 210, 28, "Subject:");
+              { Fl_Flex* o = new Fl_Flex(261, 73, 210, 24);
+                o->type(1);
+                { subject_widget = new Fl_Choice(261, 73, 110, 24, "Subject:");
                   subject_widget->down_box(FL_BORDER_BOX);
                   subject_widget->labelsize(16);
                   subject_widget->textsize(16);
                   subject_widget->callback((Fl_Callback*)cb_subject_widget);
                   subject_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
                 } // Fl_Choice* subject_widget
-                o->fixed(o->child(0), 28);
+                { Fl_Button* o = new Fl_Button(379, 73, 92, 24, "Juice");
+                  o->callback((Fl_Callback*)juice_button_cb);
+                } // Fl_Button* o
+                o->gap(8);
+                o->fixed(o->child(0), 110);
                 o->end();
               } // Fl_Flex* o
               subject_group->end();
