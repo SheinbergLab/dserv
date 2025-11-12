@@ -673,8 +673,8 @@ void get_virtual_eye_adc(int& x, int& y) const {
     points_per_deg_x = 8.0;
     points_per_deg_y = 8.0;
     
-    xextent = 10*2;
-    yextent = 10*2;
+    xextent = 16*2;
+    yextent = 16*2;
     xextent_2 = xextent/2;
     yextent_2 = yextent/2;
     em_pos_x = 0;
