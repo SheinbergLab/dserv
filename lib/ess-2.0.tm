@@ -1668,6 +1668,7 @@ namespace eval ess {
 		}
 		dservLoggerAddMatch $filename em/pupil_r 1 40 1
 		dservLoggerAddMatch $filename em/time 1 40 1
+		dservLoggerAddMatch $filename em/frame_id 1 40 1
 		dservLoggerAddMatch $filename em/blink 1 40 1
 		dservLoggerAddMatch $filename em/p1_detected 1 40 1
 		dservLoggerAddMatch $filename em/p4_detected 1 40 1
