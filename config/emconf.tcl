@@ -78,10 +78,10 @@ namespace eval em {
 	set fvals [binary format "f" $pupil_r]
 	dservSetData em/pupil_r 0 2 $fvals
 
-	set frame_id_binary [binary format i $frame_id]
+	set frame_id_binary [binary format i [expr {int($frame_id)}]]
 	dservSetData em/frame_id 0 5 $frame_id_binary
 
-	set frame_seconds [expr {$frame_time/1e6}
+	set frame_seconds [expr {$frame_time/1e6}]
 	set seconds_binary [binary format d $frame_seconds]
 	dservSetData em/time 0 3 $seconds_binary
 			  
