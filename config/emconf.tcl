@@ -81,7 +81,7 @@ namespace eval em {
 	set frame_id_binary [binary format i [expr {int($frame_id)}]]
 	dservSetData em/frame_id 0 5 $frame_id_binary
 
-	set seconds_binary [binary format d $frame_seconds]
+	set seconds_binary [binary format d $frame_time]
 	dservSetData em/time 0 3 $seconds_binary
 			  
 	foreach v "blink p1_detected p4_detected" {
