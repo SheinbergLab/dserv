@@ -64,29 +64,32 @@ namespace eval em {
         variable current_raw_h
         variable current_raw_v
 
-        lassign $data frame_id frame_time pupil_x pupil_y pupil_r p1_x p1_y p4_x p4_y \
+        lassign $data frame_id frame_time pupil_x pupil_y pupil_r \
+	    p1_x p1_y p4_x p4_y \
             blink p1_detected p4_detected
 
-	# Store raw positions
+	# get timestamp to use for all the eye data so all are in/out of obsp
+	set cur_t [now]
+
 	set pupil "$pupil_x $pupil_y"
 	set p1 "$p1_x $p1_y"
 	set p4 "$p4_x $p4_y"
 	foreach v "pupil p1 p4" {
 	    set fvals [binary format "ff" [set ${v}_x] [set ${v}_y]]
-	    dservSetData em/$v 0 2 $fvals
+	    dservSetData em/$v $cur_t 2 $fvals
 	}
 	set fvals [binary format "f" $pupil_r]
-	dservSetData em/pupil_r 0 2 $fvals
+	dservSetData em/pupil_r $cur_t 2 $fvals
 
 	set frame_id_binary [binary format i [expr {int($frame_id)}]]
-	dservSetData em/frame_id 0 5 $frame_id_binary
+	dservSetData em/frame_id $cur_t 5 $frame_id_binary
 
 	set seconds_binary [binary format d $frame_time]
-	dservSetData em/time 0 3 $seconds_binary
+	dservSetData em/time $cur_t 3 $seconds_binary
 			  
 	foreach v "blink p1_detected p4_detected" {
 	    set val [binary format c [expr {int([set $v])}]]
-	    dservSetData em/$v 0 0 $val
+	    dservSetData em/$v $cur_t 0 $val
 	}
 	
 	# Only compute eye position if BOTH reflections detected
@@ -100,7 +103,7 @@ namespace eval em {
 		set current_raw_h $raw_h
 		set current_raw_v $raw_v
 		
-		# Apply scaling relative to center point, then add offset to 2048
+		# Apply scaling relative to center, then add offset to 2048
 		set h [expr {int(($scale_h * ($raw_h - $raw_center_h)) + 2048)}]
 		set v [expr {int(($scale_v * ($raw_v - $raw_center_v)) + 2048)}]
 	    
@@ -116,7 +119,7 @@ namespace eval em {
 	
 	# Send ain/vals (even if held)
 	set ainvals [binary format ss $v $h]
-	dservSetData ain/vals 0 4 $ainvals
+	dservSetData ain/vals $cur_t 4 $ainvals
 	
 	# Compute degrees
 	dict with settings {
