@@ -34,7 +34,6 @@ extern Fl_Tree *host_widget;
 extern Fl_Group *subject_group;
 #include <FL/Fl_Choice.H>
 extern Fl_Choice *subject_widget;
-extern void juice_button_cb(Fl_Button*, void*);
 extern Fl_Output *system_status_widget;
 extern Fl_Output *obscount_widget;
 #include <FL/Fl_Box.H>
@@ -48,6 +47,9 @@ extern Fl_Pack *reload_buttons;
 extern Fl_Button *reload_system_button;
 extern Fl_Button *reload_protocol_button;
 extern Fl_Button *reload_variant_button;
+extern void juice_button_cb(Fl_Button*, void*);
+#include <FL/Fl_Spinner.H>
+extern Fl_Spinner *juice_amount;
 extern Fl_Group *settings_group;
 #include <FL/Fl_Scroll.H>
 extern Fl_Scroll *options_widget;

@@ -58,8 +58,9 @@ void menu_cb(Fl_Widget*, void*) {
 
 void juice_button_cb(Fl_Widget *, void *) {
   std::string rstr;
-  const char *cmd = "send juicer reward 0.6";
-  auto result = esscmd((char *) cmd, rstr);
+  std::string cmd = std::string("send juicer reward ") +
+    std::to_string(juice_amount->value());
+  auto result = esscmd((char *) cmd.c_str(), rstr);
 }
 
 void suggest_cb(EssguiFileDialog* dialog, void* data) {

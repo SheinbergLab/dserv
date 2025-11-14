@@ -78,6 +78,8 @@ static void cb_reload_variant_button(Fl_Button*, void*) {
   reload_variant();
 }
 
+Fl_Spinner *juice_amount=(Fl_Spinner *)0;
+
 Fl_Group *settings_group=(Fl_Group *)0;
 
 static void cb_Save(Fl_Button*, void*) {
@@ -233,9 +235,9 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
           o->labelsize(18);
           o->vertical_label_margin(4);
           { Fl_Group* o = new Fl_Group(180, 64, 315, 283);
-            { subject_group = new Fl_Group(186, 67, 306, 36);
+            { subject_group = new Fl_Group(186, 67, 192, 36);
               subject_group->box(FL_THIN_UP_BOX);
-              { Fl_Flex* o = new Fl_Flex(261, 73, 210, 24);
+              { Fl_Flex* o = new Fl_Flex(261, 73, 117, 24);
                 o->type(1);
                 { subject_widget = new Fl_Choice(261, 73, 110, 24, "Subject:");
                   subject_widget->down_box(FL_BORDER_BOX);
@@ -244,9 +246,6 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
                   subject_widget->callback((Fl_Callback*)cb_subject_widget);
                   subject_widget->when(FL_WHEN_CHANGED | FL_WHEN_NOT_CHANGED);
                 } // Fl_Choice* subject_widget
-                { Fl_Button* o = new Fl_Button(379, 73, 92, 24, "Juice");
-                  o->callback((Fl_Callback*)juice_button_cb);
-                } // Fl_Button* o
                 o->gap(8);
                 o->fixed(o->child(0), 110);
                 o->end();
@@ -336,6 +335,21 @@ Fl_Double_Window * setup_ui(int argc, char *argv[]) {
               } // Fl_Pack* reload_buttons
               load_combos_group->end();
             } // Fl_Group* load_combos_group
+            { Fl_Group* o = new Fl_Group(378, 67, 114, 42, "juice_group");
+              o->labeltype(FL_NO_LABEL);
+              { Fl_Button* o = new Fl_Button(384, 71, 58, 28, "Juice");
+                o->callback((Fl_Callback*)juice_button_cb);
+              } // Fl_Button* o
+              { juice_amount = new Fl_Spinner(446, 71, 46, 28, "amount");
+                juice_amount->type(1);
+                juice_amount->labeltype(FL_NO_LABEL);
+                juice_amount->minimum(0.1);
+                juice_amount->maximum(2.5);
+                juice_amount->step(0.1);
+                juice_amount->value(0.6);
+              } // Fl_Spinner* juice_amount
+              o->end();
+            } // Fl_Group* o
             o->end();
           } // Fl_Group* o
           { settings_group = new Fl_Group(184, 347, 311, 360);

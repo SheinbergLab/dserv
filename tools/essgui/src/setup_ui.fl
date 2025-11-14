@@ -75,21 +75,16 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
             xywh {180 64 315 283}
           } {
             Fl_Group subject_group {open
-              xywh {186 67 306 36} box THIN_UP_BOX
+              xywh {186 67 192 36} box THIN_UP_BOX
             } {
               Fl_Flex {} {open
-                xywh {261 73 210 24} type HORIZONTAL gap 8 fixed_size_tuples {1  0 110 }
+                xywh {261 73 117 24} type HORIZONTAL gap 8 fixed_size_tuples {1  0 110 }
               } {
                 Fl_Choice subject_widget {
                   label {Subject:}
                   callback {set_subject()} open
                   xywh {261 73 110 24} down_box BORDER_BOX labelsize 16 when 3 textsize 16
                 } {}
-                Fl_Button {} {
-                  label Juice
-                  callback juice_button_cb selected
-                  xywh {379 73 92 24}
-                }
               }
             }
             Fl_Group {} {
@@ -172,6 +167,20 @@ Function {setup_ui(int argc, char *argv[])} {open return_type {Fl_Double_Window 
                   callback {reload_variant()}
                   xywh {452 303 26 26}
                 }
+              }
+            }
+            Fl_Group {} {
+              label juice_group open
+              xywh {378 67 114 42} labeltype NO_LABEL
+            } {
+              Fl_Button {} {
+                label Juice
+                callback juice_button_cb
+                xywh {384 71 58 28}
+              }
+              Fl_Spinner juice_amount {
+                label amount selected
+                xywh {446 71 46 28} type Float labeltype NO_LABEL minimum 0.1 maximum 2.5 step 0.1 value 0.6
               }
             }
           }
