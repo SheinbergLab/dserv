@@ -96,6 +96,16 @@ else()
     set(WITH_LIBUV 0)
 endif()
 
+# Find OpenSSL for SSL/TLS support
+find_package(OpenSSL REQUIRED)
+if(OpenSSL_FOUND)
+    message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
+    message(STATUS "  Include: ${OPENSSL_INCLUDE_DIR}")
+    message(STATUS "  Libraries: ${OPENSSL_LIBRARIES}")
+else()
+    message(FATAL_ERROR "OpenSSL not found. Install with: apt-get install libssl-dev (Linux) or brew install openssl (macOS)")
+endif()
+
 # Build uSockets using its own build system approach
 # Collect the core source files
 set(USOCKETS_SOURCES
@@ -122,6 +132,16 @@ if(EXISTS ${usockets_SOURCE_DIR}/src/loop_data.c)
     list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/loop_data.c)
 endif()
 
+# Add SSL-specific source files
+if(EXISTS ${usockets_SOURCE_DIR}/src/crypto/openssl.c)
+    list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/crypto/openssl.c)
+    message(STATUS "Added OpenSSL crypto support")
+endif()
+
+if(EXISTS ${usockets_SOURCE_DIR}/src/crypto/sni_tree.cpp)
+    list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/crypto/sni_tree.cpp)
+endif()
+
 # Check for internal directory
 if(EXISTS ${usockets_SOURCE_DIR}/src/internal/internal.c)
     list(APPEND USOCKETS_SOURCES ${usockets_SOURCE_DIR}/src/internal/internal.c)
@@ -139,8 +159,9 @@ message(STATUS "Building uSockets with sources: ${USOCKETS_SOURCES}")
 # Create the library
 add_library(usockets STATIC ${USOCKETS_SOURCES})
 
-# Set uSockets compile definitions (no SSL)
-target_compile_definitions(usockets PRIVATE LIBUS_NO_SSL)
+# Enable SSL support in uSockets
+target_compile_definitions(usockets PRIVATE LIBUS_USE_OPENSSL)
+target_include_directories(usockets PRIVATE ${OPENSSL_INCLUDE_DIR})
 
 # Platform-specific event loop selection
 if(WIN32)
@@ -157,13 +178,19 @@ endif()
 
 # Add compile flags that uSockets expects
 if(NOT WIN32)
-    target_compile_options(usockets PRIVATE -std=c11 -flto)
+target_compile_options(usockets PRIVATE 
+    $<$<COMPILE_LANGUAGE:C>:-std=c11>
+    -flto
+)
 endif()
 
 # Include libuv headers if found
 if(LIBUV_FOUND)
     target_include_directories(usockets PRIVATE ${LIBUV_INCLUDE_DIRS})
 endif()
+
+# Link OpenSSL to usockets
+target_link_libraries(usockets PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 # Create directory for web assets
 set(WEB_ASSETS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/www)
@@ -415,6 +442,8 @@ if(APPLE)
         ${LIBZ}
         usockets
         ${USOCKETS_LIBS}
+        OpenSSL::SSL
+        OpenSSL::Crypto
     )
 elseif(WIN32)
     target_link_libraries(dserv 
@@ -423,6 +452,8 @@ elseif(WIN32)
         ${LIBZ}
         usockets
         ${USOCKETS_LIBS}
+        OpenSSL::SSL
+        OpenSSL::Crypto
     )
 else()
     target_link_libraries(dserv 
@@ -434,6 +465,8 @@ else()
         dl
         usockets
         ${USOCKETS_LIBS}
+        OpenSSL::SSL
+        OpenSSL::Crypto
     )
 endif()
 
@@ -449,6 +482,7 @@ install(DIRECTORY systems DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY systemd DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY scripts DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY www DESTINATION dserv COMPONENT dserv)
+install(DIRECTORY ssl DESTINATION dserv COMPONENT dserv)
 
 set(CPACK_PACKAGE_NAME dserv)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Data server system for data acquisition and control")
