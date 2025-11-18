@@ -1,6 +1,7 @@
 #
 # Handle branch and pull requests for system paths that are git repos
 #
+puts "Configuring git"
 
 set dspath [file dir [info nameofexecutable]]
 
@@ -273,11 +274,15 @@ namespace eval git {
     }
 
 }
+
 git::set_path
-git::branches
-if { [info exists ::env(ESS_GIT_USERID)] } {
-    git::switch_and_pull $::env(ESS_GIT_USERID)
-} else {
-    git::switch_and_pull
+
+if { 1 } {
+    git::branches
+    if { [info exists ::env(ESS_GIT_USERID)] } {
+	git::switch_and_pull $::env(ESS_GIT_USERID)
+    } else {
+	git::switch_and_pull
+    }
 }
-puts "Git listener on port 2573"
+puts "Git configured"
