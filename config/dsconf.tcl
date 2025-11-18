@@ -80,7 +80,7 @@ if { [lsearch $hbs $host] >= 0 } {
 }
 
 # start a "git" interpreter
-subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
+subprocess git "source [file join $dspath config/gitconf.tcl]"
 
 # auto update support
 source [file join $dspath config/updateconf.tcl]
