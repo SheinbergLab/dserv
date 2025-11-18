@@ -130,15 +130,17 @@ private:
 
   // WebSocket subscription support
   mutable std::mutex ws_connections_mutex;
-  std::map<std::string, uWS::WebSocket<false, true, WSPerSocketData>*> ws_connections;
+  std::map<std::string, void*> ws_connections;  // Changed to void* to support both SSL and non-SSL
   uWS::Loop *ws_loop = nullptr;  // Store the loop reference
 
   static const size_t LARGE_MESSAGE_THRESHOLD = 2 * 1024 * 1024; // 2MB
   static const size_t CHUNK_SIZE = 512 * 1024; // 512KB chunks
+  bool websocket_ssl_enabled = false;
   
-  void sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
-			const std::string& message,
-			const std::string& client_name);
+  template<typename WebSocketType>
+  void sendLargeMessage(WebSocketType* ws,
+                        const std::string& message,
+                        const std::string& client_name);
 
  using CommandRegistrationCallback = std::function<void(Tcl_Interp*, void*)>;
  CommandRegistrationCallback command_callback = nullptr;
@@ -185,6 +187,8 @@ public:
   int message_port(void) { return _message_port; }
   int websocket_port(void) { return _websocket_port; }
 
+  bool isWebSocketSSLEnabled() const { return websocket_ssl_enabled; }
+  
 	// Add this method to allow deferred execution on the WebSocket event loop
   void deferToWebSocketLoop(std::function<void()> func) {
 	if (ws_loop) {
@@ -272,10 +276,11 @@ public:
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;
 
-  bool isWebSocketConnected(const std::string& client_name, uWS::WebSocket<false, true, WSPerSocketData>* ws) {
+  template<typename WebSocketType>
+  bool isWebSocketConnected(const std::string& client_name, WebSocketType* ws) {
     std::lock_guard<std::mutex> lock(ws_connections_mutex);
     auto it = ws_connections.find(client_name);
-    return it != ws_connections.end() && it->second == ws;
+    return it != ws_connections.end() && it->second == (void*)ws;
   }
   
   static void
@@ -314,7 +319,8 @@ public:
         if (command_callback) command_callback(interp, command_callback_data); 
   }
     
-  void process_websocket_client_notifications(uWS::WebSocket<false, true, WSPerSocketData>* ws, WSPerSocketData* userData);
+  template<typename WebSocketType>
+  void process_websocket_client_notifications_template(WebSocketType* ws, WSPerSocketData* userData);
   
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }

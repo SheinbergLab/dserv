@@ -35,9 +35,13 @@
 
 
 MeshManager::MeshManager(Dataserver* ds, int argc, char *argv[],
-int http_port, int discovery_port, int websocket_port) 
+			 int http_port, int discovery_port, int websocket_port,
+			 int gui_port,
+			 bool ssl_enabled) 
     : ds(ds), argc(argc), argv(argv), myStatus("idle"), httpSocket(-1), udpSocket(-1),
-      httpPort(http_port), discoveryPort(discovery_port), mesh_websocket_port(websocket_port) {
+      httpPort(http_port), discoveryPort(discovery_port),
+      mesh_websocket_port(websocket_port), guiPort(gui_port),
+      isSSLEnabled(ssl_enabled) {
 }
 
 MeshManager::~MeshManager() {
@@ -65,7 +69,8 @@ MeshManager::~MeshManager() {
 std::unique_ptr<MeshManager> MeshManager::createAndStart(
     Dataserver* ds, TclServer* main_tclserver, int argc, char** argv,
     const std::string& appliance_id, const std::string& appliance_name,
-    int http_port, int discovery_port, int websocket_port) {
+    int http_port, int discovery_port, int websocket_port,
+							 int gui_port) {
     
     std::cout << "Initializing mesh networking..." << std::endl;
     
@@ -90,7 +95,10 @@ std::unique_ptr<MeshManager> MeshManager::createAndStart(
     std::cout << "  Discovery Port: " << discovery_port << std::endl;
     
     try {
-        auto meshManager = std::make_unique<MeshManager>(ds, argc, argv, http_port, discovery_port, websocket_port);
+      bool ssl_enabled = main_tclserver->isWebSocketSSLEnabled();
+      auto gui_port = main_tclserver->_websocket_port;
+      auto meshManager = std::make_unique<MeshManager>(ds, argc, argv, http_port, discovery_port,
+						       websocket_port, gui_port, ssl_enabled);
         meshManager->init(final_id, final_name, 2575);
         meshManager->start();
         
@@ -178,157 +186,168 @@ void MeshManager::setHeartbeatInterval(int seconds) {
 
 void MeshManager::startMeshWebSocketServer(int port) {
     mesh_ws_thread = std::thread([this, port]() {
-        auto app = uWS::App();
-        
-        // Mesh dashboard at root
-        app.get("/", [this](auto *res, auto *req) {
-            res->writeHeader("Content-Type", "text/html; charset=utf-8")
-              ->writeHeader("Cache-Control", "no-cache")
-              ->end(embedded::mesh_dashboard_html);
-        });
-        
-        // Dashboard alias  
-        app.get("/dashboard", [](auto *res, auto *req) {
-            res->writeStatus("302 Found")
-              ->writeHeader("Location", "/")
-              ->end();
-        });
-        
-        // API endpoint for peers
-        app.get("/api/peers", [this](auto *res, auto *req) {
-            res->writeHeader("Content-Type", "application/json")
-              ->writeHeader("Access-Control-Allow-Origin", "*")
-              ->end(getPeersJSON());
-        });
-        
-        // API endpoint for lost peers
-		app.get("/api/lost-peers", [this](auto *res, auto *req) {
-			res->writeHeader("Content-Type", "application/json")
-			   ->writeHeader("Access-Control-Allow-Origin", "*")
-			   ->end(getLostPeersJSON());
-		});
+        // Lambda to setup routes - works with both App and SSLApp
+        auto setup_routes = [this, port](auto &app) {
+            // Mesh dashboard at root
+            app.get("/", [this](auto *res, auto *req) {
+                res->writeHeader("Content-Type", "text/html; charset=utf-8")
+                  ->writeHeader("Cache-Control", "no-cache")
+                  ->end(embedded::mesh_dashboard_html);
+            });
+            
+            // Dashboard alias  
+            app.get("/dashboard", [](auto *res, auto *req) {
+                res->writeStatus("302 Found")
+                  ->writeHeader("Location", "/")
+                  ->end();
+            });
+            
+            // API endpoint for peers
+            app.get("/api/peers", [this](auto *res, auto *req) {
+                res->writeHeader("Content-Type", "application/json")
+                  ->writeHeader("Access-Control-Allow-Origin", "*")
+                  ->end(getPeersJSON());
+            });
+            
+            // API endpoint for lost peers
+            app.get("/api/lost-peers", [this](auto *res, auto *req) {
+                res->writeHeader("Content-Type", "application/json")
+                   ->writeHeader("Access-Control-Allow-Origin", "*")
+                   ->end(getLostPeersJSON());
+            });
 
-		app.post("/api/lost-peers/clear", [this](auto *res, auto *req) {
-			{
-				std::lock_guard<std::mutex> lock(peersMutex);
-				lostPeers.clear();
-			}
-			res->writeHeader("Content-Type", "application/json")
-			   ->writeHeader("Access-Control-Allow-Origin", "*")
-			   ->end("{\"status\":\"cleared\"}");
-		});
-
-		// forced refresh and immediate heartbeat
-		app.post("/api/mesh/refresh", [this](auto *res, auto *req) {
-			// Force immediate heartbeat send + network rescan
-			sendHeartbeat();
-			refreshBroadcastCache();
-			res->writeHeader("Content-Type", "application/json")
-			   ->end("{\"status\":\"refreshed\"}");
-		});
-		
-		// Status
-		app.get("/api/mesh/status", [this](auto *res, auto *req) {
-		  json_t* status = json_object();
-		  json_object_set_new(status, "running", json_boolean(running));
-		  json_object_set_new(status, "heartbeatInterval", json_integer(heartbeatInterval.load()));
-		  json_object_set_new(status, "peerTimeoutSeconds", json_integer(getPeerTimeoutSeconds()));
-		  json_object_set_new(status, "applianceId", json_string(myApplianceId.c_str()));
-		  json_object_set_new(status, "name", json_string(myName.c_str()));
-		  
-		  {
-		    std::lock_guard<std::mutex> lock(peersMutex);
-		    json_object_set_new(status, "peerCount", json_integer(peers.size()));
-		    json_object_set_new(status, "lostPeerCount", json_integer(lostPeers.size()));
-		  }
-		  
-		  // Add broadcast addresses
-		  auto addresses = getBroadcastAddresses();
-		  json_t* addr_array = json_array();
-		  for (const auto& addr : addresses) {
-		    json_array_append_new(addr_array, json_string(addr.c_str()));
-		  }
-		  json_object_set_new(status, "broadcastAddresses", addr_array);
-		  
-		  char* result = json_dumps(status, 0);
-		  res->writeHeader("Content-Type", "application/json")
-		    ->writeHeader("Access-Control-Allow-Origin", "*")
-		    ->end(result);
-		  free(result);
-		  json_decref(status);
-		});
-		
-        // Health check
-        app.get("/health", [](auto *res, auto *req) {
-            res->writeHeader("Content-Type", "application/json")
-              ->end("{\"status\":\"ok\",\"service\":\"mesh-manager\"}");
-        });
-        
-        app.get("/*", [this](auto *res, auto *req) {
-		    res->writeHeader("Content-Type", "text/html; charset=utf-8")
-		    ->writeHeader("Cache-Control", "no-cache")  
-	        ->end(embedded::mesh_dashboard_html);
-		});
-		
-        // WebSocket for mesh updates
-        app.ws<MeshWSData>("/ws", {
-            .upgrade = [](auto *res, auto *req, auto *context) {
-                res->template upgrade<MeshWSData>({
-                    .rqueue = new SharedQueue<std::string>(),
-                    .client_name = "",
-                    .subscriptions = std::vector<std::string>(),
-                    .notification_queue = nullptr,
-                    .dataserver_client_id = ""
-                }, req->getHeader("sec-websocket-key"),
-                   req->getHeader("sec-websocket-protocol"),
-                   req->getHeader("sec-websocket-extensions"),
-                   context);
-            },
-            
-            .open = [this](auto *ws) {
-                MeshWSData *userData = (MeshWSData *) ws->getUserData();
-                
-                // Generate client name
-                char client_id[32];
-                snprintf(client_id, sizeof(client_id), "mesh_ws_%p", (void*)ws);
-                userData->client_name = std::string(client_id);
-                
-                // Add to mesh subscribers automatically
-                addMeshSubscriber(ws);
-                
-//                std::cout << "Mesh WebSocket client connected: " << userData->client_name << std::endl;
-            },
-            
-            .message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
-                handleMeshWebSocketMessage(ws, message);
-            },
-            
-            .close = [this](auto *ws, int code, std::string_view message) {
-                MeshWSData *userData = (MeshWSData *) ws->getUserData();
-                
-                if (userData) {
-                    removeMeshSubscriber(ws);
-                    delete userData->rqueue;
-//                    std::cout << "Mesh WebSocket client disconnected: " << userData->client_name << std::endl;
+            app.post("/api/lost-peers/clear", [this](auto *res, auto *req) {
+                {
+                    std::lock_guard<std::mutex> lock(peersMutex);
+                    lostPeers.clear();
                 }
-            }
-        });
-        
-        app.listen(port, [this, port](auto *listen_socket) {
-            if (listen_socket) {
-                std::cout << "Mesh WebSocket server listening on port " << port << std::endl;
-                std::cout << "Mesh dashboard available at http://localhost:" << port << "/" << std::endl;
-            } else {
-                std::cerr << "Failed to start mesh WebSocket server on port " << port << std::endl;
-                return; // Exit thread if listen failed
-            }
+                res->writeHeader("Content-Type", "application/json")
+                   ->writeHeader("Access-Control-Allow-Origin", "*")
+                   ->end("{\"status\":\"cleared\"}");
+            });
+
+            // Forced refresh and immediate heartbeat
+            app.post("/api/mesh/refresh", [this](auto *res, auto *req) {
+                sendHeartbeat();
+                refreshBroadcastCache();
+                res->writeHeader("Content-Type", "application/json")
+                   ->end("{\"status\":\"refreshed\"}");
+            });
             
-            // Store the listen socket so we can close it during shutdown
-            mesh_listen_socket = listen_socket;
+            // Status
+            app.get("/api/mesh/status", [this](auto *res, auto *req) {
+              json_t* status = json_object();
+              json_object_set_new(status, "running", json_boolean(running));
+              json_object_set_new(status, "heartbeatInterval", json_integer(heartbeatInterval.load()));
+              json_object_set_new(status, "peerTimeoutSeconds", json_integer(getPeerTimeoutSeconds()));
+              json_object_set_new(status, "applianceId", json_string(myApplianceId.c_str()));
+              json_object_set_new(status, "name", json_string(myName.c_str()));
+              
+              {
+                std::lock_guard<std::mutex> lock(peersMutex);
+                json_object_set_new(status, "peerCount", json_integer(peers.size()));
+                json_object_set_new(status, "lostPeerCount", json_integer(lostPeers.size()));
+              }
+              
+              // Add broadcast addresses
+              auto addresses = getBroadcastAddresses();
+              json_t* addr_array = json_array();
+              for (const auto& addr : addresses) {
+                json_array_append_new(addr_array, json_string(addr.c_str()));
+              }
+              json_object_set_new(status, "broadcastAddresses", addr_array);
+              
+              char* result = json_dumps(status, 0);
+              res->writeHeader("Content-Type", "application/json")
+                ->writeHeader("Access-Control-Allow-Origin", "*")
+                ->end(result);
+              free(result);
+              json_decref(status);
+            });
             
-        }).run(); // This blocks until the app is closed
+            // Health check
+            app.get("/health", [](auto *res, auto *req) {
+                res->writeHeader("Content-Type", "application/json")
+                  ->end("{\"status\":\"ok\",\"service\":\"mesh-manager\"}");
+            });
+            
+            app.get("/*", [this](auto *res, auto *req) {
+                res->writeHeader("Content-Type", "text/html; charset=utf-8")
+                ->writeHeader("Cache-Control", "no-cache")  
+                ->end(embedded::mesh_dashboard_html);
+            });
+            
+            // WebSocket for mesh updates - use template for SSL compatibility
+            app.template ws<MeshWSData>("/ws", {
+                .upgrade = [](auto *res, auto *req, auto *context) {
+                    res->template upgrade<MeshWSData>({
+                        .rqueue = new SharedQueue<std::string>(),
+                        .client_name = "",
+                        .subscriptions = std::vector<std::string>(),
+                        .notification_queue = nullptr,
+                        .dataserver_client_id = ""
+                    }, req->getHeader("sec-websocket-key"),
+                       req->getHeader("sec-websocket-protocol"),
+                       req->getHeader("sec-websocket-extensions"),
+                       context);
+                },
+                
+                .open = [this](auto *ws) {
+                    MeshWSData *userData = (MeshWSData *) ws->getUserData();
+                    
+                    // Generate client name
+                    char client_id[32];
+                    snprintf(client_id, sizeof(client_id), "mesh_ws_%p", (void*)ws);
+                    userData->client_name = std::string(client_id);
+                    
+                    // Add to mesh subscribers automatically
+                    addMeshSubscriber(ws);
+                },
+                
+                .message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
+                    handleMeshWebSocketMessage(ws, message);
+                },
+                
+                .close = [this](auto *ws, int code, std::string_view message) {
+                    MeshWSData *userData = (MeshWSData *) ws->getUserData();
+                    
+                    if (userData) {
+                        removeMeshSubscriber(ws);
+                        delete userData->rqueue;
+                    }
+                }
+            });
+            
+            app.listen(port, [this, port](auto *listen_socket) {
+                if (listen_socket) {
+                    std::cout << "Mesh WebSocket server listening on port " << port << std::endl;
+                    std::cout << "Mesh dashboard available at " 
+                              << (isSSLEnabled ? "https" : "http") 
+                              << "://localhost:" << port << "/" << std::endl;
+                } else {
+                    std::cerr << "Failed to start mesh WebSocket server on port " << port << std::endl;
+                    return;
+                }
+                
+                mesh_listen_socket = listen_socket;
+            }).run();
+        };
         
-        std::cout << "Mesh WebSocket server thread exiting" << std::endl;
+        // Create SSL or non-SSL app based on flag
+        if (isSSLEnabled) {
+            std::string cert_path = "/usr/local/dserv/ssl/cert.pem";
+            std::string key_path = "/usr/local/dserv/ssl/key.pem";
+            
+            auto app = uWS::SSLApp({
+                .key_file_name = key_path.c_str(),
+                .cert_file_name = cert_path.c_str(),
+                .passphrase = ""
+            });
+            setup_routes(app);
+        } else {
+            auto app = uWS::App();
+            setup_routes(app);
+        }
     });
 }
 
@@ -813,7 +832,8 @@ void MeshManager::sendHeartbeat() {
     json_t* data = json_object();
     json_object_set_new(data, "name", json_string(myName.c_str()));
     json_object_set_new(data, "status", json_string(myStatus.c_str()));
-    json_object_set_new(data, "webPort", json_integer(httpPort));
+    json_object_set_new(data, "webPort", json_integer(guiPort));
+    json_object_set_new(data, "ssl", json_boolean(isSSLEnabled));
     
     // Everything else is custom (including system/protocol/variant and subject)
     {
@@ -879,7 +899,7 @@ void MeshManager::notifyWebSocketClients() {
     auto it = meshSubscribers.begin();
     while (it != meshSubscribers.end()) {
         try {
-            bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
+            bool sent = it->send_func(messageStr);  // Just call the function!
             if (!sent) {
                 it = meshSubscribers.erase(it);
                 continue;
@@ -944,6 +964,9 @@ void MeshManager::updatePeer(json_t* heartbeat, const std::string& ip) {
         } else if (json_is_integer(value) && strcmp(key, "webPort") == 0) {
             peer.webPort = json_integer_value(value);
         }
+	else if (json_is_boolean(value) && strcmp(key, "ssl") == 0) {
+	  peer.ssl = json_boolean_value(value);
+	}	
     }
 }
 
@@ -1129,7 +1152,8 @@ std::string MeshManager::getPeersJSON() {
     json_object_set_new(self, "name", json_string(myName.c_str()));
     json_object_set_new(self, "status", json_string(myStatus.c_str()));
     json_object_set_new(self, "ipAddress", json_string(getLocalIPAddress().c_str()));
-	json_object_set_new(self, "webPort", json_integer(httpPort));
+    json_object_set_new(self, "webPort", json_integer(guiPort));
+    json_object_set_new(self, "ssl", json_boolean(isSSLEnabled));
     json_object_set_new(self, "isLocal", json_true());
     
     // Add all custom fields
@@ -1152,6 +1176,7 @@ std::string MeshManager::getPeersJSON() {
         json_object_set_new(peerObj, "status", json_string(peer.status.c_str()));
         json_object_set_new(peerObj, "ipAddress", json_string(peer.ipAddress.c_str()));
         json_object_set_new(peerObj, "webPort", json_integer(peer.webPort));
+	json_object_set_new(peerObj, "ssl", json_boolean(peer.ssl));
         json_object_set_new(peerObj, "isLocal", json_false());
         
         // Add all custom fields
@@ -1291,17 +1316,6 @@ std::string MeshManager::getMeshHTML() {
     return fallback;
 }
 
-void MeshManager::addMeshSubscriber(uWS::WebSocket<false, true, MeshWSData>* ws) {
-    std::lock_guard<std::mutex> lock(subscribersMutex);
-    meshSubscribers.insert(ws);
-    //    std::cout << "Added mesh WebSocket subscriber (total: " << meshSubscribers.size() << ")" << std::endl;
-}
-
-void MeshManager::removeMeshSubscriber(uWS::WebSocket<false, true, MeshWSData>* ws) {
-    std::lock_guard<std::mutex> lock(subscribersMutex);
-    meshSubscribers.erase(ws);
-    //    std::cout << "Removed mesh WebSocket subscriber (total: " << meshSubscribers.size() << ")" << std::endl;
-}
 
 void MeshManager::broadcastMeshUpdate() {
     // Prepare the message
@@ -1314,13 +1328,14 @@ void MeshManager::broadcastMeshUpdate() {
     free(message);
     json_decref(update);
     
-    // Send directly to mesh subscribers (no deferring needed)
+    // Send to mesh subscribers using the stored send function
     std::lock_guard<std::mutex> lock(subscribersMutex);
     
     auto it = meshSubscribers.begin();
     while (it != meshSubscribers.end()) {
         try {
-            bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
+            // Call the stored send_func instead of ->send()
+            bool sent = it->send_func(messageStr);
             if (!sent) {
                 it = meshSubscribers.erase(it);
                 continue;
@@ -1356,7 +1371,7 @@ void MeshManager::broadcastCustomUpdate(const std::string& standardJson, const s
     auto it = meshSubscribers.begin();
     while (it != meshSubscribers.end()) {
         try {
-            bool sent = (*it)->send(messageStr, uWS::OpCode::TEXT);
+            bool sent = it->send_func(messageStr);
             if (!sent) {
                 it = meshSubscribers.erase(it);
                 continue;
@@ -1475,6 +1490,9 @@ int MeshManager::mesh_get_peers_command(ClientData clientData, Tcl_Interp* inter
         Tcl_DictObjPut(interp, peerDict, 
             Tcl_NewStringObj("webPort", -1), 
             Tcl_NewIntObj(peer.webPort));
+        Tcl_DictObjPut(interp, peerDict, 
+            Tcl_NewStringObj("ssl", -1), 
+            Tcl_NewBooleanObj(peer.ssl));
         
         // Add all custom fields
         for (const auto& [key, value] : peer.customFields) {
@@ -1503,6 +1521,10 @@ int MeshManager::mesh_get_peers_command(ClientData clientData, Tcl_Interp* inter
     Tcl_DictObjPut(interp, selfDict, 
         Tcl_NewStringObj("isLocal", -1), 
         Tcl_NewBooleanObj(1));
+    Tcl_DictObjPut(interp, selfDict, 
+	Tcl_NewStringObj("ssl", -1), 
+		   Tcl_NewBooleanObj(mesh->isSSLEnabled));
+        
     
     // Add our own custom fields
     auto customFields = mesh->getCustomFields();

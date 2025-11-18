@@ -186,9 +186,9 @@ int main(int argc, char *argv[])
   // Initialize mesh networking if enabled
   if (enable_mesh) {
     meshManager = MeshManager::createAndStart(dserver, tclserver, argc, argv,
-                                             mesh_appliance_id, mesh_appliance_name,
-                                             mesh_port, mesh_discovery_port,
-                                             mesh_websocket_port);
+					      mesh_appliance_id, mesh_appliance_name,
+					      mesh_port, mesh_discovery_port,
+					      mesh_websocket_port);
    }
 
   // Run initialization scripts
