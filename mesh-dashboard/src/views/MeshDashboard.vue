@@ -40,6 +40,7 @@
 				  <code class="system-id">{{ appliance.applianceId }}</code>
 				  <span v-if="appliance.isLocal" class="badge local-badge">{{ appliance.ipAddress }}</span>
 				  <span v-else class="badge ip-badge">{{ appliance.ipAddress }}</span>
+				  <span v-if="appliance.ssl" class="badge ssl-badge" title="SSL Enabled">🔒</span>
 				</div>
 				<div class="system-status-line">
 				  <span class="status-text" :class="`status-${appliance.status || 'unknown'}`">
@@ -147,7 +148,13 @@
       <h4>Debug Info</h4>
       <div>WebSocket Status: {{ wsStatus }}</div>
       <div>Selected: {{ selectedAppliance?.name || 'None' }}</div>
+      <div v-if="selectedAppliance">
+        SSL: {{ selectedAppliance.ssl ? 'Enabled' : 'Disabled' }} | 
+        Protocol: {{ selectedAppliance.ssl ? 'https' : 'http' }} | 
+        Port: {{ selectedAppliance.webPort || 2565 }}
+      </div>
       <div>Lost Peers: {{ lostPeers.length }}</div>
+      <div>Total Appliances: {{ appliances.length }}</div>
     </div>
   </div>
 </template>
@@ -224,7 +231,10 @@ export default {
     // WebSocket methods
     connectWebSocket() {
       try {
-        const wsUrl = `ws://${window.location.host}/ws`;
+        // Use wss:// if page is loaded over https://, otherwise use ws://
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        console.log(`Connecting to WebSocket: ${wsUrl}`);
         this.ws = new WebSocket(wsUrl);
         this.wsStatus = 'connecting';
 
@@ -277,6 +287,25 @@ export default {
           this.updateLastUpdate();
           this.errorMessage = '';
           
+          // Always log appliance data to catch any issues
+          console.log('Received appliances:', this.appliances.map(a => ({
+            name: a.name,
+            ipAddress: a.ipAddress,
+            ssl: a.ssl,
+            webPort: a.webPort,
+            applianceId: a.applianceId
+          })));
+          
+          // Log SSL status for debugging
+          if (this.showDebug) {
+            console.log('Appliances detailed:', this.appliances.map(a => ({
+              name: a.name,
+              ssl: a.ssl,
+              webPort: a.webPort,
+              computedProtocol: a.ssl ? 'https' : 'http'
+            })));
+          }
+          
           // Auto-select local appliance if none selected - REMOVED
           // Now we don't auto-reconnect, user must manually select
           
@@ -304,8 +333,10 @@ export default {
 
     async fetchInitialData() {
       try {
+        // Use the same protocol as the current page
+        const protocol = window.location.protocol; // 'http:' or 'https:'
         const apiBase = window.location.port === '2569' 
-          ? `http://${window.location.hostname}:12348/api`
+          ? `${protocol}//${window.location.hostname}:12348/api`
           : '/api';
         
         const response = await fetch(`${apiBase}/mesh/peers`);
@@ -330,7 +361,8 @@ export default {
 
     async fetchLostPeers() {
       try {
-        const response = await fetch(`http://${window.location.hostname}:2569/api/lost-peers`);
+        const protocol = window.location.protocol; // 'http:' or 'https:'
+        const response = await fetch(`${protocol}//${window.location.hostname}:2569/api/lost-peers`);
         if (response.ok) {
           const data = await response.json();
           if (data.lostPeers) {
@@ -378,8 +410,12 @@ export default {
     },
 
     getApplianceUrl(appliance) {
+      // Compute protocol from ssl field (true = https, false = http)
+      const protocol = appliance.ssl ? 'https' : 'http';
+      const port = 2565;  // Hardcoded for testing - will use webPort later
       // Always use IP address for consistency in mesh network
-      return `http://${appliance.ipAddress}:2565`;
+      console.log(`Connecting to ${appliance.name}: ${protocol}://${appliance.ipAddress}:${port} (ssl=${appliance.ssl})`);
+      return `${protocol}://${appliance.ipAddress}:${port}`;
     },
 
     refreshPeers() {
@@ -394,14 +430,23 @@ export default {
     },
 
     openDashboard(appliance) {
+      // Compute protocol from ssl field
+      const protocol = appliance.ssl ? 'https' : 'http';
+      const port = 2565;  // Hardcoded for testing
       const url = appliance.isLocal 
-        ? `http://localhost:2565`
-        : `http://${appliance.ipAddress}:2565`;
+        ? `${protocol}://localhost:${port}`
+        : `${protocol}://${appliance.ipAddress}:${port}`;
+      console.log(`Opening dashboard: ${url} (ssl=${appliance.ssl})`);
       window.open(url, '_blank');
     },
 
     jumpToMesh(appliance) {
-      const meshUrl = `http://${appliance.ipAddress}:2569`;
+      // Mesh typically runs on different port than main web interface
+      // For now, assume mesh port is webPort + 4 (e.g., 2565 -> 2569)
+      // You may want to add meshPort to the heartbeat data if it differs
+      const protocol = appliance.ssl ? 'https' : 'http';
+      const meshPort = (appliance.webPort || 2565) + 4;
+      const meshUrl = `${protocol}://${appliance.ipAddress}:${meshPort}`;
       window.open(meshUrl, '_blank');
     },
 
@@ -603,6 +648,12 @@ export default {
 
 .ip-badge {
   background: #4299e1;
+}
+
+.ssl-badge {
+  background: #48bb78;
+  font-size: 0.55rem;
+  padding: 2px 4px;
 }
 
 /* System status line */
