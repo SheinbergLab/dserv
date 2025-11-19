@@ -561,7 +561,7 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
   if (!g_timerInfo->use_signal_fallback) {
     pthread_t w;
     for (int i = 0; i < ntimers; i++) {
-      pthread_create(&w, NULL, timerWorkerThread, g_timerInfo.timers[i]);
+      pthread_create(&w, NULL, timerWorkerThread, g_timerInfo->timers[i]);
     }
   } 
 #endif
