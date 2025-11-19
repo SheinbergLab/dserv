@@ -37,11 +37,11 @@
 MeshManager::MeshManager(Dataserver* ds, int argc, char *argv[],
 			 int http_port, int discovery_port, int websocket_port,
 			 int gui_port,
-			 bool ssl_enabled) 
+			 bool ssl_enabled, std::string cert_path, std::string key_path) 
     : ds(ds), argc(argc), argv(argv), myStatus("idle"), httpSocket(-1), udpSocket(-1),
       httpPort(http_port), discoveryPort(discovery_port),
       mesh_websocket_port(websocket_port), guiPort(gui_port),
-      isSSLEnabled(ssl_enabled) {
+      isSSLEnabled(ssl_enabled), cert_path(cert_path), key_path(key_path) {
 }
 
 MeshManager::~MeshManager() {
@@ -67,11 +67,15 @@ MeshManager::~MeshManager() {
 }
 
 std::unique_ptr<MeshManager> MeshManager::createAndStart(
-    Dataserver* ds, TclServer* main_tclserver, int argc, char** argv,
-    const std::string& appliance_id, const std::string& appliance_name,
-    int http_port, int discovery_port, int websocket_port,
-							 int gui_port) {
-    
+							 Dataserver* ds,
+							 TclServer* main_tclserver,
+							 int argc, char** argv,
+							 const std::string& appliance_id,
+							 const std::string& appliance_name,
+							 int http_port, int discovery_port,
+							 int websocket_port,
+							 int gui_port)
+{
     std::cout << "Initializing mesh networking..." << std::endl;
     
     // Set defaults if needed
@@ -97,10 +101,14 @@ std::unique_ptr<MeshManager> MeshManager::createAndStart(
     try {
       bool ssl_enabled = main_tclserver->isWebSocketSSLEnabled();
       auto gui_port = main_tclserver->_websocket_port;
+      auto cert_path = main_tclserver->getCertPath();
+      auto key_path = main_tclserver->getKeyPath();
+      
       auto meshManager = std::make_unique<MeshManager>(ds, argc, argv, http_port, discovery_port,
-						       websocket_port, gui_port, ssl_enabled);
-        meshManager->init(final_id, final_name, 2575);
-        meshManager->start();
+						       websocket_port, gui_port, ssl_enabled,
+						       cert_path, key_path);
+      meshManager->init(final_id, final_name, 2575);
+      meshManager->start();
         
         std::cout << "Mesh networking enabled:" << std::endl;
         std::cout << "  HTTP Dashboard: http://localhost:" << http_port << "/mesh" << std::endl;
@@ -335,9 +343,6 @@ void MeshManager::startMeshWebSocketServer(int port) {
         
         // Create SSL or non-SSL app based on flag
         if (isSSLEnabled) {
-            std::string cert_path = "/usr/local/dserv/ssl/cert.pem";
-            std::string key_path = "/usr/local/dserv/ssl/key.pem";
-            
             auto app = uWS::SSLApp({
                 .key_file_name = key_path.c_str(),
                 .cert_file_name = cert_path.c_str(),

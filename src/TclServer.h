@@ -135,6 +135,10 @@ private:
 
   static const size_t LARGE_MESSAGE_THRESHOLD = 2 * 1024 * 1024; // 2MB
   static const size_t CHUNK_SIZE = 512 * 1024; // 512KB chunks
+
+  std::string cert_path = "/usr/local/dserv/ssl/cert.pem";
+  std::string key_path = "/usr/local/dserv/ssl/key.pem";
+
   bool websocket_ssl_enabled = false;
   
   template<typename WebSocketType>
@@ -187,6 +191,9 @@ public:
   int message_port(void) { return _message_port; }
   int websocket_port(void) { return _websocket_port; }
 
+  const std::string& getCertPath() { return cert_path; }
+  const std::string& getKeyPath() { return key_path; }
+  
   bool isWebSocketSSLEnabled() const { return websocket_ssl_enabled; }
   
 	// Add this method to allow deferred execution on the WebSocket event loop

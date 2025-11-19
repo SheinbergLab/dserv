@@ -83,6 +83,10 @@ private:
     int discoveryPort;
     int guiPort;
     bool isSSLEnabled;
+
+    // Set to enable SSL
+    std::string cert_path;
+    std::string key_path;
   
     // Heartbeat configuration with sensible defaults
     std::atomic<int> heartbeatInterval{1};        // seconds between heartbeats
@@ -154,7 +158,9 @@ public:
     MeshManager(Dataserver* ds, int argc, char *argv[], 
 		int http_port = 12348, int discovery_port = 12346, int websocket_port = 2569,
 		int gui_port = 2565,
-		bool ssl_enabled = false);
+		bool ssl_enabled = false,
+		std::string cert_path = "",
+		std::string key_path = "");
 
     ~MeshManager();
 

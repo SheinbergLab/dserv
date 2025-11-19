@@ -326,9 +326,8 @@ void TclServer::start_websocket_server(void)
   
   // Check for SSL certificates
   bool use_ssl = false;
-  std::string cert_path = "/usr/local/dserv/ssl/cert.pem";
-  std::string key_path = "/usr/local/dserv/ssl/key.pem";
-  
+
+  // cert_path and key_path are strings pointing to certificate/key
   struct stat buffer;
   if (stat(cert_path.c_str(), &buffer) == 0 && 
       stat(key_path.c_str(), &buffer) == 0) {
@@ -358,8 +357,10 @@ void TclServer::start_websocket_server(void)
     });
 
     // Build route strings with actual hash values
-    std::string js_route = "/assets/index-" + std::string(EXPAND_AND_STRINGIFY(ESSGUI_JS_HASH)) + ".js";
-    std::string css_route = "/assets/index-" + std::string(EXPAND_AND_STRINGIFY(ESSGUI_CSS_HASH)) + ".css";
+    std::string js_route = "/assets/index-" +
+      std::string(EXPAND_AND_STRINGIFY(ESSGUI_JS_HASH)) + ".js";
+    std::string css_route = "/assets/index-" +
+      std::string(EXPAND_AND_STRINGIFY(ESSGUI_CSS_HASH)) + ".css";
       
     // Register the exact routes
     app.get(js_route, [](auto *res, auto *req) {
@@ -430,7 +431,6 @@ void TclServer::start_websocket_server(void)
             context);
         },
         
-        // CRITICAL: Use 'auto *ws' not 'uWS::WebSocket<false, ...>*'
         .open = [this](auto *ws) {
           WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
           
@@ -445,7 +445,8 @@ void TclServer::start_websocket_server(void)
             userData->notification_queue = new SharedQueue<client_request_t>();
             
             // Register with Dataserver as a queue-based client
-            userData->dataserver_client_id = this->ds->add_new_send_client(userData->notification_queue);
+            userData->dataserver_client_id =
+	      this->ds->add_new_send_client(userData->notification_queue);
             
             if (userData->dataserver_client_id.empty()) {
               std::cerr << "Failed to register WebSocket client with Dataserver" << std::endl;
@@ -461,7 +462,6 @@ void TclServer::start_websocket_server(void)
             userData->client_name = std::string(client_id);
             
             // Store this WebSocket connection
-            // CRITICAL: Store as void* to avoid type issues
             {
               std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
               this->ws_connections[userData->client_name] = (void*)ws;
@@ -590,7 +590,8 @@ void TclServer::start_websocket_server(void)
                 json_decref(response);
               } else {
                 json_t *error_response = json_object();
-                json_object_set_new(error_response, "error", json_string("Missing or invalid 'name' field"));
+                json_object_set_new(error_response, "error",
+				    json_string("Missing or invalid 'name' field"));
                 char *error_str = json_dumps(error_response, 0);
                 ws->send(error_str, uWS::OpCode::TEXT);
                 free(error_str);
@@ -634,7 +635,8 @@ void TclServer::start_websocket_server(void)
                 const char *match = json_string_value(match_obj);
                 
                 // Remove from local subscriptions
-                auto it = std::find(userData->subscriptions.begin(), userData->subscriptions.end(), match);
+                auto it = std::find(userData->subscriptions.begin(),
+				    userData->subscriptions.end(), match);
                 if (it != userData->subscriptions.end()) {
                   userData->subscriptions.erase(it);
                 }
@@ -686,7 +688,8 @@ void TclServer::start_websocket_server(void)
                   dpoint_free(dp);
                 } else {
                   json_t *error_response = json_object();
-                  json_object_set_new(error_response, "error", json_string("Datapoint not found"));
+                  json_object_set_new(error_response, "error",
+				      json_string("Datapoint not found"));
                   char *error_str = json_dumps(error_response, 0);
                   ws->send(error_str, uWS::OpCode::TEXT);
                   free(error_str);
