@@ -13,7 +13,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-extern void send_virtual_eye_data(int adc_x, int adc_y);
+extern void send_virtual_eye_position(float x, float y);
 extern void send_virtual_touch_event(int x, int y, int event_type);
 
 typedef enum { WINDOW_OUT, WINDOW_IN } WINDOW_STATE;
@@ -93,10 +93,6 @@ private:
     float drag_offset_x, drag_offset_y;
   } virtual_eye;
 
-
-  bool virtual_eye_continuous_mode;
-  float virtual_eye_update_rate;  // Hz (e.g., 60.0 for 60Hz)
-  
   // Virtual touch state  
   struct {
     int x, y;             // screen pixels
@@ -176,9 +172,7 @@ private:
       virtual_eye.adc_x = deg_x * points_per_deg_x + 2048;
       virtual_eye.adc_y = -deg_y * points_per_deg_y + 2048;
 
-      // if we are in continuous mode, this happens automatically
-      if (!virtual_eye_continuous_mode)
-	send_virtual_eye_data(virtual_eye.adc_x, virtual_eye.adc_y);
+      send_virtual_eye_position(virtual_eye.x, virtual_eye.y);
       
       redraw();
       return 1;
@@ -258,23 +252,6 @@ private:
     }
     
     redraw();
-  }
-
-
-  static void virtual_eye_timer_callback(void* data) {
-    EyeTouchWin* self = static_cast<EyeTouchWin*>(data);
-    
-    if (self->virtual_eye_continuous_mode && 
-        self->virtual_eye_enabled && 
-        self->virtual_eye.active) {
-      
-      // Send current position
-      send_virtual_eye_data(self->virtual_eye.adc_x, self->virtual_eye.adc_y);
-
-      // Schedule next update
-      Fl::add_timeout(1.0 / self->virtual_eye_update_rate, 
-                      virtual_eye_timer_callback, self);
-    }
   }
   
 public:
@@ -566,12 +543,6 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
   }
 
   void set_virtual_eye_enabled(bool enabled) {
-    if (!enabled && virtual_eye_enabled) {
-      // Stop continuous updates
-      Fl::remove_timeout(virtual_eye_timer_callback, this);
-      virtual_eye_continuous_mode = false;
-    }
-    
     virtual_eye_enabled = enabled;
     if (enabled) {
       if (!virtual_eye.active) {
@@ -582,39 +553,12 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
 	virtual_eye.adc_y = 2048;
 	virtual_eye.active = true;
       }
-      
-      // Always enable continuous mode when enabling virtual eye
-      set_virtual_eye_continuous(true);
       redraw();
     } else {
       // Clean up when disabling
       virtual_eye.active = false;
       virtual_eye.dragging = false;
-    }
-  }
-  
-  void set_virtual_eye_continuous(bool enabled, float rate_hz = 200.0) {
-    if (!enabled && virtual_eye_continuous_mode) {
-      // Remove existing timeout before disabling
-      Fl::remove_timeout(virtual_eye_timer_callback, this);
-    }
-    
-    virtual_eye_continuous_mode = enabled;
-    virtual_eye_update_rate = rate_hz;
-    
-    if (enabled && virtual_eye_enabled && virtual_eye.active) {
-      Fl::add_timeout(1.0 / rate_hz, virtual_eye_timer_callback, this);
-    }
-  }
-
-  void set_virtual_eye_rate(float rate_hz) {
-    if (virtual_eye_continuous_mode) {
-      // Restart timer with new rate
-      Fl::remove_timeout(virtual_eye_timer_callback, this);
-      virtual_eye_update_rate = rate_hz;
-      Fl::add_timeout(1.0 / rate_hz, virtual_eye_timer_callback, this);
-    } else {
-      virtual_eye_update_rate = rate_hz;
+      redraw();
     }
   }
   
@@ -690,7 +634,6 @@ void get_virtual_eye_adc(int& x, int& y) const {
     
   ~EyeTouchWin()
   {
-    Fl::remove_timeout(virtual_eye_timer_callback, this);
   }
   
 };

@@ -1301,10 +1301,9 @@ void configure_sorters(DYN_GROUP *dg)
 }
 
 // Functions that EyeTouchWin can call
-void send_virtual_eye_data(int adc_x, int adc_y) {
-  std::string cmd("set d [binary format s2 {");
-  cmd += std::to_string(adc_y) + " " + std::to_string(adc_x) + "}];";
-  cmd += "dservSetData eyetracking/virtual 0 4 $d; unset d";
+void send_virtual_eye_position(float h_deg, float v_deg) {
+  std::string cmd("send virtual_eye { set_eye ");
+  cmd += std::to_string(h_deg) + " " + std::to_string(v_deg) + "};";
   
   std::string rstr;
   if (!g_App->host.empty()) {
