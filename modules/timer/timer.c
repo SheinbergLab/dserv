@@ -263,7 +263,7 @@ int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
   t->nrepeats = 0;
   t->expired = true;  // Match the timerfd behavior
   t->tclserver = info->tclserver;
-  t->tinfo = info;
+  t->info = info;
   
   // Check if we should use signal-based fallback
   t->use_signal_fallback = info->use_signal_fallback;
