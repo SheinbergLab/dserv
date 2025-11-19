@@ -575,6 +575,11 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
 	free(buf);
       }
       break;
+    case DSERV_NONE:
+      {
+        json_object_set_new(json_dpoint, "data", json_null());
+      }
+      break;      
     default:
       json_decref(json_dpoint);
       return NULL;
