@@ -79,6 +79,9 @@ if { [lsearch $hbs $host] >= 0 } {
     subprocess pg 2572 "source [file join $dspath config/central_postgresconf.tcl]"
 }
 
+# start a virtual eye subprocess
+subprocess virtual_eye "source [file join $dspath config/virtualeyeconf.tcl]"
+
 # start a "git" interpreter
 subprocess git "source [file join $dspath config/gitconf.tcl]"
 
