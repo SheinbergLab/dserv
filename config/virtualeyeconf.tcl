@@ -19,7 +19,7 @@ foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }
 
-proc start { { interval 10 } } {
+proc start { { interval 4 } } {
     timerTickInterval $interval $interval
 }
 
@@ -29,16 +29,11 @@ proc stop {} {
 
 proc timer_callback { dpoint data } {
     global virtual_eye
-    set h [expr {int($virtual_eye(h)*200)+2048}]
-    set v [expr {int($virtual_eye(v)*200)+2048}]
+    set h [expr {int($virtual_eye(h)*8.0)+2048}]
+    set v [expr {2048-int($virtual_eye(v)*8.0)}]
 
-    # for window checking
     set ainvals [binary format ss $v $h]
-    dservSetData ain/vals 0 4 $ainvals
-
-    # for visualization
-    dservSet ess/em_pos "$v $h $virtual_eye(h) $virtual_eye(v)"
-
+    dservSetData eyetracking/virtual 0 4 $ainvals
 }
 
 proc setup {} {
