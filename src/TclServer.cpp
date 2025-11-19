@@ -681,12 +681,24 @@ void TclServer::start_websocket_server(void)
                 const char *name = json_string_value(name_obj);
                 ds_datapoint_t *dp = ds->get_datapoint((char *)name);
                   
-                if (dp) {
-                  char *json_str = dpoint_to_json(dp);
-                  ws->send(json_str, uWS::OpCode::TEXT);
-                  free(json_str);
-                  dpoint_free(dp);
-                } else {
+		if (dp) {
+		  char *json_str = dpoint_to_json(dp);
+		  if (json_str) {
+		    ws->send(json_str, uWS::OpCode::TEXT);
+		    free(json_str);
+		  } else {
+		    // Send error about unsupported datatype
+		    json_t *error_response = json_object();
+		    json_object_set_new(error_response, "error",
+					json_string("Unsupported datapoint type"));
+		    char *error_str = json_dumps(error_response, 0);
+		    ws->send(error_str, uWS::OpCode::TEXT);
+		    free(error_str);
+		    json_decref(error_response);
+		  }
+		  dpoint_free(dp);
+		}
+                else {
                   json_t *error_response = json_object();
                   json_object_set_new(error_response, "error",
 				      json_string("Datapoint not found"));
@@ -1166,25 +1178,30 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
 {
   TclServer *tclserver = (TclServer *) data;
   int port = -1;
+  std::string script;
   
- if (objc > 3) {
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "name");
+    return TCL_ERROR;
+  }
+  
+  
+  if (objc > 3) {
     if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
       return TCL_ERROR;
     }
+    script = std::string(Tcl_GetString(objv[3]));    
   }
-
+  else if (objc > 2) {
+    script = std::string(Tcl_GetString(objv[2]));  
+  }
+  
   TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
                    tclserver->ds,
                    Tcl_GetString(objv[1]), port);
                   
   TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
 
-  std::string script;
-  if (objc > 3) {
-    script = std::string(Tcl_GetString(objv[3]));
-  } else if (objc > 2) {
-    script = std::string(Tcl_GetString(objv[2]));  
-  }
   if (!script.empty()) {
     auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
