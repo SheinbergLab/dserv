@@ -23,6 +23,7 @@ typedef enum {
   DSERV_MSGPACK = 13,
   DSERV_JPEG = 14,
   DSERV_PPM = 15,
+  DSERV_INT64 = 16,
   DSERV_UNKNOWN,
 } ds_datatype_t;
 
