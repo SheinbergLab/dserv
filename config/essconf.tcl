@@ -91,18 +91,21 @@ proc touchGetRegionInfo { reg } { processSetParam "touch_windows" settings 1 $re
 proc touchGetParam { p } { processGetParam "touch_windows" $p }
 proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
 
-
+#
 # Sampler processor convenience functions
+#
 proc samplerSetParam { p v } { processSetParam "sampler" $p $v }
 proc samplerSetIndexedParam { i p v } { processSetParam "sampler" $p $v $i }
 proc samplerGetParam { p } { processGetParam "sampler" $p }
 proc samplerGetIndexedParam { i p } { processGetParam "sampler" $p $i }
 
-# Convenience functions matching the ain/touch pattern
+# Basic control
 proc samplerStart { {slot 0} } { processSetParam "sampler" start 1 $slot }
 proc samplerStop { {slot 0} } { processSetParam "sampler" stop 1 $slot }
-proc samplerQueryRate { {slot 0} } { processSetParam "sampler" rate 1 $slot }
 proc samplerSetActive { slot active } { processSetParam "sampler" active $active $slot }
+
+# Query functions
+proc samplerQueryRate { {slot 0} } { processSetParam "sampler" rate 1 $slot }
 proc samplerGetStatus { {slot 0} } {
     processSetParam sampler status 1 0
     return [dservGet proc/sampler/status]
@@ -110,21 +113,42 @@ proc samplerGetStatus { {slot 0} } {
 proc samplerGetVals { {slot 0} } {
     return [dservGet proc/sampler/vals]
 }
-
-proc samplerEnableRateTracking { {slot 0} {interval 50} } {
-    processSetParam "sampler" track_rate 1 $slot
-    processSetParam "sampler" rate_update_interval $interval $slot
+proc samplerGetCount { {slot 0} } {
+    processSetParam sampler count 1 0
+    return [dservGet proc/sampler/count]
 }
-
 proc samplerGetRate { {slot 0} } {
    return [dservGet proc/sampler/rate]
 }
 
-# Configure sampler (matching em_sampler_enable pattern)
+# Rate tracking
+proc samplerEnableRateTracking { {slot 0} {interval 50} } {
+    processSetParam "sampler" track_rate 1 $slot
+    processSetParam "sampler" rate_update_interval $interval $slot
+}
+proc samplerDisableRateTracking { {slot 0} } {
+    processSetParam "sampler" track_rate 0 $slot
+}
+
+# Configuration - sample count mode (original behavior)
 proc samplerConfigure { slot nsamples nchannels {operation 0} } {
     processSetParam "sampler" sample_count $nsamples $slot
     processSetParam "sampler" nchannels $nchannels $slot
     processSetParam "sampler" operation $operation $slot
+    processSetParam "sampler" use_time_window 0 $slot
+}
+
+# Configuration - time window mode (new)
+proc samplerConfigureTime { slot time_window nchannels {operation 0} } {
+    processSetParam "sampler" time_window $time_window $slot
+    processSetParam "sampler" nchannels $nchannels $slot
+    processSetParam "sampler" operation $operation $slot
+    processSetParam "sampler" use_time_window 1 $slot
+}
+
+# Loop mode control
+proc samplerSetLoop { slot enable } {
+    processSetParam "sampler" loop $enable $slot
 }
 
 proc detect_board_type {} {

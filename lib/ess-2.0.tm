@@ -2795,45 +2795,87 @@ namespace eval ess {
     }
 
 
-	#
-	# sampler support (using sampler processor)
-	#
+    #
+    # sampler support (using sampler processor)
+    #
     proc em_sampler_init {nsamps {nchan 2} {slot 0}} {
-		# Initial configuration of the sampler processor
-		samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
-		
-		# Set up monitoring of status variable that indicates state
-		dservSet proc/sampler/status -1
-		dservAddExactMatch proc/sampler/status
-		
-		# Key to waking up state system on change of status
-		dpointSetScript proc/sampler/status "[namespace current]::do_update"
-    }
-
-    proc em_sampler_configure {nsamps {nchan 2} {slot 0}} {
-		# Configure the sampler processor
-
-		# Operations are one of:
-		#   0 mean
-		#   1 min
-		#   2 max
-		#   3 min/max
-
-		samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+	# Initial configuration of the sampler processor
+	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+	
+	# Set up monitoring of status variable that indicates state
+	dservSet proc/sampler/status -1
+	dservAddExactMatch proc/sampler/status
+	
+	# Key to waking up state system on change of status
+	dpointSetScript proc/sampler/status "[namespace current]::do_update"
     }
     
+    proc em_sampler_configure {nsamps {nchan 2} {slot 0}} {
+	# Configure the sampler processor (sample count mode)
+	
+	# Operations are one of:
+	#   0 mean
+	#   1 min
+	#   2 max
+	#   3 min/max
+	
+	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+    }
+    
+    proc em_sampler_configure_time {time_window {nchan 2} {slot 0} {operation 0}} {
+	# Configure sampler to use time window mode
+	# time_window: duration in seconds (e.g., 0.5 for 500ms)
+	# nchan: number of channels
+	# slot: processor slot
+	# operation: 0=mean, 1=min, 2=max, 3=minmax
+	
+	samplerConfigureTime $slot $time_window $nchan $operation
+    }
+    
+    proc em_sampler_set_loop {enable {slot 0}} {
+	# Enable/disable continuous sampling mode
+	# enable: 1 for continuous, 0 for one-shot
+	samplerSetLoop $slot $enable
+    }
+    
+    proc em_sampler_track_rate {enable {update_interval 50} {slot 0}} {
+	# Enable sample rate tracking
+	# enable: 1 to track rate, 0 to disable
+	# update_interval: update rate estimate every N samples
+	
+	if {$enable} {
+	    samplerEnableRateTracking $slot $update_interval
+	} else {
+	    samplerDisableRateTracking $slot
+	}
+    }
     
     proc em_sampler_start {{slot 0}} {
-		samplerStart $slot
+	samplerStart $slot
+    }
+    
+    proc em_sampler_stop {{slot 0}} {
+	samplerStop $slot
     }
     
     proc em_sampler_status {{slot 0}} {
-		return [dservGet proc/sampler/status]
+	return [samplerGetStatus $slot]
     }
     
     proc em_sampler_vals {{slot 0}} {
-		return [dservGet proc/sampler/vals]
+	return [samplerGetVals $slot]
     }
+    
+    proc em_sampler_count {{slot 0}} {
+	# Return number of samples used in last computation
+	return [samplerGetCount $slot]
+    }
+    
+    proc em_sampler_rate {{slot 0}} {
+	# Return current sample rate in Hz
+	return [samplerGetRate $slot]
+    }
+
 }
 
 
