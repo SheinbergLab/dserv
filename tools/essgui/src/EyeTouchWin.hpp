@@ -21,17 +21,40 @@ typedef enum { WINDOW_RECTANGLE, WINDOW_ELLIPSE } WINDOW_TYPE;
 enum { WINDOW_NOT_INITIALIZED, WINDOW_INITIALIZED };
 
 class EyeRegion {
-
 public:
   int reg;
   bool active;
   WINDOW_STATE state;
   WINDOW_TYPE type;
-  int center_x;
-  int center_y;
-  int plusminus_x;
-  int plusminus_y;
+  float center_x;      // Changed from int - now in degrees
+  float center_y;      // Changed from int - now in degrees
+  float plusminus_x;   // Changed from int - now in degrees
+  float plusminus_y;   // Changed from int - now in degrees
 
+  void set(int win, int active_val, int state_val, int type_val,
+           float cx, float cy, float pmx, float pmy) {
+    reg = win;
+    active = active_val;
+    state = (WINDOW_STATE) state_val;
+    type = (WINDOW_TYPE) type_val;
+    center_x = cx;
+    center_y = cy;
+    plusminus_x = pmx;
+    plusminus_y = pmy;
+  }
+};
+
+class TouchRegion {
+public:
+  int reg;
+  bool active;
+  WINDOW_STATE state;
+  WINDOW_TYPE type;
+  int center_x;        // Keep as int - still in screen pixels
+  int center_y;        // Keep as int - still in screen pixels
+  int plusminus_x;     // Keep as int - still in screen pixels
+  int plusminus_y;     // Keep as int - still in screen pixels
+  
   void set(int settings[8]) {
     reg         = settings[0];
     active      = settings[1];
@@ -42,9 +65,6 @@ public:
     plusminus_x = settings[6];
     plusminus_y = settings[7];
   }
-};
-
-class TouchRegion: public EyeRegion {
 };
 
 class EyeTouchWin : public Fl_Box {
@@ -87,7 +107,6 @@ private:
   // Virtual eye state
   struct {
     float x, y;           // degrees
-    int adc_x, adc_y;     // ADC values
     bool active;
     bool dragging;
     float drag_offset_x, drag_offset_y;
@@ -169,9 +188,6 @@ private:
       virtual_eye.x = deg_x;
       virtual_eye.y = deg_y;
       virtual_eye.active = true;
-      virtual_eye.adc_x = deg_x * points_per_deg_x + 2048;
-      virtual_eye.adc_y = -deg_y * points_per_deg_y + 2048;
-
       send_virtual_eye_position(virtual_eye.x, virtual_eye.y);
       
       redraw();
@@ -242,10 +258,6 @@ private:
     virtual_eye.y = deg_y;
     virtual_eye.active = true;
     
-    // Convert to ADC
-    virtual_eye.adc_x = deg_x * points_per_deg_x + 2048;
-    virtual_eye.adc_y = -deg_y * points_per_deg_y + 2048;
-    
     // Trigger callback or send data
     if (callback()) {
       do_callback();
@@ -265,33 +277,29 @@ public:
   void screen_h(int h) { _screen_h = h; }
   void screen_halfx(float halfx) { _screen_halfx = halfx; }
   void screen_halfy(float halfy) { _screen_halfy = halfy; }
-  
-  void eye_region_set(int settings[8]) {
-    if (settings[0] >= 0 && settings[0] < n_eye_regions) {
-      eye_regions[settings[0]].set(settings);
+
+  void eye_region_set(int win, int active, int state, int type,
+		      float center_x, float center_y, 
+		      float plusminus_x, float plusminus_y) {
+    if (win >= 0 && win < n_eye_regions) {
+      eye_regions[win].set(win, active, state, type, 
+			   center_x, center_y, plusminus_x, plusminus_y);
     }
     redraw();
   }
+  
+  void eye_status_set(int changes, int states, float x, float y) {
+    for (int i = 0; i < n_eye_regions; i++) {
+      eye_regions[i].state = (WINDOW_STATE) (((states & (1 << i)) != 0) && eye_regions[i].active);
+    }
+    redraw();
+  }  
   
   void touch_region_set(int settings[8]) {
     if (settings[0] >= 0 && settings[0] < n_touch_regions) {
       touch_regions[settings[0]].set(settings);
     }
     redraw();
-  }
-
-  void eye_status_set(int status[4]) {
-    int changes = status[0];
-    int states = status[1];
-    int adc_x = status[2];
-    int adc_y = status[3];
-
-    for (int i = 0; i < n_eye_regions; i++) {
-      eye_regions[i].state = (WINDOW_STATE) (((states & (1 << i)) != 0) && eye_regions[i].active);
-	//	printf("set region %d -> %d\n", i, eye_regions[i].state); 
-    }
-    //    printf("region status: changes=%02x states=%02x adc_x=%d adc_y=%d\n",
-    //	   status[0], status[1], status[2], status[3]);
   }
 
   void touch_status_set(int status[4]) {
@@ -354,44 +362,45 @@ public:
     fl_arc(xpos, ypos, radius, radius, 0.0, 360.0);
   }
 
-void draw_eye_region(EyeRegion *region)
-{
+  void draw_eye_region(EyeRegion *region)
+  {
     if (!region->active) return;
-
-    float cx_deg = (region->center_x-2048)/points_per_deg_x;
-    float cy_deg = (region->center_y-2048)/points_per_deg_y;
-    float w_deg = (region->plusminus_x/points_per_deg_x);
-    float h_deg = (region->plusminus_y/points_per_deg_y);
+    
+    // Regions are now already in degrees - no conversion needed!
+    float cx_deg = region->center_x;
+    float cy_deg = region->center_y;
+    float w_deg = region->plusminus_x;
+    float h_deg = region->plusminus_y;
     
     float xpos = x()+w()/2+(cx_deg)/deg_per_pix_x;
-    float ypos = y()+h()/2+(cy_deg)/deg_per_pix_y;
+    float ypos = y()+h()/2-(cy_deg)/deg_per_pix_y;  // Note: negative for screen coords
     float w = w_deg/deg_per_pix_x;
     float h = h_deg/deg_per_pix_y;
     
-    // Draw light fill when inside (simulating transparency)
+    // Draw light fill when inside
     if (region->state == WINDOW_IN) {
-        fl_color(100, 50, 50);  // Dark red fill
-        if (region->type == WINDOW_ELLIPSE) {
-            fl_pie(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
-        } else {
-            fl_rectf(xpos-w, ypos-h, 2*w, 2*h);
-        }
+      fl_color(100, 50, 50);  // Dark red fill
+      if (region->type == WINDOW_ELLIPSE) {
+	fl_pie(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+      } else {
+	fl_rectf(xpos-w, ypos-h, 2*w, 2*h);
+      }
     }
     
-    // Draw the outline (always red for eye regions)
+    // Draw the outline
     fl_color(FL_RED);
     if (region->type == WINDOW_ELLIPSE) {
-        fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
-        fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
+      fl_arc(xpos-w, ypos-h, 2*w, 2*h, 0.0, 360.0);
+      fl_arc(xpos-2, ypos-2, 4, 4, 0.0, 360.0);
     } else {
-        fl_rect(xpos-w, ypos-h, 2*w, 2*h);
+      fl_rect(xpos-w, ypos-h, 2*w, 2*h);
     }
-}
-
-void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
-{
+  }
+  
+  void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
+  {
     if (!region->active) return;
-
+    
     float screen_pix_per_deg_x = screen_w()/(2*screen_halfx());
     float screen_pix_per_deg_y = screen_h()/(2*screen_halfy());
     float cx_deg = (region->center_x-screen_w()/2)/screen_pix_per_deg_x;
@@ -422,7 +431,7 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
     } else {
         fl_rect(xpos-w, ypos-h, 2*w, 2*h);
     }
-}  
+  }  
   
   void draw_eye_status()
   {
@@ -549,8 +558,6 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
 	// Initialize virtual eye at center
 	virtual_eye.x = 0;
 	virtual_eye.y = 0;
-	virtual_eye.adc_x = 2048;
-	virtual_eye.adc_y = 2048;
 	virtual_eye.active = true;
       }
       redraw();
@@ -577,12 +584,6 @@ void draw_touch_region(TouchRegion *region)  // Note: TouchRegion type
   bool is_virtual_eye_enabled() const { return virtual_eye_enabled; }
   bool is_virtual_touch_enabled() const { return virtual_touch_enabled; }
 
-// Virtual position getters
-void get_virtual_eye_adc(int& x, int& y) const {
-  x = virtual_eye.adc_x;
-    y = virtual_eye.adc_y;
-  }
-  
   void get_virtual_touch_pos(int& x, int& y) const {
     x = virtual_touch.x;
     y = virtual_touch.y;
