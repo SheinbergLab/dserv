@@ -43,21 +43,6 @@ proc update_touch { name data } {
     }
 }
 
-proc update_ain_ess { name data } {
-    set em_pnts_per_deg_x 200
-    set em_pnts_per_deg_y 200
-    set v1 [expr { [lindex $data 0] & 0xFFFF}]
-    set v2 [expr { [lindex $data 1] & 0xFFFF}]
-    set v2a [format %.3f [expr {(($v2-2048.)/$em_pnts_per_deg_y)}]]
-    set v1a [format %.3f [expr {((2048.-$v1)/$em_pnts_per_deg_x)}]]
-    dservSet ess/em_pos "$v2 $v1 $v2a $v1a"
-}
-
-proc update_ain { name data } {
-    dservCopy ain/vals ain/sampler_vals
-#    dservCopy ain/vals ain/ess_vals
-}
-
 proc update_events { name data } {
     set einfo [split $name :]
     set type [lindex $einfo 1]
@@ -109,12 +94,18 @@ proc update_state { name data } {
     }
 }
 
-proc update_ain_window_settings { name data } {
-    dservSet ess/em_region_setting $data
+proc update_eye_window_settings { name data } { 
+    lassign $data win active state type cx cy pmx pmy ref_count ref_countdown
+    dservSet ess/em_region_setting "[expr {int($win)}] [expr {int($active)}] \
+                                    [expr {int($state)}] [expr {int($type)}] \
+                                    $cx $cy $pmx $pmy"
 }
 
-proc update_ain_window_status { name data } {
-    dservSet ess/em_region_status $data
+proc update_eye_window_status { name data } {
+    lassign $data changes states x y
+    set changes [expr {int($changes)}]
+    set states  [expr {int($states)}]
+    dservSet ess/em_region_status "$changes $states $x $y"
 }
 
 proc update_touch_window_settings { name data } {
@@ -128,7 +119,7 @@ proc update_touch_window_status { name data } {
 proc init_vars { } {
     dservSet ess/time [now]
     dservSet ess/dio "0 0"
-    dservSet ess/em_pos "2048 2048 0. 0."
+    dservSet ess/em_pos "0. 0."
     dservSet ess/state "Inactive"
     
     dservSet ess/name classify
@@ -156,11 +147,9 @@ init_vars
 
 triggerAdd rpio/vals                   1  update_dio
 triggerAdd pca9538/vals                1  update_joystick
-triggerAdd ain/vals                    1  update_ain
-#triggerAdd ain/ess_vals               20  update_ain_ess
 triggerAdd mtouch/event                1  update_touch
-triggerAdd proc/windows/status         1  update_ain_window_status
-triggerAdd proc/windows/settings       1  update_ain_window_settings
+triggerAdd proc/windows/status         1  update_eye_window_status
+triggerAdd proc/windows/settings       1  update_eye_window_settings
 triggerAdd proc/touch_windows/status   1  update_touch_window_status
 triggerAdd proc/touch_windows/settings 1  update_touch_window_settings
 triggerAdd eventlog/events             1  update_events
@@ -171,7 +160,7 @@ set path [file dir [info nameofexecutable]]
 # add windows processor for eye movements
 processLoad [file join \
 		 $path processors windows[info sharedlibextension]] windows
-processAttach windows ain/vals windows
+processAttach windows eyetracking/position windows
 
 # add touch_windows processor for touch regions
 processLoad [file join \
@@ -179,10 +168,10 @@ processLoad [file join \
     touch_windows
 processAttach touch_windows mtouch/event touch_windows
 
-# add sampler processor for ain/sampler_vals sampling
+# add sampler processor for eyetracking/raw
 processLoad [file join \
     $path processors sampler[info sharedlibextension]] sampler
-processAttach sampler ain/sampler_vals sampler
+processAttach sampler eyetracking/raw sampler
 
 # look for any .tcl configs in local/*.tcl
 foreach f [glob [file join $dspath local trigger-*.tcl]] {

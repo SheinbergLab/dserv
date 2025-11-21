@@ -1,5 +1,5 @@
 #
-# Handle em incoming data
+# Handle em incoming data - degrees output with calibration
 #
 
 set dspath [file dir [info nameofexecutable]]
@@ -10,29 +10,34 @@ package require dlsh
 package require yajltcl
 
 namespace eval em {
-    # parameters for converting from raw values to [0,4095] (2^12)
-    # raw_center_h/v define what p1-p4 pixel difference corresponds to center gaze (2048)
-    # scale_h/v define sensitivity (output units per pixel of p1-p4 difference)
+    # Parameters for converting from raw Purkinje reflection differences to degrees
+    # Linear model: degrees = scale * (raw_diff - raw_center)
+    # For biquadratic: add higher-order terms later
     variable settings [dict create \
-			   scale_h 1 \
-			   scale_v 1 \
-			   raw_center_h 0.0 \
-			   raw_center_v 0.0 \
-			   invert_h 0 \
-			   invert_v 0 \
-			   to_deg_h 8.0 \
-			   to_deg_v 8.0]
+        scale_h 1.0 \
+        scale_v 1.0 \
+        raw_center_h 0.0 \
+        raw_center_v 0.0 \
+        invert_h 0 \
+        invert_v 0 \
+        use_biquadratic 0 \
+        bq_h_coeffs {0 0 0 0 0 0 0 0 0} \
+        bq_v_coeffs {0 0 0 0 0 0 0 0 0}]
     
     # Track current raw values for "set center" functionality
     variable current_raw_h 0.0
     variable current_raw_v 0.0
+    
+    # Track last valid position in degrees
+    variable last_valid_h 0.0
+    variable last_valid_v 0.0
 
     proc update_settings {} {
-	variable settings
-	dservSet em/settings $settings
+        variable settings
+        dservSet em/settings $settings
     }
 
-    # set param values in our settings directory by name
+    # Set param values in our settings directory by name
     proc set_param {param_name value} {
         variable settings
         dict set settings $param_name $value
@@ -45,8 +50,19 @@ namespace eval em {
     proc set_raw_center_v {o} { set_param raw_center_v $o }
     proc set_invert_h {o} { set_param invert_h $o }
     proc set_invert_v {o} { set_param invert_v $o }
-    proc set_to_deg_h {d} { set_param to_deg_h $d }
-    proc set_to_deg_v {d} { set_param to_deg_v $d }
+    proc set_use_biquadratic {b} { set_param use_biquadratic $b }
+    proc set_bq_h_coeffs {coeffs} { 
+        if {[llength $coeffs] != 9} {
+            error "bq_h_coeffs requires 9 coefficients"
+        }
+        set_param bq_h_coeffs $coeffs 
+    }
+    proc set_bq_v_coeffs {coeffs} { 
+        if {[llength $coeffs] != 9} {
+            error "bq_v_coeffs requires 9 coefficients"
+        }
+        set_param bq_v_coeffs $coeffs 
+    }
 
     # Set current eye position as center - call this when subject is fixating center
     proc set_current_as_center {} {
@@ -57,96 +73,111 @@ namespace eval em {
         set_raw_center_v $current_raw_v
     }
 
+    # Convert raw sub-pixel difference to degrees using full biquadratic fit
+    # deg = c0 + c1*x + c2*y + c3*x² + c4*y² + c5*xy + c6*x²y + c7*xy² + c8*x²y²
+    proc biquadratic_transform {x y coeffs} {
+        lassign $coeffs c0 c1 c2 c3 c4 c5 c6 c7 c8
+        set x2 [expr {$x * $x}]
+        set y2 [expr {$y * $y}]
+        set xy [expr {$x * $y}]
+        return [expr {$c0 + $c1*$x + $c2*$y + $c3*$x2 + $c4*$y2 + $c5*$xy + 
+                      $c6*$x2*$y + $c7*$x*$y2 + $c8*$x2*$y2}]
+    }
+
     proc process { dpoint data } {
         variable settings
-	variable last_valid_h 2048  ;# Remember last valid position
-	variable last_valid_v 2048
+        variable last_valid_h
+        variable last_valid_v
         variable current_raw_h
         variable current_raw_v
 
         lassign $data frame_id frame_time pupil_x pupil_y pupil_r \
-	    p1_x p1_y p4_x p4_y \
+            p1_x p1_y p4_x p4_y \
             blink p1_detected p4_detected
 
-	# get timestamp to use for all the eye data so all are in/out of obsp
-	set cur_t [now]
+        # Get timestamp to use for all the eye data
+        set cur_t [now]
 
-	set pupil "$pupil_x $pupil_y"
-	set p1 "$p1_x $p1_y"
-	set p4 "$p4_x $p4_y"
-	foreach v "pupil p1 p4" {
-	    set fvals [binary format "ff" [set ${v}_x] [set ${v}_y]]
-	    dservSetData em/$v $cur_t 2 $fvals
-	}
-	set fvals [binary format "f" $pupil_r]
-	dservSetData em/pupil_r $cur_t 2 $fvals
+        # Store raw detection data as floats (sub-pixel positions)
+        set pupil "$pupil_x $pupil_y"
+        set p1 "$p1_x $p1_y"
+        set p4 "$p4_x $p4_y"
+        foreach v "pupil p1 p4" {
+            set fvals [binary format "ff" [set ${v}_x] [set ${v}_y]]
+            dservSetData em/$v $cur_t 2 $fvals  ;# type 2 = DSERV_FLOAT
+        }
+        set fvals [binary format "f" $pupil_r]
+        dservSetData em/pupil_r $cur_t 2 $fvals
 
-	set frame_id_binary [binary format i [expr {int($frame_id)}]]
-	dservSetData em/frame_id $cur_t 5 $frame_id_binary
+        set frame_id_binary [binary format i [expr {int($frame_id)}]]
+        dservSetData em/frame_id $cur_t 5 $frame_id_binary
 
-	set seconds_binary [binary format d $frame_time]
-	dservSetData em/time $cur_t 3 $seconds_binary
-			  
-	foreach v "blink p1_detected p4_detected" {
-	    set val [binary format c [expr {int([set $v])}]]
-	    dservSetData em/$v $cur_t 0 $val
-	}
-	
-	# Only compute eye position if BOTH reflections detected
-	dict with settings {
-	    if {$p1_detected > 0 && $p4_detected > 0} {
-		# Calculate raw eye position in pixels (P1-P4 difference)
-		set raw_h [expr {$invert_h ? ($p1_x-$p4_x) : ($p4_x-$p1_x)}]
-		set raw_v [expr {$invert_v ? ($p1_y-$p4_y) : ($p4_y-$p1_y)}]
-		
-		# Store for "set center" functionality
-		set current_raw_h $raw_h
-		set current_raw_v $raw_v
-		
-		# Apply scaling relative to center, then add offset to 2048
-		set h [expr {int(($scale_h * ($raw_h - $raw_center_h)) + 2048)}]
-		set v [expr {int(($scale_v * ($raw_v - $raw_center_v)) + 2048)}]
-	    
-	    # Remember valid position
-	    set last_valid_h $h
-	    set last_valid_v $v
-	    } else {
-		# Use last valid position (hold) or center
-		set h $last_valid_h
-		set v $last_valid_v
-	    }
-	}
-	
-	# Send ain/vals (even if held)
-	set ainvals [binary format ss $v $h]
-	dservSetData ain/vals $cur_t 4 $ainvals
-	
-	# Compute degrees
-	dict with settings {
-	    set h_deg [expr {($h - 2048.) / $to_deg_h}]
-	    set v_deg [expr {(2048. - $v) / $to_deg_v}]
-	}
-
-	dservSet ess/em_pos "$v $h $h_deg $v_deg"
+        set seconds_binary [binary format d $frame_time]
+        dservSetData em/time $cur_t 3 $seconds_binary
+                      
+        foreach v "blink p1_detected p4_detected" {
+            set val [binary format c [expr {int([set $v])}]]
+            dservSetData em/$v $cur_t 0 $val
+        }
+        
+        # Only compute eye position if BOTH reflections detected
+        dict with settings {
+            if {$p1_detected > 0 && $p4_detected > 0} {
+                # Calculate raw eye position in sub-pixels (P1-P4 difference)
+                set raw_h [expr {$invert_h ? ($p1_x-$p4_x) : ($p4_x-$p1_x)}]
+                set raw_v [expr {$invert_v ? ($p1_y-$p4_y) : ($p4_y-$p1_y)}]
+                
+                # Store for "set center" functionality
+                set current_raw_h $raw_h
+                set current_raw_v $raw_v
+                
+                # Convert to degrees
+                if {$use_biquadratic} {
+                    # Biquadratic fit: deg = f(raw_h, raw_v)
+                    set h_deg [biquadratic_transform $raw_h $raw_v $bq_h_coeffs]
+                    set v_deg [biquadratic_transform $raw_h $raw_v $bq_v_coeffs]
+                } else {
+                    # Simple linear mapping: degrees = scale * (raw - center)
+                    # scale is in degrees per sub-pixel
+                    set h_deg [expr {$scale_h * ($raw_h - $raw_center_h)}]
+                    set v_deg [expr {$scale_v * ($raw_v - $raw_center_v)}]
+                }
+                
+                # Remember valid position
+                set last_valid_h $h_deg
+                set last_valid_v $v_deg
+            } else {
+                # Use last valid position (hold during blinks)
+                set h_deg $last_valid_h
+                set v_deg $last_valid_v
+            }
+        }
+        
+        # Send eye position in degrees as floats [v, h] convention
+        set eyevals [binary format ff $v_deg $h_deg]
+        dservSetData eyetracking/position $cur_t 2 $eyevals  ;# type 2 = DSERV_FLOAT
+        
+        # Also send raw differences for calibration/debugging
+        set rawvals [binary format ff $current_raw_v $current_raw_h]
+        dservSetData eyetracking/raw $cur_t 2 $rawvals
+        
+        # Send to visualization/monitoring
+        dservSet ess/em_pos "$v_deg $h_deg"
     }    
 
-    # Process virtual eye data (already in ADC format [0-4095])
+    # Process virtual eye data (already in degrees)
     proc process_virtual { dpoint data } {
-        variable settings
+        lassign $data v_deg h_deg
         
-        lassign $data adc_v adc_h
+        # Virtual data is already in degrees, just pass through
+        set eyevals [binary format ff $v_deg $h_deg]
+        dservSetData eyetracking/position 0 2 $eyevals
+
+	# We don't have real "raw" values so just use actual
+        dservSetData eyetracking/raw 0 2 $eyevals
         
-        # Virtual data is already in ADC space, just pass through
-        set ainvals [binary format ss $adc_v $adc_h]
-        dservSetData ain/vals 0 4 $ainvals
-        
-        # Compute degrees for visualization
-	dict with settings {
-	    set h_deg [expr {($adc_h - 2048.) / $to_deg_h}]
-	    set v_deg [expr {(2048. - $adc_v) / $to_deg_v}]
-	}	
-        
-        dservSet ess/em_pos "$adc_v $adc_h $h_deg $v_deg"
+        # Also send to visualization
+        dservSet ess/em_pos "$v_deg $h_deg"
     }
     
     update_settings

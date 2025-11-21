@@ -2703,12 +2703,14 @@ namespace eval ess {
     }
 
     proc em_window_process {name data} {
-        variable em_windows
-        lassign $data \
-            em_windows(changes) em_windows(states) \
-            em_windows(hpos) em_windows(vpos)
-        do_update
-    }
+	variable em_windows
+	lassign $data changes states \
+	    em_windows(hpos) em_windows(vpos)
+	
+	set em_windows(changes) [expr {int($changes)}]
+	set em_windows(states)  [expr {int($states)}]
+	do_update
+    }    
 
     proc em_init {} {
         # set flag to ensure em's are stored in data files
@@ -2782,18 +2784,13 @@ namespace eval ess {
     }
 
     proc em_fixwin_set {win cx cy r {type 1}} {
-        set x [expr {int($cx * $::ess::em_scale_h) + 2048}]
-        set y [expr {-1 * int($cy * $::ess::em_scale_v) + 2048}]
-        set pm_x [expr {$r * $::ess::em_scale_h}]
-        set pm_y [expr {$r * $::ess::em_scale_v}]
-        em_region_set $win 1 $x $y $pm_x $pm_y
+	em_region_set $win $type $cx $cy $r $r
     }
 
     proc em_eye_in_region {win} {
         variable em_windows
         return [expr {($em_windows(states) & (1 << $win)) != 0}]
     }
-
 
     #
     # sampler support (using sampler processor)

@@ -1,12 +1,9 @@
 #
-# virtual_eye process
+# virtual_eye process - simplified for degrees
 #
-
 set dspath [file dir [info nameofexecutable]]
-
 set base [file join [zipfs root] dlsh]
 set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 package require dlsh
 tcl::tm::add $dspath/lib
 
@@ -21,19 +18,18 @@ foreach f $ess_modules {
 
 proc start { { interval 4 } } {
     timerTickInterval $interval $interval
+    dservSet eyetracking/virtual_enabled 1
 }
 
 proc stop {} {
     timerStop
+    dservSet eyetracking/virtual_enabled 0
 }
 
 proc timer_callback { dpoint data } {
     global virtual_eye
-    set h [expr {int($virtual_eye(h)*8.0)+2048}]
-    set v [expr {2048-int($virtual_eye(v)*8.0)}]
-
-    set ainvals [binary format ss $v $h]
-    dservSetData eyetracking/virtual 0 4 $ainvals
+    set eyevals [binary format ff $virtual_eye(h) $virtual_eye(v)]
+    dservSetData eyetracking/virtual 0 2 $eyevals  ;# type 2 = DSERV_FLOAT
 }
 
 proc setup {} {
@@ -51,5 +47,3 @@ proc set_eye { h v } {
 
 setup
 puts "virtual_eye subprocess configured"
-
-
