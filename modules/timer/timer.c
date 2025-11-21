@@ -499,6 +499,33 @@ static int timer_expired_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+static int timer_stop_command (ClientData data, Tcl_Interp *interp,
+                                int objc, Tcl_Obj *objv[])
+{
+  timer_info_t *info = (timer_info_t *) data;
+  int timerid = 0;
+  
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?id?");
+    return TCL_ERROR;
+  }
+
+  if (objc == 2) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &timerid) != TCL_OK)
+      return TCL_ERROR;
+  }
+  
+  if (timerid > info->ntimers) {
+    Tcl_AppendResult(interp,
+                     Tcl_GetString(objv[0]), ": invalid timer", NULL);
+    return TCL_ERROR;
+  }
+  
+  dserv_timer_reset(&info->timers[timerid]);
+  
+  return TCL_OK;
+}
+
 static int timer_set_dpoint_prefix_command (ClientData data, Tcl_Interp *interp,
 					    int objc, Tcl_Obj *objv[])
 {
@@ -578,6 +605,10 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
                        (Tcl_ObjCmdProc *) timer_expired_command,
                        (ClientData) g_timerInfo,
                        (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateObjCommand(interp, "timerStop",
+		       (Tcl_ObjCmdProc *) timer_stop_command,
+		       (ClientData) g_timerInfo,
+		       (Tcl_CmdDeleteProc *) NULL);  
   Tcl_CreateObjCommand(interp, "timerPrefix",
                        (Tcl_ObjCmdProc *) timer_set_dpoint_prefix_command,
                        (ClientData) g_timerInfo,

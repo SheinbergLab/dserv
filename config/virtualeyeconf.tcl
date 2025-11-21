@@ -24,7 +24,7 @@ proc start { { interval 4 } } {
 }
 
 proc stop {} {
-    timerTickInterval 0 0
+    timerStop
 }
 
 proc timer_callback { dpoint data } {
