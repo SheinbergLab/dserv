@@ -111,9 +111,44 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
 ##
 set(MODULE sound)
 project(${MODULE})
+
+# Find FluidSynth
+if(APPLE)
+    # On macOS with Homebrew
+    find_library(FLUIDSYNTH_LIB fluidsynth PATHS /opt/homebrew/lib /usr/local/lib)
+    find_path(FLUIDSYNTH_INCLUDE fluidsynth.h PATHS /opt/homebrew/include /usr/local/include)
+elseif(UNIX)
+    # On Linux, use pkg-config
+    find_package(PkgConfig)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(FLUIDSYNTH fluidsynth)
+    endif()
+    if(NOT FLUIDSYNTH_FOUND)
+        # Fallback to manual search
+        find_library(FLUIDSYNTH_LIB fluidsynth)
+        find_path(FLUIDSYNTH_INCLUDE fluidsynth.h)
+    endif()
+endif()
+
 add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
-target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
+
+if(FLUIDSYNTH_LIB OR FLUIDSYNTH_LIBRARIES)
+    message(STATUS "FluidSynth found - enabling software synthesis support")
+    if(FLUIDSYNTH_INCLUDE)
+        target_include_directories(${MODULE} PRIVATE ${FLUIDSYNTH_INCLUDE})
+    elseif(FLUIDSYNTH_INCLUDE_DIRS)
+        target_include_directories(${MODULE} PRIVATE ${FLUIDSYNTH_INCLUDE_DIRS})
+    endif()
+    if(FLUIDSYNTH_LIB)
+        target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread ${FLUIDSYNTH_LIB})
+    else()
+        target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread ${FLUIDSYNTH_LIBRARIES})
+    endif()
+else()
+    message(WARNING "FluidSynth NOT found - only hardware MIDI support will be available")
+    target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} pthread)
+endif()
 
 ##
 ## usbio
