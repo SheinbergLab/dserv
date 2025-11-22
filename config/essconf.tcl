@@ -296,6 +296,9 @@ proc joystick_init { } {
 }
 
 
+###
+### setup sound (try hardware over serial then fluidsynth
+###
 set ports "/dev/ttyUSB0 /dev/cu.usbserial-FTD1906W"
 foreach p $ports {
     if [file exists $p] {
@@ -304,6 +307,15 @@ foreach p $ports {
 	break
     }
 }
+set soundfiles {{YAMAHA S-YXG50_0.2.1.2.sf2} {FluidR3_GM.sf2}}
+foreach sf $soundfiles {
+    set sfile  [file join /usr/local/dserv/soundfonts $sf]
+    if { [file exists $sfile] } {
+	soundInitFluidSynth $sfile
+	break
+    }
+}
+
 
 proc connect_touchscreen {} {
     set screens [dict create \
