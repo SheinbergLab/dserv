@@ -307,11 +307,14 @@ foreach p $ports {
 	break
     }
 }
-set soundfiles {{YAMAHA S-YXG50_0.2.1.2.sf2} {FluidR3_GM.sf2}}
-foreach sf $soundfiles {
-    set sfile  [file join /usr/local/dserv/soundfonts $sf]
-    if { [file exists $sfile] } {
-	soundInitFluidSynth $sfile
+
+set paths "/usr/local/dserv/soundfonts /usr/share/sounds/sf2"
+set sfile "default-GM.sf2"
+foreach p $paths {
+    set sf [file join $p $sfile]
+    if { [file exists $sf] } {
+	soundInitFluidSynth $sf
+	puts "loaded soundfont \"$sf\""
 	break
     }
 }
