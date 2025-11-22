@@ -22,7 +22,7 @@ jobs:
           brew update
           # Remove any existing cmake installation
           brew uninstall cmake --ignore-dependencies || true
-          brew install cmake tcl-tk@9 libuv openssl@3
+          brew install cmake tcl-tk@9 libuv openssl@3 fluidsynth
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
       - name: Install runtime dependencies and coreutils with timeout util.
         run: |
           brew update
-          brew install tcl-tk@9 yajl coreutils
+          brew install tcl-tk@9 yajl coreutils fluidsynth
 
       - name: Install the dserv package we just released.
         run: |
