@@ -748,7 +748,7 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
   void **hints, **n;
   Tcl_Obj *result_list = Tcl_NewListObj(0, NULL);
   
-  // Get all PCM devices using ALSA hints (like aplay -L)
+  // Get all PCM devices using ALSA hints
   if (snd_device_name_hint(-1, "pcm", &hints) < 0) {
     Tcl_SetResult(interp, "Failed to get ALSA device hints", TCL_STATIC);
     return TCL_ERROR;
@@ -760,8 +760,22 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
     char *desc = snd_device_name_get_hint(*n, "DESC");
     char *ioid = snd_device_name_get_hint(*n, "IOID");
     
-    // Only include output devices (IOID == NULL means both, "Output" means output only)
+    // Filter to only useful devices:
+    // - Skip null, rate converters, and special plugins
+    // - Skip surround configurations (keep stereo/front only)
+    // - Keep default, plughw, dmix, sysdefault, and hw devices
+    int include = 0;
     if (name && (!ioid || strcmp(ioid, "Input") != 0)) {
+      if (strcmp(name, "default") == 0 ||
+          strncmp(name, "plughw:", 7) == 0 ||
+          strncmp(name, "dmix:", 5) == 0 ||
+          strncmp(name, "sysdefault:", 11) == 0 ||
+          strncmp(name, "hw:", 3) == 0) {
+        include = 1;
+      }
+    }
+    
+    if (include) {
       Tcl_Obj *device_dict = Tcl_NewDictObj();
       
       Tcl_DictObjPut(interp, device_dict, 
@@ -769,7 +783,7 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
                      Tcl_NewStringObj(name, -1));
       
       if (desc) {
-        // Replace newlines in description with spaces for cleaner output
+        // Replace newlines with spaces and trim
         char *desc_clean = strdup(desc);
         for (char *p = desc_clean; *p; p++) {
           if (*p == '\n') *p = ' ';
