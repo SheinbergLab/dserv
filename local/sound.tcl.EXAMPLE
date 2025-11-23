@@ -1,0 +1,14 @@
+# initialize localized sound options
+
+#
+# Open connection to serial port connected to hardware MIDI
+# sound::init_hardware
+
+# Opens connection to fluidsynth software synthesizer
+#  device_name can be found (for linux) either by
+#   aplay -L
+#   send sound soundListAlsaDevices
+#  can leave blank to attempt to find automatically
+# sound::init_fluidsynth your_sf2_file device_name 
+
+
