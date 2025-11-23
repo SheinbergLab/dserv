@@ -689,20 +689,59 @@ static void cleanup_fluidsynth(sound_info_t *info)
   }
 }
 
+
+static const char* find_working_alsa_device(fluid_settings_t *settings) {
+  const char* devices_to_try[] = {
+    "default",           // Try system default first
+    "plughw:0,0",       // Then first hardware device with conversion
+    "sysdefault",       // System default without card specification
+    "hw:0,0",           // Direct hardware access as last resort
+    NULL
+  };
+  
+  // Save the current settings
+  fluid_settings_t *test_settings = new_fluid_settings();
+  if (!test_settings) {
+    return "default";
+  }
+  
+  // Copy relevant settings
+  fluid_settings_setstr(test_settings, "audio.driver", "alsa");
+  fluid_settings_setnum(test_settings, "synth.sample-rate", 44100.0);
+  fluid_settings_setint(test_settings, "audio.period-size", 256);
+  fluid_settings_setint(test_settings, "audio.periods", 2);
+  
+  for (int i = 0; devices_to_try[i] != NULL; i++) {
+    fluid_settings_setstr(test_settings, "audio.alsa.device", devices_to_try[i]);
+    
+    // Try to create a temporary synth and audio driver to test
+    fluid_synth_t *test_synth = new_fluid_synth(test_settings);
+    if (test_synth) {
+      fluid_audio_driver_t *test_driver = new_fluid_audio_driver(test_settings, test_synth);
+      if (test_driver) {
+        // Success! Clean up and return this device
+        delete_fluid_audio_driver(test_driver);
+        delete_fluid_synth(test_synth);
+        delete_fluid_settings(test_settings);
+        return devices_to_try[i];
+      }
+      delete_fluid_synth(test_synth);
+    }
+  }
+  
+  delete_fluid_settings(test_settings);
+  return "default"; // Fall back to default if nothing works
+}
+
 static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
                                          int objc, Tcl_Obj *objv[])
 {
   sound_info_t *info = (sound_info_t *) data;
-  const char *alsa_device = "default";  // Default ALSA device
+  const char *alsa_device = NULL;
   
   if (objc < 2) {
     Tcl_WrongNumArgs(interp, 1, objv, "soundfont_path ?alsa_device?");
     return TCL_ERROR;
-  }
-  
-  // Optional second argument for ALSA device
-  if (objc >= 3) {
-    alsa_device = Tcl_GetString(objv[2]);
   }
   
   /* Clean up existing FluidSynth instance if any */
@@ -720,10 +759,20 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
   fluid_settings_setstr(info->settings, "audio.driver", "coreaudio");
 #else
   fluid_settings_setstr(info->settings, "audio.driver", "alsa");
+  
+  // Determine ALSA device
+  if (objc >= 3) {
+    // User specified device explicitly
+    alsa_device = Tcl_GetString(objv[2]);
+  } else {
+    // Auto-detect working device
+    alsa_device = find_working_alsa_device(info->settings);
+  }
+  
   fluid_settings_setstr(info->settings, "audio.alsa.device", alsa_device);
 #endif
   
-   /* Configure audio quality/latency - use correct parameter names */
+  /* Configure audio quality/latency - use correct parameter names */
   fluid_settings_setnum(info->settings, "synth.sample-rate", 44100.0);
   fluid_settings_setint(info->settings, "audio.period-size", 256);
   fluid_settings_setint(info->settings, "audio.periods", 2);
@@ -737,7 +786,8 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
   }
   
   /* Load SoundFont */
-  if (fluid_synth_sfload(info->synth, Tcl_GetString(objv[1]), 1) == FLUID_FAILED) {
+  if (fluid_synth_sfload(info->synth, Tcl_GetString(objv[1]), 1) ==
+      FLUID_FAILED) {
     Tcl_AppendResult(interp, "Failed to load SoundFont: ",
                      Tcl_GetString(objv[1]), NULL);
     cleanup_fluidsynth(info);
@@ -747,7 +797,8 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
   /* Create audio driver (starts audio output) */
   info->adriver = new_fluid_audio_driver(info->settings, info->synth);
   if (!info->adriver) {
-    Tcl_SetResult(interp, "Failed to create FluidSynth audio driver", TCL_STATIC);
+    Tcl_SetResult(interp, "Failed to create FluidSynth audio driver",
+		  TCL_STATIC);
     cleanup_fluidsynth(info);
     return TCL_ERROR;
   }
