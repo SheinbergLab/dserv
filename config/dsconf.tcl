@@ -26,6 +26,9 @@ subprocess em "source [file join $dspath config/emconf.tcl]"
 # start a juicer subprocess
 subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 
+# start a sound subprocess
+subprocess sound "source [file join $dspath config/soundconf.tcl]"
+
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
 
