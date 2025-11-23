@@ -745,41 +745,55 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
   Tcl_SetResult(interp, "ALSA device enumeration not available on macOS", TCL_STATIC);
   return TCL_ERROR;
 #else
-  int card = -1;
+  void **hints, **n;
   Tcl_Obj *result_list = Tcl_NewListObj(0, NULL);
   
-  // Always add common virtual devices first
-  Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj("default", -1));
-  Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj("sysdefault", -1));
-  
-  // Enumerate hardware cards
-  while (snd_card_next(&card) >= 0 && card >= 0) {
-    snd_ctl_t *ctl;
-    snd_ctl_card_info_t *info;
-    char name[32];
-    
-    sprintf(name, "hw:%d", card);
-    
-    if (snd_ctl_open(&ctl, name, 0) >= 0) {
-      snd_ctl_card_info_alloca(&info);
-      if (snd_ctl_card_info(ctl, info) >= 0) {
-        const char *card_name = snd_ctl_card_info_get_name(info);
-        
-        // Create device entries with descriptions
-        char device_str[256];
-        
-        snprintf(device_str, sizeof(device_str), "plughw:%d,0", card);
-        Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj(device_str, -1));
-        
-        snprintf(device_str, sizeof(device_str), "dmix:%d,0", card);
-        Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj(device_str, -1));
-        
-        snprintf(device_str, sizeof(device_str), "hw:%d,0", card);
-        Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj(device_str, -1));
-      }
-      snd_ctl_close(ctl);
-    }
+  // Get all PCM devices using ALSA hints (like aplay -L)
+  if (snd_device_name_hint(-1, "pcm", &hints) < 0) {
+    Tcl_SetResult(interp, "Failed to get ALSA device hints", TCL_STATIC);
+    return TCL_ERROR;
   }
+  
+  n = hints;
+  while (*n != NULL) {
+    char *name = snd_device_name_get_hint(*n, "NAME");
+    char *desc = snd_device_name_get_hint(*n, "DESC");
+    char *ioid = snd_device_name_get_hint(*n, "IOID");
+    
+    // Only include output devices (IOID == NULL means both, "Output" means output only)
+    if (name && (!ioid || strcmp(ioid, "Input") != 0)) {
+      Tcl_Obj *device_dict = Tcl_NewDictObj();
+      
+      Tcl_DictObjPut(interp, device_dict, 
+                     Tcl_NewStringObj("name", -1), 
+                     Tcl_NewStringObj(name, -1));
+      
+      if (desc) {
+        // Replace newlines in description with spaces for cleaner output
+        char *desc_clean = strdup(desc);
+        for (char *p = desc_clean; *p; p++) {
+          if (*p == '\n') *p = ' ';
+        }
+        Tcl_DictObjPut(interp, device_dict,
+                       Tcl_NewStringObj("description", -1),
+                       Tcl_NewStringObj(desc_clean, -1));
+        free(desc_clean);
+      } else {
+        Tcl_DictObjPut(interp, device_dict,
+                       Tcl_NewStringObj("description", -1),
+                       Tcl_NewStringObj("", -1));
+      }
+      
+      Tcl_ListObjAppendElement(interp, result_list, device_dict);
+    }
+    
+    if (name) free(name);
+    if (desc) free(desc);
+    if (ioid) free(ioid);
+    n++;
+  }
+  
+  snd_device_name_hint_free(hints);
   
   Tcl_SetObjResult(interp, result_list);
   return TCL_OK;
