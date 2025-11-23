@@ -2,13 +2,23 @@
 
 #
 # Open connection to serial port connected to hardware MIDI
-# sound::init_hardware
+#  This will attempt to guess the serial port, but it can be passed
+# sound::init_hardware ?serial_port?
 
 # Opens connection to fluidsynth software synthesizer
 #  device_name can be found (for linux) either by
 #   aplay -L
 #   send sound soundListAlsaDevices
-#  can leave blank to attempt to find automatically
-# sound::init_fluidsynth your_sf2_file device_name 
 
+# Raspberry Pi 5's don't have built in sound but USB sound dongles work well
+#  These can be accessed as below (assuming name is shortened to "Device")
+# sound::init_fluidsynth /usr/share/sounds/sf2/default-GM.sf2 plughw:CARD=Device,DEV=0
 
+# If the sound card is used by another process, try:
+#  sudo fuser -v /dev/snd/*
+# to see what process holds the device
+#
+# To deactivate pipewire, can do
+#    systemctl --user stop pipewire pipewire-pulse wireplumber
+#    systemctl --user disable pipewire pipewire-pulse wireplumber
+#    systemctl --user mask pipewire pipewire-pulse wireplumber
