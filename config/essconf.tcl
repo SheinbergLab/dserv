@@ -20,7 +20,7 @@ dservSet ess/ipaddr ""
 # load extra modules
 set ess_modules \
     "ain eventlog gpio_input gpio_output \
-    joystick4 rmt sound timer touch usbio"
+    joystick4 rmt timer touch usbio"
 foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }
@@ -294,31 +294,6 @@ proc joystick_init { } {
 	dservSet joystick/button 0
     }
 }
-
-
-###
-### setup sound (try hardware over serial then fluidsynth
-###
-set ports "/dev/ttyUSB0 /dev/cu.usbserial-FTD1906W"
-foreach p $ports {
-    if [file exists $p] {
-	soundOpen $p 
-	soundReset
-	break
-    }
-}
-
-set paths "/usr/local/dserv/soundfonts /usr/share/sounds/sf2"
-set sfile "default-GM.sf2"
-foreach p $paths {
-    set sf [file join $p $sfile]
-    if { [file exists $sf] } {
-	soundInitFluidSynth $sf
-	puts "loaded soundfont \"$sf\""
-	break
-    }
-}
-
 
 proc connect_touchscreen {} {
     set screens [dict create \
