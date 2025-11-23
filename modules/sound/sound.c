@@ -693,10 +693,16 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
                                          int objc, Tcl_Obj *objv[])
 {
   sound_info_t *info = (sound_info_t *) data;
+  const char *alsa_device = "default";  // Default ALSA device
   
   if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "soundfont_path");
+    Tcl_WrongNumArgs(interp, 1, objv, "soundfont_path ?alsa_device?");
     return TCL_ERROR;
+  }
+  
+  // Optional second argument for ALSA device
+  if (objc >= 3) {
+    alsa_device = Tcl_GetString(objv[2]);
   }
   
   /* Clean up existing FluidSynth instance if any */
@@ -714,9 +720,10 @@ static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
   fluid_settings_setstr(info->settings, "audio.driver", "coreaudio");
 #else
   fluid_settings_setstr(info->settings, "audio.driver", "alsa");
+  fluid_settings_setstr(info->settings, "audio.alsa.device", alsa_device);
 #endif
   
-  /* Optional: Configure audio quality/latency - use correct parameter names */
+   /* Configure audio quality/latency - use correct parameter names */
   fluid_settings_setnum(info->settings, "synth.sample-rate", 44100.0);
   fluid_settings_setint(info->settings, "audio.period-size", 256);
   fluid_settings_setint(info->settings, "audio.periods", 2);
