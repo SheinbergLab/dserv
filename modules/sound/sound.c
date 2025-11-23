@@ -32,6 +32,11 @@
 /* FluidSynth for software synthesis */
 #include <fluidsynth.h>
 
+/* ALSA for device enumeration on Linux */
+#if !defined(__APPLE__) && !defined(WIN32)
+#include <alsa/asoundlib.h>
+#endif
+
 /*************************************************************************/
 /***                     Sound mode selection                          ***/
 /*************************************************************************/
@@ -733,6 +738,54 @@ static const char* find_working_alsa_device(fluid_settings_t *settings) {
   return "default"; // Fall back to default if nothing works
 }
 
+static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
+                                           int objc, Tcl_Obj *objv[])
+{
+#ifdef __APPLE__
+  Tcl_SetResult(interp, "ALSA device enumeration not available on macOS", TCL_STATIC);
+  return TCL_ERROR;
+#else
+  int card = -1;
+  Tcl_Obj *result_list = Tcl_NewListObj(0, NULL);
+  
+  // Always add common virtual devices first
+  Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj("default", -1));
+  Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj("sysdefault", -1));
+  
+  // Enumerate hardware cards
+  while (snd_card_next(&card) >= 0 && card >= 0) {
+    snd_ctl_t *ctl;
+    snd_ctl_card_info_t *info;
+    char name[32];
+    
+    sprintf(name, "hw:%d", card);
+    
+    if (snd_ctl_open(&ctl, name, 0) >= 0) {
+      snd_ctl_card_info_alloca(&info);
+      if (snd_ctl_card_info(ctl, info) >= 0) {
+        const char *card_name = snd_ctl_card_info_get_name(info);
+        
+        // Create device entries with descriptions
+        char device_str[256];
+        
+        snprintf(device_str, sizeof(device_str), "plughw:%d,0", card);
+        Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj(device_str, -1));
+        
+        snprintf(device_str, sizeof(device_str), "dmix:%d,0", card);
+        Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj(device_str, -1));
+        
+        snprintf(device_str, sizeof(device_str), "hw:%d,0", card);
+        Tcl_ListObjAppendElement(interp, result_list, Tcl_NewStringObj(device_str, -1));
+      }
+      snd_ctl_close(ctl);
+    }
+  }
+  
+  Tcl_SetObjResult(interp, result_list);
+  return TCL_OK;
+#endif
+}
+
 static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
                                          int objc, Tcl_Obj *objv[])
 {
@@ -892,7 +945,11 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
 		       (Tcl_ObjCmdProc *) sound_volume_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "soundPlay",
+  Tcl_CreateObjCommand(interp, "soundListAlsaDevices",
+                       (Tcl_ObjCmdProc *) sound_list_alsa_devices_command,
+                       (ClientData) info,
+                       (Tcl_CmdDeleteProc *) NULL);
+   Tcl_CreateObjCommand(interp, "soundPlay",
 		       (Tcl_ObjCmdProc *) sound_play_command,
 		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
