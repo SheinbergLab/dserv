@@ -793,7 +793,7 @@ static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
     n++;
   }
   
-  snd_device_name_hint_free(hints);
+  snd_device_name_free_hint(hints);
   
   Tcl_SetObjResult(interp, result_list);
   return TCL_OK;
