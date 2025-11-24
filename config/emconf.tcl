@@ -216,31 +216,31 @@ namespace eval em {
             }
         }
         
-        # Send eye position in degrees as floats [v, h] convention
-        set eyevals [binary format ff $v_deg $h_deg]
-        dservSetData eyetracking/position $cur_t 2 $eyevals  ;# type 2 = DSERV_FLOAT
+        # Send eye position in degrees as floats [h, v] convention
+        set eyevals [binary format ff $h_deg $v_deg]
+        dservSetData eyetracking/position $cur_t 2 $eyevals ;# 2 = DSERV_FLOAT
         
         # Also send raw differences for calibration/debugging
-        set rawvals [binary format ff $current_raw_v $current_raw_h]
+        set rawvals [binary format ff $current_raw_h $current_raw_v]
         dservSetData eyetracking/raw $cur_t 2 $rawvals
         
         # Send to visualization/monitoring
-        dservSet ess/em_pos "$v_deg $h_deg"
+        dservSet ess/em_pos "$h_deg $v_deg"
     }    
 
     # Process virtual eye data (already in degrees)
     proc process_virtual { dpoint data } {
-        lassign $data v_deg h_deg
+        lassign $data h_deg v_deg
         
         # Virtual data is already in degrees, just pass through
-        set eyevals [binary format ff $v_deg $h_deg]
+        set eyevals [binary format ff $h_deg $v_deg]
         dservSetData eyetracking/position 0 2 $eyevals
 
 	# We don't have real "raw" values so just use actual
         dservSetData eyetracking/raw 0 2 $eyevals
         
         # Also send to visualization
-        dservSet ess/em_pos "$v_deg $h_deg"
+        dservSet ess/em_pos "$h_deg $v_deg"
     }
     
     update_settings
