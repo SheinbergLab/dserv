@@ -477,7 +477,7 @@ public:
 				"ess/state_table ess/params stimdg trialdg "
 				"ess/git/branches ess/git/branch "
 				"ess/viz_config "
-				"eyetracking/virtual_running "
+				"eyetracking/virtual_enabled "
 				"system/hostname system/os em/settings} "
 				"{ dservTouch $v }"),
 		    rstr);
@@ -2436,18 +2436,6 @@ void process_dpoint_cb(void *cbdata) {
     } else {
       obscount_widget->textcolor(FL_FOREGROUND_COLOR);
       obscount_widget->redraw();
-    }
-  }
-  
-  else if (!strcmp(json_string_value(name), "ess/em_pos")) {
-    float x, y;
-    int d1, d2;
-    if (sscanf(json_string_value(data), "%d %d %f %f",
-	       &d1, &d2, &x, &y) == 4) {
-      //      eyetouch_widget->em_pos(x, y);
-      // Just store values without drawing
-      static float last_x = 0, last_y = 0;
-      last_x = x; last_y = y;      
     }
   }
   
