@@ -1659,8 +1659,8 @@ namespace eval ess {
         variable em_active
         if {$em_active} {
             # record raw em data: obs_limited, 80 byte buffer, every sample
-            dservLoggerAddMatch $filename ain/vals 1 80 1
-            dservLoggerAddMatch $filename em_coeffDG
+	    dservLoggerAddMatch $filename eyetracking/raw 1 80 1
+            dservLoggerAddMatch $filename em/settings
 
 	    if { [dservExists eyetracking/results] } {
 		foreach v "pupil p1 p4" {
@@ -1672,15 +1672,6 @@ namespace eval ess {
 		dservLoggerAddMatch $filename em/blink 1 40 1
 		dservLoggerAddMatch $filename em/p1_detected 1 40 1
 		dservLoggerAddMatch $filename em/p4_detected 1 40 1
-	    } elseif { [dservExists openiris/frameinfo] } {
-		foreach side "right" {
-		    foreach v "pupil cr1 cr4" {
-			dservLoggerAddMatch $filename openiris/$side/$v 1 40 1
-		    }
-		}
-		foreach v "frame time int0 int1" {
-		    dservLoggerAddMatch $filename openiris/$v 1 40 1
-		}
 	    }
         }
         variable touch_active
@@ -1701,6 +1692,7 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
+	dservTouch em/settings
 
         ::ess::evt_put ID ESS [now] $current(system)
         ::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
@@ -1712,7 +1704,6 @@ namespace eval ess {
             ::ess::evt_put PARAM VAL [now] [lindex $pval 0]
         }
 
-        #   dservTouch em_coeffDG
         return 1
     }
 
