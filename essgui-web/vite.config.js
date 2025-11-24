@@ -25,9 +25,10 @@ export default defineConfig({
     // Proxy WebSocket connections to your dserv instance during development
     proxy: {
       '/ws': {
-        target: 'ws://localhost:2565',
-        ws: true,
-        changeOrigin: true
+          target: 'wss://localhost:2565',
+          ws: true,
+          changeOrigin: true,
+	  secure: false
       }
     }
   },
