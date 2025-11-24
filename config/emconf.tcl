@@ -9,10 +9,73 @@ set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 package require dlsh
 package require yajltcl
 
+package require math::linearalgebra
+
+namespace eval biquadratic {
+    namespace import ::math::linearalgebra::*
+    
+    proc create_design_matrix {x_coords y_coords} {
+        set n [llength $x_coords]
+        set A {}
+        
+        for {set i 0} {$i < $n} {incr i} {
+            set x [lindex $x_coords $i]
+            set y [lindex $y_coords $i]
+            
+            set x2 [expr {$x * $x}]
+            set y2 [expr {$y * $y}]
+            set xy [expr {$x * $y}]
+            set x2y [expr {$x2 * $y}]
+            set xy2 [expr {$x * $y2}]
+            set x2y2 [expr {$x2 * $y2}]
+            
+            lappend A [list 1.0 $x $y $x2 $y2 $xy $x2y $xy2 $x2y2]
+        }
+        return $A
+    }
+    
+    proc fit_single {x_coords y_coords target_values} {
+        set n [llength $x_coords]
+        set A [create_design_matrix $x_coords $y_coords]
+        
+        set z_vector {}
+        foreach z $target_values {
+            lappend z_vector [list $z]
+        }
+        
+        if {$n > 9} {
+            set At [transpose $A]
+            set AtA [matmul $At $A]
+            set Atz [matmul $At $z_vector]
+            set coeffs [solveGauss $AtA $Atz]
+        } else {
+            set coeffs [solveGauss $A $z_vector]
+        }
+        
+        set coeff_list {}
+        foreach row $coeffs {
+            lappend coeff_list [lindex $row 0]
+        }
+        return $coeff_list
+    }
+    
+    proc fit {raw_x raw_y target_x target_y} {
+        set x_coeffs [fit_single $raw_x $raw_y $target_x]
+        set y_coeffs [fit_single $raw_x $raw_y $target_y]
+        return [list $x_coeffs $y_coeffs]
+    }
+}
+
 namespace eval em {
+    proc do_fit { raw_x raw_y target_x target_y } {
+	lassign [biquadratic::fit $raw_x $raw_y $target_x $target_y] x_coeffs y_coeffs
+	set_bq_h_coeffs $x_coeffs
+	set_bq_v_coeffs $y_coeffs
+    }
+
     # Parameters for converting from raw Purkinje reflection differences to degrees
     # Linear model: degrees = scale * (raw_diff - raw_center)
-    # For biquadratic: add higher-order terms later
+    # For biquadratic: add higher-order terms after running calibration
     variable settings [dict create \
         scale_h 1.0 \
         scale_v 1.0 \
