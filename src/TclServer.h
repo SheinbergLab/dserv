@@ -182,6 +182,7 @@ public:
   SharedQueue<client_request_t> queue;
 
   const char *PRINT_DPOINT_NAME = "print";
+  const char *INTERPS_DPOINT_NAME = "dserv/interps";
 
   int _newline_port;		// for CR/LF oriented communication
   int _message_port;		// for message oriented comm  

@@ -1210,6 +1210,23 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
       return TCL_ERROR;
     }
   }
+
+  // update dserv/interps
+  ds_datapoint_t dpoint;
+  auto names = TclServerRegistry.getNames();
+
+  // Convert to Tcl list
+  std::string interpList;
+  for (const auto& n : names) {
+    if (!interpList.empty()) interpList += " ";
+    interpList += n;
+  }  
+  
+  /* fill the data point */
+  dpoint_set(&dpoint, (char *) tclserver->INTERPS_DPOINT_NAME,
+	     tclserver->ds->now(), DSERV_STRING, interpList.size(), (unsigned char *) interpList.c_str());
+  tclserver->ds->set(dpoint);  
+
   
   Tcl_SetObjResult(interp, Tcl_NewStringObj(child->client_name.c_str(), -1));
   
