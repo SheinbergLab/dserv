@@ -25,11 +25,6 @@ foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }
 
-# look for any .tcl configs in local/*.tcl
-foreach f [glob [file join $dspath local pre-*.tcl]] {
-    source $f
-}
-
 # now ready to start ess
 if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
     set env(ESS_SYSTEM_PATH) [file join $dspath systems]
@@ -316,11 +311,12 @@ ess::load_system emcalib
 
 # set initial subject
 ess::set_subject human
-
+    
 # look for any .tcl configs in local/*.tcl
 foreach f [glob [file join $dspath local post-*.tcl]] {
     source $f
 }
 
 puts "ESS thread configured"
+
 
