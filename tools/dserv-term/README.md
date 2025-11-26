@@ -146,8 +146,21 @@ Manual reconnection is still available with `:reconnect` if needed.
 
 Tab completion uses a cache of available commands, procs, and variables from each interpreter. The cache is automatically refreshed:
 
-- **On connection/reconnection**: Refreshes `dserv` and the active interpreter
-- **When switching interpreters** (`:use <name>`): Refreshes the new interpreter
+- **On connection/reconnection**: Refreshes the **active** interpreter's cache only
+- **When switching interpreters** (`:use <n>`): Refreshes the **new** interpreter's cache
 - **Manual refresh**: Use `:refresh` to update the active interpreter's cache
 
 The cache enables fast tab completion without querying the backend on every keystroke.
+
+**Note**: Only the active interpreter's completions are shown. When using `/interp command` syntax to send to a different interpreter, that interpreter's cache will be loaded on-demand if needed.
+
+## Tcl Namespace Commands
+
+Tcl namespace commands (like `::ess::start`) work normally. The `::` prefix is recognized as Tcl namespace syntax, not a meta command:
+
+```
+● [dserv] > ::ess::start        ← Works! Sent to Tcl
+● [dserv] > :help               ← Meta command
+```
+
+Tab completion works with namespace commands - try typing `::ess::` and hitting Tab to see available commands in that namespace.
