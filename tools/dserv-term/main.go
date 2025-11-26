@@ -32,7 +32,8 @@ var (
 	tcpCmdAddr    = flag.String("cmd", "", "TCP command interface address (host:port)")
 	tcpCmdPort    = flag.Int("port", 2560, "TCP command port (2560=msg, 2570=ess, 4620=dserv)")
 	tcpPubsubAddr = flag.String("pubsub", "", "TCP pub/sub address (empty = same as cmd)")
-	tcpHost       = flag.String("host", "", "Host to connect to (skips discovery)")
+	tcpHost       = flag.String("host", "", "Host to connect to (or pass as single argument; defaults to localhost)")
+
 
 	// Frame mode
 	frameMode = flag.String("frame", "length", "Message framing: length (default) or newline")
@@ -41,7 +42,7 @@ var (
 	wsURL = flag.String("ws", "ws://localhost:9000/debug", "WebSocket URL")
 
 	// Discovery
-	discover     = flag.Bool("discover", true, "Enable UDP mesh discovery")
+	discover     = flag.Bool("discover", false, "Enable UDP mesh discovery (auto-discovers servers)")
 	discoverOnly = flag.Bool("list", false, "List discovered hosts and exit")
 	discoverWait = flag.Int("wait", 2, "Seconds to wait for discovery before connecting")
 
@@ -1233,6 +1234,14 @@ Press ESC or Q to close this help.
 
 func main() {
 	flag.Parse()
+
+	// Handle positional argument as host
+	if len(flag.Args()) > 0 {
+		*tcpHost = flag.Args()[0]
+	} else if *tcpHost == "" && !*discover {
+		// Default to localhost if no host specified and discovery not enabled
+		*tcpHost = "localhost"
+	}
 
 	if *debug {
 		DebugProtocol = true

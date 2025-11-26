@@ -29,14 +29,23 @@ go build -o dserv-term
 ## Usage
 
 ```bash
-# Auto-discover and connect
+# Connect to localhost (default)
 ./dserv-term
 
-# Connect to specific host
+# Connect to specific host (shorthand)
+./dserv-term 192.168.1.100
+
+# Connect to specific host (explicit)
 ./dserv-term -host 192.168.1.100
+
+# Enable auto-discovery
+./dserv-term -discover
 
 # Specify port (default 2560)
 ./dserv-term -port 2560
+
+# List available hosts and exit
+./dserv-term -discover -list
 
 # WebSocket mode
 ./dserv-term -mode ws -ws ws://localhost:9000/debug
@@ -44,7 +53,6 @@ go build -o dserv-term
 # Simulation mode (for testing)
 ./dserv-term -sim
 ```
-
 ## Commands
 
 ### Meta Commands
