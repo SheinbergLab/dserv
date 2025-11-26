@@ -1516,6 +1516,7 @@ slash commands to switch between subprocesses.
     clearTerminal() {
         this.container.innerHTML = '';
         this.showInfo('Terminal cleared');
+        this.createInputLine();
     }
 
     scrollToBottom() {
