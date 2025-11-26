@@ -3,360 +3,1965 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>dserv Terminal</title>
+    <title>dserv Console</title>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+/* Reset and base styles */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
 
-        body {
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-            background: #1e1e1e;
-            color: #d4d4d4;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
+body {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
 
-        #header {
-            background: #2d2d30;
-            padding: 10px 20px;
-            border-bottom: 1px solid #3e3e42;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+/* Header */
+#header {
+    background: #2d2d30;
+    padding: 10px 20px;
+    border-bottom: 1px solid #3e3e42;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+}
 
-        #header h1 {
-            font-size: 16px;
-            font-weight: normal;
-            color: #cccccc;
-        }
+#header h1 {
+    font-size: 16px;
+    font-weight: normal;
+    color: #cccccc;
+}
 
-        #status {
-            font-size: 12px;
-            padding: 4px 12px;
-            border-radius: 3px;
-            background: #0e639c;
-            color: white;
-        }
+.status {
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 3px;
+    background: #0e639c;
+    color: white;
+    transition: background 0.3s;
+}
 
-        #status.disconnected {
-            background: #a1260d;
-        }
+.status.disconnected {
+    background: #a1260d;
+}
 
-        #terminal {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            font-size: 14px;
-            line-height: 1.5;
-        }
+/* Main content - split panes */
+#main-content {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+}
 
-        .output-line {
-            margin: 2px 0;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
+.pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 300px;
+    overflow: hidden;
+}
 
-        .command-line {
-            color: #569cd6;
-        }
+#terminal-pane {
+    flex: 1;
+    background: #1e1e1e;
+}
 
-        .result-line {
-            color: #d4d4d4;
-        }
+#datapoint-pane {
+    width: 400px;
+    background: #252526;
+    border-left: 1px solid #3e3e42;
+    display: flex;
+    flex-direction: column;
+}
 
-        .error-line {
-            color: #f48771;
-        }
+/* Resize handle */
+#resize-handle {
+    width: 5px;
+    background: #3e3e42;
+    cursor: col-resize;
+    position: relative;
+    flex-shrink: 0;
+}
 
-        .info-line {
-            color: #608b4e;
-            font-style: italic;
-        }
+#resize-handle:hover {
+    background: #0e639c;
+}
 
-        .warning-line {
-            color: #dcdcaa;
-        }
+#resize-handle:active {
+    background: #1177bb;
+}
 
-        .input-container {
-            display: flex;
-            align-items: center;
-            margin-top: 4px;
-        }
+/* Pane headers */
+.pane-header {
+    background: #2d2d30;
+    padding: 8px 12px;
+    border-bottom: 1px solid #3e3e42;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+}
 
-        .prompt {
-            color: #569cd6;
-            margin-right: 8px;
-            user-select: none;
-        }
+.pane-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #cccccc;
+}
 
-        #input {
-            flex: 1;
-            background: transparent;
-            border: none;
-            color: #d4d4d4;
-            font-family: inherit;
-            font-size: inherit;
-            outline: none;
-            caret-color: #d4d4d4;
-        }
+.pane-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
 
-        #input::selection {
-            background: #264f78;
-        }
+/* Interpreter selector */
+.interp-selector {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border: 1px solid #3e3e42;
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: all 0.2s;
+}
 
-        /* Scrollbar styling */
-        ::-webkit-scrollbar {
-            width: 10px;
-            height: 10px;
-        }
+.interp-selector:hover {
+    background: #2d2d30;
+    border-color: #569cd6;
+}
 
-        ::-webkit-scrollbar-track {
-            background: #1e1e1e;
-        }
+.interp-selector:focus {
+    border-color: #0e639c;
+    box-shadow: 0 0 0 1px #0e639c;
+}
 
-        ::-webkit-scrollbar-thumb {
-            background: #424242;
-            border-radius: 5px;
-        }
+.icon-btn {
+    background: transparent;
+    border: 1px solid #3e3e42;
+    color: #cccccc;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+}
 
-        ::-webkit-scrollbar-thumb:hover {
-            background: #4a4a4a;
-        }
+.icon-btn:hover {
+    background: #3e3e42;
+    border-color: #569cd6;
+    color: #569cd6;
+}
+
+.update-count {
+    font-size: 11px;
+    color: #858585;
+}
+
+/* Terminal styles */
+.terminal-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.output-line {
+    margin: 2px 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    user-select: text;
+    cursor: text;
+}
+
+.command-line {
+    color: #569cd6;
+}
+
+.result-line {
+    color: #d4d4d4;
+}
+
+.error-line {
+    color: #f48771;
+}
+
+.info-line {
+    color: #608b4e;
+    font-style: italic;
+}
+
+.warning-line {
+    color: #dcdcaa;
+}
+
+.input-container {
+    display: flex;
+    align-items: center;
+    margin-top: 4px;
+}
+
+.prompt {
+    color: #569cd6;
+    margin-right: 8px;
+    user-select: none;
+}
+
+#terminal input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #d4d4d4;
+    font-family: inherit;
+    font-size: inherit;
+    outline: none;
+    caret-color: #d4d4d4;
+}
+
+#terminal input::selection {
+    background: #264f78;
+}
+
+/* Datapoint list */
+#datapoint-list-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-bottom: 1px solid #3e3e42;
+}
+
+.search-container {
+    padding: 8px 12px;
+    background: #252526;
+    border-bottom: 1px solid #3e3e42;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.search-input {
+    width: 100%;
+    padding: 6px 24px 6px 10px;
+    border: 1px solid #3e3e42;
+    border-radius: 3px;
+    font-size: 12px;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: inherit;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: #0e639c;
+    box-shadow: 0 0 0 1px #0e639c;
+}
+
+.search-clear {
+    position: absolute;
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #858585;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    display: none;
+}
+
+.search-clear:hover {
+    color: #cccccc;
+}
+
+.datapoint-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.datapoint-item {
+    padding: 6px 8px;
+    margin: 2px 0;
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    font-size: 12px;
+}
+
+.datapoint-item:hover {
+    background: #37373d;
+    border-color: #0e639c;
+    transform: translateX(2px);
+}
+
+.datapoint-item.selected {
+    background: #094771;
+    border-color: #0e639c;
+}
+
+.datapoint-item.subscribed {
+    background: #1a3d1a;
+    border-color: #4caf50;
+}
+
+.datapoint-item.subscribed::after {
+    content: '👁';
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+}
+
+.datapoint-item.subscribed::before {
+    content: '×';
+    position: absolute;
+    right: 18px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    color: #f48771;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+    font-weight: bold;
+}
+
+.datapoint-item.subscribed:hover::before {
+    opacity: 1;
+}
+
+/* Datapoint detail */
+#datapoint-detail-container {
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.datapoint-detail {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    font-size: 12px;
+}
+
+.placeholder {
+    color: #858585;
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+}
+
+.detail-row {
+    margin-bottom: 12px;
+}
+
+.detail-label {
+    font-weight: 600;
+    color: #569cd6;
+    margin-bottom: 4px;
+}
+
+.detail-value {
+    color: #d4d4d4;
+    background: #1e1e1e;
+    padding: 8px;
+    border-radius: 3px;
+    border: 1px solid #3e3e42;
+    font-family: inherit;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.update-history {
+    margin-top: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.update-entry {
+    background: #1e1e1e;
+    padding: 6px 8px;
+    margin: 4px 0;
+    border-radius: 3px;
+    border-left: 3px solid #0e639c;
+    font-size: 11px;
+}
+
+.update-time {
+    color: #858585;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+/* Control panel */
+#control-panel {
+    background: #252526;
+    padding: 10px 15px;
+    border-top: 1px solid #3e3e42;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.control-group {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.control-group label {
+    font-weight: 600;
+    color: #cccccc;
+    font-size: 11px;
+}
+
+.control-group input {
+    padding: 4px 8px;
+    border: 1px solid #3e3e42;
+    border-radius: 3px;
+    font-size: 11px;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: inherit;
+    width: 120px;
+}
+
+.control-group input:focus {
+    outline: none;
+    border-color: #0e639c;
+}
+
+.control-group button {
+    padding: 5px 10px;
+    background: #0e639c;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-size: 11px;
+}
+
+.control-group button:hover {
+    background: #1177bb;
+}
+
+.control-group button:disabled {
+    background: #3e3e42;
+    cursor: not-allowed;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #424242;
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+    #datapoint-pane {
+        width: 350px;
+    }
+}
+
+@media (max-width: 900px) {
+    #main-content {
+        flex-direction: column;
+    }
+    
+    #datapoint-pane {
+        width: 100%;
+        height: 50%;
+        border-left: none;
+        border-top: 1px solid #3e3e42;
+    }
+    
+    #resize-handle {
+        display: none;
+    }
+}
     </style>
 </head>
 <body>
+    <!-- Header -->
     <div id="header">
-        <h1>dserv Terminal</h1>
-        <span id="status" class="disconnected">Disconnected</span>
+        <div class="header-left">
+            <h1>dserv Console</h1>
+        </div>
+        <div class="header-right">
+            <span id="status" class="status disconnected">Disconnected</span>
+        </div>
     </div>
-    
-    <div id="terminal">
-        <div class="info-line">dserv Web Terminal v1.0 - Type 'help' for commands</div>
-        <div class="info-line">Connecting to WebSocket...</div>
+
+    <!-- Main content area with split panes -->
+    <div id="main-content">
+        <!-- Left pane: Terminal -->
+        <div id="terminal-pane" class="pane">
+            <div class="pane-header">
+                <span class="pane-title">Terminal</span>
+                <div class="pane-controls">
+                    <select id="interp-selector" class="interp-selector" title="Select interpreter">
+                        <option value="dserv">dserv</option>
+                    </select>
+                    <button id="clear-terminal" class="icon-btn" title="Clear terminal (Ctrl+L)">⌧</button>
+                </div>
+            </div>
+            <div id="terminal" class="terminal-output"></div>
+        </div>
+
+        <!-- Resize handle -->
+        <div id="resize-handle"></div>
+
+        <!-- Right pane: Datapoint Explorer -->
+        <div id="datapoint-pane" class="pane">
+            <!-- Top: Datapoint List -->
+            <div id="datapoint-list-container">
+                <div class="pane-header">
+                    <span class="pane-title">Datapoints</span>
+                    <div class="pane-controls">
+                        <button id="refresh-keys" class="icon-btn" title="Refresh datapoint list">⟳</button>
+                        <button id="unsubscribe-all" class="icon-btn" title="Unsubscribe from all">×</button>
+                    </div>
+                </div>
+                
+                <!-- Search -->
+                <div class="search-container">
+                    <input type="text" id="search-datapoints" class="search-input" placeholder="Filter datapoints...">
+                    <button id="clear-search" class="search-clear">×</button>
+                </div>
+                
+                <!-- Datapoint list -->
+                <div id="datapoint-list" class="datapoint-list">
+                    <div class="placeholder">Connecting...</div>
+                </div>
+            </div>
+
+            <!-- Bottom: Datapoint Detail -->
+            <div id="datapoint-detail-container">
+                <div class="pane-header">
+                    <span class="pane-title">Details</span>
+                    <div class="pane-controls">
+                        <span id="update-count" class="update-count">0 updates</span>
+                    </div>
+                </div>
+                <div id="datapoint-detail" class="datapoint-detail">
+                    <div class="placeholder">Select a datapoint to view details</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Control Panel (bottom) -->
+    <div id="control-panel">
+        <div class="control-group">
+            <label>Get:</label>
+            <input type="text" id="get-name" placeholder="datapoint name">
+            <button onclick="getDatapoint()">Get</button>
+        </div>
+        <div class="control-group">
+            <label>Set:</label>
+            <input type="text" id="set-name" placeholder="datapoint name">
+            <input type="text" id="set-value" placeholder="value">
+            <button onclick="setDatapoint()">Set</button>
+        </div>
+        <div class="control-group">
+            <label>Touch:</label>
+            <input type="text" id="touch-name" placeholder="datapoint name">
+            <button onclick="touchDatapoint()">Touch</button>
+        </div>
     </div>
 
     <script>
-        const terminal = document.getElementById('terminal');
-        const statusElement = document.getElementById('status');
-        
-        let ws = null;
-        let history = JSON.parse(localStorage.getItem('dserv-history') || '[]');
-        let historyIndex = history.length;
-        let inputElement = null;
-        
-        function createInputLine() {
-            const container = document.createElement('div');
-            container.className = 'input-container';
-            
-            const prompt = document.createElement('span');
-            prompt.className = 'prompt';
-            prompt.textContent = 'ess> ';
-            
-            inputElement = document.createElement('input');
-            inputElement.id = 'input';
-            inputElement.type = 'text';
-            inputElement.autocomplete = 'off';
-            inputElement.spellcheck = false;
-            
-            container.appendChild(prompt);
-            container.appendChild(inputElement);
-            terminal.appendChild(container);
-            
-            inputElement.focus();
-            terminal.scrollTop = terminal.scrollHeight;
-            
-            inputElement.addEventListener('keydown', handleKeyDown);
+// ============================================
+// WebSocket Manager
+// ============================================
+
+class DservWebSocket {
+    constructor() {
+        this.ws = null;
+        this.connected = false;
+        this.handlers = new Map();
+        this.reconnectTimer = null;
+        this.reconnectDelay = 3000;
+    }
+
+    on(event, handler) {
+        if (!this.handlers.has(event)) {
+            this.handlers.set(event, []);
         }
-        
-        function handleKeyDown(e) {
-            switch(e.key) {
-                case 'Enter':
-                    e.preventDefault();
-                    submitCommand();
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    navigateHistory(-1);
-                    break;
-                case 'ArrowDown':
-                    e.preventDefault();
-                    navigateHistory(1);
-                    break;
-                case 'c':
-                    if (e.ctrlKey) {
-                        e.preventDefault();
-                        inputElement.value = '';
-                    }
-                    break;
-                case 'l':
-                    if (e.ctrlKey) {
-                        e.preventDefault();
-                        clearTerminal();
-                    }
-                    break;
-            }
+        this.handlers.get(event).push(handler);
+    }
+
+    emit(event, data) {
+        const handlers = this.handlers.get(event);
+        if (handlers) {
+            handlers.forEach(handler => handler(data));
         }
-        
-        function navigateHistory(direction) {
-            if (history.length === 0) return;
-            
-            historyIndex += direction;
-            historyIndex = Math.max(0, Math.min(history.length, historyIndex));
-            
-            if (historyIndex === history.length) {
-                inputElement.value = '';
-            } else {
-                inputElement.value = history[historyIndex];
-            }
-        }
-        
-        function isBlockedCommand(command) {
-            // Normalize command by trimming whitespace and converting to lowercase
-            const normalizedCmd = command.trim().toLowerCase();
-            
-            // Block 'exit' command and common variations
-            const blockedCommands = ['exit', 'quit'];
-            
-            return blockedCommands.includes(normalizedCmd);
-        }
-        
-        function submitCommand() {
-            const command = inputElement.value.trim();
-            if (!command) return;
-            
-            // Save to history
-            if (command !== history[history.length - 1]) {
-                history.push(command);
-                if (history.length > 100) history.shift();
-                localStorage.setItem('dserv-history', JSON.stringify(history));
-            }
-            historyIndex = history.length;
-            
-            // Display command
-            const commandLine = document.createElement('div');
-            commandLine.className = 'output-line command-line';
-            commandLine.textContent = 'ess> ' + command;
-            inputElement.parentElement.replaceWith(commandLine);
-            
-            // Check if command is blocked
-            if (isBlockedCommand(command)) {
-                showWarning('No need to type exit, just close your browser window when done');
-                createInputLine();
-                return;
-            }
-            
-            // Send command
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: command
-                }));
-            } else {
-                showError('Not connected to server');
-                createInputLine();
-            }
-        }
-        
-        function showResult(data) {
-            const resultLine = document.createElement('div');
-            resultLine.className = 'output-line result-line';
-            
-            if (typeof data === 'object') {
-                if (data.status === 'error' || (data.result && data.result.startsWith('!TCL_ERROR'))) {
-                    resultLine.className = 'output-line error-line';
-                    resultLine.textContent = data.result || data.error || 'Unknown error';
-                } else {
-                    resultLine.textContent = data.result || JSON.stringify(data);
+    }
+
+    connect() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.hostname}:${window.location.port}/ws`;
+
+        try {
+            this.ws = new WebSocket(wsUrl);
+
+            this.ws.onopen = () => {
+                this.connected = true;
+                this.updateStatus('connected');
+                console.log('WebSocket connected');
+                this.emit('connected');
+                
+                // Clear reconnect timer
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
                 }
+            };
+
+            this.ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.handleMessage(data);
+                } catch (e) {
+                    console.error('Failed to parse WebSocket message:', e);
+                }
+            };
+
+            this.ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                this.emit('error', error);
+            };
+
+            this.ws.onclose = () => {
+                this.connected = false;
+                this.updateStatus('disconnected');
+                console.log('WebSocket disconnected');
+                this.emit('disconnected');
+                
+                // Auto-reconnect
+                if (!this.reconnectTimer) {
+                    this.reconnectTimer = setTimeout(() => {
+                        console.log('Reconnecting...');
+                        this.connect();
+                    }, this.reconnectDelay);
+                }
+            };
+
+        } catch (error) {
+            console.error('Failed to connect:', error);
+            this.scheduleReconnect();
+        }
+    }
+
+    scheduleReconnect() {
+        if (!this.reconnectTimer) {
+            this.reconnectTimer = setTimeout(() => {
+                this.connect();
+            }, this.reconnectDelay);
+        }
+    }
+
+    handleMessage(data) {
+        // Route messages based on type/cmd
+        if (data.result !== undefined || data.status === 'error') {
+            // Command response (terminal)
+            this.emit('terminal:response', data);
+        } else if (data.action === 'subscribed' || data.action === 'unsubscribed') {
+            // Subscription confirmation - just acknowledge
+            console.log(`Subscription ${data.action}: ${data.match}`);
+        } else if (data.type === 'keys' || (data.name === '@keys')) {
+            // Datapoint keys list
+            console.log('Received @keys:', data);
+            this.emit('datapoint:keys', data);
+        } else if (data.type === 'datapoint') {
+            // Datapoint update (explicit type)
+            console.log('Datapoint update (explicit):', data.name);
+            this.emit('datapoint:update', data);
+        } else if (data.name && data.data !== undefined) {
+            // Datapoint update (implicit - just has name/data fields)
+            console.log('Datapoint update (implicit):', data.name);
+            // Special case: check if this IS the @keys data
+            if (data.name === '@keys') {
+                console.log('Found @keys in implicit format:', data);
+                this.emit('datapoint:keys', data);
             } else {
-                resultLine.textContent = data;
+                const normalized = {
+                    type: 'datapoint',
+                    name: data.name,
+                    data: data.data,
+                    timestamp: data.timestamp,
+                    dtype: data.dtype
+                };
+                this.emit('datapoint:update', normalized);
             }
-            
-            terminal.appendChild(resultLine);
-            createInputLine();
+        } else {
+            // Generic message
+            console.log('Unhandled message:', data);
         }
-        
-        function showError(message) {
-            const errorLine = document.createElement('div');
-            errorLine.className = 'output-line error-line';
-            errorLine.textContent = 'Error: ' + message;
-            terminal.appendChild(errorLine);
+    }
+
+    send(data) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(data));
+            return true;
         }
-        
-        function showInfo(message) {
-            const infoLine = document.createElement('div');
-            infoLine.className = 'output-line info-line';
-            infoLine.textContent = message;
-            terminal.appendChild(infoLine);
+        console.warn('WebSocket not connected');
+        return false;
+    }
+
+    updateStatus(status) {
+        const statusElement = document.getElementById('status');
+        if (statusElement) {
+            statusElement.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
+            statusElement.className = `status ${status}`;
         }
-        
-        function showWarning(message) {
-            const warningLine = document.createElement('div');
-            warningLine.className = 'output-line warning-line';
-            warningLine.textContent = message;
-            terminal.appendChild(warningLine);
+    }
+
+    close() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
         }
-        
-        function clearTerminal() {
-            terminal.innerHTML = '';
-            showInfo('Terminal cleared');
-            createInputLine();
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
         }
-        
-        function connect() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.hostname}:${window.location.port}/ws`;
-            
-            try {
-                ws = new WebSocket(wsUrl);
-                
-                ws.onopen = () => {
-                    statusElement.textContent = 'Connected';
-                    statusElement.classList.remove('disconnected');
-                    showInfo('Connected to dserv WebSocket');
-                    createInputLine();
-                };
-                
-                ws.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        showResult(data);
-                    } catch (e) {
-                        showResult(event.data);
-                    }
-                };
-                
-                ws.onerror = (error) => {
-                    showError('WebSocket error');
-                };
-                
-                ws.onclose = () => {
-                    statusElement.textContent = 'Disconnected';
-                    statusElement.classList.add('disconnected');
-                    showInfo('Disconnected from server. Reconnecting in 3 seconds...');
-                    setTimeout(connect, 3000);
-                };
-                
-            } catch (error) {
-                showError('Failed to connect: ' + error.message);
-                setTimeout(connect, 3000);
-            }
+    }
+}
+
+// ============================================
+// Global WebSocket instance
+// ============================================
+
+const wsManager = new DservWebSocket();
+
+// ============================================
+// Resize handle functionality
+// ============================================
+
+function initResizeHandle() {
+    const handle = document.getElementById('resize-handle');
+    const terminalPane = document.getElementById('terminal-pane');
+    const datapointPane = document.getElementById('datapoint-pane');
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = datapointPane.offsetWidth;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+
+        const deltaX = startX - e.clientX;
+        const newWidth = Math.max(300, Math.min(800, startWidth + deltaX));
+        datapointPane.style.width = `${newWidth}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
         }
+    });
+}
+
+// ============================================
+// Control panel functions (datapoint operations)
+// ============================================
+
+function getDatapoint() {
+    const name = document.getElementById('get-name').value.trim();
+    if (!name) return;
+
+    wsManager.send({
+        cmd: 'get',
+        name: name
+    });
+}
+
+function setDatapoint() {
+    const name = document.getElementById('set-name').value.trim();
+    const value = document.getElementById('set-value').value;
+
+    if (!name) return;
+
+    wsManager.send({
+        cmd: 'set',
+        name: name,
+        value: value
+    });
+
+    document.getElementById('set-name').value = '';
+    document.getElementById('set-value').value = '';
+}
+
+function touchDatapoint() {
+    const name = document.getElementById('touch-name').value.trim();
+    if (!name) return;
+
+    wsManager.send({
+        cmd: 'touch',
+        name: name
+    });
+
+    document.getElementById('touch-name').value = '';
+}
+
+// ============================================
+// Initialization
+// ============================================
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize resize handle
+    initResizeHandle();
+
+    // Add Enter key handlers for control inputs
+    document.getElementById('get-name').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') getDatapoint();
+    });
+
+    document.getElementById('set-value').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') setDatapoint();
+    });
+
+    document.getElementById('touch-name').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') touchDatapoint();
+    });
+
+    // Connect to WebSocket
+    wsManager.connect();
+});
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+    wsManager.close();
+});
+
+    </script>
+    <script>
+// ============================================
+// Terminal Module
+// ============================================
+
+class Terminal {
+    constructor(wsManager) {
+        this.ws = wsManager;
+        this.container = document.getElementById('terminal');
+        this.inputElement = null;
+        this.history = JSON.parse(localStorage.getItem('dserv-history') || '[]');
+        this.historyIndex = this.history.length;
         
-        // Start connection
-        connect();
+        // Interpreter management
+        this.currentInterp = 'dserv';
+        this.availableInterps = ['dserv'];
+        this.interpSelectorElement = null;
         
-        // Focus input when clicking anywhere in terminal
-        terminal.addEventListener('click', (e) => {
-            if (e.target === terminal || e.target.classList.contains('output-line')) {
-                if (inputElement) inputElement.focus();
+        // Tab completion state
+        this.completionMatches = [];
+        this.completionIndex = -1;
+        this.completionOriginal = '';
+        this.completionPending = false;
+        this.waitingForCompletion = false;
+
+        // Listen for WebSocket events
+        this.ws.on('connected', () => this.handleConnected());
+        this.ws.on('disconnected', () => this.handleDisconnected());
+        this.ws.on('terminal:response', (data) => this.handleResponse(data));
+        this.ws.on('datapoint:update', (data) => this.handleDatapointUpdate(data));
+
+        // Initialize
+        this.init();
+    }
+
+    init() {
+        this.showInfo('dserv Web Console - Type commands or "help" for assistance');
+        this.showInfo('Connecting to WebSocket...');
+
+        // Initialize interpreter selector
+        this.interpSelectorElement = document.getElementById('interp-selector');
+        if (this.interpSelectorElement) {
+            this.interpSelectorElement.addEventListener('change', (e) => {
+                this.switchInterpreter(e.target.value);
+            });
+        }
+
+        // Clear terminal button
+        document.getElementById('clear-terminal').addEventListener('click', () => {
+            this.clearTerminal();
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'l') {
+                e.preventDefault();
+                this.clearTerminal();
             }
         });
+    }
+
+    handleConnected() {
+        this.showInfo('Connected to dserv');
+        
+        // Subscribe to interpreter list
+        this.ws.send({
+            cmd: 'subscribe',
+            match: 'dserv/interps',
+            every: 1
+        });
+        
+        // Get current interpreter list
+        this.ws.send({
+            cmd: 'get',
+            name: 'dserv/interps'
+        });
+        
+        this.createInputLine();
+    }
+
+    handleDisconnected() {
+        this.showInfo('Disconnected from server. Reconnecting...');
+        if (this.inputElement) {
+            this.inputElement.disabled = true;
+        }
+    }
+
+    handleDatapointUpdate(data) {
+        // Check if this is the dserv/interps datapoint
+        if (data.name === 'dserv/interps') {
+            const interpsData = data.data !== undefined ? data.data : data.value;
+            if (typeof interpsData === 'string') {
+                // Parse space-separated list of interpreters
+                const interps = interpsData.trim().split(/\s+/).filter(i => i.length > 0);
+                this.updateAvailableInterpreters(interps);
+            } else if (Array.isArray(interpsData)) {
+                this.updateAvailableInterpreters(interpsData);
+            }
+        }
+    }
+
+    updateAvailableInterpreters(interps) {
+        // Always include 'dserv' as the main interpreter
+        this.availableInterps = ['dserv', ...interps.filter(i => i !== 'dserv')];
+        
+        console.log('Available interpreters:', this.availableInterps);
+        
+        // Update selector dropdown
+        if (this.interpSelectorElement) {
+            const currentValue = this.interpSelectorElement.value;
+            this.interpSelectorElement.innerHTML = this.availableInterps
+                .map(interp => `<option value="${interp}">${interp}</option>`)
+                .join('');
+            
+            // Restore current selection if still available
+            if (this.availableInterps.includes(currentValue)) {
+                this.interpSelectorElement.value = currentValue;
+            } else if (this.availableInterps.includes(this.currentInterp)) {
+                this.interpSelectorElement.value = this.currentInterp;
+            }
+        }
+    }
+
+    switchInterpreter(interpName) {
+        // Validate interpreter exists
+        if (!this.availableInterps.includes(interpName)) {
+            this.showError(`Unknown interpreter: ${interpName}. Available: ${this.availableInterps.join(', ')}`);
+            return false;
+        }
+        
+        this.currentInterp = interpName;
+        
+        // Update dropdown if it exists
+        if (this.interpSelectorElement) {
+            this.interpSelectorElement.value = interpName;
+        }
+        
+        // Update prompt
+        this.updatePrompt();
+        
+        this.showInfo(`Switched to interpreter: ${interpName}`);
+        return true;
+    }
+
+    updatePrompt() {
+        // Update the prompt in existing input line if it exists
+        const promptElement = this.container.querySelector('.prompt');
+        if (promptElement) {
+            promptElement.textContent = `${this.currentInterp}> `;
+        }
+    }
+
+    createInputLine() {
+        // Remove existing input if any
+        const existingInput = this.container.querySelector('.input-container');
+        if (existingInput) {
+            existingInput.remove();
+        }
+
+        const container = document.createElement('div');
+        container.className = 'input-container';
+
+        const prompt = document.createElement('span');
+        prompt.className = 'prompt';
+        prompt.textContent = `${this.currentInterp}> `;
+
+        this.inputElement = document.createElement('input');
+        this.inputElement.type = 'text';
+        this.inputElement.autocomplete = 'off';
+        this.inputElement.spellcheck = false;
+
+        container.appendChild(prompt);
+        container.appendChild(this.inputElement);
+        this.container.appendChild(container);
+
+        this.inputElement.focus();
+        this.scrollToBottom();
+
+        // Event handlers
+        this.inputElement.addEventListener('keydown', (e) => this.handleKeyDown(e));
+        
+        // Click anywhere in terminal to focus input
+        this.container.addEventListener('click', (e) => {
+            if (this.inputElement && e.target !== this.inputElement) {
+                this.inputElement.focus();
+            }
+        });
+    }
+
+    handleKeyDown(e) {
+        // Handle Tab for completion
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            this.handleTab();
+            return;
+        }
+        
+        // Any other key resets completion state
+        if (this.completionPending && e.key !== 'Tab') {
+            this.completionPending = false;
+            this.completionMatches = [];
+            this.completionIndex = -1;
+        }
+        
+        switch (e.key) {
+            case 'Enter':
+                e.preventDefault();
+                this.submitCommand();
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                this.navigateHistory(-1);
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                this.navigateHistory(1);
+                break;
+            case 'c':
+                if (e.ctrlKey) {
+                    e.preventDefault();
+                    this.inputElement.value = '';
+                }
+                break;
+        }
+    }
+
+    handleTab() {
+        if (this.completionPending) {
+            // Already have matches, cycle through them
+            this.cycleCompletion();
+        } else {
+            // Start new completion
+            this.startCompletion();
+        }
+    }
+
+    startCompletion() {
+        const input = this.inputElement.value;
+        
+        if (!input.trim()) {
+            return; // Don't complete empty input
+        }
+        
+        // Build completion script
+        let completeScript;
+        
+        if (this.currentInterp === 'dserv') {
+            completeScript = `complete {${input}}`;
+        } else {
+            completeScript = `send ${this.currentInterp} {complete {${input}}}`;
+        }
+        
+        // Save original input
+        this.completionOriginal = input;
+        
+        // Mark that we're waiting for completion response
+        this.waitingForCompletion = true;
+        
+        // Send completion request
+        this.ws.send({
+            cmd: 'eval',
+            script: completeScript
+        });
+    }
+
+    cycleCompletion() {
+        if (this.completionMatches.length === 0) return;
+        
+        // Move to next match
+        this.completionIndex = (this.completionIndex + 1) % this.completionMatches.length;
+        const match = this.completionMatches[this.completionIndex];
+        
+        // Update input
+        this.inputElement.value = match;
+        this.inputElement.setSelectionRange(match.length, match.length);
+    }
+
+    parseTclList(str) {
+        // Simple parser good enough for most completion results
+        if (!str || str.trim() === '') return [];
+        
+        // For simple space-separated words (99% of cases)
+        if (!str.includes('{') && !str.includes('"')) {
+            return str.trim().split(/\s+/);
+        }
+        
+        // More robust parser for complex cases
+        const items = [];
+        let current = '';
+        let braceLevel = 0;
+        let inQuotes = false;
+        let escaped = false;
+        
+        for (const ch of str) {
+            if (escaped) {
+                current += ch;
+                escaped = false;
+                continue;
+            }
+            
+            if (ch === '\\') {
+                escaped = true;
+                continue;
+            }
+            
+            if (ch === '{' && !inQuotes) {
+                if (braceLevel === 0 && current === '') {
+                    braceLevel++;
+                } else {
+                    current += ch;
+                    braceLevel++;
+                }
+            } else if (ch === '}' && !inQuotes) {
+                braceLevel--;
+                if (braceLevel === 0 && current !== '') {
+                    items.push(current);
+                    current = '';
+                } else {
+                    current += ch;
+                }
+            } else if (ch === '"' && braceLevel === 0) {
+                inQuotes = !inQuotes;
+                if (!inQuotes && current !== '') {
+                    items.push(current);
+                    current = '';
+                }
+            } else if ((ch === ' ' || ch === '\t' || ch === '\n') && braceLevel === 0 && !inQuotes) {
+                if (current !== '') {
+                    items.push(current);
+                    current = '';
+                }
+            } else {
+                current += ch;
+            }
+        }
+        
+        if (current !== '') items.push(current);
+        return items;
+    }
+
+    navigateHistory(direction) {
+        if (this.history.length === 0) return;
+
+        this.historyIndex += direction;
+        this.historyIndex = Math.max(0, Math.min(this.history.length, this.historyIndex));
+
+        if (this.historyIndex === this.history.length) {
+            this.inputElement.value = '';
+        } else {
+            this.inputElement.value = this.history[this.historyIndex];
+        }
+    }
+
+    submitCommand() {
+        const command = this.inputElement.value.trim();
+        
+        // Handle empty command - just show prompt and create new line
+        if (!command) {
+            this.showCommand('');
+            
+            // Remove input line
+            const inputContainer = this.inputElement.parentElement;
+            if (inputContainer) {
+                inputContainer.remove();
+            }
+            
+            this.createInputLine();
+            return;
+        }
+
+        // Save to history
+        if (command !== this.history[this.history.length - 1]) {
+            this.history.push(command);
+            if (this.history.length > 100) this.history.shift();
+            localStorage.setItem('dserv-history', JSON.stringify(this.history));
+        }
+        this.historyIndex = this.history.length;
+
+        // Display command with current prompt
+        this.showCommand(command);
+
+        // Remove input line
+        const inputContainer = this.inputElement.parentElement;
+        if (inputContainer) {
+            inputContainer.remove();
+        }
+
+        // Check for blocked commands
+        if (this.isBlockedCommand(command)) {
+            this.showWarning('No need to type exit, just close your browser window when done');
+            this.createInputLine();
+            return;
+        }
+
+        // Check for slash commands (interpreter switching or one-off)
+        if (command.startsWith('/')) {
+            this.handleSlashCommand(command);
+            return;
+        }
+
+        // Check for local commands
+        if (command === 'help') {
+            this.showHelp();
+            this.createInputLine();
+            return;
+        }
+
+        if (command === 'clear' || command === 'cls') {
+            this.clearTerminal();
+            this.createInputLine();
+            return;
+        }
+
+        // Send command to current interpreter
+        this.sendToInterpreter(this.currentInterp, command, true);
+    }
+
+    handleSlashCommand(command) {
+        // Parse: /interp [command...]
+        const parts = command.slice(1).split(/\s+/);
+        const targetInterp = parts[0];
+        const oneOffCommand = parts.slice(1).join(' ');
+
+        if (!targetInterp) {
+            this.showError('Usage: /interp [command] or just /interp to switch');
+            this.createInputLine();
+            return;
+        }
+
+        // Validate interpreter exists
+        if (!this.availableInterps.includes(targetInterp)) {
+            this.showError(`Unknown interpreter: ${targetInterp}. Available: ${this.availableInterps.join(', ')}`);
+            this.createInputLine();
+            return;
+        }
+
+        if (!oneOffCommand) {
+            // Just "/ess" - switch interpreter
+            this.switchInterpreter(targetInterp);
+            this.createInputLine();
+        } else {
+            // "/ess pwd" - one-off command, don't switch
+            // Build the command to send
+            let scriptToSend;
+            
+            if (this.currentInterp === 'dserv') {
+                // From dserv, can directly route to target
+                if (targetInterp === 'dserv') {
+                    scriptToSend = oneOffCommand;
+                } else {
+                    scriptToSend = `send ${targetInterp} {${oneOffCommand}}`;
+                }
+            } else {
+                // From subprocess, must route through current subprocess
+                if (targetInterp === 'dserv') {
+                    // One-off to dserv from subprocess - just send command to dserv directly
+                    scriptToSend = oneOffCommand;
+                } else if (targetInterp === this.currentInterp) {
+                    // Same interpreter - just wrap once
+                    scriptToSend = `send ${targetInterp} {${oneOffCommand}}`;
+                } else {
+                    // Different subprocess - double wrap through current interp
+                    scriptToSend = `send ${this.currentInterp} {send ${targetInterp} {${oneOffCommand}}}`;
+                }
+            }
+            
+            this.ws.send({
+                cmd: 'eval',
+                script: scriptToSend
+            });
+        }
+    }
+
+    sendToInterpreter(interpName, command, createNewInput) {
+        if (!this.ws.connected) {
+            this.showError('Not connected to server');
+            if (createNewInput) {
+                this.createInputLine();
+            }
+            return;
+        }
+
+        // Wrap command if not targeting main dserv process
+        let scriptToSend;
+        if (interpName === 'dserv') {
+            scriptToSend = command;
+        } else {
+            // Escape the command for send - need to handle Tcl braces
+            // For safety, we'll wrap in braces
+            scriptToSend = `send ${interpName} {${command}}`;
+        }
+
+        this.ws.send({
+            cmd: 'eval',
+            script: scriptToSend
+        });
+    }
+
+    isBlockedCommand(command) {
+        const normalized = command.trim().toLowerCase();
+        return ['exit', 'quit'].includes(normalized);
+    }
+
+    handleResponse(data) {
+        // Check if this is a completion response
+        if (this.waitingForCompletion) {
+            this.waitingForCompletion = false;
+            
+            if (data.status === 'ok' && data.result) {
+                // Parse Tcl list
+                const matches = this.parseTclList(data.result);
+                
+                if (matches.length === 0) {
+                    // No matches - do nothing
+                    this.completionPending = false;
+                } else if (matches.length === 1) {
+                    // Single match - auto-complete immediately
+                    this.inputElement.value = matches[0];
+                    this.inputElement.setSelectionRange(matches[0].length, matches[0].length);
+                    this.completionPending = false;
+                } else {
+                    // Multiple matches - set up for cycling
+                    this.completionMatches = matches;
+                    this.completionIndex = 0;
+                    this.completionPending = true;
+                    
+                    // Show first match
+                    this.inputElement.value = matches[0];
+                    this.inputElement.setSelectionRange(matches[0].length, matches[0].length);
+                }
+            } else {
+                // Error in completion
+                this.completionPending = false;
+            }
+            
+            return; // Don't create input line for completion
+        }
+        
+        // Regular command response
+        if (data.status === 'error' || (data.result && data.result.startsWith('!TCL_ERROR'))) {
+            this.showError(data.result || data.error || 'Unknown error');
+        } else if (data.result !== undefined) {
+            this.showResult(data.result);
+        } else {
+            this.showResult(JSON.stringify(data));
+        }
+        
+        // Always create new input line on current interpreter
+        this.createInputLine();
+    }
+
+    showCommand(text) {
+        const line = document.createElement('div');
+        line.className = 'output-line command-line';
+        line.textContent = `${this.currentInterp}> ${text}`;
+        this.container.appendChild(line);
+        this.scrollToBottom();
+    }
+
+    showResult(text) {
+        const line = document.createElement('div');
+        line.className = 'output-line result-line';
+        line.textContent = text;
+        this.container.appendChild(line);
+        this.scrollToBottom();
+    }
+
+    showError(text) {
+        const line = document.createElement('div');
+        line.className = 'output-line error-line';
+        line.textContent = 'Error: ' + text;
+        this.container.appendChild(line);
+        this.scrollToBottom();
+    }
+
+    showInfo(text) {
+        const line = document.createElement('div');
+        line.className = 'output-line info-line';
+        line.textContent = text;
+        this.container.appendChild(line);
+        this.scrollToBottom();
+    }
+
+    showWarning(text) {
+        const line = document.createElement('div');
+        line.className = 'output-line warning-line';
+        line.textContent = text;
+        this.container.appendChild(line);
+        this.scrollToBottom();
+    }
+
+    showHelp() {
+        const helpText = `
+dserv Web Console Help
+======================
+
+Commands are sent directly to the active interpreter.
+
+Interpreter Switching:
+  /interp         - Switch active interpreter to 'interp'
+  /interp cmd     - Execute 'cmd' on 'interp' without switching
+  
+  Examples:
+    /ess          - Switch to 'ess' interpreter
+    /ess pwd      - Run 'pwd' on 'ess' (stays on current interp)
+
+Local Commands:
+  help        - Show this help
+  clear/cls   - Clear terminal
+
+Keyboard Shortcuts:
+  ↑/↓         - Navigate command history
+  Tab         - Auto-complete commands, procs, variables, namespaces
+  Ctrl+C      - Clear current line
+  Ctrl+L      - Clear terminal
+  Enter       - Execute command
+
+Tab Completion:
+  Press Tab to complete commands, procedures, variables, and more.
+  Context-aware: completes variable names after 'set', namespace
+  names after 'namespace eval', etc. Press Tab multiple times to
+  cycle through matches.
+
+The terminal connects to dserv via WebSocket and evaluates
+Tcl commands in the active interpreter. Use the dropdown or
+slash commands to switch between subprocesses.
+        `.trim();
+
+        this.showInfo(helpText);
+    }
+
+    clearTerminal() {
+        this.container.innerHTML = '';
+        this.showInfo('Terminal cleared');
+    }
+
+    scrollToBottom() {
+        this.container.scrollTop = this.container.scrollHeight;
+    }
+
+    focusInput() {
+        if (this.inputElement) {
+            this.inputElement.focus();
+        }
+    }
+}
+
+// ============================================
+// Initialize terminal when DOM is ready
+// ============================================
+
+let terminal;
+
+document.addEventListener('DOMContentLoaded', () => {
+    terminal = new Terminal(wsManager);
+
+    // Track if user is selecting text
+    let isSelecting = false;
+    const terminalEl = document.getElementById('terminal');
+    
+    terminalEl.addEventListener('mousedown', () => {
+        isSelecting = false;
+    });
+    
+    terminalEl.addEventListener('mousemove', (e) => {
+        if (e.buttons === 1) { // Left mouse button is down
+            isSelecting = true;
+        }
+    });
+    
+    terminalEl.addEventListener('mouseup', () => {
+        // If there's a text selection, don't clear it
+        if (window.getSelection().toString().length > 0) {
+            isSelecting = true;
+        }
+    });
+
+    // Focus input when clicking in terminal area (but not if selecting text)
+    terminalEl.addEventListener('click', (e) => {
+        // Don't focus if user just finished selecting text
+        if (isSelecting) {
+            isSelecting = false;
+            return;
+        }
+        
+        // Only focus if clicking on the container itself or input area
+        if (e.target.id === 'terminal' || e.target.classList.contains('input-container')) {
+            terminal.focusInput();
+        }
+    });
+    
+    // Clean up copied text to remove extra blank lines
+    terminalEl.addEventListener('copy', (e) => {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            const selectedText = selection.toString();
+            // Remove multiple consecutive newlines (keep at most one blank line)
+            const cleanedText = selectedText.replace(/\n\n+/g, '\n');
+            e.clipboardData.setData('text/plain', cleanedText);
+            e.preventDefault();
+        }
+    });
+});
+
+    </script>
+    <script>
+// ============================================
+// Datapoint Explorer Module
+// ============================================
+
+class DatapointExplorer {
+    constructor(wsManager) {
+        this.ws = wsManager;
+        this.datapoints = new Map(); // name -> { value, timestamp, dtype, history }
+        this.subscribedPoints = new Set();
+        this.allKeys = [];
+        this.selectedDatapoint = null;
+
+        // DOM elements
+        this.listElement = document.getElementById('datapoint-list');
+        this.detailElement = document.getElementById('datapoint-detail');
+        this.searchInput = document.getElementById('search-datapoints');
+        this.updateCountElement = document.getElementById('update-count');
+
+        // Listen for WebSocket events
+        this.ws.on('connected', () => this.handleConnected());
+        this.ws.on('datapoint:update', (data) => this.handleDatapointUpdate(data));
+        this.ws.on('datapoint:keys', (data) => this.handleKeysUpdate(data));
+
+        this.init();
+    }
+
+    init() {
+        // Search functionality
+        this.searchInput.addEventListener('input', (e) => {
+            this.filterDatapoints(e.target.value);
+        });
+
+        this.searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.clearSearch();
+            }
+        });
+
+        document.getElementById('clear-search').addEventListener('click', () => {
+            this.clearSearch();
+        });
+
+        // Buttons
+        document.getElementById('refresh-keys').addEventListener('click', () => {
+            this.refreshKeys();
+        });
+
+        document.getElementById('unsubscribe-all').addEventListener('click', () => {
+            this.unsubscribeAll();
+        });
+    }
+
+    handleConnected() {
+        this.showPlaceholder('Connected. Loading datapoints...');
+        this.refreshKeys();
+    }
+
+    refreshKeys() {
+        // Subscribe to @keys to get list of all datapoints
+        this.ws.send({
+            cmd: 'subscribe',
+            match: '@keys',
+            every: 1
+        });
+        // Also get current value (like datapoint_explorer does)
+        this.ws.send({
+            cmd: 'get',
+            name: '@keys'
+        });
+    }
+
+    handleKeysUpdate(data) {
+        console.log('handleKeysUpdate called with:', data);
+        if (data.name === '@keys' && (data.value || data.data)) {
+            try {
+                // dserv sends space-separated string (Tcl list): "dserv ess msg ..."
+                const keysData = data.data !== undefined ? data.data : data.value;
+                console.log('Keys data:', keysData, 'Type:', typeof keysData);
+                
+                let keys;
+                if (typeof keysData === 'string') {
+                    // Split on whitespace, like datapoint_explorer does
+                    keys = keysData.trim().split(/\s+/).filter(k => k.length > 0);
+                } else if (Array.isArray(keysData)) {
+                    // Already an array
+                    keys = keysData;
+                } else {
+                    console.error('Unexpected keys format:', keysData);
+                    return;
+                }
+                
+                console.log('Parsed keys:', keys);
+                this.allKeys = keys;
+                this.allKeys.sort();
+                console.log('Rendering datapoint list with', this.allKeys.length, 'keys');
+                this.renderDatapointList();
+            } catch (e) {
+                console.error('Failed to parse keys:', e);
+            }
+        } else {
+            console.log('Keys update rejected - missing data. name:', data.name, 'has data/value:', !!(data.data || data.value));
+        }
+    }
+
+    handleDatapointUpdate(data) {
+        const name = data.name;
+        if (!name) return;
+
+        // dserv sends 'data' field, not 'value'
+        const value = data.data !== undefined ? data.data : data.value;
+
+        // Update datapoint data
+        let dpData = this.datapoints.get(name);
+        if (!dpData) {
+            dpData = {
+                value: null,
+                timestamp: null,
+                dtype: null,
+                history: []
+            };
+            this.datapoints.set(name, dpData);
+        }
+
+        dpData.value = value;
+        dpData.timestamp = data.timestamp;
+        dpData.dtype = data.dtype;
+        dpData.history.push({
+            time: new Date(),
+            value: value,
+            timestamp: data.timestamp
+        });
+
+        // Keep history limited
+        if (dpData.history.length > 100) {
+            dpData.history.shift();
+        }
+
+        // Update UI if this is the selected datapoint
+        if (this.selectedDatapoint === name) {
+            this.renderDatapointDetail(name);
+        }
+
+        // Update subscribed count
+        this.updateSubscribedCount();
+    }
+
+    renderDatapointList(filter = '') {
+        const filtered = filter 
+            ? this.allKeys.filter(key => key.toLowerCase().includes(filter.toLowerCase()))
+            : this.allKeys;
+
+        if (filtered.length === 0) {
+            this.showPlaceholder(filter ? 'No matching datapoints' : 'No datapoints available');
+            return;
+        }
+
+        this.listElement.innerHTML = '';
+
+        filtered.forEach(name => {
+            const item = document.createElement('div');
+            item.className = 'datapoint-item';
+            item.id = `dp-${name}`;
+            item.textContent = name;
+
+            if (this.subscribedPoints.has(name)) {
+                item.classList.add('subscribed');
+            }
+
+            if (this.selectedDatapoint === name) {
+                item.classList.add('selected');
+            }
+
+            // Click to select/subscribe
+            item.addEventListener('click', (e) => {
+                // Check if clicking on the unsubscribe X
+                const rect = item.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                
+                if (this.subscribedPoints.has(name) && clickX > rect.width - 35) {
+                    // Clicked on X - unsubscribe
+                    this.unsubscribe(name);
+                } else {
+                    // Normal click - select and subscribe if not already
+                    this.selectDatapoint(name);
+                    if (!this.subscribedPoints.has(name)) {
+                        this.subscribe(name);
+                    }
+                }
+            });
+
+            this.listElement.appendChild(item);
+        });
+    }
+
+    selectDatapoint(name) {
+        // Update selection
+        this.selectedDatapoint = name;
+
+        // Update UI
+        const items = this.listElement.querySelectorAll('.datapoint-item');
+        items.forEach(item => item.classList.remove('selected'));
+
+        const selectedItem = document.getElementById(`dp-${name}`);
+        if (selectedItem) {
+            selectedItem.classList.add('selected');
+        }
+
+        // If we don't have data yet, get it (like datapoint_explorer does)
+        if (!this.datapoints.has(name)) {
+            console.log(`Getting initial value for: ${name}`);
+            this.ws.send({
+                cmd: 'get',
+                name: name
+            });
+        }
+
+        this.renderDatapointDetail(name);
+    }
+
+    renderDatapointDetail(name) {
+        const dpData = this.datapoints.get(name);
+
+        if (!dpData || dpData.value === null) {
+            this.detailElement.innerHTML = `
+                <div class="placeholder">Waiting for data from: ${name}</div>
+            `;
+            return;
+        }
+
+        const history = dpData.history || [];
+        const historyHtml = history.slice(-20).reverse().map(update => `
+            <div class="update-entry">
+                <div class="update-time">${update.time.toLocaleTimeString()}</div>
+                <div>${this.formatValue(update.value)}</div>
+            </div>
+        `).join('');
+
+        this.detailElement.innerHTML = `
+            <div class="detail-row">
+                <div class="detail-label">Name:</div>
+                <div class="detail-value">${name}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Datatype:</div>
+                <div class="detail-value">${this.getDatatypeName(dpData.dtype)}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Timestamp:</div>
+                <div class="detail-value">${dpData.timestamp || 'unknown'}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Current Value:</div>
+                <div class="detail-value">${this.formatValue(dpData.value)}</div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-label">Update History (last 20):</div>
+                <div class="update-history">
+                    ${historyHtml || '<div class="placeholder">No history</div>'}
+                </div>
+            </div>
+        `;
+    }
+
+    formatValue(value) {
+        if (value === null || value === undefined) {
+            return '<null>';
+        }
+        if (typeof value === 'object') {
+            return JSON.stringify(value, null, 2);
+        }
+        return String(value);
+    }
+
+    getDatatypeName(dtype) {
+        const types = {
+            0: 'BYTE',
+            1: 'STRING',
+            2: 'FLOAT',
+            3: 'DOUBLE',
+            4: 'SHORT',
+            5: 'INT',
+            6: 'DG',
+            7: 'SCRIPT',
+            8: 'TRIGGER_SCRIPT',
+            9: 'EVENT',
+            10: 'NONE',
+            11: 'JSON',
+            12: 'ARROW',
+            13: 'MSGPACK',
+            14: 'JPEG',
+            15: 'PPM',
+            16: 'INT64',
+            17: 'UNKNOWN'
+        };
+        return types[dtype] || `Unknown (${dtype})`;
+    }
+
+    subscribe(pattern) {
+        if (this.ws.send({
+            cmd: 'subscribe',
+            match: pattern,
+            every: 1
+        })) {
+            this.subscribedPoints.add(pattern);
+            
+            const item = document.getElementById(`dp-${pattern}`);
+            if (item) {
+                item.classList.add('subscribed');
+            }
+
+            console.log(`Subscribed to: ${pattern}`);
+            this.updateSubscribedCount();
+        }
+    }
+
+    unsubscribe(pattern) {
+        if (this.ws.send({
+            cmd: 'unsubscribe',
+            match: pattern
+        })) {
+            this.subscribedPoints.delete(pattern);
+            
+            const item = document.getElementById(`dp-${pattern}`);
+            if (item) {
+                item.classList.remove('subscribed');
+            }
+
+            console.log(`Unsubscribed from: ${pattern}`);
+            this.updateSubscribedCount();
+        }
+    }
+
+    unsubscribeAll() {
+        const toUnsubscribe = Array.from(this.subscribedPoints);
+        toUnsubscribe.forEach(pattern => {
+            if (pattern !== '@keys') {
+                this.unsubscribe(pattern);
+            }
+        });
+    }
+
+    updateSubscribedCount() {
+        const count = this.subscribedPoints.size - (this.subscribedPoints.has('@keys') ? 1 : 0);
+        this.updateCountElement.textContent = `${count} subscribed`;
+    }
+
+    filterDatapoints(filter) {
+        this.renderDatapointList(filter);
+        
+        // Show/hide clear button
+        const clearBtn = document.getElementById('clear-search');
+        clearBtn.style.display = filter ? 'block' : 'none';
+    }
+
+    clearSearch() {
+        this.searchInput.value = '';
+        this.filterDatapoints('');
+    }
+
+    showPlaceholder(message) {
+        this.listElement.innerHTML = `<div class="placeholder">${message}</div>`;
+    }
+}
+
+// ============================================
+// Initialize datapoint explorer when DOM is ready
+// ============================================
+
+let datapointExplorer;
+
+document.addEventListener('DOMContentLoaded', () => {
+    datapointExplorer = new DatapointExplorer(wsManager);
+});
+
     </script>
 </body>
 </html>
