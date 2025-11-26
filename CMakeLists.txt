@@ -399,7 +399,8 @@ add_executable(dserv
     src/SendClient.cpp 
     src/LogClient.cpp 
     src/LogTable.cpp 
-    src/TclServer.cpp 
+    src/TclServer.cpp
+    src/TclCompletion.cpp
     src/MeshManager.cpp
     src/dpoint_process.c 
     src/mdns.c 
