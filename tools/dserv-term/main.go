@@ -592,17 +592,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case msgInterpList:
 		m.updateInterpreters(msg.interpreters)
 		fmt.Println(styleSystem.Render(fmt.Sprintf("Available interpreters: %s", strings.Join(msg.interpreters, ", "))))
-		// Refresh completion cache for TCP mode
+		// Refresh completion cache for active interpreter
 		if m.tcpClient != nil && m.connected && m.connMode == ModeTCP {
-			// Refresh cache for dserv (where namespace procs live)
-			go m.tcpClient.RefreshCompletionCache("dserv")
-			
-			// Also refresh for active interpreter if different
 			if len(m.interpreters) > 0 && m.activeIdx < len(m.interpreters) {
 				activeInterp := m.interpreters[m.activeIdx].Name
-				if activeInterp != "dserv" {
-					go m.tcpClient.RefreshCompletionCache(activeInterp)
-				}
+				go m.tcpClient.RefreshCompletionCache(activeInterp)
 			}
 		}
 		m.reprintPrompt()
@@ -685,8 +679,8 @@ func (m *model) reprintPrompt() {
 func (m *model) processCommand(input string) {
 	trimmed := strings.TrimSpace(input)
 
-	// Meta commands (:...)
-	if strings.HasPrefix(trimmed, ":") {
+	// Meta commands (:...) - but NOT Tcl namespace commands (::...)
+	if strings.HasPrefix(trimmed, ":") && !strings.HasPrefix(trimmed, "::") {
 		m.handleMetaCommand(strings.TrimPrefix(trimmed, ":"))
 		m.reprintPrompt()
 		return
