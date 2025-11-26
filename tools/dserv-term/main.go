@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -1315,12 +1316,33 @@ func main() {
 				cmdAddr = fmt.Sprintf("%s:%d", hosts[0].IPAddress, *tcpCmdPort)
 				fmt.Printf("Connecting to %s (%s)\n", hosts[0].Name, cmdAddr)
 			} else {
-				peer, err := discovery.SelectHostInteractive(*tcpCmdPort)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				// Multiple hosts - interactive selection
+				fmt.Println("Available hosts:")
+				for i, host := range hosts {
+					hostType := "Remote"
+					if host.IsLocal {
+						hostType = "Local"
+					}
+					fmt.Printf("  %d. %s (%s) [%s]\n", i+1, host.Name, host.IPAddress, hostType)
+				}
+				fmt.Print("Select host (1-", len(hosts), "): ")
+				
+				scanner := bufio.NewScanner(os.Stdin)
+				if scanner.Scan() {
+					input := strings.TrimSpace(scanner.Text())
+					var idx int
+					if _, err := fmt.Sscanf(input, "%d", &idx); err == nil && idx >= 1 && idx <= len(hosts) {
+						peer := hosts[idx-1]
+						cmdAddr = fmt.Sprintf("%s:%d", peer.IPAddress, *tcpCmdPort)
+						fmt.Printf("Connecting to %s\n", peer.Name)
+					} else {
+						fmt.Fprintf(os.Stderr, "Invalid selection\n")
+						os.Exit(1)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "Error reading input\n")
 					os.Exit(1)
 				}
-				cmdAddr = fmt.Sprintf("%s:%d", peer.IPAddress, *tcpCmdPort)
 			}
 		} else {
 			cmdAddr = fmt.Sprintf("localhost:%d", *tcpCmdPort)
