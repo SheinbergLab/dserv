@@ -9,8 +9,9 @@
 // JSON support
 #include <jansson.h>
 
-#include <fnmatch.h>  // Add this include for pattern matching
+#include <fnmatch.h>  // pattern matching support
 
+#include "TclCompletion.h"
 
 // our minified html pages (in www/*.html)
 #include "embedded_terminal.h"
@@ -597,8 +598,8 @@ void TclServer::start_websocket_server(void)
                 free(error_str);
                 json_decref(error_response);
               }
-            }       
-            
+            }
+	    
             else if (strcmp(cmd, "subscribe") == 0) {
               json_t *match_obj = json_object_get(root, "match");
               json_t *every_obj = json_object_get(root, "every");
@@ -1767,6 +1768,11 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   
   Tcl_LinkVar(interp, "tcpPort", (char *) &tserv->_newline_port,
           TCL_LINK_INT | TCL_LINK_READ_ONLY);
+
+
+  // Completion support
+  TclCompletion::RegisterCompletionCommand(interp);  
+
   return;
 }
 
