@@ -20,6 +20,11 @@ if { [info exists ::mesh_enabled] } {
      send mesh "source [file join $dspath config/meshconf.tcl]"
 }
 
+# look for any .tcl configs to run before other subprocesses local/*.tcl
+foreach f [glob [file join $dspath local pre-*.tcl]] {
+    source $f
+}
+
 # start an eye movement subprocess
 subprocess em "source [file join $dspath config/emconf.tcl]"
 
@@ -28,6 +33,9 @@ subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 
 # start a sound subprocess
 subprocess sound "source [file join $dspath config/soundconf.tcl]"
+
+# start a "git" interpreter
+subprocess git "source [file join $dspath config/gitconf.tcl]"
 
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
@@ -84,9 +92,6 @@ if { [lsearch $hbs $host] >= 0 } {
 
 # start a virtual eye subprocess
 subprocess virtual_eye "source [file join $dspath config/virtualeyeconf.tcl]"
-
-# start a "git" interpreter
-subprocess git "source [file join $dspath config/gitconf.tcl]"
 
 # auto update support
 source [file join $dspath config/updateconf.tcl]
