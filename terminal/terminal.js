@@ -178,9 +178,28 @@ class Terminal {
         // Event handlers
         this.inputElement.addEventListener('keydown', (e) => this.handleKeyDown(e));
         
-        // Click anywhere in terminal to focus input
-        this.container.addEventListener('click', (e) => {
-            if (this.inputElement && e.target !== this.inputElement) {
+        // Click anywhere in terminal to focus input (but allow text selection)
+        let mouseDownTime = 0;
+        let mouseDownPos = { x: 0, y: 0 };
+        
+        this.container.addEventListener('mousedown', (e) => {
+            mouseDownTime = Date.now();
+            mouseDownPos = { x: e.clientX, y: e.clientY };
+        });
+        
+        this.container.addEventListener('mouseup', (e) => {
+            // Check if this was a click (not a drag for selection)
+            const timeDiff = Date.now() - mouseDownTime;
+            const distance = Math.sqrt(
+                Math.pow(e.clientX - mouseDownPos.x, 2) + 
+                Math.pow(e.clientY - mouseDownPos.y, 2)
+            );
+            
+            // If quick click with minimal movement and no text selected
+            const selection = window.getSelection();
+            if (timeDiff < 300 && distance < 5 && 
+                (!selection || selection.toString().length === 0) &&
+                e.target !== this.inputElement) {
                 this.inputElement.focus();
             }
         });
