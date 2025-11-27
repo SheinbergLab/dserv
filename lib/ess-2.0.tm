@@ -3615,6 +3615,21 @@ namespace eval ess {
         return [find_variants $sysname $protocol]
     }
 
+    proc get_protocol_completions {prev_args partial} {
+	set system [lindex $prev_args 0]
+	set all_protocols [get_protocols $system]
+	
+	# Use lsearch with -all -inline and glob pattern
+	return [lsearch -all -inline -glob $all_protocols ${partial}*]
+    }
+    
+    proc get_variant_completions {prev_args partial} {
+	lassign $prev_args system protocol
+	set all_variants [get_variants $system $protocol]
+	
+	return [lsearch -all -inline -glob $all_variants ${partial}*]
+    }    
+    
     proc get_system_dict {} {
         variable current
         set d [dict create]

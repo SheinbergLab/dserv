@@ -167,6 +167,54 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     // Parse context to see if we should do context-aware completion
     CompletionContext ctx = parseContext(actualPartial);
     
+    // Check for custom command-specific completion first
+    if (ctx.wordIndex > 0 && !ctx.command.empty()) {
+        // Try custom completion via ::completion::get_matches
+        // Pass full input so proc-based completions can see previous args
+        std::string checkCmd = "::completion::get_matches {" + 
+                              ctx.command + "} " + 
+                              std::to_string(ctx.wordIndex) + 
+                              " {" + ctx.partial + "} {" + 
+                              actualPartial + "}";
+        
+        if (Tcl_Eval(interp, checkCmd.c_str()) == TCL_OK) {
+            const char* result = Tcl_GetStringResult(interp);
+            
+            // If non-empty result, we have custom completions
+            if (result && result[0] != '\0') {
+                TclListSize objc;
+                Tcl_Obj** objv;
+                Tcl_Obj* listObj = Tcl_NewStringObj(result, -1);
+                Tcl_IncrRefCount(listObj);
+                
+                if (Tcl_ListObjGetElements(interp, listObj, &objc, &objv) == TCL_OK && objc > 0) {
+                    // Build prefix (everything before the word being completed)
+                    size_t lastSpace = actualPartial.rfind(' ');
+                    std::string commandPrefix = "";
+                    if (lastSpace != std::string::npos) {
+                        commandPrefix = actualPartial.substr(0, lastSpace + 1);
+                    }
+                    
+                    // Add custom completions with command prefix
+                    for (TclListSize i = 0; i < objc; i++) {
+                        std::string match = Tcl_GetString(objv[i]);
+                        std::string fullCompletion = prefix + commandPrefix + match;
+                        if (seen.find(fullCompletion) == seen.end()) {
+                            seen.insert(fullCompletion);
+                            results.push_back(fullCompletion);
+                        }
+                    }
+                    
+                    Tcl_DecrRefCount(listObj);
+                    return results;  // Return custom completions
+                }
+                
+                Tcl_DecrRefCount(listObj);
+            }
+        }
+        // If no custom completions or error, fall through to default completion
+    }
+    
     // Context-aware completion for specific commands
     if (ctx.wordIndex > 0) {  // We're completing an argument, not the command itself
         
@@ -489,7 +537,151 @@ int TclCompleteCmd(ClientData clientData, Tcl_Interp* interp,
 // ============================================
 
 void RegisterCompletionCommand(Tcl_Interp* interp) {
+    // Register the 'complete' command
     Tcl_CreateObjCommand(interp, "complete", TclCompleteCmd, NULL, NULL);
+    
+    // Initialize custom completion namespace
+    const char* completion_namespace = R"TCL(
+# Custom argument completion system
+namespace eval ::completion {
+    variable rules
+    array set rules {}
+    
+    # Register completion rule for a command
+    # Usage:
+    #   completion::register ess::load_system {
+    #       {datapoint ess/systems}
+    #       {literal {tcp udp serial}}
+    #   }
+    # Or:
+    #   completion::register ess::load_system 1 {datapoint ess/systems}
+    proc register {cmd_name args} {
+        variable rules
+        
+        if {[llength $args] == 1} {
+            set specs [lindex $args 0]
+            set arg_pos 1
+            foreach spec $specs {
+                set rules($cmd_name,$arg_pos) $spec
+                incr arg_pos
+            }
+        } elseif {[llength $args] == 2} {
+            lassign $args arg_pos spec
+            set rules($cmd_name,$arg_pos) $spec
+        } else {
+            error "Usage: completion::register cmd {spec1 spec2...} OR completion::register cmd pos spec"
+        }
+    }
+    
+    # Get completion matches for a command argument
+    # full_input is the complete command line being typed
+    proc get_matches {cmd_name arg_pos partial {full_input ""}} {
+        variable rules
+        
+        if {![info exists rules($cmd_name,$arg_pos)]} {
+            return {}
+        }
+        
+        set spec $rules($cmd_name,$arg_pos)
+        set type [lindex $spec 0]
+        
+        switch $type {
+            datapoint {
+                set dp_name [lindex $spec 1]
+                if {[catch {dservGet $dp_name} value]} {
+                    return {}
+                }
+                set matches {}
+                foreach item $value {
+                    if {[string match ${partial}* $item]} {
+                        lappend matches $item
+                    }
+                }
+                return $matches
+            }
+            
+            literal {
+                set values [lindex $spec 1]
+                set matches {}
+                foreach item $values {
+                    if {[string match ${partial}* $item]} {
+                        lappend matches $item
+                    }
+                }
+                return $matches
+            }
+            
+            proc {
+                set proc_name [lindex $spec 1]
+                # DEBUG
+                # puts stderr "DEBUG get_matches: full_input='$full_input' partial='$partial'"
+                
+                # Parse full_input to get previous arguments
+                set prev_args {}
+                if {$full_input ne ""} {
+                    # Simple word split (good enough for most cases)
+                    set words [regexp -all -inline {\S+} $full_input]
+                    # DEBUG
+                    # puts stderr "DEBUG words='$words'"
+                    
+                    # First word is command, rest up to current position are prev args
+                    # If we're at position N, we want args 1..(N-1)
+                    if {[llength $words] > 1} {
+                        set prev_args [lrange $words 1 end]
+                    }
+                }
+                # DEBUG
+                # puts stderr "DEBUG prev_args='$prev_args'"
+                
+                # Call proc with: prev_args partial
+                # Proc signature: proc name {prev_args partial}
+                if {[catch {$proc_name $prev_args $partial} matches]} {
+                    return {}
+                }
+                return $matches
+            }
+            
+            glob {
+                set pattern [lindex $spec 1]
+                set full_pattern ${partial}*
+                if {[catch {glob -nocomplain $full_pattern} matches]} {
+                    return {}
+                }
+                return $matches
+            }
+            
+            range {
+                lassign [lrange $spec 1 end] min max step
+                return [list "${min}..${max}"]
+            }
+            
+            default {
+                return {}
+            }
+        }
+    }
+    
+    # List all registered commands (for debugging)
+    proc list_rules {} {
+        variable rules
+        set result {}
+        foreach key [lsort [array names rules]] {
+            lassign [split $key ,] cmd pos
+            lappend result "$cmd arg$pos: $rules($key)"
+        }
+        return $result
+    }
+    
+    # Clear all rules
+    proc clear {} {
+        variable rules
+        array unset rules *
+    }
+}
+)TCL";
+    
+    // Evaluate the completion namespace (ignore errors - may already exist)
+    Tcl_Eval(interp, completion_namespace);
 }
 
 } // namespace TclCompletion
