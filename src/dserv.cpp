@@ -178,7 +178,7 @@ int main(int argc, char *argv[])
 
   // Create core dserv components
   dserver = new Dataserver(argc, argv);
-  tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560, 2565);
+  tclserver = new TclServer(argc, argv, dserver, "dserv", 2570, 2560, 2565);
   TclServerRegistry.registerObject("ess", tclserver);
 
   setVersionInfo(tclserver);
@@ -186,7 +186,8 @@ int main(int argc, char *argv[])
   // Initialize mesh networking if enabled
   if (enable_mesh) {
     meshManager = MeshManager::createAndStart(dserver, tclserver, argc, argv,
-					      mesh_appliance_id, mesh_appliance_name,
+					      mesh_appliance_id,
+					      mesh_appliance_name,
 					      mesh_port, mesh_discovery_port,
 					      mesh_websocket_port);
    }
