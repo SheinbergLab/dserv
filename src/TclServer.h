@@ -33,6 +33,7 @@
 
 #include "Datapoint.h"
 #include "Dataserver.h"
+#include "ErrorMonitor.h"
 
 #include <unordered_map>
 #include <mutex>
@@ -167,6 +168,9 @@ public:
 
   // our dataserver
   Dataserver *ds;
+
+  // option error tracking
+  ErrorMonitor *errorMonitor = nullptr;
   
   // provide access to our interpreter
   Tcl_Interp* getInterp() const { return process_interp; }

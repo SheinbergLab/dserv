@@ -63,7 +63,7 @@ TclServer::TclServer(int argc, char **argv,
   _newline_port = cfg.newline_listener_port;
   _message_port = cfg.message_listener_port;
   _websocket_port = cfg.websocket_listener_port;
-   
+
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
 
@@ -92,7 +92,7 @@ TclServer::~TclServer()
   delete eventDispatcher;
   
   shutdown();
-  
+
   if (websocket_port() >= 0)
     websocket_thread.detach();
   
@@ -1771,7 +1771,7 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
 
   // Completion support
-  TclCompletion::RegisterCompletionCommand(interp);  
+  TclCompletion::RegisterCompletionCommand(interp);
 
   return;
 }
@@ -1956,7 +1956,11 @@ static int process_requests(TclServer *tserv)
   
   // Set the association data for modules to find
   Tcl_SetAssocData(interp, "tclserver_instance", NULL, (ClientData)tserv);
-    
+
+  // Create ErrorMonitor
+  ErrorMonitor* errorMonitor = new ErrorMonitor(tserv);
+  ErrorMonitor::registerCommand(interp, errorMonitor);
+  
   /* process until receive a message saying we are done */
   while (!tserv->m_bDone) {
     
@@ -2033,6 +2037,9 @@ static int process_requests(TclServer *tserv)
     }
   }
 
+  // Clean up ErrorMonitor
+  delete errorMonitor;
+  
   tserv->setInterp(nullptr);
   Tcl_DeleteInterp(interp);
   //  std::cout << "TclServer process thread ended" << std::endl;
