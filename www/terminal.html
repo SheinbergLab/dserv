@@ -515,6 +515,566 @@ body {
         display: none;
     }
 }
+
+/* Additional styles for error monitoring */
+
+/* Error Badge in Header */
+.error-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #d32f2f;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.3s;
+    margin-right: 12px;
+}
+
+.error-badge:hover {
+    background: #f44336;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(211, 47, 47, 0.4);
+}
+
+.error-badge.hidden {
+    display: none;
+}
+
+.error-badge.has-unread {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.error-icon {
+    font-size: 16px;
+}
+
+.error-count {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+    min-width: 20px;
+    text-align: center;
+}
+
+/* Error Panel */
+.error-panel {
+    position: fixed;
+    top: 60px;
+    right: 20px;
+    width: 500px;
+    max-height: 70vh;
+    background: #2d2d30;
+    border: 1px solid #d32f2f;
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.error-panel.hidden {
+    display: none;
+}
+
+.error-panel-header {
+    background: #d32f2f;
+    color: white;
+    padding: 10px 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #b71c1c;
+}
+
+.error-panel-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.error-panel-controls {
+    display: flex;
+    gap: 8px;
+}
+
+.error-panel-controls .icon-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+.error-panel-controls .icon-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* Error List */
+.error-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    background: #1e1e1e;
+}
+
+.error-item {
+    background: #2d2d30;
+    border: 1px solid #d32f2f;
+    border-left: 4px solid #d32f2f;
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 10px;
+    transition: all 0.2s;
+}
+
+.error-item:hover {
+    background: #37373d;
+    border-color: #f44336;
+    transform: translateX(-2px);
+    box-shadow: 2px 0 8px rgba(211, 47, 47, 0.3);
+}
+
+.error-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #3e3e42;
+}
+
+.error-interp {
+    font-weight: 600;
+    color: #f48771;
+    font-size: 12px;
+}
+
+.error-time {
+    font-size: 10px;
+    color: #858585;
+}
+
+.error-item-body {
+    font-size: 11px;
+}
+
+.error-info {
+    background: #1e1e1e;
+    padding: 8px;
+    border-radius: 3px;
+    color: #f48771;
+    overflow-x: auto;
+    margin: 6px 0;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.error-command,
+.error-code {
+    margin-top: 6px;
+    font-size: 10px;
+    color: #858585;
+}
+
+.error-command code,
+.error-code code {
+    background: #1e1e1e;
+    padding: 2px 6px;
+    border-radius: 2px;
+    color: #dcdcaa;
+}
+
+/* Error Notification (Toast) */
+.error-notification {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 350px;
+    background: #2d2d30;
+    border: 2px solid #d32f2f;
+    border-radius: 6px;
+    padding: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    cursor: pointer;
+    animation: slideIn 0.3s ease-out;
+    transition: opacity 0.3s;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.error-notification.fade-out {
+    opacity: 0;
+    transform: translateX(400px);
+}
+
+.error-notification:hover {
+    border-color: #f44336;
+    box-shadow: 0 6px 24px rgba(211, 47, 47, 0.4);
+}
+
+.error-notification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    color: #f48771;
+    font-size: 12px;
+}
+
+.error-notification-time {
+    font-size: 10px;
+    color: #858585;
+}
+
+.error-notification-body {
+    color: #d4d4d4;
+    font-size: 11px;
+    line-height: 1.4;
+    max-height: 60px;
+    overflow: hidden;
+}
+
+/* Responsive adjustments for error panel */
+@media (max-width: 768px) {
+    .error-panel {
+        left: 10px;
+        right: 10px;
+        width: auto;
+        max-height: 60vh;
+    }
+    
+    .error-notification {
+        left: 10px;
+        right: 10px;
+        width: auto;
+    }
+}
+/* Additional CSS for horizontal split layout with error log panel */
+/* Add these styles to your existing styles.css */
+
+/* Main content with left pane */
+#left-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 400px;
+    overflow: hidden;
+}
+
+/* Sub-panes within left pane */
+.sub-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 100px;
+    overflow: hidden;
+}
+
+#terminal-pane {
+    flex: 1;
+    background: #1e1e1e;
+}
+
+#error-log-pane {
+    height: 250px;
+    background: #1e1e1e;
+    border-top: 1px solid #3e3e42;
+}
+
+/* Resize handles */
+.resize-handle {
+    flex-shrink: 0;
+    position: relative;
+}
+
+.resize-handle.horizontal {
+    height: 5px;
+    width: 100%;
+    background: #3e3e42;
+    cursor: row-resize;
+}
+
+.resize-handle.vertical {
+    width: 5px;
+    background: #3e3e42;
+    cursor: col-resize;
+}
+
+.resize-handle:hover {
+    background: #0e639c;
+}
+
+.resize-handle:active {
+    background: #1177bb;
+}
+
+/* Legacy support - rename old resize-handle ID */
+#vertical-resize-handle {
+    width: 5px;
+    background: #3e3e42;
+    cursor: col-resize;
+}
+
+/* Error Log List */
+.error-log-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    font-size: 11px;
+}
+
+.error-log-item {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-left: 4px solid #d32f2f;
+    border-radius: 3px;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.error-log-item:hover {
+    background: #37373d;
+    border-color: #f44336;
+}
+
+.error-log-item-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+}
+
+/* Arrow indicator inline */
+.error-log-item-header::before {
+    content: '▼';
+    font-size: 8px;
+    color: #858585;
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+.error-log-item.collapsed .error-log-item-header::before {
+    transform: rotate(-90deg);
+}
+
+.error-log-interp {
+    font-weight: 600;
+    color: #f48771;
+    min-width: 60px;
+    flex-shrink: 0;
+}
+
+.error-log-preview {
+    flex: 1;
+    color: #d4d4d4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.error-log-time {
+    font-size: 9px;
+    color: #858585;
+    flex-shrink: 0;
+}
+
+/* Details section - hidden when collapsed */
+.error-log-details {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #3e3e42;
+}
+
+.error-log-item.collapsed .error-log-details {
+    display: none;
+}
+
+.error-log-info {
+    background: #1a1a1a;
+    padding: 6px;
+    border-radius: 2px;
+    color: #f48771;
+    overflow-x: auto;
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 1.3;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 0;
+}
+
+.error-log-code {
+    margin-top: 4px;
+    font-size: 9px;
+    color: #858585;
+}
+
+.error-log-code code {
+    background: #1a1a1a;
+    padding: 2px 4px;
+    border-radius: 2px;
+    color: #dcdcaa;
+}
+
+/* Error badge - keep existing styles but ensure visibility */
+.error-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #d32f2f;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.3s;
+    margin-right: 12px;
+}
+
+.error-badge:hover {
+    background: #f44336;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(211, 47, 47, 0.4);
+}
+
+.error-badge.hidden {
+    display: none;
+}
+
+.error-icon {
+    font-size: 16px;
+}
+
+.error-count {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+    min-width: 20px;
+    text-align: center;
+}
+
+/* Error Notification (Toast) */
+.error-notification {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 350px;
+    background: #2d2d30;
+    border: 2px solid #d32f2f;
+    border-radius: 6px;
+    padding: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    cursor: pointer;
+    animation: slideIn 0.3s ease-out;
+    transition: opacity 0.3s;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.error-notification.fade-out {
+    opacity: 0;
+    transform: translateX(400px);
+}
+
+.error-notification:hover {
+    border-color: #f44336;
+    box-shadow: 0 6px 24px rgba(211, 47, 47, 0.4);
+}
+
+.error-notification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    color: #f48771;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.error-notification-time {
+    font-size: 10px;
+    color: #858585;
+    font-weight: normal;
+}
+
+.error-notification-body {
+    color: #d4d4d4;
+    font-size: 11px;
+    line-height: 1.4;
+    max-height: 60px;
+    overflow: hidden;
+}
+
+/* Responsive adjustments */
+@media (max-width: 900px) {
+    #main-content {
+        flex-direction: column;
+    }
+    
+    #left-pane {
+        width: 100%;
+        height: 50%;
+    }
+    
+    #datapoint-pane {
+        width: 100%;
+        height: 50%;
+        border-left: none;
+        border-top: 1px solid #3e3e42;
+    }
+    
+    #vertical-resize-handle {
+        display: none;
+    }
+    
+    #error-log-pane {
+        height: 150px;
+    }
+}
+
     </style>
 </head>
 <body>
@@ -524,28 +1084,53 @@ body {
             <h1>dserv Console</h1>
         </div>
         <div class="header-right">
+            <!-- Error badge -->
+            <button id="error-badge" class="error-badge hidden">
+                <span class="error-icon">⚠️</span>
+                <span class="error-count">0</span>
+            </button>
             <span id="status" class="status disconnected">Disconnected</span>
         </div>
     </div>
 
     <!-- Main content area with split panes -->
     <div id="main-content">
-        <!-- Left pane: Terminal -->
-        <div id="terminal-pane" class="pane">
-            <div class="pane-header">
-                <span class="pane-title">Terminal</span>
-                <div class="pane-controls">
-                    <select id="interp-selector" class="interp-selector" title="Select interpreter">
-                        <option value="dserv">dserv</option>
-                    </select>
-                    <button id="clear-terminal" class="icon-btn" title="Clear terminal (Ctrl+L)">⌧</button>
+        <!-- Left side: Terminal (top) + Error Log (bottom) -->
+        <div id="left-pane" class="pane">
+            <!-- Terminal -->
+            <div id="terminal-pane" class="sub-pane">
+                <div class="pane-header">
+                    <span class="pane-title">Terminal</span>
+                    <div class="pane-controls">
+                        <select id="interp-selector" class="interp-selector" title="Select interpreter">
+                            <option value="dserv">dserv</option>
+                        </select>
+                        <button id="clear-terminal" class="icon-btn" title="Clear terminal (Ctrl+L)">⌧</button>
+                    </div>
+                </div>
+                <div id="terminal" class="terminal-output"></div>
+            </div>
+
+            <!-- Horizontal resize handle -->
+            <div id="horizontal-resize-handle" class="resize-handle horizontal"></div>
+
+            <!-- Error Log -->
+            <div id="error-log-pane" class="sub-pane">
+                <div class="pane-header">
+                    <span class="pane-title">Error Log</span>
+                    <div class="pane-controls">
+                        <span id="error-log-count" class="update-count">0 errors</span>
+                        <button id="clear-error-log" class="icon-btn" title="Clear error log">Clear</button>
+                    </div>
+                </div>
+                <div id="error-log-list" class="error-log-list">
+                    <div class="placeholder">No errors logged</div>
                 </div>
             </div>
-            <div id="terminal" class="terminal-output"></div>
         </div>
 
-        <!-- Resize handle -->
-        <div id="resize-handle"></div>
+        <!-- Vertical resize handle -->
+        <div id="vertical-resize-handle" class="resize-handle vertical"></div>
 
         <!-- Right pane: Datapoint Explorer -->
         <div id="datapoint-pane" class="pane">
@@ -583,26 +1168,6 @@ body {
                     <div class="placeholder">Select a datapoint to view details</div>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <!-- Control Panel (bottom) -->
-    <div id="control-panel">
-        <div class="control-group">
-            <label>Get:</label>
-            <input type="text" id="get-name" placeholder="datapoint name">
-            <button onclick="getDatapoint()">Get</button>
-        </div>
-        <div class="control-group">
-            <label>Set:</label>
-            <input type="text" id="set-name" placeholder="datapoint name">
-            <input type="text" id="set-value" placeholder="value">
-            <button onclick="setDatapoint()">Set</button>
-        </div>
-        <div class="control-group">
-            <label>Touch:</label>
-            <input type="text" id="touch-name" placeholder="datapoint name">
-            <button onclick="touchDatapoint()">Touch</button>
         </div>
     </div>
 
@@ -775,9 +1340,17 @@ const wsManager = new DservWebSocket();
 // Resize handle functionality
 // ============================================
 
-function initResizeHandle() {
-    const handle = document.getElementById('resize-handle');
-    const terminalPane = document.getElementById('terminal-pane');
+function initResizeHandles() {
+    // Vertical resize (left pane vs datapoint pane)
+    initVerticalResize();
+    
+    // Horizontal resize (terminal vs error log)
+    initHorizontalResize();
+}
+
+function initVerticalResize() {
+    const handle = document.getElementById('vertical-resize-handle');
+    const leftPane = document.getElementById('left-pane');
     const datapointPane = document.getElementById('datapoint-pane');
     let isResizing = false;
     let startX = 0;
@@ -809,46 +1382,44 @@ function initResizeHandle() {
     });
 }
 
-// ============================================
-// Control panel functions (datapoint operations)
-// ============================================
+function initHorizontalResize() {
+    const handle = document.getElementById('horizontal-resize-handle');
+    const terminalPane = document.getElementById('terminal-pane');
+    const errorLogPane = document.getElementById('error-log-pane');
+    let isResizing = false;
+    let startY = 0;
+    let startHeightTerminal = 0;
+    let startHeightError = 0;
 
-function getDatapoint() {
-    const name = document.getElementById('get-name').value.trim();
-    if (!name) return;
-
-    wsManager.send({
-        cmd: 'get',
-        name: name
-    });
-}
-
-function setDatapoint() {
-    const name = document.getElementById('set-name').value.trim();
-    const value = document.getElementById('set-value').value;
-
-    if (!name) return;
-
-    wsManager.send({
-        cmd: 'set',
-        name: name,
-        value: value
+    handle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startY = e.clientY;
+        startHeightTerminal = terminalPane.offsetHeight;
+        startHeightError = errorLogPane.offsetHeight;
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
     });
 
-    document.getElementById('set-name').value = '';
-    document.getElementById('set-value').value = '';
-}
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
 
-function touchDatapoint() {
-    const name = document.getElementById('touch-name').value.trim();
-    if (!name) return;
-
-    wsManager.send({
-        cmd: 'touch',
-        name: name
+        const deltaY = e.clientY - startY;
+        const newTerminalHeight = Math.max(150, startHeightTerminal + deltaY);
+        const newErrorHeight = Math.max(100, startHeightError - deltaY);
+        
+        terminalPane.style.flex = 'none';
+        terminalPane.style.height = `${newTerminalHeight}px`;
+        errorLogPane.style.height = `${newErrorHeight}px`;
     });
 
-    document.getElementById('touch-name').value = '';
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+    });
 }
 
 // ============================================
@@ -856,21 +1427,8 @@ function touchDatapoint() {
 // ============================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize resize handle
-    initResizeHandle();
-
-    // Add Enter key handlers for control inputs
-    document.getElementById('get-name').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') getDatapoint();
-    });
-
-    document.getElementById('set-value').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') setDatapoint();
-    });
-
-    document.getElementById('touch-name').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') touchDatapoint();
-    });
+    // Initialize resize handles
+    initResizeHandles();
 
     // Connect to WebSocket
     wsManager.connect();
@@ -1980,6 +2538,270 @@ let datapointExplorer;
 
 document.addEventListener('DOMContentLoaded', () => {
     datapointExplorer = new DatapointExplorer(wsManager);
+});
+
+    </script>
+    <script>
+// ============================================
+// Error Monitor Module
+// ============================================
+
+class ErrorMonitor {
+    constructor(wsManager) {
+        this.ws = wsManager;
+        this.errors = []; // Array of error objects
+        this.maxErrors = 100; // Keep last 100 errors
+        this.errorPattern = 'error/*'; // Pattern to match all error datapoints
+        this.isSubscribed = false;
+
+        // DOM elements
+        this.logListElement = document.getElementById('error-log-list');
+        this.logCountElement = document.getElementById('error-log-count');
+        this.badgeElement = document.getElementById('error-badge');
+        this.clearButton = document.getElementById('clear-error-log');
+
+        // Listen for WebSocket events
+        this.ws.on('connected', () => this.handleConnected());
+        this.ws.on('datapoint:update', (data) => this.handleDatapointUpdate(data));
+
+        this.init();
+    }
+
+    init() {
+        this.attachEventListeners();
+    }
+
+    attachEventListeners() {
+        // Clear button
+        if (this.clearButton) {
+            this.clearButton.addEventListener('click', () => this.clearErrors());
+        }
+
+        // Badge click - scroll to error log
+        if (this.badgeElement) {
+            this.badgeElement.addEventListener('click', () => this.scrollToErrorLog());
+        }
+
+        // ESC key to clear selection (optional)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                // Could add behavior here if needed
+            }
+        });
+    }
+
+    scrollToErrorLog() {
+        const errorLogPane = document.getElementById('error-log-pane');
+        if (errorLogPane) {
+            errorLogPane.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            // Briefly highlight the error log
+            errorLogPane.style.borderTop = '2px solid #d32f2f';
+            setTimeout(() => {
+                errorLogPane.style.borderTop = '1px solid #3e3e42';
+            }, 1000);
+        }
+    }
+
+    handleConnected() {
+        // Subscribe to all error datapoints
+        this.subscribeToErrors();
+    }
+
+    subscribeToErrors() {
+        // Subscribe to error pattern
+        this.ws.send({
+            cmd: 'subscribe',
+            match: 'error/*',
+            every: 1
+        });
+        this.isSubscribed = true;
+        console.log('Subscribed to error/* for monitoring');
+    }
+
+    handleDatapointUpdate(data) {
+        // Check if this is an error datapoint
+        if (!data.name || !data.name.startsWith('error/')) {
+            return;
+        }
+
+        const value = data.data !== undefined ? data.data : data.value;
+        
+        // Skip if empty/null
+        if (!value) {
+            return;
+        }
+
+        // Parse error data
+        let errorData;
+        try {
+            if (typeof value === 'string') {
+                // Try to parse as JSON
+                try {
+                    errorData = JSON.parse(value);
+                } catch {
+                    // If not JSON, treat as plain errorInfo string
+                    errorData = {
+                        interpreter: data.name.replace('error/', ''),
+                        errorInfo: value,
+                        timestamp: data.timestamp || Date.now()
+                    };
+                }
+            } else if (typeof value === 'object') {
+                errorData = value;
+            } else {
+                return; // Unknown format
+            }
+        } catch (e) {
+            console.error('Failed to parse error data:', e);
+            return;
+        }
+
+        // Add metadata
+        errorData.dpName = data.name;
+        errorData.receivedAt = new Date();
+        errorData.id = Date.now() + Math.random();
+
+        // Check for duplicates - don't add if last error is identical
+        if (this.errors.length > 0) {
+            const lastError = this.errors[this.errors.length - 1];
+            if (lastError.interpreter === errorData.interpreter &&
+                lastError.errorInfo === errorData.errorInfo &&
+                lastError.errorCode === errorData.errorCode) {
+                console.log('Duplicate error ignored:', errorData.interpreter);
+                return; // Skip duplicate
+            }
+        }
+
+        // Add to errors list
+        this.errors.push(errorData);
+
+        // Limit errors
+        if (this.errors.length > this.maxErrors) {
+            this.errors.shift();
+        }
+
+        // Update UI
+        this.renderErrorLog();
+        this.updateBadge();
+        // No toast notification - error log is always visible
+
+        console.log('Error logged:', errorData);
+    }
+
+    renderErrorLog() {
+        if (this.errors.length === 0) {
+            this.logListElement.innerHTML = '<div class="placeholder">No errors logged</div>';
+            return;
+        }
+
+        // Render errors (newest first)
+        const errorsHtml = this.errors.slice().reverse().map(error => {
+            const firstLine = this.getFirstLine(error.errorInfo);
+            const fullError = this.formatErrorInfo(error.errorInfo);
+            const interpName = error.interpreter || error.dpName.replace('error/', '') || 'unknown';
+            
+            return `
+                <div class="error-log-item collapsed" data-error-id="${error.id}">
+                    <div class="error-log-item-header">
+                        <span class="error-log-interp">${interpName}</span>
+                        <span class="error-log-preview">${this.escapeHtml(firstLine)}</span>
+                        <span class="error-log-time">${this.formatTime(error.receivedAt)}</span>
+                    </div>
+                    <div class="error-log-details">
+                        <pre class="error-log-info">${fullError}</pre>
+                        ${error.errorCode ? `<div class="error-log-code">Code: <code>${this.escapeHtml(error.errorCode)}</code></div>` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        this.logListElement.innerHTML = errorsHtml;
+
+        // Add click handlers to toggle expand/collapse
+        this.logListElement.querySelectorAll('.error-log-item').forEach(item => {
+            item.addEventListener('click', () => {
+                item.classList.toggle('collapsed');
+            });
+        });
+
+        // Auto-scroll to top (newest error)
+        this.logListElement.scrollTop = 0;
+    }
+
+    getFirstLine(errorInfo) {
+        if (!errorInfo) return 'No error information';
+        const str = String(errorInfo);
+        const firstLine = str.split('\n')[0];
+        // Limit length
+        return firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine;
+    }
+
+    formatErrorInfo(errorInfo) {
+        if (!errorInfo) return 'No error information';
+        
+        // Escape HTML
+        const escaped = this.escapeHtml(String(errorInfo));
+        
+        // Limit length for display
+        if (escaped.length > 300) {
+            return escaped.substring(0, 300) + '\n... (truncated)';
+        }
+        
+        return escaped;
+    }
+
+    formatTime(date) {
+        const now = new Date();
+        const diff = now - date;
+        
+        if (diff < 60000) { // Less than 1 minute
+            return 'just now';
+        } else if (diff < 3600000) { // Less than 1 hour
+            const mins = Math.floor(diff / 60000);
+            return `${mins}m ago`;
+        } else if (diff < 86400000) { // Less than 1 day
+            return date.toLocaleTimeString();
+        } else {
+            return date.toLocaleString();
+        }
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    updateBadge() {
+        // Update count
+        this.logCountElement.textContent = `${this.errors.length} error${this.errors.length === 1 ? '' : 's'}`;
+        
+        // Show/hide badge
+        if (this.errors.length === 0) {
+            this.badgeElement.classList.add('hidden');
+        } else {
+            this.badgeElement.classList.remove('hidden');
+            this.badgeElement.querySelector('.error-count').textContent = this.errors.length;
+        }
+    }
+
+    clearErrors() {
+        if (this.errors.length === 0) return;
+        
+        this.errors = [];
+        this.renderErrorLog();
+        this.updateBadge();
+    }
+}
+
+// ============================================
+// Initialize error monitor when DOM is ready
+// ============================================
+
+let errorMonitor;
+
+document.addEventListener('DOMContentLoaded', () => {
+    errorMonitor = new ErrorMonitor(wsManager);
 });
 
     </script>

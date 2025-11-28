@@ -26,6 +26,7 @@ def build():
     app_js = read_file(base_dir / 'app.js')
     terminal_js = read_file(base_dir / 'terminal.js')
     datapoints_js = read_file(base_dir / 'datapoints.js')
+    errors_js = read_file(base_dir / 'errors.js')
     
     # Replace external CSS with inline style (simple string replace)
     html = html.replace(
@@ -47,6 +48,11 @@ def build():
     html = html.replace(
         '<script src="datapoints.js"></script>',
         f'<script>\n{datapoints_js}\n    </script>'
+    )
+    
+    html = html.replace(
+        '<script src="errors.js"></script>',
+        f'<script>\n{errors_js}\n    </script>'
     )
     
     # Write output

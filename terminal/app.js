@@ -166,9 +166,17 @@ const wsManager = new DservWebSocket();
 // Resize handle functionality
 // ============================================
 
-function initResizeHandle() {
-    const handle = document.getElementById('resize-handle');
-    const terminalPane = document.getElementById('terminal-pane');
+function initResizeHandles() {
+    // Vertical resize (left pane vs datapoint pane)
+    initVerticalResize();
+    
+    // Horizontal resize (terminal vs error log)
+    initHorizontalResize();
+}
+
+function initVerticalResize() {
+    const handle = document.getElementById('vertical-resize-handle');
+    const leftPane = document.getElementById('left-pane');
     const datapointPane = document.getElementById('datapoint-pane');
     let isResizing = false;
     let startX = 0;
@@ -200,46 +208,44 @@ function initResizeHandle() {
     });
 }
 
-// ============================================
-// Control panel functions (datapoint operations)
-// ============================================
+function initHorizontalResize() {
+    const handle = document.getElementById('horizontal-resize-handle');
+    const terminalPane = document.getElementById('terminal-pane');
+    const errorLogPane = document.getElementById('error-log-pane');
+    let isResizing = false;
+    let startY = 0;
+    let startHeightTerminal = 0;
+    let startHeightError = 0;
 
-function getDatapoint() {
-    const name = document.getElementById('get-name').value.trim();
-    if (!name) return;
-
-    wsManager.send({
-        cmd: 'get',
-        name: name
-    });
-}
-
-function setDatapoint() {
-    const name = document.getElementById('set-name').value.trim();
-    const value = document.getElementById('set-value').value;
-
-    if (!name) return;
-
-    wsManager.send({
-        cmd: 'set',
-        name: name,
-        value: value
+    handle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startY = e.clientY;
+        startHeightTerminal = terminalPane.offsetHeight;
+        startHeightError = errorLogPane.offsetHeight;
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
     });
 
-    document.getElementById('set-name').value = '';
-    document.getElementById('set-value').value = '';
-}
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
 
-function touchDatapoint() {
-    const name = document.getElementById('touch-name').value.trim();
-    if (!name) return;
-
-    wsManager.send({
-        cmd: 'touch',
-        name: name
+        const deltaY = e.clientY - startY;
+        const newTerminalHeight = Math.max(150, startHeightTerminal + deltaY);
+        const newErrorHeight = Math.max(100, startHeightError - deltaY);
+        
+        terminalPane.style.flex = 'none';
+        terminalPane.style.height = `${newTerminalHeight}px`;
+        errorLogPane.style.height = `${newErrorHeight}px`;
     });
 
-    document.getElementById('touch-name').value = '';
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        }
+    });
 }
 
 // ============================================
@@ -247,21 +253,8 @@ function touchDatapoint() {
 // ============================================
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize resize handle
-    initResizeHandle();
-
-    // Add Enter key handlers for control inputs
-    document.getElementById('get-name').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') getDatapoint();
-    });
-
-    document.getElementById('set-value').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') setDatapoint();
-    });
-
-    document.getElementById('touch-name').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') touchDatapoint();
-    });
+    // Initialize resize handles
+    initResizeHandles();
 
     // Connect to WebSocket
     wsManager.connect();
