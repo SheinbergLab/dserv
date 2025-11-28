@@ -11,6 +11,9 @@ package require yajltcl
 
 package require math::linearalgebra
 
+# enable error logging
+errormon enable
+
 namespace eval biquadratic {
     namespace import ::math::linearalgebra::*
     

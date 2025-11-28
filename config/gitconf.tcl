@@ -8,6 +8,9 @@ set dspath [file dir [info nameofexecutable]]
 set base [file join [zipfs root] dlsh]
 set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 
+# enable error logging
+errormon enable
+
 namespace eval git {
     variable path {}
     variable setuid 0

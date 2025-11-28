@@ -14,6 +14,9 @@ package require qpcs
 
 tcl::tm::add $dspath/lib
 
+# enable error logging
+errormon enable
+
 # configure our mesh dispatcher (started on 2575 if enabled)
 if { [info exists ::mesh_enabled] } {
     puts "Mesh networking detected - loading mesh configuration"

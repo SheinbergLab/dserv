@@ -11,6 +11,9 @@ tcl::tm::add $dspath/lib
 
 package require dlsh
 
+# enable error logging
+errormon enable
+
 namespace eval viz {
     # Current configuration state
     variable current_system ""

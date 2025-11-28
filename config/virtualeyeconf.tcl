@@ -7,6 +7,9 @@ set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 package require dlsh
 tcl::tm::add $dspath/lib
 
+# enable error logging
+errormon enable
+
 set virtual_eye(h) 0.0
 set virtual_eye(v) 0.0
 

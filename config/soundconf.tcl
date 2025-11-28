@@ -5,6 +5,8 @@ set dspath [file dir [info nameofexecutable]]
 set base [file join [zipfs root] dlsh]
 set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 
+# enable error logging
+errormon enable
 
 # load sound module
 set ess_modules "sound"

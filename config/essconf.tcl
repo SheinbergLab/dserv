@@ -14,6 +14,9 @@ package require yajltcl
 
 tcl::tm::add $dspath/lib
 
+# enable error logging
+errormon enable
+
 # initialize ip addr datapoint
 dservSet ess/ipaddr ""
 
