@@ -402,6 +402,7 @@ add_executable(dserv
     src/TclServer.cpp
     src/TclCompletion.cpp
     src/MeshManager.cpp
+    src/ErrorMonitor.cpp
     src/dpoint_process.c 
     src/mdns.c 
     src/mdns_advertise.c
