@@ -179,7 +179,7 @@ int main(int argc, char *argv[])
   // Create core dserv components
   dserver = new Dataserver(argc, argv);
   tclserver = new TclServer(argc, argv, dserver, "dserv", 2570, 2560, 2565);
-  TclServerRegistry.registerObject("ess", tclserver);
+  TclServerRegistry.registerObject("dserv", tclserver);
 
   setVersionInfo(tclserver);
 
