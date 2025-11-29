@@ -63,6 +63,63 @@ static CompletionContext parseContext(const std::string& input) {
 }
 
 // ============================================
+// Filename Completion Function
+// ============================================
+
+std::vector<std::string> getFilenameCompletions(Tcl_Interp* interp,
+                                                 const std::string& partial,
+                                                 bool dirsOnly) {
+    std::vector<std::string> results;
+    
+    if (partial.empty()) {
+        return results;
+    }
+    
+    // Build glob pattern
+    std::string globPattern = partial + "*";
+    
+    // Build glob command with proper options
+    std::string cmd = "glob -nocomplain ";
+    if (dirsOnly) {
+        cmd += "-types d ";
+    }
+    cmd += "-- {" + globPattern + "}";
+    
+    // Execute glob
+    if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
+        const char* listStr = Tcl_GetStringResult(interp);
+        TclListSize objc;
+        Tcl_Obj** objv;
+        Tcl_Obj* listObj = Tcl_NewStringObj(listStr, -1);
+        Tcl_IncrRefCount(listObj);
+        
+        if (Tcl_ListObjGetElements(interp, listObj, &objc, &objv) == TCL_OK) {
+            for (TclListSize i = 0; i < objc; i++) {
+                std::string path = Tcl_GetString(objv[i]);
+                
+                // Check if this is a directory and add trailing /
+                // Use file isdirectory to check
+                std::string checkCmd = "file isdirectory {" + path + "}";
+                if (Tcl_Eval(interp, checkCmd.c_str()) == TCL_OK) {
+                    const char* isDirStr = Tcl_GetStringResult(interp);
+                    if (isDirStr && isDirStr[0] == '1') {
+                        // It's a directory - add trailing /
+                        if (!path.empty() && path[path.length() - 1] != '/') {
+                            path += "/";
+                        }
+                    }
+                }
+                
+                results.push_back(path);
+            }
+        }
+        Tcl_DecrRefCount(listObj);
+    }
+    
+    return results;
+}
+
+// ============================================
 // Core Completion Function
 // ============================================
 
@@ -351,6 +408,66 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                 Tcl_DecrRefCount(listObj);
             }
             return results;
+        }
+        
+        // 5. Filename completion for file-taking commands
+        bool needsFilenameCompletion = false;
+        bool dirsOnly = false;
+        
+        // Commands that take filenames
+        if (ctx.command == "source" || ctx.command == "open" || 
+            ctx.command == "exec" || ctx.command == "load" ||
+            ctx.command == "glob") {
+            needsFilenameCompletion = true;
+        }
+        
+        // cd takes directories only
+        if (ctx.command == "cd") {
+            needsFilenameCompletion = true;
+            dirsOnly = true;
+        }
+        
+        // file subcommands that take paths
+        if (ctx.command == "file" && ctx.wordIndex >= 2) {
+            needsFilenameCompletion = true;
+        }
+        
+        // Also check if the partial looks like a path pattern
+        if (!needsFilenameCompletion) {
+            if (ctx.partial.length() > 0) {
+                // Absolute path
+                if (ctx.partial[0] == '/') {
+                    needsFilenameCompletion = true;
+                }
+                // Relative paths
+                else if (ctx.partial.length() >= 2) {
+                    if ((ctx.partial[0] == '.' && ctx.partial[1] == '/') ||
+                        (ctx.partial[0] == '~' && ctx.partial[1] == '/')) {
+                        needsFilenameCompletion = true;
+                    }
+                    else if (ctx.partial.length() >= 3 &&
+                             ctx.partial[0] == '.' && ctx.partial[1] == '.' && ctx.partial[2] == '/') {
+                        needsFilenameCompletion = true;
+                    }
+                }
+                // Special case: just "." or ".." or "~"
+                else if (ctx.partial == "." || ctx.partial == ".." || ctx.partial == "~") {
+                    needsFilenameCompletion = true;
+                }
+            }
+        }
+        
+        // Perform filename completion if needed
+        if (needsFilenameCompletion) {
+            std::vector<std::string> filenames = getFilenameCompletions(interp, ctx.partial, dirsOnly);
+            for (const auto& filename : filenames) {
+                addWithCommandPrefix(filename);
+            }
+            
+            // Return filename completions (don't fall through to command completion)
+            if (!results.empty()) {
+                return results;
+            }
         }
     }
     

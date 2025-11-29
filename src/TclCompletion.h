@@ -33,6 +33,19 @@ namespace TclCompletion {
 std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& partial);
 
 /**
+ * Get filename/path completions using glob
+ * Expands partial paths and adds trailing / for directories
+ * 
+ * @param interp Tcl interpreter to query
+ * @param partial Partial path to complete (e.g., "/home/da", "./data/", "~/")
+ * @param dirsOnly If true, only complete directories
+ * @return Vector of matching filenames/paths with trailing / for directories
+ */
+std::vector<std::string> getFilenameCompletions(Tcl_Interp* interp, 
+                                                 const std::string& partial,
+                                                 bool dirsOnly = false);
+
+/**
  * Get completions from a remote interpreter via 'send'
  * Requires that the target interpreter has the 'complete' command registered
  * 
