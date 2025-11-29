@@ -436,7 +436,8 @@ void TclServer::start_websocket_server(void)
           WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
           
           if (!userData || !userData->rqueue) {
-            std::cerr << "ERROR: Invalid userData in WebSocket open handler" << std::endl;
+            std::cerr <<
+	      "ERROR: Invalid userData in WebSocket open handler" << std::endl;
             ws->close();
             return;
           }
@@ -450,7 +451,9 @@ void TclServer::start_websocket_server(void)
 	      this->ds->add_new_send_client(userData->notification_queue);
             
             if (userData->dataserver_client_id.empty()) {
-              std::cerr << "Failed to register WebSocket client with Dataserver" << std::endl;
+              std::cerr <<
+		"Failed to register WebSocket client with Dataserver" <<
+		std::endl;
               delete userData->notification_queue;
               userData->notification_queue = nullptr;
               ws->close();
@@ -989,6 +992,43 @@ void TclServer::sendLargeMessage(WebSocketType* ws,
     //    std::cout << "Sent " << totalChunks << " chunks for message " << messageId << std::endl;
 }
 
+/********************************* exit *********************************/
+
+// Custom exit command for subprocess control
+static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
+			       int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) clientData;
+  
+  // Check if this is the main dserv process
+  if (tserv->name == "dserv" || tserv->name == "") {
+    Tcl_SetResult(interp, 
+		  (char *)"Cannot exit main dserv process. Use 'shutdown' instead.", 
+		  TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  // For subprocesses, allow exit with optional code
+  int exitCode = 0;
+  if (objc > 1) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &exitCode) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  
+  // Store exit code in a datapoint for monitoring
+  //  std::string dp_name = tserv->name + "/exit_code";
+  //  tserv->ds->set(dp_name.c_str(), exitCode);
+  
+  std::cout << "Subprocess '" << tserv->name 
+	    << "' exiting with code " << exitCode << std::endl;
+  
+  // Trigger clean shutdown
+  tserv->shutdown();
+  
+  return TCL_OK;
+}
+
 /********************************* now *********************************/
 
 static int now_command (ClientData data, Tcl_Interp *interp,
@@ -1174,6 +1214,26 @@ static int get_var_command(ClientData data, Tcl_Interp *interp,
 
 /******************************* process *******************************/
 
+static void update_subprocess_dpoint(TclServer *tclserver)
+{
+  // update dserv/interps
+  ds_datapoint_t dpoint;
+  auto names = TclServerRegistry.getNames();
+  
+  // Convert to Tcl list
+  std::string interpList;
+  for (const auto& n : names) {
+    if (!interpList.empty()) interpList += " ";
+    interpList += n;
+  }  
+  
+  /* fill the data point */
+  dpoint_set(&dpoint, (char *) tclserver->INTERPS_DPOINT_NAME,
+	     tclserver->ds->now(), DSERV_STRING, interpList.size(),
+	     (unsigned char *) interpList.c_str());
+  tclserver->ds->set(dpoint);  
+}
+
 static int subprocess_command (ClientData data, Tcl_Interp *interp,
                    int objc, Tcl_Obj *objv[])
 {
@@ -1186,7 +1246,6 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
   
-  
   if (objc > 3) {
     if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
       return TCL_ERROR;
@@ -1196,12 +1255,21 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   else if (objc > 2) {
     script = std::string(Tcl_GetString(objv[2]));  
   }
+
+  char *name = Tcl_GetString(objv[1]);
   
-  TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
-                   tclserver->ds,
-                   Tcl_GetString(objv[1]), port);
+  if (TclServerRegistry.exists(name)) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": child process \"",
+		     name, "\" already exists", NULL);
+    return TCL_ERROR;
+  }
+ 
+  TclServer *child = new TclServer(tclserver->argc,
+				   tclserver->argv,
+				   tclserver->ds,
+				   name, port);
                   
-  TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
+  TclServerRegistry.registerObject(name, child);
 
   if (!script.empty()) {
     auto result = child->eval(script);
@@ -1212,22 +1280,8 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
     }
   }
 
-  // update dserv/interps
-  ds_datapoint_t dpoint;
-  auto names = TclServerRegistry.getNames();
-
-  // Convert to Tcl list
-  std::string interpList;
-  for (const auto& n : names) {
-    if (!interpList.empty()) interpList += " ";
-    interpList += n;
-  }  
-  
-  /* fill the data point */
-  dpoint_set(&dpoint, (char *) tclserver->INTERPS_DPOINT_NAME,
-	     tclserver->ds->now(), DSERV_STRING, interpList.size(), (unsigned char *) interpList.c_str());
-  tclserver->ds->set(dpoint);  
-
+  // update list of current subprocesses
+  update_subprocess_dpoint(tclserver);
   
   Tcl_SetObjResult(interp, Tcl_NewStringObj(child->client_name.c_str(), -1));
   
@@ -1785,7 +1839,17 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
   if (tserv->hasCommandCallback()) {
       tserv->callCommandCallback(interp);
   }
-    
+ 
+  // Common initialization for all interpreters
+  const char *init_script = 
+    "set dspath [file dir [info nameofexecutable]]\n"
+    "set base [file join [zipfs root] dlsh]\n"
+    "set auto_path [linsert $auto_path [set auto_path 0] $base/lib]\n";
+  
+  if (Tcl_Eval(interp, init_script) != TCL_OK) {
+    return TCL_ERROR;
+  }
+  
   return TCL_OK;
 }
 
@@ -1960,6 +2024,10 @@ static int process_requests(TclServer *tserv)
   // Create ErrorMonitor
   ErrorMonitor* errorMonitor = new ErrorMonitor(tserv);
   ErrorMonitor::registerCommand(interp, errorMonitor);
+
+  // Override the default exit command with our subprocess-aware version
+  Tcl_CreateObjCommand(interp, "exit", subprocess_exit_cmd, 
+		       (ClientData)tserv, NULL);
   
   /* process until receive a message saying we are done */
   while (!tserv->m_bDone) {
@@ -1970,67 +2038,67 @@ static int process_requests(TclServer *tserv)
     switch (req.type) {
     case REQ_SCRIPT:
       {
-    const char *script = req.script.c_str();
-
-    retcode = Tcl_Eval(interp, script);
-    const char *rcstr = Tcl_GetStringResult(interp);
-    
-    if (retcode == TCL_OK) {
-      if (rcstr) {
-        req.rqueue->push_back(std::string(rcstr));
+	const char *script = req.script.c_str();
+	
+	retcode = Tcl_Eval(interp, script);
+	const char *rcstr = Tcl_GetStringResult(interp);
+	
+	if (retcode == TCL_OK) {
+	  if (rcstr) {
+	    req.rqueue->push_back(std::string(rcstr));
+	  }
+	  else {
+	    req.rqueue->push_back("");
+	  }
+	}
+	else {
+	  if (rcstr) {
+	    req.rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
+	    //      std::cout << "Error: " + std::string(rcstr) << std::endl;
+	    
+	  }
+	  else {
+	    req.rqueue->push_back("Error:");
+	  }
+	}
       }
-      else {
-        req.rqueue->push_back("");
-      }
-    }
-    else {
-      if (rcstr) {
-        req.rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
-        //      std::cout << "Error: " + std::string(rcstr) << std::endl;
-        
-      }
-      else {
-        req.rqueue->push_back("Error:");
-      }
-    }
-      }
-
+      
       break;
     case REQ_SCRIPT_NOREPLY:
       {
-    const char *script = req.script.c_str();
-    retcode = Tcl_Eval(interp, script);
+	const char *script = req.script.c_str();
+	retcode = Tcl_Eval(interp, script);
       }
       break;
     case REQ_DPOINT:
       {
-    tserv->ds->set(req.dpoint);
+	tserv->ds->set(req.dpoint);
       }
       break;
     case REQ_DPOINT_SCRIPT:
       {
-    ds_datapoint_t *dpoint = req.dpoint;
-    std::string varname(dpoint->varname);
-    
-    // Process events through EventDispatcher first
-    if (varname == "eventlog/events" && tserv->eventDispatcher) {
-        tserv->eventDispatcher->processEvent(dpoint);
-    }
+	ds_datapoint_t *dpoint = req.dpoint;
+	std::string varname(dpoint->varname);
+	
+	// Process events through EventDispatcher first
+	if (varname == "eventlog/events" && tserv->eventDispatcher) {
+	  tserv->eventDispatcher->processEvent(dpoint);
+	}
         
-    // evaluate a dpoint script
-    std::string script;
-    if (tserv->dpoint_scripts.find(varname, script)) {
-      ds_datapoint_t *dpoint = req.dpoint;
-      const char *dpoint_script = script.c_str();
-      int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
-    }
-    else if (tserv->dpoint_scripts.find_match(varname, script)) {
-      ds_datapoint_t *dpoint = req.dpoint;
-      const char *dpoint_script = script.c_str();
-      int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
-    }
-
-    dpoint_free(dpoint);
+	// evaluate a dpoint script
+	std::string script;
+	if (tserv->dpoint_scripts.find(varname, script)) {
+	  ds_datapoint_t *dpoint = req.dpoint;
+	  const char *dpoint_script = script.c_str();
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	}
+	else if (tserv->dpoint_scripts.find_match(varname, script)) {
+	  ds_datapoint_t *dpoint = req.dpoint;
+	  const char *dpoint_script = script.c_str();
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	}
+	
+	dpoint_free(dpoint);
       }
     default:
       break;
@@ -2039,6 +2107,9 @@ static int process_requests(TclServer *tserv)
 
   // Clean up ErrorMonitor
   delete errorMonitor;
+
+  TclServerRegistry.unregisterObject(tserv->name);
+  update_subprocess_dpoint(tserv);
   
   tserv->setInterp(nullptr);
   Tcl_DeleteInterp(interp);
@@ -2130,19 +2201,15 @@ TclServer::tcp_client_process(TclServer *tserv,
       std::string s;
       client_request.script = std::string(script);
 
-      // ignore certain commands, especially exit...
-      if (!client_request.script.compare(0, 4, "exit")) {
-        s = std::string("");
-      } else {
-        // push request onto queue for main thread to retrieve
-        queue->push_back(client_request);
-        
-        // rqueue will be available after command has been processed
-        s = client_request.rqueue->front();
-        client_request.rqueue->pop_front();
-        
-        //    std::cout << "TCL Result: " << s << std::endl;
-      }
+      // push request onto queue for main thread to retrieve
+      queue->push_back(client_request);
+      
+      // rqueue will be available after command has been processed
+      s = client_request.rqueue->front();
+      client_request.rqueue->pop_front();
+      
+      //    std::cout << "TCL Result: " << s << std::endl;
+
       // Add a newline, and send the buffer including the null termination
       s = s+"\n";
 #ifndef _MSC_VER
@@ -2231,19 +2298,14 @@ TclServer::message_client_process(TclServer *tserv,
       client_request.script = std::string(buffer);
       std::string s;
       
-      // ignore certain commands, especially exit...
-      if (!client_request.script.compare(0, 4, "exit")) {
-    s = std::string("");
-      } else {
-    // push request onto queue for main thread to retrieve
-    queue->push_back(client_request);
-    
-    // rqueue will be available after command has been processed
-    s = client_request.rqueue->front();
-    client_request.rqueue->pop_front();
-    //  std::cout << "TCL Result: " << s << std::endl;
-      }
-
+      // push request onto queue for main thread to retrieve
+      queue->push_back(client_request);
+      
+      // rqueue will be available after command has been processed
+      s = client_request.rqueue->front();
+      client_request.rqueue->pop_front();
+      //  std::cout << "TCL Result: " << s << std::endl;
+      
       // Send a response back to the client
       sendMessage(sockfd, s);
       
