@@ -1,15 +1,12 @@
 #
 # Handle branch and pull requests for system paths that are git repos
 #
-puts "Configuring git"
-
-set dspath [file dir [info nameofexecutable]]
-
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 
 # enable error logging
 errormon enable
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 namespace eval git {
     variable path {}

@@ -17,6 +17,9 @@ load [file join $dspath modules/dserv_camera[info sharedlibextension]]
 # enable error logging
 errormon enable
 
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
+
 # allow local override for this system
 set localconf [file join  $dspath local camera.tcl]
 if { [file exists $localconf] } {

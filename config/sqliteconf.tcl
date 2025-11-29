@@ -1,8 +1,3 @@
-set dspath [file dir [info nameofexecutable]]
-
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 package require dlsh
 package require qpcs
 package require sqlite3
@@ -11,6 +6,9 @@ package require yajltcl
 set db_path "$dspath/db/dserv.db"
 
 set last_load_time {}
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 # Function to handle database setup and corruption detection
 proc setup_database {db_path} {

@@ -2,14 +2,13 @@
 # Handle em incoming data - degrees output with calibration
 #
 
-set dspath [file dir [info nameofexecutable]]
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 package require dlsh
 package require yajltcl
 
 package require math::linearalgebra
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 # enable error logging
 errormon enable

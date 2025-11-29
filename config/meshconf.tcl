@@ -1,5 +1,8 @@
 puts "initializing mesh networking"
 
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
+
 # Subscribe to mesh-relevant datapoints
 dservAddExactMatch ess/status
 dservAddExactMatch ess/system

@@ -1,12 +1,6 @@
 #
 # ess process for running experiments
 #
-
-set dspath [file dir [info nameofexecutable]]
-
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 package require dlsh
 package require qpcs
 package require sqlite3
@@ -16,6 +10,9 @@ tcl::tm::add $dspath/lib
 
 # enable error logging
 errormon enable
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 # initialize ip addr datapoint
 dservSet ess/ipaddr ""

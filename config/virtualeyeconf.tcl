@@ -1,11 +1,11 @@
 #
 # virtual_eye process - simplified for degrees
 #
-set dspath [file dir [info nameofexecutable]]
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
 package require dlsh
 tcl::tm::add $dspath/lib
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 # enable error logging
 errormon enable

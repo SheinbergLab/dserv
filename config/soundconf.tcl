@@ -1,9 +1,7 @@
 puts "initializing sound"
 
-set dspath [file dir [info nameofexecutable]]
-
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 # enable error logging
 errormon enable
