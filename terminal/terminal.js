@@ -99,27 +99,29 @@ class Terminal {
     }
 
     updateAvailableInterpreters(interps) {
-        // Always include 'dserv' as the main interpreter
-        this.availableInterps = ['dserv', ...interps.filter(i => i !== 'dserv')];
-        
-        console.log('Available interpreters:', this.availableInterps);
-        
-        // Update selector dropdown
-        if (this.interpSelectorElement) {
+	// Always include 'dserv' as the main interpreter
+	this.availableInterps = ['dserv', ...interps.filter(i => i !== 'dserv')];
+	
+	console.log('Available interpreters:', this.availableInterps);
+	
+	// Check if current interpreter still exists
+	if (!this.availableInterps.includes(this.currentInterp)) {
+            this.currentInterp = 'dserv';
+            this.updatePrompt();
+	}
+	
+	// Update selector dropdown
+	if (this.interpSelectorElement) {
             const currentValue = this.interpSelectorElement.value;
             this.interpSelectorElement.innerHTML = this.availableInterps
-                .map(interp => `<option value="${interp}">${interp}</option>`)
-                .join('');
+		.map(interp => `<option value="${interp}">${interp}</option>`)
+		.join('');
             
-            // Restore current selection if still available
-            if (this.availableInterps.includes(currentValue)) {
-                this.interpSelectorElement.value = currentValue;
-            } else if (this.availableInterps.includes(this.currentInterp)) {
-                this.interpSelectorElement.value = this.currentInterp;
-            }
-        }
+            // Set selector to match current interpreter
+            this.interpSelectorElement.value = this.currentInterp;
+	}
     }
-
+    
     switchInterpreter(interpName) {
         // Validate interpreter exists
         if (!this.availableInterps.includes(interpName)) {
@@ -516,7 +518,8 @@ class Terminal {
 
     isBlockedCommand(command) {
         const normalized = command.trim().toLowerCase();
-        return ['exit', 'quit'].includes(normalized);
+	// once blocked 'exit' but no process that on backend
+	return false;
     }
 
     handleResponse(data) {
