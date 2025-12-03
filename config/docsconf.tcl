@@ -33,7 +33,7 @@ package require dlsh
 
 proc on_shutdown {} {
     puts "Docs subprocess shutting down..."
-    catch {docsdb::close}
+    docsdb::close
     puts "Docs subprocess shutdown complete."
 }
 
