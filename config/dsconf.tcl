@@ -52,6 +52,9 @@ source [file join $dspath config/essctrl.tcl]
 # start a visualization process
 subprocess viz "source [file join $dspath config/vizconf.tcl]"
 
+# setup docs subprocess
+subprocess docs "source [file join $dspath config/docsconf.tcl]"
+
 proc set_hostinfo {} {
     # target_host allows us to connect using NIC
     set target_host google.com
@@ -109,5 +112,3 @@ load [file join $dspath modules/dserv_ina226[info sharedlibextension]]
 ina226Add 0x45 system 12v
 ina226Add 0x44 system 24v
 
-
-  
