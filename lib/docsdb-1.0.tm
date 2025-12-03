@@ -87,11 +87,6 @@ proc ::docsdb::checkpoint {} {
     }
 }
 
-# Register cleanup on interpreter exit
-trace add execution exit enter {apply {{args} {
-    catch {::docsdb::close}
-}}}
-
 # =============================================================================
 # First-Time Setup (call once to initialize a new database)
 # =============================================================================
