@@ -43,7 +43,7 @@ class TclEditor {
     const { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } = await import('https://esm.sh/@codemirror/view@6');
     const { defaultKeymap, history, historyKeymap, indentWithTab } = await import('https://esm.sh/@codemirror/commands@6');
     const { syntaxHighlighting, defaultHighlightStyle, bracketMatching, StreamLanguage } = await import('https://esm.sh/@codemirror/language@6');
-    const { oneDark } = await import('https://esm.sh/@codemirror/theme-one-dark@6');
+    const { dracula } = await import('https://esm.sh/@uiw/codemirror-theme-dracula@4');
     const { autocompletion, completionKeymap, acceptCompletion, completionStatus } = await import('https://esm.sh/@codemirror/autocomplete@6');
     const { tcl } = await import('https://esm.sh/@codemirror/legacy-modes@6/mode/tcl');
     const { searchKeymap, highlightSelectionMatches } = await import('https://esm.sh/@codemirror/search@6');
@@ -60,19 +60,14 @@ class TclEditor {
       bracketMatching(),
       highlightSelectionMatches(),
       StreamLanguage.define(tcl),
-      syntaxHighlighting(defaultHighlightStyle),
       EditorState.tabSize.of(this.options.tabSize),
       EditorView.lineWrapping,
+      dracula,
       autocompletion({
         override: [this._completionSource.bind(this)],
         defaultKeymap: false  // We'll handle Tab ourselves
       }),
     ];
-
-    // Theme
-    if (this.options.theme === 'dark') {
-      extensions.push(oneDark);
-    }
 
     // Custom keybindings
     const customKeymap = [
@@ -107,7 +102,7 @@ class TclEditor {
       ])
     );
 
-    // Custom styling
+    // Custom styling additions (on top of Dracula theme)
     extensions.push(EditorView.theme({
       '&': {
         height: '100%',
@@ -121,12 +116,12 @@ class TclEditor {
       },
       // Enhanced bracket matching
       '.cm-matchingBracket': {
-        backgroundColor: 'rgba(251, 191, 36, 0.4) !important',
-        outline: '1px solid #fbbf24',
+        backgroundColor: 'rgba(255, 212, 59, 0.3) !important',
+        outline: '1px solid #ffd43b',
       },
       '.cm-nonmatchingBracket': {
-        backgroundColor: 'rgba(239, 68, 68, 0.4)',
-        outline: '1px solid #ef4444',
+        backgroundColor: 'rgba(255, 107, 107, 0.3)',
+        outline: '1px solid #ff6b6b',
       },
     }));
 
