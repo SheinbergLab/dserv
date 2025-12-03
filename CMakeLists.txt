@@ -224,6 +224,12 @@ else()
     message(WARNING "terminal.html NOT FOUND at ${WEB_ASSETS_DIR}/terminal.html")
 endif()
 
+if(EXISTS ${WEB_ASSETS_DIR}/tutorial.html)
+    message(STATUS "Found tutorial.html")
+else()
+    message(WARNING "tutorial.html NOT FOUND at ${WEB_ASSETS_DIR}/tutorial.html")
+endif()
+
 if(EXISTS ${WEB_ASSETS_DIR}/datapoint_explorer.html)
     message(STATUS "Found datapoint_explorer.html") 
 else()
@@ -253,6 +259,12 @@ embed_resource(
     ${WEB_ASSETS_DIR}/datapoint_explorer.html
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
     datapoint_explorer_html
+)
+
+embed_resource(
+    ${WEB_ASSETS_DIR}/tutorial.html
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_tutorial.h
+    tutorial_html
 )
 
 embed_resource(
@@ -340,6 +352,7 @@ endif()
 set(EMBEDDED_HEADERS
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_tutorial.h
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
     ${CMAKE_BINARY_DIR}/embedded_essgui_index_html.h
@@ -418,6 +431,7 @@ set_property(TARGET dserv PROPERTY ENABLE_EXPORTS ON)
 set(DSERV_EMBEDDED_SOURCES
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h 
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
+    ${CMAKE_CURRENT_BINARY_DIR}/embedded_tutorial.h
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
     ${CMAKE_BINARY_DIR}/embedded_essgui_index_html.h
 )
