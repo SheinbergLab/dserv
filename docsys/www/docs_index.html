@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLSH Documentation System</title>
+    <style>
+/* shared-nav.css - Common navigation for documentation system */
+
+:root {
+    --nav-bg: #2d2d30;
+    --nav-border: #3e3e42;
+    --nav-text: #cccccc;
+    --nav-text-hover: #ffffff;
+    --nav-active: #007acc;
+    --nav-height: 50px;
+}
+
+/* Main navigation bar */
+.doc-nav {
+    background: var(--nav-bg);
+    border-bottom: 1px solid var(--nav-border);
+    height: var(--nav-height);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+}
+
+/* Offset content below fixed nav */
+.doc-content {
+    margin-top: var(--nav-height);
+    height: calc(100vh - var(--nav-height));
+}
+
+/* Logo/title */
+.doc-nav-brand {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--nav-text);
+    margin-right: 40px;
+    text-decoration: none;
+}
+
+.doc-nav-brand:hover {
+    color: var(--nav-text-hover);
+}
+
+/* Navigation links */
+.doc-nav-links {
+    display: flex;
+    gap: 5px;
+    flex: 1;
+}
+
+.doc-nav-link {
+    padding: 8px 16px;
+    color: var(--nav-text);
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.doc-nav-link:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--nav-text-hover);
+}
+
+.doc-nav-link.active {
+    background: var(--nav-active);
+    color: white;
+}
+
+/* Separator between sections */
+.doc-nav-separator {
+    width: 1px;
+    height: 24px;
+    background: var(--nav-border);
+    margin: 0 10px;
+}
+
+/* Right-side items */
+.doc-nav-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.doc-nav-info {
+    font-size: 12px;
+    color: #888;
+}
+
+/* Dropdown for mobile/small screens */
+@media (max-width: 768px) {
+    .doc-nav-links {
+        display: none;
+    }
+    
+    .doc-nav-mobile-toggle {
+        display: block;
+        background: none;
+        border: none;
+        color: var(--nav-text);
+        font-size: 24px;
+        cursor: pointer;
+    }
+    
+    .doc-nav-links.mobile-open {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: var(--nav-height);
+        left: 0;
+        right: 0;
+        background: var(--nav-bg);
+        border-bottom: 1px solid var(--nav-border);
+        padding: 10px;
+    }
+}
+
+    </style>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        
+        .landing {
+            max-width: 1000px;
+            margin: 60px auto;
+            padding: 40px;
+        }
+        
+        .hero {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        
+        .hero h1 {
+            font-size: 56px;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero p {
+            font-size: 20px;
+            color: #999;
+            line-height: 1.6;
+        }
+        
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+            margin-top: 40px;
+        }
+        
+        .card {
+            background: #2d2d30;
+            padding: 32px;
+            border-radius: 12px;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.3s;
+            border: 1px solid #3e3e42;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transform: scaleX(0);
+            transition: transform 0.3s;
+        }
+        
+        .card:hover {
+            transform: translateY(-4px);
+            background: #37373d;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        
+        .card:hover::before {
+            transform: scaleX(1);
+        }
+        
+        .card-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        
+        .card h2 {
+            font-size: 24px;
+            margin-bottom: 12px;
+            color: #fff;
+        }
+        
+        .card p {
+            color: #999;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+        
+        .section {
+            margin-top: 60px;
+        }
+        
+        .section h2 {
+            font-size: 32px;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #3e3e42;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+        
+        .feature {
+            padding: 20px;
+            background: #252526;
+            border-radius: 8px;
+        }
+        
+        .feature h3 {
+            font-size: 18px;
+            margin-bottom: 8px;
+            color: #4ec9b0;
+        }
+        
+        .feature p {
+            font-size: 14px;
+            color: #999;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin: 40px 0;
+            padding: 30px;
+            background: #252526;
+            border-radius: 12px;
+        }
+        
+        .stat {
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 48px;
+            font-weight: bold;
+            color: #4ec9b0;
+        }
+        
+        .stat-label {
+            font-size: 14px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+
+<!-- Built: 2025-12-02T03:04:01.505129 by build_docs.py -->
+</head>
+<body data-auto-nav 
+      data-current-page="home" 
+      data-app-name="DLSH Documentation"
+      data-show-authoring="true">
+    
+    <div class="doc-content">
+        <div class="landing">
+            <div class="hero">
+                <h1>📚 DLSH Documentation</h1>
+                <p>
+                    Complete documentation and interactive learning system for DLSH, 
+                    Dynamic Groups, and all system commands. Learn through hands-on 
+                    tutorials or explore the comprehensive command reference.
+                </p>
+            </div>
+            
+            <div class="stats" id="stats">
+                <div class="stat">
+                    <div class="stat-number">--</div>
+                    <div class="stat-label">Commands</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">--</div>
+                    <div class="stat-label">Tutorials</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-number">--</div>
+                    <div class="stat-label">Examples</div>
+                </div>
+            </div>
+            
+            <div class="card-grid">
+                <a href="/tutorial" class="card">
+                    <div class="card-icon">📚</div>
+                    <h2>Interactive Tutorials</h2>
+                    <p>
+                        Learn DLSH through step-by-step lessons with live code 
+                        execution and instant feedback. Perfect for beginners.
+                    </p>
+                </a>
+                
+                <a href="/help" class="card">
+                    <div class="card-icon">📖</div>
+                    <h2>Command Reference</h2>
+                    <p>
+                        Browse all available commands with detailed parameters, 
+                        return types, and working examples. Quick syntax lookup.
+                    </p>
+                </a>
+                
+                <a href="/edit/tutorials" class="card">
+                    <div class="card-icon">✏️</div>
+                    <h2>Edit Tutorials</h2>
+                    <p>
+                        Create and modify tutorial lessons. Add hints, examples, 
+                        and organize learning paths. For documentation authors.
+                    </p>
+                </a>
+                
+                <a href="/edit/commands" class="card">
+                    <div class="card-icon">🔧</div>
+                    <h2>Edit Commands</h2>
+                    <p>
+                        Document commands with descriptions, parameters, and 
+                        examples. Auto-generate from code. For developers.
+                    </p>
+                </a>
+            </div>
+            
+            <div class="section">
+                <h2>Features</h2>
+                <div class="features">
+                    <div class="feature">
+                        <h3>🚀 Live Code Execution</h3>
+                        <p>Run code directly in the browser with instant results</p>
+                    </div>
+                    <div class="feature">
+                        <h3>💡 Context-Sensitive Help</h3>
+                        <p>Get command documentation while typing with F1 key</p>
+                    </div>
+                    <div class="feature">
+                        <h3>🔍 Full-Text Search</h3>
+                        <p>Search across all commands and tutorials instantly</p>
+                    </div>
+                    <div class="feature">
+                        <h3>📊 Progress Tracking</h3>
+                        <p>Track your learning progress through lessons</p>
+                    </div>
+                    <div class="feature">
+                        <h3>🎯 Interactive Examples</h3>
+                        <p>"Try it" buttons load examples into the editor</p>
+                    </div>
+                    <div class="feature">
+                        <h3>🔗 Cross-Referenced</h3>
+                        <p>Commands link to tutorials that teach them</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+// ===========================================================================
+// WebSocket Manager - Reusable component for dserv WebSocket connections
+// ===========================================================================
+
+class DservWS {
+    constructor(linkName = null, options = {}) {
+        this.ws = null;
+        this.callbacks = {};
+        this.nextId = 1;
+        this.eventHandlers = { connected: [], disconnected: [], error: [] };
+        this.linkName = linkName;  // Used as subprocess name for routing
+        this.reconnectDelay = 2000;
+        this.reconnectTimer = null;
+        
+        // Configuration options
+        this.wsHost = options.wsHost || window.location.host;
+        this.wsPort = options.wsPort || null;  // Override port if specified
+        // Auto-detect protocol if not specified (http→ws, https→wss)
+        this.wsProtocol = options.wsProtocol || (window.location.protocol === 'https:' ? 'wss:' : 'ws:');
+        this.wsPath = options.wsPath || '/ws';
+    }
+
+    connect() {
+        // Clear any existing reconnect timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        // Build WebSocket URL (NO ?link parameter - routing done via 'send' command)
+        let wsHost = this.wsHost;
+        
+        // If custom port specified, override
+        if (this.wsPort) {
+            // Strip existing port from host if present
+            wsHost = wsHost.split(':')[0];
+            wsHost = `${wsHost}:${this.wsPort}`;
+        }
+        
+        let wsUrl = `${this.wsProtocol}//${wsHost}${this.wsPath}`;
+        
+        console.log(`Connecting to: ${wsUrl}`);
+        this.ws = new WebSocket(wsUrl);
+        
+        this.ws.onopen = () => {
+            console.log('WebSocket connected');
+            this.emit('connected', true);
+        };
+        
+        this.ws.onclose = (event) => {
+            console.log('WebSocket disconnected', event.code, event.reason);
+            this.emit('connected', false);
+            this.emit('disconnected', event);
+            
+            // Auto-reconnect
+            this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelay);
+        };
+        
+        this.ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            this.emit('error', error);
+        };
+        
+        this.ws.onmessage = (event) => {
+            console.log('WS received:', event.data);  // DEBUG
+            try {
+                const msg = JSON.parse(event.data);
+                console.log('Parsed message:', msg);  // DEBUG
+                
+                // Backend sends {result: "..."} or {status: "error", ...}
+                // No ID matching - just resolve the last pending callback
+                const pendingIds = Object.keys(this.callbacks);
+                if (pendingIds.length > 0) {
+                    const id = pendingIds[0];  // Get first pending callback
+                    console.log('Calling callback for id:', id);  // DEBUG
+                    this.callbacks[id](msg);
+                    delete this.callbacks[id];
+                } else {
+                    console.log('No pending callback for message:', msg);  // DEBUG
+                }
+            } catch (e) {
+                console.error('Failed to parse message:', e, 'Raw:', event.data);
+            }
+        };
+    }
+
+    disconnect() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
+    }
+
+    sendCommand(cmd, timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                reject(new Error('WebSocket not connected'));
+                return;
+            }
+            
+            const id = this.nextId++;
+            this.callbacks[id] = resolve;
+            
+            // NOTE: Backend doesn't use ID matching, but we track locally for timeout
+            const message = JSON.stringify(cmd);  // Don't add id to message
+            console.log('WS sending:', message);  // DEBUG
+            this.ws.send(message);
+            
+            // Timeout handler
+            const timeoutId = setTimeout(() => {
+                if (this.callbacks[id]) {
+                    console.log('Command timeout for id:', id);  // DEBUG
+                    delete this.callbacks[id];
+                    reject(new Error('Command timeout'));
+                }
+            }, timeout);
+            
+            // Wrap original callback to clear timeout
+            const originalCallback = this.callbacks[id];
+            this.callbacks[id] = (msg) => {
+                clearTimeout(timeoutId);
+                originalCallback(msg);
+            };
+        });
+    }
+
+    eval(script, timeout = 5000) {
+        // If linkName is set, wrap script with 'send subprocess {script}'  
+        let scriptToSend = script;
+        if (this.linkName) {
+            scriptToSend = `send ${this.linkName} {${script}}`;
+        }
+        
+        return this.sendCommand({ cmd: 'eval', script: scriptToSend }, timeout);
+    }
+
+    on(event, handler) {
+        if (!this.eventHandlers[event]) {
+            this.eventHandlers[event] = [];
+        }
+        this.eventHandlers[event].push(handler);
+    }
+
+    off(event, handler) {
+        if (this.eventHandlers[event]) {
+            this.eventHandlers[event] = this.eventHandlers[event].filter(h => h !== handler);
+        }
+    }
+
+    emit(event, data) {
+        if (this.eventHandlers[event]) {
+            this.eventHandlers[event].forEach(h => h(data));
+        }
+    }
+
+    isConnected() {
+        return this.ws && this.ws.readyState === WebSocket.OPEN;
+    }
+}
+
+    </script>
+    <script>
+// ===========================================================================
+// WebSocket Configuration
+// ===========================================================================
+
+// ============================================================================
+// EASY MODE: Just set your development stage here!
+// ============================================================================
+
+//const DEV_STAGE = 'production';  // Change to 'production' when embedding
+const DEV_STAGE = 'development'; 
+// ============================================================================
+// Configuration Presets
+// ============================================================================
+
+const CONFIGS = {
+    // Development: Testing with Python HTTP server
+    // - HTML served by: python -m http.server 8000
+    // - WebSocket on: dserv with WSS on port 2565
+    development: {
+        wsProtocol: 'wss:',
+        wsPort: 2565,        // Your dserv WebSocket port
+        wsHost: 'localhost', // Or your dserv hostname
+        wsPath: '/ws'
+    },
+    
+    // Production: Embedded in dserv (self-hosted)
+    // - HTML served by: dserv on same port as WebSocket
+    // - WebSocket on: same dserv server and port
+    production: {
+        wsProtocol: null,    // Auto-detect from page
+        wsPort: null,        // Same as HTTP
+        wsHost: null,        // Same as page
+        wsPath: '/ws'
+    }
+};
+
+// Apply the selected configuration
+const WS_CONFIG = CONFIGS[DEV_STAGE];
+
+// ============================================================================
+// Advanced: Custom configuration (optional)
+// ============================================================================
+// If you need something different, uncomment and edit:
+/*
+const WS_CONFIG = {
+    protocol: 'wss:',
+    port: 3000,
+    host: 'myserver.com',
+    path: '/ws'
+};
+*/
+
+// ============================================================================
+// WORKFLOW:
+// ============================================================================
+// 1. Development (testing with Python server):
+//    - Set DEV_STAGE = 'development'
+//    - python build.py tcl_tutorial.html
+//    - python -m http.server 8000
+//    - Open: http://localhost:8000/tcl_tutorial_built.html
+//    - WebSocket connects to: wss://localhost:2565/ws?link=tutorial
+//
+// 2. Production (embed in dserv):
+//    - Set DEV_STAGE = 'production'
+//    - python build.py tcl_tutorial.html
+//    - Deploy to dserv web root
+//    - Open: https://your-server/tcl_tutorial_built.html
+//    - WebSocket connects to: wss://your-server/ws?link=tutorial
+// ============================================================================
+
+
+    </script>
+    <script>
+// shared-nav.js - Reusable navigation component for documentation system
+
+class DocNav {
+    constructor(options = {}) {
+        this.currentPage = options.currentPage || '';
+        this.appName = options.appName || 'Documentation';
+        this.showAuthoring = options.showAuthoring !== false; // Show by default
+        this.container = options.container || document.body;
+        
+        this.render();
+    }
+    
+    render() {
+        const nav = document.createElement('div');
+        nav.className = 'doc-nav';
+        
+        nav.innerHTML = `
+            <a href="/" class="doc-nav-brand">${this.appName}</a>
+            
+            <div class="doc-nav-links">
+                <!-- User-facing interfaces -->
+                <a href="/tutorial" class="doc-nav-link ${this.currentPage === 'tutorial' ? 'active' : ''}">
+                    📚 Tutorials
+                </a>
+                <a href="/help" class="doc-nav-link ${this.currentPage === 'help' ? 'active' : ''}">
+                    📖 Command Reference
+                </a>
+                
+                ${this.showAuthoring ? `
+                    <div class="doc-nav-separator"></div>
+                    
+                    <!-- Authoring interfaces -->
+                    <a href="/edit/tutorials" class="doc-nav-link ${this.currentPage === 'edit-tutorials' ? 'active' : ''}">
+                        ✏️ Edit Tutorials
+                    </a>
+                    <a href="/edit/commands" class="doc-nav-link ${this.currentPage === 'edit-commands' ? 'active' : ''}">
+                        ✏️ Edit Commands
+                    </a>
+                ` : ''}
+            </div>
+            
+            <div class="doc-nav-right">
+                <span class="doc-nav-info" id="connectionStatus">
+                    <span style="color: #888;">●</span> Connecting...
+                </span>
+            </div>
+        `;
+        
+        // Insert at beginning of container
+        if (this.container.firstChild) {
+            this.container.insertBefore(nav, this.container.firstChild);
+        } else {
+            this.container.appendChild(nav);
+        }
+        
+        // Add CSS if not already present
+        if (!document.getElementById('doc-nav-styles')) {
+            const link = document.createElement('link');
+            link.id = 'doc-nav-styles';
+            link.rel = 'stylesheet';
+            link.href = '/shared-nav.css';
+            document.head.appendChild(link);
+        }
+        
+        return nav;
+    }
+    
+    setConnectionStatus(connected, message = '') {
+        const status = document.getElementById('connectionStatus');
+        if (!status) return;
+        
+        if (connected) {
+            status.innerHTML = '<span style="color: #4ec9b0;">●</span> Connected';
+        } else {
+            status.innerHTML = `<span style="color: #f48771;">●</span> ${message || 'Disconnected'}`;
+        }
+    }
+}
+
+// Auto-initialize if data-auto-nav attribute present
+document.addEventListener('DOMContentLoaded', () => {
+    const autoNav = document.querySelector('[data-auto-nav]');
+    if (autoNav) {
+        const currentPage = autoNav.getAttribute('data-current-page') || '';
+        const appName = autoNav.getAttribute('data-app-name') || 'Documentation';
+        const showAuthoring = autoNav.getAttribute('data-show-authoring') !== 'false';
+        
+        window.docNav = new DocNav({
+            currentPage,
+            appName,
+            showAuthoring,
+            container: document.body
+        });
+    }
+});
+
+    </script>
+    
+    <script>
+        // Initialize WebSocket
+        const ws = new DservWS('index', WS_CONFIG);
+        ws.connect();
+        
+        // Update navigation status
+        ws.on('connected', (connected) => {
+            if (window.docNav) {
+                window.docNav.setConnectionStatus(connected);
+            }
+            
+            if (connected) {
+                loadStats();
+            }
+        });
+        
+        // Load statistics
+        async function loadStats() {
+            try {
+                // Get command count
+                const cmdResult = await ws.eval('db eval {SELECT COUNT(*) as count FROM commands}');
+                const commandCount = JSON.parse(cmdResult.result)[0].count;
+                
+                // Get tutorial count
+                const tutResult = await ws.eval('db eval {SELECT COUNT(*) as count FROM content WHERE content_type="tutorial"}');
+                const tutorialCount = JSON.parse(tutResult.result)[0].count;
+                
+                // Get example count (rough estimate)
+                const exResult = await ws.eval('db eval {SELECT COUNT(*) as count FROM commands WHERE examples != "[]"}');
+                const exampleCount = JSON.parse(exResult.result)[0].count;
+                
+                // Update display
+                document.querySelectorAll('.stat-number')[0].textContent = commandCount;
+                document.querySelectorAll('.stat-number')[1].textContent = tutorialCount;
+                document.querySelectorAll('.stat-number')[2].textContent = exampleCount + '+';
+                
+            } catch (error) {
+                console.error('Failed to load stats:', error);
+            }
+        }
+    </script>
+</body>
+</html>
