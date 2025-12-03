@@ -38,7 +38,6 @@ proc ::docsapi::json {data} {
 
 proc ::docsapi::encode_value {gen value {top 0}} {
     # Detect type and encode appropriately
-    # top=1 means this is the top-level call (expect dict or list of dicts)
     
     if {$value eq ""} {
         $gen null
@@ -50,8 +49,8 @@ proc ::docsapi::encode_value {gen value {top 0}} {
         $gen integer $value
     } elseif {[string is double -strict $value]} {
         $gen double $value
-    } elseif {$top && [is_list_of_dicts $value]} {
-        # Top-level array of objects
+    } elseif {[is_list_of_dicts $value]} {
+        # Array of objects (check this before is_dict since dicts are also lists)
         encode_array $gen $value
     } elseif {[is_dict $value]} {
         encode_dict $gen $value
@@ -89,21 +88,24 @@ proc ::docsapi::encode_list {gen items} {
 
 proc ::docsapi::is_dict {value} {
     # Only return true for dicts we explicitly created
-    # These always have 4+ elements (at least 2 key-value pairs)
-    # and keys are simple lowercase identifiers
+    # Keys are simple lowercase identifiers
     if {[catch {dict size $value}]} {
         return 0
     }
-    set len [llength $value]
-    if {$len < 4} {
-        # Less than 2 key-value pairs - not a dict we created
+    if {[catch {llength $value} len]} {
+        return 0
+    }
+    if {$len < 2} {
+        # Need at least 1 key-value pair
         return 0
     }
     if {$len % 2 != 0} {
         return 0
     }
-    # First key should be a simple lowercase word (like "id", "slug", "name")
-    set first_key [lindex $value 0]
+    # First key should be a simple lowercase word (like "id", "slug", "name", "command")
+    if {[catch {lindex $value 0} first_key]} {
+        return 0
+    }
     if {![regexp {^[a-z][a-zA-Z]*$} $first_key]} {
         return 0
     }
@@ -111,13 +113,18 @@ proc ::docsapi::is_dict {value} {
 }
 
 proc ::docsapi::is_list_of_dicts {value} {
-    if {[llength $value] < 1} {
+    if {[catch {llength $value} len]} {
         return 0
     }
-    foreach item $value {
-        if {![is_dict $item]} {
-            return 0
-        }
+    if {$len < 1} {
+        return 0
+    }
+    # Check first item only for performance (and to avoid errors on large lists)
+    if {[catch {lindex $value 0} first]} {
+        return 0
+    }
+    if {![is_dict $first]} {
+        return 0
     }
     return 1
 }
@@ -205,15 +212,86 @@ proc api_entries_list {{filter {}}} {
     return [::docsapi::json $results]
 }
 
+# Raw version - returns Tcl list (not JSON) for wrapping
+proc api_entries_list_raw {{filter {}}} {
+    # Build WHERE clause
+    set where_clauses [list]
+    
+    if {[dict exists $filter type]} {
+        set type [dict get $filter type]
+        lappend where_clauses "e.entry_type = '$type'"
+    }
+    
+    if {[dict exists $filter category]} {
+        set cat [dict get $filter category]
+        lappend where_clauses "c.slug = '$cat'"
+    }
+    
+    if {[dict exists $filter namespace]} {
+        set ns [dict get $filter namespace]
+        lappend where_clauses "e.namespace = '$ns'"
+    }
+    
+    if {[dict exists $filter published]} {
+        set pub [dict get $filter published]
+        lappend where_clauses "e.published = $pub"
+    } else {
+        lappend where_clauses "e.published = 1"
+    }
+    
+    set where [join $where_clauses " AND "]
+    
+    set query "
+        SELECT 
+            e.id, e.slug, e.entry_type, e.title, e.summary,
+            e.namespace, e.syntax, e.difficulty, e.stability,
+            e.deprecated, e.sort_order,
+            c.slug as category_slug, c.name as category_name
+        FROM entries e
+        LEFT JOIN categories c ON e.category_id = c.id
+        WHERE $where
+        ORDER BY c.sort_order, e.sort_order, e.title
+    "
+    
+    set results [list]
+    ::docsdb::db eval $query row {
+        set item [dict create \
+            id $row(id) \
+            slug $row(slug) \
+            type $row(entry_type) \
+            title $row(title) \
+            summary $row(summary) \
+            namespace $row(namespace) \
+            syntax $row(syntax) \
+            difficulty $row(difficulty) \
+            stability $row(stability) \
+            deprecated [expr {$row(deprecated) ? true : false}] \
+        ]
+        
+        if {$row(category_slug) ne ""} {
+            dict set item category [dict create \
+                slug $row(category_slug) \
+                name $row(category_name) \
+            ]
+        }
+        
+        lappend results $item
+    }
+    
+    return $results
+}
+
 # Convenience aliases
 proc api_commands_list {{filter {}}} {
     dict set filter type command
-    return [api_entries_list $filter]
+    set entries [api_entries_list_raw $filter]
+    return [::docsapi::json [dict create commands $entries count [llength $entries]]]
 }
 
 proc api_tutorials_list {{filter {}}} {
     dict set filter type tutorial
-    return [api_entries_list $filter]
+    set entries [api_entries_list_raw $filter]
+    return [::docsapi::json [dict create tutorials $entries count [llength $entries]]]
 }
 
 # =============================================================================
@@ -354,17 +432,149 @@ proc api_entry_get {slug} {
     return [::docsapi::json $result]
 }
 
-# Convenience aliases
-proc api_command_get {name_or_slug} {
-    # Try slug first, then command name
-    set slug $name_or_slug
+# Raw version - returns Tcl dict (not JSON)
+proc api_entry_get_raw {slug} {
+    # Get full entry details by slug
     
-    # If it doesn't look like a slug, convert command name to slug
-    if {![string match "cmd-*" $slug]} {
-        set slug "cmd-[string map {:: - _ -} $name_or_slug]"
+    set found 0
+    ::docsdb::db eval {
+        SELECT 
+            e.*, c.slug as category_slug, c.name as category_name
+        FROM entries e
+        LEFT JOIN categories c ON e.category_id = c.id
+        WHERE e.slug = $slug
+    } row {
+        set found 1
+        set result [dict create \
+            id $row(id) \
+            slug $row(slug) \
+            type $row(entry_type) \
+            title $row(title) \
+            summary $row(summary) \
+            content $row(content) \
+            namespace $row(namespace) \
+            syntax $row(syntax) \
+            returnType $row(return_type) \
+            seeAlso $row(see_also) \
+            difficulty $row(difficulty) \
+            estimatedTime $row(estimated_time) \
+            stability $row(stability) \
+            deprecated [expr {$row(deprecated) ? true : false}] \
+            deprecatedMsg $row(deprecated_msg) \
+        ]
+        
+        if {$row(category_slug) ne ""} {
+            dict set result category [dict create \
+                slug $row(category_slug) \
+                name $row(category_name) \
+            ]
+        }
+        
+        set entry_id $row(id)
     }
     
-    return [api_entry_get $slug]
+    if {!$found} {
+        return [dict create error "Entry not found" slug $slug]
+    }
+    
+    # Get parameters (for commands)
+    set params [list]
+    ::docsdb::db eval {
+        SELECT name, param_type, description, is_optional, default_value
+        FROM parameters
+        WHERE entry_id = $entry_id
+        ORDER BY sort_order
+    } {
+        lappend params [dict create \
+            name $name \
+            type $param_type \
+            description $description \
+            optional [expr {$is_optional ? true : false}] \
+            default $default_value \
+        ]
+    }
+    if {[llength $params] > 0} {
+        dict set result parameters $params
+    }
+    
+    # Get examples
+    set examples [list]
+    ::docsdb::db eval {
+        SELECT id, title, description, code, expected_output, output_type, example_type
+        FROM examples
+        WHERE entry_id = $entry_id
+        ORDER BY sort_order
+    } {
+        lappend examples [dict create \
+            id $id \
+            title $title \
+            description $description \
+            code $code \
+            expectedOutput $expected_output \
+            outputType $output_type \
+            exampleType $example_type \
+        ]
+    }
+    if {[llength $examples] > 0} {
+        dict set result examples $examples
+    }
+    
+    # Get hints (for tutorials)
+    set hints [list]
+    ::docsdb::db eval {
+        SELECT hint_text FROM hints
+        WHERE entry_id = $entry_id
+        ORDER BY sort_order
+    } {
+        lappend hints $hint_text
+    }
+    if {[llength $hints] > 0} {
+        dict set result hints $hints
+    }
+    
+    # Get tags
+    set tags [list]
+    ::docsdb::db eval {
+        SELECT t.name FROM tags t
+        JOIN entry_tags et ON t.id = et.tag_id
+        WHERE et.entry_id = $entry_id
+    } {
+        lappend tags $name
+    }
+    if {[llength $tags] > 0} {
+        dict set result tags $tags
+    }
+    
+    # Get related entries
+    set related [list]
+    ::docsdb::db eval {
+        SELECT e.slug, e.title, e.entry_type, el.link_type
+        FROM entry_links el
+        JOIN entries e ON el.to_entry_id = e.id
+        WHERE el.from_entry_id = $entry_id
+    } {
+        lappend related [dict create \
+            slug $slug \
+            title $title \
+            type $entry_type \
+            linkType $link_type \
+        ]
+    }
+    if {[llength $related] > 0} {
+        dict set result related $related
+    }
+    
+    return $result
+}
+
+# Convenience aliases
+proc api_command_get {name_or_slug} {
+    # Slug is the command name directly (e.g., dl_fromto)
+    set result [api_entry_get_raw $name_or_slug]
+    if {[dict exists $result error]} {
+        return [::docsapi::json $result]
+    }
+    return [::docsapi::json [dict create command $result]]
 }
 
 proc api_tutorial_get {slug} {
