@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command Reference</title>
+    <link rel="stylesheet" href="command_reference.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>Command Reference</h1>
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="Search commands..." autofocus>
+                <select id="namespace-filter">
+                    <option value="">All namespaces</option>
+                </select>
+                <span id="result-count"></span>
+            </div>
+        </header>
+
+        <!-- Main content -->
+        <div class="main">
+            <!-- Command list (left panel) -->
+            <aside class="command-list" id="command-list">
+                <div class="loading" id="list-loading">Loading commands...</div>
+            </aside>
+
+            <!-- Command detail (right panel) -->
+            <main class="command-detail" id="command-detail">
+                <div class="placeholder">
+                    <p>Select a command to view details</p>
+                    <p class="hint">Or start typing to search</p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="ws_manager.js"></script>
+    <script src="TclFormatter.js"></script>
+    <script src="TclLinter.js"></script>
+    <script src="TclEditor.js"></script>
+    <script src="command_reference.js"></script>
+</body>
+</html>
