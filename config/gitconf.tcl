@@ -285,4 +285,4 @@ if { 1 } {
 	git::switch_and_pull
     }
 }
-puts "Git configured"
+puts "Git initialized"

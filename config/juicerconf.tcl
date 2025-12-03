@@ -1,5 +1,3 @@
-puts "initializing juicer"
-
 # JSON support
 package require yajltcl
 
@@ -247,3 +245,6 @@ init
 if { [file exists $dspath/local/juicer.tcl] } {
     source $dspath/local/juicer.tcl
 }
+
+puts "Juicer initialized"
+

@@ -1,5 +1,3 @@
-puts "initializing sound"
-
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
 
@@ -67,4 +65,6 @@ if { [file exists $dspath/local/sound.tcl] } {
     sound::init_hardware
     sound::init_fluidsynth
 }
+
+puts "Sound initialized"
 

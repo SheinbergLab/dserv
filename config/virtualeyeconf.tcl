@@ -49,4 +49,4 @@ proc set_eye { h v } {
 }
 
 setup
-puts "virtual_eye subprocess configured"
+puts "Virtual_eye initialized"
