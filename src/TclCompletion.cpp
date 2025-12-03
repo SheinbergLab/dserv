@@ -649,14 +649,118 @@ int TclCompleteCmd(ClientData clientData, Tcl_Interp* interp,
     return TCL_OK;
 }
 
+std::vector<std::string> getCompletionTokens(Tcl_Interp* interp, const std::string& partial) {
+    std::vector<std::string> fullCompletions = getCompletions(interp, partial);
+    std::vector<std::string> tokens;
+    
+    if (fullCompletions.empty()) {
+        return tokens;
+    }
+    
+    // Detect what kind of completion context we're in
+    std::string actualPartial = partial;
+    
+    // Check for embedded command: [...
+    size_t embedPos = partial.rfind('[');
+    bool isEmbedded = false;
+    if (embedPos != std::string::npos) {
+        size_t closePos = partial.find(']', embedPos);
+        if (closePos == std::string::npos) {
+            // We're completing inside [...]
+            isEmbedded = true;
+            actualPartial = partial.substr(embedPos + 1);
+            // Trim whitespace
+            size_t firstNonSpace = actualPartial.find_first_not_of(" \t");
+            if (firstNonSpace != std::string::npos) {
+                actualPartial = actualPartial.substr(firstNonSpace);
+            }
+        }
+    }
+    
+    // Check for array subscript: var(partial
+    size_t parenPos = actualPartial.rfind('(');
+    bool isArraySubscript = false;
+    if (parenPos != std::string::npos) {
+        size_t closePos = actualPartial.find(')', parenPos);
+        if (closePos == std::string::npos) {
+            // We're completing array subscript
+            isArraySubscript = true;
+        }
+    }
+    
+    // Extract tokens from full completions
+    for (const auto& full : fullCompletions) {
+        std::string token;
+        
+        if (isArraySubscript) {
+            // For array subscripts: "tcl_platform(os)" -> "os)"
+            // The full completion already includes arrayName(index)
+            // We want just index)
+            size_t fullParenPos = full.rfind('(');
+            if (fullParenPos != std::string::npos) {
+                token = full.substr(fullParenPos + 1);  // Everything after (
+            } else {
+                token = full;  // Shouldn't happen, but be safe
+            }
+        } else if (isEmbedded) {
+            // For embedded commands: "[dl_fromto" -> "dl_fromto"
+            // Strip the leading [
+            size_t fullEmbedPos = full.rfind('[');
+            if (fullEmbedPos != std::string::npos) {
+                token = full.substr(fullEmbedPos + 1);  // Everything after [
+            } else {
+                token = full;
+            }
+        } else {
+            // Normal case: "set tcl_platform" -> "tcl_platform"
+            // Extract last space-separated word
+            size_t lastSpace = full.rfind(' ');
+            if (lastSpace != std::string::npos) {
+                token = full.substr(lastSpace + 1);
+            } else {
+                token = full;
+            }
+        }
+        
+        tokens.push_back(token);
+    }
+    
+    return tokens;
+}
+
+// New Tcl command: complete_token <partial>
+// Returns just the token to insert (for editor use)
+int TclCompleteTokenCmd(ClientData clientData, Tcl_Interp* interp, 
+                        int objc, Tcl_Obj* const objv[]) {
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "partial");
+        return TCL_ERROR;
+    }
+    
+    std::string partial = Tcl_GetString(objv[1]);
+    std::vector<std::string> tokens = getCompletionTokens(interp, partial);
+    
+    // Return as Tcl list
+    Tcl_Obj* resultList = Tcl_NewListObj(0, NULL);
+    for (const auto& token : tokens) {
+        Tcl_ListObjAppendElement(interp, resultList, 
+                                 Tcl_NewStringObj(token.c_str(), -1));
+    }
+    Tcl_SetObjResult(interp, resultList);
+    
+    return TCL_OK;
+}
+  
 // ============================================
 // Registration Helper
 // ============================================
 
-void RegisterCompletionCommand(Tcl_Interp* interp) {
+void RegisterCompletionCommands(Tcl_Interp* interp) {
     // Register the 'complete' command
     Tcl_CreateObjCommand(interp, "complete", TclCompleteCmd, NULL, NULL);
-    
+
+    Tcl_CreateObjCommand(interp, "complete_token", TclCompleteTokenCmd, NULL, NULL);
+ 
     // Initialize custom completion namespace
     const char* completion_namespace = R"TCL(
 # Custom argument completion system

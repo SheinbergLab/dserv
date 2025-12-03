@@ -15,6 +15,7 @@
 
 // our minified html pages (in www/*.html)
 #include "embedded_terminal.h"
+#include "embedded_tutorial.h"
 #include "embedded_datapoint_explorer.h"
 #include "embedded_welcome.h"
 
@@ -382,6 +383,12 @@ void TclServer::start_websocket_server(void)
         ->end(embedded::terminal_html);
     });
 
+    app.get("/tutorial", [](auto *res, auto *req) {
+      res->writeHeader("Content-Type", "text/html; charset=utf-8")
+        ->writeHeader("Cache-Control", "no-cache")
+        ->end(embedded::tutorial_html);
+    });
+    
     app.get("/explorer", [](auto *res, auto *req) {
       res->writeHeader("Content-Type", "text/html; charset=utf-8")
         ->writeHeader("Cache-Control", "no-cache")
@@ -537,7 +544,9 @@ void TclServer::start_websocket_server(void)
                 req.type = REQ_SCRIPT;
                 req.rqueue = userData->rqueue;
                 req.script = std::string(script);
-                  
+		req.socket_fd = -1;
+		req.websocket_id = userData->client_name;
+		
                 // Push to queue
                 queue.push_back(req);
                   
@@ -751,7 +760,9 @@ void TclServer::start_websocket_server(void)
             req.type = REQ_SCRIPT;
             req.rqueue = userData->rqueue;
             req.script = script;
-              
+	    req.socket_fd = -1;
+	    req.websocket_id = userData->client_name;
+  
             queue.push_back(req);
               
             std::string result = userData->rqueue->front();
@@ -798,6 +809,9 @@ void TclServer::start_websocket_server(void)
             if (!userData->dataserver_client_id.empty()) {
               this->ds->remove_send_client_by_id(userData->dataserver_client_id);
             }
+
+	    // Cleanup linked subprocesses
+	    this->cleanup_subprocesses_for_websocket(userData->client_name);	    
             
             // Signal shutdown to the notification processing thread
             if (userData->notification_queue) {
@@ -992,43 +1006,76 @@ void TclServer::sendLargeMessage(WebSocketType* ws,
     //    std::cout << "Sent " << totalChunks << " chunks for message " << messageId << std::endl;
 }
 
-/********************************* exit *********************************/
+/********************* link subprocess to connection support *******************************/
 
-// Custom exit command for subprocess control
-static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
-			       int objc, Tcl_Obj *const objv[])
-{
-  TclServer *tserv = (TclServer *) clientData;
-  
-  // Check if this is the main dserv process
-  if (tserv->name == "dserv" || tserv->name == "") {
-    Tcl_SetResult(interp, 
-		  (char *)"Cannot exit main dserv process. Use 'shutdown' instead.", 
-		  TCL_STATIC);
-    return TCL_ERROR;
+void TclServer::link_subprocess_to_current_connection(const std::string& subprocess_name) {
+  if (!current_request) {
+    std::cerr << "Warning: link_subprocess called but no current request context" << std::endl;
+    return;
   }
   
-  // For subprocesses, allow exit with optional code
-  int exitCode = 0;
-  if (objc > 1) {
-    if (Tcl_GetIntFromObj(interp, objv[1], &exitCode) != TCL_OK) {
-      return TCL_ERROR;
+  std::lock_guard<std::mutex> lock(subprocess_ownership_mutex);
+  
+  if (current_request->socket_fd >= 0) {
+    subprocess_to_socket[subprocess_name] = current_request->socket_fd;
+    std::cout << "Linked subprocess '" << subprocess_name 
+              << "' to socket " << current_request->socket_fd << std::endl;
+  } 
+  else if (!current_request->websocket_id.empty()) {
+    subprocess_to_websocket[subprocess_name] = current_request->websocket_id;
+    std::cout << "Linked subprocess '" << subprocess_name 
+              << "' to websocket " << current_request->websocket_id << std::endl;
+  }
+  else {
+    std::cerr << "Warning: link_subprocess called but request has no connection info" << std::endl;
+  }
+}
+
+void TclServer::cleanup_subprocesses_for_socket(int sockfd) {
+  std::lock_guard<std::mutex> lock(subprocess_ownership_mutex);
+  
+  std::vector<std::string> to_cleanup;
+  for (const auto& [name, sock] : subprocess_to_socket) {
+    if (sock == sockfd) {
+      to_cleanup.push_back(name);
     }
   }
   
-  // Store exit code in a datapoint for monitoring
-  //  std::string dp_name = tserv->name + "/exit_code";
-  //  tserv->ds->set(dp_name.c_str(), exitCode);
-  
-  std::cout << "Subprocess '" << tserv->name 
-	    << "' exiting with code " << exitCode << std::endl;
-  
-  // Trigger clean shutdown
-  tserv->shutdown();
-  
-  return TCL_OK;
+  for (const auto& name : to_cleanup) {
+    auto subprocess = TclServerRegistry.getObject(name);
+    if (subprocess) {
+      std::cout << "Socket " << sockfd << " closed, shutting down subprocess: " 
+                << name << std::endl;
+      subprocess->shutdown();
+      delete subprocess;
+    }
+    TclServerRegistry.unregisterObject(name);
+    subprocess_to_socket.erase(name);
+  }
 }
 
+void TclServer::cleanup_subprocesses_for_websocket(const std::string& ws_id) {
+  std::lock_guard<std::mutex> lock(subprocess_ownership_mutex);
+  
+  std::vector<std::string> to_cleanup;
+  for (const auto& [name, id] : subprocess_to_websocket) {
+    if (id == ws_id) {
+      to_cleanup.push_back(name);
+    }
+  }
+  
+  for (const auto& name : to_cleanup) {
+    auto subprocess = TclServerRegistry.getObject(name);
+    if (subprocess) {
+      std::cout << "WebSocket " << ws_id << " closed, shutting down subprocess: " 
+                << name << std::endl;
+      subprocess->shutdown();
+      delete subprocess;
+    }
+    TclServerRegistry.unregisterObject(name);
+    subprocess_to_websocket.erase(name);
+  }
+}
 /********************************* now *********************************/
 
 static int now_command (ClientData data, Tcl_Interp *interp,
@@ -1216,61 +1263,101 @@ static int get_var_command(ClientData data, Tcl_Interp *interp,
 
 static void update_subprocess_dpoint(TclServer *tclserver)
 {
-  // update dserv/interps
   ds_datapoint_t dpoint;
-  auto names = TclServerRegistry.getNames();
+  auto allObjects = TclServerRegistry.getAllObjects();
   
-  // Convert to Tcl list
-  std::string interpList;
-  for (const auto& n : names) {
-    if (!interpList.empty()) interpList += " ";
-    interpList += n;
-  }  
+  // Separate regular and linked subprocesses
+  std::string interpList;      // For regular subprocesses (UI)
+  std::string sandboxList;     // For linked/sandbox subprocesses (monitoring)
   
-  /* fill the data point */
+  for (const auto& [name, server] : allObjects) {
+    if (server->is_linked()) {
+      // Add to sandbox list
+      if (!sandboxList.empty()) sandboxList += " ";
+      sandboxList += name;
+    } else {
+      // Add to regular interp list
+      if (!interpList.empty()) interpList += " ";
+      interpList += name;
+    }
+  }
+  
+  // Update dserv/interps (regular subprocesses - for UI)
   dpoint_set(&dpoint, (char *) tclserver->INTERPS_DPOINT_NAME,
-	     tclserver->ds->now(), DSERV_STRING, interpList.size(),
-	     (unsigned char *) interpList.c_str());
-  tclserver->ds->set(dpoint);  
+             tclserver->ds->now(), DSERV_STRING, interpList.size(),
+             (unsigned char *) interpList.c_str());
+  tclserver->ds->set(dpoint);
+  
+  // Update dserv/sandboxes (linked subprocesses - for monitoring)
+  dpoint_set(&dpoint, (char *) tclserver->SANDBOXES_DPOINT_NAME,
+             tclserver->ds->now(), DSERV_STRING, sandboxList.size(),
+             (unsigned char *) sandboxList.c_str());
+  tclserver->ds->set(dpoint);
 }
 
 static int subprocess_command (ClientData data, Tcl_Interp *interp,
-                   int objc, Tcl_Obj *objv[])
+                               int objc, Tcl_Obj *objv[])
 {
   TclServer *tclserver = (TclServer *) data;
   int port = -1;
   std::string script;
+  bool link_connection = false;
   
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "name");
+  int arg_idx = 1;
+  
+  // Parse -link option
+  while (arg_idx < objc && Tcl_GetString(objv[arg_idx])[0] == '-') {
+    std::string opt = Tcl_GetString(objv[arg_idx]);
+    if (opt == "-link") {
+      link_connection = true;
+      arg_idx++;
+    } else {
+      Tcl_AppendResult(interp, "unknown option: ", opt.c_str(), NULL);
+      return TCL_ERROR;
+    }
+  }
+  
+  if (arg_idx >= objc) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?-link? name ?port? ?script?");
     return TCL_ERROR;
   }
   
-  if (objc > 3) {
-    if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
-      return TCL_ERROR;
+  char *name = Tcl_GetString(objv[arg_idx++]);
+  
+  // Parse remaining args (port and/or script)
+  if (arg_idx < objc) {
+    // Try to parse as port number
+    if (Tcl_GetIntFromObj(interp, objv[arg_idx], &port) == TCL_OK) {
+      arg_idx++;
+      if (arg_idx < objc) {
+        script = std::string(Tcl_GetString(objv[arg_idx]));
+      }
+    } else {
+      // Not an int, must be script
+      script = std::string(Tcl_GetString(objv[arg_idx]));
     }
-    script = std::string(Tcl_GetString(objv[3]));    
   }
-  else if (objc > 2) {
-    script = std::string(Tcl_GetString(objv[2]));  
-  }
-
-  char *name = Tcl_GetString(objv[1]);
   
   if (TclServerRegistry.exists(name)) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": child process \"",
-		     name, "\" already exists", NULL);
+                     name, "\" already exists", NULL);
     return TCL_ERROR;
   }
- 
+  
   TclServer *child = new TclServer(tclserver->argc,
-				   tclserver->argv,
-				   tclserver->ds,
-				   name, port);
-                  
-  TclServerRegistry.registerObject(name, child);
+                                   tclserver->argv,
+                                   tclserver->ds,
+                                   name, port);
+  
+  
+  // link to current connection if requested, o.w. add to registry
+  if (link_connection) {
+    tclserver->link_subprocess_to_current_connection(name);
+    child->set_linked(true);    
+  }
 
+  TclServerRegistry.registerObject(name, child);
+    
   if (!script.empty()) {
     auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
@@ -1279,7 +1366,7 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
       return TCL_ERROR;
     }
   }
-
+  
   // update list of current subprocesses
   update_subprocess_dpoint(tclserver);
   
@@ -1328,6 +1415,43 @@ static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 }
+
+
+// Custom exit command for subprocess control
+static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
+			       int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) clientData;
+  
+  // Check if this is the main dserv process
+  if (tserv->name == "dserv" || tserv->name == "") {
+    Tcl_SetResult(interp, 
+		  (char *)"Cannot exit main dserv process. Use 'shutdown' instead.", 
+		  TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  // For subprocesses, allow exit with optional code
+  int exitCode = 0;
+  if (objc > 1) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &exitCode) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  
+  // Store exit code in a datapoint for monitoring
+  //  std::string dp_name = tserv->name + "/exit_code";
+  //  tserv->ds->set(dp_name.c_str(), exitCode);
+  
+  std::cout << "Subprocess '" << tserv->name 
+	    << "' exiting with code " << exitCode << std::endl;
+  
+  // Trigger clean shutdown
+  tserv->shutdown();
+  
+  return TCL_OK;
+}
+
 
 
 static int set_priority_command(ClientData data, Tcl_Interp *interp,
@@ -1825,7 +1949,7 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
 
   // Completion support
-  TclCompletion::RegisterCompletionCommand(interp);
+  TclCompletion::RegisterCompletionCommands(interp);
 
   return;
 }
@@ -2034,7 +2158,10 @@ static int process_requests(TclServer *tserv)
     
     req = tserv->queue.front();
     tserv->queue.pop_front();
-    
+
+    // set current request context so Tcl commands can access
+    tserv->set_current_request(&req);
+ 
     switch (req.type) {
     case REQ_SCRIPT:
       {
@@ -2103,6 +2230,9 @@ static int process_requests(TclServer *tserv)
     default:
       break;
     }
+
+    // clear context
+    tserv->set_current_request(nullptr);
   }
 
   // Clean up ErrorMonitor
@@ -2111,6 +2241,9 @@ static int process_requests(TclServer *tserv)
   TclServerRegistry.unregisterObject(tserv->name);
   update_subprocess_dpoint(tserv);
   
+  // Call a shutdown handler if it exists
+  Tcl_Eval(interp, "if {[info procs ::on_shutdown] ne {}} {::on_shutdown}");
+   
   tserv->setInterp(nullptr);
   Tcl_DeleteInterp(interp);
   //  std::cout << "TclServer process thread ended" << std::endl;
@@ -2187,7 +2320,8 @@ TclServer::tcp_client_process(TclServer *tserv,
   client_request_t client_request;
   client_request.rqueue = &rqueue;
   client_request.type = REQ_SCRIPT;
-
+  client_request.socket_fd = sockfd;
+  client_request.websocket_id = "";
   std::string script;  
     
   while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
@@ -2229,6 +2363,9 @@ TclServer::tcp_client_process(TclServer *tserv,
     }
   }
 
+  // cleanup any linked subprocesses
+  tserv->cleanup_subprocesses_for_socket(sockfd);
+  
   // close and unregister for proper limit tracking
   tserv->unregister_connection(sockfd);
 }
@@ -2284,6 +2421,8 @@ TclServer::message_client_process(TclServer *tserv,
   client_request_t client_request;
   client_request.rqueue = &rqueue;
   client_request.type = REQ_SCRIPT;
+  client_request.socket_fd = sockfd;
+  client_request.websocket_id = "";
   
   std::string script;  
 
@@ -2312,6 +2451,10 @@ TclServer::message_client_process(TclServer *tserv,
       delete[] buffer;
     }
   }
+
+  // cleanup linked subprocesses when connection closes
+  tserv->cleanup_subprocesses_for_socket(sockfd);
+  
   tserv->unregister_connection(sockfd);
 }
 

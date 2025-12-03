@@ -89,6 +89,21 @@ void signalHandler(int signum) {
     std::cout << "Resetting mesh manager..." << std::endl;
     meshManager.reset();
   }
+
+  // Shutdown all subprocesses cleanly
+  std::cout << "Shutting down subprocesses..." << std::endl;
+  std::vector<std::string> names = TclServerRegistry.getNames();
+  for (const auto& name : names) {
+    if (name != "dserv" && !name.empty()) {
+      TclServer* child = TclServerRegistry.getObject(name);
+      if (child && child->getInterp()) {
+        std::cout << "  Shutting down: " << name << std::endl;
+        child->eval("exit");
+      }
+    }
+  }
+  // Brief wait for subprocesses to finish cleanup
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));  
   
   std::cout << "Deleting TclServer..." << std::endl;
   delete tclserver;

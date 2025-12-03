@@ -129,6 +129,15 @@ private:
   std::unordered_map<int, std::string> socket_to_ip;     // socket -> IP mapping
   std::unordered_map<std::string, int> ip_connection_count;
 
+  // Make current request available
+  client_request_t* current_request = nullptr;
+  
+  // Subprocess ownership tracking for cleanup
+  bool is_linked_subprocess = false; // true if tied to a connection
+  std::unordered_map<std::string, int> subprocess_to_socket;
+  std::unordered_map<std::string, std::string> subprocess_to_websocket;
+  std::mutex subprocess_ownership_mutex;
+  
   // WebSocket subscription support
   mutable std::mutex ws_connections_mutex;
   std::map<std::string, void*> ws_connections;  // Changed to void* to support both SSL and non-SSL
@@ -187,7 +196,24 @@ public:
 
   const char *PRINT_DPOINT_NAME = "print";
   const char *INTERPS_DPOINT_NAME = "dserv/interps";
-
+  const char *SANDBOXES_DPOINT_NAME = "dserv/sandboxes";
+  
+  void set_current_request(client_request_t* req) {
+    current_request = req;
+  }
+  
+  client_request_t* get_current_request() {
+    return current_request;
+  }
+  
+  void set_linked(bool linked) { is_linked_subprocess = linked; }
+  bool is_linked() const { return is_linked_subprocess; }
+  
+  // Subprocess lifecycle management
+  void link_subprocess_to_current_connection(const std::string& subprocess_name);
+  void cleanup_subprocesses_for_socket(int sockfd);
+  void cleanup_subprocesses_for_websocket(const std::string& ws_id);
+  
   int _newline_port;		// for CR/LF oriented communication
   int _message_port;		// for message oriented comm  
   int _websocket_port;		// for WebSocket communication
