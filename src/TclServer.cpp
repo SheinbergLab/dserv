@@ -1127,6 +1127,12 @@ static int send_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
+  if (!strcmp(Tcl_GetString(objv[1]), "dserv")) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": cannot send directly to dserv", NULL);
+    return TCL_ERROR;
+  }
+  
   auto tclserver = TclServerRegistry.getObject(Tcl_GetString(objv[1]));
   if (!tclserver) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
@@ -1298,6 +1304,8 @@ static void update_subprocess_dpoint(TclServer *tclserver)
 static int subprocess_command (ClientData data, Tcl_Interp *interp,
                                int objc, Tcl_Obj *objv[])
 {
+  static std::atomic<int> link_counter{0};
+  
   TclServer *tclserver = (TclServer *) data;
   int port = -1;
   std::string script;
@@ -1317,12 +1325,22 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
     }
   }
   
-  if (arg_idx >= objc) {
-    Tcl_WrongNumArgs(interp, 1, objv, "?-link? name ?port? ?script?");
-    return TCL_ERROR;
-  }
+  std::string name;
   
-  char *name = Tcl_GetString(objv[arg_idx++]);
+  // If -link was specified and no name provided, generate one
+  if (link_connection && arg_idx >= objc) {
+    // Generate unique name for linked subprocess
+    do {
+      name = "linked_" + std::to_string(link_counter.fetch_add(1));
+    } while (TclServerRegistry.exists(name));
+  } else {
+    // Name was explicitly provided
+    if (arg_idx >= objc) {
+      Tcl_WrongNumArgs(interp, 1, objv, "?-link? ?name? ?port? ?script?");
+      return TCL_ERROR;
+    }
+    name = Tcl_GetString(objv[arg_idx++]);
+  }
   
   // Parse remaining args (port and/or script)
   if (arg_idx < objc) {
@@ -1340,14 +1358,14 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   
   if (TclServerRegistry.exists(name)) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": child process \"",
-                     name, "\" already exists", NULL);
+                     name.c_str(), "\" already exists", NULL);
     return TCL_ERROR;
   }
   
   TclServer *child = new TclServer(tclserver->argc,
                                    tclserver->argv,
                                    tclserver->ds,
-                                   name, port);
+                                   name.c_str(), port);
   
   
   // link to current connection if requested, o.w. add to registry
@@ -1355,7 +1373,6 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
     tclserver->link_subprocess_to_current_connection(name);
     child->set_linked(true);    
   }
-
   TclServerRegistry.registerObject(name, child);
     
   if (!script.empty()) {
@@ -1370,11 +1387,10 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
   // update list of current subprocesses
   update_subprocess_dpoint(tclserver);
   
-  Tcl_SetObjResult(interp, Tcl_NewStringObj(child->client_name.c_str(), -1));
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(child->name.c_str(), -1));
   
   return TCL_OK;
 }
-
 
 static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp, 
                    int objc, Tcl_Obj *const objv[])
