@@ -30,6 +30,7 @@ class CommandReference {
     async connect() {
         this.conn = new DservConnection({
             subprocess: 'docs',
+	    createLinkedSubprocess: true,
             dservHost: 'localhost:2565',
             forceSecure: true,
             onStatus: (status, msg) => this.onConnectionStatus(status, msg),
@@ -38,6 +39,12 @@ class CommandReference {
         
         try {
             await this.conn.connect();
+
+	    // Include some initialization
+	    if (this.conn.getLinkedSubprocess()) {
+		await this.conn.sendToLinked('package require dlsh');
+	    }
+	    
         } catch (e) {
             console.error('Failed to connect:', e);
             document.getElementById('list-loading').textContent = 'Connection failed. Is dserv running?';
@@ -408,13 +415,32 @@ class CommandReference {
         
         try {
             // Send to main Tcl interpreter, not docs subprocess
-            const response = await this.conn.send(code);
+	    const response = await this.conn.sendToLinked(code);
             output.textContent = response;
             output.className = 'try-it-output success';
         } catch (e) {
             output.textContent = e.message || 'Error';
             output.className = 'try-it-output error';
         }
+    }
+
+    async resetInterpreter() {
+	try {
+            const newName = await this.conn.resetLinkedSubprocess();
+            // Re-run initialization
+            await this.conn.sendToLinked('package require dlsh');
+            
+            // Clear output
+            document.getElementById('try-it-output').textContent = 'Interpreter reset';
+            document.getElementById('try-it-output').className = 'try-it-output success';
+	} catch (e) {
+            console.error('Failed to reset:', e);
+            const output = document.getElementById('try-it-output');
+            if (output) {
+		output.textContent = 'Reset failed: ' + e.message;
+		output.className = 'try-it-output error';
+            }
+	}
     }
     
     onKeyDown(e) {
