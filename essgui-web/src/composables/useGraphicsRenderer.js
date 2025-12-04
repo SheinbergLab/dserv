@@ -34,7 +34,9 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
   let scaleY = 1
   let lastGbufData = null
   let currentBackgroundColor = config.backgroundColor // Track current background
-
+    // Image cache (Map: imageId -> HTMLImageElement)
+    let imageCache = new Map()
+    
   // Cleanup tracking
   const cleanupFunctions = []
 
@@ -90,6 +92,138 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     }
   }
 
+/**
+ * Cache an image from base64 data
+ * @param {string} imageId - Unique identifier for the image
+ * @param {number} width - Image width
+ * @param {number} height - Image height
+ * @param {number} depth - 1 (grayscale), 3 (RGB), or 4 (RGBA)
+ * @param {string} base64Data - Base64-encoded image data
+ */
+const cacheImage = (imageId, width, height, depth, base64Data) => {
+  // Create image element
+  const img = new Image()
+  
+  // Create temp canvas to build image
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const tempCtx = canvas.getContext('2d')
+  
+  // Decode base64 to binary
+  const binaryString = atob(base64Data)
+  const bytes = new Uint8Array(binaryString.length)
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i)
+  }
+  
+  // Create ImageData
+  const imageData = tempCtx.createImageData(width, height)
+  
+  // Fill based on depth
+  if (depth === 1) {
+    // Grayscale: 1 byte per pixel
+    for (let i = 0; i < width * height; i++) {
+      const gray = bytes[i] || 0
+      imageData.data[i * 4] = gray
+      imageData.data[i * 4 + 1] = gray
+      imageData.data[i * 4 + 2] = gray
+      imageData.data[i * 4 + 3] = 255
+    }
+  } else if (depth === 3) {
+    // RGB: 3 bytes per pixel
+    for (let i = 0; i < width * height; i++) {
+      const srcIdx = i * 3
+      const dstIdx = i * 4
+      imageData.data[dstIdx] = bytes[srcIdx] || 0
+      imageData.data[dstIdx + 1] = bytes[srcIdx + 1] || 0
+      imageData.data[dstIdx + 2] = bytes[srcIdx + 2] || 0
+      imageData.data[dstIdx + 3] = 255
+    }
+  } else if (depth === 4) {
+    // RGBA: 4 bytes per pixel
+    for (let i = 0; i < width * height; i++) {
+      const srcIdx = i * 4
+      const dstIdx = i * 4
+      imageData.data[dstIdx] = bytes[srcIdx] || 0
+      imageData.data[dstIdx + 1] = bytes[srcIdx + 1] || 0
+      imageData.data[dstIdx + 2] = bytes[srcIdx + 2] || 0
+      imageData.data[dstIdx + 3] = bytes[srcIdx + 3] || 255
+    }
+  } else {
+    console.warn(`Unsupported image depth: ${depth}, treating as grayscale`)
+    // Fallback to grayscale
+    for (let i = 0; i < width * height; i++) {
+      const gray = bytes[i] || 0
+      imageData.data[i * 4] = gray
+      imageData.data[i * 4 + 1] = gray
+      imageData.data[i * 4 + 2] = gray
+      imageData.data[i * 4 + 3] = 255
+    }
+  }
+  
+  // Put image data on temp canvas
+  tempCtx.putImageData(imageData, 0, 0)
+  
+  // Convert canvas to data URL and set as image source
+  img.src = canvas.toDataURL()
+  
+  // Cache the image
+  imageCache.set(imageId, img)
+}
+
+/**
+ * Draw image command handler
+ */
+const executeDrawImage = (commandObj) => {
+  const args = commandObj.args
+  const imageData = commandObj.image_data
+  
+  if (!args || args.length < 5) {
+    console.warn('drawimage: insufficient args')
+    return
+  }
+  
+  const x0 = transformX(args[0])
+  const y0 = transformY(args[1])
+  const x1 = transformX(args[2])
+  const y1 = transformY(args[3])
+  const imageId = String(args[4])
+  
+  // Calculate destination rectangle (handle flipped Y coords)
+  const left = Math.min(x0, x1)
+  const top = Math.min(y0, y1)
+  const width = Math.abs(x1 - x0)
+  const height = Math.abs(y1 - y0)
+  
+  // If image_data provided, cache it
+  if (imageData && imageData.width && imageData.height && imageData.data) {
+    const imgWidth = parseInt(imageData.width)
+    const imgHeight = parseInt(imageData.height)
+    const depth = parseInt(imageData.depth) || 3
+    const base64Data = imageData.data
+    
+    const cacheKey = `${imageId}`
+    if (!imageCache.has(cacheKey)) {
+      cacheImage(cacheKey, imgWidth, imgHeight, depth, base64Data)
+    }
+  }
+  
+  // Draw the image if cached
+  const cacheKey = `${imageId}`
+  const img = imageCache.get(cacheKey)
+  if (img && img.complete) {
+    ctx.drawImage(img, left, top, width, height)
+  } else if (img) {
+    // Image still loading, draw when ready
+    img.onload = () => {
+      ctx.drawImage(img, left, top, width, height)
+    }
+  } else {
+    console.warn(`Image not found in cache: ${imageId}`)
+  }
+}
+    
   // Execute graphics commands (unchanged)
   const executeGBCommand = (commandObj) => {
     const { cmd, args } = commandObj
@@ -280,6 +414,10 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
           ctx.lineWidth = Math.max(1, (args[0] / 100) * Math.min(scaleX, scaleY))
           break
 
+      case 'drawimage':
+          executeDrawImage(commandObj)
+          break
+	  
         default:
           // Silently ignore unknown commands
           break
@@ -320,7 +458,9 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
     currentOrientation = 0
     scaleX = 1
     scaleY = 1
-
+    // Clear image cache to ensure fresh images
+      imageCache.clear()
+      
     try {
       const commands = gbufData.commands || []
       let commandCount = 0
@@ -475,9 +615,10 @@ export function useGraphicsRenderer(canvasRef, options = {}) {
 
   // Cleanup
   const cleanup = () => {
-    cleanupFunctions.forEach(fn => fn && fn())
-    cleanupFunctions.length = 0
-    console.log(`Graphics renderer cleaned up: ${config.streamId}`)
+      cleanupFunctions.forEach(fn => fn && fn())
+      cleanupFunctions.length = 0
+      imageCache.clear()       
+      console.log(`Graphics renderer cleaned up: ${config.streamId}`)
   }
 
   // Get scaling info
