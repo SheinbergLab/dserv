@@ -152,6 +152,9 @@ class DocBuilder:
             ('content_editor.html', 'docs_content_editor.html'),
             ('command_editor.html', 'docs_command_editor.html'),
             ('tutorial.html', 'docs_tutorial.html'),
+            ('DGTableViewer.html', 'DGTableViewer.html'),
+            ('TclTerminal.html', 'TclTerminal.html'),
+            ('GraphicsDemo.html', 'GraphicsDemo.html'),
         ]
         
         built_count = 0
