@@ -5,6 +5,7 @@
 #ifndef _MSC_VER
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #endif
 
 #include "sharedqueue.h"
@@ -150,7 +151,8 @@ int main(int argc, char *argv[])
   std::string mesh_appliance_name;
   std::string trigger_script;
   std::string configuration_script;
-
+  std::string www_path;
+  
   cxxopts::Options options("dserv", "Data server");
   options.add_options()
     ("h,help", "Print help", cxxopts::value<bool>(help))
@@ -159,6 +161,8 @@ int main(int argc, char *argv[])
     ("c,cscript", "Configuration script path",
      cxxopts::value<std::string>(configuration_script))
     ("v,version", "Version", cxxopts::value<bool>(version))
+    ("w,www", "Static file serving directory",
+     cxxopts::value<std::string>(www_path))    
     ("m,mesh", "Enable/disable mesh networking", cxxopts::value<bool>(enable_mesh))
     ("mesh-port", "Mesh HTTP port", cxxopts::value<int>(mesh_port)->default_value("12348"))
     ("mesh-discovery-port", "Mesh discovery port", cxxopts::value<int>(mesh_discovery_port)->default_value("12346"))
@@ -193,7 +197,21 @@ int main(int argc, char *argv[])
 
   // Create core dserv components
   dserver = new Dataserver(argc, argv);
-  tclserver = new TclServer(argc, argv, dserver, "dserv", 2570, 2560, 2565);
+
+  TclServerConfig tclserver_config("dserv", 2570, 2560, 2565);
+
+  // Include default www path if not specified
+  if (www_path.empty()) {
+    // Check if default location exists
+    struct stat st;
+    if (stat("/usr/local/dserv/www", &st) == 0 && S_ISDIR(st.st_mode)) {
+      www_path = "/usr/local/dserv/www";
+    }
+  }
+  
+  tclserver_config.www_path = www_path;
+  tclserver = new TclServer(argc, argv, dserver, tclserver_config);
+  
   TclServerRegistry.registerObject("dserv", tclserver);
 
   setVersionInfo(tclserver);
