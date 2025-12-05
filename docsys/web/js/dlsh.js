@@ -1,775 +1,631 @@
 /**
- * dlsh.css - Interactive Tcl Workbench Styles
+ * dlsh.js - Interactive Tcl Workbench
  * 
- * Layout: 2x2 grid with shared status bar
- * Theme: Dark
+ * Manages the unified interface with:
+ * - TclEditor (top-left)
+ * - TclTerminal (bottom-left)  
+ * - GraphicsRenderer (top-right)
+ * - DGTableViewer (bottom-right)
+ * 
+ * All components share a single DservConnection.
  */
 
-/* ============================================================
-   CSS Variables
-   ============================================================ */
-
-:root {
-    --dlsh-font-size-base: 12px;
-    --dlsh-font-size-code: 11px;
-    --dlsh-header-height: 32px;
-    --dlsh-status-height: 36px;
-    --dlsh-gap: 8px;
-    --dlsh-border-radius: 4px;
-    
-    /* Colors */
-    --dlsh-bg-app: #1a1a1a;
-    --dlsh-bg-panel: #252525;
-    --dlsh-bg-header: #2a2a2a;
-    --dlsh-bg-input: #333;
-    --dlsh-bg-button: #333;
-    --dlsh-bg-button-hover: #444;
-    --dlsh-bg-primary: #1890ff;
-    --dlsh-bg-primary-hover: #40a9ff;
-    --dlsh-bg-error: #ff4d4f;
-    
-    --dlsh-border: #333;
-    --dlsh-border-light: #444;
-    --dlsh-border-focus: #1890ff;
-    
-    --dlsh-text: #e0e0e0;
-    --dlsh-text-muted: #999;
-    --dlsh-text-dim: #666;
-    --dlsh-text-header: #aaa;
-    
-    --dlsh-status-connected: #52c41a;
-    --dlsh-status-connecting: #faad14;
-    --dlsh-status-error: #ff4d4f;
-}
-
-/* ============================================================
-   Base Reset & Body
-   ============================================================ */
-
-html, body {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    overflow: hidden;
-    overscroll-behavior-x: none; /* Prevent accidental swipe navigation */
-}
-
-.dlsh-app * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
-.dlsh-app {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: var(--dlsh-font-size-base);
-    background: var(--dlsh-bg-app);
-    color: var(--dlsh-text);
-    height: 100vh;
-    overflow: hidden;
-}
-
-/* ============================================================
-   App Container Layout
-   ============================================================ */
-
-.dlsh-container {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    padding: var(--dlsh-gap);
-}
-
-/* ============================================================
-   Status Bar
-   ============================================================ */
-
-.dlsh-status-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    height: var(--dlsh-status-height);
-    padding: 0 12px;
-    background: var(--dlsh-bg-panel);
-    border-radius: var(--dlsh-border-radius);
-    margin-bottom: var(--dlsh-gap);
-    flex-shrink: 0;
-}
-
-.dlsh-status-bar h1 {
-    font-size: 14px;
-    font-weight: 600;
-    color: #fff;
-    margin-right: 16px;
-}
-
-.dlsh-status-indicator {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #666;
-    transition: background 0.3s;
-}
-
-.dlsh-status-indicator.connected {
-    background: var(--dlsh-status-connected);
-    box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
-}
-
-.dlsh-status-indicator.connecting {
-    background: var(--dlsh-status-connecting);
-    animation: dlsh-pulse 1s infinite;
-}
-
-.dlsh-status-indicator.error {
-    background: var(--dlsh-status-error);
-}
-
-@keyframes dlsh-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-}
-
-.dlsh-status-text {
-    color: var(--dlsh-text-muted);
-    font-size: 11px;
-}
-
-.dlsh-status-spacer {
-    flex: 1;
-}
-
-.dlsh-status-bar button {
-    padding: 4px 10px;
-    background: var(--dlsh-bg-button);
-    color: #ccc;
-    border: 1px solid var(--dlsh-border-light);
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 11px;
-}
-
-.dlsh-status-bar button:hover {
-    background: var(--dlsh-bg-button-hover);
-    color: #fff;
-}
-
-/* ============================================================
-   Main Grid - 2x2 Layout
-   ============================================================ */
-
-.dlsh-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-    gap: var(--dlsh-gap);
-    flex: 1;
-    min-height: 0;
-}
-
-/* ============================================================
-   Panel Components
-   ============================================================ */
-
-.dlsh-panel {
-    background: var(--dlsh-bg-panel);
-    border-radius: var(--dlsh-border-radius);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--dlsh-border);
-}
-
-.dlsh-panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: var(--dlsh-header-height);
-    padding: 0 10px;
-    background: var(--dlsh-bg-header);
-    border-bottom: 1px solid var(--dlsh-border);
-    flex-shrink: 0;
-}
-
-.dlsh-panel-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--dlsh-text-header);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.dlsh-panel-status {
-    font-size: 10px;
-    color: var(--dlsh-text-dim);
-}
-
-.dlsh-panel-actions {
-    display: flex;
-    gap: 6px;
-}
-
-.dlsh-panel-actions button {
-    padding: 3px 8px;
-    background: var(--dlsh-bg-button);
-    color: var(--dlsh-text-header);
-    border: 1px solid var(--dlsh-border-light);
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 10px;
-}
-
-.dlsh-panel-actions button:hover {
-    background: var(--dlsh-bg-button-hover);
-    color: #fff;
-}
-
-.dlsh-panel-actions button.primary {
-    background: var(--dlsh-bg-primary);
-    border-color: var(--dlsh-bg-primary);
-    color: #fff;
-}
-
-.dlsh-panel-actions button.primary:hover {
-    background: var(--dlsh-bg-primary-hover);
-}
-
-.dlsh-panel-body {
-    flex: 1;
-    overflow: hidden;
-    position: relative;
-}
-
-/* ============================================================
-   Editor Panel
-   ============================================================ */
-
-.dlsh-editor-container {
-    height: 100%;
-    width: 100%;
-}
-
-/* ============================================================
-   Terminal Panel - Inline TclTerminal Overrides
-   ============================================================ */
-
-.dlsh-terminal-container {
-    height: 100%;
-    width: 100%;
-}
-
-.dlsh-terminal-container .tcl-terminal {
-    background: #1e1e1e;
-    color: #d4d4d4;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace;
-    font-size: 10px !important;
-    line-height: 1.4;
-    padding: 8px;
-    overflow-y: auto;
-    height: 100%;
-}
-
-.dlsh-terminal-container .tcl-terminal-line {
-    margin: 1px 0;
-    white-space: pre-wrap;
-    line-height: 1.4;
-}
-
-.dlsh-terminal-container .tcl-terminal-error {
-    color: #f48771;
-}
-
-.dlsh-terminal-container .tcl-terminal-info {
-    color: #4ec9b0;
-}
-
-.dlsh-terminal-container .tcl-terminal-input-container {
-    display: flex;
-    align-items: center;
-    margin: 1px 0;
-}
-
-.dlsh-terminal-container .tcl-terminal-prompt {
-    color: #569cd6;
-    user-select: none;
-    margin-right: 8px;
-}
-
-.dlsh-terminal-container .tcl-terminal-input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    color: #d4d4d4;
-    font-family: inherit;
-    font-size: inherit;
-    outline: none;
-}
-
-/* ============================================================
-   Graphics Panel
-   ============================================================ */
-
-.dlsh-canvas {
-    display: block;
-    width: 100%;
-    height: 100%;
-    background: #000;
-}
-
-/* ============================================================
-   Table Panel
-   ============================================================ */
-
-.dlsh-table-container {
-    height: 100%;
-    width: 100%;
-    overflow: auto;
-    background: #1e1e1e;
-}
-
-/* ============================================================
-   DGTableViewer Dark Theme (.dg-dark class)
-   ============================================================ */
-
-/* Main container */
-.dg-table-viewer.dg-dark {
-    background: #1e1e1e;
-    border-color: #333;
-    color: #d4d4d4;
-}
-
-/* Header bar */
-.dg-dark .dg-header {
-    background: #252525;
-    border-bottom-color: #333;
-}
-
-.dg-dark .dg-info-left,
-.dg-dark .dg-array-info,
-.dg-dark .dg-page-info {
-    color: #999;
-}
-
-.dg-dark .dg-separator {
-    color: #555;
-}
-
-/* Buttons */
-.dg-dark .dg-button {
-    background: #333;
-    border-color: #444;
-    color: #ccc;
-}
-
-.dg-dark .dg-button:hover:not(:disabled) {
-    background: #444;
-    border-color: #1890ff;
-    color: #40a9ff;
-}
-
-.dg-dark .dg-button:disabled {
-    background: #2a2a2a;
-    color: #666;
-}
-
-/* Table container */
-.dg-dark .dg-table-container {
-    background: #1e1e1e;
-}
-
-/* Table */
-.dg-dark .dg-table {
-    background: #1e1e1e;
-    color: #d4d4d4;
-}
-
-.dg-dark .dg-table thead {
-    background: #252525;
-}
-
-.dg-dark .dg-table th {
-    background: #252525;
-    color: #aaa;
-    border-bottom-color: #444;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.dg-dark .dg-table th.dg-sortable:hover {
-    background: #2a2a2a;
-}
-
-.dg-dark .dg-table th.dg-sorted {
-    color: #40a9ff;
-}
-
-.dg-dark .dg-table td {
-    border-bottom-color: #333;
-    white-space: nowrap;
-}
-
-.dg-dark .dg-table tbody tr:hover {
-    background: #2a2a2a;
-}
-
-.dg-dark .dg-table tbody tr {
-    cursor: pointer;
-}
-
-.dg-dark .dg-table td.dg-null {
-    color: #666;
-}
-
-/* Array links */
-.dg-dark .dg-array-link {
-    color: #40a9ff;
-}
-
-/* Pagination */
-.dg-dark .dg-pagination {
-    background: #252525;
-    border-top-color: #333;
-}
-
-/* Selected row */
-.dg-dark .dg-table tbody tr.dg-selected {
-    background: #1a3a5c;
-    border-left-color: #40a9ff;
-}
-
-/* Scrollbars */
-.dg-dark .dg-table-container::-webkit-scrollbar,
-.dg-dark .dg-modal-body::-webkit-scrollbar,
-.dg-dark .dg-inspector-body::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-.dg-dark .dg-table-container::-webkit-scrollbar-track,
-.dg-dark .dg-modal-body::-webkit-scrollbar-track,
-.dg-dark .dg-inspector-body::-webkit-scrollbar-track {
-    background: #1e1e1e;
-}
-
-.dg-dark .dg-table-container::-webkit-scrollbar-thumb,
-.dg-dark .dg-modal-body::-webkit-scrollbar-thumb,
-.dg-dark .dg-inspector-body::-webkit-scrollbar-thumb {
-    background: #444;
-    border-radius: 4px;
-}
-
-.dg-dark .dg-table-container::-webkit-scrollbar-thumb:hover,
-.dg-dark .dg-modal-body::-webkit-scrollbar-thumb:hover,
-.dg-dark .dg-inspector-body::-webkit-scrollbar-thumb:hover {
-    background: #555;
-}
-
-/* Modal and Inspector - dark theme 
-   Note: These are appended to document.body, so we add .dg-dark-mode to body
-   when a dark table is created. See DGTableViewer.js */
-body.dg-dark-mode .dg-modal .dg-modal-content {
-    background: #252525;
-    border: 1px solid #444;
-}
-
-body.dg-dark-mode .dg-modal-header {
-    background: #2a2a2a;
-    border-bottom-color: #444;
-}
-
-body.dg-dark-mode .dg-modal-header h3 {
-    color: #ddd;
-}
-
-body.dg-dark-mode .dg-modal-close {
-    color: #888;
-}
-
-body.dg-dark-mode .dg-modal-close:hover {
-    color: #fff;
-}
-
-body.dg-dark-mode .dg-modal-body {
-    background: #1e1e1e;
-    color: #d4d4d4;
-}
-
-body.dg-dark-mode .dg-modal-table td.dg-row-index {
-    background: #2a2a2a;
-    color: #999;
-}
-
-/* Simple array display - dark */
-body.dg-dark-mode .dg-simple-array {
-    color: #d4d4d4;
-}
-
-body.dg-dark-mode .dg-array-item {
-    border-bottom-color: #333;
-}
-
-body.dg-dark-mode .dg-array-index {
-    color: #888;
-}
-
-body.dg-dark-mode .dg-array-value {
-    color: #d4d4d4;
-}
-
-/* Inspector panel - dark theme */
-body.dg-dark-mode .dg-inspector-panel {
-    background: #252525;
-    border-left-color: #444;
-}
-
-body.dg-dark-mode .dg-inspector-header {
-    background: #2a2a2a;
-    border-bottom-color: #444;
-}
-
-body.dg-dark-mode .dg-inspector-header h3 {
-    color: #ddd;
-}
-
-body.dg-dark-mode .dg-inspector-close {
-    color: #888;
-}
-
-body.dg-dark-mode .dg-inspector-close:hover {
-    color: #fff;
-}
-
-body.dg-dark-mode .dg-inspector-body {
-    background: #1e1e1e;
-}
-
-/* Tree view - dark */
-body.dg-dark-mode .dg-tree-key {
-    color: #9cdcfe;
-}
-
-body.dg-dark-mode .dg-tree-value {
-    color: #d4d4d4;
-}
-
-body.dg-dark-mode .dg-tree-array {
-    border-left-color: #444;
-}
-
-body.dg-dark-mode .dg-tree-array-header {
-    color: #40a9ff;
-}
-
-/* ============================================================
-   Error Console
-   ============================================================ */
-
-.dlsh-console {
-    height: 80px;
-    background: #1a1a1a;
-    border-top: 1px solid #333;
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-}
-
-.dlsh-console-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 4px 10px;
-    background: #252525;
-    border-bottom: 1px solid #333;
-    flex-shrink: 0;
-}
-
-.dlsh-console-title {
-    font-size: 10px;
-    font-weight: 600;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.dlsh-console-count {
-    font-size: 10px;
-    color: #f48771;
-    font-weight: 600;
-}
-
-.dlsh-console-count:empty {
-    display: none;
-}
-
-.dlsh-console-actions {
-    margin-left: auto;
-}
-
-.dlsh-console-actions button {
-    padding: 2px 6px;
-    background: #333;
-    color: #888;
-    border: 1px solid #444;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 9px;
-}
-
-.dlsh-console-actions button:hover {
-    background: #444;
-    color: #ccc;
-}
-
-.dlsh-console-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 6px 10px;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace;
-    font-size: 11px;
-    line-height: 1.4;
-}
-
-.dlsh-console-entry {
-    padding: 3px 0;
-    border-bottom: 1px solid #2a2a2a;
-}
-
-.dlsh-console-entry:last-child {
-    border-bottom: none;
-}
-
-.dlsh-console-header-line {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-}
-
-.dlsh-console-time {
-    color: #666;
-    font-size: 10px;
-    flex-shrink: 0;
-}
-
-.dlsh-console-expander {
-    color: #888;
-    font-size: 9px;
-    user-select: none;
-    width: 10px;
-    flex-shrink: 0;
-}
-
-.dlsh-console-message {
-    color: #f48771;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.dlsh-console-message.info {
-    color: #4ec9b0;
-}
-
-.dlsh-console-message.warning {
-    color: #dcdcaa;
-}
-
-.dlsh-console-detail {
-    margin: 4px 0 4px 70px;
-    padding: 6px 8px;
-    background: #252525;
-    border-left: 2px solid #f48771;
-    border-radius: 2px;
-    max-height: 120px;
-    overflow-y: auto;
-}
-
-.dlsh-console-detail pre {
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: #ccc;
-    font-size: 10px;
-    line-height: 1.4;
-    font-family: inherit;
-}
-
-/* Collapsed state - hide detail */
-.dlsh-console-entry.collapsed .dlsh-console-detail {
-    display: none;
-}
-
-/* Expanded state - show detail */
-.dlsh-console-entry:not(.collapsed) .dlsh-console-detail {
-    display: block;
-}
-
-/* Scrollbar for console */
-.dlsh-console-body::-webkit-scrollbar {
-    width: 6px;
-}
-
-.dlsh-console-body::-webkit-scrollbar-track {
-    background: #1a1a1a;
-}
-
-.dlsh-console-body::-webkit-scrollbar-thumb {
-    background: #444;
-    border-radius: 3px;
-}
-
-.dlsh-console-body::-webkit-scrollbar-thumb:hover {
-    background: #555;
-}
-
-/* Load controls in table header */
-.dlsh-load-controls {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-}
-
-.dlsh-load-controls input {
-    padding: 3px 6px;
-    background: var(--dlsh-bg-input);
-    border: 1px solid var(--dlsh-border-light);
-    border-radius: 3px;
-    color: #ddd;
-    font-size: 10px;
-    width: 100px;
-}
-
-.dlsh-load-controls input:focus {
-    outline: none;
-    border-color: var(--dlsh-border-focus);
-}
-
-/* ============================================================
-   Error Toast
-   ============================================================ */
-
-.dlsh-error-toast {
-    position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 10px 20px;
-    background: var(--dlsh-bg-error);
-    color: white;
-    border-radius: 4px;
-    font-size: 12px;
-    z-index: 1000;
-    animation: dlsh-slideUp 0.3s ease;
-}
-
-@keyframes dlsh-slideUp {
-    from { 
-        opacity: 0; 
-        transform: translateX(-50%) translateY(20px); 
+class DlshWorkbench {
+    constructor(options = {}) {
+        this.options = {
+            dservHost: 'localhost:2565',
+            forceSecure: true,
+            subprocess: 'dlsh',
+            graphicsStream: 'graphics/demo',
+            ...options
+        };
+        
+        // Components
+        this.conn = null;
+        this.tclEditor = null;
+        this.terminal = null;
+        this.renderer = null;
+        this.dpManager = null;
+        this.tableViewer = null;
+        
+        // Private channel prefix (set after connection)
+        this.privatePrefix = null;
+        
+        // Table history for pushed tables
+        this.tableHistory = [];
+        this.currentTableIndex = -1;
+        
+        // DOM elements
+        this.elements = {
+            statusIndicator: document.getElementById('status-indicator'),
+            statusText: document.getElementById('status-text'),
+            editorContainer: document.getElementById('editor-container'),
+            terminalContainer: document.getElementById('terminal-container'),
+            graphicsCanvas: document.getElementById('graphics-canvas'),
+            graphicsStats: document.getElementById('graphics-stats'),
+            tableContainer: document.getElementById('table-container'),
+            dgNameInput: document.getElementById('dg-name'),
+            errorContainer: document.getElementById('error-container'),
+            consoleOutput: document.getElementById('console-output'),
+            errorCount: document.getElementById('error-count')
+        };
+        
+        // Error tracking
+        this.errorCount = 0;
+        this.lastErrorInfo = null;
+        
+        // Bind methods
+        this.runCode = this.runCode.bind(this);
+        this.loadTable = this.loadTable.bind(this);
+        this.handleResize = this.handleResize.bind(this);
     }
-    to { 
-        opacity: 1; 
-        transform: translateX(-50%) translateY(0); 
+    
+    // ============================================================
+    // Initialization
+    // ============================================================
+    
+    async init() {
+        this.updateStatus('connecting', 'Connecting to dserv...');
+        
+        try {
+            await this.initConnection();
+            this.initEditor();
+            this.initTerminal();
+            this.initGraphics();
+            this.initTables();
+            this.initErrorMonitor();
+            this.initEventListeners();
+            
+            this.updateStatus('connected', 'Connected');
+        } catch (e) {
+            this.updateStatus('error', 'Connection failed');
+            this.showError(`Failed to initialize: ${e.message}`);
+        }
+    }
+    
+    async initConnection() {
+        this.conn = new DservConnection({
+            subprocess: this.options.subprocess,
+            createLinkedSubprocess: true,
+            dservHost: this.options.dservHost,
+            forceSecure: this.options.forceSecure,
+            onStatus: (status, msg) => this.updateStatus(status, msg),
+            onError: (err) => this.showError(err)
+        });
+        
+        await this.conn.connect();
+        
+        // Get the private prefix from linked subprocess name
+        this.privatePrefix = this.conn.getLinkedSubprocess();
+        
+        // Initialize linked subprocess with dlsh package and error monitoring
+        if (this.privatePrefix) {
+            await this.conn.sendToLinked('package require dlsh; errormon enable');
+            
+            // Create flushwin proc that writes to private graphics channel
+            await this.conn.sendToLinked(
+                `proc flushwin {{target main}} { dservSet ${this.privatePrefix}/graphics/$target [dumpwin json] }`
+            );
+            
+            // Create dg_view proc that writes to private tables channel
+            await this.conn.sendToLinked(
+                `proc dg_view {dg {name ""}} {
+                    if {$name eq ""} {
+                        set name $dg
+                    }
+                    dservSet ${this.privatePrefix}/tables/$name [dg_toHybridJSON $dg]
+                }`
+            );
+            
+            console.log('Private prefix:', this.privatePrefix);
+        }
+    }
+    
+    initEditor() {
+        this.tclEditor = new TclEditor('editor-container', {
+            theme: 'dark',
+            fontSize: '11px',
+            tabSize: 4
+        });
+        
+        this.elements.editorContainer.addEventListener('editor-ready', () => {
+            this.tclEditor.setWebSocket(this.conn);
+            this.tclEditor.setOnExecute((code) => this.executeSnippet(code));
+            this.loadExample();
+        }, { once: true });
+    }
+    
+    initTerminal() {
+        this.terminal = new TclTerminal('terminal-container', this.conn, {
+            interpreter: 'dserv',
+            useLinkedSubprocess: true,
+            welcomeMessage: 'dlsh terminal ready',
+            tabCompletion: true
+        });
+    }
+    
+    initGraphics() {
+        // DatapointManager for subscriptions
+        this.dpManager = new DatapointManager(this.conn, {
+            autoGetKeys: false
+        });
+        
+        // Initial canvas sizing
+        this.resizeCanvas();
+        
+        // Determine graphics stream - use private channel if available
+        const graphicsStream = this.privatePrefix 
+            ? `${this.privatePrefix}/graphics/main`
+            : this.options.graphicsStream;
+        
+        // GraphicsRenderer with auto-subscription
+        this.renderer = new GraphicsRenderer('graphics-canvas', {
+            datapointManager: this.dpManager,
+            streamId: graphicsStream,
+            width: this.elements.graphicsCanvas.width,
+            height: this.elements.graphicsCanvas.height,
+            onStats: (stats) => {
+                this.elements.graphicsStats.textContent = 
+                    `${stats.commandCount} cmds • ${stats.time}`;
+            }
+        });
+    }
+    
+    initTables() {
+        if (!this.privatePrefix || !this.dpManager) return;
+        
+        // Subscribe to tables using DatapointManager (same as GraphicsRenderer)
+        const tablesPattern = `${this.privatePrefix}/tables/*`;
+        console.log('Subscribing to tables pattern:', tablesPattern);
+        
+        // Use DatapointManager's subscribe method
+        this.dpManager.subscribe(tablesPattern, (dp) => {
+            console.log('Table update received:', dp.name);
+            this.handleTablePush(dp);
+        });
+    }
+    
+    handleTablePush(datapoint) {
+        // Extract table name from datapoint path
+        const tableName = datapoint.name.split('/').pop();
+        
+        // Parse the data
+        let data;
+        try {
+            data = typeof datapoint.data === 'string' 
+                ? JSON.parse(datapoint.data) 
+                : datapoint.data;
+        } catch (e) {
+            this.showError(`Invalid table data: ${e.message}`);
+            return;
+        }
+        
+        // Add to history
+        const tableEntry = {
+            name: tableName,
+            data: data,
+            timestamp: Date.now()
+        };
+        
+        // Check if this table name already exists in history
+        const existingIndex = this.tableHistory.findIndex(t => t.name === tableName);
+        if (existingIndex >= 0) {
+            // Update existing entry
+            this.tableHistory[existingIndex] = tableEntry;
+            if (this.currentTableIndex === existingIndex) {
+                // Re-render if it's the currently displayed table
+                this.renderTable(data);
+            }
+        } else {
+            // Add new entry
+            this.tableHistory.push(tableEntry);
+            this.currentTableIndex = this.tableHistory.length - 1;
+            this.renderTable(data);
+        }
+        
+        // Update table selector UI
+        this.updateTableSelector();
+    }
+    
+    renderTable(data) {
+        this.tableViewer = new DGTableViewer('table-container', data, {
+            pageSize: 50,
+            maxHeight: '100%',
+            theme: 'dark'
+        });
+        this.tableViewer.render();
+    }
+    
+    updateTableSelector() {
+        // Update the dg-name input to show current table
+        if (this.tableHistory.length > 0 && this.currentTableIndex >= 0) {
+            const current = this.tableHistory[this.currentTableIndex];
+            this.elements.dgNameInput.value = current.name;
+        }
+    }
+    
+    initErrorMonitor() {
+        if (!this.privatePrefix || !this.dpManager) return;
+        
+        // Subscribe to error datapoint for this subprocess
+        // Errors show up as error/PRIVATE_LINKED_NAME
+        const errorPattern = `error/${this.privatePrefix}`;
+        console.log('Subscribing to errors:', errorPattern);
+        
+        this.dpManager.subscribe(errorPattern, (dp) => {
+            console.log('Error received:', dp);
+            this.handleError(dp);
+        });
+    }
+    
+    handleError(datapoint) {
+        const value = datapoint.data !== undefined ? datapoint.data : datapoint.value;
+        
+        // Skip if empty/null
+        if (!value) return;
+        
+        // Parse error data
+        let errorInfo;
+        if (typeof value === 'string') {
+            try {
+                const parsed = JSON.parse(value);
+                errorInfo = parsed.errorInfo || parsed.message || value;
+            } catch {
+                errorInfo = value;
+            }
+        } else if (typeof value === 'object') {
+            errorInfo = value.errorInfo || value.message || JSON.stringify(value);
+        } else {
+            return;
+        }
+        
+        // Check for duplicates - don't add if last error is identical
+        if (this.lastErrorInfo === errorInfo) {
+            console.log('Duplicate error ignored');
+            return;
+        }
+        this.lastErrorInfo = errorInfo;
+        
+        // Log to console panel
+        this.logToConsole(errorInfo, 'error');
+    }
+    
+    logToConsole(message, type = 'error') {
+        const output = this.elements.consoleOutput;
+        if (!output) return;
+        
+        // Create entry
+        const entry = document.createElement('div');
+        entry.className = 'dlsh-console-entry collapsed';
+        
+        // Header line with time, expander, and preview
+        const header = document.createElement('div');
+        header.className = 'dlsh-console-header-line';
+        
+        const time = document.createElement('span');
+        time.className = 'dlsh-console-time';
+        time.textContent = new Date().toLocaleTimeString();
+        
+        // Get first line for preview
+        const firstLine = message.split('\n')[0];
+        const hasMore = message.includes('\n') || firstLine.length > 60;
+        const preview = firstLine.length > 60 ? firstLine.substring(0, 57) + '...' : firstLine;
+        
+        const expander = document.createElement('span');
+        expander.className = 'dlsh-console-expander';
+        expander.textContent = hasMore ? '▶' : '•';
+        
+        const msg = document.createElement('span');
+        msg.className = `dlsh-console-message ${type}`;
+        msg.textContent = preview;
+        
+        header.appendChild(time);
+        header.appendChild(expander);
+        header.appendChild(msg);
+        entry.appendChild(header);
+        
+        // Add expandable detail if message has more content
+        if (hasMore) {
+            const detail = document.createElement('div');
+            detail.className = 'dlsh-console-detail';
+            
+            const pre = document.createElement('pre');
+            pre.textContent = message;
+            detail.appendChild(pre);
+            
+            entry.appendChild(detail);
+            
+            // Toggle on click
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', () => {
+                const isExpanded = entry.classList.toggle('collapsed');
+                expander.textContent = isExpanded ? '▶' : '▼';
+            });
+        }
+        
+        output.appendChild(entry);
+        
+        // Auto-scroll to bottom
+        output.scrollTop = output.scrollHeight;
+        
+        // Update error count
+        if (type === 'error') {
+            this.errorCount++;
+            this.elements.errorCount.textContent = `${this.errorCount} error${this.errorCount > 1 ? 's' : ''}`;
+        }
+    }
+    
+    clearConsole() {
+        if (this.elements.consoleOutput) {
+            this.elements.consoleOutput.innerHTML = '';
+        }
+        this.errorCount = 0;
+        if (this.elements.errorCount) {
+            this.elements.errorCount.textContent = '';
+        }
+    }
+    
+    initEventListeners() {
+        // Window resize
+        window.addEventListener('resize', this.handleResize);
+        
+        // Enter key in dg name input
+        this.elements.dgNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.loadTable();
+        });
+    }
+    
+    // ============================================================
+    // Editor Actions
+    // ============================================================
+    
+    async runCode() {
+        if (!this.tclEditor || !this.conn || !this.conn.connected) {
+            this.showError('Not connected');
+            return;
+        }
+        
+        const code = this.tclEditor.getValue().trim();
+        if (!code) return;
+        
+        try {
+            const response = await this.conn.sendToLinked(code);
+            
+            // If response looks like a group name, auto-populate table input
+            if (response && response.match(/^group\d+$/)) {
+                this.elements.dgNameInput.value = response;
+                this.loadTable();
+            }
+        } catch (e) {
+            this.showError('Execution error: ' + e.message);
+        }
+    }
+    
+    async executeSnippet(code) {
+        // Execute a snippet (from Shift-Enter) and show result in terminal
+        if (!this.conn || !this.conn.connected) {
+            this.showError('Not connected');
+            return;
+        }
+        
+        if (!code.trim()) return;
+        
+        try {
+            // Show the command in terminal
+            if (this.terminal) {
+                this.terminal.showCommand(code.split('\n')[0] + (code.includes('\n') ? ' ...' : ''));
+            }
+            
+            const response = await this.conn.sendToLinked(code);
+            
+            // Show result in terminal
+            if (this.terminal && response) {
+                this.terminal.showResult(response);
+            }
+            
+            // Auto-populate table if result looks like a group name
+            if (response && response.match(/^group\d+$/)) {
+                this.elements.dgNameInput.value = response;
+            }
+        } catch (e) {
+            if (this.terminal) {
+                this.terminal.showError(e.message);
+            }
+        }
+    }
+    
+    clearEditor() {
+        if (this.tclEditor) {
+            this.tclEditor.setValue('');
+        }
+    }
+    
+    loadExample() {
+        if (!this.tclEditor) return;
+        
+        const code = `# Create a dynamic group
+set g [dg_create]
+
+# Add some lists
+set n 100
+dl_set $g:trial [dl_fromto 0 $n]
+dl_set $g:condition [dl_repeat [dl_slist A B] [expr {$n/2}]]
+dl_set $g:rt [dl_add 600 [dl_mult [dl_zrand $n] 100]]
+dl_set $g:accuracy [dl_irand $n 2]
+
+# Draw tick marks to graphics
+clearwin
+setwindow 0 0 1 1
+dlg_markers [dl_fromto 0 1 0.1] 0.5 vtick -size 1y
+dlg_markers 0.5 [dl_fromto 0 1 0.1] htick -size 1x
+flushwin
+
+# Push table to viewer
+dg_view $g
+
+return $g`;
+        
+        this.tclEditor.setValue(code);
+    }
+    
+    // ============================================================
+    // Terminal Actions
+    // ============================================================
+    
+    clearTerminal() {
+        if (this.terminal && this.terminal.clear) {
+            this.terminal.clear();
+        }
+    }
+    
+    // ============================================================
+    // Graphics Actions
+    // ============================================================
+    
+    clearCanvas() {
+        if (this.renderer) {
+            this.renderer.clear();
+        }
+    }
+    
+    resizeCanvas() {
+        const canvas = this.elements.graphicsCanvas;
+        const container = canvas.parentElement;
+        
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        
+        if (this.renderer && this.renderer.resize) {
+            this.renderer.resize(canvas.width, canvas.height);
+        }
+    }
+    
+    handleResize() {
+        this.resizeCanvas();
+    }
+    
+    // ============================================================
+    // Table Actions
+    // ============================================================
+    
+    async loadTable() {
+        const dgName = this.elements.dgNameInput.value.trim();
+        if (!dgName) {
+            this.showError('Enter a group name');
+            return;
+        }
+        
+        if (!this.conn || !this.conn.connected) {
+            this.showError('Not connected');
+            return;
+        }
+        
+        try {
+            const command = `dg_toHybridJSON ${dgName}`;
+            const response = await this.conn.sendToLinked(command);
+            
+            let data;
+            try {
+                data = JSON.parse(response);
+            } catch (e) {
+                throw new Error(`Invalid JSON: ${response.substring(0, 100)}`);
+            }
+            
+            this.renderTable(data);
+            
+        } catch (e) {
+            this.showError(`Load failed: ${e.message}`);
+        }
+    }
+    
+    loadDemoData() {
+        const data = {
+            name: "Demo Data",
+            rows: [
+                {trial: 1, condition: "A", rt: 234.5, accuracy: 1},
+                {trial: 2, condition: "B", rt: 456.2, accuracy: 1},
+                {trial: 3, condition: "A", rt: 189.7, accuracy: 0},
+                {trial: 4, condition: "C", rt: 567.3, accuracy: 1},
+                {trial: 5, condition: "B", rt: 234.1, accuracy: 1},
+                {trial: 6, condition: "A", rt: 678.9, accuracy: 0},
+                {trial: 7, condition: "C", rt: 345.6, accuracy: 1},
+                {trial: 8, condition: "B", rt: 456.7, accuracy: 1},
+            ],
+            arrays: {
+                fixations: [
+                    [0.5, 1.2, 2.3], [0.8, 1.9], [1.1, 2.2, 3.3, 4.4],
+                    [0.3, 0.9, 1.5], [1.0, 2.0], [0.7, 1.4, 2.1, 2.8],
+                    [0.4, 1.2], [0.6, 1.8, 2.4]
+                ]
+            }
+        };
+        
+        this.renderTable(data);
+    }
+    
+    // ============================================================
+    // Connection Actions
+    // ============================================================
+    
+    async reconnect() {
+        if (this.conn) {
+            this.conn.disconnect();
+        }
+        await this.init();
+    }
+    
+    // ============================================================
+    // UI Helpers
+    // ============================================================
+    
+    updateStatus(status, message) {
+        const indicator = this.elements.statusIndicator;
+        const text = this.elements.statusText;
+        
+        indicator.className = 'dlsh-status-indicator';
+        if (status === 'connected') {
+            indicator.classList.add('connected');
+        } else if (status === 'connecting') {
+            indicator.classList.add('connecting');
+        } else if (status === 'error') {
+            indicator.classList.add('error');
+        }
+        
+        text.textContent = message;
+    }
+    
+    showError(message) {
+        const container = this.elements.errorContainer;
+        const toast = document.createElement('div');
+        toast.className = 'dlsh-error-toast';
+        toast.textContent = message;
+        container.appendChild(toast);
+        
+        setTimeout(() => {
+            toast.remove();
+        }, 4000);
     }
 }
+
+// ============================================================
+// Global instance and helper functions
+// ============================================================
+
+let workbench = null;
+
+// These functions are called from HTML onclick handlers
+function runCode() { workbench?.runCode(); }
+function clearEditor() { workbench?.clearEditor(); }
+function loadExample() { workbench?.loadExample(); }
+function clearTerminal() { workbench?.clearTerminal(); }
+function clearCanvas() { workbench?.clearCanvas(); }
+function loadTable() { workbench?.loadTable(); }
+function loadDemoData() { workbench?.loadDemoData(); }
+function reconnect() { workbench?.reconnect(); }
+function clearConsole() { workbench?.clearConsole(); }
+
+// Initialize on DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+    workbench = new DlshWorkbench();
+    workbench.init();
+});
