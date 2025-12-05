@@ -75,6 +75,7 @@ public:
   int message_listener_port = -1;
   int websocket_listener_port = -1;  // Add WebSocket port
   std::string name;
+  std::string www_path;
   
   TclServerConfig(std::string name, int newline_port, int message_port):
     name(name), newline_listener_port(newline_port), 
@@ -150,6 +151,9 @@ private:
   std::string key_path = "/usr/local/dserv/ssl/key.pem";
 
   bool websocket_ssl_enabled = false;
+
+  // Static file serving - path to www directory, empty = disabled
+  std::string www_path;  
   
   template<typename WebSocketType>
   void sendLargeMessage(WebSocketType* ws,
@@ -225,7 +229,11 @@ public:
 
   const std::string& getCertPath() { return cert_path; }
   const std::string& getKeyPath() { return key_path; }
-  
+
+  void setWwwPath(const std::string& path) { www_path = path; }
+  const std::string& getWwwPath() const { return www_path; }
+  bool hasWwwPath() const { return !www_path.empty(); }  
+
   bool isWebSocketSSLEnabled() const { return websocket_ssl_enabled; }
   
 	// Add this method to allow deferred execution on the WebSocket event loop
