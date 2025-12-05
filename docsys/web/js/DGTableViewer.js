@@ -21,6 +21,7 @@ class DGTableViewer {
       showExport: options.showExport !== false,
       showRowCount: options.showRowCount !== false,
       compactMode: options.compactMode || false,
+      theme: options.theme || 'light', // 'light' or 'dark'
       ...options
     };
     
@@ -93,7 +94,12 @@ class DGTableViewer {
    */
   render() {
     this.container.innerHTML = '';
-    this.container.className = 'dg-table-viewer';
+    this.container.classList.add('dg-table-viewer');
+    if (this.options.theme === 'dark') {
+      this.container.classList.add('dg-dark');
+      // Also add to body for modal/inspector which are appended to body
+      document.body.classList.add('dg-dark-mode');
+    }
     
     // Create header
     const header = this.createHeader();
