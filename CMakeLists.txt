@@ -192,11 +192,19 @@ endif()
 # Link OpenSSL to usockets
 target_link_libraries(usockets PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
-# Create directory for web assets
+# Web assets directory (for install, no longer embedded)
 set(WEB_ASSETS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/www)
-file(MAKE_DIRECTORY ${WEB_ASSETS_DIR})
+message(STATUS "Web assets directory: ${WEB_ASSETS_DIR}")
+if(EXISTS ${WEB_ASSETS_DIR}/index.html)
+    message(STATUS "  Found index.html - web interface ready")
+else()
+    message(STATUS "  index.html not found - web interface may not be configured")
+endif()
 
-# Function to embed files as C++ headers
+# ============================================================================
+# Mesh Dashboard (still embedded - runs on separate port 2569)
+# ============================================================================
+# Function to embed files as C++ headers (only used for mesh dashboard now)
 function(embed_resource input_file output_file variable_name)
     add_custom_command(
         OUTPUT ${output_file}
@@ -214,170 +222,27 @@ function(embed_resource input_file output_file variable_name)
     )
 endfunction()
 
-message(STATUS "Checking for web assets...")
-message(STATUS "WEB_ASSETS_DIR: ${WEB_ASSETS_DIR}")
-
-# Check if files exist before embedding
-if(EXISTS ${WEB_ASSETS_DIR}/terminal.html)
-    message(STATUS "Found terminal.html")
-else()
-    message(WARNING "terminal.html NOT FOUND at ${WEB_ASSETS_DIR}/terminal.html")
-endif()
-
-if(EXISTS ${WEB_ASSETS_DIR}/tutorial.html)
-    message(STATUS "Found tutorial.html")
-else()
-    message(WARNING "tutorial.html NOT FOUND at ${WEB_ASSETS_DIR}/tutorial.html")
-endif()
-
-if(EXISTS ${WEB_ASSETS_DIR}/datapoint_explorer.html)
-    message(STATUS "Found datapoint_explorer.html") 
-else()
-    message(WARNING "datapoint_explorer.html NOT FOUND")
-endif()
-
-if(EXISTS ${WEB_ASSETS_DIR}/welcome.html)
-    message(STATUS "Found welcome.html")
-else()
-    message(WARNING "welcome.html NOT FOUND") 
-endif()
-
+# Only embed mesh dashboard (for MeshManager's separate WebSocket server)
 if(EXISTS ${WEB_ASSETS_DIR}/mesh_dashboard.html)
-    message(STATUS "Found mesh_dashboard.html")
-else()
-    message(WARNING "mesh_dashboard.html NOT FOUND") 
-endif()
-
-if(EXISTS ${CMAKE_SOURCE_DIR}/essgui-web/dist/index.html)
-    message(STATUS "Found ESS GUI index.html")
-else()
-    message(WARNING "ESS GUI index.html NOT FOUND")
-endif()
-
-# Embed static HTML resources
-embed_resource(
-    ${WEB_ASSETS_DIR}/datapoint_explorer.html
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
-    datapoint_explorer_html
-)
-
-embed_resource(
-    ${WEB_ASSETS_DIR}/tutorial.html
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_tutorial.h
-    tutorial_html
-)
-
-embed_resource(
-    ${WEB_ASSETS_DIR}/mesh_dashboard.html
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
-    mesh_dashboard_html
-)
-
-embed_resource(
-    ${WEB_ASSETS_DIR}/welcome.html
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
-    welcome_html
-)
-
-embed_resource(
-    ${WEB_ASSETS_DIR}/terminal.html
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h
-    terminal_html
-)
-
-embed_resource(
-    ${CMAKE_SOURCE_DIR}/essgui-web/dist/index.html
-    ${CMAKE_BINARY_DIR}/embedded_essgui_index_html.h
-    essgui_index_html
-)
-
-# Find and embed ESS GUI assets (JS/CSS with dynamic names)
-file(GLOB ESSGUI_JS_ASSETS "${CMAKE_SOURCE_DIR}/essgui-web/dist/assets/index-*.js")
-file(GLOB ESSGUI_CSS_ASSETS "${CMAKE_SOURCE_DIR}/essgui-web/dist/assets/index-*.css")
-
-# Extract just the filename (without path and extension)
-get_filename_component(JS_FILENAME ${ESSGUI_JS_ASSETS} NAME_WE)
-get_filename_component(CSS_FILENAME ${ESSGUI_CSS_ASSETS} NAME_WE)
-
-# We'll create fixed header names regardless of the hash
-set(ESSGUI_JS_HEADER "${CMAKE_BINARY_DIR}/embedded_essgui_index_js.h")
-set(ESSGUI_CSS_HEADER "${CMAKE_BINARY_DIR}/embedded_essgui_index_css.h")
-
-# Extract the hash (everything after "index-")
-string(REGEX REPLACE "^index-(.+)$" "\\1" ESSGUI_JS_HASH ${JS_FILENAME})
-string(REGEX REPLACE "^index-(.+)$" "\\1" ESSGUI_CSS_HASH ${CSS_FILENAME})
-
-# And you can also use them as preprocessor definitions
-add_definitions(-DESSGUI_JS_HASH=${ESSGUI_JS_HASH})
-add_definitions(-DESSGUI_CSS_HASH=${ESSGUI_CSS_HASH})
-
-# Debug: Show what assets were found
-message(STATUS "Found ESS GUI assets:")
-foreach(asset ${ESSGUI_JS_ASSETS})
-    message(STATUS "  JS: ${asset} / ${ESSGUI_JS_HASH}")
-endforeach()
-foreach(asset ${ESSGUI_CSS_ASSETS})
-    message(STATUS "  CSS: ${asset} / ${ESSGUI_CSS_HASH}")
-endforeach()
-
-# Embed JS asset (take the first/only one found)
-list(LENGTH ESSGUI_JS_ASSETS js_count)
-if(js_count GREATER 0)
-    list(GET ESSGUI_JS_ASSETS 0 js_asset)
+    message(STATUS "Found mesh_dashboard.html - will embed for mesh server")
     embed_resource(
-        "${js_asset}"
-        "${ESSGUI_JS_HEADER}"
-        "essgui_index_js"
+        ${WEB_ASSETS_DIR}/mesh_dashboard.html
+        ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
+        mesh_dashboard_html
     )
-    message(STATUS "Will embed JS: ${js_asset} -> essgui_index_js")
+    set(EMBEDDED_HEADERS ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h)
 else()
-    message(WARNING "No ESS GUI JS assets found!")
+    message(WARNING "mesh_dashboard.html NOT FOUND - mesh web dashboard will not be available")
+    set(EMBEDDED_HEADERS "")
 endif()
 
-# Embed CSS asset (take the first/only one found)
-list(LENGTH ESSGUI_CSS_ASSETS css_count)
-if(css_count GREATER 0)
-    list(GET ESSGUI_CSS_ASSETS 0 css_asset)
-    embed_resource(
-        "${css_asset}"
-        "${ESSGUI_CSS_HEADER}"
-        "essgui_index_css"
+# Create target for generating embedded headers (only mesh dashboard now)
+if(EMBEDDED_HEADERS)
+    add_custom_target(generate_embedded_headers 
+        DEPENDS ${EMBEDDED_HEADERS}
+        COMMENT "Generating embedded mesh dashboard header"
     )
-    message(STATUS "Will embed CSS: ${css_asset} -> essgui_index_css")
-else()
-    message(WARNING "No ESS GUI CSS assets found!")
 endif()
-
-# Create list of all embedded headers that will be generated
-set(EMBEDDED_HEADERS
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_tutorial.h
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
-    ${CMAKE_BINARY_DIR}/embedded_essgui_index_html.h
-)
-
-# Add the fixed-name JS/CSS headers if they will be generated
-if(js_count GREATER 0)
-    list(APPEND EMBEDDED_HEADERS "${ESSGUI_JS_HEADER}")
-endif()
-if(css_count GREATER 0)
-    list(APPEND EMBEDDED_HEADERS "${ESSGUI_CSS_HEADER}")
-endif()
-
-# Debug: Print what headers we expect to generate
-message(STATUS "Will generate these embedded headers:")
-foreach(header ${EMBEDDED_HEADERS})
-    get_filename_component(header_name "${header}" NAME)
-    message(STATUS "  ${header_name}")
-endforeach()
-
-# Create target for generating embedded headers
-add_custom_target(generate_embedded_headers 
-    DEPENDS ${EMBEDDED_HEADERS}
-    COMMENT "Generating embedded resource headers"
-)
 
 add_subdirectory(modules)
 add_subdirectory(processors)
@@ -421,31 +286,16 @@ add_executable(dserv
     src/mdns_advertise.c
 )
 
-# Make dserv depend on header generation (AFTER add_executable)
-add_dependencies(dserv generate_embedded_headers)
+# Make dserv depend on header generation (if we have any embedded headers)
+if(EMBEDDED_HEADERS)
+    add_dependencies(dserv generate_embedded_headers)
+    target_sources(dserv PRIVATE ${EMBEDDED_HEADERS})
+endif()
 
 # export symbols for shared objects loaded at runtime
 set_property(TARGET dserv PROPERTY ENABLE_EXPORTS ON)
 
-# Create list of embedded source files for dserv target
-set(DSERV_EMBEDDED_SOURCES
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_terminal.h 
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_datapoint_explorer.h
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_tutorial.h
-    ${CMAKE_CURRENT_BINARY_DIR}/embedded_welcome.h
-    ${CMAKE_BINARY_DIR}/embedded_essgui_index_html.h
-)
-
-# Add JS/CSS headers if they exist
-if(js_count GREATER 0)
-    list(APPEND DSERV_EMBEDDED_SOURCES "${ESSGUI_JS_HEADER}")
-endif()
-if(css_count GREATER 0)
-    list(APPEND DSERV_EMBEDDED_SOURCES "${ESSGUI_CSS_HEADER}")
-endif()
-
-# Add embedded headers as sources to dserv target
-target_sources(dserv PRIVATE ${DSERV_EMBEDDED_SOURCES})
+# Include build directory for generated headers (dservConfig.h, embedded_mesh_dashboard.h)
 target_include_directories(dserv PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 # Link libraries based on platform
@@ -549,6 +399,3 @@ endif()
 
 include(CPack)
 cpack_add_component(dserv essctrl REQUIRED)
-
-
-
