@@ -103,7 +103,7 @@ class TclTerminal {
         
         const prompt = document.createElement('span');
         prompt.className = 'tcl-terminal-prompt';
-        prompt.textContent = `${this.options.interpreter}> `;
+        prompt.textContent = `${this.options.interpreter}>\u00A0`; // \u00A0 is non-breaking space
         
         this.inputElement = document.createElement('input');
         this.inputElement.type = 'text';
@@ -197,6 +197,8 @@ class TclTerminal {
         const command = this.inputElement.value.trim();
         
         if (!command) {
+            // Show empty prompt line (like hitting enter in a real terminal)
+            this.showCommand('');
             this.createInputLine();
             return;
         }
@@ -391,12 +393,22 @@ class TclTerminal {
         }
     }
     
+    // Helper to insert content before the input line
+    _insertBeforeInput(element) {
+        const inputContainer = this.container.querySelector('.tcl-terminal-input-container');
+        if (inputContainer) {
+            this.container.insertBefore(element, inputContainer);
+        } else {
+            this.container.appendChild(element);
+        }
+        this.scrollToBottom();
+    }
+    
     showCommand(text) {
         const line = document.createElement('div');
         line.className = 'tcl-terminal-line tcl-terminal-command';
         line.textContent = `${this.options.interpreter}> ${text}`;
-        this.container.appendChild(line);
-        this.scrollToBottom();
+        this._insertBeforeInput(line);
     }
     
     showResult(text) {
@@ -404,8 +416,7 @@ class TclTerminal {
         const line = document.createElement('div');
         line.className = 'tcl-terminal-line tcl-terminal-result';
         line.textContent = text;
-        this.container.appendChild(line);
-        this.scrollToBottom();
+        this._insertBeforeInput(line);
     }
     
     showError(text) {
@@ -426,24 +437,21 @@ class TclTerminal {
         // Store for later when we get errorInfo
         this.lastErrorLine = line;
         
-        this.container.appendChild(line);
-        this.scrollToBottom();
+        this._insertBeforeInput(line);
     }
     
     showInfo(text) {
         const line = document.createElement('div');
         line.className = 'tcl-terminal-line tcl-terminal-info';
         line.textContent = text;
-        this.container.appendChild(line);
-        this.scrollToBottom();
+        this._insertBeforeInput(line);
     }
     
     showWarning(text) {
         const line = document.createElement('div');
         line.className = 'tcl-terminal-line tcl-terminal-warning';
         line.textContent = text;
-        this.container.appendChild(line);
-        this.scrollToBottom();
+        this._insertBeforeInput(line);
     }
     
     showErrorInfo(text) {
