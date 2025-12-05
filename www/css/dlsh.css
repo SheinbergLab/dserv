@@ -1,0 +1,767 @@
+/**
+ * dlsh.css - Interactive Tcl Workbench Styles
+ * 
+ * Layout: 2x2 grid with shared status bar
+ * Theme: Dark
+ */
+
+/* ============================================================
+   CSS Variables
+   ============================================================ */
+
+:root {
+    --dlsh-font-size-base: 12px;
+    --dlsh-font-size-code: 11px;
+    --dlsh-header-height: 32px;
+    --dlsh-status-height: 36px;
+    --dlsh-gap: 8px;
+    --dlsh-border-radius: 4px;
+    
+    /* Colors */
+    --dlsh-bg-app: #1a1a1a;
+    --dlsh-bg-panel: #252525;
+    --dlsh-bg-header: #2a2a2a;
+    --dlsh-bg-input: #333;
+    --dlsh-bg-button: #333;
+    --dlsh-bg-button-hover: #444;
+    --dlsh-bg-primary: #1890ff;
+    --dlsh-bg-primary-hover: #40a9ff;
+    --dlsh-bg-error: #ff4d4f;
+    
+    --dlsh-border: #333;
+    --dlsh-border-light: #444;
+    --dlsh-border-focus: #1890ff;
+    
+    --dlsh-text: #e0e0e0;
+    --dlsh-text-muted: #999;
+    --dlsh-text-dim: #666;
+    --dlsh-text-header: #aaa;
+    
+    --dlsh-status-connected: #52c41a;
+    --dlsh-status-connecting: #faad14;
+    --dlsh-status-error: #ff4d4f;
+}
+
+/* ============================================================
+   Base Reset & Body
+   ============================================================ */
+
+.dlsh-app * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+.dlsh-app {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: var(--dlsh-font-size-base);
+    background: var(--dlsh-bg-app);
+    color: var(--dlsh-text);
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ============================================================
+   App Container Layout
+   ============================================================ */
+
+.dlsh-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: var(--dlsh-gap);
+}
+
+/* ============================================================
+   Status Bar
+   ============================================================ */
+
+.dlsh-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: var(--dlsh-status-height);
+    padding: 0 12px;
+    background: var(--dlsh-bg-panel);
+    border-radius: var(--dlsh-border-radius);
+    margin-bottom: var(--dlsh-gap);
+    flex-shrink: 0;
+}
+
+.dlsh-status-bar h1 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    margin-right: 16px;
+}
+
+.dlsh-status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #666;
+    transition: background 0.3s;
+}
+
+.dlsh-status-indicator.connected {
+    background: var(--dlsh-status-connected);
+    box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
+}
+
+.dlsh-status-indicator.connecting {
+    background: var(--dlsh-status-connecting);
+    animation: dlsh-pulse 1s infinite;
+}
+
+.dlsh-status-indicator.error {
+    background: var(--dlsh-status-error);
+}
+
+@keyframes dlsh-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.dlsh-status-text {
+    color: var(--dlsh-text-muted);
+    font-size: 11px;
+}
+
+.dlsh-status-spacer {
+    flex: 1;
+}
+
+.dlsh-status-bar button {
+    padding: 4px 10px;
+    background: var(--dlsh-bg-button);
+    color: #ccc;
+    border: 1px solid var(--dlsh-border-light);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.dlsh-status-bar button:hover {
+    background: var(--dlsh-bg-button-hover);
+    color: #fff;
+}
+
+/* ============================================================
+   Main Grid - 2x2 Layout
+   ============================================================ */
+
+.dlsh-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: var(--dlsh-gap);
+    flex: 1;
+    min-height: 0;
+}
+
+/* ============================================================
+   Panel Components
+   ============================================================ */
+
+.dlsh-panel {
+    background: var(--dlsh-bg-panel);
+    border-radius: var(--dlsh-border-radius);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--dlsh-border);
+}
+
+.dlsh-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: var(--dlsh-header-height);
+    padding: 0 10px;
+    background: var(--dlsh-bg-header);
+    border-bottom: 1px solid var(--dlsh-border);
+    flex-shrink: 0;
+}
+
+.dlsh-panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--dlsh-text-header);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.dlsh-panel-status {
+    font-size: 10px;
+    color: var(--dlsh-text-dim);
+}
+
+.dlsh-panel-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.dlsh-panel-actions button {
+    padding: 3px 8px;
+    background: var(--dlsh-bg-button);
+    color: var(--dlsh-text-header);
+    border: 1px solid var(--dlsh-border-light);
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px;
+}
+
+.dlsh-panel-actions button:hover {
+    background: var(--dlsh-bg-button-hover);
+    color: #fff;
+}
+
+.dlsh-panel-actions button.primary {
+    background: var(--dlsh-bg-primary);
+    border-color: var(--dlsh-bg-primary);
+    color: #fff;
+}
+
+.dlsh-panel-actions button.primary:hover {
+    background: var(--dlsh-bg-primary-hover);
+}
+
+.dlsh-panel-body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+/* ============================================================
+   Editor Panel
+   ============================================================ */
+
+.dlsh-editor-container {
+    height: 100%;
+    width: 100%;
+}
+
+/* ============================================================
+   Terminal Panel - Inline TclTerminal Overrides
+   ============================================================ */
+
+.dlsh-terminal-container {
+    height: 100%;
+    width: 100%;
+}
+
+.dlsh-terminal-container .tcl-terminal {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 10px !important;
+    line-height: 1.4;
+    padding: 8px;
+    overflow-y: auto;
+    height: 100%;
+}
+
+.dlsh-terminal-container .tcl-terminal-line {
+    margin: 1px 0;
+    white-space: pre-wrap;
+    line-height: 1.4;
+}
+
+.dlsh-terminal-container .tcl-terminal-error {
+    color: #f48771;
+}
+
+.dlsh-terminal-container .tcl-terminal-info {
+    color: #4ec9b0;
+}
+
+.dlsh-terminal-container .tcl-terminal-input-container {
+    display: flex;
+    align-items: center;
+    margin: 1px 0;
+}
+
+.dlsh-terminal-container .tcl-terminal-prompt {
+    color: #569cd6;
+    user-select: none;
+    margin-right: 8px;
+}
+
+.dlsh-terminal-container .tcl-terminal-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #d4d4d4;
+    font-family: inherit;
+    font-size: inherit;
+    outline: none;
+}
+
+/* ============================================================
+   Graphics Panel
+   ============================================================ */
+
+.dlsh-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #000;
+}
+
+/* ============================================================
+   Table Panel
+   ============================================================ */
+
+.dlsh-table-container {
+    height: 100%;
+    width: 100%;
+    overflow: auto;
+    background: #1e1e1e;
+}
+
+/* ============================================================
+   DGTableViewer Dark Theme (.dg-dark class)
+   ============================================================ */
+
+/* Main container */
+.dg-table-viewer.dg-dark {
+    background: #1e1e1e;
+    border-color: #333;
+    color: #d4d4d4;
+}
+
+/* Header bar */
+.dg-dark .dg-header {
+    background: #252525;
+    border-bottom-color: #333;
+}
+
+.dg-dark .dg-info-left,
+.dg-dark .dg-array-info,
+.dg-dark .dg-page-info {
+    color: #999;
+}
+
+.dg-dark .dg-separator {
+    color: #555;
+}
+
+/* Buttons */
+.dg-dark .dg-button {
+    background: #333;
+    border-color: #444;
+    color: #ccc;
+}
+
+.dg-dark .dg-button:hover:not(:disabled) {
+    background: #444;
+    border-color: #1890ff;
+    color: #40a9ff;
+}
+
+.dg-dark .dg-button:disabled {
+    background: #2a2a2a;
+    color: #666;
+}
+
+/* Table container */
+.dg-dark .dg-table-container {
+    background: #1e1e1e;
+}
+
+/* Table */
+.dg-dark .dg-table {
+    background: #1e1e1e;
+    color: #d4d4d4;
+}
+
+.dg-dark .dg-table thead {
+    background: #252525;
+}
+
+.dg-dark .dg-table th {
+    background: #252525;
+    color: #aaa;
+    border-bottom-color: #444;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dg-dark .dg-table th.dg-sortable:hover {
+    background: #2a2a2a;
+}
+
+.dg-dark .dg-table th.dg-sorted {
+    color: #40a9ff;
+}
+
+.dg-dark .dg-table td {
+    border-bottom-color: #333;
+    white-space: nowrap;
+}
+
+.dg-dark .dg-table tbody tr:hover {
+    background: #2a2a2a;
+}
+
+.dg-dark .dg-table tbody tr {
+    cursor: pointer;
+}
+
+.dg-dark .dg-table td.dg-null {
+    color: #666;
+}
+
+/* Array links */
+.dg-dark .dg-array-link {
+    color: #40a9ff;
+}
+
+/* Pagination */
+.dg-dark .dg-pagination {
+    background: #252525;
+    border-top-color: #333;
+}
+
+/* Selected row */
+.dg-dark .dg-table tbody tr.dg-selected {
+    background: #1a3a5c;
+    border-left-color: #40a9ff;
+}
+
+/* Scrollbars */
+.dg-dark .dg-table-container::-webkit-scrollbar,
+.dg-dark .dg-modal-body::-webkit-scrollbar,
+.dg-dark .dg-inspector-body::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.dg-dark .dg-table-container::-webkit-scrollbar-track,
+.dg-dark .dg-modal-body::-webkit-scrollbar-track,
+.dg-dark .dg-inspector-body::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.dg-dark .dg-table-container::-webkit-scrollbar-thumb,
+.dg-dark .dg-modal-body::-webkit-scrollbar-thumb,
+.dg-dark .dg-inspector-body::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 4px;
+}
+
+.dg-dark .dg-table-container::-webkit-scrollbar-thumb:hover,
+.dg-dark .dg-modal-body::-webkit-scrollbar-thumb:hover,
+.dg-dark .dg-inspector-body::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Modal and Inspector - dark theme 
+   Note: These are appended to document.body, so we add .dg-dark-mode to body
+   when a dark table is created. See DGTableViewer.js */
+body.dg-dark-mode .dg-modal .dg-modal-content {
+    background: #252525;
+    border: 1px solid #444;
+}
+
+body.dg-dark-mode .dg-modal-header {
+    background: #2a2a2a;
+    border-bottom-color: #444;
+}
+
+body.dg-dark-mode .dg-modal-header h3 {
+    color: #ddd;
+}
+
+body.dg-dark-mode .dg-modal-close {
+    color: #888;
+}
+
+body.dg-dark-mode .dg-modal-close:hover {
+    color: #fff;
+}
+
+body.dg-dark-mode .dg-modal-body {
+    background: #1e1e1e;
+    color: #d4d4d4;
+}
+
+body.dg-dark-mode .dg-modal-table td.dg-row-index {
+    background: #2a2a2a;
+    color: #999;
+}
+
+/* Simple array display - dark */
+body.dg-dark-mode .dg-simple-array {
+    color: #d4d4d4;
+}
+
+body.dg-dark-mode .dg-array-item {
+    border-bottom-color: #333;
+}
+
+body.dg-dark-mode .dg-array-index {
+    color: #888;
+}
+
+body.dg-dark-mode .dg-array-value {
+    color: #d4d4d4;
+}
+
+/* Inspector panel - dark theme */
+body.dg-dark-mode .dg-inspector-panel {
+    background: #252525;
+    border-left-color: #444;
+}
+
+body.dg-dark-mode .dg-inspector-header {
+    background: #2a2a2a;
+    border-bottom-color: #444;
+}
+
+body.dg-dark-mode .dg-inspector-header h3 {
+    color: #ddd;
+}
+
+body.dg-dark-mode .dg-inspector-close {
+    color: #888;
+}
+
+body.dg-dark-mode .dg-inspector-close:hover {
+    color: #fff;
+}
+
+body.dg-dark-mode .dg-inspector-body {
+    background: #1e1e1e;
+}
+
+/* Tree view - dark */
+body.dg-dark-mode .dg-tree-key {
+    color: #9cdcfe;
+}
+
+body.dg-dark-mode .dg-tree-value {
+    color: #d4d4d4;
+}
+
+body.dg-dark-mode .dg-tree-array {
+    border-left-color: #444;
+}
+
+body.dg-dark-mode .dg-tree-array-header {
+    color: #40a9ff;
+}
+
+/* ============================================================
+   Error Console
+   ============================================================ */
+
+.dlsh-console {
+    height: 80px;
+    background: #1a1a1a;
+    border-top: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.dlsh-console-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px;
+    background: #252525;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.dlsh-console-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.dlsh-console-count {
+    font-size: 10px;
+    color: #f48771;
+    font-weight: 600;
+}
+
+.dlsh-console-count:empty {
+    display: none;
+}
+
+.dlsh-console-actions {
+    margin-left: auto;
+}
+
+.dlsh-console-actions button {
+    padding: 2px 6px;
+    background: #333;
+    color: #888;
+    border: 1px solid #444;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 9px;
+}
+
+.dlsh-console-actions button:hover {
+    background: #444;
+    color: #ccc;
+}
+
+.dlsh-console-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 10px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.dlsh-console-entry {
+    padding: 3px 0;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+.dlsh-console-entry:last-child {
+    border-bottom: none;
+}
+
+.dlsh-console-header-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.dlsh-console-time {
+    color: #666;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+
+.dlsh-console-expander {
+    color: #888;
+    font-size: 9px;
+    user-select: none;
+    width: 10px;
+    flex-shrink: 0;
+}
+
+.dlsh-console-message {
+    color: #f48771;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dlsh-console-message.info {
+    color: #4ec9b0;
+}
+
+.dlsh-console-message.warning {
+    color: #dcdcaa;
+}
+
+.dlsh-console-detail {
+    margin: 4px 0 4px 70px;
+    padding: 6px 8px;
+    background: #252525;
+    border-left: 2px solid #f48771;
+    border-radius: 2px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.dlsh-console-detail pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #ccc;
+    font-size: 10px;
+    line-height: 1.4;
+    font-family: inherit;
+}
+
+/* Collapsed state - hide detail */
+.dlsh-console-entry.collapsed .dlsh-console-detail {
+    display: none;
+}
+
+/* Expanded state - show detail */
+.dlsh-console-entry:not(.collapsed) .dlsh-console-detail {
+    display: block;
+}
+
+/* Scrollbar for console */
+.dlsh-console-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.dlsh-console-body::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+.dlsh-console-body::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 3px;
+}
+
+.dlsh-console-body::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Load controls in table header */
+.dlsh-load-controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.dlsh-load-controls input {
+    padding: 3px 6px;
+    background: var(--dlsh-bg-input);
+    border: 1px solid var(--dlsh-border-light);
+    border-radius: 3px;
+    color: #ddd;
+    font-size: 10px;
+    width: 100px;
+}
+
+.dlsh-load-controls input:focus {
+    outline: none;
+    border-color: var(--dlsh-border-focus);
+}
+
+/* ============================================================
+   Error Toast
+   ============================================================ */
+
+.dlsh-error-toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 20px;
+    background: var(--dlsh-bg-error);
+    color: white;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 1000;
+    animation: dlsh-slideUp 0.3s ease;
+}
+
+@keyframes dlsh-slideUp {
+    from { 
+        opacity: 0; 
+        transform: translateX(-50%) translateY(20px); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateX(-50%) translateY(0); 
+    }
+}

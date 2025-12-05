@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dserv</title>
+    <style>
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #0f1419;
+    color: #e7e9ea;
+    min-height: 100vh;
+    line-height: 1.5;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 20px;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 48px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid #2f3336;
+}
+
+header h1 {
+    font-size: 48px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #60a5fa, #34d399);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+header .tagline {
+    font-size: 18px;
+    color: #71767b;
+}
+
+header .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 8px 16px;
+    background: #1a2634;
+    border-radius: 20px;
+    font-size: 14px;
+}
+
+header .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #71767b;
+}
+
+header .status-dot.connected {
+    background: #34d399;
+    box-shadow: 0 0 8px #34d39966;
+}
+
+header .status-dot.connecting {
+    background: #fbbf24;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* App Categories */
+.category {
+    margin-bottom: 40px;
+}
+
+.category h2 {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #71767b;
+    margin-bottom: 16px;
+    padding-left: 4px;
+}
+
+/* App Grid */
+.app-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+/* App Card */
+.app-card {
+    background: #16202a;
+    border: 1px solid #2f3336;
+    border-radius: 12px;
+    padding: 20px;
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.app-card:hover {
+    background: #1a2634;
+    border-color: #3b82f6;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.app-card .app-icon {
+    font-size: 32px;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #1e2d3d;
+    border-radius: 10px;
+}
+
+.app-card h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e7e9ea;
+}
+
+.app-card p {
+    font-size: 14px;
+    color: #71767b;
+    flex: 1;
+}
+
+.app-card .app-tag {
+    font-size: 11px;
+    padding: 4px 8px;
+    background: #2f3336;
+    border-radius: 4px;
+    color: #71767b;
+    align-self: flex-start;
+}
+
+.app-card .app-tag.new {
+    background: #1e3a5f;
+    color: #60a5fa;
+}
+
+.app-card .app-tag.core {
+    background: #1a3d2e;
+    color: #34d399;
+}
+
+/* Quick Actions */
+.quick-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 40px;
+}
+
+.quick-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: #16202a;
+    border: 1px solid #2f3336;
+    border-radius: 8px;
+    color: #e7e9ea;
+    text-decoration: none;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.quick-action:hover {
+    background: #1a2634;
+    border-color: #3b82f6;
+}
+
+.quick-action .icon {
+    font-size: 16px;
+}
+
+/* System Info */
+.system-info {
+    margin-top: 48px;
+    padding-top: 32px;
+    border-top: 1px solid #2f3336;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 24px;
+}
+
+.info-block h4 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #71767b;
+    margin-bottom: 8px;
+}
+
+.info-block .value {
+    font-size: 14px;
+    color: #e7e9ea;
+    font-family: 'SF Mono', Monaco, monospace;
+}
+
+.info-block .value.clickable {
+    cursor: pointer;
+    color: #60a5fa;
+}
+
+.info-block .value.clickable:hover {
+    text-decoration: underline;
+}
+
+/* Mesh Systems - Compact horizontal strip */
+.mesh-grid {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 8px;
+}
+
+.mesh-card {
+    background: #16202a;
+    border: 1px solid #2f3336;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    min-width: 180px;
+    max-width: 220px;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.mesh-card:hover {
+    border-color: #3b82f6;
+}
+
+.mesh-card.local {
+    border-left: 3px solid #f59e0b;
+}
+
+.mesh-card-main {
+    padding: 12px 14px;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    transition: background 0.2s ease;
+}
+
+.mesh-card-main:hover {
+    background: #1a2634;
+}
+
+.mesh-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.mesh-card h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0;
+    color: #e7e9ea;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-card .mesh-id {
+    font-size: 10px;
+    color: #71767b;
+    font-family: 'SF Mono', Monaco, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-status {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.mesh-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #71767b;
+}
+
+.mesh-status-dot.running { background: #34d399; }
+.mesh-status-dot.idle { background: #71767b; }
+.mesh-status-dot.stopped { background: #71767b; }
+.mesh-status-dot.busy { background: #f59e0b; }
+.mesh-status-dot.error { background: #ef4444; }
+
+.mesh-status-text {
+    font-size: 10px;
+    color: #71767b;
+    text-transform: capitalize;
+}
+
+.mesh-card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 2px;
+}
+
+.mesh-ip {
+    font-size: 10px;
+    color: #71767b;
+    font-family: 'SF Mono', Monaco, monospace;
+}
+
+.mesh-badges {
+    display: flex;
+    gap: 3px;
+}
+
+.mesh-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #2f3336;
+    color: #71767b;
+}
+
+.mesh-badge.ssl {
+    background: #1a3d2e;
+    color: #34d399;
+}
+
+.mesh-badge.local {
+    background: #3d2f1a;
+    color: #f59e0b;
+}
+
+/* GUI quick-link button */
+.mesh-gui-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: #1a2634;
+    border-top: 1px solid #2f3336;
+    color: #58a6ff;
+    text-decoration: none;
+    font-size: 11px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.mesh-gui-link:hover {
+    background: #213547;
+    color: #79c0ff;
+}
+
+.mesh-gui-link svg {
+    opacity: 0.8;
+}
+
+/* Hide scrollbar but keep functionality */
+.mesh-grid::-webkit-scrollbar {
+    height: 4px;
+}
+.mesh-grid::-webkit-scrollbar-track {
+    background: #1a2634;
+    border-radius: 2px;
+}
+.mesh-grid::-webkit-scrollbar-thumb {
+    background: #2f3336;
+    border-radius: 2px;
+}
+.mesh-grid::-webkit-scrollbar-thumb:hover {
+    background: #3b82f6;
+}
+
+/* Footer */
+footer {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid #2f3336;
+    text-align: center;
+    color: #71767b;
+    font-size: 13px;
+}
+
+footer a {
+    color: #60a5fa;
+    text-decoration: none;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>dserv</h1>
+            <p class="tagline">Data Acquisition & Experimental Control</p>
+            <div class="status" id="connection-status">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <a href="/terminal" class="quick-action">
+                <span class="icon">⌨️</span>
+                Terminal
+            </a>
+            <a href="/explorer" class="quick-action">
+                <span class="icon">🔍</span>
+                Datapoints
+            </a>
+            <a href="/dlsh.html" class="quick-action">
+                <span class="icon">🧪</span>
+                Workbench
+            </a>
+        </div>
+
+        <!-- Mesh Systems -->
+        <div class="category" id="mesh-section" style="display: none;">
+            <h2>Lab Network</h2>
+            <div class="mesh-grid" id="mesh-systems">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+
+        <!-- Development Tools -->
+        <div class="category">
+            <h2>Development</h2>
+            <div class="app-grid">
+                <a href="/dlsh.html" class="app-card">
+                    <div class="app-icon">🧪</div>
+                    <h3>dlsh Workbench</h3>
+                    <p>Interactive Tcl development environment with editor, terminal, graphics, and table viewer.</p>
+                    <span class="app-tag new">New</span>
+                </a>
+                <a href="/terminal" class="app-card">
+                    <div class="app-icon">⌨️</div>
+                    <h3>Console</h3>
+                    <p>Full-featured Tcl terminal with command history, tab completion, and error monitoring.</p>
+                    <span class="app-tag core">Core</span>
+                </a>
+                <a href="/TclTerminal.html" class="app-card">
+                    <div class="app-icon">💻</div>
+                    <h3>Terminal (Standalone)</h3>
+                    <p>Lightweight terminal component for quick command execution.</p>
+                </a>
+            </div>
+        </div>
+
+        <!-- Data & Diagnostics -->
+        <div class="category">
+            <h2>Data & Diagnostics</h2>
+            <div class="app-grid">
+                <a href="/explorer" class="app-card">
+                    <div class="app-icon">🔍</div>
+                    <h3>Datapoint Explorer</h3>
+                    <p>Browse, search, and subscribe to live datapoint updates.</p>
+                    <span class="app-tag core">Core</span>
+                </a>
+                <a href="/DGTableViewer.html" class="app-card">
+                    <div class="app-icon">📊</div>
+                    <h3>Table Viewer</h3>
+                    <p>View and explore dynamic group data with sorting and export.</p>
+                </a>
+                <a href="/GraphicsDemo.html" class="app-card">
+                    <div class="app-icon">🎨</div>
+                    <h3>Graphics Demo</h3>
+                    <p>Test the graphics rendering system with live updates.</p>
+                </a>
+            </div>
+        </div>
+
+        <!-- Reference & Help -->
+        <div class="category">
+            <h2>Reference & Help</h2>
+            <div class="app-grid">
+                <a href="/command_reference.html" class="app-card">
+                    <div class="app-icon">📖</div>
+                    <h3>Command Reference</h3>
+                    <p>Complete documentation for all dserv Tcl commands.</p>
+                </a>
+                <a href="/tutorial" class="app-card">
+                    <div class="app-icon">🎓</div>
+                    <h3>Tutorial</h3>
+                    <p>Getting started guide and interactive examples.</p>
+                </a>
+            </div>
+        </div>
+
+        <!-- System Info -->
+        <div class="system-info">
+            <div class="info-block">
+                <h4>Version</h4>
+                <div class="value" id="version">—</div>
+            </div>
+            <div class="info-block">
+                <h4>Host</h4>
+                <div class="value" id="host">—</div>
+            </div>
+            <div class="info-block">
+                <h4>Uptime</h4>
+                <div class="value" id="uptime">—</div>
+            </div>
+            <div class="info-block">
+                <h4>Datapoints</h4>
+                <div class="value clickable" id="datapoint-count" onclick="window.location='/explorer'">—</div>
+            </div>
+        </div>
+
+        <footer>
+            <p>dserv — <a href="https://github.com/your-org/dserv" target="_blank">GitHub</a> · <a href="/command_reference.html">Docs</a></p>
+        </footer>
+    </div>
+
+    <script>
+// Simple WebSocket connection for status and system info
+class DservStatus {
+    constructor() {
+        this.ws = null;
+        this.connected = false;
+        this.reconnectDelay = 2000;
+        this.meshSystems = new Map();
+        this.localHost = window.location.host;
+        
+        this.elements = {
+            dot: document.getElementById('status-dot'),
+            text: document.getElementById('status-text'),
+            version: document.getElementById('version'),
+            host: document.getElementById('host'),
+            uptime: document.getElementById('uptime'),
+            dpCount: document.getElementById('datapoint-count'),
+            meshSection: document.getElementById('mesh-section'),
+            meshSystems: document.getElementById('mesh-systems')
+        };
+        
+        this.connect();
+    }
+    
+    getWsUrl() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${window.location.host}/ws`;
+    }
+    
+    connect() {
+        this.setStatus('connecting', 'Connecting...');
+        
+        try {
+            this.ws = new WebSocket(this.getWsUrl());
+            
+            this.ws.onopen = () => {
+                this.connected = true;
+                this.setStatus('connected', 'Connected');
+                this.fetchSystemInfo();
+                this.subscribeMesh();
+            };
+            
+            this.ws.onclose = () => {
+                this.connected = false;
+                this.setStatus('disconnected', 'Disconnected');
+                setTimeout(() => this.connect(), this.reconnectDelay);
+            };
+            
+            this.ws.onerror = () => {
+                this.setStatus('disconnected', 'Connection error');
+            };
+            
+            this.ws.onmessage = (event) => {
+                this.handleMessage(event.data);
+            };
+        } catch (e) {
+            this.setStatus('disconnected', 'Failed to connect');
+        }
+    }
+    
+    setStatus(state, text) {
+        this.elements.dot.className = 'status-dot ' + state;
+        this.elements.text.textContent = text;
+    }
+    
+    send(cmd) {
+        if (this.ws && this.connected) {
+            if (typeof cmd === 'object') {
+                this.ws.send(JSON.stringify(cmd));
+            } else {
+                this.ws.send(cmd);
+            }
+        }
+    }
+    
+    fetchSystemInfo() {
+        // Get version
+        this.send('dservGet system/version');
+        
+        // Get host info
+        this.elements.host.textContent = window.location.host;
+        
+        // Get datapoint count (request keys)
+        this.send({ cmd: 'get', name: '@keys' });
+    }
+    
+    subscribeMesh() {
+        // Poll mesh peers via the mesh HTTP API (returns proper JSON)
+        this.refreshMeshPeers();
+        this.meshInterval = setInterval(() => this.refreshMeshPeers(), 5000);
+    }
+    
+    async refreshMeshPeers() {
+        try {
+            // The mesh WebSocket server runs on a different port (default 2569)
+            // But we can also try the main dserv connection
+            // First try: use eval to get JSON directly
+            this.send({
+                cmd: 'eval',
+                script: 'send mesh {meshGetPeers}',
+                requestId: 'mesh-peers'
+            });
+        } catch (e) {
+            console.error('Failed to fetch mesh peers:', e);
+        }
+    }
+    
+    handleMessage(data) {
+        try {
+            const msg = JSON.parse(data);
+            
+            // Handle @keys response
+            if (msg.name === '@keys' && msg.data) {
+                const count = Array.isArray(msg.data) ? msg.data.length : 
+                              typeof msg.data === 'string' ? msg.data.split('\n').filter(Boolean).length : 0;
+                this.elements.dpCount.textContent = count + ' active';
+            }
+            
+            // Handle mesh peers response from eval
+            if (msg.requestId === 'mesh-peers') {
+                if (msg.status === 'ok' && msg.result) {
+                    this.handleMeshPeers(msg.result);
+                }
+                return;
+            }
+            
+            // Handle version response (no requestId, has result)
+            if (msg.result !== undefined && !msg.requestId) {
+                this.elements.version.textContent = msg.result;
+            }
+        } catch (e) {
+            // Plain text response
+            if (data && !data.startsWith('{')) {
+                this.elements.version.textContent = data.trim();
+            }
+        }
+    }
+    
+    // Parse Tcl list of dicts: {key1 val1 key2 val2} {key1 val1 ...}
+    parseTclList(str) {
+        const results = [];
+        let depth = 0;
+        let current = '';
+        
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            
+            if (char === '{') {
+                if (depth === 0) {
+                    current = '';
+                } else {
+                    current += char;
+                }
+                depth++;
+            } else if (char === '}') {
+                depth--;
+                if (depth === 0) {
+                    results.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            } else if (depth > 0) {
+                current += char;
+            }
+        }
+        
+        return results;
+    }
+    
+    // Parse Tcl dict: key1 val1 key2 {val with spaces} key3 val3
+    parseTclDict(str) {
+        const dict = {};
+        const tokens = [];
+        let current = '';
+        let depth = 0;
+        
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            
+            if (char === '{') {
+                if (depth > 0) current += char;
+                depth++;
+            } else if (char === '}') {
+                depth--;
+                if (depth > 0) current += char;
+            } else if (char === ' ' && depth === 0) {
+                if (current) {
+                    tokens.push(current);
+                    current = '';
+                }
+            } else {
+                current += char;
+            }
+        }
+        if (current) tokens.push(current);
+        
+        // Pair up tokens as key-value
+        for (let i = 0; i < tokens.length - 1; i += 2) {
+            dict[tokens[i]] = tokens[i + 1];
+        }
+        
+        return dict;
+    }
+    
+    handleMeshPeers(result) {
+        if (!result) return;
+        
+        try {
+            // Parse Tcl list of dicts
+            const peerStrings = this.parseTclList(result);
+            
+            this.meshSystems.clear();
+            peerStrings.forEach(peerStr => {
+                const peer = this.parseTclDict(peerStr);
+                if (peer.id) {
+                    // Normalize some fields
+                    peer.ssl = peer.ssl === '1' || peer.ssl === 1;
+                    peer.isLocal = peer.isLocal === '1' || peer.isLocal === 1;
+                    this.meshSystems.set(peer.id, peer);
+                }
+            });
+            
+            this.renderMeshSystems();
+        } catch (e) {
+            console.error('Failed to parse mesh peers:', e, result);
+        }
+    }
+    
+    renderMeshSystems() {
+        if (this.meshSystems.size === 0) {
+            this.elements.meshSection.style.display = 'none';
+            return;
+        }
+        
+        this.elements.meshSection.style.display = 'block';
+        
+        // Sort: local first, then by name
+        const sorted = Array.from(this.meshSystems.values()).sort((a, b) => {
+            if (a.isLocal && !b.isLocal) return -1;
+            if (!a.isLocal && b.isLocal) return 1;
+            return (a.name || a.id).localeCompare(b.name || b.id);
+        });
+        
+        this.elements.meshSystems.innerHTML = sorted.map(sys => {
+            const url = this.getSystemUrl(sys);
+            const guiUrl = this.getSystemUrl(sys) + 'essgui/';
+            const status = sys.status || 'idle';
+            
+            // Shorter name display
+            const displayName = (sys.name || sys.id).replace('Lab Station ', '');
+            
+            return `
+                <div class="mesh-card ${sys.isLocal ? 'local' : ''}">
+                    <a href="${url}" class="mesh-card-main" target="${sys.isLocal ? '_self' : '_blank'}" title="${sys.name || sys.id}">
+                        <div class="mesh-card-header">
+                            <div style="min-width: 0; flex: 1;">
+                                <h3>${displayName}</h3>
+                                <div class="mesh-id">${sys.id}</div>
+                            </div>
+                            <div class="mesh-status">
+                                <span class="mesh-status-dot ${status}"></span>
+                            </div>
+                        </div>
+                        ${sys.subject && sys.subject !== 'human' ? `<div style="font-size: 11px; color: #a78bfa;">Subject: ${sys.subject}</div>` : ''}
+                        <div class="mesh-card-footer">
+                            <span class="mesh-ip">${sys.ip === 'local' ? 'local' : sys.ip || ''}</span>
+                            <div class="mesh-badges">
+                                ${sys.ssl ? '<span class="mesh-badge ssl">SSL</span>' : ''}
+                                ${sys.isLocal ? '<span class="mesh-badge local">Local</span>' : ''}
+                            </div>
+                        </div>
+                    </a>
+                    <a href="${guiUrl}" class="mesh-gui-link" target="${sys.isLocal ? '_self' : '_blank'}" title="Open Experiment GUI">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                        GUI
+                    </a>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    getSystemUrl(sys) {
+        if (sys.isLocal) {
+            return '/';  // Just refresh current page for local
+        }
+        const protocol = sys.ssl ? 'https' : 'http';
+        const port = sys.webPort || 2565;
+        return `${protocol}://${sys.ip}:${port}/`;
+    }
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+    new DservStatus();
+});
+    </script>
+</body>
+</html>
