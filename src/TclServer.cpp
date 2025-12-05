@@ -4,6 +4,7 @@
 #include "dserv.h"
 #include "dservConfig.h"
 #include <vector>
+#include <fstream>
 #include <sys/stat.h>
 
 // JSON support
@@ -12,18 +13,6 @@
 #include <fnmatch.h>  // pattern matching support
 
 #include "TclCompletion.h"
-
-// our minified html pages (in www/*.html)
-#include "embedded_terminal.h"
-#include "embedded_tutorial.h"
-#include "embedded_datapoint_explorer.h"
-#include "embedded_welcome.h"
-
-// Vue gui with sources in from essgui-web/dist
-#include "embedded_essgui_index_html.h"
-#include "embedded_essgui_index_js.h"
-#include "embedded_essgui_index_css.h"
-
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
@@ -64,7 +53,8 @@ TclServer::TclServer(int argc, char **argv,
   _newline_port = cfg.newline_listener_port;
   _message_port = cfg.message_listener_port;
   _websocket_port = cfg.websocket_listener_port;
-
+  www_path = cfg.www_path;
+ 
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
 
@@ -322,6 +312,65 @@ std::string TclServer::get_connection_stats() {
 }
 
 
+// Content-type mapping for static file serving
+static const char* get_content_type(const std::string& path) {
+  size_t dot_pos = path.rfind('.');
+  if (dot_pos == std::string::npos) return "application/octet-stream";
+  
+  std::string ext = path.substr(dot_pos);
+  
+  // HTML
+  if (ext == ".html" || ext == ".htm") return "text/html; charset=utf-8";
+  
+  // JavaScript
+  if (ext == ".js" || ext == ".mjs") return "application/javascript; charset=utf-8";
+  
+  // CSS
+  if (ext == ".css") return "text/css; charset=utf-8";
+  
+  // JSON
+  if (ext == ".json") return "application/json; charset=utf-8";
+  
+  // Images
+  if (ext == ".png") return "image/png";
+  if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+  if (ext == ".gif") return "image/gif";
+  if (ext == ".svg") return "image/svg+xml";
+  if (ext == ".ico") return "image/x-icon";
+  if (ext == ".webp") return "image/webp";
+  
+  // Fonts
+  if (ext == ".woff") return "font/woff";
+  if (ext == ".woff2") return "font/woff2";
+  if (ext == ".ttf") return "font/ttf";
+  
+  // Other
+  if (ext == ".txt") return "text/plain; charset=utf-8";
+  if (ext == ".md") return "text/markdown; charset=utf-8";
+  if (ext == ".xml") return "application/xml";
+  if (ext == ".wasm") return "application/wasm";
+  
+  return "application/octet-stream";
+}
+
+static bool is_safe_path(const std::string& path) {
+  return path.find("..") == std::string::npos;
+}
+
+static std::string read_file_contents(const std::string& path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) return "";
+  
+  auto size = file.tellg();
+  if (size <= 0) return "";
+  
+  file.seekg(0);
+  std::string content(static_cast<size_t>(size), '\0');
+  file.read(content.data(), size);
+  
+  return content;
+}
+
 void TclServer::start_websocket_server(void)
 {
   ws_loop = uWS::Loop::get();
@@ -343,81 +392,308 @@ void TclServer::start_websocket_server(void)
     std::cout << "(To enable HTTPS, place cert.pem and key.pem in /etc/dserv/ssl/)" 
               << std::endl;
   }
-  
-  // Lambda containing all route setup - MUST BE A TEMPLATE to handle both SSL types
-  // The key is using 'auto *ws' instead of explicit WebSocket<SSL, ...> types
+
+
   auto setup_routes = [this](auto &app) {
-    // Helper macros for stringification
-    #define STRINGIFY(x) #x
-    #define EXPAND_AND_STRINGIFY(x) STRINGIFY(x)
     
-    // Welcome page as the root
-    app.get("/", [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "text/html; charset=utf-8")
-        ->writeHeader("Cache-Control", "no-cache")
-        ->end(embedded::essgui_index_html);
-    });
-
-    // Build route strings with actual hash values
-    std::string js_route = "/assets/index-" +
-      std::string(EXPAND_AND_STRINGIFY(ESSGUI_JS_HASH)) + ".js";
-    std::string css_route = "/assets/index-" +
-      std::string(EXPAND_AND_STRINGIFY(ESSGUI_CSS_HASH)) + ".css";
-      
-    // Register the exact routes
-    app.get(js_route, [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "application/javascript; charset=utf-8")
-        ->writeHeader("Cache-Control", "public, max-age=31536000")
-        ->end(embedded::essgui_index_js);
-    });
-
-    app.get(css_route, [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "text/css; charset=utf-8")
-        ->writeHeader("Cache-Control", "public, max-age=31536000")
-        ->end(embedded::essgui_index_css);
-    });
-    
-    app.get("/terminal", [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "text/html; charset=utf-8")
-        ->writeHeader("Cache-Control", "no-cache")
-        ->end(embedded::terminal_html);
-    });
-
-    app.get("/tutorial", [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "text/html; charset=utf-8")
-        ->writeHeader("Cache-Control", "no-cache")
-        ->end(embedded::tutorial_html);
-    });
-    
-    app.get("/explorer", [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "text/html; charset=utf-8")
-        ->writeHeader("Cache-Control", "no-cache")
-        ->end(embedded::datapoint_explorer_html);
-    });
-    
-    // Add some aliases
-    app.get("/datapoints", [](auto *res, auto *req) {
-      res->writeStatus("302 Found")
-        ->writeHeader("Location", "/explorer")
-        ->end();
-    });
-    
-    app.get("/console", [](auto *res, auto *req) {
-      res->writeStatus("302 Found")
-        ->writeHeader("Location", "/terminal")
-        ->end();
-    });  
-    
+    // Health check - always available, no www_path needed
     app.get("/health", [](auto *res, auto *req) {
-      res->writeHeader("Content-Type", "application/json")
-        ->end("{\"status\":\"ok\",\"service\":\"dserv-tclserver\"}");
+        res->writeHeader("Content-Type", "application/json")
+            ->end("{\"status\":\"ok\",\"service\":\"dserv\"}");
     });
     
-    // Favicon to prevent 404s
+    // Favicon - prevent 404 noise in logs
     app.get("/favicon.ico", [](auto *res, auto *req) {
-      res->writeStatus("204 No Content")->end();
+        res->writeStatus("204 No Content")->end();
     });
+
+    // Static file serving
+    if (!this->www_path.empty()) {
+      // Explicit root handler      
+      app.get("/", [this](auto *res, auto *req) {
+        std::string file_path = this->www_path + "/index.html";
+        std::string content = read_file_contents(file_path);
+        
+        if (content.empty()) {
+	  res->writeStatus("404 Not Found")
+	    ->writeHeader("Content-Type", "text/plain")
+	    ->end("index.html not found");
+	  return;
+        }
+        
+        res->writeHeader("Content-Type", "text/html; charset=utf-8")
+	  ->writeHeader("Cache-Control", "no-cache")
+	  ->end(content);
+      });
+
+      // Explicit /essgui/ handler (Vue app)
+      app.get("/essgui/", [this](auto *res, auto *req) {
+	std::string file_path = this->www_path + "/essgui/index.html";
+	std::string content = read_file_contents(file_path);
+	
+	if (content.empty()) {
+	  res->writeStatus("404 Not Found")
+            ->writeHeader("Content-Type", "text/plain")
+            ->end("essgui/index.html not found");
+	  return;
+	}
+	
+	res->writeHeader("Content-Type", "text/html; charset=utf-8")
+	  ->writeHeader("Cache-Control", "no-cache")
+	  ->end(content);
+      });
+      
+      // Serve all other files from www_path
+app.get("/*", [this](auto *res, auto *req) {
+    std::string url_path(req->getUrl());
     
+    // Security: reject path traversal attempts
+    if (!is_safe_path(url_path)) {
+        res->writeStatus("403 Forbidden")
+            ->writeHeader("Content-Type", "text/plain")
+            ->end("Forbidden");
+        return;
+    }
+    
+    // Build filesystem path
+    std::string file_path = this->www_path + url_path;
+    std::string content = read_file_contents(file_path);
+    
+    // If path ends with /, try index.html in that directory
+    if (content.empty() && url_path.back() == '/') {
+        file_path = this->www_path + url_path + "index.html";
+        content = read_file_contents(file_path);
+    }
+    
+    // Clean URLs for paths without extension
+    if (content.empty() && url_path.find('.') == std::string::npos) {
+        // First try as directory with index.html (e.g., /essgui -> /essgui/index.html)
+        file_path = this->www_path + url_path + "/index.html";
+        content = read_file_contents(file_path);
+        
+        // Then try as .html file (e.g., /terminal -> /terminal.html)
+        if (content.empty()) {
+            file_path = this->www_path + url_path + ".html";
+            content = read_file_contents(file_path);
+        }
+    }
+    
+    if (content.empty()) {
+        res->writeStatus("404 Not Found")
+            ->writeHeader("Content-Type", "text/html; charset=utf-8")
+            ->end(R"(<!DOCTYPE html>
+<html><head><title>404 - Not Found</title>
+<style>
+body { font-family: system-ui, sans-serif; background: #0d1117; color: #e6edf3; 
+       display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.container { text-align: center; }
+h1 { color: #f85149; }
+a { color: #58a6ff; }
+</style></head>
+<body><div class="container">
+<h1>404 - Not Found</h1>
+<p>The requested page was not found.</p>
+<p><a href="/">Return to Home</a></p>
+</div></body></html>)");
+        return;
+    }
+    
+    // Cache: no-cache for HTML, short cache for assets
+    const char* cache_control = "no-cache";
+    std::string ext = file_path.substr(file_path.rfind('.') + 1);
+    if (ext == "js" || ext == "css" || ext == "png" || ext == "jpg" || 
+        ext == "gif" || ext == "svg" || ext == "woff" || ext == "woff2" || ext == "ico") {
+        cache_control = "public, max-age=3600";  // 1 hour for assets
+    }
+    
+    res->writeHeader("Content-Type", get_content_type(file_path))
+        ->writeHeader("Cache-Control", cache_control)
+        ->end(content);
+});        
+        std::cout << "Web interface enabled at: " << this->www_path << std::endl;
+    } 
+    else {
+        // No www_path: show helpful setup message
+        app.get("/*", [](auto *res, auto *req) {
+            res->writeHeader("Content-Type", "text/html; charset=utf-8")
+                ->end(R"(<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dserv - Web Interface Not Configured</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            color: #e6edf3;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+        }
+        .logo {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #58a6ff;
+            margin-bottom: 16px;
+            font-size: 24px;
+        }
+        .status {
+            background: #1a4d1a;
+            border: 1px solid #238636;
+            color: #3fb950;
+            padding: 12px 20px;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .warning {
+            background: #3d2a00;
+            border: 1px solid #9e6a03;
+            color: #d29922;
+            padding: 12px 20px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+        p {
+            color: #8b949e;
+            line-height: 1.6;
+            margin: 12px 0;
+        }
+        code {
+            background: #161b22;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            font-size: 14px;
+            color: #79c0ff;
+        }
+        .code-block {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+            text-align: left;
+            overflow-x: auto;
+        }
+        .code-block code {
+            background: none;
+            padding: 0;
+            display: block;
+            white-space: pre;
+        }
+        .section {
+            margin: 24px 0;
+            text-align: left;
+        }
+        .section h3 {
+            color: #e6edf3;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .endpoints {
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid #30363d;
+        }
+        .endpoint {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #21262d;
+        }
+        .endpoint:last-child {
+            border-bottom: none;
+        }
+        .endpoint-name {
+            color: #8b949e;
+        }
+        .endpoint-status {
+            color: #3fb950;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">⚡</div>
+        <h1>dserv is running</h1>
+        
+        <div class="status">
+            ✓ Data server operational
+        </div>
+        
+        <div class="warning">
+            ⚠ Web interface not configured
+        </div>
+        
+        <div class="section">
+            <h3>To enable the web interface:</h3>
+            <div class="code-block">
+                <code># Development (serve from source)
+dserv -w /path/to/dserv/www
+
+# Production (default install location)
+dserv -w /usr/local/dserv/www</code>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>Or set www_path in your config:</h3>
+            <div class="code-block">
+                <code># In dsconf.tcl or config.tcl
+set www_path /usr/local/dserv/www</code>
+            </div>
+        </div>
+        
+        <p>
+            If you installed via package (.deb/.pkg), the web files should be at
+            <code>/usr/local/dserv/www</code>
+        </p>
+        
+        <div class="endpoints">
+            <h3 style="color: #e6edf3; margin-bottom: 12px;">Available Endpoints</h3>
+            <div class="endpoint">
+                <span class="endpoint-name">/health</span>
+                <span class="endpoint-status">✓ Available</span>
+            </div>
+            <div class="endpoint">
+                <span class="endpoint-name">/ws</span>
+                <span class="endpoint-status">✓ Available</span>
+            </div>
+            <div class="endpoint">
+                <span class="endpoint-name">TCP :2570</span>
+                <span class="endpoint-status">✓ Available</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>)");
+        });
+        
+        std::cout << "Web interface: not configured (use -w flag or set www_path)" << std::endl;
+    }
+
     // WebSocket endpoint - NOTE the "template" keyword and "auto *ws" for type flexibility
     app.template ws<WSPerSocketData>("/ws", {
         /* Settings */
@@ -1105,8 +1381,8 @@ void TclServer::cleanup_subprocesses_for_websocket(const std::string& ws_id) {
   for (const auto& name : to_cleanup) {
     auto subprocess = TclServerRegistry.getObject(name);
     if (subprocess) {
-      std::cout << "WebSocket " << ws_id << " closed, shutting down subprocess: " 
-                << name << std::endl;
+      //      std::cout << "WebSocket " << ws_id << " closed, shutting down subprocess: " 
+      //                << name << std::endl;
       subprocess->shutdown();
       delete subprocess;
     }
@@ -1883,6 +2159,24 @@ static int print_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+
+// =============================================================================
+// Tcl command: www_path
+// =============================================================================
+
+// www_path ?path?
+// With no argument: returns current www path
+// With argument: sets the www path (validates directory exists)
+static int Www_Path_Cmd(ClientData clientData, Tcl_Interp *interp,
+                        int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *)clientData;
+  
+  // Return current path
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(tserv->getWwwPath().c_str(), -1));
+  return TCL_OK;
+}
+
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
@@ -1999,6 +2293,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
                tserv, NULL);
 
+  Tcl_CreateObjCommand(interp, "www_path", Www_Path_Cmd,
+		       (ClientData)tserv, NULL);
+  
   Tcl_CreateObjCommand(interp, "print",
                (Tcl_ObjCmdProc *) print_command, tserv, NULL);
   
