@@ -62,7 +62,9 @@ ds_datapoint_t *Dataserver::get_datapoint(char *varname)
   
 int Dataserver::delete_datapoint(char *varname)
 {
-  return datapoint_table.deletepoint(varname);
+  auto cleared = datapoint_table.deletepoint(varname);
+  if (cleared) set_key_dpoint();
+  return cleared;
 }
 
 /*
@@ -70,7 +72,9 @@ int Dataserver::delete_datapoint(char *varname)
  */
 int Dataserver::clear(char *varname)
 {
-  return datapoint_table.deletepoint(varname);
+  auto cleared = datapoint_table.deletepoint(varname);
+  if (cleared) set_key_dpoint();
+  return cleared;
 }
 
 /*
@@ -79,6 +83,7 @@ int Dataserver::clear(char *varname)
 void Dataserver::clear()
 {
   datapoint_table.clear();
+  set_key_dpoint();
 }
 
 ds_datapoint_t *Dataserver::process(ds_datapoint_t *dpoint)
