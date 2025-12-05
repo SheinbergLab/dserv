@@ -13,6 +13,14 @@
 
 namespace TclCompletion {
 
+// Helper to check if a pattern is valid for info commands/procs/etc
+// Returns false if the pattern contains spaces (would be parsed as multiple args)
+static bool isValidPattern(const std::string& pattern) {
+    if (pattern.find(' ') != std::string::npos) return false;
+    if (pattern.find('\t') != std::string::npos) return false;
+    return true;
+}
+
 // Helper to extract command context from partial input
 struct CompletionContext {
     std::string command;      // First word (the command)
@@ -174,6 +182,11 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     std::string pattern = actualPartial + "*";
     std::string cmd;
     
+    // Early exit if pattern is invalid (contains spaces - would cause arg count errors)
+    if (!isValidPattern(pattern)) {
+        return results;
+    }
+    
     // Check for array element completion: varName(partial
     // Example: tcl_platform(ma -> tcl_platform(machine)
     size_t parenPos = actualPartial.rfind('(');
@@ -191,8 +204,14 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                 arrayName = arrayName.substr(nameStart + 1);
             }
             
+            // Validate index pattern
+            std::string indexPattern = indexPartial + "*";
+            if (!isValidPattern(indexPattern)) {
+                return results;
+            }
+            
             // Query array indices
-            cmd = "array names " + arrayName + " " + indexPartial + "*";
+            cmd = "array names " + arrayName + " " + indexPattern;
             if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
                 const char* listStr = Tcl_GetStringResult(interp);
                 TclListSize objc;
@@ -277,6 +296,11 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
         
         // Use the context's partial (the word being completed) for the pattern
         std::string contextPattern = ctx.partial + "*";
+        
+        // Skip context-aware completion if the pattern is invalid
+        if (!isValidPattern(contextPattern)) {
+            return results;
+        }
         
         // Build prefix (everything before the word being completed)
         // For "set tcl_pl", prefix should be "set "
@@ -450,24 +474,18 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                         needsFilenameCompletion = true;
                     }
                 }
-                // Special case: just "." or ".." or "~"
-                else if (ctx.partial == "." || ctx.partial == ".." || ctx.partial == "~") {
-                    needsFilenameCompletion = true;
-                }
             }
         }
         
-        // Perform filename completion if needed
         if (needsFilenameCompletion) {
-            std::vector<std::string> filenames = getFilenameCompletions(interp, ctx.partial, dirsOnly);
+            auto filenames = getFilenameCompletions(interp, ctx.partial, dirsOnly);
             for (const auto& filename : filenames) {
                 addWithCommandPrefix(filename);
             }
-            
-            // Return filename completions (don't fall through to command completion)
             if (!results.empty()) {
                 return results;
             }
+            // If no filename matches, fall through to general completion
         }
     }
     
@@ -494,9 +512,12 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
         // 3. If starts with $, query global variables
         if (!actualPartial.empty() && actualPartial[0] == '$') {
             std::string varPartial = actualPartial.substr(1);  // Remove $
-            cmd = "info globals " + varPartial + "*";
-            if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
-                parseListResult(interp, "$");  // Add $ prefix back
+            std::string varPattern = varPartial + "*";
+            if (isValidPattern(varPattern)) {
+                cmd = "info globals " + varPattern;
+                if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
+                    parseListResult(interp, "$");  // Add $ prefix back
+                }
             }
         }
     }
@@ -510,30 +531,32 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
         // Query from global namespace with full pattern to avoid imported commands
         // Use ::ns::partial* to only get commands actually in that namespace
         std::string fullPattern = "::" + ns + "::" + namePartial + "*";
-        cmd = "info commands " + fullPattern;
-        if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
-            const char* listStr = Tcl_GetStringResult(interp);
-            TclListSize objc;
-            Tcl_Obj** objv;
-            Tcl_Obj* listObj = Tcl_NewStringObj(listStr, -1);
-            Tcl_IncrRefCount(listObj);
-            
-            if (Tcl_ListObjGetElements(interp, listObj, &objc, &objv) == TCL_OK) {
-                for (TclListSize i = 0; i < objc; i++) {
-                    std::string item = Tcl_GetString(objv[i]);
-                    // Strip leading :: if present for consistent output
-                    if (item.substr(0, 2) == "::") {
-                        item = item.substr(2);
-                    }
-                    // Apply the prefix
-                    std::string fullItem = prefix + item;
-                    if (seen.find(fullItem) == seen.end()) {
-                        seen.insert(fullItem);
-                        results.push_back(fullItem);
+        if (isValidPattern(fullPattern)) {
+            cmd = "info commands " + fullPattern;
+            if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
+                const char* listStr = Tcl_GetStringResult(interp);
+                TclListSize objc;
+                Tcl_Obj** objv;
+                Tcl_Obj* listObj = Tcl_NewStringObj(listStr, -1);
+                Tcl_IncrRefCount(listObj);
+                
+                if (Tcl_ListObjGetElements(interp, listObj, &objc, &objv) == TCL_OK) {
+                    for (TclListSize i = 0; i < objc; i++) {
+                        std::string item = Tcl_GetString(objv[i]);
+                        // Strip leading :: if present for consistent output
+                        if (item.substr(0, 2) == "::") {
+                            item = item.substr(2);
+                        }
+                        // Apply the prefix
+                        std::string fullItem = prefix + item;
+                        if (seen.find(fullItem) == seen.end()) {
+                            seen.insert(fullItem);
+                            results.push_back(fullItem);
+                        }
                     }
                 }
+                Tcl_DecrRefCount(listObj);
             }
-            Tcl_DecrRefCount(listObj);
         }
     }
     
@@ -552,37 +575,17 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
             
             if (Tcl_ListObjGetElements(interp, nsListObj, &nsObjc, &nsObjv) == TCL_OK) {
                 for (TclListSize i = 0; i < nsObjc; i++) {
-                    std::string fullNs = Tcl_GetString(nsObjv[i]);
-                    
-                    // Strip leading :: from namespace name
-                    std::string ns = fullNs;
-                    if (ns.substr(0, 2) == "::") {
-                        ns = ns.substr(2);
+                    std::string nsName = Tcl_GetString(nsObjv[i]);
+                    // Strip leading ::
+                    if (nsName.substr(0, 2) == "::") {
+                        nsName = nsName.substr(2);
                     }
                     
-                    // Get all commands in this matching namespace
-                    std::string nsCmd = "namespace eval " + fullNs + " {info commands}";
-                    if (Tcl_Eval(interp, nsCmd.c_str()) == TCL_OK) {
-                        const char* cmdListStr = Tcl_GetStringResult(interp);
-                        TclListSize cmdObjc;
-                        Tcl_Obj** cmdObjv;
-                        Tcl_Obj* cmdListObj = Tcl_NewStringObj(cmdListStr, -1);
-                        Tcl_IncrRefCount(cmdListObj);
-                        
-                        if (Tcl_ListObjGetElements(interp, cmdListObj, &cmdObjc, &cmdObjv) == TCL_OK) {
-                            // Limit to reasonable number of commands per namespace
-                            TclListSize maxCmds = 20;
-                            for (TclListSize j = 0; j < cmdObjc && j < maxCmds; j++) {
-                                std::string cmdName = ns + "::" + Tcl_GetString(cmdObjv[j]);
-                                // Apply the prefix
-                                std::string fullItem = prefix + cmdName;
-                                if (seen.find(fullItem) == seen.end()) {
-                                    seen.insert(fullItem);
-                                    results.push_back(fullItem);
-                                }
-                            }
-                        }
-                        Tcl_DecrRefCount(cmdListObj);
+                    // Add the namespace itself as a completion option
+                    std::string nsCompletion = prefix + nsName + "::";
+                    if (seen.find(nsCompletion) == seen.end()) {
+                        seen.insert(nsCompletion);
+                        results.push_back(nsCompletion);
                     }
                 }
             }
@@ -593,41 +596,8 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     return results;
 }
 
-// ============================================
-// Cross-Interpreter Completion
-// ============================================
-
-std::vector<std::string> getRemoteCompletions(Tcl_Interp* mainInterp,
-                                               const std::string& targetInterp,
-                                               const std::string& partial) {
-    std::vector<std::string> results;
-    
-    // Build command: send $targetInterp {complete $partial}
-    // Note: Need to properly escape braces in partial
-    std::string cmd = "send " + targetInterp + " {complete {" + partial + "}}";
-    
-    if (Tcl_Eval(mainInterp, cmd.c_str()) == TCL_OK) {
-        const char* listStr = Tcl_GetStringResult(mainInterp);
-        TclListSize objc;
-        Tcl_Obj** objv;
-        Tcl_Obj* listObj = Tcl_NewStringObj(listStr, -1);
-        Tcl_IncrRefCount(listObj);
-        
-        if (Tcl_ListObjGetElements(mainInterp, listObj, &objc, &objv) == TCL_OK) {
-            for (TclListSize i = 0; i < objc; i++) {
-                results.push_back(Tcl_GetString(objv[i]));
-            }
-        }
-        Tcl_DecrRefCount(listObj);
-    }
-    
-    return results;
-}
-
-// ============================================
-// Tcl Command: complete <partial>
-// ============================================
-
+// Tcl command callback: complete <partial>
+// Returns Tcl list of completion candidates (full replacement text)
 int TclCompleteCmd(ClientData clientData, Tcl_Interp* interp, 
                    int objc, Tcl_Obj* const objv[]) {
     if (objc != 2) {
@@ -636,52 +606,39 @@ int TclCompleteCmd(ClientData clientData, Tcl_Interp* interp,
     }
     
     std::string partial = Tcl_GetString(objv[1]);
-    std::vector<std::string> matches = getCompletions(interp, partial);
+    std::vector<std::string> completions = getCompletions(interp, partial);
     
     // Return as Tcl list
     Tcl_Obj* resultList = Tcl_NewListObj(0, NULL);
-    for (const auto& match : matches) {
+    for (const auto& completion : completions) {
         Tcl_ListObjAppendElement(interp, resultList, 
-                                 Tcl_NewStringObj(match.c_str(), -1));
+                                 Tcl_NewStringObj(completion.c_str(), -1));
     }
     Tcl_SetObjResult(interp, resultList);
     
     return TCL_OK;
 }
 
+// ============================================
+// Token-only completion (for editors)
+// ============================================
+
 std::vector<std::string> getCompletionTokens(Tcl_Interp* interp, const std::string& partial) {
-    std::vector<std::string> fullCompletions = getCompletions(interp, partial);
     std::vector<std::string> tokens;
+    
+    // Get full completions first
+    std::vector<std::string> fullCompletions = getCompletions(interp, partial);
     
     if (fullCompletions.empty()) {
         return tokens;
     }
     
-    // Detect what kind of completion context we're in
-    std::string actualPartial = partial;
-    
-    // Check for embedded command: [...
-    size_t embedPos = partial.rfind('[');
-    bool isEmbedded = false;
-    if (embedPos != std::string::npos) {
-        size_t closePos = partial.find(']', embedPos);
-        if (closePos == std::string::npos) {
-            // We're completing inside [...]
-            isEmbedded = true;
-            actualPartial = partial.substr(embedPos + 1);
-            // Trim whitespace
-            size_t firstNonSpace = actualPartial.find_first_not_of(" \t");
-            if (firstNonSpace != std::string::npos) {
-                actualPartial = actualPartial.substr(firstNonSpace);
-            }
-        }
-    }
-    
-    // Check for array subscript: var(partial
-    size_t parenPos = actualPartial.rfind('(');
+    // Determine what kind of completion this is
+    bool isEmbedded = (partial.rfind('[') != std::string::npos);
+    size_t parenPos = partial.rfind('(');
     bool isArraySubscript = false;
     if (parenPos != std::string::npos) {
-        size_t closePos = actualPartial.find(')', parenPos);
+        size_t closePos = partial.find(')', parenPos);
         if (closePos == std::string::npos) {
             // We're completing array subscript
             isArraySubscript = true;
