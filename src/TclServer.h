@@ -213,6 +213,7 @@ public:
   void link_subprocess_to_current_connection(const std::string& subprocess_name);
   void cleanup_subprocesses_for_socket(int sockfd);
   void cleanup_subprocesses_for_websocket(const std::string& ws_id);
+  void cleanup_datapoints_for_subprocess(const std::string& subprocess_name);
   
   int _newline_port;		// for CR/LF oriented communication
   int _message_port;		// for message oriented comm  

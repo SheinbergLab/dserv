@@ -1018,16 +1018,50 @@ void TclServer::link_subprocess_to_current_connection(const std::string& subproc
   
   if (current_request->socket_fd >= 0) {
     subprocess_to_socket[subprocess_name] = current_request->socket_fd;
-    std::cout << "Linked subprocess '" << subprocess_name 
-              << "' to socket " << current_request->socket_fd << std::endl;
+    //    std::cout << "Linked subprocess '" << subprocess_name 
+    //              << "' to socket " << current_request->socket_fd << std::endl;
   } 
   else if (!current_request->websocket_id.empty()) {
     subprocess_to_websocket[subprocess_name] = current_request->websocket_id;
-    std::cout << "Linked subprocess '" << subprocess_name 
-              << "' to websocket " << current_request->websocket_id << std::endl;
+    //    std::cout << "Linked subprocess '" << subprocess_name 
+    //              << "' to websocket " << current_request->websocket_id << std::endl;
   }
   else {
     std::cerr << "Warning: link_subprocess called but request has no connection info" << std::endl;
+  }
+}
+
+void TclServer::cleanup_datapoints_for_subprocess(const std::string& subprocess_name) {
+  // Get all datapoint keys
+  std::string keys_str = ds->get_table_keys();
+  if (keys_str.empty()) {
+    return;
+  }
+  
+  // Parse space-separated keys
+  std::istringstream iss(keys_str);
+  std::string key;
+  
+  // Patterns to match: "subprocess_name/*" and "error/subprocess_name"
+  std::string prefix = subprocess_name + "/";
+  std::string error_key = "error/" + subprocess_name;
+  
+  std::vector<std::string> to_delete;
+  
+  while (iss >> key) {
+    if (key.rfind(prefix, 0) == 0 || key == error_key) {
+      to_delete.push_back(key);
+    }
+  }
+  
+  // Delete matching datapoints
+  for (const auto& key : to_delete) {
+    ds->clear(const_cast<char*>(key.c_str()));
+  }
+  
+  if (!to_delete.empty()) {
+    //    std::cout << "  Cleaned up " << to_delete.size() << " datapoints for " 
+    //              << subprocess_name << std::endl;
   }
 }
 
@@ -1044,14 +1078,18 @@ void TclServer::cleanup_subprocesses_for_socket(int sockfd) {
   for (const auto& name : to_cleanup) {
     auto subprocess = TclServerRegistry.getObject(name);
     if (subprocess) {
-      std::cout << "Socket " << sockfd << " closed, shutting down subprocess: " 
-                << name << std::endl;
+      //      std::cout << "Socket " << sockfd << " closed, shutting down subprocess: " 
+      //        << name << std::endl;
       subprocess->shutdown();
       delete subprocess;
     }
     TclServerRegistry.unregisterObject(name);
     subprocess_to_socket.erase(name);
+
+    // remove private dpoints created for this subprocess
+    cleanup_datapoints_for_subprocess(name);  
   }
+
 }
 
 void TclServer::cleanup_subprocesses_for_websocket(const std::string& ws_id) {
@@ -1074,7 +1112,11 @@ void TclServer::cleanup_subprocesses_for_websocket(const std::string& ws_id) {
     }
     TclServerRegistry.unregisterObject(name);
     subprocess_to_websocket.erase(name);
+
+    // remove private dpoints created for this subprocess
+    cleanup_datapoints_for_subprocess(name);    
   }
+
 }
 /********************************* now *********************************/
 
