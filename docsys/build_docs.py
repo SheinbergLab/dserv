@@ -155,6 +155,7 @@ class DocBuilder:
             ('DGTableViewer.html', 'DGTableViewer.html'),
             ('TclTerminal.html', 'TclTerminal.html'),
             ('GraphicsDemo.html', 'GraphicsDemo.html'),
+            ('dlsh.html', 'dlsh.html'),
         ]
         
         built_count = 0
