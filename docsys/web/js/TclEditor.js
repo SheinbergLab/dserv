@@ -44,12 +44,12 @@ class TclEditor {
     const { defaultKeymap, history, historyKeymap, indentWithTab } = await import('https://esm.sh/@codemirror/commands@6');
     const { syntaxHighlighting, defaultHighlightStyle, bracketMatching, StreamLanguage } = await import('https://esm.sh/@codemirror/language@6');
     const { dracula } = await import('https://esm.sh/@uiw/codemirror-theme-dracula@4');
-    const { autocompletion, completionKeymap, acceptCompletion, completionStatus } = await import('https://esm.sh/@codemirror/autocomplete@6');
+    const { autocompletion, completionKeymap, acceptCompletion, completionStatus, startCompletion } = await import('https://esm.sh/@codemirror/autocomplete@6');
     const { tcl } = await import('https://esm.sh/@codemirror/legacy-modes@6/mode/tcl');
     const { searchKeymap, highlightSelectionMatches } = await import('https://esm.sh/@codemirror/search@6');
 
     // Store references for later use
-    this._cm = { EditorState, EditorView, keymap, StreamLanguage, acceptCompletion, completionStatus };
+    this._cm = { EditorState, EditorView, keymap, StreamLanguage, acceptCompletion, completionStatus, startCompletion };
 
     // Build extensions
     const extensions = [
@@ -74,6 +74,7 @@ class TclEditor {
       { key: 'Tab', run: this._handleTab.bind(this) },
       { key: 'Shift-Tab', run: this._handleShiftTab.bind(this) },
       { key: 'Enter', run: this._handleEnter.bind(this) },
+      { key: 'Shift-Enter', run: this._handleShiftEnter.bind(this) },
       { key: 'Ctrl-/', run: this._toggleComment.bind(this) },
       { key: 'Mod-Shift-f', run: this._formatCode.bind(this) },
     ];
@@ -95,9 +96,9 @@ class TclEditor {
     extensions.push(
       keymap.of([
         ...customKeymap,
-        ...defaultKeymap,
+        ...completionKeymap,  // Must come before defaultKeymap for arrow keys to work in popup
         ...historyKeymap,
-        ...completionKeymap,
+        ...defaultKeymap,
         ...searchKeymap,
       ])
     );
@@ -164,9 +165,9 @@ class TclEditor {
       return true;
     }
 
-    // Otherwise trigger completion by returning false to let CM handle it
-    // or we could explicitly start completion
-    return false;
+    // Otherwise trigger completion explicitly
+    this._cm.startCompletion(view);
+    return true;
   }
 
   _handleShiftTab(view) {
@@ -175,6 +176,12 @@ class TclEditor {
 
   _handleEnter(view) {
     const state = view.state;
+    
+    // If completion popup is open, accept the selected completion
+    if (this._cm.completionStatus(state) === 'active') {
+      return this._cm.acceptCompletion(view);
+    }
+    
     const selection = state.selection.main;
     const line = state.doc.lineAt(selection.head);
 
@@ -204,6 +211,31 @@ class TclEditor {
       selection: { anchor: selection.head + newline.length },
     });
 
+    return true;
+  }
+
+  _handleShiftEnter(view) {
+    const state = view.state;
+    const selection = state.selection.main;
+    
+    let code;
+    if (!selection.empty) {
+      // Run selection
+      code = state.doc.sliceString(selection.from, selection.to);
+    } else {
+      // Run current line
+      const line = state.doc.lineAt(selection.head);
+      code = line.text;
+    }
+    
+    code = code.trim();
+    if (!code) return true;
+    
+    // Call the onExecute callback if set
+    if (this.onExecute) {
+      this.onExecute(code);
+    }
+    
     return true;
   }
 
@@ -369,27 +401,59 @@ class TclEditor {
     const line = context.state.doc.lineAt(context.pos);
     const textBeforeCursor = context.state.doc.sliceString(line.from, context.pos);
 
-    // Find word start
+    // Find word start - match word characters, colons (for namespaces), $ (for variables)
     const wordMatch = textBeforeCursor.match(/[\w_:$.-]+$/);
     if (!wordMatch) return null;
 
     const word = wordMatch[0];
     const from = context.pos - word.length;
+    
+    // Don't try to complete very short tokens (avoid noise)
+    if (word.length < 2 && !word.startsWith('$')) return null;
+
+    // Determine what to send for completion
+    // For simple command completion (no special chars), just send the word
+    // For variables ($) or namespaces (::), send more context
+    let completionText;
+    if (word.startsWith('$') || word.includes('::')) {
+      // Send the word with some context
+      completionText = word;
+    } else {
+      // For command completion, just send the token being typed
+      // This avoids errors from incomplete preceding commands
+      completionText = word;
+    }
 
     try {
-      const result = await this.ws.eval(`complete_token {${textBeforeCursor}}`);
-      if (result.result) {
-        const tokens = this._parseTclList(result.result);
-        return {
-          from,
-          options: tokens.map(token => ({
-            label: token,
-            type: 'function',
-          })),
-        };
+      // Use sendToLinked if available, otherwise send
+      // Use complete_token to get just the token completions
+      let result;
+      if (this.ws.sendToLinked && this.ws.getLinkedSubprocess && this.ws.getLinkedSubprocess()) {
+        result = await this.ws.sendToLinked(`complete_token {${completionText}}`);
+      } else if (this.ws.send) {
+        result = await this.ws.send(`complete_token {${completionText}}`);
+      } else if (this.ws.eval) {
+        const evalResult = await this.ws.eval(`complete_token {${completionText}}`);
+        result = evalResult.result;
+      } else {
+        return null;
+      }
+      
+      if (result) {
+        const tokens = this._parseTclList(result);
+        if (tokens.length > 0) {
+          return {
+            from,
+            options: tokens.map(token => ({
+              label: token,
+              type: word.startsWith('$') ? 'variable' : 'function',
+            })),
+          };
+        }
       }
     } catch (e) {
-      console.error('Completion error:', e);
+      // Silently ignore completion errors - they're expected during editing
+      // console.error('Completion error:', e);
     }
 
     return null;
@@ -440,6 +504,10 @@ class TclEditor {
   // Public API
   setWebSocket(ws) {
     this.ws = ws;
+  }
+
+  setOnExecute(callback) {
+    this.onExecute = callback;
   }
 
   setValue(text, cursorPos = -1) {
