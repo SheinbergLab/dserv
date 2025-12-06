@@ -301,8 +301,8 @@
             try {
                 // Create connection with event emitter + callback support
                 conn = new DservConnection({
-                    dservHost: 'localhost:2565',
-                    forceSecure: true,
+                    dservHost: null,
+                    forceSecure: false,
                     createLinkedSubprocess: true,
                     onStatus: (status, msg) => {
                         updateStatus(status, msg);

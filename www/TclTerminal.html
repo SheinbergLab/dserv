@@ -110,8 +110,8 @@
                 conn = new DservConnection({
                     subprocess: 'docs',
                     createLinkedSubprocess: true,
-                    dservHost: 'localhost:2565',
-                    forceSecure: true,
+                    dservHost: null,
+                    forceSecure: false,
                     onStatus: (status, msg) => {
                         updateStatus(status, msg);
                     },

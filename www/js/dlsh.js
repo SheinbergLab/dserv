@@ -13,8 +13,8 @@
 class DlshWorkbench {
     constructor(options = {}) {
         this.options = {
-            dservHost: 'localhost:2565',
-            forceSecure: true,
+            dservHost: null,
+            forceSecure: false,
             subprocess: 'dlsh',
             graphicsStream: 'graphics/demo',
             ...options
