@@ -340,6 +340,7 @@ public:
 			 int sock,
 			 SharedQueue<client_request_t> *queue);
   
+  TclServer(int argc, char **argv, Dataserver *dserv);
   TclServer(int argc, char **argv, Dataserver *dserv, TclServerConfig cfg);
   TclServer(int argc, char **argv, Dataserver *dserv, std::string name);
   TclServer(int argc, char **argv, Dataserver *dserv,

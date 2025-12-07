@@ -17,6 +17,11 @@
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
 
+// For one off subprocesses don't need name
+TclServer::TclServer(int argc, char **argv, Dataserver *dserv)
+  : TclServer(argc, argv, dserv, TclServerConfig("", -1, -1, -1))
+{
+}
 // For no-network subprocess
 TclServer::TclServer(int argc, char **argv, Dataserver *dserv, std::string name)
   : TclServer(argc, argv, dserv, TclServerConfig(name, -1, -1, -1))
@@ -1392,8 +1397,36 @@ void TclServer::cleanup_subprocesses_for_websocket(const std::string& ws_id) {
     // remove private dpoints created for this subprocess
     cleanup_datapoints_for_subprocess(name);    
   }
-
 }
+
+static int subprocess_eval_command(ClientData data, Tcl_Interp *interp,
+                                   int objc, Tcl_Obj *objv[])
+{
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "script");
+        return TCL_ERROR;
+    }
+    
+    TclServer *tclserver = (TclServer *) data;
+    
+    TclServer *child = new TclServer(tclserver->argc,
+                                     tclserver->argv,
+                                     tclserver->ds);
+    
+    std::string script = Tcl_GetString(objv[1]);
+    auto result = child->eval(script);
+    
+    delete child;
+    
+    if (result.starts_with("!TCL_ERROR ")) {
+        Tcl_AppendResult(interp, result.c_str() + 11, NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), result.size()));
+    return TCL_OK;
+}
+
 /********************************* now *********************************/
 
 static int now_command (ClientData data, Tcl_Interp *interp,
@@ -2223,6 +2256,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
   Tcl_CreateObjCommand(interp, "subprocess",
                (Tcl_ObjCmdProc *) subprocess_command,
+               tserv, NULL);
+  Tcl_CreateObjCommand(interp, "subprocessEval",
+               (Tcl_ObjCmdProc *) subprocess_eval_command,
                tserv, NULL);
   Tcl_CreateObjCommand(interp, "subprocessInfo",
                (Tcl_ObjCmdProc *) getsubprocesses_command,

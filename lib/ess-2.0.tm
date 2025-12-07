@@ -3869,6 +3869,31 @@ namespace eval ess {
 }
 
 
+#####################################################################
+##                          remote_eval                            ##
+#####################################################################
+namespace eval ess {
+    proc remote_eval { host script } {
+	set port 2560
+	set sock [socket $host $port]
+	fconfigure $sock -translation binary -buffering full
+	
+	# send: 32-bit length + message
+	set msg "subprocessEval [list $script]"
+	set len [string length $msg]
+	puts -nonewline $sock [binary format I $len]$msg
+	flush $sock
+	
+	# receive: 32-bit length + result
+	set lenbuf [read $sock 4]
+	binary scan $lenbuf I rlen
+	set result [read $sock $rlen]
+	
+	close $sock
+	return $result
+    }
+}
+
 namespace eval ess {
     namespace export create_system set_system
     namespace export init
