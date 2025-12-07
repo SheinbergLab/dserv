@@ -2783,12 +2783,21 @@ TclServer::tcp_client_process(TclServer *tserv,
   tserv->unregister_connection(sockfd);
 }
 
-static  void sendMessage(int socket, const std::string& message) {
+static void sendMessage(int socket, const std::string& message) {
   // Convert size to network byte order
   uint32_t msgSize = htonl(message.size()); 
-
   send(socket, (char *) &msgSize, sizeof(msgSize), 0);
-  send(socket, message.c_str(), message.size(), 0);
+  
+  size_t totalSent = 0;
+  size_t remaining = message.size();
+  const char* data = message.c_str();
+  
+  while (totalSent < message.size()) {
+    ssize_t sent = send(socket, data + totalSent, remaining, 0);
+    if (sent <= 0) break;  // error or connection closed
+    totalSent += sent;
+    remaining -= sent;
+  }
 }
 
 static std::pair<char*, size_t> receiveMessage(int socket) {
