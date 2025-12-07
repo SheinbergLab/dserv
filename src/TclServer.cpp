@@ -2577,19 +2577,23 @@ static int process_requests(TclServer *tserv)
 	const char *script = req.script.c_str();
 	
 	retcode = Tcl_Eval(interp, script);
-	const char *rcstr = Tcl_GetStringResult(interp);
+	Tcl_Obj *resultObj = Tcl_GetObjResult(interp);
+	Tcl_Size length;
+	const unsigned char *bytes =
+	  Tcl_GetByteArrayFromObj(resultObj, &length);
 	
 	if (retcode == TCL_OK) {
-	  if (rcstr) {
-	    req.rqueue->push_back(std::string(rcstr));
+	  if (bytes && length) {
+	    req.rqueue->push_back(std::string(reinterpret_cast<const char*>(bytes), length));
 	  }
 	  else {
 	    req.rqueue->push_back("");
 	  }
 	}
 	else {
-	  if (rcstr) {
-	    req.rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
+	  if (bytes && length) {
+	    req.rqueue->push_back("!TCL_ERROR "+
+				  std::string(reinterpret_cast<const char*>(bytes), length));
 	    //      std::cout << "Error: " + std::string(rcstr) << std::endl;
 	    
 	  }
