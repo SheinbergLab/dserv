@@ -2356,10 +2356,28 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
   }
  
   // Common initialization for all interpreters
-  const char *init_script = 
-    "set dspath [file dir [info nameofexecutable]]\n"
-    "set base [file join [zipfs root] dlsh]\n"
-    "set auto_path [linsert $auto_path [set auto_path 0] $base/lib]\n";
+  const char *init_script = R"(
+    set dspath [file dir [info nameofexecutable]]
+    set base [file join [zipfs root] dlsh]
+    set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+
+    proc remoteEval {host script {port 2560}} {
+        set sock [socket $host $port]
+        fconfigure $sock -translation binary -buffering full
+        
+        set msg "subprocessEval [list $script]"
+        set len [string length $msg]
+        puts -nonewline $sock [binary format I $len]$msg
+        flush $sock
+        
+        set lenbuf [read $sock 4]
+        binary scan $lenbuf I rlen
+        set result [read $sock $rlen]
+        
+        close $sock
+        return $result
+    }
+  )";
   
   if (Tcl_Eval(interp, init_script) != TCL_OK) {
     return TCL_ERROR;
