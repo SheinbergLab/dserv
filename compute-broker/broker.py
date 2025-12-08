@@ -22,7 +22,7 @@ LISTEN_PORT = 9000
 IDLE_TIMEOUT = 900  # 15 minutes (adjustable based on workflow)
 AMI_ID = "ami-00320325883f696a9"
 INSTANCE_TYPE = "c7i.16xlarge"  # 64 cores (or c7i.8xlarge for 32)
-SECURITY_GROUP = "sg-YOUR_GROUP_ID"  # Replace with your security group ID
+SECURITY_GROUP = "sg-OUR_SECURITY_GROUP" 
 KEY_NAME = "dserv-workers"
 
 class ComputeBroker:
@@ -70,57 +70,186 @@ class ComputeBroker:
         return self.launch_worker()
     
     def launch_worker(self):
-        """Launch a new spot instance and return its IP (synchronous)"""
-        response = self.ec2.run_instances(
-            ImageId=AMI_ID,
-            InstanceType=INSTANCE_TYPE,
-            KeyName=KEY_NAME,
-            SecurityGroups=['dserv-workers'],
-            MinCount=1,
-            MaxCount=1,
-            InstanceMarketOptions={
-                'MarketType': 'spot',
-                'SpotOptions': {
-                    'SpotInstanceType': 'one-time',
-                    'InstanceInterruptionBehavior': 'terminate'
+        """
+        Launch a new worker instance with fallback strategy.
+        Tries multiple instance types as spot, falls back to on-demand if needed.
+        """
+        # Fallback instance types (64 vCPU equivalents)
+        spot_instance_types = [
+            INSTANCE_TYPE,      # Primary choice
+            'c6i.16xlarge',     # Previous gen Intel
+            'c7a.16xlarge',     # AMD alternative
+        ]
+        
+        # Try spot instances first
+        for instance_type in spot_instance_types:
+            try:
+                print(f"Attempting to launch {instance_type} spot instance...")
+                response = self.ec2.run_instances(
+                    ImageId=AMI_ID,
+                    InstanceType=instance_type,
+                    KeyName=KEY_NAME,
+                    SecurityGroupIds=[SECURITY_GROUP],  # Use ID instead of name
+                    MinCount=1,
+                    MaxCount=1,
+                    InstanceMarketOptions={
+                        'MarketType': 'spot',
+                        'SpotOptions': {
+                            'SpotInstanceType': 'one-time',
+                            'InstanceInterruptionBehavior': 'terminate'
+                        }
+                    },
+                    TagSpecifications=[{
+                        'ResourceType': 'instance',
+                        'Tags': [{'Key': 'Name', 'Value': 'dserv-worker'}]
+                    }]
+                )
+                
+                instance_id = response['Instances'][0]['InstanceId']
+                print(f"Successfully launched {instance_type} spot instance {instance_id}")
+                print(f"Waiting for IP...")
+                
+                # Wait for instance to be running and get IP
+                ip = self.wait_for_instance(instance_id)
+                
+                self.workers[instance_id] = {
+                    'ip': ip,
+                    'last_used': time.time()
                 }
-            },
-            TagSpecifications=[{
-                'ResourceType': 'instance',
-                'Tags': [{'Key': 'Name', 'Value': 'dserv-worker'}]
-            }]
-        )
+                
+                print(f"Worker {instance_id} ready at {ip}")
+                return ip
+                
+            except Exception as e:
+                error_msg = str(e)
+                if 'InsufficientInstanceCapacity' in error_msg:
+                    print(f"No spot capacity for {instance_type}, trying next option...")
+                    continue
+                elif 'SpotMaxPriceTooLow' in error_msg:
+                    print(f"Spot price too high for {instance_type}, trying next option...")
+                    continue
+                else:
+                    # Unexpected error, don't continue trying
+                    print(f"Unexpected error launching {instance_type}: {error_msg}")
+                    raise
         
-        instance_id = response['Instances'][0]['InstanceId']
-        print(f"Launched {instance_id}, waiting for IP...")
+        # All spot attempts failed, fall back to on-demand
+        print("WARNING: All spot instances unavailable, falling back to on-demand")
+        print("WARNING: This will cost approximately 3x more (~$2.50/hour vs ~$0.80/hour)")
         
-        # Wait for instance to be running and get IP
-        ip = self.wait_for_instance(instance_id)
-        
-        self.workers[instance_id] = {
-            'ip': ip,
-            'last_used': time.time()
-        }
-        
-        print(f"Worker {instance_id} ready at {ip}")
-        return ip
+        try:
+            response = self.ec2.run_instances(
+                ImageId=AMI_ID,
+                InstanceType=INSTANCE_TYPE,  # Use primary instance type
+                KeyName=KEY_NAME,
+                SecurityGroupIds=[SECURITY_GROUP],  # Use ID instead of name
+                MinCount=1,
+                MaxCount=1,
+                # No InstanceMarketOptions = on-demand
+                TagSpecifications=[{
+                    'ResourceType': 'instance',
+                    'Tags': [
+                        {'Key': 'Name', 'Value': 'dserv-worker'},
+                        {'Key': 'Type', 'Value': 'on-demand'}  # Tag for cost tracking
+                    ]
+                }]
+            )
+            
+            instance_id = response['Instances'][0]['InstanceId']
+            print(f"Launched on-demand instance {instance_id}")
+            print(f"Waiting for IP...")
+            
+            ip = self.wait_for_instance(instance_id)
+            
+            self.workers[instance_id] = {
+                'ip': ip,
+                'last_used': time.time()
+            }
+            
+            print(f"On-demand worker {instance_id} ready at {ip}")
+            return ip
+            
+        except Exception as e:
+            print(f"Failed to launch on-demand instance: {e}")
+            raise Exception("Unable to launch any worker instance (spot or on-demand)")
     
     def wait_for_instance(self, instance_id, timeout=120):
         """Wait for instance to be running and return public IP"""
+        # Small initial delay to let AWS register the instance
+        time.sleep(3)
+        
         start = time.time()
         while time.time() - start < timeout:
-            response = self.ec2.describe_instances(InstanceIds=[instance_id])
-            instance = response['Reservations'][0]['Instances'][0]
-            
-            state = instance['State']['Name']
-            if state == 'running':
-                ip = instance.get('PublicIpAddress')
-                if ip:
-                    return ip
+            try:
+                response = self.ec2.describe_instances(InstanceIds=[instance_id])
+                instance = response['Reservations'][0]['Instances'][0]
+                
+                state = instance['State']['Name']
+                if state == 'running':
+                    ip = instance.get('PublicIpAddress')
+                    if ip:
+                        return ip
+            except Exception as e:
+                # Instance might not be immediately available, keep trying
+                if 'InvalidInstanceID.NotFound' in str(e):
+                    print(f"Instance not yet registered, waiting...")
+                else:
+                    raise
             
             time.sleep(2)
         
         raise TimeoutError(f"Instance {instance_id} didn't start in {timeout}s")
+    
+    def get_worker_status(self):
+        """Return status of all known workers"""
+        status = []
+        for instance_id, info in self.workers.items():
+            idle_time = time.time() - info['last_used']
+            status.append({
+                'instance_id': instance_id,
+                'ip': info['ip'],
+                'idle_seconds': int(idle_time),
+                'will_terminate_in': max(0, int(IDLE_TIMEOUT - idle_time))
+            })
+        return status
+    
+    def list_all_running_instances(self):
+        """Query AWS for all running dserv workers (including unknowns)"""
+        try:
+            response = self.ec2.describe_instances(
+                Filters=[
+                    {'Name': 'tag:Name', 'Values': ['dserv-worker']},
+                    {'Name': 'instance-state-name', 'Values': ['running']}
+                ]
+            )
+            
+            instances = []
+            for reservation in response['Reservations']:
+                for instance in reservation['Instances']:
+                    instances.append({
+                        'instance_id': instance['InstanceId'],
+                        'instance_type': instance['InstanceType'],
+                        'ip': instance.get('PublicIpAddress', 'pending'),
+                        'launch_time': instance['LaunchTime'].isoformat(),
+                        'state': instance['State']['Name']
+                    })
+            return instances
+        except Exception as e:
+            return {'error': str(e)}
+    
+    def terminate_all_workers(self):
+        """Terminate all known workers immediately"""
+        if not self.workers:
+            return {'message': 'No workers to terminate'}
+        
+        instance_ids = list(self.workers.keys())
+        try:
+            self.ec2.terminate_instances(InstanceIds=instance_ids)
+            for instance_id in instance_ids:
+                del self.workers[instance_id]
+            return {'terminated': instance_ids}
+        except Exception as e:
+            return {'error': str(e)}
     
     def ping_worker(self, worker_ip):
         """Reset idle timer for worker (keeps it alive)"""
@@ -181,6 +310,24 @@ class ComputeBroker:
                     conn.send(b"OK\n")
                 else:
                     conn.send(b"ERROR: Worker not found\n")
+            
+            elif data == "STATUS":
+                # Get status of known workers
+                import json
+                status = self.get_worker_status()
+                conn.send(json.dumps(status).encode() + b"\n")
+            
+            elif data == "LIST_ALL":
+                # Query AWS for all running instances
+                import json
+                instances = self.list_all_running_instances()
+                conn.send(json.dumps(instances).encode() + b"\n")
+            
+            elif data == "TERMINATE_ALL":
+                # Terminate all known workers
+                import json
+                result = self.terminate_all_workers()
+                conn.send(json.dumps(result).encode() + b"\n")
             
             elif data.startswith("RELEASE "):
                 # Immediate shutdown (development/testing only)
