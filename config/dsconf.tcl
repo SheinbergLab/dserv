@@ -40,6 +40,9 @@ subprocess sound "source [file join $dspath config/soundconf.tcl]"
 # start a "git" interpreter
 subprocess git "source [file join $dspath config/gitconf.tcl]"
 
+# start a "powermon"itor if found
+subprocess powermon "source [file join $dspath config/powermonconf.tcl]"
+
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
 
@@ -107,8 +110,4 @@ if { [file exists $dspath/modules/dserv_camera[info sharedlibextension]] } {
     subprocess camera "source [file join $dspath config/cameraconf.tcl]"
 }
 
-# connect to battery power circuits
-load [file join $dspath modules/dserv_ina226[info sharedlibextension]]
-ina226Add 0x45 system 12v
-ina226Add 0x44 system 24v
 
