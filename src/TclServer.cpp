@@ -1113,7 +1113,7 @@ set www_path /usr/local/dserv/www</code>
           }
         }   
         
-    }).listen(websocket_port(), [this](auto *listen_socket) {
+	  }).listen("0.0.0.0", websocket_port(), [this](auto *listen_socket) {
       if (listen_socket) {
         std::cout << "WebSocket server listening on port " << websocket_port() << std::endl;
         std::cout << "Web terminal available at http://localhost:" << websocket_port() << "/" << std::endl;
