@@ -8,3 +8,8 @@ dlsh/
 _CPack_Packages/
 *.dmg
 *.pkg
+
+*-key.pem
+*.key
+ca-key.pem
+key.pem
