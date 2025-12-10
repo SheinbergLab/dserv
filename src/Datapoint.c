@@ -427,6 +427,15 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
 	  }
 	}
 	break;
+      case DSERV_INT64:
+	{
+	  uint64_t *vals = (uint64_t *) dpoint->data.buf;
+	  n = dpoint->data.len/sizeof(uint64_t);
+	  for (i = 0; i < n; i++) {
+	    json_array_append_new(array, json_integer(vals[i]));
+	  }
+	}
+	break;	
       case DSERV_FLOAT:
 	{
 	  float *vals = (float *) dpoint->data.buf;
@@ -546,6 +555,22 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
 	}
       }
       break;
+    case DSERV_INT64:
+      {
+	uint64_t *vals = (uint64_t *) dpoint->data.buf;
+	n = dpoint->data.len/sizeof(uint64_t);
+	if (n == 1) {
+	  json_object_set_new(json_dpoint, "data", json_integer(vals[0]));
+	}
+	else {
+	  array = json_array();
+	  for (i = 0; i < n; i++) {
+	    json_array_append_new(array, json_integer(vals[i]));
+	  }
+	  json_object_set_new(json_dpoint, "data", array);
+	}
+      }
+      break;      
     case DSERV_STRING:
     case DSERV_SCRIPT:
     case DSERV_TRIGGER_SCRIPT:
@@ -575,6 +600,11 @@ ds_datapoint_t *dpoint_from_string(char *str, int len)
 	free(buf);
       }
       break;
+    case DSERV_NONE:
+      {
+        json_object_set_new(json_dpoint, "data", json_null());
+      }
+      break;      
     default:
       json_decref(json_dpoint);
       return NULL;

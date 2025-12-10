@@ -8,6 +8,19 @@
 #include <dpoint_process.h>
 #include "prmutil.h"
 
+/*
+ * Window Processor
+ * 
+ * Monitors eye position and determines if position is inside/outside defined windows.
+ * Supports both rectangular and elliptical windows with refractory periods.
+ * 
+ * Auto-detects input type:
+ *   - DSERV_SHORT (uint16_t) - ADC units (legacy)
+ *   - DSERV_FLOAT - degrees visual angle
+ * 
+ * Coordinates are expected as [y, x] pairs (matching ain/vals convention).
+ */
+
 enum { WINDOW_UNDEFINED, WINDOW_IN, WINDOW_OUT };
 enum { WINDOW_INACTIVE, WINDOW_ACTIVE };
 enum { WINDOW_NOT_INITIALIZED, WINDOW_INITIALIZED };
@@ -22,15 +35,24 @@ typedef struct process_params_s {
   int active[NWIN];		/* are we active?         */
   int state[NWIN];		/* are we in or out       */
   int type[NWIN];		/* ellipse or rectangle   */
-  int center_x[NWIN];
-  int center_y[NWIN];
-  int plusminus_x[NWIN];
-  int plusminus_y[NWIN];
+  float center_x[NWIN];		/* now float for degrees  */
+  float center_y[NWIN];
+  float plusminus_x[NWIN];	/* half-width/radius      */
+  float plusminus_y[NWIN];	/* half-height/radius     */
   int refractory_count[NWIN];
   int refractory_countdown[NWIN];
+  
+  /* Input type detection */
+  int input_type;		/* DSERV_SHORT or DSERV_FLOAT */
+  int type_locked;		/* has type been detected?    */
+  
+  /* Last position (stored as float regardless of input type) */
+  float last_x, last_y;
+  
   ds_datapoint_t status_dpoint;
   ds_datapoint_t settings_dpoint;
-  uint16_t last_x, last_y;
+  
+  int dummyInt;
 } process_params_t;
 
 typedef struct window_settings_s {
@@ -38,10 +60,10 @@ typedef struct window_settings_s {
     active,
     state,
     type,
-    center_x,
-    center_y,
-    plusminus_x,
-    plusminus_y,
+    center_x_scaled,      /* stored as value * 10 */
+    center_y_scaled,
+    plusminus_x_scaled,
+    plusminus_y_scaled,
     refractory_count,
     refractory_countdown;
 } window_settings_t;
@@ -51,32 +73,37 @@ void *newProcessParams(void)
   process_params_t *p = calloc(1, sizeof(process_params_t));
   int i;
 
+  /* Type detection state */
+  p->input_type = -1;
+  p->type_locked = 0;
+
   for (i = 0; i < NWIN; i++) {
     p->active[i] = WINDOW_INACTIVE;
     p->state[i] = WINDOW_UNDEFINED;
     p->type[i] = WINDOW_ELLIPSE;
-    p->center_x[i] = 2047;
-    p->center_y[i] = 2047;
-    p->plusminus_x[i] = 200;
-    p->plusminus_y[i] = 200;
+    /* Default to ADC-like values for backward compatibility */
+    p->center_x[i] = 2047.0;
+    p->center_y[i] = 2047.0;
+    p->plusminus_x[i] = 200.0;
+    p->plusminus_y[i] = 200.0;
     p->refractory_count[i] = 20;
     p->refractory_countdown[i] = 0;
   }
 
-  // region updates
+  // region updates - changes/states as uint16, positions as float
   p->status_dpoint.flags = 0;
   p->status_dpoint.varname = strdup("proc/windows/status");
   p->status_dpoint.varlen = strlen(p->status_dpoint.varname);
-  p->status_dpoint.data.type = DSERV_SHORT;
-  p->status_dpoint.data.len = 4*sizeof(uint16_t);
+  p->status_dpoint.data.type = DSERV_FLOAT;  // float array
+  p->status_dpoint.data.len = 4*sizeof(float);
   p->status_dpoint.data.buf = malloc(p->status_dpoint.data.len);
 
-  // parameter updates
+  // parameter updates - all floats
   p->settings_dpoint.flags = 0;
   p->settings_dpoint.varname = strdup("proc/windows/settings");
   p->settings_dpoint.varlen = strlen(p->settings_dpoint.varname);
-  p->settings_dpoint.data.type = DSERV_SHORT;
-  p->settings_dpoint.data.len = sizeof(window_settings_t);
+  p->settings_dpoint.data.type = DSERV_FLOAT;
+  p->settings_dpoint.data.len = 10*sizeof(float);  // 10 float values
   p->settings_dpoint.data.buf = malloc(p->settings_dpoint.data.len);
   
   return p;
@@ -98,20 +125,20 @@ void freeProcessParams(void *pstruct)
 int check_state(process_params_t *p, int win)
 {
   int inside;
-  int dx, dy;
+  float dx, dy;
   if (!p->active[win]) return 0;
   switch (p->type[win]) {
   case WINDOW_ELLIPSE:
-    dx =  p->last_x - p->center_x[win];
-    dy =  p->last_y - p->center_y[win];
+    dx = p->last_x - p->center_x[win];
+    dy = p->last_y - p->center_y[win];
     inside =
-      (((dx*dx) / (float) (p->plusminus_x[win]*p->plusminus_x[win])) +
-       ((dy*dy) / (float) (p->plusminus_y[win]*p->plusminus_y[win]))) < 1.0;
+      (((dx*dx) / (p->plusminus_x[win]*p->plusminus_x[win])) +
+       ((dy*dy) / (p->plusminus_y[win]*p->plusminus_y[win]))) < 1.0;
     break;
   case WINDOW_RECTANGLE:
-    dx =  p->last_x - p->center_x[win];
-    dy =  p->last_y - p->center_y[win];
-    inside = (abs(dx) < p->plusminus_x[win]) && (abs(dy) < p->plusminus_y[win]);
+    dx = p->last_x - p->center_x[win];
+    dy = p->last_y - p->center_y[win];
+    inside = (fabsf(dx) < p->plusminus_x[win]) && (fabsf(dy) < p->plusminus_y[win]);
     break;
   }
   return inside;
@@ -125,20 +152,21 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   char *name = pinfo->pname;
   process_params_t *p = (process_params_t *) pinfo->params;
   int inside;
-  int dummyInt;
 
   if (win < 0 || win > NWIN)
     return 0;
   
   PARAM_ENTRY params[] = {
-    { "active",      &p->active[win],      &dummyInt,   PU_INT },
-    { "state",       &p->state[win],       &dummyInt,   PU_INT },
-    { "type",        &p->type[win],        &dummyInt,   PU_INT },
-    { "center_x",    &p->center_x[win],    &dummyInt,   PU_INT },
-    { "center_y",    &p->center_y[win],    &dummyInt,   PU_INT },
-    { "plusminus_x", &p->plusminus_x[win], &dummyInt,   PU_INT },
-    { "plusminus_y", &p->plusminus_y[win], &dummyInt,   PU_INT },
-    { "refractory_count",  &p->refractory_count[win], &dummyInt,   PU_INT },
+    { "active",      &p->active[win],      &p->dummyInt,   PU_INT },
+    { "state",       &p->state[win],       &p->dummyInt,   PU_INT },
+    { "type",        &p->type[win],        &p->dummyInt,   PU_INT },
+    { "center_x",    &p->center_x[win],    &p->dummyInt,   PU_FLOAT },
+    { "center_y",    &p->center_y[win],    &p->dummyInt,   PU_FLOAT },
+    { "plusminus_x", &p->plusminus_x[win], &p->dummyInt,   PU_FLOAT },
+    { "plusminus_y", &p->plusminus_y[win], &p->dummyInt,   PU_FLOAT },
+    { "refractory_count", &p->refractory_count[win], &p->dummyInt, PU_INT },
+    { "input_type",  &p->input_type,       &p->dummyInt,   PU_INT },
+    { "type_locked", &p->type_locked,      &p->dummyInt,   PU_INT },
     { "", NULL, NULL, PU_NULL }
   };
 
@@ -167,11 +195,8 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
   char **vals = pinfo->pval;
   process_params_t *p = (process_params_t *) pinfo->params;
   window_settings_t settings;
-  
-  int dummyInt;
 
-
-  /* if the special dpoint param name is passed, changed the dpoint name */
+  /* if the special dpoint param name is passed, change the dpoint name */
   if (!strcmp(name, "dpoint")) {
     /* status */
     if (p->status_dpoint.varname) free(p->status_dpoint.varname);
@@ -189,7 +214,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 
   if (win < 0 || win > NWIN) return -1;
   
-  /* by passing in "settings" as the param to set, kick an param update */
+  /* by passing in "settings" as the param to set, kick a param update */
   if (!strcmp(name, params_str)) {
     result = DPOINT_PROCESS_DSERV;
   }
@@ -199,14 +224,14 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     int was_active = p->active[win];
     
     PARAM_ENTRY params[] = {
-      { "active",      &p->active[win],      &dummyInt,   PU_INT },
-      { "state",       &p->state[win],       &dummyInt,   PU_INT },
-      { "type",        &p->type[win],        &dummyInt,   PU_INT },
-      { "center_x",    &p->center_x[win],    &dummyInt,   PU_INT },
-      { "center_y",    &p->center_y[win],    &dummyInt,   PU_INT },
-      { "plusminus_x", &p->plusminus_x[win], &dummyInt,   PU_INT },
-      { "plusminus_y", &p->plusminus_y[win], &dummyInt,   PU_INT },
-      { "refractory_count",  &p->refractory_count[win], &dummyInt,   PU_INT },
+      { "active",      &p->active[win],      &p->dummyInt,   PU_INT },
+      { "state",       &p->state[win],       &p->dummyInt,   PU_INT },
+      { "type",        &p->type[win],        &p->dummyInt,   PU_INT },
+      { "center_x",    &p->center_x[win],    &p->dummyInt,   PU_FLOAT },
+      { "center_y",    &p->center_y[win],    &p->dummyInt,   PU_FLOAT },
+      { "plusminus_x", &p->plusminus_x[win], &p->dummyInt,   PU_FLOAT },
+      { "plusminus_y", &p->plusminus_y[win], &p->dummyInt,   PU_FLOAT },
+      { "refractory_count", &p->refractory_count[win], &p->dummyInt, PU_INT },
       { "", NULL, NULL, PU_NULL }
     };
     
@@ -214,7 +239,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
       result = DPOINT_PROCESS_IGNORE;
     }
     
-    /* If window just activated/deactived set state to undefined to ensure update */
+    /* If window just activated/deactivated set state to undefined to ensure update */
     if ( !was_active && p->active[win] ||
 	 was_active && !p->active[win] )  {
       p->state[win] = WINDOW_UNDEFINED;
@@ -225,18 +250,20 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
   if (result == DPOINT_PROCESS_DSERV) {
     p->settings_dpoint.timestamp = pinfo->timestamp;
     
-    settings.win = win;
-    settings.active = p->active[win];
-    settings.state = p->state[win];
-    settings.type = p->type[win];
-    settings.center_x = p->center_x[win];
-    settings.center_y = p->center_y[win];
-    settings.plusminus_x = p->plusminus_x[win];
-    settings.plusminus_y = p->plusminus_y[win];
-    settings.refractory_count = p->refractory_count[win];
-    settings.refractory_countdown = p->refractory_countdown[win];
-
-    memcpy(p->settings_dpoint.data.buf, &settings, sizeof(window_settings_t));
+    /* Pack as float array: [win, active, state, type, center_x, center_y, 
+                             plusminus_x, plusminus_y, refractory_count, refractory_countdown] */
+    float *vals = (float *) p->settings_dpoint.data.buf;
+    vals[0] = (float)win;
+    vals[1] = (float)p->active[win];
+    vals[2] = (float)p->state[win];
+    vals[3] = (float)p->type[win];
+    vals[4] = p->center_x[win];
+    vals[5] = p->center_y[win];
+    vals[6] = p->plusminus_x[win];
+    vals[7] = p->plusminus_y[win];
+    vals[8] = (float)p->refractory_count[win];
+    vals[9] = (float)p->refractory_countdown[win];
+    
     pinfo->dpoint = &p->settings_dpoint;
   }
   
@@ -246,23 +273,40 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 int onProcess(dpoint_process_info_t *pinfo, void *params)
 {
   process_params_t *p = (process_params_t *) params;
-
-  if (strcmp(pinfo->input_dpoint->varname, "ain/vals"))
-    return DPOINT_PROCESS_IGNORE;
-
-  if (pinfo->input_dpoint->data.type != DSERV_SHORT ||
-      pinfo->input_dpoint->data.len < 2*sizeof(uint16_t))
-    return DPOINT_PROCESS_IGNORE;
-
-  uint16_t *ain_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
-  
-  int x = ain_vals[1];
-  int y = ain_vals[0];
-  int dx, dy;
+  float x, y;
+  float dx, dy;
   int i;
   int inside;
   int retval = DPOINT_PROCESS_IGNORE;
   uint16_t changes = 0, states = 0;
+
+  /* Auto-detect input type on first sample */
+  if (!p->type_locked) {
+    if (pinfo->input_dpoint->data.type == DSERV_SHORT ||
+        pinfo->input_dpoint->data.type == DSERV_FLOAT) {
+      p->input_type = pinfo->input_dpoint->data.type;
+      p->type_locked = 1;
+    } else {
+      /* Unsupported type - ignore */
+      return DPOINT_PROCESS_IGNORE;
+    }
+  }
+
+  /* Validate type matches what we locked in */
+  if (pinfo->input_dpoint->data.type != p->input_type)
+    return DPOINT_PROCESS_IGNORE;
+
+  /* Extract coordinates based on detected type */
+  if (p->input_type == DSERV_FLOAT) {
+    /* Float input (degrees visual angle) */
+    if (pinfo->input_dpoint->data.len < 2*sizeof(float))
+      return DPOINT_PROCESS_IGNORE;
+    
+    float *float_vals = (float *) pinfo->input_dpoint->data.buf;
+    x = float_vals[0];
+    y = float_vals[1];
+    
+  }
 
   /* store these away */
   p->last_x = x;
@@ -281,17 +325,17 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     
     switch (p->type[i]) {
     case WINDOW_ELLIPSE:
-      dx =  x - p->center_x[i];
-      dy =  y - p->center_y[i];
+      dx = x - p->center_x[i];
+      dy = y - p->center_y[i];
       inside =
-	(((dx*dx) / (float) (p->plusminus_x[i]*p->plusminus_x[i])) +
-	 ((dy*dy) / (float) (p->plusminus_y[i]*p->plusminus_y[i]))) < 1.0;
+	(((dx*dx) / (p->plusminus_x[i]*p->plusminus_x[i])) +
+	 ((dy*dy) / (p->plusminus_y[i]*p->plusminus_y[i]))) < 1.0;
       break;
     case WINDOW_RECTANGLE:
-      dx =  x - p->center_x[i];
-      dy =  y - p->center_y[i];
-      inside = (abs(dx) < p->plusminus_x[i]) && (abs(dy) < p->plusminus_y[i]);
-	break;
+      dx = x - p->center_x[i];
+      dy = y - p->center_y[i];
+      inside = (fabsf(dx) < p->plusminus_x[i]) && (fabsf(dy) < p->plusminus_y[i]);
+      break;
     }
         
     if (inside) {
@@ -327,11 +371,16 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
   }
   
   if (retval == DPOINT_PROCESS_DSERV) {
-    uint16_t *vals = (uint16_t *) p->status_dpoint.data.buf;
-    vals[0] = changes;
-    vals[1] = states;
-    vals[2] = ain_vals[1];
-    vals[3] = ain_vals[0];
+    /* Status buffer layout: [changes:float, states:float, x:float, y:float] 
+     * All values as floats - changes and states are integers but stored as float
+     * Positions in degrees, can be negative
+     */
+    float *vals = (float *) p->status_dpoint.data.buf;
+    vals[0] = (float)changes;
+    vals[1] = (float)states;
+    vals[2] = x;
+    vals[3] = y;
+    
     p->status_dpoint.timestamp = pinfo->input_dpoint->timestamp;
     pinfo->dpoint = &p->status_dpoint;
   }

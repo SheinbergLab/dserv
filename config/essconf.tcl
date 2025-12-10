@@ -1,12 +1,6 @@
 #
 # ess process for running experiments
 #
-
-set dspath [file dir [info nameofexecutable]]
-
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 package require dlsh
 package require qpcs
 package require sqlite3
@@ -14,20 +8,21 @@ package require yajltcl
 
 tcl::tm::add $dspath/lib
 
+# enable error logging
+errormon enable
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
+
 # initialize ip addr datapoint
 dservSet ess/ipaddr ""
 
 # load extra modules
 set ess_modules \
     "ain eventlog gpio_input gpio_output \
-    joystick4 rmt sound timer touch usbio"
+    joystick4 rmt timer touch usbio"
 foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
-}
-
-# look for any .tcl configs in local/*.tcl
-foreach f [glob [file join $dspath local pre-*.tcl]] {
-    source $f
 }
 
 # now ready to start ess
@@ -91,18 +86,21 @@ proc touchGetRegionInfo { reg } { processSetParam "touch_windows" settings 1 $re
 proc touchGetParam { p } { processGetParam "touch_windows" $p }
 proc touchGetIndexedParam { i p } {  processGetParam "touch_windows" $p $i }
 
-
+#
 # Sampler processor convenience functions
+#
 proc samplerSetParam { p v } { processSetParam "sampler" $p $v }
 proc samplerSetIndexedParam { i p v } { processSetParam "sampler" $p $v $i }
 proc samplerGetParam { p } { processGetParam "sampler" $p }
 proc samplerGetIndexedParam { i p } { processGetParam "sampler" $p $i }
 
-# Convenience functions matching the ain/touch pattern
+# Basic control
 proc samplerStart { {slot 0} } { processSetParam "sampler" start 1 $slot }
 proc samplerStop { {slot 0} } { processSetParam "sampler" stop 1 $slot }
-proc samplerQueryRate { {slot 0} } { processSetParam "sampler" rate 1 $slot }
 proc samplerSetActive { slot active } { processSetParam "sampler" active $active $slot }
+
+# Query functions
+proc samplerQueryRate { {slot 0} } { processSetParam "sampler" rate 1 $slot }
 proc samplerGetStatus { {slot 0} } {
     processSetParam sampler status 1 0
     return [dservGet proc/sampler/status]
@@ -110,21 +108,42 @@ proc samplerGetStatus { {slot 0} } {
 proc samplerGetVals { {slot 0} } {
     return [dservGet proc/sampler/vals]
 }
-
-proc samplerEnableRateTracking { {slot 0} {interval 50} } {
-    processSetParam "sampler" track_rate 1 $slot
-    processSetParam "sampler" rate_update_interval $interval $slot
+proc samplerGetCount { {slot 0} } {
+    processSetParam sampler count 1 0
+    return [dservGet proc/sampler/count]
 }
-
 proc samplerGetRate { {slot 0} } {
    return [dservGet proc/sampler/rate]
 }
 
-# Configure sampler (matching em_sampler_enable pattern)
+# Rate tracking
+proc samplerEnableRateTracking { {slot 0} {interval 50} } {
+    processSetParam "sampler" track_rate 1 $slot
+    processSetParam "sampler" rate_update_interval $interval $slot
+}
+proc samplerDisableRateTracking { {slot 0} } {
+    processSetParam "sampler" track_rate 0 $slot
+}
+
+# Configuration - sample count mode (original behavior)
 proc samplerConfigure { slot nsamples nchannels {operation 0} } {
     processSetParam "sampler" sample_count $nsamples $slot
     processSetParam "sampler" nchannels $nchannels $slot
     processSetParam "sampler" operation $operation $slot
+    processSetParam "sampler" use_time_window 0 $slot
+}
+
+# Configuration - time window mode (new)
+proc samplerConfigureTime { slot time_window nchannels {operation 0} } {
+    processSetParam "sampler" time_window $time_window $slot
+    processSetParam "sampler" nchannels $nchannels $slot
+    processSetParam "sampler" operation $operation $slot
+    processSetParam "sampler" use_time_window 1 $slot
+}
+
+# Loop mode control
+proc samplerSetLoop { slot enable } {
+    processSetParam "sampler" loop $enable $slot
 }
 
 proc detect_board_type {} {
@@ -271,16 +290,6 @@ proc joystick_init { } {
     }
 }
 
-
-set ports "/dev/ttyUSB0 /dev/cu.usbserial-FTD1906W"
-foreach p $ports {
-    if [file exists $p] {
-	soundOpen $p 
-	soundReset
-	break
-    }
-}
-
 proc connect_touchscreen {} {
     set screens [dict create \
 		     /dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00 {1024 600} \
@@ -302,11 +311,12 @@ ess::load_system emcalib
 
 # set initial subject
 ess::set_subject human
-
+    
 # look for any .tcl configs in local/*.tcl
 foreach f [glob [file join $dspath local post-*.tcl]] {
     source $f
 }
 
 puts "ESS thread configured"
+
 

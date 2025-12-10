@@ -40,13 +40,15 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
-const char *TIMER_DPOINT_PREFIX = "timer";
+const char *DEFAULT_TIMER_DPOINT_PREFIX = "timer";
+static int module_count = 0;
 
 // Forward declarations
 typedef struct timer_info_s timer_info_t;
 
 typedef struct dserv_timer_s {
   tclserver_t *tclserver;
+  timer_info_t *info;		/* each timer has access to main info */
   int timer_id;
   volatile sig_atomic_t expired;
   
@@ -78,13 +80,11 @@ typedef struct timer_info_s
   tclserver_t *tclserver;
   int ntimers;
   dserv_timer_t *timers;
+  char *dpoint_prefix;
 #ifdef __linux__
   int use_signal_fallback;  // Global flag for all timers (signal-based fallback)
 #endif
 } timer_info_t;
-
-/* global to this module */
-static timer_info_t g_timerInfo;
 
 // Forward declaration for Linux timer functions
 #ifdef __linux__
@@ -96,7 +96,7 @@ void timer_notify_dserv(dserv_timer_t *t)
   /* notify dserv */
   char dpoint_name[64];
   snprintf(dpoint_name, sizeof(dpoint_name),
-           "%s/%d", TIMER_DPOINT_PREFIX, t->timer_id);
+           "%s/%d", t->info->dpoint_prefix, t->timer_id);
            
   ds_datapoint_t *dp = dpoint_new(dpoint_name,
                                   tclserver_now(t->tclserver),
@@ -121,7 +121,9 @@ void timer_handler(dserv_timer_t *t, dispatch_source_t timer)
 int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
 {
   t->timer_id = id;
-  t->queue = dispatch_queue_create("timerQueue", 0);
+  char queue_name[64];
+  snprintf(queue_name, sizeof(queue_name), "timerQueue%d", module_count);
+  t->queue = dispatch_queue_create(queue_name, 0);
   
   t->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, t->queue);
   
@@ -137,6 +139,7 @@ int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
   t->suspend_count = 1;
 
   t->tclserver = info->tclserver;
+  t->info = info;
   return 0;
 }
 
@@ -260,6 +263,7 @@ int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
   t->nrepeats = 0;
   t->expired = true;  // Match the timerfd behavior
   t->tclserver = info->tclserver;
+  t->info = info;
   
   // Check if we should use signal-based fallback
   t->use_signal_fallback = info->use_signal_fallback;
@@ -400,7 +404,6 @@ void dserv_timer_fire(dserv_timer_t *t)
 
 #endif
 
-// Keep your existing Tcl command implementations unchanged
 static int timer_tick_command (ClientData data, Tcl_Interp *interp,
                                int objc, Tcl_Obj *objv[])
 {
@@ -496,6 +499,53 @@ static int timer_expired_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+static int timer_stop_command (ClientData data, Tcl_Interp *interp,
+                                int objc, Tcl_Obj *objv[])
+{
+  timer_info_t *info = (timer_info_t *) data;
+  int timerid = 0;
+  
+  if (objc > 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "?id?");
+    return TCL_ERROR;
+  }
+
+  if (objc == 2) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &timerid) != TCL_OK)
+      return TCL_ERROR;
+  }
+  
+  if (timerid > info->ntimers) {
+    Tcl_AppendResult(interp,
+                     Tcl_GetString(objv[0]), ": invalid timer", NULL);
+    return TCL_ERROR;
+  }
+  
+  dserv_timer_reset(&info->timers[timerid]);
+  
+  return TCL_OK;
+}
+
+static int timer_set_dpoint_prefix_command (ClientData data, Tcl_Interp *interp,
+					    int objc, Tcl_Obj *objv[])
+{
+  timer_info_t *info = (timer_info_t *) data;
+  int timerid = 0;
+  int ms;
+
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "prefix");
+    return TCL_ERROR;
+  }
+
+  if (info->dpoint_prefix) free(info->dpoint_prefix);
+  info->dpoint_prefix = strdup(Tcl_GetString(objv[1]));
+
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(Tcl_GetString(objv[1]), -1));
+  return TCL_OK;
+}
+
+
 #ifdef WIN32
 EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
 #else
@@ -512,20 +562,22 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
       == NULL) {
     return TCL_ERROR;
   }
-
   int ntimers = 8;
-  g_timerInfo.tclserver = tclserver_get_from_interp(interp);
-  g_timerInfo.ntimers = ntimers;
+
+  timer_info_t *g_timerInfo = (timer_info_t *) calloc(1, sizeof(timer_info_t));
+  g_timerInfo->tclserver = tclserver_get_from_interp(interp);
+  g_timerInfo->ntimers = ntimers;
+  g_timerInfo->dpoint_prefix = strdup(DEFAULT_TIMER_DPOINT_PREFIX);
   
 #ifdef __linux__
   // Test timerfd reliability and decide on implementation FIRST
-  g_timerInfo.use_signal_fallback = !test_timerfd_reliability();
+  g_timerInfo->use_signal_fallback = !test_timerfd_reliability();
 #endif
   
-  g_timerInfo.timers =
+  g_timerInfo->timers =
     (dserv_timer_t *) calloc(ntimers, sizeof(dserv_timer_t));
   for (int i = 0; i < ntimers; i++) {
-    if (dserv_timer_init(&g_timerInfo.timers[i], &g_timerInfo, i) != 0) {
+    if (dserv_timer_init(&g_timerInfo->timers[i], g_timerInfo, i) != 0) {
       printf("ERROR: Failed to initialize timer %d\n", i);
       return TCL_ERROR;
     }
@@ -533,29 +585,39 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
   
 #ifdef __linux__
   // Create worker threads if using timerfd (not signal-based fallback)
-  if (!g_timerInfo.use_signal_fallback) {
+  if (!g_timerInfo->use_signal_fallback) {
     pthread_t w;
     for (int i = 0; i < ntimers; i++) {
-      pthread_create(&w, NULL, timerWorkerThread, &g_timerInfo.timers[i]);
+      pthread_create(&w, NULL, timerWorkerThread, &g_timerInfo->timers[i]);
     }
   } 
 #endif
 
   Tcl_CreateObjCommand(interp, "timerTick",
                        (Tcl_ObjCmdProc *) timer_tick_command,
-                       (ClientData) &g_timerInfo,
+                       (ClientData) g_timerInfo,
                        (Tcl_CmdDeleteProc *) NULL); 
   Tcl_CreateObjCommand(interp, "timerTickInterval",
                        (Tcl_ObjCmdProc *) timer_tick_interval_command,
-                       (ClientData) &g_timerInfo,
+                       (ClientData) g_timerInfo,
                        (Tcl_CmdDeleteProc *) NULL); 
   Tcl_CreateObjCommand(interp, "timerExpired",
                        (Tcl_ObjCmdProc *) timer_expired_command,
-                       (ClientData) &g_timerInfo,
+                       (ClientData) g_timerInfo,
                        (Tcl_CmdDeleteProc *) NULL);
-
-  Tcl_LinkVar(interp, "nTimers", (char *) &g_timerInfo.ntimers,
+  Tcl_CreateObjCommand(interp, "timerStop",
+		       (Tcl_ObjCmdProc *) timer_stop_command,
+		       (ClientData) g_timerInfo,
+		       (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateObjCommand(interp, "timerPrefix",
+                       (Tcl_ObjCmdProc *) timer_set_dpoint_prefix_command,
+                       (ClientData) g_timerInfo,
+                       (Tcl_CmdDeleteProc *) NULL); 
+  
+  Tcl_LinkVar(interp, "nTimers", (char *) &g_timerInfo->ntimers,
               TCL_LINK_INT | TCL_LINK_READ_ONLY);
+
+  module_count++;
   
   return TCL_OK;
 }

@@ -29,6 +29,25 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
+/* FluidSynth for software synthesis */
+#include <fluidsynth.h>
+
+/* ALSA for device enumeration on Linux */
+#if !defined(__APPLE__) && !defined(WIN32)
+#include <alsa/asoundlib.h>
+#endif
+
+/*************************************************************************/
+/***                     Sound mode selection                          ***/
+/*************************************************************************/
+
+typedef enum {
+  SOUND_MODE_NONE =     0x00,  /* Not initialized */
+  SOUND_MODE_HARDWARE = 0x01,  /* MIDI over serial to hardware synth */
+  SOUND_MODE_SOFTWARE = 0x02,  /* FluidSynth software synthesis */
+  SOUND_MODE_BOTH =     0x03,
+} sound_mode_t;
+
 /*************************************************************************/
 /***                     queues for sound off events                   ***/
 /*************************************************************************/
@@ -134,13 +153,6 @@ struct offinfo_s *dequeue(queue* q) {
 /* Set array for program change message */
 static char Sets[] = { MIDI_VOICES, MIDI_DRUMS, MIDI_SFX };
 
-static int snd_on(int, char channel, char pitch);
-static int snd_off(int, char channel, char pitch);
-static int snd_control(int, char control, char data, char channel);
-static int snd_program(int, char program, char bank, char ch_set);
-static int snd_reset(int);
-static int snd_volume(int, char volume, char channel);
-
 #define WBUF90          (WBUF*9/10)     //flush trip point
 #define NOTE_OFF        '\x80'          //MIDI channel command
 #define NOTE_ON         '\x90'          //MIDI channel command
@@ -159,13 +171,25 @@ typedef struct offinfo_s {
 
 typedef struct sound_info_s
 {
+  sound_mode_t mode;
+
+  /* Hardware mode (MIDI over serial) */  
   int midi_fd;
+
+  /* Software mode (FluidSynth) */
+  fluid_settings_t *settings;   /* FluidSynth settings */
+  fluid_synth_t *synth;         /* FluidSynth synthesizer */
+  fluid_audio_driver_t *adriver; /* FluidSynth audio driver */
+
   queue* q;
 } sound_info_t;
 
-/* global to this module */
-static sound_info_t g_soundInfo;
-
+static int snd_on(sound_info_t *, char channel, char pitch);
+static int snd_off(sound_info_t *, char channel, char pitch);
+static int snd_control(sound_info_t *, char control, char data, char channel);
+static int snd_program(sound_info_t *, char program, char bank, char ch_set);
+static int snd_reset(sound_info_t *);
+static int snd_volume(sound_info_t *, char volume, char channel);
 
 /**************************************************************
  *
@@ -174,45 +198,70 @@ static sound_info_t g_soundInfo;
  *
  * DESCRIPTION
  *   Send a program change message to the midi driver
+ * or fluidsynth via software.
+ *
  * Note that the channel and set are packed into the
  * ch_set variable, since channels are only between 0-15
  * and there are only 3 sets (VOICES, DRUMS, SFX).
  *
  **************************************************************/
 
-static int snd_program(int midi_fd, char program, char bank, char ch_set)
+static int snd_program(sound_info_t *info, char program, char bank, char ch_set)
 {
   char set, channel;
-  char cmd[8];
-  int n = 0;
   
   channel = ch_set & 0x0F;	/* Low nibble  */
   set = (ch_set & 0xF0) >> 4; /* High nibble */
   
   if (set > sizeof(Sets)) return 0;
   
-  /* Start with Channel change 0 */ 
-  cmd[0] = 0xb0 | channel;
-  cmd[1] = 0x00;
-  cmd[2] = Sets[(int) set];
+  if (info->mode & SOUND_MODE_HARDWARE) {
+    /* Hardware mode - send MIDI over serial */
+    char cmd[8];
+    int n = 0;
+    
+    /* Start with Channel change 0 */ 
+    cmd[0] = 0xb0 | channel;
+    cmd[1] = 0x00;
+    cmd[2] = Sets[(int) set];
+    
+    /* Here's the LSB (Bank Select) command */
+    cmd[3] = 0xb0 | channel;
+    cmd[4] = 0x20;
+    cmd[5] = bank;
+    
+    /* Here's the program change */
+    cmd[6] = 0xc0 | channel;
+    cmd[7] = program-1;
+    
+    if (info->midi_fd >= 0)
+      n = write(info->midi_fd, cmd, sizeof(cmd));
+    
+    /* Now set the volume to the middle */
+    snd_control(info, MIDI_CTRL_VOLUME, 64, channel);
+    
+    return n;
+    
+  } else if (info->mode & SOUND_MODE_SOFTWARE) {
+    /* Software mode - use FluidSynth */
+    if (!info->synth) return 0;
+    
+    /* Bank select MSB (CC 0) */
+    fluid_synth_cc(info->synth, channel, 0, Sets[(int)set]);
+    
+    /* Bank select LSB (CC 32) */
+    fluid_synth_cc(info->synth, channel, 32, bank);
+    
+    /* Program change */
+    fluid_synth_program_change(info->synth, channel, program - 1);
+    
+    /* Set volume to middle */
+    fluid_synth_cc(info->synth, channel, MIDI_CTRL_VOLUME, 64);
+    
+    return 1;
+  }
   
-  /* Here's the LSB (Bank Select) command */
-  cmd[3] = 0xb0 | channel;
-  cmd[4] = 0x20;
-  cmd[5] = bank;
-  
-  /* Here's the program change */
-  cmd[6] = 0xc0 | channel;
-  cmd[7] = program-1;
-
-  
-  if (midi_fd >= 0)
-    n = write(midi_fd, cmd, sizeof(cmd));
-  
-  /* Now set the volume to the middle */
-  snd_control(midi_fd, MIDI_CTRL_VOLUME, 64, channel);
-  
-  return n;
+  return 0;
 }
 
 /**************************************************************
@@ -225,10 +274,9 @@ static int snd_program(int midi_fd, char program, char bank, char ch_set)
  *
  **************************************************************/
 
-static int snd_volume(int midi_fd, char volume, char channel)
+static int snd_volume(sound_info_t *info, char volume, char channel)
 {
-  snd_control(midi_fd, MIDI_CTRL_VOLUME, volume, channel);
-  return 1;
+  return snd_control(info, MIDI_CTRL_VOLUME, volume, channel);
 }
 
 /**************************************************************
@@ -241,50 +289,61 @@ static int snd_volume(int midi_fd, char volume, char channel)
  *
  **************************************************************/
 
-static int snd_control(int midi_fd, char control, char data, char channel)
+static int snd_control(sound_info_t *info, char control, char data, char channel)
 {
-  char cmd[3];
-  int n = 0;
-  cmd[0] = 0xb0 | channel;
-  cmd[1] = control;
-  cmd[2] = data;
+  int result = 0;
   
-  if (midi_fd >= 0)
-    n = write(midi_fd, cmd, sizeof(cmd));
-  return n;
+  if (info->mode & SOUND_MODE_HARDWARE) {
+    /* Hardware mode - send MIDI over serial */
+    char cmd[3];
+    cmd[0] = 0xb0 | channel;
+    cmd[1] = control;
+    cmd[2] = data;
+    
+    if (info->midi_fd >= 0)
+      result = write(info->midi_fd, cmd, sizeof(cmd));
+  }
+  
+  if (info->mode & SOUND_MODE_SOFTWARE) {
+    /* Software mode - use FluidSynth */
+    if (info->synth)
+      result = fluid_synth_cc(info->synth, channel, control, data);
+  }
+  
+  return result;
 }
 
-static int snd_reset(int midi_fd)
+static int snd_reset(sound_info_t *info)
 {
   int n = 0;
-  static char xg_on[] = { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00,
-    0x7e, 0x00, 0xf7 };
-#if 0
-  static char velocity_sensitivity[] = {
-    0xf0, 0x43, 0x10, 0x4c,
-    0x08, 0x01, 0x0c, 0xf5, 0xf7 };
-#endif
-  static char master_volume[] = { 0xf0, 0x7f, 0x7f, 0x04, 0x01,
-    0x7f, 0x7f,
-    0xf7 };
   
-  if (midi_fd >= 0)
-    write(midi_fd, xg_on, sizeof(xg_on));
+  if (info->mode & SOUND_MODE_HARDWARE) {
+    /* Hardware mode - send XG reset SysEx */
+    static char xg_on[] = { 0xf0, 0x43, 0x10, 0x4c, 0x00, 0x00,
+      0x7e, 0x00, 0xf7 };
+    static char master_volume[] = { 0xf0, 0x7f, 0x7f, 0x04, 0x01,
+      0x7f, 0x7f, 0xf7 };
+    
+    if (info->midi_fd >= 0)
+      write(info->midi_fd, xg_on, sizeof(xg_on));
 
-  /* according to the MU15 docs, the xg_on command takes approx 50ms */
-  usleep(50000);
-#if 0
-  if (midi_fd >= 0)
-    write(midi_fd, velocity_sensitivity, sizeof(velocity_sensitivity));
-#endif
+    /* according to the MU15 docs, the xg_on command takes approx 50ms */
+    usleep(50000);
+    
+    if (info->midi_fd >= 0)
+      n = write(info->midi_fd, master_volume, sizeof(master_volume));
+  }
   
-  if (midi_fd >= 0)
-    n = write(midi_fd, master_volume, sizeof(master_volume));
+  if (info->mode & SOUND_MODE_SOFTWARE) {
+    /* Software mode - FluidSynth system reset */
+    if (info->synth) {
+      fluid_synth_system_reset(info->synth);
+      n = 1;
+    }
+  }
   
   return n;
 }
-
-
 
 /**************************************************************
  * FUNCTION
@@ -300,24 +359,39 @@ static int snd_reset(int midi_fd)
  *   will change upon subsequent calls.
  **************************************************************/
 
-static int snd_on(int midi_fd, char channel, char pitch)
+/**************************************************************
+ * FUNCTION
+ *   snd_on
+ *
+ * DESCRIPTION
+ *   Turn on the sound for the specified channel
+ *
+ **************************************************************/
+
+static int snd_on(sound_info_t *info, char channel, char pitch)
 {
   static char vel = 127;
-  char cmd[3];
   int n = 0;
-  /* Do the actual note on */
-  cmd[0] = 0x90 | channel;
-  cmd[1] = pitch;
-  cmd[2] = vel;
-  if (midi_fd >= 0)
-    n = write(midi_fd, cmd, 3);
   
-  /* Turn on the sustain event */
-  snd_control(midi_fd, MIDI_CTRL_SUSTENTO, MIDI_ON, channel);
-
+  if (info->mode & SOUND_MODE_HARDWARE) {
+    /* Hardware mode - send MIDI note-on over serial */
+    char cmd[3];
+    cmd[0] = 0x90 | channel;
+    cmd[1] = pitch;
+    cmd[2] = vel;
+    
+    if (info->midi_fd >= 0)
+      n = write(info->midi_fd, cmd, sizeof(cmd));
+  }
+  
+  if (info->mode & SOUND_MODE_SOFTWARE) {
+    /* Software mode - FluidSynth note-on */
+    if (info->synth)
+      n = fluid_synth_noteon(info->synth, channel, pitch, vel);
+  }
+  
   return n;
 }
-
 
 /*
  * FUNCTION
@@ -328,33 +402,49 @@ static int snd_on(int midi_fd, char channel, char pitch)
  *   by clientdata (which was supplied in the sound_on
  *   function
  */
-static int snd_off(int midi_fd, char channel, char pitch)
+/**************************************************************
+ * FUNCTION
+ *   snd_off
+ *
+ * DESCRIPTION
+ *   Turn off the sound for the specified channel
+ *
+ **************************************************************/
+
+static int snd_off(sound_info_t *info, char channel, char pitch)
 {
-  char cmd[3];
-  static char vel = 127;
   int n = 0;
   
-  /* Turn off the sustain event */
-  snd_control(midi_fd, MIDI_CTRL_SUSTENTO, MIDI_OFF, channel);
+  if (info->mode & SOUND_MODE_HARDWARE) {
+    /* Hardware mode - send MIDI note-off over serial */
+    char cmd[3];
+    cmd[0] = 0x80 | channel;
+    cmd[1] = pitch;
+    cmd[2] = 0x40;
+    
+    if (info->midi_fd >= 0)
+      n = write(info->midi_fd, cmd, sizeof(cmd));
+  }
   
-  /* Do the actual note off */
-  cmd[0] = 0x80 | channel;
-  cmd[1] = pitch;
-  cmd[2] = vel;
-  if (midi_fd >= 0)
-    n = write(midi_fd, cmd, 3);
+  if (info->mode & SOUND_MODE_SOFTWARE) {
+    /* Software mode - FluidSynth note-off */
+    if (info->synth)
+      n = fluid_synth_noteoff(info->synth, channel, pitch);
+  }
   
-  //  printf("sound off %d %d %d\n", channel, pitch, vel);
   return n;
-}    
+}
 
-
-int serveOffRequest(offinfo_t *off)
+static int serveOffRequest(offinfo_t *off)
 {
-  struct timespec rqtp = { off->ms/1000, (off->ms%1000)*1000000 };
-  nanosleep(&rqtp, NULL);
-  snd_off(off->info->midi_fd, off->channel, off->pitch);  
-
+  sound_info_t *info = off->info;
+  
+  /* sleep for the note duration */
+  usleep(off->ms * 1000);
+  
+  /* send note-off */
+  snd_off(info, off->channel, off->pitch);
+  
   /* free the request */
   free(off);
   return 0;
@@ -420,6 +510,9 @@ static int sound_open_command (ClientData data, Tcl_Interp *interp,
   }
   int ret = configure_serial_port(info->midi_fd);
 
+  /* Set or add hardware mode */
+  info->mode |= SOUND_MODE_HARDWARE;
+
   Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
   
   return TCL_OK;
@@ -429,11 +522,9 @@ static int sound_reset_command (ClientData data, Tcl_Interp *interp,
 			    int objc, Tcl_Obj *objv[])
 {
   sound_info_t *info = (sound_info_t *) data;
-  if (info->midi_fd >= 0)
-    snd_reset(info->midi_fd);
+  snd_reset(info);
   return TCL_OK;
 }
-
 
 static int sound_program_command (ClientData data, Tcl_Interp *interp,
 			    int objc, Tcl_Obj *objv[])
@@ -453,8 +544,8 @@ static int sound_program_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[3], &ch_set) != TCL_OK)
     return TCL_ERROR;
-  if (info->midi_fd >= 0) 
-    snd_program(info->midi_fd, program, bank, ch_set);
+  
+  snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
 }
@@ -481,8 +572,7 @@ static int sound_setfx_command (ClientData data, Tcl_Interp *interp,
   bank = 0;
   ch_set = (2 << 4) | channel;
   
-  if (info->midi_fd >= 0) 
-    snd_program(info->midi_fd, program, bank, ch_set);
+  snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
 }
@@ -509,8 +599,7 @@ static int sound_setdrum_command (ClientData data, Tcl_Interp *interp,
   ch_set = (1 << 4) | channel;
   bank = 0;
   
-  if (info->midi_fd >= 0) 
-    snd_program(info->midi_fd, program, bank, ch_set);
+  snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
 }
@@ -533,13 +622,11 @@ static int sound_setvoice_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   if (Tcl_GetIntFromObj(interp, objv[3], &ch_set) != TCL_OK)
     return TCL_ERROR;
-  if (info->midi_fd >= 0) 
-    snd_program(info->midi_fd, program, bank, ch_set);
+  
+  snd_program(info, program, bank, ch_set);
 
   return TCL_OK;
 }
-
-
 
 static int sound_volume_command (ClientData data, Tcl_Interp *interp,
 			   int objc, Tcl_Obj *objv[])
@@ -557,8 +644,7 @@ static int sound_volume_command (ClientData data, Tcl_Interp *interp,
   if (Tcl_GetIntFromObj(interp, objv[2], &channel) != TCL_OK)
     return TCL_ERROR;
   
-  if (info->midi_fd >= 0)
-    snd_volume(info->midi_fd, volume, channel);
+  snd_volume(info, volume, channel);
   
   return TCL_OK;
 }
@@ -584,13 +670,226 @@ static int sound_play_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
 
   offinfo_t *request = new_offinfo(info, channel, pitch, duration_ms);
-  if (info->midi_fd >= 0)
-    snd_on(info->midi_fd, channel, pitch);
+  snd_on(info, channel, pitch);
   
   enqueue(info->q, request);
   return TCL_OK;
 }
+
+static void cleanup_fluidsynth(sound_info_t *info)
+{
+  if (info->adriver) {
+    delete_fluid_audio_driver(info->adriver);
+    info->adriver = NULL;
+  }
+  
+  if (info->synth) {
+    delete_fluid_synth(info->synth);
+    info->synth = NULL;
+  }
+  
+  if (info->settings) {
+    delete_fluid_settings(info->settings);
+    info->settings = NULL;
+  }
+}
+
+
+static const char* find_working_alsa_device(fluid_settings_t *settings) {
+  const char* devices_to_try[] = {
+    "default",           // Try system default first
+    "plughw:0,0",       // Then first hardware device with conversion
+    "sysdefault",       // System default without card specification
+    "hw:0,0",           // Direct hardware access as last resort
+    NULL
+  };
+  
+  // Save the current settings
+  fluid_settings_t *test_settings = new_fluid_settings();
+  if (!test_settings) {
+    return "default";
+  }
+  
+  // Copy relevant settings
+  fluid_settings_setstr(test_settings, "audio.driver", "alsa");
+  fluid_settings_setnum(test_settings, "synth.sample-rate", 44100.0);
+  fluid_settings_setint(test_settings, "audio.period-size", 256);
+  fluid_settings_setint(test_settings, "audio.periods", 2);
+  
+  for (int i = 0; devices_to_try[i] != NULL; i++) {
+    fluid_settings_setstr(test_settings, "audio.alsa.device", devices_to_try[i]);
     
+    // Try to create a temporary synth and audio driver to test
+    fluid_synth_t *test_synth = new_fluid_synth(test_settings);
+    if (test_synth) {
+      fluid_audio_driver_t *test_driver = new_fluid_audio_driver(test_settings, test_synth);
+      if (test_driver) {
+        // Success! Clean up and return this device
+        delete_fluid_audio_driver(test_driver);
+        delete_fluid_synth(test_synth);
+        delete_fluid_settings(test_settings);
+        return devices_to_try[i];
+      }
+      delete_fluid_synth(test_synth);
+    }
+  }
+  
+  delete_fluid_settings(test_settings);
+  return "default"; // Fall back to default if nothing works
+}
+
+static int sound_list_alsa_devices_command(ClientData data, Tcl_Interp *interp,
+                                           int objc, Tcl_Obj *objv[])
+{
+#ifdef __APPLE__
+  Tcl_SetResult(interp, "ALSA device enumeration not available on macOS", TCL_STATIC);
+  return TCL_ERROR;
+#else
+  void **hints, **n;
+  Tcl_Obj *result_list = Tcl_NewListObj(0, NULL);
+  
+  // Get all PCM devices using ALSA hints
+  if (snd_device_name_hint(-1, "pcm", &hints) < 0) {
+    Tcl_SetResult(interp, "Failed to get ALSA device hints", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  n = hints;
+  while (*n != NULL) {
+    char *name = snd_device_name_get_hint(*n, "NAME");
+    char *desc = snd_device_name_get_hint(*n, "DESC");
+    char *ioid = snd_device_name_get_hint(*n, "IOID");
+    
+    // Filter to only useful devices:
+    // - Skip null, rate converters, and special plugins
+    // - Skip surround configurations (keep stereo/front only)
+    // - Keep default, plughw, dmix, sysdefault, and hw devices
+    int include = 0;
+    if (name && (!ioid || strcmp(ioid, "Input") != 0)) {
+      if (strcmp(name, "default") == 0 ||
+          strncmp(name, "plughw:", 7) == 0 ||
+          strncmp(name, "dmix:", 5) == 0 ||
+          strncmp(name, "sysdefault:", 11) == 0 ||
+          strncmp(name, "hw:", 3) == 0) {
+        include = 1;
+      }
+    }
+    
+    if (include) {
+      Tcl_Obj *device_dict = Tcl_NewDictObj();
+      
+      Tcl_DictObjPut(interp, device_dict, 
+                     Tcl_NewStringObj("name", -1), 
+                     Tcl_NewStringObj(name, -1));
+      
+      if (desc) {
+        // Replace newlines with spaces and trim
+        char *desc_clean = strdup(desc);
+        for (char *p = desc_clean; *p; p++) {
+          if (*p == '\n') *p = ' ';
+        }
+        Tcl_DictObjPut(interp, device_dict,
+                       Tcl_NewStringObj("description", -1),
+                       Tcl_NewStringObj(desc_clean, -1));
+        free(desc_clean);
+      } else {
+        Tcl_DictObjPut(interp, device_dict,
+                       Tcl_NewStringObj("description", -1),
+                       Tcl_NewStringObj("", -1));
+      }
+      
+      Tcl_ListObjAppendElement(interp, result_list, device_dict);
+    }
+    
+    if (name) free(name);
+    if (desc) free(desc);
+    if (ioid) free(ioid);
+    n++;
+  }
+  
+  snd_device_name_free_hint(hints);
+  
+  Tcl_SetObjResult(interp, result_list);
+  return TCL_OK;
+#endif
+}
+
+static int sound_init_fluidsynth_command(ClientData data, Tcl_Interp *interp,
+                                         int objc, Tcl_Obj *objv[])
+{
+  sound_info_t *info = (sound_info_t *) data;
+  const char *alsa_device = NULL;
+  
+  if (objc < 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "soundfont_path ?alsa_device?");
+    return TCL_ERROR;
+  }
+  
+  /* Clean up existing FluidSynth instance if any */
+  cleanup_fluidsynth(info);
+  
+  /* Create settings */
+  info->settings = new_fluid_settings();
+  if (!info->settings) {
+    Tcl_SetResult(interp, "Failed to create FluidSynth settings", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  /* Configure audio driver based on platform */
+#ifdef __APPLE__
+  fluid_settings_setstr(info->settings, "audio.driver", "coreaudio");
+#else
+  fluid_settings_setstr(info->settings, "audio.driver", "alsa");
+  
+  // Determine ALSA device
+  if (objc >= 3) {
+    // User specified device explicitly
+    alsa_device = Tcl_GetString(objv[2]);
+  } else {
+    // Auto-detect working device
+    alsa_device = find_working_alsa_device(info->settings);
+  }
+  
+  fluid_settings_setstr(info->settings, "audio.alsa.device", alsa_device);
+#endif
+  
+  /* Configure audio quality/latency - use correct parameter names */
+  fluid_settings_setnum(info->settings, "synth.sample-rate", 44100.0);
+  fluid_settings_setint(info->settings, "audio.period-size", 256);
+  fluid_settings_setint(info->settings, "audio.periods", 2);
+  
+  /* Create synthesizer */
+  info->synth = new_fluid_synth(info->settings);
+  if (!info->synth) {
+    Tcl_SetResult(interp, "Failed to create FluidSynth synth", TCL_STATIC);
+    cleanup_fluidsynth(info);
+    return TCL_ERROR;
+  }
+  
+  /* Load SoundFont */
+  if (fluid_synth_sfload(info->synth, Tcl_GetString(objv[1]), 1) ==
+      FLUID_FAILED) {
+    Tcl_AppendResult(interp, "Failed to load SoundFont: ",
+                     Tcl_GetString(objv[1]), NULL);
+    cleanup_fluidsynth(info);
+    return TCL_ERROR;
+  }
+  
+  /* Create audio driver (starts audio output) */
+  info->adriver = new_fluid_audio_driver(info->settings, info->synth);
+  if (!info->adriver) {
+    Tcl_SetResult(interp, "Failed to create FluidSynth audio driver",
+		  TCL_STATIC);
+    cleanup_fluidsynth(info);
+    return TCL_ERROR;
+  }
+  
+  /* Set or add software mode */
+  info->mode |= SOUND_MODE_SOFTWARE;
+  
+  return TCL_OK;
+}
+
 /*****************************************************************************
  *
  * EXPORT
@@ -613,51 +912,78 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
       == NULL) {
     return TCL_ERROR;
   }
-  const int nworkers = 5;
   
-  g_soundInfo.q = queueCreate();
-  g_soundInfo.midi_fd = -1;
+  /* Allocate per-interpreter sound info */
+  sound_info_t *info = (sound_info_t *) calloc(1, sizeof(sound_info_t));
+  if (!info) {
+    Tcl_SetResult(interp, "Failed to allocate sound_info_t", TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  /* Initialize the structure */
+  info->mode = SOUND_MODE_NONE;
+  info->midi_fd = -1;
+  info->settings = NULL;
+  info->synth = NULL;
+  info->adriver = NULL;
+  info->q = queueCreate();
+  
+  const int nworkers = 5;
   
   /* setup workers */
   pthread_t w;
   for (int i = 0; i < nworkers; i++) {
-    pthread_create(&w, NULL, workerThread, &g_soundInfo);
+    pthread_create(&w, NULL, workerThread, info);
   }
   
+  /* Hardware initialization */
   Tcl_CreateObjCommand(interp, "soundOpen",
 		       (Tcl_ObjCmdProc *) sound_open_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
+  
+  /* Software initialization */
+  Tcl_CreateObjCommand(interp, "soundInitFluidSynth",
+		       (Tcl_ObjCmdProc *) sound_init_fluidsynth_command,
+		       (ClientData) info,
+		       (Tcl_CmdDeleteProc *) NULL);
+  
+  /* Common commands */
   Tcl_CreateObjCommand(interp, "soundReset",
 		       (Tcl_ObjCmdProc *) sound_reset_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundSetFX",
 		       (Tcl_ObjCmdProc *) sound_setfx_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundSetVoice",
 		       (Tcl_ObjCmdProc *) sound_setvoice_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundSetDrum",
 		       (Tcl_ObjCmdProc *) sound_setdrum_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundSetVolume",
 		       (Tcl_ObjCmdProc *) sound_volume_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   Tcl_CreateObjCommand(interp, "soundVolume",
 		       (Tcl_ObjCmdProc *) sound_volume_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
-  Tcl_CreateObjCommand(interp, "soundPlay",
+  Tcl_CreateObjCommand(interp, "soundListAlsaDevices",
+                       (Tcl_ObjCmdProc *) sound_list_alsa_devices_command,
+                       (ClientData) info,
+                       (Tcl_CmdDeleteProc *) NULL);
+   Tcl_CreateObjCommand(interp, "soundPlay",
 		       (Tcl_ObjCmdProc *) sound_play_command,
-		       (ClientData) &g_soundInfo,
+		       (ClientData) info,
 		       (Tcl_CmdDeleteProc *) NULL);
   return TCL_OK;
 }
+
 
 
 

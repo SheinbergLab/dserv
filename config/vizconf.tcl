@@ -3,13 +3,15 @@
 #
 #  Defaults to graphics/stimulus
 
-set dspath [file dir [info nameofexecutable]]
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 tcl::tm::add $dspath/lib
 
 package require dlsh
+
+# enable error logging
+errormon enable
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 namespace eval viz {
     # Current configuration state

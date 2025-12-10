@@ -8,6 +8,23 @@
 #include <dpoint_process.h>
 #include "prmutil.h"
 
+/*
+ * Generic Sampler Processor
+ * 
+ * Collects samples from a datapoint stream and computes aggregates (mean, min, max).
+ * Supports two modes:
+ *   - Sample count mode: Collect N samples then compute
+ *   - Time window mode: Collect samples over T seconds then compute
+ * 
+ * Auto-detects input type (DSERV_SHORT, DSERV_INT, or DSERV_FLOAT) on first sample.
+ * 
+ * Output datapoints:
+ *   <name>/vals   - Computed aggregate values (float array)
+ *   <name>/status - Sampling status (0=active, 1=complete)
+ *   <name>/rate   - Current sample rate in Hz
+ *   <name>/count  - Number of samples used in last computation
+ */
+
 enum { SAMPLER_INACTIVE, SAMPLER_ACTIVE };
 enum { SAMPLER_ONESHOT, SAMPLER_LOOP };
 enum { OP_MEAN, OP_MIN, OP_MAX, OP_MINMAX };
@@ -21,12 +38,23 @@ typedef struct process_params_s {
   int loop;                  /* oneshot or continuous */
   int operation;             /* which operation to perform */
   int nchannels;             /* number of channels to sample */
-  int sample_count;          /* total samples to collect */
+  int sample_count;          /* samples mode: fixed count */
+  float time_window;         /* time mode: duration in seconds */
+  int use_time_window;       /* 0=sample count mode, 1=time window mode */
   int status_pending;        /* change status on next update? */
+  int count_pending;         /* change count on next update? */
   
   /* Runtime state */
   int current_count;         /* samples collected so far */
-  uint16_t *samples;         /* sample buffer */
+  int last_computation_count; /* samples used in last computation */
+  int input_type;            /* detected: DSERV_SHORT, DSERV_INT, or DSERV_FLOAT */
+  int type_locked;           /* has type been detected yet? */
+  uint16_t *samples_short;   /* sample buffer for uint16 */
+  int32_t *samples_int;      /* sample buffer for int32 */
+  float *samples_float;      /* sample buffer for float */
+  
+  /* Time window state */
+  uint64_t window_start_time;
 
   /* Sample rate tracking */
   int track_rate;            /* enable/disable */
@@ -40,6 +68,7 @@ typedef struct process_params_s {
   ds_datapoint_t vals_dpoint;    /* computed values output */
   ds_datapoint_t status_dpoint;  /* status updates */
   ds_datapoint_t rate_dpoint;    /* sample_rate updates */
+  ds_datapoint_t count_dpoint;   /* sample count output */
   
   /* For parameter utility */
   int dummyInt;
@@ -55,15 +84,25 @@ void *newProcessParams(void)
   p->operation = OP_MEAN;
   p->nchannels = 2;
   p->sample_count = 100;
+  p->time_window = 1.0;        /* default 1 second window */
+  p->use_time_window = 0;      /* default to sample count mode */
   p->current_count = 0;
+  p->last_computation_count = 0;
   p->status_pending = 0;
+  p->count_pending = 0;
   p->track_rate = 0;
   p->rate_update_interval = 50;
   p->current_rate = 0.0;
   p->rate_sample_count = 0;
   
-  /* Allocate sample buffer */
-  p->samples = (uint16_t *) calloc(MAX_SAMPLES * MAX_CHANNELS, sizeof(uint16_t));
+  /* Type detection state */
+  p->input_type = -1;
+  p->type_locked = 0;
+  
+  /* Allocate sample buffers for all supported types */
+  p->samples_short = (uint16_t *) calloc(MAX_SAMPLES * MAX_CHANNELS, sizeof(uint16_t));
+  p->samples_int = (int32_t *) calloc(MAX_SAMPLES * MAX_CHANNELS, sizeof(int32_t));
+  p->samples_float = (float *) calloc(MAX_SAMPLES * MAX_CHANNELS, sizeof(float));
   
   /* Output for computed values */
   p->vals_dpoint.flags = 0;
@@ -89,6 +128,14 @@ void *newProcessParams(void)
   p->rate_dpoint.data.len = sizeof(float);
   p->rate_dpoint.data.buf = malloc(p->rate_dpoint.data.len);
   
+  /* Output for sample count used in computation */
+  p->count_dpoint.flags = 0;
+  p->count_dpoint.varname = strdup("proc/sampler/count");
+  p->count_dpoint.varlen = strlen(p->count_dpoint.varname);
+  p->count_dpoint.data.type = DSERV_INT;
+  p->count_dpoint.data.len = sizeof(int);
+  p->count_dpoint.data.buf = malloc(p->count_dpoint.data.len);
+  
   return p;
 }
 
@@ -96,7 +143,9 @@ void freeProcessParams(void *pstruct)
 {
   process_params_t *p = (process_params_t *) pstruct;
   
-  if (p->samples) free(p->samples);
+  if (p->samples_short) free(p->samples_short);
+  if (p->samples_int) free(p->samples_int);
+  if (p->samples_float) free(p->samples_float);
   
   free(p->vals_dpoint.varname);
   free(p->vals_dpoint.data.buf);
@@ -106,6 +155,9 @@ void freeProcessParams(void *pstruct)
   
   free(p->rate_dpoint.varname);
   free(p->rate_dpoint.data.buf);
+  
+  free(p->count_dpoint.varname);
+  free(p->count_dpoint.data.buf);
   
   free(p);
 }
@@ -122,9 +174,14 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
     { "operation",    &p->operation,    &p->dummyInt, PU_INT },
     { "nchannels",    &p->nchannels,    &p->dummyInt, PU_INT },
     { "sample_count", &p->sample_count, &p->dummyInt, PU_INT },
+    { "time_window",  &p->time_window,  &p->dummyInt, PU_FLOAT },
+    { "use_time_window", &p->use_time_window, &p->dummyInt, PU_INT },
     { "current_count",&p->current_count,&p->dummyInt, PU_INT },
+    { "last_computation_count",&p->last_computation_count,&p->dummyInt, PU_INT },
     { "track_rate",   &p->track_rate,   &p->dummyInt, PU_INT },
     { "rate_update_interval", &p->rate_update_interval, &p->dummyInt, PU_INT },
+    { "input_type",   &p->input_type,   &p->dummyInt, PU_INT },
+    { "type_locked",  &p->type_locked,  &p->dummyInt, PU_INT },
     { "", NULL, NULL, PU_NULL }
   };
   
@@ -160,6 +217,11 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     sprintf(p->rate_dpoint.varname, "%s/rate", vals[0]);
     p->rate_dpoint.varlen = strlen(p->rate_dpoint.varname);
     
+    if (p->count_dpoint.varname) free(p->count_dpoint.varname);
+    p->count_dpoint.varname = malloc(strlen(vals[0]) + 7);
+    sprintf(p->count_dpoint.varname, "%s/count", vals[0]);
+    p->count_dpoint.varlen = strlen(p->count_dpoint.varname);
+    
     return DPOINT_PROCESS_IGNORE;
   }
 
@@ -177,7 +239,7 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     int current_status;
     if (!p->active) {
       /* If inactive, check if we have completed samples */
-      current_status = (p->current_count > 0) ? 1 : 0;
+      current_status = (p->last_computation_count > 0) ? 1 : 0;
     } else {
       /* If active, we're still sampling */
       current_status = 0;
@@ -189,11 +251,21 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     return DPOINT_PROCESS_DSERV;
   }
   
+  /* Query sample count from last computation */
+  if (!strcmp(name, "count")) {
+    memcpy(p->count_dpoint.data.buf, &p->last_computation_count, sizeof(int));
+    p->count_dpoint.timestamp = pinfo->timestamp;
+    pinfo->dpoint = &p->count_dpoint;
+    return DPOINT_PROCESS_DSERV;
+  }
+  
   /* Handle start command */
   if (!strcmp(name, "start")) {
     if (!p->active) {
       p->active = SAMPLER_ACTIVE;
       p->current_count = 0;
+      p->type_locked = 0;  /* Allow type re-detection on new start */
+      /* window_start_time will be set on first sample */
       
       /* Signal that sampling has started (status = 0) */
       int status = 0;
@@ -220,6 +292,8 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     { "operation",    &p->operation,    &p->dummyInt, PU_INT },
     { "nchannels",    &p->nchannels,    &p->dummyInt, PU_INT },
     { "sample_count", &p->sample_count, &p->dummyInt, PU_INT },
+    { "time_window",  &p->time_window,  &p->dummyInt, PU_FLOAT },
+    { "use_time_window", &p->use_time_window, &p->dummyInt, PU_INT },
     { "track_rate",   &p->track_rate,   &p->dummyInt, PU_INT },
     { "rate_update_interval", &p->rate_update_interval, &p->dummyInt, PU_INT },
     { "", NULL, NULL, PU_NULL }
@@ -231,11 +305,13 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
     if (p->nchannels > MAX_CHANNELS) p->nchannels = MAX_CHANNELS;
     if (p->sample_count < 1) p->sample_count = 1;
     if (p->sample_count > MAX_SAMPLES) p->sample_count = MAX_SAMPLES;
+    if (p->time_window < 0.001) p->time_window = 0.001;  /* minimum 1ms */
     if (p->rate_update_interval < 1) p->rate_update_interval = 1;
     
     /* Reset if just activated */
     if (!was_active && p->active) {
       p->current_count = 0;
+      p->type_locked = 0;  /* Allow type re-detection */
     }
     
     /* Reset rate tracking if just enabled */
@@ -253,64 +329,178 @@ int setProcessParams(dpoint_process_param_setting_t *pinfo)
 static void compute_operation(process_params_t *p)
 {
   float *results = (float *) p->vals_dpoint.data.buf;
+  int n_samples = p->current_count;  /* Use actual samples collected */
   
-  switch (p->operation) {
-  case OP_MEAN:
-    {
-      /* Calculate means for each channel */
-      for (int c = 0; c < p->nchannels; c++) {
-        uint64_t sum = 0;
-        for (int i = 0; i < p->sample_count; i++) {
-          sum += p->samples[i * p->nchannels + c];
+  if (n_samples == 0) return;  /* Safety check */
+  
+  if (p->input_type == DSERV_FLOAT) {
+    /* Float-based operations */
+    switch (p->operation) {
+    case OP_MEAN:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          double sum = 0.0;  /* Use double for accumulation precision */
+          for (int i = 0; i < n_samples; i++) {
+            sum += p->samples_float[i * p->nchannels + c];
+          }
+          results[c] = (float)(sum / n_samples);
         }
-        results[c] = (float) sum / p->sample_count;
       }
-    }
-    break;
-    
-  case OP_MIN:
-    {
-      /* Find minimum for each channel */
-      for (int c = 0; c < p->nchannels; c++) {
-        uint16_t min = 0xFFFF;
-        for (int i = 0; i < p->sample_count; i++) {
-          uint16_t val = p->samples[i * p->nchannels + c];
-          if (val < min) min = val;
+      break;
+      
+    case OP_MIN:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          float min = INFINITY;
+          for (int i = 0; i < n_samples; i++) {
+            float val = p->samples_float[i * p->nchannels + c];
+            if (val < min) min = val;
+          }
+          results[c] = min;
         }
-        results[c] = (float) min;
       }
-    }
-    break;
-    
-  case OP_MAX:
-    {
-      /* Find maximum for each channel */
-      for (int c = 0; c < p->nchannels; c++) {
-        uint16_t max = 0;
-        for (int i = 0; i < p->sample_count; i++) {
-          uint16_t val = p->samples[i * p->nchannels + c];
-          if (val > max) max = val;
+      break;
+      
+    case OP_MAX:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          float max = -INFINITY;
+          for (int i = 0; i < n_samples; i++) {
+            float val = p->samples_float[i * p->nchannels + c];
+            if (val > max) max = val;
+          }
+          results[c] = max;
         }
-        results[c] = (float) max;
       }
-    }
-    break;
-    
-  case OP_MINMAX:
-    {
-      /* Store min and max for each channel (2x channels output) */
-      for (int c = 0; c < p->nchannels; c++) {
-        uint16_t min = 0xFFFF, max = 0;
-        for (int i = 0; i < p->sample_count; i++) {
-          uint16_t val = p->samples[i * p->nchannels + c];
-          if (val < min) min = val;
-          if (val > max) max = val;
+      break;
+      
+    case OP_MINMAX:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          float min = INFINITY, max = -INFINITY;
+          for (int i = 0; i < n_samples; i++) {
+            float val = p->samples_float[i * p->nchannels + c];
+            if (val < min) min = val;
+            if (val > max) max = val;
+          }
+          results[c*2] = min;
+          results[c*2 + 1] = max;
         }
-        results[c*2] = (float) min;
-        results[c*2 + 1] = (float) max;
       }
+      break;
     }
-    break;
+  } else if (p->input_type == DSERV_INT) {
+    /* int32_t-based operations */
+    switch (p->operation) {
+    case OP_MEAN:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          int64_t sum = 0;  /* Use int64 to avoid overflow */
+          for (int i = 0; i < n_samples; i++) {
+            sum += p->samples_int[i * p->nchannels + c];
+          }
+          results[c] = (float)sum / n_samples;
+        }
+      }
+      break;
+      
+    case OP_MIN:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          int32_t min = INT32_MAX;
+          for (int i = 0; i < n_samples; i++) {
+            int32_t val = p->samples_int[i * p->nchannels + c];
+            if (val < min) min = val;
+          }
+          results[c] = (float)min;
+        }
+      }
+      break;
+      
+    case OP_MAX:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          int32_t max = INT32_MIN;
+          for (int i = 0; i < n_samples; i++) {
+            int32_t val = p->samples_int[i * p->nchannels + c];
+            if (val > max) max = val;
+          }
+          results[c] = (float)max;
+        }
+      }
+      break;
+      
+    case OP_MINMAX:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          int32_t min = INT32_MAX, max = INT32_MIN;
+          for (int i = 0; i < n_samples; i++) {
+            int32_t val = p->samples_int[i * p->nchannels + c];
+            if (val < min) min = val;
+            if (val > max) max = val;
+          }
+          results[c*2] = (float)min;
+          results[c*2 + 1] = (float)max;
+        }
+      }
+      break;
+    }
+  } else {
+    /* uint16_t-based operations (DSERV_SHORT) */
+    switch (p->operation) {
+    case OP_MEAN:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          uint64_t sum = 0;
+          for (int i = 0; i < n_samples; i++) {
+            sum += p->samples_short[i * p->nchannels + c];
+          }
+          results[c] = (float)sum / n_samples;
+        }
+      }
+      break;
+      
+    case OP_MIN:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          uint16_t min = 0xFFFF;
+          for (int i = 0; i < n_samples; i++) {
+            uint16_t val = p->samples_short[i * p->nchannels + c];
+            if (val < min) min = val;
+          }
+          results[c] = (float)min;
+        }
+      }
+      break;
+      
+    case OP_MAX:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          uint16_t max = 0;
+          for (int i = 0; i < n_samples; i++) {
+            uint16_t val = p->samples_short[i * p->nchannels + c];
+            if (val > max) max = val;
+          }
+          results[c] = (float)max;
+        }
+      }
+      break;
+      
+    case OP_MINMAX:
+      {
+        for (int c = 0; c < p->nchannels; c++) {
+          uint16_t min = 0xFFFF, max = 0;
+          for (int i = 0; i < n_samples; i++) {
+            uint16_t val = p->samples_short[i * p->nchannels + c];
+            if (val < min) min = val;
+            if (val > max) max = val;
+          }
+          results[c*2] = (float)min;
+          results[c*2 + 1] = (float)max;
+        }
+      }
+      break;
+    }
   }
 }
 
@@ -323,6 +513,15 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     p->status_dpoint.timestamp = pinfo->input_dpoint->timestamp;
     pinfo->dpoint = &p->status_dpoint;
     p->status_pending = 0;
+
+    return DPOINT_PROCESS_DSERV;
+  }
+  
+  /* Check if we have a pending count update */
+  if (p->count_pending) {
+    p->count_dpoint.timestamp = pinfo->input_dpoint->timestamp;
+    pinfo->dpoint = &p->count_dpoint;
+    p->count_pending = 0;
 
     return DPOINT_PROCESS_DSERV;
   }
@@ -356,22 +555,83 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
   if (!p->active)
     return DPOINT_PROCESS_IGNORE;
   
-  /* Validate input data */
-  if (pinfo->input_dpoint->data.type != DSERV_SHORT ||
-      pinfo->input_dpoint->data.len < p->nchannels * sizeof(uint16_t))
+  /* Auto-detect input type on first sample */
+  if (!p->type_locked) {
+    if (pinfo->input_dpoint->data.type == DSERV_SHORT ||
+        pinfo->input_dpoint->data.type == DSERV_INT ||
+        pinfo->input_dpoint->data.type == DSERV_FLOAT) {
+      p->input_type = pinfo->input_dpoint->data.type;
+      p->type_locked = 1;
+      
+      /* Initialize time window if in time mode */
+      if (p->use_time_window) {
+        p->window_start_time = pinfo->input_dpoint->timestamp;
+      }
+    } else {
+      /* Unsupported type - ignore */
+      return DPOINT_PROCESS_IGNORE;
+    }
+  }
+  
+  /* Validate type matches what we locked in */
+  if (pinfo->input_dpoint->data.type != p->input_type)
     return DPOINT_PROCESS_IGNORE;
   
-  uint16_t *ain_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
+  /* Validate data length based on detected type */
+  int element_size;
+  switch (p->input_type) {
+    case DSERV_SHORT: element_size = sizeof(uint16_t); break;
+    case DSERV_INT:   element_size = sizeof(int32_t); break;
+    case DSERV_FLOAT: element_size = sizeof(float); break;
+    default: return DPOINT_PROCESS_IGNORE;
+  }
   
-  /* Store the samples */
-  memcpy(&p->samples[p->current_count * p->nchannels],
-         ain_vals,
-         p->nchannels * sizeof(uint16_t));
+  if (pinfo->input_dpoint->data.len < p->nchannels * element_size)
+    return DPOINT_PROCESS_IGNORE;
+  
+  /* Check buffer overflow */
+  if (p->current_count >= MAX_SAMPLES)
+    return DPOINT_PROCESS_IGNORE;
+  
+  /* Store the samples based on detected type */
+  if (p->input_type == DSERV_FLOAT) {
+    float *input_vals = (float *) pinfo->input_dpoint->data.buf;
+    memcpy(&p->samples_float[p->current_count * p->nchannels],
+           input_vals,
+           p->nchannels * sizeof(float));
+  } else if (p->input_type == DSERV_INT) {
+    int32_t *input_vals = (int32_t *) pinfo->input_dpoint->data.buf;
+    memcpy(&p->samples_int[p->current_count * p->nchannels],
+           input_vals,
+           p->nchannels * sizeof(int32_t));
+  } else {
+    uint16_t *input_vals = (uint16_t *) pinfo->input_dpoint->data.buf;
+    memcpy(&p->samples_short[p->current_count * p->nchannels],
+           input_vals,
+           p->nchannels * sizeof(uint16_t));
+  }
   p->current_count++;
   
-  /* Check if we have enough samples */
-  if (p->current_count >= p->sample_count) {
-    /* Compute the operation */
+  /* Check completion based on mode */
+  int should_compute = 0;
+  
+  if (p->use_time_window) {
+    /* Time window mode: check if enough time has elapsed */
+    uint64_t elapsed_us = pinfo->input_dpoint->timestamp - p->window_start_time;
+    float elapsed_sec = elapsed_us / 1000000.0;
+    
+    if (elapsed_sec >= p->time_window) {
+      should_compute = 1;
+    }
+  } else {
+    /* Sample count mode: check if we have enough samples */
+    if (p->current_count >= p->sample_count) {
+      should_compute = 1;
+    }
+  }
+  
+  if (should_compute) {
+    /* Compute the operation using p->current_count samples */
     compute_operation(p);
     
     /* Set up output datapoint */
@@ -388,8 +648,17 @@ int onProcess(dpoint_process_info_t *pinfo, void *params)
     memcpy(p->status_dpoint.data.buf, &status, sizeof(int));
     p->status_pending = 1;
     
+    /* Update count with number of samples used */
+    p->last_computation_count = p->current_count;
+    memcpy(p->count_dpoint.data.buf, &p->last_computation_count, sizeof(int));
+    p->count_pending = 1;
+    
     /* Reset for next round */
+    if (p->use_time_window) {
+      p->window_start_time = pinfo->input_dpoint->timestamp;
+    }
     p->current_count = 0;
+    
     if (!p->loop) {
       p->active = SAMPLER_INACTIVE;
     }

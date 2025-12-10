@@ -457,6 +457,7 @@ public:
     ds_sock->add_match(hoststr.c_str(), "trialdg");
     ds_sock->add_match(hoststr.c_str(), "em/settings");
     ds_sock->add_match(hoststr.c_str(), "print");
+    ds_sock->add_match(hoststr.c_str(), "eyetracking/virtual_enabled");
     ds_sock->add_match(hoststr.c_str(), "graphics/*");
 
     /* touch variables to update interface (check spaces at EOL!) */
@@ -476,6 +477,7 @@ public:
 				"ess/state_table ess/params stimdg trialdg "
 				"ess/git/branches ess/git/branch "
 				"ess/viz_config "
+				"eyetracking/virtual_enabled "
 				"system/hostname system/os em/settings} "
 				"{ dservTouch $v }"),
 		    rstr);
@@ -1301,10 +1303,9 @@ void configure_sorters(DYN_GROUP *dg)
 }
 
 // Functions that EyeTouchWin can call
-void send_virtual_eye_data(int adc_x, int adc_y) {
-  std::string cmd("set d [binary format s2 {");
-  cmd += std::to_string(adc_y) + " " + std::to_string(adc_x) + "}];";
-  cmd += "dservSetData eyetracking/virtual 0 4 $d; unset d";
+void send_virtual_eye_position(float h_deg, float v_deg) {
+  std::string cmd("send virtual_eye { set_eye ");
+  cmd += std::to_string(h_deg) + " " + std::to_string(v_deg) + "};";
   
   std::string rstr;
   if (!g_App->host.empty()) {
@@ -1326,7 +1327,16 @@ void send_virtual_touch_event(int x, int y, int event_type) {
 
 void virtual_eye_checkbox_cb(Fl_Check_Button* b, void*)
 {
-  eyetouch_widget->set_virtual_eye_enabled(b->value());
+  std::string cmd("send virtual_eye ");
+  if (b->value())
+    cmd += "start";
+  else
+    cmd += "stop";
+  
+  std::string rstr;
+  if (!g_App->host.empty()) {
+    g_App->ds_sock->esscmd(g_App->host, cmd, rstr);
+  }
 }
 
 void virtual_touch_checkbox_cb(Fl_Check_Button* b, void*)
@@ -1898,12 +1908,8 @@ void process_single_message(const std::string& dpoint) {
   else if (!strcmp(json_string_value(name), "ess/em_pos")) {
     float x, y;
     int d1, d2;
-    if (sscanf(json_string_value(data), "%d %d %f %f",
-	       &d1, &d2, &x, &y) == 4) {
+    if (sscanf(json_string_value(data), "%f %f", &x, &y) == 2) {
       eyetouch_widget->em_pos(x, y);
-      // Just store values without drawing
-      //static float last_x = 0, last_y = 0;
-      //last_x = x; last_y = y;      
     }
   }
   
@@ -2025,22 +2031,32 @@ void process_single_message(const std::string& dpoint) {
     update_general_perf_widget(block_percent_complete, block_percent_correct);
   }
 
+  else if (!strcmp(json_string_value(name), "eyetracking/virtual_enabled")) {
+    int enabled = atoi(json_string_value(data));
+    virtual_eye_checkbox->value(enabled);
+    eyetouch_widget->set_virtual_eye_enabled(enabled);
+  }
+  
   else if (!strcmp(json_string_value(name), "ess/em_region_setting")) {
-    int settings[8];
-    if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
-	       &settings[0], &settings[1], &settings[2], &settings[3],
-	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
-      eyetouch_widget->eye_region_set(settings);
+    int win, active, state, type;
+    float cx, cy, pmx, pmy;
+    
+    if (sscanf(json_string_value(data), "%d %d %d %d %f %f %f %f",
+               &win, &active, &state, &type,
+               &cx, &cy, &pmx, &pmy) == 8) {
+      eyetouch_widget->eye_region_set(win, active, state, type, cx, cy, pmx, pmy);
     }
   }
-
+  
   else if (!strcmp(json_string_value(name), "ess/em_region_status")) {
-    int status[4];
-    if (sscanf(json_string_value(data), "%d %d %d %d",
-	       &status[0], &status[1], &status[2], &status[3]) == 4) {
-      eyetouch_widget->eye_status_set(status);
+    int changes, states;
+    float x, y;
+    
+    if (sscanf(json_string_value(data), "%d %d %f %f",
+               &changes, &states, &x, &y) == 4) {
+      eyetouch_widget->eye_status_set(changes, states, x, y);
     }
-  }
+  }  
   
   else if (!strcmp(json_string_value(name), "ess/touch_region_setting")) {
     int settings[8];
@@ -2423,18 +2439,6 @@ void process_dpoint_cb(void *cbdata) {
     }
   }
   
-  else if (!strcmp(json_string_value(name), "ess/em_pos")) {
-    float x, y;
-    int d1, d2;
-    if (sscanf(json_string_value(data), "%d %d %f %f",
-	       &d1, &d2, &x, &y) == 4) {
-      //      eyetouch_widget->em_pos(x, y);
-      // Just store values without drawing
-      static float last_x = 0, last_y = 0;
-      last_x = x; last_y = y;      
-    }
-  }
-  
   else if (!strcmp(json_string_value(name), "ess/touch_press")) {
     int x, y;
     if (sscanf(json_string_value(data), "%d %d", &x, &y) == 2) {
@@ -2555,19 +2559,22 @@ void process_dpoint_cb(void *cbdata) {
   }
 
   else if (!strcmp(json_string_value(name), "ess/em_region_setting")) {
-    int settings[8];
-    if (sscanf(json_string_value(data), "%d %d %d %d %d %d %d %d",
-	       &settings[0], &settings[1], &settings[2], &settings[3],
-	       &settings[4], &settings[5], &settings[6], &settings[7]) == 8) {
-      eyetouch_widget->eye_region_set(settings);
+    int win, active, state, type;
+    float cx, cy, pmx, pmy;
+    
+    if (sscanf(json_string_value(data), "%d %d %d %d %f %f %f %f",
+               &win, &active, &state, &type,
+               &cx, &cy, &pmx, &pmy) == 8) {
+      eyetouch_widget->eye_region_set(win, active, state, type, cx, cy, pmx, pmy);
     }
   }
-
   else if (!strcmp(json_string_value(name), "ess/em_region_status")) {
-    int status[4];
-    if (sscanf(json_string_value(data), "%d %d %d %d",
-	       &status[0], &status[1], &status[2], &status[3]) == 4) {
-      eyetouch_widget->eye_status_set(status);
+    int changes, states;
+    float x, y;
+    
+    if (sscanf(json_string_value(data), "%d %d %f %f",
+               &changes, &states, &x, &y) == 4) {
+      eyetouch_widget->eye_status_set(changes, states, x, y);
     }
   }
   

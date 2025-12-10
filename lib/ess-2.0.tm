@@ -1659,8 +1659,8 @@ namespace eval ess {
         variable em_active
         if {$em_active} {
             # record raw em data: obs_limited, 80 byte buffer, every sample
-            dservLoggerAddMatch $filename ain/vals 1 80 1
-            dservLoggerAddMatch $filename em_coeffDG
+	    dservLoggerAddMatch $filename eyetracking/raw 1 80 1
+            dservLoggerAddMatch $filename em/settings
 
 	    if { [dservExists eyetracking/results] } {
 		foreach v "pupil p1 p4" {
@@ -1672,15 +1672,6 @@ namespace eval ess {
 		dservLoggerAddMatch $filename em/blink 1 40 1
 		dservLoggerAddMatch $filename em/p1_detected 1 40 1
 		dservLoggerAddMatch $filename em/p4_detected 1 40 1
-	    } elseif { [dservExists openiris/frameinfo] } {
-		foreach side "right" {
-		    foreach v "pupil cr1 cr4" {
-			dservLoggerAddMatch $filename openiris/$side/$v 1 40 1
-		    }
-		}
-		foreach v "frame time int0 int1" {
-		    dservLoggerAddMatch $filename openiris/$v 1 40 1
-		}
 	    }
         }
         variable touch_active
@@ -1701,6 +1692,7 @@ namespace eval ess {
         ::ess::store_evt_names
 
         dservTouch stimdg
+	dservTouch em/settings
 
         ::ess::evt_put ID ESS [now] $current(system)
         ::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
@@ -1712,7 +1704,6 @@ namespace eval ess {
             ::ess::evt_put PARAM VAL [now] [lindex $pval 0]
         }
 
-        #   dservTouch em_coeffDG
         return 1
     }
 
@@ -2703,12 +2694,14 @@ namespace eval ess {
     }
 
     proc em_window_process {name data} {
-        variable em_windows
-        lassign $data \
-            em_windows(changes) em_windows(states) \
-            em_windows(hpos) em_windows(vpos)
-        do_update
-    }
+	variable em_windows
+	lassign $data changes states \
+	    em_windows(hpos) em_windows(vpos)
+	
+	set em_windows(changes) [expr {int($changes)}]
+	set em_windows(states)  [expr {int($states)}]
+	do_update
+    }    
 
     proc em_init {} {
         # set flag to ensure em's are stored in data files
@@ -2782,11 +2775,7 @@ namespace eval ess {
     }
 
     proc em_fixwin_set {win cx cy r {type 1}} {
-        set x [expr {int($cx * $::ess::em_scale_h) + 2048}]
-        set y [expr {-1 * int($cy * $::ess::em_scale_v) + 2048}]
-        set pm_x [expr {$r * $::ess::em_scale_h}]
-        set pm_y [expr {$r * $::ess::em_scale_v}]
-        em_region_set $win 1 $x $y $pm_x $pm_y
+	em_region_set $win $type $cx $cy $r $r
     }
 
     proc em_eye_in_region {win} {
@@ -2794,51 +2783,119 @@ namespace eval ess {
         return [expr {($em_windows(states) & (1 << $win)) != 0}]
     }
 
-
-	#
-	# sampler support (using sampler processor)
-	#
+    #
+    # sampler support (using sampler processor)
+    #
     proc em_sampler_init {nsamps {nchan 2} {slot 0}} {
-		# Initial configuration of the sampler processor
-		samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
-		
-		# Set up monitoring of status variable that indicates state
-		dservSet proc/sampler/status -1
-		dservAddExactMatch proc/sampler/status
-		
-		# Key to waking up state system on change of status
-		dpointSetScript proc/sampler/status "[namespace current]::do_update"
-    }
-
-    proc em_sampler_configure {nsamps {nchan 2} {slot 0}} {
-		# Configure the sampler processor
-
-		# Operations are one of:
-		#   0 mean
-		#   1 min
-		#   2 max
-		#   3 min/max
-
-		samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+	# Initial configuration of the sampler processor
+	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+	
+	# Set up monitoring of status variable that indicates state
+	dservSet proc/sampler/status -1
+	dservAddExactMatch proc/sampler/status
+	
+	# Key to waking up state system on change of status
+	dpointSetScript proc/sampler/status "[namespace current]::do_update"
     }
     
+    proc em_sampler_configure {nsamps {nchan 2} {slot 0}} {
+	# Configure the sampler processor (sample count mode)
+	
+	# Operations are one of:
+	#   0 mean
+	#   1 min
+	#   2 max
+	#   3 min/max
+	
+	samplerConfigure $slot $nsamps $nchan 0  ;# 0 = mean operation
+    }
+    
+    proc em_sampler_configure_time {time_window {nchan 2} {slot 0} {operation 0}} {
+	# Configure sampler to use time window mode
+	# time_window: duration in seconds (e.g., 0.5 for 500ms)
+	# nchan: number of channels
+	# slot: processor slot
+	# operation: 0=mean, 1=min, 2=max, 3=minmax
+	
+	samplerConfigureTime $slot $time_window $nchan $operation
+    }
+    
+    proc em_sampler_set_loop {enable {slot 0}} {
+	# Enable/disable continuous sampling mode
+	# enable: 1 for continuous, 0 for one-shot
+	samplerSetLoop $slot $enable
+    }
+    
+    proc em_sampler_track_rate {enable {update_interval 50} {slot 0}} {
+	# Enable sample rate tracking
+	# enable: 1 to track rate, 0 to disable
+	# update_interval: update rate estimate every N samples
+	
+	if {$enable} {
+	    samplerEnableRateTracking $slot $update_interval
+	} else {
+	    samplerDisableRateTracking $slot
+	}
+    }
     
     proc em_sampler_start {{slot 0}} {
-		samplerStart $slot
+	samplerStart $slot
+    }
+    
+    proc em_sampler_stop {{slot 0}} {
+	samplerStop $slot
     }
     
     proc em_sampler_status {{slot 0}} {
-		return [dservGet proc/sampler/status]
+	return [samplerGetStatus $slot]
     }
     
     proc em_sampler_vals {{slot 0}} {
-		return [dservGet proc/sampler/vals]
+	return [samplerGetVals $slot]
+    }
+    
+    proc em_sampler_count {{slot 0}} {
+	# Return number of samples used in last computation
+	return [samplerGetCount $slot]
+    }
+    
+    proc em_sampler_rate {{slot 0}} {
+	# Return current sample rate in Hz
+	return [samplerGetRate $slot]
+    }
+
+}
+
+###############################################################################
+############################### sound support #################################
+###############################################################################
+
+namespace eval ess {
+    proc sound_reset {} { send sound soundReset }
+    proc sound_play { channel pitch duration } {
+	send sound "soundPlay $channel $pitch $duration"
+    }
+    proc sound_set_voice { program bank channel } {
+	send sound "soundSetVoice $program $bank $channel"
+    }
+    proc sound_set_volume { volume channel } {
+	send sound "soundVolume $volume $channel"
+    }
+    proc sound_init {} {
+	sound_reset
+	sound_set_voice 81 0 0
+	sound_set_voice 57 17 1
+	sound_set_voice 60 0 2
+	sound_set_voice 42 0 3
+	sound_set_voice 21 0 4
+	sound_set_voice 8 0 5
+	sound_set_voice 113 100 6
+	foreach i "0 1 2 3 4 5 6" { sound_set_volume 127 $i }
     }
 }
 
-
 ###############################################################################
-########################## juicer/reward _support #############################
+########################### juicer/reward support #############################
 ###############################################################################
 
 namespace eval ess {
@@ -3558,6 +3615,21 @@ namespace eval ess {
         return [find_variants $sysname $protocol]
     }
 
+    proc get_protocol_completions {prev_args partial} {
+	set system [lindex $prev_args 0]
+	set all_protocols [get_protocols $system]
+	
+	# Use lsearch with -all -inline and glob pattern
+	return [lsearch -all -inline -glob $all_protocols ${partial}*]
+    }
+    
+    proc get_variant_completions {prev_args partial} {
+	lassign $prev_args system protocol
+	set all_variants [get_variants $system $protocol]
+	
+	return [lsearch -all -inline -glob $all_variants ${partial}*]
+    }    
+    
     proc get_system_dict {} {
         variable current
         set d [dict create]
@@ -3796,6 +3868,15 @@ namespace eval ess {
     
 }
 
+
+#####################################################################
+##                          remote_eval                            ##
+#####################################################################
+namespace eval ess {
+    proc remote_eval { host script } {
+	return [remoteEval $host $script]
+    }
+}
 
 namespace eval ess {
     namespace export create_system set_system

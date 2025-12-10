@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dserv Console</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <div id="header">
+        <div class="header-left">
+            <h1>dserv Console</h1>
+        </div>
+        <div class="header-right">
+            <!-- Error badge -->
+            <button id="error-badge" class="error-badge hidden">
+                <span class="error-icon">⚠️</span>
+                <span class="error-count">0</span>
+            </button>
+            <span id="status" class="status disconnected">Disconnected</span>
+        </div>
+    </div>
+
+    <!-- Main content area with split panes -->
+    <div id="main-content">
+        <!-- Left side: Terminal (top) + Error Log (bottom) -->
+        <div id="left-pane" class="pane">
+            <!-- Terminal -->
+            <div id="terminal-pane" class="sub-pane">
+                <div class="pane-header">
+                    <span class="pane-title">Terminal</span>
+                    <div class="pane-controls">
+                        <select id="interp-selector" class="interp-selector" title="Select interpreter">
+                            <option value="dserv">dserv</option>
+                        </select>
+                        <button id="clear-terminal" class="icon-btn" title="Clear terminal (Ctrl+L)">⌧</button>
+                    </div>
+                </div>
+                <div id="terminal" class="terminal-output"></div>
+            </div>
+
+            <!-- Horizontal resize handle -->
+            <div id="horizontal-resize-handle" class="resize-handle horizontal"></div>
+
+            <!-- Error Log -->
+            <div id="error-log-pane" class="sub-pane">
+                <div class="pane-header">
+                    <span class="pane-title">Error Log</span>
+                    <div class="pane-controls">
+                        <span id="error-log-count" class="update-count">0 errors</span>
+                        <button id="clear-error-log" class="icon-btn" title="Clear error log">Clear</button>
+                    </div>
+                </div>
+                <div id="error-log-list" class="error-log-list">
+                    <div class="placeholder">No errors logged</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vertical resize handle -->
+        <div id="vertical-resize-handle" class="resize-handle vertical"></div>
+
+        <!-- Right pane: Datapoint Explorer -->
+        <div id="datapoint-pane" class="pane">
+            <!-- Top: Datapoint List -->
+            <div id="datapoint-list-container">
+                <div class="pane-header">
+                    <span class="pane-title">Datapoints</span>
+                    <div class="pane-controls">
+                        <button id="refresh-keys" class="icon-btn" title="Refresh datapoint list">⟳</button>
+                        <button id="unsubscribe-all" class="icon-btn" title="Unsubscribe from all">×</button>
+                    </div>
+                </div>
+                
+                <!-- Search -->
+                <div class="search-container">
+                    <input type="text" id="search-datapoints" class="search-input" placeholder="Filter datapoints...">
+                    <button id="clear-search" class="search-clear">×</button>
+                </div>
+                
+                <!-- Datapoint list -->
+                <div id="datapoint-list" class="datapoint-list">
+                    <div class="placeholder">Connecting...</div>
+                </div>
+            </div>
+
+            <!-- Bottom: Datapoint Detail -->
+            <div id="datapoint-detail-container">
+                <div class="pane-header">
+                    <span class="pane-title">Details</span>
+                    <div class="pane-controls">
+                        <span id="update-count" class="update-count">0 updates</span>
+                    </div>
+                </div>
+                <div id="datapoint-detail" class="datapoint-detail">
+                    <div class="placeholder">Select a datapoint to view details</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="terminal.js"></script>
+    <script src="datapoints.js"></script>
+    <script src="errors.js"></script>
+</body>
+</html>

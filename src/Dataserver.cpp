@@ -62,7 +62,9 @@ ds_datapoint_t *Dataserver::get_datapoint(char *varname)
   
 int Dataserver::delete_datapoint(char *varname)
 {
-  return datapoint_table.deletepoint(varname);
+  auto cleared = datapoint_table.deletepoint(varname);
+  if (cleared) set_key_dpoint();
+  return cleared;
 }
 
 /*
@@ -70,7 +72,9 @@ int Dataserver::delete_datapoint(char *varname)
  */
 int Dataserver::clear(char *varname)
 {
-  return datapoint_table.deletepoint(varname);
+  auto cleared = datapoint_table.deletepoint(varname);
+  if (cleared) set_key_dpoint();
+  return cleared;
 }
 
 /*
@@ -79,6 +83,7 @@ int Dataserver::clear(char *varname)
 void Dataserver::clear()
 {
   datapoint_table.clear();
+  set_key_dpoint();
 }
 
 ds_datapoint_t *Dataserver::process(ds_datapoint_t *dpoint)
@@ -494,6 +499,21 @@ Tcl_Obj *dpoint_to_tclobj(Tcl_Interp *interp,
       }
     }
     break;
+  case DSERV_INT64:
+    if (dpoint->data.len == sizeof(int64_t)) {
+      obj = Tcl_NewWideIntObj(*((int64_t *) dpoint->data.buf));
+    }
+    else {
+      int64_t *p = (int64_t *) dpoint->data.buf;
+      n = dpoint->data.len/sizeof(int64_t);
+      elt = Tcl_NewWideIntObj(*p++);
+      obj = Tcl_NewListObj(1, &elt);
+      for (i = 1; i < n; i++) {
+	elt = Tcl_NewWideIntObj(*p++);
+	Tcl_ListObjAppendElement(interp, obj, elt);
+      }
+    }
+    break;    
   case DSERV_DG:
   case DSERV_MSGPACK:
   case DSERV_ARROW:
@@ -650,6 +670,7 @@ int dserv_info_command(ClientData data, Tcl_Interp * interp, int objc,
     case DSERV_DOUBLE:         typeStr = "DOUBLE"; break;
     case DSERV_SHORT:          typeStr = "SHORT"; break;
     case DSERV_INT:            typeStr = "INT"; break;
+    case DSERV_INT64:          typeStr = "INT64"; break;
     case DSERV_DG:             typeStr = "DG"; break;
     case DSERV_SCRIPT:         typeStr = "SCRIPT"; break;
     case DSERV_TRIGGER_SCRIPT: typeStr = "TRIGGER_SCRIPT"; break;
@@ -708,6 +729,9 @@ int dserv_info_command(ClientData data, Tcl_Interp * interp, int objc,
         break;
       case DSERV_INT:
         element_count = dpoint->data.len / sizeof(uint32_t);
+        break;
+      case DSERV_INT64:
+        element_count = dpoint->data.len / sizeof(uint64_t);
         break;
       case DSERV_FLOAT:
         element_count = dpoint->data.len / sizeof(float);

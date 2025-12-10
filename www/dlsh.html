@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dlsh - Interactive Tcl Workbench</title>
+    
+    <!-- Component styles -->
+    <link rel="stylesheet" href="css/DGTableViewer.css">
+    <link rel="stylesheet" href="css/TclTerminal.css">
+    
+    <!-- Workbench styles -->
+    <link rel="stylesheet" href="css/dlsh.css">
+</head>
+<body class="dlsh-app">
+    <div class="dlsh-container">
+        <!-- Status Bar -->
+        <div class="dlsh-status-bar">
+            <h1>dlsh</h1>
+            <div class="dlsh-status-indicator" id="status-indicator"></div>
+            <span class="dlsh-status-text" id="status-text">Connecting...</span>
+            <div class="dlsh-status-spacer"></div>
+            <button onclick="reconnect()">Reconnect</button>
+        </div>
+        
+        <!-- Main 2x2 Grid -->
+        <div class="dlsh-grid">
+            <!-- Top Left: Tcl Editor -->
+            <div class="dlsh-panel">
+                <div class="dlsh-panel-header">
+                    <span class="dlsh-panel-title">Tcl Editor</span>
+                    <div class="dlsh-panel-actions">
+                        <button onclick="loadExample()">Example</button>
+                        <button onclick="clearEditor()">Clear</button>
+                        <button class="primary" onclick="runCode()">▶ Run</button>
+                    </div>
+                </div>
+                <div class="dlsh-panel-body">
+                    <div id="editor-container" class="dlsh-editor-container"></div>
+                </div>
+            </div>
+            
+            <!-- Top Right: Graphics -->
+            <div class="dlsh-panel">
+                <div class="dlsh-panel-header">
+                    <span class="dlsh-panel-title">Graphics</span>
+                    <span class="dlsh-panel-status" id="graphics-stats">No data</span>
+                    <div class="dlsh-panel-actions">
+                        <button onclick="clearCanvas()">Clear</button>
+                    </div>
+                </div>
+                <div class="dlsh-panel-body">
+                    <canvas id="graphics-canvas" class="dlsh-canvas"></canvas>
+                </div>
+            </div>
+            
+            <!-- Bottom Left: Terminal -->
+            <div class="dlsh-panel">
+                <div class="dlsh-panel-header">
+                    <span class="dlsh-panel-title">Terminal</span>
+                    <div class="dlsh-panel-actions">
+                        <button onclick="clearTerminal()">Clear</button>
+                    </div>
+                </div>
+                <div class="dlsh-panel-body">
+                    <div id="terminal-container" class="dlsh-terminal-container"></div>
+                </div>
+            </div>
+            
+            <!-- Bottom Right: Table Viewer -->
+            <div class="dlsh-panel">
+                <div class="dlsh-panel-header">
+                    <span class="dlsh-panel-title">Table Viewer</span>
+                    <div class="dlsh-panel-actions">
+                        <div class="dlsh-load-controls">
+                            <input type="text" id="dg-name" placeholder="group name" value="group0">
+                            <button onclick="loadTable()">Load</button>
+                        </div>
+                        <button onclick="loadDemoData()">Demo</button>
+                    </div>
+                </div>
+                <div class="dlsh-panel-body">
+                    <div id="table-container" class="dlsh-table-container"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Error Console -->
+        <div class="dlsh-console" id="error-console">
+            <div class="dlsh-console-header">
+                <span class="dlsh-console-title">Console</span>
+                <span class="dlsh-console-count" id="error-count"></span>
+                <div class="dlsh-console-actions">
+                    <button onclick="clearConsole()">Clear</button>
+                </div>
+            </div>
+            <div class="dlsh-console-body" id="console-output"></div>
+        </div>
+    </div>
+    
+    <!-- Error Toast Container -->
+    <div id="error-container"></div>
+
+    <!-- Component scripts -->
+    <script src="js/ws_manager.js"></script>
+    <script src="js/TclFormatter.js"></script>
+    <script src="js/TclLinter.js"></script>
+    <script src="js/TclEditor.js"></script>
+    <script src="js/DatapointManager.js"></script>
+    <script src="js/GraphicsRenderer.js"></script>
+    <script src="js/TclTerminal.js"></script>
+    <script src="js/DGTableViewer.js"></script>
+    
+    <!-- Workbench script -->
+    <script src="js/dlsh.js"></script>
+</body>
+</html>

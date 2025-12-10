@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 #include <memory>
+#include <functional>
 #include <condition_variable>
 #include <set>
 #include <sys/socket.h>
@@ -43,6 +44,11 @@ struct MeshWSData {
     std::string dataserver_client_id;
 };
 
+struct MeshSubscriber {
+    void* ws_ptr;                                       // For removal
+    std::function<bool(const std::string&)> send_func;  // Type-erased send
+};
+
 class MeshManager {
 public:
 struct PeerInfo {
@@ -53,7 +59,7 @@ struct PeerInfo {
     std::string ipAddress;
     int webPort = 0;
     long long lastHeartbeat = 0;
-    
+    bool ssl = false;
     // ALL other fields stored generically
     std::map<std::string, std::string> customFields;
 };
@@ -75,7 +81,13 @@ private:
     std::string myName;
     int httpPort;
     int discoveryPort;
-    
+    int guiPort;
+    bool isSSLEnabled;
+
+    // Set to enable SSL
+    std::string cert_path;
+    std::string key_path;
+  
     // Heartbeat configuration with sensible defaults
     std::atomic<int> heartbeatInterval{1};        // seconds between heartbeats
     std::atomic<int> peerTimeoutMultiplier{6};    // heartbeats missed before timeout
@@ -144,15 +156,22 @@ private:
     char **argv;
 public:
     MeshManager(Dataserver* ds, int argc, char *argv[], 
-        int http_port = 12348, int discovery_port = 12346, int websocket_port = 2577);
+		int http_port = 12348, int discovery_port = 12346, int websocket_port = 2569,
+		int gui_port = 2565,
+		bool ssl_enabled = false,
+		std::string cert_path = "",
+		std::string key_path = "");
 
     ~MeshManager();
 
     // factory for our manager    
-	static std::unique_ptr<MeshManager> createAndStart(
-        Dataserver* ds, TclServer* main_tclserver, int argc, char** argv,
-        const std::string& appliance_id = "", const std::string& appliance_name = "",
-        int http_port = 12348, int discovery_port = 12346, int websocket_port = 2569);
+  static std::unique_ptr<MeshManager> createAndStart(
+						   Dataserver* ds, TclServer* main_tclserver, int argc, char** argv,
+						   const std::string& appliance_id = "",
+						   const std::string& appliance_name = "",
+						   int http_port = 12348, int discovery_port = 12346,
+						   int websocket_port = 2569,
+						   int gui_port = 2565);
 
 
     // Configuration and startup
@@ -160,6 +179,8 @@ public:
 	          int mesh_tcl_port = 2575);
     void setHttpPort(int port) { httpPort = port; }
     void setDiscoveryPort(int port) { discoveryPort = port; }
+    void setSSLEnabbled(bool status) { isSSLEnabled = status; }
+  
     void start();
     void stop();
     
@@ -188,10 +209,8 @@ public:
     // Register Tcl commands with the main interpreter
     void registerTclCommands();
 
-    std::set<uWS::WebSocket<false, true, MeshWSData>*> meshSubscribers;
+    std::vector<MeshSubscriber> meshSubscribers;  
 
-    void addMeshSubscriber(uWS::WebSocket<false, true, MeshWSData>* ws);
-    void removeMeshSubscriber(uWS::WebSocket<false, true, MeshWSData>* ws);
     void broadcastMeshUpdate();
     void broadcastCustomUpdate(const std::string& standardJson, const std::string& customJson);
     
@@ -207,6 +226,39 @@ public:
         return heartbeatInterval.load() * peerTimeoutMultiplier.load(); 
     }
 
+    // Make these inline templates in the header
+  template<typename WebSocketType>
+  void addMeshSubscriber(WebSocketType* ws) {
+    std::lock_guard<std::mutex> lock(subscribersMutex);
+    
+    MeshSubscriber sub;
+    sub.ws_ptr = (void*)ws;
+    sub.send_func = [ws](const std::string& msg) -> bool {  // Add explicit -> bool
+      try {
+	auto result = ws->send(msg, uWS::OpCode::TEXT);
+	// SendStatus is typically truthy/falsy, so convert to bool
+	return static_cast<bool>(result);
+      } catch (...) {
+	return false;
+      }
+    };
+    
+    meshSubscribers.push_back(sub);
+  }
+    
+    template<typename WebSocketType>
+    void removeMeshSubscriber(WebSocketType* ws) {
+        std::lock_guard<std::mutex> lock(subscribersMutex);
+        void* ws_ptr = (void*)ws;
+        
+        meshSubscribers.erase(
+            std::remove_if(meshSubscribers.begin(), meshSubscribers.end(),
+                [ws_ptr](const MeshSubscriber& sub) {
+                    return sub.ws_ptr == ws_ptr;
+                }),
+            meshSubscribers.end()
+        );
+    }
     
 private:
     // Network setup and management

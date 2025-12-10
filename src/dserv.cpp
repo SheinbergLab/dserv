@@ -5,6 +5,7 @@
 #ifndef _MSC_VER
 #include <pthread.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #endif
 
 #include "sharedqueue.h"
@@ -89,6 +90,21 @@ void signalHandler(int signum) {
     std::cout << "Resetting mesh manager..." << std::endl;
     meshManager.reset();
   }
+
+  // Shutdown all subprocesses cleanly
+  std::cout << "Shutting down subprocesses..." << std::endl;
+  std::vector<std::string> names = TclServerRegistry.getNames();
+  for (const auto& name : names) {
+    if (name != "dserv" && !name.empty()) {
+      TclServer* child = TclServerRegistry.getObject(name);
+      if (child && child->getInterp()) {
+        std::cout << "  Shutting down: " << name << std::endl;
+        child->eval("exit");
+      }
+    }
+  }
+  // Brief wait for subprocesses to finish cleanup
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));  
   
   std::cout << "Deleting TclServer..." << std::endl;
   delete tclserver;
@@ -135,7 +151,8 @@ int main(int argc, char *argv[])
   std::string mesh_appliance_name;
   std::string trigger_script;
   std::string configuration_script;
-
+  std::string www_path;
+  
   cxxopts::Options options("dserv", "Data server");
   options.add_options()
     ("h,help", "Print help", cxxopts::value<bool>(help))
@@ -144,6 +161,8 @@ int main(int argc, char *argv[])
     ("c,cscript", "Configuration script path",
      cxxopts::value<std::string>(configuration_script))
     ("v,version", "Version", cxxopts::value<bool>(version))
+    ("w,www", "Static file serving directory",
+     cxxopts::value<std::string>(www_path))    
     ("m,mesh", "Enable/disable mesh networking", cxxopts::value<bool>(enable_mesh))
     ("mesh-port", "Mesh HTTP port", cxxopts::value<int>(mesh_port)->default_value("12348"))
     ("mesh-discovery-port", "Mesh discovery port", cxxopts::value<int>(mesh_discovery_port)->default_value("12346"))
@@ -178,17 +197,32 @@ int main(int argc, char *argv[])
 
   // Create core dserv components
   dserver = new Dataserver(argc, argv);
-  tclserver = new TclServer(argc, argv, dserver, "ess", 2570, 2560, 2565);
-  TclServerRegistry.registerObject("ess", tclserver);
+
+  TclServerConfig tclserver_config("dserv", 2570, 2560, 2565);
+
+  // Include default www path if not specified
+  if (www_path.empty()) {
+    // Check if default location exists
+    struct stat st;
+    if (stat("/usr/local/dserv/www", &st) == 0 && S_ISDIR(st.st_mode)) {
+      www_path = "/usr/local/dserv/www";
+    }
+  }
+  
+  tclserver_config.www_path = www_path;
+  tclserver = new TclServer(argc, argv, dserver, tclserver_config);
+  
+  TclServerRegistry.registerObject("dserv", tclserver);
 
   setVersionInfo(tclserver);
 
   // Initialize mesh networking if enabled
   if (enable_mesh) {
     meshManager = MeshManager::createAndStart(dserver, tclserver, argc, argv,
-                                             mesh_appliance_id, mesh_appliance_name,
-                                             mesh_port, mesh_discovery_port,
-                                             mesh_websocket_port);
+					      mesh_appliance_id,
+					      mesh_appliance_name,
+					      mesh_port, mesh_discovery_port,
+					      mesh_websocket_port);
    }
 
   // Run initialization scripts

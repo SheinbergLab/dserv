@@ -1,0 +1,1770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tcl Tutorial - Interactive Learning</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1e1e1e; color: #d4d4d4; height: 100vh; overflow: hidden;
+        }
+        
+        /* Header */
+        .header {
+            background: #2d2d30; padding: 12px 20px; border-bottom: 1px solid #3e3e42;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .header h1 { font-size: 18px; font-weight: 500; color: #cccccc; }
+        .header h1 span { color: #4ec9b0; }
+        .connection-status {
+            font-size: 12px; padding: 4px 12px; border-radius: 3px; background: #3a3d41;
+        }
+        .connection-status.connected { background: #0e6027; color: #cccccc; }
+        
+        /* Navigation */
+        .nav-bar {
+            background: #252526; padding: 8px 20px; border-bottom: 1px solid #3e3e42;
+            display: flex; gap: 8px; align-items: center;
+        }
+        .category-btn {
+            padding: 6px 12px; background: #3a3d41; border: 1px solid #454545;
+            border-radius: 3px; color: #cccccc; cursor: pointer; font-size: 13px;
+            transition: all 0.2s;
+        }
+        .category-btn:hover { background: #454545; }
+        .category-btn.active { background: #0e639c; border-color: #0e639c; color: white; }
+        .progress-indicator { margin-left: auto; font-size: 12px; color: #858585; }
+        
+        /* Main Layout */
+        .container { display: flex; height: calc(100vh - 90px); }
+        
+        /* Lesson Sidebar */
+        .lesson-sidebar {
+            width: 280px; background: #252526; border-right: 1px solid #3e3e42; overflow-y: auto;
+        }
+        .lesson-item {
+            padding: 12px 16px; border-bottom: 1px solid #3e3e42;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .lesson-item:hover { background: #2a2d2e; }
+        .lesson-item.active { background: #37373d; border-left: 3px solid #0e639c; }
+        .lesson-item.completed { border-left: 3px solid #0e6027; }
+        .lesson-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+        .lesson-description { font-size: 11px; color: #858585; line-height: 1.4; }
+        .lesson-status { margin-top: 6px; font-size: 11px; }
+        .lesson-status.completed { color: #4ec9b0; }
+        
+        /* Main Content */
+        .content-area { flex: 1; display: flex; flex-direction: column; }
+        .lesson-header {
+            background: #2d2d30; padding: 16px 20px; border-bottom: 1px solid #3e3e42;
+        }
+        .lesson-header h2 {
+            font-size: 16px; font-weight: 500; color: #cccccc; margin-bottom: 8px;
+        }
+        .lesson-header p { font-size: 13px; color: #858585; line-height: 1.5; }
+        
+        /* Split View */
+        .split-view { flex: 1; display: flex; min-height: 0; }
+        .editor-panel {
+            flex: 1; display: flex; flex-direction: column; border-right: 1px solid #3e3e42;
+        }
+        .output-panel { width: 45%; display: flex; flex-direction: column; background: #1e1e1e; }
+        .panel-header {
+            padding: 8px 12px; background: #2d2d30; border-bottom: 1px solid #3e3e42;
+            font-size: 12px; font-weight: 500; color: #cccccc;
+        }
+        #editor { flex: 1; }
+        
+        /* Output Area */
+        .output-content { flex: 1; overflow: auto; padding: 12px; }
+        .output-section { margin-bottom: 16px; }
+        .output-label {
+            font-size: 11px; color: #858585; text-transform: uppercase;
+            margin-bottom: 6px; font-weight: 500;
+        }
+        .output-box {
+            background: #252526; border: 1px solid #3e3e42; border-radius: 3px;
+            padding: 12px; font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px; line-height: 1.5; min-height: 60px;
+        }
+        .output-box.success { border-color: #0e6027; background: rgba(14, 96, 39, 0.1); }
+        .output-box.error { border-color: #6b1f1f; background: rgba(107, 31, 31, 0.1); }
+        
+        /* Feedback Message */
+        .feedback-container { padding: 12px; margin-bottom: 8px; }
+        .feedback-message {
+            padding: 10px 14px; border-radius: 4px; font-size: 13px; display: none;
+        }
+        .feedback-message.success {
+            background: rgba(14, 96, 39, 0.15); border: 1px solid #0e6027;
+            color: #4ec9b0; display: block;
+        }
+        .feedback-message.error {
+            background: rgba(107, 31, 31, 0.15); border: 1px solid #6b1f1f;
+            color: #f48771; display: block;
+        }
+        
+        /* DG Visualization */
+        .table-section { display: none; margin-top: 12px; }
+        .dg-table {
+            width: 100%; border-collapse: collapse; margin-top: 8px;
+            background: #252526; border: 1px solid #3e3e42;
+        }
+        .dg-table th {
+            background: #2d2d30; padding: 8px 12px; text-align: left;
+            border-bottom: 2px solid #3e3e42; font-size: 12px;
+            color: #cccccc; font-weight: 500;
+        }
+        .dg-table td { padding: 6px 12px; border-bottom: 1px solid #3e3e42; font-size: 12px; }
+        .dg-table tr:hover { background: #2a2d2e; }
+        .array-indicator { color: #4ec9b0; font-style: italic; }
+        
+        /* Control Buttons */
+        .control-bar {
+            padding: 12px 16px; background: #2d2d30; border-top: 1px solid #3e3e42;
+            display: flex; gap: 8px; justify-content: flex-end;
+        }
+        .btn {
+            padding: 8px 16px; border: none; border-radius: 3px; font-size: 13px;
+            cursor: pointer; transition: all 0.2s; font-weight: 500;
+        }
+        .btn-primary { background: #0e639c; color: white; }
+        .btn-primary:hover { background: #1177bb; }
+        .btn-success { background: #0e6027; color: white; }
+        .btn-success:hover { background: #0e7d35; }
+        .btn-secondary { background: #3a3d41; color: #cccccc; }
+        .btn-secondary:hover { background: #454545; }
+        
+        /* Console Output */
+        .console-section {
+            background: #252526; border: 1px solid #3e3e42; border-radius: 3px;
+            margin-top: 12px; max-height: 200px; overflow-y: auto;
+        }
+        .console-header {
+            padding: 8px 12px; background: #2d2d30; border-bottom: 1px solid #3e3e42;
+            font-size: 11px; font-weight: 500; color: #858585;
+        }
+        .console-content {
+            padding: 8px; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;
+        }
+        .console-entry { padding: 4px 0; border-bottom: 1px solid #2a2d2e; }
+        .console-entry:last-child { border-bottom: none; }
+        .console-timestamp { color: #858585; font-size: 11px; }
+        .console-type { display: inline-block; width: 60px; font-weight: 500; }
+        .console-type.log { color: #4ec9b0; }
+        .console-type.error { color: #f48771; }
+        .console-type.success { color: #4ec9b0; }
+        
+        /* Hints and Explanation sections */
+        .hints-section, .explanation-section {
+            margin-top: 15px;
+            padding: 15px;
+            background: #1e3a5f;
+            border-left: 4px solid #4a9eff;
+            border-radius: 4px;
+        }
+        .hints-section .output-label, .explanation-section .output-label {
+            color: #4a9eff;
+            font-weight: 600;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        #hints-content, #explanation-content {
+            color: #d4d4d4;
+            line-height: 1.6;
+            font-size: 13px;
+        }
+        #hints-content ul {
+            margin: 8px 0;
+            padding-left: 20px;
+            list-style: disc;
+        }
+        #hints-content li {
+            margin: 6px 0;
+        }
+        #explanation-content {
+            white-space: pre-wrap;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Tcl Tutorial <span>Interactive Learning</span></h1>
+        <div id="connection-status" class="connection-status">○ Disconnected</div>
+    </div>
+    
+    <div class="nav-bar">
+        <button class="category-btn active" data-category="basics">Basics</button>
+        <button class="category-btn" data-category="dlsh">DLSH Lists</button>
+        <button class="category-btn" data-category="dg">Data Grids</button>
+        <button class="category-btn" data-category="loaders">Loaders</button>
+        <div class="progress-indicator" id="progress-indicator">0/0 Completed</div>
+    </div>
+    
+    <div class="container">
+        <div class="lesson-sidebar" id="lesson-sidebar"></div>
+        
+        <div class="content-area">
+            <div class="lesson-header">
+                <h2 id="lesson-title">Welcome to Tcl Tutorial</h2>
+                <p id="lesson-description">Select a lesson to begin</p>
+            </div>
+            
+            <div class="split-view">
+                <div class="editor-panel">
+                    <div class="panel-header">Code Editor</div>
+                    <div id="editor"></div>
+                    <div class="control-bar">
+                        <button class="btn btn-secondary" id="reset-btn">Reset</button>
+                        <button class="btn btn-primary" id="run-btn">Run Code</button>
+                        <button class="btn btn-success" id="next-btn" style="display: none;">Next Lesson →</button>
+                    </div>
+                </div>
+                
+                <div class="output-panel">
+                    <div class="panel-header">Output</div>
+                    <div class="output-content">
+                        <div class="feedback-container">
+                            <div class="feedback-message" id="feedback-message"></div>
+                        </div>
+                        
+                        <div class="output-section">
+                            <div class="output-label">Expected Output</div>
+                            <div class="output-box" id="expected-output">Run your code to see results</div>
+                        </div>
+                        
+                        <div class="output-section">
+                            <div class="output-label">Your Output</div>
+                            <div class="output-box" id="actual-output">—</div>
+                        </div>
+                        
+                        <div class="hints-section" id="hints-section" style="display: none;">
+                            <div class="output-label">💡 Hints</div>
+                            <div id="hints-content"></div>
+                        </div>
+                        
+                        <div class="explanation-section" id="explanation-section" style="display: none;">
+                            <div class="output-label">📖 Explanation</div>
+                            <div id="explanation-content"></div>
+                        </div>
+                        
+                        <div class="table-section" id="table-section">
+                            <div class="output-label">Data Grid Visualization</div>
+                            <div id="table-container"></div>
+                        </div>
+                        
+                        <div class="console-section" style="display: none;" id="console-section">
+                            <div class="console-header">Console Log</div>
+                            <div class="console-content" id="console-log"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Ace Editor -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.2/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.32.2/ext-language_tools.js"></script>
+    
+    <script>
+        // ===============================================
+        // INJECTED COMPONENTS
+        // ===============================================
+        
+        // ===== INJECTED: config.js =====
+// ===========================================================================
+// WebSocket Configuration
+// ===========================================================================
+
+// ============================================================================
+// EASY MODE: Just set your development stage here!
+// ============================================================================
+
+const DEV_STAGE = 'production';  // Change to 'production' when embedding
+
+// ============================================================================
+// Configuration Presets
+// ============================================================================
+
+const CONFIGS = {
+    // Development: Testing with Python HTTP server
+    // - HTML served by: python -m http.server 8000
+    // - WebSocket on: dserv with WSS on port 2565
+    development: {
+        protocol: 'wss:',
+        port: 2565,        // Your dserv WebSocket port
+        host: 'localhost', // Or your dserv hostname
+        path: '/ws'
+    },
+    
+    // Production: Embedded in dserv (self-hosted)
+    // - HTML served by: dserv on same port as WebSocket
+    // - WebSocket on: same dserv server and port
+    production: {
+        protocol: null,    // Auto-detect from page
+        port: null,        // Same as HTTP
+        host: null,        // Same as page
+        path: '/ws'
+    }
+};
+
+// Apply the selected configuration
+const WS_CONFIG = CONFIGS[DEV_STAGE];
+
+// ============================================================================
+// Advanced: Custom configuration (optional)
+// ============================================================================
+// If you need something different, uncomment and edit:
+/*
+const WS_CONFIG = {
+    protocol: 'wss:',
+    port: 3000,
+    host: 'myserver.com',
+    path: '/ws'
+};
+*/
+
+// ============================================================================
+// WORKFLOW:
+// ============================================================================
+// 1. Development (testing with Python server):
+//    - Set DEV_STAGE = 'development'
+//    - python build.py tcl_tutorial.html
+//    - python -m http.server 8000
+//    - Open: http://localhost:8000/tcl_tutorial_built.html
+//    - WebSocket connects to: wss://localhost:2565/ws?link=tutorial
+//
+// 2. Production (embed in dserv):
+//    - Set DEV_STAGE = 'production'
+//    - python build.py tcl_tutorial.html
+//    - Deploy to dserv web root
+//    - Open: https://your-server/tcl_tutorial_built.html
+//    - WebSocket connects to: wss://your-server/ws?link=tutorial
+// ============================================================================
+
+
+// ===== END: config.js =====
+        // ===== INJECTED: ws_manager.js =====
+// ===========================================================================
+// WebSocket Manager - Reusable component for dserv WebSocket connections
+// ===========================================================================
+
+class DservWS {
+    constructor(linkName = null, options = {}) {
+        this.ws = null;
+        this.callbacks = {};
+        this.nextId = 1;
+        this.eventHandlers = { connected: [], disconnected: [], error: [] };
+        this.linkName = linkName;  // Used as subprocess name for routing
+        this.reconnectDelay = 2000;
+        this.reconnectTimer = null;
+        
+        // Configuration options
+        this.wsHost = options.wsHost || window.location.host;
+        this.wsPort = options.wsPort || null;  // Override port if specified
+        // Auto-detect protocol if not specified (http→ws, https→wss)
+        this.wsProtocol = options.wsProtocol || (window.location.protocol === 'https:' ? 'wss:' : 'ws:');
+        this.wsPath = options.wsPath || '/ws';
+    }
+
+    connect() {
+        // Clear any existing reconnect timer
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        // Build WebSocket URL (NO ?link parameter - routing done via 'send' command)
+        let wsHost = this.wsHost;
+        
+        // If custom port specified, override
+        if (this.wsPort) {
+            // Strip existing port from host if present
+            wsHost = wsHost.split(':')[0];
+            wsHost = `${wsHost}:${this.wsPort}`;
+        }
+        
+        let wsUrl = `${this.wsProtocol}//${wsHost}${this.wsPath}`;
+        
+        console.log(`Connecting to: ${wsUrl}`);
+        this.ws = new WebSocket(wsUrl);
+        
+        this.ws.onopen = () => {
+            console.log('WebSocket connected');
+            this.emit('connected', true);
+        };
+        
+        this.ws.onclose = (event) => {
+            console.log('WebSocket disconnected', event.code, event.reason);
+            this.emit('connected', false);
+            this.emit('disconnected', event);
+            
+            // Auto-reconnect
+            this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelay);
+        };
+        
+        this.ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            this.emit('error', error);
+        };
+        
+        this.ws.onmessage = (event) => {
+            console.log('WS received:', event.data);  // DEBUG
+            try {
+                const msg = JSON.parse(event.data);
+                console.log('Parsed message:', msg);  // DEBUG
+                
+                // Backend sends {result: "..."} or {status: "error", ...}
+                // No ID matching - just resolve the last pending callback
+                const pendingIds = Object.keys(this.callbacks);
+                if (pendingIds.length > 0) {
+                    const id = pendingIds[0];  // Get first pending callback
+                    console.log('Calling callback for id:', id);  // DEBUG
+                    this.callbacks[id](msg);
+                    delete this.callbacks[id];
+                } else {
+                    console.log('No pending callback for message:', msg);  // DEBUG
+                }
+            } catch (e) {
+                console.error('Failed to parse message:', e, 'Raw:', event.data);
+            }
+        };
+    }
+
+    disconnect() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
+    }
+
+    sendCommand(cmd, timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                reject(new Error('WebSocket not connected'));
+                return;
+            }
+            
+            const id = this.nextId++;
+            this.callbacks[id] = resolve;
+            
+            // NOTE: Backend doesn't use ID matching, but we track locally for timeout
+            const message = JSON.stringify(cmd);  // Don't add id to message
+            console.log('WS sending:', message);  // DEBUG
+            this.ws.send(message);
+            
+            // Timeout handler
+            const timeoutId = setTimeout(() => {
+                if (this.callbacks[id]) {
+                    console.log('Command timeout for id:', id);  // DEBUG
+                    delete this.callbacks[id];
+                    reject(new Error('Command timeout'));
+                }
+            }, timeout);
+            
+            // Wrap original callback to clear timeout
+            const originalCallback = this.callbacks[id];
+            this.callbacks[id] = (msg) => {
+                clearTimeout(timeoutId);
+                originalCallback(msg);
+            };
+        });
+    }
+
+    eval(script, timeout = 5000) {
+        // If linkName is set, wrap script with 'send subprocess {script}'  
+        let scriptToSend = script;
+        if (this.linkName) {
+            scriptToSend = `send ${this.linkName} {${script}}`;
+        }
+        
+        return this.sendCommand({ cmd: 'eval', script: scriptToSend }, timeout);
+    }
+
+    on(event, handler) {
+        if (!this.eventHandlers[event]) {
+            this.eventHandlers[event] = [];
+        }
+        this.eventHandlers[event].push(handler);
+    }
+
+    off(event, handler) {
+        if (this.eventHandlers[event]) {
+            this.eventHandlers[event] = this.eventHandlers[event].filter(h => h !== handler);
+        }
+    }
+
+    emit(event, data) {
+        if (this.eventHandlers[event]) {
+            this.eventHandlers[event].forEach(h => h(data));
+        }
+    }
+
+    isConnected() {
+        return this.ws && this.ws.readyState === WebSocket.OPEN;
+    }
+}
+
+// ===== END: ws_manager.js =====
+        // ===== INJECTED: editor_config.js =====
+// ===========================================================================
+// Ace Editor Configuration - Reusable Tcl editor setup
+// ===========================================================================
+
+class TclEditor {
+    constructor(elementId, options = {}) {
+        this.editor = ace.edit(elementId);
+        this.ws = null;  // Will be set via setWebSocket()
+        this.setupEditor(options);
+    }
+
+    setWebSocket(ws) {
+        this.ws = ws;
+        // Add dynamic completer now that we have WebSocket
+        this.addDynamicCompleter();
+    }
+
+    setupEditor(options) {
+        const defaults = {
+            theme: 'ace/theme/monokai',
+            mode: 'ace/mode/tcl',
+            fontSize: '13px',
+            showPrintMargin: false,
+            enableBasicAutocompletion: true,
+            enableLiveAutocompletion: true,
+            enableSnippets: true,  // Enable for cursor positioning in completions
+            highlightActiveLine: true,
+            highlightSelectedWord: true,
+            showGutter: true,
+            displayIndentGuides: true,
+            tabSize: 4,
+            useSoftTabs: true,
+            wrap: true,
+            behavioursEnabled: false,  // Disable auto-pairing of brackets
+            wrapBehavioursEnabled: false
+        };
+
+        const config = { ...defaults, ...options };
+
+        this.editor.setTheme(config.theme);
+        this.editor.session.setMode(config.mode);
+        this.editor.setOptions({
+            fontSize: config.fontSize,
+            showPrintMargin: config.showPrintMargin,
+            enableBasicAutocompletion: config.enableBasicAutocompletion,
+            enableLiveAutocompletion: config.enableLiveAutocompletion,
+            enableSnippets: config.enableSnippets,
+            highlightActiveLine: config.highlightActiveLine,
+            highlightSelectedWord: config.highlightSelectedWord,
+            showGutter: config.showGutter,
+            displayIndentGuides: config.displayIndentGuides
+        });
+
+        this.editor.session.setTabSize(config.tabSize);
+        this.editor.session.setUseSoftTabs(config.useSoftTabs);
+        this.editor.session.setUseWrapMode(config.wrap);
+        this.editor.setBehavioursEnabled(config.behavioursEnabled);
+        this.editor.setWrapBehavioursEnabled(config.wrapBehavioursEnabled);
+        
+        // Enable bracket matching highlighting
+        this.editor.setHighlightActiveLine(true);
+        this.editor.session.setUseSoftTabs(true);
+        this.editor.setShowPrintMargin(false);
+        this.editor.$blockScrolling = Infinity;
+        
+        // Setup Tab key for completion
+        this.setupTabCompletion();
+        
+        // Enable auto-indent
+        this.setupAutoIndent();
+    }
+    
+    setupTabCompletion() {
+        const self = this;
+        
+        // Add Tab key binding for completion
+        this.editor.commands.addCommand({
+            name: 'tabCompletion',
+            bindKey: { win: 'Tab', mac: 'Tab' },
+            exec: function(editor) {
+                const langTools = ace.require("ace/ext/language_tools");
+                const pos = editor.getCursorPosition();
+                const line = editor.session.getLine(pos.row);
+                const textBeforeCursor = line.substring(0, pos.column);
+                
+                // If there's text before cursor and we're not at the start of a line, try completion
+                if (textBeforeCursor.trim().length > 0 && !/^\s*$/.test(textBeforeCursor)) {
+                    // Trigger completion
+                    editor.execCommand("startAutocomplete");
+                    return;
+                }
+                
+                // Otherwise, insert tab/spaces
+                editor.indent();
+            },
+            readOnly: false
+        });
+    }
+    
+    setupAutoIndent() {
+        const self = this;
+        
+        // Auto-indent on Enter key
+        this.editor.commands.addCommand({
+            name: 'autoIndentNewLine',
+            bindKey: { win: 'Return', mac: 'Return' },
+            exec: function(editor) {
+                const pos = editor.getCursorPosition();
+                const line = editor.session.getLine(pos.row);
+                
+                // Calculate current indentation
+                const match = line.match(/^(\s*)/);
+                const currentIndent = match ? match[1] : '';
+                
+                // Check if line ends with opening brace
+                const trimmedLine = line.trim();
+                const needsExtraIndent = trimmedLine.endsWith('{') || 
+                                        trimmedLine.match(/^(proc|if|for|foreach|while|switch)\b/);
+                
+                // Insert newline
+                editor.insert('\n');
+                
+                // Apply indentation
+                if (needsExtraIndent) {
+                    editor.insert(currentIndent + '    '); // Add one level of indent
+                } else {
+                    editor.insert(currentIndent);
+                }
+            },
+            readOnly: false
+        });
+        
+        // Auto-dedent on closing brace
+        this.editor.commands.addCommand({
+            name: 'autoClosingBrace',
+            bindKey: { win: '}', mac: '}' },
+            exec: function(editor) {
+                const pos = editor.getCursorPosition();
+                const line = editor.session.getLine(pos.row);
+                
+                // If line is just whitespace, dedent before inserting }
+                if (/^\s*$/.test(line)) {
+                    editor.navigateLineStart();
+                    const spaces = line.match(/^\s*/)[0];
+                    if (spaces.length >= 4) {
+                        // Remove one indent level
+                        editor.session.replace({
+                            start: { row: pos.row, column: 0 },
+                            end: { row: pos.row, column: 4 }
+                        }, '');
+                    }
+                }
+                
+                editor.insert('}');
+            },
+            readOnly: false
+        });
+    }
+
+    setValue(text, cursorPos = -1) {
+        this.editor.setValue(text, cursorPos);
+    }
+
+    getValue() {
+        return this.editor.getValue();
+    }
+
+    focus() {
+        this.editor.focus();
+    }
+
+    resize() {
+        this.editor.resize();
+    }
+
+    on(event, callback) {
+        this.editor.session.on(event, callback);
+    }
+
+    getEditor() {
+        return this.editor;
+    }
+
+    setReadOnly(readonly) {
+        this.editor.setReadOnly(readonly);
+    }
+
+    clearSelection() {
+        this.editor.clearSelection();
+    }
+    
+    // Indent selected region
+    indentSelection() {
+        const range = this.editor.getSelectionRange();
+        const startRow = range.start.row;
+        const endRow = range.end.row;
+        
+        for (let row = startRow; row <= endRow; row++) {
+            this.editor.session.indentRows(row, row, '    ');
+        }
+    }
+    
+    // Dedent selected region
+    dedentSelection() {
+        const range = this.editor.getSelectionRange();
+        const startRow = range.start.row;
+        const endRow = range.end.row;
+        
+        for (let row = startRow; row <= endRow; row++) {
+            const line = this.editor.session.getLine(row);
+            if (line.match(/^    /)) {
+                this.editor.session.replace({
+                    start: { row: row, column: 0 },
+                    end: { row: row, column: 4 }
+                }, '');
+            } else if (line.match(/^\t/)) {
+                this.editor.session.replace({
+                    start: { row: row, column: 0 },
+                    end: { row: row, column: 1 }
+                }, '');
+            }
+        }
+    }
+    
+    // Auto-format selected region following Tcl indentation rules
+    autoFormatSelection() {
+        const range = this.editor.getSelectionRange();
+        const startRow = range.start.row;
+        const endRow = range.end.row;
+        
+        let indentLevel = 0;
+        
+        for (let row = startRow; row <= endRow; row++) {
+            const line = this.editor.session.getLine(row);
+            const trimmed = line.trim();
+            
+            // Skip empty lines
+            if (trimmed === '') continue;
+            
+            // Dedent if line starts with closing brace
+            if (trimmed.startsWith('}')) {
+                indentLevel = Math.max(0, indentLevel - 1);
+            }
+            
+            // Apply indentation
+            const indent = '    '.repeat(indentLevel);
+            const newLine = indent + trimmed;
+            
+            this.editor.session.replace({
+                start: { row: row, column: 0 },
+                end: { row: row, column: line.length }
+            }, newLine);
+            
+            // Increase indent if line ends with opening brace
+            if (trimmed.endsWith('{')) {
+                indentLevel++;
+            }
+            // Also increase for control structures without immediate brace
+            else if (trimmed.match(/^(proc|if|for|foreach|while|switch)\b/) && !trimmed.includes('{')) {
+                indentLevel++;
+            }
+        }
+    }
+
+    addDynamicCompleter() {
+        if (!this.ws) return;
+        
+        const langTools = ace.require("ace/ext/language_tools");
+        const self = this;
+        
+        const dynamicCompleter = {
+            // Add identifierRegexps to include $ for variable completion
+            identifierRegexps: [/[a-zA-Z_0-9\$\-\.\:]/],
+            
+            getCompletions: async function(editor, session, pos, prefix, callback) {
+                // Get the line up to cursor position
+                const line = session.getLine(pos.row);
+                const textBeforeCursor = line.substring(0, pos.column);
+                
+                // Don't complete if empty
+                if (!textBeforeCursor.trim()) {
+                    callback(null, []);
+                    return;
+                }
+                
+                try {
+                    // Call backend's complete_token command
+                    // This returns JUST the tokens to insert (no extraction needed!)
+                    const result = await self.ws.eval(`complete_token {${textBeforeCursor}}`);
+                    
+                    if (result.result) {
+                        // Parse Tcl list result
+                        const tokens = self.parseTclList(result.result);
+                        
+                        // Create completions - NO extraction, NO stripping, just use tokens!
+                        const completions = tokens.map(token => ({
+                            caption: token,
+                            value: token,
+                            meta: "backend",
+                            score: 1000
+                        }));
+                        
+                        callback(null, completions);
+                    } else {
+                        callback(null, []);
+                    }
+                } catch (error) {
+                    console.error('Completion error:', error);
+                    callback(null, []);
+                }
+            }
+        };
+        
+        langTools.addCompleter(dynamicCompleter);
+    }
+
+    parseTclList(str) {
+        // Simple Tcl list parser for completion results
+        if (!str || str.trim() === '') return [];
+        
+        // For simple space-separated words (most cases)
+        if (!str.includes('{') && !str.includes('"')) {
+            return str.trim().split(/\s+/);
+        }
+        
+        // For more complex lists, do basic parsing
+        const result = [];
+        let current = '';
+        let inBraces = 0;
+        let inQuotes = false;
+        
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            
+            if (char === '{' && !inQuotes) {
+                inBraces++;
+                if (inBraces === 1) continue;  // Skip outer brace
+            } else if (char === '}' && !inQuotes) {
+                inBraces--;
+                if (inBraces === 0 && current) {
+                    result.push(current);
+                    current = '';
+                    continue;
+                }
+            } else if (char === '"' && inBraces === 0) {
+                inQuotes = !inQuotes;
+                continue;
+            } else if (char === ' ' && inBraces === 0 && !inQuotes) {
+                if (current) {
+                    result.push(current);
+                    current = '';
+                }
+                continue;
+            }
+            
+            current += char;
+        }
+        
+        // Don't forget the last item
+        if (current) {
+            result.push(current);
+        }
+        
+        return result;
+    }
+}
+// ===== END: editor_config.js =====
+        
+        // ===============================================
+        // LESSON DATABASE
+        // ===============================================
+        
+        // ===== INJECTED: lessons.js =====
+// lessons.js - Tcl Tutorial Lesson Definitions
+// Edit this file to add/modify lessons
+
+const LESSONS = {
+    basics: [
+        {
+            id: 'return-basics',
+            title: 'Understanding return',
+            description: 'Learn how return gives values back',
+            starterCode: `# Create a variable
+set myvar 42
+
+# Return it (give it back as result)
+return $myvar`,
+            expectedOutput: '42',
+            outputType: 'text',
+            hints: [
+                'Use "set varname value" to create a variable',
+                'Use "return" to give back a result',
+                'return is NOT the same as puts (we\'ll see why next)'
+            ],
+            explanation: 'In Tcl, "return" gives a value back as the result. This is how procs (functions) send values back to their caller.'
+        },
+        {
+            id: 'return-vs-puts',
+            title: 'return vs puts',
+            description: 'Critical: Learn the difference!',
+            starterCode: `# puts PRINTS to console (side effect)
+# return GIVES BACK a value (result)
+
+# This code returns a value:
+set answer 100
+return $answer
+
+# Try changing "return" to "puts" - see what happens!`,
+            expectedOutput: '100',
+            outputType: 'text',
+            hints: [
+                'return gives the value BACK as the result',
+                'puts just prints to the console',
+                'Loaders use return to give back the DG name!',
+                'If you use puts instead of return, you get nothing back'
+            ],
+            explanation: `KEY CONCEPT:
+- puts: Prints to console (for debugging)
+- return: Gives value back (for results)
+
+Example:
+  set x [some_proc]
+  
+If some_proc uses "return 5", then x = 5
+If some_proc uses "puts 5", then x = "" (nothing!)
+
+In loader procs, you MUST use "return stimdg", not "puts stimdg"!`
+        },
+        {
+            id: 'var-set',
+            title: 'Variables with set',
+            description: 'Create and use variables',
+            starterCode: `# Create variables
+set width 10
+set height 20
+
+# Calculate area
+set area [expr {$width * $height}]
+
+# Return the result
+return $area`,
+            expectedOutput: '200',
+            outputType: 'text',
+            hints: [
+                'Use "set varname value" to create variables',
+                'Access variables with $varname',
+                'Use expr for math',
+                'Use return to give back the final answer'
+            ]
+        },
+        {
+            id: 'list-basics',
+            title: 'Working with Lists',
+            description: 'Create and access list elements',
+            starterCode: `# Create a list
+set numbers {10 20 30 40}
+
+# Get second element (index 1)
+set second [lindex $numbers 1]
+
+# Return it
+return $second`,
+            expectedOutput: '20',
+            outputType: 'text',
+            hints: [
+                'Lists are created with curly braces: {a b c}',
+                'lindex gets an element: lindex $list index',
+                'List indices start at 0',
+                'Use return to give back the value'
+            ]
+        },
+        {
+            id: 'proc-basics',
+            title: 'Creating Procedures',
+            description: 'Define your first proc',
+            starterCode: `# Define a procedure (function)
+proc double { x } {
+    set result [expr {$x * 2}]
+    return $result
+}
+
+# Call it and return the result
+set answer [double 21]
+return $answer`,
+            expectedOutput: '42',
+            outputType: 'text',
+            hints: [
+                'proc defines a function: proc name {args} {body}',
+                'Inside the proc, use return to give back a value',
+                'Call the proc like: [proc_name arg1 arg2]',
+                'The proc\'s return value can be stored in a variable'
+            ],
+            explanation: 'Procs (procedures) are functions in Tcl. They MUST use "return" to give back values. This is how loaders work!'
+        },
+        {
+            id: 'math-expr',
+            title: 'Math with expr',
+            description: 'Perform calculations',
+            starterCode: `# Calculate something
+set a 10
+set b 5
+
+set result [expr {$a * $b + 2}]
+
+# Return the answer
+return $result`,
+            expectedOutput: '52',
+            outputType: 'text',
+            hints: [
+                'Use expr for math: expr {$a + $b}',
+                'Braces are important for expr',
+                'Operators: + - * / ** (power)',
+                'Always return your final answer!'
+            ]
+        }
+    ],
+    
+    dlsh: [
+        {
+            id: 'dl-fromto',
+            title: 'Creating Sequences',
+            description: 'Use dl_fromto to create number sequences',
+            starterCode: `# Create sequence from 0 to 9
+set ids [dl_fromto 0 9]
+
+# Return the length (not puts!)
+return [dl_length $ids]`,
+            expectedOutput: '10',
+            outputType: 'text',
+            hints: [
+                'dl_fromto creates sequences: dl_fromto start end',
+                'dl_length returns the number of elements',
+                'Range is inclusive on both ends',
+                'Remember: use return, not puts!'
+            ]
+        },
+        {
+            id: 'dl-local',
+            title: 'Using dl_local',
+            description: 'Create temporary lists with automatic cleanup',
+            starterCode: `# dl_local creates a temporary list
+# It's automatically cleaned up - no memory leaks!
+
+dl_local values [dl_fromto 0 4]
+
+# Use it like any dlsh list
+set total [dl_length $values]
+
+return $total`,
+            expectedOutput: '5',
+            outputType: 'text',
+            hints: [
+                'dl_local creates temporary dlsh lists',
+                'The list is automatically cleaned up when done',
+                'Use dl_local instead of set for temporary dlsh lists',
+                'This prevents memory leaks!'
+            ],
+            explanation: 'dl_local is CRITICAL for dlsh! It creates temporary lists that auto-cleanup. Use it instead of "set" for dlsh lists you don\'t need to keep.'
+        },
+        {
+            id: 'dl-tcllist',
+            title: 'Converting to Tcl Lists',
+            description: 'Use dl_tcllist to convert dlsh → Tcl',
+            starterCode: `# Create a dlsh list
+dl_local nums [dl_fromto 1 5]
+
+# Convert to Tcl list
+set tcl_list [dl_tcllist $nums]
+
+# Now you can use regular Tcl commands
+set first [lindex $tcl_list 0]
+
+return $first`,
+            expectedOutput: '1',
+            outputType: 'text',
+            hints: [
+                'dl_tcllist converts dlsh lists to Tcl lists',
+                'This lets you use standard Tcl commands like lindex',
+                'dlsh lists are fast, but sometimes you need Tcl format',
+                'Syntax: dl_tcllist $dlsh_variable'
+            ],
+            explanation: 'dlsh lists are optimized for speed, but standard Tcl commands like lindex, llength, etc. need Tcl lists. Use dl_tcllist to convert.'
+        },
+        {
+            id: 'dl-slist',
+            title: 'String Lists',
+            description: 'Create lists of strings',
+            starterCode: `# Create a string list (converts Tcl → dlsh)
+dl_local names [dl_slist {Alice Bob Charlie}]
+
+# Return the length
+return [dl_length $names]`,
+            expectedOutput: '3',
+            outputType: 'text',
+            hints: [
+                'dl_slist creates a dlsh list from Tcl list',
+                'Use curly braces for the list',
+                'Each space-separated item is one element',
+                'Use dl_local for temporary lists!'
+            ]
+        },
+        {
+            id: 'dl-replicate',
+            title: 'Replicating Values',
+            description: 'Repeat patterns with dl_replicate',
+            starterCode: `# Replicate pattern
+dl_local pattern [dl_slist {a b c}]
+dl_local repeated [dl_replicate $pattern 3]
+
+# Return the total length
+return [dl_length $repeated]`,
+            expectedOutput: '9',
+            outputType: 'text',
+            hints: [
+                'dl_replicate repeats each element N times',
+                'Pattern {a b c} with n=3 gives {a a a b b b c c c}',
+                'Total length is original_length × n',
+                'Notice we use dl_local for both temporary lists'
+            ]
+        },
+        {
+            id: 'dl-get',
+            title: 'Getting Elements',
+            description: 'Access specific elements with dl_get',
+            starterCode: `# Create a sequence
+dl_local values [dl_fromto 100 109]
+
+# Get the 5th element (index 4)
+set fifth [dl_get $values 4]
+
+# Return it
+return $fifth`,
+            expectedOutput: '104',
+            outputType: 'text',
+            hints: [
+                'dl_get accesses elements: dl_get $list index',
+                'Indices start at 0',
+                'Element at index 4 is the 5th element',
+                'Use dl_local for the temporary sequence'
+            ]
+        },
+        {
+            id: 'dl-local-vs-set',
+            title: 'When to use dl_local vs set',
+            description: 'Learn the important distinction',
+            starterCode: `# For DG columns (permanent), use dl_set:
+# dl_set stimdg:values [dl_fromto 0 9]
+
+# For temporary work, use dl_local:
+dl_local temp [dl_fromto 0 9]
+dl_local doubled [dl_mult $temp 2]
+
+# Get first doubled value
+set result [dl_get $doubled 0]
+
+return $result`,
+            expectedOutput: '0',
+            outputType: 'text',
+            hints: [
+                'dl_local: for temporary lists (auto-cleanup)',
+                'dl_set: for DG columns (permanent data)',
+                'set: for regular Tcl variables',
+                'Using dl_local prevents memory leaks!'
+            ],
+            explanation: `MEMORY MANAGEMENT:
+- dl_local: Temporary dlsh lists (cleaned up automatically)
+- dl_set: DG columns (permanent until dg_delete)
+- set: Regular Tcl variables (strings, numbers)
+
+Always use dl_local for intermediate calculations!`
+        },
+        {
+            id: 'dl-scope-experiment',
+            title: '🔬 Experiment: dl_local Scope',
+            description: 'Try this in the Command Line below!',
+            starterCode: `# This lesson demonstrates dl_local scope.
+# Try these commands in the Command Line:
+
+# 1. Create dl_local OUTSIDE a proc:
+#    > dl_local test [dl_fromto 0 5]
+#    > dl_length $test
+#    Result: 6 (still exists!)
+
+# 2. Inside a proc:
+#    > proc my_test {} { dl_local x [dl_fromto 0 3]; return [dl_length $x] }
+#    > my_test
+#    Result: 4
+#    > dl_length $x
+#    Result: Error - x was cleaned up!
+
+# For this lesson, just return "experiment"
+return experiment`,
+            expectedOutput: 'experiment',
+            outputType: 'text',
+            hints: [
+                'Use the Command Line at the bottom of the output panel!',
+                'Try: dl_local test [dl_fromto 0 5]',
+                'Then: dl_length $test',
+                'See how scope works in real-time!'
+            ],
+            explanation: `⚡ COMMAND LINE EXPERIMENT:
+
+dl_local OUTSIDE a proc:
+- Lives until end of current scope
+- At command line, that's until you close the session
+- Still gets cleaned up (no leak)
+
+dl_local INSIDE a proc:
+- Lives only inside the proc
+- Cleaned up when proc returns
+- This is the common pattern in loaders!
+
+Try it yourself in the Command Line below!`
+        }
+    ],
+    
+    dg: [
+        {
+            id: 'dg-create',
+            title: 'Creating a Dynamic Group',
+            description: 'Learn to create and populate a DG',
+            starterCode: `# Create a dynamic group
+dg_create testdg
+
+# Add columns using dl_set (permanent)
+dl_set testdg:id [dl_fromto 0 4]
+dl_set testdg:value [dl_slist {10 20 30 40 50}]
+
+# Return the DG name for visualization
+return testdg`,
+            expectedOutput: 'testdg',
+            outputType: 'dg',
+            dgName: 'testdg',
+            hints: [
+                'dg_create makes a new dynamic group',
+                'dl_set creates columns: dl_set dgname:colname values',
+                'Use dl_set for DG columns (permanent data)',
+                'Return the DG name - this is what loaders do!'
+            ]
+        },
+        {
+            id: 'dg-with-calc',
+            title: 'DG with Calculations',
+            description: 'Use dl_local for intermediate work',
+            starterCode: `# Create DG
+dg_create testdg
+
+# Use dl_local for temporary calculations
+dl_local base [dl_fromto 1 5]
+dl_local doubled [dl_mult $base 2]
+
+# Store result in DG (permanent)
+dl_set testdg:id [dl_fromto 0 4]
+dl_set testdg:doubled $doubled
+
+return testdg`,
+            expectedOutput: 'testdg',
+            outputType: 'dg',
+            dgName: 'testdg',
+            hints: [
+                'Use dl_local for temporary calculations',
+                'Use dl_set to store final results in DG',
+                'dl_local lists are auto-cleaned up',
+                'This pattern is common in loaders!'
+            ],
+            explanation: 'Pattern: dl_local for work → dl_set for storage. This prevents memory leaks!'
+        },
+        {
+            id: 'dg-multi-column',
+            title: 'Multiple Columns',
+            description: 'Create a DG with several columns',
+            starterCode: `# Create experiment trials
+dg_create trials
+
+dl_set trials:id [dl_fromto 0 9]
+dl_set trials:condition [dl_replicate [dl_fromto 0 1] 5]
+dl_set trials:response [dl_ones 10]
+
+# Return the DG name
+return trials`,
+            expectedOutput: 'trials',
+            outputType: 'dg',
+            dgName: 'trials',
+            hints: [
+                'You can add as many columns as you need',
+                'Use dl_replicate for repeating patterns',
+                'dl_ones creates a list of all 1s',
+                'Always return the DG name at the end!'
+            ]
+        }
+    ],
+    
+    loaders: [
+        {
+            id: 'first-loader',
+            title: 'Your First Loader',
+            description: 'Create a simple stimulus loader',
+            starterCode: `# Create a basic loader
+proc my_loader { nr } {
+    dg_create stimdg
+    
+    # Use dl_local for temporary work
+    dl_local ids [dl_fromto 0 [expr {$nr - 1}]]
+    
+    # Store in DG with dl_set
+    dl_set stimdg:id $ids
+    dl_set stimdg:stimtype stimdg:id
+    dl_set stimdg:remaining [dl_ones $nr]
+    
+    return stimdg
+}
+
+# Call the loader - it RETURNS the DG name!
+set dg_name [my_loader 5]
+
+# Return the DG name
+return $dg_name`,
+            expectedOutput: 'stimdg',
+            outputType: 'dg',
+            dgName: 'stimdg',
+            hints: [
+                'proc defines a function: proc name {args} {body}',
+                'Inside the proc, use "return stimdg" to give back the DG name',
+                'Use dl_local for temporary calculations',
+                'Use dl_set to store permanent DG columns',
+                'When calling the loader: set result [my_loader 5]'
+            ],
+            explanation: `This is exactly how loaders work!
+1. Create DG with dg_create
+2. Use dl_local for intermediate calculations
+3. Use dl_set to store columns in DG
+4. Return the DG name
+
+The proc creates a DG and returns its name. You call it and capture the return value.`
+        }
+    ]
+};
+
+// ===== END: lessons.js =====
+        
+        // ===============================================
+        // TUTORIAL MANAGER
+        // ===============================================
+        
+        class TutorialManager {
+            constructor(ws) {
+                this.ws = ws;
+                this.editor = null;
+                this.currentLessonId = null;
+                this.currentCategory = 'basics';
+                this.completedLessons = new Set();
+                this.subprocess = null;  // Will be created dynamically
+                this.putsVar = `puts_output_${Date.now()}`;
+                
+                this.initEditor();
+                this.setupEventListeners();
+                this.renderLessons();
+                this.updateProgress();
+                this.ensureSubprocess();  // Create subprocess before using it
+            }
+            
+            async ensureSubprocess() {
+                if (!this.subprocess) {
+                    this.subprocess = `tutorial_${Date.now()}`;
+                    try {
+                        // Create the subprocess
+                        await this.ws.sendCommand({
+                            cmd: 'eval',
+                            script: `subprocess -link ${this.subprocess}`
+                        });
+                        
+                        // Set linkName on WebSocket so eval() automatically wraps commands
+                        this.ws.linkName = this.subprocess;
+                        
+                        // Initialize with dlsh (will be auto-wrapped now)
+                        await this.ws.eval('package require dlsh');
+                        
+                        // Setup puts capture (will be auto-wrapped now)
+                        await this.setupPutsCapture();
+                        
+                        this.log('Tutorial environment ready');
+                    } catch (error) {
+                        console.error('Failed to setup subprocess:', error);
+                        this.log('Error: ' + error.message, 'error');
+                    }
+                }
+            }
+            
+            initEditor() {
+                this.editor = new TclEditor('editor');
+                this.editor.setWebSocket(this.ws);  // Enable backend completion
+                this.editor.setValue('# Select a lesson to begin', -1);
+                
+                this.expectedOutput = document.getElementById('expected-output');
+                this.actualOutput = document.getElementById('actual-output');
+                this.feedbackMessage = document.getElementById('feedback-message');
+                this.runBtn = document.getElementById('run-btn');
+                this.resetBtn = document.getElementById('reset-btn');
+                this.nextBtn = document.getElementById('next-btn');
+                this.consoleLog = document.getElementById('console-log');
+                this.consoleSection = document.getElementById('console-section');
+                this.tableSection = document.getElementById('table-section');
+                this.tableContainer = document.getElementById('table-container');
+                this.progressIndicator = document.getElementById('progress-indicator');
+            }
+            
+            setupEventListeners() {
+                this.runBtn.addEventListener('click', () => this.runCode());
+                this.resetBtn.addEventListener('click', () => this.resetLesson());
+                this.nextBtn.addEventListener('click', () => this.nextLesson());
+                
+                document.querySelectorAll('.category-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        this.currentCategory = btn.dataset.category;
+                        document.querySelectorAll('.category-btn').forEach(b => {
+                            b.classList.toggle('active', b === btn);
+                        });
+                        this.renderLessons();
+                        const firstLesson = LESSONS[this.currentCategory][0];
+                        if (firstLesson) this.loadLesson(firstLesson.id);
+                    });
+                });
+            }
+            
+            async setupPutsCapture() {
+                try {
+                    await this.ws.eval(`set ${this.putsVar} ""`);
+                    await this.ws.eval(`rename puts ::tcl::orig_puts
+proc puts args {
+    global ${this.putsVar}
+    if {[llength $args] == 1} {
+        append ${this.putsVar} [lindex $args 0] "\\n"
+        ::tcl::orig_puts {*}$args
+    } else {
+        ::tcl::orig_puts {*}$args
+    }
+}`);
+                } catch (error) {
+                    console.error('Failed to setup puts capture:', error);
+                }
+            }
+            
+            async clearPutsOutput() {
+                await this.ws.eval(`set ${this.putsVar} ""`);
+            }
+            
+            async getPutsOutput() {
+                const result = await this.ws.eval(`set ${this.putsVar}`);
+                return result.result ? result.result.trim() : '';
+            }
+            
+            renderLessons() {
+                const sidebar = document.getElementById('lesson-sidebar');
+                sidebar.innerHTML = '';
+                
+                const lessons = LESSONS[this.currentCategory] || [];
+                lessons.forEach(lesson => {
+                    const item = document.createElement('div');
+                    item.className = 'lesson-item';
+                    if (lesson.id === this.currentLessonId) item.classList.add('active');
+                    if (this.completedLessons.has(lesson.id)) item.classList.add('completed');
+                    
+                    item.innerHTML = `
+                        <div class="lesson-title">${lesson.title}</div>
+                        <div class="lesson-description">${lesson.description}</div>
+                        ${this.completedLessons.has(lesson.id) ? '<div class="lesson-status completed">✓ Completed</div>' : ''}
+                    `;
+                    
+                    item.addEventListener('click', () => this.loadLesson(lesson.id));
+                    sidebar.appendChild(item);
+                });
+            }
+            
+            loadLesson(id) {
+                const lesson = this.findLesson(id);
+                if (!lesson) return;
+                
+                this.currentLessonId = id;
+                this.nextBtn.style.display = 'none';
+                
+                document.getElementById('lesson-title').textContent = lesson.title;
+                document.getElementById('lesson-description').textContent = lesson.description;
+                
+                // Support both starterCode (new) and initialCode (legacy)
+                this.editor.setValue(lesson.starterCode || lesson.initialCode || '', -1);
+                this.expectedOutput.textContent = lesson.expectedOutput || 'Check visualization below';
+                this.actualOutput.textContent = '—';
+                this.actualOutput.className = 'output-box';
+                this.feedbackMessage.className = 'feedback-message';
+                this.tableSection.style.display = 'none';
+                
+                // Display hints if available
+                const hintsSection = document.getElementById('hints-section');
+                const hintsContent = document.getElementById('hints-content');
+                if (lesson.hints && lesson.hints.length > 0) {
+                    hintsSection.style.display = 'block';
+                    const hintsList = lesson.hints.map(hint => `<li>${hint}</li>`).join('');
+                    hintsContent.innerHTML = `<ul>${hintsList}</ul>`;
+                } else {
+                    hintsSection.style.display = 'none';
+                }
+                
+                // Display explanation if available
+                const explanationSection = document.getElementById('explanation-section');
+                const explanationContent = document.getElementById('explanation-content');
+                if (lesson.explanation) {
+                    explanationSection.style.display = 'block';
+                    explanationContent.textContent = lesson.explanation;
+                } else {
+                    explanationSection.style.display = 'none';
+                }
+                
+                this.renderLessons();
+                this.log(`Loaded: ${lesson.title}`);
+            }
+            
+            findLesson(id) {
+                for (const category in LESSONS) {
+                    const lesson = LESSONS[category].find(l => l.id === id);
+                    if (lesson) return lesson;
+                }
+                return null;
+            }
+            
+            async runCode() {
+                const code = this.editor.getValue();
+                const lesson = this.findLesson(this.currentLessonId);
+                if (!lesson) return;
+                
+                this.runBtn.disabled = true;
+                this.actualOutput.textContent = 'Running...';
+                this.actualOutput.className = 'output-box';
+                
+                try {
+                    await this.clearPutsOutput();
+                    const result = await this.ws.eval(code);
+                    const putsOutput = await this.getPutsOutput();
+                    
+                    if (result.status === 'error') {
+                        this.actualOutput.className = 'output-box error';
+                        this.actualOutput.textContent = '✗ Error: ' + (result.error || result.result);
+                        this.showFeedback('error', 'There was an error in your code');
+                        this.log('Error: ' + (result.error || result.result), 'error');
+                    } else {
+                        const output = putsOutput || result.result || '';
+                        this.actualOutput.textContent = output || '(no output)';
+                        
+                        // Support both dgName (new) and visualizeDG (legacy)
+                        const dgToVisualize = lesson.dgName || lesson.visualizeDG;
+                        if (dgToVisualize) {
+                            await this.visualizeDG(dgToVisualize);
+                        }
+                        
+                        if (lesson.expectedOutput !== undefined && lesson.expectedOutput !== '') {
+                            this.checkAnswer(output, lesson.expectedOutput);
+                        } else {
+                            this.actualOutput.className = 'output-box success';
+                            this.showFeedback('success', '✅ Code executed successfully!');
+                            this.completedLessons.add(this.currentLessonId);
+                            this.nextBtn.style.display = 'block';
+                            this.updateProgress();
+                            this.renderLessons();
+                        }
+                        
+                        this.log('Success', 'success');
+                    }
+                } catch (error) {
+                    this.actualOutput.className = 'output-box error';
+                    this.actualOutput.textContent = '✗ Error: ' + error.message;
+                    this.showFeedback('error', 'Failed to execute code');
+                    this.log('Error: ' + error.message, 'error');
+                } finally {
+                    this.runBtn.disabled = false;
+                }
+            }
+            
+            resetLesson() {
+                const lesson = this.findLesson(this.currentLessonId);
+                if (lesson) {
+                    this.editor.setValue(lesson.starterCode || lesson.initialCode || '', -1);
+                    this.actualOutput.textContent = '—';
+                    this.actualOutput.className = 'output-box';
+                    this.feedbackMessage.className = 'feedback-message';
+                    this.log('Reset');
+                }
+            }
+            
+            log(message, type = 'log') {
+                const entry = document.createElement('div');
+                entry.className = 'console-entry';
+                const timestamp = new Date().toLocaleTimeString();
+                entry.innerHTML = `
+                    <span class="console-timestamp">${timestamp}</span>
+                    <span class="console-type ${type}">[${type.toUpperCase()}]</span>
+                    ${message}
+                `;
+                this.consoleLog.appendChild(entry);
+                this.consoleSection.style.display = 'block';
+                this.consoleLog.scrollTop = this.consoleLog.scrollHeight;
+            }
+            
+            async visualizeDG(dgName) {
+                try {
+                    const dgResult = await this.ws.eval(`dg_toHybridJSON ${dgName}`);
+                    if (dgResult.status === 'ok' && dgResult.result) {
+                        const dgData = JSON.parse(dgResult.result);
+                        this.renderDGTable(dgData);
+                    }
+                } catch (error) {
+                    this.log(`Failed to visualize DG: ${error.message}`, 'error');
+                }
+            }
+            
+            renderDGTable(data) {
+                const rows = data.rows || [];
+                const arrays = data.arrays || {};
+                
+                if (rows.length === 0) {
+                    this.tableSection.style.display = 'none';
+                    return;
+                }
+                
+                this.tableSection.style.display = 'block';
+                const cols = Object.keys(rows[0]);
+                const arrayColumns = Object.keys(arrays);
+                
+                let html = '<table class="dg-table"><thead><tr>';
+                cols.forEach(col => {
+                    const isArray = arrayColumns.includes(col);
+                    html += `<th>${col}${isArray ? ' 🔢' : ''}</th>`;
+                });
+                html += '</tr></thead><tbody>';
+                
+                rows.forEach(row => {
+                    html += '<tr>';
+                    cols.forEach(col => {
+                        const v = row[col];
+                        const isArrayCol = arrayColumns.includes(col);
+                        
+                        if (isArrayCol && typeof v === 'number') {
+                            const arrayData = arrays[col][v];
+                            if (arrayData && arrayData.length) {
+                                html += `<td><span class="array-indicator">array[${arrayData.length}]</span></td>`;
+                            } else {
+                                html += `<td><span class="array-indicator">array</span></td>`;
+                            }
+                        } else if (Array.isArray(v)) {
+                            html += `<td><span class="array-indicator">array[${v.length}]</span></td>`;
+                        } else if (typeof v === 'number' && !Number.isInteger(v)) {
+                            html += `<td>${v.toFixed(3)}</td>`;
+                        } else {
+                            html += `<td>${v !== undefined ? v : '—'}</td>`;
+                        }
+                    });
+                    html += '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                this.tableContainer.innerHTML = html;
+                this.log(`DG: ${rows.length} rows × ${cols.length} cols`);
+            }
+            
+            checkAnswer(actual, expected) {
+                const match = actual.trim() === expected.trim();
+                
+                if (match) {
+                    this.actualOutput.className = 'output-box success';
+                    this.showFeedback('success', '✅ Correct! Well done!');
+                    this.completedLessons.add(this.currentLessonId);
+                    this.nextBtn.style.display = 'block';
+                    this.updateProgress();
+                    this.renderLessons();
+                    this.log('Completed!', 'success');
+                } else {
+                    this.showFeedback('error', `Not quite right. Expected: ${expected}`);
+                }
+            }
+            
+            showFeedback(type, message) {
+                this.feedbackMessage.textContent = message;
+                this.feedbackMessage.className = `feedback-message ${type}`;
+            }
+            
+            nextLesson() {
+                const lessons = LESSONS[this.currentCategory] || [];
+                const currentIndex = lessons.findIndex(l => l.id === this.currentLessonId);
+                
+                if (currentIndex >= 0 && currentIndex < lessons.length - 1) {
+                    this.loadLesson(lessons[currentIndex + 1].id);
+                } else {
+                    const categories = Object.keys(LESSONS);
+                    const catIndex = categories.indexOf(this.currentCategory);
+                    if (catIndex < categories.length - 1) {
+                        this.currentCategory = categories[catIndex + 1];
+                        document.querySelectorAll('.category-btn').forEach(b => {
+                            b.classList.toggle('active', b.dataset.category === this.currentCategory);
+                        });
+                        this.renderLessons();
+                        const firstLesson = LESSONS[this.currentCategory][0];
+                        if (firstLesson) this.loadLesson(firstLesson.id);
+                    }
+                }
+            }
+            
+            updateProgress() {
+                let total = 0, completed = 0;
+                for (const category in LESSONS) {
+                    total += LESSONS[category].length;
+                    LESSONS[category].forEach(lesson => {
+                        if (this.completedLessons.has(lesson.id)) completed++;
+                    });
+                }
+                this.progressIndicator.textContent = `${completed}/${total} Completed`;
+            }
+        }
+        
+        // ===============================================
+        // INITIALIZE
+        // ===============================================
+        
+        const ws = new DservWS(null, {  // No linkName - set dynamically after subprocess creation
+            wsProtocol: WS_CONFIG.protocol,  // null = auto-detect
+            wsPort: WS_CONFIG.port,          // null = same as HTTP
+            wsHost: WS_CONFIG.host,          // null = current host
+            wsPath: WS_CONFIG.path
+        });
+        let tutorial;
+        
+        ws.on('connected', (connected) => {
+            const statusEl = document.getElementById('connection-status');
+            if (connected) {
+                statusEl.textContent = '● Connected';
+                statusEl.classList.add('connected');
+                
+                // Initialize tutorial manager only after connection is established
+                if (!tutorial) {
+                    tutorial = new TutorialManager(ws);
+                    const firstLesson = LESSONS.basics[0];
+                    if (firstLesson) tutorial.loadLesson(firstLesson.id);
+                }
+            } else {
+                statusEl.textContent = '○ Disconnected';
+                statusEl.classList.remove('connected');
+            }
+        });
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            ws.connect();
+        });
+    </script>
+</body>
+</html>

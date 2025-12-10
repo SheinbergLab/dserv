@@ -25,6 +25,8 @@ typedef struct client_request_s {
   std::string script;
   SharedQueue<std::string> *rqueue;
   ds_datapoint_t *dpoint;
+  int socket_fd = -1;           // Socket FD if request came from socket (-1 if not)
+  std::string websocket_id;     // WebSocket ID if request came from websocket (empty if not)
 } client_request_t;
 
 #endif

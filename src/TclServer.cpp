@@ -4,27 +4,24 @@
 #include "dserv.h"
 #include "dservConfig.h"
 #include <vector>
+#include <fstream>
+#include <sys/stat.h>
 
 // JSON support
 #include <jansson.h>
 
-#include <fnmatch.h>  // Add this include for pattern matching
+#include <fnmatch.h>  // pattern matching support
 
-
-// our minified html pages (in www/*.html)
-#include "embedded_terminal.h"
-#include "embedded_datapoint_explorer.h"
-#include "embedded_welcome.h"
-
-// Vue gui with sources in from essgui-web/dist
-#include "embedded_essgui_index_html.h"
-#include "embedded_essgui_index_js.h"
-#include "embedded_essgui_index_css.h"
-
+#include "TclCompletion.h"
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
 
+// For one off subprocesses don't need name
+TclServer::TclServer(int argc, char **argv, Dataserver *dserv)
+  : TclServer(argc, argv, dserv, TclServerConfig("", -1, -1, -1))
+{
+}
 // For no-network subprocess
 TclServer::TclServer(int argc, char **argv, Dataserver *dserv, std::string name)
   : TclServer(argc, argv, dserv, TclServerConfig(name, -1, -1, -1))
@@ -61,7 +58,8 @@ TclServer::TclServer(int argc, char **argv,
   _newline_port = cfg.newline_listener_port;
   _message_port = cfg.message_listener_port;
   _websocket_port = cfg.websocket_listener_port;
-   
+  www_path = cfg.www_path;
+ 
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
 
@@ -90,7 +88,7 @@ TclServer::~TclServer()
   delete eventDispatcher;
   
   shutdown();
-  
+
   if (websocket_port() >= 0)
     websocket_thread.detach();
   
@@ -318,475 +316,806 @@ std::string TclServer::get_connection_stats() {
   return stats.str();
 }
 
+
+// Content-type mapping for static file serving
+static const char* get_content_type(const std::string& path) {
+  size_t dot_pos = path.rfind('.');
+  if (dot_pos == std::string::npos) return "application/octet-stream";
+  
+  std::string ext = path.substr(dot_pos);
+  
+  // HTML
+  if (ext == ".html" || ext == ".htm") return "text/html; charset=utf-8";
+  
+  // JavaScript
+  if (ext == ".js" || ext == ".mjs") return "application/javascript; charset=utf-8";
+  
+  // CSS
+  if (ext == ".css") return "text/css; charset=utf-8";
+  
+  // JSON
+  if (ext == ".json") return "application/json; charset=utf-8";
+  
+  // Images
+  if (ext == ".png") return "image/png";
+  if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+  if (ext == ".gif") return "image/gif";
+  if (ext == ".svg") return "image/svg+xml";
+  if (ext == ".ico") return "image/x-icon";
+  if (ext == ".webp") return "image/webp";
+  
+  // Fonts
+  if (ext == ".woff") return "font/woff";
+  if (ext == ".woff2") return "font/woff2";
+  if (ext == ".ttf") return "font/ttf";
+  
+  // Other
+  if (ext == ".txt") return "text/plain; charset=utf-8";
+  if (ext == ".md") return "text/markdown; charset=utf-8";
+  if (ext == ".pem") return "application/x-pem-file";
+  if (ext == ".crt") return "application/x-x509-ca-cert";  
+  if (ext == ".xml") return "application/xml";
+  if (ext == ".wasm") return "application/wasm";
+  
+  return "application/octet-stream";
+}
+
+static bool is_safe_path(const std::string& path) {
+  return path.find("..") == std::string::npos;
+}
+
+static std::string read_file_contents(const std::string& path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) return "";
+  
+  auto size = file.tellg();
+  if (size <= 0) return "";
+  
+  file.seekg(0);
+  std::string content(static_cast<size_t>(size), '\0');
+  file.read(content.data(), size);
+  
+  return content;
+}
+
 void TclServer::start_websocket_server(void)
 {
   ws_loop = uWS::Loop::get();
   
-  auto app = uWS::App();
+  // Check for SSL certificates
+  bool use_ssl = false;
 
-  // Helper macros for stringification
-#define STRINGIFY(x) #x
-#define EXPAND_AND_STRINGIFY(x) STRINGIFY(x)
-  
-  // Welcome page as the root
-  app.get("/", [](auto *res, auto *req) {
-    res->writeHeader("Content-Type", "text/html; charset=utf-8")
-      ->writeHeader("Cache-Control", "no-cache")
-      ->end(embedded::essgui_index_html);
-  });
+  // cert_path and key_path are strings pointing to certificate/key
+  struct stat buffer;
+  if (stat(cert_path.c_str(), &buffer) == 0 && 
+      stat(key_path.c_str(), &buffer) == 0) {
+    use_ssl = true;
+    websocket_ssl_enabled = true;    
+    std::cout << "SSL certificates found - starting HTTPS/WSS server on port " 
+              << websocket_port() << std::endl;
+  } else {
+    std::cout << "SSL certificates not found - starting HTTP/WS server on port " 
+              << websocket_port() << std::endl;
+    std::cout << "(To enable HTTPS, place cert.pem and key.pem in /etc/dserv/ssl/)" 
+              << std::endl;
+  }
 
- // Build route strings with actual hash values
-  std::string js_route = "/assets/index-" + std::string(EXPAND_AND_STRINGIFY(ESSGUI_JS_HASH)) + ".js";
-  std::string css_route = "/assets/index-" + std::string(EXPAND_AND_STRINGIFY(ESSGUI_CSS_HASH)) + ".css";
+
+  auto setup_routes = [this](auto &app) {
     
-  // Register the exact routes
-  app.get(js_route, [](auto *res, auto *req) {
-    res->writeHeader("Content-Type", "application/javascript; charset=utf-8")
-      ->writeHeader("Cache-Control", "public, max-age=31536000") // Long cache since hash changes
-      ->end(embedded::essgui_index_js);
-  });
+    // Health check - always available, no www_path needed
+    app.get("/health", [](auto *res, auto *req) {
+        res->writeHeader("Content-Type", "application/json")
+            ->end("{\"status\":\"ok\",\"service\":\"dserv\"}");
+    });
+    
+    // Favicon - prevent 404 noise in logs
+    app.get("/favicon.ico", [](auto *res, auto *req) {
+        res->writeStatus("204 No Content")->end();
+    });
 
-  app.get(css_route, [](auto *res, auto *req) {
-    res->writeHeader("Content-Type", "text/css; charset=utf-8")
-      ->writeHeader("Cache-Control", "public, max-age=31536000") // Long cache since hash changes
-      ->end(embedded::essgui_index_css);
-  });
+    // Static file serving
+    if (!this->www_path.empty()) {
+      // Explicit root handler      
+      app.get("/", [this](auto *res, auto *req) {
+        std::string file_path = this->www_path + "/index.html";
+        std::string content = read_file_contents(file_path);
+        
+        if (content.empty()) {
+	  res->writeStatus("404 Not Found")
+	    ->writeHeader("Content-Type", "text/plain")
+	    ->end("index.html not found");
+	  return;
+        }
+        
+        res->writeHeader("Content-Type", "text/html; charset=utf-8")
+	  ->writeHeader("Cache-Control", "no-cache")
+	  ->end(content);
+      });
 
-#if 0
-  // Debug output to verify routes
-  std::cout << "Registered asset routes:" << std::endl;
-  std::cout << "  JS: " << js_route << std::endl;
-  std::cout << "  CSS: " << css_route << std::endl;
-#endif  
-  
-  app.get("/terminal", [](auto *res, auto *req) {
-    res->writeHeader("Content-Type", "text/html; charset=utf-8")
-      ->writeHeader("Cache-Control", "no-cache")
-      ->end(embedded::terminal_html);
-  });
-
-  app.get("/explorer", [](auto *res, auto *req) {
-    res->writeHeader("Content-Type", "text/html; charset=utf-8")
-      ->writeHeader("Cache-Control", "no-cache")
-      ->end(embedded::datapoint_explorer_html);
-  });
-  
-  // Add some aliases
-  app.get("/datapoints", [](auto *res, auto *req) {
-    res->writeStatus("302 Found")
-      ->writeHeader("Location", "/explorer")
-      ->end();
-  });
-  
-  app.get("/console", [](auto *res, auto *req) {
-    res->writeStatus("302 Found")
-      ->writeHeader("Location", "/terminal")
-      ->end();
-  });  
-  
-  app.get("/health", [](auto *res, auto *req) {
-    res->writeHeader("Content-Type", "application/json")
-      ->end("{\"status\":\"ok\",\"service\":\"dserv-tclserver\"}");
-  });
-  
-  // Favicon to prevent 404s
-  app.get("/favicon.ico", [](auto *res, auto *req) {
-    res->writeStatus("204 No Content")->end();
-  });
-  
-  // WebSocket endpoint
-  app.ws<WSPerSocketData>("/ws", {
-      /* Settings */
-      .compression = uWS::SHARED_COMPRESSOR,
-    .maxPayloadLength = 24 * 1024 * 1024,
-    .idleTimeout = 120,
-    .maxBackpressure = 24 * 1024 * 1024,
+      // Explicit /essgui/ handler (Vue app)
+      app.get("/essgui/", [this](auto *res, auto *req) {
+	std::string file_path = this->www_path + "/essgui/index.html";
+	std::string content = read_file_contents(file_path);
+	
+	if (content.empty()) {
+	  res->writeStatus("404 Not Found")
+            ->writeHeader("Content-Type", "text/plain")
+            ->end("essgui/index.html not found");
+	  return;
+	}
+	
+	res->writeHeader("Content-Type", "text/html; charset=utf-8")
+	  ->writeHeader("Cache-Control", "no-cache")
+	  ->end(content);
+      });
       
-    .upgrade = [](auto *res, auto *req, auto *context) {
-      res->template upgrade<WSPerSocketData>({
-          .rqueue = new SharedQueue<std::string>(),
-          .client_name = "",
-          .subscriptions = std::vector<std::string>(),
-          .notification_queue = nullptr,
-          .dataserver_client_id = ""
-        }, req->getHeader("sec-websocket-key"),
-        req->getHeader("sec-websocket-protocol"),
-        req->getHeader("sec-websocket-extensions"),
-        context);
-    },
+      // Serve all other files from www_path
+app.get("/*", [this](auto *res, auto *req) {
+    std::string url_path(req->getUrl());
     
-    .open = [this](auto *ws) {
-      WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
-      
-      if (!userData || !userData->rqueue) {
-        std::cerr << "ERROR: Invalid userData in WebSocket open handler" << std::endl;
-        ws->close();
+    // Security: reject path traversal attempts
+    if (!is_safe_path(url_path)) {
+        res->writeStatus("403 Forbidden")
+            ->writeHeader("Content-Type", "text/plain")
+            ->end("Forbidden");
         return;
-      }
-
-      try {
-        // Create notification queue for this client
-        userData->notification_queue = new SharedQueue<client_request_t>();
-        
-        // Register with Dataserver as a queue-based client
-        userData->dataserver_client_id = this->ds->add_new_send_client(userData->notification_queue);
-        
-        if (userData->dataserver_client_id.empty()) {
-          std::cerr << "Failed to register WebSocket client with Dataserver" << std::endl;
-          delete userData->notification_queue;
-          userData->notification_queue = nullptr;
-          ws->close();
-          return;
-        }
-        
-        // Create a unique client name for this WebSocket
-        char client_id[32];
-        snprintf(client_id, sizeof(client_id), "ws_%p", (void*)ws);
-        userData->client_name = std::string(client_id);
-        
-        // Store this WebSocket connection
-        {
-          std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
-          this->ws_connections[userData->client_name] = ws;
-        }
-        
-        // Start a thread to process notifications for this client
-        std::thread([this, ws, userData]() {
-          this->process_websocket_client_notifications(ws, userData);
-        }).detach();
-        
-        //      std::cout << "WebSocket client connected: " << userData->client_name << std::endl;
-        
-      } catch (const std::exception& e) {
-        std::cerr << "Exception in WebSocket open handler: " << e.what() << std::endl;
-        ws->close();
-      }
-    },
+    }
     
-    .message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
-      WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
-  
-      if (!userData || !userData->rqueue) {
-        std::cerr << "ERROR: Invalid userData in WebSocket message handler!" << std::endl;
-        ws->close();
+    // Build filesystem path
+    std::string file_path = this->www_path + url_path;
+    std::string content = read_file_contents(file_path);
+    
+    // If path ends with /, try index.html in that directory
+    if (content.empty() && url_path.back() == '/') {
+        file_path = this->www_path + url_path + "index.html";
+        content = read_file_contents(file_path);
+    }
+    
+    // Clean URLs for paths without extension
+    if (content.empty() && url_path.find('.') == std::string::npos) {
+        // First try as directory with index.html (e.g., /essgui -> /essgui/index.html)
+        file_path = this->www_path + url_path + "/index.html";
+        content = read_file_contents(file_path);
+        
+        // Then try as .html file (e.g., /terminal -> /terminal.html)
+        if (content.empty()) {
+            file_path = this->www_path + url_path + ".html";
+            content = read_file_contents(file_path);
+        }
+    }
+    
+    if (content.empty()) {
+        res->writeStatus("404 Not Found")
+            ->writeHeader("Content-Type", "text/html; charset=utf-8")
+            ->end(R"(<!DOCTYPE html>
+<html><head><title>404 - Not Found</title>
+<style>
+body { font-family: system-ui, sans-serif; background: #0d1117; color: #e6edf3; 
+       display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.container { text-align: center; }
+h1 { color: #f85149; }
+a { color: #58a6ff; }
+</style></head>
+<body><div class="container">
+<h1>404 - Not Found</h1>
+<p>The requested page was not found.</p>
+<p><a href="/">Return to Home</a></p>
+</div></body></html>)");
         return;
-      }
-  
-      // Handle JSON protocol for web clients
-      if (message.length() > 0 && message[0] == '{') {
-        // Create null-terminated string for jansson
-        std::string json_str(message.data(), message.length());
-          
-        json_error_t error;
-        json_t *root = json_loads(json_str.c_str(), 0, &error);
-          
-        if (!root) {
-          json_t *error_response = json_object();
-          json_object_set_new(error_response, "error", json_string("Invalid JSON"));
-          char *error_str = json_dumps(error_response, 0);
-          ws->send(error_str, uWS::OpCode::TEXT);
-          free(error_str);
-          json_decref(error_response);
-          return;
+    }
+    
+    // Cache: no-cache for HTML, short cache for assets
+    const char* cache_control = "no-cache";
+    std::string ext = file_path.substr(file_path.rfind('.') + 1);
+    if (ext == "js" || ext == "css" || ext == "png" || ext == "jpg" || 
+        ext == "gif" || ext == "svg" || ext == "woff" || ext == "woff2" || ext == "ico") {
+        cache_control = "public, max-age=3600";  // 1 hour for assets
+    }
+    
+    res->writeHeader("Content-Type", get_content_type(file_path))
+        ->writeHeader("Cache-Control", cache_control)
+        ->end(content);
+});        
+        std::cout << "Web interface enabled at: " << this->www_path << std::endl;
+    } 
+    else {
+        // No www_path: show helpful setup message
+        app.get("/*", [](auto *res, auto *req) {
+            res->writeHeader("Content-Type", "text/html; charset=utf-8")
+                ->end(R"(<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dserv - Web Interface Not Configured</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            color: #e6edf3;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
         }
-          
-        json_t *cmd_obj = json_object_get(root, "cmd");
-        if (!cmd_obj || !json_is_string(cmd_obj)) {
-          json_t *error_response = json_object();
-          json_object_set_new(error_response, "error", json_string("Missing 'cmd' field"));
-          char *error_str = json_dumps(error_response, 0);
-          ws->send(error_str, uWS::OpCode::TEXT);
-          free(error_str);
-          json_decref(error_response);
-          json_decref(root);
-          return;
+        .container {
+            max-width: 600px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
         }
-          
-        const char *cmd = json_string_value(cmd_obj);
-          
-        if (strcmp(cmd, "eval") == 0) {
-          // Handle Tcl script evaluation
-          json_t *script_obj = json_object_get(root, "script");
-          json_t *requestId_obj = json_object_get(root, "requestId"); // Get requestId
+        .logo {
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #58a6ff;
+            margin-bottom: 16px;
+            font-size: 24px;
+        }
+        .status {
+            background: #1a4d1a;
+            border: 1px solid #238636;
+            color: #3fb950;
+            padding: 12px 20px;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .warning {
+            background: #3d2a00;
+            border: 1px solid #9e6a03;
+            color: #d29922;
+            padding: 12px 20px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+        p {
+            color: #8b949e;
+            line-height: 1.6;
+            margin: 12px 0;
+        }
+        code {
+            background: #161b22;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Consolas', monospace;
+            font-size: 14px;
+            color: #79c0ff;
+        }
+        .code-block {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+            text-align: left;
+            overflow-x: auto;
+        }
+        .code-block code {
+            background: none;
+            padding: 0;
+            display: block;
+            white-space: pre;
+        }
+        .section {
+            margin: 24px 0;
+            text-align: left;
+        }
+        .section h3 {
+            color: #e6edf3;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .endpoints {
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid #30363d;
+        }
+        .endpoint {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #21262d;
+        }
+        .endpoint:last-child {
+            border-bottom: none;
+        }
+        .endpoint-name {
+            color: #8b949e;
+        }
+        .endpoint-status {
+            color: #3fb950;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">⚡</div>
+        <h1>dserv is running</h1>
+        
+        <div class="status">
+            ✓ Data server operational
+        </div>
+        
+        <div class="warning">
+            ⚠ Web interface not configured
+        </div>
+        
+        <div class="section">
+            <h3>To enable the web interface:</h3>
+            <div class="code-block">
+                <code># Development (serve from source)
+dserv -w /path/to/dserv/www
 
-          if (script_obj && json_is_string(script_obj)) {
-        const char *script = json_string_value(script_obj);
-              
-        // Create request
-        client_request_t req;
-        req.type = REQ_SCRIPT;
-        req.rqueue = userData->rqueue;
-        req.script = std::string(script);
-              
-        // Push to queue
-        queue.push_back(req);
-              
-        // Wait for response
-        std::string result = userData->rqueue->front();
-        userData->rqueue->pop_front();
-              
-        // Create JSON response
-        json_t *response = json_object();
-        if (result.starts_with("!TCL_ERROR ")) {
-          json_object_set_new(response, "status", json_string("error"));
-          json_object_set_new(response, "error", json_string(result.substr(11).c_str()));
-        } else {
-          json_object_set_new(response, "status", json_string("ok"));
-          json_object_set_new(response, "result", json_string(result.c_str()));
-        }
+# Production (default install location)
+dserv -w /usr/local/dserv/www</code>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>Or set www_path in your config:</h3>
+            <div class="code-block">
+                <code># In dsconf.tcl or config.tcl
+set www_path /usr/local/dserv/www</code>
+            </div>
+        </div>
+        
+        <p>
+            If you installed via package (.deb/.pkg), the web files should be at
+            <code>/usr/local/dserv/www</code>
+        </p>
+        
+        <div class="endpoints">
+            <h3 style="color: #e6edf3; margin-bottom: 12px;">Available Endpoints</h3>
+            <div class="endpoint">
+                <span class="endpoint-name">/health</span>
+                <span class="endpoint-status">✓ Available</span>
+            </div>
+            <div class="endpoint">
+                <span class="endpoint-name">/ws</span>
+                <span class="endpoint-status">✓ Available</span>
+            </div>
+            <div class="endpoint">
+                <span class="endpoint-name">TCP :2570</span>
+                <span class="endpoint-status">✓ Available</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>)");
+        });
+        
+        std::cout << "Web interface: not configured (use -w flag or set www_path)" << std::endl;
+    }
 
-        // If a requestId was provided, include it in the response
-        if (requestId_obj && json_is_string(requestId_obj)) {
-            json_object_set(response, "requestId", requestId_obj);
-        }
-              
-        char *response_str = json_dumps(response, 0);
-        ws->send(response_str, uWS::OpCode::TEXT);
-        free(response_str);
-        json_decref(response);
+    // WebSocket endpoint - NOTE the "template" keyword and "auto *ws" for type flexibility
+    app.template ws<WSPerSocketData>("/ws", {
+        /* Settings */
+        .compression = uWS::SHARED_COMPRESSOR,
+        .maxPayloadLength = 24 * 1024 * 1024,
+        .idleTimeout = 120,
+        .maxBackpressure = 24 * 1024 * 1024,
+        
+        .upgrade = [](auto *res, auto *req, auto *context) {
+          res->template upgrade<WSPerSocketData>({
+              .rqueue = new SharedQueue<std::string>(),
+              .client_name = "",
+              .subscriptions = std::vector<std::string>(),
+              .notification_queue = nullptr,
+              .dataserver_client_id = ""
+            }, req->getHeader("sec-websocket-key"),
+            req->getHeader("sec-websocket-protocol"),
+            req->getHeader("sec-websocket-extensions"),
+            context);
+        },
+        
+        .open = [this](auto *ws) {
+          WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
+          
+          if (!userData || !userData->rqueue) {
+            std::cerr <<
+	      "ERROR: Invalid userData in WebSocket open handler" << std::endl;
+            ws->close();
+            return;
           }
-        }
 
-        else if (strcmp(cmd, "touch") == 0) {
-          // Handle datapoint touch
-          json_t *name_obj = json_object_get(root, "name");
-          if (name_obj && json_is_string(name_obj)) {
-        const char *name = json_string_value(name_obj);
-        
-        // Call the Dataserver touch method
-        int found = ds->touch((char *)name);
-        
-        // Send response
-        json_t *response = json_object();
-        if (found) {
-          json_object_set_new(response, "status", json_string("ok"));
-          json_object_set_new(response, "action", json_string("touched"));
-          json_object_set_new(response, "name", json_string(name));
-        } else {
-          json_object_set_new(response, "status", json_string("error"));
-          json_object_set_new(response, "error", json_string("Datapoint not found"));
-          json_object_set_new(response, "name", json_string(name));
-        }
-        
-        char *response_str = json_dumps(response, 0);
-        ws->send(response_str, uWS::OpCode::TEXT);
-        free(response_str);
-        json_decref(response);
-          } else {
-        json_t *error_response = json_object();
-        json_object_set_new(error_response, "error", json_string("Missing or invalid 'name' field"));
-        char *error_str = json_dumps(error_response, 0);
-        ws->send(error_str, uWS::OpCode::TEXT);
-        free(error_str);
-        json_decref(error_response);
-          }
-        }       
-        
-        else if (strcmp(cmd, "subscribe") == 0) {
-          json_t *match_obj = json_object_get(root, "match");
-          json_t *every_obj = json_object_get(root, "every");
-          
-          if (match_obj && json_is_string(match_obj)) {
-        const char *match = json_string_value(match_obj);
-        int every = 1;
-        if (every_obj && json_is_integer(every_obj)) {
-          every = json_integer_value(every_obj);
-        }
-        
-        // Store the subscription for this WebSocket client
-        userData->subscriptions.push_back(std::string(match));
-        
-        // Register the match with Dataserver so we get notifications
-        ds->client_add_match(userData->dataserver_client_id, (char*)match, every);
-        
-        // Send confirmation
-        json_t *response = json_object();
-        json_object_set_new(response, "status", json_string("ok"));
-        json_object_set_new(response, "action", json_string("subscribed"));
-        json_object_set_new(response, "match", json_string(match));
-        
-        char *response_str = json_dumps(response, 0);
-        ws->send(response_str, uWS::OpCode::TEXT);
-        free(response_str);
-        json_decref(response);
-          }
-        }
-
-        else if (strcmp(cmd, "unsubscribe") == 0) {
-          json_t *match_obj = json_object_get(root, "match");
-          if (match_obj && json_is_string(match_obj)) {
-        const char *match = json_string_value(match_obj);
-        
-        // Remove from local subscriptions
-        auto it = std::find(userData->subscriptions.begin(), userData->subscriptions.end(), match);
-        if (it != userData->subscriptions.end()) {
-          userData->subscriptions.erase(it);
-        }
-        
-        // Remove from Dataserver
-        this->ds->client_remove_match(userData->dataserver_client_id, (char*)match);
-        
-        // Send confirmation
-        json_t *response = json_object();
-        json_object_set_new(response, "status", json_string("ok"));
-        json_object_set_new(response, "action", json_string("unsubscribed"));
-        json_object_set_new(response, "match", json_string(match));
-        
-        char *response_str = json_dumps(response, 0);
-        ws->send(response_str, uWS::OpCode::TEXT);
-        free(response_str);
-        json_decref(response);
-          }
-        }
-
-        else if (strcmp(cmd, "list_subscriptions") == 0) {
-          json_t *response = json_object();
-          json_t *subs_array = json_array();
-          
-          for (const std::string& sub : userData->subscriptions) {
-        json_array_append_new(subs_array, json_string(sub.c_str()));
-          }
-          
-          json_object_set_new(response, "status", json_string("ok"));
-          json_object_set_new(response, "subscriptions", subs_array);
-          
-          char *response_str = json_dumps(response, 0);
-          ws->send(response_str, uWS::OpCode::TEXT);
-          free(response_str);
-          json_decref(response);
-        }
-        
-        else if (strcmp(cmd, "get") == 0) {
-          // Handle datapoint get
-          json_t *name_obj = json_object_get(root, "name");
-          if (name_obj && json_is_string(name_obj)) {
-        const char *name = json_string_value(name_obj);
-        ds_datapoint_t *dp = ds->get_datapoint((char *)name);
-              
-        if (dp) {
-          char *json_str = dpoint_to_json(dp);
-          ws->send(json_str, uWS::OpCode::TEXT);
-          free(json_str);
-          dpoint_free(dp);
-        } else {
-          json_t *error_response = json_object();
-          json_object_set_new(error_response, "error", json_string("Datapoint not found"));
-          char *error_str = json_dumps(error_response, 0);
-          ws->send(error_str, uWS::OpCode::TEXT);
-          free(error_str);
-          json_decref(error_response);
-        }
-          }
-        }
-        else if (strcmp(cmd, "set") == 0) {
-          // Handle datapoint set
-          json_t *name_obj = json_object_get(root, "name");
-          json_t *value_obj = json_object_get(root, "value");
+          try {
+            // Create notification queue for this client
+            userData->notification_queue = new SharedQueue<client_request_t>();
             
-          if (name_obj && json_is_string(name_obj) && value_obj && json_is_string(value_obj)) {
-        const char *name = json_string_value(name_obj);
-        const char *value = json_string_value(value_obj);
+            // Register with Dataserver as a queue-based client
+            userData->dataserver_client_id =
+	      this->ds->add_new_send_client(userData->notification_queue);
+            
+            if (userData->dataserver_client_id.empty()) {
+              std::cerr <<
+		"Failed to register WebSocket client with Dataserver" <<
+		std::endl;
+              delete userData->notification_queue;
+              userData->notification_queue = nullptr;
+              ws->close();
+              return;
+            }
+            
+            // Create a unique client name for this WebSocket
+            char client_id[32];
+            snprintf(client_id, sizeof(client_id), "ws_%p", (void*)ws);
+            userData->client_name = std::string(client_id);
+            
+            // Store this WebSocket connection
+            {
+              std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+              this->ws_connections[userData->client_name] = (void*)ws;
+            }
+            
+            // Start a thread to process notifications for this client
+            // Pass 'ws' by value (as void*) to the thread
+            std::thread([this, ws, userData]() {
+              this->process_websocket_client_notifications_template(ws, userData);
+            }).detach();
+            
+          } catch (const std::exception& e) {
+            std::cerr << "Exception in WebSocket open handler: " << e.what() << std::endl;
+            ws->close();
+          }
+        },
+        
+        .message = [this](auto *ws, std::string_view message, uWS::OpCode opCode) {
+          WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
+      
+          if (!userData || !userData->rqueue) {
+            std::cerr << "ERROR: Invalid userData in WebSocket message handler!" << std::endl;
+            ws->close();
+            return;
+          }
+      
+          // Handle JSON protocol for web clients
+          if (message.length() > 0 && message[0] == '{') {
+            // Create null-terminated string for jansson
+            std::string json_str(message.data(), message.length());
               
-        ds->set((char *)name, (char *)value);
+            json_error_t error;
+            json_t *root = json_loads(json_str.c_str(), 0, &error);
               
-        json_t *response = json_object();
-        json_object_set_new(response, "status", json_string("ok"));
-        json_object_set_new(response, "action", json_string("set"));
+            if (!root) {
+              json_t *error_response = json_object();
+              json_object_set_new(error_response, "error", json_string("Invalid JSON"));
+              char *error_str = json_dumps(error_response, 0);
+              ws->send(error_str, uWS::OpCode::TEXT);
+              free(error_str);
+              json_decref(error_response);
+              return;
+            }
               
-        char *response_str = json_dumps(response, 0);
-        ws->send(response_str, uWS::OpCode::TEXT);
-        free(response_str);
-        json_decref(response);
+            json_t *cmd_obj = json_object_get(root, "cmd");
+            if (!cmd_obj || !json_is_string(cmd_obj)) {
+              json_t *error_response = json_object();
+              json_object_set_new(error_response, "error", json_string("Missing 'cmd' field"));
+              char *error_str = json_dumps(error_response, 0);
+              ws->send(error_str, uWS::OpCode::TEXT);
+              free(error_str);
+              json_decref(error_response);
+              json_decref(root);
+              return;
+            }
+              
+            const char *cmd = json_string_value(cmd_obj);
+              
+            if (strcmp(cmd, "eval") == 0) {
+              // Handle Tcl script evaluation
+              json_t *script_obj = json_object_get(root, "script");
+              json_t *requestId_obj = json_object_get(root, "requestId");
+
+              if (script_obj && json_is_string(script_obj)) {
+                const char *script = json_string_value(script_obj);
+                  
+                // Create request
+                client_request_t req;
+                req.type = REQ_SCRIPT;
+                req.rqueue = userData->rqueue;
+                req.script = std::string(script);
+		req.socket_fd = -1;
+		req.websocket_id = userData->client_name;
+		
+                // Push to queue
+                queue.push_back(req);
+                  
+                // Wait for response
+                std::string result = userData->rqueue->front();
+                userData->rqueue->pop_front();
+                  
+                // Create JSON response
+                json_t *response = json_object();
+                if (result.starts_with("!TCL_ERROR ")) {
+                  json_object_set_new(response, "status", json_string("error"));
+                  json_object_set_new(response, "error", json_string(result.substr(11).c_str()));
+                } else {
+                  json_object_set_new(response, "status", json_string("ok"));
+                  json_object_set_new(response, "result", json_string(result.c_str()));
+                }
+
+                // If a requestId was provided, include it in the response
+                if (requestId_obj && json_is_string(requestId_obj)) {
+                    json_object_set(response, "requestId", requestId_obj);
+                }
+                  
+                char *response_str = json_dumps(response, 0);
+                ws->send(response_str, uWS::OpCode::TEXT);
+                free(response_str);
+                json_decref(response);
+              }
+            }
+
+            else if (strcmp(cmd, "touch") == 0) {
+              // Handle datapoint touch
+              json_t *name_obj = json_object_get(root, "name");
+              if (name_obj && json_is_string(name_obj)) {
+                const char *name = json_string_value(name_obj);
+                
+                // Call the Dataserver touch method
+                int found = ds->touch((char *)name);
+                
+                // Send response
+                json_t *response = json_object();
+                if (found) {
+                  json_object_set_new(response, "status", json_string("ok"));
+                  json_object_set_new(response, "action", json_string("touched"));
+                  json_object_set_new(response, "name", json_string(name));
+                } else {
+                  json_object_set_new(response, "status", json_string("error"));
+                  json_object_set_new(response, "error", json_string("Datapoint not found"));
+                  json_object_set_new(response, "name", json_string(name));
+                }
+                
+                char *response_str = json_dumps(response, 0);
+                ws->send(response_str, uWS::OpCode::TEXT);
+                free(response_str);
+                json_decref(response);
+              } else {
+                json_t *error_response = json_object();
+                json_object_set_new(error_response, "error",
+				    json_string("Missing or invalid 'name' field"));
+                char *error_str = json_dumps(error_response, 0);
+                ws->send(error_str, uWS::OpCode::TEXT);
+                free(error_str);
+                json_decref(error_response);
+              }
+            }
+	    
+            else if (strcmp(cmd, "subscribe") == 0) {
+              json_t *match_obj = json_object_get(root, "match");
+              json_t *every_obj = json_object_get(root, "every");
+              
+              if (match_obj && json_is_string(match_obj)) {
+                const char *match = json_string_value(match_obj);
+                int every = 1;
+                if (every_obj && json_is_integer(every_obj)) {
+                  every = json_integer_value(every_obj);
+                }
+                
+                // Store the subscription for this WebSocket client
+                userData->subscriptions.push_back(std::string(match));
+                
+                // Register the match with Dataserver so we get notifications
+                ds->client_add_match(userData->dataserver_client_id, (char*)match, every);
+                
+                // Send confirmation
+                json_t *response = json_object();
+                json_object_set_new(response, "status", json_string("ok"));
+                json_object_set_new(response, "action", json_string("subscribed"));
+                json_object_set_new(response, "match", json_string(match));
+                
+                char *response_str = json_dumps(response, 0);
+                ws->send(response_str, uWS::OpCode::TEXT);
+                free(response_str);
+                json_decref(response);
+              }
+            }
+
+            else if (strcmp(cmd, "unsubscribe") == 0) {
+              json_t *match_obj = json_object_get(root, "match");
+              if (match_obj && json_is_string(match_obj)) {
+                const char *match = json_string_value(match_obj);
+                
+                // Remove from local subscriptions
+                auto it = std::find(userData->subscriptions.begin(),
+				    userData->subscriptions.end(), match);
+                if (it != userData->subscriptions.end()) {
+                  userData->subscriptions.erase(it);
+                }
+                
+                // Remove from Dataserver
+                this->ds->client_remove_match(userData->dataserver_client_id, (char*)match);
+                
+                // Send confirmation
+                json_t *response = json_object();
+                json_object_set_new(response, "status", json_string("ok"));
+                json_object_set_new(response, "action", json_string("unsubscribed"));
+                json_object_set_new(response, "match", json_string(match));
+                
+                char *response_str = json_dumps(response, 0);
+                ws->send(response_str, uWS::OpCode::TEXT);
+                free(response_str);
+                json_decref(response);
+              }
+            }
+
+            else if (strcmp(cmd, "list_subscriptions") == 0) {
+              json_t *response = json_object();
+              json_t *subs_array = json_array();
+              
+              for (const std::string& sub : userData->subscriptions) {
+                json_array_append_new(subs_array, json_string(sub.c_str()));
+              }
+              
+              json_object_set_new(response, "status", json_string("ok"));
+              json_object_set_new(response, "subscriptions", subs_array);
+              
+              char *response_str = json_dumps(response, 0);
+              ws->send(response_str, uWS::OpCode::TEXT);
+              free(response_str);
+              json_decref(response);
+            }
+            
+            else if (strcmp(cmd, "get") == 0) {
+              // Handle datapoint get
+              json_t *name_obj = json_object_get(root, "name");
+              if (name_obj && json_is_string(name_obj)) {
+                const char *name = json_string_value(name_obj);
+                ds_datapoint_t *dp = ds->get_datapoint((char *)name);
+                  
+		if (dp) {
+		  char *json_str = dpoint_to_json(dp);
+		  if (json_str) {
+		    ws->send(json_str, uWS::OpCode::TEXT);
+		    free(json_str);
+		  } else {
+		    // Send error about unsupported datatype
+		    json_t *error_response = json_object();
+		    json_object_set_new(error_response, "error",
+					json_string("Unsupported datapoint type"));
+		    char *error_str = json_dumps(error_response, 0);
+		    ws->send(error_str, uWS::OpCode::TEXT);
+		    free(error_str);
+		    json_decref(error_response);
+		  }
+		  dpoint_free(dp);
+		}
+                else {
+                  json_t *error_response = json_object();
+                  json_object_set_new(error_response, "error",
+				      json_string("Datapoint not found"));
+                  char *error_str = json_dumps(error_response, 0);
+                  ws->send(error_str, uWS::OpCode::TEXT);
+                  free(error_str);
+                  json_decref(error_response);
+                }
+              }
+            }
+            else if (strcmp(cmd, "set") == 0) {
+              // Handle datapoint set
+              json_t *name_obj = json_object_get(root, "name");
+              json_t *value_obj = json_object_get(root, "value");
+                
+              if (name_obj && json_is_string(name_obj) && value_obj && json_is_string(value_obj)) {
+                const char *name = json_string_value(name_obj);
+                const char *value = json_string_value(value_obj);
+                  
+                ds->set((char *)name, (char *)value);
+                  
+                json_t *response = json_object();
+                json_object_set_new(response, "status", json_string("ok"));
+                json_object_set_new(response, "action", json_string("set"));
+                  
+                char *response_str = json_dumps(response, 0);
+                ws->send(response_str, uWS::OpCode::TEXT);
+                free(response_str);
+                json_decref(response);
+              }
+            }   
+            json_decref(root);
+          }
+
+          else {
+            // Handle legacy text protocol (newline-terminated commands)
+            std::string script(message);
+              
+            // Remove trailing newline if present
+            if (!script.empty() && script.back() == '\n') {
+              script.pop_back();
+            }
+              
+            // Process as Tcl command
+            client_request_t req;
+            req.type = REQ_SCRIPT;
+            req.rqueue = userData->rqueue;
+            req.script = script;
+	    req.socket_fd = -1;
+	    req.websocket_id = userData->client_name;
+  
+            queue.push_back(req);
+              
+            std::string result = userData->rqueue->front();
+            userData->rqueue->pop_front();
+              
+            // For text protocol, send plain response
+            ws->send(result, uWS::OpCode::TEXT);
+          }
+        },
+          
+        .dropped = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
+          std::cerr << "WebSocket message dropped due to backpressure" << std::endl;
+        },
+          
+        .drain = [](auto *ws) {
+          if (ws->getBufferedAmount() > 1024 * 1024) {
+            ws->close();
+          }
+        },
+          
+        .ping = [](auto *ws, std::string_view) {
+          /* Not used, uWS automatically handles pings */
+        },
+          
+        .pong = [](auto *ws, std::string_view) {
+          /* Not used */
+        },
+
+        .close = [this](auto *ws, int code, std::string_view message) {
+          WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
+          
+          if (!userData) {
+            return;
+          }
+
+          try {
+            // Remove from active connections
+            {
+              std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+              this->ws_connections.erase(userData->client_name);
+            }
+            
+            // Remove from Dataserver's send_table
+            if (!userData->dataserver_client_id.empty()) {
+              this->ds->remove_send_client_by_id(userData->dataserver_client_id);
+            }
+
+	    // Cleanup linked subprocesses
+	    this->cleanup_subprocesses_for_websocket(userData->client_name);	    
+            
+            // Signal shutdown to the notification processing thread
+            if (userData->notification_queue) {
+              client_request_t shutdown_req;
+              shutdown_req.type = REQ_SHUTDOWN;
+              userData->notification_queue->push_back(shutdown_req);
+              
+              // Give the thread a moment to process the shutdown
+              std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            
+            // Clean up rqueue
+            delete userData->rqueue;
+            userData->rqueue = nullptr;
+            
+          } catch (const std::exception& e) {
+            std::cerr << "Exception in WebSocket close handler: " << e.what() << std::endl;
           }
         }   
-        json_decref(root);
-      }
-
-      else {
-        // Handle legacy text protocol (newline-terminated commands)
-        std::string script(message);
-          
-        // Remove trailing newline if present
-        if (!script.empty() && script.back() == '\n') {
-          script.pop_back();
-        }
-          
-        // Process as Tcl command
-        client_request_t req;
-        req.type = REQ_SCRIPT;
-        req.rqueue = userData->rqueue;
-        req.script = script;
-          
-        queue.push_back(req);
-          
-        std::string result = userData->rqueue->front();
-        userData->rqueue->pop_front();
-          
-        // For text protocol, send plain response
-        ws->send(result, uWS::OpCode::TEXT);
-      }
-    },
-      
-    .dropped = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
-      std::cerr << "WebSocket message dropped due to backpressure" << std::endl;
-    },
-      
-    .drain = [](auto *ws) {
-      if (ws->getBufferedAmount() > 1024 * 1024) {
-        ws->close();
-      }
-    },
-      
-    .ping = [](auto *ws, std::string_view) {
-      /* Not used, uWS automatically handles pings */
-    },
-      
-    .pong = [](auto *ws, std::string_view) {
-      /* Not used */
-    },
-
-    .close = [this](auto *ws, int code, std::string_view message) {
-      WSPerSocketData *userData = (WSPerSocketData *) ws->getUserData();
-      
-      if (!userData) {
-        return;
-      }
-
-      try {
-
-        // Remove from active connections
-        {
-          std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
-          this->ws_connections.erase(userData->client_name);
-        }
         
-        // Remove from Dataserver's send_table
-        if (!userData->dataserver_client_id.empty()) {
-          this->ds->remove_send_client_by_id(userData->dataserver_client_id);
-        }
-        
-        // Signal shutdown to the notification processing thread
-        if (userData->notification_queue) {
-          client_request_t shutdown_req;
-          shutdown_req.type = REQ_SHUTDOWN;
-          userData->notification_queue->push_back(shutdown_req);
-          
-          // Give the thread a moment to process the shutdown
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-        
-        // Clean up rqueue
-        delete userData->rqueue;
-        userData->rqueue = nullptr;
-        
-        //      std::cout << "WebSocket client disconnected: " << userData->client_name << std::endl;
-        
-      } catch (const std::exception& e) {
-        std::cerr << "Exception in WebSocket close handler: " << e.what() << std::endl;
-      }
-    }   
-    
-    }).listen(websocket_port(), [this](auto *listen_socket) {
+	  }).listen("0.0.0.0", websocket_port(), [this](auto *listen_socket) {
       if (listen_socket) {
         std::cout << "WebSocket server listening on port " << websocket_port() << std::endl;
         std::cout << "Web terminal available at http://localhost:" << websocket_port() << "/" << std::endl;
@@ -794,93 +1123,95 @@ void TclServer::start_websocket_server(void)
         std::cerr << "Failed to start WebSocket server on port " << websocket_port() << std::endl;
       }
     }).run();
+  }; // End of setup_routes lambda
+  
+  // Create appropriate app type and call setup_routes
+  if (use_ssl) {
+    auto app = uWS::SSLApp({
+      .key_file_name = key_path.c_str(),
+      .cert_file_name = cert_path.c_str(),
+      .passphrase = "",
+    });
+    setup_routes(app);
+  } else {
+    auto app = uWS::App();
+    setup_routes(app);
+  }
 }
 
-void TclServer::process_websocket_client_notifications(uWS::WebSocket<false, true, WSPerSocketData>* ws, WSPerSocketData* userData) {
+template<typename WebSocketType>
+void TclServer::process_websocket_client_notifications_template(
+    WebSocketType* ws, WSPerSocketData* userData) {
     if (!userData) {
         std::cerr << "ERROR: userData is null in notification thread" << std::endl;
         return;
     }
     
-    std::string client_name = userData->client_name; // Copy for safety
+    std::string client_name = userData->client_name;
     bool done = false;
     
     while (!done) {
       try {
-    if (!userData || !userData->notification_queue) {
-      break;
-    }
-        
-    client_request_t req = userData->notification_queue->front();
-    userData->notification_queue->pop_front();
-            
-            if (req.type == REQ_SHUTDOWN) {
-                done = true;
-                break;
-            }
-            
-            if (req.type == REQ_DPOINT_SCRIPT && req.dpoint) {
-
-                // Check if WebSocket is still connected BEFORE processing
-                if (!isWebSocketConnected(client_name, ws)) {
-                    dpoint_free(req.dpoint);
-                    done = true;
-                    break;
-                }
-          
-                // Check if this datapoint matches any of the client's subscriptions
-                bool matches = false;
-                std::string dpoint_name(req.dpoint->varname);
-                
-                for (const std::string& pattern : userData->subscriptions) {
-                    if (pattern == "*") {
-                        matches = true;
-                    } else if (pattern.back() == '*') {
-                        std::string prefix = pattern.substr(0, pattern.length() - 1);
-                        matches = (strncmp(dpoint_name.c_str(), prefix.c_str(), prefix.length()) == 0);
-                    } else {
-                        matches = (strcmp(dpoint_name.c_str(), pattern.c_str()) == 0);
-                    }
-                    
-                    if (matches) break;
-                }
-
-		if (matches) {
-		  // Convert to JSON
-		  char *json_str = dpoint_to_json(req.dpoint);
-		  if (json_str) {
-		    size_t json_size = strlen(json_str);
-		    
-		    // Log large messages
-		    if (json_size > 500000) {
-		      //		      std::cout << "Large datapoint: " << (json_size/1024) << "KB for " 
-		      //				<< req.dpoint->varname << std::endl;
-		    }
-		    
-		    json_error_t error;
-		    json_t *root = json_loads(json_str, 0, &error);
-		    if (root) {
-		      json_object_set_new(root, "type", json_string("datapoint"));
-		      char *enhanced_json = json_dumps(root, 0);
-		      
-		      // Create string for the message
-		      std::string message(enhanced_json);
-		      
-		      // Use chunking-aware send method (handles both small and large)
-		      sendLargeMessage(ws, message, client_name);
-		      
-		      free(enhanced_json);
-		      json_decref(root);
-		    }
-		    free(json_str);
-		  }
-		}
-                dpoint_free(req.dpoint);
-            }
-        } catch (...) {
-            // Queue empty or other error
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (!userData || !userData->notification_queue) {
+          break;
         }
+        
+        client_request_t req = userData->notification_queue->front();
+        userData->notification_queue->pop_front();
+            
+        if (req.type == REQ_SHUTDOWN) {
+            done = true;
+            break;
+        }
+        
+        if (req.type == REQ_DPOINT_SCRIPT && req.dpoint) {
+            // Check if this datapoint matches any subscriptions
+            bool matches = false;
+            std::string dpoint_name(req.dpoint->varname);
+            
+            for (const std::string& pattern : userData->subscriptions) {
+                if (pattern == "*") {
+                    matches = true;
+                } else if (pattern.back() == '*') {
+                    std::string prefix = pattern.substr(0, pattern.length() - 1);
+                    matches = (strncmp(dpoint_name.c_str(), prefix.c_str(), prefix.length()) == 0);
+                } else {
+                    matches = (strcmp(dpoint_name.c_str(), pattern.c_str()) == 0);
+                }
+                
+                if (matches) break;
+            }
+
+            if (matches) {
+                // Convert to JSON
+                char *json_str = dpoint_to_json(req.dpoint);
+                if (json_str) {
+                    json_error_t error;
+                    json_t *root = json_loads(json_str, 0, &error);
+                    if (root) {
+                        json_object_set_new(root, "type", json_string("datapoint"));
+                        char *enhanced_json = json_dumps(root, 0);
+                        
+                        std::string message(enhanced_json);
+                        
+                        // Send using ws_loop->defer for thread safety
+                        if (ws_loop) {
+                            ws_loop->defer([ws, message]() {
+                                ws->send(message, uWS::OpCode::TEXT);
+                            });
+                        }
+                        
+                        free(enhanced_json);
+                        json_decref(root);
+                    }
+                    free(json_str);
+                }
+            }
+            dpoint_free(req.dpoint);
+        }
+      } catch (...) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
     }
     
     // Cleanup
@@ -890,7 +1221,8 @@ void TclServer::process_websocket_client_notifications(uWS::WebSocket<false, tru
     }
 }
 
-void TclServer::sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
+template<typename WebSocketType>
+void TclServer::sendLargeMessage(WebSocketType* ws,
                                const std::string& message,
                                const std::string& client_name) {
     if (message.size() <= LARGE_MESSAGE_THRESHOLD) {
@@ -957,6 +1289,146 @@ void TclServer::sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* w
     //    std::cout << "Sent " << totalChunks << " chunks for message " << messageId << std::endl;
 }
 
+/********************* link subprocess to connection support *******************************/
+
+void TclServer::link_subprocess_to_current_connection(const std::string& subprocess_name) {
+  if (!current_request) {
+    std::cerr << "Warning: link_subprocess called but no current request context" << std::endl;
+    return;
+  }
+  
+  std::lock_guard<std::mutex> lock(subprocess_ownership_mutex);
+  
+  if (current_request->socket_fd >= 0) {
+    subprocess_to_socket[subprocess_name] = current_request->socket_fd;
+    //    std::cout << "Linked subprocess '" << subprocess_name 
+    //              << "' to socket " << current_request->socket_fd << std::endl;
+  } 
+  else if (!current_request->websocket_id.empty()) {
+    subprocess_to_websocket[subprocess_name] = current_request->websocket_id;
+    //    std::cout << "Linked subprocess '" << subprocess_name 
+    //              << "' to websocket " << current_request->websocket_id << std::endl;
+  }
+  else {
+    std::cerr << "Warning: link_subprocess called but request has no connection info" << std::endl;
+  }
+}
+
+void TclServer::cleanup_datapoints_for_subprocess(const std::string& subprocess_name) {
+  // Get all datapoint keys
+  std::string keys_str = ds->get_table_keys();
+  if (keys_str.empty()) {
+    return;
+  }
+  
+  // Parse space-separated keys
+  std::istringstream iss(keys_str);
+  std::string key;
+  
+  // Patterns to match: "subprocess_name/*" and "error/subprocess_name"
+  std::string prefix = subprocess_name + "/";
+  std::string error_key = "error/" + subprocess_name;
+  
+  std::vector<std::string> to_delete;
+  
+  while (iss >> key) {
+    if (key.rfind(prefix, 0) == 0 || key == error_key) {
+      to_delete.push_back(key);
+    }
+  }
+  
+  // Delete matching datapoints
+  for (const auto& key : to_delete) {
+    ds->clear(const_cast<char*>(key.c_str()));
+  }
+  
+  if (!to_delete.empty()) {
+    //    std::cout << "  Cleaned up " << to_delete.size() << " datapoints for " 
+    //              << subprocess_name << std::endl;
+  }
+}
+
+void TclServer::cleanup_subprocesses_for_socket(int sockfd) {
+  std::lock_guard<std::mutex> lock(subprocess_ownership_mutex);
+  
+  std::vector<std::string> to_cleanup;
+  for (const auto& [name, sock] : subprocess_to_socket) {
+    if (sock == sockfd) {
+      to_cleanup.push_back(name);
+    }
+  }
+  
+  for (const auto& name : to_cleanup) {
+    auto subprocess = TclServerRegistry.getObject(name);
+    if (subprocess) {
+      //      std::cout << "Socket " << sockfd << " closed, shutting down subprocess: " 
+      //        << name << std::endl;
+      subprocess->shutdown();
+      delete subprocess;
+    }
+    TclServerRegistry.unregisterObject(name);
+    subprocess_to_socket.erase(name);
+
+    // remove private dpoints created for this subprocess
+    cleanup_datapoints_for_subprocess(name);  
+  }
+
+}
+
+void TclServer::cleanup_subprocesses_for_websocket(const std::string& ws_id) {
+  std::lock_guard<std::mutex> lock(subprocess_ownership_mutex);
+  
+  std::vector<std::string> to_cleanup;
+  for (const auto& [name, id] : subprocess_to_websocket) {
+    if (id == ws_id) {
+      to_cleanup.push_back(name);
+    }
+  }
+  
+  for (const auto& name : to_cleanup) {
+    auto subprocess = TclServerRegistry.getObject(name);
+    if (subprocess) {
+      //      std::cout << "WebSocket " << ws_id << " closed, shutting down subprocess: " 
+      //                << name << std::endl;
+      subprocess->shutdown();
+      delete subprocess;
+    }
+    TclServerRegistry.unregisterObject(name);
+    subprocess_to_websocket.erase(name);
+
+    // remove private dpoints created for this subprocess
+    cleanup_datapoints_for_subprocess(name);    
+  }
+}
+
+static int subprocess_eval_command(ClientData data, Tcl_Interp *interp,
+                                   int objc, Tcl_Obj *objv[])
+{
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "script");
+        return TCL_ERROR;
+    }
+    
+    TclServer *tclserver = (TclServer *) data;
+    
+    TclServer *child = new TclServer(tclserver->argc,
+                                     tclserver->argv,
+                                     tclserver->ds);
+    
+    std::string script = Tcl_GetString(objv[1]);
+    auto result = child->eval(script);
+    
+    delete child;
+    
+    if (result.starts_with("!TCL_ERROR ")) {
+        Tcl_AppendResult(interp, result.c_str() + 11, NULL);
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result.c_str(), result.size()));
+    return TCL_OK;
+}
+
 /********************************* now *********************************/
 
 static int now_command (ClientData data, Tcl_Interp *interp,
@@ -1008,6 +1480,12 @@ static int send_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
+  if (!strcmp(Tcl_GetString(objv[1]), "dserv")) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
+                     ": cannot send directly to dserv", NULL);
+    return TCL_ERROR;
+  }
+  
   auto tclserver = TclServerRegistry.getObject(Tcl_GetString(objv[1]));
   if (!tclserver) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
@@ -1142,30 +1620,114 @@ static int get_var_command(ClientData data, Tcl_Interp *interp,
 
 /******************************* process *******************************/
 
-static int subprocess_command (ClientData data, Tcl_Interp *interp,
-                   int objc, Tcl_Obj *objv[])
+static void update_subprocess_dpoint(TclServer *tclserver)
 {
+  ds_datapoint_t dpoint;
+  auto allObjects = TclServerRegistry.getAllObjects();
+  
+  // Separate regular and linked subprocesses
+  std::string interpList;      // For regular subprocesses (UI)
+  std::string sandboxList;     // For linked/sandbox subprocesses (monitoring)
+  
+  for (const auto& [name, server] : allObjects) {
+    if (server->is_linked()) {
+      // Add to sandbox list
+      if (!sandboxList.empty()) sandboxList += " ";
+      sandboxList += name;
+    } else {
+      // Add to regular interp list
+      if (!interpList.empty()) interpList += " ";
+      interpList += name;
+    }
+  }
+  
+  // Update dserv/interps (regular subprocesses - for UI)
+  dpoint_set(&dpoint, (char *) tclserver->INTERPS_DPOINT_NAME,
+             tclserver->ds->now(), DSERV_STRING, interpList.size(),
+             (unsigned char *) interpList.c_str());
+  tclserver->ds->set(dpoint);
+  
+  // Update dserv/sandboxes (linked subprocesses - for monitoring)
+  dpoint_set(&dpoint, (char *) tclserver->SANDBOXES_DPOINT_NAME,
+             tclserver->ds->now(), DSERV_STRING, sandboxList.size(),
+             (unsigned char *) sandboxList.c_str());
+  tclserver->ds->set(dpoint);
+}
+
+static int subprocess_command (ClientData data, Tcl_Interp *interp,
+                               int objc, Tcl_Obj *objv[])
+{
+  static std::atomic<int> link_counter{0};
+  
   TclServer *tclserver = (TclServer *) data;
   int port = -1;
+  std::string script;
+  bool link_connection = false;
   
- if (objc > 3) {
-    if (Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK) {
+  int arg_idx = 1;
+  
+  // Parse -link option
+  while (arg_idx < objc && Tcl_GetString(objv[arg_idx])[0] == '-') {
+    std::string opt = Tcl_GetString(objv[arg_idx]);
+    if (opt == "-link") {
+      link_connection = true;
+      arg_idx++;
+    } else {
+      Tcl_AppendResult(interp, "unknown option: ", opt.c_str(), NULL);
       return TCL_ERROR;
     }
   }
-
-  TclServer *child = new TclServer(tclserver->argc, tclserver->argv,
-                   tclserver->ds,
-                   Tcl_GetString(objv[1]), port);
-                  
-  TclServerRegistry.registerObject(Tcl_GetString(objv[1]), child);
-
-  std::string script;
-  if (objc > 3) {
-    script = std::string(Tcl_GetString(objv[3]));
-  } else if (objc > 2) {
-    script = std::string(Tcl_GetString(objv[2]));  
+  
+  std::string name;
+  
+  // If -link was specified and no name provided, generate one
+  if (link_connection && arg_idx >= objc) {
+    // Generate unique name for linked subprocess
+    do {
+      name = "linked_" + std::to_string(link_counter.fetch_add(1));
+    } while (TclServerRegistry.exists(name));
+  } else {
+    // Name was explicitly provided
+    if (arg_idx >= objc) {
+      Tcl_WrongNumArgs(interp, 1, objv, "?-link? ?name? ?port? ?script?");
+      return TCL_ERROR;
+    }
+    name = Tcl_GetString(objv[arg_idx++]);
   }
+  
+  // Parse remaining args (port and/or script)
+  if (arg_idx < objc) {
+    // Try to parse as port number
+    if (Tcl_GetIntFromObj(interp, objv[arg_idx], &port) == TCL_OK) {
+      arg_idx++;
+      if (arg_idx < objc) {
+        script = std::string(Tcl_GetString(objv[arg_idx]));
+      }
+    } else {
+      // Not an int, must be script
+      script = std::string(Tcl_GetString(objv[arg_idx]));
+    }
+  }
+  
+  if (TclServerRegistry.exists(name)) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": child process \"",
+                     name.c_str(), "\" already exists", NULL);
+    return TCL_ERROR;
+  }
+  
+  TclServer *child = new TclServer(tclserver->argc,
+                                   tclserver->argv,
+                                   tclserver->ds,
+                                   name.c_str(), port);
+  
+  
+  // link to current connection if requested, o.w. add to registry
+  if (link_connection) {
+    tclserver->link_subprocess_to_current_connection(name);
+    child->set_linked(true);    
+  }
+  TclServerRegistry.registerObject(name, child);
+    
   if (!script.empty()) {
     auto result = child->eval(script);
     if (result.starts_with("!TCL_ERROR ")) {
@@ -1175,11 +1737,13 @@ static int subprocess_command (ClientData data, Tcl_Interp *interp,
     }
   }
   
-  Tcl_SetObjResult(interp, Tcl_NewStringObj(child->client_name.c_str(), -1));
+  // update list of current subprocesses
+  update_subprocess_dpoint(tclserver);
+  
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(child->name.c_str(), -1));
   
   return TCL_OK;
 }
-
 
 static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp, 
                    int objc, Tcl_Obj *const objv[])
@@ -1220,6 +1784,43 @@ static int getsubprocesses_command(ClientData clientData, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 }
+
+
+// Custom exit command for subprocess control
+static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
+			       int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) clientData;
+  
+  // Check if this is the main dserv process
+  if (tserv->name == "dserv" || tserv->name == "") {
+    Tcl_SetResult(interp, 
+		  (char *)"Cannot exit main dserv process. Use 'shutdown' instead.", 
+		  TCL_STATIC);
+    return TCL_ERROR;
+  }
+  
+  // For subprocesses, allow exit with optional code
+  int exitCode = 0;
+  if (objc > 1) {
+    if (Tcl_GetIntFromObj(interp, objv[1], &exitCode) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  
+  // Store exit code in a datapoint for monitoring
+  //  std::string dp_name = tserv->name + "/exit_code";
+  //  tserv->ds->set(dp_name.c_str(), exitCode);
+  
+  std::cout << "Subprocess '" << tserv->name 
+	    << "' exiting with code " << exitCode << std::endl;
+  
+  // Trigger clean shutdown
+  tserv->shutdown();
+  
+  return TCL_OK;
+}
+
 
 
 static int set_priority_command(ClientData data, Tcl_Interp *interp,
@@ -1593,6 +2194,24 @@ static int print_command (ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+
+// =============================================================================
+// Tcl command: www_path
+// =============================================================================
+
+// www_path ?path?
+// With no argument: returns current www path
+// With argument: sets the www path (validates directory exists)
+static int Www_Path_Cmd(ClientData clientData, Tcl_Interp *interp,
+                        int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *)clientData;
+  
+  // Return current path
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(tserv->getWwwPath().c_str(), -1));
+  return TCL_OK;
+}
+
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
@@ -1639,6 +2258,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
   Tcl_CreateObjCommand(interp, "subprocess",
                (Tcl_ObjCmdProc *) subprocess_command,
+               tserv, NULL);
+  Tcl_CreateObjCommand(interp, "subprocessEval",
+               (Tcl_ObjCmdProc *) subprocess_eval_command,
                tserv, NULL);
   Tcl_CreateObjCommand(interp, "subprocessInfo",
                (Tcl_ObjCmdProc *) getsubprocesses_command,
@@ -1709,11 +2331,19 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                (Tcl_ObjCmdProc *) dpoint_remove_all_scripts_command,
                tserv, NULL);
 
+  Tcl_CreateObjCommand(interp, "www_path", Www_Path_Cmd,
+		       (ClientData)tserv, NULL);
+  
   Tcl_CreateObjCommand(interp, "print",
                (Tcl_ObjCmdProc *) print_command, tserv, NULL);
   
   Tcl_LinkVar(interp, "tcpPort", (char *) &tserv->_newline_port,
           TCL_LINK_INT | TCL_LINK_READ_ONLY);
+
+
+  // Completion support
+  TclCompletion::RegisterCompletionCommands(interp);
+
   return;
 }
 
@@ -1726,7 +2356,35 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
   if (tserv->hasCommandCallback()) {
       tserv->callCommandCallback(interp);
   }
-    
+ 
+  // Common initialization for all interpreters
+  const char *init_script = R"(
+    set dspath [file dir [info nameofexecutable]]
+    set base [file join [zipfs root] dlsh]
+    set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+
+    proc remoteEval {host script {port 2560}} {
+        set sock [socket $host $port]
+        fconfigure $sock -translation binary -buffering full
+        
+        set msg "subprocessEval [list $script]"
+        set len [string length $msg]
+        puts -nonewline $sock [binary format I $len]$msg
+        flush $sock
+        
+        set lenbuf [read $sock 4]
+        binary scan $lenbuf I rlen
+        set result [read $sock $rlen]
+        
+        close $sock
+        return $result
+    }
+  )";
+  
+  if (Tcl_Eval(interp, init_script) != TCL_OK) {
+    return TCL_ERROR;
+  }
+  
   return TCL_OK;
 }
 
@@ -1897,83 +2555,103 @@ static int process_requests(TclServer *tserv)
   
   // Set the association data for modules to find
   Tcl_SetAssocData(interp, "tclserver_instance", NULL, (ClientData)tserv);
-    
+
+  // Create ErrorMonitor
+  ErrorMonitor* errorMonitor = new ErrorMonitor(tserv);
+  ErrorMonitor::registerCommand(interp, errorMonitor);
+
+  // Override the default exit command with our subprocess-aware version
+  Tcl_CreateObjCommand(interp, "exit", subprocess_exit_cmd, 
+		       (ClientData)tserv, NULL);
+  
   /* process until receive a message saying we are done */
   while (!tserv->m_bDone) {
     
     req = tserv->queue.front();
     tserv->queue.pop_front();
-    
+
+    // set current request context so Tcl commands can access
+    tserv->set_current_request(&req);
+ 
     switch (req.type) {
     case REQ_SCRIPT:
       {
-    const char *script = req.script.c_str();
-
-    retcode = Tcl_Eval(interp, script);
-    const char *rcstr = Tcl_GetStringResult(interp);
-    
-    if (retcode == TCL_OK) {
-      if (rcstr) {
-        req.rqueue->push_back(std::string(rcstr));
+	const char *script = req.script.c_str();
+	
+	retcode = Tcl_Eval(interp, script);
+	const char *rcstr = Tcl_GetStringResult(interp);
+	
+	if (retcode == TCL_OK) {
+	  if (rcstr) {
+	    req.rqueue->push_back(std::string(rcstr));
+	  }
+	  else {
+	    req.rqueue->push_back("");
+	  }
+	}
+	else {
+	  if (rcstr) {
+	    req.rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
+	  }
+	  else {
+	    req.rqueue->push_back("Error:");
+	  }
+	}
       }
-      else {
-        req.rqueue->push_back("");
-      }
-    }
-    else {
-      if (rcstr) {
-        req.rqueue->push_back("!TCL_ERROR "+std::string(rcstr));
-        //      std::cout << "Error: " + std::string(rcstr) << std::endl;
-        
-      }
-      else {
-        req.rqueue->push_back("Error:");
-      }
-    }
-      }
-
       break;
     case REQ_SCRIPT_NOREPLY:
       {
-    const char *script = req.script.c_str();
-    retcode = Tcl_Eval(interp, script);
+	const char *script = req.script.c_str();
+	retcode = Tcl_Eval(interp, script);
       }
       break;
     case REQ_DPOINT:
       {
-    tserv->ds->set(req.dpoint);
+	tserv->ds->set(req.dpoint);
       }
       break;
     case REQ_DPOINT_SCRIPT:
       {
-    ds_datapoint_t *dpoint = req.dpoint;
-    std::string varname(dpoint->varname);
-    
-    // Process events through EventDispatcher first
-    if (varname == "eventlog/events" && tserv->eventDispatcher) {
-        tserv->eventDispatcher->processEvent(dpoint);
-    }
+	ds_datapoint_t *dpoint = req.dpoint;
+	std::string varname(dpoint->varname);
+	
+	// Process events through EventDispatcher first
+	if (varname == "eventlog/events" && tserv->eventDispatcher) {
+	  tserv->eventDispatcher->processEvent(dpoint);
+	}
         
-    // evaluate a dpoint script
-    std::string script;
-    if (tserv->dpoint_scripts.find(varname, script)) {
-      ds_datapoint_t *dpoint = req.dpoint;
-      const char *dpoint_script = script.c_str();
-      int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
-    }
-    else if (tserv->dpoint_scripts.find_match(varname, script)) {
-      ds_datapoint_t *dpoint = req.dpoint;
-      const char *dpoint_script = script.c_str();
-      int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
-    }
-
-    dpoint_free(dpoint);
+	// evaluate a dpoint script
+	std::string script;
+	if (tserv->dpoint_scripts.find(varname, script)) {
+	  ds_datapoint_t *dpoint = req.dpoint;
+	  const char *dpoint_script = script.c_str();
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	}
+	else if (tserv->dpoint_scripts.find_match(varname, script)) {
+	  ds_datapoint_t *dpoint = req.dpoint;
+	  const char *dpoint_script = script.c_str();
+	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
+	}
+	
+	dpoint_free(dpoint);
       }
     default:
       break;
     }
+
+    // clear context
+    tserv->set_current_request(nullptr);
   }
 
+  // Clean up ErrorMonitor
+  delete errorMonitor;
+
+  TclServerRegistry.unregisterObject(tserv->name);
+  update_subprocess_dpoint(tserv);
+  
+  // Call a shutdown handler if it exists
+  Tcl_Eval(interp, "if {[info procs ::on_shutdown] ne {}} {::on_shutdown}");
+   
   tserv->setInterp(nullptr);
   Tcl_DeleteInterp(interp);
   //  std::cout << "TclServer process thread ended" << std::endl;
@@ -2050,7 +2728,8 @@ TclServer::tcp_client_process(TclServer *tserv,
   client_request_t client_request;
   client_request.rqueue = &rqueue;
   client_request.type = REQ_SCRIPT;
-
+  client_request.socket_fd = sockfd;
+  client_request.websocket_id = "";
   std::string script;  
     
   while ((rval = recv(sockfd, buf, sizeof(buf), 0)) > 0) {
@@ -2064,19 +2743,15 @@ TclServer::tcp_client_process(TclServer *tserv,
       std::string s;
       client_request.script = std::string(script);
 
-      // ignore certain commands, especially exit...
-      if (!client_request.script.compare(0, 4, "exit")) {
-        s = std::string("");
-      } else {
-        // push request onto queue for main thread to retrieve
-        queue->push_back(client_request);
-        
-        // rqueue will be available after command has been processed
-        s = client_request.rqueue->front();
-        client_request.rqueue->pop_front();
-        
-        //    std::cout << "TCL Result: " << s << std::endl;
-      }
+      // push request onto queue for main thread to retrieve
+      queue->push_back(client_request);
+      
+      // rqueue will be available after command has been processed
+      s = client_request.rqueue->front();
+      client_request.rqueue->pop_front();
+      
+      //    std::cout << "TCL Result: " << s << std::endl;
+
       // Add a newline, and send the buffer including the null termination
       s = s+"\n";
 #ifndef _MSC_VER
@@ -2096,16 +2771,28 @@ TclServer::tcp_client_process(TclServer *tserv,
     }
   }
 
+  // cleanup any linked subprocesses
+  tserv->cleanup_subprocesses_for_socket(sockfd);
+  
   // close and unregister for proper limit tracking
   tserv->unregister_connection(sockfd);
 }
 
-static  void sendMessage(int socket, const std::string& message) {
+static void sendMessage(int socket, const std::string& message) {
   // Convert size to network byte order
   uint32_t msgSize = htonl(message.size()); 
-
   send(socket, (char *) &msgSize, sizeof(msgSize), 0);
-  send(socket, message.c_str(), message.size(), 0);
+  
+  size_t totalSent = 0;
+  size_t remaining = message.size();
+  const char* data = message.c_str();
+  
+  while (totalSent < message.size()) {
+    ssize_t sent = send(socket, data + totalSent, remaining, 0);
+    if (sent <= 0) break;  // error or connection closed
+    totalSent += sent;
+    remaining -= sent;
+  }
 }
 
 static std::pair<char*, size_t> receiveMessage(int socket) {
@@ -2151,6 +2838,8 @@ TclServer::message_client_process(TclServer *tserv,
   client_request_t client_request;
   client_request.rqueue = &rqueue;
   client_request.type = REQ_SCRIPT;
+  client_request.socket_fd = sockfd;
+  client_request.websocket_id = "";
   
   std::string script;  
 
@@ -2165,25 +2854,24 @@ TclServer::message_client_process(TclServer *tserv,
       client_request.script = std::string(buffer);
       std::string s;
       
-      // ignore certain commands, especially exit...
-      if (!client_request.script.compare(0, 4, "exit")) {
-    s = std::string("");
-      } else {
-    // push request onto queue for main thread to retrieve
-    queue->push_back(client_request);
-    
-    // rqueue will be available after command has been processed
-    s = client_request.rqueue->front();
-    client_request.rqueue->pop_front();
-    //  std::cout << "TCL Result: " << s << std::endl;
-      }
-
+      // push request onto queue for main thread to retrieve
+      queue->push_back(client_request);
+      
+      // rqueue will be available after command has been processed
+      s = client_request.rqueue->front();
+      client_request.rqueue->pop_front();
+      //  std::cout << "TCL Result: " << s << std::endl;
+      
       // Send a response back to the client
       sendMessage(sockfd, s);
       
       delete[] buffer;
     }
   }
+
+  // cleanup linked subprocesses when connection closes
+  tserv->cleanup_subprocesses_for_socket(sockfd);
+  
   tserv->unregister_connection(sockfd);
 }
 

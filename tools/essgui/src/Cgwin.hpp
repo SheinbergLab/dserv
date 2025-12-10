@@ -12,6 +12,41 @@
 #include <cmath>
 #include <jansson.h>
 
+// Local base64 decode for image data
+static int decodeBase64(const char* in, size_t inLen, 
+                        unsigned char* out, size_t* outLen) {
+    static const int lookup[] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+        52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+        15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+        41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1
+    };
+    
+    size_t len = 0;
+    int buf = 0, bits = 0;
+    
+    for (size_t i = 0; i < inLen; i++) {
+        unsigned char c = in[i];
+        if (c == '=') break;
+        if (c >= 128 || lookup[c] < 0) continue;  // skip invalid/whitespace
+        
+        buf = (buf << 6) | lookup[c];
+        bits += 6;
+        
+        if (bits >= 8) {
+            bits -= 8;
+            out[len++] = (buf >> bits) & 0xFF;
+        }
+    }
+    
+    *outLen = len;
+    return 0;
+}
+
 class CGWin : public Fl_Group {
 private:
     std::string m_lastJsonData;
@@ -177,6 +212,64 @@ private:
       }
     }
   }
+
+    // Nearest-neighbor image scaling
+    void scaleImageNearest(const unsigned char* src, int src_w, int src_h, int depth,
+                           unsigned char* dst, int dst_w, int dst_h) {
+        for (int y = 0; y < dst_h; y++) {
+            int src_y = y * src_h / dst_h;
+            for (int x = 0; x < dst_w; x++) {
+                int src_x = x * src_w / dst_w;
+                const unsigned char* sp = src + (src_y * src_w + src_x) * depth;
+                unsigned char* dp = dst + (y * dst_w + x) * depth;
+                for (int c = 0; c < depth; c++) {
+                    dp[c] = sp[c];
+                }
+            }
+        }
+    }
+
+    // Bilinear image scaling
+    void scaleImageBilinear(const unsigned char* src, int src_w, int src_h, int depth,
+                            unsigned char* dst, int dst_w, int dst_h) {
+        for (int y = 0; y < dst_h; y++) {
+            float src_yf = (y + 0.5f) * src_h / dst_h - 0.5f;
+            int y0 = static_cast<int>(std::floor(src_yf));
+            int y1 = y0 + 1;
+            float fy = src_yf - y0;
+            
+            // Clamp to valid range
+            if (y0 < 0) { y0 = 0; fy = 0; }
+            if (y1 >= src_h) { y1 = src_h - 1; }
+            
+            for (int x = 0; x < dst_w; x++) {
+                float src_xf = (x + 0.5f) * src_w / dst_w - 0.5f;
+                int x0 = static_cast<int>(std::floor(src_xf));
+                int x1 = x0 + 1;
+                float fx = src_xf - x0;
+                
+                // Clamp to valid range
+                if (x0 < 0) { x0 = 0; fx = 0; }
+                if (x1 >= src_w) { x1 = src_w - 1; }
+                
+                // Get four neighboring pixels
+                const unsigned char* p00 = src + (y0 * src_w + x0) * depth;
+                const unsigned char* p01 = src + (y0 * src_w + x1) * depth;
+                const unsigned char* p10 = src + (y1 * src_w + x0) * depth;
+                const unsigned char* p11 = src + (y1 * src_w + x1) * depth;
+                
+                unsigned char* dp = dst + (y * dst_w + x) * depth;
+                
+                for (int c = 0; c < depth; c++) {
+                    // Bilinear interpolation
+                    float top = p00[c] * (1 - fx) + p01[c] * fx;
+                    float bot = p10[c] * (1 - fx) + p11[c] * fx;
+                    float val = top * (1 - fy) + bot * fy;
+                    dp[c] = static_cast<unsigned char>(std::min(255.0f, std::max(0.0f, val)));
+                }
+            }
+        }
+    }
   
   void executeJsonCommands(json_t *commands) {
         size_t index;
@@ -353,6 +446,68 @@ private:
             float x = transformX(json_number_value(json_array_get(args_obj, 0)));
             float y = transformY(json_number_value(json_array_get(args_obj, 1)));
             fl_point(x, y);
+        }
+        else if (strcmp(cmd, "drawimage") == 0) {
+            // Get image_data object
+            json_t *img_data = json_object_get(command, "image_data");
+            if (!img_data) return;
+            
+            int src_w = json_integer_value(json_object_get(img_data, "width"));
+            int src_h = json_integer_value(json_object_get(img_data, "height"));
+            int depth = json_integer_value(json_object_get(img_data, "depth"));
+            json_t *data_obj = json_object_get(img_data, "data");
+            if (!data_obj || !json_is_string(data_obj)) return;
+            const char *b64_data = json_string_value(data_obj);
+            
+            // Get args: [x1, y1, x2, y2, image_id, (optional) interp] - corner coordinates
+            if (json_array_size(args_obj) < 4) return;
+            float x1 = json_number_value(json_array_get(args_obj, 0));
+            float y1 = json_number_value(json_array_get(args_obj, 1));
+            float x2 = json_number_value(json_array_get(args_obj, 2));
+            float y2 = json_number_value(json_array_get(args_obj, 3));
+            // args[4] is image_id; args[5] would be interp if added later
+            int interp = (json_array_size(args_obj) >= 6) ? 
+                         json_integer_value(json_array_get(args_obj, 5)) : 1;  // default to bilinear
+            
+            // Transform corner coordinates
+            int screen_x = static_cast<int>(transformX(x1));
+            int screen_y = static_cast<int>(transformY(y2));  // y2 is top in screen coords
+            int screen_w = static_cast<int>(transformX(x2) - transformX(x1));
+            int screen_h = static_cast<int>(transformY(y1) - transformY(y2));
+            
+            if (src_w <= 0 || src_h <= 0 || depth <= 0) return;
+            if (screen_w <= 0 || screen_h <= 0) return;
+            
+            // Decode base64
+            size_t expected_size = src_w * src_h * depth;
+            std::vector<unsigned char> pixels(expected_size);
+            size_t out_len = 0;
+            decodeBase64(b64_data, strlen(b64_data), pixels.data(), &out_len);
+            
+            if (out_len != expected_size) {
+                std::cerr << "drawimage: decoded size mismatch (got " 
+                          << out_len << ", expected " << expected_size << ")" << std::endl;
+                return;
+            }
+            
+            // Scale if needed
+            if (screen_w == src_w && screen_h == src_h) {
+                // No scaling needed
+                fl_draw_image(pixels.data(), screen_x, screen_y, src_w, src_h, depth);
+            } else {
+                // Scale to destination size
+                std::vector<unsigned char> scaled(screen_w * screen_h * depth);
+                if (interp == 0) {
+                    // Nearest-neighbor
+                    scaleImageNearest(pixels.data(), src_w, src_h, depth, 
+                                      scaled.data(), screen_w, screen_h);
+                } else {
+                    // Bilinear (default)
+                    scaleImageBilinear(pixels.data(), src_w, src_h, depth, 
+                                       scaled.data(), screen_w, screen_h);
+                }
+                fl_draw_image(scaled.data(), screen_x, screen_y, screen_w, screen_h, depth);
+            }
         }
     }
 

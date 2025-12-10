@@ -14,10 +14,18 @@ package require qpcs
 
 tcl::tm::add $dspath/lib
 
+# enable error logging
+errormon enable
+
 # configure our mesh dispatcher (started on 2575 if enabled)
 if { [info exists ::mesh_enabled] } {
     puts "Mesh networking detected - loading mesh configuration"
      send mesh "source [file join $dspath config/meshconf.tcl]"
+}
+
+# look for any .tcl configs to run before other subprocesses local/*.tcl
+foreach f [glob [file join $dspath local pre-*.tcl]] {
+    source $f
 }
 
 # start an eye movement subprocess
@@ -25,6 +33,15 @@ subprocess em "source [file join $dspath config/emconf.tcl]"
 
 # start a juicer subprocess
 subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
+
+# start a sound subprocess
+subprocess sound "source [file join $dspath config/soundconf.tcl]"
+
+# start a "git" interpreter
+subprocess git "source [file join $dspath config/gitconf.tcl]"
+
+# start a "powermon"itor if found
+subprocess powermon "source [file join $dspath config/powermonconf.tcl]"
 
 # start our isolated ess thread
 subprocess ess "source [file join $dspath config/essconf.tcl]"
@@ -37,6 +54,9 @@ source [file join $dspath config/essctrl.tcl]
 
 # start a visualization process
 subprocess viz "source [file join $dspath config/vizconf.tcl]"
+
+# setup docs subprocess
+subprocess docs "source [file join $dspath config/docsconf.tcl]"
 
 proc set_hostinfo {} {
     # target_host allows us to connect using NIC
@@ -79,8 +99,8 @@ if { [lsearch $hbs $host] >= 0 } {
     subprocess pg 2572 "source [file join $dspath config/central_postgresconf.tcl]"
 }
 
-# start a "git" interpreter
-subprocess git 2573 "source [file join $dspath config/gitconf.tcl]"
+# start a virtual eye subprocess
+subprocess virtual_eye "source [file join $dspath config/virtualeyeconf.tcl]"
 
 # auto update support
 source [file join $dspath config/updateconf.tcl]
@@ -90,10 +110,4 @@ if { [file exists $dspath/modules/dserv_camera[info sharedlibextension]] } {
     subprocess camera "source [file join $dspath config/cameraconf.tcl]"
 }
 
-# connect to battery power circuits
-load [file join $dspath modules/dserv_ina226[info sharedlibextension]]
-ina226Add 0x45 system 12v
-ina226Add 0x44 system 24v
 
-
-  

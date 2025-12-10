@@ -2,10 +2,11 @@
 # Handle branch and pull requests for system paths that are git repos
 #
 
-set dspath [file dir [info nameofexecutable]]
+# enable error logging
+errormon enable
 
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
 
 namespace eval git {
     variable path {}
@@ -273,11 +274,15 @@ namespace eval git {
     }
 
 }
+
 git::set_path
-git::branches
-if { [info exists ::env(ESS_GIT_USERID)] } {
-    git::switch_and_pull $::env(ESS_GIT_USERID)
-} else {
-    git::switch_and_pull
+
+if { 1 } {
+    git::branches
+    if { [info exists ::env(ESS_GIT_USERID)] } {
+	git::switch_and_pull $::env(ESS_GIT_USERID)
+    } else {
+	git::switch_and_pull
+    }
 }
-puts "Git listener on port 2573"
+puts "Git initialized"

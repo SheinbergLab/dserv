@@ -1,12 +1,11 @@
-puts "initializing juicer"
-
-set dspath [file dir [info nameofexecutable]]
-
-set base [file join [zipfs root] dlsh]
-set auto_path [linsert $auto_path [set auto_path 0] $base/lib]
-
 # JSON support
 package require yajltcl
+
+# disable exit
+proc exit {args} { error "exit not available for this subprocess" }
+
+# enable error logging
+errormon enable
 
 ### example usage:
 # set j [Juicer new /dev/ttyACM0]
@@ -246,3 +245,6 @@ init
 if { [file exists $dspath/local/juicer.tcl] } {
     source $dspath/local/juicer.tcl
 }
+
+puts "Juicer initialized"
+

@@ -77,3 +77,16 @@ namespace eval ess {
     proc file_suggest {} { _protected_call file_suggest 0 }
 }
 
+proc complete_protocols { prev_args partial } {
+    send ess [list ess::get_protocol_completions $prev_args $partial]
+}
+
+proc complete_variants { prev_args partial } {
+    send ess [list ess::get_variant_completions $prev_args $partial]
+}
+
+completion::register ess::load_system {
+    {datapoint ess/systems}
+    {proc complete_protocols}
+    {proc complete_variants}
+}

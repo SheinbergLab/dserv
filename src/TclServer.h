@@ -33,6 +33,7 @@
 
 #include "Datapoint.h"
 #include "Dataserver.h"
+#include "ErrorMonitor.h"
 
 #include <unordered_map>
 #include <mutex>
@@ -74,6 +75,7 @@ public:
   int message_listener_port = -1;
   int websocket_listener_port = -1;  // Add WebSocket port
   std::string name;
+  std::string www_path;
   
   TclServerConfig(std::string name, int newline_port, int message_port):
     name(name), newline_listener_port(newline_port), 
@@ -128,17 +130,35 @@ private:
   std::unordered_map<int, std::string> socket_to_ip;     // socket -> IP mapping
   std::unordered_map<std::string, int> ip_connection_count;
 
+  // Make current request available
+  client_request_t* current_request = nullptr;
+  
+  // Subprocess ownership tracking for cleanup
+  bool is_linked_subprocess = false; // true if tied to a connection
+  std::unordered_map<std::string, int> subprocess_to_socket;
+  std::unordered_map<std::string, std::string> subprocess_to_websocket;
+  std::mutex subprocess_ownership_mutex;
+  
   // WebSocket subscription support
   mutable std::mutex ws_connections_mutex;
-  std::map<std::string, uWS::WebSocket<false, true, WSPerSocketData>*> ws_connections;
+  std::map<std::string, void*> ws_connections;  // Changed to void* to support both SSL and non-SSL
   uWS::Loop *ws_loop = nullptr;  // Store the loop reference
 
   static const size_t LARGE_MESSAGE_THRESHOLD = 2 * 1024 * 1024; // 2MB
   static const size_t CHUNK_SIZE = 512 * 1024; // 512KB chunks
+
+  std::string cert_path = "/usr/local/dserv/ssl/cert.pem";
+  std::string key_path = "/usr/local/dserv/ssl/key.pem";
+
+  bool websocket_ssl_enabled = false;
+
+  // Static file serving - path to www directory, empty = disabled
+  std::string www_path;  
   
-  void sendLargeMessage(uWS::WebSocket<false, true, WSPerSocketData>* ws,
-			const std::string& message,
-			const std::string& client_name);
+  template<typename WebSocketType>
+  void sendLargeMessage(WebSocketType* ws,
+                        const std::string& message,
+                        const std::string& client_name);
 
  using CommandRegistrationCallback = std::function<void(Tcl_Interp*, void*)>;
  CommandRegistrationCallback command_callback = nullptr;
@@ -161,6 +181,9 @@ public:
 
   // our dataserver
   Dataserver *ds;
+
+  // option error tracking
+  ErrorMonitor *errorMonitor = nullptr;
   
   // provide access to our interpreter
   Tcl_Interp* getInterp() const { return process_interp; }
@@ -176,7 +199,26 @@ public:
   SharedQueue<client_request_t> queue;
 
   const char *PRINT_DPOINT_NAME = "print";
-
+  const char *INTERPS_DPOINT_NAME = "dserv/interps";
+  const char *SANDBOXES_DPOINT_NAME = "dserv/sandboxes";
+  
+  void set_current_request(client_request_t* req) {
+    current_request = req;
+  }
+  
+  client_request_t* get_current_request() {
+    return current_request;
+  }
+  
+  void set_linked(bool linked) { is_linked_subprocess = linked; }
+  bool is_linked() const { return is_linked_subprocess; }
+  
+  // Subprocess lifecycle management
+  void link_subprocess_to_current_connection(const std::string& subprocess_name);
+  void cleanup_subprocesses_for_socket(int sockfd);
+  void cleanup_subprocesses_for_websocket(const std::string& ws_id);
+  void cleanup_datapoints_for_subprocess(const std::string& subprocess_name);
+  
   int _newline_port;		// for CR/LF oriented communication
   int _message_port;		// for message oriented comm  
   int _websocket_port;		// for WebSocket communication
@@ -185,6 +227,15 @@ public:
   int message_port(void) { return _message_port; }
   int websocket_port(void) { return _websocket_port; }
 
+  const std::string& getCertPath() { return cert_path; }
+  const std::string& getKeyPath() { return key_path; }
+
+  void setWwwPath(const std::string& path) { www_path = path; }
+  const std::string& getWwwPath() const { return www_path; }
+  bool hasWwwPath() const { return !www_path.empty(); }  
+
+  bool isWebSocketSSLEnabled() const { return websocket_ssl_enabled; }
+  
 	// Add this method to allow deferred execution on the WebSocket event loop
   void deferToWebSocketLoop(std::function<void()> func) {
 	if (ws_loop) {
@@ -272,10 +323,11 @@ public:
   // socket type can be SOCKET_LINE (newline oriented) or SOCKET_MESSAGE
   socket_t socket_type;
 
-  bool isWebSocketConnected(const std::string& client_name, uWS::WebSocket<false, true, WSPerSocketData>* ws) {
+  template<typename WebSocketType>
+  bool isWebSocketConnected(const std::string& client_name, WebSocketType* ws) {
     std::lock_guard<std::mutex> lock(ws_connections_mutex);
     auto it = ws_connections.find(client_name);
-    return it != ws_connections.end() && it->second == ws;
+    return it != ws_connections.end() && it->second == (void*)ws;
   }
   
   static void
@@ -288,6 +340,7 @@ public:
 			 int sock,
 			 SharedQueue<client_request_t> *queue);
   
+  TclServer(int argc, char **argv, Dataserver *dserv);
   TclServer(int argc, char **argv, Dataserver *dserv, TclServerConfig cfg);
   TclServer(int argc, char **argv, Dataserver *dserv, std::string name);
   TclServer(int argc, char **argv, Dataserver *dserv,
@@ -314,7 +367,8 @@ public:
         if (command_callback) command_callback(interp, command_callback_data); 
   }
     
-  void process_websocket_client_notifications(uWS::WebSocket<false, true, WSPerSocketData>* ws, WSPerSocketData* userData);
+  template<typename WebSocketType>
+  void process_websocket_client_notifications_template(WebSocketType* ws, WSPerSocketData* userData);
   
   int sourceFile(const char *filename);
   uint64_t now(void) { return ds->now(); }
