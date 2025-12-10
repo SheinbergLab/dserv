@@ -352,6 +352,8 @@ static const char* get_content_type(const std::string& path) {
   // Other
   if (ext == ".txt") return "text/plain; charset=utf-8";
   if (ext == ".md") return "text/markdown; charset=utf-8";
+  if (ext == ".pem") return "application/x-pem-file";
+  if (ext == ".crt") return "application/x-x509-ca-cert";  
   if (ext == ".xml") return "application/xml";
   if (ext == ".wasm") return "application/wasm";
   
@@ -1128,7 +1130,7 @@ set www_path /usr/local/dserv/www</code>
     auto app = uWS::SSLApp({
       .key_file_name = key_path.c_str(),
       .cert_file_name = cert_path.c_str(),
-      .passphrase = ""
+      .passphrase = "",
     });
     setup_routes(app);
   } else {
