@@ -198,6 +198,40 @@ header .status-dot.connecting {
     font-size: 16px;
 }
 
+/* SSL Certificate Badge */
+.ssl-cert-badge {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+}
+
+.ssl-cert-badge a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: rgba(96, 165, 250, 0.15);
+    border: 1px solid rgba(96, 165, 250, 0.3);
+    border-radius: 6px;
+    color: #60a5fa;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(10px);
+}
+
+.ssl-cert-badge a:hover {
+    background: rgba(96, 165, 250, 0.25);
+    border-color: #60a5fa;
+    transform: translateY(-1px);
+}
+
+.ssl-cert-badge .icon {
+    font-size: 14px;
+}
+
 /* System Info */
 .system-info {
     margin-top: 48px;
@@ -424,6 +458,14 @@ footer a:hover {
     </style>
 </head>
 <body>
+    <!-- SSL Certificate Install Badge -->
+    <div class="ssl-cert-badge">
+        <a href="/lab-ca.pem" download title="Download & install SSL certificate for trusted connections">
+            <span class="icon">🔒</span>
+            Install Cert
+        </a>
+    </div>
+    
     <div class="container">
         <header>
             <h1>dserv</h1>
