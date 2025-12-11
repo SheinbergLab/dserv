@@ -1,0 +1,203 @@
+/**
+ * MeshDropdown Styles
+ * 
+ * Standalone styles for the MeshDropdown component.
+ * Uses CSS custom properties for theming - override these in your app:
+ * 
+ *   --mesh-bg: Panel background color
+ *   --mesh-bg-hover: Hover background color
+ *   --mesh-border: Border color
+ *   --mesh-text: Primary text color
+ *   --mesh-text-secondary: Secondary text color
+ *   --mesh-accent: Accent color (icon, current item)
+ *   --mesh-success: Success/running color
+ *   --mesh-warning: Warning/loading color
+ *   --mesh-error: Error/stopped color
+ */
+
+/* Default theme (dark) */
+.mesh-dropdown {
+    --mesh-bg: #1e1e2e;
+    --mesh-bg-hover: rgba(124, 138, 255, 0.1);
+    --mesh-border: #3b3b4f;
+    --mesh-text: #e0e0e0;
+    --mesh-text-secondary: #888;
+    --mesh-accent: #7c8aff;
+    --mesh-success: #4ade80;
+    --mesh-warning: #fbbf24;
+    --mesh-error: #f87171;
+    
+    position: relative;
+    display: inline-block;
+}
+
+/* Dropdown button */
+.mesh-dropdown-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: var(--mesh-bg);
+    border: 1px solid var(--mesh-border);
+    border-radius: 4px;
+    color: var(--mesh-text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.mesh-dropdown-btn:hover {
+    background: var(--mesh-bg-hover);
+    border-color: var(--mesh-accent);
+}
+
+.mesh-dropdown-icon {
+    font-size: 14px;
+    color: var(--mesh-accent);
+}
+
+.mesh-dropdown-arrow {
+    font-size: 10px;
+    color: var(--mesh-text-secondary);
+}
+
+/* Dropdown menu */
+.mesh-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    min-width: 220px;
+    background: var(--mesh-bg);
+    border: 1px solid var(--mesh-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.mesh-dropdown.open .mesh-dropdown-menu {
+    display: block;
+}
+
+/* Menu items */
+.mesh-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    color: var(--mesh-text);
+    text-decoration: none;
+    font-size: 12px;
+    transition: background 0.15s;
+    border-bottom: 1px solid var(--mesh-border);
+}
+
+.mesh-dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.mesh-dropdown-item:hover {
+    background: var(--mesh-bg-hover);
+}
+
+.mesh-dropdown-item.current {
+    background: rgba(124, 138, 255, 0.15);
+}
+
+/* Status dot */
+.mesh-dropdown-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--mesh-text-secondary);
+}
+
+.mesh-dropdown-status.running {
+    background: var(--mesh-success);
+}
+
+.mesh-dropdown-status.stopped {
+    background: var(--mesh-error);
+}
+
+.mesh-dropdown-status.loading {
+    background: var(--mesh-warning);
+    animation: mesh-pulse 1s infinite;
+}
+
+.mesh-dropdown-status.idle {
+    background: var(--mesh-text-secondary);
+}
+
+@keyframes mesh-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Item info */
+.mesh-dropdown-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.mesh-dropdown-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mesh-dropdown-details {
+    font-size: 10px;
+    color: var(--mesh-text-secondary);
+    display: flex;
+    gap: 6px;
+}
+
+.mesh-dropdown-subject {
+    color: #a78bfa;
+}
+
+/* Badges */
+.mesh-dropdown-badge {
+    font-size: 9px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: var(--mesh-border);
+    color: var(--mesh-text-secondary);
+    flex-shrink: 0;
+}
+
+.mesh-dropdown-badge.local {
+    background: rgba(251, 191, 36, 0.2);
+    color: var(--mesh-warning);
+}
+
+.mesh-dropdown-badge.ssl {
+    background: rgba(74, 222, 128, 0.2);
+    color: var(--mesh-success);
+}
+
+/* Empty state */
+.mesh-dropdown-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--mesh-text-secondary);
+    font-size: 11px;
+}
+
+/* Light theme variant */
+.mesh-dropdown.light {
+    --mesh-bg: #ffffff;
+    --mesh-bg-hover: rgba(66, 153, 225, 0.1);
+    --mesh-border: #e2e8f0;
+    --mesh-text: #2d3748;
+    --mesh-text-secondary: #718096;
+    --mesh-accent: #4299e1;
+    --mesh-success: #38a169;
+    --mesh-warning: #ed8936;
+    --mesh-error: #e53e3e;
+}

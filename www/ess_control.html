@@ -7,6 +7,7 @@
     
     <!-- Component styles -->
     <link rel="stylesheet" href="css/ess_control.css">
+    <link rel="stylesheet" href="css/mesh_dropdown.css">
 </head>
 <body class="ess-app">
     <div class="ess-container">
@@ -15,6 +16,7 @@
             <h1>ESS Control</h1>
             <div class="ess-status-indicator" id="status-indicator"></div>
             <span class="ess-status-text" id="status-text">Connecting...</span>
+            <div id="mesh-dropdown-container"></div>
             <div class="ess-status-spacer"></div>
             <span class="ess-system-state" id="system-state">--</span>
             <button onclick="reconnect()">Reconnect</button>
@@ -118,6 +120,7 @@
     <script src="js/GraphicsRenderer.js"></script>
     <script src="js/ESSControl.js"></script>
     <script src="js/EyeTouchVisualizer.js"></script>
+    <script src="js/mesh_dropdown.js"></script>
     
     <!-- Main application script -->
     <script src="js/ess_app.js"></script>
