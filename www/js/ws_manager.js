@@ -189,8 +189,8 @@ class DservConnection {
             if (data.result !== undefined || data.status === 'error') {
                 this.emit('terminal:response', data);
             }
-            // Datapoint updates
-            if (data.name && (data.data !== undefined || data.value !== undefined)) {
+            // Datapoint updates - check for type: 'datapoint' (Vue format) or name+data fields
+            if (data.type === 'datapoint' || (data.name && (data.data !== undefined || data.value !== undefined))) {
                 const normalized = {
                     name: data.name,
                     data: data.data !== undefined ? data.data : data.value,
