@@ -54,7 +54,11 @@ export const EVENT_TYPES = {
   E_DECIDE: 39,
   E_ENDTRIAL: 40,
   E_ABORT: 41,
-  E_REWARD: 42
+    E_REWARD: 42,
+    E_MRI: 46,
+    E_STIMULATOR: 47,
+    E_TOUCH: 48,
+    E_FEEDBACK: 49,
 };
 
 // Event subtype definitions

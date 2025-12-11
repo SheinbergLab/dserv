@@ -601,36 +601,80 @@ class ESSControl {
                 label.classList.add('variable');
             }
             
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'ess-param-input';
-            input.value = info.value || '';
-            input.dataset.paramName = name;
-            input.dataset.dataType = info.dataType;
+            row.appendChild(label);
             
-            // Validate input based on datatype
-            if (info.dataType === 'int') {
-                input.type = 'number';
-                input.step = '1';
-            } else if (info.dataType === 'float') {
-                input.type = 'number';
-                input.step = 'any';
+            // Handle boolean as checkbox
+            if (info.dataType === 'bool' || info.dataType === 'boolean') {
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'ess-param-checkbox';
+                checkbox.checked = info.value === '1' || info.value === 'true' || info.value === true || info.value === 1;
+                checkbox.dataset.paramName = name;
+                checkbox.dataset.dataType = info.dataType;
+                
+                checkbox.addEventListener('change', (e) => {
+                    this.onParamChange(name, e.target.checked ? '1' : '0');
+                });
+                
+                row.appendChild(checkbox);
+            } else {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'ess-param-input';
+                input.value = info.value || '';
+                input.dataset.paramName = name;
+                input.dataset.dataType = info.dataType;
+                
+                // Set input type and validation based on datatype
+                if (info.dataType === 'int') {
+                    input.type = 'text';
+                    input.inputMode = 'numeric';
+                    input.pattern = '-?[0-9]*';
+                    // Filter non-integer input
+                    input.addEventListener('input', (e) => {
+                        e.target.value = e.target.value.replace(/[^0-9-]/g, '');
+                        // Only allow one minus at the start
+                        if (e.target.value.indexOf('-') > 0) {
+                            e.target.value = e.target.value.replace(/-/g, '');
+                        }
+                    });
+                } else if (info.dataType === 'float') {
+                    input.type = 'text';
+                    input.inputMode = 'decimal';
+                    input.pattern = '-?[0-9]*\\.?[0-9]*';
+                    // Filter non-float input
+                    input.addEventListener('input', (e) => {
+                        let val = e.target.value;
+                        // Allow digits, one decimal point, and minus at start
+                        val = val.replace(/[^0-9.-]/g, '');
+                        // Only one decimal point
+                        const parts = val.split('.');
+                        if (parts.length > 2) {
+                            val = parts[0] + '.' + parts.slice(1).join('');
+                        }
+                        // Only allow minus at start
+                        if (val.indexOf('-') > 0) {
+                            val = val.charAt(0) + val.slice(1).replace(/-/g, '');
+                        }
+                        e.target.value = val;
+                    });
+                }
+                
+                // Handle parameter change
+                input.addEventListener('change', (e) => {
+                    this.onParamChange(name, e.target.value);
+                });
+                
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        this.onParamChange(name, e.target.value);
+                        e.target.blur();
+                    }
+                });
+                
+                row.appendChild(input);
             }
             
-            // Handle parameter change
-            input.addEventListener('change', (e) => {
-                this.onParamChange(name, e.target.value);
-            });
-            
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    this.onParamChange(name, e.target.value);
-                    e.target.blur();
-                }
-            });
-            
-            row.appendChild(label);
-            row.appendChild(input);
             container.appendChild(row);
         }
     }
@@ -639,12 +683,9 @@ class ESSControl {
      * Handle parameter value change
      */
     onParamChange(name, value) {
-        // Set the parameter value via dserv
-        this.dpManager.connection.send({
-            cmd: 'set',
-            name: `ess/param_value/${name}`,
-            value: value
-        });
+        // Set the parameter value via ess::set_param command (like Vue)
+        const cmd = `ess::set_param ${name} ${value}`;
+        this.sendCommand(cmd);
         
         this.emit('paramChange', { name, value });
     }
@@ -667,7 +708,11 @@ class ESSControl {
                 `input[data-param-name="${name}"]`
             );
             if (input && document.activeElement !== input) {
-                input.value = value;
+                if (input.type === 'checkbox') {
+                    input.checked = value === '1' || value === 'true' || value === true || value === 1;
+                } else {
+                    input.value = value;
+                }
             }
         }
     }

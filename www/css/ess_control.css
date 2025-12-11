@@ -561,6 +561,13 @@ body.ess-app {
     border-color: var(--ess-accent);
 }
 
+.ess-param-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--ess-accent);
+}
+
 /* Options/Variant Settings */
 .ess-options-container {
     margin-top: 8px;
