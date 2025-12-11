@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESS Control Panel</title>
+    
+    <!-- Component styles -->
+    <link rel="stylesheet" href="css/ess_control.css">
+</head>
+<body class="ess-app">
+    <div class="ess-container">
+        <!-- Status Bar -->
+        <div class="ess-status-bar">
+            <h1>ESS Control</h1>
+            <div class="ess-status-indicator" id="status-indicator"></div>
+            <span class="ess-status-text" id="status-text">Connecting...</span>
+            <div class="ess-status-spacer"></div>
+            <span class="ess-system-state" id="system-state">--</span>
+            <button onclick="reconnect()">Reconnect</button>
+        </div>
+        
+        <!-- Main 3-Column Layout -->
+        <div class="ess-grid">
+            <!-- Left Column: ESS Control Panel -->
+            <div class="ess-column ess-column-left">
+                <div class="ess-panel">
+                    <div class="ess-panel-header">
+                        <span class="ess-panel-title">Experiment Control</span>
+                    </div>
+                    <div class="ess-panel-body">
+                        <div id="ess-control-container"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Middle Column: Visualizers -->
+            <div class="ess-column ess-column-middle">
+                <!-- Eye/Touch Visualizer -->
+                <div class="ess-panel">
+                    <div class="ess-panel-header">
+                        <span class="ess-panel-title">Eye/Touch Monitor</span>
+                        <span class="ess-panel-status" id="eyetouch-stats"></span>
+                    </div>
+                    <div class="ess-panel-body">
+                        <canvas id="eyetouch-canvas" class="ess-canvas"></canvas>
+                    </div>
+                </div>
+                
+                <!-- Trial/Stim Visualizer -->
+                <div class="ess-panel">
+                    <div class="ess-panel-header">
+                        <span class="ess-panel-title">Stimulus Display</span>
+                        <span class="ess-panel-status" id="stim-stats"></span>
+                    </div>
+                    <div class="ess-panel-body">
+                        <canvas id="stim-canvas" class="ess-canvas"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right Column: Performance -->
+            <div class="ess-column ess-column-right">
+                <div class="ess-panel">
+                    <div class="ess-panel-header">
+                        <span class="ess-panel-title">Performance</span>
+                    </div>
+                    <div class="ess-panel-body">
+                        <div id="performance-container">
+                            <div class="ess-perf-summary">
+                                <div class="ess-perf-stat">
+                                    <span class="ess-perf-label">Trial</span>
+                                    <span class="ess-perf-value" id="perf-trial">--/--</span>
+                                </div>
+                                <div class="ess-perf-stat">
+                                    <span class="ess-perf-label">% Correct</span>
+                                    <span class="ess-perf-value" id="perf-correct">--%</span>
+                                </div>
+                                <div class="ess-perf-stat">
+                                    <span class="ess-perf-label">% Complete</span>
+                                    <span class="ess-perf-value" id="perf-complete">--%</span>
+                                </div>
+                            </div>
+                            <div class="ess-perf-table-container">
+                                <table id="perf-table" class="ess-perf-table">
+                                    <thead>
+                                        <tr><th>Metric</th><th>Value</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        <!-- Performance data will be populated here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Error Console -->
+        <div class="ess-console" id="error-console">
+            <div class="ess-console-header">
+                <span class="ess-console-title">Console</span>
+                <span class="ess-console-count" id="error-count"></span>
+                <div class="ess-console-actions">
+                    <button onclick="clearConsole()">Clear</button>
+                    <button onclick="toggleConsole()">Toggle</button>
+                </div>
+            </div>
+            <div class="ess-console-body" id="console-output"></div>
+        </div>
+    </div>
+
+    <!-- Component scripts -->
+    <script src="js/ws_manager.js"></script>
+    <script src="js/DatapointManager.js"></script>
+    <script src="js/TclParser.js"></script>
+    <script src="js/GraphicsRenderer.js"></script>
+    <script src="js/ESSControl.js"></script>
+    <script src="js/EyeTouchVisualizer.js"></script>
+    
+    <!-- Main application script -->
+    <script src="js/ess_app.js"></script>
+</body>
+</html>

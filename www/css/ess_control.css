@@ -1,0 +1,792 @@
+/* ESS Control Panel Styles */
+
+:root {
+    --ess-bg-primary: #1e1e2e;
+    --ess-bg-secondary: #2d2d3d;
+    --ess-bg-panel: #252535;
+    --ess-border: #3d3d4d;
+    --ess-text-primary: #e0e0e0;
+    --ess-text-secondary: #a0a0a0;
+    --ess-text-muted: #707080;
+    --ess-accent: #7c8aff;
+    --ess-accent-hover: #9aa3ff;
+    --ess-success: #4ade80;
+    --ess-warning: #fbbf24;
+    --ess-error: #f87171;
+    --ess-running: #4ade80;
+    --ess-stopped: #f87171;
+    --ess-initialized: #fbbf24;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body.ess-app {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: var(--ess-bg-primary);
+    color: var(--ess-text-primary);
+    height: 100vh;
+    overflow: hidden;
+}
+
+.ess-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 8px;
+    gap: 8px;
+}
+
+/* Status Bar */
+.ess-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: var(--ess-bg-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--ess-border);
+    flex-shrink: 0;
+}
+
+.ess-status-bar h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ess-accent);
+}
+
+.ess-status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--ess-error);
+    transition: background 0.3s;
+}
+
+.ess-status-indicator.connected {
+    background: var(--ess-success);
+}
+
+.ess-status-indicator.connecting {
+    background: var(--ess-warning);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.ess-status-text {
+    font-size: 13px;
+    color: var(--ess-text-secondary);
+}
+
+.ess-status-spacer {
+    flex: 1;
+}
+
+.ess-system-state {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 4px;
+    background: var(--ess-bg-panel);
+}
+
+.ess-system-state.running {
+    color: var(--ess-running);
+    background: rgba(74, 222, 128, 0.15);
+}
+
+.ess-system-state.stopped {
+    color: var(--ess-stopped);
+    background: rgba(248, 113, 113, 0.15);
+}
+
+.ess-system-state.initialized {
+    color: var(--ess-initialized);
+    background: rgba(251, 191, 36, 0.15);
+}
+
+.ess-system-state.loading {
+    color: var(--ess-accent);
+    background: rgba(124, 138, 255, 0.15);
+    animation: pulse 1s infinite;
+}
+
+.ess-status-bar button {
+    padding: 6px 12px;
+    font-size: 12px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.ess-status-bar button:hover {
+    background: var(--ess-border);
+}
+
+/* Main Grid */
+.ess-grid {
+    display: grid;
+    grid-template-columns: 300px auto 1fr;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+}
+
+.ess-column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+/* Middle column - fixed size canvases, don't stretch */
+.ess-column-middle {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 400px;  /* Fixed width for canvas panels */
+}
+
+.ess-column-middle .ess-panel {
+    height: 300px;  /* Fixed height for each canvas panel */
+    flex: none;
+}
+
+/* Right column - takes remaining space and stretches */
+.ess-column-right {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+.ess-column-right .ess-panel {
+    flex: 1;
+}
+
+/* Panels */
+.ess-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 6px;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.ess-column-left .ess-panel {
+    flex: 1;
+}
+
+.ess-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--ess-bg-panel);
+    border-bottom: 1px solid var(--ess-border);
+    flex-shrink: 0;
+}
+
+.ess-panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ess-text-primary);
+}
+
+.ess-panel-status {
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    margin-left: auto;
+}
+
+.ess-panel-body {
+    flex: 1;
+    padding: 12px;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+/* Canvas */
+.ess-canvas {
+    width: 100%;
+    height: 100%;
+    background: #1a1a2a;
+    border-radius: 4px;
+}
+
+/* ESS Control Component Styles */
+.ess-control-section {
+    margin-bottom: 16px;
+}
+
+.ess-control-section:last-child {
+    margin-bottom: 0;
+}
+
+.ess-control-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-control-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.ess-control-row:last-child {
+    margin-bottom: 0;
+}
+
+.ess-control-label {
+    font-size: 12px;
+    color: var(--ess-text-secondary);
+    width: 70px;
+    flex-shrink: 0;
+}
+
+.ess-control-input {
+    flex: 1;
+}
+
+.ess-control-input select,
+.ess-control-input input {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    outline: none;
+}
+
+.ess-control-input select:focus,
+.ess-control-input input:focus {
+    border-color: var(--ess-accent);
+}
+
+.ess-control-input select {
+    cursor: pointer;
+}
+
+/* State Control Buttons */
+.ess-state-controls {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.ess-state-btn {
+    flex: 1;
+    padding: 6px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.ess-state-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.ess-state-btn.go {
+    background: var(--ess-success);
+    color: #000;
+}
+
+.ess-state-btn.go:hover:not(:disabled) {
+    background: #5ee98d;
+}
+
+.ess-state-btn.stop {
+    background: var(--ess-error);
+    color: #fff;
+}
+
+.ess-state-btn.stop:hover:not(:disabled) {
+    background: #f99090;
+}
+
+.ess-state-btn.init {
+    background: var(--ess-accent);
+    color: #fff;
+}
+
+.ess-state-btn.init:hover:not(:disabled) {
+    background: var(--ess-accent-hover);
+}
+
+.ess-state-btn.reset {
+    background: var(--ess-warning);
+    color: #000;
+}
+
+.ess-state-btn.reset:hover:not(:disabled) {
+    background: #fcc94d;
+}
+
+/* Subject + Juice combined row */
+.ess-subject-juice-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ess-subject-juice-row .ess-control-label {
+    font-size: 12px;
+    color: var(--ess-text-secondary);
+    width: auto;
+    flex-shrink: 0;
+}
+
+.ess-subject-juice-row .ess-control-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.ess-subject-juice-row .ess-control-input select {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+}
+
+/* Juice button - muted color, compact, don't expand */
+.ess-subject-juice-row .ess-state-btn.juice {
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    color: var(--ess-text-primary);
+    flex: none;
+    padding: 5px 6px;
+    font-size: 10px;
+}
+
+.ess-state-btn.juice:hover:not(:disabled) {
+    background: var(--ess-border);
+}
+
+.ess-subject-juice-row #ess-juice-amount {
+    width: 38px;
+    padding: 4px 2px;
+    font-size: 10px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    text-align: center;
+    flex: none;
+}
+
+#ess-juice-amount:focus {
+    border-color: var(--ess-accent);
+    outline: none;
+}
+
+/* Loading State */
+.ess-loading {
+    position: relative;
+    pointer-events: none;
+}
+
+.ess-loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(30, 30, 46, 0.6);
+    border-radius: 6px;
+    z-index: 10;
+}
+
+.ess-loading select,
+.ess-loading input,
+.ess-loading button {
+    opacity: 0.5;
+}
+
+/* Reload Icons */
+.ess-control-row-with-reload {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 4px;
+}
+
+.ess-control-row-with-reload .ess-control-input {
+    flex: 1;
+}
+
+.ess-reload-btn {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.ess-reload-btn:hover:not(:disabled) {
+    background: var(--ess-border);
+    color: var(--ess-text-primary);
+}
+
+.ess-reload-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Auto-reload checkbox */
+.ess-auto-reload {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-auto-reload input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+}
+
+.ess-auto-reload label {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+}
+
+.ess-reload-variant-btn {
+    margin-left: auto;
+    padding: 4px 8px;
+    font-size: 10px;
+    background: var(--ess-accent);
+    border: none;
+    border-radius: 3px;
+    color: #fff;
+    cursor: pointer;
+}
+
+.ess-reload-variant-btn:hover:not(:disabled) {
+    background: var(--ess-accent-hover);
+}
+
+.ess-reload-variant-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Parameters Section */
+.ess-params-container {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.ess-param-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+    gap: 8px;
+}
+
+.ess-param-label {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    width: 100px;
+    flex-shrink: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-param-label.time {
+    color: #c9a870;
+}
+
+.ess-param-label.variable {
+    color: var(--ess-text-primary);
+}
+
+.ess-param-input {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    outline: none;
+}
+
+.ess-param-input:focus {
+    border-color: var(--ess-accent);
+}
+
+/* Options/Variant Settings */
+.ess-options-container {
+    margin-top: 8px;
+}
+
+.ess-option-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+    gap: 8px;
+}
+
+.ess-option-label {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    width: 100px;
+    flex-shrink: 0;
+}
+
+.ess-option-select {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+}
+
+/* Performance Panel */
+.ess-perf-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.ess-perf-stat {
+    text-align: center;
+    padding: 12px 8px;
+    background: var(--ess-bg-panel);
+    border-radius: 4px;
+}
+
+.ess-perf-label {
+    display: block;
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.ess-perf-value {
+    display: block;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ess-text-primary);
+}
+
+.ess-perf-table-container {
+    overflow-x: auto;
+}
+
+.ess-perf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+.ess-perf-table th,
+.ess-perf-table td {
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-perf-table th {
+    font-weight: 600;
+    color: var(--ess-text-secondary);
+    background: var(--ess-bg-panel);
+}
+
+.ess-perf-table td {
+    color: var(--ess-text-primary);
+}
+
+/* Console */
+.ess-console {
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 6px;
+    max-height: 150px;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.ess-console.collapsed .ess-console-body {
+    display: none;
+}
+
+.ess-console.collapsed {
+    max-height: unset;
+}
+
+.ess-console-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--ess-bg-panel);
+    border-bottom: 1px solid var(--ess-border);
+    flex-shrink: 0;
+}
+
+.ess-console-title {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.ess-console-count {
+    font-size: 11px;
+    color: var(--ess-error);
+}
+
+.ess-console-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+}
+
+.ess-console-actions button {
+    padding: 3px 8px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+}
+
+.ess-console-actions button:hover {
+    background: var(--ess-border);
+}
+
+.ess-console-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    min-height: 60px;
+}
+
+.ess-console-entry {
+    margin-bottom: 4px;
+}
+
+.ess-console-entry.error {
+    color: var(--ess-error);
+}
+
+.ess-console-entry.warning {
+    color: var(--ess-warning);
+}
+
+.ess-console-entry.info {
+    color: var(--ess-text-secondary);
+}
+
+.ess-console-entry .timestamp {
+    color: var(--ess-text-muted);
+    margin-right: 8px;
+}
+
+/* Scrollbar Styling */
+.ess-panel-body::-webkit-scrollbar,
+.ess-console-body::-webkit-scrollbar,
+.ess-params-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-panel-body::-webkit-scrollbar-track,
+.ess-console-body::-webkit-scrollbar-track,
+.ess-params-container::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-panel-body::-webkit-scrollbar-thumb,
+.ess-console-body::-webkit-scrollbar-thumb,
+.ess-params-container::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+.ess-panel-body::-webkit-scrollbar-thumb:hover,
+.ess-console-body::-webkit-scrollbar-thumb:hover,
+.ess-params-container::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted);
+}
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+    .ess-grid {
+        grid-template-columns: 280px auto 1fr;
+    }
+    .ess-column-middle {
+        width: 350px;
+    }
+}
+
+@media (max-width: 900px) {
+    .ess-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+    }
+    
+    .ess-column-middle {
+        width: 100%;
+        flex-direction: row;
+    }
+    
+    .ess-column-middle .ess-panel {
+        height: 250px;
+        flex: 1;
+    }
+}
