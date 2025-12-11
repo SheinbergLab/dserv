@@ -86,153 +86,6 @@ body.ess-app {
     color: var(--ess-text-secondary);
 }
 
-/* Mesh Systems Dropdown */
-.ess-mesh-dropdown {
-    position: relative;
-}
-
-.ess-mesh-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 10px;
-    background: var(--ess-bg-panel);
-    border: 1px solid var(--ess-border);
-    border-radius: 4px;
-    color: var(--ess-text-primary);
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.ess-mesh-btn:hover {
-    background: var(--ess-border);
-}
-
-.ess-mesh-btn .mesh-icon {
-    font-size: 14px;
-    color: var(--ess-accent);
-}
-
-.ess-mesh-btn .mesh-arrow {
-    font-size: 10px;
-    color: var(--ess-text-secondary);
-}
-
-.ess-mesh-menu {
-    display: none;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 4px;
-    min-width: 200px;
-    background: var(--ess-bg-panel);
-    border: 1px solid var(--ess-border);
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 100;
-    overflow: hidden;
-}
-
-.ess-mesh-dropdown.open .ess-mesh-menu {
-    display: block;
-}
-
-.ess-mesh-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    color: var(--ess-text-primary);
-    text-decoration: none;
-    font-size: 12px;
-    transition: background 0.15s;
-    border-bottom: 1px solid var(--ess-border);
-}
-
-.ess-mesh-item:last-child {
-    border-bottom: none;
-}
-
-.ess-mesh-item:hover {
-    background: rgba(124, 138, 255, 0.1);
-}
-
-.ess-mesh-item.current {
-    background: rgba(124, 138, 255, 0.15);
-}
-
-.ess-mesh-item .mesh-status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-.ess-mesh-item .mesh-status-dot.running {
-    background: var(--ess-running);
-}
-
-.ess-mesh-item .mesh-status-dot.stopped {
-    background: var(--ess-stopped);
-}
-
-.ess-mesh-item .mesh-status-dot.loading {
-    background: var(--ess-warning);
-}
-
-.ess-mesh-item .mesh-status-dot.idle {
-    background: var(--ess-text-secondary);
-}
-
-.ess-mesh-item-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.ess-mesh-item-name {
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.ess-mesh-item-details {
-    font-size: 10px;
-    color: var(--ess-text-secondary);
-    display: flex;
-    gap: 6px;
-}
-
-.ess-mesh-item-subject {
-    color: #a78bfa;
-}
-
-.ess-mesh-item .mesh-badge {
-    font-size: 9px;
-    padding: 2px 4px;
-    border-radius: 3px;
-    background: var(--ess-border);
-    color: var(--ess-text-secondary);
-}
-
-.ess-mesh-item .mesh-badge.local {
-    background: rgba(251, 191, 36, 0.2);
-    color: var(--ess-warning);
-}
-
-.ess-mesh-item .mesh-badge.ssl {
-    background: rgba(74, 222, 128, 0.2);
-    color: var(--ess-success);
-}
-
-.ess-mesh-empty {
-    padding: 12px;
-    text-align: center;
-    color: var(--ess-text-secondary);
-    font-size: 11px;
-}
-
 .ess-status-spacer {
     flex: 1;
 }
@@ -802,52 +655,63 @@ body.ess-app {
     color: var(--ess-text-primary);
 }
 
-/* Console */
-.ess-console {
+/* Bottom Panel (Console + Terminal) */
+.ess-bottom-panel {
     background: var(--ess-bg-secondary);
     border: 1px solid var(--ess-border);
     border-radius: 6px;
-    max-height: 150px;
+    max-height: 200px;
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    position: relative;
+    z-index: 10;
 }
 
-.ess-console.collapsed .ess-console-body {
+.ess-bottom-panel.collapsed .ess-bottom-content {
     display: none;
 }
 
-.ess-console.collapsed {
+.ess-bottom-panel.collapsed {
     max-height: unset;
 }
 
-.ess-console-header {
+.ess-bottom-tabs {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
+    gap: 0;
+    padding: 0 8px;
     background: var(--ess-bg-panel);
     border-bottom: 1px solid var(--ess-border);
     flex-shrink: 0;
 }
 
-.ess-console-title {
+.ess-bottom-tab {
+    padding: 6px 12px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
 }
 
-.ess-console-count {
-    font-size: 11px;
-    color: var(--ess-error);
+.ess-bottom-tab:hover {
+    color: var(--ess-text-primary);
 }
 
-.ess-console-actions {
-    margin-left: auto;
-    display: flex;
-    gap: 4px;
+.ess-bottom-tab.active {
+    color: var(--ess-accent);
+    border-bottom-color: var(--ess-accent);
 }
 
-.ess-console-actions button {
+.ess-bottom-spacer {
+    flex: 1;
+}
+
+.ess-bottom-action {
     padding: 3px 8px;
     font-size: 11px;
     background: var(--ess-bg-panel);
@@ -855,20 +719,43 @@ body.ess-app {
     border-radius: 3px;
     color: var(--ess-text-secondary);
     cursor: pointer;
+    margin-left: 4px;
 }
 
-.ess-console-actions button:hover {
+.ess-bottom-action:hover {
     background: var(--ess-border);
 }
 
-.ess-console-body {
+.ess-bottom-content {
     flex: 1;
+    overflow: hidden;
+    min-height: 100px;
+}
+
+.ess-bottom-pane {
+    display: none;
+    height: 100%;
+    overflow: hidden;
+}
+
+.ess-bottom-pane.active {
+    display: block;
+}
+
+/* Console pane */
+.ess-console-count {
+    font-size: 10px;
+    color: var(--ess-error);
+    margin-left: 4px;
+}
+
+.ess-console-body {
+    height: 100%;
     overflow-y: auto;
     padding: 8px 12px;
     font-family: 'SF Mono', Monaco, Consolas, monospace;
     font-size: 11px;
     line-height: 1.5;
-    min-height: 60px;
 }
 
 .ess-console-entry {
@@ -890,6 +777,23 @@ body.ess-app {
 .ess-console-entry .timestamp {
     color: var(--ess-text-muted);
     margin-right: 8px;
+}
+
+/* Terminal pane */
+#terminal-pane {
+    overflow: hidden;
+}
+
+#tcl-terminal-container {
+    height: 100%;
+    overflow: hidden;
+}
+
+#tcl-terminal-container .tcl-terminal {
+    height: 100%;
+    max-height: 100%;
+    padding: 8px 12px;
+    overflow-y: auto;
 }
 
 /* Scrollbar Styling */

@@ -8,6 +8,7 @@
     <!-- Component styles -->
     <link rel="stylesheet" href="css/ess_control.css">
     <link rel="stylesheet" href="css/mesh_dropdown.css">
+    <link rel="stylesheet" href="css/TclTerminal.css">
 </head>
 <body class="ess-app">
     <div class="ess-container">
@@ -99,17 +100,27 @@
             </div>
         </div>
         
-        <!-- Error Console -->
-        <div class="ess-console" id="error-console">
-            <div class="ess-console-header">
-                <span class="ess-console-title">Console</span>
-                <span class="ess-console-count" id="error-count"></span>
-                <div class="ess-console-actions">
-                    <button onclick="clearConsole()">Clear</button>
-                    <button onclick="toggleConsole()">Toggle</button>
+        <!-- Bottom Panel (Console + Terminal) -->
+        <div class="ess-bottom-panel" id="bottom-panel">
+            <div class="ess-bottom-tabs">
+                <button class="ess-bottom-tab active" data-tab="console" onclick="switchBottomTab('console')">
+                    Console <span class="ess-console-count" id="error-count"></span>
+                </button>
+                <button class="ess-bottom-tab" data-tab="terminal" onclick="switchBottomTab('terminal')">
+                    Terminal
+                </button>
+                <div class="ess-bottom-spacer"></div>
+                <button class="ess-bottom-action" onclick="clearBottomPanel()">Clear</button>
+                <button class="ess-bottom-action" onclick="toggleBottomPanel()">Toggle</button>
+            </div>
+            <div class="ess-bottom-content">
+                <div class="ess-bottom-pane active" id="console-pane">
+                    <div class="ess-console-body" id="console-output"></div>
+                </div>
+                <div class="ess-bottom-pane" id="terminal-pane">
+                    <div id="tcl-terminal-container"></div>
                 </div>
             </div>
-            <div class="ess-console-body" id="console-output"></div>
         </div>
     </div>
 
@@ -121,6 +132,7 @@
     <script src="js/ESSControl.js"></script>
     <script src="js/EyeTouchVisualizer.js"></script>
     <script src="js/mesh_dropdown.js"></script>
+    <script src="js/TclTerminal.js"></script>
     
     <!-- Main application script -->
     <script src="js/ess_app.js"></script>

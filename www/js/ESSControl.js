@@ -450,13 +450,10 @@ class ESSControl {
      */
     updateVariantInfo(data) {
         try {
-            console.log('Received variant_info_json raw:', data);
             const info = typeof data === 'string' ? JSON.parse(data) : data;
-            console.log('Parsed variant info:', info);
             this.state.variantInfo = info;
             
             if (!info || !info.options || !info.loader_arg_names) {
-                console.log('Missing required fields in variant info');
                 this.elements.optionsSection.style.display = 'none';
                 return;
             }
@@ -479,8 +476,6 @@ class ESSControl {
         container.innerHTML = '';
         
         const { options, loader_arg_names, loader_args } = info;
-        
-        console.log('Rendering variant options:', { loader_arg_names, loader_args, options });
         
         loader_arg_names.forEach((argName, index) => {
             const argOptions = options[argName];
@@ -527,8 +522,6 @@ class ESSControl {
             
             select.selectedIndex = selectedIndex;
             
-            console.log(`Option ${argName}: currentValue=${currentValue}, selectedIndex=${selectedIndex}`);
-            
             // Handle option change
             select.addEventListener('change', (e) => {
                 this.onVariantOptionChange(argName, e.target.value);
@@ -547,7 +540,6 @@ class ESSControl {
         // Send command to set variant option
         // Format matches Vue: ess::set_variant_args {optionName {value}}
         const cmd = `ess::set_variant_args {${argName} {${value}}}`;
-        console.log('Setting variant option:', cmd);
         this.sendCommand(cmd);
         
         if (this.options.autoReload) {

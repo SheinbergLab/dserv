@@ -237,6 +237,9 @@ class TclTerminal {
             let response;
             if (this.options.useLinkedSubprocess) {
                 response = await this.connection.sendToLinked(command);
+            } else if (this.options.interpreter === 'dserv') {
+                // For main dserv connection, send directly without wrapping
+                response = await this.connection.sendRaw(command);
             } else {
                 response = await this.connection.send(command, this.options.interpreter);
             }

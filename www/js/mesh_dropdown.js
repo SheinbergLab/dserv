@@ -16,7 +16,15 @@ class MeshDropdown {
         this.container = typeof container === 'string' 
             ? document.querySelector(container) 
             : container;
+        
+        if (!this.container) {
+            console.warn('MeshDropdown: Container not found');
+            this.initialized = false;
+            return;
+        }
+        
         this.connection = connection;
+        this.initialized = true;
         
         this.options = {
             pollInterval: options.pollInterval || 5000,
@@ -64,6 +72,11 @@ class MeshDropdown {
      * Setup event listeners
      */
     setupEventListeners() {
+        if (!this.elements || !this.elements.btn) {
+            console.error('MeshDropdown: Elements not initialized');
+            return;
+        }
+        
         // Toggle dropdown on button click
         this.elements.btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -82,7 +95,7 @@ class MeshDropdown {
                 this.handleMeshPeers(data.result);
             }
         };
-        this.connection.on('message', this.messageHandler);
+        this.connection.on('terminal:response', this.messageHandler);
     }
     
     /**

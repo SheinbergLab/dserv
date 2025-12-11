@@ -382,229 +382,88 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-/**
- * Mesh Systems Manager
- * Polls for connected mesh peers and populates dropdown
- */
-class MeshManager {
-    constructor(connection) {
-        this.connection = connection;
-        this.meshSystems = new Map();
-        this.pollInterval = null;
-        this.requestId = 'mesh-peers';
-        
-        this.elements = {
-            dropdown: document.getElementById('mesh-dropdown'),
-            btn: document.getElementById('mesh-btn'),
-            label: document.getElementById('mesh-label'),
-            menu: document.getElementById('mesh-menu')
-        };
-        
-        this.setupEventListeners();
-        this.startPolling();
-    }
-    
-    setupEventListeners() {
-        // Toggle dropdown
-        this.elements.btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.elements.dropdown.classList.toggle('open');
-        });
-        
-        // Close on outside click
-        document.addEventListener('click', () => {
-            this.elements.dropdown.classList.remove('open');
-        });
-        
-        // Listen for mesh response
-        this.connection.on('message', (data) => {
-            if (data.requestId === this.requestId && data.status === 'ok') {
-                this.handleMeshPeers(data.result);
-            }
-        });
-    }
-    
-    startPolling() {
-        // Initial fetch
-        this.fetchMeshPeers();
-        
-        // Poll every 5 seconds
-        this.pollInterval = setInterval(() => this.fetchMeshPeers(), 5000);
-    }
-    
-    stopPolling() {
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-            this.pollInterval = null;
-        }
-    }
-    
-    fetchMeshPeers() {
-        if (this.connection.connected) {
-            this.connection.send({
-                cmd: 'eval',
-                script: 'send mesh {meshGetPeers}',
-                requestId: this.requestId
-            });
-        }
-    }
-    
-    // Parse Tcl list of dicts: {key1 val1 key2 val2} {key1 val1 ...}
-    parseTclList(str) {
-        const results = [];
-        let depth = 0;
-        let current = '';
-        
-        for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            if (char === '{') {
-                if (depth === 0) {
-                    current = '';
-                } else {
-                    current += char;
-                }
-                depth++;
-            } else if (char === '}') {
-                depth--;
-                if (depth === 0) {
-                    results.push(current.trim());
-                    current = '';
-                } else {
-                    current += char;
-                }
-            } else if (depth > 0) {
-                current += char;
-            }
-        }
-        return results;
-    }
-    
-    // Parse Tcl dict: key1 val1 key2 {val with spaces} key3 val3
-    parseTclDict(str) {
-        const dict = {};
-        const tokens = [];
-        let current = '';
-        let depth = 0;
-        
-        for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            if (char === '{') {
-                if (depth > 0) current += char;
-                depth++;
-            } else if (char === '}') {
-                depth--;
-                if (depth > 0) current += char;
-            } else if (char === ' ' && depth === 0) {
-                if (current) {
-                    tokens.push(current);
-                    current = '';
-                }
-            } else {
-                current += char;
-            }
-        }
-        if (current) tokens.push(current);
-        
-        for (let i = 0; i < tokens.length - 1; i += 2) {
-            dict[tokens[i]] = tokens[i + 1];
-        }
-        return dict;
-    }
-    
-    handleMeshPeers(result) {
-        if (!result) return;
-        
-        try {
-            const peerStrings = this.parseTclList(result);
-            
-            this.meshSystems.clear();
-            peerStrings.forEach(peerStr => {
-                const peer = this.parseTclDict(peerStr);
-                if (peer.id) {
-                    peer.ssl = peer.ssl === '1' || peer.ssl === 1;
-                    peer.isLocal = peer.isLocal === '1' || peer.isLocal === 1;
-                    this.meshSystems.set(peer.id, peer);
-                }
-            });
-            
-            this.render();
-        } catch (e) {
-            console.error('Failed to parse mesh peers:', e);
-        }
-    }
-    
-    getSystemUrl(sys) {
-        if (sys.isLocal) {
-            return window.location.href;
-        }
-        const protocol = sys.ssl ? 'https' : 'http';
-        const port = sys.webPort || 2565;
-        // Link to essgui on that system
-        return `${protocol}://${sys.ip}:${port}/essgui/`;
-    }
-    
-    render() {
-        if (this.meshSystems.size === 0) {
-            this.elements.menu.innerHTML = '<div class="ess-mesh-empty">No mesh systems found</div>';
-            return;
-        }
-        
-        // Sort: local first, then by name
-        const sorted = Array.from(this.meshSystems.values()).sort((a, b) => {
-            if (a.isLocal && !b.isLocal) return -1;
-            if (!a.isLocal && b.isLocal) return 1;
-            return (a.name || a.id).localeCompare(b.name || b.id);
-        });
-        
-        // Update label with local system name
-        const local = sorted.find(s => s.isLocal);
-        if (local) {
-            const displayName = (local.name || local.id).replace('Lab Station ', '');
-            this.elements.label.textContent = displayName;
-        }
-        
-        // Render menu items
-        this.elements.menu.innerHTML = sorted.map(sys => {
-            const url = this.getSystemUrl(sys);
-            const status = sys.status || 'idle';
-            const displayName = (sys.name || sys.id).replace('Lab Station ', '');
-            
-            return `
-                <a href="${url}" class="ess-mesh-item ${sys.isLocal ? 'current' : ''}" 
-                   ${sys.isLocal ? '' : 'target="_blank"'}>
-                    <span class="mesh-status-dot ${status}"></span>
-                    <div class="ess-mesh-item-info">
-                        <div class="ess-mesh-item-name">${displayName}</div>
-                        <div class="ess-mesh-item-details">
-                            <span>${sys.ip || 'local'}</span>
-                            ${sys.subject && sys.subject !== 'human' ? `<span class="ess-mesh-item-subject">${sys.subject}</span>` : ''}
-                        </div>
-                    </div>
-                    ${sys.isLocal ? '<span class="mesh-badge local">Local</span>' : ''}
-                    ${sys.ssl ? '<span class="mesh-badge ssl">SSL</span>' : ''}
-                </a>
-            `;
-        }).join('');
-    }
-    
-    destroy() {
-        this.stopPolling();
-    }
-}
-
-let meshManager = null;
+let meshDropdown = null;
+let tclTerminal = null;
+let activeBottomTab = 'console';
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', init);
 
-// Initialize mesh manager after connection is established
+// Initialize mesh dropdown after connection is established
 function initMeshManager() {
-    if (connection && !meshManager) {
-        meshManager = new MeshManager(connection);
+    if (connection && !meshDropdown) {
+        const container = document.getElementById('mesh-dropdown-container');
+        if (container) {
+            meshDropdown = new MeshDropdown(container, connection, {
+                guiPath: '/essgui/',
+                pollInterval: 5000
+            });
+        }
+    }
+}
+
+// Initialize Tcl terminal
+function initTerminal() {
+    if (connection && !tclTerminal) {
+        try {
+            tclTerminal = new TclTerminal('tcl-terminal-container', connection, {
+                interpreter: 'dserv',
+                useLinkedSubprocess: false,
+                showWelcome: true,
+                welcomeMessage: 'dserv Terminal - Type "help" for assistance'
+            });
+        } catch (e) {
+            console.error('Failed to initialize terminal:', e);
+        }
+    }
+}
+
+// Switch between bottom panel tabs
+function switchBottomTab(tabName) {
+    activeBottomTab = tabName;
+    
+    // Update tab buttons
+    document.querySelectorAll('.ess-bottom-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+    
+    // Update panes
+    document.querySelectorAll('.ess-bottom-pane').forEach(pane => {
+        pane.classList.toggle('active', pane.id === `${tabName}-pane`);
+    });
+    
+    // Focus terminal input if switching to terminal
+    if (tabName === 'terminal' && tclTerminal) {
+        tclTerminal.focus();
+    }
+    
+    // Initialize terminal on first switch (lazy init)
+    if (tabName === 'terminal' && !tclTerminal) {
+        initTerminal();
+    }
+}
+
+// Clear active bottom panel
+function clearBottomPanel() {
+    if (activeBottomTab === 'console') {
+        clearConsole();
+    } else if (activeBottomTab === 'terminal' && tclTerminal) {
+        tclTerminal.clear();
+    }
+}
+
+// Toggle bottom panel visibility
+function toggleBottomPanel() {
+    const panel = document.getElementById('bottom-panel');
+    if (panel) {
+        panel.classList.toggle('collapsed');
     }
 }
 
 // Export for use in HTML
 window.reconnect = reconnect;
 window.clearConsole = clearConsole;
-window.toggleConsole = toggleConsole;
+window.toggleConsole = toggleBottomPanel; // Alias for compatibility
+window.switchBottomTab = switchBottomTab;
+window.clearBottomPanel = clearBottomPanel;
+window.toggleBottomPanel = toggleBottomPanel;
