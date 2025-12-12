@@ -3187,6 +3187,12 @@ namespace eval ess {
 	}
     }
 
+    if {[info exists ::env(ESS_SUBJECTS)]} {
+	ess::set_subjects $env(ESS_SUBJECTS)
+    } else {
+	ess::set_subjects "human glenn momo riker sally val"
+    }
+    
     set project "ess"
     set_project $project
 
