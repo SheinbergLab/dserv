@@ -86,7 +86,7 @@ function requestInitialData() {
           ess/systems ess/protocols ess/variants
           ess/system ess/protocol ess/variant
           ess/variant_info_json ess/param_settings
-          ess/subject ess/state ess/status
+          ess/subject_ids ess/subject ess/state ess/status
           ess/obs_id ess/obs_total
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy

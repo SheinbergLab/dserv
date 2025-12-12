@@ -1,0 +1,170 @@
+/* Eye Touch Visualizer Styles */
+
+.ess-panel:has(#eyetouch-canvas) .ess-panel-body {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+/* Header with window indicators */
+.eyetouch-header {
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border-bottom: 1px solid var(--ess-border);
+    display: flex;
+    justify-content: flex-end;
+}
+
+.window-indicators {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+}
+
+.window-dot {
+    width: 20px;
+    height: 20px;
+    border-radius: 3px;
+    background: #222;
+    border: 1px solid #444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: #666;
+    font-family: monospace;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.window-dot.active {
+    border-color: var(--ess-accent);
+    color: var(--ess-text-primary);
+    background: rgba(124, 138, 255, 0.1);
+}
+
+.window-dot.inside {
+    background: var(--ess-success);
+    border-color: var(--ess-success);
+    color: #000;
+    font-weight: bold;
+}
+
+.window-dot.touch-dot.active {
+    border-color: #00ffff;
+}
+
+.window-dot.touch-dot.inside {
+    background: #00ffff;
+    border-color: #00ffff;
+    color: #000;
+}
+
+/* Canvas container */
+.ess-canvas {
+    display: block;
+    margin: 0 auto;
+    border: 1px solid var(--ess-border);
+    background: #000;
+}
+
+/* Info overlay */
+.eyetouch-info {
+    position: absolute;
+    top: 50px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    color: var(--ess-text-primary);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    pointer-events: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.coordinate-info {
+    white-space: nowrap;
+}
+
+/* Toolbar */
+.eyetouch-toolbar {
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border-top: 1px solid var(--ess-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    min-height: 40px;
+}
+
+.eyetouch-controls {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
+.eyetouch-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.eyetouch-checkbox input[type="checkbox"] {
+    cursor: pointer;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+}
+
+.eyetouch-checkbox:hover {
+    color: var(--ess-text-primary);
+}
+
+.eyetouch-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.eyetouch-btn {
+    padding: 4px 12px;
+    font-size: 11px;
+    background: var(--ess-bg-secondary);
+    color: var(--ess-text-primary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.eyetouch-btn:hover {
+    background: var(--ess-bg-panel);
+    border-color: var(--ess-accent);
+}
+
+.eyetouch-btn:active {
+    transform: translateY(1px);
+}
+
+/* Canvas cursor states */
+#eyetouch-canvas {
+    cursor: default;
+}
+
+#eyetouch-canvas.virtual-eye-enabled {
+    cursor: crosshair;
+}
+
+#eyetouch-canvas.virtual-touch-enabled {
+    cursor: pointer;
+}
+
+#eyetouch-canvas.virtual-eye-enabled.virtual-touch-enabled {
+    cursor: crosshair;
+}

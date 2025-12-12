@@ -3,10 +3,11 @@
  * Canvas-based visualization of eye position and touch events
  * 
  * Displays:
- * - Eye position marker
+ * - Eye position marker with optional trail
  * - Eye tracking regions (fixation windows)
  * - Touch position and regions
- * - Screen coordinate mapping
+ * - Virtual eye and touch inputs for testing
+ * - Window status indicators
  */
 
 class EyeTouchVisualizer {
@@ -18,32 +19,95 @@ class EyeTouchVisualizer {
         this.dpManager = dpManager;
         
         this.options = {
-            backgroundColor: '#1a1a2a',
-            eyeColor: '#4ade80',
-            eyeTrailColor: 'rgba(74, 222, 128, 0.3)',
-            touchColor: '#f87171',
-            regionActiveColor: 'rgba(74, 222, 128, 0.3)',
-            regionInactiveColor: 'rgba(100, 100, 120, 0.2)',
-            regionInColor: 'rgba(74, 222, 128, 0.5)',
-            gridColor: 'rgba(255, 255, 255, 0.1)',
+            backgroundColor: '#000000',
+            gridColor: '#333333',
+            centerCrossColor: '#666666',
+            eyeColor: '#ffffff',
+            eyeStrokeColor: '#ff0000',
+            eyeTrailColor: '#ff0000',
+            touchColor: '#00ffff',
+            touchStrokeColor: '#0088aa',
+            virtualEyeColor: '#ff8c00',
+            virtualTouchColor: '#ff8c00',
+            eyeRegionColor: '#ff0000',
+            eyeRegionFill: 'rgb(100, 50, 50)',
+            touchRegionColor: '#00ffff',
+            touchRegionFill: 'rgb(50, 100, 100)',
             ...options
         };
         
+        // Visual range in degrees (matching FLTK's xextent/yextent = 16*2 = 32)
+        this.xExtent = 32.0;
+        this.yExtent = 32.0;
+        
         // State
         this.state = {
+            // Eye tracking
             eyePos: { x: 0, y: 0 },
             eyeTrail: [],
+            maxTrailLength: 50,
+            showTrails: false,
+            
+            // Touch
             touchPos: { x: 0, y: 0 },
             showTouch: false,
-            eyeRegions: [],    // Array of region settings
-            touchRegions: [],  // Array of touch region settings
+            
+            // Regions
+            eyeRegions: Array(8).fill(null).map((_, i) => ({
+                id: i,
+                active: false,
+                state: 0,
+                type: 'rectangle',
+                center: { x: 0, y: 0 },
+                size: { width: 2, height: 2 },
+                inRegion: false
+            })),
+            touchRegions: Array(8).fill(null).map((_, i) => ({
+                id: i,
+                active: false,
+                state: 0,
+                type: 'rectangle',
+                centerRaw: { x: 400, y: 320 },
+                sizeRaw: { width: 100, height: 100 },
+                center: { x: 0, y: 0 },
+                size: { width: 2, height: 2 },
+                inRegion: false
+            })),
+            
+            // Screen dimensions
             screenW: 1920,
             screenH: 1080,
             screenHalfX: 15.0,  // degrees
             screenHalfY: 10.0,  // degrees
-            pointsPerDegH: 1.0,
-            pointsPerDegV: 1.0
+            
+            // Region status masks
+            eyeWindowStatusMask: 0,
+            touchWindowStatusMask: 0,
+            
+            // Virtual inputs
+            virtualEyeEnabled: false,
+            virtualTouchEnabled: false,
+            
+            virtualEye: {
+                x: 0,
+                y: 0,
+                active: false,
+                isDragging: false,
+                dragOffset: { x: 0, y: 0 }
+            },
+            
+            virtualTouch: {
+                x: 0,
+                y: 0,
+                active: false,
+                isDragging: false,
+                dragStartPos: { x: 0, y: 0 },
+                lastDragPos: { x: 0, y: 0 }
+            }
         };
+        
+        // UI elements
+        this.setupUI();
         
         // Animation
         this.animationId = null;
@@ -52,6 +116,137 @@ class EyeTouchVisualizer {
         this.setupCanvas();
         this.setupSubscriptions();
         this.startAnimation();
+    }
+    
+    setupUI() {
+        // Create UI container if it doesn't exist
+        const parent = this.canvas.parentElement;
+        
+        // Look for or create header
+        let header = parent.querySelector('.eyetouch-header');
+        if (!header) {
+            header = document.createElement('div');
+            header.className = 'eyetouch-header';
+            parent.insertBefore(header, this.canvas);
+        }
+        
+        // Create window indicators
+        header.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+                    <span style="font-size: 11px;">Eye:</span>
+                    <div class="window-indicators">
+                        ${Array(8).fill(0).map((_, i) => 
+                            `<span class="window-dot" data-type="eye" data-index="${i}">${i}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+                    <span style="font-size: 11px;">Touch:</span>
+                    <div class="window-indicators">
+                        ${Array(8).fill(0).map((_, i) => 
+                            `<span class="window-dot touch-dot" data-type="touch" data-index="${i}">${i}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Look for or create toolbar
+        let toolbar = parent.querySelector('.eyetouch-toolbar');
+        if (!toolbar) {
+            toolbar = document.createElement('div');
+            toolbar.className = 'eyetouch-toolbar';
+            parent.appendChild(toolbar);
+        }
+        
+        // Create controls
+        toolbar.innerHTML = `
+            <div class="eyetouch-controls">
+                <label class="eyetouch-checkbox">
+                    <input type="checkbox" id="eyetouch-trails">
+                    <span>Trails</span>
+                </label>
+                <label class="eyetouch-checkbox">
+                    <input type="checkbox" id="eyetouch-virtual-eye">
+                    <span>Virtual Eye</span>
+                </label>
+                <label class="eyetouch-checkbox">
+                    <input type="checkbox" id="eyetouch-virtual-touch">
+                    <span>Virtual Touch</span>
+                </label>
+            </div>
+            <div class="eyetouch-actions">
+                <button class="eyetouch-btn" id="eyetouch-reset-eye" style="display: none;">Reset Eye</button>
+                <button class="eyetouch-btn" id="eyetouch-clear-touch" style="display: none;">Clear Touch</button>
+            </div>
+        `;
+        
+        // Create info overlay
+        let overlay = parent.querySelector('.eyetouch-info');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'eyetouch-info';
+            overlay.innerHTML = `
+                <div class="coordinate-info">
+                    Eye: <span id="eyetouch-eye-coords">0.00°, 0.00°</span><br>
+                    <span id="eyetouch-touch-coords" style="display: none;">Touch: 0, 0</span><br>
+                    <span id="eyetouch-virtual-eye-coords" style="display: none;">Virtual Eye: 0.00°, 0.00°</span><br>
+                    <span id="eyetouch-virtual-touch-coords" style="display: none;">Virtual Touch: 0, 0</span>
+                </div>
+            `;
+            parent.appendChild(overlay);
+        }
+        
+        // Bind event handlers
+        this.bindUIEvents();
+    }
+    
+    bindUIEvents() {
+        // Trails checkbox
+        const trailsCheck = document.getElementById('eyetouch-trails');
+        if (trailsCheck) {
+            trailsCheck.addEventListener('change', (e) => {
+                this.state.showTrails = e.target.checked;
+                if (!this.state.showTrails) {
+                    this.state.eyeTrail = [];
+                }
+            });
+        }
+        
+        // Virtual eye checkbox
+        const virtualEyeCheck = document.getElementById('eyetouch-virtual-eye');
+        if (virtualEyeCheck) {
+            virtualEyeCheck.addEventListener('change', (e) => {
+                this.setVirtualEyeEnabled(e.target.checked);
+            });
+        }
+        
+        // Virtual touch checkbox
+        const virtualTouchCheck = document.getElementById('eyetouch-virtual-touch');
+        if (virtualTouchCheck) {
+            virtualTouchCheck.addEventListener('change', (e) => {
+                this.setVirtualTouchEnabled(e.target.checked);
+            });
+        }
+        
+        // Reset eye button
+        const resetEyeBtn = document.getElementById('eyetouch-reset-eye');
+        if (resetEyeBtn) {
+            resetEyeBtn.addEventListener('click', () => this.resetVirtualEye());
+        }
+        
+        // Clear touch button
+        const clearTouchBtn = document.getElementById('eyetouch-clear-touch');
+        if (clearTouchBtn) {
+            clearTouchBtn.addEventListener('click', () => this.resetVirtualTouch());
+        }
+        
+        // Canvas mouse events
+        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+        this.canvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
     }
     
     setupCanvas() {
@@ -70,8 +265,11 @@ class EyeTouchVisualizer {
         const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
         const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
         
-        this.canvas.width = rect.width - paddingX;
-        this.canvas.height = rect.height - paddingY;
+        // Make it square
+        const size = Math.min(rect.width - paddingX, rect.height - paddingY);
+        
+        this.canvas.width = size;
+        this.canvas.height = size;
         
         this.draw();
     }
@@ -79,39 +277,68 @@ class EyeTouchVisualizer {
     setupSubscriptions() {
         // Eye position
         this.dpManager.subscribe('ess/em_pos', (data) => {
+            // Don't update if virtual eye is enabled
+            if (this.state.virtualEyeEnabled) return;
+            
             const [x, y] = String(data.value).split(' ').map(parseFloat);
             if (!isNaN(x) && !isNaN(y)) {
                 this.state.eyePos = { x, y };
                 
-                // Add to trail
-                this.state.eyeTrail.push({ x, y, time: Date.now() });
+                // Update info display
+                this.updateInfoDisplay();
                 
-                // Limit trail length
-                const trailDuration = 500; // ms
-                const now = Date.now();
-                this.state.eyeTrail = this.state.eyeTrail.filter(
-                    p => now - p.time < trailDuration
-                );
+                // Add to trail
+                if (this.state.showTrails) {
+                    this.state.eyeTrail.push({ x, y, time: Date.now() });
+                    
+                    // Limit trail length
+                    if (this.state.eyeTrail.length > this.state.maxTrailLength) {
+                        this.state.eyeTrail.shift();
+                    }
+                }
             }
         });
         
-        // Touch events
-        this.dpManager.subscribe('ess/touch_press', (data) => {
-            const [x, y] = String(data.value).split(' ').map(parseInt);
-            if (!isNaN(x) && !isNaN(y)) {
-                this.state.touchPos = { x, y };
-                this.state.showTouch = true;
-            }
-        });
-        
-        this.dpManager.subscribe('ess/touch_release', () => {
-            this.state.showTouch = false;
-        });
-        
-        this.dpManager.subscribe('ess/touch_drag', (data) => {
-            const [x, y] = String(data.value).split(' ').map(parseInt);
-            if (!isNaN(x) && !isNaN(y)) {
-                this.state.touchPos = { x, y };
+        // Touch events - handle binary format
+        this.dpManager.subscribe('mtouch/event', (data) => {
+            // Don't update if virtual touch is active
+            if (this.state.virtualTouchEnabled && this.state.virtualTouch.active) return;
+            
+            try {
+                const value = data.value || data.data;
+                let x, y, eventType;
+                
+                if (Array.isArray(value)) {
+                    if (value.length < 3) return;
+                    [x, y, eventType] = value.map(Number);
+                } else if (typeof value === 'string') {
+                    const parts = value.split(' ');
+                    if (parts.length < 3) return;
+                    [x, y, eventType] = parts.map(Number);
+                } else {
+                    return;
+                }
+                
+                if (isNaN(x) || isNaN(y) || isNaN(eventType)) return;
+                
+                switch (eventType) {
+                    case 0: // Press
+                        this.state.touchPos = { x, y };
+                        this.state.showTouch = true;
+                        break;
+                    case 1: // Drag
+                        if (this.state.showTouch) {
+                            this.state.touchPos = { x, y };
+                        }
+                        break;
+                    case 2: // Release
+                        this.state.showTouch = false;
+                        break;
+                }
+                
+                this.updateInfoDisplay();
+            } catch (error) {
+                console.error('Error handling touch event:', error);
             }
         });
         
@@ -120,7 +347,17 @@ class EyeTouchVisualizer {
             const parts = String(data.value).split(' ').map(parseFloat);
             if (parts.length >= 8) {
                 const [win, active, state, type, cx, cy, pmx, pmy] = parts;
-                this.state.eyeRegions[win] = { active, state, type, cx, cy, pmx, pmy };
+                if (win >= 0 && win < 8) {
+                    this.state.eyeRegions[win] = {
+                        id: win,
+                        active: active === 1,
+                        state: state,
+                        type: type === 1 ? 'ellipse' : 'rectangle',
+                        center: { x: cx, y: cy },
+                        size: { width: pmx, height: pmy },
+                        inRegion: this.state.eyeRegions[win]?.inRegion || false
+                    };
+                }
             }
         });
         
@@ -129,12 +366,16 @@ class EyeTouchVisualizer {
             const parts = String(data.value).split(' ').map(parseFloat);
             if (parts.length >= 4) {
                 const [changes, states, x, y] = parts;
+                this.state.eyeWindowStatusMask = states;
+                
                 // Update region states based on bitmask
                 this.state.eyeRegions.forEach((region, i) => {
                     if (region) {
                         region.inRegion = (states & (1 << i)) !== 0;
                     }
                 });
+                
+                this.updateWindowIndicators();
             }
         });
         
@@ -142,8 +383,45 @@ class EyeTouchVisualizer {
         this.dpManager.subscribe('ess/touch_region_setting', (data) => {
             const parts = String(data.value).split(' ').map(parseInt);
             if (parts.length >= 8) {
-                const [win, active, state, type, cx, cy, w, h] = parts;
-                this.state.touchRegions[win] = { active, state, type, cx, cy, w, h };
+                const [reg, active, state, type, cx, cy, dx, dy] = parts;
+                if (reg >= 0 && reg < 8) {
+                    // Convert touch pixels to degrees
+                    const centerDeg = this.touchPixelsToDegrees(cx, cy);
+                    const sizeDeg = {
+                        width: Math.abs(dx / this.state.screenW * (2 * this.state.screenHalfX)),
+                        height: Math.abs(dy / this.state.screenH * (2 * this.state.screenHalfY))
+                    };
+                    
+                    this.state.touchRegions[reg] = {
+                        id: reg,
+                        active: active === 1,
+                        state: state,
+                        type: type === 1 ? 'ellipse' : 'rectangle',
+                        centerRaw: { x: cx, y: cy },
+                        sizeRaw: { width: dx, height: dy },
+                        center: centerDeg,
+                        size: sizeDeg,
+                        inRegion: this.state.touchRegions[reg]?.inRegion || false
+                    };
+                }
+            }
+        });
+        
+        // Touch region status
+        this.dpManager.subscribe('ess/touch_region_status', (data) => {
+            const parts = String(data.value).split(' ').map(parseFloat);
+            if (parts.length >= 4) {
+                const [changes, states, touch_x, touch_y] = parts;
+                this.state.touchWindowStatusMask = states;
+                
+                // Update region states based on bitmask
+                this.state.touchRegions.forEach((region, i) => {
+                    if (region) {
+                        region.inRegion = (states & (1 << i)) !== 0;
+                    }
+                });
+                
+                this.updateWindowIndicators();
             }
         });
         
@@ -165,6 +443,375 @@ class EyeTouchVisualizer {
         });
     }
     
+    // Coordinate transformation functions
+    get degPerPixel() {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const dpx = this.xExtent / w;
+        const dpy = dpx * (h / w);
+        return { x: dpx, y: dpy };
+    }
+    
+    get canvasCenter() {
+        return {
+            x: this.canvas.width / 2,
+            y: this.canvas.height / 2
+        };
+    }
+    
+    /**
+     * Convert degrees to canvas coordinates
+     */
+    degreesToCanvas(degX, degY) {
+        const center = this.canvasCenter;
+        const degPP = this.degPerPixel;
+        return {
+            x: center.x + (degX / degPP.x),
+            y: center.y - (degY / degPP.y)  // Negative because canvas Y increases downward
+        };
+    }
+    
+    /**
+     * Convert canvas coordinates to degrees
+     */
+    canvasToDegrees(canvasX, canvasY) {
+        const center = this.canvasCenter;
+        const degPP = this.degPerPixel;
+        return {
+            x: (canvasX - center.x) * degPP.x,
+            y: -(canvasY - center.y) * degPP.y
+        };
+    }
+    
+    /**
+     * Convert touch screen pixels to degrees
+     */
+    touchPixelsToDegrees(pixX, pixY) {
+        const screen = this.state;
+        const screenPixPerDegX = screen.screenW / (2 * screen.screenHalfX);
+        const screenPixPerDegY = screen.screenH / (2 * screen.screenHalfY);
+        return {
+            x: (pixX - screen.screenW / 2) / screenPixPerDegX,
+            y: -(pixY - screen.screenH / 2) / screenPixPerDegY
+        };
+    }
+    
+    /**
+     * Convert degrees to touch screen pixels
+     */
+    degreesToTouchPixels(degX, degY) {
+        const screen = this.state;
+        const screenPixPerDegX = screen.screenW / (2 * screen.screenHalfX);
+        const screenPixPerDegY = screen.screenH / (2 * screen.screenHalfY);
+        return {
+            x: Math.round(degX * screenPixPerDegX + screen.screenW / 2),
+            y: Math.round(-degY * screenPixPerDegY + screen.screenH / 2)
+        };
+    }
+    
+    // Mouse event handlers
+    handleMouseDown(event) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        
+        // Check if clicking on virtual eye marker
+        if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
+            const eyePos = this.degreesToCanvas(this.state.virtualEye.x, this.state.virtualEye.y);
+            const eyeDistance = Math.sqrt(
+                Math.pow(mouseX - eyePos.x, 2) + 
+                Math.pow(mouseY - eyePos.y, 2)
+            );
+            
+            if (eyeDistance <= 13) {
+                this.state.virtualEye.isDragging = true;
+                this.state.virtualEye.dragOffset = {
+                    x: eyePos.x - mouseX,
+                    y: eyePos.y - mouseY
+                };
+                event.preventDefault();
+                return;
+            }
+        }
+        
+        // Handle virtual touch start
+        if (this.state.virtualTouchEnabled && !this.state.virtualEye.isDragging) {
+            const degPos = this.canvasToDegrees(mouseX, mouseY);
+            const touchPixels = this.degreesToTouchPixels(degPos.x, degPos.y);
+            
+            this.state.virtualTouch.x = touchPixels.x;
+            this.state.virtualTouch.y = touchPixels.y;
+            this.state.virtualTouch.active = true;
+            this.state.virtualTouch.isDragging = true;
+            this.state.virtualTouch.dragStartPos = { x: touchPixels.x, y: touchPixels.y };
+            this.state.virtualTouch.lastDragPos = { x: touchPixels.x, y: touchPixels.y };
+            
+            this.sendVirtualTouchData(touchPixels.x, touchPixels.y, 0); // PRESS
+            this.updateInfoDisplay();
+            event.preventDefault();
+        }
+    }
+    
+    handleMouseMove(event) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        
+        if (this.state.virtualEyeEnabled && this.state.virtualEye.isDragging) {
+            const newCanvasX = mouseX + this.state.virtualEye.dragOffset.x;
+            const newCanvasY = mouseY + this.state.virtualEye.dragOffset.y;
+            const degPos = this.canvasToDegrees(newCanvasX, newCanvasY);
+            
+            // Clamp to visible range
+            const maxX = this.xExtent / 2;
+            const maxY = this.yExtent / 2;
+            degPos.x = Math.max(-maxX, Math.min(maxX, degPos.x));
+            degPos.y = Math.max(-maxY, Math.min(maxY, degPos.y));
+            
+            this.updateVirtualEyePosition(degPos.x, degPos.y);
+        }
+        
+        if (this.state.virtualTouchEnabled && this.state.virtualTouch.isDragging) {
+            const degPos = this.canvasToDegrees(mouseX, mouseY);
+            const touchPixels = this.degreesToTouchPixels(degPos.x, degPos.y);
+            
+            const dragThreshold = 2;
+            if (Math.abs(touchPixels.x - this.state.virtualTouch.lastDragPos.x) > dragThreshold ||
+                Math.abs(touchPixels.y - this.state.virtualTouch.lastDragPos.y) > dragThreshold) {
+                
+                this.state.virtualTouch.x = touchPixels.x;
+                this.state.virtualTouch.y = touchPixels.y;
+                this.state.virtualTouch.lastDragPos = { x: touchPixels.x, y: touchPixels.y };
+                
+                this.sendVirtualTouchData(touchPixels.x, touchPixels.y, 1); // DRAG
+                this.updateInfoDisplay();
+            }
+        }
+    }
+    
+    handleMouseUp(event) {
+        if (this.state.virtualEye.isDragging) {
+            this.state.virtualEye.isDragging = false;
+        }
+        
+        if (this.state.virtualTouch.isDragging) {
+            this.sendVirtualTouchData(
+                this.state.virtualTouch.x, 
+                this.state.virtualTouch.y, 
+                2  // RELEASE
+            );
+            this.state.virtualTouch.isDragging = false;
+            
+            // Keep visible briefly after release
+            setTimeout(() => {
+                if (!this.state.virtualTouch.isDragging) {
+                    this.state.virtualTouch.active = false;
+                }
+            }, 500);
+        }
+    }
+    
+    handleMouseLeave(event) {
+        if (this.state.virtualEye.isDragging) {
+            this.state.virtualEye.isDragging = false;
+        }
+        
+        if (this.state.virtualTouch.isDragging) {
+            this.sendVirtualTouchData(
+                this.state.virtualTouch.x,
+                this.state.virtualTouch.y,
+                2  // RELEASE
+            );
+            this.state.virtualTouch.isDragging = false;
+            this.state.virtualTouch.active = false;
+        }
+    }
+    
+    // Virtual input control
+    updateVirtualEyePosition(degX, degY) {
+        this.state.virtualEye.x = degX;
+        this.state.virtualEye.y = degY;
+        this.state.virtualEye.active = true;
+        this.sendVirtualEyeTarget(degX, degY);
+        this.updateInfoDisplay();
+    }
+    
+    async sendVirtualEyeTarget(x, y) {
+        try {
+            // Tell virtual_eye subprocess to hold this position
+            const message = {
+                cmd: 'eval',
+                script: `send virtual_eye {set_eye ${x} ${y}}`
+            };
+            if (this.dpManager.connection && this.dpManager.connection.ws) {
+                this.dpManager.connection.ws.send(JSON.stringify(message));
+            }
+        } catch (error) {
+            console.error('Failed to send virtual eye target:', error);
+        }
+    }
+    
+    async setVirtualEyeControl(enabled) {
+        try {
+            const cmd = enabled ? 'start' : 'stop';
+            const message = {
+                cmd: 'eval',
+                script: `send virtual_eye ${cmd}`
+            };
+            if (this.dpManager.connection && this.dpManager.connection.ws) {
+                this.dpManager.connection.ws.send(JSON.stringify(message));
+            }
+        } catch (error) {
+            console.error('Failed to set virtual eye control:', error);
+        }
+    }
+    
+    async sendVirtualTouchData(x, y, eventType = 0) {
+        try {
+            const cmd = `set d [binary format s3 {${x} ${y} ${eventType}}]; dservSetData mtouch/event 0 4 $d; unset d`;
+            const message = {
+                cmd: 'eval',
+                script: cmd
+            };
+            if (this.dpManager.connection && this.dpManager.connection.ws) {
+                this.dpManager.connection.ws.send(JSON.stringify(message));
+            }
+        } catch (error) {
+            console.error('Failed to send virtual touch data:', error);
+        }
+    }
+    
+    setVirtualEyeEnabled(enabled) {
+        this.state.virtualEyeEnabled = enabled;
+        this.setVirtualEyeControl(enabled);
+        
+        if (enabled) {
+            // Initialize virtual eye at current eye position or center
+            if (this.state.eyePos.x !== 0 || this.state.eyePos.y !== 0) {
+                this.updateVirtualEyePosition(this.state.eyePos.x, this.state.eyePos.y);
+            } else {
+                this.updateVirtualEyePosition(0, 0);
+            }
+            
+            // Update cursor
+            this.canvas.style.cursor = 'crosshair';
+        } else {
+            this.state.virtualEye.active = false;
+            this.state.virtualEye.isDragging = false;
+            this.canvas.style.cursor = this.state.virtualTouchEnabled ? 'pointer' : 'default';
+        }
+        
+        // Show/hide reset button
+        const resetBtn = document.getElementById('eyetouch-reset-eye');
+        if (resetBtn) {
+            resetBtn.style.display = enabled ? 'block' : 'none';
+        }
+        
+        this.updateInfoDisplay();
+    }
+    
+    setVirtualTouchEnabled(enabled) {
+        this.state.virtualTouchEnabled = enabled;
+        
+        if (!enabled) {
+            if (this.state.virtualTouch.isDragging) {
+                this.sendVirtualTouchData(
+                    this.state.virtualTouch.x,
+                    this.state.virtualTouch.y,
+                    2  // RELEASE
+                );
+            }
+            this.state.virtualTouch.active = false;
+            this.state.virtualTouch.isDragging = false;
+            this.canvas.style.cursor = this.state.virtualEyeEnabled ? 'crosshair' : 'default';
+        } else {
+            this.canvas.style.cursor = this.state.virtualEyeEnabled ? 'crosshair' : 'pointer';
+        }
+        
+        // Show/hide clear button
+        const clearBtn = document.getElementById('eyetouch-clear-touch');
+        if (clearBtn) {
+            clearBtn.style.display = enabled ? 'block' : 'none';
+        }
+        
+        this.updateInfoDisplay();
+    }
+    
+    resetVirtualEye() {
+        this.updateVirtualEyePosition(0, 0);
+    }
+    
+    resetVirtualTouch() {
+        this.state.virtualTouch.active = false;
+        this.state.virtualTouch.isDragging = false;
+        this.state.virtualTouch.x = 0;
+        this.state.virtualTouch.y = 0;
+        this.updateInfoDisplay();
+    }
+    
+    // UI updates
+    updateWindowIndicators() {
+        // Update eye window indicators
+        this.state.eyeRegions.forEach((region, i) => {
+            const dot = document.querySelector(`.window-dot[data-type="eye"][data-index="${i}"]`);
+            if (dot) {
+                dot.classList.toggle('active', region.active);
+                dot.classList.toggle('inside', region.inRegion);
+            }
+        });
+        
+        // Update touch window indicators
+        this.state.touchRegions.forEach((region, i) => {
+            const dot = document.querySelector(`.window-dot[data-type="touch"][data-index="${i}"]`);
+            if (dot) {
+                dot.classList.toggle('active', region.active);
+                dot.classList.toggle('inside', region.inRegion);
+            }
+        });
+    }
+    
+    updateInfoDisplay() {
+        // Eye coordinates
+        const eyeCoords = document.getElementById('eyetouch-eye-coords');
+        if (eyeCoords) {
+            eyeCoords.textContent = `${this.state.eyePos.x.toFixed(2)}°, ${this.state.eyePos.y.toFixed(2)}°`;
+        }
+        
+        // Touch coordinates
+        const touchCoords = document.getElementById('eyetouch-touch-coords');
+        if (touchCoords) {
+            if (this.state.showTouch && (this.state.touchPos.x !== 0 || this.state.touchPos.y !== 0)) {
+                touchCoords.textContent = `Touch: ${this.state.touchPos.x}, ${this.state.touchPos.y}`;
+                touchCoords.style.display = 'block';
+            } else {
+                touchCoords.style.display = 'none';
+            }
+        }
+        
+        // Virtual eye coordinates
+        const virtualEyeCoords = document.getElementById('eyetouch-virtual-eye-coords');
+        if (virtualEyeCoords) {
+            if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
+                virtualEyeCoords.textContent = `Virtual Eye: ${this.state.virtualEye.x.toFixed(2)}°, ${this.state.virtualEye.y.toFixed(2)}°`;
+                virtualEyeCoords.style.display = 'block';
+            } else {
+                virtualEyeCoords.style.display = 'none';
+            }
+        }
+        
+        // Virtual touch coordinates
+        const virtualTouchCoords = document.getElementById('eyetouch-virtual-touch-coords');
+        if (virtualTouchCoords) {
+            if (this.state.virtualTouchEnabled && this.state.virtualTouch.active) {
+                virtualTouchCoords.textContent = `Virtual Touch: ${this.state.virtualTouch.x}, ${this.state.virtualTouch.y}`;
+                virtualTouchCoords.style.display = 'block';
+            } else {
+                virtualTouchCoords.style.display = 'none';
+            }
+        }
+    }
+    
+    // Animation
     startAnimation() {
         const animate = () => {
             this.draw();
@@ -180,238 +827,325 @@ class EyeTouchVisualizer {
         }
     }
     
-    /**
-     * Convert degrees to canvas coordinates
-     */
-    degToCanvas(degX, degY) {
-        const { screenHalfX, screenHalfY } = this.state;
-        const cx = this.canvas.width / 2;
-        const cy = this.canvas.height / 2;
-        
-        // Scale factor: canvas pixels per degree
-        const scaleX = (this.canvas.width / 2) / screenHalfX;
-        const scaleY = (this.canvas.height / 2) / screenHalfY;
-        
-        return {
-            x: cx + degX * scaleX,
-            y: cy - degY * scaleY  // Flip Y (screen coords are top-down)
-        };
-    }
-    
-    /**
-     * Convert screen pixels to canvas coordinates
-     */
-    screenToCanvas(screenX, screenY) {
-        const { screenW, screenH } = this.state;
-        
-        const scaleX = this.canvas.width / screenW;
-        const scaleY = this.canvas.height / screenH;
-        
-        return {
-            x: screenX * scaleX,
-            y: screenY * scaleY
-        };
-    }
-    
+    // Drawing functions
     draw() {
-        const { ctx, canvas } = this;
+        const { ctx, canvas, options } = this;
         const { width, height } = canvas;
         
         // Clear
-        ctx.fillStyle = this.options.backgroundColor;
+        ctx.fillStyle = options.backgroundColor;
         ctx.fillRect(0, 0, width, height);
         
         // Draw grid
         this.drawGrid();
         
-        // Draw eye regions
-        this.drawEyeRegions();
-        
-        // Draw touch regions
-        this.drawTouchRegions();
-        
-        // Draw eye trail
-        this.drawEyeTrail();
-        
-        // Draw eye position
-        this.drawEyePosition();
-        
-        // Draw touch position
-        if (this.state.showTouch) {
-            this.drawTouchPosition();
+        // Draw trails
+        if (this.state.showTrails) {
+            this.drawTrails();
         }
         
-        // Draw crosshair at center
-        this.drawCrosshair();
+        // Draw eye regions
+        this.state.eyeRegions.forEach(region => {
+            if (region.active) {
+                this.drawEyeRegion(region);
+            }
+        });
+        
+        // Draw touch regions
+        this.state.touchRegions.forEach(region => {
+            if (region && region.active) {
+                this.drawTouchRegion(region);
+            }
+        });
+        
+        // Draw markers
+        if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
+            this.drawVirtualEye();
+        } else if (!this.state.virtualEyeEnabled) {
+            this.drawEyePosition();
+        }
+        
+        if (this.state.virtualTouchEnabled && this.state.virtualTouch.active) {
+            this.drawVirtualTouch();
+        } else if (this.state.showTouch) {
+            this.drawTouchPosition();
+        }
     }
     
     drawGrid() {
         const { ctx, canvas, options } = this;
-        const { screenHalfX, screenHalfY } = this.state;
         
+        // Draw degree lines
         ctx.strokeStyle = options.gridColor;
         ctx.lineWidth = 1;
         
-        // Draw degree lines
-        for (let deg = -Math.floor(screenHalfX); deg <= Math.floor(screenHalfX); deg += 5) {
-            const { x } = this.degToCanvas(deg, 0);
+        for (let deg = -15; deg <= 15; deg += 5) {
+            const pos = this.degreesToCanvas(deg, 0);
             ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, canvas.height);
+            ctx.moveTo(pos.x, 0);
+            ctx.lineTo(pos.x, canvas.height);
             ctx.stroke();
         }
         
-        for (let deg = -Math.floor(screenHalfY); deg <= Math.floor(screenHalfY); deg += 5) {
-            const { y } = this.degToCanvas(0, deg);
+        for (let deg = -15; deg <= 15; deg += 5) {
+            const pos = this.degreesToCanvas(0, deg);
             ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(canvas.width, y);
+            ctx.moveTo(0, pos.y);
+            ctx.lineTo(canvas.width, pos.y);
             ctx.stroke();
         }
-    }
-    
-    drawCrosshair() {
-        const { ctx, canvas, options } = this;
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2;
-        const size = 10;
         
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = 1;
+        // Draw center crosshair
+        ctx.strokeStyle = options.centerCrossColor;
+        ctx.lineWidth = 2;
         
+        const center = this.canvasCenter;
         ctx.beginPath();
-        ctx.moveTo(cx - size, cy);
-        ctx.lineTo(cx + size, cy);
-        ctx.moveTo(cx, cy - size);
-        ctx.lineTo(cx, cy + size);
+        ctx.moveTo(center.x - 10, center.y);
+        ctx.lineTo(center.x + 10, center.y);
+        ctx.moveTo(center.x, center.y - 10);
+        ctx.lineTo(center.x, center.y + 10);
         ctx.stroke();
     }
     
-    drawEyeRegions() {
-        const { ctx, options } = this;
-        
-        this.state.eyeRegions.forEach((region, i) => {
-            if (!region || !region.active) return;
-            
-            const center = this.degToCanvas(region.cx, region.cy);
-            const halfW = region.pmx * (this.canvas.width / 2) / this.state.screenHalfX;
-            const halfH = region.pmy * (this.canvas.height / 2) / this.state.screenHalfY;
-            
-            // Choose color based on state
-            if (region.inRegion) {
-                ctx.fillStyle = options.regionInColor;
-                ctx.strokeStyle = options.eyeColor;
-            } else {
-                ctx.fillStyle = region.state ? options.regionActiveColor : options.regionInactiveColor;
-                ctx.strokeStyle = region.state ? 'rgba(74, 222, 128, 0.5)' : 'rgba(100, 100, 120, 0.4)';
-            }
-            
-            ctx.lineWidth = 2;
-            
-            if (region.type === 0) {
-                // Rectangle
-                ctx.fillRect(center.x - halfW, center.y - halfH, halfW * 2, halfH * 2);
-                ctx.strokeRect(center.x - halfW, center.y - halfH, halfW * 2, halfH * 2);
-            } else {
-                // Ellipse
-                ctx.beginPath();
-                ctx.ellipse(center.x, center.y, halfW, halfH, 0, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-            }
-        });
-    }
-    
-    drawTouchRegions() {
-        const { ctx, options } = this;
-        
-        this.state.touchRegions.forEach((region, i) => {
-            if (!region || !region.active) return;
-            
-            const center = this.screenToCanvas(region.cx, region.cy);
-            const halfW = (region.w / 2) * (this.canvas.width / this.state.screenW);
-            const halfH = (region.h / 2) * (this.canvas.height / this.state.screenH);
-            
-            ctx.fillStyle = region.state ? 'rgba(248, 113, 113, 0.2)' : 'rgba(100, 100, 120, 0.1)';
-            ctx.strokeStyle = region.state ? 'rgba(248, 113, 113, 0.5)' : 'rgba(100, 100, 120, 0.3)';
-            ctx.lineWidth = 1;
-            
-            ctx.fillRect(center.x - halfW, center.y - halfH, halfW * 2, halfH * 2);
-            ctx.strokeRect(center.x - halfW, center.y - halfH, halfW * 2, halfH * 2);
-        });
-    }
-    
-    drawEyeTrail() {
-        const { ctx, options } = this;
+    drawTrails() {
+        const { ctx } = this;
         const trail = this.state.eyeTrail;
         
         if (trail.length < 2) return;
         
-        const now = Date.now();
+        ctx.strokeStyle = this.options.eyeTrailColor;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5;
         
         ctx.beginPath();
         trail.forEach((point, i) => {
-            const pos = this.degToCanvas(point.x, point.y);
-            const age = (now - point.time) / 500; // 0 to 1
-            
+            const pos = this.degreesToCanvas(point.x, point.y);
             if (i === 0) {
                 ctx.moveTo(pos.x, pos.y);
             } else {
                 ctx.lineTo(pos.x, pos.y);
             }
         });
-        
-        ctx.strokeStyle = options.eyeTrailColor;
-        ctx.lineWidth = 2;
         ctx.stroke();
+        
+        ctx.globalAlpha = 1.0;
+    }
+    
+    drawEyeRegion(region) {
+        const { ctx, options } = this;
+        const pos = this.degreesToCanvas(region.center.x, region.center.y);
+        const degPP = this.degPerPixel;
+        const halfW = region.size.width / degPP.x;
+        const halfH = region.size.height / degPP.y;
+        
+        // Draw fill when inside
+        if (region.inRegion) {
+            ctx.fillStyle = options.eyeRegionFill;
+            if (region.type === 'ellipse') {
+                ctx.beginPath();
+                ctx.ellipse(pos.x, pos.y, halfW, halfH, 0, 0, 2 * Math.PI);
+                ctx.fill();
+            } else {
+                ctx.fillRect(pos.x - halfW, pos.y - halfH, 2 * halfW, 2 * halfH);
+            }
+        }
+        
+        // Draw outline
+        ctx.strokeStyle = options.eyeRegionColor;
+        ctx.lineWidth = region.inRegion ? 2 : 1;
+        
+        if (region.type === 'ellipse') {
+            ctx.beginPath();
+            ctx.ellipse(pos.x, pos.y, halfW, halfH, 0, 0, 2 * Math.PI);
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(pos.x - halfW, pos.y - halfH, 2 * halfW, 2 * halfH);
+        }
+        
+        // Draw center dot
+        ctx.fillStyle = options.eyeRegionColor;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 2, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // Draw label
+        ctx.fillStyle = options.eyeRegionColor;
+        ctx.font = '12px monospace';
+        ctx.fillText(`E${region.id}`, pos.x - halfW + 2, pos.y - halfH - 5);
+    }
+    
+    drawTouchRegion(region) {
+        const { ctx, options } = this;
+        const pos = this.degreesToCanvas(region.center.x, region.center.y);
+        const degPP = this.degPerPixel;
+        const halfW = region.size.width / degPP.x;
+        const halfH = region.size.height / degPP.y;
+        
+        // Draw fill when inside
+        if (region.inRegion) {
+            ctx.fillStyle = options.touchRegionFill;
+            if (region.type === 'ellipse') {
+                ctx.beginPath();
+                ctx.ellipse(pos.x, pos.y, halfW, halfH, 0, 0, 2 * Math.PI);
+                ctx.fill();
+            } else {
+                ctx.fillRect(pos.x - halfW, pos.y - halfH, 2 * halfW, 2 * halfH);
+            }
+        }
+        
+        // Draw outline
+        ctx.strokeStyle = options.touchRegionColor;
+        ctx.lineWidth = region.inRegion ? 2 : 1;
+        
+        if (region.type === 'ellipse') {
+            ctx.beginPath();
+            ctx.ellipse(pos.x, pos.y, halfW, halfH, 0, 0, 2 * Math.PI);
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(pos.x - halfW, pos.y - halfH, 2 * halfW, 2 * halfH);
+        }
+        
+        // Draw center dot
+        ctx.fillStyle = options.touchRegionColor;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 2, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // Draw label
+        ctx.fillStyle = options.touchRegionColor;
+        ctx.font = '12px monospace';
+        ctx.fillText(`T${region.id}`, pos.x + halfW - 20, pos.y + halfH + 15);
     }
     
     drawEyePosition() {
         const { ctx, options } = this;
-        const pos = this.degToCanvas(this.state.eyePos.x, this.state.eyePos.y);
+        const pos = this.degreesToCanvas(this.state.eyePos.x, this.state.eyePos.y);
         
-        // Outer circle
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+        // Draw filled circle
         ctx.fillStyle = options.eyeColor;
-        ctx.fill();
+        ctx.strokeStyle = options.eyeStrokeColor;
+        ctx.lineWidth = 2;
         
-        // Inner circle
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#000';
+        ctx.arc(pos.x, pos.y, 5, 0, 2 * Math.PI);
         ctx.fill();
+        ctx.stroke();
+        
+        // Draw crosshair
+        ctx.strokeStyle = options.eyeColor;
+        ctx.lineWidth = 1;
+        
+        ctx.beginPath();
+        ctx.moveTo(pos.x - 10, pos.y);
+        ctx.lineTo(pos.x + 10, pos.y);
+        ctx.moveTo(pos.x, pos.y - 10);
+        ctx.lineTo(pos.x, pos.y + 10);
+        ctx.stroke();
+    }
+    
+    drawVirtualEye() {
+        const { ctx, options } = this;
+        const pos = this.degreesToCanvas(this.state.virtualEye.x, this.state.virtualEye.y);
+        
+        // Draw circle
+        ctx.fillStyle = options.eyeColor;
+        ctx.strokeStyle = this.state.virtualEye.isDragging ? '#00ff00' : options.virtualEyeColor;
+        ctx.lineWidth = 2;
+        
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw crosshair
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1;
+        
+        ctx.beginPath();
+        ctx.moveTo(pos.x - 6, pos.y);
+        ctx.lineTo(pos.x + 6, pos.y);
+        ctx.moveTo(pos.x, pos.y - 6);
+        ctx.lineTo(pos.x, pos.y + 6);
+        ctx.stroke();
+        
+        // Draw "V" indicator
+        ctx.fillStyle = options.virtualEyeColor;
+        ctx.font = 'bold 10px monospace';
+        ctx.fillText('V', pos.x - 3, pos.y - 12);
     }
     
     drawTouchPosition() {
         const { ctx, options } = this;
-        const pos = this.screenToCanvas(this.state.touchPos.x, this.state.touchPos.y);
+        const touchDegrees = this.touchPixelsToDegrees(
+            this.state.touchPos.x,
+            this.state.touchPos.y
+        );
+        const pos = this.degreesToCanvas(touchDegrees.x, touchDegrees.y);
         
-        // Touch indicator (crosshair style)
-        ctx.strokeStyle = options.touchColor;
+        // Draw diamond shape
+        ctx.fillStyle = options.touchColor;
+        ctx.strokeStyle = options.touchStrokeColor;
         ctx.lineWidth = 2;
         
-        const size = 12;
+        const size = 6;
         ctx.beginPath();
-        ctx.moveTo(pos.x - size, pos.y);
-        ctx.lineTo(pos.x + size, pos.y);
         ctx.moveTo(pos.x, pos.y - size);
+        ctx.lineTo(pos.x + size, pos.y);
         ctx.lineTo(pos.x, pos.y + size);
-        ctx.stroke();
-        
-        // Circle
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
-        ctx.fillStyle = options.touchColor;
+        ctx.lineTo(pos.x - size, pos.y);
+        ctx.closePath();
         ctx.fill();
+        ctx.stroke();
     }
     
-    /**
-     * Set points per degree scaling
-     */
-    setPointsPerDeg(h, v) {
-        this.state.pointsPerDegH = h;
-        this.state.pointsPerDegV = v;
+    drawVirtualTouch() {
+        const { ctx, options } = this;
+        const touchDegrees = this.touchPixelsToDegrees(
+            this.state.virtualTouch.x,
+            this.state.virtualTouch.y
+        );
+        const pos = this.degreesToCanvas(touchDegrees.x, touchDegrees.y);
+        
+        // Draw diamond shape
+        ctx.fillStyle = options.virtualTouchColor;
+        ctx.strokeStyle = this.state.virtualTouch.isDragging ? '#ffffff' : '#cc6600';
+        ctx.lineWidth = this.state.virtualTouch.isDragging ? 3 : 2;
+        
+        const size = this.state.virtualTouch.isDragging ? 11 : 9;
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y - size);
+        ctx.lineTo(pos.x + size, pos.y);
+        ctx.lineTo(pos.x, pos.y + size);
+        ctx.lineTo(pos.x - size, pos.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw "V" indicator
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 8px monospace';
+        ctx.fillText('V', pos.x - 2, pos.y + 2);
+        
+        // Draw drag line
+        if (this.state.virtualTouch.isDragging) {
+            const startDegrees = this.touchPixelsToDegrees(
+                this.state.virtualTouch.dragStartPos.x,
+                this.state.virtualTouch.dragStartPos.y
+            );
+            const startPos = this.degreesToCanvas(startDegrees.x, startDegrees.y);
+            
+            ctx.strokeStyle = 'rgba(255, 140, 0, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]);
+            
+            ctx.beginPath();
+            ctx.moveTo(startPos.x, startPos.y);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+            
+            ctx.setLineDash([]);
+        }
     }
     
     dispose() {

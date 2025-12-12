@@ -226,7 +226,7 @@ class ESSControl {
      */
     setupSubscriptions() {
         // Subject list
-        this.dpManager.subscribe('ess/subjects', (data) => {
+        this.dpManager.subscribe('ess/subject_ids', (data) => {
             this.updateSubjects(data.value);
         });
         
@@ -916,7 +916,7 @@ class ESSControl {
      */
     dispose() {
         // Unsubscribe from all datapoints
-        this.dpManager.unsubscribe('ess/subjects');
+        this.dpManager.unsubscribe('ess/subject_ids');
         this.dpManager.unsubscribe('ess/subject');
         this.dpManager.unsubscribe('ess/systems');
         this.dpManager.unsubscribe('ess/system');
