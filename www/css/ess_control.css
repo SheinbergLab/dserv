@@ -1004,3 +1004,29 @@ body.ess-app {
         height: auto;
     }
 }
+
+@media (max-width: 500px) {
+    /* Mobile - show only Experiment Control */
+    .ess-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .ess-column-middle,
+    .ess-column-right,
+    .ess-column-extra {
+        display: none;
+    }
+    
+    .ess-column-left {
+        width: 100%;
+    }
+    
+    /* Also hide bottom panel on mobile to save space */
+    .ess-bottom-panel {
+        height: 150px;
+    }
+    
+    .ess-status-bar h1 {
+        font-size: 16px;
+    }
+}
