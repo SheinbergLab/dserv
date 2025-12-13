@@ -1,24 +1,28 @@
 [Unit]
 Description=Dataserver Service
-After=network-online.target
+After=network-online.target seatd.service
 Wants=network-online.target
-
-# Add these for better network readiness
-After=systemd-networkd-wait-online.service
-After=NetworkManager-wait-online.service
 
 [Service]
 Type=simple
-ExecStart=chrt 60 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+ExecStart=/usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
 Restart=on-failure
 RestartSec=10
 KillMode=process
 
-# Add these for better logging/debugging
+# RT scheduling
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=60
+
+# Pin to isolated core if using isolcpus=3
+CPUAffinity=3
+
+# Lock memory to prevent paging latency
+LimitMEMLOCK=infinity
+
+# Logging
 StandardOutput=journal
 StandardError=journal
-# Optional: Add a delay to ensure network is really ready
-# ExecStartPre=/bin/sleep 5
 
 [Install]
 WantedBy=multi-user.target
