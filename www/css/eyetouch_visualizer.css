@@ -4,33 +4,47 @@
     display: flex;
     flex-direction: column;
     position: relative;
+    padding: 0 !important;
+    overflow: hidden;
 }
 
-/* Header with window indicators */
+/* Header with window indicators and controls */
 .eyetouch-header {
-    padding: 8px 12px;
+    padding: 4px 6px;
     background: rgba(0, 0, 0, 0.3);
     border-bottom: 1px solid var(--ess-border);
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    flex-shrink: 0;
+    width: 100%;
+}
+
+/* Canvas wrapper for centering */
+.eyetouch-canvas-wrapper {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
 }
 
 .window-indicators {
     display: flex;
-    gap: 3px;
-    flex-wrap: wrap;
+    gap: 2px;
+    flex-wrap: nowrap;
 }
 
 .window-dot {
-    width: 20px;
-    height: 20px;
-    border-radius: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 2px;
     background: #222;
     border: 1px solid #444;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 9px;
+    font-size: 7px;
     color: #666;
     font-family: monospace;
     transition: all 0.2s;
@@ -60,66 +74,80 @@
     color: #000;
 }
 
-/* Canvas container */
-.ess-canvas {
+/* Canvas container - square aspect ratio, centered */
+#eyetouch-canvas {
     display: block;
-    margin: 0 auto;
-    border: 1px solid var(--ess-border);
+    border: none;
     background: #000;
+    /* Don't use flex properties - size is set by JS */
+}
+
+/* Ensure panel body fills available space and doesn't scroll */
+.ess-column-middle .ess-panel .ess-panel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* Info overlay */
 .eyetouch-info {
     position: absolute;
-    top: 50px;
-    right: 20px;
-    background: rgba(0, 0, 0, 0.8);
+    top: 50px; /* Adjusted for new compact header */
+    right: 6px;
+    background: rgba(0, 0, 0, 0.85);
     color: var(--ess-text-primary);
-    padding: 8px 12px;
-    border-radius: 4px;
+    padding: 4px 8px;
+    border-radius: 3px;
     font-family: monospace;
-    font-size: 11px;
-    line-height: 1.6;
+    font-size: 9px;
+    line-height: 1.4;
     pointer-events: none;
     border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 10;
 }
 
 .coordinate-info {
     white-space: nowrap;
 }
 
-/* Toolbar */
+/* Toolbar - minimal, only for action buttons */
 .eyetouch-toolbar {
-    padding: 8px 12px;
+    padding: 4px 8px;
     background: rgba(0, 0, 0, 0.3);
     border-top: 1px solid var(--ess-border);
-    display: flex;
-    justify-content: space-between;
+    display: none;
+    justify-content: center;
     align-items: center;
     flex-shrink: 0;
-    min-height: 40px;
+    min-height: 28px;
+}
+
+.eyetouch-toolbar:has(button[style*="display: block"]),
+.eyetouch-toolbar:has(button:not([style*="display: none"])) {
+    display: flex;
 }
 
 .eyetouch-controls {
     display: flex;
-    gap: 16px;
+    gap: 10px;
     align-items: center;
 }
 
 .eyetouch-checkbox {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 11px;
+    gap: 4px;
+    font-size: 10px;
     color: var(--ess-text-secondary);
     cursor: pointer;
     user-select: none;
+    white-space: nowrap;
 }
 
 .eyetouch-checkbox input[type="checkbox"] {
     cursor: pointer;
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     margin: 0;
 }
 
@@ -129,12 +157,13 @@
 
 .eyetouch-actions {
     display: flex;
-    gap: 8px;
+    gap: 6px;
+    justify-content: center;
 }
 
 .eyetouch-btn {
-    padding: 4px 12px;
-    font-size: 11px;
+    padding: 3px 10px;
+    font-size: 10px;
     background: var(--ess-bg-secondary);
     color: var(--ess-text-primary);
     border: 1px solid var(--ess-border);

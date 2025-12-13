@@ -18,6 +18,9 @@ class EyeTouchVisualizer {
         this.ctx = this.canvas.getContext('2d');
         this.dpManager = dpManager;
         
+        // Get connection from options or from dpManager
+        this.connection = options.connection || (dpManager && dpManager.connection) || null;
+        
         this.options = {
             backgroundColor: '#000000',
             gridColor: '#333333',
@@ -33,6 +36,7 @@ class EyeTouchVisualizer {
             eyeRegionFill: 'rgb(100, 50, 50)',
             touchRegionColor: '#00ffff',
             touchRegionFill: 'rgb(50, 100, 100)',
+            essSubprocess: 'ess',  // subprocess for ESS commands
             ...options
         };
         
@@ -112,10 +116,19 @@ class EyeTouchVisualizer {
         // Animation
         this.animationId = null;
         
+        // Debug: expose state for console inspection
+        if (typeof window !== 'undefined') {
+            window.eyeTouchVizDebug = this;
+        }
+        
         // Setup
         this.setupCanvas();
         this.setupSubscriptions();
+        this.setupConnectionListeners();
         this.startAnimation();
+        
+        // Request initial region data
+        this.refreshWindows();
     }
     
     setupUI() {
@@ -130,57 +143,62 @@ class EyeTouchVisualizer {
             parent.insertBefore(header, this.canvas);
         }
         
-        // Create window indicators
-        header.innerHTML = `
-            <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
-                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
-                    <span style="font-size: 11px;">Eye:</span>
-                    <div class="window-indicators">
-                        ${Array(8).fill(0).map((_, i) => 
-                            `<span class="window-dot" data-type="eye" data-index="${i}">${i}</span>`
-                        ).join('')}
-                    </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
-                    <span style="font-size: 11px;">Touch:</span>
-                    <div class="window-indicators">
-                        ${Array(8).fill(0).map((_, i) => 
-                            `<span class="window-dot touch-dot" data-type="touch" data-index="${i}">${i}</span>`
-                        ).join('')}
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // Look for or create toolbar
-        let toolbar = parent.querySelector('.eyetouch-toolbar');
-        if (!toolbar) {
-            toolbar = document.createElement('div');
-            toolbar.className = 'eyetouch-toolbar';
-            parent.appendChild(toolbar);
+        // Wrap canvas in a centering container if not already wrapped
+        if (!this.canvas.parentElement.classList.contains('eyetouch-canvas-wrapper')) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'eyetouch-canvas-wrapper';
+            this.canvas.parentNode.insertBefore(wrapper, this.canvas);
+            wrapper.appendChild(this.canvas);
+            this.canvasWrapper = wrapper;
+        } else {
+            this.canvasWrapper = this.canvas.parentElement;
         }
         
-        // Create controls
-        toolbar.innerHTML = `
-            <div class="eyetouch-controls">
-                <label class="eyetouch-checkbox">
-                    <input type="checkbox" id="eyetouch-trails">
-                    <span>Trails</span>
-                </label>
-                <label class="eyetouch-checkbox">
-                    <input type="checkbox" id="eyetouch-virtual-eye">
-                    <span>Virtual Eye</span>
-                </label>
-                <label class="eyetouch-checkbox">
-                    <input type="checkbox" id="eyetouch-virtual-touch">
-                    <span>Virtual Touch</span>
-                </label>
-            </div>
-            <div class="eyetouch-actions">
-                <button class="eyetouch-btn" id="eyetouch-reset-eye" style="display: none;">Reset Eye</button>
-                <button class="eyetouch-btn" id="eyetouch-clear-touch" style="display: none;">Clear Touch</button>
+        // Create window indicators and controls - inline layout
+        header.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 3px; width: 100%;">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <label class="eyetouch-checkbox">
+                        <input type="checkbox" id="eyetouch-virtual-eye">
+                        <span>Virtual Eye</span>
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-size: 10px;">Eye:</span>
+                        <div class="window-indicators">
+                            ${Array(8).fill(0).map((_, i) => 
+                                `<span class="window-dot" data-type="eye" data-index="${i}">${i}</span>`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <label class="eyetouch-checkbox">
+                        <input type="checkbox" id="eyetouch-virtual-touch">
+                        <span>Virtual Touch</span>
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-size: 10px;">Touch:</span>
+                        <div class="window-indicators">
+                            ${Array(8).fill(0).map((_, i) => 
+                                `<span class="window-dot touch-dot" data-type="touch" data-index="${i}">${i}</span>`
+                            ).join('')}
+                        </div>
+                    </div>
+                </div>
             </div>
         `;
+        
+        // No toolbar needed - save the space!
+        // Users can disable checkboxes to "reset"
+        
+        // Explicitly ensure checkboxes start unchecked (don't trust browser state)
+        setTimeout(() => {
+            const virtualEyeCheck = document.getElementById('eyetouch-virtual-eye');
+            const virtualTouchCheck = document.getElementById('eyetouch-virtual-touch');
+            
+            if (virtualEyeCheck) virtualEyeCheck.checked = false;
+            if (virtualTouchCheck) virtualTouchCheck.checked = false;
+        }, 0);
         
         // Create info overlay
         let overlay = parent.querySelector('.eyetouch-info');
@@ -203,18 +221,7 @@ class EyeTouchVisualizer {
     }
     
     bindUIEvents() {
-        // Trails checkbox
-        const trailsCheck = document.getElementById('eyetouch-trails');
-        if (trailsCheck) {
-            trailsCheck.addEventListener('change', (e) => {
-                this.state.showTrails = e.target.checked;
-                if (!this.state.showTrails) {
-                    this.state.eyeTrail = [];
-                }
-            });
-        }
-        
-        // Virtual eye checkbox
+        // Virtual eye checkbox (now in header)
         const virtualEyeCheck = document.getElementById('eyetouch-virtual-eye');
         if (virtualEyeCheck) {
             virtualEyeCheck.addEventListener('change', (e) => {
@@ -230,43 +237,42 @@ class EyeTouchVisualizer {
             });
         }
         
-        // Reset eye button
-        const resetEyeBtn = document.getElementById('eyetouch-reset-eye');
-        if (resetEyeBtn) {
-            resetEyeBtn.addEventListener('click', () => this.resetVirtualEye());
-        }
-        
-        // Clear touch button
-        const clearTouchBtn = document.getElementById('eyetouch-clear-touch');
-        if (clearTouchBtn) {
-            clearTouchBtn.addEventListener('click', () => this.resetVirtualTouch());
-        }
-        
         // Canvas mouse events
         this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
         this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
         this.canvas.addEventListener('mouseleave', (e) => this.handleMouseLeave(e));
+        
+        // Touch events for mobile/Safari compatibility
+        this.canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e), { passive: false });
+        this.canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
+        this.canvas.addEventListener('touchend', (e) => this.handleTouchEnd(e));
+        this.canvas.addEventListener('touchcancel', (e) => this.handleTouchEnd(e));
+        
+        // Prevent default drag behavior on canvas (helps Safari)
+        this.canvas.style.touchAction = 'none';
+        this.canvas.style.webkitUserSelect = 'none';
+        this.canvas.style.userSelect = 'none';
     }
     
     setupCanvas() {
-        // Handle resize
+        // Handle resize - observe the wrapper, not the parent
         this.resizeObserver = new ResizeObserver(() => this.resize());
-        this.resizeObserver.observe(this.canvas.parentElement);
+        const observeTarget = this.canvasWrapper || this.canvas.parentElement;
+        this.resizeObserver.observe(observeTarget);
         this.resize();
     }
     
     resize() {
-        const parent = this.canvas.parentElement;
-        const rect = parent.getBoundingClientRect();
+        // Get available space from wrapper
+        const wrapper = this.canvasWrapper || this.canvas.parentElement;
+        const rect = wrapper.getBoundingClientRect();
         
-        // Account for padding
-        const style = getComputedStyle(parent);
-        const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-        const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        const availW = rect.width;
+        const availH = rect.height;
         
-        // Make it square
-        const size = Math.min(rect.width - paddingX, rect.height - paddingY);
+        // Use square aspect ratio (1:1) - take the smaller dimension
+        const size = Math.max(Math.floor(Math.min(availW, availH)), 100);
         
         this.canvas.width = size;
         this.canvas.height = size;
@@ -280,7 +286,9 @@ class EyeTouchVisualizer {
             // Don't update if virtual eye is enabled
             if (this.state.virtualEyeEnabled) return;
             
-            const [x, y] = String(data.value).split(' ').map(parseFloat);
+            const valueStr = String(data.value);
+            const [x, y] = valueStr.split(' ').map(parseFloat);
+            
             if (!isNaN(x) && !isNaN(y)) {
                 this.state.eyePos = { x, y };
                 
@@ -344,10 +352,11 @@ class EyeTouchVisualizer {
         
         // Eye region settings
         this.dpManager.subscribe('ess/em_region_setting', (data) => {
-            const parts = String(data.value).split(' ').map(parseFloat);
+            // Split on whitespace (handles multiple spaces) and filter empty strings
+            const parts = String(data.value).trim().split(/\s+/).map(parseFloat);
             if (parts.length >= 8) {
                 const [win, active, state, type, cx, cy, pmx, pmy] = parts;
-                if (win >= 0 && win < 8) {
+                if (win >= 0 && win < 8 && !isNaN(cx) && !isNaN(cy)) {
                     this.state.eyeRegions[win] = {
                         id: win,
                         active: active === 1,
@@ -357,13 +366,15 @@ class EyeTouchVisualizer {
                         size: { width: pmx, height: pmy },
                         inRegion: this.state.eyeRegions[win]?.inRegion || false
                     };
+                    this.updateWindowIndicators();
                 }
             }
         });
         
         // Eye region status
         this.dpManager.subscribe('ess/em_region_status', (data) => {
-            const parts = String(data.value).split(' ').map(parseFloat);
+            // Split on whitespace (handles multiple spaces)
+            const parts = String(data.value).trim().split(/\s+/).map(parseFloat);
             if (parts.length >= 4) {
                 const [changes, states, x, y] = parts;
                 this.state.eyeWindowStatusMask = states;
@@ -381,10 +392,11 @@ class EyeTouchVisualizer {
         
         // Touch region settings
         this.dpManager.subscribe('ess/touch_region_setting', (data) => {
-            const parts = String(data.value).split(' ').map(parseInt);
+            // Split on whitespace (handles multiple spaces)
+            const parts = String(data.value).trim().split(/\s+/).map(parseFloat);
             if (parts.length >= 8) {
                 const [reg, active, state, type, cx, cy, dx, dy] = parts;
-                if (reg >= 0 && reg < 8) {
+                if (reg >= 0 && reg < 8 && !isNaN(cx) && !isNaN(cy)) {
                     // Convert touch pixels to degrees
                     const centerDeg = this.touchPixelsToDegrees(cx, cy);
                     const sizeDeg = {
@@ -403,13 +415,15 @@ class EyeTouchVisualizer {
                         size: sizeDeg,
                         inRegion: this.state.touchRegions[reg]?.inRegion || false
                     };
+                    this.updateWindowIndicators();
                 }
             }
         });
         
         // Touch region status
         this.dpManager.subscribe('ess/touch_region_status', (data) => {
-            const parts = String(data.value).split(' ').map(parseFloat);
+            // Split on whitespace (handles multiple spaces)
+            const parts = String(data.value).trim().split(/\s+/).map(parseFloat);
             if (parts.length >= 4) {
                 const [changes, states, touch_x, touch_y] = parts;
                 this.state.touchWindowStatusMask = states;
@@ -443,13 +457,69 @@ class EyeTouchVisualizer {
         });
     }
     
+    /**
+     * Setup connection event listeners for reconnection handling
+     */
+    setupConnectionListeners() {
+        if (this.connection) {
+            // Refresh windows when connection is established/re-established
+            this.connection.on('connected', () => {
+                // Small delay to ensure connection is fully ready
+                setTimeout(() => this.refreshWindows(), 100);
+            });
+        }
+    }
+    
+    /**
+     * Request current region settings from server
+     * This triggers the datapoint updates that populate our region state
+     */
+    async refreshWindows() {
+        if (!this.connection) {
+            return;
+        }
+        
+        if (!this.connection.connected) {
+            return;
+        }
+        
+        const subprocess = this.options.essSubprocess;
+        
+        try {
+            // Request all eye region settings at once (matches FLTK approach)
+            await this.connection.send(
+                'for {set i 0} {$i < 8} {incr i} {ainGetRegionInfo $i}',
+                subprocess
+            );
+        } catch (e) {
+            // Silently ignore - regions may not be available
+        }
+        
+        try {
+            // Request all touch region settings at once
+            await this.connection.send(
+                'for {set i 0} {$i < 8} {incr i} {touchGetRegionInfo $i}',
+                subprocess
+            );
+        } catch (e) {
+            // Silently ignore - regions may not be available
+        }
+    }
+    
     // Coordinate transformation functions
     get degPerPixel() {
         const w = this.canvas.width;
         const h = this.canvas.height;
-        const dpx = this.xExtent / w;
-        const dpy = dpx * (h / w);
-        return { x: dpx, y: dpy };
+        
+        // Calculate scale to fit the extent in the canvas
+        // while maintaining circular aspect ratio
+        const scaleX = this.xExtent / w;
+        const scaleY = this.yExtent / h;
+        
+        // Use the same scale for both dimensions (ensures circles stay circular)
+        const scale = Math.max(scaleX, scaleY);
+        
+        return { x: scale, y: scale };
     }
     
     get canvasCenter() {
@@ -490,9 +560,11 @@ class EyeTouchVisualizer {
         const screen = this.state;
         const screenPixPerDegX = screen.screenW / (2 * screen.screenHalfX);
         const screenPixPerDegY = screen.screenH / (2 * screen.screenHalfY);
+        // Note: No Y flip here - touch screen coords have Y increasing downward
+        // The flip happens in degreesToCanvas when drawing
         return {
             x: (pixX - screen.screenW / 2) / screenPixPerDegX,
-            y: -(pixY - screen.screenH / 2) / screenPixPerDegY
+            y: (pixY - screen.screenH / 2) / screenPixPerDegY
         };
     }
     
@@ -512,8 +584,12 @@ class EyeTouchVisualizer {
     // Mouse event handlers
     handleMouseDown(event) {
         const rect = this.canvas.getBoundingClientRect();
-        const mouseX = event.clientX - rect.left;
-        const mouseY = event.clientY - rect.top;
+        
+        // Account for canvas scaling (display size vs internal resolution)
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const mouseX = (event.clientX - rect.left) * scaleX;
+        const mouseY = (event.clientY - rect.top) * scaleY;
         
         // Check if clicking on virtual eye marker
         if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
@@ -554,8 +630,12 @@ class EyeTouchVisualizer {
     
     handleMouseMove(event) {
         const rect = this.canvas.getBoundingClientRect();
-        const mouseX = event.clientX - rect.left;
-        const mouseY = event.clientY - rect.top;
+        
+        // Account for canvas scaling (display size vs internal resolution)
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const mouseX = (event.clientX - rect.left) * scaleX;
+        const mouseY = (event.clientY - rect.top) * scaleY;
         
         if (this.state.virtualEyeEnabled && this.state.virtualEye.isDragging) {
             const newCanvasX = mouseX + this.state.virtualEye.dragOffset.x;
@@ -627,6 +707,37 @@ class EyeTouchVisualizer {
         }
     }
     
+    // Touch event handlers (for Safari/mobile compatibility)
+    handleTouchStart(event) {
+        if (event.touches.length === 1) {
+            const touch = event.touches[0];
+            // Create a mouse-like event object
+            const mouseEvent = {
+                clientX: touch.clientX,
+                clientY: touch.clientY,
+                preventDefault: () => event.preventDefault()
+            };
+            this.handleMouseDown(mouseEvent);
+            event.preventDefault();
+        }
+    }
+    
+    handleTouchMove(event) {
+        if (event.touches.length === 1) {
+            const touch = event.touches[0];
+            const mouseEvent = {
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            };
+            this.handleMouseMove(mouseEvent);
+            event.preventDefault();
+        }
+    }
+    
+    handleTouchEnd(event) {
+        this.handleMouseUp({});
+    }
+    
     // Virtual input control
     updateVirtualEyePosition(degX, degY) {
         this.state.virtualEye.x = degX;
@@ -636,45 +747,40 @@ class EyeTouchVisualizer {
         this.updateInfoDisplay();
     }
     
-    async sendVirtualEyeTarget(x, y) {
+    sendVirtualEyeTarget(x, y) {
+        // Fire-and-forget - don't wait for response (critical for responsiveness)
         try {
-            // Tell virtual_eye subprocess to hold this position
-            const message = {
-                cmd: 'eval',
-                script: `send virtual_eye {set_eye ${x} ${y}}`
-            };
-            if (this.dpManager.connection && this.dpManager.connection.ws) {
-                this.dpManager.connection.ws.send(JSON.stringify(message));
+            const conn = this.connection || (this.dpManager && this.dpManager.connection);
+            if (conn && conn.connected && conn.ws) {
+                // Send directly to virtual_eye subprocess (like FLTK does)
+                conn.ws.send(`send virtual_eye {set_eye ${x} ${y}}`);
             }
         } catch (error) {
-            console.error('Failed to send virtual eye target:', error);
+            // Silently ignore errors during drag
         }
     }
     
     async setVirtualEyeControl(enabled) {
         try {
             const cmd = enabled ? 'start' : 'stop';
-            const message = {
-                cmd: 'eval',
-                script: `send virtual_eye ${cmd}`
-            };
-            if (this.dpManager.connection && this.dpManager.connection.ws) {
-                this.dpManager.connection.ws.send(JSON.stringify(message));
+            const conn = this.connection || (this.dpManager && this.dpManager.connection);
+            if (conn && conn.connected && conn.ws) {
+                // Send directly to virtual_eye subprocess
+                conn.ws.send(`send virtual_eye ${cmd}`);
             }
         } catch (error) {
             console.error('Failed to set virtual eye control:', error);
         }
     }
     
-    async sendVirtualTouchData(x, y, eventType = 0) {
+    sendVirtualTouchData(x, y, eventType = 0) {
+        // Fire-and-forget for responsiveness during drag
         try {
-            const cmd = `set d [binary format s3 {${x} ${y} ${eventType}}]; dservSetData mtouch/event 0 4 $d; unset d`;
-            const message = {
-                cmd: 'eval',
-                script: cmd
-            };
-            if (this.dpManager.connection && this.dpManager.connection.ws) {
-                this.dpManager.connection.ws.send(JSON.stringify(message));
+            const conn = this.connection || (this.dpManager && this.dpManager.connection);
+            if (conn && conn.connected && conn.ws) {
+                // Send dservSetData command directly (like FLTK does)
+                const cmd = `set d [binary format s3 {${x} ${y} ${eventType}}]; dservSetData mtouch/event 0 4 $d; unset d`;
+                conn.ws.send(cmd);
             }
         } catch (error) {
             console.error('Failed to send virtual touch data:', error);
@@ -701,12 +807,6 @@ class EyeTouchVisualizer {
             this.canvas.style.cursor = this.state.virtualTouchEnabled ? 'pointer' : 'default';
         }
         
-        // Show/hide reset button
-        const resetBtn = document.getElementById('eyetouch-reset-eye');
-        if (resetBtn) {
-            resetBtn.style.display = enabled ? 'block' : 'none';
-        }
-        
         this.updateInfoDisplay();
     }
     
@@ -728,12 +828,6 @@ class EyeTouchVisualizer {
             this.canvas.style.cursor = this.state.virtualEyeEnabled ? 'crosshair' : 'pointer';
         }
         
-        // Show/hide clear button
-        const clearBtn = document.getElementById('eyetouch-clear-touch');
-        if (clearBtn) {
-            clearBtn.style.display = enabled ? 'block' : 'none';
-        }
-        
         this.updateInfoDisplay();
     }
     
@@ -747,6 +841,17 @@ class EyeTouchVisualizer {
         this.state.virtualTouch.x = 0;
         this.state.virtualTouch.y = 0;
         this.updateInfoDisplay();
+    }
+    
+    /**
+     * Enable/disable eye trails programmatically
+     * (UI toggle removed to save space, but feature still available)
+     */
+    setTrailsEnabled(enabled) {
+        this.state.showTrails = enabled;
+        if (!enabled) {
+            this.state.eyeTrail = [];
+        }
     }
     
     // UI updates
@@ -977,8 +1082,14 @@ class EyeTouchVisualizer {
     
     drawTouchRegion(region) {
         const { ctx, options } = this;
-        const pos = this.degreesToCanvas(region.center.x, region.center.y);
+        // Touch regions: Y is NOT flipped (unlike eye which uses standard math coords)
+        // Touch screen Y=0 is top, increases downward - same as canvas
+        const center = this.canvasCenter;
         const degPP = this.degPerPixel;
+        const pos = {
+            x: center.x + (region.center.x / degPP.x),
+            y: center.y + (region.center.y / degPP.y)  // Note: ADD, not subtract
+        };
         const halfW = region.size.width / degPP.x;
         const halfH = region.size.height / degPP.y;
         
@@ -1105,7 +1216,13 @@ class EyeTouchVisualizer {
             this.state.virtualTouch.x,
             this.state.virtualTouch.y
         );
-        const pos = this.degreesToCanvas(touchDegrees.x, touchDegrees.y);
+        // Touch uses same Y convention as touch regions (ADD, not subtract)
+        const center = this.canvasCenter;
+        const degPP = this.degPerPixel;
+        const pos = {
+            x: center.x + (touchDegrees.x / degPP.x),
+            y: center.y + (touchDegrees.y / degPP.y)
+        };
         
         // Draw diamond shape
         ctx.fillStyle = options.virtualTouchColor;
@@ -1133,7 +1250,10 @@ class EyeTouchVisualizer {
                 this.state.virtualTouch.dragStartPos.x,
                 this.state.virtualTouch.dragStartPos.y
             );
-            const startPos = this.degreesToCanvas(startDegrees.x, startDegrees.y);
+            const startPos = {
+                x: center.x + (startDegrees.x / degPP.x),
+                y: center.y + (startDegrees.y / degPP.y)
+            };
             
             ctx.strokeStyle = 'rgba(255, 140, 0, 0.3)';
             ctx.lineWidth = 1;
@@ -1151,6 +1271,31 @@ class EyeTouchVisualizer {
     dispose() {
         this.stopAnimation();
         this.resizeObserver.disconnect();
+    }
+    
+    /**
+     * Debug helper - call from console to check state
+     */
+    debug() {
+        return {
+            connected: this.connection ? this.connection.connected : false,
+            virtualEyeEnabled: this.state.virtualEyeEnabled,
+            virtualTouchEnabled: this.state.virtualTouchEnabled,
+            eyePos: this.state.eyePos,
+            touchPos: this.state.touchPos,
+            showTouch: this.state.showTouch,
+            eyeRegionsActive: this.state.eyeRegions.filter(r => r.active).length,
+            eyeRegions: this.state.eyeRegions,
+            touchRegionsActive: this.state.touchRegions.filter(r => r && r.active).length,
+            touchRegions: this.state.touchRegions,
+            eyeWindowStatusMask: this.state.eyeWindowStatusMask,
+            touchWindowStatusMask: this.state.touchWindowStatusMask,
+            trailLength: this.state.eyeTrail.length,
+            canvasSize: { w: this.canvas.width, h: this.canvas.height },
+            degPerPixel: this.degPerPixel,
+            // Methods for manual testing
+            refresh: () => this.refreshWindows()
+        };
     }
 }
 

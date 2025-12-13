@@ -96,9 +96,10 @@ proc update_state { name data } {
 
 proc update_eye_window_settings { name data } { 
     lassign $data win active state type cx cy pmx pmy ref_count ref_countdown
-    dservSet ess/em_region_setting "[expr {int($win)}] [expr {int($active)}] \
-                                    [expr {int($state)}] [expr {int($type)}] \
-                                    $cx $cy $pmx $pmy"
+    set result [list [expr {int($win)}] [expr {int($active)}] \
+                     [expr {int($state)}] [expr {int($type)}] \
+                     $cx $cy $pmx $pmy]
+    dservSet ess/em_region_setting $result
 }
 
 proc update_eye_window_status { name data } {

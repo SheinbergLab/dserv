@@ -150,17 +150,26 @@ body.ess-app {
     min-height: 0;
 }
 
-/* Middle column - fixed size canvases, don't stretch */
+/* Middle column - fixed width, flex height */
 .ess-column-middle {
     display: flex;
     flex-direction: column;
     gap: 8px;
     width: 400px;  /* Fixed width for canvas panels */
+    min-height: 0; /* Allow flex shrinking */
 }
 
+/* Use flex ratios instead of fixed heights - panels fill available space */
 .ess-column-middle .ess-panel {
-    height: 300px;  /* Fixed height for each canvas panel */
-    flex: none;
+    min-height: 150px;
+}
+
+.ess-column-middle .ess-panel:first-child {
+    flex: 3 1 0; /* Eye/Touch gets more space */
+}
+
+.ess-column-middle .ess-panel:last-child {
+    flex: 2 1 0; /* Stimulus gets less space */
 }
 
 /* Right column - takes remaining space and stretches */
@@ -660,7 +669,7 @@ body.ess-app {
     background: var(--ess-bg-secondary);
     border: 1px solid var(--ess-border);
     border-radius: 6px;
-    max-height: 200px;
+    height: 200px; /* Fixed height for consistent sizing */
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
@@ -673,7 +682,7 @@ body.ess-app {
 }
 
 .ess-bottom-panel.collapsed {
-    max-height: unset;
+    height: auto; /* Collapse to just the tabs */
 }
 
 .ess-bottom-tabs {
@@ -729,7 +738,7 @@ body.ess-app {
 .ess-bottom-content {
     flex: 1;
     overflow: hidden;
-    min-height: 100px;
+    min-height: 0; /* Allow proper flex sizing */
 }
 
 .ess-bottom-pane {
@@ -789,10 +798,11 @@ body.ess-app {
     overflow: hidden;
 }
 
+/* Override terminal padding to match console */
 #tcl-terminal-container .tcl-terminal {
     height: 100%;
     max-height: 100%;
-    padding: 8px 12px;
+    padding: 8px 12px; /* Match console padding */
     overflow-y: auto;
 }
 
