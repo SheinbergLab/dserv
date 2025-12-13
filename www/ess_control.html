@@ -38,34 +38,77 @@
                 </div>
             </div>
             
-            <!-- Middle Column: Visualizers -->
+            <!-- Middle Column: Eye/Touch + Input Controls -->
             <div class="ess-column ess-column-middle">
-                <!-- Eye/Touch Visualizer -->
-                <div class="ess-panel">
+                <!-- Eye/Touch Visualizer (smaller, fixed size) -->
+                <div class="ess-panel ess-panel-eyetouch">
                     <div class="ess-panel-header">
                         <span class="ess-panel-title">Eye/Touch Monitor</span>
                         <span class="ess-panel-status" id="eyetouch-stats"></span>
                     </div>
-                    <div class="ess-panel-body">
-                        <canvas id="eyetouch-canvas" class="ess-canvas"></canvas>
+                    <div class="ess-panel-body ess-canvas-container">
+                        <canvas id="eyetouch-canvas" class="ess-canvas" width="240" height="240"></canvas>
                     </div>
                 </div>
                 
-                <!-- Trial/Stim Visualizer -->
-                <div class="ess-panel">
+                <!-- Input Controls (placeholder, flex to fill space) -->
+                <div class="ess-panel ess-panel-inputs">
                     <div class="ess-panel-header">
-                        <span class="ess-panel-title">Stimulus Display</span>
-                        <span class="ess-panel-status" id="stim-stats"></span>
+                        <span class="ess-panel-title">Input Controls</span>
                     </div>
                     <div class="ess-panel-body">
-                        <canvas id="stim-canvas" class="ess-canvas"></canvas>
+                        <div id="input-controls-container">
+                            <!-- Eye Tracker Settings -->
+                            <div class="ess-input-section">
+                                <div class="ess-input-section-title">Eye Tracker</div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">Center</span>
+                                    <div class="ess-input-group">
+                                        <label>h</label>
+                                        <input type="number" id="eye-h-bias" value="0" min="-2000" max="2000" step="10">
+                                        <label>v</label>
+                                        <input type="number" id="eye-v-bias" value="0" min="-2000" max="2000" step="10">
+                                    </div>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">Gain</span>
+                                    <div class="ess-input-group">
+                                        <label>h</label>
+                                        <input type="number" id="eye-h-gain" value="10.0" min="0.1" max="25" step="0.1">
+                                        <label>v</label>
+                                        <input type="number" id="eye-v-gain" value="10.0" min="0.1" max="25" step="0.1">
+                                    </div>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">Invert</span>
+                                    <div class="ess-input-group">
+                                        <label><input type="checkbox" id="eye-h-invert"> h</label>
+                                        <label><input type="checkbox" id="eye-v-invert"> v</label>
+                                        <button id="eye-recenter" class="ess-input-btn">Recenter</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- More input sections can be added here -->
+                        </div>
                     </div>
                 </div>
             </div>
             
-            <!-- Right Column: Performance -->
+            <!-- Right Column: Stimulus Display + Performance -->
             <div class="ess-column ess-column-right">
-                <div class="ess-panel">
+                <!-- Stimulus Display (fixed 512x320, 16:10) -->
+                <div class="ess-panel ess-panel-stim">
+                    <div class="ess-panel-header">
+                        <span class="ess-panel-title">Stimulus Display</span>
+                        <span class="ess-panel-status" id="stim-stats"></span>
+                    </div>
+                    <div class="ess-panel-body ess-canvas-container">
+                        <canvas id="stim-canvas" class="ess-canvas" width="512" height="320"></canvas>
+                    </div>
+                </div>
+                
+                <!-- Performance (flex to fill remaining space) -->
+                <div class="ess-panel ess-panel-perf">
                     <div class="ess-panel-header">
                         <span class="ess-panel-title">Performance</span>
                     </div>
@@ -137,5 +180,120 @@
     
     <!-- Main application script -->
     <script src="js/ess_app.js"></script>
+    
+    <!-- Eye settings handlers -->
+    <script>
+        class EyeSettings {
+            constructor(dpManager) {
+                this.dpManager = dpManager;
+                this.elements = {
+                    hBias: document.getElementById('eye-h-bias'),
+                    vBias: document.getElementById('eye-v-bias'),
+                    hGain: document.getElementById('eye-h-gain'),
+                    vGain: document.getElementById('eye-v-gain'),
+                    hInvert: document.getElementById('eye-h-invert'),
+                    vInvert: document.getElementById('eye-v-invert'),
+                    recenterBtn: document.getElementById('eye-recenter')
+                };
+                
+                this.bindEvents();
+                this.setupSubscriptions();
+            }
+            
+            sendEmCommand(cmd) {
+                try {
+                    const conn = this.dpManager?.connection;
+                    if (conn && conn.connected && conn.ws) {
+                        conn.ws.send(`send em {${cmd}}`);
+                    }
+                } catch (error) {
+                    console.error('Failed to send em command:', error);
+                }
+            }
+            
+            bindEvents() {
+                this.elements.hBias?.addEventListener('change', (e) => {
+                    this.sendEmCommand(`::em::set_param raw_center_h ${e.target.value}`);
+                });
+                
+                this.elements.vBias?.addEventListener('change', (e) => {
+                    this.sendEmCommand(`::em::set_param raw_center_v ${e.target.value}`);
+                });
+                
+                this.elements.hGain?.addEventListener('change', (e) => {
+                    this.sendEmCommand(`::em::set_param scale_h ${e.target.value}`);
+                });
+                
+                this.elements.vGain?.addEventListener('change', (e) => {
+                    this.sendEmCommand(`::em::set_param scale_v ${e.target.value}`);
+                });
+                
+                this.elements.hInvert?.addEventListener('change', (e) => {
+                    this.sendEmCommand(`::em::set_param invert_h ${e.target.checked ? 1 : 0}`);
+                });
+                
+                this.elements.vInvert?.addEventListener('change', (e) => {
+                    this.sendEmCommand(`::em::set_param invert_v ${e.target.checked ? 1 : 0}`);
+                });
+                
+                this.elements.recenterBtn?.addEventListener('click', () => {
+                    this.sendEmCommand('::em::set_current_as_center');
+                });
+            }
+            
+            setupSubscriptions() {
+                this.dpManager?.subscribe('em/settings', (data) => {
+                    this.updateFromSettings(data.value);
+                });
+            }
+            
+            updateFromSettings(settings) {
+                if (!settings) return;
+                
+                let params = settings;
+                if (typeof settings === 'string') {
+                    params = this.parseTclDict(settings);
+                }
+                
+                if (params.raw_center_h !== undefined && this.elements.hBias) {
+                    this.elements.hBias.value = params.raw_center_h;
+                }
+                if (params.raw_center_v !== undefined && this.elements.vBias) {
+                    this.elements.vBias.value = params.raw_center_v;
+                }
+                if (params.scale_h !== undefined && this.elements.hGain) {
+                    this.elements.hGain.value = params.scale_h;
+                }
+                if (params.scale_v !== undefined && this.elements.vGain) {
+                    this.elements.vGain.value = params.scale_v;
+                }
+                if (params.invert_h !== undefined && this.elements.hInvert) {
+                    this.elements.hInvert.checked = !!parseInt(params.invert_h);
+                }
+                if (params.invert_v !== undefined && this.elements.vInvert) {
+                    this.elements.vInvert.checked = !!parseInt(params.invert_v);
+                }
+            }
+            
+            parseTclDict(str) {
+                const result = {};
+                const parts = str.trim().split(/\s+/);
+                for (let i = 0; i < parts.length - 1; i += 2) {
+                    result[parts[i]] = parts[i + 1];
+                }
+                return result;
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            const checkDpManager = setInterval(() => {
+                if (window.dpManager) {
+                    clearInterval(checkDpManager);
+                    window.eyeSettings = new EyeSettings(window.dpManager);
+                }
+            }, 100);
+            setTimeout(() => clearInterval(checkDpManager), 5000);
+        });
+    </script>
 </body>
 </html>

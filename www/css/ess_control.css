@@ -1,4 +1,4 @@
-/* ESS Control Panel Styles */
+/* ESS Control Panel Styles - v2 reorganized layout */
 
 :root {
     --ess-bg-primary: #1e1e2e;
@@ -134,10 +134,16 @@ body.ess-app {
     background: var(--ess-border);
 }
 
-/* Main Grid */
+/* ===========================================
+   Main Grid Layout - 4 Columns
+   Col 1: Experiment Control (300px fixed)
+   Col 2: Eye/Touch + Input Controls (295px fixed)
+   Col 3: Stimulus + Performance (500px fixed)
+   Col 4: Extra/Info (flex)
+   =========================================== */
 .ess-grid {
     display: grid;
-    grid-template-columns: 300px auto 1fr;
+    grid-template-columns: 300px 295px 500px 1fr;
     gap: 8px;
     flex: 1;
     min-height: 0;
@@ -150,41 +156,53 @@ body.ess-app {
     min-height: 0;
 }
 
-/* Middle column - fixed width, flex height */
-.ess-column-middle {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: 400px;  /* Fixed width for canvas panels */
-    min-height: 0; /* Allow flex shrinking */
-}
-
-/* Use flex ratios instead of fixed heights - panels fill available space */
-.ess-column-middle .ess-panel {
-    min-height: 150px;
-}
-
-.ess-column-middle .ess-panel:first-child {
-    flex: 3 1 0; /* Eye/Touch gets more space */
-}
-
-.ess-column-middle .ess-panel:last-child {
-    flex: 2 1 0; /* Stimulus gets less space */
-}
-
-/* Right column - takes remaining space and stretches */
-.ess-column-right {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 0;
-}
-
-.ess-column-right .ess-panel {
+/* Left column - Experiment Control fills height */
+.ess-column-left .ess-panel {
     flex: 1;
 }
 
-/* Panels */
+/* Middle column - Eye/Touch fixed, Input Controls flex */
+.ess-column-middle {
+    width: 295px;
+}
+
+.ess-panel-eyetouch {
+    flex: 0 0 auto; /* Don't grow or shrink */
+}
+
+.ess-panel-inputs {
+    flex: 1; /* Fill remaining space */
+    min-height: 150px;
+}
+
+/* Right column - Stim fixed height, Performance flex */
+.ess-column-right {
+    width: 500px;
+}
+
+.ess-panel-stim {
+    flex: 0 0 auto; /* Don't grow or shrink */
+}
+
+.ess-panel-perf {
+    flex: 1; /* Fill remaining space */
+    min-height: 150px;
+}
+
+/* Fourth column - Extra info, fills height */
+.ess-column-extra .ess-panel {
+    flex: 1;
+}
+
+.ess-placeholder-text {
+    font-size: 12px;
+    color: var(--ess-text-muted);
+    font-style: italic;
+}
+
+/* ===========================================
+   Panels - Base Styles
+   =========================================== */
 .ess-panel {
     display: flex;
     flex-direction: column;
@@ -193,10 +211,6 @@ body.ess-app {
     border-radius: 6px;
     overflow: hidden;
     min-height: 0;
-}
-
-.ess-column-left .ess-panel {
-    flex: 1;
 }
 
 .ess-panel-header {
@@ -228,15 +242,144 @@ body.ess-app {
     min-height: 0;
 }
 
-/* Canvas */
-.ess-canvas {
-    width: 100%;
-    height: 100%;
+/* ===========================================
+   Canvas Containers - FIXED SIZES, NO CSS SCALING
+   Canvas width/height attributes set the drawing buffer.
+   CSS should match exactly to prevent distortion.
+   =========================================== */
+.ess-canvas-container {
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+}
+
+/* Eye/Touch canvas - 275x275 square */
+.ess-panel-eyetouch .ess-canvas-container {
+    height: 300px; /* Matched with stim */
+}
+
+.ess-panel-eyetouch .ess-canvas {
+    /* Must match HTML canvas width/height attributes exactly */
+    width: 275px;
+    height: 275px;
     background: #1a1a2a;
     border-radius: 4px;
 }
 
-/* ESS Control Component Styles */
+/* Stimulus canvas - scales to fit container, maintains aspect ratio */
+.ess-panel-stim .ess-canvas-container {
+    height: 300px; /* Matched with eye/touch */
+}
+
+.ess-panel-stim .ess-canvas {
+    /* Scale to fit container while maintaining aspect */
+    max-width: 100%;
+    max-height: 100%;
+    /* Drawing buffer set by JS to match displayed size */
+    background: #1a1a2a;
+    border-radius: 4px;
+}
+
+/* ===========================================
+   Input Controls Panel Styles
+   =========================================== */
+.ess-input-section {
+    margin-bottom: 16px;
+}
+
+.ess-input-section:last-child {
+    margin-bottom: 0;
+}
+
+.ess-input-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted);
+    margin-bottom: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-input-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 8px;
+}
+
+.ess-input-row:last-child {
+    margin-bottom: 0;
+}
+
+.ess-input-label {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    width: 50px;
+    flex-shrink: 0;
+}
+
+.ess-input-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+
+.ess-input-group label {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.ess-input-group input[type="number"] {
+    width: 65px;
+    padding: 4px 6px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    text-align: right;
+}
+
+.ess-input-group input[type="number"]:focus {
+    border-color: var(--ess-accent);
+    outline: none;
+}
+
+.ess-input-group input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    accent-color: var(--ess-accent);
+}
+
+.ess-input-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-left: auto;
+}
+
+.ess-input-btn:hover {
+    background: var(--ess-border);
+}
+
+/* ===========================================
+   ESS Control Component Styles (unchanged)
+   =========================================== */
 .ess-control-section {
     margin-bottom: 16px;
 }
@@ -388,7 +531,6 @@ body.ess-app {
     color: var(--ess-text-primary);
 }
 
-/* Juice button - muted color, compact, don't expand */
 .ess-subject-juice-row .ess-state-btn.juice {
     background: var(--ess-bg-panel);
     border: 1px solid var(--ess-border);
@@ -417,30 +559,6 @@ body.ess-app {
 #ess-juice-amount:focus {
     border-color: var(--ess-accent);
     outline: none;
-}
-
-/* Loading State */
-.ess-loading {
-    position: relative;
-    pointer-events: none;
-}
-
-.ess-loading::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(30, 30, 46, 0.6);
-    border-radius: 6px;
-    z-index: 10;
-}
-
-.ess-loading select,
-.ess-loading input,
-.ess-loading button {
-    opacity: 0.5;
 }
 
 /* Reload Icons */
@@ -664,12 +782,14 @@ body.ess-app {
     color: var(--ess-text-primary);
 }
 
-/* Bottom Panel (Console + Terminal) */
+/* ===========================================
+   Bottom Panel (Console + Terminal)
+   =========================================== */
 .ess-bottom-panel {
     background: var(--ess-bg-secondary);
     border: 1px solid var(--ess-border);
     border-radius: 6px;
-    height: 200px; /* Fixed height for consistent sizing */
+    height: 200px;
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
@@ -682,7 +802,7 @@ body.ess-app {
 }
 
 .ess-bottom-panel.collapsed {
-    height: auto; /* Collapse to just the tabs */
+    height: auto;
 }
 
 .ess-bottom-tabs {
@@ -738,7 +858,7 @@ body.ess-app {
 .ess-bottom-content {
     flex: 1;
     overflow: hidden;
-    min-height: 0; /* Allow proper flex sizing */
+    min-height: 0;
 }
 
 .ess-bottom-pane {
@@ -798,11 +918,10 @@ body.ess-app {
     overflow: hidden;
 }
 
-/* Override terminal padding to match console */
 #tcl-terminal-container .tcl-terminal {
     height: 100%;
     max-height: 100%;
-    padding: 8px 12px; /* Match console padding */
+    padding: 8px 12px;
     overflow-y: auto;
 }
 
@@ -832,29 +951,56 @@ body.ess-app {
     background: var(--ess-text-muted);
 }
 
-/* Responsive adjustments */
-@media (max-width: 1200px) {
+/* ===========================================
+   Responsive adjustments
+   =========================================== */
+@media (max-width: 1400px) {
+    /* Drop to 3 columns - hide extra column */
     .ess-grid {
-        grid-template-columns: 280px auto 1fr;
+        grid-template-columns: 300px 295px 1fr;
     }
+    
+    .ess-column-extra {
+        display: none;
+    }
+}
+
+@media (max-width: 1100px) {
+    .ess-grid {
+        grid-template-columns: 280px 280px 1fr;
+    }
+    
     .ess-column-middle {
-        width: 350px;
+        width: 280px;
+    }
+    
+    .ess-column-right {
+        width: auto;
+    }
+    
+    .ess-panel-stim .ess-canvas {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 16 / 10;
     }
 }
 
 @media (max-width: 900px) {
     .ess-grid {
         grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
+        grid-template-rows: auto;
     }
     
     .ess-column-middle {
         width: 100%;
-        flex-direction: row;
     }
     
-    .ess-column-middle .ess-panel {
-        height: 250px;
-        flex: 1;
+    .ess-column-right {
+        width: 100%;
+    }
+    
+    .ess-panel-eyetouch .ess-canvas-container,
+    .ess-panel-stim .ess-canvas-container {
+        height: auto;
     }
 }

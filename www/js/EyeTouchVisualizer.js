@@ -200,21 +200,7 @@ class EyeTouchVisualizer {
             if (virtualTouchCheck) virtualTouchCheck.checked = false;
         }, 0);
         
-        // Create info overlay
-        let overlay = parent.querySelector('.eyetouch-info');
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.className = 'eyetouch-info';
-            overlay.innerHTML = `
-                <div class="coordinate-info">
-                    Eye: <span id="eyetouch-eye-coords">0.00°, 0.00°</span><br>
-                    <span id="eyetouch-touch-coords" style="display: none;">Touch: 0, 0</span><br>
-                    <span id="eyetouch-virtual-eye-coords" style="display: none;">Virtual Eye: 0.00°, 0.00°</span><br>
-                    <span id="eyetouch-virtual-touch-coords" style="display: none;">Virtual Touch: 0, 0</span>
-                </div>
-            `;
-            parent.appendChild(overlay);
-        }
+        // Info overlay removed - coordinates now drawn directly on canvas
         
         // Bind event handlers
         this.bindUIEvents();
@@ -876,44 +862,8 @@ class EyeTouchVisualizer {
     }
     
     updateInfoDisplay() {
-        // Eye coordinates
-        const eyeCoords = document.getElementById('eyetouch-eye-coords');
-        if (eyeCoords) {
-            eyeCoords.textContent = `${this.state.eyePos.x.toFixed(2)}°, ${this.state.eyePos.y.toFixed(2)}°`;
-        }
-        
-        // Touch coordinates
-        const touchCoords = document.getElementById('eyetouch-touch-coords');
-        if (touchCoords) {
-            if (this.state.showTouch && (this.state.touchPos.x !== 0 || this.state.touchPos.y !== 0)) {
-                touchCoords.textContent = `Touch: ${this.state.touchPos.x}, ${this.state.touchPos.y}`;
-                touchCoords.style.display = 'block';
-            } else {
-                touchCoords.style.display = 'none';
-            }
-        }
-        
-        // Virtual eye coordinates
-        const virtualEyeCoords = document.getElementById('eyetouch-virtual-eye-coords');
-        if (virtualEyeCoords) {
-            if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
-                virtualEyeCoords.textContent = `Virtual Eye: ${this.state.virtualEye.x.toFixed(2)}°, ${this.state.virtualEye.y.toFixed(2)}°`;
-                virtualEyeCoords.style.display = 'block';
-            } else {
-                virtualEyeCoords.style.display = 'none';
-            }
-        }
-        
-        // Virtual touch coordinates
-        const virtualTouchCoords = document.getElementById('eyetouch-virtual-touch-coords');
-        if (virtualTouchCoords) {
-            if (this.state.virtualTouchEnabled && this.state.virtualTouch.active) {
-                virtualTouchCoords.textContent = `Virtual Touch: ${this.state.virtualTouch.x}, ${this.state.virtualTouch.y}`;
-                virtualTouchCoords.style.display = 'block';
-            } else {
-                virtualTouchCoords.style.display = 'none';
-            }
-        }
+        // Coordinates are now drawn directly on canvas in drawCoordinates()
+        // This method is kept for compatibility but does nothing
     }
     
     // Animation
@@ -974,6 +924,61 @@ class EyeTouchVisualizer {
             this.drawVirtualTouch();
         } else if (this.state.showTouch) {
             this.drawTouchPosition();
+        }
+        
+        // Draw coordinates overlay on canvas
+        this.drawCoordinates();
+    }
+    
+    drawCoordinates() {
+        const { ctx, canvas } = this;
+        const padding = 6;
+        const lineHeight = 12;
+        let y = padding + 10;
+        
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        
+        // Semi-transparent background for readability
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        
+        // Build lines to display
+        const lines = [];
+        
+        // Eye position (always show)
+        const eyeX = this.state.eyePos.x.toFixed(1);
+        const eyeY = this.state.eyePos.y.toFixed(1);
+        lines.push({ text: `Eye: ${eyeX}°, ${eyeY}°`, color: '#ffffff' });
+        
+        // Virtual eye (if active)
+        if (this.state.virtualEyeEnabled && this.state.virtualEye.active) {
+            const vx = this.state.virtualEye.x.toFixed(1);
+            const vy = this.state.virtualEye.y.toFixed(1);
+            lines.push({ text: `VEye: ${vx}°, ${vy}°`, color: '#ff8c00' });
+        }
+        
+        // Touch (if active)
+        if (this.state.showTouch) {
+            lines.push({ text: `Touch: ${this.state.touchPos.x}, ${this.state.touchPos.y}`, color: '#00ffff' });
+        }
+        
+        // Virtual touch (if active)
+        if (this.state.virtualTouchEnabled && this.state.virtualTouch.active) {
+            lines.push({ text: `VTouch: ${this.state.virtualTouch.x}, ${this.state.virtualTouch.y}`, color: '#ff8c00' });
+        }
+        
+        // Draw background box
+        const boxWidth = 95;
+        const boxHeight = lines.length * lineHeight + 6;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(padding, padding, boxWidth, boxHeight);
+        
+        // Draw text lines
+        for (const line of lines) {
+            ctx.fillStyle = line.color;
+            ctx.fillText(line.text, padding + 4, y);
+            y += lineHeight;
         }
     }
     

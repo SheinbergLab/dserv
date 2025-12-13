@@ -41,6 +41,9 @@ async function init() {
         autoGetKeys: false  // Don't auto-fetch keys until connected
     });
     
+    // Expose dpManager globally for EyeSettings
+    window.dpManager = dpManager;
+    
     // Connect first, then initialize components
     try {
         await connection.connect();
@@ -134,20 +137,24 @@ function initEyeTouchVisualizer() {
 
 /**
  * Initialize Stimulus Renderer (using existing GraphicsRenderer)
+ * Canvas drawing buffer size must match CSS display size to avoid distortion
  */
 function initStimRenderer() {
     const canvas = document.getElementById('stim-canvas');
     if (canvas) {
-        // Get initial size from container
-        const container = canvas.parentElement;
-        const rect = container.getBoundingClientRect();
-        const style = getComputedStyle(container);
-        const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-        const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        // Get the actual rendered size from CSS (after layout)
+        // This ensures drawing buffer matches display size
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.floor(rect.width) || canvas.width || 480;
+        const height = Math.floor(rect.height) || canvas.height || 300;
+        
+        // Set canvas buffer to match display size
+        canvas.width = width;
+        canvas.height = height;
         
         stimRenderer = new GraphicsRenderer(canvas, {
-            width: rect.width - paddingX,
-            height: rect.height - paddingY,
+            width: width,
+            height: height,
             backgroundColor: '#1a1a2a',
             datapointManager: dpManager,
             streamId: 'graphics/stimulus',
@@ -159,18 +166,7 @@ function initStimRenderer() {
             }
         });
         
-        // Handle resize
-        const resizeObserver = new ResizeObserver(() => {
-            const rect = container.getBoundingClientRect();
-            const w = rect.width - paddingX;
-            const h = rect.height - paddingY;
-            if (w > 0 && h > 0) {
-                stimRenderer.resize(w, h);
-            }
-        });
-        resizeObserver.observe(container);
-        
-        log('Stimulus Renderer initialized', 'info');
+        log(`Stimulus Renderer initialized (${width}×${height})`, 'info');
     }
 }
 
