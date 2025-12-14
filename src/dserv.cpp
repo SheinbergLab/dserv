@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #endif
 
 #include "sharedqueue.h"
@@ -195,6 +196,11 @@ int main(int argc, char *argv[])
 
   std::signal(SIGINT, signalHandler);
 
+  if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
+    std::cerr << "mlockall failed: " << strerror(errno) 
+              << " (continuing without memory locking)" << std::endl;
+  }
+  
   // Create core dserv components
   dserver = new Dataserver(argc, argv);
 
