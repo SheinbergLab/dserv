@@ -258,7 +258,6 @@ body.stimdg-app {
     text-align: left;
     font-weight: 600;
     font-size: 11px;
-    text-transform: uppercase;
     letter-spacing: 0.3px;
     background: var(--stimdg-bg-panel);
     border-bottom: 2px solid var(--stimdg-border);
