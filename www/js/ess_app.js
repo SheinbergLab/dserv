@@ -116,11 +116,6 @@ function initESSControl() {
         updateSystemState(state);
     });
     
-    essControl.on('statusChange', ({ status }) => {
-        log(`ESS status: ${status}`, 'info');
-        updateSystemStatus(status);
-    });
-    
     log('ESS Control initialized', 'info');
 }
 
@@ -245,42 +240,27 @@ function updateSystemState(state) {
     const stateEl = document.getElementById('system-state');
     if (!stateEl) return;
     
-    // Don't overwrite if we're showing Loading
-    if (stateEl.classList.contains('loading')) return;
+    // Normalize to lowercase for comparison
+    const stateLower = (state || '').toLowerCase();
     
-    stateEl.textContent = state || '--';
+    // Set display text (capitalize first letter)
+    const displayText = state ? state.charAt(0).toUpperCase() + state.slice(1).toLowerCase() : '--';
+    stateEl.textContent = displayText;
     stateEl.className = 'ess-system-state';
     
-    switch (state) {
-        case 'Running':
+    switch (stateLower) {
+        case 'running':
             stateEl.classList.add('running');
             break;
-        case 'Stopped':
+        case 'stopped':
             stateEl.classList.add('stopped');
             break;
-        case 'Initialized':
+        case 'loading':
+            stateEl.classList.add('loading');
+            break;
+        case 'initialized':
             stateEl.classList.add('initialized');
             break;
-    }
-}
-
-/**
- * Update system status (loading/stopped) in status bar
- */
-function updateSystemStatus(status) {
-    const stateEl = document.getElementById('system-state');
-    if (!stateEl) return;
-    
-    if (status === 'loading') {
-        stateEl.textContent = 'Loading...';
-        stateEl.className = 'ess-system-state loading';
-    } else {
-        // Remove loading class and let state update show the actual state
-        stateEl.classList.remove('loading');
-        // Restore the actual state
-        if (essControl && essControl.state) {
-            updateSystemState(essControl.state.essState);
-        }
     }
 }
 

@@ -32,17 +32,10 @@ class ESSControl {
             currentSystem: '',
             currentProtocol: '',
             currentVariant: '',
-            essState: 'Uninitialized',  // Stopped, Running, Initialized, Uninitialized
-            essStatus: 'stopped',        // loading, running, stopped
+            essStatus: 'stopped',  // running, stopped, loading
             params: {},
             variantInfo: null
         };
-        
-        // ESS State constants
-        this.ESS_STOPPED = 0;
-        this.ESS_RUNNING = 1;
-        this.ESS_INITIALIZED = 2;
-        this.ESS_UNINITIALIZED = 3;
         
         // Event listeners
         this.listeners = new Map();
@@ -84,7 +77,10 @@ class ESSControl {
             
             <!-- System Selection -->
             <div class="ess-control-section">
-                <div class="ess-control-section-title">System Configuration</div>
+                <div class="ess-control-section-title-row">
+                    <span class="ess-control-section-title">System Configuration</span>
+                    <a href="stimdg_viewer.html" target="_blank" class="ess-stimdg-btn">StimDG</a>
+                </div>
                 <div class="ess-control-row-with-reload">
                     <span class="ess-control-label">System</span>
                     <div class="ess-control-input">
@@ -269,12 +265,7 @@ class ESSControl {
             this.updateSelectValue(this.elements.variantSelect, data.value);
         });
         
-        // ESS state (Running, Stopped, etc.)
-        this.dpManager.subscribe('ess/state', (data) => {
-            this.updateEssState(data.value);
-        });
-        
-        // ESS status (loading, running, stopped)
+        // ESS status (running, stopped, loading)
         this.dpManager.subscribe('ess/status', (data) => {
             this.updateEssStatus(data.value);
         });
@@ -357,65 +348,57 @@ class ESSControl {
     }
     
     /**
-     * Update ESS state display and button states
-     */
-    updateEssState(stateStr) {
-        this.state.essState = stateStr;
-        
-        // Emit event for external listeners (e.g., status bar)
-        this.emit('stateChange', { state: stateStr });
-        
-        // Update button states based on current state
-        this.updateButtonStates();
-    }
-    
-    /**
-     * Update ESS status (loading, running, stopped)
+     * Update ESS status and button states
+     * Values: 'running', 'stopped', 'loading'
      */
     updateEssStatus(status) {
         this.state.essStatus = status;
         
-        // Enable/disable controls based on status
-        const isLoading = status === 'loading';
-        const controlsEnabled = status === 'stopped';
-        this.setControlsEnabled(controlsEnabled);
+        // Enable/disable selection controls based on status
+        // Only allow changes when stopped
+        const canChangeConfig = (status === 'stopped');
+        this.setControlsEnabled(canChangeConfig);
         
         // Add/remove loading class for visual feedback
-        if (isLoading) {
+        if (status === 'loading') {
             this.container.classList.add('ess-loading');
         } else {
             this.container.classList.remove('ess-loading');
         }
         
-        this.emit('statusChange', { status });
+        // Emit event for external listeners (e.g., status bar)
+        this.emit('stateChange', { state: status });
+        
+        // Update button states based on current status
+        this.updateButtonStates();
     }
     
     /**
-     * Update button enabled states based on current ESS state
+     * Update button enabled states based on current ESS status
      */
     updateButtonStates() {
-        const state = this.state.essState;
+        const status = this.state.essStatus;
         
-        // Reset all buttons
+        // Reset all buttons to disabled
         this.elements.btnReset.disabled = true;
         this.elements.btnGo.disabled = true;
         this.elements.btnStop.disabled = true;
         
-        switch (state) {
-            case 'Stopped':
+        switch (status) {
+            case 'stopped':
+                // When stopped: can Go or Reset
                 this.elements.btnGo.disabled = false;
                 this.elements.btnReset.disabled = false;
                 break;
-            case 'Running':
+            case 'running':
+                // When running: can only Stop
                 this.elements.btnStop.disabled = false;
                 break;
-            case 'Initialized':
-                this.elements.btnGo.disabled = false;
-                this.elements.btnReset.disabled = false;
+            case 'loading':
+                // When loading: all buttons disabled
                 break;
-            case 'Uninitialized':
             default:
-                // Can start if we have a variant loaded
+                // Unknown state - enable Go if we have a variant
                 if (this.state.currentVariant) {
                     this.elements.btnGo.disabled = false;
                 }
@@ -924,7 +907,6 @@ class ESSControl {
         this.dpManager.unsubscribe('ess/protocol');
         this.dpManager.unsubscribe('ess/variants');
         this.dpManager.unsubscribe('ess/variant');
-        this.dpManager.unsubscribe('ess/state');
         this.dpManager.unsubscribe('ess/status');
         this.dpManager.unsubscribe('ess/variant_info_json');
         this.dpManager.unsubscribe('ess/param_settings');

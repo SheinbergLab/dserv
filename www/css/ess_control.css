@@ -235,6 +235,21 @@ body.ess-app {
     margin-left: auto;
 }
 
+.ess-panel-link {
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    text-decoration: none;
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 3px;
+    transition: all 0.2s;
+}
+
+.ess-panel-link:hover {
+    color: var(--ess-accent);
+    background: rgba(124, 138, 255, 0.1);
+}
+
 .ess-panel-body {
     flex: 1;
     padding: 12px;
@@ -399,6 +414,21 @@ body.ess-app {
     border-bottom: 1px solid var(--ess-border);
 }
 
+.ess-control-section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-control-section-title-row .ess-control-section-title {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
 .ess-control-row {
     display: flex;
     align-items: center;
@@ -453,53 +483,47 @@ body.ess-app {
     padding: 6px 4px;
     font-size: 11px;
     font-weight: 600;
-    border: none;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
     border-radius: 4px;
+    color: var(--ess-text-primary);
     cursor: pointer;
     transition: all 0.2s;
     white-space: nowrap;
     text-align: center;
 }
 
-.ess-state-btn:disabled {
-    opacity: 0.4;
+.ess-state-btn:disabled,
+.ess-state-btn[disabled] {
+    opacity: 0.25;
     cursor: not-allowed;
-}
-
-.ess-state-btn.go {
-    background: var(--ess-success);
-    color: #000;
+    color: var(--ess-text-muted);
+    border-color: var(--ess-border);
+    background: var(--ess-bg-panel);
 }
 
 .ess-state-btn.go:hover:not(:disabled) {
-    background: #5ee98d;
-}
-
-.ess-state-btn.stop {
-    background: var(--ess-error);
-    color: #fff;
+    background: var(--ess-border);
+    color: var(--ess-success);
+    border-color: var(--ess-success);
 }
 
 .ess-state-btn.stop:hover:not(:disabled) {
-    background: #f99090;
-}
-
-.ess-state-btn.init {
-    background: var(--ess-accent);
-    color: #fff;
+    background: var(--ess-border);
+    color: var(--ess-error);
+    border-color: var(--ess-error);
 }
 
 .ess-state-btn.init:hover:not(:disabled) {
-    background: var(--ess-accent-hover);
-}
-
-.ess-state-btn.reset {
-    background: var(--ess-warning);
-    color: #000;
+    background: var(--ess-border);
+    color: var(--ess-accent);
+    border-color: var(--ess-accent);
 }
 
 .ess-state-btn.reset:hover:not(:disabled) {
-    background: #fcc94d;
+    background: var(--ess-border);
+    color: var(--ess-warning);
+    border-color: var(--ess-warning);
 }
 
 /* Subject + Juice combined row */
@@ -626,20 +650,39 @@ body.ess-app {
     margin-left: auto;
     padding: 4px 8px;
     font-size: 10px;
-    background: var(--ess-accent);
-    border: none;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
     border-radius: 3px;
-    color: #fff;
+    color: var(--ess-text-primary);
     cursor: pointer;
+    transition: all 0.2s;
 }
 
 .ess-reload-variant-btn:hover:not(:disabled) {
-    background: var(--ess-accent-hover);
+    background: var(--ess-border);
+    color: var(--ess-accent);
 }
 
 .ess-reload-variant-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+.ess-stimdg-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.ess-stimdg-btn:hover {
+    background: var(--ess-border);
+    color: var(--ess-accent);
 }
 
 /* Parameters Section */
