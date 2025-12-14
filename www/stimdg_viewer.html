@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StimDG Viewer</title>
+    
+    <link rel="stylesheet" href="css/stimdg_viewer.css">
+</head>
+<body class="stimdg-app">
+    <div class="stimdg-container">
+        <!-- Status Bar -->
+        <div class="stimdg-status-bar">
+            <h1>StimDG Viewer</h1>
+            <div class="stimdg-status-indicator" id="status-indicator"></div>
+            <span class="stimdg-status-text" id="status-text">Connecting...</span>
+            <div class="stimdg-status-spacer"></div>
+            <span class="stimdg-update-info" id="update-info"></span>
+            <button id="refresh-btn" onclick="refreshData()" disabled>Refresh</button>
+            <button onclick="reconnect()">Reconnect</button>
+        </div>
+        
+        <!-- Main Content Area -->
+        <div class="stimdg-main">
+            <!-- Table Panel -->
+            <div class="stimdg-panel stimdg-panel-table">
+                <div class="stimdg-panel-header">
+                    <span class="stimdg-panel-title">Trial Table</span>
+                    <span class="stimdg-panel-status" id="table-info">-- rows</span>
+                    <div class="stimdg-panel-actions">
+                        <button class="stimdg-header-btn" id="export-btn" onclick="exportCSV()" disabled>⬇ Export</button>
+                    </div>
+                </div>
+                <div class="stimdg-panel-body stimdg-table-wrapper">
+                    <div id="table-container" class="stimdg-table-container">
+                        <div class="stimdg-empty-state">
+                            <div class="stimdg-empty-icon">📋</div>
+                            <div class="stimdg-empty-text">No data loaded</div>
+                            <div class="stimdg-empty-hint">Connect to dserv to load stimulus data</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Pagination -->
+                <div class="stimdg-pagination" id="pagination">
+                    <button class="stimdg-page-btn" id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
+                    <span class="stimdg-page-info" id="page-info">--</span>
+                    <button class="stimdg-page-btn" id="next-btn" onclick="nextPage()" disabled>Next →</button>
+                </div>
+            </div>
+            
+            <!-- Inspector Panel (Right Side) -->
+            <div class="stimdg-panel stimdg-panel-inspector" id="inspector-panel">
+                <div class="stimdg-panel-header">
+                    <span class="stimdg-panel-title">Row Inspector</span>
+                    <span class="stimdg-panel-status" id="inspector-row">--</span>
+                    <button class="stimdg-close-btn" onclick="closeInspector()">×</button>
+                </div>
+                <div class="stimdg-panel-body" id="inspector-body">
+                    <div class="stimdg-inspector-empty">
+                        Click a row to inspect its data
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Status/Console -->
+        <div class="stimdg-bottom-bar">
+            <div class="stimdg-bottom-info">
+                <span id="subscription-status">Not subscribed</span>
+            </div>
+            <div class="stimdg-bottom-actions">
+                <label class="stimdg-checkbox-label">
+                    <input type="checkbox" id="auto-subscribe" checked>
+                    Auto-subscribe
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Array Modal -->
+    <div class="stimdg-modal" id="array-modal">
+        <div class="stimdg-modal-content">
+            <div class="stimdg-modal-header">
+                <h3 id="modal-title">Array Data</h3>
+                <button class="stimdg-close-btn" onclick="closeModal()">×</button>
+            </div>
+            <div class="stimdg-modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/ws_manager.js"></script>
+    <script src="js/DatapointManager.js"></script>
+    <script src="js/stimdg_viewer.js"></script>
+    <script>
+        // Global state
+        let viewer = null;
+        let conn = null;
+        let dpManager = null;
+        let subscribed = false;
+        let unsubscribeFn = null;
+        
+        // Configuration
+        const STIMINFO_DATAPOINT = 'ess/stiminfo';
+        
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', initApp);
+        
+        async function initApp() {
+            await initConnection();
+        }
+        
+        /**
+         * Initialize connection to dserv
+         */
+        async function initConnection() {
+            updateStatus('connecting', 'Connecting to dserv...');
+            
+            try {
+                conn = new DservConnection({
+                    subprocess: 'ess',
+                    dservHost: null,  // Use current host
+                    forceSecure: false,
+                    autoReconnect: true,
+                    onStatus: (status, msg) => {
+                        updateStatus(status, msg);
+                    },
+                    onError: (err) => {
+                        console.error('Connection error:', err);
+                        showError(err);
+                    }
+                });
+                
+                await conn.connect();
+                
+                // Create DatapointManager for subscriptions
+                dpManager = new DatapointManager(conn, {
+                    autoGetKeys: false,
+                    updateInterval: 1
+                });
+                
+                // Listen for connection events
+                dpManager.on('connected', () => {
+                    updateStatus('connected', 'Connected');
+                    // Re-fetch and re-subscribe on reconnect
+                    fetchStimInfo();
+                    if (document.getElementById('auto-subscribe').checked) {
+                        subscribeToUpdates();
+                    }
+                });
+                
+                dpManager.on('disconnected', () => {
+                    updateStatus('disconnected', 'Disconnected');
+                });
+                
+                // Enable UI
+                document.getElementById('refresh-btn').disabled = false;
+                updateStatus('connected', 'Connected');
+                
+                // Initial data fetch
+                await fetchStimInfo();
+                
+                // Auto-subscribe if enabled
+                if (document.getElementById('auto-subscribe').checked) {
+                    subscribeToUpdates();
+                }
+                
+            } catch (e) {
+                updateStatus('disconnected', 'Connection failed');
+                showError(`Failed to connect: ${e.message}`);
+                console.error('Connection failed:', e);
+                
+                // Offer demo mode
+                if (confirm('Failed to connect to dserv. Load demo data instead?')) {
+                    loadDemoData();
+                }
+            }
+        }
+        
+        /**
+         * Reconnect to dserv
+         */
+        async function reconnect() {
+            // Cleanup existing subscription
+            if (unsubscribeFn) {
+                unsubscribeFn();
+                unsubscribeFn = null;
+            }
+            subscribed = false;
+            updateSubscriptionStatus();
+            
+            // Disconnect and reconnect
+            if (conn) {
+                conn.disconnect();
+            }
+            
+            await initConnection();
+        }
+        
+        /**
+         * Fetch current stiminfo data from dserv
+         */
+        async function fetchStimInfo() {
+            if (!conn || !conn.connected) {
+                console.warn('Not connected, cannot fetch stiminfo');
+                return;
+            }
+            
+            try {
+                updateStatus('connecting', 'Fetching stiminfo...');
+                
+                // Send dservGet command to get current stiminfo
+                const response = await conn.sendRaw(`dservGet ${STIMINFO_DATAPOINT}`);
+                
+                // Parse the response - it should be JSON
+                let data;
+                try {
+                    data = JSON.parse(response);
+                } catch (e) {
+                    // If not JSON, might be an error or empty
+                    if (response.includes('error') || response.trim() === '') {
+                        throw new Error(`No data at ${STIMINFO_DATAPOINT}`);
+                    }
+                    throw new Error(`Invalid JSON response: ${response.substring(0, 100)}`);
+                }
+                
+                loadData(data);
+                updateStatus('connected', 'Connected');
+                
+            } catch (e) {
+                console.error('Failed to fetch stiminfo:', e);
+                showError(`Failed to fetch stiminfo: ${e.message}`);
+                updateStatus('connected', 'Connected (no data)');
+            }
+        }
+        
+        /**
+         * Subscribe to stiminfo updates
+         */
+        function subscribeToUpdates() {
+            if (!dpManager) {
+                console.warn('DatapointManager not initialized');
+                return;
+            }
+            
+            if (subscribed) {
+                console.log('Already subscribed');
+                return;
+            }
+            
+            // Subscribe to ess/stiminfo updates
+            unsubscribeFn = dpManager.subscribe(STIMINFO_DATAPOINT, (data) => {
+                console.log('Received stiminfo update:', data);
+                handleStimInfoUpdate(data);
+            });
+            
+            subscribed = true;
+            updateSubscriptionStatus();
+            console.log(`Subscribed to ${STIMINFO_DATAPOINT}`);
+        }
+        
+        /**
+         * Unsubscribe from updates
+         */
+        function unsubscribe() {
+            if (unsubscribeFn) {
+                unsubscribeFn();
+                unsubscribeFn = null;
+            }
+            subscribed = false;
+            updateSubscriptionStatus();
+            console.log(`Unsubscribed from ${STIMINFO_DATAPOINT}`);
+        }
+        
+        /**
+         * Handle incoming stiminfo update
+         */
+        function handleStimInfoUpdate(data) {
+            // data.value or data.data contains the payload
+            const payload = data.value || data.data;
+            
+            if (!payload) {
+                console.warn('Empty stiminfo update');
+                return;
+            }
+            
+            // Parse if string
+            let parsedData;
+            if (typeof payload === 'string') {
+                try {
+                    parsedData = JSON.parse(payload);
+                } catch (e) {
+                    console.error('Failed to parse stiminfo JSON:', e);
+                    return;
+                }
+            } else {
+                parsedData = payload;
+            }
+            
+            // Update the viewer
+            if (viewer) {
+                viewer.updateData(parsedData);
+                document.getElementById('table-info').textContent = `${viewer.rowCount} rows`;
+                updatePagination();
+            } else {
+                loadData(parsedData);
+            }
+            
+            updateTimestamp();
+        }
+        
+        /**
+         * Manual refresh
+         */
+        async function refreshData() {
+            await fetchStimInfo();
+        }
+        
+        /**
+         * Load data into viewer
+         */
+        function loadData(data) {
+            viewer = new StimDGViewer('table-container', data, {
+                pageSize: 50,
+                onRowSelect: showInspector,
+                onArrayClick: showArrayModal
+            });
+            viewer.render();
+            
+            // Update UI
+            document.getElementById('table-info').textContent = `${viewer.rowCount} rows`;
+            document.getElementById('export-btn').disabled = false;
+            updatePagination();
+            updateTimestamp();
+        }
+        
+        /**
+         * Load demo data (for testing without dserv)
+         */
+        function loadDemoData() {
+            const data = {
+                name: "stimdg",
+                rows: generateDemoRows(100),
+                arrays: generateDemoArrays(100)
+            };
+            
+            loadData(data);
+            updateStatus('connected', 'Demo Mode');
+        }
+        
+        function generateDemoRows(n) {
+            const conditions = ['A', 'B', 'C', 'D'];
+            const outcomes = ['correct', 'incorrect', 'timeout', 'fixbreak'];
+            const rows = [];
+            
+            for (let i = 0; i < n; i++) {
+                rows.push({
+                    trial: i,
+                    block: Math.floor(i / 20),
+                    condition: conditions[i % conditions.length],
+                    stim_id: Math.floor(Math.random() * 50),
+                    target_x: (Math.random() * 20 - 10).toFixed(2),
+                    target_y: (Math.random() * 20 - 10).toFixed(2),
+                    rt: i < 5 ? null : Math.floor(200 + Math.random() * 300),
+                    outcome: i < 5 ? 'pending' : outcomes[Math.floor(Math.random() * outcomes.length)],
+                    fixations: i,
+                    eye_trace: i
+                });
+            }
+            return rows;
+        }
+        
+        function generateDemoArrays(n) {
+            const fixations = [];
+            const eye_trace = [];
+            
+            for (let i = 0; i < n; i++) {
+                const nFix = Math.floor(Math.random() * 8) + 1;
+                const fix = [];
+                for (let j = 0; j < nFix; j++) {
+                    fix.push([
+                        (Math.random() * 20 - 10).toFixed(2),
+                        (Math.random() * 20 - 10).toFixed(2),
+                        Math.floor(50 + Math.random() * 200)
+                    ]);
+                }
+                fixations.push(fix);
+                
+                const nSamples = Math.floor(50 + Math.random() * 100);
+                const trace = [];
+                for (let j = 0; j < nSamples; j++) {
+                    trace.push([
+                        j * 4,
+                        (Math.random() * 20 - 10).toFixed(2),
+                        (Math.random() * 20 - 10).toFixed(2)
+                    ]);
+                }
+                eye_trace.push(trace);
+            }
+            
+            return { fixations, eye_trace };
+        }
+        
+        // Pagination
+        function prevPage() {
+            if (viewer) {
+                viewer.prevPage();
+                updatePagination();
+            }
+        }
+        
+        function nextPage() {
+            if (viewer) {
+                viewer.nextPage();
+                updatePagination();
+            }
+        }
+        
+        function updatePagination() {
+            if (!viewer) return;
+            
+            const info = viewer.getPageInfo();
+            document.getElementById('page-info').textContent = 
+                `${info.start}-${info.end} of ${info.total}`;
+            document.getElementById('prev-btn').disabled = !info.hasPrev;
+            document.getElementById('next-btn').disabled = !info.hasNext;
+        }
+        
+        // Inspector
+        function showInspector(row, rowIndex) {
+            const panel = document.getElementById('inspector-panel');
+            const body = document.getElementById('inspector-body');
+            const rowLabel = document.getElementById('inspector-row');
+            
+            panel.classList.add('open');
+            rowLabel.textContent = `Row ${rowIndex}`;
+            
+            body.innerHTML = '';
+            const tree = viewer.buildInspectorTree(row);
+            body.appendChild(tree);
+        }
+        
+        function closeInspector() {
+            document.getElementById('inspector-panel').classList.remove('open');
+            if (viewer) viewer.clearSelection();
+        }
+        
+        // Array Modal
+        function showArrayModal(arrayData, columnName, rowIndex) {
+            const modal = document.getElementById('array-modal');
+            const title = document.getElementById('modal-title');
+            const body = document.getElementById('modal-body');
+            
+            title.textContent = `${columnName} - Row ${rowIndex}`;
+            body.innerHTML = '';
+            
+            const content = viewer.buildArrayView(arrayData);
+            body.appendChild(content);
+            
+            modal.classList.add('open');
+        }
+        
+        function closeModal() {
+            document.getElementById('array-modal').classList.remove('open');
+        }
+        
+        // Export
+        function exportCSV() {
+            if (viewer) {
+                viewer.exportCSV();
+            }
+        }
+        
+        // UI Helpers
+        function updateStatus(status, message) {
+            const indicator = document.getElementById('status-indicator');
+            const text = document.getElementById('status-text');
+            
+            indicator.className = 'stimdg-status-indicator';
+            if (status === 'connected') {
+                indicator.classList.add('connected');
+            } else if (status === 'connecting') {
+                indicator.classList.add('connecting');
+            }
+            
+            text.textContent = message;
+        }
+        
+        function updateSubscriptionStatus() {
+            const el = document.getElementById('subscription-status');
+            if (subscribed) {
+                el.textContent = `Subscribed to ${STIMINFO_DATAPOINT}`;
+                el.classList.add('active');
+            } else {
+                el.textContent = 'Not subscribed';
+                el.classList.remove('active');
+            }
+        }
+        
+        function updateTimestamp() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString();
+            document.getElementById('update-info').textContent = `Last update: ${timeStr}`;
+        }
+        
+        function showError(message) {
+            // Could add a toast/notification system here
+            console.error(message);
+        }
+        
+        // Auto-subscribe checkbox handler
+        document.getElementById('auto-subscribe').addEventListener('change', (e) => {
+            if (e.target.checked && !subscribed && dpManager) {
+                subscribeToUpdates();
+            } else if (!e.target.checked && subscribed) {
+                unsubscribe();
+            }
+        });
+        
+        // Close modal on background click
+        document.getElementById('array-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('stimdg-modal')) {
+                closeModal();
+            }
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                closeInspector();
+            }
+        });
+    </script>
+</body>
+</html>
