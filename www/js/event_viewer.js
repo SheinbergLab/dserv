@@ -513,16 +513,16 @@ class EventViewer {
             elapsedTime = event.displayTimestamp - events[index - 1].displayTimestamp;
         }
         
-        // Timestamp
+        // Timestamp (convert from microseconds to milliseconds)
         const timeCell = document.createElement('td');
         timeCell.className = 'event-cell-timestamp';
-        timeCell.textContent = Math.floor(event.displayTimestamp);
+        timeCell.textContent = (event.displayTimestamp / 1000).toFixed(1);
         row.appendChild(timeCell);
         
-        // Elapsed time
+        // Elapsed time (convert from microseconds to milliseconds)
         const elapsedCell = document.createElement('td');
         elapsedCell.className = 'event-cell-elapsed';
-        elapsedCell.textContent = index > 0 ? Math.floor(elapsedTime) : '0';
+        elapsedCell.textContent = index > 0 ? (elapsedTime / 1000).toFixed(1) : '0.0';
         row.appendChild(elapsedCell);
         
         // Type number
