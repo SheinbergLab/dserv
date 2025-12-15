@@ -288,6 +288,7 @@ jobs:
 
       - name: Install the dserv package we just released.
         run: |
+          sudo apt update
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./dserv_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
@@ -319,6 +320,7 @@ jobs:
 
       - name: Install the essgui package we just released.
         run: |
+          sudo apt update
           wget ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/essgui_${{ github.ref_name }}_$(dpkg --print-architecture).deb
           sudo apt install --yes ./essgui_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
