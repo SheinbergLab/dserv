@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Viewer</title>
+    
+    <link rel="stylesheet" href="css/event_viewer.css">
+</head>
+<body class="event-app">
+    <div class="event-container">
+        <!-- Status Bar -->
+        <div class="event-status-bar">
+            <h1>Event Viewer</h1>
+            <div class="event-status-indicator" id="status-indicator"></div>
+            <span class="event-status-text" id="status-text">Connecting...</span>
+            <div class="event-status-spacer"></div>
+            <span class="event-update-info" id="update-info"></span>
+            <button id="refresh-names-btn" onclick="refreshEventNames()" disabled>🔄 Refresh Names</button>
+            <button onclick="reconnect()">Reconnect</button>
+        </div>
+        
+        <!-- Main Content Area -->
+        <div class="event-main">
+            <!-- Table Panel -->
+            <div class="event-panel event-panel-table">
+                <div class="event-panel-header">
+                    <span class="event-panel-title">Event Log</span>
+                    <span class="event-panel-status" id="event-count-info">0 events</span>
+                    <span class="event-system-info" id="system-info" style="margin-left: 12px; color: var(--event-text-secondary);"></span>
+                    <span class="event-state-badge" id="system-state" style="margin-left: 12px; display: none;"></span>
+                    
+                    <!-- Observation Navigation -->
+                    <div class="event-obs-nav">
+                        <span class="event-nav-label">View:</span>
+                        <div class="event-nav-buttons">
+                            <button class="event-nav-btn" id="prev-obs-btn" onclick="previousObservation()" disabled title="Previous Observation">◄</button>
+                            <button class="event-nav-btn" id="next-obs-btn" onclick="nextObservation()" disabled title="Next Observation">►</button>
+                        </div>
+                        <span class="event-view-status" id="view-status">Live</span>
+                        <button class="event-live-btn" id="live-btn" onclick="jumpToLive()" style="display: none;">⚡ Live</button>
+                    </div>
+                    
+                    <div class="event-panel-actions">
+                        <button class="event-header-btn" id="clear-btn" onclick="clearEvents()">🗑 Clear</button>
+                        <button class="event-header-btn" id="export-btn" onclick="exportEvents()" disabled>⬇ Export</button>
+                    </div>
+                </div>
+                
+                <div class="event-panel-body event-table-wrapper">
+                    <div id="table-container" class="event-table-container">
+                        <div class="event-empty-state">
+                            <div class="event-empty-icon">📊</div>
+                            <div class="event-empty-text">No events yet</div>
+                            <div class="event-empty-hint">Connect to dserv to receive events</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Inspector Panel (Right Side) -->
+            <div class="event-panel event-panel-inspector" id="inspector-panel">
+                <div class="event-panel-header">
+                    <span class="event-panel-title">Event Inspector</span>
+                    <span class="event-panel-status" id="inspector-row">--</span>
+                    <button class="event-close-btn" onclick="closeInspector()">×</button>
+                </div>
+                <div class="event-panel-body" id="inspector-body">
+                    <div class="event-inspector-empty">
+                        Click an event to inspect its details
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Status Bar -->
+        <div class="event-bottom-bar">
+            <div class="event-bottom-info">
+                <span id="connection-status">Disconnected</span>
+                <span id="last-event-time" style="display: none;"></span>
+            </div>
+            <div class="event-bottom-actions">
+                <label class="event-filter-label">
+                    <span>Filter Type:</span>
+                    <select id="type-filter" class="event-filter-select">
+                        <option value="">All Types</option>
+                    </select>
+                </label>
+                <label class="event-filter-label">
+                    <span>Search:</span>
+                    <input type="text" id="search-filter" class="event-search-input" placeholder="Search events...">
+                </label>
+                <label class="event-checkbox-label">
+                    <input type="checkbox" id="auto-scroll" checked>
+                    Auto-scroll
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event Details Modal -->
+    <div class="event-modal" id="event-modal">
+        <div class="event-modal-content">
+            <div class="event-modal-header">
+                <h3 id="modal-title">Event Details</h3>
+                <button class="event-close-btn" onclick="closeModal()">×</button>
+            </div>
+            <div class="event-modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/ws_manager.js"></script>
+    <script src="js/DatapointManager.js"></script>
+    <script src="js/event_viewer.js"></script>
+    <script>
+        // Global state
+        let viewer = null;
+        let conn = null;
+        let dpManager = null;
+        let subscribed = false;
+        let unsubscribeFn = null;
+        
+        // Configuration
+        const EVENTS_DATAPOINT = 'eventlog/events';
+        
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', initApp);
+        
+        async function initApp() {
+            await initConnection();
+        }
+        
+        /**
+         * Initialize connection to dserv
+         */
+        async function initConnection() {
+            updateStatus('connecting', 'Connecting to dserv...');
+            console.log('Initializing connection...');
+            
+            try {
+                conn = new DservConnection({
+                    subprocess: 'ess',
+                    dservHost: null,
+                    forceSecure: false,
+                    autoReconnect: true,
+                    onStatus: (status, msg) => {
+                        console.log('Connection status:', status, msg);
+                        updateStatus(status, msg);
+                    },
+                    onError: (err) => {
+                        console.error('Connection error:', err);
+                        showError(err);
+                    }
+                });
+                
+                console.log('Calling conn.connect()...');
+                await conn.connect();
+                console.log('Connected! Creating DatapointManager...');
+                
+                // Create DatapointManager for subscriptions
+                dpManager = new DatapointManager(conn, {
+                    autoGetKeys: false,
+                    updateInterval: 1
+                });
+                
+                console.log('DatapointManager created');
+                
+                // Listen for connection events from dpManager
+                dpManager.on('connected', () => {
+                    console.log('dpManager connected event received');
+                    updateConnectionStatus(true);
+                    // No need to re-subscribe here, dpManager handles it in resubscribeAll()
+                });
+                
+                dpManager.on('disconnected', () => {
+                    console.log('dpManager disconnected event received');
+                    updateConnectionStatus(false);
+                });
+                
+                // Also listen to connection events directly
+                conn.on('connected', () => {
+                    console.log('conn connected event received');
+                    updateConnectionStatus(true);
+                });
+                
+                conn.on('disconnected', () => {
+                    console.log('conn disconnected event received'); 
+                    updateConnectionStatus(false);
+                });
+                
+                // Create event viewer
+                viewer = new EventViewer('table-container', {
+                    onEventSelect: showInspector,
+                    autoScroll: document.getElementById('auto-scroll').checked
+                });
+                
+                console.log('EventViewer created');
+                
+                // Enable UI
+                document.getElementById('refresh-names-btn').disabled = false;
+                updateStatus('connected', 'Connected');
+                
+                // Check initial connection state
+                if (conn.connected) {
+                    console.log('Connection already established, setting status to connected');
+                    updateConnectionStatus(true);
+                }
+                
+                // Subscribe to events
+                console.log('Calling subscribeToEvents()...');
+                subscribeToEvents();
+                
+            } catch (e) {
+                updateStatus('disconnected', 'Connection failed');
+                showError(`Failed to connect: ${e.message}`);
+                console.error('Connection failed:', e);
+                
+                // Offer demo mode
+                if (confirm('Failed to connect to dserv. Load demo events instead?')) {
+                    loadDemoEvents();
+                }
+            }
+        }
+        
+        /**
+         * Subscribe to event stream
+         */
+        function subscribeToEvents() {
+            if (!dpManager) {
+                console.warn('Cannot subscribe: dpManager is null');
+                return;
+            }
+            
+            if (subscribed) {
+                console.log('Already subscribed to events');
+                return;
+            }
+            
+            try {
+                console.log('Attempting to subscribe to:', EVENTS_DATAPOINT);
+                
+                // Subscribe using DatapointManager (same pattern as stimdg_viewer)
+                unsubscribeFn = dpManager.subscribe(EVENTS_DATAPOINT, (dpData) => {
+                    // For events (dtype 9), the event fields are at the TOP LEVEL
+                    let eventValue;
+                    if (dpData.e_type !== undefined || dpData.type !== undefined) {
+                        eventValue = dpData;
+                    } else {
+                        eventValue = dpData.data !== undefined ? dpData.data : dpData.value;
+                    }
+                    
+                    if (viewer && eventValue) {
+                        viewer.handleEventDatapoint(eventValue, dpData);
+                        updateEventCount();
+                        updateLastEventTime();
+                    }
+                });
+                
+                subscribed = true;
+                console.log('Successfully subscribed to events');
+            } catch (e) {
+                console.error('Failed to subscribe:', e);
+            }
+        }
+        
+        /**
+         * Unsubscribe from events
+         */
+        function unsubscribe() {
+            if (unsubscribeFn) {
+                unsubscribeFn();
+                unsubscribeFn = null;
+            }
+            subscribed = false;
+        }
+        
+        /**
+         * Reconnect to dserv
+         */
+        async function reconnect() {
+            unsubscribe();
+            
+            if (conn) {
+                conn.disconnect();
+            }
+            
+            await initConnection();
+        }
+        
+        /**
+         * Clear all events
+         */
+        function clearEvents() {
+            if (viewer && confirm('Clear all events?')) {
+                viewer.clearAllEvents();
+                updateEventCount();
+                document.getElementById('export-btn').disabled = true;
+                closeInspector();
+            }
+        }
+        
+        /**
+         * Export events to CSV
+         */
+        function exportEvents() {
+            if (viewer) {
+                viewer.exportCSV();
+            }
+        }
+        
+        /**
+         * Refresh event names from system
+         */
+        async function refreshEventNames() {
+            if (!conn || !conn.connected) {
+                console.warn('Not connected');
+                return;
+            }
+            
+            try {
+                // Request event name refresh
+                // This would send a command to dserv to re-broadcast event names
+                console.log('Requesting event name refresh...');
+                // Implementation depends on your dserv protocol
+            } catch (e) {
+                console.error('Failed to refresh names:', e);
+            }
+        }
+        
+        /**
+         * Observation navigation
+         */
+        function previousObservation() {
+            if (viewer) {
+                viewer.previousObservation();
+                updateObservationUI();
+            }
+        }
+        
+        function nextObservation() {
+            if (viewer) {
+                viewer.nextObservation();
+                updateObservationUI();
+            }
+        }
+        
+        function jumpToLive() {
+            if (viewer) {
+                viewer.jumpToLive();
+                updateObservationUI();
+            }
+        }
+        
+        function updateObservationUI() {
+            if (!viewer) return;
+            
+            const info = viewer.getViewInfo();
+            const viewStatus = document.getElementById('view-status');
+            const liveBtn = document.getElementById('live-btn');
+            const prevBtn = document.getElementById('prev-obs-btn');
+            const nextBtn = document.getElementById('next-obs-btn');
+            
+            if (info.isLive) {
+                viewStatus.textContent = 'Live';
+                viewStatus.classList.add('live');
+                liveBtn.style.display = 'none';
+            } else {
+                viewStatus.textContent = `Obs ${info.currentObs}`;
+                viewStatus.classList.remove('live');
+                liveBtn.style.display = 'inline-block';
+            }
+            
+            prevBtn.disabled = !info.canNavigateBack;
+            nextBtn.disabled = !info.canNavigateForward;
+            
+            updateEventCount();
+        }
+        
+        /**
+         * Load demo data
+         */
+        function loadDemoEvents() {
+            if (!viewer) {
+                viewer = new EventViewer('table-container', {
+                    onEventSelect: showInspector,
+                    autoScroll: false
+                });
+            }
+            
+            viewer.loadDemoData();
+            updateStatus('connected', 'Demo Mode');
+            updateEventCount();
+            document.getElementById('export-btn').disabled = false;
+        }
+        
+        // Inspector
+        function showInspector(event, index) {
+            const panel = document.getElementById('inspector-panel');
+            const body = document.getElementById('inspector-body');
+            const rowLabel = document.getElementById('inspector-row');
+            
+            panel.classList.add('open');
+            rowLabel.textContent = `Event #${index + 1}`;
+            
+            body.innerHTML = '';
+            const tree = viewer.buildInspectorTree(event);
+            body.appendChild(tree);
+        }
+        
+        function closeInspector() {
+            document.getElementById('inspector-panel').classList.remove('open');
+            if (viewer) viewer.clearSelection();
+        }
+        
+        // Modal
+        function closeModal() {
+            document.getElementById('event-modal').classList.remove('open');
+        }
+        
+        // UI Updates
+        function updateStatus(status, message) {
+            const indicator = document.getElementById('status-indicator');
+            const text = document.getElementById('status-text');
+            
+            indicator.className = 'event-status-indicator';
+            if (status === 'connected') {
+                indicator.classList.add('connected');
+            } else if (status === 'connecting') {
+                indicator.classList.add('connecting');
+            }
+            
+            text.textContent = message;
+        }
+        
+        function updateConnectionStatus(connected) {
+            const el = document.getElementById('connection-status');
+            if (connected) {
+                el.textContent = 'Connected';
+                el.classList.add('active');
+            } else {
+                el.textContent = 'Disconnected';
+                el.classList.remove('active');
+            }
+        }
+        
+        function updateEventCount() {
+            if (!viewer) return;
+            
+            const count = viewer.getCurrentEventCount();
+            document.getElementById('event-count-info').textContent = `${count} events`;
+            document.getElementById('export-btn').disabled = count === 0;
+        }
+        
+        function updateLastEventTime() {
+            const el = document.getElementById('last-event-time');
+            const now = new Date();
+            el.textContent = `Last event: ${now.toLocaleTimeString()}`;
+            el.style.display = 'inline';
+        }
+        
+        function showError(message) {
+            console.error(message);
+        }
+        
+        // Event listeners
+        document.getElementById('auto-scroll').addEventListener('change', (e) => {
+            if (viewer) {
+                viewer.setAutoScroll(e.target.checked);
+            }
+        });
+        
+        document.getElementById('type-filter').addEventListener('change', (e) => {
+            if (viewer) {
+                viewer.setTypeFilter(e.target.value);
+            }
+        });
+        
+        document.getElementById('search-filter').addEventListener('input', (e) => {
+            if (viewer) {
+                viewer.setSearchFilter(e.target.value);
+            }
+        });
+        
+        // Close modal on background click
+        document.getElementById('event-modal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('event-modal')) {
+                closeModal();
+            }
+        });
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                closeInspector();
+            }
+        });
+        
+        // Expose diagnostic functions globally for debugging
+        window.eventViewerDebug = {
+            getState: () => ({
+                conn: conn,
+                dpManager: dpManager,
+                viewer: viewer,
+                subscribed: subscribed,
+                connected: conn?.connected,
+                dpManagerExists: !!dpManager,
+                wsReadyState: conn?.ws?.readyState,
+                subscriptions: dpManager?.getSubscriptions(),
+                stats: dpManager?.getStats()
+            }),
+            testEvent: () => {
+                console.log('Injecting test event...');
+                if (viewer) {
+                    viewer.handleEventDatapoint({
+                        e_type: 128,
+                        e_subtype: 0,
+                        timestamp: Date.now() * 1000,
+                        e_dtype: 1,
+                        e_params: "Test event"
+                    }, {});
+                    updateEventCount();
+                }
+            },
+            getDatapoints: () => {
+                if (dpManager && dpManager.datapoints) {
+                    return Object.keys(dpManager.datapoints);
+                }
+                return [];
+            },
+            forceSubscribe: () => {
+                subscribed = false;
+                subscribeToEvents();
+            },
+            monitorWebSocket: () => {
+                if (!conn || !conn.ws) {
+                    console.error('No WebSocket connection');
+                    return;
+                }
+                console.log('Monitoring WebSocket messages...');
+                const originalOnMessage = conn.ws.onmessage;
+                conn.ws.onmessage = (event) => {
+                    console.log('WS received:', event.data);
+                    originalOnMessage.call(conn.ws, event);
+                };
+                console.log('WebSocket monitoring enabled - all messages will be logged');
+            },
+            sendRawSubscribe: async () => {
+                console.log('Sending raw subscribe command...');
+                try {
+                    const result = await conn.sendRaw('dservMatch eventlog/events 1');
+                    console.log('Subscribe result:', result);
+                } catch (e) {
+                    console.error('Subscribe failed:', e);
+                }
+            },
+            checkDatapointManager: () => {
+                console.log('DatapointManager state:');
+                console.log('- Subscriptions:', dpManager?.getSubscriptions());
+                console.log('- Stats:', dpManager?.getStats());
+                console.log('- Connection:', dpManager?.connection);
+                const subInfo = dpManager?.getSubscriptionInfo('eventlog/events');
+                console.log('- eventlog/events info:', subInfo);
+            }
+        };
+        
+        console.log('Event Viewer initialized. Use window.eventViewerDebug.getState() to check status');
+        console.log('Try: window.eventViewerDebug.monitorWebSocket() to see all WS messages');
+        console.log('Try: window.eventViewerDebug.checkDatapointManager() to see subscription details');
+    </script>
+</body>
+</html>
