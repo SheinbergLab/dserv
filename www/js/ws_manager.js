@@ -190,14 +190,30 @@ class DservConnection {
                 this.emit('terminal:response', data);
             }
             // Datapoint updates - check for type: 'datapoint' (Vue format) or name+data fields
-            if (data.type === 'datapoint' || (data.name && (data.data !== undefined || data.value !== undefined))) {
-                const normalized = {
-                    name: data.name,
-                    data: data.data !== undefined ? data.data : data.value,
-                    value: data.data !== undefined ? data.data : data.value,
-                    timestamp: data.timestamp,
-                    dtype: data.dtype
-                };
+            if (data.type === 'datapoint' || (data.name && (data.data !== undefined || data.value !== undefined || data.dtype !== undefined))) {
+                // For dtype 9 (EVENT) and other special types, preserve ALL fields
+                // since the event data is at the top level, not in a data/value field
+                let normalized;
+                
+                if (data.dtype === 9) {
+                    // Events: preserve all fields (e_type, e_subtype, e_params, etc.)
+                    normalized = {
+                        ...data,
+                        // Still add data/value for consistency, even though they may be undefined
+                        data: data.data,
+                        value: data.value !== undefined ? data.value : data.data
+                    };
+                } else {
+                    // Regular datapoints: normalize to standard format
+                    normalized = {
+                        name: data.name,
+                        data: data.data !== undefined ? data.data : data.value,
+                        value: data.data !== undefined ? data.data : data.value,
+                        timestamp: data.timestamp,
+                        dtype: data.dtype
+                    };
+                }
+                
                 if (data.name === '@keys') {
                     this.emit('datapoint:keys', normalized);
                 }

@@ -255,12 +255,13 @@ class DatapointManager {
                 // Call all callbacks
                 sub.callbacks.forEach(callback => {
                     try {
+                        // Pass through the data as-is from ws_manager
+                        // ws_manager already handles special cases like dtype 9 (events)
                         callback({
-                            name: name,
-                            data: value,
-                            value: value,
-                            timestamp: data.timestamp,
-                            dtype: data.dtype
+                            ...data,  // All fields from ws_manager (preserves e_type, e_subtype, etc. for events)
+                            // Ensure data/value are set for backwards compatibility
+                            data: data.data !== undefined ? data.data : value,
+                            value: data.value !== undefined ? data.value : value
                         });
                     } catch (e) {
                         console.error('Error in datapoint callback:', e);
