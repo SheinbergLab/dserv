@@ -288,6 +288,11 @@ class EventViewer {
         this.obsStartTime = event.timestamp;
         this.allEvents = [];
         this.currentObsIndex = -1; // Return to live view
+        
+        // Update UI to reflect new observation state
+        if (typeof updateObservationUI === 'function') {
+            updateObservationUI();
+        }
     }
     
     /**
@@ -663,6 +668,9 @@ class EventViewer {
             this.currentObsIndex--;
         }
         this.render();
+        if (typeof updateObservationUI === 'function') {
+            updateObservationUI();
+        }
     }
     
     nextObservation() {
@@ -674,12 +682,18 @@ class EventViewer {
             this.currentObsIndex = -1;
             this.render();
         }
+        if (typeof updateObservationUI === 'function') {
+            updateObservationUI();
+        }
     }
     
     jumpToLive() {
         this.currentObsIndex = -1;
         this.render();
         this.scrollToBottom();
+        if (typeof updateObservationUI === 'function') {
+            updateObservationUI();
+        }
     }
     
     getViewInfo() {
