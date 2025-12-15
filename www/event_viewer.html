@@ -6,6 +6,7 @@
     <title>Event Viewer</title>
     
     <link rel="stylesheet" href="css/event_viewer.css">
+    <link rel="stylesheet" href="css/page_nav.css">
 </head>
 <body class="event-app">
     <div class="event-container">
@@ -17,7 +18,7 @@
             <div class="event-status-spacer"></div>
             <span class="event-update-info" id="update-info"></span>
             <button id="refresh-names-btn" onclick="refreshEventNames()" disabled>🔄 Refresh Names</button>
-            <button onclick="reconnect()">Reconnect</button>
+            <div id="page-nav-container"></div>
         </div>
         
         <!-- Main Content Area -->
@@ -112,6 +113,7 @@
     <!-- Scripts -->
     <script src="js/ws_manager.js"></script>
     <script src="js/DatapointManager.js"></script>
+    <script src="js/PageNav.js"></script>
     <script src="js/event_viewer.js"></script>
     <script>
         // Global state
@@ -128,6 +130,9 @@
         document.addEventListener('DOMContentLoaded', initApp);
         
         async function initApp() {
+            // Initialize PageNav dropdown
+            PageNav.init('page-nav-container', 'event_viewer');
+            
             await initConnection();
         }
         
@@ -170,7 +175,6 @@
                 dpManager.on('connected', () => {
                     console.log('dpManager connected event received');
                     updateConnectionStatus(true);
-                    // No need to re-subscribe here, dpManager handles it in resubscribeAll()
                 });
                 
                 dpManager.on('disconnected', () => {
@@ -319,10 +323,7 @@
             }
             
             try {
-                // Request event name refresh
-                // This would send a command to dserv to re-broadcast event names
                 console.log('Requesting event name refresh...');
-                // Implementation depends on your dserv protocol
             } catch (e) {
                 console.error('Failed to refresh names:', e);
             }

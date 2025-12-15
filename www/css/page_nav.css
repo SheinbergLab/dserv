@@ -1,0 +1,214 @@
+/* ===========================================
+   Page Navigation Dropdown Component
+   Consistent nav for ESS GUI pages
+   =========================================== */
+
+.page-nav {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.page-nav-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--ess-bg-panel, #252535);
+    border: 1px solid var(--ess-border, #3d3d4d);
+    border-radius: 4px;
+    color: var(--ess-text-secondary, #a0a0a0);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.page-nav-toggle:hover {
+    background: var(--ess-border, #3d3d4d);
+    color: var(--ess-text-primary, #e0e0e0);
+}
+
+.page-nav-toggle.active {
+    background: var(--ess-border, #3d3d4d);
+    color: var(--ess-accent, #7c8aff);
+    border-color: var(--ess-accent, #7c8aff);
+}
+
+.page-nav-icon {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.page-nav-arrow {
+    font-size: 10px;
+    transition: transform 0.2s;
+}
+
+.page-nav.open .page-nav-arrow {
+    transform: rotate(180deg);
+}
+
+/* Dropdown Menu */
+.page-nav-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 200px;
+    background: var(--ess-bg-secondary, #2d2d3d);
+    border: 1px solid var(--ess-border, #3d3d4d);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px);
+    transition: all 0.15s ease-out;
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.page-nav.open .page-nav-menu {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+/* Menu Header */
+.page-nav-header {
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted, #707080);
+    background: var(--ess-bg-panel, #252535);
+    border-bottom: 1px solid var(--ess-border, #3d3d4d);
+}
+
+/* Menu Items */
+.page-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--ess-text-primary, #e0e0e0);
+    text-decoration: none;
+    transition: all 0.15s;
+    border-bottom: 1px solid transparent;
+}
+
+.page-nav-item:last-child {
+    border-bottom: none;
+}
+
+.page-nav-item:hover {
+    background: var(--ess-bg-panel, #252535);
+    color: var(--ess-accent, #7c8aff);
+}
+
+.page-nav-item.current {
+    background: rgba(124, 138, 255, 0.1);
+    color: var(--ess-accent, #7c8aff);
+    cursor: default;
+}
+
+.page-nav-item.current::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--ess-accent, #7c8aff);
+}
+
+.page-nav-item-icon {
+    font-size: 16px;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.page-nav-item-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.page-nav-item-title {
+    font-weight: 500;
+}
+
+.page-nav-item-desc {
+    font-size: 11px;
+    color: var(--ess-text-muted, #707080);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.page-nav-item:hover .page-nav-item-desc {
+    color: var(--ess-text-secondary, #a0a0a0);
+}
+
+/* Divider */
+.page-nav-divider {
+    height: 1px;
+    background: var(--ess-border, #3d3d4d);
+    margin: 4px 0;
+}
+
+/* External link indicator */
+.page-nav-item-external {
+    font-size: 10px;
+    color: var(--ess-text-muted, #707080);
+    margin-left: auto;
+}
+
+/* Category groups within menu */
+.page-nav-group {
+    padding: 4px 0;
+}
+
+.page-nav-group-title {
+    padding: 6px 12px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted, #707080);
+}
+
+/* Back to home link styling */
+.page-nav-item.home {
+    border-top: 1px solid var(--ess-border, #3d3d4d);
+    margin-top: 4px;
+    padding-top: 10px;
+}
+
+.page-nav-item.home .page-nav-item-icon {
+    color: var(--ess-text-muted, #707080);
+}
+
+.page-nav-item.home:hover .page-nav-item-icon {
+    color: var(--ess-accent, #7c8aff);
+}
+
+/* Action items (reconnect, etc.) */
+.page-nav-item.action {
+    color: var(--ess-text-secondary, #a0a0a0);
+}
+
+.page-nav-item.action .page-nav-item-icon {
+    color: var(--ess-text-muted, #707080);
+}
+
+.page-nav-item.action:hover {
+    background: var(--ess-bg-panel, #252535);
+    color: var(--ess-text-primary, #e0e0e0);
+}
+
+.page-nav-item.action:hover .page-nav-item-icon {
+    color: var(--ess-accent, #7c8aff);
+}

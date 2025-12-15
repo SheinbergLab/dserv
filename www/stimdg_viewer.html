@@ -6,6 +6,7 @@
     <title>StimDG Viewer</title>
     
     <link rel="stylesheet" href="css/stimdg_viewer.css">
+    <link rel="stylesheet" href="css/page_nav.css">
 </head>
 <body class="stimdg-app">
     <div class="stimdg-container">
@@ -17,7 +18,7 @@
             <div class="stimdg-status-spacer"></div>
             <span class="stimdg-update-info" id="update-info"></span>
             <button id="refresh-btn" onclick="refreshData()" disabled>Refresh</button>
-            <button onclick="reconnect()">Reconnect</button>
+            <div id="page-nav-container"></div>
         </div>
         
         <!-- Main Content Area -->
@@ -91,6 +92,7 @@
     <!-- Scripts -->
     <script src="js/ws_manager.js"></script>
     <script src="js/DatapointManager.js"></script>
+    <script src="js/PageNav.js"></script>
     <script src="js/stimdg_viewer.js"></script>
     <script>
         // Global state
@@ -107,6 +109,9 @@
         document.addEventListener('DOMContentLoaded', initApp);
         
         async function initApp() {
+            // Initialize PageNav dropdown
+            PageNav.init('page-nav-container', 'stimdg_viewer');
+            
             await initConnection();
         }
         
@@ -213,50 +218,52 @@
                 const response = await conn.sendRaw(`dservGet ${STIMINFO_DATAPOINT}`);
                 
                 // Parse the response - it should be JSON
-                let data;
-                try {
-                    data = JSON.parse(response);
-                } catch (e) {
-                    // If not JSON, might be an error or empty
-                    if (response.includes('error') || response.trim() === '') {
-                        throw new Error(`No data at ${STIMINFO_DATAPOINT}`);
+                if (response) {
+                    try {
+                        const data = JSON.parse(response);
+                        loadData(data);
+                        updateStatus('connected', 'Connected');
+                    } catch (parseErr) {
+                        console.warn('Failed to parse stiminfo response:', parseErr);
+                        updateStatus('connected', 'Connected (no data)');
                     }
-                    throw new Error(`Invalid JSON response: ${response.substring(0, 100)}`);
+                } else {
+                    updateStatus('connected', 'Connected (no data)');
                 }
-                
-                loadData(data);
-                updateStatus('connected', 'Connected');
-                
             } catch (e) {
                 console.error('Failed to fetch stiminfo:', e);
-                showError(`Failed to fetch stiminfo: ${e.message}`);
-                updateStatus('connected', 'Connected (no data)');
+                updateStatus('connected', 'Connected');
             }
+        }
+        
+        /**
+         * Refresh data manually
+         */
+        function refreshData() {
+            fetchStimInfo();
         }
         
         /**
          * Subscribe to stiminfo updates
          */
         function subscribeToUpdates() {
-            if (!dpManager) {
-                console.warn('DatapointManager not initialized');
-                return;
-            }
+            if (subscribed || !dpManager) return;
             
-            if (subscribed) {
-                console.log('Already subscribed');
-                return;
-            }
-            
-            // Subscribe to ess/stiminfo updates
             unsubscribeFn = dpManager.subscribe(STIMINFO_DATAPOINT, (data) => {
-                console.log('Received stiminfo update:', data);
-                handleStimInfoUpdate(data);
+                if (data && data.value) {
+                    try {
+                        const parsed = typeof data.value === 'string' 
+                            ? JSON.parse(data.value) 
+                            : data.value;
+                        loadData(parsed);
+                    } catch (e) {
+                        console.error('Failed to parse stiminfo update:', e);
+                    }
+                }
             });
             
             subscribed = true;
             updateSubscriptionStatus();
-            console.log(`Subscribed to ${STIMINFO_DATAPOINT}`);
         }
         
         /**
@@ -269,51 +276,6 @@
             }
             subscribed = false;
             updateSubscriptionStatus();
-            console.log(`Unsubscribed from ${STIMINFO_DATAPOINT}`);
-        }
-        
-        /**
-         * Handle incoming stiminfo update
-         */
-        function handleStimInfoUpdate(data) {
-            // data.value or data.data contains the payload
-            const payload = data.value || data.data;
-            
-            if (!payload) {
-                console.warn('Empty stiminfo update');
-                return;
-            }
-            
-            // Parse if string
-            let parsedData;
-            if (typeof payload === 'string') {
-                try {
-                    parsedData = JSON.parse(payload);
-                } catch (e) {
-                    console.error('Failed to parse stiminfo JSON:', e);
-                    return;
-                }
-            } else {
-                parsedData = payload;
-            }
-            
-            // Update the viewer
-            if (viewer) {
-                viewer.updateData(parsedData);
-                document.getElementById('table-info').textContent = `${viewer.rowCount} rows`;
-                updatePagination();
-            } else {
-                loadData(parsedData);
-            }
-            
-            updateTimestamp();
-        }
-        
-        /**
-         * Manual refresh
-         */
-        async function refreshData() {
-            await fetchStimInfo();
         }
         
         /**

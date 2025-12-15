@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="css/eyetouch_visualizer.css">
     <link rel="stylesheet" href="css/mesh_dropdown.css">
     <link rel="stylesheet" href="css/TclTerminal.css">
+    <link rel="stylesheet" href="css/page_nav.css">
 </head>
 <body class="ess-app">
     <div class="ess-container">
@@ -21,7 +22,7 @@
             <div id="mesh-dropdown-container"></div>
             <div class="ess-status-spacer"></div>
             <span class="ess-system-state" id="system-state">--</span>
-            <button onclick="reconnect()">Reconnect</button>
+            <div id="page-nav-container"></div>
         </div>
         
         <!-- Main 3-Column Layout -->
@@ -177,9 +178,18 @@
     <script src="js/EyeTouchVisualizer.js"></script>
     <script src="js/mesh_dropdown.js"></script>
     <script src="js/TclTerminal.js"></script>
+    <script src="js/PageNav.js"></script>
     
     <!-- Main application script -->
     <script src="js/ess_app.js"></script>
+    
+    <!-- Initialize page navigation -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize PageNav dropdown
+            PageNav.init('page-nav-container', 'ess_control');
+        });
+    </script>
     
     <!-- Eye settings handlers -->
     <script>
