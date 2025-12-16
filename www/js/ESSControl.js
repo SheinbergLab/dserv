@@ -34,7 +34,8 @@ class ESSControl {
             currentVariant: '',
             essStatus: 'stopped',  // running, stopped, loading
             params: {},
-            variantInfo: null
+            variantInfo: null,
+            currentDatafile: ''  // Currently open datafile path
         };
         
         // Event listeners
@@ -108,6 +109,13 @@ class ESSControl {
                     </div>
                     <button id="ess-reload-variant" class="ess-reload-btn" title="Reload Variant">↻</button>
                 </div>
+                <!-- Datafile row -->
+                <div class="ess-datafile-row" id="ess-datafile-row">
+                    <span class="ess-control-label">Datafile</span>
+                    <span class="ess-file-name" id="ess-current-file">No file</span>
+                    <button id="ess-btn-file-open" class="ess-file-btn" title="Open datafile">Open</button>
+                    <button id="ess-btn-file-close" class="ess-file-btn close" title="Close datafile" style="display: none;">Close</button>
+                </div>
             </div>
             
             <!-- Variant Options -->
@@ -117,6 +125,8 @@ class ESSControl {
                     <input type="checkbox" id="ess-auto-reload" checked>
                     <label for="ess-auto-reload">Auto-reload</label>
                     <button id="ess-reload-options-btn" class="ess-reload-variant-btn">Reload</button>
+                    <button id="ess-btn-settings-save" class="ess-settings-btn">Save</button>
+                    <button id="ess-btn-settings-reset" class="ess-settings-btn">Reset</button>
                 </div>
                 <div id="ess-options-container" class="ess-options-container"></div>
             </div>
@@ -147,7 +157,15 @@ class ESSControl {
             autoReloadCheckbox: this.container.querySelector('#ess-auto-reload'),
             reloadOptionsBtn: this.container.querySelector('#ess-reload-options-btn'),
             paramsSection: this.container.querySelector('#ess-params-section'),
-            paramsContainer: this.container.querySelector('#ess-params-container')
+            paramsContainer: this.container.querySelector('#ess-params-container'),
+            // File controls
+            datafileRow: this.container.querySelector('#ess-datafile-row'),
+            btnFileOpen: this.container.querySelector('#ess-btn-file-open'),
+            btnFileClose: this.container.querySelector('#ess-btn-file-close'),
+            currentFile: this.container.querySelector('#ess-current-file'),
+            // Settings controls
+            btnSettingsSave: this.container.querySelector('#ess-btn-settings-save'),
+            btnSettingsReset: this.container.querySelector('#ess-btn-settings-reset')
         };
         
         // Bind event handlers
@@ -214,6 +232,25 @@ class ESSControl {
         // Juice button
         this.elements.btnJuice.addEventListener('click', () => {
             this.giveJuice();
+        });
+        
+        // File open button (auto-suggests filename)
+        this.elements.btnFileOpen.addEventListener('click', () => {
+            this.openDatafile();
+        });
+        
+        // File close button
+        this.elements.btnFileClose.addEventListener('click', () => {
+            this.closeDatafile();
+        });
+        
+        // Settings buttons
+        this.elements.btnSettingsSave.addEventListener('click', () => {
+            this.saveSettings();
+        });
+        
+        this.elements.btnSettingsReset.addEventListener('click', () => {
+            this.resetSettings();
         });
     }
     
@@ -287,6 +324,11 @@ class ESSControl {
         
         this.dpManager.subscribe('ess/params', (data) => {
             this.updateParamValue(data.value);
+        });
+        
+        // Current datafile
+        this.dpManager.subscribe('ess/datafile', (data) => {
+            this.updateDatafileStatus(data.value);
         });
     }
     
@@ -779,6 +821,108 @@ class ESSControl {
     }
     
     /**
+     * Toggle datafile open/close
+     */
+    /**
+     * Open a datafile using auto-suggested filename
+     */
+    openDatafile() {
+        // Use file_suggest to get filename, then open it
+        // The ess::file_suggest command returns the suggested filename
+        // Then we call ess::file_open with that filename
+        this.sendCommand('ess::file_open [ess::file_suggest]');
+        this.emit('log', { message: 'Opening datafile...', level: 'info' });
+    }
+    
+    /**
+     * Close the current datafile
+     */
+    closeDatafile() {
+        if (!this.state.currentDatafile) {
+            this.emit('log', { message: 'No datafile is currently open', level: 'warning' });
+            return;
+        }
+        
+        // Send close command - result will come via ess/datafile subscription
+        this.sendCommand('ess::file_close');
+        this.emit('log', { message: 'Closing datafile...', level: 'info' });
+    }
+    
+    /**
+     * Update datafile status display
+     * Called when ess/datafile subscription updates
+     */
+    updateDatafileStatus(filepath) {
+        const wasOpen = !!this.state.currentDatafile;
+        const isOpen = !!filepath;
+        
+        this.state.currentDatafile = filepath || '';
+        
+        if (filepath) {
+            // Show just the filename without path and extension
+            const filename = filepath.split('/').pop().replace('.ess', '');
+            this.elements.currentFile.textContent = filename;
+            this.elements.currentFile.classList.add('open');
+            this.elements.btnFileOpen.style.display = 'none';
+            this.elements.btnFileClose.style.display = '';
+            
+            // Log success if file was just opened
+            if (!wasOpen && isOpen) {
+                this.emit('log', { message: `Datafile opened: ${filename}`, level: 'info' });
+            }
+        } else {
+            this.elements.currentFile.textContent = 'No file';
+            this.elements.currentFile.classList.remove('open');
+            this.elements.btnFileOpen.style.display = '';
+            this.elements.btnFileClose.style.display = 'none';
+            
+            // Log if file was just closed
+            if (wasOpen && !isOpen) {
+                this.emit('log', { message: 'Datafile closed', level: 'info' });
+            }
+        }
+    }
+    
+    /**
+     * Save current settings
+     */
+    saveSettings() {
+        this.sendCommand('ess::save_settings');
+        this.emit('log', { message: 'Settings saved', level: 'info' });
+    }
+    
+    /**
+     * Reset settings to defaults
+     */
+    resetSettings() {
+        this.sendCommand('ess::reset_settings');
+        this.emit('log', { message: 'Settings reset to defaults', level: 'info' });
+    }
+    
+    /**
+     * Send a command and wait for response
+     * Used for commands that return values (like file_suggest, file_open)
+     * Uses the connection's sendRaw for commands that expect responses
+     */
+    async sendCommandWithResponse(cmd, timeout = 5000) {
+        if (!this.dpManager.connection.ws || !this.dpManager.connection.connected) {
+            throw new Error('Not connected');
+        }
+        
+        // Use sendRaw which has built-in request/response handling
+        // Wrap as eval command to ESS subprocess
+        try {
+            const result = await this.dpManager.connection.sendRaw(
+                `send ess {${cmd}}`
+            );
+            return result;
+        } catch (e) {
+            console.error('Command failed:', e);
+            throw e;
+        }
+    }
+    
+    /**
      * Send a command to the ESS subprocess using eval
      * This matches the Vue dserv.js essCommand format
      */
@@ -912,6 +1056,7 @@ class ESSControl {
         this.dpManager.unsubscribe('ess/param_settings');
         this.dpManager.unsubscribe('ess/param');
         this.dpManager.unsubscribe('ess/params');
+        this.dpManager.unsubscribe('ess/datafile');
         
         this.listeners.clear();
         this.container.innerHTML = '';

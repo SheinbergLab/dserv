@@ -624,6 +624,130 @@ body.ess-app {
     cursor: not-allowed;
 }
 
+/* ===========================================
+   File Section Styles
+   =========================================== */
+/* Datafile row - label, filename, open/close button */
+.ess-datafile-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 8px;
+}
+
+.ess-datafile-row .ess-file-name {
+    flex: 1;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-datafile-row .ess-file-name.open {
+    color: var(--ess-success);
+}
+
+.ess-file-btn {
+    padding: 4px 10px;
+    font-size: 10px;
+    font-weight: 500;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.ess-file-btn:hover:not(:disabled) {
+    background: var(--ess-border);
+    color: var(--ess-success);
+    border-color: var(--ess-success);
+}
+
+.ess-file-btn.close:hover:not(:disabled) {
+    color: var(--ess-error);
+    border-color: var(--ess-error);
+}
+
+.ess-file-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ===========================================
+   Settings Buttons (in Variant Options row)
+   =========================================== */
+.ess-auto-reload .ess-settings-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.ess-auto-reload .ess-settings-btn:hover:not(:disabled) {
+    background: var(--ess-border);
+    color: var(--ess-accent);
+}
+
+.ess-auto-reload .ess-settings-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ===========================================
+   Loading State - Applied during system load
+   =========================================== */
+.ess-loading {
+    position: relative;
+    pointer-events: none;
+}
+
+.ess-loading::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(30, 30, 46, 0.4);
+    border-radius: 6px;
+    z-index: 10;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Dim controls during loading */
+.ess-loading select,
+.ess-loading button,
+.ess-loading input {
+    opacity: 0.5;
+    cursor: wait !important;
+}
+
+/* Keep state buttons visible but clearly disabled */
+.ess-loading .ess-state-controls {
+    opacity: 0.4;
+}
+
+/* Loading indicator text (optional - shown via CSS content) */
+.ess-loading .ess-control-section:first-child::after {
+    content: 'Loading...';
+    display: block;
+    text-align: center;
+    padding: 8px;
+    font-size: 11px;
+    color: var(--ess-accent);
+    font-weight: 500;
+    animation: pulse 1s ease-in-out infinite;
+}
+
 /* Auto-reload checkbox */
 .ess-auto-reload {
     display: flex;

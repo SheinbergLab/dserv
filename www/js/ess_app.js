@@ -93,7 +93,7 @@ function requestInitialData() {
           ess/obs_id ess/obs_total
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
-          ess/params
+          ess/params ess/datafile
           system/hostname system/os
         } {
           catch { dservTouch $v }
@@ -114,6 +114,11 @@ function initESSControl() {
     // Listen for state changes to update status bar
     essControl.on('stateChange', ({ state }) => {
         updateSystemState(state);
+    });
+    
+    // Listen for log messages from ESSControl
+    essControl.on('log', ({ message, level }) => {
+        log(message, level || 'info');
     });
     
     log('ESS Control initialized', 'info');
