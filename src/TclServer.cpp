@@ -2379,6 +2379,21 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
         close $sock
         return $result
     }
+    proc remoteSend {host script {port 2560}} {
+        set sock [socket $host $port]
+        fconfigure $sock -translation binary -buffering full
+        
+        set len [string length $script]
+        puts -nonewline $sock [binary format I $len]$script
+        flush $sock
+        
+        set lenbuf [read $sock 4]
+        binary scan $lenbuf I rlen
+        set result [read $sock $rlen]
+        
+        close $sock
+        return $result
+    }
   )";
   
   if (Tcl_Eval(interp, init_script) != TCL_OK) {
