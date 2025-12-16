@@ -278,6 +278,7 @@ private:
     
     // Tcl command implementations (static callbacks)
 	static int mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
+	static int mesh_get_peers_json_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 	static int mesh_get_cluster_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 	static int mesh_update_status_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
 	static int mesh_get_appliance_id_command(ClientData clientData, Tcl_Interp* interp, int objc, Tcl_Obj* const objv[]);
@@ -291,4 +292,7 @@ private:
 	static int mesh_get_lost_peers_command(ClientData clientData, 
                                              Tcl_Interp* interp, 
                                              int objc, Tcl_Obj* const objv[]);	
+	static int mesh_get_lost_peers_json_command(ClientData clientData, 
+						    Tcl_Interp* interp, 
+						    int objc, Tcl_Obj* const objv[]);	
 };

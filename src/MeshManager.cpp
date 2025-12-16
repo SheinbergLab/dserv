@@ -885,6 +885,10 @@ void MeshManager::sendHeartbeat() {
     
     // After sending our heartbeat, notify WebSocket clients of current state
     notifyWebSocketClients();
+
+    // Update mesh/peers datapoint for subscribers
+    std::string peersJson = getPeersJSON();
+    ds->set((char*)"mesh/peers", (char*)peersJson.c_str());    
 }
 
 void MeshManager::notifyWebSocketClients() {
@@ -1467,6 +1471,20 @@ int MeshManager::mesh_clear_fields_command(ClientData clientData, Tcl_Interp* in
     return TCL_OK;
 }
 
+int MeshManager::mesh_get_peers_json_command(ClientData clientData, Tcl_Interp* interp, 
+					     int objc, Tcl_Obj* const objv[]) {
+  MeshManager* mesh = static_cast<MeshManager*>(clientData);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(mesh->getPeersJSON().c_str(), -1));
+  return TCL_OK;
+}
+    
+int MeshManager::mesh_get_lost_peers_json_command(ClientData clientData, Tcl_Interp* interp, 
+					     int objc, Tcl_Obj* const objv[]) {
+  MeshManager* mesh = static_cast<MeshManager*>(clientData);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(mesh->getLostPeersJSON().c_str(), -1));
+  return TCL_OK;
+}
+
 int MeshManager::mesh_get_peers_command(ClientData clientData, Tcl_Interp* interp, 
                                   int objc, Tcl_Obj* const objv[]) {
     MeshManager* mesh = static_cast<MeshManager*>(clientData);
@@ -1702,6 +1720,7 @@ void MeshManager::addTclCommands(Tcl_Interp* interp)
     
     /* Register mesh-specific commands */
     Tcl_CreateObjCommand(interp, "meshGetPeers", mesh_get_peers_command, this, nullptr);
+    Tcl_CreateObjCommand(interp, "meshGetPeersJSON", mesh_get_peers_json_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshGetClusterStatus", mesh_get_cluster_status_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshUpdateStatus", mesh_update_status_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshGetApplianceId", mesh_get_appliance_id_command, this, nullptr);                       
@@ -1713,6 +1732,7 @@ void MeshManager::addTclCommands(Tcl_Interp* interp)
     Tcl_CreateObjCommand(interp, "meshGetFields", mesh_get_fields_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshClearFields", mesh_clear_fields_command, this, nullptr);
     Tcl_CreateObjCommand(interp, "meshGetLostPeers", mesh_get_lost_peers_command, this, nullptr);
+    Tcl_CreateObjCommand(interp, "meshGetLostPeersJSON", mesh_get_lost_peers_json_command, this, nullptr);
 
     
     std::cout << "Mesh Tcl commands registered successfully" << std::endl;
