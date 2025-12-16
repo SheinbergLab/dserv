@@ -835,7 +835,7 @@ class DservStatus {
         
         this.elements.meshSystems.innerHTML = sorted.map(sys => {
             const url = this.getSystemUrl(sys);
-            const guiUrl = this.getSystemUrl(sys) + 'essgui/';
+            const guiUrl = this.getSystemUrl(sys) + 'ess_control';
             const status = sys.status || 'idle';
             
             // Shorter name display
