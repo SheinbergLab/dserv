@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lab Mesh Directory</title>
+    <style>
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #0f1419;
+    color: #e7e9ea;
+    min-height: 100vh;
+    line-height: 1.5;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px 20px;
+}
+
+/* Header */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 32px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #2f3336;
+}
+
+header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #60a5fa, #34d399);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.header-status {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.connection-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: #1a2634;
+    border-radius: 20px;
+    font-size: 13px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #71767b;
+}
+
+.status-dot.connected {
+    background: #34d399;
+    box-shadow: 0 0 8px #34d39966;
+}
+
+.status-dot.connecting {
+    background: #fbbf24;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.node-count {
+    color: #71767b;
+    font-size: 14px;
+}
+
+/* Node Grid */
+.node-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+}
+
+/* Node Card */
+.node-card {
+    background: #16202a;
+    border: 1px solid #2f3336;
+    border-radius: 12px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.node-card:hover {
+    border-color: #3b82f6;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.node-card.local {
+    border-left: 3px solid #f59e0b;
+}
+
+.node-header {
+    padding: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid #2f3336;
+}
+
+.node-identity {
+    flex: 1;
+    min-width: 0;
+}
+
+.node-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: #e7e9ea;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.node-id {
+    font-size: 12px;
+    color: #71767b;
+    font-family: 'SF Mono', Monaco, monospace;
+}
+
+.node-status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: capitalize;
+}
+
+.node-status-badge.running {
+    background: #1a3d2e;
+    color: #34d399;
+}
+
+.node-status-badge.stopped {
+    background: #3d1a1a;
+    color: #f87171;
+}
+
+.node-status-badge.loading {
+    background: #3d2e1a;
+    color: #fbbf24;
+}
+
+.node-status-badge.idle {
+    background: #1a2634;
+    color: #71767b;
+}
+
+.node-status-badge .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+/* Node Info */
+.node-info {
+    padding: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.info-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #71767b;
+}
+
+.info-value {
+    font-size: 14px;
+    color: #e7e9ea;
+}
+
+.info-value.empty {
+    color: #4a5568;
+    font-style: italic;
+}
+
+/* Node Actions */
+.node-actions {
+    padding: 12px 16px;
+    background: #1a2634;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.action-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-start {
+    background: #1a3d2e;
+    color: #34d399;
+    border: 1px solid #2d5a45;
+}
+
+.btn-start:hover:not(:disabled) {
+    background: #2d5a45;
+}
+
+.btn-stop {
+    background: #3d1a1a;
+    color: #f87171;
+    border: 1px solid #5a2d2d;
+}
+
+.btn-stop:hover:not(:disabled) {
+    background: #5a2d2d;
+}
+
+.btn-reset {
+    background: #2f3336;
+    color: #e7e9ea;
+    border: 1px solid #3f4448;
+}
+
+.btn-reset:hover:not(:disabled) {
+    background: #3f4448;
+}
+
+.btn-open {
+    background: #1e3a5f;
+    color: #60a5fa;
+    border: 1px solid #2d5a8f;
+    text-decoration: none;
+}
+
+.btn-open:hover {
+    background: #2d5a8f;
+}
+
+/* Badges */
+.node-badges {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge.ssl {
+    background: #1a3d2e;
+    color: #34d399;
+}
+
+.badge.local {
+    background: #3d2e1a;
+    color: #fbbf24;
+}
+
+.badge.ip {
+    background: #1e3a5f;
+    color: #60a5fa;
+    font-family: 'SF Mono', Monaco, monospace;
+    text-transform: none;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 80px 40px;
+    color: #71767b;
+}
+
+.empty-state-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+}
+
+.empty-state h3 {
+    font-size: 20px;
+    color: #e7e9ea;
+    margin-bottom: 8px;
+}
+
+.empty-state p {
+    font-size: 14px;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* Command feedback */
+.command-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 20px;
+    background: #1a2634;
+    border: 1px solid #2f3336;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 1000;
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s ease;
+}
+
+.command-toast.show {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.command-toast.success {
+    border-color: #34d399;
+    color: #34d399;
+}
+
+.command-toast.error {
+    border-color: #f87171;
+    color: #f87171;
+}
+
+/* Footer */
+footer {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #2f3336;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: #71767b;
+    font-size: 13px;
+}
+
+footer a {
+    color: #60a5fa;
+    text-decoration: none;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .node-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .node-info {
+        grid-template-columns: 1fr;
+    }
+    
+    header {
+        flex-direction: column;
+        gap: 16px;
+        text-align: center;
+    }
+}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lab Mesh Directory</h1>
+            <div class="header-status">
+                <div class="connection-badge">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span id="status-text">Connecting...</span>
+                </div>
+                <span class="node-count" id="node-count"></span>
+            </div>
+        </header>
+        
+        <div class="node-grid" id="node-grid">
+            <div class="empty-state">
+                <div class="empty-state-icon">📡</div>
+                <h3>Searching for nodes...</h3>
+                <p>Looking for active experiment systems on the mesh network.</p>
+            </div>
+        </div>
+        
+        <footer>
+            <span>Last updated: <span id="last-update">--</span></span>
+            <span>Directory: <span id="directory-host"></span></span>
+        </footer>
+    </div>
+    
+    <div class="command-toast" id="toast"></div>
+
+    <script>
+class MeshDirectory {
+    constructor() {
+        this.ws = null;
+        this.connected = false;
+        this.reconnectDelay = 2000;
+        this.nodes = new Map();
+        this.pendingCommands = new Map();
+        this.commandId = 0;
+        
+        this.elements = {
+            statusDot: document.getElementById('status-dot'),
+            statusText: document.getElementById('status-text'),
+            nodeCount: document.getElementById('node-count'),
+            nodeGrid: document.getElementById('node-grid'),
+            lastUpdate: document.getElementById('last-update'),
+            directoryHost: document.getElementById('directory-host'),
+            toast: document.getElementById('toast')
+        };
+        
+        this.elements.directoryHost.textContent = window.location.host;
+        
+        this.connect();
+    }
+    
+    getWsUrl() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${window.location.host}/ws`;
+    }
+    
+    connect() {
+        this.setStatus('connecting', 'Connecting...');
+        
+        try {
+            this.ws = new WebSocket(this.getWsUrl());
+            
+            this.ws.onopen = () => {
+                this.connected = true;
+                this.setStatus('connected', 'Connected');
+                this.startMeshPolling();
+            };
+            
+            this.ws.onclose = () => {
+                this.connected = false;
+                this.setStatus('disconnected', 'Disconnected');
+                this.stopMeshPolling();
+                setTimeout(() => this.connect(), this.reconnectDelay);
+            };
+            
+            this.ws.onerror = () => {
+                this.setStatus('disconnected', 'Connection error');
+            };
+            
+            this.ws.onmessage = (event) => {
+                this.handleMessage(event.data);
+            };
+        } catch (e) {
+            this.setStatus('disconnected', 'Failed to connect');
+        }
+    }
+    
+    setStatus(state, text) {
+        this.elements.statusDot.className = 'status-dot ' + state;
+        this.elements.statusText.textContent = text;
+    }
+    
+    send(cmd) {
+        if (this.ws && this.connected) {
+            if (typeof cmd === 'object') {
+                this.ws.send(JSON.stringify(cmd));
+            } else {
+                this.ws.send(cmd);
+            }
+        }
+    }
+    
+    startMeshPolling() {
+        this.refreshMeshPeers();
+        this.meshInterval = setInterval(() => this.refreshMeshPeers(), 5000);
+    }
+    
+    stopMeshPolling() {
+        if (this.meshInterval) {
+            clearInterval(this.meshInterval);
+            this.meshInterval = null;
+        }
+    }
+    
+    refreshMeshPeers() {
+        this.send({
+            cmd: 'eval',
+            script: 'send mesh {meshGetPeers}',
+            requestId: 'mesh-peers'
+        });
+    }
+    
+    handleMessage(data) {
+        try {
+            const msg = JSON.parse(data);
+            
+            // Handle mesh peers response
+            if (msg.requestId === 'mesh-peers' && msg.status === 'ok' && msg.result) {
+                this.handleMeshPeers(msg.result);
+                return;
+            }
+            
+            // Handle command responses
+            if (msg.requestId && msg.requestId.startsWith('cmd-')) {
+                this.handleCommandResponse(msg);
+                return;
+            }
+        } catch (e) {
+            // Ignore non-JSON messages
+        }
+    }
+    
+    // Parse Tcl list of dicts
+    parseTclList(str) {
+        const results = [];
+        let depth = 0;
+        let current = '';
+        
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            
+            if (char === '{') {
+                if (depth === 0) {
+                    current = '';
+                } else {
+                    current += char;
+                }
+                depth++;
+            } else if (char === '}') {
+                depth--;
+                if (depth === 0) {
+                    results.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            } else if (depth > 0) {
+                current += char;
+            }
+        }
+        
+        return results;
+    }
+    
+    // Parse Tcl dict
+    parseTclDict(str) {
+        const dict = {};
+        const tokens = [];
+        let current = '';
+        let depth = 0;
+        
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            
+            if (char === '{') {
+                if (depth > 0) current += char;
+                depth++;
+            } else if (char === '}') {
+                depth--;
+                if (depth > 0) current += char;
+            } else if (char === ' ' && depth === 0) {
+                if (current) {
+                    tokens.push(current);
+                    current = '';
+                }
+            } else {
+                current += char;
+            }
+        }
+        if (current) tokens.push(current);
+        
+        for (let i = 0; i < tokens.length - 1; i += 2) {
+            dict[tokens[i]] = tokens[i + 1];
+        }
+        
+        return dict;
+    }
+    
+    handleMeshPeers(result) {
+        if (!result) return;
+        
+        try {
+            const peerStrings = this.parseTclList(result);
+            
+            this.nodes.clear();
+            peerStrings.forEach(peerStr => {
+                const peer = this.parseTclDict(peerStr);
+                if (peer.id) {
+                    peer.ssl = peer.ssl === '1' || peer.ssl === 1;
+                    peer.isLocal = peer.isLocal === '1' || peer.isLocal === 1;
+                    this.nodes.set(peer.id, peer);
+                }
+            });
+            
+            this.renderNodes();
+            this.elements.lastUpdate.textContent = new Date().toLocaleTimeString();
+        } catch (e) {
+            console.error('Failed to parse mesh peers:', e, result);
+        }
+    }
+    
+    renderNodes() {
+        const count = this.nodes.size;
+        this.elements.nodeCount.textContent = `${count} node${count !== 1 ? 's' : ''} online`;
+        
+        if (count === 0) {
+            this.elements.nodeGrid.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">📡</div>
+                    <h3>No nodes found</h3>
+                    <p>No experiment systems are currently active on the mesh network.</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sort: local first, then by name
+        const sorted = Array.from(this.nodes.values()).sort((a, b) => {
+            if (a.isLocal && !b.isLocal) return -1;
+            if (!a.isLocal && b.isLocal) return 1;
+            return (a.name || a.id).localeCompare(b.name || b.id);
+        });
+        
+        this.elements.nodeGrid.innerHTML = sorted.map(node => this.renderNodeCard(node)).join('');
+        
+        // Bind event handlers
+        this.elements.nodeGrid.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const action = e.target.dataset.action;
+                const nodeId = e.target.dataset.nodeId;
+                this.handleNodeAction(nodeId, action);
+            });
+        });
+    }
+    
+    renderNodeCard(node) {
+        const status = node.status || 'idle';
+        const isRunning = status === 'running';
+        const isStopped = status === 'stopped' || status === 'idle';
+        
+        const displayName = (node.name || node.id).replace('Lab Station ', '');
+        const guiUrl = this.getNodeUrl(node) + 'ess_control.html';
+        
+        return `
+            <div class="node-card ${node.isLocal ? 'local' : ''}">
+                <div class="node-header">
+                    <div class="node-identity">
+                        <div class="node-name">${this.escapeHtml(displayName)}</div>
+                        <div class="node-id">${this.escapeHtml(node.id)}</div>
+                        <div class="node-badges">
+                            ${node.ssl ? '<span class="badge ssl">SSL</span>' : ''}
+                            ${node.isLocal ? '<span class="badge local">Local</span>' : ''}
+                            ${node.ip && node.ip !== 'local' ? `<span class="badge ip">${node.ip}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="node-status-badge ${status}">
+                        <span class="dot"></span>
+                        ${status}
+                    </div>
+                </div>
+                
+                <div class="node-info">
+                    <div class="info-item">
+                        <span class="info-label">System</span>
+                        <span class="info-value ${!node.system ? 'empty' : ''}">${node.system || 'Not loaded'}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Protocol</span>
+                        <span class="info-value ${!node.protocol ? 'empty' : ''}">${node.protocol || '--'}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Variant</span>
+                        <span class="info-value ${!node.variant ? 'empty' : ''}">${node.variant || '--'}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Subject</span>
+                        <span class="info-value ${!node.subject ? 'empty' : ''}">${node.subject || '--'}</span>
+                    </div>
+                </div>
+                
+                <div class="node-actions">
+                    <div class="action-buttons">
+                        <button class="btn btn-start" data-action="start" data-node-id="${node.id}" ${isRunning ? 'disabled' : ''}>
+                            ▶ Start
+                        </button>
+                        <button class="btn btn-stop" data-action="stop" data-node-id="${node.id}" ${isStopped ? 'disabled' : ''}>
+                            ■ Stop
+                        </button>
+                        <button class="btn btn-reset" data-action="reset" data-node-id="${node.id}">
+                            Reset
+                        </button>
+                    </div>
+                    <a href="${guiUrl}" target="_blank" class="btn btn-open">
+                        Open Control ↗
+                    </a>
+                </div>
+            </div>
+        `;
+    }
+    
+    getNodeUrl(node) {
+        if (node.isLocal) {
+            return '/';
+        }
+        const protocol = node.ssl ? 'https' : 'http';
+        const port = node.webPort || 2565;
+        return `${protocol}://${node.ip}:${port}/`;
+    }
+    
+    handleNodeAction(nodeId, action) {
+        const node = this.nodes.get(nodeId);
+        if (!node) return;
+        
+        const commands = {
+            start: 'ess::start',
+            stop: 'ess::stop',
+            reset: 'ess::reset'
+        };
+        
+        const cmd = commands[action];
+        if (!cmd) return;
+        
+        const nodeName = node.name || node.id;
+        this.showToast(`Sending ${action} to ${nodeName}...`);
+        
+        // Track if we used proxy
+        let usedProxy = false;
+        
+        // Send command - tries direct first, falls back to proxy
+        const directAttempt = node.isLocal 
+            ? this.sendLocalCommand(cmd, 5000)
+            : this.sendDirectToNode(node, cmd, 5000)
+                .catch(directErr => {
+                    console.log(`Direct connection to ${node.id} failed: ${directErr.message}, trying proxy...`);
+                    usedProxy = true;
+                    return this.sendViaProxy(node, cmd, 5000);
+                });
+        
+        directAttempt
+            .then(result => {
+                const modeNote = usedProxy ? ' (via proxy)' : '';
+                this.showToast(`${action} sent to ${nodeName}${modeNote}`, 'success');
+                // Refresh mesh status after a short delay
+                setTimeout(() => this.refreshMeshPeers(), 500);
+            })
+            .catch(err => {
+                this.showToast(`Failed to ${action} on ${nodeName}: ${err.message}`, 'error');
+            });
+    }
+    
+    /**
+     * Send command to local node via existing WebSocket
+     */
+    sendLocalCommand(cmd, timeout) {
+        return new Promise((resolve, reject) => {
+            const requestId = `cmd-${++this.commandId}`;
+            
+            const timeoutId = setTimeout(() => {
+                this.pendingCommands.delete(requestId);
+                reject(new Error('Timeout'));
+            }, timeout);
+            
+            this.pendingCommands.set(requestId, { 
+                resolve: (result) => {
+                    clearTimeout(timeoutId);
+                    resolve(result);
+                }, 
+                reject: (err) => {
+                    clearTimeout(timeoutId);
+                    reject(err);
+                }
+            });
+            
+            this.send({
+                cmd: 'eval',
+                script: cmd,
+                requestId: requestId
+            });
+        });
+    }
+    
+    /**
+     * Try direct WebSocket connection to remote node
+     * Uses short timeout since we want to fail fast if not reachable
+     */
+    sendDirectToNode(node, cmd, timeout) {
+        return new Promise((resolve, reject) => {
+            const protocol = node.ssl ? 'wss:' : 'ws:';
+            const port = node.webPort || 2565;
+            const url = `${protocol}//${node.ip}:${port}/ws`;
+            
+            let ws;
+            let timeoutId;
+            let settled = false;
+            
+            const settle = (fn, arg) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close();
+                }
+                fn(arg);
+            };
+            
+            // Short timeout for direct connection attempt
+            const directTimeout = Math.min(timeout, 2000);
+            
+            try {
+                ws = new WebSocket(url);
+            } catch (e) {
+                reject(new Error(`Failed to connect: ${e.message}`));
+                return;
+            }
+            
+            timeoutId = setTimeout(() => {
+                settle(reject, new Error('Connection timeout'));
+            }, directTimeout);
+            
+            ws.onopen = () => {
+                // Connected! Send the command
+                ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: cmd,
+                    requestId: 'direct-cmd'
+                }));
+                
+                // Extend timeout now that we're connected
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => {
+                    settle(reject, new Error('Command timeout'));
+                }, timeout);
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.requestId === 'direct-cmd') {
+                        if (msg.status === 'ok') {
+                            settle(resolve, msg.result);
+                        } else {
+                            settle(reject, new Error(msg.error || 'Command failed'));
+                        }
+                    }
+                } catch (e) {
+                    // Might be other messages, ignore
+                }
+            };
+            
+            ws.onerror = () => {
+                settle(reject, new Error('Connection error'));
+            };
+            
+            ws.onclose = (event) => {
+                if (!settled && event.code !== 1000) {
+                    settle(reject, new Error(`Connection closed: ${event.code}`));
+                }
+            };
+        });
+    }
+    
+    /**
+     * Send command via directory node proxy using remoteSend
+     */
+    sendViaProxy(node, cmd, timeout) {
+        return new Promise((resolve, reject) => {
+            const requestId = `proxy-${++this.commandId}`;
+            
+            const timeoutId = setTimeout(() => {
+                this.pendingCommands.delete(requestId);
+                reject(new Error('Proxy timeout'));
+            }, timeout);
+            
+            this.pendingCommands.set(requestId, { 
+                resolve: (result) => {
+                    clearTimeout(timeoutId);
+                    resolve(result);
+                }, 
+                reject: (err) => {
+                    clearTimeout(timeoutId);
+                    reject(err);
+                }
+            });
+            
+            // Use remoteSend through the directory node
+            this.send({
+                cmd: 'eval',
+                script: `remoteSend ${node.ip} {${cmd}}`,
+                requestId: requestId
+            });
+        });
+    }
+    
+    handleCommandResponse(msg) {
+        // Handle responses for local node commands
+        if (msg.requestId && this.pendingCommands.has(msg.requestId)) {
+            const { resolve, reject } = this.pendingCommands.get(msg.requestId);
+            this.pendingCommands.delete(msg.requestId);
+            
+            if (msg.status === 'ok') {
+                resolve(msg.result);
+            } else {
+                reject(new Error(msg.error || 'Command failed'));
+            }
+        }
+    }
+    
+    showToast(message, type = '') {
+        const toast = this.elements.toast;
+        toast.textContent = message;
+        toast.className = 'command-toast show ' + type;
+        
+        clearTimeout(this.toastTimeout);
+        this.toastTimeout = setTimeout(() => {
+            toast.className = 'command-toast';
+        }, 3000);
+    }
+    
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text || '';
+        return div.innerHTML;
+    }
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+    new MeshDirectory();
+});
+    </script>
+</body>
+</html>
