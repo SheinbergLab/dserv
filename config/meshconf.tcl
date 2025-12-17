@@ -4,52 +4,34 @@ puts "initializing mesh networking"
 proc exit {args} { error "exit not available for this subprocess" }
 
 # Subscribe to mesh-relevant datapoints
-dservAddExactMatch ess/status
-dservAddExactMatch ess/system
-dservAddExactMatch ess/protocol
-dservAddExactMatch ess/variant
-dservAddExactMatch ess/subject
+set ess_dps { 
+		status system protocol variant subject 
+		obs_total obs_id
+		block_n_complete block_pct_complete block_pct_correct
+}
+foreach dp $ess_dps { dservAddExactMatch ess/$dp } 
 
-# Datapoint handler for automatic status updates
+# Datapoint handler for status updates
 proc mesh_datapoint_handler { dpoint data } {
-    switch $dpoint {
-        "ess/status" {
-            meshUpdateStatus $data
-        }
-
-        "ess/subject" {
-            if {$data ne ""} {
-                meshSetField "subject" $data
-            } else {
-                meshRemoveField "subject"
-            }
-        }
-        "ess/system" {
-            if {$data ne ""} {
-                meshSetField "system" $data
-            } else {
-                meshRemoveField "system"
-            }
-        }
-        "ess/protocol" {
-            if {$data ne ""} {
-                meshSetField "protocol" $data
-            } else {
-                meshRemoveField "protocol"
-            }
-        }
-        "ess/variant" {
-            if {$data ne ""} {
-                meshSetField "variant" $data
-            } else {
-                meshRemoveField "variant"
-            }
-        }
+    # Extract field name from "ess/fieldname"
+    set field [lindex [split $dpoint /] 1]
+    
+    # Status is special - uses meshUpdateStatus
+    if {$field eq "status"} {
+        meshUpdateStatus $data
+        return
+    }
+    
+    # Everything else: set or remove based on value
+    if {$data ne ""} {
+        meshSetField $field $data
+    } else {
+        meshRemoveField $field
     }
 }
 
 # Connect the handler to all mesh datapoints
-foreach dp { status subject system variant protocol } {
+foreach dp $ess_dps {
     dpointSetScript ess/$dp mesh_datapoint_handler
 }
 
