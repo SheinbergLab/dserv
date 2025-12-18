@@ -14,6 +14,7 @@ class DservConnection {
             autoReconnect: options.autoReconnect !== false,
             reconnectDelay: options.reconnectDelay || 2000,
             maxReconnectDelay: options.maxReconnectDelay || 30000,
+            connectTimeout: options.connectTimeout || 10000,  // New: connection timeout
             createLinkedSubprocess: options.createLinkedSubprocess || false,
             onStatus: options.onStatus || (() => {}),
             onMessage: options.onMessage || (() => {}),
@@ -67,17 +68,66 @@ class DservConnection {
     }
 
     async connect() {
+        // Already connected - nothing to do
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             return Promise.resolve();
+        }
+
+        // Clean up any existing socket in a bad state (CONNECTING or CLOSING)
+        if (this.ws) {
+            try {
+                this.ws.onopen = null;
+                this.ws.onclose = null;
+                this.ws.onerror = null;
+                this.ws.onmessage = null;
+                this.ws.close();
+            } catch (e) {
+                // Ignore cleanup errors
+            }
+            this.ws = null;
         }
 
         return new Promise((resolve, reject) => {
             const url = this.getWsUrl();
             this.options.onStatus('connecting', `Connecting to ${url}...`);
             
+            // Track if promise has been settled to prevent double resolve/reject
+            let settled = false;
+            
+            // Connection timeout - critical for WiFi/remote connections
+            const connectTimeout = setTimeout(() => {
+                if (!settled) {
+                    settled = true;
+                    const err = new Error(`Connection timeout after ${this.options.connectTimeout}ms`);
+                    this.options.onError(err.message);
+                    this.emit('error', err);
+                    
+                    // Clean up the socket
+                    if (this.ws) {
+                        try {
+                            this.ws.onopen = null;
+                            this.ws.onclose = null;
+                            this.ws.onerror = null;
+                            this.ws.onmessage = null;
+                            this.ws.close();
+                        } catch (e) {}
+                        this.ws = null;
+                    }
+                    
+                    reject(err);
+                    
+                    // Schedule reconnect if enabled
+                    if (this.options.autoReconnect) {
+                        this.scheduleReconnect();
+                    }
+                }
+            }, this.options.connectTimeout);
+            
             try {
                 this.ws = new WebSocket(url);
             } catch (e) {
+                settled = true;
+                clearTimeout(connectTimeout);
                 this.options.onError(`Failed to create WebSocket: ${e.message}`);
                 this.emit('error', e);
                 reject(e);
@@ -85,6 +135,11 @@ class DservConnection {
             }
 
             this.ws.onopen = async () => {
+                // If we already rejected (e.g., due to timeout), ignore this
+                if (settled) return;
+                settled = true;
+                clearTimeout(connectTimeout);
+                
                 this.connected = true;
                 this.reconnectAttempts = 0;
                 this.options.onStatus('connected', 'Connected');
@@ -106,23 +161,49 @@ class DservConnection {
 
             this.ws.onclose = (event) => {
                 this.connected = false;
+                
+                // If we haven't settled yet, this is a connection failure during handshake
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(connectTimeout);
+                    const err = new Error(`Connection closed during handshake (code: ${event.code})`);
+                    this.options.onError(err.message);
+                    reject(err);
+                    
+                    // Schedule reconnect if enabled
+                    if (this.options.autoReconnect) {
+                        this.scheduleReconnect();
+                    }
+                    return;
+                }
+                
+                // Normal disconnect after connection was established
                 this.options.onStatus('disconnected', `Disconnected (code: ${event.code})`);
                 this.emit('disconnected');
                 
+                // Reject all pending requests
                 for (const [id, req] of this.pendingRequests) {
                     req.reject(new Error('Connection closed'));
                 }
                 this.pendingRequests.clear();
 
+                // Auto-reconnect on unexpected close
                 if (this.options.autoReconnect && event.code !== 1000) {
                     this.scheduleReconnect();
                 }
             };
 
             this.ws.onerror = (error) => {
+                // Log the error, but don't reject here
+                // The WebSocket spec guarantees onclose fires after onerror,
+                // so we let onclose handle the rejection to avoid race conditions
+                console.warn('WebSocket error event:', error);
                 this.options.onError('WebSocket error');
                 this.emit('error', error);
-                reject(error);
+                
+                // Note: Do NOT reject here - onclose will handle it
+                // This prevents the race condition where onerror fires but
+                // connection still succeeds
             };
 
             this.ws.onmessage = (event) => {
@@ -230,6 +311,11 @@ class DservConnection {
             throw new Error('Not connected');
         }
         
+        // Additional check for socket state
+        if (this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error(`WebSocket not ready (state: ${this.ws.readyState})`);
+        }
+        
         return new Promise((resolve, reject) => {
             const id = ++this.requestId;
             const timeout = setTimeout(() => {
@@ -255,6 +341,11 @@ class DservConnection {
     async send(commandOrObject, subprocess = null) {
         if (!this.connected || !this.ws) {
             throw new Error('Not connected');
+        }
+        
+        // Additional check for socket state
+        if (this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error(`WebSocket not ready (state: ${this.ws.readyState})`);
         }
 
         // If it's an object (like {cmd: 'subscribe'}), send as JSON directly
@@ -288,6 +379,14 @@ class DservConnection {
             throw new Error('No linked subprocess available');
         }
         return this.send(command, this.linkedSubprocess);
+    }
+    
+    /**
+     * Check if the connection is ready to send messages
+     * @returns {boolean} True if connected and socket is open
+     */
+    isReady() {
+        return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN;
     }
 }
 

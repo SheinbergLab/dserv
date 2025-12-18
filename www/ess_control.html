@@ -180,18 +180,7 @@
     <script src="js/TclTerminal.js"></script>
     <script src="js/PageNav.js"></script>
     
-    <!-- Main application script -->
-    <script src="js/ess_app.js"></script>
-    
-    <!-- Initialize page navigation -->
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            // Initialize PageNav dropdown
-            PageNav.init('page-nav-container', 'ess_control');
-        });
-    </script>
-    
-    <!-- Eye settings handlers -->
+    <!-- Eye settings class definition (initialized by ess_app.js) -->
     <script>
         class EyeSettings {
             constructor(dpManager) {
@@ -294,15 +283,16 @@
                 return result;
             }
         }
-        
+    </script>
+    
+    <!-- Main application script -->
+    <script src="js/ess_app.js"></script>
+    
+    <!-- Initialize page navigation -->
+    <script>
         document.addEventListener('DOMContentLoaded', () => {
-            const checkDpManager = setInterval(() => {
-                if (window.dpManager) {
-                    clearInterval(checkDpManager);
-                    window.eyeSettings = new EyeSettings(window.dpManager);
-                }
-            }, 100);
-            setTimeout(() => clearInterval(checkDpManager), 5000);
+            // Initialize PageNav dropdown
+            PageNav.init('page-nav-container', 'ess_control');
         });
     </script>
 </body>

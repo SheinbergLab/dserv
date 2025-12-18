@@ -8,6 +8,7 @@
  * - ESS Control panel (ESSControl)
  * - Eye/Touch Visualizer (EyeTouchVisualizer)
  * - Stimulus display (GraphicsRenderer)
+ * - Eye Settings
  * - Performance display
  */
 
@@ -17,6 +18,7 @@ let dpManager = null;
 let essControl = null;
 let eyeTouchViz = null;
 let stimRenderer = null;
+let eyeSettings = null;
 
 // Console logging
 const consoleOutput = [];
@@ -32,6 +34,7 @@ async function init() {
     connection = new DservConnection({
         subprocess: 'ess',
         autoReconnect: true,
+        connectTimeout: 10000,  // 10 second timeout for WiFi connections
         onStatus: handleConnectionStatus,
         onError: handleConnectionError
     });
@@ -41,7 +44,7 @@ async function init() {
         autoGetKeys: false  // Don't auto-fetch keys until connected
     });
     
-    // Expose dpManager globally for EyeSettings
+    // Expose dpManager globally (for debugging, not for initialization timing)
     window.dpManager = dpManager;
     
     // Connect first, then initialize components
@@ -56,6 +59,7 @@ async function init() {
         initStimRenderer();
         initPerformanceDisplay();
         initMeshManager();
+        initEyeSettings();
         
         // Small delay to ensure subscriptions are registered on server
         // before we touch the datapoints
@@ -80,6 +84,12 @@ async function init() {
  * Sends as a single foreach command for efficiency
  */
 function requestInitialData() {
+    // Guard against sending on closed/closing socket
+    if (!connection?.isReady?.()) {
+        log('Cannot request initial data - connection not ready', 'warn');
+        return;
+    }
+    
     log('Touching ESS datapoints to get current state...', 'info');
     
     // Send using eval command format (like Vue's essCommand)
@@ -94,6 +104,7 @@ function requestInitialData() {
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile
+          em/settings
           system/hostname system/os
         } {
           catch { dservTouch $v }
@@ -186,18 +197,30 @@ function initPerformanceDisplay() {
     });
     
     dpManager.subscribe('ess/block_pct_correct', (data) => {
-	const val = parseFloat(data.value);
-	const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
-	document.getElementById('perf-correct').textContent = pct;
+        const val = parseFloat(data.value);
+        const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
+        document.getElementById('perf-correct').textContent = pct;
     });
     
     dpManager.subscribe('ess/block_pct_complete', (data) => {
-	const val = parseFloat(data.value);
-	const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
-	document.getElementById('perf-complete').textContent = pct;
+        const val = parseFloat(data.value);
+        const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
+        document.getElementById('perf-complete').textContent = pct;
     });
     
     log('Performance display initialized', 'info');
+}
+
+/**
+ * Initialize Eye Settings panel
+ */
+function initEyeSettings() {
+    // EyeSettings class is defined in ess_control.html
+    if (typeof EyeSettings !== 'undefined') {
+        eyeSettings = new EyeSettings(dpManager);
+        window.eyeSettings = eyeSettings;
+        log('Eye Settings initialized', 'info');
+    }
 }
 
 /**
@@ -378,7 +401,7 @@ function initMeshManager() {
         const container = document.getElementById('mesh-dropdown-container');
         if (container) {
             meshDropdown = new MeshDropdown(container, connection, {
-                guiPath: '/essgui/',
+                guiPath: '/ess_control.html',
                 pollInterval: 5000
             });
         }

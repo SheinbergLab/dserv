@@ -28,7 +28,7 @@ class MeshDropdown {
         
         this.options = {
             pollInterval: options.pollInterval || 5000,
-            guiPath: options.guiPath || '/essgui/',  // Path to append for GUI links
+            guiPath: options.guiPath || '/ess_control',  // Path to append for GUI links
             showLocalBadge: options.showLocalBadge !== false,
             showSSLBadge: options.showSSLBadge !== false,
             showSubject: options.showSubject !== false,
