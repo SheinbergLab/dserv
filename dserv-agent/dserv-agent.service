@@ -1,0 +1,30 @@
+[Unit]
+Description=dserv Management Agent
+Documentation=https://github.com/SheinbergLab/dserv-agent
+After=network.target
+# Don't start before dserv, but don't require it
+Wants=dserv.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/dserv-agent -allow-reboot
+Restart=always
+RestartSec=5
+
+# Security hardening (allow what we need)
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=read-only
+PrivateTmp=true
+
+# Environment file for token (optional)
+EnvironmentFile=-/etc/dserv-agent/env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dserv-agent
+
+[Install]
+WantedBy=multi-user.target

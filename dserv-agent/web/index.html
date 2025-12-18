@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lab Mesh Directory</title>
+    <style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1419;
+    color: #e7e9ea;
+    min-height: 100vh;
+    line-height: 1.5;
+}
+.container { max-width: 1400px; margin: 0 auto; padding: 24px 20px; }
+
+header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid #2f3336;
+    flex-wrap: wrap; gap: 16px;
+}
+header h1 {
+    font-size: 24px; font-weight: 700;
+    background: linear-gradient(135deg, #60a5fa, #34d399);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.header-right { display: flex; align-items: center; gap: 16px; }
+.search-box { position: relative; }
+.search-box input {
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 8px;
+    padding: 8px 12px 8px 36px; color: #e7e9ea; font-size: 14px; width: 200px; outline: none;
+}
+.search-box input:focus { border-color: #3b82f6; }
+.search-box input::placeholder { color: #71767b; }
+.search-box::before { content: "🔍"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.5; }
+.connection-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: #1a2634; border-radius: 20px; font-size: 13px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #71767b; }
+.status-dot.connected { background: #34d399; box-shadow: 0 0 8px #34d39966; }
+.status-dot.connecting { background: #fbbf24; animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.node-list { display: flex; flex-direction: column; gap: 8px; max-width: 1000px; margin: 0 auto; }
+.node-row {
+    background: #16202a; border: 1px solid #2f3336; border-radius: 10px;
+    padding: 12px 16px; transition: all 0.2s ease;
+}
+.node-row:hover { border-color: #3b82f6; }
+.node-row.local { border-left: 3px solid #f59e0b; }
+
+.node-line-top {
+    display: grid; grid-template-columns: minmax(130px, 1fr) 76px 1fr 1fr 1fr 90px;
+    align-items: center; gap: 6px; margin-bottom: 8px;
+}
+.node-identity { min-width: 0; }
+.node-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-id { font-size: 11px; color: #71767b; font-family: 'SF Mono', Monaco, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-status-badge {
+    display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
+    border-radius: 10px; font-size: 11px; font-weight: 500; text-transform: capitalize;
+}
+.node-status-badge.running { background: #1a3d2e; color: #34d399; }
+.node-status-badge.stopped { background: #3d1a1a; color: #f87171; }
+.node-status-badge.idle { background: #1a2634; color: #71767b; }
+.node-status-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.info-col { min-width: 0; }
+.info-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; color: #71767b; }
+.info-value { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info-value.empty { color: #4a5568; }
+
+.node-line-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.node-badges { display: flex; align-items: center; gap: 6px; }
+.badge { font-size: 9px; padding: 2px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.3px; }
+.badge.ssl { background: #1a3d2e; color: #34d399; }
+.badge.local { background: #3d2e1a; color: #fbbf24; }
+.badge.ip { background: #1e3a5f; color: #60a5fa; font-family: 'SF Mono', Monaco, monospace; text-transform: none; font-size: 10px; }
+.node-stats { font-size: 12px; color: #71767b; flex: 1; text-align: center; }
+.node-stats .trial-num { color: #e7e9ea; font-weight: 500; font-family: 'SF Mono', Monaco, monospace; }
+.node-stats .perf-num { color: #34d399; font-weight: 500; }
+.node-stats .stats-sep { color: #4a5568; margin: 0 6px; }
+.node-actions { display: flex; align-items: center; gap: 6px; }
+
+.btn {
+    padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; font-weight: 500;
+    cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; justify-content: center;
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-start { background: #1a3d2e; color: #34d399; }
+.btn-start:hover:not(:disabled) { background: #2d5a45; }
+.btn-stop { background: #3d1a1a; color: #f87171; }
+.btn-stop:hover:not(:disabled) { background: #5a2d2d; }
+.btn-reset { background: #2f3336; color: #a0aec0; }
+.btn-reset:hover:not(:disabled) { background: #3f4448; }
+.btn-open { background: #1e3a5f; color: #60a5fa; text-decoration: none; }
+.btn-open:hover { background: #2d5a8f; }
+.btn-gear { background: #2f3336; color: #a0aec0; font-size: 14px; min-width: 36px; }
+.btn-gear:hover { background: #3f4448; color: #e7e9ea; }
+
+.empty-state { text-align: center; padding: 80px 40px; color: #71767b; }
+.empty-state-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state h3 { font-size: 20px; color: #e7e9ea; margin-bottom: 8px; }
+
+.toast {
+    position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 8px;
+    font-size: 14px; z-index: 1000; transform: translateY(100px); opacity: 0; transition: all 0.3s ease;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-color: #34d399; color: #34d399; }
+.toast.error { border-color: #f87171; color: #f87171; }
+
+footer {
+    max-width: 1000px; margin: 40px auto 0; padding-top: 20px; border-top: 1px solid #2f3336;
+    display: flex; justify-content: space-between; color: #71767b; font-size: 13px;
+}
+
+/* Panel */
+.panel-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); z-index: 1000; opacity: 0; visibility: hidden; transition: all 0.3s ease;
+}
+.panel-overlay.open { opacity: 1; visibility: visible; }
+.agent-panel {
+    position: fixed; top: 0; right: 0; width: 420px; max-width: 90vw; height: 100vh;
+    background: #0f1419; border-left: 1px solid #2f3336; z-index: 1001;
+    transform: translateX(100%); transition: transform 0.3s ease, width 0.3s ease;
+    display: flex; flex-direction: column;
+}
+.agent-panel.open { transform: translateX(0); }
+.agent-panel.expanded { width: 750px; }
+.panel-header {
+    padding: 16px 20px; border-bottom: 1px solid #2f3336;
+    display: flex; justify-content: space-between; align-items: center;
+}
+.panel-header h2 { font-size: 18px; font-weight: 600; }
+.panel-header-actions { display: flex; align-items: center; gap: 8px; }
+.panel-expand-btn {
+    background: #2f3336; border: none; color: #a0aec0; padding: 6px 10px;
+    border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+.panel-expand-btn:hover { background: #3f4448; color: #e7e9ea; }
+.panel-close { background: none; border: none; color: #71767b; font-size: 24px; cursor: pointer; }
+.panel-close:hover { color: #e7e9ea; }
+.panel-content { flex: 1; overflow-y: auto; padding: 20px; }
+.panel-section { background: #16202a; border: 1px solid #2f3336; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.panel-section-title {
+    font-size: 14px; font-weight: 600; color: #71767b; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;
+}
+.panel-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.panel-info-item .label { font-size: 11px; color: #71767b; text-transform: uppercase; }
+.panel-info-item .value { font-size: 14px; font-family: 'SF Mono', Monaco, monospace; }
+.panel-btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.panel-btn {
+    padding: 10px 16px; border: none; border-radius: 8px; font-size: 13px; font-weight: 500;
+    cursor: pointer; flex: 1; min-width: 80px;
+}
+.panel-btn.success { background: #1a3d2e; color: #34d399; }
+.panel-btn.success:hover { background: #2d5a45; }
+.panel-btn.danger { background: #3d1a1a; color: #f87171; }
+.panel-btn.danger:hover { background: #5a2d2d; }
+.panel-btn.secondary { background: #2f3336; color: #a0aec0; }
+.panel-btn.secondary:hover { background: #3f4448; }
+.panel-btn.warning { background: #3d2e1a; color: #fbbf24; }
+.panel-btn.warning:hover { background: #5a451d; }
+.panel-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.service-status { display: inline-flex; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.service-status.active { background: #1a3d2e; color: #34d399; }
+.service-status.inactive { background: #3d1a1a; color: #f87171; }
+.service-status.unknown { background: #1a2634; color: #71767b; }
+
+.component-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #2f3336; gap: 12px; flex-wrap: wrap; }
+.component-row:last-child { border-bottom: none; }
+.component-info { flex: 1; min-width: 120px; }
+.component-name { font-weight: 500; font-size: 14px; }
+.component-version { font-size: 12px; color: #71767b; font-family: 'SF Mono', Monaco, monospace; }
+.component-version .latest { color: #34d399; }
+.component-actions { display: flex; gap: 8px; align-items: center; }
+.component-select { background: #1a2634; border: 1px solid #2f3336; border-radius: 6px; padding: 6px 8px; color: #e7e9ea; font-size: 11px; max-width: 160px; }
+.component-btn { padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; background: #2f3336; color: #a0aec0; }
+.component-btn:hover { background: #3f4448; }
+.component-btn.update { background: #3b82f6; color: white; }
+.panel-progress { margin-top: 12px; display: none; }
+.panel-progress.visible { display: block; }
+.progress-bar { height: 4px; background: #2f3336; border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: #3b82f6; width: 0%; transition: width 0.3s ease; }
+.progress-text { font-size: 12px; color: #71767b; margin-top: 6px; }
+.panel-not-connected { text-align: center; padding: 40px 20px; color: #71767b; }
+.panel-not-connected h3 { color: #e7e9ea; margin-bottom: 8px; }
+
+.logs-container {
+    background: #0d1117;
+    border: 1px solid #2f3336;
+    border-radius: 6px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    overflow-x: auto;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre;
+    color: #8b949e;
+}
+.logs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.logs-header select {
+    background: #1a2634;
+    border: 1px solid #2f3336;
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: #e7e9ea;
+    font-size: 12px;
+}
+
+@media (max-width: 900px) {
+    .node-line-top { grid-template-columns: 1fr 80px; }
+    .node-line-top .info-col { display: none; }
+}
+@media (max-width: 500px) {
+    .container { padding: 16px 12px; }
+    .agent-panel { width: 100vw; max-width: 100vw; }
+}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lab Mesh Directory</h1>
+            <div class="header-right">
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="Filter nodes...">
+                </div>
+                <div class="connection-badge">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+        </header>
+        <div class="node-list" id="node-list">
+            <div class="empty-state">
+                <div class="empty-state-icon">📡</div>
+                <h3>Searching for nodes...</h3>
+                <p>Looking for active experiment systems on the mesh network.</p>
+            </div>
+        </div>
+        <footer>
+            <span id="node-count"></span>
+            <span>Updated: <span id="last-update">--</span></span>
+        </footer>
+    </div>
+    <div class="toast" id="toast"></div>
+    <div class="panel-overlay" id="panel-overlay"></div>
+    <div class="agent-panel" id="agent-panel">
+        <div class="panel-header">
+            <h2 id="panel-title">Node Management</h2>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="component-btn" onclick="app.togglePanelExpand()" id="expand-btn" title="Expand panel">⤢</button>
+                <button class="panel-close" id="panel-close">×</button>
+            </div>
+        </div>
+        <div class="panel-content" id="panel-content"></div>
+    </div>
+<script>
+const CONFIG = { reconnectDelay: 2000, agentPort: 80 };
+
+class LabMeshApp {
+    constructor() {
+        this.ws = null;
+        this.connected = false;
+        this.nodes = new Map();
+        this.searchTerm = '';
+        this.panelOpen = false;
+        this.panelNode = null;
+        this.panelWs = null;
+        this.panelStatus = null;
+        this.panelComponents = [];
+        
+        this.el = {
+            statusDot: document.getElementById('status-dot'),
+            statusText: document.getElementById('status-text'),
+            nodeCount: document.getElementById('node-count'),
+            nodeList: document.getElementById('node-list'),
+            lastUpdate: document.getElementById('last-update'),
+            searchInput: document.getElementById('search-input'),
+            toast: document.getElementById('toast'),
+            panelOverlay: document.getElementById('panel-overlay'),
+            agentPanel: document.getElementById('agent-panel'),
+            panelTitle: document.getElementById('panel-title'),
+            panelContent: document.getElementById('panel-content'),
+            panelClose: document.getElementById('panel-close')
+        };
+        
+        this.el.searchInput.addEventListener('input', e => { this.searchTerm = e.target.value.toLowerCase(); this.renderNodes(); });
+        this.el.panelClose.addEventListener('click', () => this.closePanel());
+        this.el.panelOverlay.addEventListener('click', () => this.closePanel());
+        document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.panelOpen) this.closePanel(); });
+        
+        this.connect();
+    }
+    
+    connect() {
+        this.setStatus('connecting', 'Connecting...');
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        try {
+            this.ws = new WebSocket(`${proto}//${location.host}/ws`);
+            this.ws.onopen = () => { this.connected = true; this.setStatus('connected', 'Connected'); this.ws.send(JSON.stringify({type:'mesh_peers'})); };
+            this.ws.onclose = () => { this.connected = false; this.setStatus('disconnected', 'Disconnected'); setTimeout(() => this.connect(), CONFIG.reconnectDelay); };
+            this.ws.onerror = () => this.setStatus('disconnected', 'Error');
+            this.ws.onmessage = e => this.handleMsg(JSON.parse(e.data));
+        } catch(e) { this.setStatus('disconnected', 'Failed'); setTimeout(() => this.connect(), CONFIG.reconnectDelay); }
+    }
+    
+    setStatus(state, text) { this.el.statusDot.className = 'status-dot ' + state; this.el.statusText.textContent = text; }
+    
+    handleMsg(msg) {
+        if (msg.type === 'mesh_peers_response' || msg.type === 'mesh_update') {
+            if (msg.data) this.updateNodes(msg.data);
+        }
+        // Route panel messages when using main WS for local node
+        if (this.panelOpen && this.panelUsingMainWs) {
+            this.handlePanelMsg(msg);
+        }
+    }
+    
+    updateNodes(peers) {
+        this.nodes.clear();
+        peers.forEach(p => {
+            this.nodes.set(p.applianceId, {
+                id: p.applianceId, name: p.name, status: p.status, ip: p.ipAddress,
+                webPort: p.webPort, ssl: p.ssl, isLocal: p.isLocal,
+                system: p.customFields?.system, protocol: p.customFields?.protocol,
+                variant: p.customFields?.variant, subject: p.customFields?.subject,
+                obs_id: p.customFields?.obs_id, obs_total: p.customFields?.obs_total,
+                block_pct_correct: p.customFields?.block_pct_correct
+            });
+        });
+        this.renderNodes();
+        this.el.lastUpdate.textContent = new Date().toLocaleTimeString();
+    }
+    
+    renderNodes() {
+        let nodes = Array.from(this.nodes.values());
+        if (this.searchTerm) {
+            nodes = nodes.filter(n => `${n.name} ${n.id} ${n.system} ${n.protocol} ${n.subject}`.toLowerCase().includes(this.searchTerm));
+        }
+        nodes.sort((a,b) => { if (a.isLocal && !b.isLocal) return -1; if (!a.isLocal && b.isLocal) return 1; return (a.name||a.id).localeCompare(b.name||b.id); });
+        
+        this.el.nodeCount.textContent = `${nodes.length} node${nodes.length !== 1 ? 's' : ''}`;
+        
+        if (!nodes.length) {
+            this.el.nodeList.innerHTML = `<div class="empty-state">
+                <div class="empty-state-icon">📡</div>
+                <h3>${this.searchTerm ? 'No matches' : 'No nodes found'}</h3>
+                <p>${this.searchTerm ? 'Try a different search.' : 'Mesh unavailable - dserv may be stopped.'}</p>
+                <button class="btn btn-gear" style="margin-top:16px;padding:12px 24px;font-size:14px;" onclick="app.openLocalPanel()">⚙ Manage Local System</button>
+            </div>`;
+            return;
+        }
+        
+        this.el.nodeList.innerHTML = nodes.map(n => this.renderRow(n)).join('');
+        this.el.nodeList.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', e => {
+                const action = e.target.dataset.action;
+                const nodeId = e.target.dataset.nodeId;
+                if (action === 'manage') {
+                    this.openPanel(nodeId);
+                } else if (['start', 'stop', 'reset'].includes(action)) {
+                    this.sendEssCommand(nodeId, action);
+                }
+            });
+        });
+    }
+    
+    sendEssCommand(nodeId, action) {
+        const node = this.nodes.get(nodeId);
+        if (!node) return;
+        
+        const cmds = { start: 'ess::start', stop: 'ess::stop', reset: 'ess::reset' };
+        const cmd = cmds[action];
+        
+        this.showToast(`Sending ${action} to ${node.name || node.id}...`);
+        
+        if (node.isLocal) {
+            // Send via dserv WebSocket (need to connect to dserv, not agent)
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const dservPort = node.webPort || 2565;
+            this.sendToDserv(`${proto}//${location.hostname}:${dservPort}/ws`, cmd, node);
+        } else {
+            // Send to remote dserv
+            const proto = node.ssl ? 'wss:' : 'ws:';
+            this.sendToDserv(`${proto}//${node.ip}:${node.webPort || 2565}/ws`, cmd, node);
+        }
+    }
+    
+    sendToDserv(wsUrl, cmd, node) {
+        try {
+            const ws = new WebSocket(wsUrl);
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ cmd: 'eval', script: cmd }));
+                setTimeout(() => { ws.close(); this.showToast(`${cmd.split('::')[1]} sent`, 'success'); }, 200);
+            };
+            ws.onerror = () => {
+                this.showToast(`Failed to connect to ${node.name || node.id}`, 'error');
+            };
+        } catch (e) {
+            this.showToast(`Error: ${e.message}`, 'error');
+        }
+    }
+    
+    renderRow(n) {
+        const st = n.status || 'idle';
+        const name = (n.name || n.id).replace('Lab Station ', '');
+        const url = `${n.ssl?'https':'http'}://${n.isLocal ? location.hostname : n.ip}:${n.webPort||2565}/`;
+        let stats = [];
+        if (n.obs_id != null && n.obs_total != null) {
+            const t = parseInt(n.obs_id), tot = parseInt(n.obs_total);
+            if (!isNaN(t) && tot > 0) stats.push(`<span class="trial-num">${t+1}/${tot}</span>`);
+        }
+        if (n.block_pct_correct) { const v = parseFloat(n.block_pct_correct); if (!isNaN(v)) stats.push(`<span class="perf-num">${Math.round(v*100)}%</span>`); }
+        
+        return `<div class="node-row ${n.isLocal?'local':''}" data-node-id="${n.id}">
+            <div class="node-line-top">
+                <div class="node-identity"><div class="node-name">${this.esc(name)}</div><div class="node-id">${this.esc(n.id)}</div></div>
+                <div class="node-status-badge ${st}"><span class="dot"></span>${st}</div>
+                <div class="info-col"><div class="info-label">System</div><div class="info-value ${n.system?'':'empty'}">${n.system||'—'}</div></div>
+                <div class="info-col"><div class="info-label">Protocol</div><div class="info-value ${n.protocol?'':'empty'}">${n.protocol||'—'}</div></div>
+                <div class="info-col"><div class="info-label">Variant</div><div class="info-value ${n.variant?'':'empty'}">${n.variant||'—'}</div></div>
+                <div class="info-col"><div class="info-label">Subject</div><div class="info-value ${n.subject?'':'empty'}">${n.subject||'—'}</div></div>
+            </div>
+            <div class="node-line-bottom">
+                <div class="node-badges">${n.isLocal?'<span class="badge local">LOCAL</span>':''}${n.ip&&!n.isLocal?`<span class="badge ip">${n.ip}</span>`:''}${n.ssl?'<span class="badge ssl">SSL</span>':''}</div>
+                <div class="node-stats">${stats.join(' <span class="stats-sep">·</span> ')}</div>
+                <div class="node-actions">
+                    <button class="btn btn-start" data-action="start" data-node-id="${n.id}" ${st==='running'?'disabled':''} title="Start ESS">▶</button>
+                    <button class="btn btn-stop" data-action="stop" data-node-id="${n.id}" ${st!=='running'?'disabled':''} title="Stop ESS">■</button>
+                    <button class="btn btn-reset" data-action="reset" data-node-id="${n.id}" title="Reset ESS">↺</button>
+                    <a href="${url}ess_control.html" onclick="window.open('${url}ess_control.html', '${n.id}', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="btn btn-open">Open</a>
+                    <button class="btn btn-gear" data-action="manage" data-node-id="${n.id}" title="System Management">⚙</button>
+                </div>
+            </div>
+        </div>`;
+    }
+    
+    openPanel(nodeId) {
+        const node = this.nodes.get(nodeId);
+        if (!node) return;
+        this.openPanelForNode(node);
+    }
+    
+    openLocalPanel() {
+        // Create a synthetic local node for when mesh is unavailable
+        const localNode = {
+            id: 'local',
+            name: 'Local System',
+            isLocal: true,
+            ip: 'localhost'
+        };
+        this.openPanelForNode(localNode);
+    }
+    
+    openPanelForNode(node) {
+        this.panelNode = node;
+        this.panelOpen = true;
+        this.panelStatus = null;
+        this.panelComponents = [];
+        this.el.panelTitle.textContent = node.name || node.id;
+        this.el.panelOverlay.classList.add('open');
+        this.el.agentPanel.classList.add('open');
+        this.el.panelContent.innerHTML = '<div class="panel-not-connected"><div class="empty-state-icon">⏳</div><h3>Connecting...</h3></div>';
+        this.connectAgent(node);
+    }
+    
+    closePanel() {
+        this.panelOpen = false;
+        this.panelNode = null;
+        this.el.panelOverlay.classList.remove('open');
+        this.el.agentPanel.classList.remove('open');
+        this.el.agentPanel.classList.remove('expanded');
+        // Only close panelWs if it's a separate connection
+        if (this.panelWs && !this.panelUsingMainWs) { 
+            this.panelWs.close(); 
+        }
+        this.panelWs = null;
+        this.panelUsingMainWs = false;
+    }
+    
+    connectAgent(node) {
+        // For local node, reuse existing WebSocket connection
+        if (node.isLocal && this.ws && this.connected) {
+            this.panelWs = this.ws;
+            this.panelUsingMainWs = true;
+            this.ws.send(JSON.stringify({type:'status'}));
+            this.ws.send(JSON.stringify({type:'components'}));
+            return;
+        }
+        
+        // For remote nodes, open new connection
+        // Use .local hostname instead of IP (Safari blocks cross-origin WS to IPs)
+        this.panelUsingMainWs = false;
+        const host = node.id.toLowerCase() + '.local';
+        try {
+            this.panelWs = new WebSocket(`ws://${host}:${CONFIG.agentPort}/ws`);
+            this.panelWs.onopen = () => {
+                this.panelWs.send(JSON.stringify({type:'status'}));
+                this.panelWs.send(JSON.stringify({type:'components'}));
+            };
+            this.panelWs.onmessage = e => this.handlePanelMsg(JSON.parse(e.data));
+            this.panelWs.onerror = () => this.showPanelError('Connection error');
+            this.panelWs.onclose = () => {};
+            setTimeout(() => { if (this.panelWs?.readyState === WebSocket.CONNECTING) { this.panelWs.close(); this.showPanelError('Timeout'); } }, 5000);
+        } catch(e) { this.showPanelError(e.message); }
+    }
+    
+    showPanelError(err) {
+        this.el.panelContent.innerHTML = `<div class="panel-not-connected"><div class="empty-state-icon">⚠️</div><h3>Agent not available</h3><p>${err}</p><p style="margin-top:12px;font-size:12px;">Make sure dserv-agent is running.</p></div>`;
+    }
+    
+    handlePanelMsg(msg) {
+        if (msg.type === 'status' || msg.type === 'status_response') { if (msg.data) { this.panelStatus = msg.data; this.renderPanel(); } }
+        else if (msg.type === 'components_response') { if (msg.data) { this.panelComponents = msg.data; this.renderPanel(); } }
+        else if (msg.type === 'logs_response') { if (msg.data) { this.displayLogs(msg.data.logs); } else if (msg.error) { this.displayLogs('Error: ' + msg.error); } }
+        else if (msg.type === 'dserv_response') { this.showToast(msg.success ? 'Command sent' : msg.error, msg.success ? 'success' : 'error'); if (msg.success) this.panelWs?.send(JSON.stringify({type:'status'})); }
+        else if (msg.type === 'install_progress') { this.updateProgress(msg.data); }
+        else if (msg.type === 'install_complete') { this.showToast('Install complete!', 'success'); this.hideProgress(); this.panelWs?.send(JSON.stringify({type:'components'})); this.panelWs?.send(JSON.stringify({type:'status'})); }
+        else if (msg.type === 'install_error') { this.showToast('Install failed: ' + msg.error, 'error'); this.hideProgress(); }
+    }
+    
+    renderPanel() {
+        const s = this.panelStatus || {};
+        const d = s.dserv || {};
+        const sys = s.system || {};
+        const agent = s.agent || {};
+        const comps = this.panelComponents || [];
+        
+        this.el.panelContent.innerHTML = `
+            <div class="panel-section">
+                <div class="panel-section-title">System</div>
+                <div class="panel-info-grid">
+                    <div class="panel-info-item"><div class="label">Hostname</div><div class="value">${sys.hostname||'—'}</div></div>
+                    <div class="panel-info-item"><div class="label">Arch</div><div class="value">${sys.arch||'—'}</div></div>
+                    <div class="panel-info-item"><div class="label">Uptime</div><div class="value">${sys.uptime||'—'}</div></div>
+                    <div class="panel-info-item"><div class="label">Load</div><div class="value">${sys.loadAvg||'—'}</div></div>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-section-title"><span>dserv Service</span><span class="service-status ${d.status||'unknown'}">${d.status||'unknown'}</span></div>
+                <div class="panel-info-grid" style="margin-bottom:12px">
+                    <div class="panel-info-item"><div class="label">Version</div><div class="value">${d.version||'—'}</div></div>
+                    <div class="panel-info-item"><div class="label">PID</div><div class="value">${d.pid||'—'}</div></div>
+                </div>
+                <div class="panel-btn-group">
+                    <button class="panel-btn success" onclick="app.panelCmd('start')" ${d.status==='active'?'disabled':''}>Start</button>
+                    <button class="panel-btn danger" onclick="app.panelCmd('stop')" ${d.status!=='active'?'disabled':''}>Stop</button>
+                    <button class="panel-btn secondary" onclick="app.panelCmd('restart')">Restart</button>
+                </div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-section-title">
+                    <span>Service Logs</span>
+                    <button class="component-btn" onclick="app.loadLogs()">Refresh</button>
+                </div>
+                <div class="logs-header">
+                    <input type="text" id="logs-search" placeholder="Search logs..." oninput="app.filterLogs(this.value)" style="flex:1;background:#1a2634;border:1px solid #2f3336;border-radius:4px;padding:6px 10px;color:#e7e9ea;font-size:12px;">
+                    <span id="logs-match-count" style="font-size:11px;color:#71767b;margin-left:8px;"></span>
+                </div>
+                <div class="logs-container" id="panel-logs"><div style="color:#71767b">Click Refresh to load logs...</div></div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-section-title"><span>Software</span><button class="component-btn" onclick="app.refreshComps()">Refresh</button></div>
+                <div id="panel-comps">${comps.length ? comps.map(c=>this.renderComp(c)).join('') : '<div style="color:#71767b">Loading...</div>'}</div>
+                <div class="panel-progress" id="panel-progress"><div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div><div class="progress-text" id="progress-text">Installing...</div></div>
+            </div>
+            <div class="panel-section">
+                <div class="panel-section-title">System Actions</div>
+                <div class="panel-btn-group">
+                    <button class="panel-btn warning" onclick="app.reboot()">Reboot</button>
+                    <button class="panel-btn secondary" onclick="app.refreshPanel()">Refresh</button>
+                </div>
+            </div>
+            <div class="panel-section" style="opacity:0.7"><div class="panel-section-title">Agent</div><div style="font-size:12px;color:#71767b">v${agent.version||'?'} · ${agent.uptime||'—'}</div></div>
+        `;
+    }
+    
+    renderComp(comp) {
+        const c = comp.component || comp;
+        const hasUpd = comp.updateAvailable;
+        const inst = comp.installed;
+        let ver = !inst ? '<span style="color:#71767b">Not installed</span>' : hasUpd ? `${comp.currentVersion} → <span class="latest">${comp.latestVersion}</span>` : `${comp.currentVersion||'?'}${comp.latestVersion?' <span style="color:#34d399">✓</span>':''}`;
+        const assets = comp.assets?.length ? `<select class="component-select" id="asset-${c.id}">${comp.assets.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>` : '';
+        const btn = hasUpd ? 'Update' : inst ? 'Reinstall' : 'Install';
+        return `<div class="component-row"><div class="component-info"><div class="component-name">${c.name}</div><div class="component-version">${ver}</div></div><div class="component-actions">${assets}<button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button></div></div>`;
+    }
+    
+    panelCmd(action) { this.panelWs?.send(JSON.stringify({type:'dserv',action})); this.showToast(`Sending ${action}...`); }
+    loadLogs() { this.panelWs?.send(JSON.stringify({type:'logs'})); }
+    togglePanelExpand() {
+        const panel = this.el.agentPanel;
+        const btn = document.getElementById('expand-btn');
+        panel.classList.toggle('expanded');
+        if (btn) btn.textContent = panel.classList.contains('expanded') ? '⤡' : '⤢';
+    }
+    displayLogs(logs) {
+        this.currentLogs = logs || '';
+        const el = document.getElementById('panel-logs');
+        if (el) {
+            el.textContent = this.currentLogs || 'No logs available';
+            el.scrollTop = el.scrollHeight;
+        }
+        // Clear search
+        const searchEl = document.getElementById('logs-search');
+        if (searchEl) searchEl.value = '';
+        const countEl = document.getElementById('logs-match-count');
+        if (countEl) countEl.textContent = '';
+    }
+    filterLogs(query) {
+        const el = document.getElementById('panel-logs');
+        const countEl = document.getElementById('logs-match-count');
+        if (!el || !this.currentLogs) return;
+        
+        if (!query) {
+            el.textContent = this.currentLogs;
+            if (countEl) countEl.textContent = '';
+            return;
+        }
+        
+        const lines = this.currentLogs.split('\n');
+        const q = query.toLowerCase();
+        const matches = lines.filter(l => l.toLowerCase().includes(q));
+        
+        el.textContent = matches.length ? matches.join('\n') : 'No matches found';
+        if (countEl) countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+    }
+    reboot() { if (!confirm('Reboot this system?')) return; const h = this.panelNode?.isLocal ? 'localhost' : this.panelNode?.ip; fetch(`http://${h}:${CONFIG.agentPort}/api/system/reboot`,{method:'POST'}).then(()=>{this.showToast('Reboot scheduled','success');this.closePanel();}).catch(()=>this.showToast('Reboot failed','error')); }
+    refreshPanel() { this.panelWs?.send(JSON.stringify({type:'status'})); this.panelWs?.send(JSON.stringify({type:'components'})); }
+    refreshComps() { this.panelWs?.send(JSON.stringify({type:'components'})); }
+    install(id) { const sel = document.getElementById('asset-'+id); const a = sel?.value; if (!a) { this.showToast('Select an asset','error'); return; } if (!confirm(`Install ${a}?`)) return; this.panelWs?.send(JSON.stringify({type:'install',component:id,asset:a})); this.showProgress(); }
+    showProgress() { document.getElementById('panel-progress')?.classList.add('visible'); }
+    hideProgress() { document.getElementById('panel-progress')?.classList.remove('visible'); }
+    updateProgress(data) { const stages = {checking:{p:10,t:'Checking...'},found:{p:20,t:'Found '+data.version},downloading:{p:40,t:'Downloading...'},stopping:{p:60,t:'Stopping...'},installing:{p:80,t:'Installing...'},starting:{p:90,t:'Starting...'}}; const s = stages[data.stage]; if (s) { const f = document.getElementById('progress-fill'); const t = document.getElementById('progress-text'); if (f) f.style.width = s.p+'%'; if (t) t.textContent = s.t; } }
+    showToast(msg, type='') { this.el.toast.textContent = msg; this.el.toast.className = 'toast show ' + type; clearTimeout(this.toastTimeout); this.toastTimeout = setTimeout(() => this.el.toast.className = 'toast', 3000); }
+    esc(t) { const d = document.createElement('div'); d.textContent = t||''; return d.innerHTML; }
+}
+
+let app;
+document.addEventListener('DOMContentLoaded', () => { app = new LabMeshApp(); });
+</script>
+</body>
+</html>
