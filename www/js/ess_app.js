@@ -186,13 +186,15 @@ function initPerformanceDisplay() {
     });
     
     dpManager.subscribe('ess/block_pct_correct', (data) => {
-        const pct = Math.round(parseFloat(data.value) * 100);
-        document.getElementById('perf-correct').textContent = `${pct}%`;
+	const val = parseFloat(data.value);
+	const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
+	document.getElementById('perf-correct').textContent = pct;
     });
     
     dpManager.subscribe('ess/block_pct_complete', (data) => {
-        const pct = Math.round(parseFloat(data.value) * 100);
-        document.getElementById('perf-complete').textContent = `${pct}%`;
+	const val = parseFloat(data.value);
+	const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
+	document.getElementById('perf-complete').textContent = pct;
     });
     
     log('Performance display initialized', 'info');

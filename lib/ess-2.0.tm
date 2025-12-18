@@ -1215,6 +1215,13 @@ namespace eval ess {
             $current(state_system) reset
             ::ess::evt_put USER RESET [now]
             dservSet ess/user_reset 1
+        	reset_trial_info
+            dservSet ess/obs_id 0
+            if { [dservExists ess/obs_total] } {
+            	dservSet ess/obs_count "1/[dservGet ess/obs_total]"
+		    } else {
+		   		dservSet ess/obs_count "-/-"	
+		    }
         }
         return
     }
@@ -1356,9 +1363,9 @@ namespace eval ess {
     }
 
     proc reset_trial_info {} {
-        dservClear ess/block_n_complete
-        dservClear ess/block_pct_complete
-        dservClear ess/block_pct_correct
+        dservSet ess/block_n_complete   ""
+        dservSet ess/block_pct_complete ""
+        dservSet ess/block_pct_correct  ""
         dservClear trialdg
     }
 
@@ -2873,24 +2880,24 @@ namespace eval ess {
 namespace eval ess {
     proc sound_reset {} { send sound soundReset }
     proc sound_play { channel pitch duration } {
-	send sound "soundPlay $channel $pitch $duration"
+		send sound "soundPlay $channel $pitch $duration"
     }
     proc sound_set_voice { program bank channel } {
-	send sound "soundSetVoice $program $bank $channel"
+		send sound "soundSetVoice $program $bank $channel"
     }
     proc sound_set_volume { volume channel } {
-	send sound "soundVolume $volume $channel"
+		send sound "soundVolume $volume $channel"
     }
     proc sound_init {} {
-	sound_reset
-	sound_set_voice 81 0 0
-	sound_set_voice 57 17 1
-	sound_set_voice 60 0 2
-	sound_set_voice 42 0 3
-	sound_set_voice 21 0 4
-	sound_set_voice 8 0 5
-	sound_set_voice 113 100 6
-	foreach i "0 1 2 3 4 5 6" { sound_set_volume 127 $i }
+		sound_reset
+		sound_set_voice 81 0 0
+		sound_set_voice 57 17 1
+		sound_set_voice 60 0 2
+		sound_set_voice 42 0 3
+		sound_set_voice 21 0 4
+		sound_set_voice 8 0 5
+		sound_set_voice 113 100 6
+		foreach i "0 1 2 3 4 5 6" { sound_set_volume 127 $i }
     }
 }
 
@@ -2901,7 +2908,7 @@ namespace eval ess {
 namespace eval ess {
     proc juicer_init {} {}
     proc reward {ml} {
-	send juicer "reward $ml"
+		send juicer "reward $ml"
     }
 }
 ###############################################################################
@@ -3531,8 +3538,10 @@ namespace eval ess {
             dservSet ess/obs_total $trial_count
             dservSet ess/obs_id 0
             dservSet ess/obs_count "1/$trial_count"
-            ess_info "Reset obs count to 1/$trial_count" "variant"
         }
+        
+        # reset basic performance values
+        reset_trial_info
         
         ::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
         set current(variant) $variant

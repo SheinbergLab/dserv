@@ -198,6 +198,40 @@ header .status-dot.connecting {
     font-size: 16px;
 }
 
+/* SSL Certificate Badge */
+.ssl-cert-badge {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+}
+
+.ssl-cert-badge a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: rgba(96, 165, 250, 0.15);
+    border: 1px solid rgba(96, 165, 250, 0.3);
+    border-radius: 6px;
+    color: #60a5fa;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(10px);
+}
+
+.ssl-cert-badge a:hover {
+    background: rgba(96, 165, 250, 0.25);
+    border-color: #60a5fa;
+    transform: translateY(-1px);
+}
+
+.ssl-cert-badge .icon {
+    font-size: 14px;
+}
+
 /* System Info */
 .system-info {
     margin-top: 48px;
@@ -243,26 +277,35 @@ header .status-dot.connecting {
     background: #16202a;
     border: 1px solid #2f3336;
     border-radius: 8px;
-    padding: 12px 14px;
-    text-decoration: none;
-    color: inherit;
-    transition: all 0.2s ease;
     display: flex;
     flex-direction: column;
-    gap: 4px;
     min-width: 180px;
     max-width: 220px;
     flex-shrink: 0;
+    overflow: hidden;
 }
 
 .mesh-card:hover {
-    background: #1a2634;
     border-color: #3b82f6;
-    transform: translateY(-1px);
 }
 
 .mesh-card.local {
     border-left: 3px solid #f59e0b;
+}
+
+.mesh-card-main {
+    padding: 12px 14px;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    transition: background 0.2s ease;
+}
+
+.mesh-card-main:hover {
+    background: #1a2634;
 }
 
 .mesh-card-header {
@@ -353,6 +396,31 @@ header .status-dot.connecting {
     color: #f59e0b;
 }
 
+/* GUI quick-link button */
+.mesh-gui-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: #1a2634;
+    border-top: 1px solid #2f3336;
+    color: #58a6ff;
+    text-decoration: none;
+    font-size: 11px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.mesh-gui-link:hover {
+    background: #213547;
+    color: #79c0ff;
+}
+
+.mesh-gui-link svg {
+    opacity: 0.8;
+}
+
 /* Hide scrollbar but keep functionality */
 .mesh-grid::-webkit-scrollbar {
     height: 4px;
@@ -390,6 +458,14 @@ footer a:hover {
     </style>
 </head>
 <body>
+    <!-- SSL Certificate Install Badge -->
+    <div class="ssl-cert-badge">
+        <a href="/lab-ca.pem" download title="Download & install SSL certificate for trusted connections">
+            <span class="icon">🔒</span>
+            Install Cert
+        </a>
+    </div>
+    
     <div class="container">
         <header>
             <h1>dserv</h1>
@@ -759,31 +835,42 @@ class DservStatus {
         
         this.elements.meshSystems.innerHTML = sorted.map(sys => {
             const url = this.getSystemUrl(sys);
+            const guiUrl = this.getSystemUrl(sys) + 'ess_control';
             const status = sys.status || 'idle';
             
             // Shorter name display
             const displayName = (sys.name || sys.id).replace('Lab Station ', '');
             
             return `
-                <a href="${url}" class="mesh-card ${sys.isLocal ? 'local' : ''}" target="${sys.isLocal ? '_self' : '_blank'}" title="${sys.name || sys.id}">
-                    <div class="mesh-card-header">
-                        <div style="min-width: 0; flex: 1;">
-                            <h3>${displayName}</h3>
-                            <div class="mesh-id">${sys.id}</div>
+                <div class="mesh-card ${sys.isLocal ? 'local' : ''}">
+                    <a href="${url}" class="mesh-card-main" target="${sys.isLocal ? '_self' : '_blank'}" title="${sys.name || sys.id}">
+                        <div class="mesh-card-header">
+                            <div style="min-width: 0; flex: 1;">
+                                <h3>${displayName}</h3>
+                                <div class="mesh-id">${sys.id}</div>
+                            </div>
+                            <div class="mesh-status">
+                                <span class="mesh-status-dot ${status}"></span>
+                            </div>
                         </div>
-                        <div class="mesh-status">
-                            <span class="mesh-status-dot ${status}"></span>
+                        ${sys.subject && sys.subject !== 'human' ? `<div style="font-size: 11px; color: #a78bfa;">Subject: ${sys.subject}</div>` : ''}
+                        <div class="mesh-card-footer">
+                            <span class="mesh-ip">${sys.ip === 'local' ? 'local' : sys.ip || ''}</span>
+                            <div class="mesh-badges">
+                                ${sys.ssl ? '<span class="mesh-badge ssl">SSL</span>' : ''}
+                                ${sys.isLocal ? '<span class="mesh-badge local">Local</span>' : ''}
+                            </div>
                         </div>
-                    </div>
-                    ${sys.subject && sys.subject !== 'human' ? `<div style="font-size: 11px; color: #a78bfa;">Subject: ${sys.subject}</div>` : ''}
-                    <div class="mesh-card-footer">
-                        <span class="mesh-ip">${sys.ip === 'local' ? 'local' : sys.ip || ''}</span>
-                        <div class="mesh-badges">
-                            ${sys.ssl ? '<span class="mesh-badge ssl">SSL</span>' : ''}
-                            ${sys.isLocal ? '<span class="mesh-badge local">Local</span>' : ''}
-                        </div>
-                    </div>
-                </a>
+                    </a>
+                    <a href="${guiUrl}" class="mesh-gui-link" target="${sys.isLocal ? '_self' : '_blank'}" title="Open Experiment GUI">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                        GUI
+                    </a>
+                </div>
             `;
         }).join('');
     }
