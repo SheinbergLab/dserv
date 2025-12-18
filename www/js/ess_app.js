@@ -185,15 +185,20 @@ function initStimRenderer() {
  * Initialize Performance Display
  */
 function initPerformanceDisplay() {
-    // Subscribe to performance-related datapoints
+    const updateTrialDisplay = () => {
+        const obsId = parseInt(localStorage.getItem('ess_obs_id') || '0');
+        const total = parseInt(localStorage.getItem('ess_obs_total') || '0');
+        document.getElementById('perf-trial').textContent = `${obsId + 1}/${total}`;
+    };
+    
     dpManager.subscribe('ess/obs_id', (data) => {
-        updatePerformanceValue('obs_id', data.value);
+        localStorage.setItem('ess_obs_id', data.value);
+        updateTrialDisplay();
     });
     
     dpManager.subscribe('ess/obs_total', (data) => {
-        const obsId = parseInt(localStorage.getItem('ess_obs_id') || '0');
-        const total = parseInt(data.value) || 0;
-        document.getElementById('perf-trial').textContent = `${obsId + 1}/${total}`;
+        localStorage.setItem('ess_obs_total', data.value);
+        updateTrialDisplay();
     });
     
     dpManager.subscribe('ess/block_pct_correct', (data) => {
