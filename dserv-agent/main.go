@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha1"
+	"crypto/tls"
 	"embed"
 	"encoding/base64"
 	"encoding/binary"
@@ -120,9 +121,10 @@ type Config struct {
 	Verbose        bool
 	ComponentsFile string
 	// Mesh discovery
-	MeshEnabled    bool
-	MeshPort       int // UDP port for discovery (default 12346)
-	MeshTimeout    int // Seconds before peer considered offline (default 6)
+	MeshEnabled bool
+	MeshPort    int  // UDP port for discovery (default 12346)
+	MeshTimeout int  // Seconds before peer considered offline (default 6)
+	MeshSSL     bool // Use HTTPS for mesh API (default false, auto-detect)
 }
 
 // Agent is the main management agent
@@ -212,6 +214,7 @@ func main() {
 	flag.BoolVar(&cfg.MeshEnabled, "mesh", true, "Enable mesh discovery")
 	flag.IntVar(&cfg.MeshPort, "mesh-port", 12346, "UDP port for mesh discovery")
 	flag.IntVar(&cfg.MeshTimeout, "mesh-timeout", 6, "Seconds before peer considered offline")
+	flag.BoolVar(&cfg.MeshSSL, "mesh-ssl", false, "Use HTTPS for mesh API")
 	flag.Parse()
 
 	if cfg.AuthToken == "" {
@@ -1191,16 +1194,33 @@ func (a *Agent) meshDiscoveryLoop() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	// dserv mesh WebSocket server also serves HTTP on port 2569
+	// dserv mesh server on port 2569 - try HTTP first, fallback to HTTPS
+	// Once we find one that works, stick with it
 	meshURL := "http://localhost:2569/api/peers"
-	
+	if a.cfg.MeshSSL {
+		meshURL = "https://localhost:2569/api/peers"
+	}
+	triedHTTPS := a.cfg.MeshSSL
+
 	for range ticker.C {
-		a.fetchMeshPeers(meshURL)
+		ok := a.fetchMeshPeers(meshURL)
+		// If HTTP failed and we haven't tried HTTPS yet, switch to HTTPS
+		if !ok && !triedHTTPS {
+			meshURL = "https://localhost:2569/api/peers"
+			triedHTTPS = true
+			if a.cfg.Verbose {
+				log.Println("Mesh: trying HTTPS")
+			}
+		}
 	}
 }
 
-func (a *Agent) fetchMeshPeers(url string) {
-	client := &http.Client{Timeout: 2 * time.Second}
+func (a *Agent) fetchMeshPeers(url string) bool {
+	// Create client that accepts self-signed certs for local mesh API
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: tr}
 	resp, err := client.Get(url)
 	if err != nil {
 		// dserv not running or mesh not available - clear peers
@@ -1212,12 +1232,12 @@ func (a *Agent) fetchMeshPeers(url string) {
 		} else {
 			a.meshMu.Unlock()
 		}
-		return
+		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return
+		return false
 	}
 
 	// dserv returns {"appliances": [...]}
@@ -1236,14 +1256,14 @@ func (a *Agent) fetchMeshPeers(url string) {
 	
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return
+		return false
 	}
 	
 	if err := json.Unmarshal(body, &wrapper); err != nil {
 		if a.cfg.Verbose {
 			log.Printf("Mesh: failed to parse peers: %v", err)
 		}
-		return
+		return false
 	}
 
 	// Also parse raw to get custom fields
@@ -1305,6 +1325,7 @@ func (a *Agent) fetchMeshPeers(url string) {
 		}
 		a.broadcastMeshUpdate()
 	}
+	return true
 }
 
 func (a *Agent) meshCleanupLoop() {
@@ -1350,4 +1371,3 @@ func (a *Agent) handleMeshPeers(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, a.getMeshPeers())
 }
-

@@ -63,6 +63,44 @@ jobs:
           generateReleaseNotes: true
           allowUpdates: true
 
+  release-dserv-agent:
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            goarch: amd64
+          - os: ubuntu-22.04-arm
+            goarch: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build dserv-agent
+        run: |
+          cd dserv-agent
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dserv-agent_linux_${{ matrix.goarch }} .
+
+      - name: Upload dserv-agent binary
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "dserv-agent/dserv-agent_linux_${{ matrix.goarch }}"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
   release-camera:
 
     strategy:

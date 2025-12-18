@@ -339,6 +339,94 @@ endif()
 enable_testing()
 add_subdirectory("tests")
 
+# ============================================================================
+# dserv-agent (Go-based management agent)
+# ============================================================================
+find_program(GO_EXECUTABLE go)
+
+if(GO_EXECUTABLE)
+    message(STATUS "Found Go: ${GO_EXECUTABLE}")
+    execute_process(
+        COMMAND ${GO_EXECUTABLE} version
+        OUTPUT_VARIABLE GO_VERSION_OUTPUT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    message(STATUS "  ${GO_VERSION_OUTPUT}")
+    
+    set(DSERV_AGENT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dserv-agent)
+    set(DSERV_AGENT_BINARY ${CMAKE_CURRENT_BINARY_DIR}/dserv-agent)
+    
+    if(EXISTS ${DSERV_AGENT_SOURCE_DIR}/main.go)
+        message(STATUS "Found dserv-agent source at ${DSERV_AGENT_SOURCE_DIR}")
+        
+        # Determine GOARCH
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+            set(GOARCH "arm64")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+            set(GOARCH "amd64")
+        else()
+            set(GOARCH "amd64")
+        endif()
+        
+        # Determine GOOS
+        if(APPLE)
+            set(GOOS "darwin")
+        elseif(WIN32)
+            set(GOOS "windows")
+        else()
+            set(GOOS "linux")
+        endif()
+        
+        message(STATUS "  Building for GOOS=${GOOS} GOARCH=${GOARCH}")
+        
+        add_custom_command(
+            OUTPUT ${DSERV_AGENT_BINARY}
+            COMMAND ${CMAKE_COMMAND} -E env 
+                GOOS=${GOOS} 
+                GOARCH=${GOARCH}
+                CGO_ENABLED=0
+                ${GO_EXECUTABLE} build -o ${DSERV_AGENT_BINARY} .
+            WORKING_DIRECTORY ${DSERV_AGENT_SOURCE_DIR}
+            DEPENDS ${DSERV_AGENT_SOURCE_DIR}/main.go
+            COMMENT "Building dserv-agent for ${GOOS}/${GOARCH}"
+            VERBATIM
+        )
+        
+        add_custom_target(dserv-agent ALL DEPENDS ${DSERV_AGENT_BINARY})
+        
+        # Install binary to /usr/local/bin
+        install(PROGRAMS ${DSERV_AGENT_BINARY} 
+            DESTINATION bin 
+            COMPONENT dserv-agent
+        )
+        
+        # Install systemd service file
+        if(EXISTS ${DSERV_AGENT_SOURCE_DIR}/dserv-agent.service)
+            install(FILES ${DSERV_AGENT_SOURCE_DIR}/dserv-agent.service
+                DESTINATION dserv/systemd
+                COMPONENT dserv-agent
+            )
+        endif()
+        
+        # Install components.json config
+        if(EXISTS ${DSERV_AGENT_SOURCE_DIR}/components.json)
+            install(FILES ${DSERV_AGENT_SOURCE_DIR}/components.json
+                DESTINATION dserv/config
+                COMPONENT dserv-agent
+            )
+        endif()
+        
+        set(DSERV_AGENT_FOUND TRUE)
+    else()
+        message(STATUS "dserv-agent source not found at ${DSERV_AGENT_SOURCE_DIR}")
+        set(DSERV_AGENT_FOUND FALSE)
+    endif()
+else()
+    message(STATUS "Go not found - dserv-agent will not be built")
+    set(DSERV_AGENT_FOUND FALSE)
+endif()
+
+
 install(TARGETS dserv DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY config DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY lib DESTINATION dserv COMPONENT dserv)
@@ -364,7 +452,10 @@ if(WIN32)
 elseif(APPLE)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_COMPONENTS_ALL dserv essctrl)
-
+    if(DSERV_AGENT_FOUND)
+       list(APPEND CPACK_COMPONENTS_ALL dserv-agent)
+    endif()
+    
     if(DEFINED CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM)
         # Configure for apple code signing, notarization, and gatekeeper/entitlements.
         set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
@@ -399,3 +490,6 @@ endif()
 
 include(CPack)
 cpack_add_component(dserv essctrl REQUIRED)
+if(DSERV_AGENT_FOUND)
+    cpack_add_component(dserv-agent)
+endif()

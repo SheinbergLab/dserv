@@ -8,7 +8,7 @@ Wants=dserv.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/dserv-agent -allow-reboot
+ExecStart=/usr/local/bin/dserv-agent -allow-reboot -components /usr/local/dserv/config/components.json
 Restart=always
 RestartSec=5
 
