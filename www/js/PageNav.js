@@ -45,8 +45,17 @@ class PageNav {
             id: 'Terminal',
             title: 'Dserv Terminal',
             desc: 'Terminal and datapoint monitor',
-            icon: '💻',
+            icon: '🖥️',
             href: 'terminal.html',
+            category: 'tools',
+            windowSize: { width: 950, height: 800 }
+        },
+        {
+            id: 'Explorer',
+            title: 'Datapoint Explorer',
+            desc: 'Publish and subscribe to datapoints',
+            icon: '🔭',
+            href: 'explorer.html',
             category: 'tools',
             windowSize: { width: 950, height: 800 }
         },
