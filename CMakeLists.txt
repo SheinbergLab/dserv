@@ -201,49 +201,6 @@ else()
     message(STATUS "  index.html not found - web interface may not be configured")
 endif()
 
-# ============================================================================
-# Mesh Dashboard (still embedded - runs on separate port 2569)
-# ============================================================================
-# Function to embed files as C++ headers (only used for mesh dashboard now)
-function(embed_resource input_file output_file variable_name)
-    add_custom_command(
-        OUTPUT ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo "// Auto-generated file. Do not edit!" > ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo "#pragma once" >> ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo "" >> ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo "namespace embedded {" >> ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo "const char* ${variable_name} = R\"EMBEDDED(" >> ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E cat ${input_file} >> ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo ")EMBEDDED\";" >> ${output_file}
-        COMMAND ${CMAKE_COMMAND} -E echo "} // namespace embedded" >> ${output_file}
-        DEPENDS ${input_file}
-        COMMENT "Embedding ${input_file} as ${variable_name}"
-        VERBATIM
-    )
-endfunction()
-
-# Only embed mesh dashboard (for MeshManager's separate WebSocket server)
-if(EXISTS ${WEB_ASSETS_DIR}/mesh_dashboard.html)
-    message(STATUS "Found mesh_dashboard.html - will embed for mesh server")
-    embed_resource(
-        ${WEB_ASSETS_DIR}/mesh_dashboard.html
-        ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h
-        mesh_dashboard_html
-    )
-    set(EMBEDDED_HEADERS ${CMAKE_CURRENT_BINARY_DIR}/embedded_mesh_dashboard.h)
-else()
-    message(WARNING "mesh_dashboard.html NOT FOUND - mesh web dashboard will not be available")
-    set(EMBEDDED_HEADERS "")
-endif()
-
-# Create target for generating embedded headers (only mesh dashboard now)
-if(EMBEDDED_HEADERS)
-    add_custom_target(generate_embedded_headers 
-        DEPENDS ${EMBEDDED_HEADERS}
-        COMMENT "Generating embedded mesh dashboard header"
-    )
-endif()
-
 add_subdirectory(modules)
 add_subdirectory(processors)
 add_subdirectory(tools/essctrl)
@@ -279,23 +236,14 @@ add_executable(dserv
     src/LogTable.cpp 
     src/TclServer.cpp
     src/TclCompletion.cpp
-    src/MeshManager.cpp
     src/ErrorMonitor.cpp
     src/dpoint_process.c 
-    src/mdns.c 
-    src/mdns_advertise.c
 )
-
-# Make dserv depend on header generation (if we have any embedded headers)
-if(EMBEDDED_HEADERS)
-    add_dependencies(dserv generate_embedded_headers)
-    target_sources(dserv PRIVATE ${EMBEDDED_HEADERS})
-endif()
 
 # export symbols for shared objects loaded at runtime
 set_property(TARGET dserv PROPERTY ENABLE_EXPORTS ON)
 
-# Include build directory for generated headers (dservConfig.h, embedded_mesh_dashboard.h)
+# Include build directory for generated headers (dservConfig.h)
 target_include_directories(dserv PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 # Link libraries based on platform
