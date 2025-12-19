@@ -12,7 +12,6 @@
 #include "sharedqueue.h"
 #include "Dataserver.h"
 #include "TclServer.h"
-#include "MeshManager.h"
 #include "ObjectRegistry.h"
 #include "cxxopts.hpp"
 #include "dserv.h"
@@ -29,12 +28,6 @@ ObjectRegistry<TclServer> TclServerRegistry;
 // Provide hooks for loaded modules
 Dataserver *dserver;
 TclServer *tclserver;
-
-// Mesh support
-std::unique_ptr<MeshManager> meshManager;
-MeshManager* get_mesh_manager(void) { 
-  return meshManager.get(); 
-}
 
 // These should be part of an api 
 extern "C" {
@@ -83,14 +76,6 @@ void signalHandler(int signum) {
   }
   
   std::cout << "\nShutting down gracefully..." << std::endl;
-  
-  // Stop mesh networking first
-  if (meshManager) {
-    std::cout << "Stopping mesh manager..." << std::endl;
-    meshManager->stop();
-    std::cout << "Resetting mesh manager..." << std::endl;
-    meshManager.reset();
-  }
 
   // Shutdown all subprocesses cleanly
   std::cout << "Shutting down subprocesses..." << std::endl;
@@ -143,13 +128,7 @@ int main(int argc, char *argv[])
 {
   bool version = false;
   bool help = false;
-  bool enable_mesh = true;
-  int mesh_port = 12348;
-  int mesh_discovery_port = 12346;
-  int mesh_websocket_port = 2569;
-  int mesh_tcl_port = 2575;
-  std::string mesh_appliance_id;
-  std::string mesh_appliance_name;
+
   std::string trigger_script;
   std::string configuration_script;
   std::string www_path;
@@ -163,12 +142,7 @@ int main(int argc, char *argv[])
      cxxopts::value<std::string>(configuration_script))
     ("v,version", "Version", cxxopts::value<bool>(version))
     ("w,www", "Static file serving directory",
-     cxxopts::value<std::string>(www_path))    
-    ("m,mesh", "Enable/disable mesh networking", cxxopts::value<bool>(enable_mesh))
-    ("mesh-port", "Mesh HTTP port", cxxopts::value<int>(mesh_port)->default_value("12348"))
-    ("mesh-discovery-port", "Mesh discovery port", cxxopts::value<int>(mesh_discovery_port)->default_value("12346"))
-    ("mesh-id", "Mesh appliance ID (defaults to hostname)", cxxopts::value<std::string>(mesh_appliance_id))
-    ("mesh-name", "Mesh appliance name (defaults to 'Lab Station <hostname>')", cxxopts::value<std::string>(mesh_appliance_name));
+     cxxopts::value<std::string>(www_path));    
 
   try {
     auto result = options.parse(argc, argv);
@@ -180,17 +154,6 @@ int main(int argc, char *argv[])
 
   if (version) {
     std::cout << dserv_VERSION << std::endl;
-    exit(0);
-  }
-  
-  if (help) {
-    std::cout << options.help({"", "Group"}) << std::endl;
-    std::cout << std::endl;
-    std::cout << "Mesh Networking Examples:" << std::endl;
-    std::cout << "  dserv --mesh                                    # Enable with defaults" << std::endl;
-    std::cout << "  dserv --mesh --mesh-id=lab_station_1           # Custom appliance ID" << std::endl;
-    std::cout << "  dserv --mesh --mesh-port=12350                 # Custom HTTP port" << std::endl;
-    std::cout << "  dserv --mesh --mesh-discovery-port=12351       # Custom discovery port" << std::endl;
     exit(0);
   }
 
@@ -222,15 +185,6 @@ int main(int argc, char *argv[])
 
   setVersionInfo(tclserver);
 
-  // Initialize mesh networking if enabled
-  if (enable_mesh) {
-    meshManager = MeshManager::createAndStart(dserver, tclserver, argc, argv,
-					      mesh_appliance_id,
-					      mesh_appliance_name,
-					      mesh_port, mesh_discovery_port,
-					      mesh_websocket_port);
-   }
-
   // Run initialization scripts
   if (!trigger_script.empty()) {
     auto result = dserver->eval(std::string("source ")+trigger_script);
@@ -241,9 +195,6 @@ int main(int argc, char *argv[])
     auto result = tclserver->eval(std::string("source ")+configuration_script);
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result << std::endl;
   }
-
-  /* use mdns to advertise services */
-  advertise_services(dserver->port(), tclserver->newline_port());
 
   std::promise<void>().get_future().wait();
 }
