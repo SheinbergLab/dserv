@@ -54,6 +54,8 @@ header h1 {
 }
 .node-identity { min-width: 0; }
 .node-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-name-link { color: inherit; text-decoration: none; }
+.node-name-link:hover { text-decoration: underline; }
 .node-id { font-size: 11px; color: #71767b; font-family: 'SF Mono', Monaco, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node-status-badge {
     display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
@@ -322,6 +324,13 @@ class LabMeshApp {
         if (msg.type === 'mesh_peers_response' || msg.type === 'mesh_update') {
             if (msg.data) this.updateNodes(msg.data);
         }
+        if (msg.type === 'dserv_cmd_response') {
+            if (msg.success) {
+                this.showToast('Command sent', 'success');
+            } else {
+                this.showToast(msg.error || 'Command failed', 'error');
+            }
+        }
         // Route panel messages when using main WS for local node
         if (this.panelOpen && this.panelUsingMainWs) {
             this.handlePanelMsg(msg);
@@ -443,24 +452,16 @@ class LabMeshApp {
         
         this.showToast(`Sending ${action} to ${node.name || node.id}...`);
         
-        // Always use node's IP/hostname and SSL setting
-        const host = node.isLocal ? (node.ip || location.hostname) : node.ip;
-        const proto = node.ssl ? 'wss:' : 'ws:';
-        this.sendToDserv(`${proto}//${host}:${node.webPort || 2565}/ws`, cmd, node);
-    }
-    
-    sendToDserv(wsUrl, cmd, node) {
-        try {
-            const ws = new WebSocket(wsUrl);
-            ws.onopen = () => {
-                ws.send(JSON.stringify({ cmd: 'eval', script: cmd }));
-                setTimeout(() => { ws.close(); this.showToast(`${cmd.split('::')[1]} sent`, 'success'); }, 200);
-            };
-            ws.onerror = () => {
-                this.showToast(`Failed to connect to ${node.name || node.id}`, 'error');
-            };
-        } catch (e) {
-            this.showToast(`Error: ${e.message}`, 'error');
+        // Send via agent WebSocket - agent will relay to dserv
+        // For local: direct eval, for remote: remoteSend using IP
+        if (this.ws && this.connected) {
+            this.ws.send(JSON.stringify({
+                type: 'dserv_cmd',
+                target: node.isLocal ? null : node.ip,
+                script: cmd
+            }));
+        } else {
+            this.showToast('Not connected to agent', 'error');
         }
     }
     
@@ -476,10 +477,12 @@ class LabMeshApp {
         }
         if (n.block_pct_correct) { const v = parseFloat(n.block_pct_correct); if (!isNaN(v)) perfStr = `<span class="perf-num">${Math.round(v*100)}%</span>`; }
         const statsHtml = trialStr + ' <span class="stats-sep">·</span> ' + perfStr;
+        const agentUrl = `http://${n.id.toLowerCase()}.local/`;
+        const nameHtml = n.isLocal ? this.esc(name) : `<a href="${agentUrl}" class="node-name-link" title="Go to ${n.id}'s dashboard">${this.esc(name)}</a>`;
         
         return `<div class="node-row ${n.isLocal?'local':''}" data-node-id="${n.id}">
             <div class="node-line-top">
-                <div class="node-identity"><div class="node-name">${this.esc(name)}</div><div class="node-id">${this.esc(n.id)}</div></div>
+                <div class="node-identity"><div class="node-name">${nameHtml}</div><div class="node-id">${this.esc(n.id)}</div></div>
                 <div class="node-status-badge ${st}"><span class="dot"></span>${st}</div>
                 <div class="info-col"><div class="info-label">System</div><div class="info-value ${n.system?'':'empty'}">${n.system||'—'}</div></div>
                 <div class="info-col"><div class="info-label">Protocol</div><div class="info-value ${n.protocol?'':'empty'}">${n.protocol||'—'}</div></div>

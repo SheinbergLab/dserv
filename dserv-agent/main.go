@@ -137,6 +137,9 @@ type Agent struct {
 	// Mesh discovery
 	meshPeers  map[string]*MeshPeer
 	meshMu     sync.RWMutex
+	// Connection to local dserv for relaying commands
+	dservConn   net.Conn
+	dservConnMu sync.Mutex
 }
 
 // WSConn is a minimal WebSocket connection
@@ -154,6 +157,8 @@ type WSMessage struct {
 	Action    string          `json:"action,omitempty"`
 	Component string          `json:"component,omitempty"`
 	Asset     string          `json:"asset,omitempty"`
+	Target    string          `json:"target,omitempty"`  // For dserv_cmd: target appliance ID (empty = local)
+	Script    string          `json:"script,omitempty"`  // For dserv_cmd: script to execute
 	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -1067,6 +1072,33 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 			}
 		}
 
+	case "dserv_cmd":
+		// Relay command to dserv via WebSocket
+		a.dservConnMu.Lock()
+		conn := a.dservConn
+		a.dservConnMu.Unlock()
+		
+		if conn == nil {
+			resp.Error = "Not connected to dserv"
+			return resp
+		}
+		
+		var script string
+		if msg.Target == "" {
+			// Local command
+			script = msg.Script
+		} else {
+			// Remote command via remoteSend
+			script = fmt.Sprintf("remoteSend %s {%s}", msg.Target, msg.Script)
+		}
+		
+		cmdMsg := fmt.Sprintf(`{"cmd":"eval","script":"%s"}`, script)
+		if err := a.meshWriteFrame(conn, []byte(cmdMsg)); err != nil {
+			resp.Error = "Failed to send command: " + err.Error()
+		} else {
+			resp.Success = true
+		}
+
 	default:
 		resp.Error = "Unknown type"
 	}
@@ -1285,6 +1317,17 @@ func (a *Agent) meshViaWebSocket() bool {
 }
 
 func (a *Agent) meshSubscribe(conn net.Conn, reader *bufio.Reader) {
+	// Store connection for command relay
+	a.dservConnMu.Lock()
+	a.dservConn = conn
+	a.dservConnMu.Unlock()
+	
+	defer func() {
+		a.dservConnMu.Lock()
+		a.dservConn = nil
+		a.dservConnMu.Unlock()
+	}()
+	
 	// Send subscribe message
 	subMsg := `{"cmd":"subscribe","match":"mesh/peers","every":1}`
 	a.meshWriteFrame(conn, []byte(subMsg))
@@ -1293,9 +1336,30 @@ func (a *Agent) meshSubscribe(conn net.Conn, reader *bufio.Reader) {
 	touchMsg := `{"cmd":"eval","script":"dservTouch mesh/peers"}`
 	a.meshWriteFrame(conn, []byte(touchMsg))
 	
+	// Start keepalive to prevent idle timeout (uWebSockets counts from last client write)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a.dservConnMu.Lock()
+				if a.dservConn != nil {
+					a.meshWriteFrame(conn, []byte(`{"cmd":"ping"}`))
+				}
+				a.dservConnMu.Unlock()
+			case <-done:
+				return
+			}
+		}
+	}()
+	
 	// Read messages until disconnect
 	for {
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		// 60 second timeout - should get mesh updates every ~1 second from heartbeats
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		
 		data, err := a.meshReadFrame(reader)
 		if err != nil {
