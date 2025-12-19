@@ -1189,32 +1189,328 @@ func (ws *WSConn) Close() error {
 // ============ Mesh Discovery ============
 
 func (a *Agent) meshDiscoveryLoop() {
-	// Poll local dserv's mesh endpoint for peer data
-	// This avoids UDP port conflict since dserv owns the mesh discovery
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	// dserv mesh server on port 2569 - try HTTP first, fallback to HTTPS
-	// Once we find one that works, stick with it
-	meshURL := "http://localhost:2569/api/peers"
-	if a.cfg.MeshSSL {
-		meshURL = "https://localhost:2569/api/peers"
-	}
-	triedHTTPS := a.cfg.MeshSSL
-
-	for range ticker.C {
-		ok := a.fetchMeshPeers(meshURL)
-		// If HTTP failed and we haven't tried HTTPS yet, switch to HTTPS
-		if !ok && !triedHTTPS {
-			meshURL = "https://localhost:2569/api/peers"
-			triedHTTPS = true
+	// Connect to local dserv WebSocket and subscribe to mesh/peers datapoint
+	// This gives us real-time updates instead of polling
+	
+	for {
+		// Try WebSocket subscription (more efficient, real-time updates)
+		if a.meshViaWebSocket() {
+			// Connected and ran until disconnect - retry after delay
 			if a.cfg.Verbose {
-				log.Println("Mesh: trying HTTPS")
+				log.Println("Mesh: WebSocket disconnected, will retry")
 			}
+		}
+		
+		// Clear peers on disconnect
+		a.meshMu.Lock()
+		if len(a.meshPeers) > 0 {
+			a.meshPeers = make(map[string]*MeshPeer)
+			a.meshMu.Unlock()
+			a.broadcastMeshUpdate()
+		} else {
+			a.meshMu.Unlock()
+		}
+		
+		// Wait before reconnecting
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func (a *Agent) meshViaWebSocket() bool {
+	// Try ws:// first, then wss://
+	schemes := []string{"ws", "wss"}
+	if a.cfg.MeshSSL {
+		schemes = []string{"wss", "ws"}
+	}
+	
+	var conn net.Conn
+	var err error
+	
+	for _, scheme := range schemes {
+		host := "localhost:2565"
+		
+		if scheme == "wss" {
+			tlsConfig := &tls.Config{InsecureSkipVerify: true}
+			conn, err = tls.Dial("tcp", host, tlsConfig)
+		} else {
+			conn, err = net.DialTimeout("tcp", host, 2*time.Second)
+		}
+		
+		if err != nil {
+			if a.cfg.Verbose {
+				log.Printf("Mesh: %s connection failed: %v", scheme, err)
+			}
+			continue
+		}
+		
+		// Perform WebSocket handshake
+		key := base64.StdEncoding.EncodeToString([]byte("dserv-agent-mesh"))
+		
+		handshake := "GET /ws HTTP/1.1\r\n"
+		handshake += fmt.Sprintf("Host: %s\r\n", host)
+		handshake += "Upgrade: websocket\r\n"
+		handshake += "Connection: Upgrade\r\n"
+		handshake += fmt.Sprintf("Sec-WebSocket-Key: %s\r\n", key)
+		handshake += "Sec-WebSocket-Version: 13\r\n\r\n"
+		
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, err = conn.Write([]byte(handshake))
+		if err != nil {
+			conn.Close()
+			continue
+		}
+		
+		// Read response
+		reader := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(reader, nil)
+		if err != nil || resp.StatusCode != 101 {
+			conn.Close()
+			continue
+		}
+		
+		if a.cfg.Verbose {
+			log.Printf("Mesh: connected via %s", scheme)
+		}
+		
+		// Clear deadline for normal operation
+		conn.SetDeadline(time.Time{})
+		
+		// Subscribe to mesh/peers
+		a.meshSubscribe(conn, reader)
+		conn.Close()
+		return true
+	}
+	
+	return false
+}
+
+func (a *Agent) meshSubscribe(conn net.Conn, reader *bufio.Reader) {
+	// Send subscribe message
+	subMsg := `{"cmd":"subscribe","match":"mesh/peers","every":1}`
+	a.meshWriteFrame(conn, []byte(subMsg))
+	
+	// Also touch to get immediate value
+	touchMsg := `{"cmd":"eval","script":"dservTouch mesh/peers"}`
+	a.meshWriteFrame(conn, []byte(touchMsg))
+	
+	// Read messages until disconnect
+	for {
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		
+		data, err := a.meshReadFrame(reader)
+		if err != nil {
+			if a.cfg.Verbose {
+				log.Printf("Mesh: read error: %v", err)
+			}
+			return
+		}
+		
+		// Parse message
+		var msg struct {
+			Name string          `json:"name"`
+			Data json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(data, &msg) != nil {
+			continue
+		}
+		
+		if msg.Name == "mesh/peers" {
+			a.processMeshPeersData(msg.Data)
 		}
 	}
 }
 
+func (a *Agent) meshWriteFrame(conn net.Conn, data []byte) error {
+	// Write WebSocket text frame (masked, as required for client)
+	frame := make([]byte, 0, 14+len(data))
+	frame = append(frame, 0x81) // FIN + text opcode
+	
+	// Length + mask bit
+	if len(data) < 126 {
+		frame = append(frame, byte(len(data))|0x80)
+	} else if len(data) < 65536 {
+		frame = append(frame, 126|0x80)
+		frame = append(frame, byte(len(data)>>8), byte(len(data)))
+	} else {
+		frame = append(frame, 127|0x80)
+		for i := 7; i >= 0; i-- {
+			frame = append(frame, byte(len(data)>>(i*8)))
+		}
+	}
+	
+	// Mask key
+	mask := []byte{0x12, 0x34, 0x56, 0x78}
+	frame = append(frame, mask...)
+	
+	// Masked payload
+	for i, b := range data {
+		frame = append(frame, b^mask[i%4])
+	}
+	
+	_, err := conn.Write(frame)
+	return err
+}
+
+func (a *Agent) meshReadFrame(reader *bufio.Reader) ([]byte, error) {
+	// Read first two bytes
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return nil, err
+	}
+	
+	opcode := header[0] & 0x0F
+	if opcode == wsOpClose {
+		return nil, fmt.Errorf("connection closed")
+	}
+	
+	// Get payload length
+	payloadLen := int(header[1] & 0x7F)
+	if payloadLen == 126 {
+		ext := make([]byte, 2)
+		if _, err := io.ReadFull(reader, ext); err != nil {
+			return nil, err
+		}
+		payloadLen = int(ext[0])<<8 | int(ext[1])
+	} else if payloadLen == 127 {
+		ext := make([]byte, 8)
+		if _, err := io.ReadFull(reader, ext); err != nil {
+			return nil, err
+		}
+		payloadLen = int(ext[4])<<24 | int(ext[5])<<16 | int(ext[6])<<8 | int(ext[7])
+	}
+	
+	// Read payload
+	payload := make([]byte, payloadLen)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return nil, err
+	}
+	
+	return payload, nil
+}
+
+func (a *Agent) processMeshPeersData(data json.RawMessage) {
+	// The data could be a JSON string or direct object
+	var dataStr string
+	if json.Unmarshal(data, &dataStr) == nil {
+		data = json.RawMessage(dataStr)
+	}
+	
+	// Parse appliances
+	var wrapper struct {
+		Appliances []map[string]interface{} `json:"appliances"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		var arr []map[string]interface{}
+		if json.Unmarshal(data, &arr) == nil {
+			wrapper.Appliances = arr
+		} else {
+			if a.cfg.Verbose {
+				log.Printf("Mesh: failed to parse data: %v", err)
+			}
+			return
+		}
+	}
+	
+	newPeers := make(map[string]*MeshPeer)
+	
+	for _, app := range wrapper.Appliances {
+		id, _ := app["applianceId"].(string)
+		if id == "" {
+			continue
+		}
+		
+		peer := &MeshPeer{
+			ApplianceID:   id,
+			Name:          meshGetString(app, "name"),
+			Status:        meshGetString(app, "status"),
+			IPAddress:     meshGetString(app, "ipAddress"),
+			WebPort:       meshGetInt(app, "webPort"),
+			SSL:           meshGetBool(app, "ssl"),
+			IsLocal:       meshGetBool(app, "isLocal"),
+			LastHeartbeat: time.Now(),
+			CustomFields:  make(map[string]string),
+		}
+		
+		// Capture custom fields
+		standardFields := map[string]bool{
+			"applianceId": true, "name": true, "status": true,
+			"ipAddress": true, "webPort": true, "ssl": true, "isLocal": true,
+		}
+		for k, v := range app {
+			if !standardFields[k] {
+				if s, ok := v.(string); ok {
+					peer.CustomFields[k] = s
+				} else if v != nil {
+					peer.CustomFields[k] = fmt.Sprintf("%v", v)
+				}
+			}
+		}
+		
+		newPeers[id] = peer
+	}
+	
+	// Check if changed
+	a.meshMu.Lock()
+	changed := len(newPeers) != len(a.meshPeers)
+	if !changed {
+		for id, newPeer := range newPeers {
+			if oldPeer, exists := a.meshPeers[id]; !exists {
+				changed = true
+				break
+			} else if oldPeer.Status != newPeer.Status || 
+			          !meshCustomFieldsEqual(oldPeer.CustomFields, newPeer.CustomFields) {
+				changed = true
+				break
+			}
+		}
+	}
+	
+	if changed {
+		a.meshPeers = newPeers
+		a.meshMu.Unlock()
+		if a.cfg.Verbose {
+			log.Printf("Mesh: updated, %d peers", len(newPeers))
+		}
+		a.broadcastMeshUpdate()
+	} else {
+		a.meshMu.Unlock()
+	}
+}
+
+func meshCustomFieldsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func meshGetString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func meshGetInt(m map[string]interface{}, key string) int {
+	if v, ok := m[key].(float64); ok {
+		return int(v)
+	}
+	return 0
+}
+
+func meshGetBool(m map[string]interface{}, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// fetchMeshPeers kept for potential fallback use
 func (a *Agent) fetchMeshPeers(url string) bool {
 	// Create client that accepts self-signed certs for local mesh API
 	tr := &http.Transport{
