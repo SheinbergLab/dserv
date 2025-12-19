@@ -15,11 +15,19 @@ load ${dspath}/modules/dserv_mesh[info sharedlibextension]
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
 
 # Initialize mesh broadcaster
+set ssl_enabled [dservGet system/ssl]
+set web_port [dservGet system/webport]
+if {$web_port eq ""} { set web_port 2565 }
+
 meshInit \
     -id [dservGet system/hostname] \
     -name [dservGet system/hostname] \
     -port 12346 \
-    -webport 2565
+    -webport $web_port \
+    -ssl $ssl_enabled
+
+# Set the host's real IP address (determined by outbound routing)
+meshSetField hostaddr [dservGet system/hostaddr]
 
 # Default heartbeat interval (milliseconds)
 set mesh_interval 1000
@@ -59,6 +67,23 @@ foreach dp $ess_dps {
     dpointSetScript ess/$dp mesh_datapoint_handler
 }
 
+# Initialize with current values (in case ess is already running)
+proc mesh_init_current_values {} {
+    global ess_dps
+    foreach dp $ess_dps {
+        set val [dservGet ess/$dp]
+        if {$val ne ""} {
+            if {$dp eq "status"} {
+                meshUpdateStatus $val
+            } else {
+                meshSetField $dp $val
+            }
+        }
+    }
+}
+
+mesh_init_current_values
+
 #################################################################
 # Timer-based heartbeat
 #################################################################
@@ -67,7 +92,7 @@ proc mesh_heartbeat_callback { dpoint data } {
     meshSendHeartbeat
 }
 
-proc mesh_start { {interval_ms 1000} } {
+proc mesh_start { {interval_ms 2000} } {
     global mesh_interval
     set mesh_interval $interval_ms
     timerTickInterval $interval_ms $interval_ms

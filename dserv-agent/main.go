@@ -65,7 +65,9 @@ type MeshPeer struct {
 	IPAddress     string            `json:"ipAddress"`
 	WebPort       int               `json:"webPort"`
 	SSL           bool              `json:"ssl"`
-	LastHeartbeat time.Time         `json:"lastHeartbeat"`
+	LastHeartbeat time.Time         `json:"-"` // Internal use, not serialized directly
+	LastSeenAgo   int               `json:"lastSeenAgo"`   // Seconds since last heartbeat
+	IsStale       bool              `json:"isStale"`       // True if lastSeenAgo > stale threshold
 	IsLocal       bool              `json:"isLocal"`
 	CustomFields  map[string]string `json:"customFields,omitempty"`
 }
@@ -129,7 +131,6 @@ type Config struct {
 	// Mesh discovery
 	MeshEnabled bool
 	MeshPort    int  // UDP port for discovery (default 12346)
-	MeshTimeout int  // Seconds before peer considered offline (default 6)
 	MeshSSL     bool // Use HTTPS for mesh API (default false, auto-detect)
 }
 
@@ -216,7 +217,7 @@ type ReleaseInfo struct {
 func main() {
 	cfg := Config{DservService: "dserv"}
 
-	flag.StringVar(&cfg.ListenAddr, "listen", ":80", "HTTP listen address")
+	flag.StringVar(&cfg.ListenAddr, "listen", "0.0.0.0:80", "HTTP listen address")
 	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for authentication")
 	flag.StringVar(&cfg.DservService, "service", "dserv", "systemd service name")
 	flag.BoolVar(&cfg.AllowReboot, "allow-reboot", false, "Allow system reboot")
@@ -226,7 +227,6 @@ func main() {
 	flag.StringVar(&cfg.ComponentsFile, "components", "/etc/dserv-agent/components.json", "Components config file")
 	flag.BoolVar(&cfg.MeshEnabled, "mesh", true, "Enable mesh discovery")
 	flag.IntVar(&cfg.MeshPort, "mesh-port", 12346, "UDP port for mesh discovery")
-	flag.IntVar(&cfg.MeshTimeout, "mesh-timeout", 6, "Seconds before peer considered offline")
 	flag.BoolVar(&cfg.MeshSSL, "mesh-ssl", false, "Use HTTPS for mesh API")
 	flag.Parse()
 
@@ -234,8 +234,10 @@ func main() {
 		cfg.AuthToken = os.Getenv("DSERV_AGENT_TOKEN")
 	}
 
-	// Get local hostname for appliance ID
+	// Get local hostname for appliance ID - try multiple sources for matching
 	localID, _ := os.Hostname()
+	// Normalize: lowercase and strip common suffixes
+	localID = strings.ToLower(strings.TrimSuffix(localID, ".local"))
 
 	agent := &Agent{
 		cfg:       cfg,
@@ -1266,9 +1268,10 @@ func (ws *WSConn) Close() error {
 // ============ Mesh Discovery (UDP) ============
 
 const (
-	maxLostPeers          = 50
-	lostPeerRetention     = 30 * time.Minute
-	peerTimeoutMultiplier = 3 // timeout = heartbeat interval * multiplier
+	maxLostPeers        = 50
+	lostPeerRetention   = 30 * time.Minute
+	staleThresholdSecs  = 10  // Peer is "stale" after 10 seconds without heartbeat
+	lostThresholdSecs   = 60  // Peer is "lost" after 60 seconds without heartbeat
 )
 
 func (a *Agent) meshDiscoveryLoop() {
@@ -1355,13 +1358,23 @@ func (a *Agent) processHeartbeat(data []byte, fromIP string) {
 		}
 	}
 
-	isLocal := msg.ApplianceID == a.localID
+	// Check if this is the local machine (case-insensitive, strip .local suffix)
+	normalizedApplianceID := strings.ToLower(strings.TrimSuffix(msg.ApplianceID, ".local"))
+	isLocal := normalizedApplianceID == a.localID
+
+	// Prefer hostaddr from custom fields over UDP source IP
+	// hostaddr is set by dserv based on outbound routing, more reliable for multi-NIC systems
+	ipAddress := fromIP
+	if hostaddr, ok := customFields["hostaddr"]; ok && hostaddr != "" {
+		ipAddress = hostaddr
+		delete(customFields, "hostaddr") // Don't duplicate in custom fields
+	}
 
 	peer := &MeshPeer{
 		ApplianceID:   msg.ApplianceID,
 		Name:          stdData.Name,
 		Status:        stdData.Status,
-		IPAddress:     fromIP,
+		IPAddress:     ipAddress,
 		WebPort:       stdData.WebPort,
 		SSL:           stdData.SSL,
 		LastHeartbeat: time.Now(),
@@ -1449,12 +1462,13 @@ func (a *Agent) cleanupPeers() {
 	defer a.meshMu.Unlock()
 
 	now := time.Now()
-	timeout := time.Duration(a.cfg.MeshTimeout) * time.Second
 	changed := false
 
-	// Check for timed-out peers
+	// Check for timed-out peers (lost after 60 seconds)
 	for id, peer := range a.meshPeers {
-		if now.Sub(peer.LastHeartbeat) > timeout {
+		secsSinceHeartbeat := int(now.Sub(peer.LastHeartbeat).Seconds())
+		
+		if secsSinceHeartbeat > lostThresholdSecs {
 			// Move to lost peers
 			a.meshLostPeers = append(a.meshLostPeers, LostPeer{
 				Peer:     *peer,
@@ -1467,7 +1481,7 @@ func (a *Agent) cleanupPeers() {
 			}
 
 			if a.cfg.Verbose {
-				log.Printf("Mesh: peer %s (%s) timed out", id, peer.Name)
+				log.Printf("Mesh: peer %s (%s) lost after %ds", id, peer.Name, secsSinceHeartbeat)
 			}
 
 			delete(a.meshPeers, id)
@@ -1495,15 +1509,23 @@ func (a *Agent) getMeshPeers() []MeshPeer {
 	a.meshMu.RLock()
 	defer a.meshMu.RUnlock()
 
+	now := time.Now()
 	peers := make([]MeshPeer, 0, len(a.meshPeers))
 	for _, p := range a.meshPeers {
-		peers = append(peers, *p)
+		peer := *p
+		// Compute dynamic fields
+		peer.LastSeenAgo = int(now.Sub(p.LastHeartbeat).Seconds())
+		peer.IsStale = peer.LastSeenAgo > staleThresholdSecs
+		peers = append(peers, peer)
 	}
 
-	// Sort by name for consistent ordering
+	// Sort: local first, then by name
 	for i := 0; i < len(peers)-1; i++ {
 		for j := i + 1; j < len(peers); j++ {
-			if peers[i].Name > peers[j].Name {
+			// Local always comes first
+			if peers[j].IsLocal && !peers[i].IsLocal {
+				peers[i], peers[j] = peers[j], peers[i]
+			} else if peers[i].IsLocal == peers[j].IsLocal && peers[i].Name > peers[j].Name {
 				peers[i], peers[j] = peers[j], peers[i]
 			}
 		}

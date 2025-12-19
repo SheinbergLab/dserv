@@ -34,6 +34,16 @@ header h1 {
 .search-box input:focus { border-color: #3b82f6; }
 .search-box input::placeholder { color: #71767b; }
 .search-box::before { content: "🔍"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.5; }
+
+.filter-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 12px; background: #1a2634; border: 1px solid #2f3336; border-radius: 8px;
+    color: #71767b; font-size: 12px; cursor: pointer; transition: all 0.15s ease;
+}
+.filter-toggle:hover { border-color: #3b82f6; color: #a0aec0; }
+.filter-toggle.active { background: #1a3d2e; border-color: #34d399; color: #34d399; }
+.filter-toggle .filter-icon { font-size: 10px; }
+
 .connection-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: #1a2634; border-radius: 20px; font-size: 13px; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #71767b; }
 .status-dot.connected { background: #34d399; box-shadow: 0 0 8px #34d39966; }
@@ -47,17 +57,29 @@ header h1 {
 }
 .node-row:hover { border-color: #3b82f6; }
 .node-row.local { border-left: 3px solid #f59e0b; }
+.node-row.stale { opacity: 0.7; }
+.node-row.stale:hover { opacity: 1; }
 
-.node-content {
+.node-content { display: flex; flex-direction: column; gap: 4px; }
+.node-line1 {
     display: grid; 
-    grid-template-columns: minmax(120px, 180px) 70px 1fr auto auto auto;
+    grid-template-columns: minmax(140px, 200px) 70px 1fr auto auto;
     align-items: center; gap: 12px;
 }
-.node-identity { min-width: 0; }
+.node-line2 {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-left: 2px;
+}
+
 .node-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node-name-link { color: inherit; text-decoration: none; }
 .node-name-link:hover { text-decoration: underline; }
-.node-id { font-size: 10px; color: #71767b; font-family: 'SF Mono', Monaco, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-label { font-weight: 400; color: #f59e0b; font-size: 12px; }
+
+.last-seen { font-size: 10px; color: #4a5568; font-family: 'SF Mono', Monaco, monospace; }
+.last-seen.stale { color: #f59e0b; }
+
+.node-badges { display: flex; align-items: center; justify-content: flex-start; gap: 4px; min-width: 120px; }
 
 .node-status-badge {
     display: inline-flex; align-items: center; justify-content: center; gap: 4px; 
@@ -82,11 +104,10 @@ header h1 {
 .node-stats .perf-num { color: #34d399; }
 .node-stats .stats-sep { color: #4a5568; margin: 0 4px; }
 
-.node-badges { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .badge { font-size: 8px; padding: 2px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.3px; }
 .badge.ssl { background: #1a3d2e; color: #34d399; }
-.badge.local { background: #3d2e1a; color: #fbbf24; }
-.badge.ip { background: #1e3a5f; color: #60a5fa; font-family: 'SF Mono', Monaco, monospace; text-transform: none; font-size: 9px; }
+.badge.ip { background: #1e3a5f; color: #60a5fa; font-family: 'SF Mono', Monaco, monospace; text-transform: none; font-size: 9px; min-width: 95px; text-align: center; }
+.badge.ip.local-ip { background: #3d2e1a; color: #f59e0b; }
 
 .node-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
@@ -246,6 +267,10 @@ footer {
                 <div class="search-box">
                     <input type="text" id="search-input" placeholder="Filter nodes...">
                 </div>
+                <button class="filter-toggle" id="running-filter" title="Show only running nodes">
+                    <span class="filter-icon">▶</span>
+                    <span class="filter-label">Running</span>
+                </button>
                 <div class="connection-badge">
                     <span class="status-dot" id="status-dot"></span>
                     <span id="status-text">Connecting...</span>
@@ -285,6 +310,7 @@ class LabMeshApp {
         this.connected = false;
         this.nodes = new Map();
         this.searchTerm = '';
+        this.runningOnly = false;
         this.panelOpen = false;
         this.panelNode = null;
         this.panelWs = null;
@@ -298,6 +324,7 @@ class LabMeshApp {
             nodeList: document.getElementById('node-list'),
             lastUpdate: document.getElementById('last-update'),
             searchInput: document.getElementById('search-input'),
+            runningFilter: document.getElementById('running-filter'),
             toast: document.getElementById('toast'),
             panelOverlay: document.getElementById('panel-overlay'),
             agentPanel: document.getElementById('agent-panel'),
@@ -307,6 +334,11 @@ class LabMeshApp {
         };
         
         this.el.searchInput.addEventListener('input', e => { this.searchTerm = e.target.value.toLowerCase(); this.renderNodes(); });
+        this.el.runningFilter.addEventListener('click', () => { 
+            this.runningOnly = !this.runningOnly; 
+            this.el.runningFilter.classList.toggle('active', this.runningOnly);
+            this.renderNodes(); 
+        });
         this.el.panelClose.addEventListener('click', () => this.closePanel());
         this.el.panelOverlay.addEventListener('click', () => this.closePanel());
         document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.panelOpen) this.closePanel(); });
@@ -359,15 +391,23 @@ class LabMeshApp {
         if (this.searchTerm) {
             nodes = nodes.filter(n => `${n.name} ${n.id} ${n.system} ${n.protocol} ${n.subject}`.toLowerCase().includes(this.searchTerm));
         }
+        if (this.runningOnly) {
+            nodes = nodes.filter(n => n.status === 'running');
+        }
         nodes.sort((a,b) => { if (a.isLocal && !b.isLocal) return -1; if (!a.isLocal && b.isLocal) return 1; return (a.name||a.id).localeCompare(b.name||b.id); });
         
-        this.el.nodeCount.textContent = `${nodes.length} node${nodes.length !== 1 ? 's' : ''}`;
+        const totalNodes = this.nodes.size;
+        const filteredCount = nodes.length;
+        const filterActive = this.searchTerm || this.runningOnly;
+        this.el.nodeCount.textContent = filterActive 
+            ? `${filteredCount} of ${totalNodes} node${totalNodes !== 1 ? 's' : ''}`
+            : `${totalNodes} node${totalNodes !== 1 ? 's' : ''}`;
         
         if (!nodes.length) {
             this.el.nodeList.innerHTML = `<div class="empty-state">
                 <div class="empty-state-icon">📡</div>
-                <h3>${this.searchTerm ? 'No matches' : 'No nodes found'}</h3>
-                <p>${this.searchTerm ? 'Try a different search.' : 'Mesh unavailable - dserv may be stopped.'}</p>
+                <h3>${filterActive ? 'No matches' : 'No nodes found'}</h3>
+                <p>${filterActive ? 'Try a different filter.' : 'Mesh unavailable - dserv may be stopped.'}</p>
                 <button class="btn btn-gear" style="margin-top:16px;padding:12px 24px;font-size:14px;" onclick="app.openLocalPanel()">⚙ Manage Local System</button>
             </div>`;
             return;
@@ -402,6 +442,10 @@ class LabMeshApp {
             nodes.forEach(n => {
                 const row = this.el.nodeList.querySelector(`.node-row[data-node-id="${n.id}"]`);
                 if (!row) return;
+                
+                // Update stale class on row
+                const isStale = n.isStale || false;
+                row.classList.toggle('stale', isStale);
                 
                 // Update status badge
                 const statusBadge = row.querySelector('.node-status-badge');
@@ -449,6 +493,16 @@ class LabMeshApp {
                     }
                     statsEl.innerHTML = statsHtml;
                 }
+                
+                // Update last seen
+                const lastSeenEl = row.querySelector('.last-seen');
+                if (lastSeenEl) {
+                    const lastSeenAgo = n.lastSeenAgo || 0;
+                    const lastSeenText = lastSeenAgo < 2 ? 'just now' : `${lastSeenAgo}s ago`;
+                    const staleIcon = isStale ? ' ⚠' : '';
+                    lastSeenEl.textContent = lastSeenText + staleIcon;
+                    lastSeenEl.classList.toggle('stale', isStale);
+                }
             });
         }
     }
@@ -458,7 +512,10 @@ class LabMeshApp {
         const name = (n.name || n.id).replace('Lab Station ', '');
         const url = `${n.ssl?'https':'http'}://${n.isLocal ? location.hostname : n.ip}:${n.webPort||2565}/`;
         const agentUrl = `http://${n.id.toLowerCase()}.local/`;
-        const nameHtml = n.isLocal ? this.esc(name) : `<a href="${agentUrl}" class="node-name-link" title="Go to ${n.id}'s dashboard">${this.esc(name)}</a>`;
+        const localLabel = n.isLocal ? ' <span class="local-label">(local)</span>' : '';
+        const nameHtml = n.isLocal 
+            ? this.esc(name) + localLabel
+            : `<a href="${agentUrl}" class="node-name-link" title="Go to ${n.id}'s dashboard">${this.esc(name)}</a>`;
         
         // System/protocol/variant combined
         const configParts = [n.system, n.protocol, n.variant].filter(Boolean);
@@ -493,16 +550,28 @@ class LabMeshApp {
             }
         }
         
-        return `<div class="node-row ${n.isLocal?'local':''}" data-node-id="${n.id}">
+        // Last seen info
+        const lastSeenAgo = n.lastSeenAgo || 0;
+        const isStale = n.isStale || false;
+        const lastSeenText = lastSeenAgo < 2 ? 'just now' : `${lastSeenAgo}s ago`;
+        const staleClass = isStale ? 'stale' : '';
+        const staleIcon = isStale ? ' ⚠' : '';
+        
+        return `<div class="node-row ${n.isLocal?'local':''} ${staleClass}" data-node-id="${n.id}">
             <div class="node-content">
-                <div class="node-identity"><div class="node-name">${nameHtml}</div><div class="node-id">${this.esc(n.id)}</div></div>
-                <div class="node-status-badge ${st}"><span class="dot"></span>${st}</div>
-                <div class="node-info">${configHtml}${subjectHtml}</div>
-                <div class="node-stats">${statsHtml}</div>
-                <div class="node-badges">${n.isLocal?'<span class="badge local">LOCAL</span>':''}${n.ip&&!n.isLocal?`<span class="badge ip">${n.ip}</span>`:''}${n.ssl?'<span class="badge ssl">SSL</span>':''}</div>
-                <div class="node-actions">
-                    <a href="${url}ess_control.html" onclick="window.open('${url}ess_control.html', '${n.id}', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="btn btn-open">Open</a>
-                    <button class="btn btn-gear" data-action="manage" data-node-id="${n.id}" title="System Management">⚙</button>
+                <div class="node-line1">
+                    <div class="node-name">${nameHtml}</div>
+                    <div class="node-status-badge ${st}"><span class="dot"></span>${st}</div>
+                    <div class="node-info">${configHtml}${subjectHtml}</div>
+                    <div class="node-stats">${statsHtml}</div>
+                    <div class="node-actions">
+                        <a href="${url}ess_control.html" onclick="window.open('${url}ess_control.html', '${n.id}', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="btn btn-open">Open</a>
+                        <button class="btn btn-gear" data-action="manage" data-node-id="${n.id}" title="System Management">⚙</button>
+                    </div>
+                </div>
+                <div class="node-line2">
+                    <span class="node-badges">${n.isLocal?'<span class="badge ip local-ip">local</span>':(n.ip?`<span class="badge ip">${n.ip}</span>`:'')}${n.ssl?'<span class="badge ssl">SSL</span>':''}</span>
+                    <span class="last-seen ${staleClass}">${lastSeenText}${staleIcon}</span>
                 </div>
             </div>
         </div>`;
@@ -553,7 +622,13 @@ class LabMeshApp {
     
     connectAgent(node) {
         // For local node, reuse existing WebSocket connection
-        if (node.isLocal && this.ws && this.connected) {
+        // Also check if we're viewing from the same host (covers hostname mismatch cases)
+        const isSameHost = node.isLocal || 
+            node.ipAddress === location.hostname ||
+            location.hostname === 'localhost' ||
+            location.hostname === '127.0.0.1';
+            
+        if (isSameHost && this.ws && this.connected) {
             this.panelWs = this.ws;
             this.panelUsingMainWs = true;
             this.ws.send(JSON.stringify({type:'status'}));
@@ -562,9 +637,13 @@ class LabMeshApp {
         }
         
         // For remote nodes, open new connection
-        // Use .local hostname instead of IP (Safari blocks cross-origin WS to IPs)
+        // Try .local hostname first, fall back to IP if it contains spaces or special chars
         this.panelUsingMainWs = false;
-        const host = node.id.toLowerCase() + '.local';
+        let host = node.id.toLowerCase() + '.local';
+        // If hostname has spaces or special chars, use IP instead
+        if (node.id.includes(' ') || !/^[a-z0-9-]+$/i.test(node.id)) {
+            host = node.ipAddress;
+        }
         try {
             this.panelWs = new WebSocket(`ws://${host}:${CONFIG.agentPort}/ws`);
             this.panelWs.onopen = () => {

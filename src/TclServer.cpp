@@ -400,6 +400,9 @@ void TclServer::start_websocket_server(void)
               << std::endl;
   }
 
+  ds->set((char *)"system/ssl", (char *)(use_ssl ? "1" : "0"));
+  std::string portStr = std::to_string(websocket_port());
+  ds->set((char *)"system/webport", (char *)portStr.c_str());
 
   auto setup_routes = [this](auto &app) {
     
