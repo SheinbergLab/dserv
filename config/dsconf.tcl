@@ -16,13 +16,7 @@ tcl::tm::add $dspath/lib
 
 # enable error logging
 errormon enable
-
-# configure our mesh dispatcher (started on 2575 if enabled)
-if { [info exists ::mesh_enabled] } {
-    puts "Mesh networking detected - loading mesh configuration"
-     send mesh "source [file join $dspath config/meshconf.tcl]"
-}
-
+    
 # look for any .tcl configs to run before other subprocesses local/*.tcl
 foreach f [glob [file join $dspath local pre-*.tcl]] {
     source $f
@@ -86,6 +80,9 @@ proc set_hostinfo {} {
 set_hostinfo
 
 set host [dservGet system/hostaddr]
+
+# Start subprocess to handle ess/* datapoint forwarding
+subprocess mesh "source [file join $dspath config/meshconf.tcl]"
 
 # start sqlite local db
 subprocess db 2571 "source [file join $dspath config/sqliteconf.tcl]"
