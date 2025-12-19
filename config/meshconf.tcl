@@ -1,15 +1,39 @@
-puts "initializing mesh networking"
+# meshconf.tcl - Mesh broadcasting configuration
+# 
+# This subprocess handles broadcasting this node's status to the mesh.
+# Discovery and peer tracking are handled by dserv-agent.
+#
+# Uses timer module for periodic heartbeat.
 
-# disable exit
+puts "Initializing mesh broadcasting"
+
+# Disable exit for subprocess
 proc exit {args} { error "exit not available for this subprocess" }
 
-# Subscribe to mesh-relevant datapoints
+# Load required modules
+load ${dspath}/modules/dserv_mesh[info sharedlibextension]
+load ${dspath}/modules/dserv_timer[info sharedlibextension]
+
+# Initialize mesh broadcaster
+meshInit \
+    -id [dservGet system/hostname] \
+    -name [dservGet system/hostname] \
+    -port 12346 \
+    -webport 2565
+
+# Default heartbeat interval (milliseconds)
+set mesh_interval 1000
+
+# Subscribe to mesh-relevant datapoints from ess
 set ess_dps { 
-		status system protocol variant subject 
-		obs_total obs_id
-		block_n_complete block_pct_complete block_pct_correct
+    status system protocol variant subject 
+    obs_total obs_id
+    block_n_complete block_pct_complete block_pct_correct
 }
-foreach dp $ess_dps { dservAddExactMatch ess/$dp } 
+
+foreach dp $ess_dps { 
+    dservAddExactMatch ess/$dp 
+}
 
 # Datapoint handler for status updates
 proc mesh_datapoint_handler { dpoint data } {
@@ -35,6 +59,43 @@ foreach dp $ess_dps {
     dpointSetScript ess/$dp mesh_datapoint_handler
 }
 
+#################################################################
+# Timer-based heartbeat
+#################################################################
+
+proc mesh_heartbeat_callback { dpoint data } {
+    meshSendHeartbeat
+}
+
+proc mesh_start { {interval_ms 1000} } {
+    global mesh_interval
+    set mesh_interval $interval_ms
+    timerTickInterval $interval_ms $interval_ms
+    puts "Mesh heartbeat started: ${interval_ms}ms interval"
+}
+
+proc mesh_stop {} {
+    timerStop
+    puts "Mesh heartbeat stopped"
+}
+
+proc mesh_set_interval { interval_ms } {
+    global mesh_interval
+    set mesh_interval $interval_ms
+    timerTickInterval $interval_ms $interval_ms
+    puts "Mesh heartbeat interval changed to ${interval_ms}ms"
+}
+
+proc mesh_setup {} {
+    timerPrefix meshTimer
+    dservAddExactMatch meshTimer/0
+    dpointSetScript meshTimer/0 mesh_heartbeat_callback
+}
+
+#################################################################
+# Helper functions
+#################################################################
+
 # Set multiple fields at once using a dictionary
 proc mesh_set_fields { field_dict } {
     dict for {key value} $field_dict {
@@ -42,59 +103,42 @@ proc mesh_set_fields { field_dict } {
     }
 }
 
+# Get current broadcast info
+proc mesh_get_info {} {
+    return [meshInfo]
+}
+
+# Get this appliance's ID
+proc mesh_get_id {} {
+    return [meshGetApplianceId]
+}
+
+# Get current custom fields
+proc mesh_get_fields {} {
+    return [meshGetFields]
+}
+
 #################################################################
-# Helper functions
+# Initialize and start
 #################################################################
 
-# Get cluster status as a nice Tcl dict
-proc mesh_get_cluster_status {} {
-    return [meshGetPeers]
-}
+mesh_setup
+mesh_start $mesh_interval
 
-# Get just the appliance IDs
-proc mesh_get_appliance_ids {} {
-    set peers [meshGetPeers]
-    set ids {}
-    foreach peer $peers {
-        lappend ids [dict get $peer id]
-    }
-    return $ids
-}
-
-# Check if a specific appliance is online
-proc mesh_appliance_online { appliance_id } {
-    set ids [mesh_get_appliance_ids]
-    return [expr {$appliance_id in $ids}]
-}
-
-# Get status of specific appliance
-proc mesh_get_appliance_status { appliance_id } {
-    set peers [meshGetPeers]
-    foreach peer $peers {
-        if {[dict get $peer id] eq $appliance_id} {
-            return [dict get $peer status]
-        }
-    }
-    return ""
-}
-
-# As simple as it gets
-proc mesh_generate_html {} {
-    set hostname [expr {[dservExists system/hostname] ? [dservGet system/hostname] : "Unknown"}]
-    set status [expr {[dservExists ess/status] ? [dservGet ess/status] : "idle"}]
-    
-    return "<html><body><h1>$hostname</h1><p>Status: $status</p><p>Time: [clock format [clock seconds]]</p></body></html>"
-}
-
-puts "Mesh configuration ready - flexible field system active"
-puts "Standard fields mapped:"
-puts "  ess/status   -> status"
-puts "  ess/subject  -> subject"
-puts "  ess/system   -> system"
-puts "  ess/protocol -> protocol"
-puts "  ess/variant  -> variant"
+if { 0 } {
+puts "Mesh broadcasting ready"
+puts "  Appliance ID: [meshGetApplianceId]"
+puts "  Heartbeat interval: ${mesh_interval}ms"
 puts ""
-puts "Add your own fields with:"
-puts "  meshSetField <fieldname> <value>"
-puts "  meshRemoveField <fieldname>"
-puts "  meshGetFields"
+puts "Commands available:"
+puts "  meshSendHeartbeat             - Send heartbeat now"
+puts "  meshUpdateStatus <status>     - Set current status"
+puts "  meshSetField <key> <value>    - Set custom field"
+puts "  meshRemoveField <key>         - Remove custom field"
+puts "  meshGetFields                 - Get all custom fields"
+puts "  meshClearFields               - Clear all custom fields"
+puts "  meshInfo                      - Get broadcaster info"
+puts "  mesh_start ?interval_ms?      - Start/restart heartbeat timer"
+puts "  mesh_stop                     - Stop heartbeat timer"
+puts "  mesh_set_interval <ms>        - Change heartbeat interval"
+}
