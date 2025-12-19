@@ -75,9 +75,9 @@ header h1 {
 .badge.ssl { background: #1a3d2e; color: #34d399; }
 .badge.local { background: #3d2e1a; color: #fbbf24; }
 .badge.ip { background: #1e3a5f; color: #60a5fa; font-family: 'SF Mono', Monaco, monospace; text-transform: none; font-size: 10px; }
-.node-stats { font-size: 12px; color: #71767b; flex: 1; text-align: center; }
-.node-stats .trial-num { color: #e7e9ea; font-weight: 500; font-family: 'SF Mono', Monaco, monospace; }
-.node-stats .perf-num { color: #34d399; font-weight: 500; }
+.node-stats { font-size: 12px; color: #71767b; flex: 1; text-align: center; min-width: 120px; }
+.node-stats .trial-num { color: #e7e9ea; font-weight: 500; font-family: 'SF Mono', Monaco, monospace; min-width: 50px; display: inline-block; }
+.node-stats .perf-num { color: #34d399; font-weight: 500; min-width: 40px; display: inline-block; }
 .node-stats .stats-sep { color: #4a5568; margin: 0 6px; }
 .node-actions { display: flex; align-items: center; gap: 6px; }
 
@@ -363,18 +363,75 @@ class LabMeshApp {
             return;
         }
         
-        this.el.nodeList.innerHTML = nodes.map(n => this.renderRow(n)).join('');
-        this.el.nodeList.querySelectorAll('[data-action]').forEach(btn => {
-            btn.addEventListener('click', e => {
-                const action = e.target.dataset.action;
-                const nodeId = e.target.dataset.nodeId;
-                if (action === 'manage') {
-                    this.openPanel(nodeId);
-                } else if (['start', 'stop', 'reset'].includes(action)) {
-                    this.sendEssCommand(nodeId, action);
-                }
+        // Get current node IDs in DOM
+        const currentIds = new Set();
+        this.el.nodeList.querySelectorAll('.node-row').forEach(el => currentIds.add(el.dataset.nodeId));
+        
+        // Get new node IDs
+        const newIds = new Set(nodes.map(n => n.id));
+        
+        // If structure changed (nodes added/removed/reordered), do full rebuild
+        const nodeIds = nodes.map(n => n.id);
+        const domIds = Array.from(this.el.nodeList.querySelectorAll('.node-row')).map(el => el.dataset.nodeId);
+        const structureChanged = nodeIds.length !== domIds.length || nodeIds.some((id, i) => id !== domIds[i]);
+        
+        if (structureChanged) {
+            // Full rebuild needed
+            this.el.nodeList.innerHTML = nodes.map(n => this.renderRow(n)).join('');
+            this.el.nodeList.querySelectorAll('[data-action]').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    const action = e.target.dataset.action;
+                    const nodeId = e.target.dataset.nodeId;
+                    if (action === 'manage') {
+                        this.openPanel(nodeId);
+                    } else if (['start', 'stop', 'reset'].includes(action)) {
+                        this.sendEssCommand(nodeId, action);
+                    }
+                });
             });
-        });
+        } else {
+            // In-place update - only update changed fields
+            nodes.forEach(n => {
+                const row = this.el.nodeList.querySelector(`.node-row[data-node-id="${n.id}"]`);
+                if (!row) return;
+                
+                // Update status badge
+                const statusBadge = row.querySelector('.node-status-badge');
+                if (statusBadge) {
+                    const st = n.status || 'idle';
+                    statusBadge.className = 'node-status-badge ' + st;
+                    statusBadge.innerHTML = `<span class="dot"></span>${st}`;
+                }
+                
+                // Update info columns
+                const infoEl = row.querySelector('.node-info');
+                if (infoEl) {
+                    infoEl.innerHTML = `<span>${n.system||'—'}</span><span>${n.protocol||'—'}</span><span>${n.variant||'—'}</span><span>${n.subject||'—'}</span>`;
+                }
+                
+                // Update stats
+                const statsEl = row.querySelector('.node-stats');
+                if (statsEl) {
+                    let trialStr = '<span class="trial-num">&nbsp;</span>';
+                    let perfStr = '<span class="perf-num">&nbsp;</span>';
+                    if (n.obs_id != null && n.obs_total != null) {
+                        const t = parseInt(n.obs_id), tot = parseInt(n.obs_total);
+                        if (!isNaN(t) && tot > 0) trialStr = `<span class="trial-num">${t+1}/${tot}</span>`;
+                    }
+                    if (n.block_pct_correct) { 
+                        const v = parseFloat(n.block_pct_correct); 
+                        if (!isNaN(v)) perfStr = `<span class="perf-num">${Math.round(v*100)}%</span>`; 
+                    }
+                    statsEl.innerHTML = trialStr + ' <span class="stats-sep">·</span> ' + perfStr;
+                }
+                
+                // Update button states
+                const startBtn = row.querySelector('[data-action="start"]');
+                const stopBtn = row.querySelector('[data-action="stop"]');
+                if (startBtn) startBtn.disabled = (n.status === 'running');
+                if (stopBtn) stopBtn.disabled = (n.status !== 'running');
+            });
+        }
     }
     
     sendEssCommand(nodeId, action) {
@@ -386,16 +443,10 @@ class LabMeshApp {
         
         this.showToast(`Sending ${action} to ${node.name || node.id}...`);
         
-        if (node.isLocal) {
-            // Send via dserv WebSocket (need to connect to dserv, not agent)
-            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const dservPort = node.webPort || 2565;
-            this.sendToDserv(`${proto}//${location.hostname}:${dservPort}/ws`, cmd, node);
-        } else {
-            // Send to remote dserv
-            const proto = node.ssl ? 'wss:' : 'ws:';
-            this.sendToDserv(`${proto}//${node.ip}:${node.webPort || 2565}/ws`, cmd, node);
-        }
+        // Always use node's IP/hostname and SSL setting
+        const host = node.isLocal ? (node.ip || location.hostname) : node.ip;
+        const proto = node.ssl ? 'wss:' : 'ws:';
+        this.sendToDserv(`${proto}//${host}:${node.webPort || 2565}/ws`, cmd, node);
     }
     
     sendToDserv(wsUrl, cmd, node) {
@@ -417,12 +468,14 @@ class LabMeshApp {
         const st = n.status || 'idle';
         const name = (n.name || n.id).replace('Lab Station ', '');
         const url = `${n.ssl?'https':'http'}://${n.isLocal ? location.hostname : n.ip}:${n.webPort||2565}/`;
-        let stats = [];
+        let trialStr = '<span class="trial-num">&nbsp;</span>';
+        let perfStr = '<span class="perf-num">&nbsp;</span>';
         if (n.obs_id != null && n.obs_total != null) {
             const t = parseInt(n.obs_id), tot = parseInt(n.obs_total);
-            if (!isNaN(t) && tot > 0) stats.push(`<span class="trial-num">${t+1}/${tot}</span>`);
+            if (!isNaN(t) && tot > 0) trialStr = `<span class="trial-num">${t+1}/${tot}</span>`;
         }
-        if (n.block_pct_correct) { const v = parseFloat(n.block_pct_correct); if (!isNaN(v)) stats.push(`<span class="perf-num">${Math.round(v*100)}%</span>`); }
+        if (n.block_pct_correct) { const v = parseFloat(n.block_pct_correct); if (!isNaN(v)) perfStr = `<span class="perf-num">${Math.round(v*100)}%</span>`; }
+        const statsHtml = trialStr + ' <span class="stats-sep">·</span> ' + perfStr;
         
         return `<div class="node-row ${n.isLocal?'local':''}" data-node-id="${n.id}">
             <div class="node-line-top">
@@ -435,7 +488,7 @@ class LabMeshApp {
             </div>
             <div class="node-line-bottom">
                 <div class="node-badges">${n.isLocal?'<span class="badge local">LOCAL</span>':''}${n.ip&&!n.isLocal?`<span class="badge ip">${n.ip}</span>`:''}${n.ssl?'<span class="badge ssl">SSL</span>':''}</div>
-                <div class="node-stats">${stats.join(' <span class="stats-sep">·</span> ')}</div>
+                <div class="node-stats">${statsHtml}</div>
                 <div class="node-actions">
                     <button class="btn btn-start" data-action="start" data-node-id="${n.id}" ${st==='running'?'disabled':''} title="Start ESS">▶</button>
                     <button class="btn btn-stop" data-action="stop" data-node-id="${n.id}" ${st!=='running'?'disabled':''} title="Stop ESS">■</button>
