@@ -275,15 +275,25 @@ add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
+##
+## mesh
+##
+set(MODULE mesh)
+project(${MODULE})
+find_library(LIBJANSSON NAMES jansson)
+add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
+set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${LIBJANSSON} pthread)
+
 # Install targets - conditionally include camera
 if(BUILD_CAMERA)
     install(TARGETS
-        ain juicer gpio_input gpio_output touch
+        ain juicer gpio_input gpio_output touch mesh
         rmt eventlog sound timer usbio ina226 joystick4 camera_capture
         DESTINATION dserv/modules COMPONENT dserv)
 else()
     install(TARGETS
-        ain juicer gpio_input gpio_output touch
+        ain juicer gpio_input gpio_output touch mesh
         rmt eventlog sound timer usbio ina226 joystick4
         DESTINATION dserv/modules COMPONENT dserv)
 endif()
