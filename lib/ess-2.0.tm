@@ -254,13 +254,14 @@ oo::class create System {
             
 			rename puts _puts
 			proc puts {args} {
+				global dservhost
 				switch [llength $args] {
 					1 {
-						qpcs::dsSetData $dservhost stim/stdout "[lindex $args 0]\n"
+						qpcs::dsPut $dservhost stim/stdout "[lindex $args 0]\n"
 					}
 					2 {
 						if {[lindex $args 0] eq "-nonewline"} {
-							qpcs::dsSetData $dservhost stim/stdout [lindex $args 1]
+							qpcs::dsPut $dservhost stim/stdout [lindex $args 1]
 						} else {
 							_puts {*}$args
 						}
