@@ -114,6 +114,54 @@ body {
     color: #cccccc;
 }
 
+.pane-tabs {
+    display: flex;
+    gap: 4px;
+}
+
+.pane-tab {
+    background: transparent;
+    color: #999999;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pane-tab:hover {
+    color: #cccccc;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.pane-tab.active {
+    color: #007acc;
+    border-bottom-color: #007acc;
+}
+
+.tab-badge {
+    display: inline-block;
+    background: #d32f2f;
+    color: white;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 5px;
+    border-radius: 10px;
+    margin-left: 6px;
+    min-width: 16px;
+    text-align: center;
+}
+
+.tab-badge.hidden {
+    display: none;
+}
+
+.pane-tab.active .tab-badge {
+    display: none;
+}
+
 .pane-controls {
     display: flex;
     gap: 8px;
@@ -846,6 +894,11 @@ body {
     overflow-y: auto;
     padding: 8px;
     font-size: 11px;
+    display: none;
+}
+
+.error-log-list.active {
+    display: block;
 }
 
 .error-log-item {
@@ -857,6 +910,52 @@ body {
     margin-bottom: 4px;
     transition: all 0.2s;
     cursor: pointer;
+}
+
+.console-log-item {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-left: 4px solid #007acc;
+    border-radius: 3px;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.console-block {
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-radius: 3px;
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+
+.console-block-header {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #3e3e42;
+}
+
+.console-block-content {
+    padding: 8px;
+    margin: 0;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-x: auto;
+}
+
+.console-active-indicator {
+    font-size: 10px;
+    margin-left: auto;
 }
 
 .error-log-item:hover {
@@ -889,6 +988,23 @@ body {
     color: #f48771;
     min-width: 60px;
     flex-shrink: 0;
+}
+
+.console-log-interp {
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.console-log-time {
+    font-size: 9px;
+    color: #858585;
+    margin-right: 8px;
+}
+
+.console-log-message {
+    color: #d4d4d4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
 }
 
 .error-log-preview {
@@ -1114,17 +1230,29 @@ body {
             <!-- Horizontal resize handle -->
             <div id="horizontal-resize-handle" class="resize-handle horizontal"></div>
 
-            <!-- Error Log -->
+            <!-- Error Log & Console -->
             <div id="error-log-pane" class="sub-pane">
                 <div class="pane-header">
-                    <span class="pane-title">Error Log</span>
+                    <div class="pane-tabs">
+                        <button class="pane-tab active" data-tab="errors">
+                            Errors
+                            <span class="tab-badge hidden" id="errors-badge">0</span>
+                        </button>
+                        <button class="pane-tab" data-tab="console">
+                            Console
+                            <span class="tab-badge hidden" id="console-badge">0</span>
+                        </button>
+                    </div>
                     <div class="pane-controls">
                         <span id="error-log-count" class="update-count">0 errors</span>
-                        <button id="clear-error-log" class="icon-btn" title="Clear error log">Clear</button>
+                        <button id="clear-error-log" class="icon-btn" title="Clear">Clear</button>
                     </div>
                 </div>
-                <div id="error-log-list" class="error-log-list">
+                <div id="error-log-list" class="error-log-list active">
                     <div class="placeholder">No errors logged</div>
+                </div>
+                <div id="console-log-list" class="error-log-list">
+                    <div class="placeholder">No console output</div>
                 </div>
             </div>
         </div>
@@ -1558,6 +1686,9 @@ class Terminal {
 	this.availableInterps = ['dserv', ...interps.filter(i => i !== 'dserv')];
 	
 	console.log('Available interpreters:', this.availableInterps);
+	
+	// Notify ConsoleMonitor of interpreter list update
+	this.ws.emit('interp-list-updated', this.availableInterps);
 	
 	// Check if current interpreter still exists
 	if (!this.availableInterps.includes(this.currentInterp)) {
@@ -2585,6 +2716,7 @@ class ErrorMonitor {
         this.logCountElement = document.getElementById('error-log-count');
         this.badgeElement = document.getElementById('error-badge');
         this.clearButton = document.getElementById('clear-error-log');
+        this.tabBadgeElement = document.getElementById('errors-badge');
 
         // Listen for WebSocket events
         this.ws.on('connected', () => this.handleConnected());
@@ -2598,11 +2730,6 @@ class ErrorMonitor {
     }
 
     attachEventListeners() {
-        // Clear button
-        if (this.clearButton) {
-            this.clearButton.addEventListener('click', () => this.clearErrors());
-        }
-
         // Badge click - scroll to error log
         if (this.badgeElement) {
             this.badgeElement.addEventListener('click', () => this.scrollToErrorLog());
@@ -2809,6 +2936,17 @@ class ErrorMonitor {
             this.badgeElement.classList.remove('hidden');
             this.badgeElement.querySelector('.error-count').textContent = this.errors.length;
         }
+        
+        // Update tab badge
+        if (this.tabBadgeElement) {
+            const errorTab = document.querySelector('.pane-tab[data-tab="errors"]');
+            if (this.errors.length === 0 || (errorTab && errorTab.classList.contains('active'))) {
+                this.tabBadgeElement.classList.add('hidden');
+            } else {
+                this.tabBadgeElement.classList.remove('hidden');
+                this.tabBadgeElement.textContent = this.errors.length;
+            }
+        }
     }
 
     clearErrors() {
@@ -2821,13 +2959,306 @@ class ErrorMonitor {
 }
 
 // ============================================
+// Console Monitor Module
+// ============================================
+
+class ConsoleMonitor {
+    constructor(wsManager) {
+        this.ws = wsManager;
+        this.consoleBlocks = []; // Array of console blocks (one per interpreter session)
+        this.currentBlock = null; // Currently active block being accumulated
+        this.maxBlocks = 100; // Keep last 100 blocks
+        this.stdoutSubscriptions = new Set(); // Track subscribed interpreters
+        
+        // Color palette for interpreters
+        this.interpColors = {};
+        this.colorPalette = [
+            '#4ec9b0', // teal
+            '#ce9178', // orange
+            '#c586c0', // purple
+            '#dcdcaa', // yellow
+            '#569cd6', // blue
+            '#4fc1ff', // cyan
+            '#b5cea8', // green
+            '#d16969', // red
+            '#9cdcfe', // light blue
+            '#f48771'  // salmon
+        ];
+        
+        // DOM elements
+        this.consoleListElement = document.getElementById('console-log-list');
+        this.logCountElement = document.getElementById('error-log-count'); // Shared with errors
+        this.tabBadgeElement = document.getElementById('console-badge');
+        
+        // Listen for WebSocket events
+        this.ws.on('connected', () => this.handleConnected());
+        this.ws.on('datapoint:update', (data) => this.handleDatapointUpdate(data));
+        
+        // Listen for interpreter list updates
+        this.ws.on('interp-list-updated', (interps) => this.updateStdoutSubscriptions(interps));
+    }
+    
+    getInterpColor(interpreter) {
+        // Return existing color if we've seen this interpreter
+        if (this.interpColors[interpreter]) {
+            return this.interpColors[interpreter];
+        }
+        
+        // Assign a new color from palette
+        const usedColors = Object.values(this.interpColors);
+        const availableColors = this.colorPalette.filter(c => !usedColors.includes(c));
+        
+        // If we've used all colors, start reusing them
+        const color = availableColors.length > 0 
+            ? availableColors[0] 
+            : this.colorPalette[Object.keys(this.interpColors).length % this.colorPalette.length];
+        
+        this.interpColors[interpreter] = color;
+        return color;
+    }
+    
+    handleConnected() {
+        // Will subscribe once we get the interpreter list
+        console.log('ConsoleMonitor: WebSocket connected, waiting for interpreter list');
+    }
+    
+    updateStdoutSubscriptions(interps) {
+        if (!interps || !Array.isArray(interps)) return;
+        
+        // Get list of non-dserv interpreters
+        const activeInterps = interps.filter(name => name !== 'dserv');
+        
+        // Unsubscribe from interpreters that are no longer active
+        for (const interp of this.stdoutSubscriptions) {
+            if (!activeInterps.includes(interp)) {
+                const dpName = `${interp}/stdout`;
+                this.ws.send({
+                    cmd: 'unsubscribe',
+                    match: dpName
+                });
+                this.stdoutSubscriptions.delete(interp);
+                console.log(`ConsoleMonitor: Unsubscribed from ${dpName}`);
+            }
+        }
+        
+        // Subscribe to new interpreters
+        for (const interp of activeInterps) {
+            if (!this.stdoutSubscriptions.has(interp)) {
+                const dpName = `${interp}/stdout`;
+                this.ws.send({
+                    cmd: 'subscribe',
+                    match: dpName,
+                    every: 1
+                });
+                this.stdoutSubscriptions.add(interp);
+                console.log(`ConsoleMonitor: Subscribed to ${dpName}`);
+            }
+        }
+    }
+    
+    handleDatapointUpdate(data) {
+        // Check if this is a stdout message
+        if (data.name && data.name.endsWith('/stdout')) {
+            const interpName = data.name.replace('/stdout', '');
+            const value = data.data !== undefined ? data.data : data.value;
+            this.addConsoleMessage(interpName, value);
+        }
+    }
+    
+    addConsoleMessage(interpreter, message) {
+        if (!message) return;
+        
+        // Check if we should append to current block or start a new one
+        if (this.currentBlock && this.currentBlock.interpreter === interpreter) {
+            // Append to current block
+            this.currentBlock.lines.push(String(message));
+            this.currentBlock.lastUpdated = new Date();
+        } else {
+            // Finalize current block if exists
+            if (this.currentBlock) {
+                this.consoleBlocks.push(this.currentBlock);
+                this.currentBlock = null;
+                
+                // Limit blocks
+                if (this.consoleBlocks.length > this.maxBlocks) {
+                    this.consoleBlocks.shift();
+                }
+            }
+            
+            // Start new block
+            this.currentBlock = {
+                id: Date.now() + Math.random(),
+                interpreter: interpreter,
+                lines: [String(message)],
+                startedAt: new Date(),
+                lastUpdated: new Date()
+            };
+        }
+        
+        // Update UI
+        this.renderConsoleLog();
+        
+        console.log(`Console [${interpreter}]:`, message);
+    }
+    
+    renderConsoleLog() {
+        // Get all blocks including current active one
+        const allBlocks = [...this.consoleBlocks];
+        if (this.currentBlock) {
+            allBlocks.push(this.currentBlock);
+        }
+        
+        if (allBlocks.length === 0) {
+            this.consoleListElement.innerHTML = '<div class="placeholder">No console output</div>';
+            this.updateBadge();
+            return;
+        }
+        
+        // Render blocks (newest first)
+        const blocksHtml = allBlocks.slice().reverse().map(block => {
+            const messageText = block.lines.join('');  // Simple join - puts includes newline
+            const isActive = block === this.currentBlock;
+            const color = this.getInterpColor(block.interpreter);
+            const borderWidth = isActive ? '5px' : '4px';
+            
+            return `
+                <div class="console-block ${isActive ? 'active' : ''}" style="border-left: ${borderWidth} solid ${color};">
+                    <div class="console-block-header">
+                        <span class="console-log-time">${this.formatTime(block.startedAt)}</span>
+                        <span class="console-log-interp" style="color: ${color};">[${block.interpreter}]</span>
+                        ${isActive ? `<span class="console-active-indicator" style="color: ${color};">●</span>` : ''}
+                    </div>
+                    <pre class="console-block-content">${this.escapeHtml(messageText)}</pre>
+                </div>
+            `;
+        }).join('');
+        
+        this.consoleListElement.innerHTML = blocksHtml;
+        
+        // Auto-scroll to top (newest block)
+        this.consoleListElement.scrollTop = 0;
+        
+        // Update badge
+        this.updateBadge();
+    }
+    
+    updateBadge() {
+        if (this.tabBadgeElement) {
+            const totalBlocks = this.consoleBlocks.length + (this.currentBlock ? 1 : 0);
+            const consoleTab = document.querySelector('.pane-tab[data-tab="console"]');
+            if (totalBlocks === 0 || (consoleTab && consoleTab.classList.contains('active'))) {
+                this.tabBadgeElement.classList.add('hidden');
+            } else {
+                this.tabBadgeElement.classList.remove('hidden');
+                this.tabBadgeElement.textContent = totalBlocks;
+            }
+        }
+    }
+    
+    formatTime(date) {
+        const now = new Date();
+        const diff = now - date;
+        
+        if (diff < 60000) { // Less than 1 minute
+            const seconds = Math.floor(diff / 1000);
+            return seconds === 0 ? 'now' : `${seconds}s`;
+        } else if (diff < 3600000) { // Less than 1 hour
+            const minutes = Math.floor(diff / 60000);
+            return `${minutes}m`;
+        } else if (diff < 86400000) { // Less than 1 day
+            const hours = Math.floor(diff / 3600000);
+            return `${hours}h`;
+        } else {
+            // Format as HH:MM
+            return date.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false 
+            });
+        }
+    }
+    
+    escapeHtml(unsafe) {
+        if (unsafe === null || unsafe === undefined) return '';
+        return String(unsafe)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+    
+    clearConsole() {
+        if (this.consoleBlocks.length === 0 && !this.currentBlock) return;
+        
+        this.consoleBlocks = [];
+        this.currentBlock = null;
+        this.renderConsoleLog();
+    }
+}
+
+// ============================================
+// Tab Switching for Error/Console Panel
+// ============================================
+
+function initializePaneTabs() {
+    const tabs = document.querySelectorAll('.pane-tab');
+    const errorList = document.getElementById('error-log-list');
+    const consoleList = document.getElementById('console-log-list');
+    const clearButton = document.getElementById('clear-error-log');
+    const countElement = document.getElementById('error-log-count');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const targetTab = tab.dataset.tab;
+            
+            // Update active tab
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            // Show appropriate content
+            if (targetTab === 'errors') {
+                errorList.classList.add('active');
+                consoleList.classList.remove('active');
+                countElement.textContent = `${errorMonitor.errors.length} error${errorMonitor.errors.length === 1 ? '' : 's'}`;
+                // Hide error badge when viewing errors
+                errorMonitor.updateBadge();
+            } else if (targetTab === 'console') {
+                errorList.classList.remove('active');
+                consoleList.classList.add('active');
+                const totalBlocks = consoleMonitor.consoleBlocks.length + (consoleMonitor.currentBlock ? 1 : 0);
+                countElement.textContent = `${totalBlocks} block${totalBlocks === 1 ? '' : 's'}`;
+                // Hide console badge when viewing console
+                consoleMonitor.updateBadge();
+            }
+        });
+    });
+    
+    // Update clear button to work with current tab
+    clearButton.addEventListener('click', () => {
+        const activeTab = document.querySelector('.pane-tab.active');
+        if (activeTab) {
+            const targetTab = activeTab.dataset.tab;
+            if (targetTab === 'errors') {
+                errorMonitor.clearErrors();
+            } else if (targetTab === 'console') {
+                consoleMonitor.clearConsole();
+            }
+        }
+    });
+}
+
+// ============================================
 // Initialize error monitor when DOM is ready
 // ============================================
 
 let errorMonitor;
+let consoleMonitor;
 
 document.addEventListener('DOMContentLoaded', () => {
     errorMonitor = new ErrorMonitor(wsManager);
+    consoleMonitor = new ConsoleMonitor(wsManager);
+    initializePaneTabs();
 });
 
     </script>
