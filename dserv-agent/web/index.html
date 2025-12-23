@@ -351,8 +351,21 @@ class LabMeshApp {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         try {
             this.ws = new WebSocket(`${proto}//${location.host}/ws`);
-            this.ws.onopen = () => { this.connected = true; this.setStatus('connected', 'Connected'); this.ws.send(JSON.stringify({type:'mesh_peers'})); };
-            this.ws.onclose = () => { this.connected = false; this.setStatus('disconnected', 'Disconnected'); setTimeout(() => this.connect(), CONFIG.reconnectDelay); };
+            this.ws.onopen = () => { 
+                this.connected = true; 
+                this.setStatus('connected', 'Connected'); 
+                this.ws.send(JSON.stringify({type:'mesh_peers'}));
+                // Refresh mesh data every 2 seconds to update lastSeenAgo
+                this.meshRefreshInterval = setInterval(() => {
+                    if (this.connected) this.ws.send(JSON.stringify({type:'mesh_peers'}));
+                }, 2000);
+            };
+            this.ws.onclose = () => { 
+                this.connected = false; 
+                this.setStatus('disconnected', 'Disconnected'); 
+                if (this.meshRefreshInterval) clearInterval(this.meshRefreshInterval);
+                setTimeout(() => this.connect(), CONFIG.reconnectDelay); 
+            };
             this.ws.onerror = () => this.setStatus('disconnected', 'Error');
             this.ws.onmessage = e => this.handleMsg(JSON.parse(e.data));
         } catch(e) { this.setStatus('disconnected', 'Failed'); setTimeout(() => this.connect(), CONFIG.reconnectDelay); }
@@ -376,6 +389,7 @@ class LabMeshApp {
             this.nodes.set(p.applianceId, {
                 id: p.applianceId, name: p.name, status: p.status, ip: p.ipAddress,
                 webPort: p.webPort, ssl: p.ssl, isLocal: p.isLocal,
+                lastSeenAgo: p.lastSeenAgo, isStale: p.isStale,
                 system: p.customFields?.system, protocol: p.customFields?.protocol,
                 variant: p.customFields?.variant, subject: p.customFields?.subject,
                 obs_id: p.customFields?.obs_id, obs_total: p.customFields?.obs_total,
