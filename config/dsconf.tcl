@@ -81,6 +81,9 @@ set_hostinfo
 
 set host [dservGet system/hostaddr]
 
+# Start subprocess to provide connection to stim
+subprocess stim "source [file join $dspath config/stimconf.tcl]"
+
 # Start subprocess to handle ess/* datapoint forwarding
 subprocess mesh "source [file join $dspath config/meshconf.tcl]"
 
