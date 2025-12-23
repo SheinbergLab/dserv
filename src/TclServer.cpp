@@ -2403,6 +2403,34 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
     return TCL_ERROR;
   }
   
+  // Redirect puts to datapoint for subprocesses (not main dserv)
+  if (tserv->name != "dserv") {
+    std::string puts_redirect = R"(
+      rename puts _puts
+      proc puts {args} {
+        switch [llength $args] {
+          1 {
+            dservSet )" + tserv->name + R"(/stdout "[lindex $args 0]\n"
+          }
+          2 {
+            if {[lindex $args 0] eq "-nonewline"} {
+              dservSet )" + tserv->name + R"(/stdout [lindex $args 1]
+            } else {
+              _puts {*}$args
+            }
+          }
+          default {
+            _puts {*}$args
+          }
+        }
+      }
+    )";
+    
+    if (Tcl_Eval(interp, puts_redirect.c_str()) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+
   return TCL_OK;
 }
 
@@ -2664,6 +2692,9 @@ static int process_requests(TclServer *tserv)
   // Clean up ErrorMonitor
   delete errorMonitor;
 
+  // Clean up datapoints for this subprocess before unregistering
+  tserv->cleanup_datapoints_for_subprocess(tserv->name);
+  
   TclServerRegistry.unregisterObject(tserv->name);
   update_subprocess_dpoint(tserv);
   
