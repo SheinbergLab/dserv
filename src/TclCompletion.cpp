@@ -108,6 +108,7 @@ std::vector<std::string> getFilenameCompletions(Tcl_Interp* interp,
                 // Check if this is a directory and add trailing /
                 // Use file isdirectory to check
                 std::string checkCmd = "file isdirectory {" + path + "}";
+
                 if (Tcl_Eval(interp, checkCmd.c_str()) == TCL_OK) {
                     const char* isDirStr = Tcl_GetStringResult(interp);
                     if (isDirStr && isDirStr[0] == '1') {
@@ -140,7 +141,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     std::string actualPartial = partial;
     std::string prefix = "";
     size_t embedPos = partial.rfind('[');
-    
+ 
     if (embedPos != std::string::npos) {
         // Check if there's a closing ] after the [
         size_t closePos = partial.find(']', embedPos);
@@ -156,7 +157,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
             }
         }
     }
-    
+
     // Helper to parse Tcl list results
     auto parseListResult = [&](Tcl_Interp* interp, const std::string& itemPrefix = "") {
         const char* listStr = Tcl_GetStringResult(interp);
@@ -178,18 +179,16 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
         }
         Tcl_DecrRefCount(listObj);
     };
-    
+
     std::string pattern = actualPartial + "*";
     std::string cmd;
-    
-    // Early exit if pattern is invalid (contains spaces - would cause arg count errors)
-    if (!isValidPattern(pattern)) {
-        return results;
-    }
-    
+
     // Check for array element completion: varName(partial
     // Example: tcl_platform(ma -> tcl_platform(machine)
     size_t parenPos = actualPartial.rfind('(');
+
+
+
     if (parenPos != std::string::npos) {
         // Check if there's a closing paren
         size_t closePos = actualPartial.find(')', parenPos);
@@ -242,7 +241,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     
     // Parse context to see if we should do context-aware completion
     CompletionContext ctx = parseContext(actualPartial);
-    
+
     // Check for custom command-specific completion first
     if (ctx.wordIndex > 0 && !ctx.command.empty()) {
         // Try custom completion via ::completion::get_matches
@@ -284,8 +283,6 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                     Tcl_DecrRefCount(listObj);
                     return results;  // Return custom completions
                 }
-                
-                Tcl_DecrRefCount(listObj);
             }
         }
         // If no custom completions or error, fall through to default completion
@@ -476,7 +473,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                 }
             }
         }
-        
+
         if (needsFilenameCompletion) {
             auto filenames = getFilenameCompletions(interp, ctx.partial, dirsOnly);
             for (const auto& filename : filenames) {
@@ -728,7 +725,6 @@ namespace eval ::completion {
     # Register completion rule for a command
     # Usage:
     #   completion::register ess::load_system {
-    #       {datapoint ess/systems}
     #       {literal {tcp udp serial}}
     #   }
     # Or:
@@ -776,8 +772,7 @@ namespace eval ::completion {
                     }
                 }
                 return $matches
-            }
-            
+            }            
             literal {
                 set values [lindex $spec 1]
                 set matches {}
