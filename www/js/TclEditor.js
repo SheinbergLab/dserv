@@ -137,8 +137,466 @@ class TclEditor {
       parent: this.container,
     });
 
+    // Setup context menu
+    this._setupContextMenu();
+
     // Emit ready event
     this.container.dispatchEvent(new CustomEvent('editor-ready', { detail: this }));
+  }
+
+  // Context menu setup
+  _setupContextMenu() {
+    // Create menu element (hidden by default)
+    this._contextMenu = document.createElement('div');
+    this._contextMenu.className = 'tcl-context-menu';
+    this._contextMenu.style.cssText = `
+      display: none;
+      position: fixed;
+      background: #2d2d30;
+      border: 1px solid #3e3e42;
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      padding: 4px 0;
+      z-index: 1000;
+      min-width: 150px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+    `;
+    document.body.appendChild(this._contextMenu);
+
+    // Right-click handler
+    this.container.addEventListener('contextmenu', async (e) => {
+      e.preventDefault();
+      
+      const pos = this.view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos === null) return;
+
+      const { text } = this._getWordAt(this.view.state, pos);
+      
+      // Build menu items
+      const items = await this._buildContextMenuItems(text, pos);
+      
+      // Render menu
+      this._contextMenu.innerHTML = items.map(item => {
+        if (item.separator) {
+          return '<div class="tcl-context-menu-separator" style="height: 1px; background: #3e3e42; margin: 4px 0;"></div>';
+        }
+        const disabled = item.disabled ? 'opacity: 0.5; pointer-events: none;' : '';
+        return `<div class="tcl-context-menu-item" data-action="${item.action}" style="padding: 6px 12px; cursor: pointer; color: #d4d4d4; ${disabled}">${item.label}</div>`;
+      }).join('');
+
+      // Add hover effect
+      this._contextMenu.querySelectorAll('.tcl-context-menu-item').forEach(el => {
+        el.addEventListener('mouseenter', () => {
+          if (!el.style.pointerEvents) el.style.background = '#094771';
+        });
+        el.addEventListener('mouseleave', () => {
+          el.style.background = '';
+        });
+        el.addEventListener('click', () => {
+          this._handleContextMenuAction(el.dataset.action, text, pos);
+          this._hideContextMenu();
+        });
+      });
+
+      // Position and show menu
+      this._contextMenu.style.left = e.clientX + 'px';
+      this._contextMenu.style.top = e.clientY + 'px';
+      this._contextMenu.style.display = 'block';
+
+      // Adjust if menu goes off screen
+      const rect = this._contextMenu.getBoundingClientRect();
+      if (rect.right > window.innerWidth) {
+        this._contextMenu.style.left = (window.innerWidth - rect.width - 5) + 'px';
+      }
+      if (rect.bottom > window.innerHeight) {
+        this._contextMenu.style.top = (window.innerHeight - rect.height - 5) + 'px';
+      }
+    });
+
+    // Hide menu on click elsewhere or escape
+    document.addEventListener('click', (e) => {
+      if (!this._contextMenu.contains(e.target)) {
+        this._hideContextMenu();
+      }
+    });
+    
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this._hideContextMenu();
+      }
+    });
+  }
+
+  _hideContextMenu() {
+    this._contextMenu.style.display = 'none';
+  }
+
+  async _buildContextMenuItems(word, pos) {
+    const items = [];
+    
+    // Check if there's a selection
+    const selection = this.view.state.selection.main;
+    const hasSelection = !selection.empty;
+
+    // Execute section first - most useful
+    items.push({
+      label: '▶️ Execute Selection',
+      action: 'executeSelection',
+      disabled: !hasSelection
+    });
+
+    items.push({
+      label: '▶️ Execute Line',
+      action: 'executeLine'
+    });
+
+    items.push({ separator: true });
+
+    if (word && word.length >= 2) {
+      // Check if it's a proc we can show definition for
+      let isProc = false;
+      if (this.ws) {
+        try {
+          let result;
+          const checkScript = `expr {[info procs {${word}}] ne ""}`;
+          if (this.ws.sendToLinked && this.ws.getLinkedSubprocess && this.ws.getLinkedSubprocess()) {
+            result = await this.ws.sendToLinked(checkScript);
+          } else if (this.ws.send) {
+            result = await this.ws.send(checkScript);
+          } else if (this.ws.eval) {
+            const evalResult = await this.ws.eval(checkScript);
+            result = evalResult.result;
+          }
+          isProc = result && result.trim() === '1';
+        } catch (e) {}
+      }
+
+      // Check if we can show help (ensemble or proc)
+      let hasHelp = isProc;
+      if (!hasHelp && this.ws) {
+        try {
+          let result;
+          const checkScript = `namespace ensemble exists {${word}}`;
+          if (this.ws.sendToLinked && this.ws.getLinkedSubprocess && this.ws.getLinkedSubprocess()) {
+            result = await this.ws.sendToLinked(checkScript);
+          } else if (this.ws.send) {
+            result = await this.ws.send(checkScript);
+          } else if (this.ws.eval) {
+            const evalResult = await this.ws.eval(checkScript);
+            result = evalResult.result;
+          }
+          hasHelp = result && result.trim() === '1';
+        } catch (e) {}
+      }
+
+      items.push({
+        label: '📖 Help',
+        action: 'help',
+        disabled: !hasHelp
+      });
+
+      items.push({
+        label: '📄 Show Definition',
+        action: 'definition',
+        disabled: !isProc
+      });
+
+      items.push({ separator: true });
+    }
+
+    items.push({
+      label: '⌨️ Complete',
+      action: 'complete'
+    });
+
+    items.push({ separator: true });
+
+    items.push({
+      label: '📋 Copy',
+      action: 'copy'
+    });
+
+    items.push({
+      label: '✂️ Cut',
+      action: 'cut'
+    });
+
+    items.push({
+      label: '📥 Paste',
+      action: 'paste'
+    });
+
+    return items;
+  }
+
+  async _handleContextMenuAction(action, word, pos) {
+    switch (action) {
+      case 'executeSelection': {
+        const selection = this.view.state.selection.main;
+        if (!selection.empty) {
+          const code = this.view.state.doc.sliceString(selection.from, selection.to).trim();
+          if (code && this.onExecute) {
+            this.onExecute(code);
+          }
+        }
+        break;
+      }
+
+      case 'executeLine': {
+        const selection = this.view.state.selection.main;
+        const line = this.view.state.doc.lineAt(selection.head);
+        const code = line.text.trim();
+        if (code && this.onExecute) {
+          this.onExecute(code);
+        }
+        break;
+      }
+
+      case 'help':
+        if (word && this.ws) {
+          try {
+            const infoScript = `
+              set _cmd {${word}}
+              set _result ""
+              if {[namespace ensemble exists $_cmd]} {
+                set _subs [namespace ensemble configure $_cmd -subcommands]
+                if {$_subs ne ""} {
+                  set _result "ensemble: [join [lsort $_subs] {, }]"
+                } else {
+                  set _map [namespace ensemble configure $_cmd -map]
+                  if {$_map ne ""} {
+                    set _result "ensemble: [join [lsort [dict keys $_map]] {, }]"
+                  }
+                }
+              } elseif {[info procs $_cmd] ne ""} {
+                set _args [info args $_cmd]
+                set _arglist {}
+                foreach _a $_args {
+                  if {[info default $_cmd $_a _def]} {
+                    lappend _arglist "?$_a?"
+                  } else {
+                    lappend _arglist $_a
+                  }
+                }
+                set _result "proc: $_cmd [join $_arglist { }]"
+              }
+              set _result
+            `;
+            let result;
+            if (this.ws.sendToLinked && this.ws.getLinkedSubprocess && this.ws.getLinkedSubprocess()) {
+              result = await this.ws.sendToLinked(infoScript);
+            } else if (this.ws.send) {
+              result = await this.ws.send(infoScript);
+            } else if (this.ws.eval) {
+              const evalResult = await this.ws.eval(infoScript);
+              result = evalResult.result;
+            }
+            if (result && result.trim()) {
+              this._showHelpModal(word, result.trim());
+            }
+          } catch (e) {
+            console.error('Failed to get help:', e);
+          }
+        }
+        break;
+
+      case 'definition':
+        if (word && this.ws) {
+          try {
+            const defScript = `info body {${word}}`;
+            let result;
+            if (this.ws.sendToLinked && this.ws.getLinkedSubprocess && this.ws.getLinkedSubprocess()) {
+              result = await this.ws.sendToLinked(defScript);
+            } else if (this.ws.send) {
+              result = await this.ws.send(defScript);
+            } else if (this.ws.eval) {
+              const evalResult = await this.ws.eval(defScript);
+              result = evalResult.result;
+            }
+            if (result) {
+              // Get args too
+              const argsScript = `info args {${word}}`;
+              let args;
+              if (this.ws.sendToLinked && this.ws.getLinkedSubprocess && this.ws.getLinkedSubprocess()) {
+                args = await this.ws.sendToLinked(argsScript);
+              } else if (this.ws.send) {
+                args = await this.ws.send(argsScript);
+              } else if (this.ws.eval) {
+                const evalResult = await this.ws.eval(argsScript);
+                args = evalResult.result;
+              }
+              
+              // Show in a modal or new editor tab
+              const fullDef = `proc ${word} {${args || ''}} {${result}}`;
+              this._showDefinitionModal(word, fullDef);
+            }
+          } catch (e) {
+            console.error('Failed to get definition:', e);
+          }
+        }
+        break;
+
+      case 'complete':
+        this.view.focus();
+        this._cm.startCompletion(this.view);
+        break;
+
+      case 'copy':
+        document.execCommand('copy');
+        break;
+
+      case 'cut':
+        document.execCommand('cut');
+        break;
+
+      case 'paste':
+        document.execCommand('paste');
+        break;
+    }
+  }
+
+  _showDefinitionModal(name, definition) {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      background: #1e1e1e;
+      border: 1px solid #3e3e42;
+      border-radius: 6px;
+      padding: 16px;
+      max-width: 80%;
+      max-height: 80%;
+      overflow: auto;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #3e3e42;
+    `;
+    header.innerHTML = `
+      <span style="color: #d4d4d4; font-weight: bold;">proc ${name}</span>
+      <button style="background: none; border: none; color: #808080; cursor: pointer; font-size: 18px;">&times;</button>
+    `;
+
+    const pre = document.createElement('pre');
+    pre.style.cssText = `
+      margin: 0;
+      color: #d4d4d4;
+      font-family: Monaco, Menlo, "Ubuntu Mono", monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+    `;
+    pre.textContent = definition;
+
+    modal.appendChild(header);
+    modal.appendChild(pre);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Close handlers
+    const close = () => document.body.removeChild(overlay);
+    header.querySelector('button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') {
+        close();
+        document.removeEventListener('keydown', escHandler);
+      }
+    });
+  }
+
+  _showHelpModal(name, info) {
+    // Create modal overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      background: #1e1e1e;
+      border: 1px solid #3e3e42;
+      border-radius: 6px;
+      padding: 16px;
+      min-width: 300px;
+      max-width: 80%;
+      max-height: 80%;
+      overflow: auto;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #3e3e42;
+    `;
+    header.innerHTML = `
+      <span style="color: #d4d4d4; font-weight: bold;">${name}</span>
+      <button style="background: none; border: none; color: #808080; cursor: pointer; font-size: 18px;">&times;</button>
+    `;
+
+    const content = document.createElement('div');
+    content.style.cssText = `
+      color: #d4d4d4;
+      font-family: Monaco, Menlo, "Ubuntu Mono", monospace;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    `;
+    content.textContent = info;
+
+    modal.appendChild(header);
+    modal.appendChild(content);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Close handlers
+    const close = () => document.body.removeChild(overlay);
+    header.querySelector('button').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') {
+        close();
+        document.removeEventListener('keydown', escHandler);
+      }
+    });
   }
 
   // Smart Tab handling
@@ -401,27 +859,32 @@ class TclEditor {
     const line = context.state.doc.lineAt(context.pos);
     const textBeforeCursor = context.state.doc.sliceString(line.from, context.pos);
 
-    // Find word start - match word characters, colons (for namespaces), $ (for variables)
-    const wordMatch = textBeforeCursor.match(/[\w_:$.-]+$/);
-    if (!wordMatch) return null;
-
-    const word = wordMatch[0];
-    const from = context.pos - word.length;
-    
-    // Don't try to complete very short tokens (avoid noise)
-    if (word.length < 2 && !word.startsWith('$')) return null;
-
-    // Determine what to send for completion
-    // For simple command completion (no special chars), just send the word
-    // For variables ($) or namespaces (::), send more context
+    // Determine token boundaries and completion text
+    let from;
     let completionText;
-    if (word.startsWith('$') || word.includes('::')) {
-      // Send the word with some context
-      completionText = word;
+
+    // Check if we're inside a quoted string
+    const quoteMatch = textBeforeCursor.match(/"([^"]*)$/);
+    if (quoteMatch) {
+      // Inside quotes - complete the quoted content
+      const quotedPart = quoteMatch[1];
+      from = context.pos - quotedPart.length;
+      completionText = textBeforeCursor;
     } else {
-      // For command completion, just send the token being typed
-      // This avoids errors from incomplete preceding commands
-      completionText = word;
+      // Normal word matching - include path characters
+      const wordMatch = textBeforeCursor.match(/[~.\w_:$/-]+$/);
+      if (!wordMatch) return null;
+
+      const word = wordMatch[0];
+      from = context.pos - word.length;
+
+      // Don't try to complete very short tokens (avoid noise)
+      // But allow if there's context (space before the word means we're completing an argument)
+      const hasContext = textBeforeCursor.length > word.length && 
+                         textBeforeCursor[textBeforeCursor.length - word.length - 1] === ' ';
+      if (word.length < 2 && !word.startsWith('$') && !word.startsWith('/') && !hasContext) return null;
+
+      completionText = textBeforeCursor;
     }
 
     try {
@@ -446,7 +909,8 @@ class TclEditor {
             from,
             options: tokens.map(token => ({
               label: token,
-              type: word.startsWith('$') ? 'variable' : 'function',
+              type: completionText.includes('$') ? 'variable' : 
+                    (completionText.includes('/') || completionText.includes('~')) ? 'text' : 'function',
             })),
           };
         }
@@ -499,6 +963,30 @@ class TclEditor {
 
     if (current) result.push(current);
     return result;
+  }
+
+  // Helper to get word at position
+  _getWordAt(state, pos) {
+    const line = state.doc.lineAt(pos);
+    const lineText = line.text;
+    const linePos = pos - line.from;
+
+    // Find word boundaries
+    let start = linePos;
+    let end = linePos;
+
+    // Word characters for Tcl: alphanumeric, underscore, colons (for namespaces)
+    const isWordChar = (ch) => /[\w:]/.test(ch);
+
+    while (start > 0 && isWordChar(lineText[start - 1])) start--;
+    while (end < lineText.length && isWordChar(lineText[end])) end++;
+
+    const text = lineText.slice(start, end);
+    return {
+      from: line.from + start,
+      to: line.from + end,
+      text
+    };
   }
 
   // Public API
