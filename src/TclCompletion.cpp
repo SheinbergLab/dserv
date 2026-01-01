@@ -14,23 +14,49 @@
 namespace TclCompletion {
 
 // Helper to check if a pattern is valid for info commands/procs/etc
-// Returns false if the pattern contains spaces (would be parsed as multiple args)
+// Returns false if the pattern contains spaces or unmatched quotes
 static bool isValidPattern(const std::string& pattern) {
     if (pattern.find(' ') != std::string::npos) return false;
     if (pattern.find('\t') != std::string::npos) return false;
+    
+    // Check for unmatched quotes (single or double)
+    int singleQuotes = 0;
+    int doubleQuotes = 0;
+    for (char ch : pattern) {
+        if (ch == '\'') singleQuotes++;
+        if (ch == '"') doubleQuotes++;
+    }
+    if (singleQuotes % 2 != 0) return false;
+    if (doubleQuotes % 2 != 0) return false;
+    
+    // Check for unmatched brackets/braces
+    int braces = 0;
+    int brackets = 0;
+    for (char ch : pattern) {
+        if (ch == '{') braces++;
+        if (ch == '}') braces--;
+        if (ch == '[') brackets++;
+        if (ch == ']') brackets--;
+        // If we go negative, there's an unmatched closer
+        if (braces < 0 || brackets < 0) return false;
+    }
+    if (braces != 0 || brackets != 0) return false;
+    
     return true;
 }
 
 // Helper to extract command context from partial input
 struct CompletionContext {
     std::string command;      // First word (the command)
-    std::string partial;      // What we're completing
+    std::string partial;      // What we're completing (without leading quote if quoted)
     int wordIndex;            // Which word are we completing (0=command, 1=first arg, etc.)
+    bool inQuotes;            // Was partial inside quotes?
 };
 
 static CompletionContext parseContext(const std::string& input) {
     CompletionContext ctx;
     ctx.wordIndex = 0;
+    ctx.inQuotes = false;
     
     // Simple word splitting - good enough for most cases
     std::vector<std::string> words;
@@ -61,6 +87,12 @@ static CompletionContext parseContext(const std::string& input) {
     // The last (incomplete) word is what we're completing
     ctx.partial = current;
     ctx.wordIndex = words.size();
+    
+    // Strip leading quote if we're completing inside a quoted string
+    if (!ctx.partial.empty() && ctx.partial[0] == '"') {
+        ctx.partial = ctx.partial.substr(1);
+        ctx.inQuotes = true;
+    }
     
     // First word is the command (if we have any complete words)
     if (!words.empty()) {
@@ -108,7 +140,6 @@ std::vector<std::string> getFilenameCompletions(Tcl_Interp* interp,
                 // Check if this is a directory and add trailing /
                 // Use file isdirectory to check
                 std::string checkCmd = "file isdirectory {" + path + "}";
-
                 if (Tcl_Eval(interp, checkCmd.c_str()) == TCL_OK) {
                     const char* isDirStr = Tcl_GetStringResult(interp);
                     if (isDirStr && isDirStr[0] == '1') {
@@ -141,7 +172,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     std::string actualPartial = partial;
     std::string prefix = "";
     size_t embedPos = partial.rfind('[');
- 
+    
     if (embedPos != std::string::npos) {
         // Check if there's a closing ] after the [
         size_t closePos = partial.find(']', embedPos);
@@ -157,7 +188,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
             }
         }
     }
-
+    
     // Helper to parse Tcl list results
     auto parseListResult = [&](Tcl_Interp* interp, const std::string& itemPrefix = "") {
         const char* listStr = Tcl_GetStringResult(interp);
@@ -179,16 +210,13 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
         }
         Tcl_DecrRefCount(listObj);
     };
-
+    
     std::string pattern = actualPartial + "*";
     std::string cmd;
-
+    
     // Check for array element completion: varName(partial
     // Example: tcl_platform(ma -> tcl_platform(machine)
     size_t parenPos = actualPartial.rfind('(');
-
-
-
     if (parenPos != std::string::npos) {
         // Check if there's a closing paren
         size_t closePos = actualPartial.find(')', parenPos);
@@ -241,7 +269,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     
     // Parse context to see if we should do context-aware completion
     CompletionContext ctx = parseContext(actualPartial);
-
+    
     // Check for custom command-specific completion first
     if (ctx.wordIndex > 0 && !ctx.command.empty()) {
         // Try custom completion via ::completion::get_matches
@@ -283,6 +311,8 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                     Tcl_DecrRefCount(listObj);
                     return results;  // Return custom completions
                 }
+                
+                Tcl_DecrRefCount(listObj);
             }
         }
         // If no custom completions or error, fall through to default completion
@@ -307,9 +337,10 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
             commandPrefix = actualPartial.substr(0, lastSpace + 1);
         }
         
-        // Helper to add results with command prefix
+        // Helper to add results with command prefix, preserving quotes if needed
         auto addWithCommandPrefix = [&](const std::string& match) {
-            std::string fullCompletion = prefix + commandPrefix + match;
+            std::string item = ctx.inQuotes ? "\"" + match : match;
+            std::string fullCompletion = prefix + commandPrefix + item;
             if (seen.find(fullCompletion) == seen.end()) {
                 seen.insert(fullCompletion);
                 results.push_back(fullCompletion);
@@ -431,7 +462,82 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
             return results;
         }
         
-        // 5. Filename completion for file-taking commands
+        // 5. Subcommand completion for ensemble commands
+        // Helper for matching subcommands against a partial
+        auto matchSubcommands = [&](const std::vector<std::string>& subcommands) {
+            for (const auto& subcmd : subcommands) {
+                if (ctx.partial.empty() || 
+                    subcmd.compare(0, ctx.partial.length(), ctx.partial) == 0) {
+                    addWithCommandPrefix(subcmd);
+                }
+            }
+        };
+        
+        // info subcommands
+        if (ctx.command == "info" && ctx.wordIndex == 1) {
+            matchSubcommands({
+                "args", "body", "class", "cmdcount", "commands", "complete",
+                "coroutine", "default", "errorstack", "exists", "frame",
+                "functions", "globals", "hostname", "level", "library",
+                "loaded", "locals", "nameofexecutable", "object", "patchlevel",
+                "procs", "script", "sharedlibextension", "tclversion", "vars"
+            });
+            return results;
+        }
+        
+        // string subcommands
+        if (ctx.command == "string" && ctx.wordIndex == 1) {
+            matchSubcommands({
+                "cat", "compare", "equal", "first", "index", "is", "last",
+                "length", "map", "match", "range", "repeat", "replace",
+                "reverse", "tolower", "totitle", "toupper", "trim",
+                "trimleft", "trimright", "wordend", "wordstart"
+            });
+            return results;
+        }
+        
+        // package subcommands
+        if (ctx.command == "package" && ctx.wordIndex == 1) {
+            matchSubcommands({
+                "forget", "ifneeded", "names", "prefer", "present",
+                "provide", "require", "unknown", "vcompare", "versions",
+                "vsatisfies"
+            });
+            return results;
+        }
+        
+        // interp subcommands
+        if (ctx.command == "interp" && ctx.wordIndex == 1) {
+            matchSubcommands({
+                "alias", "aliases", "bgerror", "cancel", "create", "debug",
+                "delete", "eval", "exists", "expose", "hidden", "hide",
+                "invokehidden", "issafe", "limit", "marktrusted", "recursionlimit",
+                "share", "slaves", "target", "transfer"
+            });
+            return results;
+        }
+        
+        // dict subcommands
+        if (ctx.command == "dict" && ctx.wordIndex == 1) {
+            matchSubcommands({
+                "append", "create", "exists", "filter", "for", "get",
+                "getdef", "getwithdefault", "incr", "info", "keys", "lappend",
+                "map", "merge", "remove", "replace", "set", "size",
+                "unset", "update", "values", "with"
+            });
+            return results;
+        }
+        
+        // clock subcommands
+        if (ctx.command == "clock" && ctx.wordIndex == 1) {
+            matchSubcommands({
+                "add", "clicks", "format", "microseconds", "milliseconds",
+                "scan", "seconds"
+            });
+            return results;
+        }
+        
+        // 6. Filename completion for file-taking commands
         bool needsFilenameCompletion = false;
         bool dirsOnly = false;
         
@@ -473,7 +579,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
                 }
             }
         }
-
+        
         if (needsFilenameCompletion) {
             auto filenames = getFilenameCompletions(interp, ctx.partial, dirsOnly);
             for (const auto& filename : filenames) {
@@ -492,8 +598,8 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     size_t colonPos = actualPartial.rfind("::");
     bool isNamespaceQualified = (colonPos != std::string::npos);
     
-    // Only do global searches if NOT namespace-qualified
-    if (!isNamespaceQualified) {
+    // Only do global searches if NOT namespace-qualified and pattern is valid
+    if (!isNamespaceQualified && isValidPattern(pattern)) {
         // 1. Query commands: "info commands partial*"
         cmd = "info commands " + pattern;
         if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
@@ -560,7 +666,7 @@ std::vector<std::string> getCompletions(Tcl_Interp* interp, const std::string& p
     // 5. Smart child namespace search
     // If partial matches a namespace name, also search commands in that namespace
     // Example: "str" matches "string" namespace → also return "string::map" etc.
-    if (colonPos == std::string::npos && !actualPartial.empty()) {
+    if (colonPos == std::string::npos && !actualPartial.empty() && isValidPattern(pattern)) {
         // Check if any namespace starts with our partial
         cmd = "namespace children :: " + pattern;
         if (Tcl_Eval(interp, cmd.c_str()) == TCL_OK) {
@@ -642,6 +748,9 @@ std::vector<std::string> getCompletionTokens(Tcl_Interp* interp, const std::stri
         }
     }
     
+    // Check if we're in a quoted context
+    bool isQuoted = (partial.rfind('"') != std::string::npos);
+    
     // Extract tokens from full completions
     for (const auto& full : fullCompletions) {
         std::string token;
@@ -664,6 +773,22 @@ std::vector<std::string> getCompletionTokens(Tcl_Interp* interp, const std::stri
                 token = full.substr(fullEmbedPos + 1);  // Everything after [
             } else {
                 token = full;
+            }
+        } else if (isQuoted) {
+            // For quoted strings: extract just the path after the quote
+            // full is like: cd "/Users/sheinb/"
+            // We want: /Users/sheinb/
+            size_t quotePos = full.rfind('"');
+            if (quotePos != std::string::npos) {
+                token = full.substr(quotePos + 1);  // Everything after "
+            } else {
+                // Fallback to last space
+                size_t lastSpace = full.rfind(' ');
+                if (lastSpace != std::string::npos) {
+                    token = full.substr(lastSpace + 1);
+                } else {
+                    token = full;
+                }
             }
         } else {
             // Normal case: "set tcl_platform" -> "tcl_platform"
@@ -725,6 +850,7 @@ namespace eval ::completion {
     # Register completion rule for a command
     # Usage:
     #   completion::register ess::load_system {
+    #       {datapoint ess/systems}
     #       {literal {tcp udp serial}}
     #   }
     # Or:
@@ -772,7 +898,8 @@ namespace eval ::completion {
                     }
                 }
                 return $matches
-            }            
+            }
+            
             literal {
                 set values [lindex $spec 1]
                 set matches {}

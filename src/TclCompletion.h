@@ -65,19 +65,6 @@ std::vector<std::string> getFilenameCompletions(Tcl_Interp* interp,
                                                  bool dirsOnly = false);
 
 /**
- * Get completions from a remote interpreter via 'send'
- * Requires that the target interpreter has the 'complete' command registered
- * 
- * @param mainInterp Main interpreter (with send command)
- * @param targetInterp Name of target interpreter
- * @param partial Partial text to complete
- * @return Vector of completion candidates
- */
-std::vector<std::string> getRemoteCompletions(Tcl_Interp* mainInterp,
-                                               const std::string& targetInterp,
-                                               const std::string& partial);
-
-/**
  * Tcl command callback: complete <partial>
  * Returns Tcl list of completion candidates (full replacement text for terminals)
  * 
