@@ -436,22 +436,13 @@ void TclServer::start_websocket_server(void)
 	  ->end(content);
       });
 
-      // Explicit /essgui/ handler (Vue app)
-      app.get("/essgui/", [this](auto *res, auto *req) {
-	std::string file_path = this->www_path + "/essgui/index.html";
-	std::string content = read_file_contents(file_path);
-	
-	if (content.empty()) {
-	  res->writeStatus("404 Not Found")
-            ->writeHeader("Content-Type", "text/plain")
-            ->end("essgui/index.html not found");
-	  return;
-	}
-	
-	res->writeHeader("Content-Type", "text/html; charset=utf-8")
-	  ->writeHeader("Cache-Control", "no-cache")
-	  ->end(content);
-      });
+      // Redirect /essgui/ to main control page
+      app.get("/essgui/", [](auto *res, auto *req) {
+	res->writeStatus("302 Found")
+	  ->writeHeader("Location", "/ess_control.html")
+	  ->end();
+      });      
+      
       
       // Serve all other files from www_path
 app.get("/*", [this](auto *res, auto *req) {
