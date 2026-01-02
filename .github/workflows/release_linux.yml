@@ -238,6 +238,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    permissions:
+      contents: write
+
     steps:
 
       - name: Check out our dserv code for the current tag.
@@ -281,16 +284,18 @@ jobs:
 
       - name: Install our dlsh libs and headers into the build environment.
         run: |
+          # Get latest dlsh version from SheinbergLab
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          echo "Using dlsh version: $DLSH_VERSION"
+          
           # Install .deb packages for build dependencies (libdg, etc.)
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
           sudo dpkg --install dlsh-dg_${DLSH_VERSION}_$(dpkg --print-architecture).deb
           sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
           
           # Also download the dlsh.zip for runtime use
-          DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep "browser_download_url.*dlsh_.*\.zip" | cut -d '"' -f 4)
-          wget "$DLSH_URL" -O dlsh.zip
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh/
 
@@ -329,8 +334,8 @@ jobs:
 
       - name: Install dlsh packages.
         run: |
-          DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep "browser_download_url.*dlsh_.*\.zip" | cut -d '"' -f 4)
-          wget "$DLSH_URL" -O dlsh.zip
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
@@ -362,8 +367,8 @@ jobs:
 
       - name: Install dlsh packages.
         run: |
-          DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep "browser_download_url.*dlsh_.*\.zip" | cut -d '"' -f 4)
-          wget "$DLSH_URL" -O dlsh.zip
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 

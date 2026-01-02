@@ -47,10 +47,10 @@ jobs:
 
       - name: Obtain dlsh packages for test scripts to use.
         run: |
-          mkdir dlsh/
+          mkdir -p dlsh/
           cd dlsh/
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Linux-$(dpkg --print-architecture).zip -O dlsh.zip
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
 
       - name: ctest
         run: |
@@ -99,10 +99,10 @@ jobs:
 
       - name: Obtain dlsh packages for test scripts to use.
         run: |
-          mkdir dlsh/
+          mkdir -p dlsh/
           cd dlsh/
-          DLSH_VERSION=0.0.48
-          wget https://github.com/benjamin-heasly/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-$(uname -m).zip -O dlsh.zip
+          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
 
       - name: ctest
         run: |
