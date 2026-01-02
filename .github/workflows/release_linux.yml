@@ -45,10 +45,6 @@ jobs:
           cmake --build build
           sudo cmake --install build
 
-      - name: Download dlsh for release inclusion
-        run: |
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
-
       - name: Build dserv itself and package it for release.
         run: |
           cmake -D PROJECT_VERSION=${{ github.ref_name }} -B build
@@ -58,7 +54,7 @@ jobs:
       - name: Create a GitHub release for the current tag and package.
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "./*.deb,dlsh.zip"
+          artifacts: "./*.deb"
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
@@ -293,7 +289,8 @@ jobs:
           sudo dpkg --install dlsh-dlsh_${DLSH_VERSION}_$(dpkg --print-architecture).deb
           
           # Also download the dlsh.zip for runtime use
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
+          DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep "browser_download_url.*dlsh_.*\.zip" | cut -d '"' -f 4)
+          wget "$DLSH_URL" -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh/
 
@@ -332,7 +329,8 @@ jobs:
 
       - name: Install dlsh packages.
         run: |
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
+          DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep "browser_download_url.*dlsh_.*\.zip" | cut -d '"' -f 4)
+          wget "$DLSH_URL" -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
@@ -364,7 +362,8 @@ jobs:
 
       - name: Install dlsh packages.
         run: |
-          wget https://github.com/SheinbergLab/dlsh/releases/download/0.9.7/dlsh.zip -O dlsh.zip
+          DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep "browser_download_url.*dlsh_.*\.zip" | cut -d '"' -f 4)
+          wget "$DLSH_URL" -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
 
