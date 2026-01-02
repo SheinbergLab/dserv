@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -35,6 +36,9 @@ import (
 
 //go:embed web/*
 var webContent embed.FS
+
+//go:embed components.json
+var defaultComponentsJSON []byte
 
 const (
 	githubAPI  = "https://api.github.com/repos"
@@ -106,6 +110,8 @@ type Component struct {
 	VersionCmd   []string `json:"versionCmd,omitempty"`
 	VersionFile  string   `json:"versionFile,omitempty"`
 	PostInstall  []string `json:"postInstall,omitempty"`
+	InstallCmd   string   `json:"installCmd,omitempty"`   // Custom install command ({file} replaced with path)
+	AssetPattern string   `json:"assetPattern,omitempty"` // Regex pattern for asset matching
 }
 
 // ComponentStatus represents the current state of a component
@@ -300,29 +306,43 @@ func main() {
 }
 
 func (a *Agent) loadComponents() {
+	var cfg struct {
+		Components []Component `json:"components"`
+	}
+
+	// First, load embedded defaults
+	if err := json.Unmarshal(defaultComponentsJSON, &cfg); err != nil {
+		log.Printf("Warning: failed to parse embedded components.json: %v", err)
+	} else {
+		a.components = cfg.Components
+	}
+
+	// Then, override with file if it exists
 	data, err := os.ReadFile(a.cfg.ComponentsFile)
 	if err == nil {
-		var cfg struct {
+		var fileCfg struct {
 			Components []Component `json:"components"`
 		}
-		if json.Unmarshal(data, &cfg) == nil {
-			a.components = cfg.Components
-			return
+		if json.Unmarshal(data, &fileCfg) == nil {
+			a.components = fileCfg.Components
+			log.Printf("Loaded components from %s", a.cfg.ComponentsFile)
 		}
 	}
 
-	// Default component
-	a.components = []Component{
-		{
-			ID:          "dserv",
-			Name:        "dserv",
-			Description: "Data acquisition server",
-			Type:        "github-deb",
-			Repo:        "SheinbergLab/dserv",
-			Package:     "dserv",
-			Service:     "dserv",
-			VersionCmd:  []string{"essctrl", "-c", "dservVersion"},
-		},
+	// Fallback if nothing loaded
+	if len(a.components) == 0 {
+		a.components = []Component{
+			{
+				ID:          "dserv",
+				Name:        "dserv",
+				Description: "Data acquisition server",
+				Type:        "github-deb",
+				Repo:        "SheinbergLab/dserv",
+				Package:     "dserv",
+				Service:     "dserv",
+				VersionCmd:  []string{"essctrl", "-c", "dservVersion"},
+			},
+		}
 	}
 }
 
@@ -405,6 +425,36 @@ func (a *Agent) getSystemInfo() SystemInfo {
 		}
 	}
 	return info
+}
+
+// getDebianCodename returns the Debian version codename (e.g., "bookworm", "trixie")
+// Returns empty string if not on Debian or unable to detect
+func getDebianCodename() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VERSION_CODENAME=") {
+			return strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"")
+		}
+	}
+	return ""
+}
+
+// getDebianVersion returns the Debian major version number (e.g., "12", "13")
+// Returns empty string if not on Debian or unable to detect
+func getDebianVersion() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VERSION_ID=") {
+			return strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+		}
+	}
+	return ""
 }
 
 func (a *Agent) handleDserv(w http.ResponseWriter, r *http.Request) {
@@ -556,13 +606,21 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 	status.CurrentVersion = a.getInstalledVersion(comp)
 	status.Installed = status.CurrentVersion != ""
 
-	if strings.HasPrefix(comp.Type, "github-") && comp.Repo != "" {
+	// If repo is specified, fetch release info (works with or without Type prefix)
+	if comp.Repo != "" {
 		release := a.getLatestRelease(comp.Repo)
 		if release != nil {
 			status.LatestVersion = release.TagName
 			arch := runtime.GOARCH
 			if arch == "arm" {
 				arch = "armhf"
+			}
+			debianCodename := getDebianCodename() // e.g., "bookworm", "trixie"
+
+			// Compile asset pattern if provided
+			var assetRegex *regexp.Regexp
+			if comp.AssetPattern != "" {
+				assetRegex, _ = regexp.Compile(comp.AssetPattern)
 			}
 
 			// Collect matching assets, scoring them by relevance
@@ -576,11 +634,18 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 				name := asset.Name
 				nameLower := strings.ToLower(name)
 
-				// Only include debs or zips
-				isDeb := strings.HasSuffix(nameLower, ".deb")
-				isZip := strings.HasSuffix(nameLower, ".zip")
-				if !isDeb && !isZip {
-					continue
+				// If AssetPattern is specified, use it as primary filter
+				if assetRegex != nil {
+					if !assetRegex.MatchString(name) {
+						continue
+					}
+				} else {
+					// Legacy behavior: only include debs or zips
+					isDeb := strings.HasSuffix(nameLower, ".deb")
+					isZip := strings.HasSuffix(nameLower, ".zip")
+					if !isDeb && !isZip {
+						continue
+					}
 				}
 
 				// Check architecture - be strict about filtering
@@ -605,52 +670,89 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 					}
 				}
 
+				// Check Debian version compatibility
+				hasBookworm := strings.Contains(nameLower, "bookworm")
+				hasJammy := strings.Contains(nameLower, "jammy")
+				hasTrixie := strings.Contains(nameLower, "trixie")
+				hasNoble := strings.Contains(nameLower, "noble")
+				hasDistro := hasBookworm || hasJammy || hasTrixie || hasNoble
+
+				// If asset specifies a distro, filter by our distro
+				if hasDistro && debianCodename != "" {
+					matchesDistro := false
+					switch debianCodename {
+					case "bookworm":
+						matchesDistro = hasBookworm
+					case "jammy":
+						matchesDistro = hasJammy
+					case "trixie":
+						matchesDistro = hasTrixie
+					case "noble":
+						matchesDistro = hasNoble
+					}
+					if !matchesDistro {
+						continue // Wrong distro, skip
+					}
+				}
+
 				score := 0
-				compID := strings.ToLower(comp.ID)
-				compPkg := strings.ToLower(comp.Package)
 
-				// For deb packages, strongly prefer matching package name
-				if isDeb && compPkg != "" {
-					// Exact match: dserv_0.36.1_arm64.deb for package "dserv"
-					if strings.HasPrefix(nameLower, compPkg+"_") {
-						score += 200
-					} else if strings.HasPrefix(nameLower, compPkg+"-") && !strings.Contains(nameLower, compPkg+"-camera") {
-						score += 150
-					} else if strings.Contains(nameLower, compPkg) {
-						// Contains but doesn't start with - likely a sub-package
-						score -= 50
+				// If using AssetPattern, asset already matches - give base score
+				if assetRegex != nil {
+					score = 100
+				} else {
+					// Legacy scoring logic
+					compID := strings.ToLower(comp.ID)
+					compPkg := strings.ToLower(comp.Package)
+					isDeb := strings.HasSuffix(nameLower, ".deb")
+					isZip := strings.HasSuffix(nameLower, ".zip")
+
+					// For deb packages, strongly prefer matching package name
+					if isDeb && compPkg != "" {
+						if strings.HasPrefix(nameLower, compPkg+"_") {
+							score += 200
+						} else if strings.HasPrefix(nameLower, compPkg+"-") && !strings.Contains(nameLower, compPkg+"-camera") {
+							score += 150
+						} else if strings.Contains(nameLower, compPkg) {
+							score -= 50
+						}
+					}
+
+					// Match component ID
+					if strings.HasPrefix(nameLower, compID+"_") {
+						score += 100
+					} else if strings.HasPrefix(nameLower, compID+"-") {
+						score += 50
+					}
+
+					// Penalize things that are clearly different packages
+					if compID == "dserv" || compPkg == "dserv" {
+						if strings.Contains(nameLower, "camera") {
+							score -= 100
+						}
+						if strings.Contains(nameLower, "essgui") {
+							score -= 100
+						}
+						if strings.Contains(nameLower, "dlsh") {
+							score -= 100
+						}
+					}
+
+					// Prefer .deb for deb components, .zip for zip components
+					if strings.HasSuffix(comp.Type, "-deb") && isDeb {
+						score += 50
+					} else if strings.HasSuffix(comp.Type, "-zip") && isZip {
+						score += 50
+					} else if strings.HasSuffix(comp.Type, "-deb") && isZip {
+						score -= 200
+					} else if strings.HasSuffix(comp.Type, "-zip") && isDeb {
+						score -= 200
 					}
 				}
 
-				// Match component ID
-				if strings.HasPrefix(nameLower, compID+"_") {
-					score += 100
-				} else if strings.HasPrefix(nameLower, compID+"-") {
+				// Bonus for matching our specific distro
+				if debianCodename != "" && strings.Contains(nameLower, debianCodename) {
 					score += 50
-				}
-
-				// Penalize things that are clearly different packages
-				if compID == "dserv" || compPkg == "dserv" {
-					if strings.Contains(nameLower, "camera") {
-						score -= 100
-					}
-					if strings.Contains(nameLower, "essgui") {
-						score -= 100
-					}
-					if strings.Contains(nameLower, "dlsh") {
-						score -= 100
-					}
-				}
-
-				// Prefer .deb for deb components, .zip for zip components
-				if strings.HasSuffix(comp.Type, "-deb") && isDeb {
-					score += 50
-				} else if strings.HasSuffix(comp.Type, "-zip") && isZip {
-					score += 50
-				} else if strings.HasSuffix(comp.Type, "-deb") && isZip {
-					score -= 200 // Wrong type entirely
-				} else if strings.HasSuffix(comp.Type, "-zip") && isDeb {
-					score -= 200
 				}
 
 				scored = append(scored, scoredAsset{name, score})
@@ -789,7 +891,15 @@ func (a *Agent) installComponent(comp Component, selectedAsset string) {
 	})
 
 	var installErr error
-	if strings.HasSuffix(assetName, ".deb") {
+	if comp.InstallCmd != "" {
+		// Custom install command - replace placeholders
+		cmd := strings.ReplaceAll(comp.InstallCmd, "{file}", tmpPath)
+		cmd = strings.ReplaceAll(cmd, "{version}", release.TagName)
+		out, err := exec.Command("sudo", "sh", "-c", cmd).CombinedOutput()
+		if err != nil {
+			installErr = fmt.Errorf("%s: %s", err, string(out))
+		}
+	} else if strings.HasSuffix(assetName, ".deb") {
 		installErr = a.installDeb(tmpPath)
 	} else if strings.HasSuffix(assetName, ".zip") {
 		installErr = a.installZip(tmpPath, comp.InstallPath)
