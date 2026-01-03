@@ -653,8 +653,10 @@ class LabMeshApp {
         const dlshUrl = `${url}dlsh.html`;
         const helpUrl = `${url}command_reference.html`;
         const hasStim = !!n.rmt_host;
-        // For stim, use rmt_host but need to resolve 'localhost' to the node's IP
-        const stimHost = n.rmt_host === 'localhost' ? (n.isLocal ? 'localhost' : n.ip) : n.rmt_host;
+        // For stim, use rmt_host but need to resolve 'localhost' to the actual host
+        // If rmt_host is 'localhost', use the hostname we're viewing from (location.hostname)
+        // or the node's IP for remote nodes
+        const stimHost = n.rmt_host === 'localhost' ? (n.isLocal ? location.hostname : n.ip) : n.rmt_host;
         const stimUrl = hasStim ? `http://${stimHost}:4613` : '';
         const stimDevUrl = hasStim ? `http://${stimHost}:4613/stim2-dev.html` : '';
         
