@@ -37,6 +37,7 @@ set ess_dps {
     status system protocol variant subject 
     obs_total obs_id
     block_n_complete block_pct_complete block_pct_correct
+    rmt_host
 }
 
 foreach dp $ess_dps { 
