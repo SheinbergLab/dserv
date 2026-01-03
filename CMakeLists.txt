@@ -302,7 +302,8 @@ if(GO_EXECUTABLE)
     message(STATUS "  ${GO_VERSION_OUTPUT}")
     
     set(DSERV_AGENT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dserv-agent)
-    set(DSERV_AGENT_BINARY ${CMAKE_CURRENT_BINARY_DIR}/dserv-agent)
+    # Put binary in bin/ subdirectory to avoid circular dependency warning
+    set(DSERV_AGENT_BINARY ${CMAKE_CURRENT_BINARY_DIR}/bin/dserv-agent)
     
     if(EXISTS ${DSERV_AGENT_SOURCE_DIR}/main.go)
         message(STATUS "Found dserv-agent source at ${DSERV_AGENT_SOURCE_DIR}")
@@ -327,6 +328,13 @@ if(GO_EXECUTABLE)
         
         message(STATUS "  Building for GOOS=${GOOS} GOARCH=${GOARCH}")
         
+        # Ensure output directory exists
+        file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
+        
+        # Collect embedded files that should trigger rebuild
+        file(GLOB DSERV_AGENT_WEB_FILES ${DSERV_AGENT_SOURCE_DIR}/web/*)
+        set(DSERV_AGENT_COMPONENTS_JSON ${DSERV_AGENT_SOURCE_DIR}/components.json)
+        
         add_custom_command(
             OUTPUT ${DSERV_AGENT_BINARY}
             COMMAND ${CMAKE_COMMAND} -E env 
@@ -335,7 +343,10 @@ if(GO_EXECUTABLE)
                 CGO_ENABLED=0
                 ${GO_EXECUTABLE} build -o ${DSERV_AGENT_BINARY} .
             WORKING_DIRECTORY ${DSERV_AGENT_SOURCE_DIR}
-            DEPENDS ${DSERV_AGENT_SOURCE_DIR}/main.go
+            DEPENDS 
+                ${DSERV_AGENT_SOURCE_DIR}/main.go
+                ${DSERV_AGENT_WEB_FILES}
+                ${DSERV_AGENT_COMPONENTS_JSON}
             COMMENT "Building dserv-agent for ${GOOS}/${GOARCH}"
             VERBATIM
         )
