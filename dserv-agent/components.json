@@ -28,6 +28,6 @@
       "assetPattern": "dlsh.*\\.zip$",
       "installCmd": "mkdir -p /usr/local/dlsh && cp {file} /usr/local/dlsh/dlsh.zip && echo {version} > /usr/local/dlsh/VERSION",
       "versionFile": "/usr/local/dlsh/VERSION"
-    },
+    }
   ]
 }
