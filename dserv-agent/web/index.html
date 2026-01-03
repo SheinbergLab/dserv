@@ -146,7 +146,7 @@ footer {
 }
 .panel-overlay.open { opacity: 1; visibility: visible; }
 .agent-panel {
-    position: fixed; top: 0; right: 0; width: 420px; max-width: 90vw; height: 100vh;
+    position: fixed; top: 0; right: 0; width: 480px; max-width: 90vw; height: 100vh;
     background: #0f1419; border-left: 1px solid #2f3336; z-index: 1001;
     transform: translateX(100%); transition: transform 0.3s ease, width 0.3s ease;
     display: flex; flex-direction: column;
@@ -194,17 +194,84 @@ footer {
 .service-status.inactive { background: #3d1a1a; color: #f87171; }
 .service-status.unknown { background: #1a2634; color: #71767b; }
 
-.component-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #2f3336; gap: 12px; flex-wrap: wrap; }
+/* Component rows with service controls */
+.component-row { 
+    display: flex; flex-direction: column; 
+    padding: 12px 0; border-bottom: 1px solid #2f3336; gap: 10px;
+}
 .component-row:last-child { border-bottom: none; }
+.component-main { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .component-info { flex: 1; min-width: 120px; }
-.component-name { font-weight: 500; font-size: 14px; }
+.component-name { font-weight: 500; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.component-desc { font-size: 11px; color: #71767b; margin-top: 2px; }
 .component-version { font-size: 12px; color: #71767b; font-family: 'SF Mono', Monaco, monospace; }
 .component-version .latest { color: #34d399; }
 .component-actions { display: flex; gap: 8px; align-items: center; }
 .component-select { background: #1a2634; border: 1px solid #2f3336; border-radius: 6px; padding: 6px 8px; color: #e7e9ea; font-size: 11px; max-width: 160px; }
 .component-btn { padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; background: #2f3336; color: #a0aec0; }
 .component-btn:hover { background: #3f4448; }
+.component-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .component-btn.update { background: #3b82f6; color: white; }
+
+/* Service controls within component */
+.component-service { 
+    display: flex; align-items: center; justify-content: space-between;
+    background: #0d1117; border-radius: 6px; padding: 8px 12px;
+    margin-top: 4px;
+}
+.service-info { display: flex; align-items: center; gap: 10px; }
+.service-label { font-size: 11px; color: #71767b; text-transform: uppercase; }
+.service-badge { 
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 500;
+}
+.service-badge.active { background: #1a3d2e; color: #34d399; }
+.service-badge.inactive { background: #3d1a1a; color: #f87171; }
+.service-badge.unknown { background: #1a2634; color: #71767b; }
+.service-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.service-controls { display: flex; gap: 6px; }
+.svc-btn { 
+    padding: 4px 10px; border: none; border-radius: 4px; font-size: 11px; 
+    cursor: pointer; transition: all 0.15s ease;
+}
+.svc-btn.start { background: #1a3d2e; color: #34d399; }
+.svc-btn.start:hover { background: #2d5a45; }
+.svc-btn.stop { background: #3d1a1a; color: #f87171; }
+.svc-btn.stop:hover { background: #5a2d2d; }
+.svc-btn.restart { background: #2f3336; color: #a0aec0; }
+.svc-btn.restart:hover { background: #3f4448; }
+.svc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Dependency badge */
+.dep-badge {
+    font-size: 9px; padding: 2px 6px; border-radius: 4px;
+    background: #1e3a5f; color: #60a5fa;
+}
+.dep-badge.shared { background: #3d2e1a; color: #fbbf24; }
+
+/* Install workflow modal */
+.install-workflow {
+    background: #0d1117; border: 1px solid #2f3336; border-radius: 8px;
+    padding: 16px; margin-top: 12px;
+}
+.workflow-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #e7e9ea; }
+.workflow-steps { display: flex; flex-direction: column; gap: 8px; }
+.workflow-step {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: #a0aec0;
+}
+.workflow-step .step-icon {
+    width: 20px; height: 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; flex-shrink: 0;
+}
+.workflow-step.pending .step-icon { background: #2f3336; color: #71767b; }
+.workflow-step.active .step-icon { background: #3b82f6; color: white; animation: pulse 1s infinite; }
+.workflow-step.done .step-icon { background: #1a3d2e; color: #34d399; }
+.workflow-step.error .step-icon { background: #3d1a1a; color: #f87171; }
+.workflow-step.active { color: #e7e9ea; }
+.workflow-step.done { color: #71767b; }
+
 .panel-progress { margin-top: 12px; display: none; }
 .panel-progress.visible { display: block; }
 .progress-bar { height: 4px; background: #2f3336; border-radius: 2px; overflow: hidden; }
@@ -316,6 +383,7 @@ class LabMeshApp {
         this.panelWs = null;
         this.panelStatus = null;
         this.panelComponents = [];
+        this.installWorkflow = null; // Track multi-step install progress
         
         this.el = {
             statusDot: document.getElementById('status-dot'),
@@ -355,7 +423,6 @@ class LabMeshApp {
                 this.connected = true; 
                 this.setStatus('connected', 'Connected'); 
                 this.ws.send(JSON.stringify({type:'mesh_peers'}));
-                // Refresh mesh data every 2 seconds to update lastSeenAgo
                 this.meshRefreshInterval = setInterval(() => {
                     if (this.connected) this.ws.send(JSON.stringify({type:'mesh_peers'}));
                 }, 2000);
@@ -377,7 +444,6 @@ class LabMeshApp {
         if (msg.type === 'mesh_peers_response' || msg.type === 'mesh_update') {
             if (msg.data) this.updateNodes(msg.data);
         }
-        // Route panel messages when using main WS for local node
         if (this.panelOpen && this.panelUsingMainWs) {
             this.handlePanelMsg(msg);
         }
@@ -427,20 +493,11 @@ class LabMeshApp {
             return;
         }
         
-        // Get current node IDs in DOM
-        const currentIds = new Set();
-        this.el.nodeList.querySelectorAll('.node-row').forEach(el => currentIds.add(el.dataset.nodeId));
-        
-        // Get new node IDs
-        const newIds = new Set(nodes.map(n => n.id));
-        
-        // If structure changed (nodes added/removed/reordered), do full rebuild
         const nodeIds = nodes.map(n => n.id);
         const domIds = Array.from(this.el.nodeList.querySelectorAll('.node-row')).map(el => el.dataset.nodeId);
         const structureChanged = nodeIds.length !== domIds.length || nodeIds.some((id, i) => id !== domIds[i]);
         
         if (structureChanged) {
-            // Full rebuild needed
             this.el.nodeList.innerHTML = nodes.map(n => this.renderRow(n)).join('');
             this.el.nodeList.querySelectorAll('[data-action]').forEach(btn => {
                 btn.addEventListener('click', e => {
@@ -452,16 +509,13 @@ class LabMeshApp {
                 });
             });
         } else {
-            // In-place update - only update changed fields
             nodes.forEach(n => {
                 const row = this.el.nodeList.querySelector(`.node-row[data-node-id="${n.id}"]`);
                 if (!row) return;
                 
-                // Update stale class on row
                 const isStale = n.isStale || false;
                 row.classList.toggle('stale', isStale);
                 
-                // Update status badge
                 const statusBadge = row.querySelector('.node-status-badge');
                 if (statusBadge) {
                     const st = n.status || 'idle';
@@ -469,7 +523,6 @@ class LabMeshApp {
                     statusBadge.innerHTML = `<span class="dot"></span>${st}`;
                 }
                 
-                // Update info (config + subject)
                 const infoEl = row.querySelector('.node-info');
                 if (infoEl) {
                     const configParts = [n.system, n.protocol, n.variant].filter(Boolean);
@@ -482,7 +535,6 @@ class LabMeshApp {
                     infoEl.innerHTML = configHtml + subjectHtml;
                 }
                 
-                // Update stats
                 const statsEl = row.querySelector('.node-stats');
                 if (statsEl) {
                     let statsHtml = '';
@@ -508,7 +560,6 @@ class LabMeshApp {
                     statsEl.innerHTML = statsHtml;
                 }
                 
-                // Update last seen
                 const lastSeenEl = row.querySelector('.last-seen');
                 if (lastSeenEl) {
                     const lastSeenAgo = n.lastSeenAgo || 0;
@@ -531,18 +582,15 @@ class LabMeshApp {
             ? this.esc(name) + localLabel
             : `<a href="${agentUrl}" class="node-name-link" title="Go to ${n.id}'s dashboard">${this.esc(name)}</a>`;
         
-        // System/protocol/variant combined
         const configParts = [n.system, n.protocol, n.variant].filter(Boolean);
         const configHtml = configParts.length 
             ? `<span class="node-info-item">${this.esc(configParts.join(' / '))}</span>`
             : '<span class="node-info-item empty">—</span>';
         
-        // Subject separate
         const subjectHtml = n.subject 
             ? `<span class="node-info-item subject">${this.esc(n.subject)}</span>`
             : '';
         
-        // Trial stats
         let statsHtml = '';
         const hasTrialInfo = n.obs_id != null && n.obs_total != null;
         const hasPerfInfo = n.block_pct_correct != null;
@@ -564,7 +612,6 @@ class LabMeshApp {
             }
         }
         
-        // Last seen info
         const lastSeenAgo = n.lastSeenAgo || 0;
         const isStale = n.isStale || false;
         const lastSeenText = lastSeenAgo < 2 ? 'just now' : `${lastSeenAgo}s ago`;
@@ -598,7 +645,6 @@ class LabMeshApp {
     }
     
     openLocalPanel() {
-        // Create a synthetic local node for when mesh is unavailable
         const localNode = {
             id: 'local',
             name: 'Local System',
@@ -613,6 +659,7 @@ class LabMeshApp {
         this.panelOpen = true;
         this.panelStatus = null;
         this.panelComponents = [];
+        this.installWorkflow = null;
         this.el.panelTitle.textContent = node.name || node.id;
         this.el.panelOverlay.classList.add('open');
         this.el.agentPanel.classList.add('open');
@@ -623,10 +670,10 @@ class LabMeshApp {
     closePanel() {
         this.panelOpen = false;
         this.panelNode = null;
+        this.installWorkflow = null;
         this.el.panelOverlay.classList.remove('open');
         this.el.agentPanel.classList.remove('open');
         this.el.agentPanel.classList.remove('expanded');
-        // Only close panelWs if it's a separate connection
         if (this.panelWs && !this.panelUsingMainWs) { 
             this.panelWs.close(); 
         }
@@ -635,8 +682,6 @@ class LabMeshApp {
     }
     
     connectAgent(node) {
-        // For local node, reuse existing WebSocket connection
-        // Also check if we're viewing from the same host (covers hostname mismatch cases)
         const isSameHost = node.isLocal || 
             node.ipAddress === location.hostname ||
             location.hostname === 'localhost' ||
@@ -650,11 +695,8 @@ class LabMeshApp {
             return;
         }
         
-        // For remote nodes, open new connection
-        // Try .local hostname first, fall back to IP if it contains spaces or special chars
         this.panelUsingMainWs = false;
         let host = node.id.toLowerCase() + '.local';
-        // If hostname has spaces or special chars, use IP instead
         if (node.id.includes(' ') || !/^[a-z0-9-]+$/i.test(node.id)) {
             host = node.ipAddress;
         }
@@ -676,13 +718,79 @@ class LabMeshApp {
     }
     
     handlePanelMsg(msg) {
-        if (msg.type === 'status' || msg.type === 'status_response') { if (msg.data) { this.panelStatus = msg.data; this.renderPanel(); } }
-        else if (msg.type === 'components_response') { if (msg.data) { this.panelComponents = msg.data; this.renderPanel(); } }
-        else if (msg.type === 'logs_response') { if (msg.data) { this.displayLogs(msg.data.logs); } else if (msg.error) { this.displayLogs('Error: ' + msg.error); } }
-        else if (msg.type === 'dserv_response') { this.showToast(msg.success ? 'Command sent' : msg.error, msg.success ? 'success' : 'error'); if (msg.success) this.panelWs?.send(JSON.stringify({type:'status'})); }
-        else if (msg.type === 'install_progress') { this.updateProgress(msg.data); }
-        else if (msg.type === 'install_complete') { this.showToast('Install complete!', 'success'); this.hideProgress(); this.panelWs?.send(JSON.stringify({type:'components'})); this.panelWs?.send(JSON.stringify({type:'status'})); }
-        else if (msg.type === 'install_error') { this.showToast('Install failed: ' + msg.error, 'error'); this.hideProgress(); }
+        if (msg.type === 'status' || msg.type === 'status_response') { 
+            if (msg.data) { this.panelStatus = msg.data; this.renderPanel(); } 
+        }
+        else if (msg.type === 'components_response') { 
+            if (msg.data) { this.panelComponents = msg.data; this.renderPanel(); } 
+        }
+        else if (msg.type === 'logs_response') { 
+            if (msg.data) { this.displayLogs(msg.data.logs); } 
+            else if (msg.error) { this.displayLogs('Error: ' + msg.error); } 
+        }
+        else if (msg.type === 'dserv_response') { 
+            this.showToast(msg.success ? 'Command sent' : msg.error, msg.success ? 'success' : 'error'); 
+            if (msg.success) this.panelWs?.send(JSON.stringify({type:'status'})); 
+        }
+        else if (msg.type === 'service_response') {
+            // Handle per-component service control responses
+            this.showToast(msg.success ? `${msg.service}: ${msg.action}` : msg.error, msg.success ? 'success' : 'error');
+            if (msg.success) {
+                this.panelWs?.send(JSON.stringify({type:'status'}));
+                this.panelWs?.send(JSON.stringify({type:'components'}));
+            }
+        }
+        else if (msg.type === 'install_progress') { 
+            this.updateInstallWorkflow(msg.data); 
+        }
+        else if (msg.type === 'install_complete') { 
+            this.completeInstallWorkflow();
+            this.showToast('Install complete!', 'success'); 
+            this.panelWs?.send(JSON.stringify({type:'components'})); 
+            this.panelWs?.send(JSON.stringify({type:'status'})); 
+        }
+        else if (msg.type === 'install_error') { 
+            this.failInstallWorkflow(msg.error);
+            this.showToast('Install failed: ' + msg.error, 'error'); 
+        }
+    }
+    
+    // Build dependency graph from components
+    buildDependencyGraph() {
+        const graph = { dependents: {}, dependencies: {} };
+        this.panelComponents.forEach(comp => {
+            const c = comp.component || comp;
+            const id = c.id;
+            graph.dependencies[id] = c.depends || [];
+            (c.depends || []).forEach(dep => {
+                if (!graph.dependents[dep]) graph.dependents[dep] = [];
+                if (!graph.dependents[dep].includes(id)) graph.dependents[dep].push(id);
+            });
+        });
+        return graph;
+    }
+    
+    // Get services that need to be stopped before updating a component
+    getServicesToStop(componentId) {
+        const graph = this.buildDependencyGraph();
+        const services = new Set();
+        
+        // Get all dependents (things that depend on this component)
+        const dependents = graph.dependents[componentId] || [];
+        dependents.forEach(depId => {
+            const comp = this.panelComponents.find(c => (c.component || c).id === depId);
+            if (comp && (comp.component || comp).service) {
+                services.add((comp.component || comp).service);
+            }
+        });
+        
+        // Also check if this component itself has a service
+        const thisComp = this.panelComponents.find(c => (c.component || c).id === componentId);
+        if (thisComp && (thisComp.component || thisComp).service) {
+            services.add((thisComp.component || thisComp).service);
+        }
+        
+        return Array.from(services);
     }
     
     renderPanel() {
@@ -691,6 +799,7 @@ class LabMeshApp {
         const sys = s.system || {};
         const agent = s.agent || {};
         const comps = this.panelComponents || [];
+        const services = s.services || {}; // Per-component service statuses
         
         this.el.panelContent.innerHTML = `
             <div class="panel-section">
@@ -703,16 +812,12 @@ class LabMeshApp {
                 </div>
             </div>
             <div class="panel-section">
-                <div class="panel-section-title"><span>dserv Service</span><span class="service-status ${d.status||'unknown'}">${d.status||'unknown'}</span></div>
-                <div class="panel-info-grid" style="margin-bottom:12px">
-                    <div class="panel-info-item"><div class="label">Version</div><div class="value">${d.version||'—'}</div></div>
-                    <div class="panel-info-item"><div class="label">PID</div><div class="value">${d.pid||'—'}</div></div>
+                <div class="panel-section-title">
+                    <span>Software</span>
+                    <button class="component-btn" onclick="app.refreshComps()">Refresh</button>
                 </div>
-                <div class="panel-btn-group">
-                    <button class="panel-btn success" onclick="app.panelCmd('start')" ${d.status==='active'?'disabled':''}>Start</button>
-                    <button class="panel-btn danger" onclick="app.panelCmd('stop')" ${d.status!=='active'?'disabled':''}>Stop</button>
-                    <button class="panel-btn secondary" onclick="app.panelCmd('restart')">Restart</button>
-                </div>
+                <div id="panel-comps">${comps.length ? comps.map(c => this.renderComp(c, services)).join('') : '<div style="color:#71767b">Loading...</div>'}</div>
+                ${this.renderInstallWorkflow()}
             </div>
             <div class="panel-section">
                 <div class="panel-section-title">
@@ -726,11 +831,6 @@ class LabMeshApp {
                 <div class="logs-container" id="panel-logs"><div style="color:#71767b">Click Refresh to load logs...</div></div>
             </div>
             <div class="panel-section">
-                <div class="panel-section-title"><span>Software</span><button class="component-btn" onclick="app.refreshComps()">Refresh</button></div>
-                <div id="panel-comps">${comps.length ? comps.map(c=>this.renderComp(c)).join('') : '<div style="color:#71767b">Loading...</div>'}</div>
-                <div class="panel-progress" id="panel-progress"><div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div><div class="progress-text" id="progress-text">Installing...</div></div>
-            </div>
-            <div class="panel-section">
                 <div class="panel-section-title">System Actions</div>
                 <div class="panel-btn-group">
                     <button class="panel-btn warning" onclick="app.reboot()">Reboot System</button>
@@ -742,24 +842,129 @@ class LabMeshApp {
         `;
     }
     
-    renderComp(comp) {
+    renderComp(comp, services = {}) {
         const c = comp.component || comp;
         const hasUpd = comp.updateAvailable;
         const inst = comp.installed;
-        let ver = !inst ? '<span style="color:#71767b">Not installed</span>' : hasUpd ? `${comp.currentVersion} → <span class="latest">${comp.latestVersion}</span>` : `${comp.currentVersion||'?'}${comp.latestVersion?' <span style="color:#34d399">✓</span>':''}`;
-        const assets = comp.assets?.length ? `<select class="component-select" id="asset-${c.id}">${comp.assets.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>` : '';
+        const hasService = !!c.service;
+        const serviceStatus = services[c.service] || 'unknown';
+        const deps = c.depends || [];
+        const graph = this.buildDependencyGraph();
+        const dependents = graph.dependents[c.id] || [];
+        const isSharedDep = dependents.length > 0;
+        
+        let ver = !inst 
+            ? '<span style="color:#71767b">Not installed</span>' 
+            : hasUpd 
+                ? `${comp.currentVersion} → <span class="latest">${comp.latestVersion}</span>` 
+                : `${comp.currentVersion||'?'}${comp.latestVersion?' <span style="color:#34d399">✓</span>':''}`;
+        
+        const assets = comp.assets?.length 
+            ? `<select class="component-select" id="asset-${c.id}">${comp.assets.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>` 
+            : '';
+        
         const btn = hasUpd ? 'Update' : inst ? 'Reinstall' : 'Install';
-        return `<div class="component-row"><div class="component-info"><div class="component-name">${c.name}</div><div class="component-version">${ver}</div></div><div class="component-actions">${assets}<button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button></div></div>`;
+        
+        // Dependency badges
+        let depBadges = '';
+        if (isSharedDep) {
+            depBadges += `<span class="dep-badge shared" title="Used by: ${dependents.join(', ')}">shared</span>`;
+        }
+        if (deps.length) {
+            depBadges += `<span class="dep-badge" title="Requires: ${deps.join(', ')}">→${deps.join(',')}</span>`;
+        }
+        
+        // Service control row (only for components with services)
+        let serviceHtml = '';
+        if (hasService) {
+            const isActive = serviceStatus === 'active';
+            serviceHtml = `
+                <div class="component-service">
+                    <div class="service-info">
+                        <span class="service-label">Service</span>
+                        <span class="service-badge ${serviceStatus}">
+                            <span class="dot"></span>
+                            ${serviceStatus}
+                        </span>
+                    </div>
+                    <div class="service-controls">
+                        <button class="svc-btn start" onclick="app.serviceCmd('${c.service}', 'start')" ${isActive?'disabled':''}>Start</button>
+                        <button class="svc-btn stop" onclick="app.serviceCmd('${c.service}', 'stop')" ${!isActive?'disabled':''}>Stop</button>
+                        <button class="svc-btn restart" onclick="app.serviceCmd('${c.service}', 'restart')">Restart</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        return `
+            <div class="component-row" data-component-id="${c.id}">
+                <div class="component-main">
+                    <div class="component-info">
+                        <div class="component-name">
+                            ${c.name}
+                            ${depBadges}
+                        </div>
+                        ${c.description ? `<div class="component-desc">${c.description}</div>` : ''}
+                        <div class="component-version">${ver}</div>
+                    </div>
+                    <div class="component-actions">
+                        ${assets}
+                        <button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button>
+                    </div>
+                </div>
+                ${serviceHtml}
+            </div>
+        `;
     }
     
-    panelCmd(action) { this.panelWs?.send(JSON.stringify({type:'dserv',action})); this.showToast(`Sending ${action}...`); }
+    renderInstallWorkflow() {
+        if (!this.installWorkflow) return '<div class="panel-progress" id="panel-progress"><div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div><div class="progress-text" id="progress-text">Installing...</div></div>';
+        
+        const wf = this.installWorkflow;
+        const stepsHtml = wf.steps.map((step, i) => {
+            let status = 'pending';
+            let icon = '○';
+            if (i < wf.currentStep) { status = 'done'; icon = '✓'; }
+            else if (i === wf.currentStep) { 
+                status = wf.error ? 'error' : 'active'; 
+                icon = wf.error ? '✗' : '◉'; 
+            }
+            return `<div class="workflow-step ${status}"><span class="step-icon">${icon}</span><span>${step}</span></div>`;
+        }).join('');
+        
+        return `
+            <div class="install-workflow">
+                <div class="workflow-title">Installing ${wf.component}...</div>
+                <div class="workflow-steps">${stepsHtml}</div>
+            </div>
+        `;
+    }
+    
+    // Service control for individual components
+    serviceCmd(service, action) {
+        this.panelWs?.send(JSON.stringify({
+            type: 'service',
+            service: service,
+            action: action
+        }));
+        this.showToast(`${action}ing ${service}...`);
+    }
+    
+    // Legacy dserv service control (for backward compatibility)
+    panelCmd(action) { 
+        this.panelWs?.send(JSON.stringify({type:'dserv',action})); 
+        this.showToast(`Sending ${action}...`); 
+    }
+    
     loadLogs() { this.panelWs?.send(JSON.stringify({type:'logs'})); }
+    
     togglePanelExpand() {
         const panel = this.el.agentPanel;
         const btn = document.getElementById('expand-btn');
         panel.classList.toggle('expanded');
         if (btn) btn.textContent = panel.classList.contains('expanded') ? '⤡' : '⤢';
     }
+    
     displayLogs(logs) {
         this.currentLogs = logs || '';
         const el = document.getElementById('panel-logs');
@@ -767,12 +972,12 @@ class LabMeshApp {
             el.textContent = this.currentLogs || 'No logs available';
             el.scrollTop = el.scrollHeight;
         }
-        // Clear search
         const searchEl = document.getElementById('logs-search');
         if (searchEl) searchEl.value = '';
         const countEl = document.getElementById('logs-match-count');
         if (countEl) countEl.textContent = '';
     }
+    
     filterLogs(query) {
         const el = document.getElementById('panel-logs');
         const countEl = document.getElementById('logs-match-count');
@@ -791,20 +996,139 @@ class LabMeshApp {
         el.textContent = matches.length ? matches.join('\n') : 'No matches found';
         if (countEl) countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
     }
-    reboot() { if (!confirm('Reboot this system?')) return; const h = this.panelNode?.isLocal ? 'localhost' : this.panelNode?.ip; fetch(`http://${h}:${CONFIG.agentPort}/api/system/reboot`,{method:'POST'}).then(()=>{this.showToast('Reboot scheduled','success');this.closePanel();}).catch(()=>this.showToast('Reboot failed','error')); }
+    
+    reboot() { 
+        if (!confirm('Reboot this system?')) return; 
+        const h = this.panelNode?.isLocal ? 'localhost' : this.panelNode?.ip; 
+        fetch(`http://${h}:${CONFIG.agentPort}/api/system/reboot`,{method:'POST'})
+            .then(()=>{this.showToast('Reboot scheduled','success');this.closePanel();})
+            .catch(()=>this.showToast('Reboot failed','error')); 
+    }
+    
     restartAgent() { 
         if (!confirm('Restart dserv-agent? The panel will disconnect briefly.')) return; 
         this.panelWs?.send(JSON.stringify({type:'agent_restart'})); 
         this.showToast('Agent restarting...', 'success'); 
         setTimeout(() => this.closePanel(), 1000);
     }
-    refreshPanel() { this.panelWs?.send(JSON.stringify({type:'status'})); this.panelWs?.send(JSON.stringify({type:'components'})); }
+    
+    refreshPanel() { 
+        this.panelWs?.send(JSON.stringify({type:'status'})); 
+        this.panelWs?.send(JSON.stringify({type:'components'})); 
+    }
+    
     refreshComps() { this.panelWs?.send(JSON.stringify({type:'components'})); }
-    install(id) { const sel = document.getElementById('asset-'+id); const a = sel?.value; if (!a) { this.showToast('Select an asset','error'); return; } if (!confirm(`Install ${a}?`)) return; this.panelWs?.send(JSON.stringify({type:'install',component:id,asset:a})); this.showProgress(); }
+    
+    install(id) { 
+        const sel = document.getElementById('asset-'+id); 
+        const a = sel?.value; 
+        if (!a) { this.showToast('Select an asset','error'); return; }
+        
+        // Check for dependencies that need service stops
+        const servicesToStop = this.getServicesToStop(id);
+        const comp = this.panelComponents.find(c => (c.component || c).id === id);
+        const compName = comp ? (comp.component || comp).name : id;
+        
+        let confirmMsg = `Install ${a}?`;
+        if (servicesToStop.length > 0) {
+            confirmMsg = `Install ${a}?\n\nThis will temporarily stop: ${servicesToStop.join(', ')}`;
+        }
+        
+        if (!confirm(confirmMsg)) return;
+        
+        // Initialize workflow UI
+        const steps = [];
+        if (servicesToStop.length > 0) {
+            steps.push(`Stop services (${servicesToStop.join(', ')})`);
+        }
+        steps.push('Download update');
+        steps.push('Install package');
+        if (servicesToStop.length > 0) {
+            steps.push(`Restart services`);
+        }
+        
+        this.installWorkflow = {
+            component: compName,
+            steps: steps,
+            currentStep: 0,
+            error: null
+        };
+        this.renderPanel();
+        
+        // Send install request with dependency info
+        this.panelWs?.send(JSON.stringify({
+            type: 'install',
+            component: id,
+            asset: a,
+            stopServices: servicesToStop
+        }));
+    }
+    
+    updateInstallWorkflow(data) {
+        if (!this.installWorkflow) return;
+        
+        const stageMap = {
+            'stopping': 0,
+            'downloading': this.installWorkflow.steps.findIndex(s => s.includes('Download')),
+            'installing': this.installWorkflow.steps.findIndex(s => s.includes('Install')),
+            'starting': this.installWorkflow.steps.length - 1
+        };
+        
+        if (data.stage && stageMap[data.stage] !== undefined) {
+            this.installWorkflow.currentStep = stageMap[data.stage];
+        }
+        
+        this.renderPanel();
+    }
+    
+    completeInstallWorkflow() {
+        if (this.installWorkflow) {
+            this.installWorkflow.currentStep = this.installWorkflow.steps.length;
+        }
+        setTimeout(() => {
+            this.installWorkflow = null;
+            this.renderPanel();
+        }, 2000);
+    }
+    
+    failInstallWorkflow(error) {
+        if (this.installWorkflow) {
+            this.installWorkflow.error = error;
+        }
+        setTimeout(() => {
+            this.installWorkflow = null;
+            this.renderPanel();
+        }, 3000);
+    }
+    
     showProgress() { document.getElementById('panel-progress')?.classList.add('visible'); }
     hideProgress() { document.getElementById('panel-progress')?.classList.remove('visible'); }
-    updateProgress(data) { const stages = {checking:{p:10,t:'Checking...'},found:{p:20,t:'Found '+data.version},downloading:{p:40,t:'Downloading...'},stopping:{p:60,t:'Stopping...'},installing:{p:80,t:'Installing...'},starting:{p:90,t:'Starting...'}}; const s = stages[data.stage]; if (s) { const f = document.getElementById('progress-fill'); const t = document.getElementById('progress-text'); if (f) f.style.width = s.p+'%'; if (t) t.textContent = s.t; } }
-    showToast(msg, type='') { this.el.toast.textContent = msg; this.el.toast.className = 'toast show ' + type; clearTimeout(this.toastTimeout); this.toastTimeout = setTimeout(() => this.el.toast.className = 'toast', 3000); }
+    
+    updateProgress(data) { 
+        const stages = {
+            checking:{p:10,t:'Checking...'},
+            found:{p:20,t:'Found '+data.version},
+            downloading:{p:40,t:'Downloading...'},
+            stopping:{p:60,t:'Stopping...'},
+            installing:{p:80,t:'Installing...'},
+            starting:{p:90,t:'Starting...'}
+        }; 
+        const s = stages[data.stage]; 
+        if (s) { 
+            const f = document.getElementById('progress-fill'); 
+            const t = document.getElementById('progress-text'); 
+            if (f) f.style.width = s.p+'%'; 
+            if (t) t.textContent = s.t; 
+        } 
+    }
+    
+    showToast(msg, type='') { 
+        this.el.toast.textContent = msg; 
+        this.el.toast.className = 'toast show ' + type; 
+        clearTimeout(this.toastTimeout); 
+        this.toastTimeout = setTimeout(() => this.el.toast.className = 'toast', 3000); 
+    }
+    
     esc(t) { const d = document.createElement('div'); d.textContent = t||''; return d.innerHTML; }
 }
 

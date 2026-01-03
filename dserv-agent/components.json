@@ -3,27 +3,31 @@
     {
       "id": "dserv",
       "name": "dserv",
+      "description": "Data server and experiment control backend",
       "repo": "SheinbergLab/dserv",
       "package": "dserv",
       "service": "dserv",
-      "assetPattern": "dserv_.*\\.deb$"
+      "assetPattern": "dserv_.*\\.deb$",
+      "depends": ["dlsh"]
     },
     {
       "id": "dlsh",
       "name": "dlsh",
-      "description": "Tcl zipfs library",
+      "description": "Tcl zipfs library (shared runtime)",
       "repo": "SheinbergLab/dlsh",
       "assetPattern": "dlsh.*\\.zip$",
       "installCmd": "mkdir -p /usr/local/dlsh && cp {file} /usr/local/dlsh/dlsh.zip && echo {version} > /usr/local/dlsh/VERSION",
       "versionFile": "/usr/local/dlsh/VERSION"
-    },      
+    },
     {
       "id": "stim2",
       "name": "stim2",
+      "description": "Stimulus presentation system",
       "repo": "SheinbergLab/stim2",
       "package": "stim2",
+      "service": "stim2",
       "assetPattern": "stim2_.*\\.deb$",
-      "versionCmd": ["dpkg-query", "-W", "-f=${Version}", "stim2"]
+      "depends": ["dlsh"]
     }
   ]
 }

@@ -57,7 +57,7 @@ const (
 )
 
 var (
-	version   = "0.4.0"
+	version   = "0.5.0"
 	startTime = time.Now()
 )
 
@@ -112,6 +112,7 @@ type Component struct {
 	PostInstall  []string `json:"postInstall,omitempty"`
 	InstallCmd   string   `json:"installCmd,omitempty"`   // Custom install command ({file} replaced with path)
 	AssetPattern string   `json:"assetPattern,omitempty"` // Regex pattern for asset matching
+	Depends      []string `json:"depends,omitempty"`      // Component IDs this depends on
 }
 
 // ComponentStatus represents the current state of a component
@@ -167,14 +168,16 @@ type WSConn struct {
 
 // Data structures
 type WSMessage struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id,omitempty"`
-	Action    string          `json:"action,omitempty"`
-	Component string          `json:"component,omitempty"`
-	Asset     string          `json:"asset,omitempty"`
-	Target    string          `json:"target,omitempty"`  // For dserv_cmd: target appliance ID (empty = local)
-	Script    string          `json:"script,omitempty"`  // For dserv_cmd: script to execute
-	Payload   json.RawMessage `json:"payload,omitempty"`
+	Type         string          `json:"type"`
+	ID           string          `json:"id,omitempty"`
+	Action       string          `json:"action,omitempty"`
+	Component    string          `json:"component,omitempty"`
+	Asset        string          `json:"asset,omitempty"`
+	Target       string          `json:"target,omitempty"`       // For dserv_cmd: target appliance ID (empty = local)
+	Script       string          `json:"script,omitempty"`       // For dserv_cmd: script to execute
+	Service      string          `json:"service,omitempty"`      // For service control: service name
+	StopServices []string        `json:"stopServices,omitempty"` // For install: services to stop during update
+	Payload      json.RawMessage `json:"payload,omitempty"`
 }
 
 type WSResponse struct {
@@ -183,12 +186,15 @@ type WSResponse struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
 	Error   string      `json:"error,omitempty"`
+	Service string      `json:"service,omitempty"` // For service_response
+	Action  string      `json:"action,omitempty"`  // For service_response
 }
 
 type StatusInfo struct {
-	Agent  AgentInfo   `json:"agent"`
-	Dserv  ServiceInfo `json:"dserv"`
-	System SystemInfo  `json:"system"`
+	Agent    AgentInfo         `json:"agent"`
+	Dserv    ServiceInfo       `json:"dserv"`
+	System   SystemInfo        `json:"system"`
+	Services map[string]string `json:"services,omitempty"` // Per-component service statuses
 }
 
 type AgentInfo struct {
@@ -265,6 +271,7 @@ func main() {
 
 	mux.HandleFunc("/api/status", agent.auth(agent.handleStatus))
 	mux.HandleFunc("/api/dserv/", agent.auth(agent.handleDserv))
+	mux.HandleFunc("/api/service/", agent.auth(agent.handleService)) // New: per-component service control
 	mux.HandleFunc("/api/agent/restart", agent.auth(agent.handleAgentRestart))
 	mux.HandleFunc("/api/logs", agent.auth(agent.handleLogs))
 	mux.HandleFunc("/api/system/reboot", agent.auth(agent.handleReboot))
@@ -381,15 +388,41 @@ func (a *Agent) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) getStatus() StatusInfo {
-	return StatusInfo{
+	status := StatusInfo{
 		Agent: AgentInfo{
 			Version:   version,
 			Uptime:    time.Since(startTime).Round(time.Second).String(),
 			StartTime: startTime.Format(time.RFC3339),
 		},
-		Dserv:  a.getDservStatus(),
-		System: a.getSystemInfo(),
+		Dserv:    a.getDservStatus(),
+		System:   a.getSystemInfo(),
+		Services: a.getAllServiceStatuses(),
 	}
+	return status
+}
+
+// getAllServiceStatuses returns the status of all component services
+func (a *Agent) getAllServiceStatuses() map[string]string {
+	services := make(map[string]string)
+	for _, comp := range a.components {
+		if comp.Service != "" {
+			services[comp.Service] = a.getServiceStatus(comp.Service)
+		}
+	}
+	return services
+}
+
+// getServiceStatus returns "active", "inactive", or "unknown" for a systemd service
+func (a *Agent) getServiceStatus(service string) string {
+	out, err := exec.Command("systemctl", "is-active", service).Output()
+	if err != nil {
+		return "inactive"
+	}
+	status := strings.TrimSpace(string(out))
+	if status == "active" {
+		return "active"
+	}
+	return "inactive"
 }
 
 func (a *Agent) getDservStatus() ServiceInfo {
@@ -485,6 +518,73 @@ func (a *Agent) handleDserv(w http.ResponseWriter, r *http.Request) {
 	}
 	time.Sleep(500 * time.Millisecond)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "action": action, "status": a.getDservStatus()})
+}
+
+// handleService handles per-component service control via HTTP
+// POST /api/service/{serviceName}/{action}
+func (a *Agent) handleService(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/service/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 {
+		http.Error(w, "Invalid path: expected /api/service/{service}/{action}", 400)
+		return
+	}
+
+	service := parts[0]
+	action := parts[1]
+
+	// Validate service exists in our components
+	found := false
+	for _, comp := range a.components {
+		if comp.Service == service {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "Unknown service: "+service, 404)
+		return
+	}
+
+	var cmd *exec.Cmd
+	switch action {
+	case "start":
+		cmd = exec.Command("sudo", "systemctl", "start", service)
+	case "stop":
+		cmd = exec.Command("sudo", "systemctl", "stop", service)
+	case "restart":
+		cmd = exec.Command("sudo", "systemctl", "restart", service)
+	case "status":
+		writeJSON(w, 200, map[string]string{"service": service, "status": a.getServiceStatus(service)})
+		return
+	default:
+		http.Error(w, "Unknown action: "+action, 400)
+		return
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		writeJSON(w, 500, map[string]interface{}{
+			"success": false,
+			"service": service,
+			"action":  action,
+			"error":   string(out),
+		})
+		return
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true,
+		"service": service,
+		"action":  action,
+		"status":  a.getServiceStatus(service),
+	})
 }
 
 // POST /api/agent/restart - restart the dserv-agent service itself
@@ -586,14 +686,17 @@ func (a *Agent) handleComponentAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		asset := r.URL.Query().Get("asset")
+		var stopServices []string
 		if asset == "" {
 			var body struct {
-				Asset string `json:"asset"`
+				Asset        string   `json:"asset"`
+				StopServices []string `json:"stopServices"`
 			}
 			json.NewDecoder(r.Body).Decode(&body)
 			asset = body.Asset
+			stopServices = body.StopServices
 		}
-		go a.installComponent(*comp, asset)
+		go a.installComponentWithDeps(*comp, asset, stopServices)
 		writeJSON(w, 202, map[string]string{"status": "started", "component": comp.ID})
 
 	default:
@@ -824,7 +927,21 @@ func (a *Agent) getLatestRelease(repo string) *ReleaseInfo {
 	return &release
 }
 
-func (a *Agent) installComponent(comp Component, selectedAsset string) {
+// getDependentServices returns services that depend on the given component
+func (a *Agent) getDependentServices(compID string) []string {
+	services := make([]string, 0)
+	for _, comp := range a.components {
+		for _, dep := range comp.Depends {
+			if dep == compID && comp.Service != "" {
+				services = append(services, comp.Service)
+			}
+		}
+	}
+	return services
+}
+
+// installComponentWithDeps handles installation with dependency-aware service management
+func (a *Agent) installComponentWithDeps(comp Component, selectedAsset string, stopServices []string) {
 	a.broadcast(WSResponse{
 		Type: "install_progress",
 		Data: map[string]string{"component": comp.ID, "stage": "checking"},
@@ -876,12 +993,39 @@ func (a *Agent) installComponent(comp Component, selectedAsset string) {
 	io.Copy(f, resp.Body)
 	f.Close()
 
-	if comp.Service != "" {
+	// Collect all services to stop: explicitly requested + component's own service
+	allServicesToStop := make([]string, 0)
+	seen := make(map[string]bool)
+
+	// Add explicitly requested services (dependents)
+	for _, svc := range stopServices {
+		if !seen[svc] {
+			allServicesToStop = append(allServicesToStop, svc)
+			seen[svc] = true
+		}
+	}
+
+	// Add component's own service
+	if comp.Service != "" && !seen[comp.Service] {
+		allServicesToStop = append(allServicesToStop, comp.Service)
+		seen[comp.Service] = true
+	}
+
+	// Stop all services
+	if len(allServicesToStop) > 0 {
 		a.broadcast(WSResponse{
 			Type: "install_progress",
-			Data: map[string]string{"component": comp.ID, "stage": "stopping"},
+			Data: map[string]interface{}{
+				"component": comp.ID,
+				"stage":     "stopping",
+				"services":  allServicesToStop,
+			},
 		})
-		exec.Command("sudo", "systemctl", "stop", comp.Service).Run()
+
+		for _, svc := range allServicesToStop {
+			a.log("Stopping service %s before install", svc)
+			exec.Command("sudo", "systemctl", "stop", svc).Run()
+		}
 		time.Sleep(2 * time.Second)
 	}
 
@@ -909,8 +1053,9 @@ func (a *Agent) installComponent(comp Component, selectedAsset string) {
 
 	if installErr != nil {
 		a.broadcast(WSResponse{Type: "install_error", Error: installErr.Error()})
-		if comp.Service != "" {
-			exec.Command("sudo", "systemctl", "start", comp.Service).Run()
+		// Try to restart services even on error
+		for _, svc := range allServicesToStop {
+			exec.Command("sudo", "systemctl", "start", svc).Run()
 		}
 		return
 	}
@@ -919,12 +1064,21 @@ func (a *Agent) installComponent(comp Component, selectedAsset string) {
 		exec.Command("sudo", "sh", "-c", cmd).Run()
 	}
 
-	if comp.Service != "" {
+	// Restart all services that were stopped
+	if len(allServicesToStop) > 0 {
 		a.broadcast(WSResponse{
 			Type: "install_progress",
-			Data: map[string]string{"component": comp.ID, "stage": "starting"},
+			Data: map[string]interface{}{
+				"component": comp.ID,
+				"stage":     "starting",
+				"services":  allServicesToStop,
+			},
 		})
-		exec.Command("sudo", "systemctl", "start", comp.Service).Run()
+
+		for _, svc := range allServicesToStop {
+			a.log("Starting service %s after install", svc)
+			exec.Command("sudo", "systemctl", "start", svc).Run()
+		}
 		time.Sleep(2 * time.Second)
 	}
 
@@ -936,6 +1090,11 @@ func (a *Agent) installComponent(comp Component, selectedAsset string) {
 		Success: true,
 		Data:    map[string]interface{}{"component": comp.ID, "version": newVersion},
 	})
+}
+
+// Legacy installComponent for backward compatibility
+func (a *Agent) installComponent(comp Component, selectedAsset string) {
+	a.installComponentWithDeps(comp, selectedAsset, nil)
 }
 
 func (a *Agent) installDeb(path string) error {
@@ -1170,6 +1329,64 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 			resp.Data = a.getDservStatus()
 		}
 
+	case "service":
+		// Per-component service control via WebSocket
+		service := msg.Service
+		action := msg.Action
+
+		if service == "" {
+			resp.Type = "service_response"
+			resp.Error = "No service specified"
+			return resp
+		}
+
+		// Validate service exists in our components
+		found := false
+		for _, comp := range a.components {
+			if comp.Service == service {
+				found = true
+				break
+			}
+		}
+		if !found {
+			resp.Type = "service_response"
+			resp.Error = "Unknown service: " + service
+			return resp
+		}
+
+		var cmd *exec.Cmd
+		switch action {
+		case "start":
+			cmd = exec.Command("sudo", "systemctl", "start", service)
+		case "stop":
+			cmd = exec.Command("sudo", "systemctl", "stop", service)
+		case "restart":
+			cmd = exec.Command("sudo", "systemctl", "restart", service)
+		case "status":
+			resp.Type = "service_response"
+			resp.Success = true
+			resp.Service = service
+			resp.Action = action
+			resp.Data = map[string]string{"status": a.getServiceStatus(service)}
+			return resp
+		default:
+			resp.Type = "service_response"
+			resp.Error = "Unknown action: " + action
+			return resp
+		}
+
+		resp.Type = "service_response"
+		resp.Service = service
+		resp.Action = action
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			resp.Error = string(out)
+		} else {
+			time.Sleep(500 * time.Millisecond)
+			resp.Success = true
+			resp.Data = map[string]string{"status": a.getServiceStatus(service)}
+		}
+
 	case "components":
 		statuses := make([]ComponentStatus, 0, len(a.components))
 		for _, comp := range a.components {
@@ -1190,7 +1407,7 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 			resp.Error = "Component not found: " + msg.Component
 			return resp
 		}
-		go a.installComponent(*comp, msg.Asset)
+		go a.installComponentWithDeps(*comp, msg.Asset, msg.StopServices)
 		resp.Success = true
 		resp.Data = map[string]string{"status": "started", "component": comp.ID}
 
@@ -1230,13 +1447,13 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 		// Relay command to dserv via HTTP API
 		// For local commands, connect to local dserv
 		// For remote commands, we'd need the target's address
-		
+
 		if msg.Target != "" {
 			// Remote commands not yet supported in this version
 			resp.Error = "Remote commands not yet supported"
 			return resp
 		}
-		
+
 		// Try to send command to local dserv via essctrl
 		script := msg.Script
 		out, err := exec.Command("essctrl", "-c", script).CombinedOutput()
@@ -1378,10 +1595,10 @@ func (ws *WSConn) Close() error {
 // ============ Mesh Discovery (UDP) ============
 
 const (
-	maxLostPeers        = 50
-	lostPeerRetention   = 30 * time.Minute
-	staleThresholdSecs  = 10  // Peer is "stale" after 10 seconds without heartbeat
-	lostThresholdSecs   = 60  // Peer is "lost" after 60 seconds without heartbeat
+	maxLostPeers       = 50
+	lostPeerRetention  = 30 * time.Minute
+	staleThresholdSecs = 10 // Peer is "stale" after 10 seconds without heartbeat
+	lostThresholdSecs  = 60 // Peer is "lost" after 60 seconds without heartbeat
 )
 
 func (a *Agent) meshDiscoveryLoop() {
@@ -1577,7 +1794,7 @@ func (a *Agent) cleanupPeers() {
 	// Check for timed-out peers (lost after 60 seconds)
 	for id, peer := range a.meshPeers {
 		secsSinceHeartbeat := int(now.Sub(peer.LastHeartbeat).Seconds())
-		
+
 		if secsSinceHeartbeat > lostThresholdSecs {
 			// Move to lost peers
 			a.meshLostPeers = append(a.meshLostPeers, LostPeer{
