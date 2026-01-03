@@ -102,9 +102,6 @@ if { [lsearch $hbs $host] >= 0 } {
 # start a virtual eye subprocess
 subprocess virtual_eye "source [file join $dspath config/virtualeyeconf.tcl]"
 
-# auto update support
-source [file join $dspath config/updateconf.tcl]
-
 # if we have camera support (libcamera), start a camera process
 if { [file exists $dspath/modules/dserv_camera[info sharedlibextension]] } {
     subprocess camera "source [file join $dspath config/cameraconf.tcl]"
