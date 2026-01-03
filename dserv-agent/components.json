@@ -11,15 +11,6 @@
       "depends": ["dlsh"]
     },
     {
-      "id": "dlsh",
-      "name": "dlsh",
-      "description": "Tcl zipfs library (shared runtime)",
-      "repo": "SheinbergLab/dlsh",
-      "assetPattern": "dlsh.*\\.zip$",
-      "installCmd": "mkdir -p /usr/local/dlsh && cp {file} /usr/local/dlsh/dlsh.zip && echo {version} > /usr/local/dlsh/VERSION",
-      "versionFile": "/usr/local/dlsh/VERSION"
-    },
-    {
       "id": "stim2",
       "name": "stim2",
       "description": "Stimulus presentation system",
@@ -28,6 +19,15 @@
       "service": "stim2",
       "assetPattern": "stim2_.*\\.deb$",
       "depends": ["dlsh"]
-    }
+    },
+    {
+      "id": "dlsh",
+      "name": "dlsh",
+      "description": "Tcl zipfs library (shared runtime)",
+      "repo": "SheinbergLab/dlsh",
+      "assetPattern": "dlsh.*\\.zip$",
+      "installCmd": "mkdir -p /usr/local/dlsh && cp {file} /usr/local/dlsh/dlsh.zip && echo {version} > /usr/local/dlsh/VERSION",
+      "versionFile": "/usr/local/dlsh/VERSION"
+    },
   ]
 }
