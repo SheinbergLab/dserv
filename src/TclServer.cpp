@@ -1806,8 +1806,8 @@ static int subprocess_exit_cmd(ClientData clientData, Tcl_Interp *interp,
   //  std::string dp_name = tserv->name + "/exit_code";
   //  tserv->ds->set(dp_name.c_str(), exitCode);
   
-  std::cout << "Subprocess '" << tserv->name 
-	    << "' exiting with code " << exitCode << std::endl;
+  //  std::cout << "Subprocess '" << tserv->name 
+  //	    << "' exiting with code " << exitCode << std::endl;
   
   // Trigger clean shutdown
   tserv->shutdown();
