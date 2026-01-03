@@ -121,6 +121,34 @@ header h1 {
 .btn-gear { background: #2f3336; color: #a0aec0; font-size: 13px; min-width: 32px; padding: 5px 8px; }
 .btn-gear:hover { background: #3f4448; color: #e7e9ea; }
 
+/* Open dropdown menu */
+.open-dropdown { position: relative; display: inline-block; }
+.open-dropdown-btn {
+    background: #1e3a5f; color: #60a5fa; text-decoration: none;
+    padding: 5px 8px 5px 10px; border: none; border-radius: 6px; font-size: 11px; font-weight: 500;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+}
+.open-dropdown-btn:hover { background: #2d5a8f; }
+.open-dropdown-btn .arrow { font-size: 8px; opacity: 0.7; }
+.open-dropdown-menu {
+    position: absolute; top: 100%; right: 0; margin-top: 4px;
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    min-width: 120px; z-index: 100; opacity: 0; visibility: hidden;
+    transform: translateY(-4px); transition: all 0.15s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.open-dropdown:hover .open-dropdown-menu,
+.open-dropdown-menu:hover { opacity: 1; visibility: visible; transform: translateY(0); }
+.open-dropdown-item {
+    display: block; padding: 8px 12px; color: #e7e9ea; text-decoration: none;
+    font-size: 12px; border-bottom: 1px solid #2f3336; transition: background 0.1s ease;
+}
+.open-dropdown-item:last-child { border-bottom: none; }
+.open-dropdown-item:hover { background: #2f3336; }
+.open-dropdown-item .item-label { display: block; font-weight: 500; }
+.open-dropdown-item .item-desc { display: block; font-size: 10px; color: #71767b; margin-top: 2px; }
+.open-dropdown-item.disabled { opacity: 0.4; pointer-events: none; }
+
 .empty-state { text-align: center; padding: 80px 40px; color: #71767b; }
 .empty-state-icon { font-size: 48px; margin-bottom: 16px; }
 .empty-state h3 { font-size: 20px; color: #e7e9ea; margin-bottom: 8px; }
@@ -459,7 +487,8 @@ class LabMeshApp {
                 system: p.customFields?.system, protocol: p.customFields?.protocol,
                 variant: p.customFields?.variant, subject: p.customFields?.subject,
                 obs_id: p.customFields?.obs_id, obs_total: p.customFields?.obs_total,
-                block_pct_correct: p.customFields?.block_pct_correct
+                block_pct_correct: p.customFields?.block_pct_correct,
+                rmt_host: p.customFields?.rmt_host
             });
         });
         this.renderNodes();
@@ -618,6 +647,48 @@ class LabMeshApp {
         const staleClass = isStale ? 'stale' : '';
         const staleIcon = isStale ? ' ⚠' : '';
         
+        // Build the Open dropdown menu
+        const essUrl = `${url}ess_control.html`;
+        const termUrl = `${url}terminal.html`;
+        const dlshUrl = `${url}dlsh.html`;
+        const helpUrl = `${url}command_reference.html`;
+        const hasStim = !!n.rmt_host;
+        // For stim, use rmt_host but need to resolve 'localhost' to the node's IP
+        const stimHost = n.rmt_host === 'localhost' ? (n.isLocal ? 'localhost' : n.ip) : n.rmt_host;
+        const stimUrl = hasStim ? `http://${stimHost}:4613` : '';
+        const stimDevUrl = hasStim ? `http://${stimHost}:4613/stim2-dev.html` : '';
+        
+        const openDropdown = `
+            <div class="open-dropdown">
+                <button class="open-dropdown-btn">Open <span class="arrow">▼</span></button>
+                <div class="open-dropdown-menu">
+                    <a href="${essUrl}" onclick="window.open('${essUrl}', '${n.id}_ess', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">ESS</span>
+                        <span class="item-desc">Experiment control</span>
+                    </a>
+                    <a href="${stimUrl}" onclick="window.open('${stimUrl}', '${n.id}_stim', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item ${hasStim ? '' : 'disabled'}">
+                        <span class="item-label">Stim</span>
+                        <span class="item-desc">${hasStim ? 'Stim terminal' : 'Not available'}</span>
+                    </a>
+                    <a href="${stimDevUrl}" onclick="window.open('${stimDevUrl}', '${n.id}_stimdev', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item ${hasStim ? '' : 'disabled'}">
+                        <span class="item-label">Stim Dev</span>
+                        <span class="item-desc">${hasStim ? 'Stim development' : 'Not available'}</span>
+                    </a>
+                    <a href="${termUrl}" onclick="window.open('${termUrl}', '${n.id}_term', 'width=800,height=600,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Term</span>
+                        <span class="item-desc">Terminal console</span>
+                    </a>
+                    <a href="${dlshUrl}" onclick="window.open('${dlshUrl}', '${n.id}_dlsh', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Dlsh</span>
+                        <span class="item-desc">Dlsh environment</span>
+                    </a>
+                    <a href="${helpUrl}" onclick="window.open('${helpUrl}', '${n.id}_help', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Help</span>
+                        <span class="item-desc">Command reference</span>
+                    </a>
+                </div>
+            </div>`;
+        
         return `<div class="node-row ${n.isLocal?'local':''} ${staleClass}" data-node-id="${n.id}">
             <div class="node-content">
                 <div class="node-line1">
@@ -626,7 +697,7 @@ class LabMeshApp {
                     <div class="node-info">${configHtml}${subjectHtml}</div>
                     <div class="node-stats">${statsHtml}</div>
                     <div class="node-actions">
-                        <a href="${url}ess_control.html" onclick="window.open('${url}ess_control.html', '${n.id}', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="btn btn-open">Open</a>
+                        ${openDropdown}
                         <button class="btn btn-gear" data-action="manage" data-node-id="${n.id}" title="System Management">⚙</button>
                     </div>
                 </div>
