@@ -285,7 +285,7 @@ jobs:
       - name: Install our dlsh libs and headers into the build environment.
         run: |
           # Get latest dlsh version from SheinbergLab
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          DLSH_VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r '.tag_name')
           echo "Using dlsh version: $DLSH_VERSION"
           
           # Install .deb packages for build dependencies (libdg, etc.)
