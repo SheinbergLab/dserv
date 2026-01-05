@@ -1197,7 +1197,14 @@ class EyeTouchVisualizer {
             this.state.touchPos.x,
             this.state.touchPos.y
         );
-        const pos = this.degreesToCanvas(touchDegrees.x, touchDegrees.y);
+        // Touch uses same Y convention as touch regions (ADD, not subtract)
+        // Touch screen Y=0 is top, increases downward - same as canvas
+        const center = this.canvasCenter;
+        const degPP = this.degPerPixel;
+        const pos = {
+            x: center.x + (touchDegrees.x / degPP.x),
+            y: center.y + (touchDegrees.y / degPP.y)
+        };
         
         // Draw diamond shape
         ctx.fillStyle = options.touchColor;
