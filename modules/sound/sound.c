@@ -209,6 +209,7 @@ static int snd_volume(sound_info_t *, char volume, char channel);
 static int snd_program(sound_info_t *info, char program, char bank, char ch_set)
 {
   char set, channel;
+  int n = 0;
   
   channel = ch_set & 0x0F;	/* Low nibble  */
   set = (ch_set & 0xF0) >> 4; /* High nibble */
@@ -218,9 +219,8 @@ static int snd_program(sound_info_t *info, char program, char bank, char ch_set)
   if (info->mode & SOUND_MODE_HARDWARE) {
     /* Hardware mode - send MIDI over serial */
     char cmd[8];
-    int n = 0;
     
-    /* Start with Channel change 0 */ 
+    /* Start with Channel change 0 */
     cmd[0] = 0xb0 | channel;
     cmd[1] = 0x00;
     cmd[2] = Sets[(int) set];
@@ -239,29 +239,28 @@ static int snd_program(sound_info_t *info, char program, char bank, char ch_set)
     
     /* Now set the volume to the middle */
     snd_control(info, MIDI_CTRL_VOLUME, 64, channel);
-    
-    return n;
-    
-  } else if (info->mode & SOUND_MODE_SOFTWARE) {
-    /* Software mode - use FluidSynth */
-    if (!info->synth) return 0;
-    
-    /* Bank select MSB (CC 0) */
-    fluid_synth_cc(info->synth, channel, 0, Sets[(int)set]);
-    
-    /* Bank select LSB (CC 32) */
-    fluid_synth_cc(info->synth, channel, 32, bank);
-    
-    /* Program change */
-    fluid_synth_program_change(info->synth, channel, program - 1);
-    
-    /* Set volume to middle */
-    fluid_synth_cc(info->synth, channel, MIDI_CTRL_VOLUME, 64);
-    
-    return 1;
   }
   
-  return 0;
+  if (info->mode & SOUND_MODE_SOFTWARE) {
+    /* Software mode - use FluidSynth */
+    if (info->synth) {
+      /* Bank select MSB (CC 0) */
+      fluid_synth_cc(info->synth, channel, 0, Sets[(int)set]);
+      
+      /* Bank select LSB (CC 32) */
+      fluid_synth_cc(info->synth, channel, 32, bank);
+      
+      /* Program change */
+      fluid_synth_program_change(info->synth, channel, program - 1);
+      
+      /* Set volume to middle */
+      fluid_synth_cc(info->synth, channel, MIDI_CTRL_VOLUME, 64);
+      
+      n = 1;
+    }
+  }
+  
+  return n;
 }
 
 /**************************************************************
@@ -983,7 +982,3 @@ EXPORT(int,Dserv_sound_Init) (Tcl_Interp *interp)
 		       (Tcl_CmdDeleteProc *) NULL);
   return TCL_OK;
 }
-
-
-
-
