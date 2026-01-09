@@ -649,6 +649,7 @@ class LabMeshApp {
         
         // Build the Open dropdown menu
         const essUrl = `${url}ess_control.html`;
+        const essDevUrl = `${url}ess_workbench.html`;
         const termUrl = `${url}terminal.html`;
         const dlshUrl = `${url}dlsh.html`;
         const helpUrl = `${url}command_reference.html`;
@@ -667,6 +668,10 @@ class LabMeshApp {
                     <a href="${essUrl}" onclick="window.open('${essUrl}', '${n.id}_ess', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
                         <span class="item-label">ESS</span>
                         <span class="item-desc">Experiment control</span>
+                    </a>
+                    <a href="${essDevUrl}" onclick="window.open('${essDevUrl}', '${n.id}_essdev', 'width=950,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Workbench</span>
+                        <span class="item-desc">ESS Workbenchl</span>
                     </a>
                     <a href="${termUrl}" onclick="window.open('${termUrl}', '${n.id}_term', 'width=950,height=600,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
                         <span class="item-label">Term</span>
