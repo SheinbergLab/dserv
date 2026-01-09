@@ -3,6 +3,7 @@
 package require dlsh
 package provide ess 2.0
 package require yajltcl
+package require tcljson
 package require dslog
 
 catch {System destroy}
@@ -3577,7 +3578,10 @@ namespace eval ess {
         ::ess::evt_put ID VARIANT [now] $system:$protocol:$variant
         set current(variant) $variant
         set current(open_variant) 1
-        
+
+	# this is a full JSON version of our current system
+	publish_snapshot
+	
         # loading is complete, so return status to stopped
         $current(state_system) set_status stopped
     }
@@ -3913,7 +3917,106 @@ namespace eval ess {
     }
     
 }
+#
+# ess::system_snapshot_json
+#
+# Returns a comprehensive JSON snapshot of the current system state
+# suitable for:
+#   - Workbench hydration
+#   - Sandbox testing
+#   - Sharing configurations
+#   - Debugging/support
+#
+# Requires: tcljson package (dict_to_json command)
+#
+# Add to ess-2.0.tm namespace eval ess { ... }
+#
 
+proc ess::system_snapshot_json {} {
+    variable current
+    variable subject_id
+    variable subject_ids
+    
+    if {$current(system) eq ""} {
+        return [dict_to_json [dict create error "No system loaded"]]
+    }
+    
+    set s [find_system $current(system)]
+    
+    #───────────────────────────────────────────────────────────────────
+    # Identity / Context
+    #───────────────────────────────────────────────────────────────────
+    set snapshot [dict create \
+        timestamp    [clock seconds] \
+        project      $current(project) \
+        system       $current(system) \
+        protocol     $current(protocol) \
+        variant      $current(variant) \
+        version      [$s get_version] \
+        subject_id   $subject_id \
+        subject_ids  $subject_ids]
+    
+    #───────────────────────────────────────────────────────────────────
+    # Loaders - registered via add_loader with arg signatures
+    #───────────────────────────────────────────────────────────────────
+    set loaders [list]
+    foreach name [$s get_loaders] {
+        set arglist [lindex [info object definition $s $name] 0]
+        lappend loaders [dict create name $name args $arglist]
+    }
+    dict set snapshot loaders $loaders
+    
+    #───────────────────────────────────────────────────────────────────
+    # Variants - all defined variants with full config
+    #───────────────────────────────────────────────────────────────────
+    dict set snapshot variants [$s get_variants]
+    
+    #───────────────────────────────────────────────────────────────────
+    # Current variant loader info (resolved options + current selections)
+    #───────────────────────────────────────────────────────────────────
+    if {$current(variant) ne ""} {
+        # This gives us loader_proc, loader_args, loader_arg_names, loader_arg_options
+        set loader_info [variant_loader_info $current(system) $current(protocol) $current(variant)]
+        dict set snapshot current_loader $loader_info
+        
+        # Also get the merged args dict (defaults + overrides)
+        dict set snapshot variant_args [get_variant_args]
+    } else {
+        dict set snapshot current_loader {}
+        dict set snapshot variant_args {}
+    }
+    
+    #───────────────────────────────────────────────────────────────────
+    # Parameters - names, defaults, types
+    #───────────────────────────────────────────────────────────────────
+    dict set snapshot params [$s get_params]
+    
+    #───────────────────────────────────────────────────────────────────
+    # State machine - states and their transitions
+    #───────────────────────────────────────────────────────────────────
+    dict set snapshot states [get_state_transitions]
+    
+    #───────────────────────────────────────────────────────────────────
+    # Scripts - full contents (existing *_script procs return content)
+    # Names are derivable: {system}.tcl, {protocol}.tcl, 
+    # {protocol}_loaders.tcl, {protocol}_variants.tcl, {protocol}_stim.tcl
+    #───────────────────────────────────────────────────────────────────
+    dict set snapshot scripts [dict create \
+        system   [system_script] \
+        protocol [protocol_script] \
+        loaders  [loaders_script] \
+        variants [variants_script] \
+        stim     [stim_script]]
+    
+    return [dict_to_json $snapshot]
+}
+
+#
+# publish snapshot to datapoint
+#
+proc ess::publish_snapshot {} {
+    dservSet ess/snapshot [system_snapshot_json]
+}
 
 #####################################################################
 ##                          remote_eval                            ##
