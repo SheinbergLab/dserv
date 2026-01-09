@@ -24,6 +24,15 @@ class PageNav {
             windowSize: { width: 1200, height: 800 }
         },
         {
+            id: 'ess_workbench',
+            title: 'ESS Workbench',
+            desc: 'Configure State Systems',
+            icon: '🧰',
+            href: 'ess_workbench.html',
+            category: 'config',
+            windowSize: { width: 900, height: 600 }
+        },
+        {
             id: 'stimdg_viewer',
             title: 'StimDG Viewer',
             desc: 'View stimulus data table',
