@@ -668,6 +668,10 @@ class LabMeshApp {
                         <span class="item-label">ESS</span>
                         <span class="item-desc">Experiment control</span>
                     </a>
+                    <a href="${termUrl}" onclick="window.open('${termUrl}', '${n.id}_term', 'width=950,height=600,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Term</span>
+                        <span class="item-desc">Terminal console</span>
+                    </a>
                     <a href="${stimUrl}" onclick="window.open('${stimUrl}', '${n.id}_stim', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item ${hasStim ? '' : 'disabled'}">
                         <span class="item-label">Stim</span>
                         <span class="item-desc">${hasStim ? 'Stim terminal' : 'Not available'}</span>
@@ -675,10 +679,6 @@ class LabMeshApp {
                     <a href="${stimDevUrl}" onclick="window.open('${stimDevUrl}', '${n.id}_stimdev', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item ${hasStim ? '' : 'disabled'}">
                         <span class="item-label">Stim Dev</span>
                         <span class="item-desc">${hasStim ? 'Stim development' : 'Not available'}</span>
-                    </a>
-                    <a href="${termUrl}" onclick="window.open('${termUrl}', '${n.id}_term', 'width=800,height=600,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
-                        <span class="item-label">Term</span>
-                        <span class="item-desc">Terminal console</span>
                     </a>
                     <a href="${dlshUrl}" onclick="window.open('${dlshUrl}', '${n.id}_dlsh', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
                         <span class="item-label">Dlsh</span>
