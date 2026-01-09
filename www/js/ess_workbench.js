@@ -1135,8 +1135,14 @@ class ESSWorkbench {
             fileValidationStatus: document.getElementById('file-validation-status'),
             formatBtn: document.getElementById('variant-format-btn'),
             newBtn: document.getElementById('variant-new-btn'),
-            duplicateBtn: document.getElementById('variant-duplicate-btn')
+            duplicateBtn: document.getElementById('variant-duplicate-btn'),
+            saveBtn: document.getElementById('variant-save-btn'),
+            saveReloadBtn: document.getElementById('variant-save-reload-btn')
         };
+        
+        // Track original content for modified detection
+        this.variantsOriginalContent = null;
+        this.variantsModified = false;
         
         // Bind button events
         this.variantElements.formatBtn?.addEventListener('click', () => {
@@ -1149,6 +1155,14 @@ class ESSWorkbench {
         
         this.variantElements.duplicateBtn?.addEventListener('click', () => {
             this.duplicateCurrentVariant();
+        });
+        
+        this.variantElements.saveBtn?.addEventListener('click', () => {
+            this.saveVariantsScript(false);
+        });
+        
+        this.variantElements.saveReloadBtn?.addEventListener('click', () => {
+            this.saveVariantsScript(true);
         });
         
         // Bind variant selector dropdown
@@ -1185,6 +1199,12 @@ class ESSWorkbench {
             this.variantScriptEditor.view.dispatch({
                 selection: { anchor: newPos }
             });
+            
+            // Check if modified and update save button
+            if (this.variantsOriginalContent !== null) {
+                this.variantsModified = formatted !== this.variantsOriginalContent;
+                this.updateSaveButton();
+            }
             
             // Re-validate
             this.validateEntireFile();
@@ -1266,19 +1286,174 @@ class ESSWorkbench {
             }, 500);
         };
         
+        // Check for modifications
+        const checkModified = () => {
+            if (this.variantsOriginalContent !== null) {
+                const currentContent = this.variantScriptEditor.getValue();
+                this.variantsModified = currentContent !== this.variantsOriginalContent;
+                this.updateSaveButton();
+            }
+        };
+        
         // Listen for cursor position changes via CodeMirror
         const view = this.variantScriptEditor.view;
         if (view) {
             view.dom.addEventListener('keyup', () => {
                 debouncedUpdate();
                 debouncedValidate();
+                checkModified();
             });
             view.dom.addEventListener('click', debouncedUpdate);
             view.dom.addEventListener('input', () => {
                 debouncedUpdate();
                 debouncedValidate();
+                checkModified();
+            });
+            
+            // Refresh highlight on scroll (since CM virtualizes lines)
+            view.scrollDOM.addEventListener('scroll', () => {
+                this.applyVariantHighlight();
             });
         }
+    }
+    
+    updateSaveButton() {
+        const btn = this.variantElements.saveBtn;
+        const reloadBtn = this.variantElements.saveReloadBtn;
+        
+        if (btn) {
+            if (this.variantsModified) {
+                btn.disabled = false;
+                btn.classList.add('modified');
+            } else {
+                btn.disabled = true;
+                btn.classList.remove('modified');
+            }
+        }
+        
+        if (reloadBtn) {
+            if (this.variantsModified) {
+                reloadBtn.disabled = false;
+                reloadBtn.classList.add('modified');
+            } else {
+                reloadBtn.disabled = true;
+                reloadBtn.classList.remove('modified');
+            }
+        }
+    }
+    
+    async saveVariantsScript(andReload = false) {
+        if (!this.variantScriptEditor?.view || !this.variantsModified) return;
+        
+        const content = this.variantScriptEditor.getValue();
+        const btn = andReload ? this.variantElements.saveReloadBtn : this.variantElements.saveBtn;
+        
+        // Check for errors first
+        const statusEl = this.variantElements.fileValidationStatus;
+        if (statusEl?.classList.contains('error')) {
+            const proceed = confirm('This file has validation errors. Save anyway?');
+            if (!proceed) return;
+        }
+        
+        // Update button to show saving
+        const originalHtml = btn?.innerHTML;
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                    <circle cx="12" cy="12" r="10"></circle>
+                </svg>
+                ${andReload ? 'Saving...' : 'Saving...'}
+            `;
+        }
+        
+        try {
+            // Send save command via WebSocket
+            const saveCmd = `ess::save_script variants {${content}}`;
+            
+            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
+                this.connection.ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: saveCmd
+                }));
+                
+                // Mark as saved
+                this.variantsOriginalContent = content;
+                this.variantsModified = false;
+                
+                console.log('Variants script saved successfully');
+                
+                // If reload requested, send reload command
+                if (andReload) {
+                    if (btn) {
+                        btn.innerHTML = `
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                                <circle cx="12" cy="12" r="10"></circle>
+                            </svg>
+                            Reloading...
+                        `;
+                    }
+                    
+                    // Small delay then reload
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    
+                    this.connection.ws.send(JSON.stringify({
+                        cmd: 'eval',
+                        script: 'ess::reload_system'
+                    }));
+                    
+                    console.log('System reload triggered');
+                }
+                
+                // Show success briefly
+                if (btn) {
+                    btn.innerHTML = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        ${andReload ? 'Reloaded!' : 'Saved!'}
+                    `;
+                    setTimeout(() => {
+                        this.resetSaveButton();
+                    }, 2000);
+                }
+            } else {
+                throw new Error('WebSocket not connected');
+            }
+            
+        } catch (error) {
+            console.error('Failed to save variants script:', error);
+            alert(`Failed to save: ${error.message}`);
+            this.resetSaveButton();
+        }
+    }
+    
+    resetSaveButton() {
+        const btn = this.variantElements.saveBtn;
+        const reloadBtn = this.variantElements.saveReloadBtn;
+        
+        if (btn) {
+            btn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                    <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+                Save
+            `;
+        }
+        
+        if (reloadBtn) {
+            reloadBtn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                </svg>
+                Save & Reload
+            `;
+        }
+        
+        this.updateSaveButton();
     }
     
     validateEntireFile() {
@@ -1391,18 +1566,24 @@ class ESSWorkbench {
     loadVariantScriptContent() {
         if (!this.variantScriptEditor?.view) return;
         
+        let content = '';
         if (this.scripts.variants) {
             console.log('Loading variant script content:', this.scripts.variants.length, 'chars');
-            this.variantScriptEditor.setValue(this.scripts.variants);
-            // Populate dropdown, trigger initial parse, and validate file
-            setTimeout(() => {
-                this.populateVariantDropdown();
-                this.updateParsedView();
-                this.validateEntireFile();
-            }, 100);
+            content = this.scripts.variants;
         } else if (this.snapshot?.variants) {
             console.log('Loading variant content from snapshot');
-            this.variantScriptEditor.setValue(this.snapshot.variants);
+            content = this.snapshot.variants;
+        }
+        
+        if (content) {
+            this.variantScriptEditor.setValue(content);
+            
+            // Track original for modified detection
+            this.variantsOriginalContent = content;
+            this.variantsModified = false;
+            this.updateSaveButton();
+            
+            // Populate dropdown, trigger initial parse, and validate file
             setTimeout(() => {
                 this.populateVariantDropdown();
                 this.updateParsedView();
@@ -1533,8 +1714,12 @@ class ESSWorkbench {
         
         if (!variantInfo) {
             this.showNoParsedVariant();
+            this.clearVariantHighlight();
             return;
         }
+        
+        // Highlight the variant in the editor
+        this.highlightVariant(variantInfo.start, variantInfo.end);
         
         // Parse the variant
         try {
@@ -1544,6 +1729,55 @@ class ESSWorkbench {
         } catch (e) {
             this.showParseError(variantInfo.name, e.message);
         }
+    }
+    
+    highlightVariant(start, end) {
+        if (!this.variantScriptEditor?.view) return;
+        
+        const view = this.variantScriptEditor.view;
+        const doc = view.state.doc;
+        
+        // Get line numbers for start and end
+        const startLine = doc.lineAt(start);
+        const endLine = doc.lineAt(end);
+        
+        // Remove existing highlight and add new one
+        // We'll use a CSS class on the gutter/lines
+        this.currentHighlight = { start: startLine.number, end: endLine.number };
+        
+        // Apply highlight via DOM manipulation (simpler than CM extensions)
+        this.applyVariantHighlight();
+    }
+    
+    clearVariantHighlight() {
+        this.currentHighlight = null;
+        this.applyVariantHighlight();
+    }
+    
+    applyVariantHighlight() {
+        if (!this.variantScriptEditor?.view) return;
+        
+        const view = this.variantScriptEditor.view;
+        const gutterEl = view.dom.querySelector('.cm-gutters');
+        
+        if (!gutterEl) return;
+        
+        // Remove all existing highlights
+        view.dom.querySelectorAll('.variant-highlight-gutter').forEach(el => {
+            el.classList.remove('variant-highlight-gutter');
+        });
+        
+        if (!this.currentHighlight) return;
+        
+        // Highlight gutter line numbers
+        const gutterElements = gutterEl.querySelectorAll('.cm-gutterElement');
+        
+        gutterElements.forEach(gutterEl => {
+            const lineNum = parseInt(gutterEl.textContent);
+            if (!isNaN(lineNum) && lineNum >= this.currentHighlight.start && lineNum <= this.currentHighlight.end) {
+                gutterEl.classList.add('variant-highlight-gutter');
+            }
+        });
     }
     
     validateVariant(parsed) {

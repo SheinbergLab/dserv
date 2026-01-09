@@ -564,6 +564,31 @@ body {
     gap: var(--wb-space-xs);
 }
 
+/* Save button styles */
+#variant-save-btn {
+    transition: all 0.2s;
+}
+
+#variant-save-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#variant-save-btn.modified {
+    background: var(--wb-accent);
+    color: white;
+    opacity: 1;
+}
+
+#variant-save-btn .spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 /* Split view */
 .variants-split {
     display: grid;
@@ -989,6 +1014,12 @@ body {
 
 .variant-editor-container .cm-scroller {
     overflow: auto;
+}
+
+/* Variant highlight - gutter numbers for active variant */
+.variant-editor-container .variant-highlight-gutter {
+    color: var(--wb-accent) !important;
+    font-weight: 600;
 }
 
 .empty-state-sm {
