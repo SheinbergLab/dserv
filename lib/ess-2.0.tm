@@ -84,7 +84,7 @@ namespace eval ess {
 }
 
 #
-# System class (cleaned up with proper logging)
+# System class 
 #
 oo::class create System {
     variable _systemname
@@ -107,6 +107,7 @@ oo::class create System {
     variable _evt_subtype_names
     variable _evt_ptype_ids
     variable _state_time
+    variable _loaders
     variable _variants
     variable _variant_args
     variable _version
@@ -129,7 +130,7 @@ oo::class create System {
         set _variants {}
         set _variant_args {}
         set _version 0.0
-        
+        set _loaders {}
         ::ess::ess_debug "System $_systemname created" "system"
     }
 
@@ -502,6 +503,15 @@ oo::class create System {
         oo::objdefine [self] export $name
     }
 
+    method add_loader { name arglist body } {
+	my add_method $name $arglist $body
+	lappend _loaders $name
+    }
+
+    method get_loaders {} {
+	return $_loaders
+    }
+    
     method add_variable { var { val {} } } {
         set pos [lsearch $_vars $var]
         if { $pos < 0 } {
@@ -1830,6 +1840,7 @@ namespace eval ess {
     # Complete list of ESS system methods
     variable ess_system_methods {
         add_state add_action add_transition add_param add_variable add_method
+	add_loader get_loaders
         set_start set_end get_params set_param get_states status set_status
         init deinit start stop reset update do_action do_transition
         set_init_callback set_deinit_callback set_protocol_init_callback
