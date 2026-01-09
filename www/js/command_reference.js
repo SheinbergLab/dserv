@@ -31,7 +31,6 @@ class CommandReference {
         this.conn = new DservConnection({
             subprocess: 'docs',
 	    createLinkedSubprocess: true,
-            forceSecure: true,
             onStatus: (status, msg) => this.onConnectionStatus(status, msg),
             onError: (err) => console.error('Connection error:', err),
         });
