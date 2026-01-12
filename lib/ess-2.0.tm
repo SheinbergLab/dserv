@@ -1158,12 +1158,15 @@ namespace eval ess {
 
     proc set_subject {subj} {
         variable subject_id
+	variable _loading_from_config
         set subject_id [string tolower $subj]
         ::ess::evt_put ID SUBJECT [now] $subject_id
 
-        # load subject specific settings and reload
-        load_settings
-        reload_variant
+	# if changed by hand, reload the variant
+	if {![info exists _loading_from_config] || !$_loading_from_config} {
+	    reload_variant
+	}
+
     }
 
     proc set_subjects {args} {
