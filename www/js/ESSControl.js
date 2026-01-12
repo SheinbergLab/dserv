@@ -3,14 +3,65 @@
  * Experiment System State Control Panel Component
  * 
  * Provides UI for:
- * - Subject selection
- * - System/Protocol/Variant selection
- * - State control (Initialize, Go, Stop, Reset)
- * - Parameter viewing and editing
- * - Variant option selection
+ * - State control (Go, Stop, Reset, Juice)
+ * - Observation status indicator (in_obs sync line)
+ * - Tabbed interface:
+ *   - Setup tab: Subject, System/Protocol/Variant selection, options, params
+ *   - Configs tab: Search/browse saved configurations
+ * - Configuration snapshot save/load
+ * 
+ * =============================================================================
+ * TABLE OF CONTENTS
+ * =============================================================================
+ * 
+ * SECTION 1: CONSTRUCTOR & STATE          (~line 35)
+ *   - constructor()
+ *   - state initialization
+ * 
+ * SECTION 2: RENDER                        (~line 60)
+ *   - render() - Main HTML template
+ *   - Element caching
+ * 
+ * SECTION 3: EVENT BINDING                 (~line 250)
+ *   - bindEvents() - All UI event handlers
+ *   - switchTab()
+ * 
+ * SECTION 4: DATAPOINT SUBSCRIPTIONS       (~line 330)
+ *   - setupSubscriptions() - All dpManager subscriptions
+ * 
+ * SECTION 5: SETUP TAB - ESS STATE         (~line 450)
+ *   - updateSubjects/Systems/Protocols/Variants()
+ *   - updateEssStatus(), updateButtonStates()
+ *   - updateObsDisplay(), updateInObsIndicator()
+ *   - updateVariantInfo(), renderVariantOptions()
+ *   - updateParams(), renderParams()
+ *   - ESS Commands: setSubject, setSystem, start, stop, etc.
+ *   - Datafile handling
+ * 
+ * SECTION 6: CONFIGS TAB                   (~line 850)
+ *   - updateConfigList/Tags/CurrentConfig()
+ *   - renderTagFilter(), renderConfigList()
+ *   - updateConfigStatusBar()
+ *   - loadConfig(), saveConfig(), openSaveDialog()
+ * 
+ * SECTION 7: HELPERS                       (~line 1020)
+ *   - sendCommand(), sendConfigCommand()
+ *   - parseListData(), parseTags()
+ *   - populateSelect(), updateSelectValue()
+ *   - escapeHtml(), escapeAttr()
+ * 
+ * SECTION 8: EVENT EMITTER & CLEANUP       (~line 1100)
+ *   - on(), emit()
+ *   - getState(), dispose()
+ * 
+ * =============================================================================
  */
 
 class ESSControl {
+    // =========================================================================
+    // SECTION 1: CONSTRUCTOR & STATE
+    // =========================================================================
+    
     constructor(container, dpManager, options = {}) {
         this.container = typeof container === 'string' 
             ? document.getElementById(container) 
@@ -24,6 +75,7 @@ class ESSControl {
         
         // State
         this.state = {
+            // ESS state
             subjects: [],
             systems: [],
             protocols: [],
@@ -35,7 +87,26 @@ class ESSControl {
             essStatus: 'stopped',  // running, stopped, loading
             params: {},
             variantInfo: null,
-            currentDatafile: ''  // Currently open datafile path
+            currentDatafile: '',
+            obsId: 0,
+            obsTotal: 0,
+            inObs: false,
+            
+            // Tab state
+            activeTab: 'setup',  // 'setup' or 'configs'
+            
+            // Config state
+            configs: [],
+            archivedConfigs: [],
+            configTags: [],
+            currentConfig: null,  // {id, name} or null
+            configSearch: '',
+            configTagFilter: '',
+            showingTrash: false,
+            
+            // Edit state
+            editingConfig: null,  // full config object being edited, or null
+            editForm: {}          // form field values during edit
         };
         
         // Event listeners
@@ -48,107 +119,253 @@ class ESSControl {
         this.setupSubscriptions();
     }
     
+    // =========================================================================
+    // SECTION 2: RENDER
+    // =========================================================================
+    
     /**
      * Render the control panel UI
      */
     render() {
         this.container.innerHTML = `
-            <!-- State Controls -->
-            <div class="ess-control-section">
-                <div class="ess-state-controls">
-                    <button id="ess-btn-go" class="ess-state-btn go" disabled>▶ Go</button>
-                    <button id="ess-btn-stop" class="ess-state-btn stop" disabled>■ Stop</button>
-                    <button id="ess-btn-reset" class="ess-state-btn reset" disabled>Reset</button>
+            <!-- Fixed Top: State Controls -->
+            <div class="ess-control-fixed-top">
+                <div class="ess-control-section ess-state-section">
+                    <div class="ess-state-controls">
+                        <button id="ess-btn-go" class="ess-state-btn go" disabled>▶ Go</button>
+                        <button id="ess-btn-stop" class="ess-state-btn stop" disabled>■ Stop</button>
+                        <button id="ess-btn-reset" class="ess-state-btn reset" disabled>Reset</button>
+                    </div>
+                    <div class="ess-status-row">
+                        <span class="ess-in-obs-indicator" id="ess-in-obs-indicator"></span>
+                        <span class="ess-obs-label">Obs:</span>
+                        <span class="ess-obs-value" id="ess-obs-display">–/–</span>
+                        <div class="ess-status-spacer"></div>
+                        <button id="ess-btn-juice" class="ess-mini-btn juice">Juice</button>
+                        <input type="number" id="ess-juice-amount" class="ess-juice-input" value="0.5" min="0.1" max="5" step="0.1" title="Juice amount (sec)">
+                    </div>
                 </div>
             </div>
             
-            <!-- Subject and Juice - combined row -->
-            <div class="ess-control-section">
-                <div class="ess-subject-juice-row">
-                    <span class="ess-control-label">Subject</span>
-                    <div class="ess-control-input">
-                        <select id="ess-subject-select">
-                            <option value="">-- Select --</option>
-                        </select>
+            <!-- Scrollable Middle: Tabbed Section -->
+            <div class="ess-control-scrollable">
+                <div class="ess-control-section ess-tabbed-section">
+                    <!-- Tab Headers -->
+                    <div class="ess-tab-header">
+                        <button class="ess-tab-btn active" data-tab="setup">Setup</button>
+                        <button class="ess-tab-btn" data-tab="configs">Configs</button>
+                        <div class="ess-tab-spacer"></div>
+                        <a href="stimdg_viewer.html" target="_blank" class="ess-stimdg-btn">StimDG</a>
                     </div>
-                    <button id="ess-btn-juice" class="ess-state-btn juice">Juice</button>
-                    <input type="number" id="ess-juice-amount" value="0.5" min="0.1" max="5" step="0.1" title="Juice amount (sec)">
+                    
+                    <!-- Setup Tab Content -->
+                    <div class="ess-tab-content active" id="ess-tab-setup">
+                        <!-- Subject -->
+                        <div class="ess-setup-row">
+                            <span class="ess-control-label">Subject</span>
+                            <div class="ess-control-input">
+                                <select id="ess-subject-select">
+                                    <option value="">-- Select --</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <!-- System -->
+                        <div class="ess-setup-row">
+                            <span class="ess-control-label">System</span>
+                            <div class="ess-control-input">
+                                <select id="ess-system-select">
+                                    <option value="">-- Select System --</option>
+                            </select>
+                        </div>
+                        <button id="ess-reload-system" class="ess-reload-btn" title="Reload System">↻</button>
+                    </div>
+                    
+                    <!-- Protocol -->
+                    <div class="ess-setup-row">
+                        <span class="ess-control-label">Protocol</span>
+                        <div class="ess-control-input">
+                            <select id="ess-protocol-select">
+                                <option value="">-- Select Protocol --</option>
+                            </select>
+                        </div>
+                        <button id="ess-reload-protocol" class="ess-reload-btn" title="Reload Protocol">↻</button>
+                    </div>
+                    
+                    <!-- Variant -->
+                    <div class="ess-setup-row">
+                        <span class="ess-control-label">Variant</span>
+                        <div class="ess-control-input">
+                            <select id="ess-variant-select">
+                                <option value="">-- Select Variant --</option>
+                            </select>
+                        </div>
+                        <button id="ess-reload-variant" class="ess-reload-btn" title="Reload Variant">↻</button>
+                    </div>
+                    
+                    <!-- Datafile -->
+                    <div class="ess-setup-row">
+                        <span class="ess-control-label">Datafile</span>
+                        <span class="ess-file-name" id="ess-current-file">No file</span>
+                        <button id="ess-btn-file-open" class="ess-mini-btn" title="Open datafile">Open</button>
+                        <button id="ess-btn-file-close" class="ess-mini-btn close" title="Close datafile" style="display: none;">Close</button>
+                    </div>
+                    
+                    <!-- Variant Options (collapsible) -->
+                    <div class="ess-setup-subsection" id="ess-options-section" style="display: none;">
+                        <div class="ess-subsection-header">
+                            <span class="ess-subsection-title">Variant Options</span>
+                            <label class="ess-auto-reload-label">
+                                <input type="checkbox" id="ess-auto-reload" checked>
+                                Auto
+                            </label>
+                            <button id="ess-reload-options-btn" class="ess-mini-btn">Reload</button>
+                        </div>
+                        <div id="ess-options-container" class="ess-options-container"></div>
+                    </div>
+                    
+                    <!-- Parameters (collapsible) -->
+                    <div class="ess-setup-subsection" id="ess-params-section" style="display: none;">
+                        <div class="ess-subsection-header">
+                            <span class="ess-subsection-title">Parameters</span>
+                        </div>
+                        <div id="ess-params-container" class="ess-params-container"></div>
+                    </div>
+                </div>
+                
+                <!-- Configs Tab Content -->
+                <div class="ess-tab-content" id="ess-tab-configs">
+                    <!-- List View (default) -->
+                    <div class="ess-config-list-view" id="ess-config-list-view">
+                        <!-- Search Row -->
+                        <div class="ess-config-search-row">
+                            <input type="text" id="ess-config-search" class="ess-config-search" 
+                                   placeholder="Search configs...">
+                            <button id="ess-config-trash-toggle" class="ess-config-trash-btn" title="View trash">
+                                🗑 <span id="ess-config-trash-count"></span>
+                            </button>
+                        </div>
+                        
+                        <!-- Tag Filter Row -->
+                        <div class="ess-config-tags-row" id="ess-config-tags-row">
+                            <span class="ess-config-tags-label">Tags:</span>
+                            <div class="ess-config-tags-list" id="ess-config-tags-list">
+                                <!-- Tag chips rendered here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Config List -->
+                        <div class="ess-config-list" id="ess-config-list">
+                            <div class="ess-config-empty">No saved configurations</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Edit View (shown when editing) -->
+                    <div class="ess-config-edit-view" id="ess-config-edit-view" style="display: none;">
+                        <div class="ess-config-edit-header">
+                            <button class="ess-config-edit-back" id="ess-config-edit-back">← Back</button>
+                            <span class="ess-config-edit-title">Editing: <span id="ess-config-edit-name">—</span></span>
+                        </div>
+                        
+                        <div class="ess-config-edit-form" id="ess-config-edit-form">
+                            <!-- Name -->
+                            <div class="ess-edit-row">
+                                <label class="ess-edit-label">Name</label>
+                                <input type="text" id="ess-edit-name" class="ess-edit-input">
+                            </div>
+                            
+                            <!-- Description -->
+                            <div class="ess-edit-row">
+                                <label class="ess-edit-label">Description</label>
+                                <textarea id="ess-edit-description" class="ess-edit-textarea" rows="2"></textarea>
+                            </div>
+                            
+                            <!-- Subject -->
+                            <div class="ess-edit-row">
+                                <label class="ess-edit-label">Subject</label>
+                                <select id="ess-edit-subject" class="ess-edit-select">
+                                    <option value="">-- None --</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Tags -->
+                            <div class="ess-edit-row">
+                                <label class="ess-edit-label">Tags</label>
+                                <div class="ess-edit-tags-container">
+                                    <div class="ess-edit-tags" id="ess-edit-tags"></div>
+                                    <input type="text" id="ess-edit-tag-input" class="ess-edit-tag-input" 
+                                           placeholder="Add tag...">
+                                </div>
+                            </div>
+                            
+                            <!-- Variant Args (dynamic) -->
+                            <div class="ess-edit-section" id="ess-edit-variant-args-section" style="display: none;">
+                                <div class="ess-edit-section-title">Variant Arguments</div>
+                                <div id="ess-edit-variant-args"></div>
+                            </div>
+                            
+                            <!-- Params (dynamic) -->
+                            <div class="ess-edit-section" id="ess-edit-params-section" style="display: none;">
+                                <div class="ess-edit-section-title">Parameters</div>
+                                <div id="ess-edit-params"></div>
+                            </div>
+                            
+                            <!-- Read-only info -->
+                            <div class="ess-edit-readonly">
+                                <div class="ess-edit-readonly-row">
+                                    <span class="ess-edit-readonly-label">Path:</span>
+                                    <span class="ess-edit-readonly-value" id="ess-edit-path">—</span>
+                                </div>
+                                <div class="ess-edit-readonly-row">
+                                    <span class="ess-edit-readonly-label">Created:</span>
+                                    <span class="ess-edit-readonly-value" id="ess-edit-created">—</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Edit Actions -->
+                        <div class="ess-config-edit-actions">
+                            <button class="ess-edit-btn cancel" id="ess-edit-cancel">Cancel</button>
+                            <button class="ess-edit-btn save" id="ess-edit-save">Save Changes</button>
+                        </div>
+                    </div>
                 </div>
             </div>
-            
-            <!-- System Selection -->
-            <div class="ess-control-section">
-                <div class="ess-control-section-title-row">
-                    <span class="ess-control-section-title">System Configuration</span>
-                    <a href="stimdg_viewer.html" target="_blank" class="ess-stimdg-btn">StimDG</a>
-                </div>
-                <div class="ess-control-row-with-reload">
-                    <span class="ess-control-label">System</span>
-                    <div class="ess-control-input">
-                        <select id="ess-system-select">
-                            <option value="">-- Select System --</option>
-                        </select>
-                    </div>
-                    <button id="ess-reload-system" class="ess-reload-btn" title="Reload System">↻</button>
-                </div>
-                <div class="ess-control-row-with-reload">
-                    <span class="ess-control-label">Protocol</span>
-                    <div class="ess-control-input">
-                        <select id="ess-protocol-select">
-                            <option value="">-- Select Protocol --</option>
-                        </select>
-                    </div>
-                    <button id="ess-reload-protocol" class="ess-reload-btn" title="Reload Protocol">↻</button>
-                </div>
-                <div class="ess-control-row-with-reload">
-                    <span class="ess-control-label">Variant</span>
-                    <div class="ess-control-input">
-                        <select id="ess-variant-select">
-                            <option value="">-- Select Variant --</option>
-                        </select>
-                    </div>
-                    <button id="ess-reload-variant" class="ess-reload-btn" title="Reload Variant">↻</button>
-                </div>
-                <!-- Datafile row -->
-                <div class="ess-datafile-row" id="ess-datafile-row">
-                    <span class="ess-control-label">Datafile</span>
-                    <span class="ess-file-name" id="ess-current-file">No file</span>
-                    <button id="ess-btn-file-open" class="ess-file-btn" title="Open datafile">Open</button>
-                    <button id="ess-btn-file-close" class="ess-file-btn close" title="Close datafile" style="display: none;">Close</button>
-                </div>
             </div>
             
-            <!-- Variant Options -->
-            <div class="ess-control-section" id="ess-options-section" style="display: none;">
-                <div class="ess-control-section-title">Variant Options</div>
-                <div class="ess-auto-reload">
-                    <input type="checkbox" id="ess-auto-reload" checked>
-                    <label for="ess-auto-reload">Auto-reload</label>
-                    <button id="ess-reload-options-btn" class="ess-reload-variant-btn">Reload</button>
-                    <button id="ess-btn-settings-save" class="ess-settings-btn">Save</button>
-                    <button id="ess-btn-settings-reset" class="ess-settings-btn">Reset</button>
+            <!-- Fixed Bottom: Config Status Bar -->
+            <div class="ess-control-fixed-bottom">
+                <div class="ess-control-section ess-config-status">
+                    <span class="ess-config-status-label">Config:</span>
+                    <input type="text" id="ess-config-status-name" class="ess-config-status-input" 
+                           placeholder="(unsaved)" spellcheck="false">
+                    <div class="ess-config-status-spacer"></div>
+                    <button id="ess-btn-config-save" class="ess-mini-btn save" disabled>Save</button>
                 </div>
-                <div id="ess-options-container" class="ess-options-container"></div>
-            </div>
-            
-            <!-- Parameters -->
-            <div class="ess-control-section" id="ess-params-section" style="display: none;">
-                <div class="ess-control-section-title">Parameters</div>
-                <div id="ess-params-container" class="ess-params-container"></div>
             </div>
         `;
         
         // Cache element references
         this.elements = {
-            subjectSelect: this.container.querySelector('#ess-subject-select'),
-            systemSelect: this.container.querySelector('#ess-system-select'),
-            protocolSelect: this.container.querySelector('#ess-protocol-select'),
-            variantSelect: this.container.querySelector('#ess-variant-select'),
+            // Tab elements
+            tabBtns: this.container.querySelectorAll('.ess-tab-btn'),
+            tabSetup: this.container.querySelector('#ess-tab-setup'),
+            tabConfigs: this.container.querySelector('#ess-tab-configs'),
+            
+            // State controls
             btnReset: this.container.querySelector('#ess-btn-reset'),
             btnGo: this.container.querySelector('#ess-btn-go'),
             btnStop: this.container.querySelector('#ess-btn-stop'),
             btnJuice: this.container.querySelector('#ess-btn-juice'),
             juiceAmount: this.container.querySelector('#ess-juice-amount'),
+            inObsIndicator: this.container.querySelector('#ess-in-obs-indicator'),
+            obsDisplay: this.container.querySelector('#ess-obs-display'),
+            
+            // Setup tab elements
+            subjectSelect: this.container.querySelector('#ess-subject-select'),
+            systemSelect: this.container.querySelector('#ess-system-select'),
+            protocolSelect: this.container.querySelector('#ess-protocol-select'),
+            variantSelect: this.container.querySelector('#ess-variant-select'),
             reloadSystem: this.container.querySelector('#ess-reload-system'),
             reloadProtocol: this.container.querySelector('#ess-reload-protocol'),
             reloadVariant: this.container.querySelector('#ess-reload-variant'),
@@ -158,25 +375,62 @@ class ESSControl {
             reloadOptionsBtn: this.container.querySelector('#ess-reload-options-btn'),
             paramsSection: this.container.querySelector('#ess-params-section'),
             paramsContainer: this.container.querySelector('#ess-params-container'),
-            // File controls
-            datafileRow: this.container.querySelector('#ess-datafile-row'),
             btnFileOpen: this.container.querySelector('#ess-btn-file-open'),
             btnFileClose: this.container.querySelector('#ess-btn-file-close'),
             currentFile: this.container.querySelector('#ess-current-file'),
-            // Settings controls
-            btnSettingsSave: this.container.querySelector('#ess-btn-settings-save'),
-            btnSettingsReset: this.container.querySelector('#ess-btn-settings-reset')
+            
+            // Configs tab elements
+            configSearch: this.container.querySelector('#ess-config-search'),
+            configTagsRow: this.container.querySelector('#ess-config-tags-row'),
+            configTagsList: this.container.querySelector('#ess-config-tags-list'),
+            configTrashToggle: this.container.querySelector('#ess-config-trash-toggle'),
+            configTrashCount: this.container.querySelector('#ess-config-trash-count'),
+            configList: this.container.querySelector('#ess-config-list'),
+            
+            // Config status bar
+            configStatusName: this.container.querySelector('#ess-config-status-name'),
+            btnConfigSave: this.container.querySelector('#ess-btn-config-save'),
+            
+            // Config list/edit views
+            configListView: this.container.querySelector('#ess-config-list-view'),
+            configEditView: this.container.querySelector('#ess-config-edit-view'),
+            
+            // Edit form elements
+            editBack: this.container.querySelector('#ess-config-edit-back'),
+            editName: this.container.querySelector('#ess-edit-name'),
+            editNameDisplay: this.container.querySelector('#ess-config-edit-name'),
+            editDescription: this.container.querySelector('#ess-edit-description'),
+            editSubject: this.container.querySelector('#ess-edit-subject'),
+            editTags: this.container.querySelector('#ess-edit-tags'),
+            editTagInput: this.container.querySelector('#ess-edit-tag-input'),
+            editVariantArgsSection: this.container.querySelector('#ess-edit-variant-args-section'),
+            editVariantArgs: this.container.querySelector('#ess-edit-variant-args'),
+            editParamsSection: this.container.querySelector('#ess-edit-params-section'),
+            editParams: this.container.querySelector('#ess-edit-params'),
+            editPath: this.container.querySelector('#ess-edit-path'),
+            editCreated: this.container.querySelector('#ess-edit-created'),
+            editCancel: this.container.querySelector('#ess-edit-cancel'),
+            editSave: this.container.querySelector('#ess-edit-save')
         };
         
         // Bind event handlers
         this.bindEvents();
     }
     
+    // =========================================================================
+    // SECTION 3: EVENT BINDING
+    // =========================================================================
+    
     /**
      * Bind UI event handlers
      */
     bindEvents() {
-        // Selection changes
+        // Tab switching
+        this.elements.tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
+        });
+        
+        // Setup tab - Selection changes
         this.elements.subjectSelect.addEventListener('change', (e) => {
             this.setSubject(e.target.value);
         });
@@ -194,17 +448,9 @@ class ESSControl {
         });
         
         // Reload buttons
-        this.elements.reloadSystem.addEventListener('click', () => {
-            this.reloadSystem();
-        });
-        
-        this.elements.reloadProtocol.addEventListener('click', () => {
-            this.reloadProtocol();
-        });
-        
-        this.elements.reloadVariant.addEventListener('click', () => {
-            this.reloadVariant();
-        });
+        this.elements.reloadSystem.addEventListener('click', () => this.reloadSystem());
+        this.elements.reloadProtocol.addEventListener('click', () => this.reloadProtocol());
+        this.elements.reloadVariant.addEventListener('click', () => this.reloadVariant());
         
         // Auto-reload checkbox
         this.elements.autoReloadCheckbox.addEventListener('change', (e) => {
@@ -212,112 +458,150 @@ class ESSControl {
         });
         
         // Manual reload button for variant options
-        this.elements.reloadOptionsBtn.addEventListener('click', () => {
-            this.reloadVariant();
-        });
+        this.elements.reloadOptionsBtn.addEventListener('click', () => this.reloadVariant());
         
-        // State control buttons - send actual ESS commands
-        this.elements.btnReset.addEventListener('click', () => {
-            this.resetExperiment();
-        });
-        
-        this.elements.btnGo.addEventListener('click', () => {
-            this.startExperiment();
-        });
-        
-        this.elements.btnStop.addEventListener('click', () => {
-            this.stopExperiment();
-        });
+        // State control buttons
+        this.elements.btnReset.addEventListener('click', () => this.resetExperiment());
+        this.elements.btnGo.addEventListener('click', () => this.startExperiment());
+        this.elements.btnStop.addEventListener('click', () => this.stopExperiment());
         
         // Juice button
-        this.elements.btnJuice.addEventListener('click', () => {
-            this.giveJuice();
+        this.elements.btnJuice.addEventListener('click', () => this.giveJuice());
+        
+        // File buttons
+        this.elements.btnFileOpen.addEventListener('click', () => this.openDatafile());
+        this.elements.btnFileClose.addEventListener('click', () => this.closeDatafile());
+        
+        // Configs tab - Search
+        this.elements.configSearch.addEventListener('input', (e) => {
+            this.state.configSearch = e.target.value;
+            this.renderConfigList();
         });
         
-        // File open button (auto-suggests filename)
-        this.elements.btnFileOpen.addEventListener('click', () => {
-            this.openDatafile();
+        // Trash toggle
+        this.elements.configTrashToggle.addEventListener('click', () => {
+            this.toggleTrashView();
         });
         
-        // File close button
-        this.elements.btnFileClose.addEventListener('click', () => {
-            this.closeDatafile();
+        // Config name input - enable/disable save button
+        this.elements.configStatusName.addEventListener('input', () => {
+            this.updateSaveButtonState();
         });
         
-        // Settings buttons
-        this.elements.btnSettingsSave.addEventListener('click', () => {
-            this.saveSettings();
+        // Config name input - save on Enter
+        this.elements.configStatusName.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.saveCurrentConfig();
+            }
         });
         
-        this.elements.btnSettingsReset.addEventListener('click', () => {
-            this.resetSettings();
+        // Config save button
+        this.elements.btnConfigSave.addEventListener('click', () => this.saveCurrentConfig());
+        
+        // Edit form buttons
+        this.elements.editBack.addEventListener('click', () => this.cancelEdit());
+        this.elements.editCancel.addEventListener('click', () => this.cancelEdit());
+        this.elements.editSave.addEventListener('click', () => this.saveEdit());
+        
+        // Tag input - add tag on Enter
+        this.elements.editTagInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.addEditTag(e.target.value.trim());
+                e.target.value = '';
+            }
+        });
+        
+        // Close config menus when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.ess-config-item-actions')) {
+                this.closeAllConfigMenus();
+            }
         });
     }
+    
+    /**
+     * Switch between tabs
+     */
+    switchTab(tabName) {
+        this.state.activeTab = tabName;
+        
+        // Update tab buttons
+        this.elements.tabBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.tab === tabName);
+        });
+        
+        // Update tab content
+        this.elements.tabSetup.classList.toggle('active', tabName === 'setup');
+        this.elements.tabConfigs.classList.toggle('active', tabName === 'configs');
+        
+        // If switching to configs, refresh the list
+        if (tabName === 'configs') {
+            this.refreshConfigList();
+        }
+    }
+    
+    // =========================================================================
+    // SECTION 4: DATAPOINT SUBSCRIPTIONS
+    // =========================================================================
     
     /**
      * Setup datapoint subscriptions
      */
     setupSubscriptions() {
-        // Subject list
+        // ESS subscriptions (existing)
         this.dpManager.subscribe('ess/subject_ids', (data) => {
             this.updateSubjects(data.value);
         });
         
-        // Current subject
         this.dpManager.subscribe('ess/subject', (data) => {
             this.state.currentSubject = data.value;
             this.updateSelectValue(this.elements.subjectSelect, data.value);
         });
         
-        // Systems list
         this.dpManager.subscribe('ess/systems', (data) => {
             this.updateSystems(data.value);
         });
         
-        // Current system
         this.dpManager.subscribe('ess/system', (data) => {
             this.state.currentSystem = data.value;
             this.updateSelectValue(this.elements.systemSelect, data.value);
+            this.updateConfigStatusBar();
         });
         
-        // Protocols list
         this.dpManager.subscribe('ess/protocols', (data) => {
             this.updateProtocols(data.value);
         });
         
-        // Current protocol
         this.dpManager.subscribe('ess/protocol', (data) => {
             this.state.currentProtocol = data.value;
             this.updateSelectValue(this.elements.protocolSelect, data.value);
+            this.updateConfigStatusBar();
         });
         
-        // Variants list
         this.dpManager.subscribe('ess/variants', (data) => {
             this.updateVariants(data.value);
         });
         
-        // Current variant
         this.dpManager.subscribe('ess/variant', (data) => {
             this.state.currentVariant = data.value;
             this.updateSelectValue(this.elements.variantSelect, data.value);
+            this.updateConfigStatusBar();
         });
         
-        // ESS status (running, stopped, loading)
         this.dpManager.subscribe('ess/status', (data) => {
             this.updateEssStatus(data.value);
         });
         
-        // Variant info (JSON format with options)
         this.dpManager.subscribe('ess/variant_info_json', (data) => {
             this.updateVariantInfo(data.value);
         });
         
-        // Parameter settings
         this.dpManager.subscribe('ess/param_settings', (data) => {
             this.updateParams(data.value);
         });
         
-        // Individual parameter updates
         this.dpManager.subscribe('ess/param', (data) => {
             this.updateParamValue(data.value);
         });
@@ -326,121 +610,117 @@ class ESSControl {
             this.updateParamValue(data.value);
         });
         
-        // Current datafile
         this.dpManager.subscribe('ess/datafile', (data) => {
             this.updateDatafileStatus(data.value);
         });
+        
+        // Observation tracking
+        this.dpManager.subscribe('ess/obs_id', (data) => {
+            this.state.obsId = parseInt(data.value) || 0;
+            this.updateObsDisplay();
+        });
+        
+        this.dpManager.subscribe('ess/obs_total', (data) => {
+            this.state.obsTotal = parseInt(data.value) || 0;
+            this.updateObsDisplay();
+        });
+        
+        this.dpManager.subscribe('ess/in_obs', (data) => {
+            this.state.inObs = data.value === '1' || data.value === 1 || data.value === true;
+            this.updateInObsIndicator();
+        });
+        
+        // Config subscriptions
+        this.dpManager.subscribe('configs/list', (data) => {
+            this.updateConfigList(data.value);
+        });
+        
+        this.dpManager.subscribe('configs/archived', (data) => {
+            this.updateArchivedList(data.value);
+        });
+        
+        this.dpManager.subscribe('configs/tags', (data) => {
+            this.updateConfigTags(data.value);
+        });
+        
+        this.dpManager.subscribe('configs/current', (data) => {
+            this.updateCurrentConfig(data.value);
+        });
     }
     
-    /**
-     * Update subjects dropdown
-     */
+    // =========================================================================
+    // SECTION 5: SETUP TAB - ESS State Management
+    // =========================================================================
+    
     updateSubjects(data) {
         const subjects = this.parseListData(data);
         this.state.subjects = subjects;
-        
         this.populateSelect(this.elements.subjectSelect, subjects, '-- Select Subject --');
-        
-        // Restore current selection if set
         if (this.state.currentSubject) {
             this.updateSelectValue(this.elements.subjectSelect, this.state.currentSubject);
         }
     }
     
-    /**
-     * Update systems dropdown
-     */
     updateSystems(data) {
         const systems = this.parseListData(data);
         this.state.systems = systems;
-        
         this.populateSelect(this.elements.systemSelect, systems, '-- Select System --');
-        
         if (this.state.currentSystem) {
             this.updateSelectValue(this.elements.systemSelect, this.state.currentSystem);
         }
     }
     
-    /**
-     * Update protocols dropdown
-     */
     updateProtocols(data) {
         const protocols = this.parseListData(data);
         this.state.protocols = protocols;
-        
         this.populateSelect(this.elements.protocolSelect, protocols, '-- Select Protocol --');
-        
         if (this.state.currentProtocol) {
             this.updateSelectValue(this.elements.protocolSelect, this.state.currentProtocol);
         }
     }
     
-    /**
-     * Update variants dropdown
-     */
     updateVariants(data) {
         const variants = this.parseListData(data);
         this.state.variants = variants;
-        
         this.populateSelect(this.elements.variantSelect, variants, '-- Select Variant --');
-        
         if (this.state.currentVariant) {
             this.updateSelectValue(this.elements.variantSelect, this.state.currentVariant);
         }
     }
     
-    /**
-     * Update ESS status and button states
-     * Values: 'running', 'stopped', 'loading'
-     */
     updateEssStatus(status) {
         this.state.essStatus = status;
-        
-        // Enable/disable selection controls based on status
-        // Only allow changes when stopped
         const canChangeConfig = (status === 'stopped');
         this.setControlsEnabled(canChangeConfig);
         
-        // Add/remove loading class for visual feedback
         if (status === 'loading') {
             this.container.classList.add('ess-loading');
         } else {
             this.container.classList.remove('ess-loading');
         }
         
-        // Emit event for external listeners (e.g., status bar)
         this.emit('stateChange', { state: status });
-        
-        // Update button states based on current status
         this.updateButtonStates();
     }
     
-    /**
-     * Update button enabled states based on current ESS status
-     */
     updateButtonStates() {
         const status = this.state.essStatus;
         
-        // Reset all buttons to disabled
         this.elements.btnReset.disabled = true;
         this.elements.btnGo.disabled = true;
         this.elements.btnStop.disabled = true;
         
         switch (status) {
             case 'stopped':
-                // When stopped: can Go or Reset
                 this.elements.btnGo.disabled = false;
                 this.elements.btnReset.disabled = false;
                 break;
             case 'running':
-                // When running: can only Stop
                 this.elements.btnStop.disabled = false;
                 break;
             case 'loading':
-                // When loading: all buttons disabled
                 break;
             default:
-                // Unknown state - enable Go if we have a variant
                 if (this.state.currentVariant) {
                     this.elements.btnGo.disabled = false;
                 }
@@ -448,31 +728,30 @@ class ESSControl {
         }
     }
     
-    /**
-     * Enable/disable selection controls
-     */
+    updateObsDisplay() {
+        const id = this.state.obsId + 1;  // Display 1-indexed
+        const total = this.state.obsTotal;
+        this.elements.obsDisplay.textContent = total > 0 ? `${id}/${total}` : '–/–';
+    }
+    
+    updateInObsIndicator() {
+        this.elements.inObsIndicator.classList.toggle('active', this.state.inObs);
+    }
+    
     setControlsEnabled(enabled) {
         this.elements.subjectSelect.disabled = !enabled;
         this.elements.systemSelect.disabled = !enabled;
         this.elements.protocolSelect.disabled = !enabled;
         this.elements.variantSelect.disabled = !enabled;
-        
-        // Reload buttons
         this.elements.reloadSystem.disabled = !enabled;
         this.elements.reloadProtocol.disabled = !enabled;
         this.elements.reloadVariant.disabled = !enabled;
         this.elements.reloadOptionsBtn.disabled = !enabled;
         
-        // Also disable option selects in variant options
         const optionSelects = this.elements.optionsContainer.querySelectorAll('select');
-        optionSelects.forEach(select => {
-            select.disabled = !enabled;
-        });
+        optionSelects.forEach(select => select.disabled = !enabled);
     }
     
-    /**
-     * Update variant info/options from JSON
-     */
     updateVariantInfo(data) {
         try {
             const info = typeof data === 'string' ? JSON.parse(data) : data;
@@ -492,10 +771,6 @@ class ESSControl {
         }
     }
     
-    /**
-     * Render variant options (dropdowns for loader arguments)
-     * Matches Vue's parseVariantInfoJson logic
-     */
     renderVariantOptions(info) {
         const container = this.elements.optionsContainer;
         container.innerHTML = '';
@@ -506,7 +781,6 @@ class ESSControl {
             const argOptions = options[argName];
             if (!argOptions || !Array.isArray(argOptions)) return;
             
-            // Get the current value from loader_args
             const currentValue = loader_args[index];
             
             const row = document.createElement('div');
@@ -521,7 +795,6 @@ class ESSControl {
             select.dataset.argName = argName;
             select.dataset.argIndex = index;
             
-            // Find the selected value - check opt.selected first, then match against currentValue
             let selectedIndex = 0;
             let foundSelected = false;
             
@@ -531,12 +804,10 @@ class ESSControl {
                 option.textContent = opt.label;
                 select.appendChild(option);
                 
-                // Check if this option is selected
                 if (opt.selected === true) {
                     selectedIndex = optIndex;
                     foundSelected = true;
                 } else if (!foundSelected && currentValue !== undefined) {
-                    // Match against currentValue from loader_args
                     const optValue = String(opt.value).trim();
                     const curValue = String(currentValue).trim();
                     if (optValue === curValue) {
@@ -546,8 +817,6 @@ class ESSControl {
             });
             
             select.selectedIndex = selectedIndex;
-            
-            // Handle option change
             select.addEventListener('change', (e) => {
                 this.onVariantOptionChange(argName, e.target.value);
             });
@@ -558,24 +827,15 @@ class ESSControl {
         });
     }
     
-    /**
-     * Handle variant option change
-     */
     onVariantOptionChange(argName, value) {
-        // Send command to set variant option
-        // Format matches Vue: ess::set_variant_args {optionName {value}}
         const cmd = `ess::set_variant_args {${argName} {${value}}}`;
         this.sendCommand(cmd);
         
         if (this.options.autoReload) {
-            // Reload the variant to apply changes
             this.sendCommand('ess::reload_variant');
         }
     }
     
-    /**
-     * Update parameters display
-     */
     updateParams(data) {
         try {
             const params = TclParser.parseParamSettings(data);
@@ -595,9 +855,6 @@ class ESSControl {
         }
     }
     
-    /**
-     * Render parameters as input fields
-     */
     renderParams(params) {
         const container = this.elements.paramsContainer;
         container.innerHTML = '';
@@ -611,7 +868,6 @@ class ESSControl {
             label.textContent = name;
             label.title = name;
             
-            // Color code based on type (1=time, 2=variable)
             if (info.varType === '1') {
                 label.classList.add('time');
             } else {
@@ -620,7 +876,6 @@ class ESSControl {
             
             row.appendChild(label);
             
-            // Handle boolean as checkbox
             if (info.dataType === 'bool' || info.dataType === 'boolean') {
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
@@ -642,34 +897,22 @@ class ESSControl {
                 input.dataset.paramName = name;
                 input.dataset.dataType = info.dataType;
                 
-                // Set input type and validation based on datatype
                 if (info.dataType === 'int') {
-                    input.type = 'text';
                     input.inputMode = 'numeric';
-                    input.pattern = '-?[0-9]*';
-                    // Filter non-integer input
                     input.addEventListener('input', (e) => {
                         e.target.value = e.target.value.replace(/[^0-9-]/g, '');
-                        // Only allow one minus at the start
                         if (e.target.value.indexOf('-') > 0) {
                             e.target.value = e.target.value.replace(/-/g, '');
                         }
                     });
                 } else if (info.dataType === 'float') {
-                    input.type = 'text';
                     input.inputMode = 'decimal';
-                    input.pattern = '-?[0-9]*\\.?[0-9]*';
-                    // Filter non-float input
                     input.addEventListener('input', (e) => {
-                        let val = e.target.value;
-                        // Allow digits, one decimal point, and minus at start
-                        val = val.replace(/[^0-9.-]/g, '');
-                        // Only one decimal point
+                        let val = e.target.value.replace(/[^0-9.-]/g, '');
                         const parts = val.split('.');
                         if (parts.length > 2) {
                             val = parts[0] + '.' + parts.slice(1).join('');
                         }
-                        // Only allow minus at start
                         if (val.indexOf('-') > 0) {
                             val = val.charAt(0) + val.slice(1).replace(/-/g, '');
                         }
@@ -677,7 +920,6 @@ class ESSControl {
                     });
                 }
                 
-                // Handle parameter change
                 input.addEventListener('change', (e) => {
                     this.onParamChange(name, e.target.value);
                 });
@@ -696,31 +938,20 @@ class ESSControl {
         }
     }
     
-    /**
-     * Handle parameter value change
-     */
     onParamChange(name, value) {
-        // Set the parameter value via ess::set_param command (like Vue)
         const cmd = `ess::set_param ${name} ${value}`;
         this.sendCommand(cmd);
-        
         this.emit('paramChange', { name, value });
     }
     
-    /**
-     * Update a single parameter value
-     */
     updateParamValue(data) {
-        // Parse key-value pairs: "param1 val1 param2 val2"
         const updates = TclParser.parseKeyValue(data);
         
         for (const [name, value] of Object.entries(updates)) {
-            // Update state
             if (this.state.params[name]) {
                 this.state.params[name].value = value;
             }
             
-            // Update UI
             const input = this.elements.paramsContainer.querySelector(
                 `input[data-param-name="${name}"]`
             );
@@ -734,124 +965,70 @@ class ESSControl {
         }
     }
     
-    /**
-     * Set subject
-     */
+    // ESS Commands
     setSubject(subject) {
         if (!subject) return;
         this.sendCommand(`ess::set_subject ${subject}`);
     }
     
-    /**
-     * Set system (triggers protocol list update)
-     */
     setSystem(system) {
         if (!system) return;
         this.sendCommand(`evalNoReply {ess::load_system ${system}}`);
     }
     
-    /**
-     * Set protocol (triggers variant list update)
-     */
     setProtocol(protocol) {
         if (!protocol || !this.state.currentSystem) return;
-        this.sendCommand(
-            `evalNoReply {ess::load_system ${this.state.currentSystem} ${protocol}}`
-        );
+        this.sendCommand(`evalNoReply {ess::load_system ${this.state.currentSystem} ${protocol}}`);
     }
     
-    /**
-     * Set variant
-     */
     setVariant(variant) {
         if (!variant || !this.state.currentSystem || !this.state.currentProtocol) return;
-        this.sendCommand(
-            `evalNoReply {ess::load_system ${this.state.currentSystem} ${this.state.currentProtocol} ${variant}}`
-        );
+        this.sendCommand(`evalNoReply {ess::load_system ${this.state.currentSystem} ${this.state.currentProtocol} ${variant}}`);
     }
     
-    /**
-     * Start the experiment
-     */
     startExperiment() {
         this.sendCommand('ess::start');
     }
     
-    /**
-     * Stop the experiment
-     */
     stopExperiment() {
         this.sendCommand('ess::stop');
     }
     
-    /**
-     * Reset the experiment
-     */
     resetExperiment() {
         this.sendCommand('ess::reset');
     }
     
-    /**
-     * Reload the current system
-     */
     reloadSystem() {
         this.sendCommand('ess::reload_system');
     }
     
-    /**
-     * Reload the current protocol
-     */
     reloadProtocol() {
         this.sendCommand('ess::reload_protocol');
     }
     
-    /**
-     * Reload the current variant
-     */
     reloadVariant() {
         this.sendCommand('ess::reload_variant');
     }
     
-    /**
-     * Give juice reward
-     */
     giveJuice() {
         const amount = this.elements.juiceAmount.value || 50;
         this.sendCommand(`send juicer reward ${amount}`);
     }
     
-    /**
-     * Toggle datafile open/close
-     */
-    /**
-     * Open a datafile using auto-suggested filename
-     */
     openDatafile() {
-        // Use file_suggest to get filename, then open it
-        // The ess::file_suggest command returns the suggested filename
-        // Then we call ess::file_open with that filename
         this.sendCommand('ess::file_open [ess::file_suggest]');
         this.emit('log', { message: 'Opening datafile...', level: 'info' });
     }
     
-    /**
-     * Close the current datafile
-     */
     closeDatafile() {
         if (!this.state.currentDatafile) {
             this.emit('log', { message: 'No datafile is currently open', level: 'warning' });
             return;
         }
-        
-        // Send close command - result will come via ess/datafile subscription
         this.sendCommand('ess::file_close');
         this.emit('log', { message: 'Closing datafile...', level: 'info' });
     }
     
-    /**
-     * Update datafile status display
-     * Called when ess/datafile subscription updates
-     */
     updateDatafileStatus(filepath) {
         const wasOpen = !!this.state.currentDatafile;
         const isOpen = !!filepath;
@@ -859,14 +1036,12 @@ class ESSControl {
         this.state.currentDatafile = filepath || '';
         
         if (filepath) {
-            // Show just the filename without path and extension
             const filename = filepath.split('/').pop().replace('.ess', '');
             this.elements.currentFile.textContent = filename;
             this.elements.currentFile.classList.add('open');
             this.elements.btnFileOpen.style.display = 'none';
             this.elements.btnFileClose.style.display = '';
             
-            // Log success if file was just opened
             if (!wasOpen && isOpen) {
                 this.emit('log', { message: `Datafile opened: ${filename}`, level: 'info' });
             }
@@ -876,92 +1051,796 @@ class ESSControl {
             this.elements.btnFileOpen.style.display = '';
             this.elements.btnFileClose.style.display = 'none';
             
-            // Log if file was just closed
             if (wasOpen && !isOpen) {
                 this.emit('log', { message: 'Datafile closed', level: 'info' });
             }
         }
     }
     
-    /**
-     * Save current settings
-     */
-    saveSettings() {
-        this.sendCommand('ess::save_settings');
-        this.emit('log', { message: 'Settings saved', level: 'info' });
+    // =========================================================================
+    // SECTION 6: CONFIGS TAB - Configuration Management
+    // =========================================================================
+    
+    updateConfigList(data) {
+        try {
+            const configs = typeof data === 'string' ? JSON.parse(data) : data;
+            this.state.configs = Array.isArray(configs) ? configs : [];
+            if (!this.state.showingTrash) {
+                this.renderConfigList();
+            }
+        } catch (e) {
+            console.error('Failed to parse config list:', e);
+            this.state.configs = [];
+            if (!this.state.showingTrash) {
+                this.renderConfigList();
+            }
+        }
     }
     
-    /**
-     * Reset settings to defaults
-     */
-    resetSettings() {
-        this.sendCommand('ess::reset_settings');
-        this.emit('log', { message: 'Settings reset to defaults', level: 'info' });
+    updateArchivedList(data) {
+        try {
+            const configs = typeof data === 'string' ? JSON.parse(data) : data;
+            this.state.archivedConfigs = Array.isArray(configs) ? configs : [];
+            this.updateTrashCount();
+            if (this.state.showingTrash) {
+                this.renderConfigList();
+            }
+        } catch (e) {
+            console.error('Failed to parse archived config list:', e);
+            this.state.archivedConfigs = [];
+            this.updateTrashCount();
+        }
     }
     
-    /**
-     * Send a command and wait for response
-     * Used for commands that return values (like file_suggest, file_open)
-     * Uses the connection's sendRaw for commands that expect responses
-     */
-    async sendCommandWithResponse(cmd, timeout = 5000) {
-        if (!this.dpManager.connection.ws || !this.dpManager.connection.connected) {
-            throw new Error('Not connected');
+    updateTrashCount() {
+        const count = this.state.archivedConfigs.length;
+        this.elements.configTrashCount.textContent = count > 0 ? count : '';
+        this.elements.configTrashToggle.classList.toggle('has-items', count > 0);
+    }
+    
+    toggleTrashView() {
+        this.state.showingTrash = !this.state.showingTrash;
+        this.elements.configTrashToggle.classList.toggle('active', this.state.showingTrash);
+        this.elements.configList.classList.toggle('trash-view', this.state.showingTrash);
+        
+        // Update search placeholder
+        this.elements.configSearch.placeholder = this.state.showingTrash 
+            ? 'Search trash...' 
+            : 'Search configs...';
+        
+        this.renderConfigList();
+    }
+    
+    updateConfigTags(data) {
+        try {
+            const tags = typeof data === 'string' ? JSON.parse(data) : data;
+            this.state.configTags = Array.isArray(tags) ? tags : [];
+            this.renderTagFilter();
+        } catch (e) {
+            console.error('Failed to parse config tags:', e);
+            this.state.configTags = [];
+        }
+    }
+    
+    updateCurrentConfig(data) {
+        try {
+            const current = typeof data === 'string' && data ? JSON.parse(data) : data;
+            this.state.currentConfig = current;
+            this.updateConfigStatusBar();
+            this.renderConfigList(); // Re-render to highlight active
+        } catch (e) {
+            this.state.currentConfig = null;
+            this.updateConfigStatusBar();
+        }
+    }
+    
+    refreshConfigList() {
+        // Request fresh data from configs subprocess
+        this.sendConfigCommand('config_publish_all');
+    }
+    
+    renderTagFilter() {
+        const tags = this.state.configTags;
+        const currentFilter = this.state.configTagFilter;
+        
+        // Hide row if no tags
+        if (tags.length === 0) {
+            this.elements.configTagsRow.style.display = 'none';
+            return;
         }
         
-        // Use sendRaw which has built-in request/response handling
-        // Wrap as eval command to ESS subprocess
-        try {
-            const result = await this.dpManager.connection.sendRaw(
-                `send ess {${cmd}}`
-            );
-            return result;
-        } catch (e) {
-            console.error('Command failed:', e);
-            throw e;
+        this.elements.configTagsRow.style.display = 'flex';
+        
+        // Render "All" chip plus tag chips
+        let html = `<span class="ess-filter-tag ${!currentFilter ? 'active' : ''}" data-tag="">All</span>`;
+        html += tags.map(tag => 
+            `<span class="ess-filter-tag ${currentFilter === tag ? 'active' : ''}" data-tag="${this.escapeAttr(tag)}">${this.escapeHtml(tag)}</span>`
+        ).join('');
+        
+        this.elements.configTagsList.innerHTML = html;
+        
+        // Bind click handlers
+        this.elements.configTagsList.querySelectorAll('.ess-filter-tag').forEach(chip => {
+            chip.addEventListener('click', () => {
+                this.state.configTagFilter = chip.dataset.tag;
+                this.renderTagFilter();
+                this.renderConfigList();
+            });
+        });
+    }
+    
+    renderConfigList() {
+        // Choose source based on view mode
+        let configs = this.state.showingTrash 
+            ? this.state.archivedConfigs 
+            : this.state.configs;
+        
+        // Helper to safely get lowercase string
+        const toLower = (val) => {
+            if (val == null) return '';
+            if (typeof val === 'string') return val.toLowerCase();
+            return String(val).toLowerCase();
+        };
+        
+        // Apply search filter
+        if (this.state.configSearch) {
+            const q = this.state.configSearch.toLowerCase();
+            configs = configs.filter(cfg => {
+                return toLower(cfg.name).includes(q) || 
+                       toLower(cfg.description).includes(q) || 
+                       toLower(cfg.system).includes(q) || 
+                       toLower(cfg.variant).includes(q) || 
+                       toLower(cfg.subject).includes(q);
+            });
+        }
+        
+        // Apply tag filter (only for normal view)
+        if (!this.state.showingTrash && this.state.configTagFilter) {
+            configs = configs.filter(cfg => {
+                const tags = this.parseTags(cfg.tags);
+                return tags.includes(this.state.configTagFilter);
+            });
+        }
+        
+        const list = this.elements.configList;
+        
+        if (configs.length === 0) {
+            const emptyMsg = this.state.showingTrash 
+                ? 'Trash is empty' 
+                : 'No matching configurations';
+            list.innerHTML = `<div class="ess-config-empty">${emptyMsg}</div>`;
+            return;
+        }
+        
+        if (this.state.showingTrash) {
+            // Render trash view
+            list.innerHTML = configs.map(cfg => {
+                const tags = this.parseTags(cfg.tags);
+                
+                return `
+                    <div class="ess-config-item archived" data-name="${this.escapeAttr(cfg.name)}">
+                        <div class="ess-config-item-main">
+                            <span class="ess-config-item-name">${this.escapeHtml(cfg.name)}</span>
+                            <button class="ess-config-item-restore">Restore</button>
+                            <button class="ess-config-item-delete-permanent">Delete</button>
+                        </div>
+                        <div class="ess-config-item-meta">
+                            ${cfg.subject ? `<span class="ess-config-item-subject">${this.escapeHtml(cfg.subject)}</span>` : ''}
+                            <span class="ess-config-item-path">${this.escapeHtml(cfg.system || '')}/${this.escapeHtml(cfg.protocol || '')}/${this.escapeHtml(cfg.variant || '')}</span>
+                        </div>
+                        ${tags.length > 0 ? `
+                            <div class="ess-config-item-tags">
+                                ${tags.map(t => `<span class="ess-config-tag">${this.escapeHtml(t)}</span>`).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            // Bind trash item handlers
+            list.querySelectorAll('.ess-config-item').forEach(item => {
+                const name = item.dataset.name;
+                
+                item.querySelector('.ess-config-item-restore')?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.restoreConfig(name);
+                });
+                
+                item.querySelector('.ess-config-item-delete-permanent')?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.permanentlyDeleteConfig(name);
+                });
+            });
+        } else {
+            // Render normal view
+            list.innerHTML = configs.map(cfg => {
+                const isActive = this.state.currentConfig?.name === cfg.name;
+                const tags = this.parseTags(cfg.tags);
+                
+                return `
+                    <div class="ess-config-item ${isActive ? 'active' : ''}" data-name="${this.escapeAttr(cfg.name)}">
+                        <div class="ess-config-item-main">
+                            <span class="ess-config-item-name">${this.escapeHtml(cfg.name)}</span>
+                            <button class="ess-config-item-load">Load</button>
+                            <div class="ess-config-item-actions">
+                                <button class="ess-config-item-menu-btn" title="More actions">⋮</button>
+                                <div class="ess-config-item-menu">
+                                    <button class="ess-config-menu-action" data-action="clone">Clone</button>
+                                    <button class="ess-config-menu-action" data-action="edit">Edit</button>
+                                    <button class="ess-config-menu-action delete" data-action="delete">Delete</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="ess-config-item-meta">
+                            ${cfg.subject ? `<span class="ess-config-item-subject">${this.escapeHtml(cfg.subject)}</span>` : ''}
+                            <span class="ess-config-item-path">${this.escapeHtml(cfg.system || '')}/${this.escapeHtml(cfg.protocol || '')}/${this.escapeHtml(cfg.variant || '')}</span>
+                        </div>
+                        ${tags.length > 0 ? `
+                            <div class="ess-config-item-tags">
+                                ${tags.map(t => `<span class="ess-config-tag">${this.escapeHtml(t)}</span>`).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            // Bind normal item handlers
+            list.querySelectorAll('.ess-config-item').forEach(item => {
+                const name = item.dataset.name;
+                
+                item.querySelector('.ess-config-item-load').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.loadConfig(name);
+                });
+                
+                // Menu button toggle
+                const menuBtn = item.querySelector('.ess-config-item-menu-btn');
+                const menu = item.querySelector('.ess-config-item-menu');
+                
+                menuBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const wasOpen = menu.classList.contains('open');
+                    
+                    // Close all menus first
+                    this.closeAllConfigMenus();
+                    
+                    // If it wasn't open, open it and position it
+                    if (!wasOpen) {
+                        menu.classList.add('open');
+                        this.positionConfigMenu(menuBtn, menu);
+                    }
+                });
+                
+                // Menu action handlers
+                menu.querySelectorAll('.ess-config-menu-action').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const action = btn.dataset.action;
+                        menu.classList.remove('open');
+                        
+                        switch (action) {
+                            case 'clone':
+                                this.cloneConfig(name);
+                                break;
+                            case 'edit':
+                                this.editConfig(name);
+                                break;
+                            case 'delete':
+                                this.archiveConfig(name);
+                                break;
+                        }
+                    });
+                });
+                
+                // Click on row loads (but not if clicking menu area)
+                item.addEventListener('click', (e) => {
+                    if (!e.target.closest('.ess-config-item-actions')) {
+                        this.loadConfig(name);
+                    }
+                });
+            });
         }
     }
     
-    /**
-     * Send a command to the ESS subprocess using eval
-     * This matches the Vue dserv.js essCommand format
-     */
+    closeAllConfigMenus() {
+        this.elements.configList.querySelectorAll('.ess-config-item-menu.open').forEach(menu => {
+            menu.classList.remove('open');
+        });
+    }
+    
+    positionConfigMenu(button, menu) {
+        // Position the menu using fixed positioning relative to viewport
+        const btnRect = button.getBoundingClientRect();
+        const menuHeight = menu.offsetHeight || 100; // estimate if not yet rendered
+        const viewportHeight = window.innerHeight;
+        
+        // Position below the button, aligned to right edge
+        let top = btnRect.bottom + 4;
+        let left = btnRect.right - (menu.offsetWidth || 90);
+        
+        // If menu would go below viewport, position above the button
+        if (top + menuHeight > viewportHeight - 10) {
+            top = btnRect.top - menuHeight - 4;
+        }
+        
+        menu.style.top = `${top}px`;
+        menu.style.left = `${left}px`;
+    }
+    
+    updateConfigStatusBar() {
+        const current = this.state.currentConfig;
+        
+        // Config name input
+        if (current && current.name) {
+            this.elements.configStatusName.value = current.name;
+            this.elements.configStatusName.classList.add('active');
+        } else {
+            this.elements.configStatusName.value = '';
+            this.elements.configStatusName.classList.remove('active');
+        }
+        
+        // Update save button state
+        this.updateSaveButtonState();
+    }
+    
+    updateSaveButtonState() {
+        const name = this.elements.configStatusName.value.trim();
+        const hasSystem = !!this.state.currentSystem;
+        const loadedName = this.state.currentConfig?.name || '';
+        
+        // Enable save when:
+        // - We have a name AND a system loaded
+        // - AND either no config loaded OR name differs from loaded (Save As)
+        const canSave = name && hasSystem && (name !== loadedName);
+        this.elements.btnConfigSave.disabled = !canSave;
+    }
+    
+    async loadConfig(name) {
+        try {
+            this.emit('log', { message: `Loading config: ${name}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_load {${name}}`);
+            this.emit('log', { message: `Loaded config: ${name}`, level: 'info' });
+        } catch (e) {
+            this.emit('log', { message: `Failed to load config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    saveCurrentConfig() {
+        const name = this.elements.configStatusName.value.trim();
+        
+        if (!name) {
+            this.emit('log', { message: 'Enter a config name to save', level: 'warning' });
+            return;
+        }
+        
+        if (!/^[\w\-\.]+$/.test(name)) {
+            this.emit('log', { message: 'Invalid name: use only letters, numbers, underscores, dashes, dots', level: 'error' });
+            return;
+        }
+        
+        this.saveConfig(name);
+    }
+    
+    async saveConfig(name) {
+        try {
+            this.emit('log', { message: `Saving config: ${name}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_save {${name}}`);
+            this.emit('log', { message: `Saved config: ${name}`, level: 'info' });
+            
+            // Refresh list
+            this.refreshConfigList();
+        } catch (e) {
+            this.emit('log', { message: `Failed to save config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    async archiveConfig(name) {
+        try {
+            this.emit('log', { message: `Moving to trash: ${name}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_archive {${name}}`);
+            this.emit('log', { message: `Moved to trash: ${name}`, level: 'info' });
+            
+            // Clear current config if it was the archived one
+            if (this.state.currentConfig?.name === name) {
+                this.state.currentConfig = null;
+                this.updateConfigStatusBar();
+                this.updateConfigStatusBar();
+            }
+            
+            // Refresh list
+            this.refreshConfigList();
+        } catch (e) {
+            this.emit('log', { message: `Failed to archive config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    async restoreConfig(name) {
+        try {
+            this.emit('log', { message: `Restoring config: ${name}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_restore {${name}}`);
+            this.emit('log', { message: `Restored config: ${name}`, level: 'info' });
+            
+            // Refresh list
+            this.refreshConfigList();
+        } catch (e) {
+            this.emit('log', { message: `Failed to restore config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    async permanentlyDeleteConfig(name) {
+        const confirmed = confirm(`Permanently delete "${name}"?\n\nThis cannot be undone.`);
+        if (!confirmed) return;
+        
+        try {
+            this.emit('log', { message: `Permanently deleting: ${name}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_delete {${name}}`);
+            this.emit('log', { message: `Permanently deleted: ${name}`, level: 'info' });
+            
+            // Refresh list
+            this.refreshConfigList();
+        } catch (e) {
+            this.emit('log', { message: `Failed to delete config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    async cloneConfig(name) {
+        // Backend clone with auto-generated name
+        const newName = `${name}_copy`;
+        
+        try {
+            this.emit('log', { message: `Cloning config: ${name} → ${newName}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_clone {${name}} {${newName}}`);
+            this.emit('log', { message: `Cloned config: ${newName} (use Edit to rename)`, level: 'info' });
+            
+            // Refresh list
+            this.refreshConfigList();
+        } catch (e) {
+            this.emit('log', { message: `Failed to clone config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    async editConfig(name) {
+        try {
+            // Fetch full config details as JSON
+            const response = await this.sendConfigCommandAsync(`config_get_json {${name}}`);
+            let config;
+            try {
+                config = typeof response === 'string' ? JSON.parse(response) : response;
+            } catch (parseErr) {
+                this.emit('log', { message: `Failed to parse config data`, level: 'error' });
+                return;
+            }
+            
+            if (!config || !config.name) {
+                this.emit('log', { message: `Config not found: ${name}`, level: 'error' });
+                return;
+            }
+            
+            // Store config being edited
+            this.state.editingConfig = config;
+            
+            // Fetch variant options for this config's system/protocol/variant
+            this.state.editVariantOptions = {};
+            if (config.system && config.protocol && config.variant) {
+                try {
+                    const optResponse = await this.sendConfigCommandAsync(
+                        `config_get_variant_options {${config.system}} {${config.protocol}} {${config.variant}}`
+                    );
+                    const optData = typeof optResponse === 'string' ? JSON.parse(optResponse) : optResponse;
+                    if (optData && optData.loader_options) {
+                        this.state.editVariantOptions = optData.loader_options;
+                    }
+                } catch (optErr) {
+                    console.warn('Could not fetch variant options:', optErr);
+                }
+            }
+            
+            // Initialize form values - handle tags that might be string or array
+            let tags = config.tags || [];
+            if (typeof tags === 'string') {
+                try { tags = JSON.parse(tags); } catch (e) { tags = []; }
+            }
+            
+            this.state.editForm = {
+                name: config.name || '',
+                description: config.description || '',
+                subject: config.subject || '',
+                tags: Array.isArray(tags) ? [...tags] : [],
+                variant_args: config.variant_args || {},
+                params: config.params || {}
+            };
+            
+            // Populate the edit form
+            this.populateEditForm();
+            
+            // Show edit view
+            this.showEditView();
+            
+        } catch (e) {
+            this.emit('log', { message: `Failed to load config for editing: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    showEditView() {
+        this.elements.configListView.style.display = 'none';
+        this.elements.configEditView.style.display = 'block';
+    }
+    
+    hideEditView() {
+        this.elements.configEditView.style.display = 'none';
+        this.elements.configListView.style.display = 'block';
+    }
+    
+    populateEditForm() {
+        const config = this.state.editingConfig;
+        const form = this.state.editForm;
+        
+        // Basic fields
+        this.elements.editNameDisplay.textContent = config.name;
+        this.elements.editName.value = form.name;
+        this.elements.editDescription.value = form.description;
+        
+        // Subject dropdown - populate with available subjects
+        this.populateSelect(this.elements.editSubject, this.state.subjects, '-- None --');
+        this.elements.editSubject.value = form.subject;
+        
+        // Tags
+        this.renderEditTags();
+        
+        // Variant args
+        const variantArgs = form.variant_args;
+        if (variantArgs && Object.keys(variantArgs).length > 0) {
+            this.elements.editVariantArgsSection.style.display = 'block';
+            this.renderEditKeyValues(this.elements.editVariantArgs, variantArgs, 'variant_args');
+        } else {
+            this.elements.editVariantArgsSection.style.display = 'none';
+        }
+        
+        // Params
+        const params = form.params;
+        if (params && Object.keys(params).length > 0) {
+            this.elements.editParamsSection.style.display = 'block';
+            this.renderEditKeyValues(this.elements.editParams, params, 'params');
+        } else {
+            this.elements.editParamsSection.style.display = 'none';
+        }
+        
+        // Read-only info
+        const path = `${config.system || ''}/${config.protocol || ''}/${config.variant || ''}`;
+        this.elements.editPath.textContent = path;
+        
+        const createdDate = config.created_at ? new Date(config.created_at * 1000).toLocaleDateString() : '—';
+        const createdBy = config.created_by || 'unknown';
+        this.elements.editCreated.textContent = `${createdBy} @ ${createdDate}`;
+    }
+    
+    renderEditTags() {
+        const tags = this.state.editForm.tags || [];
+        this.elements.editTags.innerHTML = tags.map(tag => `
+            <span class="ess-edit-tag">
+                ${this.escapeHtml(tag)}
+                <button class="ess-edit-tag-remove" data-tag="${this.escapeAttr(tag)}">×</button>
+            </span>
+        `).join('');
+        
+        // Bind remove handlers
+        this.elements.editTags.querySelectorAll('.ess-edit-tag-remove').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.removeEditTag(btn.dataset.tag);
+            });
+        });
+    }
+    
+    addEditTag(tag) {
+        if (!tag) return;
+        const tags = this.state.editForm.tags;
+        if (!tags.includes(tag)) {
+            tags.push(tag);
+            this.renderEditTags();
+        }
+    }
+    
+    removeEditTag(tag) {
+        const tags = this.state.editForm.tags;
+        const idx = tags.indexOf(tag);
+        if (idx >= 0) {
+            tags.splice(idx, 1);
+            this.renderEditTags();
+        }
+    }
+    
+    renderEditKeyValues(container, obj, prefix) {
+        const variantOptions = this.state.editVariantOptions || {};
+        
+        container.innerHTML = Object.entries(obj).map(([key, value]) => {
+            const options = (prefix === 'variant_args') ? variantOptions[key] : null;
+            
+            if (options && Array.isArray(options) && options.length > 0) {
+                // Render dropdown for variant_args with defined options
+                const optionsHtml = options.map(opt => {
+                    const optLabel = opt.label || opt.value || opt;
+                    const optValue = opt.value || opt;
+                    const selected = String(optValue) === String(value) ? 'selected' : '';
+                    return `<option value="${this.escapeAttr(String(optValue))}" ${selected}>${this.escapeHtml(String(optLabel))}</option>`;
+                }).join('');
+                
+                return `
+                    <div class="ess-edit-kv-row">
+                        <label class="ess-edit-kv-label">${this.escapeHtml(key)}</label>
+                        <select class="ess-edit-kv-select" data-prefix="${prefix}" data-key="${this.escapeAttr(key)}">
+                            ${optionsHtml}
+                        </select>
+                    </div>
+                `;
+            } else {
+                // Render text input (for params or variant_args without options)
+                return `
+                    <div class="ess-edit-kv-row">
+                        <label class="ess-edit-kv-label">${this.escapeHtml(key)}</label>
+                        <input type="text" class="ess-edit-kv-input" 
+                               data-prefix="${prefix}" data-key="${this.escapeAttr(key)}"
+                               value="${this.escapeAttr(String(value))}">
+                    </div>
+                `;
+            }
+        }).join('');
+    }
+    
+    cancelEdit() {
+        this.state.editingConfig = null;
+        this.state.editForm = {};
+        this.hideEditView();
+    }
+    
+    async saveEdit() {
+        const original = this.state.editingConfig;
+        if (!original) return;
+        
+        // Gather current form values
+        const newName = this.elements.editName.value.trim();
+        const newDescription = this.elements.editDescription.value.trim();
+        const newSubject = this.elements.editSubject.value;
+        const newTags = this.state.editForm.tags;
+        
+        // Gather variant_args from inputs and selects
+        const newVariantArgs = {};
+        this.elements.editVariantArgs.querySelectorAll('.ess-edit-kv-input, .ess-edit-kv-select').forEach(el => {
+            if (el.dataset.prefix === 'variant_args') {
+                newVariantArgs[el.dataset.key] = el.value;
+            }
+        });
+        
+        // Gather params from inputs and selects
+        const newParams = {};
+        this.elements.editParams.querySelectorAll('.ess-edit-kv-input, .ess-edit-kv-select').forEach(el => {
+            if (el.dataset.prefix === 'params') {
+                newParams[el.dataset.key] = el.value;
+            }
+        });
+        
+        // Validate name
+        if (!newName) {
+            this.emit('log', { message: 'Name cannot be empty', level: 'error' });
+            return;
+        }
+        if (!/^[\w\-\.]+$/.test(newName)) {
+            this.emit('log', { message: 'Invalid name: use only letters, numbers, underscores, dashes, dots', level: 'error' });
+            return;
+        }
+        
+        // Build update command with changed fields
+        let updateArgs = [];
+        
+        if (newName !== original.name) {
+            updateArgs.push(`-name {${newName}}`);
+        }
+        if (newDescription !== (original.description || '')) {
+            updateArgs.push(`-description {${newDescription}}`);
+        }
+        if (newSubject !== (original.subject || '')) {
+            updateArgs.push(`-subject {${newSubject}}`);
+        }
+        
+        // Tags - compare as sorted strings
+        const origTags = Array.isArray(original.tags) ? [...original.tags].sort() : [];
+        const formTags = [...newTags].sort();
+        if (JSON.stringify(origTags) !== JSON.stringify(formTags)) {
+            updateArgs.push(`-tags {${newTags.join(' ')}}`);
+        }
+        
+        // Variant args - compare
+        if (JSON.stringify(newVariantArgs) !== JSON.stringify(original.variant_args || {})) {
+            const vargsStr = Object.entries(newVariantArgs).map(([k, v]) => `${k} {${v}}`).join(' ');
+            updateArgs.push(`-variant_args {${vargsStr}}`);
+        }
+        
+        // Params - compare
+        if (JSON.stringify(newParams) !== JSON.stringify(original.params || {})) {
+            const paramsStr = Object.entries(newParams).map(([k, v]) => `${k} {${v}}`).join(' ');
+            updateArgs.push(`-params {${paramsStr}}`);
+        }
+        
+        if (updateArgs.length === 0) {
+            this.emit('log', { message: 'No changes to save', level: 'info' });
+            this.cancelEdit();
+            return;
+        }
+        
+        try {
+            this.emit('log', { message: `Updating config: ${original.name}...`, level: 'info' });
+            await this.sendConfigCommandAsync(`config_update {${original.name}} ${updateArgs.join(' ')}`);
+            this.emit('log', { message: `Updated config: ${original.name}`, level: 'info' });
+            
+            // Refresh and close edit view
+            this.refreshConfigList();
+            this.cancelEdit();
+        } catch (e) {
+            this.emit('log', { message: `Failed to update config: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    // =========================================================================
+    // SECTION 7: HELPERS
+    // =========================================================================
+    
     sendCommand(cmd) {
         if (this.dpManager.connection.ws && this.dpManager.connection.connected) {
-            // Use the same format as Vue: { cmd: 'eval', script: command }
             const message = { cmd: 'eval', script: cmd };
             this.dpManager.connection.ws.send(JSON.stringify(message));
         }
     }
     
-    /**
-     * Parse list data (handles both Tcl list and array formats)
-     */
+    sendConfigCommand(cmd) {
+        if (this.dpManager.connection.ws && this.dpManager.connection.connected) {
+            const script = `send configs {${cmd}}`;
+            const message = { cmd: 'eval', script: script };
+            this.dpManager.connection.ws.send(JSON.stringify(message));
+        }
+    }
+    
+    async sendConfigCommandAsync(cmd) {
+        if (!this.dpManager.connection.ws || !this.dpManager.connection.connected) {
+            throw new Error('Not connected');
+        }
+        return await this.dpManager.connection.sendRaw(`send configs {${cmd}}`);
+    }
+    
+    async sendEssCommandAsync(cmd) {
+        if (!this.dpManager.connection.ws || !this.dpManager.connection.connected) {
+            throw new Error('Not connected');
+        }
+        return await this.dpManager.connection.sendRaw(`send ess {${cmd}}`);
+    }
+    
     parseListData(data) {
-        if (Array.isArray(data)) {
-            return data;
-        }
-        
-        if (typeof data === 'string') {
-            return TclParser.parseList(data);
-        }
-        
+        if (Array.isArray(data)) return data;
+        if (typeof data === 'string') return TclParser.parseList(data);
         return [];
     }
     
-    /**
-     * Populate a select element with options
-     */
+    parseTags(tags) {
+        if (!tags) return [];
+        if (Array.isArray(tags)) return tags;
+        if (typeof tags === 'string') {
+            try {
+                const parsed = JSON.parse(tags);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+                return [];
+            }
+        }
+        return [];
+    }
+    
     populateSelect(select, items, placeholder = '') {
         select.innerHTML = '';
-        
         if (placeholder) {
             const opt = document.createElement('option');
             opt.value = '';
             opt.textContent = placeholder;
             select.appendChild(opt);
         }
-        
         items.forEach(item => {
             const opt = document.createElement('option');
             opt.value = item;
@@ -970,49 +1849,28 @@ class ESSControl {
         });
     }
     
-    /**
-     * Update select to show current value (only if value exists in options)
-     */
     updateSelectValue(select, value) {
         if (!value) return;
-        
-        // Only set the value if it exists in options (like FLTK's find_index)
         const exists = Array.from(select.options).some(opt => opt.value === value);
-        
-        if (exists) {
-            select.value = value;
-        }
-        // If value doesn't exist in options, don't add it - it's stale
+        if (exists) select.value = value;
     }
     
-    /**
-     * Clear a select element back to just the placeholder
-     */
-    clearSelect(select, placeholder = '') {
-        select.innerHTML = '';
-        if (placeholder) {
-            const opt = document.createElement('option');
-            opt.value = '';
-            opt.textContent = placeholder;
-            select.appendChild(opt);
-        }
+    escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
     
-    /**
-     * Hide options and params sections (used when switching system/protocol)
-     */
-    hideOptionsAndParams() {
-        this.elements.optionsSection.style.display = 'none';
-        this.elements.paramsSection.style.display = 'none';
-        this.elements.optionsContainer.innerHTML = '';
-        this.elements.paramsContainer.innerHTML = '';
-        this.state.variantOptions = {};
-        this.state.params = {};
+    escapeAttr(text) {
+        if (!text) return '';
+        return text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
     
-    /**
-     * Event emitter methods
-     */
+    // =========================================================================
+    // SECTION 8: EVENT EMITTER & CLEANUP
+    // =========================================================================
+    
     on(event, callback) {
         if (!this.listeners.has(event)) {
             this.listeners.set(event, new Set());
@@ -1031,32 +1889,21 @@ class ESSControl {
         }
     }
     
-    /**
-     * Get current state
-     */
     getState() {
         return { ...this.state };
     }
     
-    /**
-     * Cleanup
-     */
     dispose() {
         // Unsubscribe from all datapoints
-        this.dpManager.unsubscribe('ess/subject_ids');
-        this.dpManager.unsubscribe('ess/subject');
-        this.dpManager.unsubscribe('ess/systems');
-        this.dpManager.unsubscribe('ess/system');
-        this.dpManager.unsubscribe('ess/protocols');
-        this.dpManager.unsubscribe('ess/protocol');
-        this.dpManager.unsubscribe('ess/variants');
-        this.dpManager.unsubscribe('ess/variant');
-        this.dpManager.unsubscribe('ess/status');
-        this.dpManager.unsubscribe('ess/variant_info_json');
-        this.dpManager.unsubscribe('ess/param_settings');
-        this.dpManager.unsubscribe('ess/param');
-        this.dpManager.unsubscribe('ess/params');
-        this.dpManager.unsubscribe('ess/datafile');
+        const dps = [
+            'ess/subject_ids', 'ess/subject', 'ess/systems', 'ess/system',
+            'ess/protocols', 'ess/protocol', 'ess/variants', 'ess/variant',
+            'ess/status', 'ess/variant_info_json', 'ess/param_settings',
+            'ess/param', 'ess/params', 'ess/datafile',
+            'ess/obs_id', 'ess/obs_total', 'ess/in_obs',
+            'configs/list', 'configs/tags', 'configs/current'
+        ];
+        dps.forEach(dp => this.dpManager.unsubscribe(dp));
         
         this.listeners.clear();
         this.container.innerHTML = '';

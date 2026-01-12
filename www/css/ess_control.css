@@ -257,6 +257,13 @@ body.ess-app {
     min-height: 0;
 }
 
+/* Left column panel body - let internal flex layout handle scrolling */
+.ess-column-left .ess-panel-body {
+    overflow-y: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
 /* ===========================================
    Canvas Containers - FIXED SIZES, NO CSS SCALING
    Canvas width/height attributes set the drawing buffer.
@@ -402,6 +409,74 @@ body.ess-app {
 .ess-control-section:last-child {
     margin-bottom: 0;
 }
+
+/* ===========================================
+   ESS Control Flex Layout (fixed top/bottom, scrollable middle)
+   =========================================== */
+
+/* Container needs to be flex column and fill parent */
+#ess-control-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+/* Fixed top section */
+.ess-control-fixed-top {
+    flex-shrink: 0;
+}
+
+.ess-control-fixed-top .ess-control-section {
+    margin-bottom: 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+/* Scrollable middle section */
+.ess-control-scrollable {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-top: 8px;
+}
+
+.ess-control-scrollable .ess-tabbed-section {
+    margin-bottom: 0;
+}
+
+/* Fixed bottom section */
+.ess-control-fixed-bottom {
+    flex-shrink: 0;
+    border-top: 1px solid var(--ess-border);
+    margin-top: auto;
+}
+
+.ess-control-fixed-bottom .ess-control-section {
+    margin-bottom: 0;
+}
+
+/* Scrollbar for middle section */
+.ess-control-scrollable::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-control-scrollable::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-control-scrollable::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+.ess-control-scrollable::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted);
+}
+
+/* ===========================================
+   ESS Control Section Titles
+   =========================================== */
 
 .ess-control-section-title {
     font-size: 11px;
@@ -700,6 +775,16 @@ body.ess-app {
 .ess-auto-reload .ess-settings-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+
+/* Config Manager inline row */
+.ess-config-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 0 0 0;
+    margin-top: 8px;
+    border-top: 1px solid var(--ess-border);
 }
 
 /* ===========================================
@@ -1196,4 +1281,1005 @@ body.ess-app {
     .ess-status-bar h1 {
         font-size: 16px;
     }
+}
+
+/* ===========================================
+   ESSControl Tabbed Layout - Additional Styles
+   Add these to ess_control.css
+   =========================================== */
+
+/* Tab Header */
+.ess-tab-header {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    background: var(--ess-bg-panel);
+    border-bottom: 1px solid var(--ess-border);
+    margin: -12px -12px 12px -12px;
+    padding: 8px 8px 0 8px;
+}
+
+/* State Controls Section - fixed height to prevent shifting */
+.ess-state-section {
+    flex-shrink: 0;
+}
+
+.ess-state-section .ess-state-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 0;
+}
+
+/* Status row with obs info and juice */
+.ess-status-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--ess-border);
+    margin-bottom: 4px;
+}
+
+/* In-obs indicator - red circle that shows when recording */
+.ess-in-obs-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--ess-error);
+    opacity: 0.15;
+    flex-shrink: 0;
+}
+
+.ess-in-obs-indicator.active {
+    opacity: 1;
+    box-shadow: 0 0 6px var(--ess-error);
+}
+
+.ess-obs-label {
+    font-size: 11px;
+    color: var(--ess-text-muted);
+}
+
+.ess-obs-value {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ess-text-primary);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.ess-status-spacer {
+    flex: 1;
+}
+
+/* Juice button and input in status row */
+.ess-status-row .ess-mini-btn.juice {
+    padding: 4px 10px;
+}
+
+.ess-status-row .ess-juice-input {
+    width: 42px;
+    padding: 4px 4px;
+    font-size: 10px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    text-align: center;
+}
+
+.ess-status-row .ess-juice-input:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+.ess-tab-btn {
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.ess-tab-btn:hover {
+    color: var(--ess-text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.ess-tab-btn.active {
+    color: var(--ess-accent);
+    border-bottom-color: var(--ess-accent);
+}
+
+.ess-tab-spacer {
+    flex: 1;
+}
+
+/* StimDG button position adjustment in tab header */
+.ess-tab-header .ess-stimdg-btn {
+    margin-top: 3px;
+    margin-right: 6px;
+}
+
+/* Tab Content */
+.ess-tab-content {
+    display: none;
+    flex-direction: column;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
+.ess-tab-content.active {
+    display: flex;
+}
+
+/* Tabbed section - consistent height */
+.ess-tabbed-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    margin-top: 4px;
+}
+
+.ess-tabbed-section .ess-tab-content {
+    flex: 1;
+    min-height: 0;
+}
+
+/* Setup Tab Rows */
+.ess-setup-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 6px;
+}
+
+.ess-setup-row:last-child {
+    margin-bottom: 0;
+}
+
+.ess-setup-row .ess-control-label {
+    width: 60px;
+    flex-shrink: 0;
+    font-size: 11px;
+}
+
+.ess-setup-row .ess-control-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.ess-setup-row .ess-control-input select {
+    width: 100%;
+    padding: 5px 6px;
+    font-size: 11px;
+}
+
+/* Mini buttons for inline use */
+.ess-mini-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.ess-mini-btn:hover:not(:disabled) {
+    background: var(--ess-border);
+}
+
+.ess-mini-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.ess-mini-btn.juice:hover:not(:disabled) {
+    color: var(--ess-accent);
+    border-color: var(--ess-accent);
+}
+
+.ess-mini-btn.close:hover:not(:disabled) {
+    color: var(--ess-error);
+    border-color: var(--ess-error);
+}
+
+.ess-mini-btn.save {
+    background: rgba(74, 222, 128, 0.1);
+    border-color: rgba(74, 222, 128, 0.3);
+    color: var(--ess-success);
+}
+
+.ess-mini-btn.save:hover:not(:disabled) {
+    background: rgba(74, 222, 128, 0.2);
+    border-color: var(--ess-success);
+}
+
+/* Juice input */
+.ess-juice-input {
+    width: 42px;
+    padding: 4px 4px;
+    font-size: 10px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    text-align: center;
+}
+
+.ess-juice-input:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+/* File name display */
+.ess-setup-row .ess-file-name {
+    flex: 1;
+    font-size: 10px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: var(--ess-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-setup-row .ess-file-name.open {
+    color: var(--ess-success);
+}
+
+/* Setup Subsections (Variant Options, Parameters) */
+.ess-setup-subsection {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--ess-border);
+}
+
+.ess-subsection-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.ess-subsection-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted);
+}
+
+.ess-auto-reload-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.ess-auto-reload-label input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    cursor: pointer;
+}
+
+/* ===========================================
+   Configs Tab Styles
+   =========================================== */
+
+/* Search row */
+.ess-config-search-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.ess-config-search {
+    flex: 1;
+    padding: 6px 8px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+}
+
+.ess-config-search:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+.ess-config-search::placeholder {
+    color: var(--ess-text-muted);
+}
+
+/* Tag filter row */
+.ess-config-tags-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.ess-config-tags-label {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    flex-shrink: 0;
+}
+
+.ess-config-tags-list {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.ess-filter-tag {
+    padding: 2px 8px;
+    font-size: 10px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-filter-tag:hover {
+    border-color: var(--ess-accent);
+    color: var(--ess-text-primary);
+}
+
+.ess-filter-tag.active {
+    background: rgba(124, 138, 255, 0.15);
+    border-color: var(--ess-accent);
+    color: var(--ess-accent);
+}
+
+/* Trash toggle button */
+.ess-config-trash-btn {
+    padding: 5px 8px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ess-config-trash-btn:hover {
+    background: var(--ess-bg-panel);
+    color: var(--ess-text-secondary);
+}
+
+.ess-config-trash-btn.has-items {
+    color: var(--ess-text-secondary);
+}
+
+.ess-config-trash-btn.active {
+    background: rgba(248, 113, 113, 0.15);
+    border-color: rgba(248, 113, 113, 0.4);
+    color: var(--ess-error);
+}
+
+#ess-config-trash-count {
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* Config list */
+.ess-config-list {
+    flex: 1;
+    min-height: 100px;
+    overflow-y: auto;
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    background: var(--ess-bg-panel);
+}
+
+.ess-config-list.trash-view {
+    border-color: rgba(248, 113, 113, 0.3);
+    background: rgba(248, 113, 113, 0.03);
+}
+
+.ess-config-empty {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--ess-text-muted);
+    font-size: 11px;
+    font-style: italic;
+}
+
+/* Config item */
+.ess-config-item {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--ess-border);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.ess-config-item:last-child {
+    border-bottom: none;
+}
+
+.ess-config-item:hover {
+    background: rgba(124, 138, 255, 0.08);
+}
+
+.ess-config-item.active {
+    background: rgba(124, 138, 255, 0.15);
+    border-left: 3px solid var(--ess-accent);
+    padding-left: 7px;
+}
+
+.ess-config-item-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.ess-config-item-name {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ess-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-config-item-load {
+    padding: 3px 8px;
+    font-size: 9px;
+    font-weight: 500;
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    border-radius: 3px;
+    color: var(--ess-success);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-config-item-load:hover {
+    background: rgba(74, 222, 128, 0.2);
+    border-color: var(--ess-success);
+}
+
+/* Archived item buttons */
+.ess-config-item-restore {
+    padding: 3px 8px;
+    font-size: 9px;
+    font-weight: 500;
+    background: rgba(124, 138, 255, 0.1);
+    border: 1px solid rgba(124, 138, 255, 0.3);
+    border-radius: 3px;
+    color: var(--ess-accent);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-config-item-restore:hover {
+    background: rgba(124, 138, 255, 0.2);
+    border-color: var(--ess-accent);
+}
+
+.ess-config-item-delete-permanent {
+    padding: 3px 8px;
+    font-size: 9px;
+    font-weight: 500;
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    border-radius: 3px;
+    color: var(--ess-error);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-config-item-delete-permanent:hover {
+    background: rgba(248, 113, 113, 0.2);
+    border-color: var(--ess-error);
+}
+
+/* Archived item styling */
+.ess-config-item.archived {
+    opacity: 0.8;
+}
+
+.ess-config-item.archived .ess-config-item-name {
+    color: var(--ess-text-secondary);
+}
+
+.ess-config-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-config-item-subject {
+    color: var(--ess-text-secondary);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 1px 5px;
+    border-radius: 2px;
+}
+
+.ess-config-item-path {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 9px;
+}
+
+.ess-config-item-tags {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+}
+
+.ess-config-tag {
+    font-size: 9px;
+    padding: 1px 5px;
+    background: rgba(124, 138, 255, 0.15);
+    color: var(--ess-accent);
+    border-radius: 2px;
+}
+
+/* Config item action menu */
+.ess-config-item-actions {
+    position: relative;
+    margin-left: 4px;
+}
+
+.ess-config-item-menu-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-config-item-menu-btn:hover {
+    background: var(--ess-bg-panel);
+    border-color: var(--ess-border);
+    color: var(--ess-text-primary);
+}
+
+.ess-config-item-menu {
+    display: none;
+    position: fixed;
+    min-width: 90px;
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.ess-config-item-menu.open {
+    display: block;
+}
+
+.ess-config-menu-action {
+    display: block;
+    width: 100%;
+    padding: 7px 12px;
+    font-size: 11px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.ess-config-menu-action:hover {
+    background: rgba(124, 138, 255, 0.15);
+}
+
+.ess-config-menu-action.delete {
+    color: var(--ess-error);
+}
+
+.ess-config-menu-action.delete:hover {
+    background: rgba(248, 113, 113, 0.15);
+}
+
+/* ===========================================
+   Config Status Bar (always visible)
+   =========================================== */
+
+.ess-config-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px !important;
+    background: var(--ess-bg-panel);
+    margin-top: 0 !important;
+}
+
+.ess-config-status-label {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-config-status-input {
+    width: 120px;
+    padding: 3px 6px;
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: var(--ess-text-secondary);
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.ess-config-status-input:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+    color: var(--ess-text-primary);
+}
+
+.ess-config-status-input.active {
+    color: var(--ess-accent);
+    font-weight: 500;
+    border-color: rgba(124, 138, 255, 0.3);
+}
+
+.ess-config-status-input::placeholder {
+    color: var(--ess-text-muted);
+    font-weight: normal;
+    font-style: italic;
+}
+
+.ess-config-status-spacer {
+    flex: 1;
+    min-width: 8px;
+}
+
+/* ===========================================
+   Scrollbar for config list
+   =========================================== */
+
+.ess-config-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-config-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-config-list::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+.ess-config-list::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted);
+}
+
+/* ===========================================
+   Config Edit View
+   =========================================== */
+
+.ess-config-list-view,
+.ess-config-edit-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.ess-config-edit-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-config-edit-back {
+    padding: 4px 8px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-config-edit-back:hover {
+    background: var(--ess-bg-panel);
+    color: var(--ess-text-primary);
+}
+
+.ess-config-edit-title {
+    font-size: 12px;
+    color: var(--ess-text-secondary);
+}
+
+.ess-config-edit-title span {
+    color: var(--ess-accent);
+    font-weight: 500;
+}
+
+.ess-config-edit-form {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+/* Edit form rows */
+.ess-edit-row {
+    margin-bottom: 12px;
+}
+
+.ess-edit-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--ess-text-muted);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.ess-edit-input,
+.ess-edit-textarea,
+.ess-edit-select {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+}
+
+.ess-edit-input:focus,
+.ess-edit-textarea:focus,
+.ess-edit-select:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+.ess-edit-textarea {
+    resize: vertical;
+    min-height: 48px;
+    font-family: inherit;
+}
+
+/* Tags editing */
+.ess-edit-tags-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    min-height: 32px;
+    align-items: center;
+}
+
+.ess-edit-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.ess-edit-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    background: rgba(124, 138, 255, 0.15);
+    color: var(--ess-accent);
+    border-radius: 3px;
+}
+
+.ess-edit-tag-remove {
+    padding: 0 2px;
+    font-size: 12px;
+    line-height: 1;
+    background: transparent;
+    border: none;
+    color: var(--ess-accent);
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.ess-edit-tag-remove:hover {
+    opacity: 1;
+    color: var(--ess-error);
+}
+
+.ess-edit-tag-input {
+    flex: 1;
+    min-width: 80px;
+    padding: 2px 4px;
+    font-size: 11px;
+    background: transparent;
+    border: none;
+    color: var(--ess-text-primary);
+    outline: none;
+}
+
+.ess-edit-tag-input::placeholder {
+    color: var(--ess-text-muted);
+}
+
+/* Edit sections (variant args, params) */
+.ess-edit-section {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--ess-border);
+}
+
+.ess-edit-section-title {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ess-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 8px;
+}
+
+.ess-edit-kv-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.ess-edit-kv-label {
+    width: 80px;
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--ess-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-edit-kv-input {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+}
+
+.ess-edit-kv-input:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+.ess-edit-kv-select {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+}
+
+.ess-edit-kv-select:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+/* Read-only info */
+.ess-edit-readonly {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--ess-border);
+}
+
+.ess-edit-readonly-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 10px;
+}
+
+.ess-edit-readonly-label {
+    color: var(--ess-text-muted);
+    width: 50px;
+    flex-shrink: 0;
+}
+
+.ess-edit-readonly-value {
+    color: var(--ess-text-secondary);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+/* Edit action buttons */
+.ess-config-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 12px;
+    margin-top: 12px;
+    border-top: 1px solid var(--ess-border);
+}
+
+.ess-edit-btn {
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-edit-btn.cancel {
+    background: transparent;
+    border: 1px solid var(--ess-border);
+    color: var(--ess-text-secondary);
+}
+
+.ess-edit-btn.cancel:hover {
+    background: var(--ess-bg-panel);
+    color: var(--ess-text-primary);
+}
+
+.ess-edit-btn.save {
+    background: rgba(74, 222, 128, 0.15);
+    border: 1px solid rgba(74, 222, 128, 0.4);
+    color: var(--ess-success);
+}
+
+.ess-edit-btn.save:hover {
+    background: rgba(74, 222, 128, 0.25);
+    border-color: var(--ess-success);
+}
+
+/* Edit form scrollbar */
+.ess-config-edit-form::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-config-edit-form::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-config-edit-form::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+.ess-config-edit-form::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted);
 }

@@ -6,6 +6,7 @@
  * - WebSocket connection (DservConnection)
  * - Datapoint subscriptions (DatapointManager)
  * - ESS Control panel (ESSControl)
+ * - Config Manager (ConfigManager)
  * - Eye/Touch Visualizer (EyeTouchVisualizer)
  * - Stimulus display (GraphicsRenderer)
  * - Eye Settings
@@ -100,12 +101,13 @@ function requestInitialData() {
           ess/system ess/protocol ess/variant
           ess/variant_info_json ess/param_settings
           ess/subject_ids ess/subject ess/state ess/status
-          ess/obs_id ess/obs_total
+          ess/obs_id ess/obs_total ess/in_obs
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile
           em/settings
           system/hostname system/os
+          configs/list configs/tags configs/quick_picks configs/current
         } {
           catch { dservTouch $v }
         }
