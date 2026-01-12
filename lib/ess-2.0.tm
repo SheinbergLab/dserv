@@ -577,6 +577,9 @@ oo::class create System {
             my $_callbacks(start)
         }
         set _current_state $_start_state
+
+	dservSet ess/run_state active
+
         my update
     }
 
@@ -611,6 +614,9 @@ oo::class create System {
         if { [info exists _callbacks(end)] } {
             my $_callbacks(end)
         }
+
+	dservSet ess/run_state complete
+	
         return
     }
 
@@ -1010,13 +1016,17 @@ namespace eval ess {
         $s reset_variant_args
         
         set_loading_progress "settings" "Loading saved settings" 70
-        # Load saved settings
-        load_settings
+
+        # Apply variant_args from config (if loading via load_config)
+        apply_pending_config_args
         
         set_loading_progress "variant_init" "Initializing variant: $current(variant)" 80
         # Initialize the loaders
         variant_init $current(system) $current(protocol) $current(variant)
-        
+
+        # Apply params from config (if loading via load_config)  
+	 apply_pending_config_params
+	
         set_loading_progress "final_init" "Completing system initialization" 90
         # Final init
         $s final_init
@@ -3217,6 +3227,9 @@ namespace eval ess {
         variable rmt_host localhost
     }
 
+    # publish so other processes can access
+    dservSet ess/system_path $system_path    
+
     if {[info exists ::env(ESS_DATA_DIR)]} {
         variable data_dir $::env(ESS_DATA_DIR)
     } else {
@@ -3737,9 +3750,121 @@ namespace eval ess {
         return [$obj get]
     }
 
-    # Fixed variant_info_to_json function for ess-2.0.tm
-    # Replace the existing variant_info_to_json proc with this version
+    #=========================================================================
+    # get_variant_options
+    #
+    # Read variant loader_options from file without sourcing/executing.
+    # Returns JSON with loader_options for the specified variant.
+    #
+    # Usage: ess::get_variant_options system protocol variant
+    # Returns: {"loader_options":{"nr":[{"label":"2","value":"2"},...],...}}
+    #=========================================================================
     
+proc get_variant_options {system protocol variant} {
+    variable current
+    
+    # Build path to variants file
+    set variants_file [file join $::ess::system_path $current(project) $system $protocol ${protocol}_variants.tcl]
+    
+    if {![file exists $variants_file]} {
+        return [dict_to_json [dict create error "Variants file not found: $variants_file"]]
+    }
+    
+    # Read file contents
+    set fd [open $variants_file r]
+    set contents [read $fd]
+    close $fd
+    
+    # Create a safe interp to extract just the variants variable
+    set safe [interp create -safe]
+    
+    $safe eval {
+        set ::_extracted_variants {}
+        
+        proc namespace {cmd args} {
+            if {$cmd eq "eval"} {
+                set body [lindex $args end]
+                uplevel #0 $body
+            }
+        }
+        
+        proc package {args} {}
+        
+        proc variable {name args} {
+            if {$name eq "variants" && [llength $args] == 1} {
+                set ::_extracted_variants [lindex $args 0]
+            }
+        }
+    }
+    
+    if {[catch {$safe eval $contents} err]} {
+        interp delete $safe
+        return [dict_to_json [dict create error "Could not parse file: $err"]]
+    }
+    
+    set variants_body [$safe eval {set ::_extracted_variants}]
+    interp delete $safe
+    
+    if {$variants_body eq ""} {
+        return [dict_to_json [dict create error "Could not find variants definition"]]
+    }
+    
+    if {[catch {set variants_dict [dict create {*}$variants_body]} err]} {
+        return [dict_to_json [dict create error "Could not parse variants: $err"]]
+    }
+    
+    if {![dict exists $variants_dict $variant]} {
+        return [dict_to_json [dict create error "Variant '$variant' not found"]]
+    }
+    
+    set variant_def [dict get $variants_dict $variant]
+    
+    set loader_options {}
+    if {[dict exists $variant_def loader_options]} {
+        set loader_options [dict get $variant_def loader_options]
+    }
+    
+    # Build JSON using yajltcl
+    set obj [yajl create #auto]
+    
+    $obj map_open
+    $obj string "loader_options" map_open
+    
+    dict for {arg_name options_list} $loader_options {
+        $obj string $arg_name array_open
+        
+        foreach opt $options_list {
+            $obj map_open
+            
+            if {[llength $opt] == 2} {
+                set lbl [lindex $opt 0]
+                set val [lindex $opt 1]
+                # Preserve Tcl structure for complex values
+                if {[llength $val] > 1} {
+                    set val [list {*}$val]
+                }
+            } else {
+                set lbl $opt
+                set val $opt
+            }
+            
+            $obj string "label" string $lbl
+            $obj string "value" string $val
+            
+            $obj map_close
+        }
+        
+        $obj array_close
+    }
+    
+    $obj map_close
+    $obj map_close
+    
+    set result [$obj get]
+    $obj delete
+    return $result
+}
+
     proc variant_info_to_json {full_dict_data} {
 	set obj [yajl create #auto]
 	
@@ -3936,6 +4061,7 @@ proc ess::system_snapshot_json {} {
     variable current
     variable subject_id
     variable subject_ids
+    variable _loading_from_config
     
     if {$current(system) eq ""} {
         return [dict_to_json [dict create error "No system loaded"]]
@@ -4007,6 +4133,12 @@ proc ess::system_snapshot_json {} {
         loaders  [loaders_script] \
         variants [variants_script] \
         stim     [stim_script]]
+
+    if {[info exists _loading_from_config] && $_loading_from_config} {
+	dict set snapshot source "config"
+    } else {
+	dict set snapshot source "user"
+    }
     
     return [dict_to_json $snapshot]
 }
@@ -4017,6 +4149,293 @@ proc ess::system_snapshot_json {} {
 proc ess::publish_snapshot {} {
     dservSet ess/snapshot [system_snapshot_json]
 }
+
+###############################################################################
+#                           CONFIG SCHEMA & OPERATIONS                         #
+###############################################################################
+
+namespace eval ess {
+    
+    #=========================================================================
+    # Config Schema
+    #
+    # Defines what constitutes a loadable configuration.
+    # This is the SOURCE OF TRUTH - the configs thread stores these fields.
+    #=========================================================================
+    
+    variable config_schema {
+        script_source {required 0  type string  default ""}
+        system        {required 1  type string}
+        protocol      {required 1  type string}
+        variant       {required 1  type string}
+        subject       {required 0  type string  default ""}
+        variant_args  {required 0  type dict    default {}}
+        params        {required 0  type dict    default {}}
+    }
+    
+    #=========================================================================
+    # capture_config
+    #
+    # Captures the current ESS state as a minimal config dict.
+    # This is what gets stored in the configs database.
+    #
+    # Returns: dict with config fields
+    # Throws: error if no system loaded
+    #=========================================================================
+    
+    proc capture_config {} {
+        variable current
+        variable subject_id
+        
+        if {$current(system) eq ""} {
+            error "No system loaded - cannot capture config"
+        }
+        
+        # Build minimal config dict
+        set config [dict create \
+            script_source $current(project) \
+            system        $current(system) \
+            protocol      $current(protocol) \
+            variant       $current(variant) \
+            subject       $subject_id \
+            variant_args  [get_variant_args] \
+            params        [get_param_vals]]
+        
+        return $config
+    }
+    
+    #=========================================================================
+    # validate_config
+    #
+    # Validates a config dict has required fields and correct types.
+    #
+    # Arguments:
+    #   config_dict - dict to validate
+    #
+    # Returns: 1 if valid
+    # Throws: error with details if invalid
+    #=========================================================================
+    
+    proc validate_config {config_dict} {
+        variable config_schema
+        
+        set errors {}
+        
+        dict for {field spec} $config_schema {
+            set required [dict get $spec required]
+            set has_field [dict exists $config_dict $field]
+            set field_value ""
+            if {$has_field} {
+                set field_value [dict get $config_dict $field]
+            }
+            
+            # Check required fields
+            if {$required && (!$has_field || $field_value eq "")} {
+                lappend errors "Missing required field: $field"
+            }
+        }
+        
+        if {[llength $errors] > 0} {
+            error "Invalid config: [join $errors {; }]"
+        }
+        
+        return 1
+    }
+    
+    #=========================================================================
+    # Config Loading State
+    #
+    # These variables coordinate between load_config and load_system.
+    # When load_config calls load_system, these hold the config values
+    # to be applied at the right moments during the load sequence.
+    #=========================================================================
+    
+    variable _pending_config_args {}
+    variable _pending_config_params {}
+    variable _loading_from_config 0
+    
+    #=========================================================================
+    # load_config
+    #
+    # Loads a system from a config dict. This is the single entry point
+    # for config-based loading - the configs thread calls this.
+    #
+    # The load sequence is:
+    #   1. Switch script_source/project if needed
+    #   2. Set subject
+    #   3. Store variant_args and params for load_system to pick up
+    #   4. Call load_system
+    #      - load_system calls reset_variant_args (clears to empty)
+    #      - load_system calls apply_pending_config_args (sets our args)
+    #      - load_system calls variant_init (loader runs with our args)
+    #      - load_system calls apply_pending_config_params (sets our params)
+    #   5. Done - system is loaded with config's exact settings
+    #
+    # Arguments:
+    #   config_dict - dict with config fields (from capture_config or database)
+    #
+    # Returns: dict with what was actually loaded (for confirmation)
+    # Throws: error if validation fails or system cannot be loaded
+    #=========================================================================
+    
+    proc load_config {config_dict} {
+        variable current
+        variable _pending_config_args
+        variable _pending_config_params
+        variable _loading_from_config
+        
+        ess_info "load_config starting" "config"
+
+	set _loading_from_config 1
+
+        # Validate the config
+        validate_config $config_dict
+        
+        # Extract fields with defaults
+        set script_source ""
+        set system        [dict get $config_dict system]
+        set protocol      [dict get $config_dict protocol]
+        set variant       [dict get $config_dict variant]
+        set subject       ""
+        set variant_args  {}
+        set params        {}
+        
+        if {[dict exists $config_dict script_source]} {
+            set script_source [dict get $config_dict script_source]
+        }
+        if {[dict exists $config_dict subject]} {
+            set subject [dict get $config_dict subject]
+        }
+        if {[dict exists $config_dict variant_args]} {
+            set variant_args [dict get $config_dict variant_args]
+        }
+        if {[dict exists $config_dict params]} {
+            set params [dict get $config_dict params]
+        }
+        
+        # Handle script_source / project switching if specified and different
+        if {$script_source ne "" && $script_source ne $current(project)} {
+            ess_info "Config requires script_source '$script_source', switching from '$current(project)'" "config"
+            set_project $script_source
+        }
+        
+        # Set subject before loading
+        if {$subject ne ""} {
+            ess_info "Setting subject: $subject" "config"
+            set_subject $subject
+        }
+        
+        # Store variant_args and params for load_system to pick up
+        set _pending_config_args $variant_args
+        set _pending_config_params $params
+        
+        # Load the system - this does the heavy lifting
+        # The hooks apply_pending_config_args and apply_pending_config_params
+        # will be called at the right moments during load_system
+        ess_info "Loading system: $system $protocol $variant" "config"
+        
+        if {[catch {load_system $system $protocol $variant} err]} {
+            # Clean up on error
+            set _pending_config_args {}
+            set _pending_config_params {}
+            set _loading_from_config 0
+            error $err
+        }
+        
+        # Clear pending state
+        set _pending_config_args {}
+        set _pending_config_params {}
+        set _loading_from_config 0
+        
+        ess_info "load_config complete" "config"
+        
+        # Return what was actually loaded
+        return [capture_config]
+    }
+    
+    #=========================================================================
+    # apply_pending_config_args
+    #
+    # Hook called by load_system after reset_variant_args.
+    # If we're loading from a config, applies the config's variant_args.
+    # If not loading from config, does nothing (variant_args stay at defaults).
+    #=========================================================================
+    
+    proc apply_pending_config_args {} {
+        variable _pending_config_args
+        variable _loading_from_config
+        
+        if {$_loading_from_config && [dict size $_pending_config_args] > 0} {
+            ess_info "Applying config variant_args: $_pending_config_args" "config"
+            set_variant_args $_pending_config_args
+        }
+    }
+    
+    #=========================================================================
+    # apply_pending_config_params
+    #
+    # Hook called by load_system after variant_init.
+    # If we're loading from a config, applies the config's param values.
+    # These override any defaults set by the variant.
+    #=========================================================================
+    
+    proc apply_pending_config_params {} {
+        variable _pending_config_params
+        variable _loading_from_config
+        
+        if {$_loading_from_config && [dict size $_pending_config_params] > 0} {
+            ess_info "Applying config params" "config"
+            dict for {pname pval} $_pending_config_params {
+                if {[catch {set_param $pname $pval} err]} {
+                    ess_warning "Could not set param $pname to $pval: $err" "config"
+                }
+            }
+        }
+    }
+    
+    #=========================================================================
+    # load_config_json
+    #
+    # Convenience wrapper - loads from a JSON string.
+    # Useful for websocket/remote calls.
+    #
+    # Arguments:
+    #   json_string - JSON representation of config dict
+    #
+    # Returns: dict with what was actually loaded
+    #=========================================================================
+    
+    proc load_config_json {json_string} {
+        set config_dict [::json_to_dict $json_string]
+        return [load_config $config_dict]
+    }
+    
+    #=========================================================================
+    # config_to_json
+    #
+    # Convenience wrapper - captures current config as JSON string.
+    #
+    # Returns: JSON string
+    #=========================================================================
+    
+    proc config_to_json {} {
+        return [::dict_to_json [capture_config]]
+    }
+    
+    #=========================================================================
+    # get_config_schema
+    #
+    # Returns the config schema (for documentation/validation by other tools).
+    #
+    # Returns: dict with field specifications
+    #=========================================================================
+    
+    proc get_config_schema {} {
+        variable config_schema
+        return $config_schema
+    }
+}
+
 
 #####################################################################
 ##                          remote_eval                            ##
