@@ -67,7 +67,7 @@ namespace eval ess::configs {
             -- Main configs table
             CREATE TABLE IF NOT EXISTS configs (
                 id INTEGER PRIMARY KEY,
-                name TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
                 description TEXT DEFAULT '',
                 
                 -- ESS config fields (the loadable part)
@@ -88,6 +88,11 @@ namespace eval ess::configs {
                 use_count INTEGER DEFAULT 0,
                 archived INTEGER DEFAULT 0
             );
+            
+            -- Unique name only for active (non-archived) configs
+            -- This allows reusing names after deletion
+            CREATE UNIQUE INDEX IF NOT EXISTS configs_name_active 
+                ON configs(name) WHERE archived = 0;
             
             -- Indexes for common queries
             CREATE INDEX IF NOT EXISTS idx_configs_name ON configs(name);
@@ -179,9 +184,9 @@ namespace eval ess::configs {
         set params_json [dict_to_json $params]
         set tags_json [list_to_json $tags]
         
-        # Check if name exists
+        # Check if name exists (only check active configs, not archived)
         set existing_id [configdb eval { 
-            SELECT id FROM configs WHERE name = :name 
+            SELECT id FROM configs WHERE name = :name AND archived = 0
         }]
         
         if {[llength $existing_id] > 0} {
@@ -833,125 +838,4 @@ namespace eval ess::configs {
         }
     }
 
-#=========================================================================
-    # get_variant_options
-    #
-    # Read variant loader_options from file without sourcing/executing.
-    # Returns JSON with loader_options for the specified variant.
-    #=========================================================================
-    
-    proc get_variant_options {system protocol variant} {
-        # Get system path and project from published datapoints
-        set system_path [dservGet ess/system_path]
-        if {$system_path eq ""} {
-            return "{\"error\":\"System path not available\"}"
-        }
-        
-        set project [dservGet ess/project]
-        if {$project eq ""} {
-            set project "ess"
-        }
-        
-        # Build path to variants file
-        set variants_file [file join $system_path $project $system $protocol ${protocol}_variants.tcl]
-        
-        if {![file exists $variants_file]} {
-            return "{\"error\":\"Variants file not found: $variants_file\"}"
-        }
-        
-        # Read file contents
-        set fd [::open $variants_file r]
-        set contents [::read $fd]
-        ::close $fd
-        
-        # Create a safe interp to extract just the variants variable
-        set safe [interp create -safe]
-        
-        $safe eval {
-            set ::_extracted_variants {}
-            
-            proc namespace {cmd args} {
-                if {$cmd eq "eval"} {
-                    set body [lindex $args end]
-                    uplevel #0 $body
-                }
-            }
-            
-            proc package {args} {}
-            
-            proc variable {name args} {
-                if {$name eq "variants" && [llength $args] == 1} {
-                    set ::_extracted_variants [lindex $args 0]
-                }
-            }
-        }
-        
-        if {[catch {$safe eval $contents} err]} {
-            interp delete $safe
-            return "{\"error\":\"Could not parse file: $err\"}"
-        }
-        
-        set variants_body [$safe eval {set ::_extracted_variants}]
-        interp delete $safe
-        
-        if {$variants_body eq ""} {
-            return "{\"error\":\"Could not find variants definition\"}"
-        }
-        
-        if {[catch {set variants_dict [dict create {*}$variants_body]} err]} {
-            return "{\"error\":\"Could not parse variants: $err\"}"
-        }
-        
-        if {![dict exists $variants_dict $variant]} {
-            return "{\"error\":\"Variant '$variant' not found\"}"
-        }
-        
-        set variant_def [dict get $variants_dict $variant]
-        
-        set loader_options {}
-        if {[dict exists $variant_def loader_options]} {
-            set loader_options [dict get $variant_def loader_options]
-        }
-        
-        # Build JSON using yajltcl
-        package require yajltcl
-        set obj [yajl create #auto]
-        
-        $obj map_open
-        $obj string "loader_options" map_open
-        
-        dict for {arg_name options_list} $loader_options {
-            $obj string $arg_name array_open
-            
-            foreach opt $options_list {
-                $obj map_open
-                
-                if {[llength $opt] == 2} {
-                    set lbl [lindex $opt 0]
-                    set val [lindex $opt 1]
-                    if {[llength $val] > 1} {
-                        set val [list {*}$val]
-                    }
-                } else {
-                    set lbl $opt
-                    set val $opt
-                }
-                
-                $obj string "label" string $lbl
-                $obj string "value" string $val
-                
-                $obj map_close
-            }
-            
-            $obj array_close
-        }
-        
-        $obj map_close
-        $obj map_close
-        
-        set result [$obj get]
-        $obj delete
-        return $result
-    }
-    
 }
