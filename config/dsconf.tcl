@@ -49,6 +49,9 @@ source [file join $dspath config/essctrl.tcl]
 # start a visualization process
 subprocess viz "source [file join $dspath config/vizconf.tcl]"
 
+# start queuemgr process
+subprocess configs "source [file join $dspath config/configsconf.tcl]"
+
 # setup docs subprocess
 subprocess docs "source [file join $dspath config/docsconf.tcl]"
 
