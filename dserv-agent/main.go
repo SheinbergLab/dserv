@@ -61,6 +61,11 @@ var (
 	startTime = time.Now()
 )
 
+const (
+	dservDataPort = 4620
+	DSERV_JSON    = 11
+)
+
 // MeshPeer represents a discovered dserv instance
 type MeshPeer struct {
 	ApplianceID   string            `json:"applianceId"`
@@ -1883,6 +1888,8 @@ func (a *Agent) broadcastMeshUpdate() {
 		Success: true,
 		Data:    peers,
 	})
+	
+	a.publishMeshToDserv()	
 }
 
 // GET /api/mesh/peers
@@ -1904,5 +1911,82 @@ func (a *Agent) handleMeshLost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "cleared"})
 	default:
 		http.Error(w, "Method not allowed", 405)
+	}
+}
+
+
+// writeDpoint sends a JSON datapoint to dserv's dataserver (port 4620)
+// using the @set protocol. One-shot connection for reliability.
+func (a *Agent) writeDpoint(varname string, data []byte) error {
+	addr := fmt.Sprintf("127.0.0.1:%d", dservDataPort)
+
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect to dataserver: %w", err)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Protocol: @set {varlen} {datatype} {datalen}
+	// varlen and datalen include the \r\n suffix
+	varBytes := []byte(varname)
+	varLen := len(varBytes) + 2 // +2 for \r\n
+	dataLen := len(data) + 2    // +2 for \r\n
+
+	// Send command
+	cmd := fmt.Sprintf("@set %d %d %d\n", varLen, DSERV_JSON, dataLen)
+	if _, err := conn.Write([]byte(cmd)); err != nil {
+		return fmt.Errorf("write command: %w", err)
+	}
+
+	// Wait for ack
+	ack := make([]byte, 1)
+	if _, err := conn.Read(ack); err != nil {
+		return fmt.Errorf("read ack1: %w", err)
+	}
+
+	// Send varname + \r\n
+	if _, err := conn.Write(append(varBytes, '\r', '\n')); err != nil {
+		return fmt.Errorf("write varname: %w", err)
+	}
+
+	// Wait for ack
+	if _, err := conn.Read(ack); err != nil {
+		return fmt.Errorf("read ack2: %w", err)
+	}
+
+	// Send data + \r\n
+	if _, err := conn.Write(append(data, '\r', '\n')); err != nil {
+		return fmt.Errorf("write data: %w", err)
+	}
+
+	// Wait for response (should be "1\n" for success)
+	resp := make([]byte, 2)
+	if _, err := conn.Read(resp); err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+
+	if resp[0] != '1' {
+		return fmt.Errorf("server returned error: %s", string(resp))
+	}
+
+	return nil
+}
+
+// publishMeshToDserv publishes current peers to mesh/peers datapoint
+func (a *Agent) publishMeshToDserv() {
+	peers := a.getMeshPeers()
+	jsonData, err := json.Marshal(peers)
+	if err != nil {
+		return
+	}
+
+	if err := a.writeDpoint("mesh/peers", jsonData); err != nil {
+		if a.cfg.Verbose {
+			log.Printf("Mesh: failed to publish to dserv: %v", err)
+		}
+	} else if a.cfg.Verbose {
+		log.Printf("Mesh: published %d peers to dserv", len(peers))
 	}
 }
