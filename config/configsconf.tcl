@@ -98,7 +98,7 @@ proc config_get_json {name_or_id} {
     if {$config eq ""} {
         return "{}"
     }
-    return [dict_to_json $config -deep]
+    return [dict_to_json $config]
 }
 
 # Check if config exists
@@ -149,8 +149,115 @@ proc config_tags {} {
     ess::configs::get_all_tags
 }
 
+
 proc config_get_variant_options {system protocol variant} {
-    ess::configs::get_variant_options $system $protocol $variant
+    set system_path [dservGet ess/system_path]
+    if {$system_path eq ""} {
+        return "{\"error\":\"System path not available\"}"
+    }
+    
+    set project [dservGet ess/project]
+    if {$project eq ""} {
+        set project "ess"
+    }
+    
+    set variants_file [file join $system_path $project $system $protocol ${protocol}_variants.tcl]
+    
+    if {![file exists $variants_file]} {
+        return "{\"error\":\"Variants file not found: $variants_file\"}"
+    }
+    
+    set fd [::open $variants_file r]
+    set contents [::read $fd]
+    ::close $fd
+    
+    set safe [interp create -safe]
+    
+    $safe eval {
+        proc namespace {cmd args} {
+            if {$cmd eq "eval"} {
+                uplevel #0 [lindex $args end]
+            }
+        }
+        
+        proc package {args} {}
+        
+        proc variable {name args} {
+            if {[llength $args] == 1} {
+                uplevel 1 [list set $name [lindex $args 0]]
+            }
+        }
+    }
+    
+    if {[catch {$safe eval $contents} err]} {
+        interp delete $safe
+        return "{\"error\":\"Could not parse file: $err\"}"
+    }
+    
+    if {[catch {set variants_body [$safe eval {set variants}]} err]} {
+        interp delete $safe
+        return "{\"error\":\"Could not find variants definition\"}"
+    }
+    
+    interp delete $safe
+    
+    if {$variants_body eq ""} {
+        return "{\"error\":\"Could not find variants definition\"}"
+    }
+    
+    if {[catch {set variants_dict [dict create {*}$variants_body]} err]} {
+        return "{\"error\":\"Could not parse variants: $err\"}"
+    }
+    
+    if {![dict exists $variants_dict $variant]} {
+        return "{\"error\":\"Variant '$variant' not found\"}"
+    }
+    
+    set variant_def [dict get $variants_dict $variant]
+    
+    set loader_options {}
+    if {[dict exists $variant_def loader_options]} {
+        set loader_options [dict get $variant_def loader_options]
+    }
+    
+    package require yajltcl
+    set obj [yajl create #auto]
+    
+    $obj map_open
+    $obj string "loader_options" map_open
+    
+    dict for {arg_name options_list} $loader_options {
+        $obj string $arg_name array_open
+        
+        foreach opt $options_list {
+            $obj map_open
+            
+            if {[llength $opt] == 2} {
+                set lbl [lindex $opt 0]
+                set val [lindex $opt 1]
+                if {[llength $val] > 1} {
+                    set val [list {*}$val]
+                }
+            } else {
+                set lbl $opt
+                set val $opt
+            }
+            
+            $obj string "label" string $lbl
+            $obj string "value" string $val
+            
+            $obj map_close
+        }
+        
+        $obj array_close
+    }
+    
+    $obj map_close
+    $obj map_close
+    
+    set result [$obj get]
+    $obj delete
+    return $result
 }
 
 #=========================================================================
