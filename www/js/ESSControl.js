@@ -250,6 +250,9 @@ class ESSControl {
                             <button id="ess-config-trash-back" class="ess-config-trash-back" style="display: none;">← Back</button>
                             <input type="text" id="ess-config-search" class="ess-config-search" 
                                    placeholder="Search configs...">
+                            <button id="ess-config-import-btn" class="ess-config-import-btn" title="Import from peer">
+                                ↓ Import
+                            </button>
                             <button id="ess-config-trash-toggle" class="ess-config-trash-btn" title="View trash">
                                 🗑 <span id="ess-config-trash-count"></span>
                             </button>
@@ -391,6 +394,7 @@ class ESSControl {
             configSearch: this.container.querySelector('#ess-config-search'),
             configTagsRow: this.container.querySelector('#ess-config-tags-row'),
             configTagsList: this.container.querySelector('#ess-config-tags-list'),
+            configImportBtn: this.container.querySelector('#ess-config-import-btn'),
             configTrashToggle: this.container.querySelector('#ess-config-trash-toggle'),
             configTrashBack: this.container.querySelector('#ess-config-trash-back'),
             configTrashCount: this.container.querySelector('#ess-config-trash-count'),
@@ -495,6 +499,11 @@ class ESSControl {
         // Trash back button
         this.elements.configTrashBack.addEventListener('click', () => {
             this.toggleTrashView();  // Toggle back to normal view
+        });
+        
+        // Import button
+        this.elements.configImportBtn.addEventListener('click', () => {
+            this.showImportDialog();
         });
         
         // Config New button - opens edit view in create mode
@@ -652,6 +661,11 @@ class ESSControl {
         
         this.dpManager.subscribe('configs/current', (data) => {
             this.updateCurrentConfig(data.value);
+        });
+        
+        // Mesh peers subscription (published by dserv-agent)
+        this.dpManager.subscribe('mesh/peers', (data) => {
+            this.updateMeshPeers(data.value);
         });
     }
     
@@ -1279,6 +1293,7 @@ class ESSControl {
                                     <button class="ess-config-menu-action" data-action="view">View</button>
                                     <button class="ess-config-menu-action" data-action="edit">Edit</button>
                                     <button class="ess-config-menu-action" data-action="clone">Clone</button>
+                                    <button class="ess-config-menu-action" data-action="export">Export to...</button>
                                     <button class="ess-config-menu-action delete" data-action="delete">Delete</button>
                                 </div>
                             </div>
@@ -1339,6 +1354,9 @@ class ESSControl {
                                 break;
                             case 'edit':
                                 this.editConfig(name);
+                                break;
+                            case 'export':
+                                this.showExportDialog(name);
                                 break;
                             case 'delete':
                                 this.archiveConfig(name);
@@ -1974,6 +1992,268 @@ class ESSControl {
         } catch (e) {
             this.emit('log', { message: `Failed to update config: ${e.message}`, level: 'error' });
         }
+    }
+    
+    // =========================================================================
+    // SECTION 6b: IMPORT/EXPORT - Peer Config Sharing
+    // =========================================================================
+    
+    /**
+     * Get mesh peers from subscribed datapoint (populated by dserv-agent)
+     * Falls back to empty array if not yet available
+     */
+    getMeshPeers() {
+        const peers = this.state.meshPeers || [];
+        // Filter out local peer for import/export
+        return peers.filter(p => !p.isLocal);
+    }
+    
+    /**
+     * Update mesh peers from datapoint subscription
+     */
+    updateMeshPeers(data) {
+        try {
+            const peers = typeof data === 'string' ? JSON.parse(data) : data;
+            this.state.meshPeers = Array.isArray(peers) ? peers : [];
+        } catch (e) {
+            console.error('Failed to parse mesh peers:', e);
+            this.state.meshPeers = [];
+        }
+    }
+    
+    /**
+     * Show import dialog - select peer, then select configs to import
+     */
+    async showImportDialog() {
+        const peers = this.getMeshPeers();
+        
+        if (peers.length === 0) {
+            this.emit('log', { message: 'No remote peers available', level: 'warning' });
+            return;
+        }
+        
+        // Create modal for peer selection
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Import Config</span>
+                    <button class="ess-modal-close">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Select source system:</label>
+                        <select class="ess-modal-select" id="ess-import-peer-select">
+                            <option value="">-- Select peer --</option>
+                            ${peers.map(p => `<option value="${p.ipAddress}" data-port="${p.webPort}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="ess-modal-section" id="ess-import-configs-section" style="display: none;">
+                        <label class="ess-modal-label">Select configs to import:</label>
+                        <div class="ess-modal-config-list" id="ess-import-config-list">
+                            <div class="ess-modal-loading">Loading configs...</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="ess-modal-footer">
+                    <button class="ess-modal-btn cancel" id="ess-import-cancel">Cancel</button>
+                    <button class="ess-modal-btn primary" id="ess-import-confirm" disabled>Import Selected</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const peerSelect = modal.querySelector('#ess-import-peer-select');
+        const configsSection = modal.querySelector('#ess-import-configs-section');
+        const configList = modal.querySelector('#ess-import-config-list');
+        const confirmBtn = modal.querySelector('#ess-import-confirm');
+        const cancelBtn = modal.querySelector('#ess-import-cancel');
+        const closeBtn = modal.querySelector('.ess-modal-close');
+        
+        let selectedConfigs = new Set();
+        let remoteConfigs = [];
+        
+        // Peer selection change
+        peerSelect.addEventListener('change', async () => {
+            const ip = peerSelect.value;
+            if (!ip) {
+                configsSection.style.display = 'none';
+                return;
+            }
+            
+            configsSection.style.display = 'block';
+            configList.innerHTML = '<div class="ess-modal-loading">Loading configs...</div>';
+            selectedConfigs.clear();
+            confirmBtn.disabled = true;
+            
+            try {
+                // Fetch remote config list via remoteSend
+                const result = await this.dpManager.connection.sendRaw(`remoteSend ${ip} {dservGet configs/list}`);
+                remoteConfigs = typeof result === 'string' ? JSON.parse(result) : result;
+                
+                if (!Array.isArray(remoteConfigs) || remoteConfigs.length === 0) {
+                    configList.innerHTML = '<div class="ess-modal-empty">No configs on remote system</div>';
+                    return;
+                }
+                
+                configList.innerHTML = remoteConfigs.map(cfg => `
+                    <label class="ess-modal-config-item">
+                        <input type="checkbox" value="${this.escapeAttr(cfg.name)}" class="ess-import-checkbox">
+                        <span class="ess-modal-config-name">${this.escapeHtml(cfg.name)}</span>
+                        <span class="ess-modal-config-path">${this.escapeHtml(cfg.system)}/${this.escapeHtml(cfg.protocol)}/${this.escapeHtml(cfg.variant)}</span>
+                    </label>
+                `).join('');
+                
+                // Bind checkbox changes
+                configList.querySelectorAll('.ess-import-checkbox').forEach(cb => {
+                    cb.addEventListener('change', () => {
+                        if (cb.checked) {
+                            selectedConfigs.add(cb.value);
+                        } else {
+                            selectedConfigs.delete(cb.value);
+                        }
+                        confirmBtn.disabled = selectedConfigs.size === 0;
+                    });
+                });
+                
+            } catch (e) {
+                configList.innerHTML = `<div class="ess-modal-error">Failed to fetch configs: ${this.escapeHtml(e.message)}</div>`;
+            }
+        });
+        
+        // Confirm import
+        confirmBtn.addEventListener('click', async () => {
+            const ip = peerSelect.value;
+            if (!ip || selectedConfigs.size === 0) return;
+            
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Importing...';
+            
+            let imported = 0;
+            let failed = 0;
+            
+            for (const name of selectedConfigs) {
+                try {
+                    // Get export JSON from remote
+                    const exportJson = await this.dpManager.connection.sendRaw(
+                        `remoteSend ${ip} {send configs {config_export {${name}}}}`
+                    );
+                    
+                    // Import locally - need to escape the JSON properly for Tcl
+                    const escapedJson = exportJson.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+                    await this.sendConfigCommandAsync(`config_import {${exportJson}}`);
+                    imported++;
+                    
+                } catch (e) {
+                    console.error(`Failed to import ${name}:`, e);
+                    failed++;
+                }
+            }
+            
+            modal.remove();
+            this.refreshConfigList();
+            
+            if (failed === 0) {
+                this.emit('log', { message: `Imported ${imported} config(s)`, level: 'info' });
+            } else {
+                this.emit('log', { message: `Imported ${imported}, failed ${failed}`, level: 'warning' });
+            }
+        });
+        
+        // Cancel/close
+        const closeModal = () => modal.remove();
+        cancelBtn.addEventListener('click', closeModal);
+        closeBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+    }
+    
+    /**
+     * Show export dialog - select peer to export to
+     */
+    async showExportDialog(configName) {
+        const peers = this.getMeshPeers();
+        
+        if (peers.length === 0) {
+            this.emit('log', { message: 'No remote peers available', level: 'warning' });
+            return;
+        }
+        
+        // Create modal for peer selection
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Export Config</span>
+                    <button class="ess-modal-close">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Config:</label>
+                        <div class="ess-modal-value">${this.escapeHtml(configName)}</div>
+                    </div>
+                    <div class="ess-modal-section">
+                        <label class="ess-modal-label">Export to:</label>
+                        <select class="ess-modal-select" id="ess-export-peer-select">
+                            <option value="">-- Select destination --</option>
+                            ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                <div class="ess-modal-footer">
+                    <button class="ess-modal-btn cancel" id="ess-export-cancel">Cancel</button>
+                    <button class="ess-modal-btn primary" id="ess-export-confirm" disabled>Export</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const peerSelect = modal.querySelector('#ess-export-peer-select');
+        const confirmBtn = modal.querySelector('#ess-export-confirm');
+        const cancelBtn = modal.querySelector('#ess-export-cancel');
+        const closeBtn = modal.querySelector('.ess-modal-close');
+        
+        peerSelect.addEventListener('change', () => {
+            confirmBtn.disabled = !peerSelect.value;
+        });
+        
+        confirmBtn.addEventListener('click', async () => {
+            const ip = peerSelect.value;
+            if (!ip) return;
+            
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Exporting...';
+            
+            try {
+                // Get export JSON locally
+                const exportJson = await this.sendConfigCommandAsync(`config_export {${configName}}`);
+                
+                // Send to remote via remoteSend
+                await this.dpManager.connection.sendRaw(
+                    `remoteSend ${ip} {send configs {config_import {${exportJson}}}}`
+                );
+                
+                modal.remove();
+                this.emit('log', { message: `Exported "${configName}" to ${peerSelect.options[peerSelect.selectedIndex].text}`, level: 'info' });
+                
+            } catch (e) {
+                modal.remove();
+                this.emit('log', { message: `Export failed: ${e.message}`, level: 'error' });
+            }
+        });
+        
+        // Cancel/close
+        const closeModal = () => modal.remove();
+        cancelBtn.addEventListener('click', closeModal);
+        closeBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
     }
     
     // =========================================================================

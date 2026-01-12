@@ -105,7 +105,7 @@ function requestInitialData() {
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile
-          em/settings
+          em/settings mesh/peers
           system/hostname system/os
           configs/list configs/tags configs/quick_picks configs/current
         } {
