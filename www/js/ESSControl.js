@@ -247,6 +247,7 @@ class ESSControl {
                     <div class="ess-config-list-view" id="ess-config-list-view">
                         <!-- Search Row -->
                         <div class="ess-config-search-row">
+                            <button id="ess-config-trash-back" class="ess-config-trash-back" style="display: none;">← Back</button>
                             <input type="text" id="ess-config-search" class="ess-config-search" 
                                    placeholder="Search configs...">
                             <button id="ess-config-trash-toggle" class="ess-config-trash-btn" title="View trash">
@@ -330,12 +331,6 @@ class ESSControl {
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- Edit Actions -->
-                        <div class="ess-config-edit-actions">
-                            <button class="ess-edit-btn cancel" id="ess-edit-cancel">Cancel</button>
-                            <button class="ess-edit-btn save" id="ess-edit-save">Save Changes</button>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -345,10 +340,11 @@ class ESSControl {
             <div class="ess-control-fixed-bottom">
                 <div class="ess-control-section ess-config-status">
                     <span class="ess-config-status-label">Config:</span>
-                    <input type="text" id="ess-config-status-name" class="ess-config-status-input" 
-                           placeholder="(unsaved)" spellcheck="false">
+                    <span class="ess-config-status-name" id="ess-config-status-name">(unsaved)</span>
                     <div class="ess-config-status-spacer"></div>
-                    <button id="ess-btn-config-save" class="ess-mini-btn save" disabled>Save</button>
+                    <button id="ess-btn-config-new" class="ess-mini-btn save">New</button>
+                    <button id="ess-btn-config-save-edit" class="ess-mini-btn save" style="display: none;">Save</button>
+                    <button id="ess-btn-config-cancel-edit" class="ess-mini-btn" style="display: none;">Cancel</button>
                 </div>
             </div>
         `;
@@ -396,12 +392,15 @@ class ESSControl {
             configTagsRow: this.container.querySelector('#ess-config-tags-row'),
             configTagsList: this.container.querySelector('#ess-config-tags-list'),
             configTrashToggle: this.container.querySelector('#ess-config-trash-toggle'),
+            configTrashBack: this.container.querySelector('#ess-config-trash-back'),
             configTrashCount: this.container.querySelector('#ess-config-trash-count'),
             configList: this.container.querySelector('#ess-config-list'),
             
             // Config status bar
             configStatusName: this.container.querySelector('#ess-config-status-name'),
-            btnConfigSave: this.container.querySelector('#ess-btn-config-save'),
+            btnConfigNew: this.container.querySelector('#ess-btn-config-new'),
+            btnConfigSaveEdit: this.container.querySelector('#ess-btn-config-save-edit'),
+            btnConfigCancelEdit: this.container.querySelector('#ess-btn-config-cancel-edit'),
             
             // Config list/edit views
             configListView: this.container.querySelector('#ess-config-list-view'),
@@ -420,9 +419,7 @@ class ESSControl {
             editParamsSection: this.container.querySelector('#ess-edit-params-section'),
             editParams: this.container.querySelector('#ess-edit-params'),
             editPath: this.container.querySelector('#ess-edit-path'),
-            editCreated: this.container.querySelector('#ess-edit-created'),
-            editCancel: this.container.querySelector('#ess-edit-cancel'),
-            editSave: this.container.querySelector('#ess-edit-save')
+            editCreated: this.container.querySelector('#ess-edit-created')
         };
         
         // Bind event handlers
@@ -495,26 +492,20 @@ class ESSControl {
             this.toggleTrashView();
         });
         
-        // Config name input - enable/disable save button
-        this.elements.configStatusName.addEventListener('input', () => {
-            this.updateSaveButtonState();
+        // Trash back button
+        this.elements.configTrashBack.addEventListener('click', () => {
+            this.toggleTrashView();  // Toggle back to normal view
         });
         
-        // Config name input - save on Enter
-        this.elements.configStatusName.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                this.saveCurrentConfig();
-            }
-        });
+        // Config New button - opens edit view in create mode
+        this.elements.btnConfigNew.addEventListener('click', () => this.startCreateConfig());
         
-        // Config save button
-        this.elements.btnConfigSave.addEventListener('click', () => this.saveCurrentConfig());
+        // Config Save/Cancel buttons in status bar (for edit mode)
+        this.elements.btnConfigSaveEdit.addEventListener('click', () => this.saveEdit());
+        this.elements.btnConfigCancelEdit.addEventListener('click', () => this.cancelEdit());
         
-        // Edit form buttons
+        // Edit form - back button
         this.elements.editBack.addEventListener('click', () => this.cancelEdit());
-        this.elements.editCancel.addEventListener('click', () => this.cancelEdit());
-        this.elements.editSave.addEventListener('click', () => this.saveEdit());
         
         // Tag input - add tag on Enter
         this.elements.editTagInput.addEventListener('keydown', (e) => {
@@ -1119,6 +1110,10 @@ class ESSControl {
         this.elements.configTrashToggle.classList.toggle('active', this.state.showingTrash);
         this.elements.configList.classList.toggle('trash-view', this.state.showingTrash);
         
+        // Show/hide back button and trash toggle
+        this.elements.configTrashBack.style.display = this.state.showingTrash ? '' : 'none';
+        this.elements.configTrashToggle.style.display = this.state.showingTrash ? 'none' : '';
+        
         // Update search placeholder
         this.elements.configSearch.placeholder = this.state.showingTrash 
             ? 'Search trash...' 
@@ -1416,29 +1411,14 @@ class ESSControl {
     updateConfigStatusBar() {
         const current = this.state.currentConfig;
         
-        // Config name input
+        // Config name display
         if (current && current.name) {
-            this.elements.configStatusName.value = current.name;
+            this.elements.configStatusName.textContent = current.name;
             this.elements.configStatusName.classList.add('active');
         } else {
-            this.elements.configStatusName.value = '';
+            this.elements.configStatusName.textContent = '(unsaved)';
             this.elements.configStatusName.classList.remove('active');
         }
-        
-        // Update save button state
-        this.updateSaveButtonState();
-    }
-    
-    updateSaveButtonState() {
-        const name = this.elements.configStatusName.value.trim();
-        const hasSystem = !!this.state.currentSystem;
-        const loadedName = this.state.currentConfig?.name || '';
-        
-        // Enable save when:
-        // - We have a name AND a system loaded
-        // - AND either no config loaded OR name differs from loaded (Save As)
-        const canSave = name && hasSystem && (name !== loadedName);
-        this.elements.btnConfigSave.disabled = !canSave;
     }
     
     async loadConfig(name) {
@@ -1457,20 +1437,92 @@ class ESSControl {
         }
     }
     
-    saveCurrentConfig() {
-        const name = this.elements.configStatusName.value.trim();
-        
-        if (!name) {
-            this.emit('log', { message: 'Enter a config name to save', level: 'warning' });
+    /**
+     * Start creating a new config - opens edit view with current ESS state
+     */
+    async startCreateConfig() {
+        // Check if system is loaded
+        if (!this.state.currentSystem) {
+            this.emit('log', { message: 'Load a system first before saving a config', level: 'warning' });
             return;
         }
         
-        if (!/^[\w\-\.]+$/.test(name)) {
-            this.emit('log', { message: 'Invalid name: use only letters, numbers, underscores, dashes, dots', level: 'error' });
-            return;
+        // Get current params from ESS
+        const currentParams = { ...this.state.params };
+        // Convert param objects to just values
+        const paramsDict = {};
+        for (const [name, info] of Object.entries(currentParams)) {
+            paramsDict[name] = info.value || '';
         }
         
-        this.saveConfig(name);
+        // Get variant_args from variant_info
+        let variantArgs = {};
+        if (this.state.variantInfo) {
+            const info = this.state.variantInfo;
+            if (info.loader_arg_names && info.loader_args) {
+                const names = Array.isArray(info.loader_arg_names) ? info.loader_arg_names : [];
+                const values = Array.isArray(info.loader_args) ? info.loader_args : [];
+                names.forEach((n, i) => {
+                    variantArgs[n] = values[i] || '';
+                });
+            }
+        }
+        
+        // Fetch variant options for dropdowns
+        this.state.editVariantOptions = {};
+        if (this.state.currentSystem && this.state.currentProtocol && this.state.currentVariant) {
+            try {
+                const optResponse = await this.sendConfigCommandAsync(
+                    `config_get_variant_options {${this.state.currentSystem}} {${this.state.currentProtocol}} {${this.state.currentVariant}}`
+                );
+                const optData = typeof optResponse === 'string' ? JSON.parse(optResponse) : optResponse;
+                if (optData && optData.loader_options) {
+                    this.state.editVariantOptions = optData.loader_options;
+                }
+            } catch (optErr) {
+                console.warn('Could not fetch variant options:', optErr);
+            }
+        }
+        
+        // Build a pseudo-config object for create mode
+        const subject = this.state.currentSubject || '';
+        this.state.editingConfig = {
+            name: '',  // Empty - user must provide
+            description: '',
+            subject: subject,
+            system: this.state.currentSystem,
+            protocol: this.state.currentProtocol,
+            variant: this.state.currentVariant,
+            variant_args: variantArgs,
+            params: paramsDict,
+            tags: subject ? [subject] : [],  // Auto-tag with subject
+            created_at: null,
+            created_by: ''
+        };
+        
+        // Mark as create mode (not editing existing)
+        this.state.createMode = true;
+        this.state.viewMode = false;
+        
+        // Initialize form
+        this.state.editForm = {
+            name: '',
+            description: '',
+            subject: subject,
+            tags: subject ? [subject] : [],
+            variant_args: { ...variantArgs },
+            params: { ...paramsDict }
+        };
+        
+        // Populate and show edit form
+        this.populateEditForm();
+        this.showEditView();
+        
+        // Switch to Configs tab if not already there
+        this.switchTab('configs');
+        
+        // Focus the name input
+        setTimeout(() => this.elements.editName.focus(), 100);
     }
     
     async saveConfig(name) {
@@ -1581,6 +1633,7 @@ class ESSControl {
             
             // Store config being edited
             this.state.editingConfig = config;
+            this.state.createMode = false;  // Editing existing config
             
             // Fetch variant options for this config's system/protocol/variant
             this.state.editVariantOptions = {};
@@ -1631,21 +1684,33 @@ class ESSControl {
     showEditView() {
         this.elements.configListView.style.display = 'none';
         this.elements.configEditView.style.display = 'block';
+        
+        // Show Save/Cancel in status bar, hide New
+        this.elements.btnConfigNew.style.display = 'none';
+        this.elements.btnConfigSaveEdit.style.display = '';
+        this.elements.btnConfigCancelEdit.style.display = '';
     }
     
     hideEditView() {
         this.elements.configEditView.style.display = 'none';
         this.elements.configListView.style.display = 'block';
         this.state.viewMode = false;
+        this.state.createMode = false;
+        
+        // Show New in status bar, hide Save/Cancel
+        this.elements.btnConfigNew.style.display = '';
+        this.elements.btnConfigSaveEdit.style.display = 'none';
+        this.elements.btnConfigCancelEdit.style.display = 'none';
     }
     
     populateEditForm() {
         const config = this.state.editingConfig;
         const form = this.state.editForm;
         const viewMode = this.state.viewMode;
+        const createMode = this.state.createMode;
         
         // Basic fields
-        this.elements.editNameDisplay.textContent = config.name;
+        this.elements.editNameDisplay.textContent = createMode ? 'New Config' : config.name;
         this.elements.editName.value = form.name;
         this.elements.editDescription.value = form.description;
         
@@ -1660,9 +1725,14 @@ class ESSControl {
         this.elements.editTagInput.disabled = viewMode;
         this.elements.editTagInput.style.display = viewMode ? 'none' : '';
         
-        // Update buttons for view vs edit mode
-        this.elements.editSave.style.display = viewMode ? 'none' : '';
-        this.elements.editCancel.textContent = viewMode ? 'Close' : 'Cancel';
+        // Update status bar buttons for view vs edit mode
+        if (viewMode) {
+            this.elements.btnConfigSaveEdit.style.display = 'none';
+            this.elements.btnConfigCancelEdit.textContent = 'Close';
+        } else {
+            this.elements.btnConfigSaveEdit.style.display = '';
+            this.elements.btnConfigCancelEdit.textContent = 'Cancel';
+        }
         
         // Tags
         this.renderEditTags();
@@ -1776,6 +1846,7 @@ class ESSControl {
     cancelEdit() {
         this.state.editingConfig = null;
         this.state.editForm = {};
+        this.state.createMode = false;
         this.hideEditView();
     }
     
@@ -1815,7 +1886,46 @@ class ESSControl {
             return;
         }
         
-        // Build update command with changed fields
+        // Handle CREATE mode vs UPDATE mode
+        if (this.state.createMode) {
+            // Create new config using config_create
+            try {
+                // Build optional args
+                let optArgs = [];
+                if (newDescription) {
+                    optArgs.push(`-description {${newDescription}}`);
+                }
+                if (newSubject) {
+                    optArgs.push(`-subject {${newSubject}}`);
+                }
+                if (newTags && newTags.length > 0) {
+                    optArgs.push(`-tags {${newTags.join(' ')}}`);
+                }
+                if (Object.keys(newVariantArgs).length > 0) {
+                    const vargsStr = Object.entries(newVariantArgs).map(([k, v]) => `${k} {${v}}`).join(' ');
+                    optArgs.push(`-variant_args {${vargsStr}}`);
+                }
+                if (Object.keys(newParams).length > 0) {
+                    const paramsStr = Object.entries(newParams).map(([k, v]) => `${k} {${v}}`).join(' ');
+                    optArgs.push(`-params {${paramsStr}}`);
+                }
+                
+                const cmd = `config_create {${newName}} {${original.system}} {${original.protocol}} {${original.variant}} ${optArgs.join(' ')}`;
+                
+                this.emit('log', { message: `Creating config: ${newName}...`, level: 'info' });
+                await this.sendConfigCommandAsync(cmd);
+                this.emit('log', { message: `Created config: ${newName}`, level: 'info' });
+                
+                // Refresh and close edit view
+                this.refreshConfigList();
+                this.cancelEdit();
+            } catch (e) {
+                this.emit('log', { message: `Failed to create config: ${e.message}`, level: 'error' });
+            }
+            return;
+        }
+        
+        // UPDATE mode - build update command with changed fields
         let updateArgs = [];
         
         if (newName !== original.name) {

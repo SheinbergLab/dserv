@@ -179,10 +179,10 @@ namespace eval ess::configs {
         
         # Convert to JSON for storage
         # variant_args and params are flat dicts - shallow is fine
-        # tags is a simple list
+        # tags uses yajltcl to ensure proper array format
         set variant_args_json [dict_to_json $variant_args]
         set params_json [dict_to_json $params]
-        set tags_json [list_to_json $tags]
+        set tags_json [tags_to_json $tags]
         
         # Check if name exists (only check active configs, not archived)
         set existing_id [configdb eval { 
@@ -255,7 +255,7 @@ namespace eval ess::configs {
         
         set variant_args_json [dict_to_json $variant_args]
         set params_json [dict_to_json $params]
-        set tags_json [list_to_json $tags]
+        set tags_json [tags_to_json $tags]
         
         configdb eval {
             INSERT INTO configs 
@@ -522,7 +522,7 @@ namespace eval ess::configs {
                 -description { lappend updates "description = :new_desc"; set new_desc $value }
                 -subject     { lappend updates "subject = :new_subj"; set new_subj $value }
                 -tags        { 
-                    set new_tags_json [list_to_json $value]
+                    set new_tags_json [tags_to_json $value]
                     lappend updates "tags = :new_tags_json" 
                 }
                 -variant_args {
@@ -721,8 +721,9 @@ namespace eval ess::configs {
     #=========================================================================
     
     proc publish_list {} {
-        # Build list of config summaries as JSON array
-        set json_items {}
+        set obj [yajl create #auto]
+        $obj array_open
+        
         configdb eval {
             SELECT id, name, description, system, protocol, variant,
                    subject, tags, use_count, last_used_at
@@ -731,29 +732,45 @@ namespace eval ess::configs {
             ORDER BY use_count DESC, last_used_at DESC
             LIMIT 100
         } row {
-            # Build each item as a dict, then convert to JSON
-            set item [dict create \
-                id           $row(id) \
-                name         $row(name) \
-                description  $row(description) \
-                system       $row(system) \
-                protocol     $row(protocol) \
-                variant      $row(variant) \
-                subject      $row(subject) \
-                tags         [json_to_dict $row(tags)] \
-                use_count    $row(use_count) \
-                last_used_at $row(last_used_at)]
-            lappend json_items [dict_to_json $item -deep]
+            $obj map_open
+            $obj string "id" number $row(id)
+            $obj string "name" string $row(name)
+            $obj string "description" string $row(description)
+            $obj string "system" string $row(system)
+            $obj string "protocol" string $row(protocol)
+            $obj string "variant" string $row(variant)
+            $obj string "subject" string $row(subject)
+            $obj string "use_count" number $row(use_count)
+            if {$row(last_used_at) ne ""} {
+                $obj string "last_used_at" number $row(last_used_at)
+            } else {
+                $obj string "last_used_at" null
+            }
+            
+            # Tags - parse JSON array from DB and rebuild as proper array
+            $obj string "tags" array_open
+            set tags_json $row(tags)
+            if {$tags_json ne "" && $tags_json ne {[]}} {
+                foreach tag [json_to_dict $tags_json] {
+                    $obj string $tag
+                }
+            }
+            $obj array_close
+            
+            $obj map_close
         }
         
-        # Build JSON array manually
-        set json_array "\[[join $json_items ,]\]"
-        dservSet configs/list $json_array
+        $obj array_close
+        set result [$obj get]
+        $obj delete
+        
+        dservSet configs/list $result
     }
     
     proc publish_archived {} {
-        # Build list of archived config summaries as JSON array
-        set json_items {}
+        set obj [yajl create #auto]
+        $obj array_open
+        
         configdb eval {
             SELECT id, name, description, system, protocol, variant,
                    subject, tags, updated_at
@@ -762,26 +779,43 @@ namespace eval ess::configs {
             ORDER BY updated_at DESC
             LIMIT 50
         } row {
-            set item [dict create \
-                id           $row(id) \
-                name         $row(name) \
-                description  $row(description) \
-                system       $row(system) \
-                protocol     $row(protocol) \
-                variant      $row(variant) \
-                subject      $row(subject) \
-                tags         [json_to_dict $row(tags)] \
-                updated_at   $row(updated_at)]
-            lappend json_items [dict_to_json $item -deep]
+            $obj map_open
+            $obj string "id" number $row(id)
+            $obj string "name" string $row(name)
+            $obj string "description" string $row(description)
+            $obj string "system" string $row(system)
+            $obj string "protocol" string $row(protocol)
+            $obj string "variant" string $row(variant)
+            $obj string "subject" string $row(subject)
+            if {$row(updated_at) ne ""} {
+                $obj string "updated_at" number $row(updated_at)
+            } else {
+                $obj string "updated_at" null
+            }
+            
+            # Tags - parse JSON array from DB and rebuild as proper array
+            $obj string "tags" array_open
+            set tags_json $row(tags)
+            if {$tags_json ne "" && $tags_json ne {[]}} {
+                foreach tag [json_to_dict $tags_json] {
+                    $obj string $tag
+                }
+            }
+            $obj array_close
+            
+            $obj map_close
         }
         
-        set json_array "\[[join $json_items ,]\]"
-        dservSet configs/archived $json_array
+        $obj array_close
+        set result [$obj get]
+        $obj delete
+        
+        dservSet configs/archived $result
     }
     
     proc publish_tags {} {
         set tags [get_all_tags]
-        dservSet configs/tags [list_to_json $tags]
+        dservSet configs/tags [tags_to_json $tags]
     }
     
     proc publish_quick_picks {} {
@@ -827,6 +861,20 @@ namespace eval ess::configs {
     #=========================================================================
     # Helpers
     #=========================================================================
+    
+    # Convert a Tcl list of tags to a JSON array using yajltcl
+    # This ensures proper array format even for single-element or empty lists
+    proc tags_to_json {tags} {
+        set obj [yajl create #auto]
+        $obj array_open
+        foreach tag $tags {
+            $obj string $tag
+        }
+        $obj array_close
+        set result [$obj get]
+        $obj delete
+        return $result
+    }
     
     proc get_current_user {} {
         if {[info exists ::env(USER)]} {

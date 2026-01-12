@@ -1747,6 +1747,23 @@ body.ess-app {
     color: var(--ess-error);
 }
 
+/* Trash back button */
+.ess-config-trash-back {
+    padding: 5px 10px;
+    font-size: 11px;
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    border-radius: 4px;
+    color: var(--ess-error);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-config-trash-back:hover {
+    background: rgba(248, 113, 113, 0.2);
+    border-color: rgba(248, 113, 113, 0.5);
+}
+
 #ess-config-trash-count {
     font-size: 10px;
     font-weight: 600;
@@ -1995,34 +2012,17 @@ body.ess-app {
     color: var(--ess-text-muted);
 }
 
-.ess-config-status-input {
-    width: 120px;
-    padding: 3px 6px;
+.ess-config-status-name {
     font-size: 11px;
     font-family: 'SF Mono', Monaco, Consolas, monospace;
-    color: var(--ess-text-secondary);
-    background: var(--ess-bg-secondary);
-    border: 1px solid var(--ess-border);
-    border-radius: 3px;
-    flex-shrink: 0;
+    color: var(--ess-text-muted);
+    font-style: italic;
 }
 
-.ess-config-status-input:focus {
-    outline: none;
-    border-color: var(--ess-accent);
-    color: var(--ess-text-primary);
-}
-
-.ess-config-status-input.active {
+.ess-config-status-name.active {
     color: var(--ess-accent);
     font-weight: 500;
-    border-color: rgba(124, 138, 255, 0.3);
-}
-
-.ess-config-status-input::placeholder {
-    color: var(--ess-text-muted);
-    font-weight: normal;
-    font-style: italic;
+    font-style: normal;
 }
 
 .ess-config-status-spacer {
