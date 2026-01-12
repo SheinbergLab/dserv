@@ -1444,10 +1444,16 @@ class ESSControl {
     async loadConfig(name) {
         try {
             this.emit('log', { message: `Loading config: ${name}...`, level: 'info' });
+            
+            // Set loading state
+            this.updateEssStatus('loading');
+            
             await this.sendConfigCommandAsync(`config_load {${name}}`);
             this.emit('log', { message: `Loaded config: ${name}`, level: 'info' });
         } catch (e) {
             this.emit('log', { message: `Failed to load config: ${e.message}`, level: 'error' });
+            // Restore stopped state on error
+            this.updateEssStatus('stopped');
         }
     }
     
