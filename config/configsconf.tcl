@@ -14,6 +14,7 @@
 
 package require dlsh
 package require qpcs
+package require tcljson
 
 # Add local lib to module path
 tcl::tm::add $dspath/lib
@@ -38,8 +39,29 @@ file mkdir [file dirname $configs_db]
 # Initialize the configs system
 ess::configs::init $configs_db
 
+# Purge archived configs older than 60 days
+ess::configs::purge_old_archived 60
+
 # Publish initial state for any connected clients
 ess::configs::publish_all
+
+#=========================================================================
+# Track ESS Setup Changes
+#=========================================================================
+
+# When ESS snapshot changes, check if it came from a config load.
+# If not, clear configs/current since saved config no longer matches.
+proc on_ess_snapshot_change {dpoint_name value} {
+    if {$value ne "" && [json_get $value source] eq "config"} {
+        return
+    }
+    # User change - clear current config
+    dservSet configs/current {}
+}
+
+# Subscribe to ESS snapshot - fires after any setup change completes
+dservAddExactMatch ess/snapshot
+dpointSetScript ess/snapshot on_ess_snapshot_change
 
 #=========================================================================
 # Convenience Commands - these are what other threads call via send
@@ -67,6 +89,16 @@ proc config_list {args} {
 # Usage: config_get "name" or config_get 42
 proc config_get {name_or_id} {
     ess::configs::get $name_or_id
+}
+
+# Get full config details as JSON (for web frontend)
+# Usage: config_get_json "name"
+proc config_get_json {name_or_id} {
+    set config [ess::configs::get $name_or_id]
+    if {$config eq ""} {
+        return "{}"
+    }
+    return [dict_to_json $config -deep]
 }
 
 # Check if config exists
@@ -115,6 +147,10 @@ proc config_quick_picks {{limit 5}} {
 # Usage: config_tags
 proc config_tags {} {
     ess::configs::get_all_tags
+}
+
+proc config_get_variant_options {system protocol variant} {
+    ess::configs::get_variant_options $system $protocol $variant
 }
 
 #=========================================================================
