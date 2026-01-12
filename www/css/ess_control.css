@@ -433,6 +433,74 @@ body.ess-app {
     border-bottom: 1px solid var(--ess-border);
 }
 
+/* Identity Header */
+.ess-identity-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--ess-bg-panel);
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-identity-subject {
+    font-weight: 600;
+    color: var(--ess-accent);
+    font-size: 11px;
+}
+
+.ess-identity-subject:not(:empty)::after {
+    content: '·';
+    margin-left: 6px;
+    color: var(--ess-text-muted);
+}
+
+.ess-identity-path {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+}
+
+.ess-identity-path.empty {
+    color: var(--ess-text-muted);
+    font-style: italic;
+}
+
+/* File Header */
+.ess-file-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--ess-bg-secondary);
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-file-label {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-file-header .ess-file-name {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-file-header .ess-file-name.active {
+    color: var(--ess-success);
+}
+
+.ess-file-spacer {
+    flex: 1;
+}
+
+.ess-file-header .ess-mini-btn {
+    padding: 2px 8px;
+    font-size: 10px;
+}
+
 /* Scrollable middle section */
 .ess-control-scrollable {
     flex: 1;

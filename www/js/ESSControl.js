@@ -128,8 +128,15 @@ class ESSControl {
      */
     render() {
         this.container.innerHTML = `
-            <!-- Fixed Top: State Controls -->
+            <!-- Fixed Top: Identity + State Controls -->
             <div class="ess-control-fixed-top">
+                <!-- Identity Header -->
+                <div class="ess-identity-header">
+                    <span class="ess-identity-subject" id="ess-identity-subject"></span>
+                    <span class="ess-identity-path" id="ess-identity-path">(no system loaded)</span>
+                </div>
+                
+                <!-- State Controls -->
                 <div class="ess-control-section ess-state-section">
                     <div class="ess-state-controls">
                         <button id="ess-btn-go" class="ess-state-btn go" disabled>▶ Go</button>
@@ -144,6 +151,15 @@ class ESSControl {
                         <button id="ess-btn-juice" class="ess-mini-btn juice">Juice</button>
                         <input type="number" id="ess-juice-amount" class="ess-juice-input" value="0.5" min="0.1" max="5" step="0.1" title="Juice amount (sec)">
                     </div>
+                </div>
+                
+                <!-- File Controls -->
+                <div class="ess-file-header">
+                    <span class="ess-file-label">File:</span>
+                    <span class="ess-file-name" id="ess-current-file">(none)</span>
+                    <div class="ess-file-spacer"></div>
+                    <button id="ess-btn-file-open" class="ess-mini-btn">Open</button>
+                    <button id="ess-btn-file-close" class="ess-mini-btn close" style="display: none;">Close</button>
                 </div>
             </div>
             
@@ -201,14 +217,6 @@ class ESSControl {
                             </select>
                         </div>
                         <button id="ess-reload-variant" class="ess-reload-btn" title="Reload Variant">↻</button>
-                    </div>
-                    
-                    <!-- Datafile -->
-                    <div class="ess-setup-row">
-                        <span class="ess-control-label">Datafile</span>
-                        <span class="ess-file-name" id="ess-current-file">No file</span>
-                        <button id="ess-btn-file-open" class="ess-mini-btn" title="Open datafile">Open</button>
-                        <button id="ess-btn-file-close" class="ess-mini-btn close" title="Close datafile" style="display: none;">Close</button>
                     </div>
                     
                     <!-- Variant Options (collapsible) -->
@@ -347,6 +355,10 @@ class ESSControl {
         
         // Cache element references
         this.elements = {
+            // Identity header
+            identitySubject: this.container.querySelector('#ess-identity-subject'),
+            identityPath: this.container.querySelector('#ess-identity-path'),
+            
             // Tab elements
             tabBtns: this.container.querySelectorAll('.ess-tab-btn'),
             tabSetup: this.container.querySelector('#ess-tab-setup'),
@@ -558,6 +570,7 @@ class ESSControl {
         this.dpManager.subscribe('ess/subject', (data) => {
             this.state.currentSubject = data.value;
             this.updateSelectValue(this.elements.subjectSelect, data.value);
+            this.updateIdentityHeader();
         });
         
         this.dpManager.subscribe('ess/systems', (data) => {
@@ -567,6 +580,7 @@ class ESSControl {
         this.dpManager.subscribe('ess/system', (data) => {
             this.state.currentSystem = data.value;
             this.updateSelectValue(this.elements.systemSelect, data.value);
+            this.updateIdentityHeader();
             this.updateConfigStatusBar();
         });
         
@@ -577,6 +591,7 @@ class ESSControl {
         this.dpManager.subscribe('ess/protocol', (data) => {
             this.state.currentProtocol = data.value;
             this.updateSelectValue(this.elements.protocolSelect, data.value);
+            this.updateIdentityHeader();
             this.updateConfigStatusBar();
         });
         
@@ -587,6 +602,7 @@ class ESSControl {
         this.dpManager.subscribe('ess/variant', (data) => {
             this.state.currentVariant = data.value;
             this.updateSelectValue(this.elements.variantSelect, data.value);
+            this.updateIdentityHeader();
             this.updateConfigStatusBar();
         });
         
@@ -1265,8 +1281,9 @@ class ESSControl {
                             <div class="ess-config-item-actions">
                                 <button class="ess-config-item-menu-btn" title="More actions">⋮</button>
                                 <div class="ess-config-item-menu">
-                                    <button class="ess-config-menu-action" data-action="clone">Clone</button>
+                                    <button class="ess-config-menu-action" data-action="view">View</button>
                                     <button class="ess-config-menu-action" data-action="edit">Edit</button>
+                                    <button class="ess-config-menu-action" data-action="clone">Clone</button>
                                     <button class="ess-config-menu-action delete" data-action="delete">Delete</button>
                                 </div>
                             </div>
@@ -1319,6 +1336,9 @@ class ESSControl {
                         menu.classList.remove('open');
                         
                         switch (action) {
+                            case 'view':
+                                this.viewConfig(name);
+                                break;
                             case 'clone':
                                 this.cloneConfig(name);
                                 break;
@@ -1365,6 +1385,32 @@ class ESSControl {
         
         menu.style.top = `${top}px`;
         menu.style.left = `${left}px`;
+    }
+    
+    updateIdentityHeader() {
+        const subject = this.state.currentSubject || '';
+        const system = this.state.currentSystem || '';
+        const protocol = this.state.currentProtocol || '';
+        const variant = this.state.currentVariant || '';
+        
+        // Update subject display
+        if (subject) {
+            this.elements.identitySubject.textContent = subject;
+            this.elements.identitySubject.style.display = '';
+        } else {
+            this.elements.identitySubject.textContent = '';
+            this.elements.identitySubject.style.display = 'none';
+        }
+        
+        // Update path display
+        if (system) {
+            const path = [system, protocol, variant].filter(Boolean).join('/');
+            this.elements.identityPath.textContent = path;
+            this.elements.identityPath.classList.remove('empty');
+        } else {
+            this.elements.identityPath.textContent = '(no system loaded)';
+            this.elements.identityPath.classList.add('empty');
+        }
     }
     
     updateConfigStatusBar() {
@@ -1499,7 +1545,18 @@ class ESSControl {
         }
     }
     
+    async viewConfig(name) {
+        // View mode - same as edit but read-only
+        this.state.viewMode = true;
+        await this.editConfig(name);
+    }
+    
     async editConfig(name) {
+        // Edit mode (unless viewConfig set viewMode)
+        if (!this.state.viewMode) {
+            this.state.viewMode = false;
+        }
+        
         try {
             // Fetch full config details as JSON
             const response = await this.sendConfigCommandAsync(`config_get_json {${name}}`);
@@ -1546,8 +1603,12 @@ class ESSControl {
                 description: config.description || '',
                 subject: config.subject || '',
                 tags: Array.isArray(tags) ? [...tags] : [],
-                variant_args: config.variant_args || {},
-                params: config.params || {}
+                variant_args: typeof config.variant_args === 'string' 
+                    ? TclParser.parseDict(config.variant_args) 
+                    : (config.variant_args || {}),
+                params: typeof config.params === 'string'
+                    ? TclParser.parseDict(config.params)
+                    : (config.params || {})
             };
             
             // Populate the edit form
@@ -1569,11 +1630,13 @@ class ESSControl {
     hideEditView() {
         this.elements.configEditView.style.display = 'none';
         this.elements.configListView.style.display = 'block';
+        this.state.viewMode = false;
     }
     
     populateEditForm() {
         const config = this.state.editingConfig;
         const form = this.state.editForm;
+        const viewMode = this.state.viewMode;
         
         // Basic fields
         this.elements.editNameDisplay.textContent = config.name;
@@ -1583,6 +1646,17 @@ class ESSControl {
         // Subject dropdown - populate with available subjects
         this.populateSelect(this.elements.editSubject, this.state.subjects, '-- None --');
         this.elements.editSubject.value = form.subject;
+        
+        // Apply view mode (read-only) to form fields
+        this.elements.editName.disabled = viewMode;
+        this.elements.editDescription.disabled = viewMode;
+        this.elements.editSubject.disabled = viewMode;
+        this.elements.editTagInput.disabled = viewMode;
+        this.elements.editTagInput.style.display = viewMode ? 'none' : '';
+        
+        // Update buttons for view vs edit mode
+        this.elements.editSave.style.display = viewMode ? 'none' : '';
+        this.elements.editCancel.textContent = viewMode ? 'Close' : 'Cancel';
         
         // Tags
         this.renderEditTags();
@@ -1616,20 +1690,24 @@ class ESSControl {
     
     renderEditTags() {
         const tags = this.state.editForm.tags || [];
+        const viewMode = this.state.viewMode;
+        
         this.elements.editTags.innerHTML = tags.map(tag => `
             <span class="ess-edit-tag">
                 ${this.escapeHtml(tag)}
-                <button class="ess-edit-tag-remove" data-tag="${this.escapeAttr(tag)}">×</button>
+                ${viewMode ? '' : `<button class="ess-edit-tag-remove" data-tag="${this.escapeAttr(tag)}">×</button>`}
             </span>
         `).join('');
         
-        // Bind remove handlers
-        this.elements.editTags.querySelectorAll('.ess-edit-tag-remove').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                this.removeEditTag(btn.dataset.tag);
+        // Bind remove handlers (only in edit mode)
+        if (!viewMode) {
+            this.elements.editTags.querySelectorAll('.ess-edit-tag-remove').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.removeEditTag(btn.dataset.tag);
+                });
             });
-        });
+        }
     }
     
     addEditTag(tag) {
@@ -1652,6 +1730,8 @@ class ESSControl {
     
     renderEditKeyValues(container, obj, prefix) {
         const variantOptions = this.state.editVariantOptions || {};
+        const viewMode = this.state.viewMode;
+        const disabledAttr = viewMode ? 'disabled' : '';
         
         container.innerHTML = Object.entries(obj).map(([key, value]) => {
             const options = (prefix === 'variant_args') ? variantOptions[key] : null;
@@ -1668,7 +1748,7 @@ class ESSControl {
                 return `
                     <div class="ess-edit-kv-row">
                         <label class="ess-edit-kv-label">${this.escapeHtml(key)}</label>
-                        <select class="ess-edit-kv-select" data-prefix="${prefix}" data-key="${this.escapeAttr(key)}">
+                        <select class="ess-edit-kv-select" data-prefix="${prefix}" data-key="${this.escapeAttr(key)}" ${disabledAttr}>
                             ${optionsHtml}
                         </select>
                     </div>
@@ -1680,7 +1760,7 @@ class ESSControl {
                         <label class="ess-edit-kv-label">${this.escapeHtml(key)}</label>
                         <input type="text" class="ess-edit-kv-input" 
                                data-prefix="${prefix}" data-key="${this.escapeAttr(key)}"
-                               value="${this.escapeAttr(String(value))}">
+                               value="${this.escapeAttr(String(value))}" ${disabledAttr}>
                     </div>
                 `;
             }
