@@ -106,7 +106,11 @@ class ESSControl {
             
             // Edit state
             editingConfig: null,  // full config object being edited, or null
-            editForm: {}          // form field values during edit
+            editForm: {},         // form field values during edit
+            
+            // Remote servers (manually entered during this session)
+            remoteServers: [],        // [{address: 'hostname', label: 'hostname'}]
+            backendRemoteServers: []  // from configs/remote_servers datapoint
         };
         
         // Event listeners
@@ -666,6 +670,11 @@ class ESSControl {
         // Mesh peers subscription (published by dserv-agent)
         this.dpManager.subscribe('mesh/peers', (data) => {
             this.updateMeshPeers(data.value);
+        });
+        
+        // Remote servers subscription (optional - if backend provides known servers)
+        this.dpManager.subscribe('configs/remote_servers', (data) => {
+            this.updateRemoteServers(data.value);
         });
     }
     
@@ -2022,15 +2031,52 @@ class ESSControl {
     }
     
     /**
+     * Update remote servers from backend datapoint
+     * Expected format: [{address: "hostname", label: "Display Name"}, ...]
+     * or simple array of strings: ["hostname1", "hostname2", ...]
+     */
+    updateRemoteServers(data) {
+        try {
+            let servers = typeof data === 'string' ? JSON.parse(data) : data;
+            if (!Array.isArray(servers)) {
+                servers = [];
+            }
+            
+            // Normalize to {address, label} format
+            const normalized = servers.map(s => {
+                if (typeof s === 'string') {
+                    return { address: s, label: s };
+                }
+                return { address: s.address || s.host || s, label: s.label || s.name || s.address || s };
+            });
+            
+            // Merge with session servers (session servers take priority, no duplicates)
+            const sessionAddresses = new Set(this.state.remoteServers.map(s => s.address));
+            const backendServers = normalized.filter(s => !sessionAddresses.has(s.address));
+            
+            // Store backend servers separately so session additions appear first
+            this.state.backendRemoteServers = backendServers;
+        } catch (e) {
+            console.error('Failed to parse remote servers:', e);
+            this.state.backendRemoteServers = [];
+        }
+    }
+    
+    /**
+     * Get combined list of remote servers (session + backend)
+     */
+    getRemoteServers() {
+        const session = this.state.remoteServers || [];
+        const backend = this.state.backendRemoteServers || [];
+        return [...session, ...backend];
+    }
+    
+    /**
      * Show import dialog - select peer, then select configs to import
      */
     async showImportDialog() {
         const peers = this.getMeshPeers();
-        
-        if (peers.length === 0) {
-            this.emit('log', { message: 'No remote peers available', level: 'warning' });
-            return;
-        }
+        const recentServers = this.getRemoteServers();
         
         // Create modal for peer selection
         const modal = document.createElement('div');
@@ -2045,9 +2091,20 @@ class ESSControl {
                     <div class="ess-modal-section">
                         <label class="ess-modal-label">Select source system:</label>
                         <select class="ess-modal-select" id="ess-import-peer-select">
-                            <option value="">-- Select peer --</option>
-                            ${peers.map(p => `<option value="${p.ipAddress}" data-port="${p.webPort}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
+                            <option value="">-- Select source --</option>
+                            <option value="__custom__">Enter IP address...</option>
+                            ${recentServers.length > 0 ? `<optgroup label="Recent Servers">
+                                ${recentServers.map(s => `<option value="${this.escapeAttr(s.address)}">${this.escapeHtml(s.label)}</option>`).join('')}
+                            </optgroup>` : ''}
+                            ${peers.length > 0 ? `<optgroup label="Mesh Peers">
+                                ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
+                            </optgroup>` : ''}
                         </select>
+                    </div>
+                    <div class="ess-modal-section" id="ess-import-custom-ip-section" style="display: none;">
+                        <label class="ess-modal-label">Remote server address:</label>
+                        <input type="text" class="ess-modal-input" id="ess-import-custom-ip" 
+                               placeholder="hostname or IP address">
                     </div>
                     <div class="ess-modal-section" id="ess-import-configs-section" style="display: none;">
                         <label class="ess-modal-label">Select configs to import:</label>
@@ -2066,6 +2123,8 @@ class ESSControl {
         document.body.appendChild(modal);
         
         const peerSelect = modal.querySelector('#ess-import-peer-select');
+        const customIpSection = modal.querySelector('#ess-import-custom-ip-section');
+        const customIpInput = modal.querySelector('#ess-import-custom-ip');
         const configsSection = modal.querySelector('#ess-import-configs-section');
         const configList = modal.querySelector('#ess-import-config-list');
         const confirmBtn = modal.querySelector('#ess-import-confirm');
@@ -2074,15 +2133,13 @@ class ESSControl {
         
         let selectedConfigs = new Set();
         let remoteConfigs = [];
+        let currentIp = '';
         
-        // Peer selection change
-        peerSelect.addEventListener('change', async () => {
-            const ip = peerSelect.value;
-            if (!ip) {
-                configsSection.style.display = 'none';
-                return;
-            }
+        // Helper to fetch and display configs from an IP
+        const fetchConfigsFromIp = async (ip) => {
+            if (!ip) return;
             
+            currentIp = ip;
             configsSection.style.display = 'block';
             configList.innerHTML = '<div class="ess-modal-loading">Loading configs...</div>';
             selectedConfigs.clear();
@@ -2121,12 +2178,56 @@ class ESSControl {
             } catch (e) {
                 configList.innerHTML = `<div class="ess-modal-error">Failed to fetch configs: ${this.escapeHtml(e.message)}</div>`;
             }
+        };
+        
+        // Peer selection change
+        peerSelect.addEventListener('change', async () => {
+            const value = peerSelect.value;
+            
+            if (value === '__custom__') {
+                // Show custom IP input
+                customIpSection.style.display = 'block';
+                configsSection.style.display = 'none';
+                customIpInput.focus();
+                return;
+            }
+            
+            customIpSection.style.display = 'none';
+            
+            if (!value) {
+                configsSection.style.display = 'none';
+                return;
+            }
+            
+            await fetchConfigsFromIp(value);
+        });
+        
+        // Custom IP input - fetch on Enter
+        customIpInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                const ip = customIpInput.value.trim();
+                if (ip) {
+                    await fetchConfigsFromIp(ip);
+                }
+            }
+        });
+        
+        // Also add a "Connect" button behavior on blur
+        customIpInput.addEventListener('blur', async () => {
+            const ip = customIpInput.value.trim();
+            if (ip && configsSection.style.display === 'none') {
+                await fetchConfigsFromIp(ip);
+            }
         });
         
         // Confirm import
         confirmBtn.addEventListener('click', async () => {
-            const ip = peerSelect.value;
-            if (!ip || selectedConfigs.size === 0) return;
+            if (!currentIp || selectedConfigs.size === 0) return;
+            
+            // If this was a custom IP, save it to session list
+            if (peerSelect.value === '__custom__' && customIpInput.value.trim()) {
+                this.addRemoteServer(customIpInput.value.trim());
+            }
             
             confirmBtn.disabled = true;
             confirmBtn.textContent = 'Importing...';
@@ -2138,11 +2239,10 @@ class ESSControl {
                 try {
                     // Get export JSON from remote
                     const exportJson = await this.dpManager.connection.sendRaw(
-                        `remoteSend ${ip} {send configs {config_export {${name}}}}`
+                        `remoteSend ${currentIp} {send configs {config_export {${name}}}}`
                     );
                     
-                    // Import locally - need to escape the JSON properly for Tcl
-                    const escapedJson = exportJson.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+                    // Import locally
                     await this.sendConfigCommandAsync(`config_import {${exportJson}}`);
                     imported++;
                     
@@ -2156,9 +2256,9 @@ class ESSControl {
             this.refreshConfigList();
             
             if (failed === 0) {
-                this.emit('log', { message: `Imported ${imported} config(s)`, level: 'info' });
+                this.emit('log', { message: `Imported ${imported} config(s) from ${currentIp}`, level: 'info' });
             } else {
-                this.emit('log', { message: `Imported ${imported}, failed ${failed}`, level: 'warning' });
+                this.emit('log', { message: `Imported ${imported}, failed ${failed} from ${currentIp}`, level: 'warning' });
             }
         });
         
@@ -2176,13 +2276,9 @@ class ESSControl {
      */
     async showExportDialog(configName) {
         const peers = this.getMeshPeers();
+        const recentServers = this.getRemoteServers();
         
-        if (peers.length === 0) {
-            this.emit('log', { message: 'No remote peers available', level: 'warning' });
-            return;
-        }
-        
-        // Create modal for peer selection
+        // Create modal for destination selection
         const modal = document.createElement('div');
         modal.className = 'ess-modal-overlay';
         modal.innerHTML = `
@@ -2200,8 +2296,19 @@ class ESSControl {
                         <label class="ess-modal-label">Export to:</label>
                         <select class="ess-modal-select" id="ess-export-peer-select">
                             <option value="">-- Select destination --</option>
-                            ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
+                            <option value="__custom__">Enter IP address...</option>
+                            ${recentServers.length > 0 ? `<optgroup label="Recent Servers">
+                                ${recentServers.map(s => `<option value="${this.escapeAttr(s.address)}">${this.escapeHtml(s.label)}</option>`).join('')}
+                            </optgroup>` : ''}
+                            ${peers.length > 0 ? `<optgroup label="Mesh Peers">
+                                ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
+                            </optgroup>` : ''}
                         </select>
+                    </div>
+                    <div class="ess-modal-section" id="ess-export-custom-ip-section" style="display: none;">
+                        <label class="ess-modal-label">Remote server address:</label>
+                        <input type="text" class="ess-modal-input" id="ess-export-custom-ip" 
+                               placeholder="hostname or IP address">
                     </div>
                 </div>
                 <div class="ess-modal-footer">
@@ -2214,17 +2321,46 @@ class ESSControl {
         document.body.appendChild(modal);
         
         const peerSelect = modal.querySelector('#ess-export-peer-select');
+        const customIpSection = modal.querySelector('#ess-export-custom-ip-section');
+        const customIpInput = modal.querySelector('#ess-export-custom-ip');
         const confirmBtn = modal.querySelector('#ess-export-confirm');
         const cancelBtn = modal.querySelector('#ess-export-cancel');
         const closeBtn = modal.querySelector('.ess-modal-close');
         
+        // Helper to get current target IP
+        const getTargetIp = () => {
+            if (peerSelect.value === '__custom__') {
+                return customIpInput.value.trim();
+            }
+            return peerSelect.value;
+        };
+        
+        // Update confirm button state
+        const updateConfirmState = () => {
+            confirmBtn.disabled = !getTargetIp();
+        };
+        
         peerSelect.addEventListener('change', () => {
-            confirmBtn.disabled = !peerSelect.value;
+            if (peerSelect.value === '__custom__') {
+                customIpSection.style.display = 'block';
+                customIpInput.focus();
+                confirmBtn.disabled = true;
+            } else {
+                customIpSection.style.display = 'none';
+                updateConfirmState();
+            }
         });
         
+        customIpInput.addEventListener('input', updateConfirmState);
+        
         confirmBtn.addEventListener('click', async () => {
-            const ip = peerSelect.value;
+            const ip = getTargetIp();
             if (!ip) return;
+            
+            // If this was a custom IP, save it to session list
+            if (peerSelect.value === '__custom__' && customIpInput.value.trim()) {
+                this.addRemoteServer(customIpInput.value.trim());
+            }
             
             confirmBtn.disabled = true;
             confirmBtn.textContent = 'Exporting...';
@@ -2239,7 +2375,7 @@ class ESSControl {
                 );
                 
                 modal.remove();
-                this.emit('log', { message: `Exported "${configName}" to ${peerSelect.options[peerSelect.selectedIndex].text}`, level: 'info' });
+                this.emit('log', { message: `Exported "${configName}" to ${ip}`, level: 'info' });
                 
             } catch (e) {
                 modal.remove();
@@ -2254,6 +2390,27 @@ class ESSControl {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) closeModal();
         });
+    }
+    
+    /**
+     * Add a remote server to the session list
+     */
+    addRemoteServer(address) {
+        // Don't add duplicates
+        if (this.state.remoteServers.some(s => s.address === address)) {
+            return;
+        }
+        
+        // Add to front of list
+        this.state.remoteServers.unshift({
+            address: address,
+            label: address
+        });
+        
+        // Keep only most recent 5
+        if (this.state.remoteServers.length > 5) {
+            this.state.remoteServers.pop();
+        }
     }
     
     // =========================================================================

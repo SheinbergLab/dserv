@@ -108,6 +108,7 @@ function requestInitialData() {
           em/settings mesh/peers
           system/hostname system/os
           configs/list configs/tags configs/quick_picks configs/current
+          configs/remote_servers
         } {
           catch { dservTouch $v }
         }

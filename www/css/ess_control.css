@@ -2475,6 +2475,26 @@ body.ess-app {
     border-color: var(--ess-accent);
 }
 
+.ess-modal-input {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 12px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.ess-modal-input:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+.ess-modal-input::placeholder {
+    color: var(--ess-text-muted);
+}
+
 .ess-modal-config-list {
     max-height: 200px;
     overflow-y: auto;
