@@ -1,0 +1,7 @@
+# Provide list of servers that store configs that can be shared
+
+# Simple list
+#dservSet configs/remote_servers {["central.server.edu", "backup.server.edu"]}
+
+# Or with labels
+#dservSet configs/remote_servers {[{"address":"central.server.edu","label":"Central Lab Server"}]}
