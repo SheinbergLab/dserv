@@ -248,10 +248,11 @@ proc config_get_variant_options {system protocol variant} {
     set contents [::read $fd]
     ::close $fd
     
-    set safe [interp create -safe]
+    set safe [interp create]
     
     $safe eval {
-	package reuqire dlsh
+	lappend auto_path [zipfs root]/dlsh/lib
+	package require dlsh
         proc namespace {cmd args} {
             if {$cmd eq "eval"} {
                 uplevel #0 [lindex $args end]
