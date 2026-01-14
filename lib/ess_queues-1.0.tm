@@ -31,6 +31,7 @@ namespace eval ::ess_queues {
         auto_advance    1
         auto_datafile   1
         datafile_open   0
+        forced_complete 0
     }
     
     # Status values:
@@ -1033,9 +1034,11 @@ proc ::ess_queues::finish_run_complete {} {
 }
 
 # Force complete the current run (for ending early)
-# This triggers the normal completion flow - flush, close file, advance
+# Unlike normal completion, this goes to 'paused' state instead of auto-advancing,
+# giving the operator a chance to handle whatever caused the forced end.
 proc ::ess_queues::force_complete {} {
     variable state
+    variable flush_delay_ms
     
     if {$state(status) ne "running"} {
         log warning "force_complete: not running (status=$state(status))"
@@ -1047,9 +1050,29 @@ proc ::ess_queues::force_complete {} {
     # Stop ESS if it's running
     ess_stop
     
-    # Trigger normal completion flow
+    # Go to flushing state, but mark that this was a forced completion
+    # so we pause instead of auto-advancing
     set state(run_started) 0
-    on_run_complete
+    set state(status) flushing
+    set state(flush_until) [expr {[clock milliseconds] + $flush_delay_ms}]
+    set state(forced_complete) 1
+    publish_state
+}
+
+# Called after flush delay for forced completion - goes to paused state
+proc ::ess_queues::finish_forced_complete {} {
+    variable state
+    
+    log info "Force complete flush done, entering paused state"
+    
+    # Close datafile
+    close_datafile
+    
+    # Go to paused state instead of continuing
+    # This gives operator a chance to retry, skip, or stop
+    set state(status) paused
+    set state(forced_complete) 0
+    publish_state
 }
 
 proc ::ess_queues::advance_to_next {} {
@@ -1100,7 +1123,12 @@ proc ::ess_queues::tick {} {
     if {$state(status) eq "flushing"} {
         if {[clock milliseconds] >= $state(flush_until)} {
             set state(flush_until) 0
-            finish_run_complete
+            # Check if this was a forced completion
+            if {$state(forced_complete)} {
+                finish_forced_complete
+            } else {
+                finish_run_complete
+            }
         }
         return
     }
