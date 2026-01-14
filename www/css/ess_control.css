@@ -945,23 +945,6 @@ body.ess-app {
     cursor: not-allowed;
 }
 
-.ess-stimdg-btn {
-    padding: 4px 8px;
-    font-size: 10px;
-    background: var(--ess-bg-panel);
-    border: 1px solid var(--ess-border);
-    border-radius: 3px;
-    color: var(--ess-text-primary);
-    cursor: pointer;
-    text-decoration: none;
-    transition: all 0.2s;
-}
-
-.ess-stimdg-btn:hover {
-    background: var(--ess-border);
-    color: var(--ess-accent);
-}
-
 /* Parameters Section */
 .ess-params-container {
     max-height: 300px;
@@ -1356,15 +1339,15 @@ body.ess-app {
    Add these to ess_control.css
    =========================================== */
 
-/* Tab Header */
+/* Tab Header - fixed outside scrollable area */
 .ess-tab-header {
     display: flex;
     align-items: center;
     gap: 0;
     background: var(--ess-bg-panel);
     border-bottom: 1px solid var(--ess-border);
-    margin: -12px -12px 12px -12px;
-    padding: 8px 8px 0 8px;
+    padding: 0 8px 0 8px;
+    flex-shrink: 0;
 }
 
 /* State Controls Section - fixed height to prevent shifting */
@@ -1478,15 +1461,16 @@ body.ess-app {
 .ess-tab-content {
     display: none;
     flex-direction: column;
-    overflow-y: auto;
-    scrollbar-gutter: stable;
+    padding: 12px;
+    flex: 1;
+    min-height: 0;
 }
 
 .ess-tab-content.active {
     display: flex;
 }
 
-/* Tabbed section - consistent height */
+/* Tabbed section - contains fixed header + scrollable content */
 .ess-tabbed-section {
     flex: 1;
     display: flex;
@@ -1496,9 +1480,12 @@ body.ess-app {
     margin-top: 4px;
 }
 
-.ess-tabbed-section .ess-tab-content {
+/* Scrollable area inside tabbed section */
+.ess-tabbed-section .ess-control-scrollable {
     flex: 1;
     min-height: 0;
+    overflow-y: auto;
+    padding: 0;
 }
 
 /* Setup Tab Rows */
@@ -1657,7 +1644,7 @@ body.ess-app {
 
 .ess-config-search {
     flex: 1;
-    padding: 6px 8px;
+    padding: 5px 6px;
     font-size: 11px;
     background: var(--ess-bg-panel);
     border: 1px solid var(--ess-border);
@@ -1672,6 +1659,75 @@ body.ess-app {
 
 .ess-config-search::placeholder {
     color: var(--ess-text-muted);
+}
+
+/* Config menu (⋮ dropdown) */
+.ess-config-menu-wrapper {
+    position: relative;
+}
+
+.ess-config-menu-btn {
+    background: var(--ess-bg-tertiary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 3px 6px;
+    line-height: 1;
+    transition: all 0.15s ease;
+}
+
+.ess-config-menu-btn:hover {
+    background: var(--ess-bg-secondary);
+    color: var(--ess-text-primary);
+}
+
+.ess-config-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--ess-bg-primary);
+    border: 1px solid var(--ess-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 150px;
+    padding: 4px 0;
+    z-index: 100;
+    display: none;
+}
+
+.ess-config-menu.open {
+    display: block;
+}
+
+.ess-config-menu-action {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    text-align: left;
+    color: var(--ess-text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+
+.ess-config-menu-action:hover:not(:disabled) {
+    background: var(--ess-bg-secondary);
+}
+
+.ess-config-menu-action:disabled {
+    color: var(--ess-text-disabled);
+    cursor: not-allowed;
+}
+
+.ess-config-menu-divider {
+    height: 1px;
+    background: var(--ess-border);
+    margin: 4px 0;
 }
 
 /* Tag filter row */
@@ -1715,36 +1771,6 @@ body.ess-app {
     background: rgba(124, 138, 255, 0.15);
     border-color: var(--ess-accent);
     color: var(--ess-accent);
-}
-
-/* Trash toggle button */
-.ess-config-trash-btn {
-    padding: 5px 8px;
-    font-size: 11px;
-    background: transparent;
-    border: 1px solid var(--ess-border);
-    border-radius: 4px;
-    color: var(--ess-text-muted);
-    cursor: pointer;
-    transition: all 0.15s;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.ess-config-trash-btn:hover {
-    background: var(--ess-bg-panel);
-    color: var(--ess-text-secondary);
-}
-
-.ess-config-trash-btn.has-items {
-    color: var(--ess-text-secondary);
-}
-
-.ess-config-trash-btn.active {
-    background: rgba(248, 113, 113, 0.15);
-    border-color: rgba(248, 113, 113, 0.4);
-    color: var(--ess-error);
 }
 
 /* Trash back button */
@@ -2353,26 +2379,6 @@ body.ess-app {
 }
 
 /* ===========================================
-   Import Button
-   =========================================== */
-
-.ess-config-import-btn {
-    padding: 5px 10px;
-    font-size: 11px;
-    background: rgba(124, 138, 255, 0.1);
-    border: 1px solid rgba(124, 138, 255, 0.3);
-    border-radius: 4px;
-    color: var(--ess-accent);
-    cursor: pointer;
-    transition: all 0.15s;
-}
-
-.ess-config-import-btn:hover {
-    background: rgba(124, 138, 255, 0.2);
-    border-color: rgba(124, 138, 255, 0.5);
-}
-
-/* ===========================================
    Import/Export Modal
    =========================================== */
 
@@ -2736,8 +2742,7 @@ body.ess-app {
 
 .ess-queue-playlist {
     flex: 1;
-    min-height: 80px;
-    max-height: 200px;
+    min-height: 60px;
     overflow-y: auto;
     border: 1px solid var(--ess-border);
     border-radius: 4px;
@@ -3178,6 +3183,15 @@ body.ess-app {
     padding: 4px 12px;
     font-size: 11px;
     color: var(--ess-text-secondary);
+    cursor: pointer;
+    transition: background 0.1s;
+    border-radius: 3px;
+    margin: 1px 4px;
+}
+
+.ess-qb-help-item:hover {
+    background: var(--ess-bg-secondary);
+    color: var(--ess-text-primary);
 }
 
 .ess-qb-help-item code {
@@ -3188,6 +3202,18 @@ body.ess-app {
     padding: 1px 4px;
     border-radius: 3px;
     margin-right: 6px;
+}
+
+.ess-qb-help-item:hover code {
+    background: var(--ess-bg-tertiary);
+}
+
+/* Hint text in title */
+.ess-qb-help-hint {
+    font-weight: 400;
+    font-size: 9px;
+    color: var(--ess-text-muted);
+    margin-left: 6px;
 }
 
 /* Help popup scrollbar */

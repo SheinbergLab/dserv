@@ -185,17 +185,16 @@ class ESSControl {
             </div>
             
             <!-- Scrollable Middle: Tabbed Section -->
-            <div class="ess-control-scrollable">
-                <div class="ess-control-section ess-tabbed-section">
-                    <!-- Tab Headers -->
-                    <div class="ess-tab-header">
-                        <button class="ess-tab-btn active" data-tab="setup">Setup</button>
-                        <button class="ess-tab-btn" data-tab="configs">Configs</button>
-                        <button class="ess-tab-btn" data-tab="queue">Queue</button>
-                        <div class="ess-tab-spacer"></div>
-                        <a href="stimdg_viewer.html" target="_blank" class="ess-stimdg-btn">StimDG</a>
-                    </div>
-                    
+            <div class="ess-control-section ess-tabbed-section">
+                <!-- Tab Headers (fixed, outside scrollable area) -->
+                <div class="ess-tab-header">
+                    <button class="ess-tab-btn active" data-tab="setup">Setup</button>
+                    <button class="ess-tab-btn" data-tab="configs">Configs</button>
+                    <button class="ess-tab-btn" data-tab="queue">Run</button>
+                </div>
+                
+                <!-- Scrollable Tab Content -->
+                <div class="ess-control-scrollable">
                     <!-- Setup Tab Content -->
                     <div class="ess-tab-content active" id="ess-tab-setup">
                         <!-- Subject -->
@@ -272,12 +271,16 @@ class ESSControl {
                             <button id="ess-config-trash-back" class="ess-config-trash-back" style="display: none;">← Back</button>
                             <input type="text" id="ess-config-search" class="ess-config-search" 
                                    placeholder="Search configs...">
-                            <button id="ess-config-import-btn" class="ess-config-import-btn" title="Import from peer">
-                                ↓ Import
-                            </button>
-                            <button id="ess-config-trash-toggle" class="ess-config-trash-btn" title="View trash">
-                                🗑 <span id="ess-config-trash-count"></span>
-                            </button>
+                            <div class="ess-config-menu-wrapper">
+                                <button id="ess-config-menu-btn" class="ess-config-menu-btn" title="Config actions">⋮</button>
+                                <div class="ess-config-menu" id="ess-config-menu">
+                                    <button class="ess-config-menu-action" data-action="import">Import from...</button>
+                                    <div class="ess-config-menu-divider"></div>
+                                    <button class="ess-config-menu-action" data-action="trash">
+                                        🗑 View Trash <span id="ess-config-trash-count"></span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                         
                         <!-- Tag Filter Row -->
@@ -366,15 +369,15 @@ class ESSControl {
                     </div>
                 </div>
                 
-                <!-- Queue Tab Content -->
+                <!-- Run Tab Content (internally still uses queue infrastructure) -->
                 <div class="ess-tab-content" id="ess-tab-queue">
-                    <!-- Queue Selection Row -->
+                    <!-- Session Selection Row -->
                     <div class="ess-queue-select-row">
                         <select id="ess-queue-select" class="ess-queue-select">
-                            <option value="">-- Select Queue --</option>
+                            <option value="">-- Select Session --</option>
                         </select>
                         <div class="ess-queue-menu-wrapper">
-                            <button id="ess-queue-menu-btn" class="ess-queue-menu-btn" title="Queue actions">⋮</button>
+                            <button id="ess-queue-menu-btn" class="ess-queue-menu-btn" title="Session actions">⋮</button>
                             <div class="ess-queue-menu" id="ess-queue-menu">
                                 <button class="ess-queue-menu-action" data-action="edit">Edit</button>
                                 <button class="ess-queue-menu-action" data-action="new">New</button>
@@ -385,13 +388,13 @@ class ESSControl {
                         </div>
                     </div>
                     
-                    <!-- Queue Status Display -->
+                    <!-- Run Status Display -->
                     <div class="ess-queue-status" id="ess-queue-status">
                         <div class="ess-queue-status-row">
                             <span class="ess-queue-status-label">Status:</span>
                             <span class="ess-queue-status-value" id="ess-queue-status-text">idle</span>
                         </div>
-                        <div class="ess-queue-status-row">
+                        <div class="ess-queue-status-row" id="ess-queue-progress-row">
                             <span class="ess-queue-status-label">Progress:</span>
                             <span class="ess-queue-status-value" id="ess-queue-progress">--/--</span>
                         </div>
@@ -405,31 +408,31 @@ class ESSControl {
                         </div>
                     </div>
                     
-                    <!-- Queue Playback Controls -->
+                    <!-- Run Controls -->
                     <div class="ess-queue-controls">
                         <button id="ess-queue-start" class="ess-state-btn go" disabled>▶ Start</button>
                         <button id="ess-queue-stop" class="ess-state-btn stop" disabled>■ Stop</button>
                         <button id="ess-queue-pause" class="ess-state-btn reset" disabled>⏸ Pause</button>
                     </div>
                     
-                    <!-- Queue Secondary Controls -->
+                    <!-- Secondary Controls -->
                     <div class="ess-queue-controls-secondary">
-                        <button id="ess-queue-skip" class="ess-mini-btn" disabled title="Skip to next item">Skip →</button>
-                        <button id="ess-queue-retry" class="ess-mini-btn" disabled title="Retry current item">↺ Retry</button>
+                        <button id="ess-queue-skip" class="ess-mini-btn" disabled title="Skip to next config">Skip →</button>
+                        <button id="ess-queue-retry" class="ess-mini-btn" disabled title="Retry current config">↺ Retry</button>
                         <button id="ess-queue-force" class="ess-mini-btn" disabled title="Force complete current run">Force Done</button>
                     </div>
                     
-                    <!-- Playlist (Queue Items) -->
-                    <div class="ess-queue-playlist-header">
-                        <span class="ess-queue-playlist-title">Playlist</span>
+                    <!-- Config List (shown when multiple configs) -->
+                    <div class="ess-queue-playlist-header" id="ess-queue-playlist-header">
+                        <span class="ess-queue-playlist-title">Configs</span>
                         <span class="ess-queue-playlist-count" id="ess-queue-item-count">0 items</span>
                     </div>
                     <div class="ess-queue-playlist" id="ess-queue-playlist">
-                        <div class="ess-queue-empty">No queue selected</div>
+                        <div class="ess-queue-empty">No session selected</div>
                     </div>
                 </div>
-            </div>
-            </div>
+                </div><!-- /.ess-control-scrollable -->
+            </div><!-- /.ess-tabbed-section -->
             
             <!-- Fixed Bottom: Config Status Bar -->
             <div class="ess-control-fixed-bottom">
@@ -487,8 +490,8 @@ class ESSControl {
             configSearch: this.container.querySelector('#ess-config-search'),
             configTagsRow: this.container.querySelector('#ess-config-tags-row'),
             configTagsList: this.container.querySelector('#ess-config-tags-list'),
-            configImportBtn: this.container.querySelector('#ess-config-import-btn'),
-            configTrashToggle: this.container.querySelector('#ess-config-trash-toggle'),
+            configMenuBtn: this.container.querySelector('#ess-config-menu-btn'),
+            configMenu: this.container.querySelector('#ess-config-menu'),
             configTrashBack: this.container.querySelector('#ess-config-trash-back'),
             configTrashCount: this.container.querySelector('#ess-config-trash-count'),
             configList: this.container.querySelector('#ess-config-list'),
@@ -524,6 +527,7 @@ class ESSControl {
             queueMenuBtn: this.container.querySelector('#ess-queue-menu-btn'),
             queueMenu: this.container.querySelector('#ess-queue-menu'),
             queueStatusText: this.container.querySelector('#ess-queue-status-text'),
+            queueProgressRow: this.container.querySelector('#ess-queue-progress-row'),
             queueProgress: this.container.querySelector('#ess-queue-progress'),
             queueRunRow: this.container.querySelector('#ess-queue-run-row'),
             queueRunCount: this.container.querySelector('#ess-queue-run-count'),
@@ -535,6 +539,7 @@ class ESSControl {
             queueBtnSkip: this.container.querySelector('#ess-queue-skip'),
             queueBtnRetry: this.container.querySelector('#ess-queue-retry'),
             queueBtnForce: this.container.querySelector('#ess-queue-force'),
+            queuePlaylistHeader: this.container.querySelector('#ess-queue-playlist-header'),
             queueItemCount: this.container.querySelector('#ess-queue-item-count'),
             queuePlaylist: this.container.querySelector('#ess-queue-playlist')
         };
@@ -604,19 +609,36 @@ class ESSControl {
             this.renderConfigList();
         });
         
-        // Trash toggle
-        this.elements.configTrashToggle.addEventListener('click', () => {
-            this.toggleTrashView();
+        // Config menu button
+        this.elements.configMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleConfigMenu();
         });
+        
+        // Config menu actions
+        this.elements.configMenu.querySelectorAll('.ess-config-menu-action').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.action;
+                this.closeConfigMenu();
+                
+                switch (action) {
+                    case 'import':
+                        this.showImportDialog();
+                        break;
+                    case 'trash':
+                        this.toggleTrashView();
+                        break;
+                }
+            });
+        });
+        
+        // Close config menu when clicking elsewhere
+        document.addEventListener('click', () => this.closeConfigMenu());
         
         // Trash back button
         this.elements.configTrashBack.addEventListener('click', () => {
             this.toggleTrashView();  // Toggle back to normal view
-        });
-        
-        // Import button
-        this.elements.configImportBtn.addEventListener('click', () => {
-            this.showImportDialog();
         });
         
         // Config New button - opens edit view in create mode
@@ -710,6 +732,20 @@ class ESSControl {
      */
     closeQueueMenu() {
         this.elements.queueMenu.classList.remove('open');
+    }
+    
+    /**
+     * Toggle config menu visibility
+     */
+    toggleConfigMenu() {
+        this.elements.configMenu.classList.toggle('open');
+    }
+    
+    /**
+     * Close config menu
+     */
+    closeConfigMenu() {
+        this.elements.configMenu.classList.remove('open');
     }
     
     /**
@@ -1343,18 +1379,16 @@ class ESSControl {
     
     updateTrashCount() {
         const count = this.state.archivedConfigs.length;
-        this.elements.configTrashCount.textContent = count > 0 ? count : '';
-        this.elements.configTrashToggle.classList.toggle('has-items', count > 0);
+        this.elements.configTrashCount.textContent = count > 0 ? `(${count})` : '';
     }
     
     toggleTrashView() {
         this.state.showingTrash = !this.state.showingTrash;
-        this.elements.configTrashToggle.classList.toggle('active', this.state.showingTrash);
         this.elements.configList.classList.toggle('trash-view', this.state.showingTrash);
         
-        // Show/hide back button and trash toggle
+        // Show/hide back button and menu button
         this.elements.configTrashBack.style.display = this.state.showingTrash ? '' : 'none';
-        this.elements.configTrashToggle.style.display = this.state.showingTrash ? 'none' : '';
+        this.elements.configMenuBtn.parentElement.style.display = this.state.showingTrash ? 'none' : '';
         
         // Update search placeholder
         this.elements.configSearch.placeholder = this.state.showingTrash 
@@ -2730,6 +2764,23 @@ class ESSControl {
         return text.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
     
+    /**
+     * Insert text at cursor position in an input/textarea element
+     */
+    insertAtCursor(input, text) {
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        const before = input.value.substring(0, start);
+        const after = input.value.substring(end);
+        
+        input.value = before + text + after;
+        
+        // Move cursor to end of inserted text
+        const newPos = start + text.length;
+        input.setSelectionRange(newPos, newPos);
+        input.focus();
+    }
+    
     // =========================================================================
     // SECTION 8: EVENT EMITTER & CLEANUP
     // =========================================================================
@@ -2851,11 +2902,12 @@ class ESSControl {
         const select = this.elements.queueSelect;
         const queues = this.state.queues;
         
-        select.innerHTML = '<option value="">-- Select Queue --</option>';
+        select.innerHTML = '<option value="">-- Select Session --</option>';
         queues.forEach(q => {
+            const itemLabel = q.item_count === 1 ? '1 config' : `${q.item_count} configs`;
             const opt = document.createElement('option');
             opt.value = q.name;
-            opt.textContent = `${q.name} (${q.item_count} items)`;
+            opt.textContent = `${q.name} (${itemLabel})`;
             select.appendChild(opt);
         });
         
@@ -2950,15 +3002,19 @@ class ESSControl {
         const items = this.state.queueItems;
         const qs = this.state.queueState;
         const playlist = this.elements.queuePlaylist;
+        const isSingleConfig = items.length === 1;
+        
+        // Adapt UI based on single vs multiple configs
+        this.adaptUIForSessionSize(items.length);
         
         // Update item count
-        this.elements.queueItemCount.textContent = `${items.length} item${items.length !== 1 ? 's' : ''}`;
+        this.elements.queueItemCount.textContent = `${items.length} config${items.length !== 1 ? 's' : ''}`;
         
         if (items.length === 0) {
             if (this.state.selectedQueue) {
-                playlist.innerHTML = '<div class="ess-queue-empty">Queue is empty</div>';
+                playlist.innerHTML = '<div class="ess-queue-empty">Session is empty</div>';
             } else {
-                playlist.innerHTML = '<div class="ess-queue-empty">No queue selected</div>';
+                playlist.innerHTML = '<div class="ess-queue-empty">No session selected</div>';
             }
             return;
         }
@@ -2973,6 +3029,17 @@ class ESSControl {
             if (isCurrent) statusClass = 'current';
             else if (isPast) statusClass = 'completed';
             
+            // For single config, show simpler display
+            if (isSingleConfig) {
+                return `
+                    <div class="ess-queue-item single ${statusClass}" data-position="${idx}">
+                        <span class="ess-queue-item-name">${this.escapeHtml(item.config_name)}</span>
+                        ${repeatInfo ? `<span class="ess-queue-item-repeat">${repeatInfo}</span>` : ''}
+                        ${isCurrent && qs.run_count > 0 ? `<span class="ess-queue-item-run">run ${qs.run_count}</span>` : ''}
+                    </div>
+                `;
+            }
+            
             return `
                 <div class="ess-queue-item ${statusClass}" data-position="${idx}">
                     <span class="ess-queue-item-position">${idx + 1}</span>
@@ -2986,13 +3053,39 @@ class ESSControl {
             `;
         }).join('');
         
-        // Add click handlers for jumping to position
-        playlist.querySelectorAll('.ess-queue-item').forEach(el => {
-            el.addEventListener('click', () => {
-                const pos = parseInt(el.dataset.position);
-                this.queueJumpTo(pos);
+        // Add click handlers for jumping to position (only useful for multi-config)
+        if (!isSingleConfig) {
+            playlist.querySelectorAll('.ess-queue-item').forEach(el => {
+                el.addEventListener('click', () => {
+                    const pos = parseInt(el.dataset.position);
+                    this.queueJumpTo(pos);
+                });
             });
-        });
+        }
+    }
+    
+    /**
+     * Adapt UI elements based on session size (single config vs multiple)
+     */
+    adaptUIForSessionSize(itemCount) {
+        const isSingleConfig = itemCount === 1;
+        const isMultiConfig = itemCount > 1;
+        
+        // Hide progress row for single config (it's always 1/1)
+        if (this.elements.queueProgressRow) {
+            this.elements.queueProgressRow.style.display = isSingleConfig ? 'none' : '';
+        }
+        
+        // Hide Skip button for single config (nowhere to skip to)
+        if (this.elements.queueBtnSkip) {
+            this.elements.queueBtnSkip.style.display = isSingleConfig ? 'none' : '';
+        }
+        
+        // Rename playlist header based on count
+        const headerTitle = this.elements.queuePlaylistHeader?.querySelector('.ess-queue-playlist-title');
+        if (headerTitle) {
+            headerTitle.textContent = isSingleConfig ? 'Config' : 'Configs';
+        }
     }
     
     /**
@@ -3056,19 +3149,19 @@ class ESSControl {
         if (!this.state.selectedQueue) return;
         
         try {
-            this.emit('log', { message: `Starting queue: ${this.state.selectedQueue}`, level: 'info' });
+            this.emit('log', { message: `Starting session: ${this.state.selectedQueue}`, level: 'info' });
             await this.sendConfigCommandAsync(`queue_start {${this.state.selectedQueue}}`);
         } catch (e) {
-            this.emit('log', { message: `Failed to start queue: ${e.message}`, level: 'error' });
+            this.emit('log', { message: `Failed to start session: ${e.message}`, level: 'error' });
         }
     }
     
     async queueStop() {
         try {
-            this.emit('log', { message: 'Stopping queue', level: 'info' });
+            this.emit('log', { message: 'Stopping session', level: 'info' });
             await this.sendConfigCommandAsync('queue_stop');
         } catch (e) {
-            this.emit('log', { message: `Failed to stop queue: ${e.message}`, level: 'error' });
+            this.emit('log', { message: `Failed to stop session: ${e.message}`, level: 'error' });
         }
     }
     
@@ -3076,20 +3169,20 @@ class ESSControl {
         const isPaused = this.state.queueState.status === 'paused';
         try {
             if (isPaused) {
-                this.emit('log', { message: 'Resuming queue', level: 'info' });
+                this.emit('log', { message: 'Resuming session', level: 'info' });
                 await this.sendConfigCommandAsync('queue_resume');
             } else {
-                this.emit('log', { message: 'Pausing queue', level: 'info' });
+                this.emit('log', { message: 'Pausing session', level: 'info' });
                 await this.sendConfigCommandAsync('queue_pause');
             }
         } catch (e) {
-            this.emit('log', { message: `Failed to ${isPaused ? 'resume' : 'pause'} queue: ${e.message}`, level: 'error' });
+            this.emit('log', { message: `Failed to ${isPaused ? 'resume' : 'pause'} session: ${e.message}`, level: 'error' });
         }
     }
     
     async queueSkip() {
         try {
-            this.emit('log', { message: 'Skipping to next item', level: 'info' });
+            this.emit('log', { message: 'Skipping to next config', level: 'info' });
             await this.sendConfigCommandAsync('queue_skip');
         } catch (e) {
             this.emit('log', { message: `Failed to skip: ${e.message}`, level: 'error' });
@@ -3115,10 +3208,10 @@ class ESSControl {
     }
     
     async queueJumpTo(position) {
-        // Only allow jumping when queue is paused or stopped
+        // Only allow jumping when session is paused or stopped
         const qs = this.state.queueState;
         if (qs.status === 'running') {
-            this.emit('log', { message: 'Stop or pause the queue before jumping to a position', level: 'warning' });
+            this.emit('log', { message: 'Stop or pause the session before jumping to a position', level: 'warning' });
             return;
         }
         
@@ -3190,7 +3283,7 @@ class ESSControl {
         modal.innerHTML = `
             <div class="ess-modal ess-queue-builder-modal">
                 <div class="ess-modal-header">
-                    <span class="ess-modal-title">${queueName ? `Edit: ${this.escapeHtml(queueName)}` : 'Create Queue'}</span>
+                    <span class="ess-modal-title">${queueName ? `Edit: ${this.escapeHtml(queueName)}` : 'New Session'}</span>
                     <button class="ess-modal-close" id="ess-qb-close">&times;</button>
                 </div>
                 <div class="ess-modal-body">
@@ -3199,7 +3292,7 @@ class ESSControl {
                         <label class="ess-modal-label">Name</label>
                         <input type="text" class="ess-modal-input" id="ess-qb-name" 
                                value="${this.escapeHtml(this.queueBuilder.name)}" 
-                               placeholder="Queue name (required)">
+                               placeholder="Session name (required)">
                     </div>
                     <div class="ess-modal-section">
                         <label class="ess-modal-label">Description</label>
@@ -3236,36 +3329,36 @@ class ESSControl {
                             Preview: <span id="ess-qb-preview-text">--</span>
                         </div>
                         <div class="ess-qb-template-help-popup" id="ess-qb-help-popup">
-                            <div class="ess-qb-help-title">Template Variables</div>
+                            <div class="ess-qb-help-title">Template Variables <span class="ess-qb-help-hint">(click to insert)</span></div>
                             <div class="ess-qb-help-content">
-                                <div class="ess-qb-help-item"><code>{suggest}</code> Use ESS default naming</div>
+                                <div class="ess-qb-help-item" data-template="{suggest}"><code>{suggest}</code> Use ESS default naming</div>
                                 <div class="ess-qb-help-section">ESS State</div>
-                                <div class="ess-qb-help-item"><code>{subject}</code> Current subject</div>
-                                <div class="ess-qb-help-item"><code>{system}</code> System name</div>
-                                <div class="ess-qb-help-item"><code>{protocol}</code> Protocol name</div>
-                                <div class="ess-qb-help-item"><code>{variant}</code> Variant name</div>
-                                <div class="ess-qb-help-item"><code>{config}</code> Config name (or short_name)</div>
-                                <div class="ess-qb-help-section">Queue Info</div>
-                                <div class="ess-qb-help-item"><code>{queue}</code> Queue name</div>
-                                <div class="ess-qb-help-item"><code>{position}</code> Position in queue (0-based)</div>
-                                <div class="ess-qb-help-item"><code>{run}</code> Run number within item (1-based)</div>
-                                <div class="ess-qb-help-item"><code>{global}</code> Global run counter (0-based)</div>
+                                <div class="ess-qb-help-item" data-template="{subject}"><code>{subject}</code> Current subject</div>
+                                <div class="ess-qb-help-item" data-template="{system}"><code>{system}</code> System name</div>
+                                <div class="ess-qb-help-item" data-template="{protocol}"><code>{protocol}</code> Protocol name</div>
+                                <div class="ess-qb-help-item" data-template="{variant}"><code>{variant}</code> Variant name</div>
+                                <div class="ess-qb-help-item" data-template="{config}"><code>{config}</code> Config name (or short_name)</div>
+                                <div class="ess-qb-help-section">Session Info</div>
+                                <div class="ess-qb-help-item" data-template="{queue}"><code>{queue}</code> Session name</div>
+                                <div class="ess-qb-help-item" data-template="{position}"><code>{position}</code> Position in session (0-based)</div>
+                                <div class="ess-qb-help-item" data-template="{run}"><code>{run}</code> Run number within config (1-based)</div>
+                                <div class="ess-qb-help-item" data-template="{global}"><code>{global}</code> Global run counter (0-based)</div>
                                 <div class="ess-qb-help-section">Zero-Padding</div>
-                                <div class="ess-qb-help-item"><code>{position:02}</code> → 00, 01, 02...</div>
-                                <div class="ess-qb-help-item"><code>{global:03}</code> → 000, 001, 002...</div>
+                                <div class="ess-qb-help-item" data-template="{position:02}"><code>{position:02}</code> → 00, 01, 02...</div>
+                                <div class="ess-qb-help-item" data-template="{global:03}"><code>{global:03}</code> → 000, 001, 002...</div>
                                 <div class="ess-qb-help-section">Date/Time</div>
-                                <div class="ess-qb-help-item"><code>{date}</code> YYYYMMDD</div>
-                                <div class="ess-qb-help-item"><code>{date_short}</code> YYMMDD</div>
-                                <div class="ess-qb-help-item"><code>{time}</code> HHMMSS</div>
-                                <div class="ess-qb-help-item"><code>{time_short}</code> HHMM</div>
-                                <div class="ess-qb-help-item"><code>{timestamp}</code> Unix timestamp</div>
+                                <div class="ess-qb-help-item" data-template="{date}"><code>{date}</code> YYYYMMDD</div>
+                                <div class="ess-qb-help-item" data-template="{date_short}"><code>{date_short}</code> YYMMDD</div>
+                                <div class="ess-qb-help-item" data-template="{time}"><code>{time}</code> HHMMSS</div>
+                                <div class="ess-qb-help-item" data-template="{time_short}"><code>{time_short}</code> HHMM</div>
+                                <div class="ess-qb-help-item" data-template="{timestamp}"><code>{timestamp}</code> Unix timestamp</div>
                             </div>
                         </div>
                     </div>
                     
-                    <!-- Items -->
+                    <!-- Configs -->
                     <div class="ess-modal-section">
-                        <label class="ess-modal-label">Items</label>
+                        <label class="ess-modal-label">Configs</label>
                         <div class="ess-qb-items-list" id="ess-qb-items-list">
                             <!-- Items rendered here -->
                         </div>
@@ -3310,6 +3403,8 @@ class ESSControl {
         // Template help popup toggle
         const helpBtn = modal.querySelector('#ess-qb-template-help');
         const helpPopup = modal.querySelector('#ess-qb-help-popup');
+        const templateInput = modal.querySelector('#ess-qb-template');
+        
         helpBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             const isVisible = helpPopup.classList.toggle('visible');
@@ -3321,6 +3416,16 @@ class ESSControl {
             }
         });
         
+        // Click on help item to insert template variable at cursor
+        helpPopup.querySelectorAll('.ess-qb-help-item[data-template]').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const template = item.dataset.template;
+                this.insertAtCursor(templateInput, template);
+                this.updateTemplatePreview();
+            });
+        });
+        
         // Close help popup when clicking elsewhere
         document.addEventListener('click', (e) => {
             if (!helpBtn.contains(e.target) && !helpPopup.contains(e.target)) {
@@ -3329,7 +3434,6 @@ class ESSControl {
         });
         
         // Template preview - update on input
-        const templateInput = modal.querySelector('#ess-qb-template');
         templateInput.addEventListener('input', () => this.updateTemplatePreview());
         
         // Initial preview update
@@ -3727,7 +3831,7 @@ class ESSControl {
         modal.innerHTML = `
             <div class="ess-modal">
                 <div class="ess-modal-header">
-                    <span class="ess-modal-title">Import Queue</span>
+                    <span class="ess-modal-title">Import Session</span>
                     <button class="ess-modal-close">×</button>
                 </div>
                 <div class="ess-modal-body">
@@ -3750,7 +3854,7 @@ class ESSControl {
                                placeholder="hostname or IP address">
                     </div>
                     <div class="ess-modal-section" id="ess-queue-import-list-section" style="display: none;">
-                        <label class="ess-modal-label">Select queue to import:</label>
+                        <label class="ess-modal-label">Select session to import:</label>
                         <div class="ess-modal-config-list" id="ess-queue-import-list">
                             <!-- Populated dynamically -->
                         </div>
@@ -3912,12 +4016,12 @@ class ESSControl {
         modal.innerHTML = `
             <div class="ess-modal">
                 <div class="ess-modal-header">
-                    <span class="ess-modal-title">Push Queue</span>
+                    <span class="ess-modal-title">Push Session</span>
                     <button class="ess-modal-close">×</button>
                 </div>
                 <div class="ess-modal-body">
                     <div class="ess-modal-section">
-                        <label class="ess-modal-label">Queue:</label>
+                        <label class="ess-modal-label">Session:</label>
                         <div class="ess-modal-value">${this.escapeHtml(queueName)}</div>
                     </div>
                     <div class="ess-modal-section">
@@ -3945,7 +4049,7 @@ class ESSControl {
                         </label>
                         <label class="ess-qb-checkbox">
                             <input type="checkbox" id="ess-queue-push-overwrite">
-                            Overwrite if queue exists on destination
+                            Overwrite if session exists on destination
                         </label>
                     </div>
                 </div>
