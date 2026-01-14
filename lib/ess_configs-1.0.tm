@@ -12,6 +12,7 @@
 #   - Usage tracking
 #   - Cross-rig export/import
 #   - Datapoint publishing for reactive UIs
+#   - Schema versioning and migrations
 #
 
 package require sqlite3
@@ -30,9 +31,18 @@ namespace eval ess::configs {
     variable db_path ""         ;# Path to database file
     variable initialized 0      ;# Whether init has been called
     
+    # Current schema version - increment when adding migrations
+    variable SCHEMA_VERSION 2
+    
     #=========================================================================
     # Initialization
     #=========================================================================
+    
+    # Return the database handle (for sharing with other modules like ess_queues)
+    proc get_db {} {
+        variable db
+        return $db
+    }
     
     proc init {path} {
         variable db
@@ -55,14 +65,17 @@ namespace eval ess::configs {
         configdb eval { PRAGMA busy_timeout=5000 }
         configdb eval { PRAGMA foreign_keys=ON }
         
-        # Create schema
+        # Create base schema if needed, then run migrations
         init_schema
+        migrate
         
         set initialized 1
         log info "ess::configs initialized: $path"
     }
     
     proc init_schema {} {
+        # Base schema - version 1
+        # This creates tables if they don't exist
         configdb eval {
             -- Main configs table
             CREATE TABLE IF NOT EXISTS configs (
@@ -101,6 +114,11 @@ namespace eval ess::configs {
             CREATE INDEX IF NOT EXISTS idx_configs_use_count ON configs(use_count DESC);
             CREATE INDEX IF NOT EXISTS idx_configs_last_used ON configs(last_used_at DESC);
         }
+        
+        # Set version 1 if this is a fresh database
+        if {[schema_version] == 0} {
+            set_schema_version 1
+        }
     }
     
     proc close {} {
@@ -111,6 +129,185 @@ namespace eval ess::configs {
             configdb close
             set initialized 0
         }
+    }
+    
+    #=========================================================================
+    # Schema Migration System
+    #=========================================================================
+    
+    # Get current schema version from database
+    proc schema_version {} {
+        configdb eval {PRAGMA user_version}
+    }
+    
+    # Set schema version
+    proc set_schema_version {v} {
+        configdb eval "PRAGMA user_version = $v"
+    }
+    
+    # Check if a column exists in a table
+    proc column_exists {table column} {
+        set cols [configdb eval "PRAGMA table_info($table)"]
+        # table_info returns: cid name type notnull dflt_value pk (6 items per column)
+        foreach {cid name type notnull dflt pk} $cols {
+            if {$name eq $column} {
+                return 1
+            }
+        }
+        return 0
+    }
+    
+    # Check if a table exists
+    proc table_exists {table} {
+        set count [configdb eval {
+            SELECT COUNT(*) FROM sqlite_master 
+            WHERE type='table' AND name=:table
+        }]
+        return [expr {$count > 0}]
+    }
+    
+    # Run all pending migrations
+    proc migrate {} {
+        variable SCHEMA_VERSION
+        
+        set current [schema_version]
+        
+        if {$current >= $SCHEMA_VERSION} {
+            log info "Schema up to date (version $current)"
+            return
+        }
+        
+        log info "Migrating schema from version $current to $SCHEMA_VERSION"
+        
+        # Migration 2: Add short_name to configs for filename generation
+        if {$current < 2} {
+            migrate_to_v2
+        }
+        
+        # Future migrations go here:
+        # if {$current < 3} { migrate_to_v3 }
+        # if {$current < 4} { migrate_to_v4 }
+        
+        log info "Schema migration complete (now at version [schema_version])"
+    }
+    
+    # Migration 2: Add short_name column to configs
+    proc migrate_to_v2 {} {
+        log info "Migration 2: Adding short_name column to configs"
+        
+        if {![column_exists configs short_name]} {
+            configdb eval {
+                ALTER TABLE configs ADD COLUMN short_name TEXT DEFAULT ''
+            }
+            log info "  Added configs.short_name"
+        } else {
+            log info "  configs.short_name already exists, skipping"
+        }
+        
+        set_schema_version 2
+    }
+    
+    # Get schema information for diagnostics
+    proc schema_info {} {
+        variable SCHEMA_VERSION
+        
+        set info [dict create]
+        dict set info current_version [schema_version]
+        dict set info target_version $SCHEMA_VERSION
+        dict set info needs_migration [expr {[schema_version] < $SCHEMA_VERSION}]
+        
+        # List tables
+        set tables [configdb eval {
+            SELECT name FROM sqlite_master WHERE type='table' ORDER BY name
+        }]
+        dict set info tables $tables
+        
+        # Get column info for main tables
+        foreach table {configs queues queue_items} {
+            if {[table_exists $table]} {
+                set cols {}
+                configdb eval "PRAGMA table_info($table)" row {
+                    lappend cols $row(name)
+                }
+                dict set info columns $table $cols
+            }
+        }
+        
+        return $info
+    }
+    
+    # Backup database before destructive operations
+    proc backup {{suffix ""}} {
+        variable db_path
+        
+        if {$suffix eq ""} {
+            set suffix [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+        }
+        
+        set backup_path "${db_path}.backup_${suffix}"
+        
+        # Use SQLite's backup API via VACUUM INTO (SQLite 3.27+)
+        # Fall back to file copy if not available
+        if {[catch {
+            configdb eval "VACUUM INTO '$backup_path'"
+        }]} {
+            # Fallback: close, copy, reopen
+            file copy -force $db_path $backup_path
+        }
+        
+        log info "Database backed up to: $backup_path"
+        return $backup_path
+    }
+    
+    # Reset database (dangerous - requires confirmation token)
+    proc reset {confirm_token} {
+        variable db_path
+        variable initialized
+        
+        # Require specific confirmation to prevent accidents
+        if {$confirm_token ne "YES_DELETE_ALL_DATA"} {
+            error "Reset requires confirm_token 'YES_DELETE_ALL_DATA'"
+        }
+        
+        # Backup first
+        set backup [backup "pre_reset"]
+        
+        log warning "Resetting database - all data will be deleted"
+        
+        # Drop all tables
+        set tables [configdb eval {
+            SELECT name FROM sqlite_master WHERE type='table'
+        }]
+        foreach table $tables {
+            if {$table ne "sqlite_sequence"} {
+                configdb eval "DROP TABLE IF EXISTS $table"
+            }
+        }
+        
+        # Reset version
+        set_schema_version 0
+        
+        # Reinitialize
+        init_schema
+        migrate
+        
+        log info "Database reset complete. Backup at: $backup"
+        return $backup
+    }
+    
+    # Rebuild indexes (maintenance operation)
+    proc rebuild_indexes {} {
+        log info "Rebuilding database indexes"
+        configdb eval {REINDEX}
+        log info "Index rebuild complete"
+    }
+    
+    # Optimize database (maintenance operation)
+    proc optimize {} {
+        log info "Optimizing database"
+        configdb eval {VACUUM}
+        configdb eval {ANALYZE}
+        log info "Optimization complete"
     }
     
     #=========================================================================
@@ -133,12 +330,14 @@ namespace eval ess::configs {
         set description ""
         set tags {}
         set created_by ""
+        set short_name ""
         
         foreach {key value} $args {
             switch -- $key {
                 -description { set description $value }
                 -tags        { set tags $value }
                 -created_by  { set created_by $value }
+                -short_name  { set short_name $value }
             }
         }
         
@@ -178,8 +377,6 @@ namespace eval ess::configs {
         }
         
         # Convert to JSON for storage
-        # variant_args and params are flat dicts - shallow is fine
-        # tags uses yajltcl to ensure proper array format
         set variant_args_json [dict_to_json $variant_args]
         set params_json [dict_to_json $params]
         set tags_json [tags_to_json $tags]
@@ -203,6 +400,7 @@ namespace eval ess::configs {
                     variant_args = :variant_args_json,
                     params = :params_json,
                     tags = :tags_json,
+                    short_name = :short_name,
                     updated_at = strftime('%s', 'now')
                 WHERE id = :config_id
             }
@@ -212,10 +410,10 @@ namespace eval ess::configs {
             configdb eval {
                 INSERT INTO configs 
                     (name, description, script_source, system, protocol, variant,
-                     subject, variant_args, params, tags, created_by)
+                     subject, variant_args, params, tags, created_by, short_name)
                 VALUES 
                     (:name, :description, :script_source, :system, :protocol, :variant,
-                     :subject, :variant_args_json, :params_json, :tags_json, :created_by)
+                     :subject, :variant_args_json, :params_json, :tags_json, :created_by, :short_name)
             }
             set config_id [configdb last_insert_rowid]
             log info "Created config: $name (id=$config_id)"
@@ -236,6 +434,7 @@ namespace eval ess::configs {
         set params {}
         set tags {}
         set created_by ""
+        set short_name ""
         
         foreach {key value} $args {
             switch -- $key {
@@ -246,6 +445,7 @@ namespace eval ess::configs {
                 -params        { set params $value }
                 -tags          { set tags $value }
                 -created_by    { set created_by $value }
+                -short_name    { set short_name $value }
             }
         }
         
@@ -260,10 +460,10 @@ namespace eval ess::configs {
         configdb eval {
             INSERT INTO configs 
                 (name, description, script_source, system, protocol, variant,
-                 subject, variant_args, params, tags, created_by)
+                 subject, variant_args, params, tags, created_by, short_name)
             VALUES 
                 (:name, :description, :script_source, :system, :protocol, :variant,
-                 :subject, :variant_args_json, :params_json, :tags_json, :created_by)
+                 :subject, :variant_args_json, :params_json, :tags_json, :created_by, :short_name)
         }
         
         set config_id [configdb last_insert_rowid]
@@ -286,19 +486,19 @@ namespace eval ess::configs {
         }
         
         # Build ESS config dict (just the fields ESS needs)
-	set ess_config [dict create \
-             script_source [dict get $config script_source] \
-             system        [dict get $config system] \
-             protocol      [dict get $config protocol] \
-             variant       [dict get $config variant] \
-             subject       [dict get $config subject] \
-             variant_args  [dict get $config variant_args] \
-             params        [dict get $config params]]
+        set ess_config [dict create \
+            script_source [dict get $config script_source] \
+            system        [dict get $config system] \
+            protocol      [dict get $config protocol] \
+            variant       [dict get $config variant] \
+            subject       [dict get $config subject] \
+            variant_args  [dict get $config variant_args] \
+            params        [dict get $config params]]
 
         # Send to ESS thread to load
         log info "Loading config: [dict get $config name]"
-	set result [send ess "::ess::load_config {$ess_config}"]
-	
+        set result [send ess "::ess::load_config {$ess_config}"]
+        
         # Update usage stats
         set config_id [dict get $config id]
         configdb eval {
@@ -334,7 +534,7 @@ namespace eval ess::configs {
         configdb eval "
             SELECT id, name, description, script_source, system, protocol, variant,
                    subject, variant_args, params, tags, created_by, created_at,
-                   updated_at, last_used_at, use_count, archived
+                   updated_at, last_used_at, use_count, archived, short_name
             FROM configs 
             WHERE $where_clause AND archived = 0
         " row {
@@ -355,7 +555,8 @@ namespace eval ess::configs {
                 updated_at    $row(updated_at) \
                 last_used_at  $row(last_used_at) \
                 use_count     $row(use_count) \
-                archived      $row(archived)]
+                archived      $row(archived) \
+                short_name    $row(short_name)]
         }
         
         return $result
@@ -399,7 +600,6 @@ namespace eval ess::configs {
             }
         }
         
-        # Build WHERE clauses
         set where_clauses {}
         
         if {!$include_archived} {
@@ -422,7 +622,7 @@ namespace eval ess::configs {
             lappend where_clauses "(name LIKE '%' || :search || '%' OR description LIKE '%' || :search || '%')"
         }
         
-        # Tag filtering - check if tags JSON array contains each tag
+        # Tag filtering - check if all requested tags are present
         foreach tag $tags {
             lappend where_clauses "tags LIKE '%\"$tag\"%'"
         }
@@ -432,68 +632,40 @@ namespace eval ess::configs {
             set where_sql "WHERE [join $where_clauses { AND }]"
         }
         
-        set sql "
-            SELECT id, name, description, script_source, system, protocol, variant,
-                   subject, tags, created_by, created_at, updated_at, 
-                   last_used_at, use_count
+        set results {}
+        configdb eval "
+            SELECT id, name, description, system, protocol, variant, subject,
+                   tags, use_count, last_used_at, short_name
             FROM configs
             $where_sql
             ORDER BY $order
             LIMIT :limit
-        "
-        
-        set results {}
-        configdb eval $sql row {
+        " row {
             lappend results [dict create \
-                id            $row(id) \
-                name          $row(name) \
-                description   $row(description) \
-                script_source $row(script_source) \
-                system        $row(system) \
-                protocol      $row(protocol) \
-                variant       $row(variant) \
-                subject       $row(subject) \
-                tags          [json_to_dict $row(tags)] \
-                created_by    $row(created_by) \
-                created_at    $row(created_at) \
-                updated_at    $row(updated_at) \
-                last_used_at  $row(last_used_at) \
-                use_count     $row(use_count)]
+                id          $row(id) \
+                name        $row(name) \
+                description $row(description) \
+                system      $row(system) \
+                protocol    $row(protocol) \
+                variant     $row(variant) \
+                subject     $row(subject) \
+                tags        [json_to_dict $row(tags)] \
+                use_count   $row(use_count) \
+                last_used_at $row(last_used_at) \
+                short_name  $row(short_name)]
         }
         
         return $results
     }
     
-    # Get quick picks - most used configs
-    proc quick_picks {{limit 5}} {
-        set results {}
-        configdb eval {
-            SELECT id, name, system, protocol, variant, use_count
-            FROM configs
-            WHERE archived = 0 AND use_count > 0
-            ORDER BY use_count DESC, last_used_at DESC
-            LIMIT :limit
-        } row {
-            lappend results [dict create \
-                id        $row(id) \
-                name      $row(name) \
-                system    $row(system) \
-                protocol  $row(protocol) \
-                variant   $row(variant) \
-                use_count $row(use_count)]
-        }
-        return $results
-    }
-    
-    # Get all unique tags in use
+    # Get all unique tags
     proc get_all_tags {} {
         set all_tags {}
         configdb eval {
-            SELECT DISTINCT tags FROM configs WHERE archived = 0 AND tags != '[]'
+            SELECT DISTINCT tags FROM configs WHERE archived = 0
         } row {
-            # tags is stored as JSON array, parse it
             foreach tag [json_to_dict $row(tags)] {
-                if {[lsearch $all_tags $tag] < 0} {
+                if {$tag ni $all_tags} {
                     lappend all_tags $tag
                 }
             }
@@ -501,11 +673,32 @@ namespace eval ess::configs {
         return [lsort $all_tags]
     }
     
+    # Quick picks - most frequently used configs
+    proc quick_picks {{limit 5}} {
+        set results {}
+        configdb eval {
+            SELECT id, name, description, system, protocol, variant, use_count
+            FROM configs
+            WHERE archived = 0 AND use_count > 0
+            ORDER BY use_count DESC, last_used_at DESC
+            LIMIT :limit
+        } row {
+            lappend results [dict create \
+                id          $row(id) \
+                name        $row(name) \
+                description $row(description) \
+                system      $row(system) \
+                protocol    $row(protocol) \
+                variant     $row(variant) \
+                use_count   $row(use_count)]
+        }
+        return $results
+    }
+    
     #=========================================================================
     # Update Operations
     #=========================================================================
     
-    # Update config metadata and/or values
     proc update {name_or_id args} {
         set config [get $name_or_id]
         if {$config eq ""} {
@@ -513,25 +706,37 @@ namespace eval ess::configs {
         }
         
         set config_id [dict get $config id]
-        
-        # Parse what to update
         set updates {}
+        
         foreach {key value} $args {
             switch -- $key {
-                -name        { lappend updates "name = :new_name"; set new_name $value }
-                -description { lappend updates "description = :new_desc"; set new_desc $value }
-                -subject     { lappend updates "subject = :new_subj"; set new_subj $value }
-                -tags        { 
+                -name {
+                    lappend updates "name = :new_name"
+                    set new_name $value
+                }
+                -description {
+                    lappend updates "description = :new_description"
+                    set new_description $value
+                }
+                -tags {
                     set new_tags_json [tags_to_json $value]
-                    lappend updates "tags = :new_tags_json" 
+                    lappend updates "tags = :new_tags_json"
+                }
+                -subject {
+                    lappend updates "subject = :new_subject"
+                    set new_subject $value
                 }
                 -variant_args {
-                    set new_vargs_json [dict_to_json $value]
-                    lappend updates "variant_args = :new_vargs_json"
+                    set new_variant_args_json [dict_to_json $value]
+                    lappend updates "variant_args = :new_variant_args_json"
                 }
                 -params {
                     set new_params_json [dict_to_json $value]
                     lappend updates "params = :new_params_json"
+                }
+                -short_name {
+                    lappend updates "short_name = :new_short_name"
+                    set new_short_name $value
                 }
             }
         }
@@ -568,6 +773,7 @@ namespace eval ess::configs {
         set tags [dict get $source tags]
         set variant_args [dict get $source variant_args]
         set params [dict get $source params]
+        set short_name [dict get $source short_name]
         
         # Apply overrides
         foreach {key value} $args {
@@ -576,6 +782,7 @@ namespace eval ess::configs {
                 -tags         { set tags $value }
                 -variant_args { set variant_args [dict merge $variant_args $value] }
                 -params       { set params [dict merge $params $value] }
+                -short_name   { set short_name $value }
             }
         }
         
@@ -589,7 +796,8 @@ namespace eval ess::configs {
             -subject [dict get $source subject] \
             -variant_args $variant_args \
             -params $params \
-            -tags $tags]
+            -tags $tags \
+            -short_name $short_name]
         
         log info "Cloned config: [dict get $source name] -> $new_name"
         
@@ -699,6 +907,11 @@ namespace eval ess::configs {
             set tags [dict get $config tags]
         }
         
+        set short_name ""
+        if {[dict exists $config short_name]} {
+            set short_name [dict get $config short_name]
+        }
+        
         set new_id [create $name \
             [dict get $config system] \
             [dict get $config protocol] \
@@ -709,6 +922,7 @@ namespace eval ess::configs {
             -variant_args [expr {[dict exists $config variant_args] ? [dict get $config variant_args] : {}}] \
             -params [expr {[dict exists $config params] ? [dict get $config params] : {}}] \
             -tags $tags \
+            -short_name $short_name \
             -created_by [expr {[dict exists $config created_by] ? [dict get $config created_by] : ""}]]
         
         log info "Imported config: $name"
@@ -726,7 +940,7 @@ namespace eval ess::configs {
         
         configdb eval {
             SELECT id, name, description, system, protocol, variant,
-                   subject, tags, use_count, last_used_at
+                   subject, tags, use_count, last_used_at, short_name
             FROM configs
             WHERE archived = 0
             ORDER BY use_count DESC, last_used_at DESC
@@ -741,6 +955,7 @@ namespace eval ess::configs {
             $obj string "variant" string $row(variant)
             $obj string "subject" string $row(subject)
             $obj string "use_count" number $row(use_count)
+            $obj string "short_name" string $row(short_name)
             if {$row(last_used_at) ne ""} {
                 $obj string "last_used_at" number $row(last_used_at)
             } else {
