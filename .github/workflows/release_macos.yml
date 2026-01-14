@@ -122,8 +122,28 @@ jobs:
           ls -alth /usr/local/dserv
           echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
-          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl
-          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl
+          # Run dserv briefly to verify it starts up correctly.
+          # Exit code 130 (SIGINT) or 124 (timeout) are expected and indicate success.
+          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv --cscript /usr/local/dserv/scripts/tcl/test_logger.tcl || EXIT_CODE=$?
+          if [ "${EXIT_CODE:-0}" -eq 130 ] || [ "${EXIT_CODE:-0}" -eq 124 ]; then
+            echo "dserv started successfully and was terminated as expected"
+          elif [ "${EXIT_CODE:-0}" -eq 0 ]; then
+            echo "dserv exited cleanly"
+          else
+            echo "dserv failed with unexpected exit code: ${EXIT_CODE}"
+            exit ${EXIT_CODE}
+          fi
+          
+          # Also test with config files
+          timeout --foreground --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl || EXIT_CODE=$?
+          if [ "${EXIT_CODE:-0}" -eq 130 ] || [ "${EXIT_CODE:-0}" -eq 124 ]; then
+            echo "dserv with config started successfully and was terminated as expected"
+          elif [ "${EXIT_CODE:-0}" -eq 0 ]; then
+            echo "dserv exited cleanly"
+          else
+            echo "dserv failed with unexpected exit code: ${EXIT_CODE}"
+            exit ${EXIT_CODE}
+          fi
 
   release-essgui:
 
@@ -250,4 +270,14 @@ jobs:
 
       - name: Sanity check the installed essgui.
         run: |
-          timeout --preserve-status --signal SIGINT 2 /Applications/essgui.app/Contents/MacOS/essgui || echo "$?"
+          # Run essgui briefly - it will exit quickly in headless environment
+          # Exit code 130 (SIGINT) or 124 (timeout) are expected from timeout
+          # Other non-zero codes are expected for GUI apps in headless CI
+          timeout --preserve-status --signal SIGINT 2 /Applications/essgui.app/Contents/MacOS/essgui || EXIT_CODE=$?
+          if [ "${EXIT_CODE:-0}" -eq 130 ] || [ "${EXIT_CODE:-0}" -eq 124 ]; then
+            echo "essgui was terminated by timeout as expected"
+          elif [ "${EXIT_CODE:-0}" -eq 0 ]; then
+            echo "essgui exited cleanly"
+          else
+            echo "essgui exited with code ${EXIT_CODE} (expected for headless environment)"
+          fi
