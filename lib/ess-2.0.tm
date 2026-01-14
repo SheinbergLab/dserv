@@ -1229,26 +1229,28 @@ namespace eval ess {
 
     proc start {} {
         variable current
-        if {$current(system) == ""} {print "no system set"; return}
+        if {$current(system) == ""} {print "no system set"; return 0}
         set current(state_system) [find_system $current(system)]
         if {$current(state_system) != ""} {
             ::ess::evt_put USER START [now]
             $current(state_system) start
             dservSet ess/user_start 1
+	    return 1
         }
-        return
+        return 0
     }
 
     proc stop {} {
         variable current
-        if {$current(system) == ""} {print "no system set"; return}
+        if {$current(system) == ""} {print "no system set"; return 0}
         set current(state_system) [find_system $current(system)]
         if {$current(state_system) != ""} {
             $current(state_system) stop
             ::ess::evt_put USER QUIT [now]
             dservSet ess/user_quit 1
+	    return 1
         }
-        return
+        return 0
     }
 
     proc reset {} {
@@ -1675,6 +1677,7 @@ namespace eval ess {
             set ts [clock format [clock seconds] -format {%y%m%d%H%M}]
             return "${subject_id}_$current(system)-$current(protocol)-$current(variant)_${ts}"
         }
+	return $suggestion
     }
 
     proc file_open {f {overwrite 0}} {
@@ -1759,42 +1762,44 @@ namespace eval ess {
     }
 
     proc file_close {} {
-        variable current
-        variable open_datafile
-        if {$open_datafile != ""} {
-            # could put pre_close callback here
-
-            dservLoggerClose $open_datafile
-	    set lastfile [file tail [file root $open_datafile]]
-            dservSet ess/lastfile $lastfile
-            dservSet ess/datafile {}
-
-            # call the system's specific file_close callback
-            if { [catch {$current(state_system) file_close $open_datafile} ioerror] } {
-		error $ioerror
-	    }
-
-            # convert to other formats
-	    if { [catch { file_load_ess $lastfile } result] } {
-		error $result
-	    } else {
-		set g $result
-	    }
-            if { [catch {ess_to_dgz $lastfile $g} ioerror] } {
-		dg_delete $g
-		set open_datafile {}
-		error $ioerror
-	    }
-            if { [catch {ess_to_json $lastfile $g} ioerror] } {
-		dg_delete $g
-		set open_datafile {}
-		error $ioerror
-	    }
-            return 1
-        }
-        return 0
-    }
-
+	variable current
+	variable open_datafile
+	
+	if {$open_datafile eq ""} {
+	    return 1
+	}
+	
+	set filename $open_datafile
+	set open_datafile {}  ;# Clear immediately so we don't get stuck
+	
+	catch {dservLoggerClose $filename}
+	
+	set lastfile [file tail [file root $filename]]
+	dservSet ess/lastfile $lastfile
+	dservSet ess/datafile {}
+	
+	# call the system's specific file_close callback
+	catch {$current(state_system) file_close $filename}
+	
+	# convert to other formats - don't let failures block
+	if {[catch {file_load_ess $lastfile} g]} {
+	    print "Warning: file_load_ess failed: $g"
+	    return 1
+	}
+	
+	if {[catch {ess_to_dgz $lastfile $g} err]} {
+	    print "Warning: ess_to_dgz failed: $err"
+	}
+	
+	if {[catch {ess_to_json $lastfile $g} err]} {
+	    print "Warning: ess_to_json failed: $err"
+	}
+	
+	catch {dg_delete $g}
+	
+	return 1
+    }    
+    
     proc file_load_ess {f} {
 	variable data_dir
         set infile [file join $data_dir $f.ess]
