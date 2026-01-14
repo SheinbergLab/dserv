@@ -93,7 +93,7 @@ function requestInitialData() {
     
     log('Touching ESS datapoints to get current state...', 'info');
     
-    // Send using eval command format (like Vue's essCommand)
+    // Send using eval command format 
     // This matches how dserv.js does it
     const touchCommand = `
         foreach v {
@@ -109,6 +109,7 @@ function requestInitialData() {
           system/hostname system/os
           configs/list configs/tags configs/quick_picks configs/current
           configs/remote_servers
+          queues/list queues/state queues/items
         } {
           catch { dservTouch $v }
         }
