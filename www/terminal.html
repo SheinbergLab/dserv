@@ -33,6 +33,18 @@ body {
     flex-shrink: 0;
 }
 
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 #header h1 {
     font-size: 16px;
     font-weight: normal;
@@ -121,12 +133,13 @@ body {
 
 .pane-tab {
     background: transparent;
-    color: #999999;
+    color: #cccccc;
     border: none;
     border-bottom: 2px solid transparent;
     padding: 4px 12px;
+    font-family: inherit;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
     transition: all 0.2s;
 }
@@ -193,20 +206,20 @@ body {
 }
 
 .icon-btn {
-    background: transparent;
+    background: #3c3c3c;
     border: 1px solid #3e3e42;
     color: #cccccc;
-    padding: 2px 8px;
+    padding: 4px 10px;
     border-radius: 3px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 11px;
+    font-family: inherit;
     transition: all 0.2s;
 }
 
 .icon-btn:hover {
-    background: #3e3e42;
+    background: #4a4a4a;
     border-color: #569cd6;
-    color: #569cd6;
 }
 
 .update-count {
@@ -844,12 +857,14 @@ body {
 }
 
 #terminal-pane {
-    flex: 1;
+    flex: 3;
     background: #1e1e1e;
+    min-height: 150px;
 }
 
 #error-log-pane {
-    height: 250px;
+    flex: 1;
+    min-height: 100px;
     background: #1e1e1e;
     border-top: 1px solid #3e3e42;
 }
@@ -919,7 +934,7 @@ body {
     border-radius: 3px;
     padding: 6px 8px;
     margin-bottom: 4px;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-family: inherit;
     font-size: 11px;
     line-height: 1.4;
 }
@@ -944,7 +959,7 @@ body {
 .console-block-content {
     padding: 8px;
     margin: 0;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-family: inherit;
     font-size: 11px;
     line-height: 1.4;
     color: #d4d4d4;
@@ -1191,6 +1206,229 @@ body {
     }
 }
 
+/* Sandbox Editor Styles */
+#sandbox-editor-pane {
+    background: #252526;
+    border-bottom: 1px solid #3e3e42;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+#sandbox-editor-pane.collapsed .sandbox-editor-content,
+#sandbox-editor-pane.collapsed .sandbox-status-bar {
+    display: none;
+}
+
+#sandbox-editor-pane.collapsed .sandbox-editor-header {
+    border-bottom: none;
+}
+
+.sandbox-editor-header {
+    background: #2d2d30;
+    padding: 6px 12px;
+    border-bottom: 1px solid #3e3e42;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sandbox-editor-header:hover {
+    background: #37373d;
+}
+
+.sandbox-title-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sandbox-toggle {
+    font-size: 10px;
+    color: #858585;
+    transition: transform 0.2s;
+}
+
+#sandbox-editor-pane.collapsed .sandbox-toggle {
+    transform: rotate(-90deg);
+}
+
+.sandbox-editor-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #cccccc;
+}
+
+.sandbox-editor-controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.sandbox-btn {
+    background: #3c3c3c;
+    color: #cccccc;
+    border: 1px solid #3e3e42;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sandbox-btn:hover {
+    background: #4a4a4a;
+    border-color: #569cd6;
+}
+
+.sandbox-btn.primary {
+    background: #0e639c;
+    border-color: #0e639c;
+}
+
+.sandbox-btn.primary:hover {
+    background: #1177bb;
+}
+
+.sandbox-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sandbox-editor-content {
+    display: flex;
+    flex-direction: column;
+    height: 180px;
+    min-height: 80px;
+    max-height: 500px;
+    overflow: hidden;
+}
+
+#sandbox-textarea {
+    flex: 1;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border: none;
+    padding: 12px;
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: none;
+    outline: none;
+    tab-size: 4;
+}
+
+#sandbox-textarea::placeholder {
+    color: #5a5a5a;
+}
+
+#sandbox-textarea:focus {
+    background: #1e1e1e;
+}
+
+.sandbox-status-bar {
+    background: #252526;
+    padding: 4px 12px;
+    border-top: 1px solid #3e3e42;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: #858585;
+    flex-shrink: 0;
+}
+
+.sandbox-status-left {
+    display: flex;
+    gap: 16px;
+}
+
+.sandbox-status-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sandbox-status-item.error {
+    color: #f48771;
+}
+
+.sandbox-status-item.warning {
+    color: #dcdcaa;
+}
+
+.sandbox-status-item.success {
+    color: #4ec9b0;
+}
+
+.sandbox-lint-popup {
+    position: absolute;
+    background: #2d2d30;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    max-width: 400px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 100;
+    font-size: 11px;
+}
+
+.sandbox-lint-item {
+    padding: 8px 12px;
+    border-bottom: 1px solid #3e3e42;
+    cursor: pointer;
+}
+
+.sandbox-lint-item:last-child {
+    border-bottom: none;
+}
+
+.sandbox-lint-item:hover {
+    background: #37373d;
+}
+
+.sandbox-lint-item.error {
+    border-left: 3px solid #f48771;
+}
+
+.sandbox-lint-item.warning {
+    border-left: 3px solid #dcdcaa;
+}
+
+.sandbox-lint-location {
+    color: #858585;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+.sandbox-lint-message {
+    color: #d4d4d4;
+}
+
+/* Resize handle between editor and terminal */
+#editor-resize-handle {
+    height: 4px;
+    background: #3e3e42;
+    cursor: row-resize;
+    flex-shrink: 0;
+}
+
+#editor-resize-handle:hover {
+    background: #0e639c;
+}
+
+#sandbox-editor-pane.collapsed + #editor-resize-handle {
+    display: none;
+}
+
     </style>
 </head>
 <body>
@@ -1198,6 +1436,9 @@ body {
     <div id="header">
         <div class="header-left">
             <h1>dserv Console</h1>
+            <select id="interp-selector" class="interp-selector" title="Select interpreter">
+                <option value="dserv">dserv</option>
+            </select>
         </div>
         <div class="header-right">
             <!-- Error badge -->
@@ -1211,17 +1452,54 @@ body {
 
     <!-- Main content area with split panes -->
     <div id="main-content">
-        <!-- Left side: Terminal (top) + Error Log (bottom) -->
+        <!-- Left side: Editor + Terminal (top) + Error Log (bottom) -->
         <div id="left-pane" class="pane">
+            <!-- Sandbox Editor (collapsible) -->
+            <div id="sandbox-editor-pane">
+                <div class="sandbox-editor-header" id="sandbox-editor-toggle">
+                    <div class="sandbox-title-area">
+                        <span class="sandbox-toggle">▼</span>
+                        <span class="sandbox-editor-title">Editor</span>
+                    </div>
+                    <div class="sandbox-editor-controls" onclick="event.stopPropagation()">
+                        <button id="sandbox-format-btn" class="sandbox-btn" title="Format code (Mod+Shift+F)">
+                            Format
+                        </button>
+                        <button id="sandbox-lint-btn" class="sandbox-btn" title="Check for errors">
+                            Lint
+                        </button>
+                        <button id="sandbox-clear-btn" class="sandbox-btn" title="Clear editor">
+                            Clear
+                        </button>
+                        <button id="sandbox-execute-btn" class="sandbox-btn primary" title="Execute code (Shift+Enter)">
+                            ▶ Execute
+                        </button>
+                    </div>
+                </div>
+                <div class="sandbox-editor-content">
+                    <textarea id="sandbox-textarea" 
+                              placeholder="# Paste or write Tcl code here...&#10;# Use Shift+Enter to execute, Mod+Shift+F to format&#10;# Code is sent to the selected interpreter"></textarea>
+                </div>
+                <div class="sandbox-status-bar">
+                    <div class="sandbox-status-left">
+                        <span id="sandbox-line-info" class="sandbox-status-item">Ln 1, Col 1</span>
+                        <span id="sandbox-lint-status" class="sandbox-status-item success">✓ Ready</span>
+                    </div>
+                    <div class="sandbox-status-right">
+                        <span id="sandbox-interp-target" class="sandbox-status-item">→ dserv</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Resize handle between editor and terminal -->
+            <div id="editor-resize-handle"></div>
+
             <!-- Terminal -->
             <div id="terminal-pane" class="sub-pane">
                 <div class="pane-header">
                     <span class="pane-title">Terminal</span>
                     <div class="pane-controls">
-                        <select id="interp-selector" class="interp-selector" title="Select interpreter">
-                            <option value="dserv">dserv</option>
-                        </select>
-                        <button id="clear-terminal" class="icon-btn" title="Clear terminal (Ctrl+L)">⌧</button>
+                        <button id="clear-terminal" class="icon-btn" title="Clear terminal (Ctrl+L)">Clear</button>
                     </div>
                 </div>
                 <div id="terminal" class="terminal-output"></div>
@@ -1298,6 +1576,10 @@ body {
             </div>
         </div>
     </div>
+
+    <!-- Load Tcl utilities for sandbox editor -->
+    <script src="js/TclFormatter.js"></script>
+    <script src="js/TclLinter.js"></script>
 
     <script>
 // ============================================
@@ -1536,9 +1818,10 @@ function initHorizontalResize() {
         const newTerminalHeight = Math.max(150, startHeightTerminal + deltaY);
         const newErrorHeight = Math.max(100, startHeightError - deltaY);
         
-        terminalPane.style.flex = 'none';
-        terminalPane.style.height = `${newTerminalHeight}px`;
-        errorLogPane.style.height = `${newErrorHeight}px`;
+        // Use flex-basis to maintain proportions on window resize
+        const total = newTerminalHeight + newErrorHeight;
+        terminalPane.style.flex = `${newTerminalHeight / total * 4} 1 0`;
+        errorLogPane.style.flex = `${newErrorHeight / total * 4} 1 0`;
     });
 
     document.addEventListener('mouseup', () => {
@@ -3249,16 +3532,431 @@ function initializePaneTabs() {
 }
 
 // ============================================
-// Initialize error monitor when DOM is ready
+// Sandbox Editor - Multi-line code editor
+// ============================================
+
+class SandboxEditor {
+    constructor(ws, terminal) {
+        this.ws = ws;
+        this.terminal = terminal;
+        
+        // DOM elements
+        this.pane = document.getElementById('sandbox-editor-pane');
+        this.textarea = document.getElementById('sandbox-textarea');
+        this.toggleBtn = document.getElementById('sandbox-editor-toggle');
+        this.formatBtn = document.getElementById('sandbox-format-btn');
+        this.lintBtn = document.getElementById('sandbox-lint-btn');
+        this.clearBtn = document.getElementById('sandbox-clear-btn');
+        this.executeBtn = document.getElementById('sandbox-execute-btn');
+        this.lineInfo = document.getElementById('sandbox-line-info');
+        this.lintStatus = document.getElementById('sandbox-lint-status');
+        this.interpTarget = document.getElementById('sandbox-interp-target');
+        this.resizeHandle = document.getElementById('editor-resize-handle');
+        
+        // State
+        this.isCollapsed = false;
+        this.lintTimeout = null;
+        this.lintPopup = null;
+        this.lastLintResult = null;
+        
+        // Load saved state
+        this.loadState();
+        
+        // Initialize
+        this.init();
+    }
+    
+    init() {
+        // Toggle collapse/expand
+        this.toggleBtn.addEventListener('click', (e) => {
+            // Don't toggle if clicking on controls
+            if (e.target.closest('.sandbox-editor-controls')) return;
+            this.toggleCollapse();
+        });
+        
+        // Button handlers
+        this.formatBtn.addEventListener('click', () => this.formatCode());
+        this.lintBtn.addEventListener('click', () => this.showLintResults());
+        this.clearBtn.addEventListener('click', () => this.clearEditor());
+        this.executeBtn.addEventListener('click', () => this.executeCode());
+        
+        // Textarea events
+        this.textarea.addEventListener('input', () => this.handleInput());
+        this.textarea.addEventListener('keydown', (e) => this.handleKeyDown(e));
+        this.textarea.addEventListener('click', () => this.updateCursorPosition());
+        this.textarea.addEventListener('keyup', () => this.updateCursorPosition());
+        
+        // Tab handling in textarea
+        this.textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                this.insertTab();
+            }
+        });
+        
+        // Resize handle
+        this.initResize();
+        
+        // Update interpreter target when terminal changes
+        this.updateInterpTarget();
+        
+        // Listen for interpreter changes
+        const interpSelector = document.getElementById('interp-selector');
+        if (interpSelector) {
+            interpSelector.addEventListener('change', () => this.updateInterpTarget());
+        }
+        
+        // Close lint popup on outside click
+        document.addEventListener('click', (e) => {
+            if (this.lintPopup && !this.lintPopup.contains(e.target) && e.target !== this.lintBtn) {
+                this.closeLintPopup();
+            }
+        });
+    }
+    
+    loadState() {
+        try {
+            const saved = localStorage.getItem('sandbox-editor-state');
+            if (saved) {
+                const state = JSON.parse(saved);
+                if (state.content) {
+                    this.textarea.value = state.content;
+                }
+                if (state.collapsed) {
+                    this.isCollapsed = true;
+                    this.pane.classList.add('collapsed');
+                }
+                if (state.height) {
+                    this.pane.querySelector('.sandbox-editor-content').style.height = state.height + 'px';
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load sandbox state:', e);
+        }
+    }
+    
+    saveState() {
+        try {
+            const content = this.textarea.value;
+            const contentEl = this.pane.querySelector('.sandbox-editor-content');
+            localStorage.setItem('sandbox-editor-state', JSON.stringify({
+                content: content,
+                collapsed: this.isCollapsed,
+                height: contentEl ? contentEl.offsetHeight : null
+            }));
+        } catch (e) {
+            console.error('Failed to save sandbox state:', e);
+        }
+    }
+    
+    toggleCollapse() {
+        this.isCollapsed = !this.isCollapsed;
+        this.pane.classList.toggle('collapsed', this.isCollapsed);
+        this.saveState();
+    }
+    
+    handleInput() {
+        // Save content on change
+        this.saveState();
+        
+        // Debounced lint
+        if (this.lintTimeout) {
+            clearTimeout(this.lintTimeout);
+        }
+        this.lintTimeout = setTimeout(() => this.lintCode(), 500);
+    }
+    
+    handleKeyDown(e) {
+        // Shift+Enter to execute
+        if (e.key === 'Enter' && e.shiftKey) {
+            e.preventDefault();
+            this.executeCode();
+            return;
+        }
+        
+        // Mod+Shift+F to format
+        if (e.key === 'f' && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            this.formatCode();
+            return;
+        }
+        
+        // Escape to close lint popup
+        if (e.key === 'Escape' && this.lintPopup) {
+            this.closeLintPopup();
+        }
+    }
+    
+    insertTab() {
+        const start = this.textarea.selectionStart;
+        const end = this.textarea.selectionEnd;
+        const value = this.textarea.value;
+        
+        // Insert 4 spaces
+        this.textarea.value = value.substring(0, start) + '    ' + value.substring(end);
+        this.textarea.selectionStart = this.textarea.selectionEnd = start + 4;
+        
+        this.handleInput();
+    }
+    
+    updateCursorPosition() {
+        const value = this.textarea.value;
+        const pos = this.textarea.selectionStart;
+        
+        // Count lines and column
+        const textBefore = value.substring(0, pos);
+        const lines = textBefore.split('\n');
+        const line = lines.length;
+        const col = lines[lines.length - 1].length + 1;
+        
+        this.lineInfo.textContent = `Ln ${line}, Col ${col}`;
+    }
+    
+    updateInterpTarget() {
+        const interpSelector = document.getElementById('interp-selector');
+        const interp = interpSelector ? interpSelector.value : 'dserv';
+        this.interpTarget.textContent = `→ ${interp}`;
+    }
+    
+    formatCode() {
+        const code = this.textarea.value;
+        if (!code.trim()) return;
+        
+        // Check if TclFormatter is available
+        if (typeof TclFormatter === 'undefined') {
+            console.warn('TclFormatter not loaded');
+            return;
+        }
+        
+        try {
+            const formatted = TclFormatter.formatTclCode(code, 4);
+            this.textarea.value = formatted;
+            this.saveState();
+            this.lintCode();
+        } catch (e) {
+            console.error('Format error:', e);
+        }
+    }
+    
+    lintCode() {
+        const code = this.textarea.value;
+        
+        if (!code.trim()) {
+            this.lintStatus.textContent = '✓ Ready';
+            this.lintStatus.className = 'sandbox-status-item success';
+            this.lastLintResult = null;
+            return;
+        }
+        
+        // Check if TclLinter is available
+        if (typeof TclLinter === 'undefined') {
+            this.lintStatus.textContent = '? Linter not loaded';
+            this.lintStatus.className = 'sandbox-status-item';
+            return;
+        }
+        
+        try {
+            const linter = new TclLinter();
+            const result = linter.lint(code);
+            this.lastLintResult = result;
+            
+            const errorCount = result.errors.length;
+            const warningCount = result.warnings.length;
+            
+            if (errorCount === 0 && warningCount === 0) {
+                this.lintStatus.textContent = '✓ No issues';
+                this.lintStatus.className = 'sandbox-status-item success';
+            } else if (errorCount > 0) {
+                this.lintStatus.textContent = `✗ ${errorCount} error${errorCount > 1 ? 's' : ''}${warningCount > 0 ? `, ${warningCount} warning${warningCount > 1 ? 's' : ''}` : ''}`;
+                this.lintStatus.className = 'sandbox-status-item error';
+            } else {
+                this.lintStatus.textContent = `⚠ ${warningCount} warning${warningCount > 1 ? 's' : ''}`;
+                this.lintStatus.className = 'sandbox-status-item warning';
+            }
+        } catch (e) {
+            console.error('Lint error:', e);
+            this.lintStatus.textContent = '? Lint failed';
+            this.lintStatus.className = 'sandbox-status-item';
+        }
+    }
+    
+    showLintResults() {
+        // Force a lint first
+        this.lintCode();
+        
+        if (!this.lastLintResult) {
+            return;
+        }
+        
+        const { errors, warnings } = this.lastLintResult;
+        const allIssues = [...errors, ...warnings];
+        
+        if (allIssues.length === 0) {
+            // No issues, show brief message
+            this.lintStatus.textContent = '✓ No issues found';
+            this.lintStatus.className = 'sandbox-status-item success';
+            return;
+        }
+        
+        // Close existing popup
+        this.closeLintPopup();
+        
+        // Create popup
+        this.lintPopup = document.createElement('div');
+        this.lintPopup.className = 'sandbox-lint-popup';
+        
+        allIssues.forEach(issue => {
+            const item = document.createElement('div');
+            item.className = `sandbox-lint-item ${issue.severity}`;
+            item.innerHTML = `
+                <div class="sandbox-lint-location">Line ${issue.line}, Col ${issue.column}</div>
+                <div class="sandbox-lint-message">${this.escapeHtml(issue.message)}</div>
+            `;
+            
+            // Click to jump to line
+            item.addEventListener('click', () => {
+                this.jumpToLine(issue.line, issue.column);
+                this.closeLintPopup();
+            });
+            
+            this.lintPopup.appendChild(item);
+        });
+        
+        // Position popup below the lint button
+        const btnRect = this.lintBtn.getBoundingClientRect();
+        this.lintPopup.style.position = 'fixed';
+        this.lintPopup.style.left = btnRect.left + 'px';
+        this.lintPopup.style.top = (btnRect.bottom + 4) + 'px';
+        
+        document.body.appendChild(this.lintPopup);
+    }
+    
+    closeLintPopup() {
+        if (this.lintPopup) {
+            this.lintPopup.remove();
+            this.lintPopup = null;
+        }
+    }
+    
+    jumpToLine(line, col) {
+        const lines = this.textarea.value.split('\n');
+        let pos = 0;
+        
+        for (let i = 0; i < line - 1 && i < lines.length; i++) {
+            pos += lines[i].length + 1; // +1 for newline
+        }
+        pos += Math.min(col - 1, lines[line - 1]?.length || 0);
+        
+        this.textarea.focus();
+        this.textarea.setSelectionRange(pos, pos);
+        this.updateCursorPosition();
+    }
+    
+    clearEditor() {
+        this.textarea.value = '';
+        this.saveState();
+        this.lintCode();
+        this.textarea.focus();
+    }
+    
+    executeCode() {
+        const code = this.textarea.value.trim();
+        if (!code) return;
+        
+        // Get target interpreter
+        const interpSelector = document.getElementById('interp-selector');
+        const targetInterp = interpSelector ? interpSelector.value : 'dserv';
+        
+        // Send to terminal for execution
+        if (this.terminal) {
+            this.terminal.sendToInterpreter(targetInterp, code, true);
+        } else {
+            // Fallback: send directly via WebSocket
+            let scriptToSend;
+            if (targetInterp === 'dserv') {
+                scriptToSend = code;
+            } else {
+                scriptToSend = `send ${targetInterp} {${code}}`;
+            }
+            
+            this.ws.send({
+                cmd: 'eval',
+                script: scriptToSend
+            });
+        }
+    }
+    
+    initResize() {
+        let isResizing = false;
+        let startY = 0;
+        let startEditorHeight = 0;
+        const contentEl = this.pane.querySelector('.sandbox-editor-content');
+        const terminalPane = document.getElementById('terminal-pane');
+        const errorLogPane = document.getElementById('error-log-pane');
+        
+        // Set initial height if not set
+        if (!contentEl.style.height) {
+            contentEl.style.height = contentEl.offsetHeight + 'px';
+        }
+        
+        this.resizeHandle.addEventListener('mousedown', (e) => {
+            if (this.isCollapsed) return;
+            isResizing = true;
+            startY = e.clientY;
+            startEditorHeight = contentEl.offsetHeight;
+            document.body.style.cursor = 'row-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            
+            const deltaY = e.clientY - startY;
+            const newEditorHeight = Math.max(80, startEditorHeight + deltaY);
+            
+            contentEl.style.height = newEditorHeight + 'px';
+            // Let terminal and error panes flex naturally to fill remaining space
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                this.saveState();
+            }
+        });
+    }
+    
+    escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+}
+
+// ============================================
+// Initialize all components when DOM is ready
 // ============================================
 
 let errorMonitor;
 let consoleMonitor;
+let sandboxEditor;
 
 document.addEventListener('DOMContentLoaded', () => {
     errorMonitor = new ErrorMonitor(wsManager);
     consoleMonitor = new ConsoleMonitor(wsManager);
     initializePaneTabs();
+    
+    // Initialize sandbox editor after terminal is ready
+    // Terminal is created in wsManager.on('connected') via Terminal class
+    setTimeout(() => {
+        sandboxEditor = new SandboxEditor(wsManager, terminal);
+    }, 100);
 });
 
     </script>
