@@ -2612,3 +2612,703 @@ body.ess-app {
 .ess-modal-config-list::-webkit-scrollbar-thumb:hover {
     background: var(--ess-text-muted);
 }
+
+/* ===========================================
+   Queue Tab Styles
+   =========================================== */
+
+/* Queue select row */
+.ess-queue-select-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.ess-queue-select {
+    flex: 1;
+    padding: 6px 8px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+}
+
+.ess-queue-select:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+/* Queue status display */
+.ess-queue-status {
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+}
+
+.ess-queue-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.ess-queue-status-row:last-child {
+    margin-bottom: 0;
+}
+
+.ess-queue-status-label {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    width: 55px;
+    flex-shrink: 0;
+}
+
+.ess-queue-status-value {
+    font-size: 11px;
+    color: var(--ess-text-primary);
+    font-weight: 500;
+}
+
+.ess-queue-status-value.running {
+    color: var(--ess-success);
+}
+
+.ess-queue-status-value.paused {
+    color: var(--ess-warning);
+}
+
+.ess-queue-status-value.finished {
+    color: var(--ess-accent);
+}
+
+/* Queue playback controls */
+.ess-queue-controls {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.ess-queue-controls .ess-state-btn {
+    flex: 1;
+    padding: 6px 4px;
+    font-size: 10px;
+}
+
+/* Queue secondary controls */
+.ess-queue-controls-secondary {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.ess-queue-controls-secondary .ess-mini-btn {
+    flex: 1;
+    font-size: 9px;
+    padding: 4px 6px;
+}
+
+/* Queue playlist */
+.ess-queue-playlist-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-queue-playlist-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ess-text-muted);
+}
+
+.ess-queue-playlist-count {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-queue-playlist {
+    flex: 1;
+    min-height: 80px;
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    background: var(--ess-bg-panel);
+}
+
+.ess-queue-empty {
+    padding: 20px 16px;
+    text-align: center;
+    color: var(--ess-text-muted);
+    font-size: 11px;
+    font-style: italic;
+}
+
+/* Queue item */
+.ess-queue-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--ess-border);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.ess-queue-item:last-child {
+    border-bottom: none;
+}
+
+.ess-queue-item:hover {
+    background: rgba(124, 138, 255, 0.08);
+}
+
+.ess-queue-item.current {
+    background: rgba(74, 222, 128, 0.15);
+    border-left: 3px solid var(--ess-success);
+    padding-left: 7px;
+}
+
+.ess-queue-item.completed {
+    opacity: 0.5;
+}
+
+.ess-queue-item-position {
+    width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ess-text-muted);
+    background: var(--ess-bg-secondary);
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.ess-queue-item.current .ess-queue-item-position {
+    background: var(--ess-success);
+    color: var(--ess-bg-primary);
+}
+
+.ess-queue-item-name {
+    flex: 1;
+    font-size: 11px;
+    color: var(--ess-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ess-queue-item-info {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.ess-queue-item-repeat,
+.ess-queue-item-pause {
+    font-size: 9px;
+    color: var(--ess-text-muted);
+    padding: 1px 4px;
+    background: var(--ess-bg-secondary);
+    border-radius: 2px;
+}
+
+.ess-queue-item-run {
+    font-size: 9px;
+    color: var(--ess-success);
+    font-weight: 500;
+}
+
+/* Queue playlist scrollbar */
+.ess-queue-playlist::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-queue-playlist::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-queue-playlist::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+.ess-queue-playlist::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted);
+}
+
+/* ===========================================
+   Queue Builder Modal Styles
+   =========================================== */
+
+.ess-queue-builder-modal {
+    width: 500px;
+    max-width: 95vw;
+    max-height: 85vh;
+}
+
+.ess-queue-builder-modal .ess-modal-body {
+    max-height: calc(85vh - 120px);
+    overflow-y: auto;
+}
+
+/* Settings row with checkboxes */
+.ess-qb-settings {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.ess-qb-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+}
+
+.ess-qb-checkbox input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    accent-color: var(--ess-accent);
+}
+
+.ess-qb-template-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ess-qb-template-label {
+    font-size: 10px;
+    color: var(--ess-text-muted);
+    flex-shrink: 0;
+}
+
+.ess-qb-template-row .ess-modal-input {
+    flex: 1;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 11px;
+}
+
+/* Items list */
+.ess-qb-items-list {
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    background: var(--ess-bg-panel);
+    max-height: 250px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+}
+
+.ess-qb-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--ess-text-muted);
+    font-size: 11px;
+    font-style: italic;
+}
+
+.ess-qb-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--ess-border);
+}
+
+.ess-qb-item:last-child {
+    border-bottom: none;
+}
+
+.ess-qb-item-pos {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ess-text-muted);
+    background: var(--ess-bg-secondary);
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.ess-qb-item-name {
+    flex: 1;
+    font-size: 12px;
+    color: var(--ess-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.ess-qb-item-fields {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.ess-qb-item-field {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-qb-item-field input {
+    width: 40px;
+    padding: 3px 4px;
+    font-size: 10px;
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    text-align: center;
+}
+
+.ess-qb-item-field input:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+.ess-qb-item-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.ess-qb-move-btn,
+.ess-qb-remove-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ess-qb-move-btn:hover:not(:disabled) {
+    background: var(--ess-border);
+    color: var(--ess-text-primary);
+}
+
+.ess-qb-move-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.ess-qb-remove-btn:hover {
+    background: rgba(248, 113, 113, 0.2);
+    border-color: var(--ess-error);
+    color: var(--ess-error);
+}
+
+/* Add row */
+.ess-qb-add-row {
+    display: flex;
+    gap: 8px;
+}
+
+.ess-qb-config-select {
+    flex: 1;
+    padding: 6px 8px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+}
+
+.ess-qb-config-select:focus {
+    outline: none;
+    border-color: var(--ess-accent);
+}
+
+/* Footer with delete button */
+.ess-modal-footer-spacer {
+    flex: 1;
+}
+
+.ess-modal-btn.delete {
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    color: var(--ess-error);
+}
+
+.ess-modal-btn.delete:hover {
+    background: rgba(248, 113, 113, 0.2);
+    border-color: var(--ess-error);
+}
+
+/* Items list scrollbar */
+.ess-qb-items-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-qb-items-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-qb-items-list::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+.ess-qb-items-list::-webkit-scrollbar-thumb:hover {
+    background: var(--ess-text-muted);
+}
+
+/* ===========================================
+   Template Help & Preview
+   =========================================== */
+
+.ess-qb-help-btn {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--ess-bg-secondary);
+    border: 1px solid var(--ess-border);
+    border-radius: 50%;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.ess-qb-help-btn:hover {
+    background: var(--ess-accent);
+    border-color: var(--ess-accent);
+    color: white;
+}
+
+.ess-qb-template-preview {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-qb-template-preview span {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: var(--ess-text-secondary);
+}
+
+.ess-qb-template-preview span.error {
+    color: var(--ess-error);
+}
+
+/* Help popup - positioned relative to viewport to avoid overflow clipping */
+.ess-qb-template-help-popup {
+    position: fixed;
+    width: 280px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 10001;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+}
+
+.ess-qb-template-help-popup.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.ess-qb-help-title {
+    padding: 10px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ess-text-primary);
+    border-bottom: 1px solid var(--ess-border);
+    background: var(--ess-bg-secondary);
+    border-radius: 6px 6px 0 0;
+}
+
+.ess-qb-help-content {
+    padding: 8px 0;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.ess-qb-help-section {
+    padding: 6px 12px 4px;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ess-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ess-qb-help-item {
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+}
+
+.ess-qb-help-item code {
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 10px;
+    color: var(--ess-accent);
+    background: var(--ess-bg-secondary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin-right: 6px;
+}
+
+/* Help popup scrollbar */
+.ess-qb-help-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.ess-qb-help-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ess-qb-help-content::-webkit-scrollbar-thumb {
+    background: var(--ess-border);
+    border-radius: 3px;
+}
+
+
+/* ==========================================================================
+   Queue Menu
+   ========================================================================== */
+
+.ess-queue-menu-wrapper {
+    position: relative;
+}
+
+.ess-queue-menu-btn {
+    background: var(--ess-bg-tertiary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    color: var(--ess-text-secondary);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px 8px;
+    line-height: 1;
+    transition: all 0.15s ease;
+}
+
+.ess-queue-menu-btn:hover {
+    background: var(--ess-bg-secondary);
+    color: var(--ess-text-primary);
+}
+
+.ess-queue-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--ess-bg-primary);
+    border: 1px solid var(--ess-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 140px;
+    padding: 4px 0;
+    z-index: 100;
+    display: none;
+}
+
+.ess-queue-menu.open {
+    display: block;
+}
+
+.ess-queue-menu-action {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    text-align: left;
+    color: var(--ess-text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+
+.ess-queue-menu-action:hover:not(:disabled) {
+    background: var(--ess-bg-secondary);
+}
+
+.ess-queue-menu-action:disabled {
+    color: var(--ess-text-disabled);
+    cursor: not-allowed;
+}
+
+.ess-queue-menu-divider {
+    height: 1px;
+    background: var(--ess-border);
+    margin: 4px 0;
+}
+
+/* Import queue list item styling */
+.ess-import-queue-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ess-import-queue-item:hover {
+    background: var(--ess-bg-secondary);
+}
+
+.ess-import-queue-item.selected {
+    background: var(--ess-accent);
+    border-color: var(--ess-accent);
+    color: white;
+}
+
+.ess-import-queue-name {
+    font-weight: 500;
+}
+
+.ess-import-queue-count {
+    font-size: 11px;
+    opacity: 0.7;
+}
+
+.ess-import-queue-item.selected .ess-import-queue-count {
+    opacity: 0.9;
+}
