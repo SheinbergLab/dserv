@@ -102,7 +102,7 @@ jobs:
       - name: Install runtime dependencies and coreutils with timeout util.
         run: |
           brew update
-          brew install tcl-tk@9 yajl coreutils fluidsynth
+          brew install tcl-tk@9 yajl coreutils fluidsynth jq
 
       - name: Install the dserv package we just released.
         run: |
@@ -112,6 +112,14 @@ jobs:
       - name: Install dlsh packages.
         run: |
           DLSH_VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r '.tag_name')
+          echo "Using dlsh version: $DLSH_VERSION"
+          
+          # Verify we got a valid version
+          if [ -z "$DLSH_VERSION" ] || [ "$DLSH_VERSION" = "null" ]; then
+            echo "ERROR: Failed to get dlsh version from GitHub API"
+            exit 1
+          fi
+          
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}.zip -O dlsh.zip
           sudo mkdir -p /usr/local/dlsh
           sudo cp dlsh.zip /usr/local/dlsh
@@ -138,7 +146,7 @@ jobs:
           brew update
           # Remove any existing cmake installation
           brew uninstall cmake --ignore-dependencies || true
-          brew install cmake tcl-tk@9
+          brew install cmake tcl-tk@9 jq
 
       - name: Check out our code
         uses: actions/checkout@v4
@@ -169,8 +177,14 @@ jobs:
       - name: Install our dlsh libs and headers into the build environment.
         run: |
           # Get latest dlsh version from SheinbergLab
-          DLSH_VERSION=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | grep '"tag_name"' | cut -d '"' -f 4)
+          DLSH_VERSION=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/SheinbergLab/dlsh/releases/latest | jq -r '.tag_name')
           echo "Using dlsh version: $DLSH_VERSION"
+          
+          # Verify we got a valid version
+          if [ -z "$DLSH_VERSION" ] || [ "$DLSH_VERSION" = "null" ]; then
+            echo "ERROR: Failed to get dlsh version from GitHub API"
+            exit 1
+          fi
           
           # Download and install the signed pkg
           wget https://github.com/SheinbergLab/dlsh/releases/download/${DLSH_VERSION}/dlsh-${DLSH_VERSION}-Darwin-arm64-signed.pkg
