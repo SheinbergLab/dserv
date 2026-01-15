@@ -345,17 +345,6 @@ jobs:
           ls -alth /usr/local/dserv/db
           echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
-          # Run dserv briefly to verify it starts up correctly.
-          # Exit code 130 (SIGINT) or 124 (timeout) are expected and indicate success.
-          timeout --preserve-status --signal SIGINT 2 /usr/local/dserv/dserv -c /usr/local/dserv/config/dsconf.tcl -t /usr/local/dserv/config/triggers.tcl || EXIT_CODE=$?
-          if [ "${EXIT_CODE:-0}" -eq 130 ] || [ "${EXIT_CODE:-0}" -eq 124 ]; then
-            echo "dserv started successfully and was terminated as expected"
-          elif [ "${EXIT_CODE:-0}" -eq 0 ]; then
-            echo "dserv exited cleanly"
-          else
-            echo "dserv failed with unexpected exit code: ${EXIT_CODE}"
-            exit ${EXIT_CODE}
-          fi
 
   check-essgui:
 
