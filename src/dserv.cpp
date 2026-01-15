@@ -152,6 +152,11 @@ int main(int argc, char *argv[])
     exit(-1);
   }
 
+  if (help) {
+    std::cout << options.help() << std::endl;
+    exit(0);
+  }
+  
   if (version) {
     std::cout << dserv_VERSION << std::endl;
     exit(0);
