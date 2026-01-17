@@ -1,0 +1,164 @@
+/**
+ * ess_performance.css
+ * Styles for the ESS Performance monitoring panel
+ */
+
+/* Summary stats row */
+.ess-perf-summary {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color, #3a3a4a);
+    margin-bottom: 8px;
+}
+
+.ess-perf-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 60px;
+}
+
+.ess-perf-label {
+    font-size: 10px;
+    color: var(--text-muted, #888);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ess-perf-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #e0e0e0);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Sort by controls */
+.ess-perf-sortby {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color, #3a3a4a);
+    margin-bottom: 8px;
+}
+
+.ess-perf-sortby label {
+    font-size: 11px;
+    color: var(--text-muted, #888);
+    white-space: nowrap;
+}
+
+.ess-perf-select {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    font-size: 12px;
+    background: var(--input-bg, #2a2a3a);
+    color: var(--text-primary, #e0e0e0);
+    border: 1px solid var(--border-color, #3a3a4a);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.ess-perf-select:hover {
+    border-color: var(--border-hover, #4a4a5a);
+}
+
+.ess-perf-select:focus {
+    outline: none;
+    border-color: var(--accent-color, #6a9fb5);
+}
+
+/* Table container - scrollable */
+.ess-perf-table-container {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+/* Performance table */
+.ess-perf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.ess-perf-table th,
+.ess-perf-table td {
+    padding: 4px 6px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color, #3a3a4a);
+}
+
+.ess-perf-table th {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #888);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    position: sticky;
+    top: 0;
+    background: var(--panel-bg, #1e1e2e);
+    z-index: 1;
+}
+
+.ess-perf-table td {
+    color: var(--text-primary, #e0e0e0);
+}
+
+/* Numeric columns - right align */
+.ess-perf-table td:nth-last-child(-n+3),
+.ess-perf-table th:nth-last-child(-n+3) {
+    text-align: right;
+}
+
+/* Zebra striping */
+.ess-perf-table tbody tr:nth-child(even) {
+    background: var(--row-alt-bg, rgba(255, 255, 255, 0.02));
+}
+
+/* Hover effect */
+.ess-perf-table tbody tr:hover {
+    background: var(--row-hover-bg, rgba(255, 255, 255, 0.05));
+}
+
+/* Good/bad performance highlighting (optional - can enable via classes) */
+.ess-perf-table td.perf-good {
+    color: var(--success-color, #4caf50);
+}
+
+.ess-perf-table td.perf-bad {
+    color: var(--error-color, #f44336);
+}
+
+/* Empty state */
+.ess-perf-table tbody:empty::after {
+    content: 'Select sort variables to view breakdown';
+    display: block;
+    padding: 20px;
+    text-align: center;
+    color: var(--text-muted, #888);
+    font-style: italic;
+}
+
+/* Compact mode for small panels */
+.ess-panel-perf.compact .ess-perf-summary {
+    gap: 8px;
+    padding: 6px 0;
+}
+
+.ess-panel-perf.compact .ess-perf-value {
+    font-size: 14px;
+}
+
+.ess-panel-perf.compact .ess-perf-table {
+    font-size: 10px;
+}
+
+.ess-panel-perf.compact .ess-perf-table th,
+.ess-panel-perf.compact .ess-perf-table td {
+    padding: 3px 4px;
+}
