@@ -15,6 +15,8 @@ class ESSPerformance {
         this.sortby1 = '';
         this.sortby2 = '';
         this.sortableColumns = [];
+        this.obsId = 0;
+        this.obsTotal = 0;
         
         // DOM elements (will be created in init)
         this.elements = {};
@@ -64,7 +66,8 @@ class ESSPerformance {
                 </table>
             </div>
         `;
-        
+
+
         // Cache element references
         this.elements = {
             trial: document.getElementById('perf-trial'),
@@ -79,11 +82,13 @@ class ESSPerformance {
         // Bind dropdown events
         this.elements.sortby1.addEventListener('change', (e) => {
             this.sortby1 = e.target.value;
+	    console.log('sortby1 changed to:', e.target.value);
             this.requestSortedPerf();
         });
         
         this.elements.sortby2.addEventListener('change', (e) => {
             this.sortby2 = e.target.value;
+	    console.log('sortby2 changed to:', e.target.value);
             this.requestSortedPerf();
         });
     }
@@ -102,7 +107,6 @@ class ESSPerformance {
         
         // Subscribe to trial completion to trigger refresh
         this.dpManager?.subscribe('ess/block_n_complete', (data) => {
-            this.updateTrialCount();
             this.requestSortedPerf();
         });
         
@@ -117,15 +121,20 @@ class ESSPerformance {
             this.elements.complete.textContent = isNaN(pct) ? '--%' : `${(pct * 100).toFixed(0)}%`;
         });
         
-        // Also subscribe to obs counts for trial display
-        this.dpManager?.subscribe('ess/obs_id', () => this.updateTrialCount());
-        this.dpManager?.subscribe('ess/obs_total', () => this.updateTrialCount());
+        // Track obs counts for trial display
+        this.dpManager?.subscribe('ess/obs_id', (data) => {
+            this.obsId = parseInt(data.value) || 0;
+            this.updateTrialCount();
+        });
+        
+        this.dpManager?.subscribe('ess/obs_total', (data) => {
+            this.obsTotal = parseInt(data.value) || 0;
+            this.updateTrialCount();
+        });
     }
     
     updateTrialCount() {
-        const obsId = parseInt(this.dpManager?.getValue('ess/obs_id')) || 0;
-        const obsTotal = parseInt(this.dpManager?.getValue('ess/obs_total')) || 0;
-        this.elements.trial.textContent = `${obsId + 1}/${obsTotal}`;
+        this.elements.trial.textContent = `${this.obsId + 1}/${this.obsTotal}`;
     }
     
     updateSortableColumns(jsonStr) {
@@ -170,6 +179,11 @@ class ESSPerformance {
     }
     
     async requestSortedPerf() {
+ console.log('requestSortedPerf called:', {
+        blockId: this.blockId,
+        sortby1: this.sortby1,
+        sortby2: this.sortby2
+ });
         if (this.blockId === null) return;
         
         // Only request if at least one sortby is selected
@@ -185,8 +199,8 @@ class ESSPerformance {
                 return;
             }
             
-            // Build the Tcl command - send to sqliteconf subprocess
-            const cmd = `send sqliteconf {get_sorted_perf ${this.blockId} ${this.sortby1} ${this.sortby2}}`;
+            // Build the Tcl command - send to db subprocess
+            const cmd = `send db {get_sorted_perf ${this.blockId} ${this.sortby1} ${this.sortby2}}`;
             const response = await conn.sendRaw(cmd);
             
             this.updateSortedPerf(response);

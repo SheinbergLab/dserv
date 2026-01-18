@@ -7,6 +7,7 @@
     
     <!-- Component styles -->
     <link rel="stylesheet" href="css/ess_control.css">
+    <link rel="stylesheet" href="css/ess_performance.css">
     <link rel="stylesheet" href="css/eyetouch_visualizer.css">
     <link rel="stylesheet" href="css/mesh_dropdown.css">
     <link rel="stylesheet" href="css/TclTerminal.css">
@@ -182,109 +183,111 @@
     
     <!-- Eye settings class definition (initialized by ess_app.js) -->
     <script>
-        class EyeSettings {
-            constructor(dpManager) {
-                this.dpManager = dpManager;
-                this.elements = {
-                    hBias: document.getElementById('eye-h-bias'),
-                    vBias: document.getElementById('eye-v-bias'),
-                    hGain: document.getElementById('eye-h-gain'),
-                    vGain: document.getElementById('eye-v-gain'),
-                    hInvert: document.getElementById('eye-h-invert'),
-                    vInvert: document.getElementById('eye-v-invert'),
-                    recenterBtn: document.getElementById('eye-recenter')
-                };
-                
-                this.bindEvents();
-                this.setupSubscriptions();
-            }
-            
-            sendEmCommand(cmd) {
-                try {
-                    const conn = this.dpManager?.connection;
-                    if (conn && conn.connected && conn.ws) {
-                        conn.ws.send(`send em {${cmd}}`);
-                    }
-                } catch (error) {
-                    console.error('Failed to send em command:', error);
-                }
-            }
-            
-            bindEvents() {
-                this.elements.hBias?.addEventListener('change', (e) => {
-                    this.sendEmCommand(`::em::set_param raw_center_h ${e.target.value}`);
-                });
-                
-                this.elements.vBias?.addEventListener('change', (e) => {
-                    this.sendEmCommand(`::em::set_param raw_center_v ${e.target.value}`);
-                });
-                
-                this.elements.hGain?.addEventListener('change', (e) => {
-                    this.sendEmCommand(`::em::set_param scale_h ${e.target.value}`);
-                });
-                
-                this.elements.vGain?.addEventListener('change', (e) => {
-                    this.sendEmCommand(`::em::set_param scale_v ${e.target.value}`);
-                });
-                
-                this.elements.hInvert?.addEventListener('change', (e) => {
-                    this.sendEmCommand(`::em::set_param invert_h ${e.target.checked ? 1 : 0}`);
-                });
-                
-                this.elements.vInvert?.addEventListener('change', (e) => {
-                    this.sendEmCommand(`::em::set_param invert_v ${e.target.checked ? 1 : 0}`);
-                });
-                
-                this.elements.recenterBtn?.addEventListener('click', () => {
-                    this.sendEmCommand('::em::set_current_as_center');
-                });
-            }
-            
-            setupSubscriptions() {
-                this.dpManager?.subscribe('em/settings', (data) => {
-                    this.updateFromSettings(data.value);
-                });
-            }
-            
-            updateFromSettings(settings) {
-                if (!settings) return;
-                
-                let params = settings;
-                if (typeof settings === 'string') {
-                    params = this.parseTclDict(settings);
-                }
-                
-                if (params.raw_center_h !== undefined && this.elements.hBias) {
-                    this.elements.hBias.value = params.raw_center_h;
-                }
-                if (params.raw_center_v !== undefined && this.elements.vBias) {
-                    this.elements.vBias.value = params.raw_center_v;
-                }
-                if (params.scale_h !== undefined && this.elements.hGain) {
-                    this.elements.hGain.value = params.scale_h;
-                }
-                if (params.scale_v !== undefined && this.elements.vGain) {
-                    this.elements.vGain.value = params.scale_v;
-                }
-                if (params.invert_h !== undefined && this.elements.hInvert) {
-                    this.elements.hInvert.checked = !!parseInt(params.invert_h);
-                }
-                if (params.invert_v !== undefined && this.elements.vInvert) {
-                    this.elements.vInvert.checked = !!parseInt(params.invert_v);
-                }
-            }
-            
-            parseTclDict(str) {
-                const result = {};
-                const parts = str.trim().split(/\s+/);
-                for (let i = 0; i < parts.length - 1; i += 2) {
-                    result[parts[i]] = parts[i + 1];
-                }
-                return result;
-            }
-        }
+     class EyeSettings {
+         constructor(dpManager) {
+             this.dpManager = dpManager;
+             this.elements = {
+                 hBias: document.getElementById('eye-h-bias'),
+                 vBias: document.getElementById('eye-v-bias'),
+                 hGain: document.getElementById('eye-h-gain'),
+                 vGain: document.getElementById('eye-v-gain'),
+                 hInvert: document.getElementById('eye-h-invert'),
+                 vInvert: document.getElementById('eye-v-invert'),
+                 recenterBtn: document.getElementById('eye-recenter')
+             };
+             
+             this.bindEvents();
+             this.setupSubscriptions();
+         }
+         
+         sendEmCommand(cmd) {
+             try {
+                 const conn = this.dpManager?.connection;
+                 if (conn && conn.connected && conn.ws) {
+                     conn.ws.send(`send em {${cmd}}`);
+                 }
+             } catch (error) {
+                 console.error('Failed to send em command:', error);
+             }
+         }
+         
+         bindEvents() {
+             this.elements.hBias?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param raw_center_h ${e.target.value}`);
+             });
+             
+             this.elements.vBias?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param raw_center_v ${e.target.value}`);
+             });
+             
+             this.elements.hGain?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param scale_h ${e.target.value}`);
+             });
+             
+             this.elements.vGain?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param scale_v ${e.target.value}`);
+             });
+             
+             this.elements.hInvert?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param invert_h ${e.target.checked ? 1 : 0}`);
+             });
+             
+             this.elements.vInvert?.addEventListener('change', (e) => {
+                 this.sendEmCommand(`::em::set_param invert_v ${e.target.checked ? 1 : 0}`);
+             });
+             
+             this.elements.recenterBtn?.addEventListener('click', () => {
+                 this.sendEmCommand('::em::set_current_as_center');
+             });
+         }
+         
+         setupSubscriptions() {
+             this.dpManager?.subscribe('em/settings', (data) => {
+                 this.updateFromSettings(data.value);
+             });
+         }
+         
+         updateFromSettings(settings) {
+             if (!settings) return;
+             
+             let params = settings;
+             if (typeof settings === 'string') {
+                 params = this.parseTclDict(settings);
+             }
+             
+             if (params.raw_center_h !== undefined && this.elements.hBias) {
+                 this.elements.hBias.value = params.raw_center_h;
+             }
+             if (params.raw_center_v !== undefined && this.elements.vBias) {
+                 this.elements.vBias.value = params.raw_center_v;
+             }
+             if (params.scale_h !== undefined && this.elements.hGain) {
+                 this.elements.hGain.value = params.scale_h;
+             }
+             if (params.scale_v !== undefined && this.elements.vGain) {
+                 this.elements.vGain.value = params.scale_v;
+             }
+             if (params.invert_h !== undefined && this.elements.hInvert) {
+                 this.elements.hInvert.checked = !!parseInt(params.invert_h);
+             }
+             if (params.invert_v !== undefined && this.elements.vInvert) {
+                 this.elements.vInvert.checked = !!parseInt(params.invert_v);
+             }
+         }
+         
+         parseTclDict(str) {
+             const result = {};
+             const parts = str.trim().split(/\s+/);
+             for (let i = 0; i < parts.length - 1; i += 2) {
+                 result[parts[i]] = parts[i + 1];
+             }
+             return result;
+         }
+     }
     </script>
     
+    <script src="js/ESSPerformance.js"></script>
+
     <!-- Main application script -->
     <script src="js/ess_app.js"></script>
     

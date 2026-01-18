@@ -104,7 +104,7 @@ function requestInitialData() {
           ess/obs_id ess/obs_total ess/in_obs
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
-          ess/params ess/datafile
+          ess/params ess/datafile ess/sortby_columns ess/block_id
           em/settings mesh/peers
           system/hostname system/os
           configs/list configs/tags configs/quick_picks configs/current
@@ -188,35 +188,11 @@ function initStimRenderer() {
 /**
  * Initialize Performance Display
  */
+let essPerformance = null;
+
 function initPerformanceDisplay() {
-    const updateTrialDisplay = () => {
-        const obsId = parseInt(localStorage.getItem('ess_obs_id') || '0');
-        const total = parseInt(localStorage.getItem('ess_obs_total') || '0');
-        document.getElementById('perf-trial').textContent = `${obsId + 1}/${total}`;
-    };
-    
-    dpManager.subscribe('ess/obs_id', (data) => {
-        localStorage.setItem('ess_obs_id', data.value);
-        updateTrialDisplay();
-    });
-    
-    dpManager.subscribe('ess/obs_total', (data) => {
-        localStorage.setItem('ess_obs_total', data.value);
-        updateTrialDisplay();
-    });
-    
-    dpManager.subscribe('ess/block_pct_correct', (data) => {
-        const val = parseFloat(data.value);
-        const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
-        document.getElementById('perf-correct').textContent = pct;
-    });
-    
-    dpManager.subscribe('ess/block_pct_complete', (data) => {
-        const val = parseFloat(data.value);
-        const pct = isNaN(val) ? '--' : `${Math.round(val * 100)}%`;
-        document.getElementById('perf-complete').textContent = pct;
-    });
-    
+    essPerformance = new ESSPerformance(dpManager, 'performance-container');
+    window.essPerformance = essPerformance;
     log('Performance display initialized', 'info');
 }
 
