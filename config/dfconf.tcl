@@ -1,30 +1,31 @@
 #
 # dfconf.tcl - Datafile management subprocess
 #
-# Responsibilities:
-#   - Index/catalog saved datafiles (.ess)
-#   - Post-close processing hooks (emcalib transforms, etc.)
-#   - Load and process .ess files for export
-#   - Format conversion (JSON, Arrow, CSV)
+# Uses df 2.0 module for core functionality, adds:
+#   - SQLite catalog/index with column tracking
+#   - Datapoint subscriptions for auto-indexing
+#   - Post-close hooks via system extractors
+#   - Query API for frontend
 #
 
 package require dlsh
 package require qpcs
 package require sqlite3
 package require yajltcl
-package require dslog
+
+tcl::tm::add $dspath/lib
+package require df 2.0
 
 # Configuration
 set df_db_path "$dspath/db/datafiles.db"
 
-# ess_dir will be set when we get ess/data_dir datapoint
+# Paths will be set when we get datapoints
 set ess_dir ""
+set ess_system_path ""
+set ess_project ""
 
 # Track current datafile for close detection
 set current_datafile ""
-
-# Cache for loaded system processors
-set loaded_processors {}
 
 # Disable exit
 proc exit {args} { error "exit not available for this subprocess" }
@@ -63,7 +64,7 @@ proc setup_database {db_path} {
             system TEXT,
             protocol TEXT,
             variant TEXT,
-            n_trials INTEGER,
+            n_obs INTEGER,
             date TEXT,
             time TEXT,
             timestamp INTEGER,
@@ -81,6 +82,24 @@ proc setup_database {db_path} {
         CREATE INDEX IF NOT EXISTS idx_datafiles_date ON datafiles (date);
         CREATE INDEX IF NOT EXISTS idx_datafiles_timestamp ON datafiles (timestamp);
         CREATE INDEX IF NOT EXISTS idx_datafiles_system_protocol ON datafiles (system, protocol, variant);
+    }
+    
+    # Column info table - tracks what data each file contains
+    dfdb eval {
+        CREATE TABLE IF NOT EXISTS file_columns (
+            id INTEGER PRIMARY KEY,
+            datafile_id INTEGER,
+            column_name TEXT,
+            column_type TEXT,
+            column_depth INTEGER,
+            column_length INTEGER,
+            column_category TEXT,
+            FOREIGN KEY (datafile_id) REFERENCES datafiles(id) ON DELETE CASCADE,
+            UNIQUE(datafile_id, column_name)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_file_columns_datafile ON file_columns(datafile_id);
+        CREATE INDEX IF NOT EXISTS idx_file_columns_category ON file_columns(column_category);
     }
     
     # Processing log - track post-close hook executions
@@ -104,153 +123,84 @@ proc setup_database {db_path} {
 }
 
 #
-# Data directory handling
+# Configuration datapoint callbacks
 #
 
 proc process_data_dir {dpoint data} {
-    variable ess_dir
+    global ess_dir
     
     if {$data eq ""} {
         return
     }
     
     set ess_dir $data
-    puts "Data directory set to: $ess_dir"
+    puts "dfconf: Data directory set to: $ess_dir"
     
     # Scan for datafiles now that we have the directory
     if {[file exists $ess_dir]} {
-        puts "Scanning for existing datafiles in $ess_dir..."
+        puts "dfconf: Scanning for existing datafiles in $ess_dir..."
         set count [scan_datafiles]
-        puts "Indexed $count new datafiles"
+        puts "dfconf: Indexed $count new datafiles"
+    }
+}
+
+proc process_system_path {dpoint data} {
+    global ess_system_path ess_project
+    
+    if {$data eq ""} {
+        return
+    }
+    
+    set ess_system_path $data
+    puts "dfconf: ESS system path set to: $ess_system_path"
+    
+    # Update df::ess_root if we have both pieces
+    update_ess_root
+}
+
+proc process_project {dpoint data} {
+    global ess_system_path ess_project
+    
+    if {$data eq ""} {
+        return
+    }
+    
+    set ess_project $data
+    puts "dfconf: ESS project set to: $ess_project"
+    
+    # Update df::ess_root if we have both pieces
+    update_ess_root
+}
+
+proc update_ess_root {} {
+    global ess_system_path ess_project
+    
+    if {$ess_system_path ne "" && $ess_project ne ""} {
+        set ess_root [file join $ess_system_path $ess_project]
+        df::set_ess_root $ess_root
+        puts "dfconf: ESS root set to: $ess_root"
     }
 }
 
 proc get_ess_dir {} {
-    variable ess_dir
+    global ess_dir
     
-    # Return cached value if set
     if {$ess_dir ne ""} {
         return $ess_dir
     }
     
-    # Try datapoint
     if {[catch {set dir [dservGet ess/data_dir]}] == 0 && $dir ne ""} {
         set ess_dir $dir
         return $ess_dir
     }
     
-    # Fall back to environment variable
     if {[info exists ::env(ESS_DATA_DIR)]} {
         set ess_dir $::env(ESS_DATA_DIR)
         return $ess_dir
     }
     
-    # Default
     set ess_dir /tmp/essdat
     return $ess_dir
-}
-
-#
-# Metadata extraction from .ess files
-#
-
-proc extract_datafile_metadata {filepath} {
-    # Initialize with defaults
-    array set meta {
-        subject "" system "" protocol "" variant ""
-        n_trials 0 date "" time "" timestamp 0 file_size 0
-    }
-    
-    # Get file size
-    if {[file exists $filepath]} {
-        set meta(file_size) [file size $filepath]
-    }
-    
-    # Read the ess file
-    if {[catch {
-        set g [dslog::readESS $filepath]
-    } err]} {
-        puts "Warning: Could not read $filepath: $err"
-        return [array get meta]
-    }
-    
-    # Extract pre-event info and data
-    # e_pre contains pairs: {type subtype timestamp} {payload}
-    dl_local pre_einfo [dl_unpack [dl_choose $g:e_pre [dl_llist 0]]]
-    dl_local pre_edata [dl_unpack [dl_choose $g:e_pre [dl_llist 1]]]
-    dl_local pre_types [dl_unpack [dl_choose $pre_einfo [dl_llist 0]]]
-    dl_local pre_subtypes [dl_unpack [dl_choose $pre_einfo [dl_llist 1]]]
-    
-    # Event type 8 = TIME
-    #   Subtype 0 = file open timestamp (payload is unix seconds)
-    dl_local time_evt [dl_and [dl_eq $pre_types 8] [dl_eq $pre_subtypes 0]]
-    if {[dl_sum $time_evt] > 0} {
-        set unix_ts [dl_tcllist [dl_first [dl_select $pre_edata $time_evt]]]
-        set meta(date) [clock format $unix_ts -format "%Y-%m-%d"]
-        set meta(time) [clock format $unix_ts -format "%H:%M:%S"]
-        set meta(timestamp) $unix_ts
-    }
-    
-    # Fallback: extract date from filename if TIME event not found
-    if {$meta(date) eq ""} {
-        set filename [file rootname [file tail $filepath]]
-        if {[regexp {(\d{8})-(\d{6})} $filename -> date time]} {
-            set meta(date) "[string range $date 0 3]-[string range $date 4 5]-[string range $date 6 7]"
-            set meta(time) "[string range $time 0 1]:[string range $time 2 3]:[string range $time 4 5]"
-        } elseif {[regexp {(\d{8})} $filename -> date]} {
-            set meta(date) "[string range $date 0 3]-[string range $date 4 5]-[string range $date 6 7]"
-        } else {
-            # Last resort: file modification time
-            set mtime [file mtime $filepath]
-            set meta(date) [clock format $mtime -format "%Y-%m-%d"]
-            set meta(time) [clock format $mtime -format "%H:%M:%S"]
-            set meta(timestamp) $mtime
-        }
-    }
-    
-    # Event type 18 = ID
-    #   Subtype 0 = ESS (system name, legacy)
-    #   Subtype 1 = SUBJECT  
-    #   Subtype 2 = PROTOCOL (system:protocol)
-    #   Subtype 3 = VARIANT (system:protocol:variant)
-    
-    # Get system:protocol:variant from ID/VARIANT event (18/3)
-    dl_local variant_evt [dl_and [dl_eq $pre_types 18] [dl_eq $pre_subtypes 3]]
-    if {[dl_sum $variant_evt] > 0} {
-        set sysinfo [dl_tcllist [dl_first [dl_select $pre_edata $variant_evt]]]
-        set parts [split $sysinfo ":"]
-        if {[llength $parts] >= 3} {
-            set meta(system) [lindex $parts 0]
-            set meta(protocol) [lindex $parts 1]
-            set meta(variant) [lindex $parts 2]
-        } elseif {[llength $parts] == 2} {
-            set meta(system) [lindex $parts 0]
-            set meta(protocol) [lindex $parts 1]
-        }
-    }
-    
-    # Fallback: get system from ID/ESS event (18/0) if not already set
-    if {$meta(system) eq ""} {
-        dl_local ess_evt [dl_and [dl_eq $pre_types 18] [dl_eq $pre_subtypes 0]]
-        if {[dl_sum $ess_evt] > 0} {
-            set meta(system) [dl_tcllist [dl_first [dl_select $pre_edata $ess_evt]]]
-        }
-    }
-    
-    # Get subject from ID/SUBJECT event (18/1)
-    dl_local subject_evt [dl_and [dl_eq $pre_types 18] [dl_eq $pre_subtypes 1]]
-    if {[dl_sum $subject_evt] > 0} {
-        set meta(subject) [dl_tcllist [dl_first [dl_select $pre_edata $subject_evt]]]
-    }
-    
-    # Count obs periods - length of e_types
-    if {[dl_exists $g:e_types]} {
-        set meta(n_trials) [dl_length $g:e_types]
-    }
-    
-    dg_delete $g
-    
-    return [array get meta]
 }
 
 #
@@ -263,7 +213,7 @@ proc scan_datafiles { {dir ""} } {
     }
     
     if {$dir eq "" || ![file exists $dir]} {
-        puts "Data directory does not exist or not configured: $dir"
+        puts "dfconf: Data directory does not exist or not configured: $dir"
         return 0
     }
     
@@ -289,80 +239,152 @@ proc index_datafile {filepath} {
         return 0
     }
     
-    # Extract metadata from file
-    array set meta [extract_datafile_metadata $filepath]
+    # Extract metadata using df module
+    set meta [df::metadata $filepath]
+    
+    # Insert file record
+    set meta_subject [dict get $meta subject]
+    set meta_system [dict get $meta system]
+    set meta_protocol [dict get $meta protocol]
+    set meta_variant [dict get $meta variant]
+    set meta_n_obs [dict get $meta n_obs]
+    set meta_date [dict get $meta date]
+    set meta_time [dict get $meta time]
+    set meta_timestamp [dict get $meta timestamp]
+    set meta_file_size [dict get $meta file_size]
     
     dfdb eval {
         INSERT INTO datafiles (filename, filepath, subject, system, protocol, variant, 
-                               n_trials, date, time, timestamp, file_size)
+                               n_obs, date, time, timestamp, file_size)
         VALUES ($filename, $filepath, 
-                $meta(subject), $meta(system), $meta(protocol), $meta(variant),
-                $meta(n_trials), $meta(date), $meta(time), $meta(timestamp), $meta(file_size))
+                $meta_subject, $meta_system, $meta_protocol, $meta_variant,
+                $meta_n_obs, $meta_date, $meta_time, $meta_timestamp, $meta_file_size)
     }
     
-    puts "Indexed: $filename ($meta(system)/$meta(protocol), $meta(n_trials) trials)"
+    set file_id [dfdb last_insert_rowid]
+    
+    # Insert column information
+    set col_info [dict get $meta column_info]
+    dict for {col_name info} $col_info {
+        set col_type [dict get $info type]
+        set col_depth [dict get $info depth]
+        set col_length [dict get $info length]
+        
+        # Determine category
+        if {[string match "<stimdg>*" $col_name]} {
+            set category "stimdg"
+        } elseif {[string match "<ds>*" $col_name]} {
+            set category "datastream"
+        } elseif {[string match "e_*" $col_name]} {
+            set category "event"
+        } else {
+            set category "other"
+        }
+        
+        dfdb eval {
+            INSERT INTO file_columns (datafile_id, column_name, column_type, 
+                                      column_depth, column_length, column_category)
+            VALUES ($file_id, $col_name, $col_type, $col_depth, $col_length, $category)
+        }
+    }
+    
+    puts "dfconf: Indexed: $filename ($meta_system/$meta_protocol, $meta_n_obs obs)"
     return 1
 }
 
 proc reindex_datafile {filename} {
-    # Re-extract metadata and update database
     set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
     
     if {$filepath eq ""} {
         return 0
     }
     
-    array set meta [extract_datafile_metadata $filepath]
+    set meta [df::metadata $filepath]
+    
+    set meta_subject [dict get $meta subject]
+    set meta_system [dict get $meta system]
+    set meta_protocol [dict get $meta protocol]
+    set meta_variant [dict get $meta variant]
+    set meta_n_obs [dict get $meta n_obs]
+    set meta_date [dict get $meta date]
+    set meta_time [dict get $meta time]
+    set meta_timestamp [dict get $meta timestamp]
+    set meta_file_size [dict get $meta file_size]
     
     dfdb eval {
         UPDATE datafiles SET
-            subject = $meta(subject),
-            system = $meta(system),
-            protocol = $meta(protocol),
-            variant = $meta(variant),
-            n_trials = $meta(n_trials),
-            date = $meta(date),
-            time = $meta(time),
-            timestamp = $meta(timestamp),
-            file_size = $meta(file_size)
+            subject = $meta_subject,
+            system = $meta_system,
+            protocol = $meta_protocol,
+            variant = $meta_variant,
+            n_obs = $meta_n_obs,
+            date = $meta_date,
+            time = $meta_time,
+            timestamp = $meta_timestamp,
+            file_size = $meta_file_size
         WHERE filename = $filename
+    }
+    
+    # Update column info
+    set file_id [dfdb eval {SELECT id FROM datafiles WHERE filename = $filename}]
+    dfdb eval {DELETE FROM file_columns WHERE datafile_id = $file_id}
+    
+    set col_info [dict get $meta column_info]
+    dict for {col_name info} $col_info {
+        set col_type [dict get $info type]
+        set col_depth [dict get $info depth]
+        set col_length [dict get $info length]
+        
+        if {[string match "<stimdg>*" $col_name]} {
+            set category "stimdg"
+        } elseif {[string match "<ds>*" $col_name]} {
+            set category "datastream"
+        } elseif {[string match "e_*" $col_name]} {
+            set category "event"
+        } else {
+            set category "other"
+        }
+        
+        dfdb eval {
+            INSERT INTO file_columns (datafile_id, column_name, column_type, 
+                                      column_depth, column_length, column_category)
+            VALUES ($file_id, $col_name, $col_type, $col_depth, $col_length, $category)
+        }
     }
     
     return 1
 }
 
 proc reindex_all {} {
-    # Re-extract metadata for all indexed files
     set count 0
     dfdb eval {SELECT filename FROM datafiles} {
         if {[reindex_datafile $filename]} {
             incr count
         }
     }
-    puts "Reindexed $count datafiles"
+    puts "dfconf: Reindexed $count datafiles"
     return $count
 }
 
 proc remove_missing {} {
-    # Remove entries for files that no longer exist
     set count 0
     dfdb eval {SELECT id, filename, filepath FROM datafiles} values {
         if {![file exists $values(filepath)]} {
             dfdb eval {DELETE FROM datafiles WHERE id = $values(id)}
-            puts "Removed missing file: $values(filename)"
+            puts "dfconf: Removed missing file: $values(filename)"
             incr count
         }
     }
-    puts "Removed $count missing datafiles"
+    puts "dfconf: Removed $count missing datafiles"
     return $count
 }
 
 #
-# Datafile close detection and post-processing hooks
+# Datafile close detection and post-processing
 #
 
 proc process_ess_datafile {dpoint data} {
-    variable current_datafile
+    global current_datafile
     
     set new_datafile $data
     
@@ -375,90 +397,52 @@ proc process_ess_datafile {dpoint data} {
 }
 
 proc on_datafile_closed {filepath} {
-    puts "Datafile closed: $filepath"
+    puts "dfconf: Datafile closed: $filepath"
     
     # Index the file
     index_datafile $filepath
     
     # Get file metadata for processor lookup
-    array set meta [extract_datafile_metadata $filepath]
+    set meta [df::metadata $filepath]
     
-    if {$meta(system) eq ""} {
-        puts "Warning: Could not determine system for $filepath"
+    set system [dict get $meta system]
+    set protocol [dict get $meta protocol]
+    
+    if {$system eq ""} {
+        puts "dfconf: Warning: Could not determine system for $filepath"
         return
     }
     
-    # Run system-level post-close hook if defined
-    run_post_close_hook $filepath $meta(system)
-}
-
-proc run_post_close_hook {filepath system} {
-    set hook_proc "${system}_on_file_close"
-    
-    if {[load_system_processor $system]} {
-        if {[info commands $hook_proc] ne ""} {
-            puts "Running post-close hook: $hook_proc"
-            if {[catch {
-                $hook_proc $filepath
-                log_processing $filepath $hook_proc "success" ""
-            } err]} {
-                puts "Error in post-close hook: $err"
-                log_processing $filepath $hook_proc "error" $err
-            }
-        }
-    }
-}
-
-proc load_system_processor {system} {
-    variable loaded_processors
-    
-    # Already loaded?
-    if {$system in $loaded_processors} {
-        return 1
-    }
-    
-    # Find processor file
-    set system_path [dservGet ess/system_path]
-    set project [dservGet ess/project]
-    if {$project eq ""} { set project "ess" }
-    
-    set process_file [file join $system_path $project $system ${system}_process.tcl]
-    
-    if {![file exists $process_file]} {
-        puts "No processor found for system $system: $process_file"
-        return 0
-    }
-    
-    if {[catch {source $process_file} err]} {
-        puts "Error loading processor for $system: $err"
-        return 0
-    }
-    
-    lappend loaded_processors $system
-    puts "Loaded processor for system: $system"
-    return 1
-}
-
-proc log_processing {filepath proc_name status message} {
+    # Log the close event
     set filename [file tail $filepath]
-    
-    set file_id [dfdb eval {
-        SELECT id FROM datafiles WHERE filename = $filename
-    }]
+    set file_id [dfdb eval {SELECT id FROM datafiles WHERE filename = $filename}]
     
     if {$file_id ne ""} {
-        dfdb eval {
-            INSERT INTO processing_log (datafile_id, processor, status, message)
-            VALUES ($file_id, $proc_name, $status, $message)
-        }
+        log_processing $file_id "close_detected" "success" "system=$system protocol=$protocol"
+    }
+    
+    # Publish close event for other subsystems
+    dservSet df/file_closed [dict create \
+        filepath $filepath \
+        filename $filename \
+        system $system \
+        protocol $protocol \
+        n_obs [dict get $meta n_obs] \
+        timestamp [clock seconds]]
+}
+
+proc log_processing {file_id processor status message} {
+    dfdb eval {
+        INSERT INTO processing_log (datafile_id, processor, status, message)
+        VALUES ($file_id, $processor, $status, $message)
     }
 }
 
 #
-# Datafile listing and querying (for frontend)
+# Query functions for frontend
 #
 
-proc get_datafile_list { {filters {}} } {
+proc list_datafiles { {filters {}} } {
     set where_clauses {}
     
     if {[dict exists $filters subject] && [dict get $filters subject] ne ""} {
@@ -481,22 +465,24 @@ proc get_datafile_list { {filters {}} } {
         lappend where_clauses "variant = '$var'"
     }
     
-    if {[dict exists $filters date_from] && [dict get $filters date_from] ne ""} {
-        set df [dict get $filters date_from]
-        lappend where_clauses "date >= '$df'"
+    if {[dict exists $filters date] && [dict get $filters date] ne ""} {
+        set dt [dict get $filters date]
+        lappend where_clauses "date = '$dt'"
     }
     
-    if {[dict exists $filters date_to] && [dict get $filters date_to] ne ""} {
-        set dt [dict get $filters date_to]
-        lappend where_clauses "date <= '$dt'"
+    if {[dict exists $filters after] && [dict get $filters after] ne ""} {
+        set after [dict get $filters after]
+        lappend where_clauses "timestamp >= $after"
     }
     
-    if {[dict exists $filters search] && [dict get $filters search] ne ""} {
-        set search [dict get $filters search]
-        lappend where_clauses "(filename LIKE '%$search%' OR subject LIKE '%$search%')"
+    if {[dict exists $filters before] && [dict get $filters before] ne ""} {
+        set before [dict get $filters before]
+        lappend where_clauses "timestamp <= $before"
     }
     
-    set sql "SELECT id, filename, subject, system, protocol, variant, n_trials, date, time, timestamp, file_size, processed, synced FROM datafiles"
+    set sql "SELECT id, filename, filepath, subject, system, protocol, variant, 
+                    n_obs, date, time, timestamp, file_size, processed, synced
+             FROM datafiles"
     
     if {[llength $where_clauses] > 0} {
         append sql " WHERE [join $where_clauses { AND }]"
@@ -520,11 +506,12 @@ proc get_datafile_list { {filters {}} } {
         $json map_open
         $json string "id" number $values(id)
         $json string "filename" string $values(filename)
+        $json string "filepath" string $values(filepath)
         $json string "subject" string $values(subject)
         $json string "system" string $values(system)
         $json string "protocol" string $values(protocol)
         $json string "variant" string $values(variant)
-        $json string "n_trials" number $values(n_trials)
+        $json string "n_obs" number $values(n_obs)
         $json string "date" string $values(date)
         $json string "time" string $values(time)
         $json string "timestamp" number $values(timestamp)
@@ -569,7 +556,6 @@ proc get_datafile_count { {filters {}} } {
 }
 
 proc get_filter_options {} {
-    # Return available filter values for frontend dropdowns
     set json [yajl create #auto]
     $json map_open
     
@@ -622,15 +608,34 @@ proc get_datafile_info {filename} {
     set found 0
     dfdb eval {SELECT * FROM datafiles WHERE filename = $filename} values {
         set found 1
+        set file_id $values(id)
+        
         $json map_open
-        foreach col {id filename filepath subject system protocol variant n_trials date time timestamp file_size processed synced} {
+        foreach col {id filename filepath subject system protocol variant n_obs date time timestamp file_size processed synced} {
             $json string $col
-            if {$col in {id n_trials timestamp file_size processed synced}} {
+            if {$col in {id n_obs timestamp file_size processed synced}} {
                 $json number $values($col)
             } else {
                 $json string $values($col)
             }
         }
+        
+        # Add column info
+        $json string "columns" array_open
+        dfdb eval {
+            SELECT column_name, column_type, column_depth, column_length, column_category
+            FROM file_columns WHERE datafile_id = $file_id
+        } col_values {
+            $json map_open
+            $json string "name" string $col_values(column_name)
+            $json string "type" string $col_values(column_type)
+            $json string "depth" number $col_values(column_depth)
+            $json string "length" number $col_values(column_length)
+            $json string "category" string $col_values(column_category)
+            $json map_close
+        }
+        $json array_close
+        
         $json map_close
     }
     
@@ -675,125 +680,6 @@ proc get_processing_log {filename} {
     return $result
 }
 
-#
-# Datafile processing and export
-#
-
-proc process_datafile {filename} {
-    # Look up file info
-    set found 0
-    dfdb eval {SELECT filepath, system, protocol, variant FROM datafiles WHERE filename = $filename} values {
-        set found 1
-        set filepath $values(filepath)
-        set system $values(system)
-        set protocol $values(protocol)
-        set variant $values(variant)
-    }
-    
-    if {!$found} {
-        error "File not found in catalog: $filename"
-    }
-    
-    # Load system processor
-    if {![load_system_processor $system]} {
-        error "No processor available for system: $system"
-    }
-    
-    # Run system-level processing
-    set process_proc "${system}_process_datafile"
-    if {[info commands $process_proc] eq ""} {
-        error "System processor not defined: $process_proc"
-    }
-    
-    set g [$process_proc $filepath]
-    
-    # Run protocol-level processing if available
-    set protocol_proc "${protocol}_process_datafile"
-    if {[info commands $protocol_proc] ne ""} {
-        set g [$protocol_proc $g]
-    }
-    
-    # Mark as processed in database
-    dfdb eval {UPDATE datafiles SET processed = 1 WHERE filename = $filename}
-    
-    return $g
-}
-
-proc export_datafile {filename format} {
-    set g [process_datafile $filename]
-    
-    set result [export_dg $g $format]
-    
-    dg_delete $g
-    return $result
-}
-
-proc export_datafiles {filenames format} {
-    # Process and concatenate multiple files
-    set combined ""
-    set errors {}
-    
-    foreach filename $filenames {
-        if {[catch {
-            set g [process_datafile $filename]
-        } err]} {
-            puts "Warning: Failed to process $filename: $err"
-            lappend errors [list $filename $err]
-            continue
-        }
-        
-        # Add filename column for identification
-        set nrows [dl_length $g:[lindex [dg_tclListnames $g] 0]]
-        dl_set $g:source_file [dl_replicate [dl_slist $filename] $nrows]
-        
-        if {$combined eq ""} {
-            set combined $g
-        } else {
-            # Append columns from g to combined
-            foreach col [dg_tclListnames $g] {
-                if {[dl_exists $combined:$col]} {
-                    dl_append $combined:$col $g:$col
-                }
-            }
-            dg_delete $g
-        }
-    }
-    
-    if {$combined eq ""} {
-        error "No files processed successfully. Errors: $errors"
-    }
-    
-    set result [export_dg $combined $format]
-    
-    dg_delete $combined
-    return $result
-}
-
-proc export_dg {g format} {
-    switch $format {
-        json {
-            return [dg_toJSON $g]
-        }
-        arrow {
-            return [dg_toArrow $g]
-        }
-        csv {
-            return [dg_toCSV $g]
-        }
-        default {
-            error "Unknown export format: $format"
-        }
-    }
-}
-
-#
-# Utility procs
-#
-
-proc get_export_formats {} {
-    return {["json", "arrow", "csv"]}
-}
-
 proc get_stats {} {
     set json [yajl create #auto]
     $json map_open
@@ -801,14 +687,42 @@ proc get_stats {} {
     set total [dfdb eval {SELECT COUNT(*) FROM datafiles}]
     set processed [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE processed = 1}]
     set synced [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE synced = 1}]
-    set total_trials [dfdb eval {SELECT SUM(n_trials) FROM datafiles}]
+    set total_obs [dfdb eval {SELECT SUM(n_obs) FROM datafiles}]
     set total_size [dfdb eval {SELECT SUM(file_size) FROM datafiles}]
     
     $json string "total_files" number $total
     $json string "processed_files" number $processed
     $json string "synced_files" number $synced
-    $json string "total_trials" number [expr {$total_trials ne "" ? $total_trials : 0}]
+    $json string "total_obs" number [expr {$total_obs ne "" ? $total_obs : 0}]
     $json string "total_size_bytes" number [expr {$total_size ne "" ? $total_size : 0}]
+    
+    # By system breakdown
+    $json string "by_system" array_open
+    dfdb eval {
+        SELECT system, COUNT(*) as cnt, SUM(n_obs) as obs 
+        FROM datafiles GROUP BY system ORDER BY cnt DESC
+    } {
+        $json map_open
+        $json string "system" string $system
+        $json string "count" number $cnt
+        $json string "n_obs" number [expr {$obs ne "" ? $obs : 0}]
+        $json map_close
+    }
+    $json array_close
+    
+    # By subject breakdown
+    $json string "by_subject" array_open
+    dfdb eval {
+        SELECT subject, COUNT(*) as cnt, SUM(n_obs) as obs 
+        FROM datafiles GROUP BY subject ORDER BY cnt DESC
+    } {
+        $json map_open
+        $json string "subject" string $subject
+        $json string "count" number $cnt
+        $json string "n_obs" number [expr {$obs ne "" ? $obs : 0}]
+        $json map_close
+    }
+    $json array_close
     
     $json map_close
     set result [$json get]
@@ -818,20 +732,37 @@ proc get_stats {} {
 }
 
 #
+# Data loading - delegates to df module
+#
+
+proc load_trials {filename args} {
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    
+    if {$filepath eq ""} {
+        error "File not found in catalog: $filename"
+    }
+    
+    set g [df::load_data $filepath {*}$args]
+    
+    # Mark as processed
+    dfdb eval {UPDATE datafiles SET processed = 1 WHERE filename = $filename}
+    
+    return $g
+}
+
+#
 # Manual commands for testing/maintenance
 #
 
 proc rescan {} {
-    # Full rescan: remove missing, index new
     remove_missing
     scan_datafiles
 }
 
 proc list_files { {limit 20} } {
-    # Simple list for terminal use
-    dfdb eval {SELECT filename, subject, system, protocol, n_trials, date FROM datafiles ORDER BY timestamp DESC LIMIT $limit} values {
-        puts [format "%-40s %-10s %-15s %-15s %4d trials  %s" \
-            $values(filename) $values(subject) $values(system) $values(protocol) $values(n_trials) $values(date)]
+    dfdb eval {SELECT filename, subject, system, protocol, n_obs, date FROM datafiles ORDER BY timestamp DESC LIMIT $limit} values {
+        puts [format "%-40s %-10s %-15s %-15s %4d obs  %s" \
+            $values(filename) $values(subject) $values(system) $values(protocol) $values(n_obs) $values(date)]
     }
 }
 
@@ -841,15 +772,24 @@ proc list_files { {limit 20} } {
 
 setup_database $df_db_path
 
-# Subscribe to datafile changes for close detection
-dservAddExactMatch ess/datafile
-dpointSetScript    ess/datafile process_ess_datafile
+# Subscribe to system path and project - will set ess_root for df module
+dservAddExactMatch ess/system_path
+dpointSetScript    ess/system_path process_system_path
+
+dservAddExactMatch ess/project
+dpointSetScript    ess/project process_project
 
 # Subscribe to data directory - will trigger scan when received
 dservAddExactMatch ess/data_dir
 dpointSetScript    ess/data_dir process_data_dir
 
-# Touch to get current value (fails silently if not yet set)
-dservTouch ess/data_dir
+# Subscribe to datafile changes for close detection
+dservAddExactMatch ess/datafile
+dpointSetScript    ess/datafile process_ess_datafile
 
-puts "Datafile manager ready (df)"
+# Touch to get current values (fails silently if not yet set)
+catch {dservTouch ess/system_path}
+catch {dservTouch ess/project}
+catch {dservTouch ess/data_dir}
+
+puts "dfconf: Datafile manager ready (df 2.0)"
