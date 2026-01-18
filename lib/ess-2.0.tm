@@ -1771,11 +1771,10 @@ namespace eval ess {
 	if {$open_datafile eq ""} {
 	    return 1
 	}
-
 	::ess::evt_put TIME CLOSE [now] [clock seconds]
 	
 	set filename $open_datafile
-	set open_datafile {}  ;# Clear immediately so we don't get stuck
+	set open_datafile {}
 	
 	catch {dservLoggerClose $filename}
 	
@@ -1786,22 +1785,8 @@ namespace eval ess {
 	# call the system's specific file_close callback
 	catch {$current(state_system) file_close $filename}
 	
-	# convert to other formats - don't let failures block
-	if {[catch {file_load_ess $lastfile} g]} {
-	    print "Warning: file_load_ess failed: $g"
-	    return 1
-	}
-	
-	if {[catch {ess_to_dgz $lastfile $g} err]} {
-	    print "Warning: ess_to_dgz failed: $err"
-	}
-	
-	if {[catch {ess_to_json $lastfile $g} err]} {
-	    print "Warning: ess_to_json failed: $err"
-	}
-	
-	catch {dg_delete $g}
-	
+	# df subprocess handles conversion and analysis
+	#   via ess/datafile subscription
 	return 1
     }    
     
