@@ -1,5 +1,7 @@
 package provide df 2.0
 
+package require dslog
+
 namespace eval df {
     variable ess_root ""
     
@@ -46,7 +48,7 @@ namespace eval df {
         set col_info [dict create]
         foreach col $all_columns {
             dict set col_info $col [dict create \
-                type [dl_type $g:$col] \
+                type [dl_datatype $g:$col] \
                 depth [dl_depth $g:$col] \
                 length [dl_length $g:$col]]
         }
@@ -97,6 +99,10 @@ namespace eval df {
             dict set meta file_size [file size $filepath]
         }
         
+        # Group name is based on filename - delete if exists to allow re-read
+        set groupname [file rootname [file tail $filepath]]
+        catch {dg_delete $groupname}
+        
         if {[catch {set g [dslog::readESS $filepath]} err]} {
             return $meta
         }
@@ -138,7 +144,7 @@ namespace eval df {
         }
         
         # Obs period count
-        if {[dg_exists $g:e_types]} {
+        if {[dl_exists $g:e_types]} {
             dict set meta n_obs [dl_length $g:e_types]
         }
         
@@ -171,12 +177,14 @@ namespace eval df {
         }
         
         # Look for and source extractors
+        # Path structure: $ess_root/$system/${system}_extract.tcl
         set sys_extract [file join $ess_root $system ${system}_extract.tcl]
         if {[file exists $sys_extract]} {
             uplevel #0 [list source $sys_extract]
         }
         
         if {$protocol ne ""} {
+            # Path structure: $ess_root/$system/$protocol/${protocol}_extract.tcl
             set proto_extract [file join $ess_root $system $protocol ${protocol}_extract.tcl]
             if {[file exists $proto_extract]} {
                 uplevel #0 [list source $proto_extract]
@@ -187,7 +195,7 @@ namespace eval df {
         set f [df::File new $filepath]
         
         # Run system extractor (required)
-        set sys_proc "${system}::extract_trials"
+        set sys_proc "::${system}::extract_trials"
         if {[info commands $sys_proc] eq ""} {
             $f destroy
             error "No extractor found: $sys_proc (looked in $sys_extract)"
@@ -196,7 +204,7 @@ namespace eval df {
         
         # Run protocol extractor if exists (optional second pass)
         if {$protocol ne ""} {
-            set proto_proc "${system}::${protocol}::extract_trials"
+            set proto_proc "::${system}::${protocol}::extract_trials"
             if {[info commands $proto_proc] ne ""} {
                 set result [{*}$proto_proc $f $result {*}$args]
             }
@@ -209,12 +217,18 @@ namespace eval df {
     #
     # Full file access for analysis
     #
+    catch {df::File destroy}
+    
     oo::class create File {
         variable filepath g predg meta
         variable type_names type_ids subtypes
         
         constructor {path} {
             set filepath $path
+            
+            # Group name is based on filename - delete if exists to allow re-read
+            set groupname [file rootname [file tail $filepath]]
+            catch {dg_delete $groupname}
             
             # Read the ess file - we own this group
             set g [dslog::readESS $filepath]
@@ -273,16 +287,12 @@ namespace eval df {
             
             dl_local subtype_evts [dl_eq $predg:types 6]
             set type_ids_list [dl_tcllist [dl_select $predg:subtypes $subtype_evts]]
-            set subtype_dicts [dl_tcllist [dl_select $predg:data $subtype_evts]]
+            set subtype_dicts [dl_tcllist [dl_unpack [dl_select $predg:data $subtype_evts]]]
             
             foreach type_id $type_ids_list subtype_dict $subtype_dicts {
-                # payload is {subtype_id subtype_name ...}
-                # reverse to {subtype_name subtype_id}
-                set reversed [dict create]
-                dict for {sub_id sub_name} $subtype_dict {
-                    dict set reversed $sub_name $sub_id
-                }
-                dict set subtypes $type_id $reversed
+                # payload is already {subtype_name subtype_id ...}
+                # store directly keyed by type_id
+                dict set subtypes $type_id $subtype_dict
             }
         }
         
@@ -298,6 +308,11 @@ namespace eval df {
         }
         
         method ExtractMetadata {} {
+            # Hardcoded subtypes for system events (may not have SUBTYPE events)
+            set TIME_OPEN 0
+            set ID_SUBJECT 1
+            set ID_VARIANT 3
+            
             set meta [dict create \
                 filepath $filepath \
                 subject "" \
@@ -320,8 +335,8 @@ namespace eval df {
                 dict set meta file_size [file size $filepath]
             }
             
-            # TIME/OPEN - file timestamp
-            lassign [my evt TIME OPEN] t s
+            # TIME/OPEN - file timestamp (use integer subtype)
+            lassign [my evt TIME $TIME_OPEN] t s
             set ts [my FindPreEvent $t $s]
             if {$ts ne ""} {
                 dict set meta timestamp $ts
@@ -329,8 +344,8 @@ namespace eval df {
                 dict set meta time [clock format $ts -format "%H:%M:%S"]
             }
             
-            # ID/VARIANT - system:protocol:variant
-            lassign [my evt ID VARIANT] t s
+            # ID/VARIANT - system:protocol:variant (use integer subtype)
+            lassign [my evt ID $ID_VARIANT] t s
             set sysinfo [my FindPreEvent $t $s]
             if {$sysinfo ne ""} {
                 set parts [split $sysinfo ":"]
@@ -344,15 +359,15 @@ namespace eval df {
                 }
             }
             
-            # ID/SUBJECT
-            lassign [my evt ID SUBJECT] t s
+            # ID/SUBJECT (use integer subtype)
+            lassign [my evt ID $ID_SUBJECT] t s
             set subj [my FindPreEvent $t $s]
             if {$subj ne ""} {
                 dict set meta subject $subj
             }
             
             # Obs period count
-            if {[dg_exists $g:e_types]} {
+            if {[dl_exists $g:e_types]} {
                 dict set meta n_obs [dl_length $g:e_types]
             }
             
@@ -370,8 +385,11 @@ namespace eval df {
         method evt {type_name {subtype_name ""}} {
             if {[string is integer -strict $type_name]} {
                 set t $type_name
-            } else {
+            } elseif {[dict exists $type_ids $type_name]} {
                 set t [dict get $type_ids $type_name]
+            } else {
+                puts "Warning: Unknown type '$type_name'"
+                return ""
             }
             
             if {$subtype_name eq ""} {
@@ -380,16 +398,70 @@ namespace eval df {
             
             if {[string is integer -strict $subtype_name]} {
                 set s $subtype_name
-            } else {
+            } elseif {[dict exists $subtypes $t] && [dict exists [dict get $subtypes $t] $subtype_name]} {
                 set s [dict get $subtypes $t $subtype_name]
+            } else {
+                puts "Warning: Unknown subtype '$subtype_name' for type '$type_name' (id=$t)"
+                return ""
             }
             
             return [list $t $s]
         }
         
-        method select_evt {type_name subtype_name} {
-            lassign [my evt $type_name $subtype_name] t s
-            dl_return [dl_and [dl_eq $g:e_types $t] [dl_eq $g:e_subtypes $s]]
+        method select_evt {type_name {subtype_name ""}} {
+            set t [my evt $type_name]
+            if {$t eq ""} {
+                return ""
+            }
+            
+            if {$subtype_name eq ""} {
+                # Return all events of this type
+                dl_return [dl_eq $g:e_types $t]
+            } else {
+                lassign [my evt $type_name $subtype_name] t s
+                if {$t eq ""} {
+                    return ""
+                }
+                dl_return [dl_and [dl_eq $g:e_types $t] [dl_eq $g:e_subtypes $s]]
+            }
+        }
+        
+        method event_times {mask} {
+            dl_return [dl_select $g:e_times $mask]
+        }
+        
+        method event_subtypes {mask} {
+            dl_return [dl_select $g:e_subtypes $mask]
+        }
+        
+        method event_params {mask} {
+            dl_return [dl_select $g:e_params $mask]
+        }
+        
+        #
+        # Convenience methods that select and unpack in one step
+        # These return flat lists suitable for direct use
+        #
+        
+        # Get param values for events matching type/subtype, properly unpacked
+        method event_param_values {type_name {subtype_name ""}} {
+            set mask [my select_evt $type_name $subtype_name]
+            if {$mask eq ""} { return "" }
+            dl_return [dl_unpack [dl_deepUnpack [dl_select $g:e_params $mask]]]
+        }
+        
+        # Get time values for events matching type/subtype, properly unpacked
+        method event_time_values {type_name {subtype_name ""}} {
+            set mask [my select_evt $type_name $subtype_name]
+            if {$mask eq ""} { return "" }
+            dl_return [dl_unpack [dl_select $g:e_times $mask]]
+        }
+        
+        # Get subtype values for events matching type/subtype, properly unpacked
+        method event_subtype_values {type_name {subtype_name ""}} {
+            set mask [my select_evt $type_name $subtype_name]
+            if {$mask eq ""} { return "" }
+            dl_return [dl_unpack [dl_select $g:e_subtypes $mask]]
         }
         
         method meta {{key ""}} {
