@@ -1748,6 +1748,7 @@ namespace eval ess {
         dservTouch stimdg
 	dservTouch em/settings
 
+	::ess::evt_put TIME 0 [now] [clock seconds]
         ::ess::evt_put ID ESS [now] $current(system)
         ::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
         ::ess::evt_put ID VARIANT [now] $current(system):$current(protocol):$current(variant)
@@ -3247,6 +3248,9 @@ namespace eval ess {
 	}
     }
 
+    # publish so other processes can access
+    dservSet ess/data_dir $data_dir
+    
     if {[info exists ::env(ESS_SUBJECTS)]} {
 	ess::set_subjects $env(ESS_SUBJECTS)
     } else {
@@ -4777,7 +4781,7 @@ namespace eval ess {
     dict set evt_info USER [list 3 {User Interaction} null $subtypes]
 
     set subtypes [dict create ACT 0 TRANS 1]
-    dict set evt_info TRACE [list 4 {State System Trace} string]
+    dict set evt_info TRACE [list 4 {State System Trace} string $subtypes]
 
     set subtypes [dict create NAME 0 VAL 1]
     dict set evt_info PARAM [list 5 {Parameter Set} string $subtypes]
@@ -4787,6 +4791,8 @@ namespace eval ess {
     set subtypes [dict create STOPPED 0 RUNNING 1 INACTIVE 2]
     dict set evt_info SYSTEM_STATE [list 7 {System State} string $subtypes]
 
+    dict set evt_info TIME [list 8 {Timestamp} long]
+    
     set subtypes [dict create ENTER 0 EXIT 1 CHECK 2 \
 		      TRANSITION 3 VAR 4 TIMER 5 METHOD 6]
     dict set evt_info STATE_DEBUG [list 10 {State Debug} string $subtypes]
