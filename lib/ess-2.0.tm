@@ -1715,6 +1715,7 @@ namespace eval ess {
             # record raw em data: obs_limited, 80 byte buffer, every sample
 	    dservLoggerAddMatch $filename eyetracking/raw 1 80 1
             dservLoggerAddMatch $filename em/settings
+            dservLoggerAddMatch $filename em/biquadratic
 
 	    if { [dservExists eyetracking/results] } {
 		foreach v "pupil p1 p4" {
@@ -1747,8 +1748,9 @@ namespace eval ess {
 
         dservTouch stimdg
 	dservTouch em/settings
+	dservTouch em/biquadratic
 
-	::ess::evt_put TIME 0 [now] [clock seconds]
+	::ess::evt_put TIME OPEN [now] [clock seconds]
         ::ess::evt_put ID ESS [now] $current(system)
         ::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
         ::ess::evt_put ID VARIANT [now] $current(system):$current(protocol):$current(variant)
@@ -1769,6 +1771,8 @@ namespace eval ess {
 	if {$open_datafile eq ""} {
 	    return 1
 	}
+
+	::ess::evt_put TIME CLOSE [now] [clock seconds]
 	
 	set filename $open_datafile
 	set open_datafile {}  ;# Clear immediately so we don't get stuck
@@ -4791,7 +4795,8 @@ namespace eval ess {
     set subtypes [dict create STOPPED 0 RUNNING 1 INACTIVE 2]
     dict set evt_info SYSTEM_STATE [list 7 {System State} string $subtypes]
 
-    dict set evt_info TIME [list 8 {Timestamp} long]
+    set subtypes [dict create OPEN 0 CLOSE 1]
+    dict set evt_info TIME [list 8 {Timestamp} long $subtypes]
     
     set subtypes [dict create ENTER 0 EXIT 1 CHECK 2 \
 		      TRANSITION 3 VAR 4 TIMER 5 METHOD 6]
