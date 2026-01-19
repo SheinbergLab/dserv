@@ -1704,8 +1704,9 @@ namespace eval ess {
         dservLoggerOpen $filename 1
         set open_datafile $filename
 
-        dservSet ess/datafile $f
-
+        dservSet ess/datafile $f              ;# just filename for frontends
+	dservSet ess/datafile_path $filename  ;# full path for subprocesses
+	
         dservLoggerAddMatch $filename eventlog/events
         dservLoggerAddMatch $filename eventlog/names
         dservLoggerAddMatch $filename stimdg
@@ -1781,6 +1782,7 @@ namespace eval ess {
 	set lastfile [file tail [file root $filename]]
 	dservSet ess/lastfile $lastfile
 	dservSet ess/datafile {}
+	dservSet ess/datafile_path {}
 	
 	# call the system's specific file_close callback
 	catch {$current(state_system) file_close $filename}
