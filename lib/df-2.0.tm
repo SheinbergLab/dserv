@@ -63,6 +63,32 @@ namespace eval df {
     }
     
     #
+    # Add standard metadata columns to a trials dg
+    #
+    # Arguments:
+    #   trials   - dg to add columns to
+    #   f        - df::File object (for metadata)
+    #   n_trials - number of trials (for replication)
+    #
+    # Adds columns: trialid, date, time, filename, system, protocol, variant, subject
+    #
+    proc add_metadata_columns {trials f n_trials} {
+        set meta [$f meta]
+        
+        # Serial trial index (0 to n-1)
+        dl_set $trials:trialid [dl_fromto 0 $n_trials]
+        
+        # File metadata (replicated for each trial)
+        dl_set $trials:date [dl_replicate [dl_slist [dict get $meta date]] $n_trials]
+        dl_set $trials:time [dl_replicate [dl_slist [dict get $meta time]] $n_trials]
+        dl_set $trials:filename [dl_replicate [dl_slist [file tail [dict get $meta filepath]]] $n_trials]
+        dl_set $trials:system [dl_replicate [dl_slist [dict get $meta system]] $n_trials]
+        dl_set $trials:protocol [dl_replicate [dl_slist [dict get $meta protocol]] $n_trials]
+        dl_set $trials:variant [dl_replicate [dl_slist [dict get $meta variant]] $n_trials]
+        dl_set $trials:subject [dl_replicate [dl_slist [dict get $meta subject]] $n_trials]
+    }
+    
+    #
     # Lightweight metadata extraction for indexing
     #
     proc metadata {filepath} {
