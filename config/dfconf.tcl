@@ -398,12 +398,14 @@ proc process_ess_datafile {dpoint data} {
 }
 
 proc on_datafile_closed {filepath} {
+    global ess_system_path ess_project
+    
     puts "dfconf: Datafile closed: $filepath"
     
     # Index the file
     index_datafile $filepath
     
-    # Get file metadata for processor lookup
+    # Get file metadata
     set meta [df::metadata $filepath]
     
     set system [dict get $meta system]
@@ -430,6 +432,57 @@ proc on_datafile_closed {filepath} {
         protocol $protocol \
         n_obs [dict get $meta n_obs] \
         timestamp [clock seconds]]
+    
+    # Try to extract and analyze
+    if {[df::get_ess_root] eq ""} {
+        puts "dfconf: ESS root not set, skipping extraction"
+        return
+    }
+    
+    # Source analyzer if it exists
+    set ess_root [df::get_ess_root]
+    set analyzer_file [file join $ess_root $system ${system}_analyze.tcl]
+    if {[file exists $analyzer_file]} {
+        if {[catch {uplevel #0 [list source $analyzer_file]} err]} {
+            puts "dfconf: Error sourcing analyzer $analyzer_file: $err"
+        }
+    }
+    
+    # Extract trials
+    if {[catch {set trials [df::load_data $filepath]} err]} {
+        puts "dfconf: Extract failed for $filepath: $err"
+        if {$file_id ne ""} {
+            log_processing $file_id "extract" "error" $err
+        }
+        return
+    }
+    
+    if {$file_id ne ""} {
+        log_processing $file_id "extract" "success" "trials extracted"
+    }
+    
+    # Run system analyzer if exists
+    set analyzer_proc "::${system}::analyze"
+    if {[info commands $analyzer_proc] ne ""} {
+        puts "dfconf: Running analyzer $analyzer_proc"
+        if {[catch {set results [{*}$analyzer_proc $trials $filepath]} err]} {
+            puts "dfconf: Analyze failed for $filepath: $err"
+            if {$file_id ne ""} {
+                log_processing $file_id "analyze" "error" $err
+            }
+        } else {
+            puts "dfconf: Analysis complete for $filepath"
+            if {$file_id ne ""} {
+                log_processing $file_id "analyze" "success" "analysis complete"
+            }
+            
+            # Mark as processed
+            dfdb eval {UPDATE datafiles SET processed = 1 WHERE id = $file_id}
+        }
+    }
+    
+    # Clean up
+    catch {dg_delete $trials}
 }
 
 proc log_processing {file_id processor status message} {
@@ -784,9 +837,9 @@ dpointSetScript    ess/project process_project
 dservAddExactMatch ess/data_dir
 dpointSetScript    ess/data_dir process_data_dir
 
-# Subscribe to datafile changes for close detection
-dservAddExactMatch ess/datafile
-dpointSetScript    ess/datafile process_ess_datafile
+# Subscribe to datafile changes for close detection (use full path version)
+dservAddExactMatch ess/datafile_path
+dpointSetScript    ess/datafile_path process_ess_datafile
 
 # Touch to get current values (fails silently if not yet set)
 catch {dservTouch ess/system_path}
