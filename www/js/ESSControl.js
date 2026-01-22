@@ -8,6 +8,7 @@
  * - Tabbed interface:
  *   - Setup tab: Subject, System/Protocol/Variant selection, options, params
  *   - Configs tab: Search/browse saved configurations
+ *   - Run tab: Session/run management with Start Run, Close Run controls
  * - Configuration snapshot save/load
  * 
  * =============================================================================
@@ -54,6 +55,15 @@
  *   - on(), emit()
  *   - getState(), dispose()
  * 
+ * SECTION 9: RUN TAB - Session Management
+ *   - updateQueueList(), updateQueueState(), updateQueueItems()
+ *   - renderQueueSelect(), renderQueueStatus(), renderQueuePlaylist()
+ *   - updateQueueControls(), updateConfigPlayButtons()
+ *   - Run Commands: startRun(), closeRun(), resetSession()
+ * 
+ * SECTION 10: QUEUE BUILDER MODAL
+ *   - showQueueBuilderModal(), queueBuilderSave()
+ * 
  * =============================================================================
  */
 
@@ -85,6 +95,7 @@ class ESSControl {
             currentProtocol: '',
             currentVariant: '',
             essStatus: 'stopped',  // running, stopped, loading
+            essRunning: false,     // true when ESS state machine is actively running
             params: {},
             variantInfo: null,
             currentDatafile: '',
@@ -376,6 +387,7 @@ class ESSControl {
                         <select id="ess-queue-select" class="ess-queue-select">
                             <option value="">-- Select Session --</option>
                         </select>
+                        <button id="ess-queue-reset" class="ess-reload-btn" title="Reset session to beginning" disabled>↻</button>
                         <div class="ess-queue-menu-wrapper">
                             <button id="ess-queue-menu-btn" class="ess-queue-menu-btn" title="Session actions">⋮</button>
                             <div class="ess-queue-menu" id="ess-queue-menu">
@@ -410,16 +422,8 @@ class ESSControl {
                     
                     <!-- Run Controls -->
                     <div class="ess-queue-controls">
-                        <button id="ess-queue-start" class="ess-state-btn go" disabled>▶ Start</button>
-                        <button id="ess-queue-stop" class="ess-state-btn stop" disabled>■ Stop</button>
-                        <button id="ess-queue-pause" class="ess-state-btn reset" disabled>⏸ Pause</button>
-                    </div>
-                    
-                    <!-- Secondary Controls -->
-                    <div class="ess-queue-controls-secondary">
-                        <button id="ess-queue-skip" class="ess-mini-btn" disabled title="Skip to next config">Skip →</button>
-                        <button id="ess-queue-retry" class="ess-mini-btn" disabled title="Retry current config">↺ Retry</button>
-                        <button id="ess-queue-force" class="ess-mini-btn" disabled title="Force complete current run">Force Done</button>
+                        <button id="ess-queue-start-run" class="ess-state-btn go" disabled>▶ Start Run</button>
+                        <button id="ess-queue-close-run" class="ess-state-btn stop" disabled>Close Run</button>
                     </div>
                     
                     <!-- Config List (shown when multiple configs) -->
@@ -533,12 +537,9 @@ class ESSControl {
             queueRunCount: this.container.querySelector('#ess-queue-run-count'),
             queueCountdownRow: this.container.querySelector('#ess-queue-countdown-row'),
             queueCountdown: this.container.querySelector('#ess-queue-countdown'),
-            queueBtnStart: this.container.querySelector('#ess-queue-start'),
-            queueBtnStop: this.container.querySelector('#ess-queue-stop'),
-            queueBtnPause: this.container.querySelector('#ess-queue-pause'),
-            queueBtnSkip: this.container.querySelector('#ess-queue-skip'),
-            queueBtnRetry: this.container.querySelector('#ess-queue-retry'),
-            queueBtnForce: this.container.querySelector('#ess-queue-force'),
+            queueResetBtn: this.container.querySelector('#ess-queue-reset'),
+            queueBtnStartRun: this.container.querySelector('#ess-queue-start-run'),
+            queueBtnCloseRun: this.container.querySelector('#ess-queue-close-run'),
             queuePlaylistHeader: this.container.querySelector('#ess-queue-playlist-header'),
             queueItemCount: this.container.querySelector('#ess-queue-item-count'),
             queuePlaylist: this.container.querySelector('#ess-queue-playlist')
@@ -708,13 +709,10 @@ class ESSControl {
         // Close menu when clicking elsewhere
         document.addEventListener('click', () => this.closeQueueMenu());
         
-        // Queue playback controls
-        this.elements.queueBtnStart.addEventListener('click', () => this.queueStart());
-        this.elements.queueBtnStop.addEventListener('click', () => this.queueStop());
-        this.elements.queueBtnPause.addEventListener('click', () => this.queuePauseResume());
-        this.elements.queueBtnSkip.addEventListener('click', () => this.queueSkip());
-        this.elements.queueBtnRetry.addEventListener('click', () => this.queueRetry());
-        this.elements.queueBtnForce.addEventListener('click', () => this.queueForceComplete());
+        // Run controls
+        this.elements.queueResetBtn.addEventListener('click', () => this.resetSession());
+        this.elements.queueBtnStartRun.addEventListener('click', () => this.startRun());
+        this.elements.queueBtnCloseRun.addEventListener('click', () => this.closeRun());
     }
     
     /**
@@ -975,6 +973,7 @@ class ESSControl {
     
     updateEssStatus(status) {
         this.state.essStatus = status;
+        this.state.essRunning = (status === 'running');
         const canChangeConfig = (status === 'stopped');
         this.setControlsEnabled(canChangeConfig);
         
@@ -986,6 +985,10 @@ class ESSControl {
         
         this.emit('stateChange', { state: status });
         this.updateButtonStates();
+        
+        // Update queue controls and status display when ESS state changes
+        this.updateQueueControls();
+        this.renderQueueStatus();
     }
     
     updateButtonStates() {
@@ -2863,12 +2866,22 @@ class ESSControl {
                     auto_advance: parseInt(state.auto_advance) || 0
                 };
                 
-                // If queue is active, sync selection
-                if (this.state.queueState.queue_name && 
-                    this.state.queueState.status !== 'idle' &&
-                    this.state.selectedQueue !== this.state.queueState.queue_name) {
+                // Sync selection to backend state if:
+                // 1. Backend has a queue_name AND
+                // 2. Either: session is active (not idle), OR we don't have a selection yet
+                const hasBackendQueue = !!this.state.queueState.queue_name;
+                const isActive = this.state.queueState.status !== 'idle';
+                const noCurrentSelection = !this.state.selectedQueue;
+                
+                if (hasBackendQueue && (isActive || noCurrentSelection)) {
+                    const needsLoad = this.state.selectedQueue !== this.state.queueState.queue_name;
                     this.state.selectedQueue = this.state.queueState.queue_name;
                     this.elements.queueSelect.value = this.state.queueState.queue_name;
+                    
+                    // Fetch items if we just synced to a different queue or have no items
+                    if (needsLoad || this.state.queueItems.length === 0) {
+                        this.loadQueueItems(this.state.queueState.queue_name);
+                    }
                 }
                 
                 this.renderQueueStatus();
@@ -2922,17 +2935,30 @@ class ESSControl {
      */
     renderQueueStatus() {
         const qs = this.state.queueState;
+        const essLoading = this.state.essStatus === 'loading';
         
         // Status text with styling
         const statusEl = this.elements.queueStatusText;
-        statusEl.textContent = qs.status;
         statusEl.className = 'ess-queue-status-value';
-        if (qs.status === 'running') {
-            statusEl.classList.add('running');
-        } else if (qs.status === 'paused') {
-            statusEl.classList.add('paused');
-        } else if (qs.status === 'finished') {
-            statusEl.classList.add('finished');
+        
+        // Show ESS loading state prominently
+        if (essLoading && (qs.status === 'loading' || qs.status === 'ready')) {
+            statusEl.textContent = 'loading...';
+            statusEl.classList.add('loading');
+        } else if (qs.status === 'between_runs') {
+            statusEl.textContent = 'waiting';
+            statusEl.classList.add('waiting');
+        } else {
+            statusEl.textContent = qs.status;
+            if (qs.status === 'running') {
+                statusEl.classList.add('running');
+            } else if (qs.status === 'paused') {
+                statusEl.classList.add('paused');
+            } else if (qs.status === 'finished') {
+                statusEl.classList.add('finished');
+            } else if (qs.status === 'ready') {
+                statusEl.classList.add('ready');
+            }
         }
         
         // Progress - cap at total_items when finished
@@ -2963,36 +2989,65 @@ class ESSControl {
     /**
      * Update queue control button states
      */
+    /**
+     * Update queue control button states
+     * All run controls require ESS to be stopped (not running, not loading)
+     */
     updateQueueControls() {
         const qs = this.state.queueState;
         const hasQueue = !!this.state.selectedQueue;
-        const isIdle = qs.status === 'idle' || qs.status === 'finished';
-        const isRunning = qs.status === 'running';
-        const isPaused = qs.status === 'paused';
-        const isActive = !isIdle;  // Any non-idle state
+        const hasItems = this.state.queueItems.length > 0;
+        const essRunning = this.state.essRunning;
+        const essLoading = this.state.essStatus === 'loading';
+        const essBusy = essRunning || essLoading;
         
-        // Start button - enabled when queue selected and idle/finished
-        this.elements.queueBtnStart.disabled = !hasQueue || isActive;
+        // Session/queue states
+        const isIdle = qs.status === 'idle';
+        const isFinished = qs.status === 'finished';
+        const isReady = qs.status === 'ready';
+        const isBetweenRuns = qs.status === 'between_runs';
+        const isRunActive = qs.status === 'running' || qs.status === 'ready';
         
-        // Stop button - enabled when active
-        this.elements.queueBtnStop.disabled = !isActive;
+        // Reset button: enabled when session selected and ESS not busy
+        this.elements.queueResetBtn.disabled = !hasQueue || essBusy;
         
-        // Pause button - changes text based on state
-        this.elements.queueBtnPause.disabled = !isActive;
-        if (isPaused) {
-            this.elements.queueBtnPause.textContent = '▶ Resume';
-            this.elements.queueBtnPause.classList.remove('reset');
-            this.elements.queueBtnPause.classList.add('go');
-        } else {
-            this.elements.queueBtnPause.textContent = '⏸ Pause';
-            this.elements.queueBtnPause.classList.remove('go');
-            this.elements.queueBtnPause.classList.add('reset');
-        }
+        // Start Run: enabled when session selected, has items, idle/finished/between_runs, ESS not busy
+        const canStartRun = hasQueue && hasItems && (isIdle || isFinished || isBetweenRuns) && !essBusy;
+        this.elements.queueBtnStartRun.disabled = !canStartRun;
         
-        // Secondary controls - only when active
-        this.elements.queueBtnSkip.disabled = !isActive;
-        this.elements.queueBtnRetry.disabled = !isActive;
-        this.elements.queueBtnForce.disabled = !isRunning;
+        // Close Run: enabled when run is active (file open) and ESS is stopped (not running, not loading)
+        const canCloseRun = isRunActive && !essBusy;
+        this.elements.queueBtnCloseRun.disabled = !canCloseRun;
+        
+        // Update config row play buttons
+        this.updateConfigPlayButtons();
+    }
+    
+    /**
+     * Update play/close button states in config playlist
+     * - Play buttons: enabled when ESS stopped and session is in a "selectable" state
+     * - Close button: enabled when ESS stopped (can close the current run)
+     */
+    updateConfigPlayButtons() {
+        const qs = this.state.queueState;
+        const essRunning = this.state.essRunning;
+        const essLoading = this.state.essStatus === 'loading';
+        const essBusy = essRunning || essLoading;
+        
+        // Can play when ESS is stopped and session is in a "selectable" state
+        const canPlay = !essBusy && 
+            (qs.status === 'idle' || qs.status === 'finished' || qs.status === 'between_runs');
+        
+        // Can close when ESS is stopped and there's an active run
+        const canClose = !essBusy && (qs.status === 'running' || qs.status === 'ready');
+        
+        this.elements.queuePlaylist.querySelectorAll('.ess-queue-item-play').forEach(btn => {
+            btn.disabled = !canPlay;
+        });
+        
+        this.elements.queuePlaylist.querySelectorAll('.ess-queue-item-close').forEach(btn => {
+            btn.disabled = !canClose;
+        });
     }
     
     /**
@@ -3020,19 +3075,23 @@ class ESSControl {
         }
         
         playlist.innerHTML = items.map((item, idx) => {
-            const isCurrent = qs.status !== 'idle' && qs.position === idx;
-            const isPast = qs.status !== 'idle' && idx < qs.position;
+            const isCurrent = qs.status !== 'idle' && qs.status !== 'finished' && qs.position === idx;
             const repeatInfo = item.repeat_count > 1 ? `×${item.repeat_count}` : '';
             const pauseInfo = item.pause_after > 0 ? `⏱${item.pause_after}s` : '';
             
             let statusClass = '';
             if (isCurrent) statusClass = 'current';
-            else if (isPast) statusClass = 'completed';
+            
+            // Current config gets a close button, others get play button
+            const buttonHtml = isCurrent
+                ? `<button class="ess-queue-item-close" data-position="${idx}" title="Close run">■</button>`
+                : `<button class="ess-queue-item-play" data-position="${idx}" title="Start run at this config">▶</button>`;
             
             // For single config, show simpler display
             if (isSingleConfig) {
                 return `
                     <div class="ess-queue-item single ${statusClass}" data-position="${idx}">
+                        ${buttonHtml}
                         <span class="ess-queue-item-name">${this.escapeHtml(item.config_name)}</span>
                         ${repeatInfo ? `<span class="ess-queue-item-repeat">${repeatInfo}</span>` : ''}
                         ${isCurrent && qs.run_count > 0 ? `<span class="ess-queue-item-run">run ${qs.run_count}</span>` : ''}
@@ -3042,6 +3101,7 @@ class ESSControl {
             
             return `
                 <div class="ess-queue-item ${statusClass}" data-position="${idx}">
+                    ${buttonHtml}
                     <span class="ess-queue-item-position">${idx + 1}</span>
                     <span class="ess-queue-item-name">${this.escapeHtml(item.config_name)}</span>
                     <span class="ess-queue-item-info">
@@ -3053,15 +3113,25 @@ class ESSControl {
             `;
         }).join('');
         
-        // Add click handlers for jumping to position (only useful for multi-config)
-        if (!isSingleConfig) {
-            playlist.querySelectorAll('.ess-queue-item').forEach(el => {
-                el.addEventListener('click', () => {
-                    const pos = parseInt(el.dataset.position);
-                    this.queueJumpTo(pos);
-                });
+        // Bind play button clicks
+        playlist.querySelectorAll('.ess-queue-item-play').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pos = parseInt(btn.dataset.position);
+                this.startRun(pos);
             });
-        }
+        });
+        
+        // Bind close button clicks (for current/active config)
+        playlist.querySelectorAll('.ess-queue-item-close').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.closeRun();
+            });
+        });
+        
+        // Update button enabled/disabled states
+        this.updateConfigPlayButtons();
     }
     
     /**
@@ -3074,11 +3144,6 @@ class ESSControl {
         // Hide progress row for single config (it's always 1/1)
         if (this.elements.queueProgressRow) {
             this.elements.queueProgressRow.style.display = isSingleConfig ? 'none' : '';
-        }
-        
-        // Hide Skip button for single config (nowhere to skip to)
-        if (this.elements.queueBtnSkip) {
-            this.elements.queueBtnSkip.style.display = isSingleConfig ? 'none' : '';
         }
         
         // Rename playlist header based on count
@@ -3096,24 +3161,18 @@ class ESSControl {
     }
     
     /**
-     * Select a queue
+     * Load items for a queue (without changing selection)
      */
-    async selectQueue(name) {
-        this.state.selectedQueue = name;
-        
+    async loadQueueItems(name) {
         if (!name) {
             this.state.queueItems = [];
             this.renderQueuePlaylist();
-            this.updateQueueControls();
             return;
         }
         
-        // Load queue items
         try {
             const response = await this.sendConfigCommandAsync(`queue_get_json {${name}}`);
-            console.log('queue_get_json response:', response);  // Debug
             const queue = typeof response === 'string' ? JSON.parse(response) : response;
-            console.log('parsed queue:', queue);  // Debug
             
             if (queue && queue.items) {
                 let items = queue.items;
@@ -3130,98 +3189,109 @@ class ESSControl {
                     }
                 }
                 this.state.queueItems = Array.isArray(items) ? items : [];
-                console.log('final queueItems:', this.state.queueItems);  // Debug
             } else {
                 this.state.queueItems = [];
             }
             this.renderQueuePlaylist();
         } catch (e) {
-            console.error('Failed to load queue:', e);
+            console.error('Failed to load queue items:', e);
             this.state.queueItems = [];
             this.renderQueuePlaylist();
         }
+    }
+    
+    /**
+     * Select a queue
+     */
+    async selectQueue(name) {
+        this.state.selectedQueue = name;
         
-        this.updateQueueControls();
-    }
-    
-    // Queue playback commands
-    async queueStart() {
-        if (!this.state.selectedQueue) return;
-        
-        try {
-            this.emit('log', { message: `Starting session: ${this.state.selectedQueue}`, level: 'info' });
-            await this.sendConfigCommandAsync(`queue_start {${this.state.selectedQueue}}`);
-        } catch (e) {
-            this.emit('log', { message: `Failed to start session: ${e.message}`, level: 'error' });
-        }
-    }
-    
-    async queueStop() {
-        try {
-            this.emit('log', { message: 'Stopping session', level: 'info' });
-            await this.sendConfigCommandAsync('queue_stop');
-        } catch (e) {
-            this.emit('log', { message: `Failed to stop session: ${e.message}`, level: 'error' });
-        }
-    }
-    
-    async queuePauseResume() {
-        const isPaused = this.state.queueState.status === 'paused';
-        try {
-            if (isPaused) {
-                this.emit('log', { message: 'Resuming session', level: 'info' });
-                await this.sendConfigCommandAsync('queue_resume');
-            } else {
-                this.emit('log', { message: 'Pausing session', level: 'info' });
-                await this.sendConfigCommandAsync('queue_pause');
-            }
-        } catch (e) {
-            this.emit('log', { message: `Failed to ${isPaused ? 'resume' : 'pause'} session: ${e.message}`, level: 'error' });
-        }
-    }
-    
-    async queueSkip() {
-        try {
-            this.emit('log', { message: 'Skipping to next config', level: 'info' });
-            await this.sendConfigCommandAsync('queue_skip');
-        } catch (e) {
-            this.emit('log', { message: `Failed to skip: ${e.message}`, level: 'error' });
-        }
-    }
-    
-    async queueRetry() {
-        try {
-            this.emit('log', { message: 'Retrying current item', level: 'info' });
-            await this.sendConfigCommandAsync('queue_retry');
-        } catch (e) {
-            this.emit('log', { message: `Failed to retry: ${e.message}`, level: 'error' });
-        }
-    }
-    
-    async queueForceComplete() {
-        try {
-            this.emit('log', { message: 'Force completing current run', level: 'info' });
-            await this.sendConfigCommandAsync('queue_force_complete');
-        } catch (e) {
-            this.emit('log', { message: `Failed to force complete: ${e.message}`, level: 'error' });
-        }
-    }
-    
-    async queueJumpTo(position) {
-        // Only allow jumping when session is paused or stopped
-        const qs = this.state.queueState;
-        if (qs.status === 'running') {
-            this.emit('log', { message: 'Stop or pause the session before jumping to a position', level: 'warning' });
+        if (!name) {
+            this.state.queueItems = [];
+            this.renderQueuePlaylist();
+            this.updateQueueControls();
             return;
         }
         
+        await this.loadQueueItems(name);
+        this.updateQueueControls();
+    }
+    
+    // =========================================================================
+    // Run Commands
+    // =========================================================================
+    
+    /**
+     * Start a run at the current (or specified) position
+     * Loads config, opens datafile, auto-starts ESS if auto_start enabled
+     * @param {number|null} position - Position to start at, or null for current position
+     */
+    async startRun(position = null) {
         if (!this.state.selectedQueue) return;
+        if (this.state.essRunning) {
+            this.emit('log', { message: 'Stop ESS before starting a new run', level: 'warn' });
+            return;
+        }
+        
+        const pos = position ?? this.state.queueState.position;
         
         try {
-            this.emit('log', { message: `Jumping to position ${position + 1}`, level: 'info' });
-            await this.sendConfigCommandAsync(`queue_start {${this.state.selectedQueue}} -position ${position}`);
+            this.emit('log', { message: `Starting run: ${this.state.selectedQueue} at position ${pos}`, level: 'info' });
+            await this.sendConfigCommandAsync(`queue_start {${this.state.selectedQueue}} -position ${pos}`);
         } catch (e) {
-            this.emit('log', { message: `Failed to jump: ${e.message}`, level: 'error' });
+            this.emit('log', { message: `Failed to start run: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    /**
+     * Close the current run - closes datafile and advances to next position
+     * Only available when ESS is stopped
+     */
+    async closeRun() {
+        if (this.state.essRunning) {
+            this.emit('log', { message: 'Stop ESS before closing run', level: 'warn' });
+            return;
+        }
+        
+        try {
+            this.emit('log', { message: 'Closing run', level: 'info' });
+            await this.sendConfigCommandAsync('run_close');
+        } catch (e) {
+            this.emit('log', { message: `Failed to close run: ${e.message}`, level: 'error' });
+        }
+    }
+    
+    /**
+     * Reset/reload session
+     * - If session is active: close any open files, return to position 0, idle state
+     * - If session is idle: just reload the items list
+     * Only available when ESS is stopped
+     */
+    async resetSession() {
+        if (!this.state.selectedQueue) return;
+        if (this.state.essRunning) {
+            this.emit('log', { message: 'Stop ESS before resetting session', level: 'warn' });
+            return;
+        }
+        
+        const qs = this.state.queueState;
+        const isIdle = qs.status === 'idle' || qs.status === 'finished' || qs.queue_name !== this.state.selectedQueue;
+        
+        if (isIdle) {
+            // Just reload items
+            this.emit('log', { message: `Reloading session: ${this.state.selectedQueue}`, level: 'info' });
+            await this.loadQueueItems(this.state.selectedQueue);
+            this.updateQueueControls();
+        } else {
+            // Active session - reset to beginning
+            try {
+                this.emit('log', { message: `Resetting session: ${this.state.selectedQueue}`, level: 'info' });
+                await this.sendConfigCommandAsync('queue_reset');
+                // Reload items after reset
+                await this.loadQueueItems(this.state.selectedQueue);
+            } catch (e) {
+                this.emit('log', { message: `Failed to reset session: ${e.message}`, level: 'error' });
+            }
         }
     }
     

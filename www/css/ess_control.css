@@ -2633,10 +2633,12 @@ body.ess-app {
     display: flex;
     gap: 6px;
     margin-bottom: 10px;
+    align-items: center;
 }
 
 .ess-queue-select {
     flex: 1;
+    min-width: 0;  /* Allow shrinking */
     padding: 6px 8px;
     font-size: 11px;
     background: var(--ess-bg-panel);
@@ -2694,6 +2696,19 @@ body.ess-app {
 
 .ess-queue-status-value.finished {
     color: var(--ess-accent);
+}
+
+.ess-queue-status-value.loading {
+    color: var(--ess-accent);
+    animation: pulse 1s infinite;
+}
+
+.ess-queue-status-value.waiting {
+    color: var(--ess-warning);
+}
+
+.ess-queue-status-value.ready {
+    color: var(--ess-success);
 }
 
 /* Queue playback controls */
@@ -2769,7 +2784,6 @@ body.ess-app {
     gap: 8px;
     padding: 6px 10px;
     border-bottom: 1px solid var(--ess-border);
-    cursor: pointer;
     transition: background 0.1s;
 }
 
@@ -2785,10 +2799,6 @@ body.ess-app {
     background: rgba(74, 222, 128, 0.15);
     border-left: 3px solid var(--ess-success);
     padding-left: 7px;
-}
-
-.ess-queue-item.completed {
-    opacity: 0.5;
 }
 
 .ess-queue-item-position {
@@ -2838,6 +2848,77 @@ body.ess-app {
     font-size: 9px;
     color: var(--ess-success);
     font-weight: 500;
+}
+
+/* Queue item play button */
+.ess-queue-item-play {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    background: transparent;
+    border: 1px solid var(--ess-accent);
+    border-radius: 3px;
+    color: var(--ess-accent);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.ess-queue-item-play:hover:not(:disabled) {
+    background: var(--ess-accent);
+    color: white;
+}
+
+.ess-queue-item-play:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    border-color: var(--ess-text-muted);
+    color: var(--ess-text-muted);
+}
+
+/* Current config's play button is highlighted */
+.ess-queue-item.current .ess-queue-item-play {
+    background: var(--ess-success);
+    border-color: var(--ess-success);
+    color: var(--ess-bg-primary);
+}
+
+.ess-queue-item.current .ess-queue-item-play:hover:not(:disabled) {
+    background: var(--ess-success);
+    filter: brightness(1.1);
+}
+
+/* Queue item close button (for current/active config) */
+.ess-queue-item-close {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    background: var(--ess-success);
+    border: 1px solid var(--ess-success);
+    border-radius: 3px;
+    color: var(--ess-bg-primary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.ess-queue-item-close:hover:not(:disabled) {
+    background: var(--ess-error);
+    border-color: var(--ess-error);
+    color: white;
+}
+
+.ess-queue-item-close:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Queue playlist scrollbar */
