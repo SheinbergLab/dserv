@@ -4829,7 +4829,6 @@ namespace eval ess {
     dict set evt_info TARGET [list 33 {Target} long $subtypes]
     dict set evt_info DISTRACTOR [list 34 {Distractor} long $subtypes]
     dict set evt_info SOUND [list 35 {Sound Event} long $subtypes]
-    dict set evt_info CHOICES [list 49 {Choices} long $subtypes]
 
     set subtypes [dict create OUT 0 IN 1 REFIXATE 2]
     dict set evt_info FIXATE [list 36 {Fixation} long $subtypes]
@@ -4863,6 +4862,9 @@ namespace eval ess {
 
     set subtypes [dict create OFF 0 ON 1 ]
     dict set evt_info FEEDBACK [list 49 {Feedback} long $subtypes]
+
+    set subtypes [dict create OFF 0 ON 1 ]
+    dict set evt_info CHOICES [list 50 {Choices} long $subtypes]
     
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
