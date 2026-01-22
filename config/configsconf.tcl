@@ -611,6 +611,20 @@ proc queue_force_complete {} {
     ::ess_queues::force_complete
 }
 
+# Close current run (close datafile, advance to next position)
+# Used when ESS is stopped and user wants to end the current run
+# Usage: run_close
+proc run_close {} {
+    ::ess_queues::run_close
+}
+
+# Reset session to beginning (close file, reset position to 0)
+# Used when user clicks reset button next to session dropdown
+# Usage: queue_reset
+proc queue_reset {} {
+    ::ess_queues::queue_reset
+}
+
 # Get current queue state
 # Usage: queue_status
 proc queue_status {} {
