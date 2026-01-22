@@ -889,6 +889,69 @@ proc ::ess_queues::queue_retry {} {
     load_current_item
 }
 
+# run_close - Close current run's datafile and advance to next position
+# Called when user clicks "Close Run" after stopping ESS
+# Only valid when ESS is stopped and a run is active (file open)
+proc ::ess_queues::run_close {} {
+    variable state
+    
+    # Verify ESS is not running
+    set ess_status [dservGet ess/status]
+    if {$ess_status eq "running"} {
+        error "Cannot close run while ESS is running"
+    }
+    
+    # Must have an active session
+    if {$state(status) eq "idle"} {
+        error "No active session"
+    }
+    
+    log info "Closing run at position $state(position)"
+    
+    # Close datafile with flush delay
+    close_datafile
+    
+    # Advance to next position (this will set status to finished if at end)
+    advance_to_next
+    
+    return "ok"
+}
+
+# queue_reset - Reset session to beginning
+# Called when user clicks the reset button next to session dropdown
+# Closes any open files, resets position to 0, returns to idle
+proc ::ess_queues::queue_reset {} {
+    variable state
+    
+    # Verify ESS is not running
+    set ess_status [dservGet ess/status]
+    if {$ess_status eq "running"} {
+        error "Cannot reset session while ESS is running"
+    }
+    
+    # Must have a session selected
+    if {$state(queue_name) eq ""} {
+        error "No session to reset"
+    }
+    
+    log info "Resetting session: $state(queue_name)"
+    
+    # Close any open datafile
+    close_datafile
+    
+    # Reset position but keep queue selected
+    set state(position) 0
+    set state(run_count) 0
+    set state(global_run) 0
+    set state(current_config) ""
+    set state(status) idle
+    set state(run_started) 0
+    
+    publish_state
+    
+    return "ok"
+}
+
 # =============================================================================
 # Orchestration Internals
 # =============================================================================
