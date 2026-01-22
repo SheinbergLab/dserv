@@ -514,6 +514,14 @@ namespace eval df {
             dict get $subtypes $t $subtype_name
         }
         
+        # Check if an event type exists in this file's event dictionary
+        method has_event_type {type_name} {
+            if {[string is integer -strict $type_name]} {
+                return [dict exists $type_names $type_name]
+            }
+            return [dict exists $type_ids $type_name]
+        }
+        
         method type_names {} {
             return $type_names
         }
