@@ -120,7 +120,37 @@ else()
     if(LIBXXHASH)
         list(APPEND LINUX_LIBS ${LIBXXHASH})
     endif()
+    
+    # Core X11 libraries
     list(APPEND LINUX_LIBS X11 Xext Xinerama Xfixes Xcursor Xft Xrender fontconfig pthread dl)
+    
+    # Wayland/GTK libraries (needed if FLTK was built with Wayland support)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(WAYLAND wayland-client wayland-cursor)
+        pkg_check_modules(GTK3 gtk+-3.0)
+        pkg_check_modules(CAIRO cairo)
+        if(WAYLAND_FOUND)
+            list(APPEND LINUX_LIBS ${WAYLAND_LIBRARIES})
+        endif()
+        if(GTK3_FOUND)
+            list(APPEND LINUX_LIBS ${GTK3_LIBRARIES})
+        endif()
+        if(CAIRO_FOUND)
+            list(APPEND LINUX_LIBS ${CAIRO_LIBRARIES})
+        endif()
+    endif()
+    
+    # Additional libraries that may be needed
+    find_library(LIBDECOR decor-0)
+    find_library(LIBXKBCOMMON xkbcommon)
+    if(LIBDECOR)
+        list(APPEND LINUX_LIBS ${LIBDECOR})
+    endif()
+    if(LIBXKBCOMMON)
+        list(APPEND LINUX_LIBS ${LIBXKBCOMMON})
+    endif()
+    
     target_link_libraries(dgview ${LINUX_LIBS})
 endif()
 
