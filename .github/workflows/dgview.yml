@@ -16,6 +16,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Clone dlsh
         run: |
@@ -24,6 +26,13 @@ jobs:
       - name: Install dependencies
         run: |
           brew install fltk lz4
+      
+      - name: Build and install jansson
+        run: |
+          cd deps/jansson/
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
           
       - name: Build libdg only
         run: |
@@ -61,6 +70,8 @@ jobs:
     runs-on: macos-14  # ARM64 runner
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Clone dlsh
         run: |
@@ -69,6 +80,13 @@ jobs:
       - name: Install dependencies
         run: |
           brew install fltk lz4
+      
+      - name: Build and install jansson
+        run: |
+          cd deps/jansson/
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
+          cmake --build build
+          sudo cmake --install build
           
       - name: Build libdg only
         run: |
@@ -106,6 +124,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Clone dlsh
         run: |
@@ -120,6 +140,13 @@ jobs:
             zlib1g-dev liblz4-dev libxxhash-dev \
             libwayland-dev libgtk-3-dev libcairo2-dev \
             libxkbcommon-dev libdbus-1-dev libdecor-0-dev
+      
+      - name: Build and install jansson
+        run: |
+          cd deps/jansson/
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
             
       - name: Build libdg only
         run: |
@@ -152,6 +179,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Clone dlsh
         run: |
@@ -167,7 +196,7 @@ jobs:
           
       - name: Install dependencies via vcpkg
         run: |
-          vcpkg install fltk:x64-windows-static zlib:x64-windows-static lz4:x64-windows-static
+          vcpkg install fltk:x64-windows-static zlib:x64-windows-static lz4:x64-windows-static jansson:x64-windows-static
           
       - name: Build libdg only
         run: |
