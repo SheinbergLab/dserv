@@ -76,6 +76,7 @@ public:
   int websocket_listener_port = -1;  // Add WebSocket port
   std::string name;
   std::string www_path;
+  std::string exports_path;
   
   TclServerConfig(std::string name, int newline_port, int message_port):
     name(name), newline_listener_port(newline_port), 
@@ -154,6 +155,9 @@ private:
 
   // Static file serving - path to www directory, empty = disabled
   std::string www_path;  
+
+  // Staging area for file exports
+  std::string exports_path;
   
   template<typename WebSocketType>
   void sendLargeMessage(WebSocketType* ws,
