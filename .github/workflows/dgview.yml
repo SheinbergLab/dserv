@@ -300,8 +300,8 @@ jobs:
           cd zlib-src
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps
           ninja -C build zlibstatic
-          # Manually copy static lib and headers
-          Copy-Item build/zlibstatic.lib -Destination C:/deps/lib/
+          # Library is named zs.lib on Windows
+          Copy-Item build/zs.lib -Destination C:/deps/lib/
           Copy-Item zlib.h -Destination C:/deps/include/
           Copy-Item build/zconf.h -Destination C:/deps/include/
         shell: pwsh
