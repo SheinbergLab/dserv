@@ -210,36 +210,51 @@ jobs:
       
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
+      
+      - name: Install Ninja
+        run: choco install ninja -y
         
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitCommitId: 'c82f74667287d3dc386bce81e44964370c91a289'  # 2025.01.13
-          
-      - name: Install dependencies via vcpkg
+      - name: Build and install zlib
         run: |
-          vcpkg install fltk:x64-windows-static zlib:x64-windows-static lz4:x64-windows-static jansson:x64-windows-static
+          git clone https://github.com/madler/zlib.git zlib-src
+          cd zlib-src
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps
+          ninja -C build
+          ninja -C build install
           
-      - name: Build libdg only
+      - name: Build and install lz4
+        run: |
+          git clone https://github.com/lz4/lz4.git lz4-src
+          cd lz4-src/build/cmake
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DBUILD_SHARED_LIBS=OFF -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
+          ninja -C build
+          ninja -C build install
+          
+      - name: Build and install jansson
+        run: |
+          cd deps/jansson
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DJANSSON_BUILD_DOCS=OFF
+          ninja -C build
+          ninja -C build install
+          
+      - name: Build and install FLTK
+        run: |
+          cd deps/fltk
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF
+          ninja -C build
+          ninja -C build install
+          
+      - name: Build libdg
         run: |
           cd dlsh/libdg
-          mkdir build
-          cd build
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF `
-            -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static ..
-          ninja
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH=C:/deps
+          ninja -C build
           
       - name: Build dgview
         run: |
           cd tools/dgview
-          mkdir build
-          cd build
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-            -DLIBDG_PATH=${{ github.workspace }}/dlsh/libdg/build ..
-          ninja
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/deps -DLIBDG_PATH=${{ github.workspace }}/dlsh/libdg/build
+          ninja -C build
           
       - name: Install NSIS
         run: choco install nsis -y
