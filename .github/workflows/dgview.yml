@@ -14,6 +14,10 @@ on:
 jobs:
   build-macos:
     runs-on: macos-latest
+    
+    permissions:
+      contents: write
+      
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,33 +52,62 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           make
           sudo make install
+      
+      - name: Set up a keychain for Apple code signing
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
+        run: |
+          # Reconstitute text-encoded secrets as binary .p12 files.
+          APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.p12
+          echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
+
+          # Create a new keychain for use in CI.
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add our certificates to the keychain.
+          security import $APP_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          # Allow codesign util and the current user to use this keychain for signing.
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Log info about this keychain for debugging.
+          security find-identity -p basic -v
           
-      - name: Build dgview
+      - name: Build, sign, package, and notarize dgview
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cd tools/dgview
-          mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release ..
-          make
+          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }}
+          cmake --build build --config Release
+          cpack -G DragNDrop --config build/CPackConfig.cmake
+
+          xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dgview-signing"
+          xcrun notarytool submit dgview-${{ github.ref_name }}-Darwin.dmg --keychain-profile "dgview-signing" --wait
+          xcrun stapler staple dgview-${{ github.ref_name }}-Darwin.dmg
           
-      - name: Create DMG
-        run: |
-          cd tools/dgview/build
-          mkdir -p dmg_staging
-          cp -R dgview.app dmg_staging/
-          ln -s /Applications dmg_staging/Applications
-          hdiutil create -volname "DG Viewer" \
-            -srcfolder dmg_staging \
-            -ov -format UDZO \
-            dgview-macos-x64.dmg
+          mv dgview-${{ github.ref_name }}-Darwin.dmg dgview-macos-x64.dmg
             
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dgview-macos-x64
-          path: tools/dgview/build/dgview-macos-x64.dmg
+          path: tools/dgview/dgview-macos-x64.dmg
 
   build-macos-arm:
     runs-on: macos-14  # ARM64 runner
+    
+    permissions:
+      contents: write
+      
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,30 +142,55 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           make
           sudo make install
+      
+      - name: Set up a keychain for Apple code signing
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          APP_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_CERTIFICATE_BASE64 }}
+        run: |
+          # Reconstitute text-encoded secrets as binary .p12 files.
+          APP_CERTIFICATE_PATH=$RUNNER_TEMP/developerID_application.p12
+          echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERTIFICATE_PATH
+
+          # Create a new keychain for use in CI.
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add our certificates to the keychain.
+          security import $APP_CERTIFICATE_PATH -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          # Allow codesign util and the current user to use this keychain for signing.
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Log info about this keychain for debugging.
+          security find-identity -p basic -v
           
-      - name: Build dgview
+      - name: Build, sign, package, and notarize dgview
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cd tools/dgview
-          mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release ..
-          make
+          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }}
+          cmake --build build --config Release
+          cpack -G DragNDrop --config build/CPackConfig.cmake
+
+          xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dgview-signing"
+          xcrun notarytool submit dgview-${{ github.ref_name }}-Darwin.dmg --keychain-profile "dgview-signing" --wait
+          xcrun stapler staple dgview-${{ github.ref_name }}-Darwin.dmg
           
-      - name: Create DMG
-        run: |
-          cd tools/dgview/build
-          mkdir -p dmg_staging
-          cp -R dgview.app dmg_staging/
-          ln -s /Applications dmg_staging/Applications
-          hdiutil create -volname "DG Viewer" \
-            -srcfolder dmg_staging \
-            -ov -format UDZO \
-            dgview-macos-arm64.dmg
+          mv dgview-${{ github.ref_name }}-Darwin.dmg dgview-macos-arm64.dmg
             
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dgview-macos-arm64
-          path: tools/dgview/build/dgview-macos-arm64.dmg
+          path: tools/dgview/dgview-macos-arm64.dmg
 
   build-linux:
     strategy:
@@ -274,6 +332,10 @@ jobs:
     needs: [build-macos, build-macos-arm, build-linux, build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    
+    permissions:
+      contents: write
+      
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -287,6 +349,8 @@ jobs:
             dgview-linux-amd64/*.deb
             dgview-linux-arm64/*.deb
             dgview-windows-x64/*.exe
-          draft: true
+          body: dgview version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
