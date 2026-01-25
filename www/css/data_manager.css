@@ -1,0 +1,831 @@
+/**
+ * data_manager.css
+ * Simplified Data Manager interface
+ */
+
+/* ============================================================================
+   Base / Reset
+   ============================================================================ */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+.dm-app {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    font-size: 14px;
+    background: #0d1117;
+    color: #e6edf3;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.dm-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 8px;
+    gap: 8px;
+}
+
+/* ============================================================================
+   Status Bar
+   ============================================================================ */
+
+.dm-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.dm-status-bar h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #58a6ff;
+    margin: 0;
+}
+
+.dm-status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #484f58;
+}
+
+.dm-status-indicator.connected {
+    background: #3fb950;
+    box-shadow: 0 0 6px #3fb950;
+}
+
+.dm-status-indicator.connecting {
+    background: #d29922;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.dm-status-text {
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.dm-status-spacer {
+    flex: 1;
+}
+
+.dm-data-summary {
+    color: #8b949e;
+    font-size: 13px;
+    padding: 4px 12px;
+    background: #21262d;
+    border-radius: 4px;
+}
+
+.dm-scan-btn {
+    padding: 6px 12px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #e6edf3;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+}
+
+.dm-scan-btn:hover {
+    background: #30363d;
+}
+
+/* ============================================================================
+   Filter Bar
+   ============================================================================ */
+
+.dm-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.dm-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dm-filter-group label {
+    color: #8b949e;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.dm-filter-group select,
+.dm-filter-group input {
+    padding: 5px 10px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #e6edf3;
+    font-size: 13px;
+    min-width: 100px;
+}
+
+.dm-filter-group input[type="number"] {
+    width: 70px;
+    min-width: 70px;
+}
+
+.dm-filter-group input[type="text"] {
+    width: 140px;
+}
+
+.dm-filter-group select:focus,
+.dm-filter-group input:focus {
+    outline: none;
+    border-color: #58a6ff;
+}
+
+.dm-filter-clear {
+    padding: 5px 12px;
+    background: transparent;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.dm-filter-clear:hover {
+    color: #e6edf3;
+    border-color: #484f58;
+}
+
+/* ============================================================================
+   Main Panel
+   ============================================================================ */
+
+.dm-main-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.dm-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: #21262d;
+    border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+}
+
+.dm-header-left,
+.dm-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.dm-panel-title {
+    font-weight: 600;
+    color: #e6edf3;
+}
+
+.dm-panel-count {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.dm-btn-small {
+    padding: 4px 10px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.dm-btn-small:hover {
+    color: #e6edf3;
+    background: #30363d;
+}
+
+/* ============================================================================
+   Staging Bar
+   ============================================================================ */
+
+.dm-staging-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+}
+
+.dm-staging-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dm-staging-label {
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.dm-staging-count {
+    color: #58a6ff;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.dm-staging-obs {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.dm-staging-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.dm-level-select {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dm-level-select label {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.dm-level-select select {
+    padding: 5px 10px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #e6edf3;
+    font-size: 13px;
+}
+
+/* ============================================================================
+   Buttons
+   ============================================================================ */
+
+.dm-btn {
+    padding: 6px 14px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #e6edf3;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.dm-btn:hover:not(:disabled) {
+    background: #30363d;
+}
+
+.dm-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.dm-btn-primary {
+    background: #238636;
+    border-color: #238636;
+}
+
+.dm-btn-primary:hover:not(:disabled) {
+    background: #2ea043;
+}
+
+/* ============================================================================
+   Dropdowns
+   ============================================================================ */
+
+.dm-dropdown {
+    position: relative;
+}
+
+.dm-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    z-index: 100;
+    min-width: 240px;
+}
+
+.dm-dropdown-menu.open {
+    display: block;
+}
+
+.dm-dropdown-menu > button {
+    display: block;
+    width: 100%;
+    padding: 10px 14px;
+    background: none;
+    border: none;
+    color: #e6edf3;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dm-dropdown-menu > button:hover {
+    background: #30363d;
+}
+
+.dm-dropdown-menu > button:first-child {
+    border-radius: 6px 6px 0 0;
+}
+
+.dm-dropdown-menu > button:last-child {
+    border-radius: 0 0 6px 6px;
+}
+
+.dm-dropdown-section {
+    padding: 10px 14px;
+}
+
+.dm-dropdown-label {
+    font-size: 11px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+}
+
+.dm-dropdown-hint {
+    font-size: 11px;
+    color: #8b949e;
+    margin: 8px 0;
+    font-style: italic;
+}
+
+.dm-destination-row {
+    display: flex;
+    gap: 6px;
+}
+
+.dm-destination-row input {
+    flex: 1;
+    padding: 6px 10px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #e6edf3;
+    font-size: 12px;
+}
+
+.dm-destination-row input:focus {
+    outline: none;
+    border-color: #58a6ff;
+}
+
+.dm-destination-row button {
+    padding: 6px 12px;
+    background: #238636;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.dm-destination-row button:hover {
+    background: #2ea043;
+}
+
+.dm-dropdown-action {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    background: #238636;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    margin-top: 8px;
+}
+
+.dm-dropdown-action:hover {
+    background: #2ea043;
+}
+
+.dm-dropdown-divider {
+    height: 1px;
+    background: #30363d;
+    margin: 0;
+}
+
+.dm-sync-destination {
+    font-size: 12px;
+    color: #58a6ff;
+    padding: 4px 0;
+    word-break: break-all;
+}
+
+.dm-sync-destination.not-configured {
+    color: #8b949e;
+    font-style: italic;
+}
+
+/* ============================================================================
+   Status Message
+   ============================================================================ */
+
+.dm-status-message {
+    padding: 0 14px;
+    font-size: 12px;
+    color: #8b949e;
+    min-height: 0;
+    overflow: hidden;
+    transition: all 0.2s;
+}
+
+.dm-status-message:not(:empty) {
+    padding: 8px 14px;
+    border-bottom: 1px solid #30363d;
+}
+
+.dm-status-message.success {
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.1);
+}
+
+.dm-status-message.error {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.1);
+}
+
+.dm-status-message.working {
+    color: #d29922;
+    background: rgba(210, 153, 34, 0.1);
+}
+
+/* ============================================================================
+   File Table
+   ============================================================================ */
+
+.dm-panel-body {
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+.dm-file-table-container {
+    height: 100%;
+    overflow: auto;
+}
+
+.dm-file-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.dm-file-table thead {
+    position: sticky;
+    top: 0;
+    background: #21262d;
+    z-index: 10;
+}
+
+.dm-file-table th {
+    text-align: left;
+    padding: 8px 10px;
+    color: #8b949e;
+    font-weight: 500;
+    font-size: 12px;
+    border-bottom: 1px solid #30363d;
+    white-space: nowrap;
+}
+
+.dm-file-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #21262d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dm-file-table tbody tr {
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.dm-file-table tbody tr:hover {
+    background: #21262d;
+}
+
+.dm-file-table tbody tr.selected {
+    background: #1f3a5f;
+}
+
+.dm-file-table tbody tr.selected:hover {
+    background: #244776;
+}
+
+/* Column widths */
+.dm-col-check { width: 36px; text-align: center; }
+.dm-col-filename { min-width: 200px; }
+.dm-col-subject { width: 80px; }
+.dm-col-system { width: 100px; }
+.dm-col-protocol { width: 120px; }
+.dm-col-obs { width: 60px; text-align: right; }
+.dm-col-date { width: 90px; }
+.dm-col-time { width: 70px; }
+
+.dm-file-table td.dm-col-obs {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.dm-file-table input[type="checkbox"] {
+    cursor: pointer;
+}
+
+/* ============================================================================
+   Console
+   ============================================================================ */
+
+.dm-console {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    flex-shrink: 0;
+    max-height: 120px;
+    display: flex;
+    flex-direction: column;
+}
+
+.dm-console.collapsed .dm-console-body {
+    display: none;
+}
+
+.dm-console.collapsed {
+    max-height: none;
+}
+
+.dm-clickable {
+    cursor: pointer;
+}
+
+.dm-clickable:hover {
+    background: #262c34;
+}
+
+.dm-console-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    background: #21262d;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.dm-console:not(.collapsed) .dm-console-header {
+    border-radius: 6px 6px 0 0;
+}
+
+.dm-console-title {
+    font-weight: 500;
+    font-size: 12px;
+    color: #8b949e;
+}
+
+.dm-console-count {
+    font-size: 11px;
+    color: #f85149;
+}
+
+.dm-console-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+}
+
+.dm-console-actions button {
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid #30363d;
+    border-radius: 3px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.dm-console-actions button:hover {
+    color: #e6edf3;
+    border-color: #484f58;
+}
+
+.dm-collapse-icon {
+    color: #8b949e;
+    font-size: 10px;
+    margin-left: 8px;
+}
+
+.dm-console-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+}
+
+.dm-console-entry {
+    padding: 2px 0;
+    color: #8b949e;
+}
+
+.dm-console-entry .timestamp {
+    color: #484f58;
+    margin-right: 8px;
+}
+
+.dm-console-entry.error {
+    color: #f85149;
+}
+
+.dm-console-entry.success {
+    color: #3fb950;
+}
+
+/* ============================================================================
+   Preview Modal
+   ============================================================================ */
+
+.dm-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.dm-modal.open {
+    display: flex;
+}
+
+.dm-modal-content {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 1000px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.dm-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: #21262d;
+    border-bottom: 1px solid #30363d;
+    border-radius: 8px 8px 0 0;
+}
+
+.dm-modal-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #e6edf3;
+}
+
+.dm-modal-close {
+    font-size: 24px;
+    color: #8b949e;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.dm-modal-close:hover {
+    color: #e6edf3;
+}
+
+.dm-modal-info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 12px 18px;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    font-size: 13px;
+}
+
+.dm-modal-info span {
+    color: #8b949e;
+}
+
+.dm-modal-info strong {
+    color: #e6edf3;
+    font-weight: 500;
+}
+
+.dm-modal-body {
+    flex: 1;
+    overflow: auto;
+    padding: 0;
+    min-height: 300px;
+}
+
+/* DGTableViewer in modal - light theme with dark text */
+.dm-modal-body .dg-table-viewer {
+    color: #333 !important;
+    border: none;
+    border-radius: 0;
+}
+
+.dm-modal-body .dg-table th {
+    color: #333 !important;
+}
+
+.dm-modal-body .dg-table td {
+    color: #333 !important;
+}
+
+.dm-modal-body .dg-info-left,
+.dm-modal-body .dg-array-info {
+    color: #666 !important;
+}
+
+.dm-modal-body .dg-array-link {
+    color: #1890ff !important;
+}
+
+/* ============================================================================
+   Scrollbar Styling
+   ============================================================================ */
+
+.dm-app ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.dm-app ::-webkit-scrollbar-track {
+    background: #0d1117;
+}
+
+.dm-app ::-webkit-scrollbar-thumb {
+    background: #30363d;
+    border-radius: 4px;
+}
+
+.dm-app ::-webkit-scrollbar-thumb:hover {
+    background: #484f58;
+}
+
+/* ============================================================================
+   Utility Classes
+   ============================================================================ */
+
+.dm-hidden {
+    display: none !important;
+}

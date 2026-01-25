@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Manager</title>
+    
+    <!-- Component styles -->
+    <link rel="stylesheet" href="css/DGTableViewer.css">
+    <link rel="stylesheet" href="css/page_nav.css">
+    
+    <!-- Data Manager styles -->
+    <link rel="stylesheet" href="css/data_manager.css">
+</head>
+<body class="dm-app">
+    <div class="dm-container">
+        <!-- Status Bar -->
+        <div class="dm-status-bar">
+            <h1>Data Manager</h1>
+            <div class="dm-status-indicator" id="status-indicator"></div>
+            <span class="dm-status-text" id="status-text">Connecting...</span>
+            <div class="dm-status-spacer"></div>
+            <span class="dm-data-summary" id="data-summary">--</span>
+            <button class="dm-scan-btn" onclick="scanDatafiles()" title="Scan for new datafiles">⟳ Scan</button>
+            <div id="page-nav-container"></div>
+        </div>
+        
+        <!-- Filter Bar -->
+        <div class="dm-filter-bar">
+            <div class="dm-filter-group">
+                <label>Subject</label>
+                <select id="filter-subject">
+                    <option value="">All</option>
+                </select>
+            </div>
+            <div class="dm-filter-group">
+                <label>System</label>
+                <select id="filter-system">
+                    <option value="">All</option>
+                </select>
+            </div>
+            <div class="dm-filter-group">
+                <label>Protocol</label>
+                <select id="filter-protocol">
+                    <option value="">All</option>
+                </select>
+            </div>
+            <div class="dm-filter-group">
+                <label>Date</label>
+                <select id="filter-date">
+                    <option value="">All</option>
+                    <option value="today">Today</option>
+                    <option value="week">This Week</option>
+                    <option value="month">This Month</option>
+                </select>
+            </div>
+            <div class="dm-filter-group">
+                <label>Min Obs</label>
+                <input type="number" id="filter-min-obs" value="" min="0" placeholder="0">
+            </div>
+            <div class="dm-filter-group">
+                <label>Search</label>
+                <input type="text" id="filter-search" placeholder="filename...">
+            </div>
+            <button class="dm-filter-clear" onclick="clearFilters()">Clear</button>
+        </div>
+        
+        <!-- Main Panel: File List -->
+        <div class="dm-main-panel">
+            <!-- Panel Header -->
+            <div class="dm-panel-header">
+                <div class="dm-header-left">
+                    <span class="dm-panel-title">Datafiles</span>
+                    <span class="dm-panel-count" id="file-count">0 files</span>
+                </div>
+                <div class="dm-header-right">
+                    <button class="dm-btn-small" onclick="selectAll()">Select All</button>
+                    <button class="dm-btn-small" onclick="selectNone()">Select None</button>
+                </div>
+            </div>
+            
+            <!-- Staging Controls Row -->
+            <div class="dm-staging-bar">
+                <div class="dm-staging-info">
+                    <span class="dm-staging-label">Staged:</span>
+                    <span class="dm-staging-count" id="staged-count">0 files</span>
+                    <span class="dm-staging-obs" id="staged-obs">(0 obs)</span>
+                </div>
+                <div class="dm-staging-controls">
+                    <div class="dm-level-select">
+                        <label>Level:</label>
+                        <select id="export-level">
+                            <option value="raw">Raw</option>
+                            <option value="trials">Trials</option>
+                            <option value="extracted" selected>Extracted</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Download Dropdown (browser-based) -->
+                    <div class="dm-dropdown" id="download-dropdown">
+                        <button class="dm-btn dm-btn-primary" id="download-btn" onclick="toggleDownloadMenu()" disabled>
+                            Download ▾
+                        </button>
+                        <div class="dm-dropdown-menu" id="download-menu">
+                            <button onclick="downloadAsZip()">Download as Zip</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Sync Dropdown (server-side to configured destination) -->
+                    <div class="dm-dropdown" id="sync-dropdown">
+                        <button class="dm-btn" id="sync-btn" onclick="toggleSyncMenu()" disabled title="Configure df/sync_destination to enable">
+                            Sync ▾
+                        </button>
+                        <div class="dm-dropdown-menu" id="sync-menu">
+                            <div class="dm-dropdown-section">
+                                <div class="dm-dropdown-label">Destination:</div>
+                                <div class="dm-sync-destination" id="sync-destination-display">Not configured</div>
+                            </div>
+                            <div class="dm-dropdown-divider"></div>
+                            <button onclick="syncFiles('both')">Copy .ess + .dgz</button>
+                            <button onclick="syncFiles('ess')">Copy .ess only</button>
+                            <button onclick="syncFiles('dgz')">Copy .dgz only</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Status Message -->
+            <div class="dm-status-message" id="status-message"></div>
+            
+            <!-- File Table -->
+            <div class="dm-panel-body">
+                <div class="dm-file-table-container">
+                    <table class="dm-file-table" id="file-table">
+                        <thead>
+                            <tr>
+                                <th class="dm-col-check"><input type="checkbox" id="select-all-check" onchange="toggleSelectAll(this)"></th>
+                                <th class="dm-col-filename">Filename</th>
+                                <th class="dm-col-subject">Subject</th>
+                                <th class="dm-col-system">System</th>
+                                <th class="dm-col-protocol">Protocol</th>
+                                <th class="dm-col-obs">Obs</th>
+                                <th class="dm-col-date">Date</th>
+                                <th class="dm-col-time">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="file-table-body">
+                            <!-- Files populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Console (collapsible, starts collapsed) -->
+        <div class="dm-console collapsed" id="console-panel">
+            <div class="dm-console-header dm-clickable" onclick="toggleConsole()">
+                <span class="dm-console-title">Console</span>
+                <span class="dm-console-count" id="error-count"></span>
+                <div class="dm-console-actions">
+                    <button onclick="event.stopPropagation(); clearConsole()">Clear</button>
+                    <span class="dm-collapse-icon" id="console-collapse-icon">▶</span>
+                </div>
+            </div>
+            <div class="dm-console-body" id="console-output"></div>
+        </div>
+    </div>
+    
+    <!-- Preview Modal -->
+    <div class="dm-modal" id="preview-modal">
+        <div class="dm-modal-content">
+            <div class="dm-modal-header">
+                <h3 id="preview-title">Preview</h3>
+                <span class="dm-modal-close" onclick="closePreview()">&times;</span>
+            </div>
+            <div class="dm-modal-info" id="preview-info"></div>
+            <div class="dm-modal-body" id="preview-table-container"></div>
+        </div>
+    </div>
+
+    <!-- Component scripts -->
+    <script src="js/ws_manager.js"></script>
+    <script src="js/DatapointManager.js"></script>
+    <script src="js/DGTableViewer.js"></script>
+    <script src="js/PageNav.js"></script>
+    
+    <!-- Data Manager script -->
+    <script src="js/data_manager.js"></script>
+    
+    <!-- Initialize page navigation -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            PageNav.init('page-nav-container', 'data_manager');
+        });
+    </script>
+</body>
+</html>
