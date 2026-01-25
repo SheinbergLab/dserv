@@ -37,8 +37,8 @@ else()
     link_directories(/usr/local/lib)
     find_library(LIBZ z)
     find_library(LIBLZ4 NAMES "liblz4.a" lz4)
-    find_library(LIBFLTK NAMES "libfltk.a")
-    find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a")
+    find_library(LIBFLTK NAMES "libfltk.a" fltk)
+    find_library(LIBFLTK_ZLIB NAMES "libfltk_z.a" fltk_z)  # May not exist on all systems
     set(LIBDG "dg")
     
     # Check for XXHash (needed on newer Debian/Ubuntu)
@@ -65,7 +65,20 @@ if(APPLE)
         src/DgExport.cxx
         src/MacDropHandler.mm
     )
+elseif(WIN32)
+    # Include resource file for Windows icon
+    set(WIN_RESOURCES "")
+    if(EXISTS ${CMAKE_SOURCE_DIR}/windows/dgview.rc)
+        set(WIN_RESOURCES ${CMAKE_SOURCE_DIR}/windows/dgview.rc)
+    endif()
+    add_executable(dgview WIN32
+        src/dgview.cxx
+        src/DgTable.cxx
+        src/DgExport.cxx
+        ${WIN_RESOURCES}
+    )
 else()
+    # Linux
     add_executable(dgview
         src/dgview.cxx
         src/DgTable.cxx
@@ -100,7 +113,10 @@ elseif(APPLE)
     endif()
 else()
     # Linux
-    set(LINUX_LIBS ${LIBFLTK} ${LIBFLTK_ZLIB} ${LIBDG} ${LIBZ} ${LIBLZ4})
+    set(LINUX_LIBS ${LIBFLTK} ${LIBDG} ${LIBZ} ${LIBLZ4})
+    if(LIBFLTK_ZLIB)
+        list(APPEND LINUX_LIBS ${LIBFLTK_ZLIB})
+    endif()
     if(LIBXXHASH)
         list(APPEND LINUX_LIBS ${LIBXXHASH})
     endif()
@@ -115,7 +131,28 @@ set(CPACK_PACKAGE_CONTACT SheinbergLab)
 set(CPACK_PACKAGE_VENDOR SheinbergLab)
 
 if(WIN32)
-    # TODO: Windows installer
+    # Windows NSIS installer configuration
+    set(CPACK_GENERATOR "NSIS")
+    set(CPACK_NSIS_DISPLAY_NAME "DG Viewer")
+    set(CPACK_NSIS_PACKAGE_NAME "dgview")
+    set(CPACK_NSIS_MODIFY_PATH ON)
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    
+    # File associations for .dg and .dgz
+    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+        WriteRegStr HKCR '.dg' '' 'dgview.Document'
+        WriteRegStr HKCR '.dgz' '' 'dgview.Document'
+        WriteRegStr HKCR 'dgview.Document' '' 'DG Data File'
+        WriteRegStr HKCR 'dgview.Document\\\\DefaultIcon' '' '$INSTDIR\\\\bin\\\\dgview.exe,0'
+        WriteRegStr HKCR 'dgview.Document\\\\shell\\\\open\\\\command' '' '$INSTDIR\\\\bin\\\\dgview.exe \\\"%1\\\"'
+    ")
+    set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
+        DeleteRegKey HKCR '.dg'
+        DeleteRegKey HKCR '.dgz'
+        DeleteRegKey HKCR 'dgview.Document'
+    ")
+    
+    install(TARGETS dgview RUNTIME DESTINATION bin COMPONENT dgview)
 elseif(APPLE)
     set(CMAKE_SKIP_RPATH TRUE)
     set(APP_BUNDLE ${CMAKE_BINARY_DIR}/Release/dgview.app)
@@ -149,7 +186,27 @@ elseif(APPLE)
     
     install(TARGETS dgview BUNDLE DESTINATION . COMPONENT dgview)
 else()
+    # Linux installation
     install(TARGETS dgview RUNTIME DESTINATION bin)
+    
+    # Install desktop file for menu integration
+    install(FILES ${CMAKE_SOURCE_DIR}/linux/dgview.desktop 
+            DESTINATION share/applications)
+    
+    # Install icons at various sizes (if they exist)
+    foreach(SIZE 16 32 48 64 128 256 512)
+        if(EXISTS ${CMAKE_SOURCE_DIR}/linux/icons/${SIZE}x${SIZE}/dgview.png)
+            install(FILES ${CMAKE_SOURCE_DIR}/linux/icons/${SIZE}x${SIZE}/dgview.png
+                    DESTINATION share/icons/hicolor/${SIZE}x${SIZE}/apps)
+        endif()
+    endforeach()
+    
+    # Fallback: install single icon
+    if(EXISTS ${CMAKE_SOURCE_DIR}/linux/dgview.png)
+        install(FILES ${CMAKE_SOURCE_DIR}/linux/dgview.png
+                DESTINATION share/pixmaps)
+    endif()
+    
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, liblz4-1, libx11-6, libxinerama1, libxfixes3, libxcursor1")
