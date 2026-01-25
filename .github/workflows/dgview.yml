@@ -28,9 +28,8 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
-          rm -rf test  # Skip tests - they need jansson/xxhash
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           make
           sudo make install
           
@@ -74,9 +73,8 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
-          rm -rf test  # Skip tests - they need jansson/xxhash
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           make
           sudo make install
           
@@ -126,9 +124,8 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
-          rm -rf test  # Skip tests - they need jansson/xxhash
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           make
           sudo make install
           
@@ -175,10 +172,9 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
-          Remove-Item -Recurse -Force test -ErrorAction SilentlyContinue
           mkdir build
           cd build
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release `
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF `
             -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static ..
           ninja
