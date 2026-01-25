@@ -542,3 +542,216 @@ namespace eval df {
         }
     }
 }
+
+namespace eval df {
+    
+    # ========================================================================
+    # Export Functions - Three Levels
+    # ========================================================================
+    
+    #
+    # Level 1: Raw - direct .ess to .dgz conversion, minimal processing
+    # Preserves the event stream exactly as recorded
+    #
+    # Arguments:
+    #   filepath  - Full path to source .ess file
+    #   outpath   - Full path for output .dgz file
+    #
+    # Returns: output path on success
+    #
+    proc export_raw {filepath outpath} {
+        if {![file exists $filepath]} {
+            error "Source file not found: $filepath"
+        }
+        
+        # Read raw data
+        set g [dslog::read $filepath]
+        
+        # Save compressed
+        dg_write $g $outpath
+        dg_delete $g
+        
+        return $outpath
+    }
+    
+    #
+    # Level 2: Trials - obs-period oriented structure via readESS
+    # Organizes data by observation periods but doesn't run extractors
+    #
+    # Arguments:
+    #   filepath  - Full path to source .ess file
+    #   outpath   - Full path for output .dgz file
+    #
+    # Returns: output path on success
+    #
+    proc export_trials {filepath outpath} {
+        if {![file exists $filepath]} {
+            error "Source file not found: $filepath"
+        }
+        
+        # Read with obs-period structure
+        set g [dslog::readESS $filepath]
+        
+        # Save compressed
+        dg_write $g $outpath
+        dg_delete $g
+        
+        return $outpath
+    }
+    
+    #
+    # Level 3: Extracted - full extraction with system/protocol extractors
+    # This is the "analysis-ready" format most users want
+    #
+    # Arguments:
+    #   filepath  - Full path to source .ess file
+    #   outpath   - Full path for output .dgz file
+    #   args      - Additional arguments passed to load_data
+    #
+    # Returns: output path on success
+    #
+    proc export_extracted {filepath outpath args} {
+        if {![file exists $filepath]} {
+            error "Source file not found: $filepath"
+        }
+        
+        # Use load_data which sources and runs extractors
+        set g [load_data $filepath {*}$args]
+        
+        # Save compressed
+        dg_write $g $outpath
+        dg_delete $g
+        
+        return $outpath
+    }
+    
+    #
+    # Generate output filename for export
+    # 
+    # Arguments:
+    #   filepath  - Source .ess filepath
+    #   level     - raw | trials | extracted
+    #   outdir    - Output directory
+    #
+    # Returns: Full output path
+    #
+    proc export_outpath {filepath level outdir} {
+        set base [file rootname [file tail $filepath]]
+        
+        switch $level {
+            raw {
+                return [file join $outdir "${base}_raw.dgz"]
+            }
+            trials {
+                return [file join $outdir "${base}_trials.dgz"]
+            }
+            extracted {
+                return [file join $outdir "${base}.dgz"]
+            }
+            default {
+                error "Unknown export level: $level (use raw, trials, or extracted)"
+            }
+        }
+    }
+    
+    #
+    # Export a file at specified level (convenience wrapper)
+    #
+    # Arguments:
+    #   filepath  - Source .ess filepath
+    #   level     - raw | trials | extracted
+    #   outdir    - Output directory
+    #
+    # Returns: Output filepath
+    #
+    proc export {filepath level outdir} {
+        file mkdir $outdir
+        
+        set outpath [export_outpath $filepath $level $outdir]
+        
+        switch $level {
+            raw {
+                return [export_raw $filepath $outpath]
+            }
+            trials {
+                return [export_trials $filepath $outpath]
+            }
+            extracted {
+                return [export_extracted $filepath $outpath]
+            }
+            default {
+                error "Unknown export level: $level"
+            }
+        }
+    }
+    
+    #
+    # Generate code snippet to load file(s) in external tools
+    #
+    # Arguments:
+    #   filepaths - List of filepaths (can be .ess or .dgz)
+    #   language  - python | r | matlab
+    #
+    # Returns: Code string
+    #
+    proc generate_load_code {filepaths language} {
+        set code ""
+        
+        switch $language {
+            python {
+                set code "from dgread import dg_read\n\n"
+                if {[llength $filepaths] == 1} {
+                    set code "${code}data = dg_read('[lindex $filepaths 0]')\n"
+                } else {
+                    set code "${code}files = \[\n"
+                    foreach p $filepaths {
+                        set code "${code}    '$p',\n"
+                    }
+                    set code "${code}\]\n\n"
+                    set code "${code}# Load all files\n"
+                    set code "${code}data = \[dg_read(f) for f in files\]\n"
+                }
+            }
+            
+            r {
+                set code "# library(dgread)  # if installed as package\n"
+                set code "${code}# source('dgread.R')  # or source directly\n\n"
+                if {[llength $filepaths] == 1} {
+                    set code "${code}data <- dg_read('[lindex $filepaths 0]')\n"
+                } else {
+                    set code "${code}files <- c(\n"
+                    foreach p $filepaths {
+                        set code "${code}  '[string map {' \\'} $p]',\n"
+                    }
+                    set code "${code})\n\n"
+                    set code "${code}# Load all files\n"
+                    set code "${code}data <- lapply(files, dg_read)\n"
+                }
+            }
+            
+            matlab {
+                set code "% Requires dgread.m in path\n\n"
+                if {[llength $filepaths] == 1} {
+                    set code "${code}data = dg_read('[lindex $filepaths 0]');\n"
+                } else {
+                    set code "${code}files = {\n"
+                    foreach p $filepaths {
+                        set code "${code}    '$p'\n"
+                    }
+                    set code "${code}};\n\n"
+                    set code "${code}% Load all files\n"
+                    set code "${code}data = cell(length(files), 1);\n"
+                    set code "${code}for i = 1:length(files)\n"
+                    set code "${code}    data{i} = dg_read(files{i});\n"
+                    set code "${code}end\n"
+                }
+            }
+            
+            default {
+                error "Unknown language: $language (use python, r, or matlab)"
+            }
+        }
+        
+        return $code
+    }
+}
