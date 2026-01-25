@@ -86,15 +86,26 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cd tools/dgview
-          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }}
+          
+          # Determine version - use tag if available, otherwise use input or default
+          if [[ "${{ github.ref_name }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="0.0.1"
+          fi
+          echo "Building version: $VERSION"
+          
+          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=$VERSION
           cmake --build build --config Release
           cpack -G DragNDrop --config build/CPackConfig.cmake
 
           xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dgview-signing"
-          xcrun notarytool submit dgview-${{ github.ref_name }}-Darwin.dmg --keychain-profile "dgview-signing" --wait
-          xcrun stapler staple dgview-${{ github.ref_name }}-Darwin.dmg
+          xcrun notarytool submit dgview-$VERSION-Darwin.dmg --keychain-profile "dgview-signing" --wait
+          xcrun stapler staple dgview-$VERSION-Darwin.dmg
           
-          mv dgview-${{ github.ref_name }}-Darwin.dmg dgview-macos-x64.dmg
+          mv dgview-$VERSION-Darwin.dmg dgview-macos-x64.dmg
             
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -176,15 +187,26 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           cd tools/dgview
-          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }}
+          
+          # Determine version - use tag if available, otherwise use input or default
+          if [[ "${{ github.ref_name }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="0.0.1"
+          fi
+          echo "Building version: $VERSION"
+          
+          cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=$VERSION
           cmake --build build --config Release
           cpack -G DragNDrop --config build/CPackConfig.cmake
 
           xcrun notarytool store-credentials --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" "dgview-signing"
-          xcrun notarytool submit dgview-${{ github.ref_name }}-Darwin.dmg --keychain-profile "dgview-signing" --wait
-          xcrun stapler staple dgview-${{ github.ref_name }}-Darwin.dmg
+          xcrun notarytool submit dgview-$VERSION-Darwin.dmg --keychain-profile "dgview-signing" --wait
+          xcrun stapler staple dgview-$VERSION-Darwin.dmg
           
-          mv dgview-${{ github.ref_name }}-Darwin.dmg dgview-macos-arm64.dmg
+          mv dgview-$VERSION-Darwin.dmg dgview-macos-arm64.dmg
             
       - name: Upload artifact
         uses: actions/upload-artifact@v4
