@@ -16,11 +16,31 @@ message(STATUS "Using FLTK: ${FLTK_INCLUDE_DIRS}")
 # Platform-specific setup
 if(WIN32)
     add_compile_definitions(WIN32)
-    link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
-    set(LIBFLTK fltk.lib)
-    set(LIBDG dg.lib)
-    set(ZLIB zlibstatic.lib)
-    set(LZ4LIB liblz4_static.lib)
+    
+    # Try to find libraries via vcpkg or standard paths
+    find_package(ZLIB REQUIRED)
+    find_package(lz4 CONFIG QUIET)
+    
+    if(lz4_FOUND)
+        set(LZ4_LIBRARIES lz4::lz4)
+    else()
+        find_library(LZ4_LIBRARIES NAMES lz4 liblz4_static liblz4)
+    endif()
+    
+    # libdg - check for path hint or standard locations
+    if(DEFINED LIBDG_PATH)
+        link_directories(${LIBDG_PATH})
+        find_library(LIBDG NAMES dg dg.lib PATHS ${LIBDG_PATH} NO_DEFAULT_PATH)
+    else()
+        link_directories(c:/usr/local/lib/$ENV{VSCMD_ARG_TGT_ARCH})
+        find_library(LIBDG NAMES dg dg.lib)
+    endif()
+    
+    if(NOT LIBDG)
+        set(LIBDG "dg")  # Fallback
+    endif()
+    
+    set(WIN_LIBS fltk::fltk ZLIB::ZLIB ${LZ4_LIBRARIES} ${LIBDG})
 elseif(APPLE)
     include_directories("/usr/local/include" "/opt/homebrew/include")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
@@ -54,8 +74,16 @@ include_directories(
     src
     ${CMAKE_SOURCE_DIR}/../../dlsh/src
     ${CMAKE_SOURCE_DIR}/../../dlsh/src/lablib
-    /usr/local/include
 )
+
+if(WIN32)
+    include_directories(c:/usr/local/include)
+    if(DEFINED LIBDG_PATH)
+        include_directories(${LIBDG_PATH}/../src ${LIBDG_PATH}/../src/lablib)
+    endif()
+else()
+    include_directories(/usr/local/include)
+endif()
 
 # Main executable
 if(APPLE)
@@ -88,8 +116,8 @@ endif()
 
 # Link libraries
 if(WIN32)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:libcmt comctl32.lib ws2_32.lib kernel32.lib user32.lib gdi32.lib shell32.lib ole32.lib comdlg32.lib advapi32.lib")
-    target_link_libraries(dgview ${LIBFLTK} ${LZ4LIB} ${ZLIB} ${LIBDG})
+    target_link_libraries(dgview ${WIN_LIBS} 
+        comctl32 ws2_32 kernel32 user32 gdi32 shell32 ole32 comdlg32 advapi32)
 elseif(APPLE)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -framework Cocoa -weak_framework UniformTypeIdentifiers -weak_framework ScreenCaptureKit")
     target_link_libraries(dgview ${LIBFLTK} ${LIBFLTK_ZLIB} ${LIBDG} ${LIBZ} ${LIBLZ4})
