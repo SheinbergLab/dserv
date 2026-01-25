@@ -320,7 +320,7 @@ jobs:
       - name: Build and install FLTK
         run: |
           cd deps/fltk
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF -DCMAKE_PREFIX_PATH=C:/deps -DFLTK_USE_SYSTEM_ZLIB=ON
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF -DFLTK_USE_SYSTEM_ZLIB=OFF
           ninja -C build
           ninja -C build install
           
@@ -348,7 +348,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dgview-windows-x64
-          path: tools/dgview/build/*.exe
+          path: tools/dgview/build/dgview-*-win64.exe
 
   release:
     needs: [build-macos, build-macos-arm, build-linux, build-windows]

@@ -17,16 +17,6 @@ message(STATUS "Using FLTK: ${FLTK_INCLUDE_DIRS}")
 if(WIN32)
     add_compile_definitions(WIN32)
     
-    # Find zlib - prefer static library
-    find_library(ZLIB_STATIC_LIBRARY NAMES zlibstatic zlibstaticd zlib PATHS ${CMAKE_PREFIX_PATH}/lib)
-    if(ZLIB_STATIC_LIBRARY)
-        set(ZLIB_LIBRARIES ${ZLIB_STATIC_LIBRARY})
-        message(STATUS "Using static zlib: ${ZLIB_STATIC_LIBRARY}")
-    else()
-        find_package(ZLIB REQUIRED)
-        set(ZLIB_LIBRARIES ZLIB::ZLIB)
-    endif()
-    
     # Find lz4
     find_package(lz4 CONFIG QUIET)
     if(lz4_FOUND)
@@ -48,7 +38,14 @@ if(WIN32)
         set(LIBDG "dg")  # Fallback
     endif()
     
-    set(WIN_LIBS fltk::fltk ${ZLIB_LIBRARIES} ${LZ4_LIBRARIES} ${LIBDG})
+    # Find FLTK's bundled zlib (fltk_z)
+    find_library(FLTK_ZLIB NAMES fltk_z PATHS ${CMAKE_PREFIX_PATH}/lib)
+    if(NOT FLTK_ZLIB)
+        # Fallback to static zlib if FLTK didn't bundle it
+        find_library(FLTK_ZLIB NAMES zlibstatic zlib PATHS ${CMAKE_PREFIX_PATH}/lib)
+    endif()
+    
+    set(WIN_LIBS fltk::fltk ${FLTK_ZLIB} ${LZ4_LIBRARIES} ${LIBDG})
 elseif(APPLE)
     include_directories("/usr/local/include" "/opt/homebrew/include")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")
