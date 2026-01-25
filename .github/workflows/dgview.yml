@@ -19,19 +19,18 @@ jobs:
       
       - name: Clone dlsh
         run: |
-          # Clone dlsh to repo root (tools/dgview/CMakeLists.txt expects ../../dlsh)
           git clone https://github.com/SheinbergLab/dlsh.git dlsh
       
       - name: Install dependencies
         run: |
           brew install fltk lz4
           
-      - name: Build dlsh/libdg
+      - name: Build libdg only
         run: |
-          cd dlsh
+          cd dlsh/libdg
           mkdir build && cd build
-          cmake ..
-          make dg
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make
           sudo make install
           
       - name: Build dgview
@@ -71,12 +70,12 @@ jobs:
         run: |
           brew install fltk lz4
           
-      - name: Build dlsh/libdg
+      - name: Build libdg only
         run: |
-          cd dlsh
+          cd dlsh/libdg
           mkdir build && cd build
-          cmake ..
-          make dg
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make
           sudo make install
           
       - name: Build dgview
@@ -122,12 +121,12 @@ jobs:
             libwayland-dev libgtk-3-dev libcairo2-dev \
             libxkbcommon-dev libdbus-1-dev libdecor-0-dev
             
-      - name: Build dlsh/libdg
+      - name: Build libdg only
         run: |
-          cd dlsh
+          cd dlsh/libdg
           mkdir build && cd build
-          cmake ..
-          make dg
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make
           sudo make install
           
       - name: Build dgview
@@ -170,15 +169,15 @@ jobs:
         run: |
           vcpkg install fltk:x64-windows-static zlib:x64-windows-static lz4:x64-windows-static
           
-      - name: Build dlsh/libdg
+      - name: Build libdg only
         run: |
-          cd dlsh
+          cd dlsh/libdg
           mkdir build
           cd build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static ..
-          ninja dg
+          ninja
           
       - name: Build dgview
         run: |
@@ -188,7 +187,7 @@ jobs:
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-            -DLIBDG_PATH=${{ github.workspace }}/dlsh/build ..
+            -DLIBDG_PATH=${{ github.workspace }}/dlsh/libdg/build ..
           ninja
           
       - name: Install NSIS
