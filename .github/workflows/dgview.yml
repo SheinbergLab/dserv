@@ -28,6 +28,7 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
+          rm -rf test  # Skip tests - they need jansson/xxhash
           mkdir build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make
@@ -73,6 +74,7 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
+          rm -rf test  # Skip tests - they need jansson/xxhash
           mkdir build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make
@@ -124,6 +126,7 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
+          rm -rf test  # Skip tests - they need jansson/xxhash
           mkdir build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make
@@ -172,6 +175,7 @@ jobs:
       - name: Build libdg only
         run: |
           cd dlsh/libdg
+          Remove-Item -Recurse -Force test -ErrorAction SilentlyContinue
           mkdir build
           cd build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release `
