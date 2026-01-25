@@ -243,10 +243,9 @@ else()
     
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
-    # Use automatic dependency detection, or specify manually
-    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-    # Fallback manual list if shlibdeps doesn't work
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS "zlib1g, liblz4-1, libx11-6, libxinerama1, libxfixes3, libxcursor1, libgtk-3-0, libwayland-client0, libwayland-cursor0, libcairo2, libdbus-1-3, libxkbcommon0, libfontconfig1")
+    # Full dependency list based on ldd output
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS 
+        "libc6, libstdc++6, libgcc-s1, zlib1g, libx11-6, libxext6, libxinerama1, libxfixes3, libxcursor1, libxrender1, libxft2, libfontconfig1, libgtk-3-0, libgdk-pixbuf-2.0-0, libpango-1.0-0, libpangocairo-1.0-0, libcairo2, libglib2.0-0, libgobject-2.0-0, libgio-2.0-0, libwayland-client0, libwayland-cursor0, libdbus-1-3, libxkbcommon0, libatk1.0-0, libharfbuzz0b")
 endif()
 
 include(CPack)
