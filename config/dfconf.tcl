@@ -204,6 +204,16 @@ proc get_ess_dir {} {
     return $ess_dir
 }
 
+proc process_sync_destination {dpoint data} {
+    if {$data ne ""} {
+        puts "dfconf: Sync destination set to: $data"
+        configure_auto_sync $data extracted 1
+    } else {
+        puts "dfconf: Sync destination cleared"
+        configure_auto_sync "" extracted 0
+    }
+}
+
 #
 # Datafile indexing
 #
@@ -480,6 +490,9 @@ proc on_datafile_closed {filepath} {
             dfdb eval {UPDATE datafiles SET processed = 1 WHERE id = $file_id}
         }
     }
+
+    # Auto-sync if enabled 
+    auto_sync_file $filename
     
     # Clean up
     catch {dg_delete $trials}
@@ -532,6 +545,11 @@ proc list_datafiles { {filters {}} } {
     if {[dict exists $filters before] && [dict get $filters before] ne ""} {
         set before [dict get $filters before]
         lappend where_clauses "timestamp <= $before"
+    }
+    
+    if {[dict exists $filters min_obs] && [dict get $filters min_obs] ne ""} {
+        set minobs [dict get $filters min_obs]
+        lappend where_clauses "n_obs >= $minobs"
     }
     
     set sql "SELECT id, filename, filepath, subject, system, protocol, variant, 
@@ -613,42 +631,43 @@ proc get_filter_options {} {
     set json [yajl create #auto]
     $json map_open
     
-    # Subjects
     $json string "subjects" array_open
     dfdb eval {SELECT DISTINCT subject FROM datafiles WHERE subject != '' ORDER BY subject} {
         $json string $subject
     }
     $json array_close
     
-    # Systems
     $json string "systems" array_open
     dfdb eval {SELECT DISTINCT system FROM datafiles WHERE system != '' ORDER BY system} {
         $json string $system
     }
     $json array_close
     
-    # Protocols
     $json string "protocols" array_open
     dfdb eval {SELECT DISTINCT protocol FROM datafiles WHERE protocol != '' ORDER BY protocol} {
         $json string $protocol
     }
     $json array_close
     
-    # Variants
-    $json string "variants" array_open
-    dfdb eval {SELECT DISTINCT variant FROM datafiles WHERE variant != '' ORDER BY variant} {
-        $json string $variant
-    }
-    $json array_close
-    
-    # Date range
-    $json string "date_range" map_open
-    set min_date [dfdb eval {SELECT MIN(date) FROM datafiles}]
-    set max_date [dfdb eval {SELECT MAX(date) FROM datafiles}]
-    $json string "min" string [expr {$min_date ne "" ? $min_date : ""}]
-    $json string "max" string [expr {$max_date ne "" ? $max_date : ""}]
     $json map_close
+    set result [$json get]
+    $json delete
     
+    return $result
+}
+
+proc get_stats {} {
+    set total_files [dfdb eval {SELECT COUNT(*) FROM datafiles}]
+    set total_obs [dfdb eval {SELECT COALESCE(SUM(n_obs), 0) FROM datafiles}]
+    set processed_count [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE processed = 1}]
+    set synced_count [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE synced = 1}]
+    
+    set json [yajl create #auto]
+    $json map_open
+    $json string "total_files" number $total_files
+    $json string "total_obs" number $total_obs
+    $json string "processed" number $processed_count
+    $json string "synced" number $synced_count
     $json map_close
     set result [$json get]
     $json delete
@@ -657,123 +676,47 @@ proc get_filter_options {} {
 }
 
 proc get_datafile_info {filename} {
-    set json [yajl create #auto]
+    set result [dfdb eval {
+        SELECT id, filename, filepath, subject, system, protocol, variant, 
+               n_obs, date, time, timestamp, file_size, processed, synced
+        FROM datafiles WHERE filename = $filename
+    }]
     
-    set found 0
-    dfdb eval {SELECT * FROM datafiles WHERE filename = $filename} values {
-        set found 1
-        set file_id $values(id)
-        
-        $json map_open
-        foreach col {id filename filepath subject system protocol variant n_obs date time timestamp file_size processed synced} {
-            $json string $col
-            if {$col in {id n_obs timestamp file_size processed synced}} {
-                $json number $values($col)
-            } else {
-                $json string $values($col)
-            }
-        }
-        
-        # Add column info
-        $json string "columns" array_open
-        dfdb eval {
-            SELECT column_name, column_type, column_depth, column_length, column_category
-            FROM file_columns WHERE datafile_id = $file_id
-        } col_values {
-            $json map_open
-            $json string "name" string $col_values(column_name)
-            $json string "type" string $col_values(column_type)
-            $json string "depth" number $col_values(column_depth)
-            $json string "length" number $col_values(column_length)
-            $json string "category" string $col_values(column_category)
-            $json map_close
-        }
-        $json array_close
-        
-        $json map_close
+    if {[llength $result] == 0} {
+        return [_json_error "File not found: $filename"]
     }
     
-    if {!$found} {
-        $json map_open
-        $json string "error" string "File not found"
-        $json map_close
-    }
+    lassign $result id fn fp subj sys proto var n_obs date time ts fsize proc sync
     
-    set result [$json get]
-    $json delete
-    
-    return $result
-}
-
-proc get_processing_log {filename} {
-    set json [yajl create #auto]
-    $json array_open
-    
-    set file_id [dfdb eval {SELECT id FROM datafiles WHERE filename = $filename}]
-    
-    if {$file_id ne ""} {
-        dfdb eval {
-            SELECT processor, status, message, processed_at 
-            FROM processing_log 
-            WHERE datafile_id = $file_id 
-            ORDER BY processed_at DESC
-        } values {
-            $json map_open
-            $json string "processor" string $values(processor)
-            $json string "status" string $values(status)
-            $json string "message" string $values(message)
-            $json string "processed_at" string $values(processed_at)
-            $json map_close
-        }
-    }
-    
-    $json array_close
-    set result [$json get]
-    $json delete
-    
-    return $result
-}
-
-proc get_stats {} {
     set json [yajl create #auto]
     $json map_open
+    $json string "id" number $id
+    $json string "filename" string $fn
+    $json string "filepath" string $fp
+    $json string "subject" string $subj
+    $json string "system" string $sys
+    $json string "protocol" string $proto
+    $json string "variant" string $var
+    $json string "n_obs" number $n_obs
+    $json string "date" string $date
+    $json string "time" string $time
+    $json string "timestamp" number $ts
+    $json string "file_size" number $fsize
+    $json string "processed" number $proc
+    $json string "synced" number $sync
     
-    set total [dfdb eval {SELECT COUNT(*) FROM datafiles}]
-    set processed [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE processed = 1}]
-    set synced [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE synced = 1}]
-    set total_obs [dfdb eval {SELECT SUM(n_obs) FROM datafiles}]
-    set total_size [dfdb eval {SELECT SUM(file_size) FROM datafiles}]
-    
-    $json string "total_files" number $total
-    $json string "processed_files" number $processed
-    $json string "synced_files" number $synced
-    $json string "total_obs" number [expr {$total_obs ne "" ? $total_obs : 0}]
-    $json string "total_size_bytes" number [expr {$total_size ne "" ? $total_size : 0}]
-    
-    # By system breakdown
-    $json string "by_system" array_open
+    # Add column info
+    $json string "columns" array_open
     dfdb eval {
-        SELECT system, COUNT(*) as cnt, SUM(n_obs) as obs 
-        FROM datafiles GROUP BY system ORDER BY cnt DESC
-    } {
+        SELECT column_name, column_type, column_depth, column_length, column_category 
+        FROM file_columns WHERE datafile_id = $id
+    } col {
         $json map_open
-        $json string "system" string $system
-        $json string "count" number $cnt
-        $json string "n_obs" number [expr {$obs ne "" ? $obs : 0}]
-        $json map_close
-    }
-    $json array_close
-    
-    # By subject breakdown
-    $json string "by_subject" array_open
-    dfdb eval {
-        SELECT subject, COUNT(*) as cnt, SUM(n_obs) as obs 
-        FROM datafiles GROUP BY subject ORDER BY cnt DESC
-    } {
-        $json map_open
-        $json string "subject" string $subject
-        $json string "count" number $cnt
-        $json string "n_obs" number [expr {$obs ne "" ? $obs : 0}]
+        $json string "name" string $col(column_name)
+        $json string "type" string $col(column_type)
+        $json string "depth" number $col(column_depth)
+        $json string "length" number $col(column_length)
+        $json string "category" string $col(column_category)
         $json map_close
     }
     $json array_close
@@ -786,43 +729,469 @@ proc get_stats {} {
 }
 
 #
-# Data loading - delegates to df module
-#
-
-proc load_trials {filename args} {
-    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
-    
-    if {$filepath eq ""} {
-        error "File not found in catalog: $filename"
-    }
-    
-    set g [df::load_data $filepath {*}$args]
-    
-    # Mark as processed
-    dfdb eval {UPDATE datafiles SET processed = 1 WHERE filename = $filename}
-    
-    return $g
-}
-
-#
-# Manual commands for testing/maintenance
+# Rescan for frontend
 #
 
 proc rescan {} {
     remove_missing
-    scan_datafiles
+    set count [scan_datafiles]
+    
+    set json [yajl create #auto]
+    $json map_open
+    $json string "status" string "ok"
+    $json string "indexed" number $count
+    $json map_close
+    set result [$json get]
+    $json delete
+    
+    return $result
 }
 
-proc list_files { {limit 20} } {
-    dfdb eval {SELECT filename, subject, system, protocol, n_obs, date FROM datafiles ORDER BY timestamp DESC LIMIT $limit} values {
-        puts [format "%-40s %-10s %-15s %-15s %4d obs  %s" \
-            $values(filename) $values(subject) $values(system) $values(protocol) $values(n_obs) $values(date)]
+# ============================================================================
+# Temporary Path for Zip Downloads
+# ============================================================================
+
+#
+# Get temporary path for zip creation (uses $dspath/tmp)
+#
+proc get_tmp_path {} {
+    global dspath
+    set tmp_path [file join $dspath tmp]
+    if {![file exists $tmp_path]} {
+        file mkdir $tmp_path
     }
+    return $tmp_path
 }
 
 #
-# Initialize
+# Clean up old temp files (older than N hours)
 #
+proc cleanup_tmp {{hours 1}} {
+    set tmp_path [get_tmp_path]
+    set cutoff [expr {[clock seconds] - ($hours * 3600)}]
+    set deleted 0
+    
+    foreach f [glob -nocomplain -directory $tmp_path *] {
+        if {[file isfile $f] && [file mtime $f] < $cutoff} {
+            catch {file delete $f}
+            incr deleted
+        }
+    }
+    
+    return $deleted
+}
+
+# ============================================================================
+# Single File Export (uses catalog to resolve filename -> filepath)
+# ============================================================================
+
+#
+# Export by catalog filename (looks up filepath from SQLite)
+#
+proc export_file {filename level {output_dir ""}} {
+    if {$output_dir eq ""} {
+        set output_dir [get_tmp_path]
+    }
+    
+    # Resolve filename to filepath via catalog
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq ""} {
+        error "File not found in catalog: $filename"
+    }
+    
+    # Use df module's export function
+    set outpath [df::export $filepath $level $output_dir]
+    
+    # Mark as processed if extracted
+    if {$level eq "extracted"} {
+        dfdb eval {UPDATE datafiles SET processed = 1 WHERE filename = $filename}
+    }
+    
+    return $outpath
+}
+
+# ============================================================================
+# Download Function - Zip Bundle for Browser Download
+# ============================================================================
+
+#
+# Create a zip bundle of multiple exported files (for browser download)
+#
+proc export_bundle {filenames level bundle_name} {
+    # Validate level
+    if {$level ni {raw trials extracted}} {
+        return [_json_error "Invalid level: $level (must be raw, trials, or extracted)"]
+    }
+    
+    set tmp_dir [get_tmp_path]
+    set bundle_dir [file join $tmp_dir "bundle_${bundle_name}_[clock seconds]"]
+    file mkdir $bundle_dir
+    
+    # Export each file to bundle directory
+    set exported [list]
+    set errors [list]
+    
+    foreach fn $filenames {
+        set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $fn}]
+        if {$filepath eq ""} {
+            lappend errors [dict create filename $fn error "Not found in catalog"]
+            continue
+        }
+        
+        if {[catch {set path [df::export $filepath $level $bundle_dir]} err]} {
+            lappend errors [dict create filename $fn error $err]
+        } else {
+            lappend exported $path
+            # Mark as processed if extracted
+            if {$level eq "extracted"} {
+                dfdb eval {UPDATE datafiles SET processed = 1 WHERE filename = $fn}
+            }
+        }
+    }
+    
+    if {[llength $exported] == 0} {
+        file delete -force $bundle_dir
+        return [_json_error "No files exported successfully"]
+    }
+    
+    # Create zip file
+    set zipname "${bundle_name}.zip"
+    set zippath [file join $tmp_dir $zipname]
+    
+    catch {file delete $zippath}
+    
+    set cwd [pwd]
+    cd $bundle_dir
+    
+    set files_to_zip [lmap p $exported {file tail $p}]
+    if {[catch {exec zip -q $zippath {*}$files_to_zip} err]} {
+        cd $cwd
+        file delete -force $bundle_dir
+        return [_json_error "Failed to create zip: $err"]
+    }
+    
+    cd $cwd
+    file delete -force $bundle_dir
+    
+    # Return JSON result
+    set json [yajl create #auto]
+    $json map_open
+    $json string "status" string "ok"
+    $json string "bundle" string $zipname
+    $json string "path" string $zippath
+    $json string "url" string "/download/$zipname"
+    $json string "size" number [file size $zippath]
+    $json string "file_count" number [llength $exported]
+    
+    if {[llength $errors] > 0} {
+        $json string "errors" array_open
+        foreach e $errors {
+            $json map_open
+            $json string "filename" string [dict get $e filename]
+            $json string "error" string [dict get $e error]
+            $json map_close
+        }
+        $json array_close
+    }
+    
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# ============================================================================
+# Sync Configuration and Functions
+# ============================================================================
+
+variable sync_destination ""
+variable auto_sync_level "extracted"
+variable auto_sync_enabled 0
+
+#
+# Configure sync destination (called at startup or via datapoint)
+#
+proc configure_auto_sync {destination {level "extracted"} {enabled 1}} {
+    variable sync_destination
+    variable auto_sync_level
+    variable auto_sync_enabled
+    
+    set sync_destination $destination
+    set auto_sync_level $level
+    set auto_sync_enabled $enabled
+    
+    if {$enabled && $destination ne ""} {
+        file mkdir [file join $destination essdat]
+        file mkdir [file join $destination dgzdat]
+        puts "dfconf: Sync enabled to $destination (level: $level)"
+    } else {
+        puts "dfconf: Sync disabled"
+    }
+    
+    dservSet df/sync_config [dict create \
+        destination $destination \
+        level $level \
+        enabled $enabled]
+}
+
+#
+# Get sync configuration (JSON for frontend)
+#
+proc get_sync_config {} {
+    variable sync_destination
+    variable auto_sync_level
+    variable auto_sync_enabled
+    
+    set json [yajl create #auto]
+    $json map_open
+    $json string "destination" string $sync_destination
+    $json string "level" string $auto_sync_level
+    $json string "enabled" bool $auto_sync_enabled
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+#
+# Sync files to configured destination (called from frontend)
+#
+# Arguments:
+#   filenames - List of catalog filenames
+#   level     - raw | trials | extracted
+#   mode      - both | ess | dgz
+#
+# Returns: JSON result
+#
+proc sync_files {filenames level mode} {
+    variable sync_destination
+    variable auto_sync_enabled
+    
+    if {!$auto_sync_enabled || $sync_destination eq ""} {
+        return [_json_error "Sync destination not configured"]
+    }
+    
+    # Validate level
+    if {$level ni {raw trials extracted}} {
+        return [_json_error "Invalid level: $level"]
+    }
+    
+    # Validate mode
+    if {$mode ni {both ess dgz}} {
+        set mode "both"
+    }
+    
+    set essdir [file join $sync_destination essdat]
+    set dgzdir [file join $sync_destination dgzdat]
+    
+    # Ensure directories exist
+    file mkdir $essdir
+    file mkdir $dgzdir
+    
+    set success 0
+    set errors 0
+    set ess_copied 0
+    set dgz_copied 0
+    set error_list [list]
+    
+    foreach fn $filenames {
+        # Get filepath from catalog
+        set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $fn}]
+        if {$filepath eq ""} {
+            lappend error_list [dict create filename $fn error "Not found in catalog"]
+            incr errors
+            continue
+        }
+        
+        if {![file exists $filepath]} {
+            lappend error_list [dict create filename $fn error "Source file missing"]
+            incr errors
+            continue
+        }
+        
+        set file_success 1
+        
+        # Copy .ess if requested
+        if {$mode eq "both" || $mode eq "ess"} {
+            set ess_dest [file join $essdir [file tail $filepath]]
+            if {[catch {file copy -force $filepath $ess_dest} err]} {
+                lappend error_list [dict create filename $fn error "ESS copy failed: $err"]
+                set file_success 0
+            } else {
+                incr ess_copied
+            }
+        }
+        
+        # Convert and save .dgz if requested
+        if {$mode eq "both" || $mode eq "dgz"} {
+            if {[catch {df::export $filepath $level $dgzdir} err]} {
+                lappend error_list [dict create filename $fn error "DGZ export failed: $err"]
+                set file_success 0
+            } else {
+                incr dgz_copied
+                if {$level eq "extracted"} {
+                    dfdb eval {UPDATE datafiles SET processed = 1 WHERE filename = $fn}
+                }
+            }
+        }
+        
+        # Mark as synced if successful
+        if {$file_success} {
+            incr success
+            dfdb eval {UPDATE datafiles SET synced = 1 WHERE filename = $fn}
+        } else {
+            incr errors
+        }
+    }
+    
+    # Build JSON response
+    set json [yajl create #auto]
+    $json map_open
+    $json string "status" string "ok"
+    $json string "total" number [llength $filenames]
+    $json string "success" number $success
+    $json string "errors" number $errors
+    $json string "ess_copied" number $ess_copied
+    $json string "dgz_copied" number $dgz_copied
+    $json string "destination" string $sync_destination
+    
+    if {[llength $error_list] > 0} {
+        $json string "error_details" array_open
+        foreach e $error_list {
+            $json map_open
+            $json string "filename" string [dict get $e filename]
+            $json string "error" string [dict get $e error]
+            $json map_close
+        }
+        $json array_close
+    }
+    
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+#
+# Called from on_datafile_closed to auto-sync newly closed files
+#
+proc auto_sync_file {filename} {
+    variable sync_destination
+    variable auto_sync_level
+    variable auto_sync_enabled
+    
+    if {!$auto_sync_enabled || $sync_destination eq ""} {
+        return 0
+    }
+    
+    # Get filepath
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        puts "dfconf: Auto-sync skipped, file not found: $filename"
+        return 0
+    }
+    
+    set essdir [file join $sync_destination essdat]
+    set dgzdir [file join $sync_destination dgzdat]
+    
+    # Copy .ess
+    if {[catch {file copy -force $filepath [file join $essdir [file tail $filepath]]} err]} {
+        puts "dfconf: Auto-sync ESS copy failed for $filename: $err"
+        return 0
+    }
+    
+    # Export .dgz
+    if {[catch {df::export $filepath $auto_sync_level $dgzdir} err]} {
+        puts "dfconf: Auto-sync DGZ export failed for $filename: $err"
+        return 0
+    }
+    
+    dfdb eval {UPDATE datafiles SET synced = 1 WHERE filename = $filename}
+    
+    puts "dfconf: Auto-synced $filename to $sync_destination"
+    return 1
+}
+
+# ============================================================================
+# Preview for Data Manager
+# ============================================================================
+
+#
+# Load and convert a datafile to hybrid JSON for preview
+# 
+# Arguments:
+#   filename - Catalog filename (e.g., "file_001.ess")
+#   level    - raw | trials | extracted (default: extracted)
+#   limit    - Max rows to return (default: 100, for performance)
+#
+# Returns: Hybrid JSON string for DGTableViewer
+#
+proc preview_datafile {filename {level extracted} {limit 100}} {
+    # Resolve filename to filepath via catalog
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq ""} {
+        error "File not found in catalog: $filename"
+    }
+    
+    if {![file exists $filepath]} {
+        error "Source file missing: $filepath"
+    }
+    
+    # Load data based on level
+    switch $level {
+        raw {
+            set g [dslog::read $filepath]
+        }
+        trials {
+            set g [dslog::readESS $filepath]
+        }
+        extracted {
+            set g [df::load_data $filepath]
+        }
+        default {
+            error "Unknown level: $level"
+        }
+    }
+    
+    # Limit rows if needed (for performance in preview)
+    set n_rows [dl_length $g:[lindex [dg_tclListnames $g] 0]]
+    if {$n_rows > $limit} {
+        # Create a subset - first $limit rows
+        set g_subset [dg_create]
+        foreach col [dg_tclListnames $g] {
+            dl_set $g_subset:$col [dl_choose $g:$col [dl_fromto 0 $limit]]
+        }
+        dg_delete $g
+        set g $g_subset
+    }
+    
+    # Convert to hybrid JSON
+    set json [dg_toHybridJSON $g]
+    
+    # Cleanup
+    dg_delete $g
+    
+    return $json
+}
+
+# ============================================================================
+# Helper
+# ============================================================================
+
+proc _json_error {message} {
+    set json [yajl create #auto]
+    $json map_open
+    $json string "status" string "error"
+    $json string "error" string $message
+    $json map_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+# ============================================================================
+# Initialize
+# ============================================================================
 
 setup_database $df_db_path
 
@@ -841,9 +1210,17 @@ dpointSetScript    ess/data_dir process_data_dir
 dservAddExactMatch ess/datafile_path
 dpointSetScript    ess/datafile_path process_ess_datafile
 
+# Subscribe to sync destination configuration
+dservAddExactMatch df/sync_destination
+dpointSetScript    df/sync_destination process_sync_destination
+
 # Touch to get current values (fails silently if not yet set)
 catch {dservTouch ess/system_path}
 catch {dservTouch ess/project}
 catch {dservTouch ess/data_dir}
+catch {dservTouch df/sync_destination}
+
+# Clean up old temp files on startup
+catch {cleanup_tmp 1}
 
 puts "dfconf: Datafile manager ready (df 2.0)"
