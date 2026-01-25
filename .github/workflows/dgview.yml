@@ -3,7 +3,7 @@ name: dgview Release Build
 on:
   push:
     tags:
-      - 'dgview-v*'
+      - '[0-9]+.[0-9]+.[0-9]+*'  # Matches 0.9.10, 1.0.0, etc.
   workflow_dispatch:
     inputs:
       version:
@@ -16,6 +16,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Clone dlsh
+        run: |
+          # Clone dlsh to repo root (tools/dgview/CMakeLists.txt expects ../../dlsh)
+          git clone https://github.com/SheinbergLab/dlsh.git dlsh
       
       - name: Install dependencies
         run: |
@@ -58,6 +63,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Clone dlsh
+        run: |
+          git clone https://github.com/SheinbergLab/dlsh.git dlsh
+      
       - name: Install dependencies
         run: |
           brew install fltk lz4
@@ -98,6 +107,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Clone dlsh
+        run: |
+          git clone https://github.com/SheinbergLab/dlsh.git dlsh
       
       - name: Install dependencies
         run: |
@@ -140,6 +153,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Clone dlsh
+        run: |
+          git clone https://github.com/SheinbergLab/dlsh.git dlsh
       
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
