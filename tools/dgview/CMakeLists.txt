@@ -38,14 +38,13 @@ if(WIN32)
         set(LIBDG "dg")  # Fallback
     endif()
     
-    # Find FLTK's bundled zlib (fltk_z)
-    find_library(FLTK_ZLIB NAMES fltk_z PATHS ${CMAKE_PREFIX_PATH}/lib)
-    if(NOT FLTK_ZLIB)
-        # Fallback to static zlib if FLTK didn't bundle it
-        find_library(FLTK_ZLIB NAMES zlibstatic zlib PATHS ${CMAKE_PREFIX_PATH}/lib)
+    # Find zlib static library (for gzip functions gzopen, gzread, etc.)
+    find_library(ZLIB_STATIC NAMES zlibstatic zlibstaticd PATHS ${CMAKE_PREFIX_PATH}/lib)
+    if(NOT ZLIB_STATIC)
+        message(FATAL_ERROR "Could not find zlibstatic library")
     endif()
     
-    set(WIN_LIBS fltk::fltk ${FLTK_ZLIB} ${LZ4_LIBRARIES} ${LIBDG})
+    set(WIN_LIBS fltk::fltk ${ZLIB_STATIC} ${LZ4_LIBRARIES} ${LIBDG})
 elseif(APPLE)
     include_directories("/usr/local/include" "/opt/homebrew/include")
     link_directories("/usr/local/lib" "/opt/homebrew/lib")

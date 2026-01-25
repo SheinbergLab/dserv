@@ -298,9 +298,13 @@ jobs:
         run: |
           git clone https://github.com/madler/zlib.git zlib-src
           cd zlib-src
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DBUILD_SHARED_LIBS=OFF -DSKIP_INSTALL_SHARED=ON
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps
           ninja -C build zlibstatic
-          ninja -C build install
+          # Manually copy static lib and headers
+          Copy-Item build/zlibstatic.lib -Destination C:/deps/lib/
+          Copy-Item zlib.h -Destination C:/deps/include/
+          Copy-Item build/zconf.h -Destination C:/deps/include/
+        shell: pwsh
           
       - name: Build and install lz4
         run: |
