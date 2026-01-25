@@ -296,6 +296,10 @@ jobs:
         
       - name: Build and install zlib (static only)
         run: |
+          # Create deps directories
+          New-Item -ItemType Directory -Force -Path C:/deps/lib
+          New-Item -ItemType Directory -Force -Path C:/deps/include
+          
           git clone https://github.com/madler/zlib.git zlib-src
           cd zlib-src
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps
