@@ -25,7 +25,14 @@ jobs:
       
       - name: Install dependencies
         run: |
-          brew install fltk lz4
+          brew install lz4
+      
+      - name: Build and install FLTK
+        run: |
+          cd deps/fltk/
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
       
       - name: Build and install jansson
         run: |
@@ -79,7 +86,14 @@ jobs:
       
       - name: Install dependencies
         run: |
-          brew install fltk lz4
+          brew install lz4
+      
+      - name: Build and install FLTK
+        run: |
+          cd deps/fltk/
+          cmake -B build
+          cmake --build build
+          sudo cmake --install build
       
       - name: Build and install jansson
         run: |
