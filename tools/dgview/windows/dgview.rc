@@ -1,0 +1,4 @@
+// Windows resource file for dgview
+// Embeds the application icon
+
+IDI_ICON1 ICON "dgview.ico"

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=DG Viewer
+Comment=Viewer for DG/DGZ data files
+Exec=dgview %F
+Icon=dgview
+Terminal=false
+Type=Application
+Categories=Science;DataVisualization;
+MimeType=application/x-dg;application/x-dgz;
+Keywords=data;viewer;neuroscience;

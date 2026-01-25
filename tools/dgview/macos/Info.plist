@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>dgview</string>
+    <key>CFBundleDisplayName</key>
+    <string>DG Viewer</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.sheinberglab.dgview</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>dgview</string>
+    <key>CFBundleIconFile</key>
+    <string>dgview</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    
+    <!-- Accept dropped files -->
+    <key>NSServices</key>
+    <array/>
+    
+    <!-- Document types we can open -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>DG Data File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.sheinberglab.dg</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>dg</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>DGZ Compressed Data File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.sheinberglab.dgz</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>dgz</string>
+            </array>
+        </dict>
+    </array>
+    
+    <!-- Define our custom UTI types -->
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.sheinberglab.dg</string>
+            <key>UTTypeDescription</key>
+            <string>DG Data File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>dg</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.sheinberglab.dgz</string>
+            <key>UTTypeDescription</key>
+            <string>DGZ Compressed Data File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>dgz</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
