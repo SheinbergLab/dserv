@@ -41,7 +41,7 @@ if(WIN32)
     # Find zlib static library (for gzip functions gzopen, gzread, etc.)
     find_library(ZLIB_STATIC NAMES zs zlibstatic zlibstaticd PATHS ${CMAKE_PREFIX_PATH}/lib)
     if(NOT ZLIB_STATIC)
-        message(FATAL_ERROR "Could not find zlibstatic library")
+        message(FATAL_ERROR "Could not find static zlib library (zs.lib or zlibstatic.lib)")
     endif()
     
     set(WIN_LIBS fltk::fltk ${ZLIB_STATIC} ${LZ4_LIBRARIES} ${LIBDG})
