@@ -5,6 +5,8 @@
 #include "dservConfig.h"
 #include <vector>
 #include <fstream>
+#include <dirent.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 // JSON support
@@ -59,6 +61,13 @@ TclServer::TclServer(int argc, char **argv,
   _message_port = cfg.message_listener_port;
   _websocket_port = cfg.websocket_listener_port;
   www_path = cfg.www_path;
+
+  exports_path = cfg.exports_path;
+  if (exports_path.empty()) {
+    exports_path = www_path.empty() ? "/tmp/dserv_exports" 
+      : www_path + "/exports";
+  }
+  mkdir(exports_path.c_str(), 0755);  
  
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
@@ -378,6 +387,93 @@ static std::string read_file_contents(const std::string& path) {
   return content;
 }
 
+
+// Efficient file streaming for large downloads
+// Uses uWebSockets async pattern to avoid loading entire file in memory
+static void stream_file_response(auto *res, const std::string& file_path, 
+                                  const std::string& content_type,
+                                  const std::string& filename) {
+    // Check file exists and get size
+    struct stat st;
+    if (stat(file_path.c_str(), &st) != 0) {
+        res->writeStatus("404 Not Found")
+           ->writeHeader("Content-Type", "text/plain")
+           ->end("File not found");
+        return;
+    }
+    
+    size_t file_size = st.st_size;
+    
+    // For small files (< 10MB), read and send directly
+    const size_t SMALL_FILE_THRESHOLD = 10 * 1024 * 1024;
+    
+    if (file_size < SMALL_FILE_THRESHOLD) {
+        std::ifstream file(file_path, std::ios::binary);
+        if (!file) {
+            res->writeStatus("500 Internal Server Error")
+               ->end("Failed to open file");
+            return;
+        }
+        
+        std::string content(file_size, '\0');
+        file.read(content.data(), file_size);
+        
+        res->writeHeader("Content-Type", content_type)
+           ->writeHeader("Content-Disposition", 
+                        "attachment; filename=\"" + filename + "\"")
+           ->writeHeader("Content-Length", std::to_string(file_size))
+           ->writeHeader("Cache-Control", "no-cache")
+           ->end(content);
+        return;
+    }
+    
+    // For large files, use chunked streaming
+    // Note: This is a simplified version. For production, you might want
+    // to use uWS::HttpResponse::tryEnd() with onWritable callback for
+    // true async streaming of very large files.
+    
+    std::ifstream file(file_path, std::ios::binary);
+    if (!file) {
+        res->writeStatus("500 Internal Server Error")
+           ->end("Failed to open file");
+        return;
+    }
+    
+    // Read in chunks
+    const size_t CHUNK_SIZE = 64 * 1024;  // 64KB chunks
+    std::string content;
+    content.reserve(file_size);
+    
+    char buffer[CHUNK_SIZE];
+    while (file.read(buffer, CHUNK_SIZE) || file.gcount() > 0) {
+        content.append(buffer, file.gcount());
+    }
+    
+    res->writeHeader("Content-Type", content_type)
+       ->writeHeader("Content-Disposition", 
+                    "attachment; filename=\"" + filename + "\"")
+       ->writeHeader("Content-Length", std::to_string(file_size))
+       ->writeHeader("Cache-Control", "no-cache")
+       ->end(content);
+}
+
+// Get content type for data files
+static const char* get_download_content_type(const std::string& path) {
+    size_t dot_pos = path.rfind('.');
+    if (dot_pos == std::string::npos) return "application/octet-stream";
+    
+    std::string ext = path.substr(dot_pos);
+    
+    if (ext == ".dgz") return "application/gzip";
+    if (ext == ".dg") return "application/octet-stream";
+    if (ext == ".ess") return "application/octet-stream";
+    if (ext == ".zip") return "application/zip";
+    if (ext == ".json") return "application/json";
+    if (ext == ".csv") return "text/csv";
+    
+    return "application/octet-stream";
+}
+
 void TclServer::start_websocket_server(void)
 {
   ws_loop = uWS::Loop::get();
@@ -443,6 +539,217 @@ void TclServer::start_websocket_server(void)
 	  ->end();
       });      
       
+    // ------------------------------------------------------------------
+    // Download route - serves exported data files
+    // ------------------------------------------------------------------
+    app.get("/download/*", [this](auto *res, auto *req) {
+        std::string url_path(req->getUrl());
+        
+        // Strip "/download" prefix (9 chars)
+        if (url_path.length() <= 9) {
+            res->writeStatus("400 Bad Request")
+               ->end("No file specified");
+            return;
+        }
+        std::string file_name = url_path.substr(10);  // Skip "/download/"
+        
+        // Security: reject path traversal
+        if (!is_safe_path(file_name)) {
+            res->writeStatus("403 Forbidden")
+               ->writeHeader("Content-Type", "text/plain")
+               ->end("Forbidden: invalid path");
+            return;
+        }
+        
+        // Only allow certain extensions for security
+        size_t dot_pos = file_name.rfind('.');
+        if (dot_pos == std::string::npos) {
+            res->writeStatus("403 Forbidden")
+               ->end("Forbidden: no file extension");
+            return;
+        }
+        
+        std::string ext = file_name.substr(dot_pos);
+        if (ext != ".dgz" && ext != ".dg" && ext != ".zip" && 
+            ext != ".json" && ext != ".csv" && ext != ".ess") {
+            res->writeStatus("403 Forbidden")
+               ->end("Forbidden: file type not allowed");
+            return;
+        }
+        
+        // Build full path
+        std::string file_path = this->exports_path + "/" + file_name;
+        
+        // Stream the file
+        stream_file_response(res, file_path, 
+                            get_download_content_type(file_name),
+                            file_name);
+    });
+    
+    // ------------------------------------------------------------------
+    // List available exports
+    // ------------------------------------------------------------------
+    app.get("/api/exports", [this](auto *res, auto *req) {
+        json_t *response = json_array();
+        
+        DIR *dir = opendir(this->exports_path.c_str());
+        if (dir) {
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != nullptr) {
+                if (entry->d_name[0] == '.') continue;  // Skip hidden files
+                
+                std::string name = entry->d_name;
+                std::string full_path = this->exports_path + "/" + name;
+                
+                struct stat st;
+                if (stat(full_path.c_str(), &st) == 0) {
+                    json_t *file_obj = json_object();
+                    json_object_set_new(file_obj, "name", json_string(name.c_str()));
+                    json_object_set_new(file_obj, "size", json_integer(st.st_size));
+                    json_object_set_new(file_obj, "mtime", json_integer(st.st_mtime));
+                    json_object_set_new(file_obj, "url", 
+                        json_string(("/download/" + name).c_str()));
+                    json_array_append_new(response, file_obj);
+                }
+            }
+            closedir(dir);
+        }
+        
+        char *json_str = json_dumps(response, JSON_INDENT(2));
+        res->writeHeader("Content-Type", "application/json")
+           ->writeHeader("Cache-Control", "no-cache")
+           ->end(json_str);
+        free(json_str);
+        json_decref(response);
+    });
+    
+    // ------------------------------------------------------------------
+    // Trigger export via POST (calls Tcl export functions)
+    // ------------------------------------------------------------------
+    app.post("/api/export", [this](auto *res, auto *req) {
+        // Buffer the request body
+        std::string buffer;
+        
+        res->onData([this, res, buffer = std::move(buffer)]
+                   (std::string_view data, bool last) mutable {
+            buffer.append(data.data(), data.length());
+            
+            if (last) {
+                // Parse JSON request
+                json_error_t error;
+                json_t *root = json_loads(buffer.c_str(), 0, &error);
+                
+                if (!root) {
+                    json_t *err_response = json_object();
+                    json_object_set_new(err_response, "error", 
+                                       json_string("Invalid JSON"));
+                    char *err_str = json_dumps(err_response, 0);
+                    res->writeHeader("Content-Type", "application/json")
+                       ->end(err_str);
+                    free(err_str);
+                    json_decref(err_response);
+                    return;
+                }
+                
+                // Extract parameters
+                json_t *files_obj = json_object_get(root, "files");
+                json_t *level_obj = json_object_get(root, "level");
+                
+                if (!files_obj || !json_is_array(files_obj)) {
+                    json_t *err_response = json_object();
+                    json_object_set_new(err_response, "error", 
+                                       json_string("Missing 'files' array"));
+                    char *err_str = json_dumps(err_response, 0);
+                    res->writeHeader("Content-Type", "application/json")
+                       ->end(err_str);
+                    free(err_str);
+                    json_decref(err_response);
+                    json_decref(root);
+                    return;
+                }
+                
+                const char *level = "extracted";  // default
+                if (level_obj && json_is_string(level_obj)) {
+                    level = json_string_value(level_obj);
+                }
+                
+                // Build Tcl command to execute export
+                // This will be sent to the df subprocess
+                std::string tcl_cmd = "send df {export_batch {";
+                
+                size_t n_files = json_array_size(files_obj);
+                for (size_t i = 0; i < n_files; i++) {
+                    json_t *file = json_array_get(files_obj, i);
+                    if (json_is_string(file)) {
+                        if (i > 0) tcl_cmd += " ";
+                        tcl_cmd += json_string_value(file);
+                    }
+                }
+                tcl_cmd += "} ";
+                tcl_cmd += level;
+                tcl_cmd += "}";
+                
+                // Execute via queue
+                SharedQueue<std::string> rqueue;
+                client_request_t client_request;
+                client_request.type = REQ_SCRIPT;
+                client_request.rqueue = &rqueue;
+                client_request.script = tcl_cmd;
+                client_request.socket_fd = -1;
+                client_request.websocket_id = "";
+                
+                this->queue.push_back(client_request);
+                
+                // Wait for response
+                std::string result = rqueue.front();
+                rqueue.pop_front();
+                
+                // Return result (should be JSON from dfconf.tcl)
+                res->writeHeader("Content-Type", "application/json")
+                   ->writeHeader("Cache-Control", "no-cache")
+                   ->end(result);
+                
+                json_decref(root);
+            }
+        });
+        
+        res->onAborted([]() {
+            std::cerr << "Export request aborted" << std::endl;
+        });
+    });
+    
+    // ------------------------------------------------------------------
+    // Delete export file (cleanup)
+    // ------------------------------------------------------------------
+    app.del("/api/export/*", [this](auto *res, auto *req) {
+        std::string url_path(req->getUrl());
+        
+        // Strip "/api/export/" prefix
+        if (url_path.length() <= 12) {
+            res->writeStatus("400 Bad Request")
+               ->end("{\"error\":\"No file specified\"}");
+            return;
+        }
+        std::string file_name = url_path.substr(12);
+        
+        // Security checks
+        if (!is_safe_path(file_name)) {
+            res->writeStatus("403 Forbidden")
+               ->end("{\"error\":\"Invalid path\"}");
+            return;
+        }
+        
+        std::string file_path = this->exports_path + "/" + file_name;
+        
+        if (unlink(file_path.c_str()) == 0) {
+            res->writeHeader("Content-Type", "application/json")
+               ->end("{\"status\":\"deleted\"}");
+        } else {
+            res->writeStatus("404 Not Found")
+               ->writeHeader("Content-Type", "application/json")
+               ->end("{\"error\":\"File not found\"}");
+        }
+    });
       
       // Serve all other files from www_path
 app.get("/*", [this](auto *res, auto *req) {
