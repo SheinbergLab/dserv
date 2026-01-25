@@ -135,7 +135,15 @@ jobs:
           path: tools/dgview/build/dgview-macos-arm64.dmg
 
   build-linux:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -181,13 +189,13 @@ jobs:
         run: |
           cd tools/dgview/build
           cpack -G DEB
-          mv *.deb dgview-linux-amd64.deb
+          mv *.deb dgview-linux-${{ matrix.arch }}.deb
           
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dgview-linux-amd64
-          path: tools/dgview/build/dgview-linux-amd64.deb
+          name: dgview-linux-${{ matrix.arch }}
+          path: tools/dgview/build/dgview-linux-${{ matrix.arch }}.deb
 
   build-windows:
     runs-on: windows-latest
@@ -206,7 +214,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: '01f602195983451bc83e72f4214af2cbc495aa94'  # 2024.05.24
+          vcpkgGitCommitId: 'c82f74667287d3dc386bce81e44964370c91a289'  # 2025.01.13
           
       - name: Install dependencies via vcpkg
         run: |
@@ -262,6 +270,7 @@ jobs:
             dgview-macos-x64/*.dmg
             dgview-macos-arm64/*.dmg
             dgview-linux-amd64/*.deb
+            dgview-linux-arm64/*.deb
             dgview-windows-x64/*.exe
           draft: true
         env:
