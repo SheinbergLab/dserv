@@ -298,7 +298,7 @@ jobs:
         run: |
           git clone https://github.com/madler/zlib.git zlib-src
           cd zlib-src
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DBUILD_SHARED_LIBS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           ninja -C build
           ninja -C build install
           
@@ -306,34 +306,34 @@ jobs:
         run: |
           git clone https://github.com/lz4/lz4.git lz4-src
           cd lz4-src/build/cmake
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DBUILD_SHARED_LIBS=OFF -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DBUILD_SHARED_LIBS=OFF -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           ninja -C build
           ninja -C build install
           
       - name: Build and install jansson
         run: |
           cd deps/jansson
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DJANSSON_BUILD_DOCS=OFF
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DJANSSON_BUILD_DOCS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           ninja -C build
           ninja -C build install
           
       - name: Build and install FLTK
         run: |
           cd deps/fltk
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           ninja -C build
           ninja -C build install
           
       - name: Build libdg
         run: |
           cd dlsh/libdg
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH=C:/deps -DCMAKE_C_FLAGS="-IC:/deps/include" -DCMAKE_CXX_FLAGS="-IC:/deps/include"
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH=C:/deps -DCMAKE_C_FLAGS="-IC:/deps/include" -DCMAKE_CXX_FLAGS="-IC:/deps/include" -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           ninja -C build
           
       - name: Build dgview
         run: |
           cd tools/dgview
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/deps -DLIBDG_PATH=${{ github.workspace }}/dlsh/libdg/build
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/deps -DLIBDG_PATH=${{ github.workspace }}/dlsh/libdg/build -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           ninja -C build
           
       - name: Install NSIS
