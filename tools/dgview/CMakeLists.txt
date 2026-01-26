@@ -275,9 +275,8 @@ else()
     
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
     set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
-    # Full dependency list based on ldd output
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS 
-        "libc6, libstdc++6, libgcc-s1, zlib1g, libx11-6, libxext6, libxinerama1, libxfixes3, libxcursor1, libxrender1, libxft2, libfontconfig1, libgtk-3-0, libgdk-pixbuf-2.0-0, libpango-1.0-0, libpangocairo-1.0-0, libcairo2, libglib2.0-0, libgobject-2.0-0, libgio-2.0-0, libwayland-client0, libwayland-cursor0, libdbus-1-3, libxkbcommon0, libatk1.0-0, libharfbuzz0b")
+    # Auto-detect dependencies for the target system (handles Pi OS, Ubuntu, Debian variants)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 endif()
 
 include(CPack)
