@@ -37,7 +37,7 @@
 #include <iostream>
 
 // Forward declarations
-class OpenFile;
+class DgOpenFile;
 class DgViewerApp;
 
 // Global app pointer for callbacks
@@ -170,12 +170,12 @@ static CLIOptions parseCommandLine(int argc, char** argv) {
 }
 
 //============================================================================
-// OpenFile - Represents a single open DG file
+// DgOpenFile - Represents a single open DG file
 //============================================================================
 
-class OpenFile {
+class DgOpenFile {
 public:
-    OpenFile(const std::string& path) : m_path(path), m_dg(nullptr) {
+    DgOpenFile(const std::string& path) : m_path(path), m_dg(nullptr) {
         // Extract basename for display
         const char* p = path.c_str();
         const char* slash = strrchr(p, '/');
@@ -187,7 +187,7 @@ public:
         m_basename = p;
     }
     
-    ~OpenFile() {
+    ~DgOpenFile() {
         if (m_dg) {
             dfuFreeDynGroup(m_dg);
             m_dg = nullptr;
@@ -434,7 +434,7 @@ public:
         showPlaceholder();
     }
     
-    void setFile(OpenFile* file) {
+    void setFile(DgOpenFile* file) {
         m_currentFile = file;
         m_columnMap.clear();
         m_currentDetailRow = -1;
@@ -460,7 +460,7 @@ public:
     }
     
     DgTable* table() const { return m_table; }
-    OpenFile* currentFile() const { return m_currentFile; }
+    DgOpenFile* currentFile() const { return m_currentFile; }
     
     void updateHeader() {
         if (m_currentFile && m_currentFile->data()) {
@@ -736,7 +736,7 @@ private:
     Fl_Tile* m_tile;
     DgTable* m_table;
     ContainedTree* m_detailTree;
-    OpenFile* m_currentFile;
+    DgOpenFile* m_currentFile;
     bool m_detailVisible;
     int m_savedDetailWidth;
     int m_currentDetailRow;
@@ -809,7 +809,7 @@ public:
         }
         
         // Create new file entry
-        OpenFile* file = new OpenFile(filename);
+        DgOpenFile* file = new DgOpenFile(filename);
         if (!file->load()) {
             fl_alert("Failed to load %s:\n%s", filename, file->error().c_str());
             delete file;
@@ -862,7 +862,7 @@ public:
     }
     
     void exportCSV() {
-        OpenFile* file = m_content->currentFile();
+        DgOpenFile* file = m_content->currentFile();
         if (!file || !file->data()) {
             fl_alert("No data to export");
             return;
@@ -894,7 +894,7 @@ public:
     }
     
     void exportJSON() {
-        OpenFile* file = m_content->currentFile();
+        DgOpenFile* file = m_content->currentFile();
         if (!file || !file->data()) {
             fl_alert("No data to export");
             return;
@@ -1057,7 +1057,7 @@ private:
     }
     
     void updateStatus() {
-        OpenFile* file = m_content->currentFile();
+        DgOpenFile* file = m_content->currentFile();
         if (file && file->data()) {
             setStatus("%s: %d columns, %d rows",
                      file->path().c_str(),
@@ -1119,7 +1119,7 @@ private:
     FileListPanel* m_fileList;
     ContentPanel* m_content;
     Fl_Box* m_status;
-    std::vector<OpenFile*> m_files;
+    std::vector<DgOpenFile*> m_files;
 };
 
 //============================================================================
