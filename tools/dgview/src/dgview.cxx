@@ -4,6 +4,11 @@
  * A fast, efficient viewer for DYN_GROUP data files.
  * Supports drag-and-drop, file list management, and export to CSV/JSON.
  * 
+ * Usage:
+ *   dgview [files...]              Open files in GUI
+ *   dgview --batch -o DIR files... Batch convert without GUI
+ *   dgview --help                  Show help
+ * 
  * Copyright (c) SheinbergLab
  */
 
@@ -19,6 +24,7 @@
 #include <FL/fl_ask.H>
 #include <FL/Fl_Native_File_Chooser.H>
 
+#include "CLI11.hpp"
 #include "DgFile.h"
 #include "DgTable.h"
 #include "DgExport.h"
@@ -28,6 +34,7 @@
 #include <memory>
 #include <map>
 #include <algorithm>
+#include <iostream>
 
 // Forward declarations
 class OpenFile;
@@ -35,6 +42,132 @@ class DgViewerApp;
 
 // Global app pointer for callbacks
 static DgViewerApp* g_app = nullptr;
+
+//============================================================================
+// Batch Conversion (CLI mode)
+//============================================================================
+
+static std::string replaceExtension(const std::string& filename, const std::string& newExt) {
+    std::string basename = filename;
+    size_t slash = basename.find_last_of("/\\");
+    if (slash != std::string::npos) basename = basename.substr(slash + 1);
+    size_t dot = basename.rfind('.');
+    if (dot != std::string::npos) basename = basename.substr(0, dot);
+    return basename + newExt;
+}
+
+static int runBatchConvert(const std::vector<std::string>& files,
+                           const std::string& outDir,
+                           const std::string& format,
+                           bool prettyPrint,
+                           bool verbose) {
+    int success = 0, failed = 0;
+    
+    DgExport::Options opts;
+    opts.prettyJson = prettyPrint;
+    opts.delimiter = '\t';
+    
+    for (const auto& inFile : files) {
+        std::string error;
+        DYN_GROUP* dg = DgFile::load(inFile.c_str(), &error);
+        
+        if (!dg) {
+            std::cerr << "Error: Failed to load " << inFile << ": " << error << "\n";
+            failed++;
+            continue;
+        }
+        
+        // Build output filename
+        std::string ext = (format == "csv") ? ".csv" : ".json";
+        std::string outFile = outDir + "/" + replaceExtension(inFile, ext);
+        
+        if (format == "json") {
+            error = DgExport::toJSON(dg, outFile.c_str(), opts);
+        } else {
+            error = DgExport::toCSV(dg, outFile.c_str(), opts);
+        }
+        
+        dfuFreeDynGroup(dg);
+        
+        if (error.empty()) {
+            if (verbose) {
+                std::cout << inFile << " -> " << outFile << "\n";
+            }
+            success++;
+        } else {
+            std::cerr << "Error: Failed to export " << inFile << ": " << error << "\n";
+            failed++;
+        }
+    }
+    
+    std::cout << "Converted " << success << " file" << (success != 1 ? "s" : "");
+    if (failed > 0) {
+        std::cout << " (" << failed << " failed)";
+    }
+    std::cout << "\n";
+    
+    return (failed > 0) ? 1 : 0;
+}
+
+//============================================================================
+// Command Line Parsing
+//============================================================================
+
+struct CLIOptions {
+    bool guiMode = true;
+    bool batchMode = false;
+    bool verbose = false;
+    bool prettyPrint = true;
+    std::string outputDir = ".";
+    std::string format = "json";
+    std::vector<std::string> inputFiles;
+    int exitCode = 0;
+};
+
+static CLIOptions parseCommandLine(int argc, char** argv) {
+    CLIOptions opts;
+    
+    CLI::App app{"dgview - DG/DGZ File Viewer and Converter"};
+    app.set_version_flag("--version,-V", "dgview 0.1.0");
+    
+    // Positional args (files to open)
+    app.add_option("files", opts.inputFiles, "Input files (.dg, .dgz, .lz4)");
+    
+    // Batch conversion options
+    app.add_flag("--batch,-b", opts.batchMode, "Batch convert mode (no GUI)");
+    app.add_option("--outdir,-o", opts.outputDir, "Output directory for batch conversion")
+        ->check(CLI::ExistingDirectory);
+    app.add_option("--format,-f", opts.format, "Output format: json, csv (default: json)")
+        ->check(CLI::IsMember({"json", "csv"}));
+    app.add_flag("--verbose,-v", opts.verbose, "Verbose output (show each file converted)");
+    app.add_flag("--compact,-c", [&opts](int64_t) { opts.prettyPrint = false; }, 
+                 "Compact JSON output (no pretty printing)");
+    
+    try {
+        app.parse(argc, argv);
+    } catch (const CLI::ParseError& e) {
+        opts.exitCode = app.exit(e);
+        opts.guiMode = false;
+        return opts;
+    }
+    
+    // Handle batch mode
+    if (opts.batchMode) {
+        opts.guiMode = false;
+        
+        if (opts.inputFiles.empty()) {
+            std::cerr << "Error: No input files specified for batch conversion\n";
+            std::cerr << "Usage: dgview --batch -o OUTDIR files...\n";
+            opts.exitCode = 1;
+            return opts;
+        }
+        
+        opts.exitCode = runBatchConvert(opts.inputFiles, opts.outputDir, 
+                                         opts.format, opts.prettyPrint, opts.verbose);
+    }
+    
+    return opts;
+}
 
 //============================================================================
 // OpenFile - Represents a single open DG file
@@ -1040,6 +1173,15 @@ static void initStyling() {
 }
 
 int main(int argc, char** argv) {
+    // Parse command line first
+    CLIOptions opts = parseCommandLine(argc, argv);
+    
+    // If CLI mode handled everything (batch, help, error), exit
+    if (!opts.guiMode) {
+        return opts.exitCode;
+    }
+    
+    // GUI mode
     initStyling();
     
 #ifdef __APPLE__
@@ -1056,8 +1198,9 @@ int main(int argc, char** argv) {
     macEnableFileDrop(&app);
 #endif
     
-    for (int i = 1; i < argc; i++) {
-        app.openFile(argv[i]);
+    // Open any files specified on command line
+    for (const auto& file : opts.inputFiles) {
+        app.openFile(file.c_str());
     }
     
     return Fl::run();
