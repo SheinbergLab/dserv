@@ -12,6 +12,9 @@
  * Copyright (c) SheinbergLab
  */
 
+// CLI11 must come BEFORE FLTK/X11 headers due to X11 defining 'Success' as a macro
+#include "CLI11.hpp"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Menu_Bar.H>
@@ -24,7 +27,6 @@
 #include <FL/fl_ask.H>
 #include <FL/Fl_Native_File_Chooser.H>
 
-#include "CLI11.hpp"
 #include "DgFile.h"
 #include "DgTable.h"
 #include "DgExport.h"
