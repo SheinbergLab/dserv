@@ -87,15 +87,6 @@
                     <span class="dm-staging-obs" id="staged-obs">(0 obs)</span>
                 </div>
                 <div class="dm-staging-controls">
-                    <div class="dm-level-select">
-                        <label>Level:</label>
-                        <select id="export-level">
-                            <option value="raw">Raw</option>
-                            <option value="trials">Trials</option>
-                            <option value="extracted" selected>Extracted</option>
-                        </select>
-                    </div>
-                    
                     <!-- Download Dropdown (browser-based) -->
                     <div class="dm-dropdown" id="download-dropdown">
                         <button class="dm-btn dm-btn-primary" id="download-btn" onclick="toggleDownloadMenu()" disabled>
@@ -106,20 +97,20 @@
                         </div>
                     </div>
                     
-                    <!-- Sync Dropdown (server-side to configured destination) -->
-                    <div class="dm-dropdown" id="sync-dropdown">
-                        <button class="dm-btn" id="sync-btn" onclick="toggleSyncMenu()" disabled title="Configure df/sync_destination to enable">
-                            Sync ▾
+                    <!-- Export Dropdown (server-side to configured destination) -->
+                    <div class="dm-dropdown" id="export-dropdown">
+                        <button class="dm-btn" id="export-btn" onclick="toggleExportMenu()" disabled title="Configure df/export_destination to enable">
+                            Export ▾
                         </button>
-                        <div class="dm-dropdown-menu" id="sync-menu">
+                        <div class="dm-dropdown-menu" id="export-menu">
                             <div class="dm-dropdown-section">
                                 <div class="dm-dropdown-label">Destination:</div>
-                                <div class="dm-sync-destination" id="sync-destination-display">Not configured</div>
+                                <div class="dm-export-destination" id="export-destination-display">Not configured</div>
                             </div>
                             <div class="dm-dropdown-divider"></div>
-                            <button onclick="syncFiles('both')">Copy .ess + .dgz</button>
-                            <button onclick="syncFiles('ess')">Copy .ess only</button>
-                            <button onclick="syncFiles('dgz')">Copy .dgz only</button>
+                            <button onclick="exportFiles('both')">Copy .ess + .dgz</button>
+                            <button onclick="exportFiles('ess')">Copy .ess only</button>
+                            <button onclick="exportFiles('dgz')">Copy .dgz only</button>
                         </div>
                     </div>
                 </div>
@@ -140,8 +131,11 @@
                                 <th class="dm-col-system">System</th>
                                 <th class="dm-col-protocol">Protocol</th>
                                 <th class="dm-col-obs">Obs</th>
+                                <th class="dm-col-trials">Trials</th>
+                                <th class="dm-col-status">Status</th>
                                 <th class="dm-col-date">Date</th>
                                 <th class="dm-col-time">Time</th>
+                                <th class="dm-col-actions"></th>
                             </tr>
                         </thead>
                         <tbody id="file-table-body">

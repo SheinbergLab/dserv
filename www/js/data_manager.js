@@ -1,6 +1,11 @@
 /**
  * data_manager.js
  * Simplified Data Manager - browse, stage, download/copy
+ * 
+ * Terminology:
+ *   - obs: observation-period oriented data (sync-line bounded epochs)
+ *   - trials: analysis-ready rectangular data (extracted trials)
+ *   - export: copy files to destination
  */
 
 // ============================================================================
@@ -22,16 +27,16 @@ let filterOptions = {
     protocols: []
 };
 
-// Destination paths (persisted to localStorage)
-let syncDestination = '';  // Configured via datapoint
-let syncEnabled = false;
+// Destination paths (configured via datapoint)
+let exportDestination = '';
+let exportEnabled = false;
 
 // Preview
 let previewViewer = null;
 
 // UI state
 let downloadMenuOpen = false;
-let syncMenuOpen = false;
+let exportMenuOpen = false;
 
 // Console
 let errorCount = 0;
@@ -63,7 +68,7 @@ async function init() {
         await connection.connect();
         log('Connected to dserv', 'info');
         
-        await loadSyncConfig();
+        await loadExportConfig();
         await loadFilterOptions();
         await loadStats();
         await loadFiles();
@@ -74,7 +79,7 @@ async function init() {
     
     connection.on('connected', async () => {
         log('Reconnected - refreshing data...', 'info');
-        await loadSyncConfig();
+        await loadExportConfig();
         await loadFilterOptions();
         await loadStats();
         await loadFiles();
@@ -95,24 +100,8 @@ function setupEventListeners() {
         if (!e.target.closest('#download-dropdown')) {
             closeDownloadMenu();
         }
-        if (!e.target.closest('#sync-dropdown')) {
-            closeSyncMenu();
-        }
-    });
-    
-    // Keyboard shortcuts
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            closePreview();
-            closeDownloadMenu();
-            closeSyncMenu();
-        }
-    });
-    
-    // Modal backdrop click
-    document.getElementById('preview-modal').addEventListener('click', (e) => {
-        if (e.target.id === 'preview-modal') {
-            closePreview();
+        if (!e.target.closest('#export-dropdown')) {
+            closeExportMenu();
         }
     });
 }
@@ -141,8 +130,9 @@ async function loadStats() {
         const stats = JSON.parse(result);
         
         const totalObs = stats.total_obs || 0;
+        const totalTrials = stats.total_trials || 0;
         document.getElementById('data-summary').textContent = 
-            `${stats.total_files} files, ${totalObs.toLocaleString()} obs`;
+            `${stats.total_files} files, ${totalObs.toLocaleString()} obs, ${totalTrials.toLocaleString()} trials`;
         
     } catch (e) {
         log(`Failed to load stats: ${e.message}`, 'error');
@@ -166,33 +156,33 @@ async function loadFiles() {
     }
 }
 
-async function loadSyncConfig() {
+async function loadExportConfig() {
     try {
-        const result = await sendCommand('get_sync_config');
+        const result = await sendCommand('get_export_config');
         const config = JSON.parse(result);
         
-        syncDestination = config.destination || '';
-        syncEnabled = config.enabled && syncDestination !== '';
+        exportDestination = config.destination || '';
+        exportEnabled = config.enabled && exportDestination !== '';
         
         // Update UI
-        const destDisplay = document.getElementById('sync-destination-display');
-        const syncBtn = document.getElementById('sync-btn');
+        const destDisplay = document.getElementById('export-destination-display');
+        const exportBtn = document.getElementById('export-btn');
         
-        if (syncEnabled) {
-            destDisplay.textContent = syncDestination;
+        if (exportEnabled) {
+            destDisplay.textContent = exportDestination;
             destDisplay.classList.remove('not-configured');
-            syncBtn.title = `Sync to ${syncDestination}`;
+            exportBtn.title = `Export to ${exportDestination}`;
         } else {
             destDisplay.textContent = 'Not configured';
             destDisplay.classList.add('not-configured');
-            syncBtn.title = 'Configure df/sync_destination to enable';
+            exportBtn.title = 'Configure df/export_destination to enable';
         }
         
-        log(`Sync config: ${syncEnabled ? syncDestination : 'not configured'}`, 'info');
+        log(`Export config: ${exportEnabled ? exportDestination : 'not configured'}`, 'info');
         
     } catch (e) {
-        log(`Failed to load sync config: ${e.message}`, 'error');
-        syncEnabled = false;
+        log(`Failed to load export config: ${e.message}`, 'error');
+        exportEnabled = false;
     }
 }
 
@@ -271,28 +261,44 @@ function renderFileTable() {
     
     tbody.innerHTML = displayFiles.map(file => {
         const isSelected = selectedFiles.has(file.filename);
+        const statusClass = getStatusClass(file.status);
+        const displayName = file.filename.replace(/\.ess$/, '');
         return `
             <tr class="${isSelected ? 'selected' : ''}" 
                 data-filename="${escapeHtml(file.filename)}"
-                onclick="handleRowClick(event, '${escapeJs(file.filename)}')"
-                ondblclick="previewFile('${escapeJs(file.filename)}')">
+                onclick="handleRowClick(event, '${escapeJs(file.filename)}')">
                 <td class="dm-col-check">
                     <input type="checkbox" 
                            ${isSelected ? 'checked' : ''} 
                            onclick="event.stopPropagation(); toggleFileSelection('${escapeJs(file.filename)}')">
                 </td>
-                <td class="dm-col-filename" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</td>
+                <td class="dm-col-filename" title="${escapeHtml(file.filename)}">${escapeHtml(displayName)}</td>
                 <td class="dm-col-subject">${escapeHtml(file.subject || '')}</td>
                 <td class="dm-col-system">${escapeHtml(file.system || '')}</td>
                 <td class="dm-col-protocol">${escapeHtml(file.protocol || '')}</td>
                 <td class="dm-col-obs">${file.n_obs || 0}</td>
+                <td class="dm-col-trials">${file.n_trials || 0}</td>
+                <td class="dm-col-status ${statusClass}">${escapeHtml(file.status || '')}</td>
                 <td class="dm-col-date">${escapeHtml(file.date || '')}</td>
                 <td class="dm-col-time">${escapeHtml(file.time || '')}</td>
+                <td class="dm-col-actions">
+                    <button class="dm-preview-btn" onclick="event.stopPropagation(); previewFile('${escapeJs(file.filename)}')" title="Preview">👁</button>
+                </td>
             </tr>
         `;
     }).join('');
     
     updateSelectAllCheckbox();
+}
+
+function getStatusClass(status) {
+    switch (status) {
+        case 'ok': return 'status-ok';
+        case 'error': return 'status-error';
+        case 'obs_only': return 'status-warning';
+        case 'processing': return 'status-working';
+        default: return '';
+    }
 }
 
 function updateFileCount() {
@@ -373,17 +379,21 @@ function updateSelectionUI() {
     // Update staging info
     const count = selectedFiles.size;
     let totalObs = 0;
+    let totalTrials = 0;
     selectedFiles.forEach(filename => {
         const file = allFiles.find(f => f.filename === filename);
-        if (file) totalObs += file.n_obs || 0;
+        if (file) {
+            totalObs += file.n_obs || 0;
+            totalTrials += file.n_trials || 0;
+        }
     });
     
     document.getElementById('staged-count').textContent = `${count} file${count !== 1 ? 's' : ''}`;
-    document.getElementById('staged-obs').textContent = `(${totalObs.toLocaleString()} obs)`;
+    document.getElementById('staged-obs').textContent = `(${totalObs.toLocaleString()} obs, ${totalTrials.toLocaleString()} trials)`;
     
     // Enable/disable buttons
     document.getElementById('download-btn').disabled = count === 0;
-    document.getElementById('sync-btn').disabled = count === 0 || !syncEnabled;
+    document.getElementById('export-btn').disabled = count === 0 || !exportEnabled;
     
     updateSelectAllCheckbox();
 }
@@ -395,7 +405,7 @@ function updateSelectionUI() {
 function toggleDownloadMenu() {
     downloadMenuOpen = !downloadMenuOpen;
     document.getElementById('download-menu').classList.toggle('open', downloadMenuOpen);
-    if (downloadMenuOpen) closeSyncMenu();
+    if (downloadMenuOpen) closeExportMenu();
 }
 
 function closeDownloadMenu() {
@@ -404,7 +414,8 @@ function closeDownloadMenu() {
 }
 
 function getSelectedLevel() {
-    return document.getElementById('export-level').value;
+    // Default to trials for downloads
+    return 'trials';
 }
 
 async function downloadAsZip() {
@@ -448,30 +459,30 @@ async function downloadAsZip() {
 }
 
 // ============================================================================
-// Sync Menu (server-side to configured destination)
+// Export Menu (server-side to configured destination)
 // ============================================================================
 
-function toggleSyncMenu() {
-    if (!syncEnabled) {
-        showStatus('Sync not configured. Set df/sync_destination datapoint.', 'error');
+function toggleExportMenu() {
+    if (!exportEnabled) {
+        showStatus('Export not configured. Set df/export_destination datapoint.', 'error');
         return;
     }
-    syncMenuOpen = !syncMenuOpen;
-    document.getElementById('sync-menu').classList.toggle('open', syncMenuOpen);
-    if (syncMenuOpen) closeDownloadMenu();
+    exportMenuOpen = !exportMenuOpen;
+    document.getElementById('export-menu').classList.toggle('open', exportMenuOpen);
+    if (exportMenuOpen) closeDownloadMenu();
 }
 
-function closeSyncMenu() {
-    syncMenuOpen = false;
-    document.getElementById('sync-menu').classList.remove('open');
+function closeExportMenu() {
+    exportMenuOpen = false;
+    document.getElementById('export-menu').classList.remove('open');
 }
 
-async function syncFiles(mode) {
-    closeSyncMenu();
+async function exportFiles(mode) {
+    closeExportMenu();
     
     if (selectedFiles.size === 0) return;
-    if (!syncEnabled || !syncDestination) {
-        showStatus('Sync destination not configured', 'error');
+    if (!exportEnabled || !exportDestination) {
+        showStatus('Export destination not configured', 'error');
         return;
     }
     
@@ -486,26 +497,31 @@ async function syncFiles(mode) {
         default: modeDesc = '.ess + .dgz files'; mode = 'both';
     }
     
-    showStatus(`Syncing ${filenames.length} ${modeDesc}...`, 'working');
-    log(`Syncing to ${syncDestination} (${mode})...`, 'info');
+    showStatus(`Exporting ${filenames.length} ${modeDesc}...`, 'working');
+    log(`Exporting to ${exportDestination} (${mode})...`, 'info');
     
     try {
-        const result = await sendCommand(`sync_files {${filenameList}} ${level} ${mode}`);
+        const result = await sendCommand(`export_files {${filenameList}} ${level} ${mode}`);
         const response = JSON.parse(result);
         
         if (response.status === 'ok') {
-            showStatus(`Synced ${response.success} of ${response.total} files`, 'success');
-            log(`Sync complete: ${response.ess_copied || 0} .ess, ${response.dgz_copied || 0} .dgz`, 'success');
+            const counts = [];
+            if (response.ess_copied) counts.push(`${response.ess_copied} .ess`);
+            if (response.obs_copied) counts.push(`${response.obs_copied} .obs.dgz`);
+            if (response.trials_copied) counts.push(`${response.trials_copied} .trials.dgz`);
             
-            // Refresh file list to show updated sync status
+            showStatus(`Exported ${response.success} of ${response.total} files`, 'success');
+            log(`Export complete: ${counts.join(', ') || 'no files'}`, 'success');
+            
+            // Refresh file list to show updated export status
             await loadFiles();
         } else {
             showStatus(`Error: ${response.error}`, 'error');
-            log(`Sync failed: ${response.error}`, 'error');
+            log(`Export failed: ${response.error}`, 'error');
         }
     } catch (e) {
         showStatus(`Error: ${e.message}`, 'error');
-        log(`Sync failed: ${e.message}`, 'error');
+        log(`Export failed: ${e.message}`, 'error');
     }
 }
 
@@ -550,6 +566,8 @@ async function previewFile(filename) {
             <span><strong>System:</strong> ${escapeHtml(info.system || '--')}</span>
             <span><strong>Protocol:</strong> ${escapeHtml(info.protocol || '--')}</span>
             <span><strong>Obs:</strong> ${info.n_obs || 0}</span>
+            <span><strong>Trials:</strong> ${info.n_trials || 0}</span>
+            <span><strong>Status:</strong> ${escapeHtml(info.status || '--')}</span>
             <span><strong>Size:</strong> ${formatBytes(info.file_size || 0)}</span>
         `;
         
@@ -793,8 +811,8 @@ window.handleRowClick = handleRowClick;
 window.toggleFileSelection = toggleFileSelection;
 window.toggleDownloadMenu = toggleDownloadMenu;
 window.downloadAsZip = downloadAsZip;
-window.toggleSyncMenu = toggleSyncMenu;
-window.syncFiles = syncFiles;
+window.toggleExportMenu = toggleExportMenu;
+window.exportFiles = exportFiles;
 window.previewFile = previewFile;
 window.closePreview = closePreview;
 window.clearConsole = clearConsole;

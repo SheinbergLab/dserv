@@ -1,6 +1,11 @@
 /**
  * data_manager.css
  * Simplified Data Manager interface
+ * 
+ * Terminology:
+ *   - obs: observation-period oriented data
+ *   - trials: analysis-ready rectangular data
+ *   - export: copy files to destination
  */
 
 /* ============================================================================
@@ -454,16 +459,19 @@
     margin: 0;
 }
 
-.dm-sync-destination {
+/* Export destination display (renamed from sync) */
+.dm-export-destination {
     font-size: 12px;
     color: #58a6ff;
     padding: 4px 0;
     word-break: break-all;
+    font-family: 'SF Mono', Monaco, monospace;
 }
 
-.dm-sync-destination.not-configured {
+.dm-export-destination.not-configured {
     color: #8b949e;
     font-style: italic;
+    font-family: inherit;
 }
 
 /* ============================================================================
@@ -569,16 +577,61 @@
 .dm-col-system { width: 100px; }
 .dm-col-protocol { width: 120px; }
 .dm-col-obs { width: 60px; text-align: right; }
+.dm-col-trials { width: 60px; text-align: right; }
+.dm-col-status { width: 80px; }
 .dm-col-date { width: 90px; }
 .dm-col-time { width: 70px; }
+.dm-col-actions { width: 40px; text-align: center; }
 
-.dm-file-table td.dm-col-obs {
+.dm-file-table td.dm-col-obs,
+.dm-file-table td.dm-col-trials {
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
 
 .dm-file-table input[type="checkbox"] {
     cursor: pointer;
+}
+
+/* Preview button */
+.dm-preview-btn {
+    padding: 2px 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.5;
+    transition: opacity 0.15s, border-color 0.15s;
+}
+
+.dm-preview-btn:hover {
+    opacity: 1;
+    border-color: #30363d;
+}
+
+.dm-file-table tbody tr:hover .dm-preview-btn {
+    opacity: 0.8;
+}
+
+/* ============================================================================
+   Status Column Colors
+   ============================================================================ */
+
+.dm-file-table td.status-ok {
+    color: #3fb950;
+}
+
+.dm-file-table td.status-error {
+    color: #f85149;
+}
+
+.dm-file-table td.status-warning {
+    color: #d29922;
+}
+
+.dm-file-table td.status-working {
+    color: #58a6ff;
 }
 
 /* ============================================================================
