@@ -26,6 +26,7 @@ DgTable::DgTable(int X, int Y, int W, int H, const char* L)
     , m_cellFg(FL_BLACK)
     , m_nestedBg(fl_rgb_color(240, 248, 255))  // Light blue for nested
     , m_selectedBg(FL_SELECTION_COLOR)
+    , m_currentRow(-1)
 {
     // Default table configuration
     col_header(1);
@@ -36,7 +37,7 @@ DgTable::DgTable(int X, int Y, int W, int H, const char* L)
     row_resize(0);
     row_height_all(22);
     
-    type(SELECT_MULTI);  // Allow multi-row selection
+    type(SELECT_SINGLE);
     
     when(FL_WHEN_RELEASE | FL_WHEN_CHANGED);
     
@@ -50,6 +51,7 @@ DgTable::~DgTable() {
 void DgTable::setData(DYN_GROUP* dg) {
     m_dg = dg;
     m_colWidths.clear();
+    m_currentRow = -1;
     
     if (!dg) {
         rows(0);
@@ -78,6 +80,7 @@ void DgTable::setData(DYN_GROUP* dg) {
 void DgTable::clear() {
     m_dg = nullptr;
     m_colWidths.clear();
+    m_currentRow = -1;
     rows(0);
     cols(0);
     redraw();
@@ -277,17 +280,84 @@ void DgTable::autoSizeColumns() {
 
 int DgTable::handle(int event) {
     switch (event) {
+        case FL_FOCUS:
+            return 1;
+            
+        case FL_UNFOCUS:
+            return 1;
+            
+        case FL_KEYDOWN: {
+            int key = Fl::event_key();
+            
+            // Cmd+C for copy
+            if (key == 'c' && (Fl::event_state() & FL_COMMAND)) {
+                copySelection();
+                return 1;
+            }
+            
+            // Arrow key navigation
+            if (key == FL_Up || key == FL_Down || key == FL_Left || key == FL_Right) {
+                return handleArrowKey(key);
+            }
+            
+            // Home/End for first/last row
+            if (key == FL_Home) {
+                if (rows() > 0) {
+                    m_currentRow = 0;
+                    select_row(0, 1);
+                    row_position(0);
+		    Fl_Widget::do_callback();
+                }
+                return 1;
+            }
+            if (key == FL_End) {
+                if (rows() > 0) {
+                    m_currentRow = rows() - 1;
+                    select_row(m_currentRow, 1);
+                    row_position(m_currentRow);
+		    Fl_Widget::do_callback();
+                }
+                return 1;
+            }
+            
+            // Page Up/Down
+            if (key == FL_Page_Up || key == FL_Page_Down) {
+                if (m_currentRow < 0) {
+                    int top, left, bot, right;
+                    get_selection(top, left, bot, right);
+                    m_currentRow = (top >= 0) ? top : 0;
+                }
+                
+                int visibleRows = (h() - col_header_height()) / row_height(0);
+                int newRow;
+                
+                if (key == FL_Page_Up) {
+                    newRow = std::max(0, m_currentRow - visibleRows);
+                } else {
+                    newRow = std::min(rows() - 1, m_currentRow + visibleRows);
+                }
+                
+                if (newRow >= 0 && newRow < rows()) {
+                    m_currentRow = newRow;
+                    select_row(newRow, 1);
+                    row_position(newRow);
+		    Fl_Widget::do_callback();
+                }
+                return 1;
+            }
+            break;
+        }
+            
         case FL_MOUSEWHEEL:
-            // Always consume mousewheel to prevent parent scrolling
             if (rows() > 0) {
-                int result = Fl_Table_Row::handle(event);
-                if (result) return 1;
+                Fl_Table_Row::handle(event);
             }
             return 1;
             
         case FL_PUSH:
+            take_focus();
+            m_currentRow = -1;  // Reset so we read from mouse selection
             if (Fl::event_button() == FL_RIGHT_MOUSE) {
-                // Right-click context menu
                 int R, C;
                 ResizeFlag resizeFlag;
                 TableContext ctx = cursor2rowcol(R, C, resizeFlag);
@@ -300,7 +370,6 @@ int DgTable::handle(int event) {
             
         case FL_RELEASE:
             if (Fl::event_clicks() > 0) {
-                // Double-click
                 int R, C;
                 ResizeFlag resizeFlag;
                 TableContext ctx = cursor2rowcol(R, C, resizeFlag);
@@ -315,16 +384,73 @@ int DgTable::handle(int event) {
                 }
             }
             break;
-            
-        case FL_KEYBOARD:
-            if (Fl::event_key() == 'c' && (Fl::event_state() & FL_COMMAND)) {
-                copySelection();
-                return 1;
-            }
-            break;
     }
     
     return Fl_Table_Row::handle(event);
+}
+
+int DgTable::handleArrowKey(int key) {
+    if (rows() == 0 || cols() == 0) return 1;
+    
+    // If m_currentRow not set, get from selection (after mouse click)
+    if (m_currentRow < 0) {
+        int top, left, bot, right;
+        get_selection(top, left, bot, right);
+        m_currentRow = (top >= 0) ? top : 0;
+    }
+    
+    int currentCol = 0;
+    {
+        int top, left, bot, right;
+        get_selection(top, left, bot, right);
+        currentCol = (left >= 0) ? left : 0;
+    }
+    
+    int newRow = m_currentRow;
+    int newCol = currentCol;
+    
+    switch (key) {
+        case FL_Up:
+            newRow = std::max(0, m_currentRow - 1);
+            break;
+        case FL_Down:
+            newRow = std::min(rows() - 1, m_currentRow + 1);
+            break;
+        case FL_Left:
+            newCol = std::max(0, currentCol - 1);
+            break;
+        case FL_Right:
+            newCol = std::min(cols() - 1, currentCol + 1);
+            break;
+    }
+    
+    // For row selection mode, just move rows with Up/Down
+    if (key == FL_Up || key == FL_Down) {
+        if (newRow != m_currentRow) {
+            m_currentRow = newRow;
+            select_row(newRow, 1);
+            
+            // Scroll to make row visible
+            int visTop = row_position();
+            int visibleRows = (h() - col_header_height()) / row_height(0);
+            if (newRow < visTop) {
+                row_position(newRow);
+            } else if (newRow >= visTop + visibleRows - 1) {
+                row_position(newRow - visibleRows + 2);
+            }
+            
+            redraw();
+	    Fl_Widget::do_callback();
+        }
+    } else {
+        // Left/Right scrolls columns into view
+        if (newCol != currentCol) {
+            col_position(newCol);
+            redraw();
+        }
+    }
+    
+    return 1;
 }
 
 void DgTable::showContextMenu(int row, int col) {

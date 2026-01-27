@@ -238,14 +238,26 @@ class ContainedBrowser : public Fl_Hold_Browser {
 public:
     ContainedBrowser(int X, int Y, int W, int H) : Fl_Hold_Browser(X, Y, W, H) {}
     
-    int handle(int event) override {
-        if (event == FL_MOUSEWHEEL && Fl::event_inside(this)) {
-            // Always consume mousewheel events, even if we can't scroll
-            Fl_Hold_Browser::handle(event);
-            return 1;
-        }
-        return Fl_Hold_Browser::handle(event);
+  int handle(int event) override {
+    if (event == FL_MOUSEWHEEL && Fl::event_inside(this)) {
+      Fl_Hold_Browser::handle(event);
+      return 1;
     }
+    if (event == FL_KEYDOWN || event == FL_SHORTCUT) {
+      int key = Fl::event_key();
+      // Only handle Up/Down arrows, reject everything else
+      if (key == FL_Up || key == FL_Down) {
+	return Fl_Hold_Browser::handle(event);
+      }
+      // Let Cmd+key shortcuts pass through to parent
+      if (Fl::event_state() & FL_COMMAND) {
+	return 0;
+      }
+      // Consume but ignore other keys
+      return 1;
+    }
+    return Fl_Hold_Browser::handle(event);
+  }
 };
 
 class ContainedTree : public Fl_Tree {
@@ -389,7 +401,7 @@ public:
     ContentPanel(int X, int Y, int W, int H)
         : Fl_Group(X, Y, W, H)
         , m_currentFile(nullptr)
-        , m_detailVisible(true)
+        , m_detailVisible(false)
         , m_savedDetailWidth(0)
         , m_currentDetailRow(-1)
     {
@@ -419,7 +431,11 @@ public:
         m_detailTree->item_labelfont(FL_HELVETICA);
         m_detailTree->item_labelsize(12);
         m_detailTree->callback(detailTreeCallback, this);
-        
+
+	m_detailTree->hide();
+	m_savedDetailWidth = detailW;
+	m_table->resize(X, Y + headerH, W, H - headerH);
+	
         m_tile->end();
         
         end();
@@ -549,8 +565,6 @@ public:
         if (root) root->open();
         if (colsItem) colsItem->open();
         m_detailTree->redraw();
-        
-        if (!m_detailVisible) showDetailPanel(true);
     }
     
     void showRowDetail(int row) {
@@ -596,8 +610,6 @@ public:
         
         if (root) root->open();
         m_detailTree->redraw();
-        
-        if (!m_detailVisible) showDetailPanel(true);
     }
     
 private:
@@ -698,7 +710,6 @@ private:
         if (root) root->open();
         
         m_detailTree->redraw();
-        if (!m_detailVisible) showDetailPanel(true);
     }
     
     static void detailTreeCallback(Fl_Widget* w, void* data) {
@@ -718,21 +729,24 @@ private:
         }
     }
     
-    static void tableCallback(Fl_Widget* w, void* data) {
-        ContentPanel* panel = static_cast<ContentPanel*>(data);
-        DgTable* table = static_cast<DgTable*>(w);
-        
-        int top, left, bot, right;
-        table->get_selection(top, left, bot, right);
-        
-        if (top >= 0 && top == bot) {
-            // Single row selected
-            panel->showRowDetail(top);
-        } else {
-            // No selection or multiple rows - show overview
-            panel->showFileOverview();
-        }
+  static void tableCallback(Fl_Widget* w, void* data) {
+    ContentPanel* panel = static_cast<ContentPanel*>(data);
+    DgTable* table = static_cast<DgTable*>(w);
+    
+    int row = table->currentRow();
+    if (row < 0) {
+      // Try get_selection as fallback (for mouse clicks)
+      int top, left, bot, right;
+      table->get_selection(top, left, bot, right);
+      row = (top >= 0 && top == bot) ? top : -1;
     }
+    
+    if (row >= 0) {
+      panel->showRowDetail(row);
+    } else {
+      panel->showFileOverview();
+    }
+  }
     
     Fl_Box* m_header;
     Fl_Tile* m_tile;
