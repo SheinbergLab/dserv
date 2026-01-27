@@ -23,9 +23,22 @@
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     
+    <!-- Single instance behavior (default for document-based apps) -->
+    <!-- Set to false if you want to allow multiple instances -->
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    
+    <!-- Bring app to front when opened via document -->
+    <key>LSUIElement</key>
+    <false/>
+    
     <!-- Accept dropped files -->
     <key>NSServices</key>
     <array/>
+    
+    <!-- Support for Apple Events (required for open document events) -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>DG Viewer needs to respond to file open requests.</string>
     
     <!-- Document types we can open -->
     <key>CFBundleDocumentTypes</key>
@@ -60,6 +73,18 @@
             <key>CFBundleTypeExtensions</key>
             <array>
                 <string>dgz</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>LZ4 Compressed DG File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>lz4</string>
             </array>
         </dict>
     </array>

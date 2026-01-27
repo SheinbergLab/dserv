@@ -1135,18 +1135,22 @@ extern "C" {
     typedef void (*DropCallback)(const char* filename);
     void macSetDropCallback(DropCallback callback);
     void macEnableFileDrop(Fl_Window* window);
+    void macActivateApp(void);
 }
 
+// Called by fl_open_callback for files opened before app is fully initialized
 static void macOpenCallback(const char* filename) {
     if (g_app && filename) {
         g_app->openFile(filename);
     }
 }
 
+// Called by our custom drop handler and app delegate for file drops/opens
 static void macDropCallback(const char* filename) {
     if (g_app && filename) {
         g_app->openFile(filename);
-        // Force redraw after drop
+        // App activation is handled by DgViewAppDelegate in MacDropHandler.mm
+        // but we still need to ensure redraw for window drops
         Fl::flush();
         g_app->redraw();
     }
