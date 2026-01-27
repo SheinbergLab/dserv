@@ -546,6 +546,7 @@ public:
         if (!m_currentFile || !m_currentFile->data()) return;
         
         DYN_GROUP* dg = m_currentFile->data();
+        m_detailTree->deselect_all();
         m_detailTree->clear();
         m_columnMap.clear();
         m_currentDetailRow = -1;
@@ -576,12 +577,14 @@ public:
             DYN_LIST* dl = DYN_GROUP_LIST(dg, i);
             const char* typeStr = getTypeString(DYN_LIST_DATATYPE(dl));
             bool hidden = m_currentFile->isColumnHidden(i);
-            const char* checkbox = hidden ? "◻" : "◼";
             char colPath[512];
-            snprintf(colPath, sizeof(colPath), "%s/Columns/%s %s (%s, %d)", 
-                     rootLabel, checkbox, DYN_LIST_NAME(dl), typeStr, DYN_LIST_N(dl));
+            snprintf(colPath, sizeof(colPath), "%s/Columns/%s (%s, %d)", 
+                     rootLabel, DYN_LIST_NAME(dl), typeStr, DYN_LIST_N(dl));
             Fl_Tree_Item* item = m_detailTree->add(colPath);
             if (item) {
+                if (hidden) {
+                    item->labelbgcolor(fl_rgb_color(240, 200, 200)); // light red for hidden
+                }
                 m_columnMap[item] = i;
             }
         }

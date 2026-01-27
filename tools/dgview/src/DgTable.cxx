@@ -537,5 +537,6 @@ void DgTable::setHiddenColumns(const std::set<int>& hiddenCols) {
         }
     }
     
+    table_resized();
     redraw();
 }
