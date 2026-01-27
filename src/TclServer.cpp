@@ -4,6 +4,7 @@
 #include "dserv.h"
 #include "dservConfig.h"
 #include <vector>
+#include <filesystem>
 #include <fstream>
 #include <dirent.h>
 #include <unistd.h>
@@ -64,11 +65,15 @@ TclServer::TclServer(int argc, char **argv,
 
   exports_path = cfg.exports_path;
   if (exports_path.empty()) {
-    exports_path = www_path.empty() ? "/tmp/dserv_exports" 
-      : www_path + "/exports";
+    if (!www_path.empty()) {
+      std::filesystem::path p(www_path);
+      exports_path = (p.parent_path() / "exports").string();
+    } else {
+      exports_path = "/tmp/dserv_exports";
+    }
   }
-  mkdir(exports_path.c_str(), 0755);  
- 
+  std::filesystem::create_directories(exports_path); 
+  
   // create a connection to dataserver so we can subscribe to datapoints
   client_name = ds->add_new_send_client(&queue);
 
@@ -499,7 +504,9 @@ void TclServer::start_websocket_server(void)
   ds->set((char *)"system/ssl", (char *)(use_ssl ? "1" : "0"));
   std::string portStr = std::to_string(websocket_port());
   ds->set((char *)"system/webport", (char *)portStr.c_str());
-
+  ds->set((char *)"system/www_path", (char *)www_path.c_str());
+  ds->set((char *)"system/exports_path", (char *)exports_path.c_str());
+ 
   auto setup_routes = [this](auto &app) {
     
     // Health check - always available, no www_path needed
@@ -1715,7 +1722,7 @@ static int subprocess_eval_command(ClientData data, Tcl_Interp *interp,
     TclServer *child = new TclServer(tclserver->argc,
                                      tclserver->argv,
                                      tclserver->ds);
-    
+
     std::string script = Tcl_GetString(objv[1]);
     auto result = child->eval(script);
     
@@ -2657,7 +2664,7 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
   if (tserv->hasCommandCallback()) {
       tserv->callCommandCallback(interp);
   }
- 
+
   // Common initialization for all interpreters
   const char *init_script = R"(
     set dspath [file dir [info nameofexecutable]]

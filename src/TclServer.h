@@ -209,6 +209,9 @@ public:
   void set_current_request(client_request_t* req) {
     current_request = req;
   }
+
+  const std::string& get_exports_path() const { return exports_path; }
+  const std::string& get_www_path() const { return www_path; }
   
   client_request_t* get_current_request() {
     return current_request;
