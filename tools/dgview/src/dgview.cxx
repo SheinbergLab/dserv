@@ -35,6 +35,7 @@
 #include <string>
 #include <memory>
 #include <map>
+#include <set>
 #include <algorithm>
 #include <iostream>
 
@@ -205,6 +206,7 @@ public:
             m_error = error;
             return false;
         }
+        m_hiddenColumns.clear();  // All columns visible by default
         return true;
     }
     
@@ -212,6 +214,15 @@ public:
     const std::string& basename() const { return m_basename; }
     const std::string& error() const { return m_error; }
     DYN_GROUP* data() const { return m_dg; }
+    
+    // Column visibility
+    bool isColumnHidden(int col) const { return m_hiddenColumns.count(col) > 0; }
+    void setColumnHidden(int col, bool hidden) {
+        if (hidden) m_hiddenColumns.insert(col);
+        else m_hiddenColumns.erase(col);
+    }
+    void showAllColumns() { m_hiddenColumns.clear(); }
+    const std::set<int>& hiddenColumns() const { return m_hiddenColumns; }
     
     std::string displayName() const {
         if (!m_dg) return m_basename + " (not loaded)";
@@ -228,6 +239,7 @@ private:
     std::string m_basename;
     std::string m_error;
     DYN_GROUP* m_dg;
+    std::set<int> m_hiddenColumns;
 };
 
 //============================================================================
@@ -466,6 +478,7 @@ public:
         
         updateHeader();
         m_table->setData(file->data());
+        applyColumnVisibility();
         showFileOverview();
     }
     
@@ -550,12 +563,23 @@ public:
         snprintf(path, sizeof(path), "%s/Columns", rootLabel);
         Fl_Tree_Item* colsItem = m_detailTree->add(path);
         
+        // Add "Show All" or "Hide All" item at top of columns list
+        bool anyHidden = !m_currentFile->hiddenColumns().empty();
+        const char* toggleLabel = anyHidden ? "[Show All]" : "[Hide All]";
+        snprintf(path, sizeof(path), "%s/Columns/%s", rootLabel, toggleLabel);
+        Fl_Tree_Item* showAllItem = m_detailTree->add(path);
+        if (showAllItem) {
+            m_columnMap[showAllItem] = anyHidden ? -1 : -2;  // -1 = show all, -2 = hide all
+        }
+        
         for (int i = 0; i < DYN_GROUP_N(dg); i++) {
             DYN_LIST* dl = DYN_GROUP_LIST(dg, i);
             const char* typeStr = getTypeString(DYN_LIST_DATATYPE(dl));
+            bool hidden = m_currentFile->isColumnHidden(i);
+            const char* checkbox = hidden ? "◻" : "◼";
             char colPath[512];
-            snprintf(colPath, sizeof(colPath), "%s/Columns/%s (%s, %d)", 
-                     rootLabel, DYN_LIST_NAME(dl), typeStr, DYN_LIST_N(dl));
+            snprintf(colPath, sizeof(colPath), "%s/Columns/%s %s (%s, %d)", 
+                     rootLabel, checkbox, DYN_LIST_NAME(dl), typeStr, DYN_LIST_N(dl));
             Fl_Tree_Item* item = m_detailTree->add(colPath);
             if (item) {
                 m_columnMap[item] = i;
@@ -583,6 +607,9 @@ public:
         Fl_Tree_Item* root = m_detailTree->add(rootLabel);
         
         for (int c = 0; c < DYN_GROUP_N(dg); c++) {
+            // Skip hidden columns
+            if (m_currentFile->isColumnHidden(c)) continue;
+            
             DYN_LIST* dl = DYN_GROUP_LIST(dg, c);
             const char* colName = DYN_LIST_NAME(dl);
             
@@ -724,25 +751,50 @@ private:
         auto it = panel->m_columnMap.find(item);
         if (it != panel->m_columnMap.end()) {
             int col = it->second;
-            panel->m_table->col_position(col);
-            panel->m_table->redraw();
+            
+            if (col == -1) {
+                // "Show All" clicked
+                panel->m_currentFile->showAllColumns();
+                panel->applyColumnVisibility();
+                panel->showFileOverview();
+            } else if (col == -2) {
+                // "Hide All" clicked
+                DYN_GROUP* dg = panel->m_currentFile->data();
+                for (int i = 0; i < DYN_GROUP_N(dg); i++) {
+                    panel->m_currentFile->setColumnHidden(i, true);
+                }
+                panel->applyColumnVisibility();
+                panel->showFileOverview();
+            } else {
+                // Toggle column visibility
+                bool currentlyHidden = panel->m_currentFile->isColumnHidden(col);
+                panel->m_currentFile->setColumnHidden(col, !currentlyHidden);
+                panel->applyColumnVisibility();
+                panel->showFileOverview();
+            }
         }
+    }
+    
+    void applyColumnVisibility() {
+        if (!m_currentFile || !m_currentFile->data()) return;
+        m_table->setHiddenColumns(m_currentFile->hiddenColumns());
     }
     
   static void tableCallback(Fl_Widget* w, void* data) {
     ContentPanel* panel = static_cast<ContentPanel*>(data);
     DgTable* table = static_cast<DgTable*>(w);
     
-    int row = table->currentRow();
-    if (row < 0) {
-      // Try get_selection as fallback (for mouse clicks)
-      int top, left, bot, right;
-      table->get_selection(top, left, bot, right);
-      row = (top >= 0 && top == bot) ? top : -1;
+    // Check if any row is actually selected
+    int selectedRow = -1;
+    for (int r = 0; r < table->rows(); r++) {
+      if (table->row_selected(r)) {
+        selectedRow = r;
+        break;
+      }
     }
     
-    if (row >= 0) {
-      panel->showRowDetail(row);
+    if (selectedRow >= 0) {
+      panel->showRowDetail(selectedRow);
     } else {
       panel->showFileOverview();
     }

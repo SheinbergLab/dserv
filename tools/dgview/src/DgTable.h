@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,9 @@ public:
   
   // Copy selection to clipboard
   void copySelection();
+  
+  // Set which columns are hidden
+  void setHiddenColumns(const std::set<int>& hiddenCols);
   
 protected:
   void draw_cell(TableContext context, int R, int C, int X, int Y, int W, int H) override;

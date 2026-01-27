@@ -7,6 +7,7 @@
 #include <FL/fl_ask.H>
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 // Platform-specific clipboard
 #ifdef __APPLE__
@@ -356,6 +357,19 @@ int DgTable::handle(int event) {
             
         case FL_PUSH:
             take_focus();
+            if (Fl::event_button() == FL_LEFT_MOUSE) {
+                int R, C;
+                ResizeFlag resizeFlag;
+                TableContext ctx = cursor2rowcol(R, C, resizeFlag);
+                if (ctx == CONTEXT_CELL && row_selected(R)) {
+                    // Clicking on already-selected row - deselect it
+                    select_row(R, 0);
+                    m_currentRow = -1;
+                    redraw();
+                    Fl_Widget::do_callback();
+                    return 1;
+                }
+            }
             m_currentRow = -1;  // Reset so we read from mouse selection
             if (Fl::event_button() == FL_RIGHT_MOUSE) {
                 int R, C;
@@ -508,4 +522,20 @@ void DgTable::copySelection() {
     }
     
     Fl::copy(text.c_str(), text.length(), 1);
+}
+
+void DgTable::setHiddenColumns(const std::set<int>& hiddenCols) {
+    if (!m_dg) return;
+    
+    int numCols = DYN_GROUP_N(m_dg);
+    
+    for (int c = 0; c < numCols && c < (int)m_colWidths.size(); c++) {
+        if (hiddenCols.count(c)) {
+            col_width(c, 0);
+        } else {
+            col_width(c, m_colWidths[c]);
+        }
+    }
+    
+    redraw();
 }
