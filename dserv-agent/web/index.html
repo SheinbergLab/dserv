@@ -480,10 +480,17 @@ class LabMeshApp {
     updateNodes(peers) {
         this.nodes.clear();
         peers.forEach(p => {
-            this.nodes.set(p.applianceId, {
-                id: p.applianceId, name: p.name, status: p.status, ip: p.ipAddress,
-                webPort: p.webPort, ssl: p.ssl, isLocal: p.isLocal,
-                lastSeenAgo: p.lastSeenAgo, isStale: p.isStale,
+            // Support both old field names (applianceId, ipAddress, webPort) and new (hostname, ip, port)
+            const id = p.applianceId || p.hostname;
+            const name = p.name || p.hostname;
+            const ip = p.ipAddress || p.ip;
+            const webPort = p.webPort || p.port || 2565;
+            const isStale = p.isStale || (p.state === 'stale') || (p.state === 'unresponsive');
+            
+            this.nodes.set(id, {
+                id: id, name: name, status: p.status, ip: ip,
+                webPort: webPort, ssl: p.ssl, isLocal: p.isLocal,
+                lastSeenAgo: p.lastSeenAgo, isStale: isStale,
                 system: p.customFields?.system, protocol: p.customFields?.protocol,
                 variant: p.customFields?.variant, subject: p.customFields?.subject,
                 obs_id: p.customFields?.obs_id, obs_total: p.customFields?.obs_total,
@@ -668,6 +675,10 @@ class LabMeshApp {
                     <a href="${essUrl}" onclick="window.open('${essUrl}', '${n.id}_ess', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
                         <span class="item-label">ESS</span>
                         <span class="item-desc">Experiment control</span>
+                    </a>
+                    <a href="${url}data_manager.html" onclick="window.open('${url}data_manager.html', '${n.id}_dataman', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">DataMan</span>
+                        <span class="item-desc">Data Manager</span>
                     </a>
                     <a href="${essDevUrl}" onclick="window.open('${essDevUrl}', '${n.id}_essdev', 'width=950,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
                         <span class="item-label">Workbench</span>

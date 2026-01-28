@@ -1,7 +1,10 @@
 // dserv-agent: Management agent for dserv systems
-// Provides HTTP/WebSocket APIs for remote management, updates, and monitoring.
-// Runs as an independent systemd service so it can manage dserv even when dserv is down.
 //
+// Two operational modes:
+//   --server    Registry mode: receives heartbeats from dserv instances, serves mesh state
+//   (default)   Client mode: component management, service control, web UI
+//
+// In client mode, mesh state comes from local dserv's mesh/peers datapoint (set by Tcl subprocess).
 // Uses only Go standard library - no external dependencies.
 
 package main
@@ -22,11 +25,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -41,6 +44,7 @@ var webContent embed.FS
 var defaultComponentsJSON []byte
 
 const (
+	version    = "0.6.0"
 	githubAPI  = "https://api.github.com/repos"
 	maxMsgSize = 512 * 1024
 	wsGUID     = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -56,50 +60,57 @@ const (
 	wsOpPong     = 10
 )
 
-var (
-	version   = "0.5.0"
-	startTime = time.Now()
-)
-
+// Node state thresholds (in seconds)
 const (
-	dservDataPort = 4620
-	DSERV_JSON    = 11
+	staleThresholdSecs  = 10  // Node is "stale" after 10s without heartbeat
+	unrespThresholdSecs = 60  // Node is "unresponsive" after 60s
+	goneThresholdSecs   = 180 // Node is removed after 180s
 )
 
-// MeshPeer represents a discovered dserv instance
-type MeshPeer struct {
-	ApplianceID   string            `json:"applianceId"`
-	Name          string            `json:"name"`
-	Status        string            `json:"status"`
-	IPAddress     string            `json:"ipAddress"`
-	WebPort       int               `json:"webPort"`
-	SSL           bool              `json:"ssl"`
-	LastHeartbeat time.Time         `json:"-"` // Internal use, not serialized directly
-	LastSeenAgo   int               `json:"lastSeenAgo"`   // Seconds since last heartbeat
-	IsStale       bool              `json:"isStale"`       // True if lastSeenAgo > stale threshold
-	IsLocal       bool              `json:"isLocal"`
-	CustomFields  map[string]string `json:"customFields,omitempty"`
+var startTime = time.Now()
+
+// ============ Data Types ============
+
+// MeshNode represents a dserv instance in the mesh
+type MeshNode struct {
+	Hostname     string                 `json:"hostname"`
+	IP           string                 `json:"ip"`
+	Port         int                    `json:"port"`
+	SSL          bool                   `json:"ssl"`
+	Workgroup    string                 `json:"workgroup,omitempty"`
+	Status       string                 `json:"status"`            // running, idle, stopped
+	State        string                 `json:"state"`             // active, stale, unresponsive (computed)
+	LastSeen     time.Time              `json:"lastSeen"`          // Last heartbeat time
+	LastSeenAgo  int                    `json:"lastSeenAgo"`       // Seconds since last heartbeat (computed)
+	IsLocal      bool                   `json:"isLocal,omitempty"` // True if this is the local node
+	Services     []string               `json:"services,omitempty"`
+	CustomFields map[string]interface{} `json:"customFields,omitempty"`
 }
 
-// LostPeer tracks peers that have timed out
-type LostPeer struct {
-	Peer     MeshPeer  `json:"peer"`
-	LostTime time.Time `json:"lostTime"`
+// HeartbeatRequest is sent by dserv Tcl subprocess to the registry
+type HeartbeatRequest struct {
+	Hostname     string                 `json:"hostname"`
+	IP           string                 `json:"ip"`
+	Port         int                    `json:"port"`
+	SSL          bool                   `json:"ssl"`
+	Workgroup    string                 `json:"workgroup"`
+	Status       string                 `json:"status"`
+	Services     []string               `json:"services,omitempty"`
+	CustomFields map[string]interface{} `json:"customFields,omitempty"`
 }
 
-// MeshHeartbeat is the UDP broadcast format from dserv
-type MeshHeartbeat struct {
-	Type        string `json:"type"`
-	ApplianceID string `json:"applianceId"`
-	Timestamp   int64  `json:"timestamp"`
-	Data        struct {
-		Name    string `json:"name"`
-		Status  string `json:"status"`
-		WebPort int    `json:"webPort"`
-		SSL     bool   `json:"ssl"`
-	} `json:"data"`
-	// Raw data for custom field extraction
-	RawData json.RawMessage `json:"-"`
+// HeartbeatResponse returns current mesh state to the sender
+type HeartbeatResponse struct {
+	OK    bool        `json:"ok"`
+	Mesh  []*MeshNode `json:"mesh"`
+	Error string      `json:"error,omitempty"`
+}
+
+// MeshResponse is returned by GET /api/v1/mesh
+type MeshResponse struct {
+	Workgroup string      `json:"workgroup"`
+	Nodes     []*MeshNode `json:"nodes"`
+	Updated   time.Time   `json:"updated"`
 }
 
 // Component represents an installable software component
@@ -107,7 +118,7 @@ type Component struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	Description  string   `json:"description,omitempty"`
-	Type         string   `json:"type"` // "github-deb", "github-zip"
+	Type         string   `json:"type"`
 	Repo         string   `json:"repo,omitempty"`
 	Package      string   `json:"package,omitempty"`
 	Service      string   `json:"service,omitempty"`
@@ -115,12 +126,11 @@ type Component struct {
 	VersionCmd   []string `json:"versionCmd,omitempty"`
 	VersionFile  string   `json:"versionFile,omitempty"`
 	PostInstall  []string `json:"postInstall,omitempty"`
-	InstallCmd   string   `json:"installCmd,omitempty"`   // Custom install command ({file} replaced with path)
-	AssetPattern string   `json:"assetPattern,omitempty"` // Regex pattern for asset matching
-	Depends      []string `json:"depends,omitempty"`      // Component IDs this depends on
+	InstallCmd   string   `json:"installCmd,omitempty"`
+	AssetPattern string   `json:"assetPattern,omitempty"`
+	Depends      []string `json:"depends,omitempty"`
 }
 
-// ComponentStatus represents the current state of a component
 type ComponentStatus struct {
 	Component      Component `json:"component"`
 	Installed      bool      `json:"installed"`
@@ -130,76 +140,11 @@ type ComponentStatus struct {
 	Assets         []string  `json:"assets,omitempty"`
 }
 
-// Config holds agent configuration
-type Config struct {
-	ListenAddr     string
-	AuthToken      string
-	DservService   string
-	AllowReboot    bool
-	UploadDir      string
-	Timeout        time.Duration
-	Verbose        bool
-	ComponentsFile string
-	// Mesh discovery
-	MeshEnabled bool
-	MeshPort    int  // UDP port for discovery (default 12346)
-	MeshSSL     bool // Use HTTPS for mesh API (default false, auto-detect)
-}
-
-// Agent is the main management agent
-type Agent struct {
-	cfg        Config
-	clients    map[*WSConn]bool
-	mu         sync.RWMutex
-	http       *http.Client
-	components []Component
-	// Mesh discovery
-	meshPeers     map[string]*MeshPeer
-	meshLostPeers []LostPeer
-	meshMu        sync.RWMutex
-	localID       string // This machine's appliance ID (hostname)
-	// Connection to local dserv for relaying commands
-	dservConn   net.Conn
-	dservConnMu sync.Mutex
-}
-
-// WSConn is a minimal WebSocket connection
-type WSConn struct {
-	conn   net.Conn
-	br     *bufio.Reader
-	mu     sync.Mutex
-	closed bool
-}
-
-// Data structures
-type WSMessage struct {
-	Type         string          `json:"type"`
-	ID           string          `json:"id,omitempty"`
-	Action       string          `json:"action,omitempty"`
-	Component    string          `json:"component,omitempty"`
-	Asset        string          `json:"asset,omitempty"`
-	Target       string          `json:"target,omitempty"`       // For dserv_cmd: target appliance ID (empty = local)
-	Script       string          `json:"script,omitempty"`       // For dserv_cmd: script to execute
-	Service      string          `json:"service,omitempty"`      // For service control: service name
-	StopServices []string        `json:"stopServices,omitempty"` // For install: services to stop during update
-	Payload      json.RawMessage `json:"payload,omitempty"`
-}
-
-type WSResponse struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id,omitempty"`
-	Success bool        `json:"success"`
-	Data    interface{} `json:"data,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Service string      `json:"service,omitempty"` // For service_response
-	Action  string      `json:"action,omitempty"`  // For service_response
-}
-
 type StatusInfo struct {
 	Agent    AgentInfo         `json:"agent"`
 	Dserv    ServiceInfo       `json:"dserv"`
 	System   SystemInfo        `json:"system"`
-	Services map[string]string `json:"services,omitempty"` // Per-component service statuses
+	Services map[string]string `json:"services,omitempty"`
 }
 
 type AgentInfo struct {
@@ -231,52 +176,237 @@ type ReleaseInfo struct {
 	} `json:"assets"`
 }
 
+// Config holds agent configuration
+type Config struct {
+	// Common
+	ListenAddr string
+	Verbose    bool
+
+	// TLS
+	TLSCert string
+	TLSKey  string
+
+	// Server mode
+	ServerMode bool
+
+	// Client mode
+	AuthToken      string
+	DservService   string
+	AllowReboot    bool
+	UploadDir      string
+	Timeout        time.Duration
+	ComponentsFile string
+
+	// Mesh registry (client mode)
+	RegistryURLs []string // Multiple registries for redundancy
+	Workgroup    string
+}
+
+// registryList is a custom flag type for multiple -registry flags
+type registryList []string
+
+func (r *registryList) String() string {
+	return strings.Join(*r, ",")
+}
+
+func (r *registryList) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
+// Registry holds mesh state (server mode only)
+type Registry struct {
+	workgroups map[string]*Workgroup
+	mu         sync.RWMutex
+}
+
+type Workgroup struct {
+	nodes   map[string]*MeshNode
+	updated time.Time
+}
+
+// Agent is the main application
+type Agent struct {
+	cfg        Config
+	registry   *Registry // server mode only
+	clients    map[*WSConn]bool
+	mu         sync.RWMutex
+	http       *http.Client
+	components []Component
+	localID    string
+
+	// Mesh cache (client mode) - populated by polling registry
+	meshCache   []*MeshNode
+	meshUpdated time.Time
+	meshMu      sync.RWMutex
+}
+
+// WebSocket types
+type WSConn struct {
+	conn   net.Conn
+	br     *bufio.Reader
+	mu     sync.Mutex
+	closed bool
+}
+
+type WSMessage struct {
+	Type         string          `json:"type"`
+	ID           string          `json:"id,omitempty"`
+	Action       string          `json:"action,omitempty"`
+	Component    string          `json:"component,omitempty"`
+	Asset        string          `json:"asset,omitempty"`
+	Service      string          `json:"service,omitempty"`
+	StopServices []string        `json:"stopServices,omitempty"`
+	Payload      json.RawMessage `json:"payload,omitempty"`
+}
+
+type WSResponse struct {
+	Type    string      `json:"type"`
+	ID      string      `json:"id,omitempty"`
+	Success bool        `json:"success"`
+	Data    interface{} `json:"data,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	Service string      `json:"service,omitempty"`
+	Action  string      `json:"action,omitempty"`
+}
+
+// ============ Main ============
+
 func main() {
 	cfg := Config{DservService: "dserv"}
+	var registries registryList
 
-	flag.StringVar(&cfg.ListenAddr, "listen", "0.0.0.0:80", "HTTP listen address")
-	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for authentication")
-	flag.StringVar(&cfg.DservService, "service", "dserv", "systemd service name")
-	flag.BoolVar(&cfg.AllowReboot, "allow-reboot", false, "Allow system reboot")
-	flag.StringVar(&cfg.UploadDir, "upload-dir", "/tmp/dserv-uploads", "Upload directory")
-	flag.DurationVar(&cfg.Timeout, "timeout", 5*time.Minute, "HTTP timeout")
-	flag.BoolVar(&cfg.Verbose, "v", false, "Verbose output")
-	flag.StringVar(&cfg.ComponentsFile, "components", "/etc/dserv-agent/components.json", "Components config file")
-	flag.BoolVar(&cfg.MeshEnabled, "mesh", true, "Enable mesh discovery")
-	flag.IntVar(&cfg.MeshPort, "mesh-port", 12346, "UDP port for mesh discovery")
-	flag.BoolVar(&cfg.MeshSSL, "mesh-ssl", false, "Use HTTPS for mesh API")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, `dserv-agent - Management agent for dserv systems
+
+Usage: dserv-agent [options]
+
+The agent provides a web interface for managing dserv installations,
+viewing mesh status, and updating components. It can also act as a
+mesh registry server to coordinate multiple dserv instances.
+
+Options:
+`)
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, `
+Examples:
+  # Basic client mode (web UI only, no mesh)
+  dserv-agent
+
+  # Client with mesh (polls registry for mesh status)
+  dserv-agent --registry https://dserv.io --workgroup mylab
+
+  # Registry server (receives heartbeats, serves mesh state)
+  dserv-agent --server --listen :443
+
+  # Combined: registry + local management + polls itself
+  dserv-agent --server --registry http://localhost:80 --workgroup mylab
+
+  # Multiple registries for redundancy
+  dserv-agent --registry https://dserv.io --registry http://backup.local --workgroup mylab
+
+  # Enable HTTPS with TLS certificates
+  dserv-agent --tls-cert /usr/local/dserv/ssl/cert.pem --tls-key /usr/local/dserv/ssl/key.pem
+
+Environment:
+  DSERV_AGENT_TOKEN  Bearer token for API authentication (or use --token)
+`)
+	}
+
+	// Common flags
+	flag.StringVar(&cfg.ListenAddr, "listen", "0.0.0.0:80", "HTTP listen address (host:port)")
+	flag.BoolVar(&cfg.Verbose, "v", false, "Verbose logging")
+
+	// TLS flags
+	flag.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file (enables HTTPS)")
+	flag.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
+
+	// Mode selection
+	flag.BoolVar(&cfg.ServerMode, "server", false, "Enable registry server mode (receive heartbeats)")
+
+	// Client mode flags
+	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for API authentication")
+	flag.StringVar(&cfg.DservService, "service", "dserv", "systemd service name to manage")
+	flag.BoolVar(&cfg.AllowReboot, "allow-reboot", false, "Allow system reboot via API")
+	flag.StringVar(&cfg.UploadDir, "upload-dir", "/tmp/dserv-uploads", "Directory for file uploads")
+	flag.DurationVar(&cfg.Timeout, "timeout", 5*time.Minute, "HTTP client timeout")
+	flag.StringVar(&cfg.ComponentsFile, "components", "/etc/dserv-agent/components.json", "Components configuration file")
+
+	// Mesh registry (client mode) - can specify multiple for redundancy
+	flag.Var(&registries, "registry", "Mesh registry URL (can be specified multiple times)")
+	flag.StringVar(&cfg.Workgroup, "workgroup", "", "Mesh workgroup name")
+
 	flag.Parse()
+
+	cfg.RegistryURLs = registries
+
+	// Auto-detect dserv SSL certificates if not specified
+	if cfg.TLSCert == "" && cfg.TLSKey == "" {
+		defaultCert := "/usr/local/dserv/ssl/cert.pem"
+		defaultKey := "/usr/local/dserv/ssl/key.pem"
+		if _, err := os.Stat(defaultCert); err == nil {
+			if _, err := os.Stat(defaultKey); err == nil {
+				cfg.TLSCert = defaultCert
+				cfg.TLSKey = defaultKey
+			}
+		}
+	}
 
 	if cfg.AuthToken == "" {
 		cfg.AuthToken = os.Getenv("DSERV_AGENT_TOKEN")
 	}
 
-	// Get local hostname for appliance ID - try multiple sources for matching
 	localID, _ := os.Hostname()
-	// Normalize: lowercase and strip common suffixes
 	localID = strings.ToLower(strings.TrimSuffix(localID, ".local"))
 
 	agent := &Agent{
-		cfg:       cfg,
-		clients:   make(map[*WSConn]bool),
-		http:      &http.Client{Timeout: cfg.Timeout},
-		meshPeers: make(map[string]*MeshPeer),
-		localID:   localID,
-	}
-
-	agent.loadComponents()
-
-	// Start mesh discovery if enabled
-	if cfg.MeshEnabled {
-		go agent.meshDiscoveryLoop()
-		go agent.meshCleanupLoop()
+		cfg:     cfg,
+		clients: make(map[*WSConn]bool),
+		http:    &http.Client{Timeout: cfg.Timeout},
+		localID: localID,
 	}
 
 	mux := http.NewServeMux()
 
+	if cfg.ServerMode {
+		// ===== SERVER MODE =====
+		agent.registry = &Registry{
+			workgroups: make(map[string]*Workgroup),
+		}
+		log.Printf("dserv-agent %s starting on %s", version, cfg.ListenAddr)
+		log.Printf("  Registry mode: enabled")
+
+		// Registry endpoints
+		mux.HandleFunc("/api/v1/heartbeat", agent.handleHeartbeat)
+		mux.HandleFunc("/api/v1/mesh", agent.handleMeshQuery)
+		mux.HandleFunc("/api/registry/status", agent.handleServerStatus)
+
+		// Start cleanup goroutine
+		go agent.registryCleanupLoop()
+
+	} else {
+		log.Printf("dserv-agent %s starting on %s", version, cfg.ListenAddr)
+	}
+
+	// ===== CLIENT MODE (always enabled) =====
+	agent.loadComponents()
+	log.Printf("  Loaded %d components", len(agent.components))
+
+	if len(cfg.RegistryURLs) > 0 && cfg.Workgroup != "" {
+		log.Printf("  Mesh workgroup: %s", cfg.Workgroup)
+		for _, reg := range cfg.RegistryURLs {
+			log.Printf("  Mesh registry: %s", reg)
+		}
+		// Start mesh polling loop
+		go agent.meshPollingLoop()
+	} else if !cfg.ServerMode {
+		log.Printf("  Mesh: not configured (use --registry and --workgroup)")
+	}
+
+	// Standard agent endpoints
 	mux.HandleFunc("/api/status", agent.auth(agent.handleStatus))
 	mux.HandleFunc("/api/dserv/", agent.auth(agent.handleDserv))
-	mux.HandleFunc("/api/service/", agent.auth(agent.handleService)) // New: per-component service control
+	mux.HandleFunc("/api/service/", agent.auth(agent.handleService))
 	mux.HandleFunc("/api/agent/restart", agent.auth(agent.handleAgentRestart))
 	mux.HandleFunc("/api/logs", agent.auth(agent.handleLogs))
 	mux.HandleFunc("/api/system/reboot", agent.auth(agent.handleReboot))
@@ -284,15 +414,25 @@ func main() {
 	mux.HandleFunc("/api/files/", agent.auth(agent.handleFiles))
 	mux.HandleFunc("/api/components", agent.auth(agent.handleComponents))
 	mux.HandleFunc("/api/components/", agent.auth(agent.handleComponentAction))
+
+	// Mesh endpoints (reads from cache)
 	mux.HandleFunc("/api/mesh/peers", agent.auth(agent.handleMeshPeers))
-	mux.HandleFunc("/api/mesh/lost", agent.auth(agent.handleMeshLost))
+	if !cfg.ServerMode {
+		// Only add local mesh handler if not in server mode
+		// (server mode already handles /api/v1/mesh from registry)
+		mux.HandleFunc("/api/v1/mesh", agent.auth(agent.handleLocalMesh))
+	}
+
+	// WebSocket
 	mux.HandleFunc("/ws", agent.handleWebSocket)
 
+	// Serve embedded web UI
 	webFS, _ := fs.Sub(webContent, "web")
 	mux.Handle("/", http.FileServer(http.FS(webFS)))
 
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 
+	// Graceful shutdown
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
@@ -303,60 +443,362 @@ func main() {
 		server.Shutdown(ctx)
 	}()
 
-	log.Printf("dserv-agent %s on %s", version, cfg.ListenAddr)
 	if cfg.AuthToken == "" {
 		log.Println("WARNING: No auth token set")
 	}
-	log.Printf("Loaded %d components", len(agent.components))
-	if cfg.MeshEnabled {
-		log.Printf("Mesh discovery enabled on UDP port %d", cfg.MeshPort)
-	}
 
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		log.Fatal(err)
-	}
-}
-
-func (a *Agent) loadComponents() {
-	var cfg struct {
-		Components []Component `json:"components"`
-	}
-
-	// First, load embedded defaults
-	if err := json.Unmarshal(defaultComponentsJSON, &cfg); err != nil {
-		log.Printf("Warning: failed to parse embedded components.json: %v", err)
+	// Start server with or without TLS
+	if cfg.TLSCert != "" && cfg.TLSKey != "" {
+		log.Printf("  TLS: enabled (cert: %s)", cfg.TLSCert)
+		if err := server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
 	} else {
-		a.components = cfg.Components
-	}
-
-	// Then, override with file if it exists
-	data, err := os.ReadFile(a.cfg.ComponentsFile)
-	if err == nil {
-		var fileCfg struct {
-			Components []Component `json:"components"`
-		}
-		if json.Unmarshal(data, &fileCfg) == nil {
-			a.components = fileCfg.Components
-			log.Printf("Loaded components from %s", a.cfg.ComponentsFile)
-		}
-	}
-
-	// Fallback if nothing loaded
-	if len(a.components) == 0 {
-		a.components = []Component{
-			{
-				ID:          "dserv",
-				Name:        "dserv",
-				Description: "Data acquisition server",
-				Type:        "github-deb",
-				Repo:        "SheinbergLab/dserv",
-				Package:     "dserv",
-				Service:     "dserv",
-				VersionCmd:  []string{"essctrl", "-c", "dservVersion"},
-			},
+		log.Printf("  TLS: disabled")
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatal(err)
 		}
 	}
 }
+
+// ============ Server Mode: Registry Handlers ============
+
+// POST /api/v1/heartbeat - receive heartbeat from dserv, return mesh state
+func (a *Agent) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req HeartbeatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, HeartbeatResponse{
+			OK:    false,
+			Error: "Invalid JSON: " + err.Error(),
+		})
+		return
+	}
+
+	if req.Workgroup == "" {
+		writeJSON(w, http.StatusBadRequest, HeartbeatResponse{
+			OK:    false,
+			Error: "Workgroup is required",
+		})
+		return
+	}
+
+	if req.Hostname == "" {
+		writeJSON(w, http.StatusBadRequest, HeartbeatResponse{
+			OK:    false,
+			Error: "Hostname is required",
+		})
+		return
+	}
+
+	// Update registry
+	node := &MeshNode{
+		Hostname:     req.Hostname,
+		IP:           req.IP,
+		Port:         req.Port,
+		SSL:          req.SSL,
+		Workgroup:    req.Workgroup,
+		Status:       req.Status,
+		LastSeen:     time.Now(),
+		Services:     req.Services,
+		CustomFields: req.CustomFields,
+	}
+
+	a.registry.upsert(req.Workgroup, node)
+
+	if a.cfg.Verbose {
+		log.Printf("Heartbeat from %s/%s (%s)", req.Workgroup, req.Hostname, req.IP)
+	}
+
+	// Return current mesh state for this workgroup
+	nodes := a.registry.getNodes(req.Workgroup)
+	writeJSON(w, http.StatusOK, HeartbeatResponse{
+		OK:   true,
+		Mesh: nodes,
+	})
+}
+
+// GET /api/v1/mesh?workgroup=xxx - query mesh state
+func (a *Agent) handleMeshQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	workgroup := r.URL.Query().Get("workgroup")
+	if workgroup == "" {
+		http.Error(w, "workgroup parameter required", http.StatusBadRequest)
+		return
+	}
+
+	nodes := a.registry.getNodes(workgroup)
+	writeJSON(w, http.StatusOK, MeshResponse{
+		Workgroup: workgroup,
+		Nodes:     nodes,
+		Updated:   time.Now(),
+	})
+}
+
+// GET /api/status - server status
+func (a *Agent) handleServerStatus(w http.ResponseWriter, r *http.Request) {
+	a.registry.mu.RLock()
+	numWorkgroups := len(a.registry.workgroups)
+	totalNodes := 0
+	for _, wg := range a.registry.workgroups {
+		totalNodes += len(wg.nodes)
+	}
+	a.registry.mu.RUnlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"mode":       "server",
+		"version":    version,
+		"workgroups": numWorkgroups,
+		"nodes":      totalNodes,
+		"uptime":     time.Since(startTime).Round(time.Second).String(),
+		"system": map[string]string{
+			"os":   runtime.GOOS,
+			"arch": runtime.GOARCH,
+		},
+	})
+}
+
+// Registry methods
+func (r *Registry) upsert(workgroup string, node *MeshNode) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	wg, exists := r.workgroups[workgroup]
+	if !exists {
+		wg = &Workgroup{
+			nodes: make(map[string]*MeshNode),
+		}
+		r.workgroups[workgroup] = wg
+	}
+
+	wg.nodes[node.Hostname] = node
+	wg.updated = time.Now()
+}
+
+func (r *Registry) getNodes(workgroup string) []*MeshNode {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	wg, exists := r.workgroups[workgroup]
+	if !exists {
+		return []*MeshNode{}
+	}
+
+	now := time.Now()
+	nodes := make([]*MeshNode, 0, len(wg.nodes))
+	for _, n := range wg.nodes {
+		node := *n // copy
+		node.LastSeenAgo = int(now.Sub(n.LastSeen).Seconds())
+		node.State = computeState(node.LastSeenAgo)
+		nodes = append(nodes, &node)
+	}
+	return nodes
+}
+
+func (r *Registry) cleanup() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	for wgName, wg := range r.workgroups {
+		for hostname, node := range wg.nodes {
+			age := int(now.Sub(node.LastSeen).Seconds())
+			if age > goneThresholdSecs {
+				delete(wg.nodes, hostname)
+				log.Printf("Removed stale node %s/%s (last seen %ds ago)", wgName, hostname, age)
+			}
+		}
+		if len(wg.nodes) == 0 {
+			delete(r.workgroups, wgName)
+		}
+	}
+}
+
+func (a *Agent) registryCleanupLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.registry.cleanup()
+	}
+}
+
+func computeState(lastSeenAgo int) string {
+	switch {
+	case lastSeenAgo <= staleThresholdSecs:
+		return "active"
+	case lastSeenAgo <= unrespThresholdSecs:
+		return "stale"
+	default:
+		return "unresponsive"
+	}
+}
+
+// ============ Client Mode: Mesh Polling ============
+
+// normalizeURL ensures URL has scheme and port
+// "localhost" -> "http://localhost:80"
+// "http://example.com" -> "http://example.com:80"
+// "https://example.com" -> "https://example.com:443"
+func normalizeURL(rawURL string) string {
+	// Add scheme if missing
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		rawURL = "http://" + rawURL
+	}
+
+	// Parse to check for port
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+
+	// Add default port if missing
+	if u.Port() == "" {
+		if u.Scheme == "https" {
+			u.Host = u.Host + ":443"
+		} else {
+			u.Host = u.Host + ":80"
+		}
+	}
+
+	return u.String()
+}
+
+// meshPollingLoop fetches mesh state from registry every 5 seconds
+func (a *Agent) meshPollingLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Initial fetch
+	a.fetchMeshFromRegistry()
+
+	for range ticker.C {
+		a.fetchMeshFromRegistry()
+	}
+}
+
+// fetchMeshFromRegistry polls the registry for current mesh state
+// Tries each configured registry in order until one succeeds
+func (a *Agent) fetchMeshFromRegistry() {
+	var meshResp MeshResponse
+	var lastErr error
+
+	for _, registryURL := range a.cfg.RegistryURLs {
+		baseURL := normalizeURL(registryURL)
+		fullURL := fmt.Sprintf("%s/api/v1/mesh?workgroup=%s",
+			strings.TrimSuffix(baseURL, "/"),
+			a.cfg.Workgroup)
+
+		resp, err := a.http.Get(fullURL)
+		if err != nil {
+			lastErr = err
+			if a.cfg.Verbose {
+				log.Printf("Mesh fetch from %s failed: %v", baseURL, err)
+			}
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			if a.cfg.Verbose {
+				log.Printf("Mesh fetch from %s error: %d", baseURL, resp.StatusCode)
+			}
+			continue
+		}
+
+		err = json.NewDecoder(resp.Body).Decode(&meshResp)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			if a.cfg.Verbose {
+				log.Printf("Mesh decode from %s error: %v", baseURL, err)
+			}
+			continue
+		}
+
+		// Success - break out of loop
+		lastErr = nil
+		break
+	}
+
+	if lastErr != nil {
+		// All registries failed
+		if a.cfg.Verbose {
+			log.Printf("All mesh registries failed, last error: %v", lastErr)
+		}
+		return
+	}
+
+	// Mark local node and update cache
+	for _, n := range meshResp.Nodes {
+		n.IsLocal = strings.EqualFold(n.Hostname, a.localID)
+	}
+
+	a.meshMu.Lock()
+	a.meshCache = meshResp.Nodes
+	a.meshUpdated = time.Now()
+	a.meshMu.Unlock()
+
+	if a.cfg.Verbose {
+		log.Printf("Mesh updated: %d nodes", len(meshResp.Nodes))
+	}
+
+	// Broadcast to any connected WebSocket clients
+	a.broadcast(WSResponse{
+		Type:    "mesh_update",
+		Success: true,
+		Data:    meshResp.Nodes,
+	})
+}
+
+// getMeshCache returns the current cached mesh state
+func (a *Agent) getMeshCache() []*MeshNode {
+	a.meshMu.RLock()
+	defer a.meshMu.RUnlock()
+
+	// Return a copy
+	nodes := make([]*MeshNode, len(a.meshCache))
+	copy(nodes, a.meshCache)
+	return nodes
+}
+
+// GET /api/mesh/peers - return cached mesh peers
+func (a *Agent) handleMeshPeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	writeJSON(w, 200, a.getMeshCache())
+}
+
+// GET /api/v1/mesh - return mesh in standard format
+func (a *Agent) handleLocalMesh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+
+	a.meshMu.RLock()
+	nodes := a.meshCache
+	updated := a.meshUpdated
+	a.meshMu.RUnlock()
+
+	writeJSON(w, http.StatusOK, MeshResponse{
+		Workgroup: a.cfg.Workgroup,
+		Nodes:     nodes,
+		Updated:   updated,
+	})
+}
+
+// ============ Client Mode: Standard Agent Handlers ============
 
 func (a *Agent) auth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -372,18 +814,6 @@ func (a *Agent) auth(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (a *Agent) log(format string, args ...interface{}) {
-	if a.cfg.Verbose {
-		log.Printf(format, args...)
-	}
-}
-
-func writeJSON(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
-}
-
 func (a *Agent) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", 405)
@@ -393,7 +823,7 @@ func (a *Agent) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) getStatus() StatusInfo {
-	status := StatusInfo{
+	return StatusInfo{
 		Agent: AgentInfo{
 			Version:   version,
 			Uptime:    time.Since(startTime).Round(time.Second).String(),
@@ -403,31 +833,6 @@ func (a *Agent) getStatus() StatusInfo {
 		System:   a.getSystemInfo(),
 		Services: a.getAllServiceStatuses(),
 	}
-	return status
-}
-
-// getAllServiceStatuses returns the status of all component services
-func (a *Agent) getAllServiceStatuses() map[string]string {
-	services := make(map[string]string)
-	for _, comp := range a.components {
-		if comp.Service != "" {
-			services[comp.Service] = a.getServiceStatus(comp.Service)
-		}
-	}
-	return services
-}
-
-// getServiceStatus returns "active", "inactive", or "unknown" for a systemd service
-func (a *Agent) getServiceStatus(service string) string {
-	out, err := exec.Command("systemctl", "is-active", service).Output()
-	if err != nil {
-		return "inactive"
-	}
-	status := strings.TrimSpace(string(out))
-	if status == "active" {
-		return "active"
-	}
-	return "inactive"
 }
 
 func (a *Agent) getDservStatus() ServiceInfo {
@@ -465,34 +870,26 @@ func (a *Agent) getSystemInfo() SystemInfo {
 	return info
 }
 
-// getDebianCodename returns the Debian version codename (e.g., "bookworm", "trixie")
-// Returns empty string if not on Debian or unable to detect
-func getDebianCodename() string {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "VERSION_CODENAME=") {
-			return strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"")
+func (a *Agent) getAllServiceStatuses() map[string]string {
+	services := make(map[string]string)
+	for _, comp := range a.components {
+		if comp.Service != "" {
+			services[comp.Service] = a.getServiceStatus(comp.Service)
 		}
 	}
-	return ""
+	return services
 }
 
-// getDebianVersion returns the Debian major version number (e.g., "12", "13")
-// Returns empty string if not on Debian or unable to detect
-func getDebianVersion() string {
-	data, err := os.ReadFile("/etc/os-release")
+func (a *Agent) getServiceStatus(service string) string {
+	out, err := exec.Command("systemctl", "is-active", service).Output()
 	if err != nil {
-		return ""
+		return "inactive"
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "VERSION_ID=") {
-			return strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
-		}
+	status := strings.TrimSpace(string(out))
+	if status == "active" {
+		return "active"
 	}
-	return ""
+	return "inactive"
 }
 
 func (a *Agent) handleDserv(w http.ResponseWriter, r *http.Request) {
@@ -525,8 +922,6 @@ func (a *Agent) handleDserv(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "action": action, "status": a.getDservStatus()})
 }
 
-// handleService handles per-component service control via HTTP
-// POST /api/service/{serviceName}/{action}
 func (a *Agent) handleService(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", 405)
@@ -536,14 +931,13 @@ func (a *Agent) handleService(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/service/")
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) != 2 {
-		http.Error(w, "Invalid path: expected /api/service/{service}/{action}", 400)
+		http.Error(w, "Invalid path", 400)
 		return
 	}
 
 	service := parts[0]
 	action := parts[1]
 
-	// Validate service exists in our components
 	found := false
 	for _, comp := range a.components {
 		if comp.Service == service {
@@ -574,43 +968,28 @@ func (a *Agent) handleService(w http.ResponseWriter, r *http.Request) {
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{
-			"success": false,
-			"service": service,
-			"action":  action,
-			"error":   string(out),
-		})
+		writeJSON(w, 500, map[string]interface{}{"success": false, "service": service, "error": string(out)})
 		return
 	}
-
 	time.Sleep(500 * time.Millisecond)
-	writeJSON(w, 200, map[string]interface{}{
-		"success": true,
-		"service": service,
-		"action":  action,
-		"status":  a.getServiceStatus(service),
-	})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "service": service, "status": a.getServiceStatus(service)})
 }
 
-// POST /api/agent/restart - restart the dserv-agent service itself
 func (a *Agent) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
 	writeJSON(w, 202, map[string]string{"status": "restarting"})
-	// Flush response before restarting
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	// Schedule restart after brief delay to allow response to be sent
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		exec.Command("sudo", "systemctl", "restart", "dserv-agent").Run()
 	}()
 }
 
-// GET /api/logs?service=dserv&lines=50
 func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", 405)
@@ -627,7 +1006,6 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		lines = "50"
 	}
 
-	// Use journalctl to get logs
 	cmd := exec.Command("journalctl", "-u", service, "-n", lines, "--no-pager", "-o", "short-iso")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -635,14 +1013,120 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, 200, map[string]interface{}{
-		"service": service,
-		"lines":   lines,
-		"logs":    string(out),
-	})
+	writeJSON(w, 200, map[string]interface{}{"service": service, "lines": lines, "logs": string(out)})
+}
+
+func (a *Agent) handleReboot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	if !a.cfg.AllowReboot {
+		http.Error(w, "Reboot not allowed", 403)
+		return
+	}
+	writeJSON(w, 202, map[string]string{"status": "rebooting"})
+	go func() {
+		time.Sleep(1 * time.Second)
+		exec.Command("sudo", "reboot").Run()
+	}()
+}
+
+func (a *Agent) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	os.MkdirAll(a.cfg.UploadDir, 0755)
+	r.ParseMultipartForm(100 << 20)
+	file, handler, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "File required", 400)
+		return
+	}
+	defer file.Close()
+
+	dst, err := os.Create(filepath.Join(a.cfg.UploadDir, handler.Filename))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer dst.Close()
+	io.Copy(dst, file)
+	writeJSON(w, 200, map[string]string{"filename": handler.Filename, "path": dst.Name()})
+}
+
+func (a *Agent) handleFiles(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/files")
+	if path == "" {
+		path = a.cfg.UploadDir
+	}
+	switch r.Method {
+	case "GET":
+		info, err := os.Stat(path)
+		if err != nil {
+			http.Error(w, "Not found", 404)
+			return
+		}
+		if info.IsDir() {
+			entries, _ := os.ReadDir(path)
+			var files []map[string]interface{}
+			for _, e := range entries {
+				i, _ := e.Info()
+				files = append(files, map[string]interface{}{"name": e.Name(), "isDir": e.IsDir(), "size": i.Size()})
+			}
+			writeJSON(w, 200, files)
+		} else {
+			http.ServeFile(w, r, path)
+		}
+	case "DELETE":
+		if err := os.Remove(path); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"deleted": true})
+	default:
+		http.Error(w, "Method not allowed", 405)
+	}
 }
 
 // ============ Component Management ============
+
+func (a *Agent) loadComponents() {
+	var cfg struct {
+		Components []Component `json:"components"`
+	}
+
+	if err := json.Unmarshal(defaultComponentsJSON, &cfg); err == nil {
+		a.components = cfg.Components
+	}
+
+	data, err := os.ReadFile(a.cfg.ComponentsFile)
+	if err == nil {
+		var fileCfg struct {
+			Components []Component `json:"components"`
+		}
+		if json.Unmarshal(data, &fileCfg) == nil {
+			a.components = fileCfg.Components
+			log.Printf("Loaded components from %s", a.cfg.ComponentsFile)
+		}
+	}
+
+	if len(a.components) == 0 {
+		a.components = []Component{
+			{
+				ID:          "dserv",
+				Name:        "dserv",
+				Description: "Data acquisition server",
+				Type:        "github-deb",
+				Repo:        "SheinbergLab/dserv",
+				Package:     "dserv",
+				Service:     "dserv",
+				VersionCmd:  []string{"essctrl", "-c", "dservVersion"},
+			},
+		}
+	}
+}
 
 func (a *Agent) handleComponents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
@@ -701,7 +1185,7 @@ func (a *Agent) handleComponentAction(w http.ResponseWriter, r *http.Request) {
 			asset = body.Asset
 			stopServices = body.StopServices
 		}
-		go a.installComponentWithDeps(*comp, asset, stopServices)
+		go a.installComponent(*comp, asset, stopServices)
 		writeJSON(w, 202, map[string]string{"status": "started", "component": comp.ID})
 
 	default:
@@ -714,172 +1198,11 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 	status.CurrentVersion = a.getInstalledVersion(comp)
 	status.Installed = status.CurrentVersion != ""
 
-	// If repo is specified, fetch release info (works with or without Type prefix)
 	if comp.Repo != "" {
 		release := a.getLatestRelease(comp.Repo)
 		if release != nil {
 			status.LatestVersion = release.TagName
-			arch := runtime.GOARCH
-			if arch == "arm" {
-				arch = "armhf"
-			}
-			debianCodename := getDebianCodename() // e.g., "bookworm", "trixie"
-
-			// Compile asset pattern if provided
-			var assetRegex *regexp.Regexp
-			if comp.AssetPattern != "" {
-				assetRegex, _ = regexp.Compile(comp.AssetPattern)
-			}
-
-			// Collect matching assets, scoring them by relevance
-			type scoredAsset struct {
-				name  string
-				score int
-			}
-			var scored []scoredAsset
-
-			for _, asset := range release.Assets {
-				name := asset.Name
-				nameLower := strings.ToLower(name)
-
-				// If AssetPattern is specified, use it as primary filter
-				if assetRegex != nil {
-					if !assetRegex.MatchString(name) {
-						continue
-					}
-				} else {
-					// Legacy behavior: only include debs or zips
-					isDeb := strings.HasSuffix(nameLower, ".deb")
-					isZip := strings.HasSuffix(nameLower, ".zip")
-					if !isDeb && !isZip {
-						continue
-					}
-				}
-
-				// Check architecture - be strict about filtering
-				hasAmd64 := strings.Contains(nameLower, "amd64") || strings.Contains(nameLower, "x86_64")
-				hasArm64 := strings.Contains(nameLower, "arm64") || strings.Contains(nameLower, "aarch64")
-				hasArmhf := strings.Contains(nameLower, "armhf") || strings.Contains(nameLower, "armv7")
-				hasArch := hasAmd64 || hasArm64 || hasArmhf
-
-				// If asset specifies an arch, it must match ours
-				if hasArch {
-					matchesArch := false
-					switch arch {
-					case "amd64":
-						matchesArch = hasAmd64
-					case "arm64":
-						matchesArch = hasArm64
-					case "armhf":
-						matchesArch = hasArmhf
-					}
-					if !matchesArch {
-						continue // Wrong architecture, skip
-					}
-				}
-
-				// Check Debian version compatibility
-				hasBookworm := strings.Contains(nameLower, "bookworm")
-				hasJammy := strings.Contains(nameLower, "jammy")
-				hasTrixie := strings.Contains(nameLower, "trixie")
-				hasNoble := strings.Contains(nameLower, "noble")
-				hasDistro := hasBookworm || hasJammy || hasTrixie || hasNoble
-
-				// If asset specifies a distro, filter by our distro
-				if hasDistro && debianCodename != "" {
-					matchesDistro := false
-					switch debianCodename {
-					case "bookworm":
-						matchesDistro = hasBookworm
-					case "jammy":
-						matchesDistro = hasJammy
-					case "trixie":
-						matchesDistro = hasTrixie
-					case "noble":
-						matchesDistro = hasNoble
-					}
-					if !matchesDistro {
-						continue // Wrong distro, skip
-					}
-				}
-
-				score := 0
-
-				// If using AssetPattern, asset already matches - give base score
-				if assetRegex != nil {
-					score = 100
-				} else {
-					// Legacy scoring logic
-					compID := strings.ToLower(comp.ID)
-					compPkg := strings.ToLower(comp.Package)
-					isDeb := strings.HasSuffix(nameLower, ".deb")
-					isZip := strings.HasSuffix(nameLower, ".zip")
-
-					// For deb packages, strongly prefer matching package name
-					if isDeb && compPkg != "" {
-						if strings.HasPrefix(nameLower, compPkg+"_") {
-							score += 200
-						} else if strings.HasPrefix(nameLower, compPkg+"-") && !strings.Contains(nameLower, compPkg+"-camera") {
-							score += 150
-						} else if strings.Contains(nameLower, compPkg) {
-							score -= 50
-						}
-					}
-
-					// Match component ID
-					if strings.HasPrefix(nameLower, compID+"_") {
-						score += 100
-					} else if strings.HasPrefix(nameLower, compID+"-") {
-						score += 50
-					}
-
-					// Penalize things that are clearly different packages
-					if compID == "dserv" || compPkg == "dserv" {
-						if strings.Contains(nameLower, "camera") {
-							score -= 100
-						}
-						if strings.Contains(nameLower, "essgui") {
-							score -= 100
-						}
-						if strings.Contains(nameLower, "dlsh") {
-							score -= 100
-						}
-					}
-
-					// Prefer .deb for deb components, .zip for zip components
-					if strings.HasSuffix(comp.Type, "-deb") && isDeb {
-						score += 50
-					} else if strings.HasSuffix(comp.Type, "-zip") && isZip {
-						score += 50
-					} else if strings.HasSuffix(comp.Type, "-deb") && isZip {
-						score -= 200
-					} else if strings.HasSuffix(comp.Type, "-zip") && isDeb {
-						score -= 200
-					}
-				}
-
-				// Bonus for matching our specific distro
-				if debianCodename != "" && strings.Contains(nameLower, debianCodename) {
-					score += 50
-				}
-
-				scored = append(scored, scoredAsset{name, score})
-			}
-
-			// Sort by score descending
-			for i := 0; i < len(scored)-1; i++ {
-				for j := i + 1; j < len(scored); j++ {
-					if scored[j].score > scored[i].score {
-						scored[i], scored[j] = scored[j], scored[i]
-					}
-				}
-			}
-
-			// Extract sorted names
-			for _, sa := range scored {
-				status.Assets = append(status.Assets, sa.name)
-			}
-
+			status.Assets = a.filterAssets(release, comp)
 			status.UpdateAvail = status.Installed && status.CurrentVersion != status.LatestVersion
 		}
 	}
@@ -887,31 +1210,24 @@ func (a *Agent) getComponentStatus(comp Component) ComponentStatus {
 }
 
 func (a *Agent) getInstalledVersion(comp Component) string {
-	// Try version command first (e.g., essctrl for running service)
 	if len(comp.VersionCmd) > 0 {
 		out, err := exec.Command(comp.VersionCmd[0], comp.VersionCmd[1:]...).Output()
-		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
-			return strings.TrimSpace(string(out))
-		}
-		// Command failed - service might be down, fall through to other methods
-	}
-
-	// Try dpkg for deb packages (works even if service is down)
-	if comp.Package != "" {
-		out, err := exec.Command("dpkg-query", "-W", "-f=${Version}", comp.Package).Output()
-		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		if err == nil {
 			return strings.TrimSpace(string(out))
 		}
 	}
-
-	// Try version file (for zip installs)
 	if comp.VersionFile != "" {
 		data, err := os.ReadFile(comp.VersionFile)
-		if err == nil && len(strings.TrimSpace(string(data))) > 0 {
+		if err == nil {
 			return strings.TrimSpace(string(data))
 		}
 	}
-
+	if comp.Package != "" {
+		out, err := exec.Command("dpkg-query", "-W", "-f=${Version}", comp.Package).Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	}
 	return ""
 }
 
@@ -926,31 +1242,45 @@ func (a *Agent) getLatestRelease(repo string) *ReleaseInfo {
 		return nil
 	}
 	var release ReleaseInfo
-	if json.NewDecoder(resp.Body).Decode(&release) != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return nil
 	}
 	return &release
 }
 
-// getDependentServices returns services that depend on the given component
-func (a *Agent) getDependentServices(compID string) []string {
-	services := make([]string, 0)
-	for _, comp := range a.components {
-		for _, dep := range comp.Depends {
-			if dep == compID && comp.Service != "" {
-				services = append(services, comp.Service)
-			}
-		}
+func (a *Agent) filterAssets(release *ReleaseInfo, comp Component) []string {
+	arch := runtime.GOARCH
+	if arch == "arm" {
+		arch = "armhf"
 	}
-	return services
+
+	var assets []string
+	for _, asset := range release.Assets {
+		name := strings.ToLower(asset.Name)
+
+		// Basic filtering
+		if !strings.HasSuffix(name, ".deb") && !strings.HasSuffix(name, ".zip") {
+			continue
+		}
+
+		// Architecture filtering
+		if strings.Contains(name, "amd64") && arch != "amd64" {
+			continue
+		}
+		if strings.Contains(name, "arm64") && arch != "arm64" {
+			continue
+		}
+		if strings.Contains(name, "armhf") && arch != "armhf" {
+			continue
+		}
+
+		assets = append(assets, asset.Name)
+	}
+	return assets
 }
 
-// installComponentWithDeps handles installation with dependency-aware service management
-func (a *Agent) installComponentWithDeps(comp Component, selectedAsset string, stopServices []string) {
-	a.broadcast(WSResponse{
-		Type: "install_progress",
-		Data: map[string]string{"component": comp.ID, "stage": "checking"},
-	})
+func (a *Agent) installComponent(comp Component, assetName string, stopServices []string) {
+	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "checking", "component": comp.ID}})
 
 	release := a.getLatestRelease(comp.Repo)
 	if release == nil {
@@ -958,180 +1288,88 @@ func (a *Agent) installComponentWithDeps(comp Component, selectedAsset string, s
 		return
 	}
 
-	a.broadcast(WSResponse{
-		Type: "install_progress",
-		Data: map[string]string{"component": comp.ID, "stage": "found", "version": release.TagName},
-	})
-
-	var assetURL, assetName string
+	var downloadURL string
 	for _, asset := range release.Assets {
-		if selectedAsset != "" && asset.Name == selectedAsset {
-			assetURL = asset.DownloadURL
-			assetName = asset.Name
+		if asset.Name == assetName {
+			downloadURL = asset.DownloadURL
 			break
 		}
 	}
-
-	if assetURL == "" {
-		a.broadcast(WSResponse{Type: "install_error", Error: "Asset not found: " + selectedAsset})
+	if downloadURL == "" {
+		a.broadcast(WSResponse{Type: "install_error", Error: "Asset not found: " + assetName})
 		return
 	}
 
-	a.broadcast(WSResponse{
-		Type: "install_progress",
-		Data: map[string]string{"component": comp.ID, "stage": "downloading", "asset": assetName},
-	})
+	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "downloading", "version": release.TagName}})
 
-	resp, err := a.http.Get(assetURL)
+	// Download
+	os.MkdirAll(a.cfg.UploadDir, 0755)
+	localPath := filepath.Join(a.cfg.UploadDir, assetName)
+
+	resp, err := a.http.Get(downloadURL)
 	if err != nil {
-		a.broadcast(WSResponse{Type: "install_error", Error: err.Error()})
+		a.broadcast(WSResponse{Type: "install_error", Error: "Download failed: " + err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	tmpPath := filepath.Join(os.TempDir(), assetName)
-	f, err := os.Create(tmpPath)
+	out, err := os.Create(localPath)
 	if err != nil {
-		a.broadcast(WSResponse{Type: "install_error", Error: err.Error()})
+		a.broadcast(WSResponse{Type: "install_error", Error: "Create file failed: " + err.Error()})
 		return
 	}
-	io.Copy(f, resp.Body)
-	f.Close()
+	io.Copy(out, resp.Body)
+	out.Close()
 
-	// Collect all services to stop: explicitly requested + component's own service
-	allServicesToStop := make([]string, 0)
-	seen := make(map[string]bool)
-
-	// Add explicitly requested services (dependents)
-	for _, svc := range stopServices {
-		if !seen[svc] {
-			allServicesToStop = append(allServicesToStop, svc)
-			seen[svc] = true
-		}
-	}
-
-	// Add component's own service
-	if comp.Service != "" && !seen[comp.Service] {
-		allServicesToStop = append(allServicesToStop, comp.Service)
-		seen[comp.Service] = true
-	}
-
-	// Stop all services
-	if len(allServicesToStop) > 0 {
-		a.broadcast(WSResponse{
-			Type: "install_progress",
-			Data: map[string]interface{}{
-				"component": comp.ID,
-				"stage":     "stopping",
-				"services":  allServicesToStop,
-			},
-		})
-
-		for _, svc := range allServicesToStop {
-			a.log("Stopping service %s before install", svc)
+	// Stop services if requested
+	if len(stopServices) > 0 {
+		a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "stopping"}})
+		for _, svc := range stopServices {
 			exec.Command("sudo", "systemctl", "stop", svc).Run()
 		}
-		time.Sleep(2 * time.Second)
 	}
 
-	a.broadcast(WSResponse{
-		Type: "install_progress",
-		Data: map[string]string{"component": comp.ID, "stage": "installing"},
-	})
+	// Install
+	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "installing"}})
 
-	var installErr error
-	if comp.InstallCmd != "" {
-		// Custom install command - replace placeholders
-		cmd := strings.ReplaceAll(comp.InstallCmd, "{file}", tmpPath)
-		cmd = strings.ReplaceAll(cmd, "{version}", release.TagName)
-		out, err := exec.Command("sudo", "sh", "-c", cmd).CombinedOutput()
-		if err != nil {
-			installErr = fmt.Errorf("%s: %s", err, string(out))
+	if strings.HasSuffix(assetName, ".deb") {
+		cmd := exec.Command("sudo", "dpkg", "-i", localPath)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			a.broadcast(WSResponse{Type: "install_error", Error: "Install failed: " + string(output)})
+			return
 		}
-	} else if strings.HasSuffix(assetName, ".deb") {
-		installErr = a.installDeb(tmpPath)
-	} else if strings.HasSuffix(assetName, ".zip") {
-		installErr = a.installZip(tmpPath, comp.InstallPath)
-	} else {
-		installErr = fmt.Errorf("unknown file type: %s", assetName)
+	} else if strings.HasSuffix(assetName, ".zip") && comp.InstallPath != "" {
+		if err := a.extractZip(localPath, comp.InstallPath); err != nil {
+			a.broadcast(WSResponse{Type: "install_error", Error: "Extract failed: " + err.Error()})
+			return
+		}
 	}
 
-	if installErr != nil {
-		a.broadcast(WSResponse{Type: "install_error", Error: installErr.Error()})
-		// Try to restart services even on error
-		for _, svc := range allServicesToStop {
+	// Start services
+	if len(stopServices) > 0 {
+		a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "starting"}})
+		for _, svc := range stopServices {
 			exec.Command("sudo", "systemctl", "start", svc).Run()
 		}
-		return
 	}
 
-	for _, cmd := range comp.PostInstall {
-		exec.Command("sudo", "sh", "-c", cmd).Run()
-	}
-
-	// Restart all services that were stopped
-	if len(allServicesToStop) > 0 {
-		a.broadcast(WSResponse{
-			Type: "install_progress",
-			Data: map[string]interface{}{
-				"component": comp.ID,
-				"stage":     "starting",
-				"services":  allServicesToStop,
-			},
-		})
-
-		for _, svc := range allServicesToStop {
-			a.log("Starting service %s after install", svc)
-			exec.Command("sudo", "systemctl", "start", svc).Run()
-		}
-		time.Sleep(2 * time.Second)
-	}
-
-	os.Remove(tmpPath)
-
-	newVersion := a.getInstalledVersion(comp)
-	a.broadcast(WSResponse{
-		Type:    "install_complete",
-		Success: true,
-		Data:    map[string]interface{}{"component": comp.ID, "version": newVersion},
-	})
+	os.Remove(localPath)
+	a.broadcast(WSResponse{Type: "install_complete", Success: true, Data: map[string]string{"component": comp.ID, "version": release.TagName}})
 }
 
-// Legacy installComponent for backward compatibility
-func (a *Agent) installComponent(comp Component, selectedAsset string) {
-	a.installComponentWithDeps(comp, selectedAsset, nil)
-}
-
-func (a *Agent) installDeb(path string) error {
-	out, err := exec.Command("sudo", "dpkg", "-i", path).CombinedOutput()
-	if err != nil {
-		fixOut, fixErr := exec.Command("sudo", "apt-get", "install", "-f", "-y").CombinedOutput()
-		if fixErr != nil {
-			return fmt.Errorf("dpkg: %s\napt fix: %s", out, fixOut)
-		}
-	}
-	return nil
-}
-
-func (a *Agent) installZip(zipPath, destPath string) error {
-	if destPath == "" {
-		return fmt.Errorf("no install path for zip")
-	}
-	os.MkdirAll(destPath, 0755)
-
+func (a *Agent) extractZip(zipPath, destPath string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
 
+	os.MkdirAll(destPath, 0755)
+
 	for _, f := range r.File {
 		fpath := filepath.Join(destPath, f.Name)
-		if !strings.HasPrefix(fpath, filepath.Clean(destPath)+string(os.PathSeparator)) {
-			continue
-		}
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, 0755)
+			os.MkdirAll(fpath, f.Mode())
 			continue
 		}
 		os.MkdirAll(filepath.Dir(fpath), 0755)
@@ -1144,93 +1382,11 @@ func (a *Agent) installZip(zipPath, destPath string) error {
 			outFile.Close()
 			return err
 		}
-		_, err = io.Copy(outFile, rc)
+		io.Copy(outFile, rc)
 		outFile.Close()
 		rc.Close()
-		if err != nil {
-			return err
-		}
 	}
 	return nil
-}
-
-func (a *Agent) handleReboot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", 405)
-		return
-	}
-	if !a.cfg.AllowReboot {
-		writeJSON(w, 403, map[string]string{"error": "Reboot not allowed"})
-		return
-	}
-	delay := 5
-	fmt.Sscanf(r.URL.Query().Get("delay"), "%d", &delay)
-	writeJSON(w, 202, map[string]interface{}{"status": "scheduled", "delay": delay})
-	go func() {
-		time.Sleep(time.Duration(delay) * time.Second)
-		exec.Command("sudo", "reboot").Run()
-	}()
-}
-
-func (a *Agent) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", 405)
-		return
-	}
-	os.MkdirAll(a.cfg.UploadDir, 0755)
-	r.ParseMultipartForm(32 << 20)
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": "No file"})
-		return
-	}
-	defer file.Close()
-	dest := filepath.Join(a.cfg.UploadDir, header.Filename)
-	if p := r.FormValue("path"); p != "" {
-		dest = p
-	}
-	out, err := os.Create(dest)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	n, _ := io.Copy(out, file)
-	out.Close()
-	writeJSON(w, 200, map[string]interface{}{"path": dest, "size": n})
-}
-
-func (a *Agent) handleFiles(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/files")
-	if path == "" {
-		path = a.cfg.UploadDir
-	}
-	switch r.Method {
-	case "GET":
-		info, err := os.Stat(path)
-		if err != nil {
-			http.Error(w, "Not found", 404)
-			return
-		}
-		if info.IsDir() {
-			entries, _ := os.ReadDir(path)
-			var files []map[string]interface{}
-			for _, e := range entries {
-				i, _ := e.Info()
-				files = append(files, map[string]interface{}{"name": e.Name(), "isDir": e.IsDir(), "size": i.Size()})
-			}
-			writeJSON(w, 200, files)
-		} else {
-			http.ServeFile(w, r, path)
-		}
-	case "DELETE":
-		if err := os.Remove(path); err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"deleted": true})
-	default:
-		http.Error(w, "Method not allowed", 405)
-	}
 }
 
 // ============ WebSocket ============
@@ -1335,17 +1491,13 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 		}
 
 	case "service":
-		// Per-component service control via WebSocket
 		service := msg.Service
 		action := msg.Action
-
 		if service == "" {
 			resp.Type = "service_response"
 			resp.Error = "No service specified"
 			return resp
 		}
-
-		// Validate service exists in our components
 		found := false
 		for _, comp := range a.components {
 			if comp.Service == service {
@@ -1358,7 +1510,6 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 			resp.Error = "Unknown service: " + service
 			return resp
 		}
-
 		var cmd *exec.Cmd
 		switch action {
 		case "start":
@@ -1371,19 +1522,16 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 			resp.Type = "service_response"
 			resp.Success = true
 			resp.Service = service
-			resp.Action = action
 			resp.Data = map[string]string{"status": a.getServiceStatus(service)}
 			return resp
 		default:
 			resp.Type = "service_response"
-			resp.Error = "Unknown action: " + action
+			resp.Error = "Unknown action"
 			return resp
 		}
-
 		resp.Type = "service_response"
 		resp.Service = service
 		resp.Action = action
-
 		if out, err := cmd.CombinedOutput(); err != nil {
 			resp.Error = string(out)
 		} else {
@@ -1412,143 +1560,60 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 			resp.Error = "Component not found: " + msg.Component
 			return resp
 		}
-		go a.installComponentWithDeps(*comp, msg.Asset, msg.StopServices)
+		go a.installComponent(*comp, msg.Asset, msg.StopServices)
 		resp.Success = true
 		resp.Data = map[string]string{"status": "started", "component": comp.ID}
 
 	case "mesh_peers":
 		resp.Success = true
-		resp.Data = a.getMeshPeers()
-
-	case "mesh_lost":
-		if msg.Action == "clear" {
-			a.clearLostPeers()
-			resp.Success = true
-			resp.Data = map[string]string{"status": "cleared"}
-		} else {
-			resp.Success = true
-			resp.Data = a.getMeshLostPeers()
-		}
+		resp.Data = a.getMeshCache()
 
 	case "logs":
-		service := msg.Action // reuse action field for service name
+		service := msg.Action
 		if service == "" {
 			service = a.cfg.DservService
 		}
-		lines := "100"
-		cmd := exec.Command("journalctl", "-u", service, "-n", lines, "--no-pager", "-o", "short-iso")
+		cmd := exec.Command("journalctl", "-u", service, "-n", "100", "--no-pager", "-o", "short-iso")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			resp.Error = err.Error()
 		} else {
 			resp.Success = true
-			resp.Data = map[string]interface{}{
-				"service": service,
-				"logs":    string(out),
-			}
-		}
-
-	case "dserv_cmd":
-		// Relay command to dserv via HTTP API
-		// For local commands, connect to local dserv
-		// For remote commands, we'd need the target's address
-
-		if msg.Target != "" {
-			// Remote commands not yet supported in this version
-			resp.Error = "Remote commands not yet supported"
-			return resp
-		}
-
-		// Try to send command to local dserv via essctrl
-		script := msg.Script
-		out, err := exec.Command("essctrl", "-c", script).CombinedOutput()
-		if err != nil {
-			resp.Error = fmt.Sprintf("Command failed: %v - %s", err, string(out))
-		} else {
-			resp.Success = true
-			resp.Data = map[string]string{"output": strings.TrimSpace(string(out))}
+			resp.Data = map[string]interface{}{"service": service, "logs": string(out)}
 		}
 
 	case "agent_restart":
-		// Restart the dserv-agent service itself
 		resp.Success = true
 		resp.Data = map[string]string{"status": "restarting"}
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			exec.Command("sudo", "systemctl", "restart", "dserv-agent").Run()
 		}()
-
-	default:
-		resp.Error = "Unknown type"
 	}
+
 	return resp
 }
 
-func (a *Agent) broadcast(v interface{}) {
+func (a *Agent) broadcast(msg WSResponse) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	for ws := range a.clients {
-		ws.WriteJSON(v)
+	clients := make([]*WSConn, 0, len(a.clients))
+	for c := range a.clients {
+		clients = append(clients, c)
+	}
+	a.mu.RUnlock()
+
+	for _, c := range clients {
+		c.WriteJSON(msg)
 	}
 }
 
-// ============ WebSocket frame handling ============
-
-func (ws *WSConn) ReadMessage() ([]byte, error) {
-	header := make([]byte, 2)
-	if _, err := io.ReadFull(ws.br, header); err != nil {
-		return nil, err
-	}
-	fin := header[0]&0x80 != 0
-	opcode := header[0] & 0x0f
-	masked := header[1]&0x80 != 0
-	length := int64(header[1] & 0x7f)
-
-	if opcode == wsOpClose {
-		return nil, io.EOF
-	}
-	if opcode == wsOpPing {
-		if length > 0 {
-			data := make([]byte, length)
-			io.ReadFull(ws.br, data)
-		}
-		ws.writeFrame(wsOpPong, nil)
-		return ws.ReadMessage()
-	}
-	if length == 126 {
-		ext := make([]byte, 2)
-		io.ReadFull(ws.br, ext)
-		length = int64(binary.BigEndian.Uint16(ext))
-	} else if length == 127 {
-		ext := make([]byte, 8)
-		io.ReadFull(ws.br, ext)
-		length = int64(binary.BigEndian.Uint64(ext))
-	}
-	var mask []byte
-	if masked {
-		mask = make([]byte, 4)
-		io.ReadFull(ws.br, mask)
-	}
-	data := make([]byte, length)
-	if _, err := io.ReadFull(ws.br, data); err != nil {
-		return nil, err
-	}
-	if masked {
-		for i := range data {
-			data[i] ^= mask[i%4]
-		}
-	}
-	if !fin {
-		next, err := ws.ReadMessage()
-		if err != nil {
-			return nil, err
-		}
-		return append(data, next...), nil
-	}
-	return data, nil
-}
-
+// WebSocket connection methods
 func (ws *WSConn) WriteJSON(v interface{}) error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	if ws.closed {
+		return fmt.Errorf("connection closed")
+	}
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -1557,436 +1622,92 @@ func (ws *WSConn) WriteJSON(v interface{}) error {
 }
 
 func (ws *WSConn) writeFrame(opcode byte, data []byte) error {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-	if ws.closed {
-		return io.EOF
-	}
+	var header []byte
 	length := len(data)
-	header := make([]byte, 2, 10)
-	header[0] = 0x80 | opcode
+
 	if length < 126 {
-		header[1] = byte(length)
+		header = []byte{0x80 | opcode, byte(length)}
 	} else if length < 65536 {
-		header[1] = 126
-		header = append(header, byte(length>>8), byte(length))
+		header = []byte{0x80 | opcode, 126, byte(length >> 8), byte(length)}
 	} else {
+		header = make([]byte, 10)
+		header[0] = 0x80 | opcode
 		header[1] = 127
-		header = append(header, make([]byte, 8)...)
 		binary.BigEndian.PutUint64(header[2:], uint64(length))
 	}
+
 	if _, err := ws.conn.Write(header); err != nil {
 		return err
 	}
-	if len(data) > 0 {
-		if _, err := ws.conn.Write(data); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := ws.conn.Write(data)
+	return err
 }
 
-func (ws *WSConn) Close() error {
+func (ws *WSConn) ReadMessage() ([]byte, error) {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(ws.br, header); err != nil {
+		return nil, err
+	}
+
+	opcode := header[0] & 0x0f
+	masked := header[1]&0x80 != 0
+	length := uint64(header[1] & 0x7f)
+
+	if opcode == wsOpClose {
+		return nil, fmt.Errorf("connection closed")
+	}
+	if opcode == wsOpPing {
+		ws.writeFrame(wsOpPong, nil)
+		return ws.ReadMessage()
+	}
+
+	if length == 126 {
+		ext := make([]byte, 2)
+		io.ReadFull(ws.br, ext)
+		length = uint64(binary.BigEndian.Uint16(ext))
+	} else if length == 127 {
+		ext := make([]byte, 8)
+		io.ReadFull(ws.br, ext)
+		length = binary.BigEndian.Uint64(ext)
+	}
+
+	if length > maxMsgSize {
+		return nil, fmt.Errorf("message too large")
+	}
+
+	var mask []byte
+	if masked {
+		mask = make([]byte, 4)
+		io.ReadFull(ws.br, mask)
+	}
+
+	data := make([]byte, length)
+	if _, err := io.ReadFull(ws.br, data); err != nil {
+		return nil, err
+	}
+
+	if masked {
+		for i := range data {
+			data[i] ^= mask[i%4]
+		}
+	}
+
+	return data, nil
+}
+
+func (ws *WSConn) Close() {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
-	if ws.closed {
-		return nil
-	}
-	ws.closed = true
-	ws.writeFrame(wsOpClose, nil)
-	return ws.conn.Close()
-}
-
-// ============ Mesh Discovery (UDP) ============
-
-const (
-	maxLostPeers       = 50
-	lostPeerRetention  = 30 * time.Minute
-	staleThresholdSecs = 10 // Peer is "stale" after 10 seconds without heartbeat
-	lostThresholdSecs  = 60 // Peer is "lost" after 60 seconds without heartbeat
-)
-
-func (a *Agent) meshDiscoveryLoop() {
-	// Listen for UDP broadcasts from dserv instances
-	addr := net.UDPAddr{
-		Port: a.cfg.MeshPort,
-		IP:   net.IPv4zero,
-	}
-
-	conn, err := net.ListenUDP("udp4", &addr)
-	if err != nil {
-		log.Printf("Mesh: failed to bind UDP port %d: %v", a.cfg.MeshPort, err)
-		log.Println("Mesh: discovery disabled - another process may be using the port")
-		return
-	}
-	defer conn.Close()
-
-	log.Printf("Mesh: listening for broadcasts on UDP port %d", a.cfg.MeshPort)
-
-	buf := make([]byte, 2048)
-	for {
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-		n, remoteAddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue // Normal timeout, keep listening
-			}
-			if a.cfg.Verbose {
-				log.Printf("Mesh: UDP read error: %v", err)
-			}
-			continue
-		}
-
-		a.processHeartbeat(buf[:n], remoteAddr.IP.String())
+	if !ws.closed {
+		ws.closed = true
+		ws.conn.Close()
 	}
 }
 
-func (a *Agent) processHeartbeat(data []byte, fromIP string) {
-	// Parse the heartbeat JSON
-	var msg struct {
-		Type        string          `json:"type"`
-		ApplianceID string          `json:"applianceId"`
-		Timestamp   int64           `json:"timestamp"`
-		Data        json.RawMessage `json:"data"`
-	}
+// ============ Helpers ============
 
-	if err := json.Unmarshal(data, &msg); err != nil {
-		if a.cfg.Verbose {
-			log.Printf("Mesh: invalid heartbeat JSON: %v", err)
-		}
-		return
-	}
-
-	if msg.Type != "heartbeat" || msg.ApplianceID == "" {
-		return
-	}
-
-	// Parse standard fields from data
-	var stdData struct {
-		Name    string `json:"name"`
-		Status  string `json:"status"`
-		WebPort int    `json:"webPort"`
-		SSL     bool   `json:"ssl"`
-	}
-	json.Unmarshal(msg.Data, &stdData)
-
-	// Parse all fields to capture custom ones
-	var allFields map[string]interface{}
-	json.Unmarshal(msg.Data, &allFields)
-
-	// Extract custom fields (everything not standard)
-	customFields := make(map[string]string)
-	standardKeys := map[string]bool{"name": true, "status": true, "webPort": true, "ssl": true}
-	for k, v := range allFields {
-		if !standardKeys[k] {
-			switch val := v.(type) {
-			case string:
-				customFields[k] = val
-			case float64:
-				customFields[k] = fmt.Sprintf("%v", val)
-			case bool:
-				customFields[k] = fmt.Sprintf("%v", val)
-			}
-		}
-	}
-
-	// Check if this is the local machine (case-insensitive, strip .local suffix)
-	normalizedApplianceID := strings.ToLower(strings.TrimSuffix(msg.ApplianceID, ".local"))
-	isLocal := normalizedApplianceID == a.localID
-
-	// Prefer hostaddr from custom fields over UDP source IP
-	// hostaddr is set by dserv based on outbound routing, more reliable for multi-NIC systems
-	ipAddress := fromIP
-	if hostaddr, ok := customFields["hostaddr"]; ok && hostaddr != "" {
-		ipAddress = hostaddr
-		delete(customFields, "hostaddr") // Don't duplicate in custom fields
-	}
-
-	peer := &MeshPeer{
-		ApplianceID:   msg.ApplianceID,
-		Name:          stdData.Name,
-		Status:        stdData.Status,
-		IPAddress:     ipAddress,
-		WebPort:       stdData.WebPort,
-		SSL:           stdData.SSL,
-		LastHeartbeat: time.Now(),
-		IsLocal:       isLocal,
-		CustomFields:  customFields,
-	}
-
-	a.updatePeer(peer)
-}
-
-func (a *Agent) updatePeer(peer *MeshPeer) {
-	a.meshMu.Lock()
-	defer a.meshMu.Unlock()
-
-	// Check if this peer was in the lost list - if so, it's back
-	newLostPeers := make([]LostPeer, 0, len(a.meshLostPeers))
-	wasLost := false
-	for _, lost := range a.meshLostPeers {
-		if lost.Peer.ApplianceID == peer.ApplianceID {
-			wasLost = true
-			if a.cfg.Verbose {
-				log.Printf("Mesh: peer %s has reconnected", peer.ApplianceID)
-			}
-		} else {
-			newLostPeers = append(newLostPeers, lost)
-		}
-	}
-	if wasLost {
-		a.meshLostPeers = newLostPeers
-	}
-
-	// Check if this is a new peer or update
-	existing, exists := a.meshPeers[peer.ApplianceID]
-	isNew := !exists
-	changed := isNew
-
-	if exists {
-		// Check if anything changed
-		if existing.Status != peer.Status ||
-			existing.Name != peer.Name ||
-			existing.IPAddress != peer.IPAddress ||
-			!customFieldsEqual(existing.CustomFields, peer.CustomFields) {
-			changed = true
-		}
-	}
-
-	a.meshPeers[peer.ApplianceID] = peer
-
-	if isNew && a.cfg.Verbose {
-		log.Printf("Mesh: discovered peer %s (%s) at %s", peer.ApplianceID, peer.Name, peer.IPAddress)
-	}
-
-	// Broadcast update if anything changed
-	if changed {
-		// Must unlock before broadcast to avoid deadlock
-		a.meshMu.Unlock()
-		a.broadcastMeshUpdate()
-		a.meshMu.Lock()
-	}
-}
-
-func customFieldsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func (a *Agent) meshCleanupLoop() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		a.cleanupPeers()
-	}
-}
-
-func (a *Agent) cleanupPeers() {
-	a.meshMu.Lock()
-	defer a.meshMu.Unlock()
-
-	now := time.Now()
-	changed := false
-
-	// Check for timed-out peers (lost after 60 seconds)
-	for id, peer := range a.meshPeers {
-		secsSinceHeartbeat := int(now.Sub(peer.LastHeartbeat).Seconds())
-
-		if secsSinceHeartbeat > lostThresholdSecs {
-			// Move to lost peers
-			a.meshLostPeers = append(a.meshLostPeers, LostPeer{
-				Peer:     *peer,
-				LostTime: now,
-			})
-
-			// Trim lost peers list if too long
-			if len(a.meshLostPeers) > maxLostPeers {
-				a.meshLostPeers = a.meshLostPeers[1:]
-			}
-
-			if a.cfg.Verbose {
-				log.Printf("Mesh: peer %s (%s) lost after %ds", id, peer.Name, secsSinceHeartbeat)
-			}
-
-			delete(a.meshPeers, id)
-			changed = true
-		}
-	}
-
-	// Clean up old lost peers
-	newLostPeers := make([]LostPeer, 0, len(a.meshLostPeers))
-	for _, lost := range a.meshLostPeers {
-		if now.Sub(lost.LostTime) < lostPeerRetention {
-			newLostPeers = append(newLostPeers, lost)
-		}
-	}
-	a.meshLostPeers = newLostPeers
-
-	if changed {
-		a.meshMu.Unlock()
-		a.broadcastMeshUpdate()
-		a.meshMu.Lock()
-	}
-}
-
-func (a *Agent) getMeshPeers() []MeshPeer {
-	a.meshMu.RLock()
-	defer a.meshMu.RUnlock()
-
-	now := time.Now()
-	peers := make([]MeshPeer, 0, len(a.meshPeers))
-	for _, p := range a.meshPeers {
-		peer := *p
-		// Compute dynamic fields
-		peer.LastSeenAgo = int(now.Sub(p.LastHeartbeat).Seconds())
-		peer.IsStale = peer.LastSeenAgo > staleThresholdSecs
-		peers = append(peers, peer)
-	}
-
-	// Sort: local first, then by name
-	for i := 0; i < len(peers)-1; i++ {
-		for j := i + 1; j < len(peers); j++ {
-			// Local always comes first
-			if peers[j].IsLocal && !peers[i].IsLocal {
-				peers[i], peers[j] = peers[j], peers[i]
-			} else if peers[i].IsLocal == peers[j].IsLocal && peers[i].Name > peers[j].Name {
-				peers[i], peers[j] = peers[j], peers[i]
-			}
-		}
-	}
-
-	return peers
-}
-
-func (a *Agent) getMeshLostPeers() []LostPeer {
-	a.meshMu.RLock()
-	defer a.meshMu.RUnlock()
-
-	lost := make([]LostPeer, len(a.meshLostPeers))
-	copy(lost, a.meshLostPeers)
-	return lost
-}
-
-func (a *Agent) clearLostPeers() {
-	a.meshMu.Lock()
-	a.meshLostPeers = nil
-	a.meshMu.Unlock()
-}
-
-func (a *Agent) broadcastMeshUpdate() {
-	peers := a.getMeshPeers()
-	a.broadcast(WSResponse{
-		Type:    "mesh_update",
-		Success: true,
-		Data:    peers,
-	})
-	
-	a.publishMeshToDserv()	
-}
-
-// GET /api/mesh/peers
-func (a *Agent) handleMeshPeers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", 405)
-		return
-	}
-	writeJSON(w, 200, a.getMeshPeers())
-}
-
-// GET/DELETE /api/mesh/lost
-func (a *Agent) handleMeshLost(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		writeJSON(w, 200, a.getMeshLostPeers())
-	case "DELETE":
-		a.clearLostPeers()
-		writeJSON(w, 200, map[string]string{"status": "cleared"})
-	default:
-		http.Error(w, "Method not allowed", 405)
-	}
-}
-
-
-// writeDpoint sends a JSON datapoint to dserv's dataserver (port 4620)
-// using the @set protocol. One-shot connection for reliability.
-func (a *Agent) writeDpoint(varname string, data []byte) error {
-	addr := fmt.Sprintf("127.0.0.1:%d", dservDataPort)
-
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect to dataserver: %w", err)
-	}
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	// Protocol: @set {varlen} {datatype} {datalen}
-	// varlen and datalen include the \r\n suffix
-	varBytes := []byte(varname)
-	varLen := len(varBytes) + 2 // +2 for \r\n
-	dataLen := len(data) + 2    // +2 for \r\n
-
-	// Send command
-	cmd := fmt.Sprintf("@set %d %d %d\n", varLen, DSERV_JSON, dataLen)
-	if _, err := conn.Write([]byte(cmd)); err != nil {
-		return fmt.Errorf("write command: %w", err)
-	}
-
-	// Wait for ack
-	ack := make([]byte, 1)
-	if _, err := conn.Read(ack); err != nil {
-		return fmt.Errorf("read ack1: %w", err)
-	}
-
-	// Send varname + \r\n
-	if _, err := conn.Write(append(varBytes, '\r', '\n')); err != nil {
-		return fmt.Errorf("write varname: %w", err)
-	}
-
-	// Wait for ack
-	if _, err := conn.Read(ack); err != nil {
-		return fmt.Errorf("read ack2: %w", err)
-	}
-
-	// Send data + \r\n
-	if _, err := conn.Write(append(data, '\r', '\n')); err != nil {
-		return fmt.Errorf("write data: %w", err)
-	}
-
-	// Wait for response (should be "1\n" for success)
-	resp := make([]byte, 2)
-	if _, err := conn.Read(resp); err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-
-	if resp[0] != '1' {
-		return fmt.Errorf("server returned error: %s", string(resp))
-	}
-
-	return nil
-}
-
-// publishMeshToDserv publishes current peers to mesh/peers datapoint
-func (a *Agent) publishMeshToDserv() {
-	peers := a.getMeshPeers()
-	jsonData, err := json.Marshal(peers)
-	if err != nil {
-		return
-	}
-
-	if err := a.writeDpoint("mesh/peers", jsonData); err != nil {
-		if a.cfg.Verbose {
-			log.Printf("Mesh: failed to publish to dserv: %v", err)
-		}
-	} else if a.cfg.Verbose {
-		log.Printf("Mesh: published %d peers to dserv", len(peers))
-	}
+func writeJSON(w http.ResponseWriter, code int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
 }
