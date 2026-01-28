@@ -1,22 +1,37 @@
 # mesh.tcl - Local mesh configuration
 #
-# Place this file in /usr/local/dserv/local/mesh.tcl to override
-# the default seed peer configuration.
+# Copy this file to /usr/local/dserv/local/mesh.tcl and customize
+# for your site. This file is sourced by meshconf.tcl at startup.
 #
-# This file is sourced instead of mesh_default_seed_config when present,
-# allowing per-machine or per-network customization without modifying
-# the main meshconf.tcl (which may be overwritten by system updates).
+# The mesh system allows dserv instances to discover each other and
+# share status information (experiment state, subjects, protocols, etc.)
+#
 
-# Configure seeds for this machine/network
-#  Add additional seeds as needed:
-#  192.168.1.100
-#  labserver2.local
-mesh_configure_seeds {
-    128.148.140.71
-}
+# Configure the mesh registry and workgroup
+# 
+# Registry: URL of the dserv-agent running in --server mode
+#   - Use http://localhost:80 if dserv-agent runs locally as registry
+#   - Use https://your-server.io for a remote registry
+#
+# Workgroup: Name to group related dserv instances
+#   - Only nodes in the same workgroup see each other
+#   - Use your lab name, e.g., "brown-sheinberg", "smith-lab"
+#
+mesh_configure "http://localhost:80" "your-workgroup"
 
-# Optional: Enable gossip if you want peer-to-peer heartbeats
-# meshSetGossip 1
-
-# Optional: Adjust heartbeat interval for this machine
+# Optional: Adjust heartbeat interval (milliseconds)
+# Default is 5000ms (5 seconds). Lower values give faster updates
+# but increase network traffic.
+#
 # set mesh_interval 2000
+
+# Optional: Add custom fields that will appear in the mesh directory
+# These persist until cleared or overwritten
+#
+# mesh_set_field "room" "B123"
+# mesh_set_field "rig" "rig-1"
+
+# Optional: Override hostname if system hostname isn't descriptive
+# (Uncomment and modify if needed)
+#
+# set mesh_hostname "my-custom-name"
