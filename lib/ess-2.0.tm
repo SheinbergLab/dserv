@@ -1750,13 +1750,14 @@ namespace eval ess {
         dservTouch stimdg
 	dservTouch em/settings
 	dservTouch em/biquadratic
-
+	
 	::ess::evt_put TIME OPEN [now] [clock seconds]
         ::ess::evt_put ID ESS [now] $current(system)
         ::ess::evt_put ID PROTOCOL [now] $current(system):$current(protocol)
         ::ess::evt_put ID VARIANT [now] $current(system):$current(protocol):$current(variant)
         ::ess::evt_put ID SUBJECT [now] $subject_id
-
+	::ess::evt_put ID HOSTNAME [now] [dservGet system/hostname]
+	
         dict for { pname pval } [::ess::get_params] {
             ::ess::evt_put PARAM NAME [now] $pname
             ::ess::evt_put PARAM VAL [now] [lindex $pval 0]
@@ -4792,7 +4793,7 @@ namespace eval ess {
     dict set evt_info FSPIKE [list 16 {Time Stamped Spike} long]
     dict set evt_info HSPIKE [list 17 {DIS-1 Hardware Spike} long]
 
-    set subtypes [dict create ESS 0 SUBJECT 1 PROTOCOL 2 VARIANT 3]
+    set subtypes [dict create ESS 0 SUBJECT 1 PROTOCOL 2 VARIANT 3 HOSTNAME 4]
     dict set evt_info ID [list 18 {Name} string $subtypes]
 
     set subtypes [dict create INFO 0]
