@@ -1,0 +1,22 @@
+# mesh.tcl - Local mesh configuration
+#
+# Place this file in /usr/local/dserv/local/mesh.tcl to override
+# the default seed peer configuration.
+#
+# This file is sourced instead of mesh_default_seed_config when present,
+# allowing per-machine or per-network customization without modifying
+# the main meshconf.tcl (which may be overwritten by system updates).
+
+# Configure seeds for this machine/network
+#  Add additional seeds as needed:
+#  192.168.1.100
+#  labserver2.local
+mesh_configure_seeds {
+    128.148.140.71
+}
+
+# Optional: Enable gossip if you want peer-to-peer heartbeats
+# meshSetGossip 1
+
+# Optional: Adjust heartbeat interval for this machine
+# set mesh_interval 2000
