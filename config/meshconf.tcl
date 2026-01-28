@@ -1,74 +1,58 @@
-# meshconf.tcl - Mesh broadcasting configuration
+# meshconf.tcl - Mesh heartbeat configuration (HTTP-based)
 # 
-# This subprocess handles broadcasting this node's status to the mesh.
-# Discovery and peer tracking are handled by dserv-agent.
+# This subprocess handles sending heartbeats to the mesh registry.
+# The registry returns current mesh state which is published to mesh/peers.
+#
+# Configuration:
+#   mesh_registry  - URL of the mesh registry (e.g., https://dserv.io)
+#   mesh_workgroup - Workgroup name for this machine
 #
 # Uses timer module for periodic heartbeat.
-# Supports seed peers for cross-subnet discovery.
+# Uses yajltcl for JSON encoding/decoding.
+# Uses https_post for HTTPS communication.
 
-puts "Initializing mesh broadcasting"
+puts "Initializing mesh heartbeat (HTTP)"
 
 # Disable exit for subprocess
 proc exit {args} { error "exit not available for this subprocess" }
 
 # Load required modules
-load ${dspath}/modules/dserv_mesh[info sharedlibextension]
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
 
-# Initialize mesh broadcaster
-set ssl_enabled [dservGet system/ssl]
-set web_port [dservGet system/webport]
-if {$web_port eq ""} { set web_port 2565 }
+# JSON support via yajltcl
+package require yajltcl
 
-meshInit \
-    -id [dservGet system/hostname] \
-    -name [dservGet system/hostname] \
-    -port 12346 \
-    -webport $web_port \
-    -ssl $ssl_enabled
-
-# Set the host's real IP address (determined by outbound routing)
-meshSetField hostaddr [dservGet system/hostaddr]
+# https_post command should be available (registered by dserv)
 
 #################################################################
-# Seed Peer Configuration
+# Configuration
 #################################################################
 
-# Configure seed peers for cross-subnet discovery
-# These are well-known dserv-agent instances that aggregate mesh info
-# Heartbeats are sent via unicast to seeds in addition to local broadcast
+# Registry URL - override in local/mesh.tcl
+set mesh_registry ""
+set mesh_workgroup ""
 
-# Add seeds from a list
-proc mesh_configure_seeds { seeds } {
-    meshClearSeeds
-    
-    foreach seed $seeds {
-        if {$seed ne ""} {
-            meshAddSeed $seed
-        }
-    }
-    
-    set configured [meshGetSeeds]
-    if {[llength $configured] > 0} {
-        puts "Mesh seeds configured: $configured"
-    } else {
-        puts "Mesh: no seed peers configured (broadcast-only mode)"
-    }
-}
+# Heartbeat interval (milliseconds)  
+set mesh_interval 5000
 
-# Default seed configuration (used if no local config exists)
-proc mesh_default_seed_config {} {
-    # Default lab seeds - edit as needed for your environment
-    mesh_configure_seeds {
-    }
-}
+# Local node info
+set mesh_hostname [dservGet system/hostname]
+set mesh_hostaddr [dservGet system/hostaddr]
+set mesh_webport [dservGet system/webport]
+set mesh_ssl [dservGet system/ssl]
+
+if {$mesh_webport eq ""} { set mesh_webport 2565 }
+if {$mesh_ssl eq ""} { set mesh_ssl 0 }
+
+# Current status
+set mesh_status "idle"
+
+# Custom fields to include in heartbeat
+set mesh_fields [dict create]
 
 #################################################################
 # Datapoint subscriptions
 #################################################################
-
-# Default heartbeat interval (milliseconds)
-set mesh_interval 1000
 
 # Subscribe to mesh-relevant datapoints from ess
 set ess_dps { 
@@ -84,20 +68,24 @@ foreach dp $ess_dps {
 
 # Datapoint handler for status updates
 proc mesh_datapoint_handler { dpoint data } {
+    global mesh_fields mesh_status
+    
     # Extract field name from "ess/fieldname"
     set field [lindex [split $dpoint /] 1]
     
-    # Status is special - uses meshUpdateStatus
+    # Status is tracked separately
     if {$field eq "status"} {
-        meshUpdateStatus $data
+        set mesh_status $data
         return
     }
     
     # Everything else: set or remove based on value
     if {$data ne ""} {
-        meshSetField $field $data
+        dict set mesh_fields $field $data
     } else {
-        meshRemoveField $field
+        if {[dict exists $mesh_fields $field]} {
+            dict unset mesh_fields $field
+        }
     }
 }
 
@@ -108,14 +96,14 @@ foreach dp $ess_dps {
 
 # Initialize with current values (in case ess is already running)
 proc mesh_init_current_values {} {
-    global ess_dps
+    global ess_dps mesh_fields mesh_status
     foreach dp $ess_dps {
         set val [dservGet ess/$dp]
         if {$val ne ""} {
             if {$dp eq "status"} {
-                meshUpdateStatus $val
+                set mesh_status $val
             } else {
-                meshSetField $dp $val
+                dict set mesh_fields $dp $val
             }
         }
     }
@@ -124,14 +112,139 @@ proc mesh_init_current_values {} {
 mesh_init_current_values
 
 #################################################################
+# HTTP Heartbeat
+#################################################################
+
+proc mesh_build_heartbeat {} {
+    global mesh_hostname mesh_hostaddr mesh_webport mesh_ssl
+    global mesh_workgroup mesh_status mesh_fields
+    
+    set json [yajl create #auto]
+    
+    $json map_open
+    $json string hostname   string $mesh_hostname
+    $json string ip         string $mesh_hostaddr
+    $json string port       number $mesh_webport
+    $json string ssl        bool   [expr {$mesh_ssl ? 1 : 0}]
+    $json string workgroup  string $mesh_workgroup
+    $json string status     string $mesh_status
+    
+    $json string customFields map_open
+    dict for {k v} $mesh_fields {
+        # Determine type: try number first, fall back to string
+        if {[string is integer -strict $v]} {
+            $json string $k number $v
+        } elseif {[string is double -strict $v]} {
+            $json string $k number $v
+        } else {
+            $json string $k string $v
+        }
+    }
+    $json map_close
+    
+    $json map_close
+    
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+proc mesh_send_heartbeat {} {
+    global mesh_registry mesh_workgroup
+    
+    # Skip if not configured
+    if {$mesh_registry eq "" || $mesh_workgroup eq ""} {
+        return
+    }
+    
+    set url "${mesh_registry}/api/v1/heartbeat"
+    set body [mesh_build_heartbeat]
+    
+    # Send HTTP POST using tclhttps
+    if {[catch {
+        set response [https_post $url $body -timeout 5000]
+        mesh_process_response $response
+    } err]} {
+        puts "Mesh heartbeat error: $err"
+    }
+}
+
+proc mesh_process_response { response_json } {
+    # Parse response using yajltcl
+    if {[catch {
+        set response [::yajl::json2dict $response_json]
+    } err]} {
+        puts "Mesh: invalid JSON response: $err"
+        return
+    }
+    
+    # Check ok field
+    if {![dict exists $response ok] || ![dict get $response ok]} {
+        if {[dict exists $response error]} {
+            puts "Mesh registry error: [dict get $response error]"
+        }
+        return
+    }
+    
+    # Extract mesh array and publish to dserv
+    if {[dict exists $response mesh]} {
+        set mesh_list [dict get $response mesh]
+        
+        # Convert back to JSON for dserv datapoint using yajltcl
+        set json [yajl create #auto]
+        $json array_open
+        
+        foreach node $mesh_list {
+            $json map_open
+            dict for {k v} $node {
+                switch $k {
+                    port - lastSeenAgo {
+                        $json string $k number $v
+                    }
+                    ssl - isLocal {
+                        $json string $k bool [expr {$v ? 1 : 0}]
+                    }
+                    customFields {
+                        $json string $k map_open
+                        if {[llength $v] > 0} {
+                            dict for {ck cv} $v {
+                                if {[string is integer -strict $cv]} {
+                                    $json string $ck number $cv
+                                } elseif {[string is double -strict $cv]} {
+                                    $json string $ck number $cv
+                                } else {
+                                    $json string $ck string $cv
+                                }
+                            }
+                        }
+                        $json map_close
+                    }
+                    default {
+                        $json string $k string $v
+                    }
+                }
+            }
+            $json map_close
+        }
+        
+        $json array_close
+        set mesh_json [$json get]
+        $json delete
+        
+        # Publish to local dserv for any scripts that want mesh info
+        dservSetData mesh/peers 0 11 $mesh_json
+    }
+}
+
+#################################################################
 # Timer-based heartbeat
 #################################################################
 
 proc mesh_heartbeat_callback { dpoint data } {
-    meshSendHeartbeat
+    mesh_send_heartbeat
 }
 
-proc mesh_start { {interval_ms 2000} } {
+proc mesh_start { {interval_ms 5000} } {
     global mesh_interval
     set mesh_interval $interval_ms
     timerTickInterval $interval_ms $interval_ms
@@ -157,49 +270,75 @@ proc mesh_setup {} {
 }
 
 #################################################################
-# Helper functions
+# Configuration helpers
 #################################################################
 
-# Set multiple fields at once using a dictionary
-proc mesh_set_fields { field_dict } {
-    dict for {key value} $field_dict {
-        meshSetField $key $value
+proc mesh_configure { registry workgroup } {
+    global mesh_registry mesh_workgroup
+    
+    # Normalize registry URL - add scheme if missing
+    if {![regexp {^https?://} $registry]} {
+        set registry "http://$registry"
+    }
+    
+    # Add default port if missing
+    if {![regexp {:\d+(/|$)} $registry]} {
+        if {[string match "https://*" $registry]} {
+            # Remove trailing slash, add port, restore path
+            regexp {^(https://[^/]+)(.*)} $registry -> base path
+            set registry "${base}:443${path}"
+        } else {
+            regexp {^(http://[^/]+)(.*)} $registry -> base path
+            set registry "${base}:80${path}"
+        }
+    }
+    
+    set mesh_registry $registry
+    set mesh_workgroup $workgroup
+    puts "Mesh configured: registry=$registry workgroup=$workgroup"
+}
+
+proc mesh_set_field { key value } {
+    global mesh_fields
+    dict set mesh_fields $key $value
+}
+
+proc mesh_remove_field { key } {
+    global mesh_fields
+    if {[dict exists $mesh_fields $key]} {
+        dict unset mesh_fields $key
     }
 }
 
-# Get current broadcast info
-proc mesh_get_info {} {
-    return [meshInfo]
-}
-
-# Get this appliance's ID
-proc mesh_get_id {} {
-    return [meshGetApplianceId]
-}
-
-# Get current custom fields
 proc mesh_get_fields {} {
-    return [meshGetFields]
+    global mesh_fields
+    return $mesh_fields
 }
 
-# Seed management helpers
-proc mesh_add_seed { address } {
-    meshAddSeed $address
-    puts "Mesh: added seed $address"
+proc mesh_clear_fields {} {
+    global mesh_fields
+    set mesh_fields [dict create]
 }
 
-proc mesh_remove_seed { address } {
-    meshRemoveSeed $address
-    puts "Mesh: removed seed $address"
+proc mesh_get_info {} {
+    global mesh_registry mesh_workgroup mesh_hostname mesh_hostaddr
+    global mesh_webport mesh_ssl mesh_status mesh_interval
+    
+    return [dict create \
+        registry $mesh_registry \
+        workgroup $mesh_workgroup \
+        hostname $mesh_hostname \
+        ip $mesh_hostaddr \
+        port $mesh_webport \
+        ssl $mesh_ssl \
+        status $mesh_status \
+        interval $mesh_interval \
+    ]
 }
 
-proc mesh_list_seeds {} {
-    return [meshGetSeeds]
-}
-
-# Get statistics
-proc mesh_get_stats {} {
-    return [meshStats]
+# Force a heartbeat now
+proc mesh_heartbeat_now {} {
+    mesh_send_heartbeat
 }
 
 #################################################################
@@ -207,39 +346,31 @@ proc mesh_get_stats {} {
 #################################################################
 
 # Local configuration in /usr/local/dserv/local/mesh.tcl
-# Use this to override seed peers for specific machines/networks
+# Use this to set registry and workgroup:
+#   mesh_configure "https://dserv.io" "brown-sheinberg"
+#
 if { [file exists $dspath/local/mesh.tcl] } {
     source $dspath/local/mesh.tcl
-} else {
-    mesh_default_seed_config
 }
 
 # Setup timer and start heartbeat
 mesh_setup
 mesh_start $mesh_interval
 
-if { 0 } {
-puts "Mesh broadcasting ready"
-puts "  Appliance ID: [meshGetApplianceId]"
+puts "Mesh heartbeat ready"
+puts "  Hostname: $mesh_hostname"
+puts "  Registry: [expr {$mesh_registry ne {} ? $mesh_registry : {(not configured)}}]"
+puts "  Workgroup: [expr {$mesh_workgroup ne {} ? $mesh_workgroup : {(not configured)}}]"
 puts "  Heartbeat interval: ${mesh_interval}ms"
-puts "  Seeds: [meshGetSeeds]"
 puts ""
 puts "Commands available:"
-puts "  meshSendHeartbeat             - Send heartbeat now"
-puts "  meshUpdateStatus <status>     - Set current status"
-puts "  meshSetField <key> <value>    - Set custom field"
-puts "  meshRemoveField <key>         - Remove custom field"
-puts "  meshGetFields                 - Get all custom fields"
-puts "  meshClearFields               - Clear all custom fields"
-puts "  meshInfo                      - Get broadcaster info"
-puts "  mesh_start ?interval_ms?      - Start/restart heartbeat timer"
-puts "  mesh_stop                     - Stop heartbeat timer"
-puts "  mesh_set_interval <ms>        - Change heartbeat interval"
-puts ""
-puts "Seed peer commands:"
-puts "  meshAddSeed <address>         - Add a seed peer"
-puts "  meshRemoveSeed <address>      - Remove a seed peer"
-puts "  meshGetSeeds                  - List configured seeds"
-puts "  meshClearSeeds                - Remove all seeds"
-puts "  meshStats                     - Get send statistics"
-}
+puts "  mesh_configure <registry> <workgroup>  - Configure registry"
+puts "  mesh_heartbeat_now                     - Send heartbeat immediately"
+puts "  mesh_set_field <key> <value>           - Set custom field"
+puts "  mesh_remove_field <key>                - Remove custom field"
+puts "  mesh_get_fields                        - Get all custom fields"
+puts "  mesh_clear_fields                      - Clear all custom fields"
+puts "  mesh_get_info                          - Get current config"
+puts "  mesh_start ?interval_ms?               - Start/restart heartbeat"
+puts "  mesh_stop                              - Stop heartbeat"
+puts "  mesh_set_interval <ms>                 - Change interval"
