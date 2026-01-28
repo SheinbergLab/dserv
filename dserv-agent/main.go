@@ -187,7 +187,8 @@ type Config struct {
 	TLSKey  string
 
 	// Server mode
-	ServerMode bool
+	ServerMode   bool
+	PublicServer bool // Don't expose mesh UI, just landing page
 
 	// Client mode
 	AuthToken      string
@@ -323,6 +324,7 @@ Environment:
 
 	// Mode selection
 	flag.BoolVar(&cfg.ServerMode, "server", false, "Enable registry server mode (receive heartbeats)")
+	flag.BoolVar(&cfg.PublicServer, "public", false, "Public server mode (show landing page, protect mesh data)")
 
 	// Client mode flags
 	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for API authentication")
@@ -423,12 +425,18 @@ Environment:
 		mux.HandleFunc("/api/v1/mesh", agent.auth(agent.handleLocalMesh))
 	}
 
-	// WebSocket
-	mux.HandleFunc("/ws", agent.handleWebSocket)
+	// WebSocket (only for non-public mode)
+	if !cfg.PublicServer {
+		mux.HandleFunc("/ws", agent.handleWebSocket)
+	}
 
-	// Serve embedded web UI
-	webFS, _ := fs.Sub(webContent, "web")
-	mux.Handle("/", http.FileServer(http.FS(webFS)))
+	// Serve web UI or simple landing page
+	if cfg.PublicServer {
+		mux.HandleFunc("/", agent.handleLandingPage)
+	} else {
+		webFS, _ := fs.Sub(webContent, "web")
+		mux.Handle("/", http.FileServer(http.FS(webFS)))
+	}
 
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 
@@ -449,12 +457,22 @@ Environment:
 
 	// Start server with or without TLS
 	if cfg.TLSCert != "" && cfg.TLSKey != "" {
-		log.Printf("  TLS: enabled (cert: %s)", cfg.TLSCert)
+		scheme := "https"
+		log.Printf("  TLS: enabled")
+		log.Printf("  URL: %s://%s", scheme, cfg.ListenAddr)
+		if cfg.ServerMode {
+			log.Printf("  Heartbeat URL: %s://%s/api/v1/heartbeat", scheme, cfg.ListenAddr)
+		}
 		if err := server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	} else {
+		scheme := "http"
 		log.Printf("  TLS: disabled")
+		log.Printf("  URL: %s://%s", scheme, cfg.ListenAddr)
+		if cfg.ServerMode {
+			log.Printf("  Heartbeat URL: %s://%s/api/v1/heartbeat", scheme, cfg.ListenAddr)
+		}
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -529,6 +547,15 @@ func (a *Agent) handleMeshQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In public mode, require auth token to query mesh
+	if a.cfg.PublicServer {
+		token := r.Header.Get("Authorization")
+		if a.cfg.AuthToken == "" || token != "Bearer "+a.cfg.AuthToken {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	workgroup := r.URL.Query().Get("workgroup")
 	if workgroup == "" {
 		http.Error(w, "workgroup parameter required", http.StatusBadRequest)
@@ -564,6 +591,66 @@ func (a *Agent) handleServerStatus(w http.ResponseWriter, r *http.Request) {
 			"arch": runtime.GOARCH,
 		},
 	})
+}
+
+// Landing page for public server mode
+func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	html := `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dserv.net</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            padding: 40px;
+        }
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: #e7e9ea;
+        }
+        p {
+            font-size: 18px;
+            color: #71767b;
+            margin-bottom: 32px;
+        }
+        a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>dserv.net</h1>
+        <p>Mesh registry for dserv lab systems</p>
+        <p><a href="https://github.com/SheinbergLab/dserv">github.com/SheinbergLab/dserv</a></p>
+    </div>
+</body>
+</html>`
+	w.Write([]byte(html))
 }
 
 // Registry methods
