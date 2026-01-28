@@ -4,6 +4,7 @@
 # Discovery and peer tracking are handled by dserv-agent.
 #
 # Uses timer module for periodic heartbeat.
+# Supports seed peers for cross-subnet discovery.
 
 puts "Initializing mesh broadcasting"
 
@@ -28,6 +29,43 @@ meshInit \
 
 # Set the host's real IP address (determined by outbound routing)
 meshSetField hostaddr [dservGet system/hostaddr]
+
+#################################################################
+# Seed Peer Configuration
+#################################################################
+
+# Configure seed peers for cross-subnet discovery
+# These are well-known dserv-agent instances that aggregate mesh info
+# Heartbeats are sent via unicast to seeds in addition to local broadcast
+
+# Add seeds from a list
+proc mesh_configure_seeds { seeds } {
+    meshClearSeeds
+    
+    foreach seed $seeds {
+        if {$seed ne ""} {
+            meshAddSeed $seed
+        }
+    }
+    
+    set configured [meshGetSeeds]
+    if {[llength $configured] > 0} {
+        puts "Mesh seeds configured: $configured"
+    } else {
+        puts "Mesh: no seed peers configured (broadcast-only mode)"
+    }
+}
+
+# Default seed configuration (used if no local config exists)
+proc mesh_default_seed_config {} {
+    # Default lab seeds - edit as needed for your environment
+    mesh_configure_seeds {
+    }
+}
+
+#################################################################
+# Datapoint subscriptions
+#################################################################
 
 # Default heartbeat interval (milliseconds)
 set mesh_interval 1000
@@ -144,10 +182,39 @@ proc mesh_get_fields {} {
     return [meshGetFields]
 }
 
+# Seed management helpers
+proc mesh_add_seed { address } {
+    meshAddSeed $address
+    puts "Mesh: added seed $address"
+}
+
+proc mesh_remove_seed { address } {
+    meshRemoveSeed $address
+    puts "Mesh: removed seed $address"
+}
+
+proc mesh_list_seeds {} {
+    return [meshGetSeeds]
+}
+
+# Get statistics
+proc mesh_get_stats {} {
+    return [meshStats]
+}
+
 #################################################################
 # Initialize and start
 #################################################################
 
+# Local configuration in /usr/local/dserv/local/mesh.tcl
+# Use this to override seed peers for specific machines/networks
+if { [file exists $dspath/local/mesh.tcl] } {
+    source $dspath/local/mesh.tcl
+} else {
+    mesh_default_seed_config
+}
+
+# Setup timer and start heartbeat
 mesh_setup
 mesh_start $mesh_interval
 
@@ -155,6 +222,7 @@ if { 0 } {
 puts "Mesh broadcasting ready"
 puts "  Appliance ID: [meshGetApplianceId]"
 puts "  Heartbeat interval: ${mesh_interval}ms"
+puts "  Seeds: [meshGetSeeds]"
 puts ""
 puts "Commands available:"
 puts "  meshSendHeartbeat             - Send heartbeat now"
@@ -167,4 +235,11 @@ puts "  meshInfo                      - Get broadcaster info"
 puts "  mesh_start ?interval_ms?      - Start/restart heartbeat timer"
 puts "  mesh_stop                     - Stop heartbeat timer"
 puts "  mesh_set_interval <ms>        - Change heartbeat interval"
+puts ""
+puts "Seed peer commands:"
+puts "  meshAddSeed <address>         - Add a seed peer"
+puts "  meshRemoveSeed <address>      - Remove a seed peer"
+puts "  meshGetSeeds                  - List configured seeds"
+puts "  meshClearSeeds                - Remove all seeds"
+puts "  meshStats                     - Get send statistics"
 }
