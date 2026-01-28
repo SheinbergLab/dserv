@@ -17,6 +17,8 @@
 
 #include "TclCompletion.h"
 
+extern "C" int TclHttps_RegisterCommands(Tcl_Interp *interp);
+
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
 
@@ -2651,6 +2653,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
   // Completion support
   TclCompletion::RegisterCompletionCommands(interp);
+
+  // HTTPS client commands
+  TclHttps_RegisterCommands(interp);  
 
   return;
 }
