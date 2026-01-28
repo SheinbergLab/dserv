@@ -235,6 +235,7 @@ add_executable(dserv
     src/LogClient.cpp 
     src/LogTable.cpp 
     src/TclServer.cpp
+    src/TclHttps.cpp    
     src/TclCompletion.cpp
     src/ErrorMonitor.cpp
     src/dpoint_process.c 

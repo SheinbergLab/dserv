@@ -98,7 +98,8 @@ static HttpResponse parseHttpResponse(const std::string& raw) {
 static HttpResponse doHttpsRequest(const std::string& method,
                                     const ParsedUrl& url,
                                     const std::string& body,
-                                    int timeoutMs) {
+                                    int timeoutMs,
+                                    bool skipVerify = false) {
     HttpResponse resp = {0, "", false, ""};
     
     // Initialize OpenSSL (safe to call multiple times)
@@ -113,9 +114,18 @@ static HttpResponse doHttpsRequest(const std::string& method,
         return resp;
     }
     
-    // Use system CA certificates
-    SSL_CTX_set_default_verify_paths(ctx);
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+    // For localhost or when explicitly requested, skip certificate verification
+    // This is necessary for self-signed certificates
+    bool isLocalhost = (url.host == "localhost" || url.host == "127.0.0.1" ||
+                        url.host.find(".local") != std::string::npos);
+    
+    if (skipVerify || isLocalhost) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+    } else {
+        // Use system CA certificates for remote hosts
+        SSL_CTX_set_default_verify_paths(ctx);
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+    }
     
     // Create socket
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
