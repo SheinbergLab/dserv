@@ -24,6 +24,15 @@ class PageNav {
             windowSize: { width: 1200, height: 800 }
         },
         {
+            id: 'data_manager',
+            title: 'Data Manager',
+            desc: 'Convert and Export Data Files',
+            icon: '🗂️',
+            href: 'data_manager.html',
+            category: 'tools',
+            windowSize: { width: 1240, height: 700 }
+        },
+        {
             id: 'ess_workbench',
             title: 'ESS Workbench',
             desc: 'Configure State Systems',
