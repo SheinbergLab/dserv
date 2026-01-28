@@ -1,14 +1,19 @@
 /*
  * NAME
- *   mesh.c - UDP mesh broadcast module
+ *   mesh.c - UDP mesh broadcast module with seed peer support
  *
  * DESCRIPTION
  *   Broadcasts heartbeat packets for mesh discovery.
+ *   Supports both local broadcast and unicast to seed peers
+ *   for cross-subnet discovery.
  *   Discovery and aggregation handled by dserv-agent.
  *   Timing controlled externally via timer module.
  *
  * AUTHOR
- *   DLS, 12/24
+ *   DLS
+ *
+ * DATE
+ *   12/24, 1/26
  */
 
 #include <stdlib.h>
@@ -24,6 +29,7 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <ifaddrs.h>
+#include <netdb.h>
 
 #include <tcl.h>
 #include <jansson.h>
@@ -35,12 +41,19 @@
 #define MAX_FIELD_KEY_LEN 64
 #define MAX_FIELD_VAL_LEN 256
 #define MAX_BROADCAST_ADDRS 8
+#define MAX_SEED_PEERS 8
 #define NETWORK_SCAN_INTERVAL_SEC 30
 
 typedef struct custom_field_s {
     char key[MAX_FIELD_KEY_LEN];
     char value[MAX_FIELD_VAL_LEN];
 } custom_field_t;
+
+typedef struct seed_peer_s {
+    char address[128];          /* IP or hostname */
+    struct sockaddr_in resolved; /* Resolved address */
+    int valid;                   /* Resolution succeeded */
+} seed_peer_t;
 
 typedef struct mesh_info_s {
     tclserver_t *tclserver;
@@ -57,12 +70,50 @@ typedef struct mesh_info_s {
     custom_field_t fields[MAX_CUSTOM_FIELDS];
     int num_fields;
     
-    /* Network */
+    /* Network - broadcast */
     int udp_socket;
     char broadcast_addrs[MAX_BROADCAST_ADDRS][16];
     int num_broadcast_addrs;
     time_t last_network_scan;
+    
+    /* Network - seed peers */
+    seed_peer_t seed_peers[MAX_SEED_PEERS];
+    int num_seed_peers;
+    
+    /* Statistics */
+    unsigned long broadcasts_sent;
+    unsigned long unicasts_sent;
+    unsigned long send_errors;
 } mesh_info_t;
+
+/*
+ * Resolve a seed peer address (IP or hostname)
+ */
+static int mesh_resolve_seed(seed_peer_t *seed, int port)
+{
+    seed->valid = 0;
+    
+    memset(&seed->resolved, 0, sizeof(seed->resolved));
+    seed->resolved.sin_family = AF_INET;
+    seed->resolved.sin_port = htons(port);
+    
+    /* Try as IP address first */
+    if (inet_aton(seed->address, &seed->resolved.sin_addr) != 0) {
+        seed->valid = 1;
+        return 0;
+    }
+    
+    /* Try DNS resolution */
+    struct hostent *he = gethostbyname(seed->address);
+    if (he && he->h_addr_list[0]) {
+        memcpy(&seed->resolved.sin_addr, he->h_addr_list[0], sizeof(struct in_addr));
+        seed->valid = 1;
+        return 0;
+    }
+    
+    fprintf(stderr, "Mesh: failed to resolve seed peer %s\n", seed->address);
+    return -1;
+}
 
 /*
  * Scan network interfaces for broadcast addresses
@@ -166,15 +217,11 @@ static int mesh_setup_udp(mesh_info_t *info)
 }
 
 /*
- * Send a single heartbeat
+ * Build heartbeat JSON message
+ * Returns allocated string that caller must free
  */
-static void mesh_send_heartbeat(mesh_info_t *info)
+static char *mesh_build_heartbeat_json(mesh_info_t *info)
 {
-    if (info->udp_socket < 0) return;
-    
-    mesh_refresh_broadcast_addrs(info);
-    
-    /* Build JSON */
     json_t *heartbeat = json_object();
     json_object_set_new(heartbeat, "type", json_string("heartbeat"));
     json_object_set_new(heartbeat, "applianceId", json_string(info->appliance_id));
@@ -199,21 +246,113 @@ static void mesh_send_heartbeat(mesh_info_t *info)
     json_object_set_new(heartbeat, "data", data);
     
     char *message = json_dumps(heartbeat, JSON_COMPACT);
+    json_decref(heartbeat);
+    
+    return message;
+}
+
+/*
+ * Send a single heartbeat to all targets
+ */
+static void mesh_send_heartbeat(mesh_info_t *info)
+{
+    if (info->udp_socket < 0) return;
+    
+    mesh_refresh_broadcast_addrs(info);
+    
+    char *message = mesh_build_heartbeat_json(info);
+    if (!message) return;
+    
     size_t msg_len = strlen(message);
     
-    /* Send to all broadcast addresses */
+    /* 1. Send to all broadcast addresses (local subnet discovery) */
     for (int i = 0; i < info->num_broadcast_addrs; i++) {
         struct sockaddr_in addr;
         addr.sin_family = AF_INET;
         addr.sin_port = htons(info->discovery_port);
         inet_aton(info->broadcast_addrs[i], &addr.sin_addr);
         
-        sendto(info->udp_socket, message, msg_len, 0,
-               (struct sockaddr *)&addr, sizeof(addr));
+        ssize_t result = sendto(info->udp_socket, message, msg_len, 0,
+                               (struct sockaddr *)&addr, sizeof(addr));
+        if (result >= 0) {
+            info->broadcasts_sent++;
+        } else {
+            info->send_errors++;
+        }
+    }
+    
+    /* 2. Send to all seed peers (cross-subnet discovery) */
+    for (int i = 0; i < info->num_seed_peers; i++) {
+        if (!info->seed_peers[i].valid) continue;
+        
+        ssize_t result = sendto(info->udp_socket, message, msg_len, 0,
+                               (struct sockaddr *)&info->seed_peers[i].resolved,
+                               sizeof(info->seed_peers[i].resolved));
+        if (result >= 0) {
+            info->unicasts_sent++;
+        } else {
+            info->send_errors++;
+        }
     }
     
     free(message);
-    json_decref(heartbeat);
+}
+
+/*
+ * Add a seed peer
+ */
+static int mesh_add_seed_peer(mesh_info_t *info, const char *address)
+{
+    /* Check for duplicates */
+    for (int i = 0; i < info->num_seed_peers; i++) {
+        if (strcmp(info->seed_peers[i].address, address) == 0) {
+            return 0;  /* Already exists */
+        }
+    }
+    
+    if (info->num_seed_peers >= MAX_SEED_PEERS) {
+        fprintf(stderr, "Mesh: maximum seed peers (%d) reached\n", MAX_SEED_PEERS);
+        return -1;
+    }
+    
+    seed_peer_t *seed = &info->seed_peers[info->num_seed_peers];
+    strncpy(seed->address, address, sizeof(seed->address) - 1);
+    
+    if (mesh_resolve_seed(seed, info->discovery_port) == 0) {
+        info->num_seed_peers++;
+        printf("Mesh: added seed peer %s\n", address);
+        return 0;
+    }
+    
+    return -1;
+}
+
+/*
+ * Remove a seed peer
+ */
+static int mesh_remove_seed_peer(mesh_info_t *info, const char *address)
+{
+    for (int i = 0; i < info->num_seed_peers; i++) {
+        if (strcmp(info->seed_peers[i].address, address) == 0) {
+            /* Shift remaining seeds */
+            for (int j = i; j < info->num_seed_peers - 1; j++) {
+                info->seed_peers[j] = info->seed_peers[j + 1];
+            }
+            info->num_seed_peers--;
+            printf("Mesh: removed seed peer %s\n", address);
+            return 0;
+        }
+    }
+    return -1;  /* Not found */
+}
+
+/*
+ * Clear all seed peers
+ */
+static void mesh_clear_seed_peers(mesh_info_t *info)
+{
+    info->num_seed_peers = 0;
+    printf("Mesh: cleared all seed peers\n");
 }
 
 /*
@@ -417,6 +556,9 @@ static int mesh_info_command(ClientData data, Tcl_Interp *interp,
     Tcl_DictObjPut(interp, dict,
                    Tcl_NewStringObj("numBroadcastAddrs", -1),
                    Tcl_NewIntObj(info->num_broadcast_addrs));
+    Tcl_DictObjPut(interp, dict,
+                   Tcl_NewStringObj("numSeedPeers", -1),
+                   Tcl_NewIntObj(info->num_seed_peers));
     
     Tcl_SetObjResult(interp, dict);
     return TCL_OK;
@@ -433,6 +575,87 @@ static int mesh_shutdown_command(ClientData data, Tcl_Interp *interp,
         printf("Mesh broadcaster shutdown\n");
     }
     
+    return TCL_OK;
+}
+
+/* Seed peer Tcl commands */
+
+static int mesh_add_seed_command(ClientData data, Tcl_Interp *interp,
+                                 int objc, Tcl_Obj *objv[])
+{
+    mesh_info_t *info = (mesh_info_t *)data;
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "address");
+        return TCL_ERROR;
+    }
+    
+    const char *address = Tcl_GetString(objv[1]);
+    
+    if (mesh_add_seed_peer(info, address) < 0) {
+        Tcl_SetResult(interp, "failed to add seed peer", TCL_STATIC);
+        return TCL_ERROR;
+    }
+    
+    return TCL_OK;
+}
+
+static int mesh_remove_seed_command(ClientData data, Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *objv[])
+{
+    mesh_info_t *info = (mesh_info_t *)data;
+    
+    if (objc != 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "address");
+        return TCL_ERROR;
+    }
+    
+    mesh_remove_seed_peer(info, Tcl_GetString(objv[1]));
+    return TCL_OK;
+}
+
+static int mesh_get_seeds_command(ClientData data, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *objv[])
+{
+    mesh_info_t *info = (mesh_info_t *)data;
+    
+    Tcl_Obj *list = Tcl_NewListObj(0, NULL);
+    
+    for (int i = 0; i < info->num_seed_peers; i++) {
+        Tcl_ListObjAppendElement(interp, list,
+                                 Tcl_NewStringObj(info->seed_peers[i].address, -1));
+    }
+    
+    Tcl_SetObjResult(interp, list);
+    return TCL_OK;
+}
+
+static int mesh_clear_seeds_command(ClientData data, Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *objv[])
+{
+    mesh_info_t *info = (mesh_info_t *)data;
+    mesh_clear_seed_peers(info);
+    return TCL_OK;
+}
+
+static int mesh_stats_command(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *objv[])
+{
+    mesh_info_t *info = (mesh_info_t *)data;
+    
+    Tcl_Obj *dict = Tcl_NewDictObj();
+    
+    Tcl_DictObjPut(interp, dict,
+                   Tcl_NewStringObj("broadcastsSent", -1),
+                   Tcl_NewWideIntObj(info->broadcasts_sent));
+    Tcl_DictObjPut(interp, dict,
+                   Tcl_NewStringObj("unicastsSent", -1),
+                   Tcl_NewWideIntObj(info->unicasts_sent));
+    Tcl_DictObjPut(interp, dict,
+                   Tcl_NewStringObj("sendErrors", -1),
+                   Tcl_NewWideIntObj(info->send_errors));
+    
+    Tcl_SetObjResult(interp, dict);
     return TCL_OK;
 }
 
@@ -482,7 +705,7 @@ int Dserv_mesh_Init(Tcl_Interp *interp)
     info->ssl_enabled = 0;
     strncpy(info->status, "idle", sizeof(info->status));
     
-    /* Create commands */
+    /* Create commands - original */
     Tcl_CreateObjCommand(interp, "meshInit",
                          (Tcl_ObjCmdProc *)mesh_init_command,
                          (ClientData)info, NULL);
@@ -512,6 +735,23 @@ int Dserv_mesh_Init(Tcl_Interp *interp)
                          (ClientData)info, NULL);
     Tcl_CreateObjCommand(interp, "meshShutdown",
                          (Tcl_ObjCmdProc *)mesh_shutdown_command,
+                         (ClientData)info, NULL);
+    
+    /* Create commands - seed peers */
+    Tcl_CreateObjCommand(interp, "meshAddSeed",
+                         (Tcl_ObjCmdProc *)mesh_add_seed_command,
+                         (ClientData)info, NULL);
+    Tcl_CreateObjCommand(interp, "meshRemoveSeed",
+                         (Tcl_ObjCmdProc *)mesh_remove_seed_command,
+                         (ClientData)info, NULL);
+    Tcl_CreateObjCommand(interp, "meshGetSeeds",
+                         (Tcl_ObjCmdProc *)mesh_get_seeds_command,
+                         (ClientData)info, NULL);
+    Tcl_CreateObjCommand(interp, "meshClearSeeds",
+                         (Tcl_ObjCmdProc *)mesh_clear_seeds_command,
+                         (ClientData)info, NULL);
+    Tcl_CreateObjCommand(interp, "meshStats",
+                         (Tcl_ObjCmdProc *)mesh_stats_command,
                          (ClientData)info, NULL);
     
     /* Register cleanup */
