@@ -139,6 +139,7 @@ namespace eval df {
         # File metadata (replicated for each trial)
         dl_set $trials:date [dl_replicate [dl_slist [dict get $meta date]] $n_trials]
         dl_set $trials:time [dl_replicate [dl_slist [dict get $meta time]] $n_trials]
+	dl_set $trials:hostname [dl_replicate [dl_slist [dict get $meta hostname]] $n_trials]
         dl_set $trials:filename [dl_replicate [dl_slist [file tail [dict get $meta filepath]]] $n_trials]
         dl_set $trials:system [dl_replicate [dl_slist [dict get $meta system]] $n_trials]
         dl_set $trials:protocol [dl_replicate [dl_slist [dict get $meta protocol]] $n_trials]
@@ -577,12 +578,14 @@ namespace eval df {
         
         method ExtractMetadata {} {
             # Hardcoded subtypes for system events (may not have SUBTYPE events)
-            set TIME_OPEN 0
-            set ID_SUBJECT 1
-            set ID_VARIANT 3
+            set TIME_OPEN   0
+            set ID_SUBJECT  1
+            set ID_VARIANT  3
+	    set ID_HOSTNAME 4
             
             set meta [dict create \
                 filepath $filepath \
+		hostname "" \
                 subject "" \
                 system "" \
                 protocol "" \
@@ -632,6 +635,13 @@ namespace eval df {
             set subj [my FindPreEvent $t $s]
             if {$subj ne ""} {
                 dict set meta subject $subj
+            }
+
+            # ID/HOSTNAME 
+            lassign [my evt ID $ID_HOSTNAME] t s
+            set hostname [my FindPreEvent $t $s]
+            if {$hostname ne ""} {
+                dict set meta hostname $hostname
             }
             
             # Obs period count
