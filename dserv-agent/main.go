@@ -185,6 +185,7 @@ type Config struct {
 	// TLS
 	TLSCert string
 	TLSKey  string
+	NoTLS   bool
 
 	// Server mode
 	ServerMode   bool
@@ -322,6 +323,7 @@ Environment:
 	// TLS flags
 	flag.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file (enables HTTPS)")
 	flag.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
+	flag.BoolVar(&cfg.NoTLS, "no-tls", false, "Disable TLS (even if certs exist)")
 
 	// Mode selection
 	flag.BoolVar(&cfg.ServerMode, "server", false, "Enable registry server mode (receive heartbeats)")
@@ -344,8 +346,8 @@ Environment:
 
 	cfg.RegistryURLs = registries
 
-	// Auto-detect dserv SSL certificates if not specified
-	if cfg.TLSCert == "" && cfg.TLSKey == "" {
+	// Auto-detect dserv SSL certificates if not specified (unless --no-tls)
+	if !cfg.NoTLS && cfg.TLSCert == "" && cfg.TLSKey == "" {
 		defaultCert := "/usr/local/dserv/ssl/cert.pem"
 		defaultKey := "/usr/local/dserv/ssl/key.pem"
 		if _, err := os.Stat(defaultCert); err == nil {
@@ -354,6 +356,12 @@ Environment:
 				cfg.TLSKey = defaultKey
 			}
 		}
+	}
+	
+	// Clear TLS if --no-tls was specified
+	if cfg.NoTLS {
+		cfg.TLSCert = ""
+		cfg.TLSKey = ""
 	}
 
 	if cfg.AuthToken == "" {
