@@ -188,7 +188,8 @@ type Config struct {
 
 	// Server mode
 	ServerMode   bool
-	PublicServer bool // Don't expose mesh UI, just landing page
+	PublicServer bool // Protect mesh queries (requires token)
+	LandingPage  bool // Show landing page instead of mesh UI
 
 	// Client mode
 	AuthToken      string
@@ -324,7 +325,8 @@ Environment:
 
 	// Mode selection
 	flag.BoolVar(&cfg.ServerMode, "server", false, "Enable registry server mode (receive heartbeats)")
-	flag.BoolVar(&cfg.PublicServer, "public", false, "Public server mode (show landing page, protect mesh data)")
+	flag.BoolVar(&cfg.PublicServer, "public", false, "Public server mode (protect mesh data, requires --token)")
+	flag.BoolVar(&cfg.LandingPage, "landing-page", false, "Show simple landing page instead of mesh UI")
 
 	// Client mode flags
 	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for API authentication")
@@ -425,13 +427,13 @@ Environment:
 		mux.HandleFunc("/api/v1/mesh", agent.auth(agent.handleLocalMesh))
 	}
 
-	// WebSocket (only for non-public mode)
-	if !cfg.PublicServer {
+	// WebSocket (only when showing full UI)
+	if !cfg.PublicServer && !cfg.LandingPage {
 		mux.HandleFunc("/ws", agent.handleWebSocket)
 	}
 
 	// Serve web UI or simple landing page
-	if cfg.PublicServer {
+	if cfg.PublicServer || cfg.LandingPage {
 		mux.HandleFunc("/", agent.handleLandingPage)
 	} else {
 		webFS, _ := fs.Sub(webContent, "web")
