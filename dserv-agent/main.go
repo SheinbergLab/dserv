@@ -392,6 +392,9 @@ Environment:
 		mux.HandleFunc("/api/v1/heartbeat", agent.handleHeartbeat)
 		mux.HandleFunc("/api/v1/mesh", agent.handleMeshQuery)
 		mux.HandleFunc("/api/registry/status", agent.handleServerStatus)
+		
+		// Workgroup directory page (e.g., /brown-sheinberg)
+		mux.HandleFunc("/w/", agent.handleWorkgroupPage)
 
 		// Start cleanup goroutine
 		go agent.registryCleanupLoop()
@@ -660,6 +663,144 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
     </div>
 </body>
 </html>`
+	w.Write([]byte(html))
+}
+
+// Workgroup directory page - shows hostname/IP list for a workgroup
+// URL: /w/{workgroup}
+func (a *Agent) handleWorkgroupPage(w http.ResponseWriter, r *http.Request) {
+	// Extract workgroup from path: /w/brown-sheinberg -> brown-sheinberg
+	workgroup := strings.TrimPrefix(r.URL.Path, "/w/")
+	workgroup = strings.TrimSuffix(workgroup, "/")
+	
+	if workgroup == "" {
+		http.Error(w, "Workgroup required: /w/{workgroup}", http.StatusBadRequest)
+		return
+	}
+
+	nodes := a.registry.getNodes(workgroup)
+	
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	
+	var nodeRows strings.Builder
+	if len(nodes) == 0 {
+		nodeRows.WriteString(`<tr><td colspan="4" style="text-align:center;color:#71767b;padding:40px;">No active nodes</td></tr>`)
+	} else {
+		for _, n := range nodes {
+			stateColor := "#34d399" // green for active
+			if n.State == "stale" {
+				stateColor = "#fbbf24" // yellow
+			} else if n.State == "unresponsive" {
+				stateColor = "#f87171" // red
+			}
+			
+			// Link to the node's web interface
+			scheme := "http"
+			if n.SSL {
+				scheme = "https"
+			}
+			nodeURL := fmt.Sprintf("%s://%s:%d/", scheme, n.IP, n.Port)
+			
+			nodeRows.WriteString(fmt.Sprintf(`
+				<tr>
+					<td><a href="%s" target="_blank">%s</a></td>
+					<td><code>%s</code></td>
+					<td>%d</td>
+					<td><span style="color:%s">●</span> %s</td>
+				</tr>`,
+				nodeURL, n.Hostname, n.IP, n.Port, stateColor, n.State))
+		}
+	}
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>%s - dserv.net</title>
+    <meta http-equiv="refresh" content="10">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: #71767b;
+            margin-bottom: 32px;
+        }
+        table {
+            width: 100%%;
+            border-collapse: collapse;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px 16px;
+            border-bottom: 1px solid #2f3336;
+        }
+        th {
+            color: #71767b;
+            font-weight: 500;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        td {
+            font-size: 14px;
+        }
+        code {
+            background: #1a2634;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+        a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .footer {
+            margin-top: 32px;
+            color: #71767b;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>%s</h1>
+        <p class="subtitle">%d node(s) registered • auto-refreshes every 10s</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Hostname</th>
+                    <th>IP Address</th>
+                    <th>Port</th>
+                    <th>State</th>
+                </tr>
+            </thead>
+            <tbody>
+                %s
+            </tbody>
+        </table>
+        <p class="footer"><a href="/">← dserv.net</a></p>
+    </div>
+</body>
+</html>`, workgroup, workgroup, len(nodes), nodeRows.String())
+
 	w.Write([]byte(html))
 }
 
