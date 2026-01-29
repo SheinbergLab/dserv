@@ -8,7 +8,7 @@ Wants=dserv.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/dserv-agent -allow-reboot -components /usr/local/dserv/config/components.json
+ExecStart=/usr/local/bin/dserv-agent --registry https://dserv.net --workgroup YOUR-WORKGROUP-NAME --no-tls --allow-reboot --components /usr/local/dserv/config/components.json
 Restart=always
 RestartSec=5
 
