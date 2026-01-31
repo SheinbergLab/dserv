@@ -203,6 +203,9 @@ type Config struct {
 	// Mesh registry (client mode)
 	RegistryURLs []string // Multiple registries for redundancy
 	Workgroup    string
+
+	// ESS Registry
+	ESSRegistryPath string	
 }
 
 // registryList is a custom flag type for multiple -registry flags
@@ -342,6 +345,10 @@ Environment:
 	flag.Var(&registries, "registry", "Mesh registry URL (can be specified multiple times)")
 	flag.StringVar(&cfg.Workgroup, "workgroup", "", "Mesh workgroup name")
 
+	// ESS Registry
+	flag.StringVar(&cfg.ESSRegistryPath, "ess-registry", "", 
+		"Path to ESS registry database (enables ESS script management)")
+	
 	flag.Parse()
 
 	cfg.RegistryURLs = registries
@@ -379,7 +386,21 @@ Environment:
 	}
 
 	mux := http.NewServeMux()
-
+	
+	// Initialize ESS Registry if enabled
+	var essRegistry *ESSRegistry
+	if cfg.ESSRegistryPath != "" {
+		var err error
+		essRegistry, err = NewESSRegistry(cfg.ESSRegistryPath)
+		if err != nil {
+			log.Fatalf("Failed to initialize ESS registry: %v", err)
+		}
+		log.Printf("  ESS Registry: %s", cfg.ESSRegistryPath)
+		
+		// Register HTTP handlers
+		essRegistry.RegisterHandlers(mux, agent.auth)
+	}
+	
 	if cfg.ServerMode {
 		// ===== SERVER MODE =====
 		agent.registry = &Registry{
