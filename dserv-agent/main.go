@@ -30,6 +30,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -1531,27 +1532,46 @@ func (a *Agent) filterAssets(release *ReleaseInfo, comp Component) []string {
 		arch = "armhf"
 	}
 
+	// Compile regex pattern if provided
+	var pattern *regexp.Regexp
+	if comp.AssetPattern != "" {
+		var err error
+		pattern, err = regexp.Compile(comp.AssetPattern)
+		if err != nil {
+			log.Printf("Invalid asset pattern for %s: %v", comp.ID, err)
+			pattern = nil
+		}
+	}
+
 	var assets []string
 	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.Name)
+		name := asset.Name
+		nameLower := strings.ToLower(name)
 
-		// Basic filtering
-		if !strings.HasSuffix(name, ".deb") && !strings.HasSuffix(name, ".zip") {
-			continue
-		}
-
-		// Architecture filtering
-		if strings.Contains(name, "amd64") && arch != "amd64" {
-			continue
-		}
-		if strings.Contains(name, "arm64") && arch != "arm64" {
-			continue
-		}
-		if strings.Contains(name, "armhf") && arch != "armhf" {
-			continue
+		// If AssetPattern is specified, use it as the primary filter
+		if pattern != nil {
+			if !pattern.MatchString(name) {
+				continue
+			}
+		} else {
+			// Fallback to basic filtering if no pattern
+			if !strings.HasSuffix(nameLower, ".deb") && !strings.HasSuffix(nameLower, ".zip") {
+				continue
+			}
 		}
 
-		assets = append(assets, asset.Name)
+		// Architecture filtering (applies to both pattern and non-pattern cases)
+		if strings.Contains(nameLower, "amd64") && arch != "amd64" {
+			continue
+		}
+		if strings.Contains(nameLower, "arm64") && arch != "arm64" {
+			continue
+		}
+		if strings.Contains(nameLower, "armhf") && arch != "armhf" {
+			continue
+		}
+
+		assets = append(assets, name)
 	}
 	return assets
 }
