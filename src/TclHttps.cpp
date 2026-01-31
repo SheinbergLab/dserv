@@ -84,10 +84,63 @@ static HttpResponse parseHttpResponse(const std::string& raw) {
     }
     resp.statusCode = std::stoi(match[1].str());
     
-    // Find body (after \r\n\r\n)
-    size_t bodyStart = raw.find("\r\n\r\n");
-    if (bodyStart != std::string::npos) {
-        resp.body = raw.substr(bodyStart + 4);
+    // Find headers section
+    size_t headersEnd = raw.find("\r\n\r\n");
+    if (headersEnd == std::string::npos) {
+        resp.error = "No headers/body separator found";
+        return resp;
+    }
+    
+    std::string headers = raw.substr(0, headersEnd);
+    std::string bodyData = raw.substr(headersEnd + 4);
+    
+    // Check for chunked transfer encoding (case-insensitive)
+    bool isChunked = false;
+    std::regex chunkedRegex(R"(transfer-encoding:\s*chunked)", std::regex::icase);
+    if (std::regex_search(headers, chunkedRegex)) {
+        isChunked = true;
+    }
+    
+    if (isChunked) {
+        // Decode chunked transfer encoding
+        std::string decoded;
+        size_t pos = 0;
+        
+        while (pos < bodyData.size()) {
+            // Find chunk size line
+            size_t lineEnd = bodyData.find("\r\n", pos);
+            if (lineEnd == std::string::npos) break;
+            
+            // Parse chunk size (hex)
+            std::string sizeStr = bodyData.substr(pos, lineEnd - pos);
+            // Remove any chunk extensions (after semicolon)
+            size_t semiPos = sizeStr.find(';');
+            if (semiPos != std::string::npos) {
+                sizeStr = sizeStr.substr(0, semiPos);
+            }
+            
+            unsigned long chunkSize;
+            try {
+                chunkSize = std::stoul(sizeStr, nullptr, 16);
+            } catch (...) {
+                break;  // Invalid chunk size
+            }
+            
+            if (chunkSize == 0) {
+                break;  // Final chunk
+            }
+            
+            // Extract chunk data
+            pos = lineEnd + 2;  // Skip \r\n after size
+            if (pos + chunkSize > bodyData.size()) break;
+            
+            decoded += bodyData.substr(pos, chunkSize);
+            pos += chunkSize + 2;  // Skip chunk data and trailing \r\n
+        }
+        
+        resp.body = decoded;
+    } else {
+        resp.body = bodyData;
     }
     
     resp.success = (resp.statusCode >= 200 && resp.statusCode < 300);
