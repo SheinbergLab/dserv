@@ -36,24 +36,6 @@ FetchContent_Declare(
   TIMEOUT        120
 )
 
-# QuickJS-NG - use amalgamated build to avoid symbol conflicts with jansson
-# Both jansson and quickjs define utf8_encode, so we compile quickjs with hidden visibility
-include(FetchContent)
-FetchContent_Declare(
-  quickjs_amalgam
-  URL https://github.com/quickjs-ng/quickjs/releases/download/v0.9.0/quickjs-amalgam.zip
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(quickjs_amalgam)
-
-# Build QuickJS as static library with renamed conflicting symbol
-add_library(qjs STATIC ${quickjs_amalgam_SOURCE_DIR}/quickjs-amalgam.c)
-target_include_directories(qjs PUBLIC ${quickjs_amalgam_SOURCE_DIR})
-# Rename utf8_encode to avoid conflict with jansson
-target_compile_definitions(qjs PRIVATE utf8_encode=qjs_utf8_encode)
-# Silence some warnings from quickjs
-target_compile_options(qjs PRIVATE -Wno-implicit-fallthrough -Wno-sign-compare)
-
 # Make all available (usockets and uwebsockets only now)
 FetchContent_MakeAvailable(usockets uwebsockets)
 
@@ -257,8 +239,6 @@ add_executable(dserv
     src/TclCompletion.cpp
     src/ErrorMonitor.cpp
     src/dpoint_process.c
-    src/JSServer.cpp
-    src/JSCommands.cpp
 )
 
 # export symbols for shared objects loaded at runtime
@@ -279,7 +259,6 @@ if(APPLE)
         ${USOCKETS_LIBS}
         OpenSSL::SSL
         OpenSSL::Crypto
-        qjs
     )
 elseif(WIN32)
     target_link_libraries(dserv 
@@ -290,7 +269,6 @@ elseif(WIN32)
         ${USOCKETS_LIBS}
         OpenSSL::SSL
         OpenSSL::Crypto
-        qjs
     )
 else()
     target_link_libraries(dserv 
@@ -304,7 +282,6 @@ else()
         ${USOCKETS_LIBS}
         OpenSSL::SSL
         OpenSSL::Crypto
-        qjs
     )
 endif()
 
