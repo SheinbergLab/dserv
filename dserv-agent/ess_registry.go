@@ -7,8 +7,6 @@
 //   - Advisory locking for concurrent editing
 //   - Project definitions for scoping what's available on rigs
 //
-// Uses SQLite for storage (modernc.org/sqlite - pure Go, no CGO).
-// Database files are standard SQLite format, compatible with sqlite3 CLI.
 
 package main
 
@@ -28,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // ============ Registry ============

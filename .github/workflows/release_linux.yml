@@ -87,7 +87,7 @@ jobs:
       - name: Build dserv-agent
         run: |
           cd dserv-agent
-          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dserv-agent_linux_${{ matrix.goarch }} .
+          CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dserv-agent_linux_${{ matrix.goarch }} .
 
       - name: Upload dserv-agent binary
         uses: ncipollo/release-action@v1
