@@ -1,5 +1,6 @@
 #include "TclServer.h"
 #include "TclCommands.h"
+#include "JSCommands.h"
 #include "ObjectRegistry.h"
 #include "dserv.h"
 #include "dservConfig.h"
@@ -2665,7 +2666,9 @@ static int Tcl_DservAppInit(Tcl_Interp *interp, TclServer *tserv)
   if (Tcl_Init(interp) == TCL_ERROR) return TCL_ERROR;
   
   add_tcl_commands(interp, tserv);
-  
+
+  JSCommands_Init(interp, tserv);
+ 
   if (tserv->hasCommandCallback()) {
       tserv->callCommandCallback(interp);
   }
