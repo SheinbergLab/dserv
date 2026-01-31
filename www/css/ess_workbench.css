@@ -507,7 +507,7 @@ body {
    Variants Editor Tab
    ========================================== */
 
-#tab-variants {
+#tab-variants.active {
     display: flex;
     flex-direction: column;
     height: 100%;
