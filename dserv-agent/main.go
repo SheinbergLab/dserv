@@ -276,6 +276,24 @@ type WSResponse struct {
 	Action  string      `json:"action,omitempty"`
 }
 
+
+func corsMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Allow requests from any origin (or specify your dserv origin)
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        
+        // Handle preflight OPTIONS request
+        if r.Method == "OPTIONS" {
+            w.WriteHeader(http.StatusOK)
+            return
+        }
+        
+        next.ServeHTTP(w, r)
+    })
+}
+
 // ============ Main ============
 
 func main() {
@@ -472,7 +490,7 @@ Environment:
 		mux.Handle("/", http.FileServer(http.FS(webFS)))
 	}
 
-	server := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
+	server := &http.Server{Addr: cfg.ListenAddr, Handler: corsMiddleware(mux)}
 
 	// Graceful shutdown
 	go func() {
