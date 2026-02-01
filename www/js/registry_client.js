@@ -245,6 +245,103 @@ class RegistryClient {
             method: 'DELETE'
         });
     }
+
+
+    // ==========================================
+    // Sandboxes
+    // ==========================================
+
+    async createSandbox(system, fromVersion = 'main', toVersion = null, comment = '') {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	if (!toVersion) toVersion = this.getUser() || 'sandbox';
+	
+	return this.fetch(`/sandbox/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/create`, {
+            method: 'POST',
+            body: JSON.stringify({
+		fromVersion,
+		toVersion,
+		username: this.getUser() || 'unknown',
+		comment
+            })
+	});
+    }
+
+    async promoteSandbox(system, fromVersion, toVersion = 'main', comment = '') {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	if (!fromVersion) throw new Error('fromVersion required');
+	
+	return this.fetch(`/sandbox/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/promote`, {
+            method: 'POST',
+            body: JSON.stringify({
+		fromVersion,
+		toVersion,
+		username: this.getUser() || 'unknown',
+		comment
+            })
+	});
+    }
+
+    async syncSandbox(system, toVersion, fromVersion = 'main', conflicts = 'overwrite') {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	if (!toVersion) throw new Error('toVersion required');
+	
+	return this.fetch(`/sandbox/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/sync`, {
+            method: 'POST',
+            body: JSON.stringify({
+		fromVersion,
+		toVersion,
+		username: this.getUser() || 'unknown',
+		conflicts
+            })
+	});
+    }
+
+    async deleteSandbox(system, version) {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	if (version === 'main') throw new Error('Cannot delete main version');
+	
+	return this.fetch(`/sandbox/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/${encodeURIComponent(version)}`, {
+            method: 'DELETE'
+	});
+    }
+
+    async listVersions(system) {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	
+	return this.fetch(`/sandbox/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/versions`);
+    }
+
+    async getSystemScripts(system, version = 'main') {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	
+	const data = await this.fetch(`/scripts/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}?version=${encodeURIComponent(version)}`);
+	return data;
+    }
+
+    async getScriptVersion(system, protocol, type, version = 'main') {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	
+	const proto = protocol || '_';
+	return this.fetch(`/script/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/${encodeURIComponent(proto)}/${encodeURIComponent(type)}?version=${encodeURIComponent(version)}`);
+    }
+
+    async saveScriptVersion(system, protocol, type, content, version = null, expectedChecksum = '', comment = '') {
+	if (!this.workgroup) throw new Error('Workgroup required');
+	if (!version) version = this.getUser() || 'main';
+	
+	const proto = protocol || '_';
+	
+	return this.fetch(`/script/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}/${encodeURIComponent(proto)}/${encodeURIComponent(type)}?version=${encodeURIComponent(version)}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+		content,
+		expectedChecksum,
+		updatedBy: this.getUser() || 'unknown',
+		comment
+            })
+	});
+    }    
+    
     
     // ==========================================
     // Locks
