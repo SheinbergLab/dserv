@@ -45,6 +45,9 @@ func (r *ESSRegistry) RegisterHandlers(mux *http.ServeMux, authMiddleware func(h
 	mux.HandleFunc("/api/v1/ess/users", authMiddleware(r.handleListUsers))
 	mux.HandleFunc("/api/v1/ess/user/", authMiddleware(r.handleUser))
 
+    // Sandbox/Version Management
+    mux.HandleFunc("/api/v1/ess/sandbox/", authMiddleware(r.handleSandbox))
+     
 	// Admin
 	mux.HandleFunc("/api/v1/ess/admin/seed-templates", authMiddleware(r.handleSeedTemplates))
 	mux.HandleFunc("/api/v1/ess/admin/backup", authMiddleware(r.handleBackup))
@@ -667,6 +670,41 @@ func (r *ESSRegistry) handleUser(w http.ResponseWriter, req *http.Request) {
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+
+// handleSandbox routes sandbox operations based on the action in the path
+func (r *ESSRegistry) handleSandbox(w http.ResponseWriter, req *http.Request) {
+	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/sandbox/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) < 3 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// parts[0] = workgroup
+	// parts[1] = system
+	// parts[2] = action ("create", "promote", "sync", "versions") or version (for DELETE)
+
+	action := parts[2]
+	switch action {
+	case "create":
+		r.handleCreateSandbox(w, req)
+	case "promote":
+		r.handlePromoteSandbox(w, req)
+	case "sync":
+		r.handleSyncSandbox(w, req)
+	case "versions":
+		r.handleListVersions(w, req)
+	default:
+		// If not a known action, might be DELETE with version
+		if req.Method == http.MethodDelete {
+			r.handleDeleteSandbox(w, req)
+		} else {
+			http.Error(w, "Unknown action", http.StatusNotFound)
+		}
 	}
 }
 
