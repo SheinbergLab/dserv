@@ -21,15 +21,14 @@
         originalInit.call(this);
         
         // Add registry properties
-        this.registry = null;
         this.workgroup = null;
         this.currentUser = null;
         this.scriptSyncStatus = {};
         this.localChecksums = {};
         this.registryChecksums = {};
         
-        // Initialize registry
-        this.initRegistry();
+        // Note: Registry is initialized by main workbench after connection
+        // We'll set up UI features when that happens
         
         // Bind registry events
         this.bindRegistryEvents();
@@ -39,21 +38,21 @@
     // Registry Initialization
     // ==========================================
     
-    ESSWorkbench.prototype.initRegistry = async function() {
-        // Parse workgroup and agent URL from URL params or use defaults
-        const urlParams = new URLSearchParams(window.location.search);
-        this.workgroup = urlParams.get('workgroup') || 'brown-sheinberg';
-        const agentUrl = urlParams.get('agent') || 'http://localhost';
+    // This gets called by main ess_workbench.js after registry client is created
+    ESSWorkbench.prototype.setupRegistryUI = async function() {
+        if (!this.registry) {
+            console.warn('setupRegistryUI called but registry not initialized');
+            return;
+        }
         
-        // Create registry client
-        this.registry = new RegistryClient({
-            baseUrl: agentUrl,
-            workgroup: this.workgroup
-        });
+        console.log('Setting up registry UI features...');
         
         // Update workgroup display
         const wgEl = document.getElementById('workgroup-name');
-        if (wgEl) wgEl.textContent = this.workgroup;
+        if (wgEl && this.registry.workgroup) {
+            wgEl.textContent = this.registry.workgroup;
+            this.workgroup = this.registry.workgroup;
+        }
         
         // Restore user from localStorage
         this.currentUser = this.registry.getUser();

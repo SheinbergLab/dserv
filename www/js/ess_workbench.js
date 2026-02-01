@@ -15,6 +15,7 @@ class ESSWorkbench {
         this.connection = null;
         this.snapshot = null;
         this.autoReload = true;
+        this.registry = null;  // ESS Registry client
         
         // UI state
         this.currentTab = 'dashboard';
@@ -151,6 +152,7 @@ class ESSWorkbench {
         this.connection.on('connected', () => {
             this.updateConnectionStatus('connected');
             this.subscribeToSnapshot();
+            this.initRegistry();  // Initialize registry after connection
         });
         
         this.connection.on('disconnected', () => {
@@ -210,6 +212,69 @@ class ESSWorkbench {
         }
         
         console.log('Subscription sent');
+    }
+    
+    async initRegistry() {
+        try {
+            console.log('Initializing ESS Registry...');
+            
+            // Query dserv for registry configuration
+            const registryUrlDp = await this.dpManager.get('ess/registry/url');
+            const workgroupDp = await this.dpManager.get('ess/registry/workgroup');
+            
+            // Extract values from datapoint objects
+            const registryUrl = registryUrlDp?.data || registryUrlDp?.value || '';
+            const workgroup = workgroupDp?.data || workgroupDp?.value || 'brown-sheinberg';
+            
+            console.log('Registry config from dserv:', { registryUrl, workgroup });
+            
+            // Create registry client
+            this.registry = new RegistryClient({
+                baseUrl: registryUrl,
+                workgroup: workgroup
+            });
+            
+            console.log('Registry client initialized');
+            
+            // Test connection and load available systems
+            if (this.registry.workgroup) {
+                try {
+                    const systems = await this.registry.getSystems();
+                    console.log(`Registry connected: ${systems.length} systems available`);
+                } catch (err) {
+                    console.warn('Registry connection test failed:', err);
+                }
+            }
+            
+            // Set up registry UI features if the integration module is loaded
+            if (typeof this.setupRegistryUI === 'function') {
+                await this.setupRegistryUI();
+            }
+            
+        } catch (err) {
+            console.error('Failed to initialize registry from dserv config:', err);
+            
+            // Fallback: try URL parameters
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const agentUrl = urlParams.get('agent') || '';
+                const workgroup = urlParams.get('workgroup') || 'brown-sheinberg';
+                
+                console.log('Falling back to URL params:', { agentUrl, workgroup });
+                
+                this.registry = new RegistryClient({
+                    baseUrl: agentUrl,
+                    workgroup: workgroup
+                });
+                
+                // Set up UI even with fallback
+                if (typeof this.setupRegistryUI === 'function') {
+                    await this.setupRegistryUI();
+                }
+            } catch (fallbackErr) {
+                console.error('Registry initialization completely failed:', fallbackErr);
+            }
+        }
     }
     
     // ==========================================
