@@ -437,11 +437,8 @@ class RegistryClient {
      * Compute SHA256 checksum (matches server-side)
      */
     async computeChecksum(content) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(content);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+	// Use global sha256 function (from ess_workbench.js) which has fallback
+	return await sha256(content);
     }
 }
 
