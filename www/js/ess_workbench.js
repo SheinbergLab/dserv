@@ -1017,11 +1017,17 @@ class ESSWorkbench {
             
 	    // Listen for changes (debounced)
 	    const onEditorChange = () => {
-		// Skip if we're still loading (hash not ready)
 		if (!this.scriptOriginalHash) return;
 		
 		if (checkTimeout) clearTimeout(checkTimeout);
 		checkTimeout = setTimeout(checkModified, 300);
+		
+		// Clear lint status when editing (user will re-lint manually)
+		if (this.elements.editorStatus.textContent) {
+		    this.elements.editorStatus.textContent = '';
+		    this.elements.editorStatus.style.color = '';
+		    this.elements.editorStatus.onclick = null;
+		}
 	    };
 	    
 	    this.editor.view.dom.addEventListener('input', onEditorChange);
@@ -1077,22 +1083,61 @@ class ESSWorkbench {
     }
     
     lintCurrentScript() {
-        if (!this.editor) return;
-        
-        const result = this.editor.lint();
-        
-        if (result.isValid) {
+	if (!this.editor) return;
+	
+	const result = this.editor.lint();
+	
+	if (result.isValid) {
             this.elements.editorStatus.textContent = '✓ No issues';
             this.elements.editorStatus.style.color = 'var(--wb-success)';
-        } else {
-            this.elements.editorStatus.textContent = result.summary;
-            this.elements.editorStatus.style.color = 'var(--wb-error)';
-        }
-        
-        setTimeout(() => {
-            this.elements.editorStatus.textContent = '';
-            this.elements.editorStatus.style.color = '';
-        }, 3000);
+            
+            setTimeout(() => {
+		this.elements.editorStatus.textContent = '';
+		this.elements.editorStatus.style.color = '';
+            }, 3000);
+	} else {
+            // Show first error with line number
+            const firstError = result.errors[0];
+            const firstWarning = result.warnings[0];
+            const issue = firstError || firstWarning;
+            
+            if (issue) {
+		this.elements.editorStatus.innerHTML = 
+                    `<span style="cursor:pointer" title="Click to see all issues">` +
+                    `Line ${issue.line}: ${issue.message}` +
+                    (result.errors.length + result.warnings.length > 1 
+                     ? ` <small>(+${result.errors.length + result.warnings.length - 1} more)</small>` 
+                     : '') +
+                    `</span>`;
+		this.elements.editorStatus.style.color = firstError ? 'var(--wb-error)' : 'var(--wb-warning)';
+		
+		// Jump to error line on click
+		this.elements.editorStatus.onclick = () => {
+                    this.jumpToLine(issue.line);
+                    // Log all issues to console for reference
+                    console.log('Lint results:', result);
+		};
+            } else {
+		this.elements.editorStatus.textContent = result.summary;
+		this.elements.editorStatus.style.color = 'var(--wb-error)';
+            }
+            
+            // Don't auto-clear errors - let user see them
+	}
+    }
+    
+    jumpToLine(lineNum) {
+	if (!this.editor?.view) return;
+	
+	const doc = this.editor.view.state.doc;
+	const line = doc.line(Math.min(lineNum, doc.lines));
+	
+	this.editor.view.dispatch({
+            selection: { anchor: line.from },
+            scrollIntoView: true
+	});
+	
+	this.editor.view.focus();
     }
     
     formatCurrentScript() {

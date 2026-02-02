@@ -385,6 +385,12 @@ proc ::ess_queues::queue_create {name args} {
     
     log info "Created queue: $name"
     publish_list
+
+    # Assign to active project (if ess_projects is loaded)
+    if {[namespace exists ::ess_projects]} {
+        ::ess_projects::on_queue_created $queue_id
+    }
+    
     return $name
 }
 

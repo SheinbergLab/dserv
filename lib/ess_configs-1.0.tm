@@ -421,6 +421,11 @@ namespace eval ess::configs {
         
         # Publish updated list
         publish_list
+
+	# Assign to active project (if ess_projects is loaded)
+	if {[namespace exists ::ess_projects]} {
+	    ::ess_projects::on_config_created $config_id
+	}
         
         return $config_id
     }
@@ -470,6 +475,12 @@ namespace eval ess::configs {
         log info "Created config: $name (id=$config_id)"
         
         publish_list
+
+	# Assign to active project
+	if {[namespace exists ::ess_projects]} {
+	    ::ess_projects::on_config_created $new_id
+	}
+	
         return $config_id
     }
     

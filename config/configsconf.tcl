@@ -37,6 +37,7 @@ proc exit {args} { error "exit not available for this subprocess" }
 # Load the configs and queues modules
 package require ess_configs
 package require ess_queues
+package require ess_projects
 
 # Load timer module for queue orchestration
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
@@ -54,8 +55,12 @@ file mkdir [file dirname $configs_db]
 # Initialize the configs system
 ess::configs::init $configs_db
 
-# Initialize the queues system (shares same database)
+# Initialize the queues system (same database)
 ::ess_queues::init [ess::configs::get_db]
+
+# Initialize the projects system (same database)
+::ess_projects::init [ess::configs::get_db]
+::ess_projects::publish_all
 
 # Purge archived configs older than 60 days
 ess::configs::purge_old_archived 60
@@ -635,6 +640,42 @@ proc queue_status {} {
         total [dservGet queues/total] \
         current_config [dservGet queues/current_config] \
         run_count [dservGet queues/run_count]]
+}
+
+#=========================================================================
+# Project procs
+#=========================================================================
+
+proc project_create {name args} { ::ess_projects::create $name {*}$args }
+proc project_get {name} { ::ess_projects::get $name }
+proc project_list {} { ::ess_projects::list }
+proc project_update {name args} { ::ess_projects::update $name {*}$args }
+proc project_delete {name} { ::ess_projects::delete $name }
+proc project_exists {name} { ::ess_projects::exists $name }
+
+proc project_add_config {proj cfg} { ::ess_projects::add_config $proj $cfg }
+proc project_add_configs {proj cfgs} { ::ess_projects::add_configs $proj $cfgs }
+proc project_remove_config {proj cfg} { ::ess_projects::remove_config $proj $cfg }
+proc project_move_config {cfg from to} { ::ess_projects::move_config $cfg $from $to }
+
+proc project_add_queue {proj q} { ::ess_projects::add_queue $proj $q }
+proc project_remove_queue {proj q} { ::ess_projects::remove_queue $proj $q }
+
+proc config_projects {cfg} { ::ess_projects::config_projects $cfg }
+proc queue_projects {q} { ::ess_projects::queue_projects $q }
+
+proc project_activate {name} { ::ess_projects::activate $name }
+proc project_deactivate {} { ::ess_projects::deactivate }
+proc project_active {} { ::ess_projects::active }
+
+proc project_validate {name} { ::ess_projects::validate $name }
+
+proc project_export {name} { ::ess_projects::export $name }
+proc project_import {json args} { ::ess_projects::import $json {*}$args }
+
+proc project_push {name remote_host args} {
+    set json [project_export $name]
+    send $remote_host "project_import {$json} -skip_existing {*}$args"
 }
 
 #=========================================================================
