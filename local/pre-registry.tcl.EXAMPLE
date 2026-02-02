@@ -1,5 +1,5 @@
 #
 # configure connection to ess-script registry
 #
-dservSet ess/registry/url https://dserv.net
-dservSet ess/registry/workgroup brown-sheinberg
+set env(ESS_REGISTRY_URL) https://dserv.net
+set env(ESS_WORKGROUP)    brown-sheinberg
