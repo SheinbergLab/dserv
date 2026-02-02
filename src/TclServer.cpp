@@ -18,6 +18,7 @@
 #include "TclCompletion.h"
 
 extern "C" int TclHttps_RegisterCommands(Tcl_Interp *interp);
+extern "C" int TclSha256_RegisterCommands(Tcl_Interp *interp);
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
@@ -2656,6 +2657,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
   // HTTPS client commands
   TclHttps_RegisterCommands(interp);  
+
+  // SHA256 client commands
+  TclSha256_RegisterCommands(interp);  
 
   return;
 }
