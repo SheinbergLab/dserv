@@ -31,7 +31,22 @@ if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
 }
 
 package require ess
+package require ess_registry
+package require ess_validation
 
+ess::registry::init_from_dserv
+
+# Configure registry from environment or defaults
+if {[info exists ::env(ESS_REGISTRY_URL)]} {
+    ess::registry::configure -url $::env(ESS_REGISTRY_URL)
+}
+if {[info exists ::env(ESS_WORKGROUP)]} {
+    ess::registry::configure -workgroup $::env(ESS_WORKGROUP)
+}
+
+#
+# TODO: set data dir based on user settings
+#
 foreach d "/shared/qpcs/data/essdat" {
     if { [file exists $d] } {
 	set ess::data_dir $d
