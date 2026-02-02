@@ -35,9 +35,21 @@
     // ==========================================
     
     ESSWorkbench.prototype.initRegistryV2 = function() {
-        // Set up event listeners for registry operations via dserv
-        this.setupRegistryDatapoints();
-        this.bindRegistryV2Events();
+	// Bind UI events that don't need connection
+	this.bindRegistryV2Events();
+	
+	// Defer datapoint subscriptions until connected
+	// (setupRegistryDatapoints requires an active WebSocket)
+	if (this.connection) {
+            this.connection.on('connected', () => {
+		this.setupRegistryDatapoints();
+            });
+            
+            // If already connected (e.g., reconnect scenario), set up now
+            if (this.connection.ws?.readyState === WebSocket.OPEN) {
+		this.setupRegistryDatapoints();
+            }
+	}
     };
     
     ESSWorkbench.prototype.setupRegistryDatapoints = function() {
@@ -111,7 +123,7 @@
     
     ESSWorkbench.prototype.execRegistryCmd = async function(cmd) {
         return new Promise((resolve, reject) => {
-            if (!this.connection?.ws?.readyState === WebSocket.OPEN) {
+	    if (this.connection?.ws?.readyState !== WebSocket.OPEN) {	    
                 reject(new Error('WebSocket not connected'));
                 return;
             }

@@ -164,21 +164,22 @@ class DatapointManager {
      * @returns {Promise} Resolves with datapoint value
      */
     async get(name) {
-        return new Promise((resolve, reject) => {
+	return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
-                reject(new Error(`Timeout getting datapoint: ${name}`));
+		reject(new Error(`Timeout getting datapoint: ${name}`));
             }, 5000);
             
-            // Subscribe temporarily to get the value
-            const unsubscribe = this.subscribe(name, (data) => {
-                clearTimeout(timeout);
-                unsubscribe();
-                resolve(data);
+            let unsubscribe = null;
+            
+            unsubscribe = this.subscribe(name, (data) => {
+		clearTimeout(timeout);
+		if (unsubscribe) unsubscribe();
+		resolve(data);
             });
             
             // Also send explicit get command
             this.sendGet(name);
-        });
+	});
     }
     
     /**

@@ -277,6 +277,20 @@
             const status = this.scriptSyncStatus[script] || '';
             dot.className = 'script-status-dot ' + status;
         });
+
+	// Disable commit buttons when synced
+	const variantsStatus = this.scriptSyncStatus['variants'] || 'unknown';
+	const variantCommitBtn = document.getElementById('variant-commit-btn');
+	if (variantCommitBtn) {
+	    variantCommitBtn.disabled = (variantsStatus === 'synced');
+	}
+	
+	const currentScriptStatus = this.scriptSyncStatus[this.currentScript] || 'unknown';
+	const scriptCommitBtn = document.getElementById('script-commit-btn');
+	if (scriptCommitBtn) {
+	    scriptCommitBtn.disabled = (currentScriptStatus === 'synced');
+	}
+	
     };
     
     ESSWorkbench.prototype.updateSingleSyncStatus = function(elementId, scriptType) {
@@ -413,6 +427,14 @@
         if (tabName === 'registry') {
             this.loadRegistryTab();
         }
+
+	// Touch snapshot to refresh sync status for scripts or variants tabs
+	if ((tabName === 'scripts' || tabName === 'variants') && this.connection?.ws?.readyState === WebSocket.OPEN) {
+            this.connection.ws.send(JSON.stringify({
+		cmd: 'touch',
+		name: 'ess/snapshot'
+            }));
+	}	
     };
     
     ESSWorkbench.prototype.loadRegistryTab = async function() {

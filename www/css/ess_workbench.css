@@ -412,6 +412,70 @@ body {
 }
 
 /* ==========================================
+   Guided Editor Placeholder (System/Loaders tabs)
+   ========================================== */
+
+.guided-editor-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(100% - 60px); /* Account for hero bar */
+    padding: var(--wb-space-lg);
+}
+
+.guided-editor-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--wb-space-lg);
+    padding: var(--wb-space-2xl);
+    background: var(--wb-bg-secondary);
+    border: 2px dashed var(--wb-border);
+    border-radius: var(--wb-radius-xl);
+    max-width: 500px;
+    text-align: center;
+}
+
+.guided-editor-placeholder svg {
+    color: var(--wb-text-muted);
+    opacity: 0.6;
+}
+
+.guided-editor-placeholder h3 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--wb-text-primary);
+    margin: 0;
+}
+
+.guided-editor-placeholder p {
+    color: var(--wb-text-secondary);
+    margin: 0;
+    line-height: 1.5;
+}
+
+.guided-editor-placeholder .placeholder-hint {
+    font-size: 0.875rem;
+    color: var(--wb-text-muted);
+    font-style: italic;
+}
+
+/* System and Loaders tab layout */
+#tab-system,
+#tab-loaders {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+    padding: var(--wb-space-md);
+}
+
+#tab-system.active,
+#tab-loaders.active {
+    display: flex;
+}
+
+/* ==========================================
    Stats Bar
    ========================================== */
 

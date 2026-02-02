@@ -38,6 +38,21 @@
                     </svg>
                     Dashboard
                 </button>
+                <button class="tab-btn" data-tab="system">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    System
+                </button>
+                <button class="tab-btn" data-tab="loaders">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                        <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                    </svg>
+                    Loaders
+                </button>
                 <button class="tab-btn" data-tab="variants">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="4" y1="21" x2="4" y2="14"></line>
@@ -183,140 +198,203 @@
                 </div>		    
             </div>
 
-<!-- Variants Tab - Corrected to match original structure + registry buttons -->
-<!-- Replace the entire tab-variants section in ess_workbench.html with this -->
-
-<div class="tab-content" id="tab-variants">
-    <div class="variants-editor">
-        <!-- Mini Hero -->
-        <div class="tab-hero">
-            <div class="tab-hero-identity">
-                <span class="tab-hero-project" id="variants-hero-project">—</span>
-                <span class="tab-hero-sep">/</span>
-                <span class="tab-hero-system" id="variants-hero-system">—</span>
-                <span class="tab-hero-sep">/</span>
-                <span class="tab-hero-protocol" id="variants-hero-protocol">—</span>
-            </div>
-            <!-- Sync status indicator (NEW) -->
-            <div class="sync-status-container">
-                <span class="sync-status" id="variants-sync-status" title="Sync status with registry">
-                    <span class="sync-icon"></span>
-                    <span class="sync-text">—</span>
-                </span>
-            </div>
-        </div>
-        
-        <!-- Header with actions -->
-        <div class="variants-header">
-            <div class="variants-title">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="4" y1="21" x2="4" y2="14"></line>
-                    <line x1="4" y1="10" x2="4" y2="3"></line>
-                    <line x1="12" y1="21" x2="12" y2="12"></line>
-                    <line x1="12" y1="8" x2="12" y2="3"></line>
-                    <line x1="20" y1="21" x2="20" y2="16"></line>
-                    <line x1="20" y1="12" x2="20" y2="3"></line>
-                </svg>
-                <span>variants.tcl</span>
-                <span class="file-validation-status" id="file-validation-status"></span>
-            </div>
-            <div class="variants-actions">
-                <button class="btn btn-sm btn-ghost" id="variant-format-btn" title="Format code">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="21" y1="10" x2="3" y2="10"></line>
-                        <line x1="21" y1="6" x2="3" y2="6"></line>
-                        <line x1="21" y1="14" x2="3" y2="14"></line>
-                        <line x1="21" y1="18" x2="3" y2="18"></line>
-                    </svg>
-                    Format
-                </button>
-                <button class="btn btn-sm btn-ghost" id="variant-duplicate-btn" title="Duplicate current variant">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                    Duplicate
-                </button>
-                <button class="btn btn-sm btn-ghost" id="variant-new-btn" title="Add new variant">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
-                    New
-                </button>
-                <button class="btn btn-sm btn-primary" id="variant-save-btn" title="Save to server" disabled>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-                        <polyline points="17 21 17 13 7 13 7 21"></polyline>
-                        <polyline points="7 3 7 8 15 8"></polyline>
-                    </svg>
-                    Save
-                </button>
-                <button class="btn btn-sm btn-primary" id="variant-save-reload-btn" title="Save and reload system" disabled>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="23 4 23 10 17 10"></polyline>
-                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                    </svg>
-                    Save & Reload
-                </button>
+            <!-- System Tab - Guided system.tcl editing -->
+            <div class="tab-content" id="tab-system">
+                <div class="tab-hero">
+                    <div class="tab-hero-identity">
+                        <span class="tab-hero-project" id="system-hero-project">—</span>
+                        <span class="tab-hero-sep">/</span>
+                        <span class="tab-hero-system" id="system-hero-system">—</span>
+                        <span class="tab-hero-sep">/</span>
+                        <span class="tab-hero-protocol" id="system-hero-protocol">—</span>
+                    </div>
+                    <div class="sync-status-container">
+                        <span class="sync-status" id="system-sync-status">
+                            <span class="sync-icon"></span>
+                            <span class="sync-text">—</span>
+                        </span>
+                    </div>
+                </div>
                 
-                <!-- Registry buttons (NEW) -->
-                <div class="toolbar-divider"></div>
-                <button class="btn btn-sm btn-registry" id="variant-pull-btn" title="Pull latest from registry">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="8 17 12 21 16 17"></polyline>
-                        <line x1="12" y1="12" x2="12" y2="21"></line>
-                        <path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"></path>
-                    </svg>
-                    Pull
-                </button>
-                <button class="btn btn-sm btn-registry-primary" id="variant-commit-btn" title="Commit changes to registry">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="16 16 12 12 8 16"></polyline>
-                        <line x1="12" y1="12" x2="12" y2="21"></line>
-                        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
-                    </svg>
-                    Commit
-                </button>
-            </div>
-        </div>
-        
-        <!-- Side-by-side: Script | Parsed View (ORIGINAL STRUCTURE) -->
-        <div class="variants-split">
-            <!-- Script Editor (Left) -->
-            <div class="variants-script-panel">
-                <div id="variant-script-editor" class="variant-editor-container"></div>
-            </div>
-            
-            <!-- Parsed View (Right) - Shows dropdowns like ess_control would -->
-            <div class="variants-parsed-panel">
-                <div class="parsed-header">
-                    <div class="parsed-variant-selector">
-                        <label class="parsed-variant-label">Variant:</label>
-                        <select id="parsed-variant-select" class="parsed-variant-select">
-                            <!-- Populated by JS -->
-                        </select>
-                    </div>
-                    <span class="parsed-status" id="parsed-status"></span>
-                </div>
-                <div class="parsed-content" id="parsed-content">
-                    <div class="parsed-empty">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <path d="M12 16v-4"></path>
-                            <path d="M12 8h.01"></path>
+                <div class="guided-editor-container">
+                    <div class="guided-editor-placeholder">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
                         </svg>
-                        <span>Place cursor inside a variant to see its structure</span>
+                        <h3>System Configuration</h3>
+                        <p>Guided editor for system.tcl coming soon</p>
+                        <p class="placeholder-hint">Edit system-level settings: states, transitions, parameters, and timing</p>
+                        <button class="btn btn-secondary" onclick="switchTab('scripts')">Edit in Scripts tab</button>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-</div>	    
+
+            <!-- Loaders Tab - Guided loaders.tcl editing -->
+            <div class="tab-content" id="tab-loaders">
+                <div class="tab-hero">
+                    <div class="tab-hero-identity">
+                        <span class="tab-hero-project" id="loaders-hero-project">—</span>
+                        <span class="tab-hero-sep">/</span>
+                        <span class="tab-hero-system" id="loaders-hero-system">—</span>
+                        <span class="tab-hero-sep">/</span>
+                        <span class="tab-hero-protocol" id="loaders-hero-protocol">—</span>
+                    </div>
+                    <div class="sync-status-container">
+                        <span class="sync-status" id="loaders-sync-status">
+                            <span class="sync-icon"></span>
+                            <span class="sync-text">—</span>
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="guided-editor-container">
+                    <div class="guided-editor-placeholder">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                        </svg>
+                        <h3>Loader Functions</h3>
+                        <p>Guided editor for loaders.tcl coming soon</p>
+                        <p class="placeholder-hint">Define trial loading procedures and their configurable options</p>
+                        <button class="btn btn-secondary" onclick="switchTab('scripts')">Edit in Scripts tab</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Variants Tab -->
+            <div class="tab-content" id="tab-variants">
+                <div class="variants-editor">
+                    <!-- Mini Hero -->
+                    <div class="tab-hero">
+                        <div class="tab-hero-identity">
+                            <span class="tab-hero-project" id="variants-hero-project">—</span>
+                            <span class="tab-hero-sep">/</span>
+                            <span class="tab-hero-system" id="variants-hero-system">—</span>
+                            <span class="tab-hero-sep">/</span>
+                            <span class="tab-hero-protocol" id="variants-hero-protocol">—</span>
+                        </div>
+                        <!-- Sync status indicator -->
+                        <div class="sync-status-container">
+                            <span class="sync-status" id="variants-sync-status" title="Sync status with registry">
+                                <span class="sync-icon"></span>
+                                <span class="sync-text">—</span>
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- Header with actions -->
+                    <div class="variants-header">
+                        <div class="variants-title">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="4" y1="21" x2="4" y2="14"></line>
+                                <line x1="4" y1="10" x2="4" y2="3"></line>
+                                <line x1="12" y1="21" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12" y2="3"></line>
+                                <line x1="20" y1="21" x2="20" y2="16"></line>
+                                <line x1="20" y1="12" x2="20" y2="3"></line>
+                            </svg>
+                            <span>variants.tcl</span>
+                            <span class="file-validation-status" id="file-validation-status"></span>
+                        </div>
+                        <div class="variants-actions">
+                            <button class="btn btn-sm btn-ghost" id="variant-format-btn" title="Format code">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="21" y1="10" x2="3" y2="10"></line>
+                                    <line x1="21" y1="6" x2="3" y2="6"></line>
+                                    <line x1="21" y1="14" x2="3" y2="14"></line>
+                                    <line x1="21" y1="18" x2="3" y2="18"></line>
+                                </svg>
+                                Format
+                            </button>
+                            <button class="btn btn-sm btn-ghost" id="variant-duplicate-btn" title="Duplicate current variant">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                                Duplicate
+                            </button>
+                            <button class="btn btn-sm btn-ghost" id="variant-new-btn" title="Add new variant">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                                New
+                            </button>
+                            <button class="btn btn-sm btn-primary" id="variant-save-btn" title="Save to server" disabled>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                                    <polyline points="7 3 7 8 15 8"></polyline>
+                                </svg>
+                                Save
+                            </button>
+                            <button class="btn btn-sm btn-primary" id="variant-save-reload-btn" title="Save and reload system" disabled>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                                </svg>
+                                Save & Reload
+                            </button>
+                            
+                            <!-- Registry buttons -->
+                            <div class="toolbar-divider"></div>
+                            <button class="btn btn-sm btn-registry" id="variant-pull-btn" title="Pull latest from registry">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="8 17 12 21 16 17"></polyline>
+                                    <line x1="12" y1="12" x2="12" y2="21"></line>
+                                    <path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"></path>
+                                </svg>
+                                Pull
+                            </button>
+                            <button class="btn btn-sm btn-registry-primary" id="variant-commit-btn" title="Commit changes to registry">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="16 16 12 12 8 16"></polyline>
+                                    <line x1="12" y1="12" x2="12" y2="21"></line>
+                                    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+                                </svg>
+                                Commit
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Side-by-side: Script | Parsed View -->
+                    <div class="variants-split">
+                        <!-- Script Editor (Left) -->
+                        <div class="variants-script-panel">
+                            <div id="variant-script-editor" class="variant-editor-container"></div>
+                        </div>
+                        
+                        <!-- Parsed View (Right) - Shows dropdowns like ess_control would -->
+                        <div class="variants-parsed-panel">
+                            <div class="parsed-header">
+                                <div class="parsed-variant-selector">
+                                    <label class="parsed-variant-label">Variant:</label>
+                                    <select id="parsed-variant-select" class="parsed-variant-select">
+                                        <!-- Populated by JS -->
+                                    </select>
+                                </div>
+                                <span class="parsed-status" id="parsed-status"></span>
+                            </div>
+                            <div class="parsed-content" id="parsed-content">
+                                <div class="parsed-empty">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <path d="M12 16v-4"></path>
+                                        <path d="M12 8h.01"></path>
+                                    </svg>
+                                    <span>Place cursor inside a variant to see its structure</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>	    
 	    
-	    <!-- Scripts Tab -->
+            <!-- Scripts Tab -->
             <div class="tab-content" id="tab-scripts">
-                <!-- Mini Hero -->
+                <!-- Mini Hero - simplified, no "Variant:" -->
                 <div class="tab-hero">
                     <div class="tab-hero-identity">
                         <span class="tab-hero-project" id="scripts-hero-project">—</span>
@@ -324,10 +402,6 @@
                         <span class="tab-hero-system" id="scripts-hero-system">—</span>
                         <span class="tab-hero-sep">/</span>
                         <span class="tab-hero-protocol" id="scripts-hero-protocol">—</span>
-                    </div>
-                    <div class="tab-hero-variant">
-                        <span class="tab-hero-variant-label">Variant:</span>
-                        <span class="tab-hero-variant-value" id="scripts-hero-variant">—</span>
                     </div>
                     <!-- Sync status -->
                     <div class="sync-status-container">
@@ -405,7 +479,7 @@
                                     </svg>
                                     Format
                                 </button>
-                                <button class="btn btn-sm btn-primary" id="script-save-btn">Save</button>
+				<button class="btn btn-sm btn-primary" id="script-save-btn" disabled>Save</button>
                                 <button class="btn btn-sm btn-registry" id="script-pull-btn">Pull</button>
                                 <button class="btn btn-sm btn-registry-primary" id="script-commit-btn">Commit</button>
 			    </div>
@@ -417,7 +491,7 @@
                 </div>
             </div>
             
-            <!-- Registry Tab (NEW) -->
+            <!-- Registry Tab -->
             <div class="tab-content" id="tab-registry">
                 <div class="registry-layout">
                     <!-- Left column: Systems and Templates -->
@@ -660,5 +734,6 @@
     <script src="js/registry_client.js"></script>
     <script src="js/ess_workbench.js"></script>
     <script src="js/ess_registry_integration.js"></script>
+    <script src="js/ess_registry_integration_v2.js"></script>
 </body>
 </html>

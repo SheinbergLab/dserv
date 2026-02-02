@@ -9,6 +9,20 @@
  * - State diagram visualization
  */
 
+
+/**
+ * Compute SHA256 hash of a string using Web Crypto API
+ * Returns lowercase hex string (64 chars)
+ */
+async function sha256(text) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+    
+
 class ESSWorkbench {
     constructor() {
         // Connection state
@@ -871,64 +885,100 @@ class ESSWorkbench {
             this.variantScriptEditor.setValue(this.snapshot.variants);
         }
     }
-    
+
     // ==========================================
     // Script Editor
     // ==========================================
     
     async initEditor() {
-        if (this.editor) return;
-        
-        try {
+	if (this.editor) return;
+	
+	try {
             this.editor = new TclEditor(this.elements.editorContainer, {
-                theme: 'dark',
-                fontSize: '13px',
-                tabSize: 4,
-                lineNumbers: true,
-                keybindings: 'emacs'
+		theme: 'dark',
+		fontSize: '13px',
+		tabSize: 4,
+		lineNumbers: true,
+		keybindings: 'emacs'
             });
             
             // Wait for editor to be ready
             await new Promise(resolve => {
-                this.elements.editorContainer.addEventListener('editor-ready', resolve, { once: true });
+		this.elements.editorContainer.addEventListener('editor-ready', resolve, { once: true });
             });
             
             // Load initial script
-            this.loadScript(this.currentScript);
+            await this.loadScript(this.currentScript);
             
-        } catch (e) {
+            // Set up debounced change detection
+            let checkTimeout = null;
+            const checkModified = async () => {
+		if (this.scriptOriginalHash) {
+                    const currentContent = this.editor.getValue();
+                    const currentHash = await sha256(currentContent);
+                    const isModified = currentHash !== this.scriptOriginalHash;
+                    
+                    if (isModified !== this.scriptModified) {
+			this.scriptModified = isModified;
+			const saveBtn = document.getElementById('script-save-btn');
+			if (saveBtn) saveBtn.disabled = !isModified;
+                    }
+		}
+            };
+            
+	    // Listen for changes (debounced)
+	    const onEditorChange = () => {
+		// Skip if we're still loading (hash not ready)
+		if (!this.scriptOriginalHash) return;
+		
+		if (checkTimeout) clearTimeout(checkTimeout);
+		checkTimeout = setTimeout(checkModified, 300);
+	    };
+	    
+	    this.editor.view.dom.addEventListener('input', onEditorChange);
+	    this.editor.view.dom.addEventListener('keyup', onEditorChange);
+            
+	} catch (e) {
             console.error('Failed to initialize editor:', e);
-        }
+	}
     }
-    
-    selectScript(scriptName) {
-        this.currentScript = scriptName;
-        
-        // Update selection UI
-        this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
+
+    async selectScript(scriptName) {
+	this.currentScript = scriptName;
+	
+	// Update selection UI
+	this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
             item.classList.toggle('active', item.dataset.script === scriptName);
-        });
-        
-        this.loadScript(scriptName);
+	});
+	
+	await this.loadScript(scriptName);
     }
     
-    loadScript(scriptName) {
-        if (!this.editor) return;
-        
-        const content = this.scripts[scriptName] || '';
-        this.editor.setValue(content);
-        
-        // Update filename display
-        const filenames = {
+    async loadScript(scriptName) {
+	if (!this.editor) return;
+	
+	const content = this.scripts[scriptName] || '';
+	this.editor.setValue(content);
+	
+	// Compute and store hash for change detection
+	this.scriptOriginalHash = await sha256(content);
+	this.scriptModified = false;
+	
+	// Disable save button (no changes yet)
+	const saveBtn = document.getElementById('script-save-btn');
+	if (saveBtn) saveBtn.disabled = true;
+	
+	// Update filename display
+	const filenames = {
             system: 'system.tcl',
             protocol: 'protocol.tcl',
             loaders: 'loaders.tcl',
             variants: 'variants.tcl',
             stim: 'stim.tcl'
-        };
-        
-        this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;
-        this.elements.editorStatus.textContent = '';
+	};
+	
+	this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;
+	this.elements.editorStatus.textContent = '';
     }
     
     updateScriptEditor() {
@@ -1206,7 +1256,7 @@ class ESSWorkbench {
         };
         
         // Track original content for modified detection
-        this.variantsOriginalContent = null;
+        this.variantsOriginalHash = null;
         this.variantsModified = false;
         
         // Bind button events
@@ -1239,7 +1289,7 @@ class ESSWorkbench {
         this.variantEditorPending = true;
     }
     
-    formatVariantsScript() {
+    async formatVariantsScript() {
         if (!this.variantScriptEditor?.view) return;
         
         if (typeof TclFormatter === 'undefined') {
@@ -1264,12 +1314,13 @@ class ESSWorkbench {
             this.variantScriptEditor.view.dispatch({
                 selection: { anchor: newPos }
             });
-            
-            // Check if modified and update save button
-            if (this.variantsOriginalContent !== null) {
-                this.variantsModified = formatted !== this.variantsOriginalContent;
-                this.updateSaveButton();
-            }
+
+	    // Check if modified and update save button
+	    if (this.variantsOriginalHash) {
+		const currentHash = await sha256(formatted);
+		this.variantsModified = currentHash !== this.variantsOriginalHash;
+		this.updateSaveButton();
+	    }
             
             // Re-validate
             this.validateEntireFile();
@@ -1352,13 +1403,17 @@ class ESSWorkbench {
         };
         
         // Check for modifications
-        const checkModified = () => {
-            if (this.variantsOriginalContent !== null) {
-                const currentContent = this.variantScriptEditor.getValue();
-                this.variantsModified = currentContent !== this.variantsOriginalContent;
-                this.updateSaveButton();
-            }
-        };
+	const checkModified = async () => {
+	    if (this.variantsOriginalHash) {
+		const currentContent = this.variantScriptEditor.getValue();
+		const currentHash = await sha256(currentContent);
+		const isModified = currentHash !== this.variantsOriginalHash;
+		if (isModified !== this.variantsModified) {
+		    this.variantsModified = isModified;
+		    this.updateSaveButton();
+		}
+	    }
+	};
         
         // Listen for cursor position changes via CodeMirror
         const view = this.variantScriptEditor.view;
@@ -1443,7 +1498,7 @@ class ESSWorkbench {
                 }));
                 
                 // Mark as saved
-                this.variantsOriginalContent = content;
+		this.variantsOriginalHash = await sha256(content);
                 this.variantsModified = false;
                 
                 console.log('Variants script saved successfully');
@@ -1628,7 +1683,7 @@ class ESSWorkbench {
         return variants;
     }
     
-    loadVariantScriptContent() {
+    async loadVariantScriptContent() {
         if (!this.variantScriptEditor?.view) return;
         
         let content = '';
@@ -1639,22 +1694,22 @@ class ESSWorkbench {
             console.log('Loading variant content from snapshot');
             content = this.snapshot.variants;
         }
-        
-        if (content) {
-            this.variantScriptEditor.setValue(content);
-            
-            // Track original for modified detection
-            this.variantsOriginalContent = content;
-            this.variantsModified = false;
-            this.updateSaveButton();
-            
-            // Populate dropdown, trigger initial parse, and validate file
-            setTimeout(() => {
-                this.populateVariantDropdown();
-                this.updateParsedView();
-                this.validateEntireFile();
-            }, 100);
-        }
+
+	if (content) {
+	    this.variantScriptEditor.setValue(content);
+	    
+	    // Track original hash for modified detection
+	    this.variantsOriginalHash = await sha256(content);
+	    this.variantsModified = false;
+	    this.updateSaveButton();
+	    
+	    // Populate dropdown, trigger initial parse, and validate file
+	    setTimeout(() => {
+		this.populateVariantDropdown();
+		this.updateParsedView();
+		this.validateEntireFile();
+	    }, 100);
+	}	
     }
     
     populateVariantDropdown() {
