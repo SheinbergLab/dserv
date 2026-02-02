@@ -19,7 +19,6 @@
 #
 
 package provide ess_validation 1.0
-package require Tcl 8.6
 
 namespace eval ess::validation {
     
@@ -45,9 +44,9 @@ namespace eval ess::validation {
         foreach line [split $content \n] {
             incr line_num
             
-            # Check for unbalanced braces/brackets
-            set open_braces [regexp -all {\{} $line]
-            set close_braces [regexp -all {\}} $line]
+            # Use unicode escapes to avoid tripping the Tcl parser's brace counter
+            set open_braces [regexp -all {\u007b} $line]
+            set close_braces [regexp -all {\u007d} $line]
             set open_brackets [regexp -all {\[} $line]
             set close_brackets [regexp -all {\]} $line]
             
@@ -60,7 +59,8 @@ namespace eval ess::validation {
                     message "proc declaration appears incomplete (missing args and body)"]
             }
             
-            if {[regexp {\$\{[^}]*$} $line]} {
+            # Fixed unclosed variable substitution regex
+            if {[regexp {\$\u007b[^\u007d]*$} $line]} {
                 lappend warnings [dict create \
                     line $line_num \
                     message "Unclosed variable substitution"]
@@ -306,26 +306,26 @@ namespace eval ess::validation {
         # Additional variant-specific checks
         
         # Check for required variant structure
-        if {![regexp {^\s*namespace\s+eval\s+Variants\s*\{} $content]} {
+        if {![regexp {^\s*namespace\s+eval\s+Variants\s*\u007b} $content]} {
             lappend warnings [dict create \
                 line 1 \
                 message "Expected 'namespace eval Variants' at start"]
         }
         
-        # Check each variant definition
-        set variant_pattern {(\w+)\s*\{\s*description\s+}
+        # Check each variant definition - use escapes for literal braces
+        set variant_pattern {(\w+)\s*\u007b\s*description\s+}
         set found_variants [regexp -all -inline $variant_pattern $content]
         
         if {[llength $found_variants] == 0} {
             lappend warnings [dict create \
                 line 0 \
-                message "No variant definitions found (expected: name \{ description ... \})"]
+                message "No variant definitions found (expected: name \{\u007b\} description ... \{\u007d\})"]
         }
         
         # Check for required fields in variants
         foreach {match variant_name} $found_variants {
             # Find this variant's block and check contents
-            if {![regexp "${variant_name}\\s*\\{.*?loader_proc\\s+\\w+" $content]} {
+            if {![regexp "${variant_name}\\s*\\u007b.*?loader_proc\\s+\\w+" $content]} {
                 lappend warnings [dict create \
                     line 0 \
                     message "Variant '$variant_name' missing loader_proc"]
