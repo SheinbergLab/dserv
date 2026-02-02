@@ -29,7 +29,6 @@
 #
 
 package provide ess_registry 1.0
-package require Tcl 8.6
 
 namespace eval ess::registry {
     # Configuration
@@ -309,11 +308,10 @@ namespace eval ess::registry {
             default  { error "Unknown script type: $type" }
         }
     }
-    
+
     proc compute_checksum {content} {
-        # SHA256 checksum matching server-side
-        package require sha256
-        return [::sha2::sha256 -hex $content]
+       # Use native sha256 command (from TclSha256.cpp)
+       return [sha256 $content]
     }
     
     #=========================================================================
