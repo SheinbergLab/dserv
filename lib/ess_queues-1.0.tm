@@ -760,13 +760,15 @@ proc ::ess_queues::queue_reset {} {
 proc ::ess_queues::run_close {} {
     variable state
     
-    # Only valid when in ready or between_runs state (i.e., ESS not running)
     if {$state(status) eq "idle"} {
         error "No active run to close"
     }
     
     if {$state(status) eq "running"} {
-        error "Stop ESS before closing run"
+        # Signal run complete - this triggers the normal state machine flow
+        # (flushing, datafile close, advance/idle)
+        dservSet ess/run_state complete
+        return
     }
     
     log info "Closing run: $state(current_config_name) (position $state(position))"
