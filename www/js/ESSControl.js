@@ -114,7 +114,11 @@ class ESSControl {
             configSearch: '',
             configTagFilter: '',
             showingTrash: false,
-            
+
+            // Project filtering state
+	    activeProject: '',
+	    activeProjectDetail: null,
+	    
             // Edit state
             editingConfig: null,  // full config object being edited, or null
             editForm: {},         // form field values during edit
@@ -201,7 +205,7 @@ class ESSControl {
                 <div class="ess-tab-header">
                     <button class="ess-tab-btn active" data-tab="setup">Setup</button>
                     <button class="ess-tab-btn" data-tab="configs">Configs</button>
-                    <button class="ess-tab-btn" data-tab="queue">Run</button>
+                    <button class="ess-tab-btn" data-tab="queue">Queues</button>
                 </div>
                 
                 <!-- Scrollable Tab Content -->
@@ -275,6 +279,15 @@ class ESSControl {
                 
                 <!-- Configs Tab Content -->
                 <div class="ess-tab-content" id="ess-tab-configs">
+                    <!-- No Project Overlay -->
+                    <div class="ess-no-project-overlay" id="ess-configs-no-project">
+                        <div class="ess-no-project-icon">📁</div>
+                        <div class="ess-no-project-title">No Project Selected</div>
+                        <div class="ess-no-project-message">
+                            Select a project from the dropdown above, or click <strong>+</strong> to create one.
+                        </div>
+                    </div>
+                    
                     <!-- List View (default) -->
                     <div class="ess-config-list-view" id="ess-config-list-view">
                         <!-- Search Row -->
@@ -307,8 +320,8 @@ class ESSControl {
                             <div class="ess-config-empty">No saved configurations</div>
                         </div>
                     </div>
-                    
-                    <!-- Edit View (shown when editing) -->
+
+                   <!-- Edit View (shown when editing) -->
                     <div class="ess-config-edit-view" id="ess-config-edit-view" style="display: none;">
                         <div class="ess-config-edit-header">
                             <button class="ess-config-edit-back" id="ess-config-edit-back">← Back</button>
@@ -328,19 +341,41 @@ class ESSControl {
                                 <textarea id="ess-edit-description" class="ess-edit-textarea" rows="2"></textarea>
                             </div>
                             
-                            <!-- Short Name -->
-                            <div class="ess-edit-row">
-                                <label class="ess-edit-label">Short Name</label>
-                                <input type="text" id="ess-edit-short-name" class="ess-edit-input" 
-                                       placeholder="Brief label for filenames">
-                            </div>
-                            
                             <!-- Subject -->
                             <div class="ess-edit-row">
                                 <label class="ess-edit-label">Subject</label>
                                 <select id="ess-edit-subject" class="ess-edit-select">
                                     <option value="">-- None --</option>
                                 </select>
+                            </div>
+                            
+                            <!-- File Template (NEW - moved from queue) -->
+                            <div class="ess-edit-row">
+                                <label class="ess-edit-label">File Template</label>
+                                <div class="ess-edit-template-wrapper">
+                                    <input type="text" id="ess-edit-file-template" class="ess-edit-input" 
+                                           placeholder="e.g. {subject}_{config}_{date}">
+                                    <button type="button" class="ess-edit-template-help-btn" id="ess-edit-template-help">?</button>
+                                </div>
+                                <div class="ess-edit-template-preview" id="ess-edit-template-preview">
+                                    Preview: <span id="ess-edit-template-preview-text">(default)</span>
+                                </div>
+                                <div class="ess-edit-template-help-popup" id="ess-edit-template-help-popup">
+                                    <div class="ess-edit-help-title">Template Variables <span class="ess-edit-help-hint">(click to insert)</span></div>
+                                    <div class="ess-edit-help-grid">
+                                        <span class="ess-edit-help-var" data-var="{subject}">{subject}</span>
+                                        <span class="ess-edit-help-var" data-var="{config}">{config}</span>
+                                        <span class="ess-edit-help-var" data-var="{system}">{system}</span>
+                                        <span class="ess-edit-help-var" data-var="{protocol}">{protocol}</span>
+                                        <span class="ess-edit-help-var" data-var="{variant}">{variant}</span>
+                                        <span class="ess-edit-help-var" data-var="{project}">{project}</span>
+                                        <span class="ess-edit-help-var" data-var="{date}">{date}</span>
+                                        <span class="ess-edit-help-var" data-var="{date_short}">{date_short}</span>
+                                        <span class="ess-edit-help-var" data-var="{time}">{time}</span>
+                                        <span class="ess-edit-help-var" data-var="{time_short}">{time_short}</span>
+                                    </div>
+                                    <div class="ess-edit-help-note">Leave empty for system default naming</div>
+                                </div>
                             </div>
                             
                             <!-- Tags -->
@@ -378,18 +413,27 @@ class ESSControl {
                             </div>
                         </div>
                     </div>
-                </div>
+                </div><!-- /.ess-tab-configs -->
                 
                 <!-- Run Tab Content (internally still uses queue infrastructure) -->
                 <div class="ess-tab-content" id="ess-tab-queue">
-                    <!-- Session Selection Row -->
+                    <!-- No Project Overlay -->
+                    <div class="ess-no-project-overlay" id="ess-queues-no-project">
+                        <div class="ess-no-project-icon">📁</div>
+                        <div class="ess-no-project-title">No Project Selected</div>
+                        <div class="ess-no-project-message">
+                            Select a project from the dropdown above, or click <strong>+</strong> to create one.
+                        </div>
+                    </div>
+                    
+                    <!-- Queue Selection Row -->
                     <div class="ess-queue-select-row">
                         <select id="ess-queue-select" class="ess-queue-select">
-                            <option value="">-- Select Session --</option>
+                            <option value="">-- Select Queue --</option>
                         </select>
-                        <button id="ess-queue-reset" class="ess-reload-btn" title="Reset session to beginning" disabled>↻</button>
+                        <button id="ess-queue-reset" class="ess-reload-btn" title="Reset queue to beginning" disabled>↻</button>
                         <div class="ess-queue-menu-wrapper">
-                            <button id="ess-queue-menu-btn" class="ess-queue-menu-btn" title="Session actions">⋮</button>
+                            <button id="ess-queue-menu-btn" class="ess-queue-menu-btn" title="Queue actions">⋮</button>
                             <div class="ess-queue-menu" id="ess-queue-menu">
                                 <button class="ess-queue-menu-action" data-action="edit">Edit</button>
                                 <button class="ess-queue-menu-action" data-action="new">New</button>
@@ -432,7 +476,7 @@ class ESSControl {
                         <span class="ess-queue-playlist-count" id="ess-queue-item-count">0 items</span>
                     </div>
                     <div class="ess-queue-playlist" id="ess-queue-playlist">
-                        <div class="ess-queue-empty">No session selected</div>
+                        <div class="ess-queue-empty">No queue selected</div>
                     </div>
                 </div>
                 </div><!-- /.ess-control-scrollable -->
@@ -509,13 +553,13 @@ class ESSControl {
             // Config list/edit views
             configListView: this.container.querySelector('#ess-config-list-view'),
             configEditView: this.container.querySelector('#ess-config-edit-view'),
+            configsNoProject: this.container.querySelector('#ess-configs-no-project'),
             
             // Edit form elements
             editBack: this.container.querySelector('#ess-config-edit-back'),
             editName: this.container.querySelector('#ess-edit-name'),
             editNameDisplay: this.container.querySelector('#ess-config-edit-name'),
             editDescription: this.container.querySelector('#ess-edit-description'),
-            editShortName: this.container.querySelector('#ess-edit-short-name'),
             editSubject: this.container.querySelector('#ess-edit-subject'),
             editTags: this.container.querySelector('#ess-edit-tags'),
             editTagInput: this.container.querySelector('#ess-edit-tag-input'),
@@ -525,8 +569,15 @@ class ESSControl {
             editParams: this.container.querySelector('#ess-edit-params'),
             editPath: this.container.querySelector('#ess-edit-path'),
             editCreated: this.container.querySelector('#ess-edit-created'),
-            
+
+	    // Edit form elements
+            editFileTemplate: this.container.querySelector('#ess-edit-file-template'),
+            editFileTemplatePreview: this.container.querySelector('#ess-edit-template-preview-text'),
+            editFileTemplateHelp: this.container.querySelector('#ess-edit-template-help'),
+            editFileTemplateHelpPopup: this.container.querySelector('#ess-edit-template-help-popup'),
+
             // Queue tab elements
+            queuesNoProject: this.container.querySelector('#ess-queues-no-project'),
             queueSelect: this.container.querySelector('#ess-queue-select'),
             queueMenuBtn: this.container.querySelector('#ess-queue-menu-btn'),
             queueMenu: this.container.querySelector('#ess-queue-menu'),
@@ -651,7 +702,39 @@ class ESSControl {
         
         // Edit form - back button
         this.elements.editBack.addEventListener('click', () => this.cancelEdit());
+
+        // File template help popup
+        this.elements.editFileTemplateHelp?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.elements.editFileTemplateHelpPopup?.classList.toggle('visible');
+        });
         
+        // Close help popup when clicking elsewhere
+        document.addEventListener('click', (e) => {
+            if (this.elements.editFileTemplateHelpPopup && 
+                !this.elements.editFileTemplateHelp?.contains(e.target) && 
+                !this.elements.editFileTemplateHelpPopup.contains(e.target)) {
+                this.elements.editFileTemplateHelpPopup.classList.remove('visible');
+            }
+        });
+        
+        // Click variable to insert into template
+        this.container.querySelectorAll('.ess-edit-help-var').forEach(el => {
+            el.addEventListener('click', () => {
+                const varText = el.dataset.var;
+                if (this.elements.editFileTemplate) {
+                    this.insertAtCursor(this.elements.editFileTemplate, varText);
+                    this.updateEditTemplatePreview();
+                }
+                this.elements.editFileTemplateHelpPopup?.classList.remove('visible');
+            });
+        });
+        
+        // Update preview on template input
+        this.elements.editFileTemplate?.addEventListener('input', () => {
+            this.updateEditTemplatePreview();
+        });
+	
         // Tag input - add tag on Enter
         this.elements.editTagInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
@@ -713,6 +796,9 @@ class ESSControl {
         this.elements.queueResetBtn.addEventListener('click', () => this.resetSession());
         this.elements.queueBtnStartRun.addEventListener('click', () => this.startRun());
         this.elements.queueBtnCloseRun.addEventListener('click', () => this.closeRun());
+        
+        // Initial state for no-project overlays
+        this.updateNoProjectOverlays();
     }
     
     /**
@@ -889,7 +975,16 @@ class ESSControl {
             this.state.inObs = data.value === '1' || data.value === 1 || data.value === true;
             this.updateInObsIndicator();
         });
+
+	// Project subscriptions for filtering
+        this.dpManager.subscribe('projects/active', (data) => {
+            this.updateActiveProject(data.value);
+        });
         
+        this.dpManager.subscribe('projects/active_detail', (data) => {
+            this.updateActiveProjectDetail(data.value);
+        });
+	
         // Config subscriptions
         this.dpManager.subscribe('configs/list', (data) => {
             this.updateConfigList(data.value);
@@ -943,15 +1038,71 @@ class ESSControl {
             this.updateSelectValue(this.elements.subjectSelect, this.state.currentSubject);
         }
     }
-    
+
     updateSystems(data) {
         const systems = this.parseListData(data);
         this.state.systems = systems;
-        this.populateSelect(this.elements.systemSelect, systems, '-- Select System --');
+        
+        // If project is active, mark systems that are in the project
+        if (this.state.activeProject && this.state.activeProjectDetail) {
+            const projectSystems = this.state.activeProjectDetail.systems || [];
+            this.populateSelectWithProjectIndicator(
+                this.elements.systemSelect, 
+                systems, 
+                '-- Select System --',
+                projectSystems
+            );
+        } else {
+            this.populateSelect(this.elements.systemSelect, systems, '-- Select System --');
+        }
+        
         if (this.state.currentSystem) {
             this.updateSelectValue(this.elements.systemSelect, this.state.currentSystem);
         }
     }
+
+  /**
+     * Populate select with project membership indicator
+     * Systems in project shown normally, others shown grayed with indicator
+     */
+    populateSelectWithProjectIndicator(select, items, placeholder, projectItems) {
+        select.innerHTML = '';
+        
+        if (placeholder) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = placeholder;
+            select.appendChild(opt);
+        }
+        
+        // Separate into in-project and not-in-project
+        const inProject = items.filter(item => projectItems.includes(item));
+        const notInProject = items.filter(item => !projectItems.includes(item));
+        
+        // Add in-project items first
+        inProject.forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item;
+            opt.textContent = item;
+            select.appendChild(opt);
+        });
+        
+        // Add separator and not-in-project items if any
+        if (notInProject.length > 0 && inProject.length > 0) {
+            const sep = document.createElement('option');
+            sep.disabled = true;
+            sep.textContent = '── other systems ──';
+            select.appendChild(sep);
+        }
+        
+        notInProject.forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item;
+            opt.textContent = `${item} ○`;  // Circle indicates not in project
+            opt.style.color = '#666';
+            select.appendChild(opt);
+        });
+    }    
     
     updateProtocols(data) {
         const protocols = this.parseListData(data);
@@ -989,8 +1140,43 @@ class ESSControl {
         // Update queue controls and status display when ESS state changes
         this.updateQueueControls();
         this.renderQueueStatus();
+        this.updateConfigRunButtons();
+    }    
+
+/**
+     * Update config run button appearance based on queue state
+     */
+updateConfigRunButtons() {
+        const currentConfig = this.state.queueState?.current_config || '';
+        const queueStatus = this.state.queueState?.status || 'idle';
+        
+        this.container.querySelectorAll('.ess-config-item').forEach(item => {
+            const btn = item.querySelector('.ess-config-item-run');
+            const loadBtn = item.querySelector('.ess-config-item-load');
+            if (!btn) return;
+            
+            const configName = item.dataset.name;
+            const isThisConfig = configName === currentConfig;
+            const isActive = isThisConfig && queueStatus !== 'idle';
+            
+            if (isActive) {
+                btn.textContent = '✕';
+                btn.title = 'Close';
+                btn.classList.add('closeable');
+            } else {
+                btn.textContent = '▶';
+                btn.title = 'Load, open file, and start';
+                btn.classList.remove('closeable');
+            }
+            
+            // Disable while ESS is running
+            btn.disabled = this.state.essRunning;
+            if (loadBtn) {
+                loadBtn.disabled = this.state.essRunning;
+            }
+        });
     }
-    
+
     updateButtonStates() {
         const status = this.state.essStatus;
         
@@ -1423,6 +1609,63 @@ class ESSControl {
             this.updateConfigStatusBar();
         }
     }
+
+   /**
+     * Update active project name
+     */
+    updateActiveProject(data) {
+        this.state.activeProject = data || '';
+        // Update no-project overlay visibility
+        this.updateNoProjectOverlays();
+        // Re-render lists to apply filter
+        this.renderConfigList();
+        this.renderQueueSelect();
+    }
+    
+    /**
+     * Show/hide the "no project" overlays based on active project state
+     */
+    updateNoProjectOverlays() {
+        const hasProject = !!this.state.activeProject;
+        
+        // Configs tab overlay
+        if (this.elements.configsNoProject) {
+            this.elements.configsNoProject.style.display = hasProject ? 'none' : 'flex';
+        }
+        if (this.elements.configListView) {
+            this.elements.configListView.style.display = hasProject ? '' : 'none';
+        }
+        
+        // Queues tab overlay
+        if (this.elements.queuesNoProject) {
+            this.elements.queuesNoProject.style.display = hasProject ? 'none' : 'flex';
+        }
+        // Hide all queue content when no project
+        const queueContent = this.container.querySelectorAll('#ess-tab-queue > :not(.ess-no-project-overlay)');
+        queueContent.forEach(el => {
+            el.style.display = hasProject ? '' : 'none';
+        });
+    }
+    
+    /**
+     * Update active project detail (with configs/queues membership lists)
+     */
+    updateActiveProjectDetail(data) {
+        try {
+            if (!data || data === '{}') {
+                this.state.activeProjectDetail = null;
+            } else {
+                const detail = typeof data === 'string' ? JSON.parse(data) : data;
+                this.state.activeProjectDetail = detail;
+            }
+            // Re-render lists with new filter data
+            this.renderConfigList();
+            this.renderQueueSelect();
+        } catch (e) {
+            console.error('Failed to parse project detail:', e);
+            this.state.activeProjectDetail = null;
+        }
+    }
     
     refreshConfigList() {
         // Request fresh data from configs subprocess
@@ -1491,7 +1734,7 @@ class ESSControl {
                 return tags.includes(this.state.configTagFilter);
             });
         }
-        
+
         const list = this.elements.configList;
         
         if (configs.length === 0) {
@@ -1543,7 +1786,7 @@ class ESSControl {
             });
         } else {
             // Render normal view
-            list.innerHTML = configs.map(cfg => {
+           list.innerHTML = configs.map(cfg => {
                 const isActive = this.state.currentConfig?.name === cfg.name;
                 const tags = this.parseTags(cfg.tags);
                 
@@ -1551,15 +1794,17 @@ class ESSControl {
                     <div class="ess-config-item ${isActive ? 'active' : ''}" data-name="${this.escapeAttr(cfg.name)}">
                         <div class="ess-config-item-main">
                             <span class="ess-config-item-name">${this.escapeHtml(cfg.name)}</span>
-                            <button class="ess-config-item-load">Load</button>
+                            <button class="ess-config-item-run" title="Load, open file, and start">▶</button>
+                            <button class="ess-config-item-load" title="Load setup only">Load</button>
                             <div class="ess-config-item-actions">
                                 <button class="ess-config-item-menu-btn" title="More actions">⋮</button>
                                 <div class="ess-config-item-menu">
-                                    <button class="ess-config-menu-action" data-action="view">View</button>
+                                    <button class="ess-config-menu-action" data-action="view">View Details</button>
                                     <button class="ess-config-menu-action" data-action="edit">Edit</button>
                                     <button class="ess-config-menu-action" data-action="clone">Clone</button>
-                                    <button class="ess-config-menu-action" data-action="export">Export to...</button>
-                                    <button class="ess-config-menu-action delete" data-action="delete">Delete</button>
+                                    <button class="ess-config-menu-action" data-action="export">Export...</button>
+                                    <div class="ess-config-menu-divider"></div>
+                                    <button class="ess-config-menu-action danger" data-action="delete">Delete</button>
                                 </div>
                             </div>
                         </div>
@@ -1574,29 +1819,35 @@ class ESSControl {
                         ` : ''}
                     </div>
                 `;
-            }).join('');
+           }).join('');	    
             
             // Bind normal item handlers
             list.querySelectorAll('.ess-config-item').forEach(item => {
                 const name = item.dataset.name;
                 
-                item.querySelector('.ess-config-item-load').addEventListener('click', (e) => {
+                // Run button - run or close file
+                item.querySelector('.ess-config-item-run')?.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    this.loadConfig(name);
+                    const isThisConfig = this.state.queueState?.current_config === name;
+                    const status = this.state.queueState?.status;
+                    
+                    if (isThisConfig && status !== 'idle') {
+                        // This config is active (running or file open) - close it
+                        this.closeRun();
+                    } else {
+                        // Idle - start run
+                        this.runConfig(name);
+                    }
                 });
                 
                 // Menu button toggle
                 const menuBtn = item.querySelector('.ess-config-item-menu-btn');
                 const menu = item.querySelector('.ess-config-item-menu');
                 
-                menuBtn.addEventListener('click', (e) => {
+                menuBtn?.addEventListener('click', (e) => {
                     e.stopPropagation();
                     const wasOpen = menu.classList.contains('open');
-                    
-                    // Close all menus first
                     this.closeAllConfigMenus();
-                    
-                    // If it wasn't open, open it and position it
                     if (!wasOpen) {
                         menu.classList.add('open');
                         this.positionConfigMenu(menuBtn, menu);
@@ -1604,7 +1855,7 @@ class ESSControl {
                 });
                 
                 // Menu action handlers
-                menu.querySelectorAll('.ess-config-menu-action').forEach(btn => {
+                menu?.querySelectorAll('.ess-config-menu-action').forEach(btn => {
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         const action = btn.dataset.action;
@@ -1630,9 +1881,11 @@ class ESSControl {
                     });
                 });
                 
-                // Click on row loads (but not if clicking menu area)
+                // Click on row loads (but not if clicking button area)
                 item.addEventListener('click', (e) => {
-                    if (!e.target.closest('.ess-config-item-actions')) {
+                    if (!e.target.closest('.ess-config-item-actions') && 
+                        !e.target.closest('.ess-config-item-run') &&
+                        !e.target.closest('.ess-config-item-load')) {
                         this.loadConfig(name);
                     }
                 });
@@ -1719,6 +1972,23 @@ class ESSControl {
             this.updateEssStatus('stopped');
         }
     }
+
+    /**
+     * Run a config directly (load + open datafile + start)
+     * This is the "one click to run" option - no queue needed
+     */
+    async runConfig(name) {
+	try {
+            this.emit('log', { message: `Running config: ${name}...`, level: 'info' });
+            this.updateEssStatus('loading');
+            
+            const result = await this.sendConfigCommandAsync(`queue_run_config {${name}}`);
+            this.emit('log', { message: `Started: ${name}`, level: 'info' });
+	} catch (e) {
+            this.emit('log', { message: `Failed to run config: ${e.message}`, level: 'error' });
+            this.updateEssStatus('stopped');
+	}
+    }
     
     /**
      * Start creating a new config - opens edit view with current ESS state
@@ -1791,12 +2061,12 @@ class ESSControl {
         this.state.editForm = {
             name: '',
             description: '',
-            short_name: '',
+	    file_template: '{subject}_{config}_{date_short}{time}',
             subject: subject,
             tags: subject ? [subject] : [],
             variant_args: { ...variantArgs },
             params: { ...paramsDict }
-        };
+        };	
         
         // Populate and show edit form
         this.populateEditForm();
@@ -1940,20 +2210,20 @@ class ESSControl {
             if (typeof tags === 'string') {
                 try { tags = JSON.parse(tags); } catch (e) { tags = []; }
             }
-            
+
             this.state.editForm = {
                 name: config.name || '',
                 description: config.description || '',
-                short_name: config.short_name || '',
+                file_template: config.file_template || '',  // NEW
                 subject: config.subject || '',
                 tags: Array.isArray(tags) ? [...tags] : [],
                 variant_args: typeof config.variant_args === 'string' 
-                    ? TclParser.parseDict(config.variant_args) 
-                    : (config.variant_args || {}),
+			    ? TclParser.parseDict(config.variant_args) 
+			    : (config.variant_args || {}),
                 params: typeof config.params === 'string'
-                    ? TclParser.parseDict(config.params)
-                    : (config.params || {})
-            };
+                      ? TclParser.parseDict(config.params)
+                      : (config.params || {})
+            };            
             
             // Populate the edit form
             this.populateEditForm();
@@ -1998,16 +2268,21 @@ class ESSControl {
         this.elements.editNameDisplay.textContent = createMode ? 'New Config' : config.name;
         this.elements.editName.value = form.name;
         this.elements.editDescription.value = form.description;
-        this.elements.editShortName.value = form.short_name || '';
         
         // Subject dropdown - populate with available subjects
         this.populateSelect(this.elements.editSubject, this.state.subjects, '-- None --');
         this.elements.editSubject.value = form.subject;
-        
+
+        // File template
+        if (this.elements.editFileTemplate) {
+            this.elements.editFileTemplate.value = form.file_template || '';
+            this.elements.editFileTemplate.disabled = viewMode;
+        }
+        this.updateEditTemplatePreview();
+	
         // Apply view mode (read-only) to form fields
         this.elements.editName.disabled = viewMode;
         this.elements.editDescription.disabled = viewMode;
-        this.elements.editShortName.disabled = viewMode;
         this.elements.editSubject.disabled = viewMode;
         this.elements.editTagInput.disabled = viewMode;
         this.elements.editTagInput.style.display = viewMode ? 'none' : '';
@@ -2049,6 +2324,57 @@ class ESSControl {
         const createdDate = config.created_at ? new Date(config.created_at * 1000).toLocaleDateString() : '—';
         const createdBy = config.created_by || 'unknown';
         this.elements.editCreated.textContent = `${createdBy} @ ${createdDate}`;
+    }
+
+       /**
+     * Update file template preview in config editor
+     */
+    updateEditTemplatePreview() {
+        const template = this.elements.editFileTemplate?.value?.trim() || '';
+        const previewEl = this.elements.editFileTemplatePreview;
+        if (!previewEl) return;
+        
+	let displayTemplate = template;
+        if (!displayTemplate) {
+	    displayTemplate = '{subject}_{config}_{date_short}{time}';
+        }
+        
+        // Get current values for preview
+        const config = this.state.editingConfig || {};
+        const subject = this.elements.editSubject?.value || config.subject || 'subject';
+        const system = config.system || this.state.currentSystem || 'system';
+        const protocol = config.protocol || this.state.currentProtocol || 'protocol';
+        const variant = config.variant || this.state.currentVariant || 'variant';
+        const configName = this.elements.editName?.value || config.name || 'config';
+        const projectName = this.state.activeProject || 'project';
+        
+        const now = new Date();
+        const date = now.toISOString().slice(0, 10).replace(/-/g, '');
+        const dateShort = date.slice(2);
+        const time = now.toTimeString().slice(0, 8).replace(/:/g, '');
+        const timeShort = time.slice(0, 4);
+        
+        let preview = displayTemplate
+            .replace(/\{subject\}/g, subject)
+            .replace(/\{config\}/g, configName)
+            .replace(/\{system\}/g, system)
+            .replace(/\{protocol\}/g, protocol)
+            .replace(/\{variant\}/g, variant)
+            .replace(/\{project\}/g, projectName)
+            .replace(/\{date\}/g, date)
+            .replace(/\{date_short\}/g, dateShort)
+            .replace(/\{time\}/g, time)
+            .replace(/\{time_short\}/g, timeShort);
+        
+        // Check for unrecognized variables
+        const remaining = preview.match(/\{[^}]+\}/g);
+        if (remaining) {
+            previewEl.textContent = `Unknown: ${remaining.join(', ')}`;
+            previewEl.classList.add('error');
+        } else {
+            previewEl.textContent = preview;
+            previewEl.classList.remove('error');
+        }
     }
     
     renderEditTags() {
@@ -2144,9 +2470,9 @@ class ESSControl {
         // Gather current form values
         const newName = this.elements.editName.value.trim();
         const newDescription = this.elements.editDescription.value.trim();
-        const newShortName = this.elements.editShortName.value.trim();
         const newSubject = this.elements.editSubject.value;
         const newTags = this.state.editForm.tags;
+	const newFileTemplate = this.elements.editFileTemplate?.value?.trim() || '';
         
         // Gather variant_args from inputs and selects
         const newVariantArgs = {};
@@ -2182,9 +2508,6 @@ class ESSControl {
                 let optArgs = [];
                 if (newDescription) {
                     optArgs.push(`-description {${newDescription}}`);
-                }
-                if (newShortName) {
-                    optArgs.push(`-short_name {${newShortName}}`);
                 }
                 if (newSubject) {
                     optArgs.push(`-subject {${newSubject}}`);
@@ -2224,9 +2547,6 @@ class ESSControl {
         }
         if (newDescription !== (original.description || '')) {
             updateArgs.push(`-description {${newDescription}}`);
-        }
-        if (newShortName !== (original.short_name || '')) {
-            updateArgs.push(`-short_name {${newShortName}}`);
         }
         if (newSubject !== (original.subject || '')) {
             updateArgs.push(`-subject {${newSubject}}`);
@@ -2819,7 +3139,8 @@ class ESSControl {
             'ess/param', 'ess/params', 'ess/datafile',
             'ess/obs_id', 'ess/obs_total', 'ess/in_obs',
             'configs/list', 'configs/tags', 'configs/current',
-            'queues/list', 'queues/state', 'queues/items'
+            'queues/list', 'queues/state', 'queues/items',
+	    'projects/active', 'projects/active_detail'	    
         ];
         dps.forEach(dp => this.dpManager.unsubscribe(dp));
         
@@ -2866,27 +3187,52 @@ class ESSControl {
                     auto_advance: parseInt(state.auto_advance) || 0
                 };
                 
-                // Sync selection to backend state if:
-                // 1. Backend has a queue_name AND
-                // 2. Either: session is active (not idle), OR we don't have a selection yet
-                const hasBackendQueue = !!this.state.queueState.queue_name;
-                const isActive = this.state.queueState.status !== 'idle';
-                const noCurrentSelection = !this.state.selectedQueue;
+                // Handle (single) pseudo-queue specially - this is a single config run
+                // Don't sync to dropdown, but do show the current config in playlist
+                const isSingleRun = this.state.queueState.queue_name === '(single)';
                 
-                if (hasBackendQueue && (isActive || noCurrentSelection)) {
-                    const needsLoad = this.state.selectedQueue !== this.state.queueState.queue_name;
-                    this.state.selectedQueue = this.state.queueState.queue_name;
-                    this.elements.queueSelect.value = this.state.queueState.queue_name;
+                if (isSingleRun) {
+                    // For single config runs, create a synthetic item from the state
+                    if (this.state.queueState.current_config && this.state.queueState.status !== 'idle') {
+                        this.state.queueItems = [{
+                            config_name: this.state.queueState.current_config,
+                            position: 0,
+                            repeat_count: this.state.queueState.repeat_total,
+                            pause_after: 0
+                        }];
+                        // Don't change selectedQueue - leave it showing the dropdown selection
+                    } else {
+                        // Single run finished/idle - clear items if no real queue selected
+                        if (!this.state.selectedQueue || this.state.selectedQueue === '(single)') {
+                            this.state.queueItems = [];
+                            this.state.selectedQueue = '';
+                        }
+                    }
+                } else {
+                    // Regular queue - sync selection to backend state if:
+                    // 1. Backend has a queue_name AND
+                    // 2. Either: session is active (not idle), OR we don't have a selection yet
+                    const hasBackendQueue = !!this.state.queueState.queue_name;
+                    const isActive = this.state.queueState.status !== 'idle';
+                    const noCurrentSelection = !this.state.selectedQueue;
                     
-                    // Fetch items if we just synced to a different queue or have no items
-                    if (needsLoad || this.state.queueItems.length === 0) {
-                        this.loadQueueItems(this.state.queueState.queue_name);
+                    if (hasBackendQueue && (isActive || noCurrentSelection)) {
+                        const needsLoad = this.state.selectedQueue !== this.state.queueState.queue_name;
+                        this.state.selectedQueue = this.state.queueState.queue_name;
+                        this.elements.queueSelect.value = this.state.queueState.queue_name;
+                        
+                        // Fetch items if we just synced to a different queue or have no items
+                        if (needsLoad || this.state.queueItems.length === 0) {
+                            // Load items async - renderQueuePlaylist will be called again when items arrive
+                            this.loadQueueItems(this.state.queueState.queue_name);
+                        }
                     }
                 }
                 
                 this.renderQueueStatus();
                 this.updateQueueControls();
                 this.renderQueuePlaylist();
+                this.updateConfigRunButtons();		
             }
         } catch (e) {
             console.error('Failed to parse queue state:', e);
@@ -2913,9 +3259,15 @@ class ESSControl {
      */
     renderQueueSelect() {
         const select = this.elements.queueSelect;
-        const queues = this.state.queues;
+        let queues = this.state.queues;
         
-        select.innerHTML = '<option value="">-- Select Session --</option>';
+        // Apply project filter
+        if (this.state.activeProject && this.state.activeProjectDetail) {
+            const projectQueues = this.state.activeProjectDetail.queues || [];
+            queues = queues.filter(q => projectQueues.includes(q.name));
+        }
+        
+        select.innerHTML = '<option value="">-- Select Queue --</option>';
         queues.forEach(q => {
             const itemLabel = q.item_count === 1 ? '1 config' : `${q.item_count} configs`;
             const opt = document.createElement('option');
@@ -2924,11 +3276,18 @@ class ESSControl {
             select.appendChild(opt);
         });
         
-        // Restore selection
+        // Restore selection if still valid
         if (this.state.selectedQueue) {
-            select.value = this.state.selectedQueue;
+            const stillExists = queues.some(q => q.name === this.state.selectedQueue);
+            if (stillExists) {
+                select.value = this.state.selectedQueue;
+            } else {
+                // Selected queue not in current project, clear selection
+                this.state.selectedQueue = '';
+                select.value = '';
+            }
         }
-    }
+    }    
     
     /**
      * Render queue status display
@@ -2995,7 +3354,8 @@ class ESSControl {
      */
     updateQueueControls() {
         const qs = this.state.queueState;
-        const hasQueue = !!this.state.selectedQueue;
+        const isSingleRun = qs.queue_name === '(single)';
+        const hasQueue = !!this.state.selectedQueue || isSingleRun;
         const hasItems = this.state.queueItems.length > 0;
         const essRunning = this.state.essRunning;
         const essLoading = this.state.essStatus === 'loading';
@@ -3008,14 +3368,16 @@ class ESSControl {
         const isBetweenRuns = qs.status === 'between_runs';
         const isRunActive = qs.status === 'running' || qs.status === 'ready';
         
-        // Reset button: enabled when session selected and ESS not busy
-        this.elements.queueResetBtn.disabled = !hasQueue || essBusy;
+        // Reset button: enabled when session selected and ESS not busy (not for single runs)
+        this.elements.queueResetBtn.disabled = !this.state.selectedQueue || essBusy || isSingleRun;
         
-        // Start Run: enabled when session selected, has items, idle/finished/between_runs, ESS not busy
-        const canStartRun = hasQueue && hasItems && (isIdle || isFinished || isBetweenRuns) && !essBusy;
+        // Start Run: enabled when session selected (real queue), has items, idle/finished/between_runs, ESS not busy
+        // For single runs, Start Run is not applicable (use config run button instead)
+        const canStartRun = this.state.selectedQueue && hasItems && (isIdle || isFinished || isBetweenRuns) && !essBusy;
         this.elements.queueBtnStartRun.disabled = !canStartRun;
         
         // Close Run: enabled when run is active (file open) and ESS is stopped (not running, not loading)
+        // This works for both queue runs and single runs
         const canCloseRun = isRunActive && !essBusy;
         this.elements.queueBtnCloseRun.disabled = !canCloseRun;
         
@@ -3067,9 +3429,9 @@ class ESSControl {
         
         if (items.length === 0) {
             if (this.state.selectedQueue) {
-                playlist.innerHTML = '<div class="ess-queue-empty">Session is empty</div>';
+                playlist.innerHTML = '<div class="ess-queue-empty">Queue is empty</div>';
             } else {
-                playlist.innerHTML = '<div class="ess-queue-empty">No session selected</div>';
+                playlist.innerHTML = '<div class="ess-queue-empty">No queue selected</div>';
             }
             return;
         }
@@ -3233,7 +3595,17 @@ class ESSControl {
             return;
         }
         
-        const pos = position ?? this.state.queueState.position;
+        // Determine position: use provided, or current, or 0 if finished/idle
+        let pos = position;
+        if (pos === null) {
+            const qs = this.state.queueState;
+            // If finished or idle, start from beginning
+            if (qs.status === 'finished' || qs.status === 'idle') {
+                pos = 0;
+            } else {
+                pos = qs.position;
+            }
+        }
         
         try {
             this.emit('log', { message: `Starting run: ${this.state.selectedQueue} at position ${pos}`, level: 'info' });
@@ -3312,7 +3684,6 @@ class ESSControl {
             auto_start: 1,
             auto_advance: 1,
             auto_datafile: 1,
-            datafile_template: '{suggest}',
             items: []
         };
         
@@ -3388,42 +3759,6 @@ class ESSControl {
                                 Auto-datafile
                             </label>
                         </div>
-                        <div class="ess-qb-template-row">
-                            <span class="ess-qb-template-label">Datafile template:</span>
-                            <input type="text" class="ess-modal-input" id="ess-qb-template" 
-                                   value="${this.escapeHtml(this.queueBuilder.datafile_template)}"
-                                   placeholder="{suggest}">
-                            <button type="button" class="ess-qb-help-btn" id="ess-qb-template-help">?</button>
-                        </div>
-                        <div class="ess-qb-template-preview" id="ess-qb-template-preview">
-                            Preview: <span id="ess-qb-preview-text">--</span>
-                        </div>
-                        <div class="ess-qb-template-help-popup" id="ess-qb-help-popup">
-                            <div class="ess-qb-help-title">Template Variables <span class="ess-qb-help-hint">(click to insert)</span></div>
-                            <div class="ess-qb-help-content">
-                                <div class="ess-qb-help-item" data-template="{suggest}"><code>{suggest}</code> Use ESS default naming</div>
-                                <div class="ess-qb-help-section">ESS State</div>
-                                <div class="ess-qb-help-item" data-template="{subject}"><code>{subject}</code> Current subject</div>
-                                <div class="ess-qb-help-item" data-template="{system}"><code>{system}</code> System name</div>
-                                <div class="ess-qb-help-item" data-template="{protocol}"><code>{protocol}</code> Protocol name</div>
-                                <div class="ess-qb-help-item" data-template="{variant}"><code>{variant}</code> Variant name</div>
-                                <div class="ess-qb-help-item" data-template="{config}"><code>{config}</code> Config name (or short_name)</div>
-                                <div class="ess-qb-help-section">Session Info</div>
-                                <div class="ess-qb-help-item" data-template="{queue}"><code>{queue}</code> Session name</div>
-                                <div class="ess-qb-help-item" data-template="{position}"><code>{position}</code> Position in session (0-based)</div>
-                                <div class="ess-qb-help-item" data-template="{run}"><code>{run}</code> Run number within config (1-based)</div>
-                                <div class="ess-qb-help-item" data-template="{global}"><code>{global}</code> Global run counter (0-based)</div>
-                                <div class="ess-qb-help-section">Zero-Padding</div>
-                                <div class="ess-qb-help-item" data-template="{position:02}"><code>{position:02}</code> → 00, 01, 02...</div>
-                                <div class="ess-qb-help-item" data-template="{global:03}"><code>{global:03}</code> → 000, 001, 002...</div>
-                                <div class="ess-qb-help-section">Date/Time</div>
-                                <div class="ess-qb-help-item" data-template="{date}"><code>{date}</code> YYYYMMDD</div>
-                                <div class="ess-qb-help-item" data-template="{date_short}"><code>{date_short}</code> YYMMDD</div>
-                                <div class="ess-qb-help-item" data-template="{time}"><code>{time}</code> HHMMSS</div>
-                                <div class="ess-qb-help-item" data-template="{time_short}"><code>{time_short}</code> HHMM</div>
-                                <div class="ess-qb-help-item" data-template="{timestamp}"><code>{timestamp}</code> Unix timestamp</div>
-                            </div>
-                        </div>
                     </div>
                     
                     <!-- Configs -->
@@ -3451,7 +3786,8 @@ class ESSControl {
         
         document.body.appendChild(modal);
         
-        // Populate config dropdown
+        // Refresh config list and populate dropdown
+        await this.refreshConfigListForQueueBuilder();
         this.populateQueueBuilderConfigSelect();
         
         // Render items
@@ -3470,45 +3806,6 @@ class ESSControl {
             addBtn.disabled = !configSelect.value;
         });
         
-        // Template help popup toggle
-        const helpBtn = modal.querySelector('#ess-qb-template-help');
-        const helpPopup = modal.querySelector('#ess-qb-help-popup');
-        const templateInput = modal.querySelector('#ess-qb-template');
-        
-        helpBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isVisible = helpPopup.classList.toggle('visible');
-            if (isVisible) {
-                // Position popup below the button
-                const rect = helpBtn.getBoundingClientRect();
-                helpPopup.style.top = (rect.bottom + 8) + 'px';
-                helpPopup.style.left = Math.max(10, rect.right - 280) + 'px';
-            }
-        });
-        
-        // Click on help item to insert template variable at cursor
-        helpPopup.querySelectorAll('.ess-qb-help-item[data-template]').forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const template = item.dataset.template;
-                this.insertAtCursor(templateInput, template);
-                this.updateTemplatePreview();
-            });
-        });
-        
-        // Close help popup when clicking elsewhere
-        document.addEventListener('click', (e) => {
-            if (!helpBtn.contains(e.target) && !helpPopup.contains(e.target)) {
-                helpPopup.classList.remove('visible');
-            }
-        });
-        
-        // Template preview - update on input
-        templateInput.addEventListener('input', () => this.updateTemplatePreview());
-        
-        // Initial preview update
-        this.updateTemplatePreview();
-        
         if (queueName) {
             modal.querySelector('#ess-qb-delete').addEventListener('click', () => this.queueBuilderDelete());
         }
@@ -3523,92 +3820,17 @@ class ESSControl {
     }
     
     /**
-     * Update the template preview with current values
+     * Refresh config list for queue builder dropdown
+     * Triggers a publish which will update state via subscription
      */
-    updateTemplatePreview() {
-        const templateInput = document.querySelector('#ess-qb-template');
-        const previewText = document.querySelector('#ess-qb-preview-text');
-        if (!templateInput || !previewText) return;
-        
-        const template = templateInput.value.trim();
-        
-        // Handle special {suggest} case
-        if (template === '{suggest}' || template === '') {
-            previewText.textContent = '(ESS default naming)';
-            previewText.classList.remove('error');
-            return;
-        }
-        
-        // Get current ESS state for preview
-        const subject = this.state.currentSubject || 'subject';
-        const system = this.state.currentSystem || 'system';
-        const protocol = this.state.currentProtocol || 'protocol';
-        const variant = this.state.currentVariant || 'variant';
-        
-        // Use first item's config name or placeholder
-        const configName = this.queueBuilder.items.length > 0 
-            ? this.queueBuilder.items[0].config_name 
-            : 'config';
-        
-        // Queue name from the form
-        const queueName = document.querySelector('#ess-qb-name')?.value.trim() || 'queue';
-        
-        // Date/time values
-        const now = new Date();
-        const date = now.toISOString().slice(0, 10).replace(/-/g, '');
-        const dateShort = date.slice(2);
-        const time = now.toTimeString().slice(0, 8).replace(/:/g, '');
-        const timeShort = time.slice(0, 4);
-        const timestamp = Math.floor(now.getTime() / 1000);
-        
-        // Build substitution map for string variables
-        const stringSubstitutions = {
-            '{subject}': subject,
-            '{system}': system,
-            '{protocol}': protocol,
-            '{variant}': variant,
-            '{config}': configName,
-            '{queue}': queueName,
-            '{date}': date,
-            '{date_short}': dateShort,
-            '{time}': time,
-            '{time_short}': timeShort,
-            '{timestamp}': timestamp.toString()
-        };
-        
-        // Numeric variables that support format specifiers
-        const numericVars = {
-            'position': 0,
-            'run': 1,
-            'global': 0
-        };
-        
-        let preview = template;
-        
-        // Handle numeric variables with optional format specifier {var:NN}
-        for (const [varName, value] of Object.entries(numericVars)) {
-            // Handle formatted version {var:NN} - zero-padded to NN digits
-            const formatRegex = new RegExp(`\\{${varName}:(\\d+)\\}`, 'g');
-            preview = preview.replace(formatRegex, (match, width) => {
-                return String(value).padStart(parseInt(width), '0');
-            });
-            // Handle plain version {var}
-            preview = preview.split(`{${varName}}`).join(String(value));
-        }
-        
-        // Apply string substitutions
-        for (const [key, value] of Object.entries(stringSubstitutions)) {
-            preview = preview.split(key).join(value);
-        }
-        
-        // Check for unrecognized variables
-        const remaining = preview.match(/\{[^}]+\}/g);
-        if (remaining) {
-            previewText.textContent = `Unknown: ${remaining.join(', ')}`;
-            previewText.classList.add('error');
-        } else {
-            previewText.textContent = preview;
-            previewText.classList.remove('error');
+    async refreshConfigListForQueueBuilder() {
+        try {
+            // Trigger a publish - this will update state.configs via subscription
+            await this.sendConfigCommandAsync('config_publish_all');
+            // Small delay to let subscription update state
+            await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (e) {
+            console.warn('Failed to refresh config list for queue builder:', e);
         }
     }
     
@@ -3754,7 +3976,6 @@ class ESSControl {
         const auto_start = document.querySelector('#ess-qb-auto-start')?.checked ? 1 : 0;
         const auto_advance = document.querySelector('#ess-qb-auto-advance')?.checked ? 1 : 0;
         const auto_datafile = document.querySelector('#ess-qb-auto-datafile')?.checked ? 1 : 0;
-        const datafile_template = document.querySelector('#ess-qb-template')?.value.trim() || '{suggest}';
         
         console.log('queueBuilderSave - items to save:', this.queueBuilder.items);
         
@@ -3789,7 +4010,6 @@ class ESSControl {
                 updateCmd += ` -auto_start ${auto_start}`;
                 updateCmd += ` -auto_advance ${auto_advance}`;
                 updateCmd += ` -auto_datafile ${auto_datafile}`;
-                updateCmd += ` -datafile_template {${datafile_template}}`;
                 
                 console.log('Update command:', updateCmd);
                 await this.sendConfigCommandAsync(updateCmd);
@@ -3812,7 +4032,6 @@ class ESSControl {
                 createCmd += ` -auto_start ${auto_start}`;
                 createCmd += ` -auto_advance ${auto_advance}`;
                 createCmd += ` -auto_datafile ${auto_datafile}`;
-                createCmd += ` -datafile_template {${datafile_template}}`;
                 
                 await this.sendConfigCommandAsync(createCmd);
                 
@@ -4086,12 +4305,12 @@ class ESSControl {
         modal.innerHTML = `
             <div class="ess-modal">
                 <div class="ess-modal-header">
-                    <span class="ess-modal-title">Push Session</span>
+                    <span class="ess-modal-title">Push Queue</span>
                     <button class="ess-modal-close">×</button>
                 </div>
                 <div class="ess-modal-body">
                     <div class="ess-modal-section">
-                        <label class="ess-modal-label">Session:</label>
+                        <label class="ess-modal-label">Queue:</label>
                         <div class="ess-modal-value">${this.escapeHtml(queueName)}</div>
                     </div>
                     <div class="ess-modal-section">

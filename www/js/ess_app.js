@@ -20,6 +20,7 @@ let essControl = null;
 let eyeTouchViz = null;
 let stimRenderer = null;
 let eyeSettings = null;
+let projectSelector = null;
 
 // Console logging
 const consoleOutput = [];
@@ -61,6 +62,7 @@ async function init() {
         initPerformanceDisplay();
         initMeshManager();
         initEyeSettings();
+	initProjectSelector();
         
         // Small delay to ensure subscriptions are registered on server
         // before we touch the datapoints
@@ -110,6 +112,7 @@ function requestInitialData() {
           configs/list configs/tags configs/quick_picks configs/current
           configs/remote_servers
           queues/list queues/state queues/items
+          projects/list projects/active projects/active_detail
         } {
           catch { dservTouch $v }
         }
@@ -205,6 +208,18 @@ function initEyeSettings() {
         eyeSettings = new EyeSettings(dpManager);
         window.eyeSettings = eyeSettings;
         log('Eye Settings initialized', 'info');
+    }
+}
+
+/**
+ * Initialize Project Selector
+ */
+function initProjectSelector() {
+    const container = document.getElementById('project-selector-container');
+    if (container && !projectSelector) {
+        projectSelector = new ProjectSelector(container, dpManager);
+        window.projectSelector = projectSelector;  // For debugging
+        log('Project Selector initialized', 'info');
     }
 }
 
