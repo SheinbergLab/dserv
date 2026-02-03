@@ -4,6 +4,8 @@
  * Provides:
  *   https_post $url $body ?-timeout ms?
  *   https_get $url ?-timeout ms?
+ *   https_put $url $body ?-timeout ms?
+ *   https_delete $url ?-timeout ms?
  *
  * Uses OpenSSL which is already linked into dserv.
  * Add to TclServer.cpp's add_tcl_commands():
@@ -273,14 +275,14 @@ static HttpResponse doHttpsRequest(const std::string& method,
     reqStream << "Connection: close\r\n";
     reqStream << "User-Agent: dserv-tclhttps/1.0\r\n";
     
-    if (method == "POST" && !body.empty()) {
+    if ((method == "POST" || method == "PUT") && !body.empty()) {
         reqStream << "Content-Type: application/json\r\n";
         reqStream << "Content-Length: " << body.size() << "\r\n";
     }
     
     reqStream << "\r\n";
     
-    if (method == "POST" && !body.empty()) {
+    if ((method == "POST" || method == "PUT") && !body.empty()) {
         reqStream << body;
     }
     
@@ -362,14 +364,14 @@ static HttpResponse doHttpRequest(const std::string& method,
     reqStream << "Host: " << url.host << "\r\n";
     reqStream << "Connection: close\r\n";
     
-    if (method == "POST" && !body.empty()) {
+    if ((method == "POST" || method == "PUT") && !body.empty()) {
         reqStream << "Content-Type: application/json\r\n";
         reqStream << "Content-Length: " << body.size() << "\r\n";
     }
     
     reqStream << "\r\n";
     
-    if (method == "POST" && !body.empty()) {
+    if ((method == "POST" || method == "PUT") && !body.empty()) {
         reqStream << body;
     }
     
@@ -498,6 +500,87 @@ static int HttpsGetCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
+ * https_put $url $body ?-timeout ms?
+ */
+static int HttpsPutCmd(ClientData clientData, Tcl_Interp *interp,
+                       int objc, Tcl_Obj *const objv[]) {
+    if (objc < 3) {
+        Tcl_WrongNumArgs(interp, 1, objv, "url body ?-timeout ms?");
+        return TCL_ERROR;
+    }
+    
+    const char* url = Tcl_GetString(objv[1]);
+    const char* body = Tcl_GetString(objv[2]);
+    int timeoutMs = 10000;
+    
+    for (int i = 3; i < objc; i++) {
+        const char* opt = Tcl_GetString(objv[i]);
+        if (strcmp(opt, "-timeout") == 0 && i + 1 < objc) {
+            if (Tcl_GetIntFromObj(interp, objv[i + 1], &timeoutMs) != TCL_OK) {
+                return TCL_ERROR;
+            }
+            i++;
+        }
+    }
+    
+    HttpResponse resp = doRequest("PUT", url, body, timeoutMs);
+    
+    if (!resp.error.empty()) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.error.c_str(), -1));
+        return TCL_ERROR;
+    }
+    
+    if (!resp.success) {
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("HTTP %d: %s", 
+            resp.statusCode, resp.body.c_str()));
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.body.c_str(), resp.body.size()));
+    return TCL_OK;
+}
+
+/*
+ * https_delete $url ?-timeout ms?
+ */
+static int HttpsDeleteCmd(ClientData clientData, Tcl_Interp *interp,
+                          int objc, Tcl_Obj *const objv[]) {
+    if (objc < 2) {
+        Tcl_WrongNumArgs(interp, 1, objv, "url ?-timeout ms?");
+        return TCL_ERROR;
+    }
+    
+    const char* url = Tcl_GetString(objv[1]);
+    int timeoutMs = 10000;
+    
+    for (int i = 2; i < objc; i++) {
+        const char* opt = Tcl_GetString(objv[i]);
+        if (strcmp(opt, "-timeout") == 0 && i + 1 < objc) {
+            if (Tcl_GetIntFromObj(interp, objv[i + 1], &timeoutMs) != TCL_OK) {
+                return TCL_ERROR;
+            }
+            i++;
+        }
+    }
+    
+    HttpResponse resp = doRequest("DELETE", url, "", timeoutMs);
+    
+    if (!resp.error.empty()) {
+        Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.error.c_str(), -1));
+        return TCL_ERROR;
+    }
+    
+    if (!resp.success) {
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("HTTP %d: %s", 
+            resp.statusCode, resp.body.c_str()));
+        return TCL_ERROR;
+    }
+    
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.body.c_str(), resp.body.size()));
+    return TCL_OK;
+}
+
+/*
  * Register commands with interpreter
  * Call from add_tcl_commands() in TclServer.cpp:
  *   TclHttps_RegisterCommands(interp);
@@ -506,6 +589,8 @@ extern "C" {
     int TclHttps_RegisterCommands(Tcl_Interp *interp) {
         Tcl_CreateObjCommand(interp, "https_post", HttpsPostCmd, NULL, NULL);
         Tcl_CreateObjCommand(interp, "https_get", HttpsGetCmd, NULL, NULL);
+        Tcl_CreateObjCommand(interp, "https_put", HttpsPutCmd, NULL, NULL);
+        Tcl_CreateObjCommand(interp, "https_delete", HttpsDeleteCmd, NULL, NULL);
         return TCL_OK;
     }
 }
