@@ -1,9 +1,14 @@
 # ess_queues-1_0.tm -- Queue management and run orchestration for ESS
 #
-# Manages experiment queues (ordered sequences of configs) and orchestrates
-# running through them with datafile management, pauses, and manual control.
+# Queues are ordered sequences of configs for unattended/batch execution.
+# Each queue belongs to exactly one project.
 #
-# Part of the configs subprocess - shares database with ess_configs module.
+# Key simplifications from previous version:
+#   - Queues no longer have datafile_template (now in configs)
+#   - Queue items reference configs by ID (not name)
+#   - No subject_override (edit config or clone it instead)
+#
+# Part of the configs subprocess - shares database with ess_configs.
 #
 
 package provide ess_queues 1.0
@@ -16,10 +21,13 @@ namespace eval ::ess_queues {
     variable state
     array set state {
         status          idle
+        queue_id        0
         queue_name      ""
+        project_name    ""
         position        0
         total_items     0
-        current_config  ""
+        current_config_id 0
+        current_config_name ""
         run_count       0
         global_run      0
         pause_until     0
@@ -31,20 +39,18 @@ namespace eval ::ess_queues {
         auto_advance    1
         auto_datafile   1
         datafile_open   0
-        forced_complete 0
     }
     
     # Status values:
     #   idle         - no queue active
     #   loading      - loading next config
-    #   ready        - config loaded, waiting to start (manual) or about to auto-start
+    #   ready        - config loaded, waiting to start
     #   running      - ESS is running
-    #   flushing     - run complete, waiting for datapoints to flush before closing file
-    #   paused       - run stopped early, waiting for retry/skip/abort
-    #   between_runs - run complete, in delay or waiting for manual advance
+    #   flushing     - waiting for datapoints to flush
+    #   paused       - manually paused
+    #   between_runs - between repeats or items
     #   finished     - queue complete
     
-    # Flush delay in milliseconds before closing datafile
     variable flush_delay_ms 750
 }
 
@@ -56,288 +62,10 @@ proc ::ess_queues::init {db_handle} {
     variable db
     set db $db_handle
     
-    create_tables
+    # Tables are created by ess_configs now (unified schema)
     publish_state
     
     return 1
-}
-
-proc ::ess_queues::create_tables {} {
-    variable db
-    
-    # Queues table - base schema
-    $db eval {
-        CREATE TABLE IF NOT EXISTS queues (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            description TEXT DEFAULT '',
-            auto_start INTEGER DEFAULT 1,
-            auto_advance INTEGER DEFAULT 1,
-            created_at INTEGER DEFAULT (strftime('%s', 'now')),
-            created_by TEXT DEFAULT '',
-            updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-        )
-    }
-    
-    # Queue items table
-    $db eval {
-        CREATE TABLE IF NOT EXISTS queue_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            queue_id INTEGER NOT NULL,
-            config_name TEXT NOT NULL,
-            position INTEGER NOT NULL,
-            repeat_count INTEGER DEFAULT 1,
-            pause_after INTEGER DEFAULT 0,
-            notes TEXT DEFAULT '',
-            FOREIGN KEY (queue_id) REFERENCES queues(id) ON DELETE CASCADE,
-            UNIQUE(queue_id, position)
-        )
-    }
-    
-    # Index for efficient lookups
-    $db eval {
-        CREATE INDEX IF NOT EXISTS idx_queue_items_queue_id 
-        ON queue_items(queue_id, position)
-    }
-    
-    # Run queue-specific migrations
-    migrate_queues
-}
-
-#=========================================================================
-# Queue Schema Migrations
-#=========================================================================
-
-# Check if a column exists in a table
-proc ::ess_queues::column_exists {table column} {
-    variable db
-    set cols [$db eval "PRAGMA table_info($table)"]
-    foreach {cid name type notnull dflt pk} $cols {
-        if {$name eq $column} {
-            return 1
-        }
-    }
-    return 0
-}
-
-# Run queue-specific migrations
-# Note: We use ess_configs' schema_version for the shared database,
-# but we also need to handle queue-specific columns
-proc ::ess_queues::migrate_queues {} {
-    variable db
-    
-    # Migration: Add auto_datafile column to queues
-    if {![column_exists queues auto_datafile]} {
-        log info "Migration: Adding auto_datafile column to queues"
-        $db eval {
-            ALTER TABLE queues ADD COLUMN auto_datafile INTEGER DEFAULT 1
-        }
-    }
-    
-    # Migration: Add datafile_template column to queues
-    if {![column_exists queues datafile_template]} {
-        log info "Migration: Adding datafile_template column to queues"
-        $db eval {
-            ALTER TABLE queues ADD COLUMN datafile_template TEXT DEFAULT '{suggest}'
-        }
-    }
-}
-
-# =============================================================================
-# Datafile Naming 
-# =============================================================================
-
-# Generate datafile basename from queue's template
-# Returns just the basename - ESS handles path and extension
-proc ::ess_queues::generate_datafile_basename {} {
-    variable state
-    variable db
-    
-    # Get the queue's template setting
-    set queue_id [get_queue_id $state(queue_name)]
-    set template [$db onecolumn {
-        SELECT datafile_template FROM queues WHERE id = :queue_id
-    }]
-    
-    # If template is {suggest} or empty, defer to ESS's file_suggest
-    if {$template eq "{suggest}" || $template eq ""} {
-        set basename [send ess "::ess::file_suggest"]
-        # Append run number if we have repeats
-        if {$state(current_repeat_count) > 1} {
-            append basename "_r$state(run_count)"
-        }
-        return $basename
-    }
-    
-    # Otherwise, process the template
-    
-    # Get values from ESS state
-    set subject [dservGet ess/subject]
-    if {$subject eq ""} { set subject "unknown" }
-    
-    set system [dservGet ess/system]
-    set protocol [dservGet ess/protocol]
-    set variant [dservGet ess/variant]
-    
-    # Get config's short_name if available
-    set config_label $state(current_config)
-    if {[catch {
-        set config_info [::ess::configs::get $state(current_config)]
-        if {$config_info ne "" && [dict exists $config_info short_name]} {
-            set sn [dict get $config_info short_name]
-            if {$sn ne ""} {
-                set config_label $sn
-            }
-        }
-    }]} {
-        # Failed to get config info, use config name as-is
-    }
-    
-    # Format date and time
-    set now [clock seconds]
-    set date [clock format $now -format "%Y%m%d"]
-    set date_short [clock format $now -format "%y%m%d"]
-    set time [clock format $now -format "%H%M%S"]
-    set time_short [clock format $now -format "%H%M"]
-    set timestamp $now
-    
-    # Clean strings for filename (remove special chars)
-    set config_clean [regsub -all {[^a-zA-Z0-9_-]} $config_label "_"]
-    set queue_clean [regsub -all {[^a-zA-Z0-9_-]} $state(queue_name) "_"]
-    set subject_clean [regsub -all {[^a-zA-Z0-9_-]} $subject "_"]
-    
-    # Build substitution map for string variables
-    set subst_map [list \
-        "{subject}"   $subject_clean \
-        "{system}"    $system \
-        "{protocol}"  $protocol \
-        "{variant}"   $variant \
-        "{date}"      $date \
-        "{date_short}" $date_short \
-        "{time}"      $time \
-        "{time_short}" $time_short \
-        "{timestamp}" $timestamp \
-        "{config}"    $config_clean \
-        "{queue}"     $queue_clean]
-    
-    # Start with template
-    set basename $template
-    
-    # Handle numeric variables with optional format specifier {var:NN}
-    foreach {var value} [list position $state(position) run $state(run_count) global $state(global_run)] {
-        # Handle formatted version {var:NN} - zero-padded to NN digits
-        while {[regexp "\\{${var}:(\\d+)\\}" $basename -> width]} {
-            set formatted [format "%0${width}d" $value]
-            regsub "\\{${var}:\\d+\\}" $basename $formatted basename
-        }
-        # Handle plain version {var}
-        set basename [string map [list "\{$var\}" $value] $basename]
-    }
-    
-    # Perform string substitutions
-    set basename [string map $subst_map $basename]
-    
-    return $basename
-}
-
-# =============================================================================
-# ESS Control Integration
-# =============================================================================
-
-# Open datafile for current run
-proc ::ess_queues::open_datafile {} {
-    variable state
-    
-    # Check if auto_datafile is enabled for this queue
-    if {!$state(auto_datafile)} {
-        log info "auto_datafile disabled - skipping file open"
-        return 1
-    }
-    
-    if {$state(datafile_open)} {
-        log warning "Datafile already open - closing first"
-        close_datafile
-    }
-    
-    set basename [generate_datafile_basename]
-    
-    log info "Opening datafile: $basename"
-    
-    if {[catch {send ess "::ess::file_open {$basename}"} result]} {
-        log error "Failed to open datafile: $result"
-        return 0
-    }
-    
-    # Check return value from ess::file_open
-    # Returns: 1 = success, 0 = file exists, -1 = file already open
-    if {$result == 0} {
-        log error "Datafile already exists: $basename"
-        return 0
-    } elseif {$result == -1} {
-        log error "Another datafile is already open"
-        return 0
-    }
-    
-    set state(datafile_open) 1
-    dservSet queues/datafile $basename
-    return 1
-}
-
-# Close current datafile
-proc ::ess_queues::close_datafile {} {
-    variable state
-    
-    # If auto_datafile is disabled, nothing to close
-    if {!$state(auto_datafile)} {
-        return 1
-    }
-    
-    if {!$state(datafile_open)} {
-        return 1
-    }
-    
-    log info "Closing datafile"
-    
-    if {[catch {send ess "::ess::file_close"} err]} {
-        log warning "Error closing datafile: $err"
-    }
-    
-    set state(datafile_open) 0
-    dservSet queues/datafile ""
-    return 1
-}
-
-# Start ESS
-proc ::ess_queues::ess_start {} {
-    log info "Starting ESS"
-    if {[catch {send ess "ess::start"} err]} {
-        log error "Failed to start ESS: $err"
-        return 0
-    }
-    return 1
-}
-
-# Stop ESS
-proc ::ess_queues::ess_stop {} {
-    log info "Stopping ESS"
-    if {[catch {send ess "ess::stop"} err]} {
-        log warning "Error stopping ESS: $err"
-    }
-    return 1
-}
-
-# =============================================================================
-# Logging
-# =============================================================================
-
-proc ::ess_queues::log {level msg} {
-    set timestamp [clock format [clock seconds] -format "%H:%M:%S"]
-    set full_msg "\[$timestamp\] \[$level\] $msg"
-    
-    # Publish to datapoint for monitoring
-    if {[catch {dservSet queues/log $full_msg}]} {
-        puts "ess_queues $level: $msg"
-    }
 }
 
 # =============================================================================
@@ -347,66 +75,71 @@ proc ::ess_queues::log {level msg} {
 proc ::ess_queues::queue_create {name args} {
     variable db
     
-    # Parse optional arguments
+    # Get active project from configs module
+    set project [::ess::configs::project_active]
+    
     set description ""
     set auto_start 1
     set auto_advance 1
     set auto_datafile 1
-    set datafile_template "{suggest}"
     set created_by ""
     
     foreach {opt val} $args {
         switch -- $opt {
+            -project { set project $val }
             -description { set description $val }
             -auto_start { set auto_start [expr {$val ? 1 : 0}] }
             -auto_advance { set auto_advance [expr {$val ? 1 : 0}] }
             -auto_datafile { set auto_datafile [expr {$val ? 1 : 0}] }
-            -datafile_template { set datafile_template $val }
             -created_by { set created_by $val }
         }
     }
     
-    # Validate name
+    if {$project eq ""} {
+        error "No project specified and no active project"
+    }
+    
+    set project_id [::ess::configs::project_get_id $project]
+    
     if {![regexp {^[\w\-\.]+$} $name]} {
         error "Invalid queue name: use only letters, numbers, underscores, dashes, dots"
     }
     
-    # Check for duplicate
-    if {[$db exists {SELECT 1 FROM queues WHERE name = :name}]} {
-        error "Queue already exists: $name"
+    # Check for duplicate in this project
+    if {[$db exists {SELECT 1 FROM queues WHERE project_id = :project_id AND name = :name}]} {
+        error "Queue already exists in project: $name"
     }
     
     $db eval {
-        INSERT INTO queues (name, description, auto_start, auto_advance, 
-                           auto_datafile, datafile_template, created_by)
-        VALUES (:name, :description, :auto_start, :auto_advance,
-                :auto_datafile, :datafile_template, :created_by)
+        INSERT INTO queues (project_id, name, description, auto_start, auto_advance, 
+                           auto_datafile, created_by)
+        VALUES (:project_id, :name, :description, :auto_start, :auto_advance,
+                :auto_datafile, :created_by)
     }
     
-    log info "Created queue: $name"
+    log info "Created queue: $name in project $project"
     publish_list
-
-    # Assign to active project (if ess_projects is loaded)
-    if {[namespace exists ::ess_projects]} {
-        ::ess_projects::on_queue_created $queue_id
-    }
     
     return $name
 }
 
-proc ::ess_queues::queue_delete {name} {
+proc ::ess_queues::queue_delete {name args} {
     variable db
     variable state
     
+    set project [::ess::configs::project_active]
+    foreach {k v} $args {
+        if {$k eq "-project"} { set project $v }
+    }
+    
+    set queue_id [get_queue_id $name $project]
+    
     # Can't delete active queue
-    if {$state(status) ne "idle" && $state(queue_name) eq $name} {
+    if {$state(status) ne "idle" && $state(queue_id) == $queue_id} {
         error "Cannot delete active queue"
     }
     
-    set queue_id [get_queue_id $name]
-    
-    # Delete items first (cascade should handle this, but be explicit)
-    $db eval {DELETE FROM queue_items WHERE queue_id = :queue_id}
+    # Items deleted via CASCADE
     $db eval {DELETE FROM queues WHERE id = :queue_id}
     
     log info "Deleted queue: $name"
@@ -414,25 +147,44 @@ proc ::ess_queues::queue_delete {name} {
     return $name
 }
 
-proc ::ess_queues::queue_list {} {
+proc ::ess_queues::queue_list {args} {
     variable db
     
+    set project [::ess::configs::project_active]
+    set all 0
+    
+    foreach {k v} $args {
+        switch -- $k {
+            -project { set project $v }
+            -all { set all $v }
+        }
+    }
+    
+    set where_clause "1=1"
+    if {!$all && $project ne ""} {
+        set project_id [::ess::configs::project_get_id $project]
+        set where_clause "q.project_id = :project_id"
+    }
+    
     set result [list]
-    $db eval {
-        SELECT q.name, q.description, q.auto_start, q.auto_advance,
-               q.auto_datafile, q.datafile_template,
-               q.created_at, q.created_by,
+    $db eval "
+        SELECT q.id, q.name, q.description, q.auto_start, q.auto_advance,
+               q.auto_datafile, q.created_at, q.created_by,
+               p.name as project_name,
                (SELECT COUNT(*) FROM queue_items WHERE queue_id = q.id) as item_count
         FROM queues q
-        ORDER BY q.name
-    } row {
+        JOIN projects p ON p.id = q.project_id
+        WHERE $where_clause
+        ORDER BY p.name, q.name
+    " row {
         lappend result [dict create \
+            id $row(id) \
             name $row(name) \
             description $row(description) \
+            project $row(project_name) \
             auto_start $row(auto_start) \
             auto_advance $row(auto_advance) \
             auto_datafile $row(auto_datafile) \
-            datafile_template $row(datafile_template) \
             item_count $row(item_count) \
             created_at $row(created_at) \
             created_by $row(created_by)]
@@ -441,85 +193,163 @@ proc ::ess_queues::queue_list {} {
     return $result
 }
 
-proc ::ess_queues::queue_get {name} {
+proc ::ess_queues::queue_get {name args} {
     variable db
     
-    set queue_id [get_queue_id $name]
-    
-    # Get queue info
-    set queue_info [$db eval {
-        SELECT name, description, auto_start, auto_advance, 
-               auto_datafile, datafile_template, created_at, created_by
-        FROM queues WHERE id = :queue_id
-    }]
-    
-    if {$queue_info eq ""} {
-        error "Queue not found: $name"
+    set project [::ess::configs::project_active]
+    foreach {k v} $args {
+        if {$k eq "-project"} { set project $v }
     }
     
-    lassign $queue_info qname desc auto_start auto_advance auto_datafile datafile_template created_at created_by
+    set queue_id [get_queue_id $name $project]
     
-    # Get items
-    set items [list]
+    set result ""
     $db eval {
-        SELECT config_name, position, repeat_count, pause_after, notes
-        FROM queue_items
-        WHERE queue_id = :queue_id
-        ORDER BY position
+        SELECT q.id, q.name, q.description, q.auto_start, q.auto_advance,
+               q.auto_datafile, q.created_at, q.created_by, q.project_id,
+               p.name as project_name
+        FROM queues q
+        JOIN projects p ON p.id = q.project_id
+        WHERE q.id = :queue_id
     } row {
-        lappend items [dict create \
-            config_name $row(config_name) \
-            position $row(position) \
-            repeat_count $row(repeat_count) \
-            pause_after $row(pause_after) \
-            notes $row(notes)]
+        # Get items with config names
+        set items [list]
+        $db eval {
+            SELECT qi.config_id, qi.position, qi.repeat_count, qi.pause_after, qi.notes,
+                   c.name as config_name
+            FROM queue_items qi
+            JOIN configs c ON c.id = qi.config_id
+            WHERE qi.queue_id = :queue_id
+            ORDER BY qi.position
+        } item {
+            lappend items [dict create \
+                config_id $item(config_id) \
+                config_name $item(config_name) \
+                position $item(position) \
+                repeat_count $item(repeat_count) \
+                pause_after $item(pause_after) \
+                notes $item(notes)]
+        }
+        
+        set result [dict create \
+            id $row(id) \
+            name $row(name) \
+            description $row(description) \
+            project $row(project_name) \
+            auto_start $row(auto_start) \
+            auto_advance $row(auto_advance) \
+            auto_datafile $row(auto_datafile) \
+            items $items \
+            created_at $row(created_at) \
+            created_by $row(created_by)]
     }
     
-    return [dict create \
-        name $qname \
-        description $desc \
-        auto_start $auto_start \
-        auto_advance $auto_advance \
-        auto_datafile $auto_datafile \
-        datafile_template $datafile_template \
-        items $items \
-        created_at $created_at \
-        created_by $created_by]
+    return $result
+}
+
+proc ::ess_queues::queue_get_json {name args} {
+    variable db
+    
+    set project [::ess::configs::project_active]
+    foreach {k v} $args {
+        if {$k eq "-project"} { set project $v }
+    }
+    
+    set queue_id [get_queue_id $name $project]
+    
+    package require yajltcl
+    set obj [yajl create #auto]
+    
+    $db eval {
+        SELECT q.id, q.name, q.description, q.auto_start, q.auto_advance,
+               q.auto_datafile, q.created_at, q.created_by,
+               p.name as project_name
+        FROM queues q
+        JOIN projects p ON p.id = q.project_id
+        WHERE q.id = :queue_id
+    } row {
+        $obj map_open
+        $obj string "id" number $row(id)
+        $obj string "name" string $row(name)
+        $obj string "description" string $row(description)
+        $obj string "project" string $row(project_name)
+        $obj string "auto_start" bool $row(auto_start)
+        $obj string "auto_advance" bool $row(auto_advance)
+        $obj string "auto_datafile" bool $row(auto_datafile)
+        $obj string "created_at" number $row(created_at)
+        $obj string "created_by" string $row(created_by)
+        
+        # Build items array properly
+        $obj string "items" array_open
+        $db eval {
+            SELECT qi.config_id, qi.position, qi.repeat_count, qi.pause_after, qi.notes,
+                   c.name as config_name
+            FROM queue_items qi
+            JOIN configs c ON c.id = qi.config_id
+            WHERE qi.queue_id = :queue_id
+            ORDER BY qi.position
+        } item {
+            $obj map_open
+            $obj string "config_id" number $item(config_id)
+            $obj string "config_name" string $item(config_name)
+            $obj string "position" number $item(position)
+            $obj string "repeat_count" number $item(repeat_count)
+            $obj string "pause_after" number $item(pause_after)
+            $obj string "notes" string $item(notes)
+            $obj map_close
+        }
+        $obj array_close
+        
+        $obj map_close
+    }
+    
+    set result [$obj get]
+    $obj delete
+    
+    if {$result eq ""} {
+        return "{}"
+    }
+    return $result
 }
 
 proc ::ess_queues::queue_update {name args} {
     variable db
     
-    set queue_id [get_queue_id $name]
+    set project [::ess::configs::project_active]
+    set updates {}
     
     foreach {opt val} $args {
         switch -- $opt {
+            -project { set project $val }
             -description {
                 $db eval {UPDATE queues SET description = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
             }
             -auto_start {
                 set val [expr {$val ? 1 : 0}]
-                $db eval {UPDATE queues SET auto_start = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
+                lappend updates "auto_start = $val"
             }
             -auto_advance {
                 set val [expr {$val ? 1 : 0}]
-                $db eval {UPDATE queues SET auto_advance = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
+                lappend updates "auto_advance = $val"
             }
             -auto_datafile {
                 set val [expr {$val ? 1 : 0}]
-                $db eval {UPDATE queues SET auto_datafile = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
-            }
-            -datafile_template {
-                $db eval {UPDATE queues SET datafile_template = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
+                lappend updates "auto_datafile = $val"
             }
             -name {
                 if {![regexp {^[\w\-\.]+$} $val]} {
                     error "Invalid queue name"
                 }
-                $db eval {UPDATE queues SET name = :val, updated_at = strftime('%s','now') WHERE id = :queue_id}
+                lappend updates "name = '$val'"
                 set name $val
             }
         }
+    }
+    
+    if {[llength $updates] > 0} {
+        set queue_id [get_queue_id $name $project]
+        set sql "UPDATE queues SET [join $updates ", "], updated_at = strftime('%s','now') WHERE id = $queue_id"
+        $db eval $sql
     }
     
     publish_list
@@ -533,9 +363,7 @@ proc ::ess_queues::queue_update {name args} {
 proc ::ess_queues::queue_add {queue_name config_name args} {
     variable db
     
-    set queue_id [get_queue_id $queue_name]
-    
-    # Parse options
+    set project [::ess::configs::project_active]
     set position -1
     set repeat_count 1
     set pause_after 0
@@ -543,12 +371,22 @@ proc ::ess_queues::queue_add {queue_name config_name args} {
     
     foreach {opt val} $args {
         switch -- $opt {
+            -project { set project $val }
             -position { set position $val }
             -repeat { set repeat_count [expr {int($val)}] }
             -pause_after { set pause_after [expr {int($val)}] }
             -notes { set notes $val }
         }
     }
+    
+    set queue_id [get_queue_id $queue_name $project]
+    
+    # Get config ID (must be in same project)
+    set config [::ess::configs::get $config_name -project $project]
+    if {$config eq ""} {
+        error "Config not found in project: $config_name"
+    }
+    set config_id [dict get $config id]
     
     # Get max position if not specified
     if {$position < 0} {
@@ -557,7 +395,7 @@ proc ::ess_queues::queue_add {queue_name config_name args} {
         }]
         set position [expr {$max_pos + 1}]
     } else {
-        # Shift existing items to make room
+        # Shift existing items
         $db eval {
             UPDATE queue_items 
             SET position = position + 1 
@@ -566,122 +404,107 @@ proc ::ess_queues::queue_add {queue_name config_name args} {
     }
     
     $db eval {
-        INSERT INTO queue_items (queue_id, config_name, position, repeat_count, pause_after, notes)
-        VALUES (:queue_id, :config_name, :position, :repeat_count, :pause_after, :notes)
+        INSERT INTO queue_items (queue_id, config_id, position, repeat_count, pause_after, notes)
+        VALUES (:queue_id, :config_id, :position, :repeat_count, :pause_after, :notes)
     }
     
-    publish_queue_items $queue_name
+    publish_queue_items $queue_name $project
     return $position
 }
 
-proc ::ess_queues::queue_remove {queue_name position} {
+proc ::ess_queues::queue_remove {queue_name position args} {
     variable db
     
-    set queue_id [get_queue_id $queue_name]
+    set project [::ess::configs::project_active]
+    foreach {k v} $args {
+        if {$k eq "-project"} { set project $v }
+    }
+    
+    set queue_id [get_queue_id $queue_name $project]
     set position [expr {int($position)}]
     
-    # Delete the item
     $db eval {
         DELETE FROM queue_items WHERE queue_id = :queue_id AND position = :position
     }
     
-    # Renumber remaining items
     renumber_items $queue_id
-    
-    publish_queue_items $queue_name
+    publish_queue_items $queue_name $project
 }
 
-proc ::ess_queues::queue_reorder {queue_name from_pos to_pos} {
+proc ::ess_queues::queue_clear {queue_name args} {
     variable db
     
-    set queue_id [get_queue_id $queue_name]
-    set from_pos [expr {int($from_pos)}]
-    set to_pos [expr {int($to_pos)}]
-    
-    if {$from_pos == $to_pos} return
-    
-    # Get the item being moved
-    set item_id [$db onecolumn {
-        SELECT id FROM queue_items WHERE queue_id = :queue_id AND position = :from_pos
-    }]
-    
-    if {$item_id eq ""} {
-        error "No item at position $from_pos"
+    set project [::ess::configs::project_active]
+    foreach {k v} $args {
+        if {$k eq "-project"} { set project $v }
     }
     
-    # Temporarily move to position -1
-    $db eval {UPDATE queue_items SET position = -1 WHERE id = :item_id}
-    
-    # Shift items
-    if {$from_pos < $to_pos} {
-        # Moving down - shift items up
-        $db eval {
-            UPDATE queue_items 
-            SET position = position - 1 
-            WHERE queue_id = :queue_id AND position > :from_pos AND position <= :to_pos
-        }
-    } else {
-        # Moving up - shift items down
-        $db eval {
-            UPDATE queue_items 
-            SET position = position + 1 
-            WHERE queue_id = :queue_id AND position >= :to_pos AND position < :from_pos
-        }
-    }
-    
-    # Place item in new position
-    $db eval {UPDATE queue_items SET position = :to_pos WHERE id = :item_id}
-    
-    publish_queue_items $queue_name
-}
-
-proc ::ess_queues::queue_clear {queue_name} {
-    variable db
-    
-    set queue_id [get_queue_id $queue_name]
+    set queue_id [get_queue_id $queue_name $project]
     
     $db eval {DELETE FROM queue_items WHERE queue_id = :queue_id}
     
-    publish_queue_items $queue_name
+    publish_queue_items $queue_name $project
 }
 
-proc ::ess_queues::queue_item_update {queue_name position args} {
-    variable db
+# =============================================================================
+# Single Config Run (no queue needed)
+# =============================================================================
+
+proc ::ess_queues::run_single {config_name args} {
+    variable state
     
-    set queue_id [get_queue_id $queue_name]
-    
-    foreach {opt val} $args {
-        switch -- $opt {
-            -config_name {
-                $db eval {
-                    UPDATE queue_items SET config_name = :val 
-                    WHERE queue_id = :queue_id AND position = :position
-                }
-            }
-            -repeat {
-                set val [expr {int($val)}]
-                $db eval {
-                    UPDATE queue_items SET repeat_count = :val 
-                    WHERE queue_id = :queue_id AND position = :position
-                }
-            }
-            -pause_after {
-                set val [expr {int($val)}]
-                $db eval {
-                    UPDATE queue_items SET pause_after = :val 
-                    WHERE queue_id = :queue_id AND position = :position
-                }
-            }
-            -notes {
-                $db eval {
-                    UPDATE queue_items SET notes = :val 
-                    WHERE queue_id = :queue_id AND position = :position
-                }
-            }
-        }
+    # Stop any active queue
+    if {$state(status) ne "idle"} {
+        queue_stop
     }
     
-    publish_queue_items $queue_name
+    # Get the config
+    set config [::ess::configs::get $config_name]
+    if {$config eq ""} {
+        error "Config not found: $config_name"
+    }
+    
+    set config_id [dict get $config id]
+    set project_name [dict get $config project_name]
+    
+    # Initialize state for single run (no queue, just one config)
+    set state(status) loading
+    set state(queue_id) 0
+    set state(queue_name) "(single)"
+    set state(project_name) $project_name
+    set state(position) 0
+    set state(total_items) 1
+    set state(current_config_id) $config_id
+    set state(current_config_name) $config_name
+    set state(current_repeat_count) 1
+    set state(current_pause_after) 0
+    set state(run_count) 0
+    set state(global_run) 0
+    set state(pause_until) 0
+    set state(run_started) 0
+    set state(datafile_open) 0
+    set state(auto_start) 1
+    set state(auto_advance) 0
+    set state(auto_datafile) 1
+    
+    log info "Running single config: $config_name"
+    publish_state
+    
+    # Load the config
+    if {[catch {::ess::configs::load $config_id} err]} {
+        log error "Failed to load config: $err"
+        set state(status) idle
+        publish_state
+        error "Failed to load config: $err"
+    }
+    
+    set state(status) ready
+    publish_state
+    
+    # Start immediately
+    start_run
+    
+    return $config_name
 }
 
 # =============================================================================
@@ -692,21 +515,28 @@ proc ::ess_queues::queue_start {queue_name args} {
     variable state
     variable db
     
-    # Can't start if already running
     if {$state(status) ni {idle finished}} {
         error "Queue already active: $state(queue_name)"
     }
     
-    # Parse options
+    set project [::ess::configs::project_active]
     set start_position 0
+    
     foreach {opt val} $args {
         switch -- $opt {
+            -project { set project $val }
             -position { set start_position [expr {int($val)}] }
         }
     }
     
-    # Validate queue exists and has items
-    set queue_id [get_queue_id $queue_name]
+    set queue_id [get_queue_id $queue_name $project]
+    
+    # Get queue info
+    set queue_info [$db eval {
+        SELECT auto_start, auto_advance, auto_datafile FROM queues WHERE id = :queue_id
+    }]
+    lassign $queue_info auto_start auto_advance auto_datafile
+    
     set item_count [$db onecolumn {
         SELECT COUNT(*) FROM queue_items WHERE queue_id = :queue_id
     }]
@@ -715,32 +545,27 @@ proc ::ess_queues::queue_start {queue_name args} {
         error "Queue is empty: $queue_name"
     }
     
-    # Get queue settings
-    lassign [$db eval {
-        SELECT auto_start, auto_advance, auto_datafile FROM queues WHERE id = :queue_id
-    }] auto_start auto_advance auto_datafile
-    
     # Initialize state
     set state(status) loading
+    set state(queue_id) $queue_id
     set state(queue_name) $queue_name
+    set state(project_name) $project
     set state(position) $start_position
     set state(total_items) $item_count
     set state(run_count) 0
     set state(global_run) 0
-    set state(current_config) ""
+    set state(current_config_id) 0
+    set state(current_config_name) ""
     set state(pause_until) 0
     set state(run_started) 0
     set state(datafile_open) 0
-    
-    # Store queue settings in state for easy access
     set state(auto_start) $auto_start
     set state(auto_advance) $auto_advance
     set state(auto_datafile) $auto_datafile
     
-    log info "Starting queue: $queue_name (items: $item_count, position: $start_position, auto_datafile: $auto_datafile)"
+    log info "Starting queue: $queue_name (items: $item_count, position: $start_position)"
     publish_state
     
-    # Load the first config
     load_current_item
     
     return $queue_name
@@ -755,23 +580,26 @@ proc ::ess_queues::queue_stop {} {
     
     log info "Stopping queue: $state(queue_name)"
     
-    # Stop ESS if running
     if {$state(status) eq "running"} {
         ess_stop
     }
     
-    # Close any open datafile
     close_datafile
     
     # Reset state
-    set state(status) idle
-    set state(queue_name) ""
-    set state(position) 0
-    set state(total_items) 0
-    set state(current_config) ""
-    set state(run_count) 0
-    set state(pause_until) 0
-    set state(run_started) 0
+    array set state {
+        status          idle
+        queue_id        0
+        queue_name      ""
+        project_name    ""
+        position        0
+        total_items     0
+        current_config_id 0
+        current_config_name ""
+        run_count       0
+        pause_until     0
+        run_started     0
+    }
     
     publish_state
 }
@@ -779,14 +607,12 @@ proc ::ess_queues::queue_stop {} {
 proc ::ess_queues::queue_pause {} {
     variable state
     
-    # Only valid when running or ready
     if {$state(status) ni {running ready}} {
         error "Cannot pause: queue is $state(status)"
     }
     
     log info "Pausing queue at position $state(position)"
     
-    # If running, stop the current run
     if {$state(status) eq "running"} {
         ess_stop
         close_datafile
@@ -803,9 +629,8 @@ proc ::ess_queues::queue_resume {} {
         error "Cannot resume: queue is $state(status)"
     }
     
-    log info "Resuming queue from position $state(position)"
+    log info "Resuming queue"
     
-    # Go back to ready state, which will trigger start on next tick if auto_start
     set state(status) ready
     publish_state
     
@@ -814,28 +639,31 @@ proc ::ess_queues::queue_resume {} {
     }
 }
 
-proc ::ess_queues::queue_run {} {
+proc ::ess_queues::queue_skip {} {
     variable state
     
-    # Manually start the run when in ready state
-    if {$state(status) ne "ready"} {
-        error "Cannot run: queue is $state(status)"
+    if {$state(status) eq "idle"} {
+        error "No active queue"
     }
     
-    start_run
+    log info "Skipping to next item"
+    
+    if {$state(status) eq "running"} {
+        ess_stop
+        close_datafile
+    }
+    
+    set state(run_count) 0
+    advance_position
 }
 
 proc ::ess_queues::queue_next {} {
     variable state
     
-    # Manual advance - complete current run and move on (respects repeats)
     if {$state(status) eq "idle"} {
         error "No active queue"
     }
     
-    log info "Manual next: position $state(position), run $state(run_count)/$state(current_repeat_count)"
-    
-    # Stop if currently running
     if {$state(status) eq "running"} {
         ess_stop
         close_datafile
@@ -843,169 +671,144 @@ proc ::ess_queues::queue_next {} {
     
     set state(run_started) 0
     
-    # Check if more repeats needed
     if {$state(run_count) < $state(current_repeat_count)} {
-        # More repeats - stay on same item, go to ready
         set state(status) ready
         publish_state
-        
+        if {$state(auto_start)} {
+            start_run
+        }
+    } else {
+        advance_position
+    }
+}
+
+proc ::ess_queues::queue_reset {} {
+    variable state
+    
+    if {$state(status) eq "idle"} {
+        # Nothing to reset
+        return
+    }
+    
+    log info "Resetting queue: $state(queue_name) to position 0"
+    
+    # Stop ESS if running
+    if {$state(status) eq "running"} {
+        ess_stop
+    }
+    
+    # Close any open datafile
+    close_datafile
+    
+    # Reset to beginning but keep queue active
+    set state(position) 0
+    set state(run_count) 0
+    set state(current_config_id) 0
+    set state(current_config_name) ""
+    set state(pause_until) 0
+    set state(run_started) 0
+    set state(status) idle
+    
+    publish_state
+}
+
+proc ::ess_queues::run_close {} {
+    variable state
+    
+    # Only valid when in ready or between_runs state (i.e., ESS not running)
+    if {$state(status) eq "idle"} {
+        error "No active run to close"
+    }
+    
+    if {$state(status) eq "running"} {
+        error "Stop ESS before closing run"
+    }
+    
+    log info "Closing run: $state(current_config_name) (position $state(position))"
+    
+    # Close any open datafile
+    close_datafile
+    
+    # For single config runs, go to idle
+    if {$state(queue_name) eq "(single)"} {
+        set state(status) idle
+        set state(current_config_name) ""
+        publish_state
+        return
+    }
+    
+    # For queue runs, check if more repeats needed
+    if {$state(run_count) < $state(current_repeat_count)} {
+        # More repeats of this config - stay ready
+        set state(status) ready
+        publish_state
         if {$state(auto_start)} {
             start_run
         }
         return
     }
     
-    # Done with repeats, advance to next item
-    advance_to_next
-}
-
-proc ::ess_queues::queue_skip {} {
-    variable state
-    
-    # Skip current item entirely (even remaining repeats)
-    if {$state(status) eq "idle"} {
-        error "No active queue"
+    # Check if there's pause_after time
+    if {$state(current_pause_after) > 0} {
+        set state(status) between_runs
+        set state(pause_until) [expr {[clock seconds] + $state(current_pause_after)}]
+        publish_state
+        return
     }
     
-    log info "Skipping position $state(position)"
-    
-    # Stop if currently running
-    if {$state(status) eq "running"} {
-        ess_stop
-        close_datafile
+    # Advance to next position if auto_advance, otherwise go between_runs
+    if {$state(auto_advance)} {
+        advance_position
+    } else {
+        set state(status) between_runs
+        publish_state
     }
-    
-    set state(run_count) 0  ;# Reset repeat counter
-    advance_to_next
-}
-
-proc ::ess_queues::queue_retry {} {
-    variable state
-    
-    # Reload and retry current item
-    if {$state(status) ni {paused between_runs}} {
-        error "Cannot retry: queue is $state(status)"
-    }
-    
-    log info "Retrying position $state(position)"
-    
-    set state(status) loading
-    publish_state
-    
-    load_current_item
-}
-
-# run_close - Close current run's datafile and advance to next position
-# Called when user clicks "Close Run" after stopping ESS
-# Only valid when ESS is stopped and a run is active (file open)
-proc ::ess_queues::run_close {} {
-    variable state
-    
-    # Verify ESS is not running
-    set ess_status [dservGet ess/status]
-    if {$ess_status eq "running"} {
-        error "Cannot close run while ESS is running"
-    }
-    
-    # Must have an active session
-    if {$state(status) eq "idle"} {
-        error "No active session"
-    }
-    
-    log info "Closing run at position $state(position)"
-    
-    # Close datafile with flush delay
-    close_datafile
-    
-    # Advance to next position (this will set status to finished if at end)
-    advance_to_next
-    
-    return "ok"
-}
-
-# queue_reset - Reset session to beginning
-# Called when user clicks the reset button next to session dropdown
-# Closes any open files, resets position to 0, returns to idle
-proc ::ess_queues::queue_reset {} {
-    variable state
-    
-    # Verify ESS is not running
-    set ess_status [dservGet ess/status]
-    if {$ess_status eq "running"} {
-        error "Cannot reset session while ESS is running"
-    }
-    
-    # Must have a session selected
-    if {$state(queue_name) eq ""} {
-        error "No session to reset"
-    }
-    
-    log info "Resetting session: $state(queue_name)"
-    
-    # Close any open datafile
-    close_datafile
-    
-    # Reset position but keep queue selected
-    set state(position) 0
-    set state(run_count) 0
-    set state(global_run) 0
-    set state(current_config) ""
-    set state(status) idle
-    set state(run_started) 0
-    
-    publish_state
-    
-    return "ok"
 }
 
 # =============================================================================
-# Orchestration Internals
+# Internal Orchestration
 # =============================================================================
 
 proc ::ess_queues::load_current_item {} {
     variable state
     variable db
     
-    set queue_id [get_queue_id $state(queue_name)]
-    set pos $state(position)
-    
-    # Get current item
+    # Get item at current position
     set item [$db eval {
-        SELECT config_name, repeat_count, pause_after
-        FROM queue_items
-        WHERE queue_id = :queue_id AND position = :pos
+        SELECT qi.config_id, qi.repeat_count, qi.pause_after, c.name as config_name
+        FROM queue_items qi
+        JOIN configs c ON c.id = qi.config_id
+        WHERE qi.queue_id = :state(queue_id) AND qi.position = :state(position)
     }]
     
     if {$item eq ""} {
-        # No more items - queue finished
-        log info "Queue finished: $state(queue_name)"
+        log info "No more items - queue finished"
         set state(status) finished
-        set state(current_config) ""
         publish_state
         return
     }
     
-    lassign $item config_name repeat_count pause_after
+    lassign $item config_id repeat_count pause_after config_name
     
-    set state(current_config) $config_name
+    set state(current_config_id) $config_id
+    set state(current_config_name) $config_name
     set state(current_repeat_count) $repeat_count
     set state(current_pause_after) $pause_after
+    set state(run_count) 0
     
-    log info "Loading config: $config_name (position $pos, repeats: $repeat_count)"
+    log info "Loading config: $config_name (repeats: $repeat_count)"
     
-    # Load the config via ess_configs
-    if {[catch {::ess::configs::load $config_name} err]} {
-        log error "Failed to load config '$config_name': $err"
+    # Load the config
+    if {[catch {::ess::configs::load $config_id} err]} {
+        log error "Failed to load config: $err"
         set state(status) paused
         publish_state
         return
     }
     
-    # Config loaded successfully - transition to ready
     set state(status) ready
     publish_state
     
-    # If auto_start, begin the run
     if {$state(auto_start)} {
         start_run
     }
@@ -1020,143 +823,158 @@ proc ::ess_queues::start_run {} {
     
     incr state(run_count)
     incr state(global_run)
-    log info "Starting run $state(run_count)/$state(current_repeat_count) for $state(current_config) (global: $state(global_run))"
     
-    # Open datafile
-    if {![open_datafile]} {
-        log error "Failed to open datafile - pausing queue"
-        set state(status) paused
-        publish_state
-        return
+    log info "Starting run $state(run_count)/$state(current_repeat_count) (global: $state(global_run))"
+    
+    # Open datafile if auto_datafile enabled
+    if {$state(auto_datafile)} {
+        if {![open_datafile]} {
+            set state(status) paused
+            publish_state
+            return
+        }
     }
     
     # Start ESS
-    if {![ess_start]} {
-        log error "Failed to start ESS - pausing queue"
-        close_datafile
-        set state(status) paused
-        publish_state
-        return
-    }
-    
     set state(status) running
-    set state(run_started) 1
+    set state(run_started) [clock seconds]
     publish_state
+    
+    ess_start
 }
 
-proc ::ess_queues::on_run_complete {} {
+proc ::ess_queues::open_datafile {} {
     variable state
-    variable flush_delay_ms
     
-    if {$state(status) ne "running"} {
-        return
+    if {$state(datafile_open)} {
+        close_datafile
     }
     
-    log info "Run complete: position $state(position), run $state(run_count)/$state(current_repeat_count)"
+    # Get config for file template
+    set config [::ess::configs::get $state(current_config_id)]
+    if {$config eq ""} {
+        log error "Config not found: $state(current_config_id)"
+        return 0
+    }
     
-    # Enter flushing state - wait for datapoints to flush before closing file
-    set state(status) flushing
-    set state(flush_until) [expr {[clock milliseconds] + $flush_delay_ms}]
-    publish_state
+    # Generate basename using config's template (with queue context)
+    set basename [generate_file_basename_queue $config]
+    
+    log info "Opening datafile: $basename"
+    
+    if {[catch {send ess "::ess::file_open {$basename}"} result]} {
+        log error "Failed to open datafile: $result"
+        return 0
+    }
+    
+    if {$result == 0} {
+        log error "Datafile already exists: $basename"
+        return 0
+    } elseif {$result == -1} {
+        log error "Another datafile is already open"
+        return 0
+    }
+    
+    set state(datafile_open) 1
+    dservSet queues/datafile $basename
+    return 1
 }
 
-# Called after flush delay to actually close file and continue
-proc ::ess_queues::finish_run_complete {} {
+proc ::ess_queues::generate_file_basename_queue {config} {
     variable state
     
-    log info "Flush complete, closing datafile"
+    set template [dict get $config file_template]
     
-    # Close datafile
-    close_datafile
-    
-    # Check if more repeats needed
-    if {$state(run_count) < $state(current_repeat_count)} {
-        # More repeats - stay on same item
-        log info "More repeats needed ($state(run_count)/$state(current_repeat_count))"
-        set state(status) ready
-        publish_state
-        
-        if {$state(auto_start)} {
-            start_run
+    # If empty, use ESS default with run suffix
+    if {$template eq ""} {
+        set basename [send ess "::ess::file_suggest"]
+        if {$state(current_repeat_count) > 1} {
+            append basename "_r$state(run_count)"
         }
-        return
+        return $basename
     }
     
-    # Check for pause_after delay
-    if {$state(current_pause_after) > 0} {
-        set state(status) between_runs
-        set state(pause_until) [expr {[clock seconds] + $state(current_pause_after)}]
-        log info "Pausing for $state(current_pause_after) seconds before next item"
-        publish_state
-        return
+    # Get values from config
+    set subject [dict get $config subject]
+    if {$subject eq ""} { set subject "unknown" }
+    
+    set system [dict get $config system]
+    set protocol [dict get $config protocol]
+    set variant [dict get $config variant]
+    set config_name [dict get $config name]
+    set project_name [dict get $config project_name]
+    
+    # Timestamps
+    set now [clock seconds]
+    set date [clock format $now -format "%Y%m%d"]
+    set date_short [clock format $now -format "%y%m%d"]
+    set time [clock format $now -format "%H%M%S"]
+    set time_short [clock format $now -format "%H%M"]
+    
+    # Clean for filename
+    set config_clean [regsub -all {[^a-zA-Z0-9_-]} $config_name "_"]
+    set subject_clean [regsub -all {[^a-zA-Z0-9_-]} $subject "_"]
+    set project_clean [regsub -all {[^a-zA-Z0-9_-]} $project_name "_"]
+    set queue_clean [regsub -all {[^a-zA-Z0-9_-]} $state(queue_name) "_"]
+    
+    # Base substitutions
+    set basename $template
+    
+    # Handle numeric variables with format specifiers
+    foreach {var value} [list position $state(position) run $state(run_count) global $state(global_run)] {
+        # Handle {var:NN} format
+        while {[regexp "\\{${var}:(\\d+)\\}" $basename -> width]} {
+            set formatted [format "%0${width}d" $value]
+            regsub "\\{${var}:\\d+\\}" $basename $formatted basename
+        }
+        # Handle plain {var}
+        set basename [string map [list "\{$var\}" $value] $basename]
     }
     
-    # Auto-advance or wait
-    if {$state(auto_advance)} {
-        advance_to_next
-    } else {
-        set state(status) between_runs
-        set state(pause_until) 0
-        log info "Waiting for manual advance"
-        publish_state
-    }
+    # String substitutions
+    set subst_map [list \
+        "{subject}"    $subject_clean \
+        "{system}"     $system \
+        "{protocol}"   $protocol \
+        "{variant}"    $variant \
+        "{config}"     $config_clean \
+        "{project}"    $project_clean \
+        "{queue}"      $queue_clean \
+        "{date}"       $date \
+        "{date_short}" $date_short \
+        "{time}"       $time \
+        "{time_short}" $time_short \
+        "{timestamp}"  $now]
+    
+    return [string map $subst_map $basename]
 }
 
-# Force complete the current run (for ending early)
-# Unlike normal completion, this goes to 'paused' state instead of auto-advancing,
-# giving the operator a chance to handle whatever caused the forced end.
-proc ::ess_queues::force_complete {} {
+proc ::ess_queues::close_datafile {} {
     variable state
-    variable flush_delay_ms
     
-    if {$state(status) ne "running"} {
-        log warning "force_complete: not running (status=$state(status))"
-        return
+    if {!$state(datafile_open)} {
+        return 1
     }
     
-    log info "Force completing run at position $state(position)"
+    log info "Closing datafile"
     
-    # Stop ESS if it's running
-    ess_stop
+    if {[catch {send ess "::ess::file_close"} err]} {
+        log warning "Error closing datafile: $err"
+    }
     
-    # Go to flushing state, but mark that this was a forced completion
-    # so we pause instead of auto-advancing
-    set state(run_started) 0
-    set state(status) flushing
-    set state(flush_until) [expr {[clock milliseconds] + $flush_delay_ms}]
-    set state(forced_complete) 1
-    publish_state
+    set state(datafile_open) 0
+    dservSet queues/datafile ""
+    return 1
 }
 
-# Called after flush delay for forced completion - goes to paused state
-proc ::ess_queues::finish_forced_complete {} {
+proc ::ess_queues::advance_position {} {
     variable state
     
-    log info "Force complete flush done, entering paused state"
-    
-    # Close datafile
-    close_datafile
-    
-    # Go to paused state instead of continuing
-    # This gives operator a chance to retry, skip, or stop
-    set state(status) paused
-    set state(forced_complete) 0
-    publish_state
-}
-
-proc ::ess_queues::advance_to_next {} {
-    variable state
-    
-    set state(run_count) 0
     incr state(position)
     
-    log info "Advancing to position $state(position)/$state(total_items)"
-    
     if {$state(position) >= $state(total_items)} {
-        # Queue complete
-        log info "Queue complete: $state(queue_name)"
+        log info "Queue complete"
         set state(status) finished
-        set state(current_config) ""
         publish_state
         return
     }
@@ -1167,406 +985,204 @@ proc ::ess_queues::advance_to_next {} {
     load_current_item
 }
 
-# Called by ess/run_state subscription
 proc ::ess_queues::on_ess_run_state {run_state} {
     variable state
-    
-    # Only react if we're actually running a queue
+    variable flush_delay_ms
+
     if {$state(status) ne "running"} {
         return
     }
     
-    # Run complete when ESS reaches end state
-    # run_state is "active" when running, "complete" when finished normally
-    if {$run_state eq "complete" && $state(run_started)} {
-        set state(run_started) 0
-        on_run_complete
+    if {$run_state eq "complete"} {
+        log info "Run complete"
+        
+        # Start flush delay
+        set state(status) flushing
+        set state(flush_until) [expr {[clock milliseconds] + $flush_delay_ms}]
+        publish_state
     }
 }
 
-# Called periodically by dserv timer
 proc ::ess_queues::tick {} {
     variable state
     
-    # Handle flush delay before closing datafile
-    if {$state(status) eq "flushing"} {
-        if {[clock milliseconds] >= $state(flush_until)} {
-            set state(flush_until) 0
-            # Check if this was a forced completion
-            if {$state(forced_complete)} {
-                finish_forced_complete
-            } else {
-                finish_run_complete
+    switch $state(status) {
+        flushing {
+            if {[clock milliseconds] >= $state(flush_until)} {
+                close_datafile
+                
+                if {$state(current_pause_after) > 0 && 
+                    $state(run_count) >= $state(current_repeat_count)} {
+                    set state(status) between_runs
+                    set state(pause_until) [expr {[clock seconds] + $state(current_pause_after)}]
+                } elseif {$state(run_count) < $state(current_repeat_count)} {
+                    set state(status) ready
+                    if {$state(auto_start)} {
+                        start_run
+                    }
+} elseif {$state(auto_advance)} {
+                    advance_position
+                } elseif {$state(queue_name) eq "(single)"} {
+                    # Single config run complete - go idle
+                    set state(status) idle
+                    set state(current_config_name) ""
+                } else {
+                    set state(status) between_runs
+                }		    
+                publish_state
             }
         }
-        return
-    }
-    
-    # Handle pause_until delay
-    if {$state(status) eq "between_runs" && $state(pause_until) > 0} {
-        set now [clock seconds]
-        set remaining [expr {$state(pause_until) - $now}]
-        
-        if {$remaining <= 0} {
-            log info "Pause complete - advancing"
-            set state(pause_until) 0
-            
-            if {$state(auto_advance)} {
-                advance_to_next
+        between_runs {
+            if {$state(pause_until) > 0 && [clock seconds] >= $state(pause_until)} {
+                set state(pause_until) 0
+                if {$state(auto_advance)} {
+                    advance_position
+                }
             }
-        } else {
-            # Publish remaining time for UI
-            dservSet queues/pause_remaining $remaining
         }
     }
 }
 
 # =============================================================================
-# State Publishing
+# ESS Control
+# =============================================================================
+
+proc ::ess_queues::ess_start {} {
+    log info "Starting ESS"
+    if {[catch {send ess "ess::start"} err]} {
+        log error "Failed to start ESS: $err"
+        return 0
+    }
+    return 1
+}
+
+proc ::ess_queues::ess_stop {} {
+    log info "Stopping ESS"
+    if {[catch {send ess "ess::stop"} err]} {
+        log warning "Error stopping ESS: $err"
+    }
+    return 1
+}
+
+# =============================================================================
+# Publishing
 # =============================================================================
 
 proc ::ess_queues::publish_state {} {
     variable state
     
-    # Publish individual state datapoints
+    # Individual datapoints (legacy)
     dservSet queues/status $state(status)
     dservSet queues/active $state(queue_name)
+    dservSet queues/project $state(project_name)
     dservSet queues/position $state(position)
     dservSet queues/total $state(total_items)
-    dservSet queues/current_config $state(current_config)
+    dservSet queues/current_config $state(current_config_name)
     dservSet queues/run_count $state(run_count)
-    dservSet queues/repeat_total $state(current_repeat_count)
+    dservSet queues/repeat_count $state(current_repeat_count)
     dservSet queues/global_run $state(global_run)
     
-    # Calculate pause_remaining if applicable
-    set pause_remaining 0
-    if {$state(pause_until) > 0} {
-        set pause_remaining [expr {max(0, $state(pause_until) - [clock seconds])}]
-    }
-    dservSet queues/pause_remaining $pause_remaining
+    # Combined JSON for JS clients
+    set json "{\"status\":\"$state(status)\",\"queue_name\":\"$state(queue_name)\",\"project_name\":\"$state(project_name)\",\"position\":$state(position),\"total_items\":$state(total_items),\"current_config\":\"$state(current_config_name)\",\"run_count\":$state(run_count),\"repeat_total\":$state(current_repeat_count),\"auto_start\":$state(auto_start),\"auto_advance\":$state(auto_advance)}"
     
-    # Publish combined state as JSON for UI
-    set json_state [dict create \
-        status $state(status) \
-        queue_name $state(queue_name) \
-        position $state(position) \
-        total_items $state(total_items) \
-        current_config $state(current_config) \
-        run_count $state(run_count) \
-        repeat_total $state(current_repeat_count) \
-        pause_remaining $pause_remaining \
-        auto_start $state(auto_start) \
-        auto_advance $state(auto_advance) \
-        global_run $state(global_run)]
-    
-    dservSet queues/state [dict_to_json $json_state]
+    dservSet queues/state $json
 }
 
 proc ::ess_queues::publish_list {} {
     variable db
     
-    set queues [queue_list]
-    dservSet queues/list [list_to_json $queues]
+    set project [::ess::configs::project_active]
+    
+    package require yajltcl
+    set obj [yajl create #auto]
+    $obj array_open
+    
+    set where "1=1"
+    if {$project ne ""} {
+        set project_id [::ess::configs::project_get_id $project]
+        set where "q.project_id = $project_id"
+    }
+    
+    $db eval "
+        SELECT q.id, q.name, q.description, q.auto_start, q.auto_advance,
+               q.auto_datafile, p.name as project_name,
+               (SELECT COUNT(*) FROM queue_items WHERE queue_id = q.id) as item_count
+        FROM queues q
+        JOIN projects p ON p.id = q.project_id
+        WHERE $where
+        ORDER BY q.name
+    " row {
+        $obj map_open
+        $obj string "id" number $row(id)
+        $obj string "name" string $row(name)
+        $obj string "description" string $row(description)
+        $obj string "project" string $row(project_name)
+        $obj string "auto_start" bool $row(auto_start)
+        $obj string "auto_advance" bool $row(auto_advance)
+        $obj string "auto_datafile" bool $row(auto_datafile)
+        $obj string "item_count" number $row(item_count)
+        $obj map_close
+    }
+    
+    $obj array_close
+    set result [$obj get]
+    $obj delete
+    
+    dservSet queues/list $result
 }
 
-proc ::ess_queues::publish_queue_items {queue_name} {
-    variable db
-    variable state
-    
-    # Only publish if this is the active queue
-    if {$state(queue_name) eq $queue_name} {
-        set queue [queue_get $queue_name]
-        dservSet queues/items [list_to_json [dict get $queue items]]
-    }
-}
-
-# =============================================================================
-# Export/Import for Cross-Rig Sync
-# =============================================================================
-
-# Export queue as JSON
-# Usage: queue_export "name" ?-include_configs?
-# Returns JSON with queue definition and optionally bundled config exports
-proc ::ess_queues::queue_export {queue_name args} {
+proc ::ess_queues::publish_queue_items {queue_name project} {
     variable db
     
-    # Parse options
-    set include_configs 0
-    foreach arg $args {
-        switch -- $arg {
-            -include_configs { set include_configs 1 }
-        }
-    }
+    set queue_id [get_queue_id $queue_name $project]
     
-    # Get queue info
-    set queue_id [get_queue_id $queue_name]
+    package require yajltcl
+    set obj [yajl create #auto]
+    $obj array_open
     
-    set queue_data [$db eval {
-        SELECT name, description, auto_start, auto_advance, auto_datafile, 
-               datafile_template, created_by
-        FROM queues WHERE id = :queue_id
-    }]
-    
-    if {$queue_data eq ""} {
-        error "Queue not found: $queue_name"
-    }
-    
-    lassign $queue_data name description auto_start auto_advance auto_datafile \
-                        datafile_template created_by
-    
-    # Get items
-    set items [list]
     $db eval {
-        SELECT config_name, position, repeat_count, pause_after, notes
-        FROM queue_items 
-        WHERE queue_id = :queue_id 
-        ORDER BY position
+        SELECT qi.position, qi.config_id, qi.repeat_count, qi.pause_after, qi.notes,
+               c.name as config_name
+        FROM queue_items qi
+        JOIN configs c ON c.id = qi.config_id
+        WHERE qi.queue_id = :queue_id
+        ORDER BY qi.position
     } row {
-        lappend items [dict create \
-            config_name $row(config_name) \
-            position $row(position) \
-            repeat_count $row(repeat_count) \
-            pause_after $row(pause_after) \
-            notes $row(notes)]
+        $obj map_open
+        $obj string "position" number $row(position)
+        $obj string "config_id" number $row(config_id)
+        $obj string "config_name" string $row(config_name)
+        $obj string "repeat_count" number $row(repeat_count)
+        $obj string "pause_after" number $row(pause_after)
+        $obj string "notes" string $row(notes)
+        $obj map_close
     }
     
-    # Build export dict
-    set export_dict [dict create \
-        name $name \
-        description $description \
-        auto_start $auto_start \
-        auto_advance $auto_advance \
-        auto_datafile $auto_datafile \
-        datafile_template $datafile_template \
-        created_by $created_by \
-        items $items]
-    
-    # Build JSON using yajltcl for proper encoding
-    package require yajltcl
-    set obj [yajl create #auto]
-    
-    $obj map_open
-    $obj string "queue" map_open
-    
-    dict for {k v} $export_dict {
-        if {$k eq "items"} {
-            $obj string "items" array_open
-            foreach item $v {
-                $obj map_open
-                dict for {ik iv} $item {
-                    if {[string is integer -strict $iv]} {
-                        $obj string $ik number $iv
-                    } else {
-                        $obj string $ik string $iv
-                    }
-                }
-                $obj map_close
-            }
-            $obj array_close
-        } elseif {[string is integer -strict $v]} {
-            $obj string $k number $v
-        } else {
-            $obj string $k string $v
-        }
-    }
-    
-    $obj map_close
-    
-    # Optionally include configs
-    if {$include_configs} {
-        $obj string "configs" array_open
-        
-        # Get unique config names from items
-        set config_names [list]
-        foreach item $items {
-            set cname [dict get $item config_name]
-            if {$cname ni $config_names} {
-                lappend config_names $cname
-            }
-        }
-        
-        # Export each config
-        foreach cname $config_names {
-            if {[catch {
-                set config_json [::ess::configs::export $cname]
-                # Parse and re-emit to include in our JSON structure
-                set config_dict [json_to_dict $config_json]
-                $obj map_open
-                dict for {ck cv} $config_dict {
-                    if {[llength $cv] > 1 && ![string is integer -strict $cv]} {
-                        # Nested dict or list - serialize as string for simplicity
-                        $obj string $ck string $cv
-                    } elseif {[string is integer -strict $cv]} {
-                        $obj string $ck number $cv
-                    } else {
-                        $obj string $ck string $cv
-                    }
-                }
-                $obj map_close
-            } err]} {
-                log warning "Could not export config '$cname': $err"
-            }
-        }
-        
-        $obj array_close
-    }
-    
-    $obj map_close
-    
+    $obj array_close
     set result [$obj get]
     $obj delete
     
-    return $result
-}
-
-# Import queue from JSON
-# Usage: queue_import {json} ?-skip_existing_configs? ?-overwrite_queue?
-# Options:
-#   -skip_existing_configs  - Don't error if config exists, skip it
-#   -overwrite_queue        - If queue exists, delete and recreate
-proc ::ess_queues::queue_import {json args} {
-    variable db
-    
-    # Parse options
-    set skip_existing_configs 0
-    set overwrite_queue 0
-    foreach arg $args {
-        switch -- $arg {
-            -skip_existing_configs { set skip_existing_configs 1 }
-            -overwrite_queue { set overwrite_queue 1 }
-        }
-    }
-    
-    # Parse JSON
-    set data [json_to_dict $json]
-    
-    if {![dict exists $data queue]} {
-        error "Invalid queue export: missing 'queue' key"
-    }
-    
-    set queue_def [dict get $data queue]
-    set queue_name [dict get $queue_def name]
-    
-    # Import bundled configs first (if present)
-    if {[dict exists $data configs]} {
-        set configs [dict get $data configs]
-        foreach config $configs {
-            set config_name [dict get $config name]
-            if {[::ess::configs::exists $config_name]} {
-                if {$skip_existing_configs} {
-                    log info "Skipping existing config: $config_name"
-                    continue
-                } else {
-                    error "Config already exists: $config_name"
-                }
-            }
-            
-            # Re-export as JSON for import
-            set config_json [dict_to_json_deep $config]
-            ::ess::configs::import $config_json
-            log info "Imported config: $config_name"
-        }
-    }
-    
-    # Check if queue exists
-    set exists 0
-    if {[catch {get_queue_id $queue_name}] == 0} {
-        set exists 1
-    }
-    
-    if {$exists} {
-        if {$overwrite_queue} {
-            queue_delete $queue_name
-            log info "Deleted existing queue: $queue_name"
-        } else {
-            error "Queue already exists: $queue_name (use -overwrite_queue to replace)"
-        }
-    }
-    
-    # Create the queue
-    queue_create $queue_name \
-        -description [expr {[dict exists $queue_def description] ? [dict get $queue_def description] : ""}] \
-        -auto_start [expr {[dict exists $queue_def auto_start] ? [dict get $queue_def auto_start] : 1}] \
-        -auto_advance [expr {[dict exists $queue_def auto_advance] ? [dict get $queue_def auto_advance] : 1}] \
-        -auto_datafile [expr {[dict exists $queue_def auto_datafile] ? [dict get $queue_def auto_datafile] : 1}] \
-        -datafile_template [expr {[dict exists $queue_def datafile_template] ? [dict get $queue_def datafile_template] : "{suggest}"}]
-    
-    # Add items
-    if {[dict exists $queue_def items]} {
-        foreach item [dict get $queue_def items] {
-            set config_name [dict get $item config_name]
-            set repeat_count [expr {[dict exists $item repeat_count] ? [dict get $item repeat_count] : 1}]
-            set pause_after [expr {[dict exists $item pause_after] ? [dict get $item pause_after] : 0}]
-            set notes [expr {[dict exists $item notes] ? [dict get $item notes] : ""}]
-            
-            queue_add $queue_name $config_name \
-                -repeat $repeat_count \
-                -pause_after $pause_after \
-                -notes $notes
-        }
-    }
-    
-    log info "Imported queue: $queue_name"
-    publish_list
-    
-    return $queue_name
-}
-
-# Deep dict to JSON (handles nested dicts)
-proc ::ess_queues::dict_to_json_deep {d} {
-    package require yajltcl
-    set obj [yajl create #auto]
-    
-    dict_to_yajl $obj $d
-    
-    set result [$obj get]
-    $obj delete
-    return $result
-}
-
-proc ::ess_queues::dict_to_yajl {obj d} {
-    $obj map_open
-    dict for {k v} $d {
-        $obj string $k
-        if {[string is integer -strict $v]} {
-            $obj number $v
-        } elseif {[string is double -strict $v]} {
-            $obj number $v
-        } elseif {$v eq "true" || $v eq "false"} {
-            $obj bool [expr {$v eq "true"}]
-        } elseif {[llength $v] > 1 && [catch {dict size $v}] == 0} {
-            # Looks like a dict
-            dict_to_yajl $obj $v
-        } elseif {[llength $v] > 1} {
-            # Looks like a list
-            $obj array_open
-            foreach item $v {
-                if {[catch {dict size $item}] == 0 && [llength $item] > 1} {
-                    dict_to_yajl $obj $item
-                } elseif {[string is integer -strict $item]} {
-                    $obj number $item
-                } else {
-                    $obj string $item
-                }
-            }
-            $obj array_close
-        } else {
-            $obj string $v
-        }
-    }
-    $obj map_close
+    dservSet queues/items/$queue_name $result
 }
 
 # =============================================================================
-# Helper Procedures
+# Helpers
 # =============================================================================
 
-proc ::ess_queues::get_queue_id {name} {
+proc ::ess_queues::get_queue_id {name project} {
     variable db
     
-    set id [$db onecolumn {SELECT id FROM queues WHERE name = :name}]
+    if {$project eq ""} {
+        error "Project required for queue lookup"
+    }
+    
+    set project_id [::ess::configs::project_get_id $project]
+    
+    set id [$db onecolumn {
+        SELECT id FROM queues WHERE project_id = :project_id AND name = :name
+    }]
     if {$id eq ""} {
-        error "Queue not found: $name"
+        error "Queue not found in project $project: $name"
     }
     return $id
 }
@@ -1574,12 +1190,10 @@ proc ::ess_queues::get_queue_id {name} {
 proc ::ess_queues::renumber_items {queue_id} {
     variable db
     
-    # Get all items ordered by current position
     set items [$db eval {
         SELECT id FROM queue_items WHERE queue_id = :queue_id ORDER BY position
     }]
     
-    # Renumber sequentially
     set pos 0
     foreach item_id $items {
         $db eval {UPDATE queue_items SET position = :pos WHERE id = :item_id}
@@ -1587,30 +1201,11 @@ proc ::ess_queues::renumber_items {queue_id} {
     }
 }
 
-# JSON helpers (simple implementations - may need to match ess_configs style)
-proc ::ess_queues::dict_to_json {d} {
-    set pairs [list]
-    dict for {k v} $d {
-        if {[string is integer -strict $v] || [string is double -strict $v]} {
-            lappend pairs "\"$k\":$v"
-        } elseif {$v eq "true" || $v eq "false"} {
-            lappend pairs "\"$k\":$v"
-        } else {
-            lappend pairs "\"$k\":\"[string map {\" \\\" \\ \\\\ \n \\n \r \\r \t \\t} $v]\""
-        }
+proc ::ess_queues::log {level msg} {
+    set timestamp [clock format [clock seconds] -format "%H:%M:%S"]
+    set full_msg "\[$timestamp\] \[$level\] $msg"
+    
+    if {[catch {dservSet queues/log $full_msg}]} {
+        puts "ess_queues $level: $msg"
     }
-    return "\{[join $pairs ,]\}"
-}
-
-proc ::ess_queues::list_to_json {lst} {
-    set items [list]
-    foreach item $lst {
-        if {[llength $item] > 1 || [string index $item 0] eq "\{"} {
-            # Assume it's a dict
-            lappend items [dict_to_json $item]
-        } else {
-            lappend items "\"[string map {\" \\\" \\ \\\\} $item]\""
-        }
-    }
-    return "\[[join $items ,]\]"
 }
