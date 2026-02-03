@@ -1,79 +1,71 @@
 #
 # configsconf.tcl - Configs Manager subprocess configuration
 #
-# This subprocess provides configuration persistence and management for ESS,
-# plus queue orchestration for running sequences of configs.
+# Unified management for projects, configs, and queues.
 #
-# It owns the configs database and handles all CRUD operations for both
-# configs and queues.
+# Architecture:
+#   - Projects own configs and queues (single ownership)
+#   - Configs are complete runnable units (include file_template)
+#   - Queues are ordered sequences of config references
 #
-# Config operations (via send configs "..."):
-#   config_save name ?-tags {t1 t2}? ?-description text?
-#   config_load name
-#   config_list ?-tags {t1 t2}?
-#   config_get name
-#   etc.
+# Commands via "send configs ...":
 #
-# Queue operations (via send configs "..."):
-#   queue_create name ?-description text?
-#   queue_add queue_name config_name ?-position N? ?-repeat N?
-#   queue_start name
-#   queue_stop / queue_pause / queue_resume
-#   queue_next / queue_skip / queue_retry
-#   etc.
+#   Projects:
+#     project_create, project_get, project_list, project_update, project_delete
+#     project_activate, project_deactivate, project_active
+#     project_export, project_import
+#
+#   Configs:
+#     config_save, config_load, config_run, config_list, config_get
+#     config_update, config_archive, config_delete, config_clone
+#
+#   Queues:
+#     queue_create, queue_get, queue_list, queue_update, queue_delete
+#     queue_add, queue_remove, queue_clear
+#     queue_start, queue_stop, queue_pause, queue_resume
+#     queue_skip, queue_next
 #
 
 package require dlsh
 package require qpcs
 package require tcljson
 
-# Add local lib to module path
 tcl::tm::add $dspath/lib
 
-# Standard subprocess setup
 errormon enable
 proc exit {args} { error "exit not available for this subprocess" }
 
-# Load the configs and queues modules
 package require ess_configs
 package require ess_queues
-package require ess_projects
 
-# Load timer module for queue orchestration
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
 
 #=========================================================================
 # Initialize
 #=========================================================================
 
-# Database location
 set configs_db [file join $dspath db configs.db]
-
-# Ensure db directory exists
 file mkdir [file dirname $configs_db]
 
-# Initialize the configs system
 ess::configs::init $configs_db
-
-# Initialize the queues system (same database)
 ::ess_queues::init [ess::configs::get_db]
 
-# Initialize the projects system (same database)
-::ess_projects::init [ess::configs::get_db]
-::ess_projects::publish_all
-
-# Purge archived configs older than 60 days
-ess::configs::purge_old_archived 60
-
-# Publish initial state for any connected clients
 ess::configs::publish_all
-::ess_queues::publish_list
+
+#=========================================================================
+# Single config queue
+#=========================================================================
+
+proc queue_run_config {config_name args} {
+    # Start the orchestration timer
+    queue_timer_start 500    
+    ::ess_queues::run_single $config_name {*}$args
+}
 
 #=========================================================================
 # Timer-based Queue Orchestration
 #=========================================================================
 
-# Track whether timer is running
 variable queue_timer_running 0
 
 proc queue_tick_callback {dpoint data} {
@@ -88,95 +80,99 @@ proc queue_timer_setup {} {
 
 proc queue_timer_start {{interval_ms 500}} {
     variable queue_timer_running
-    
-    if {$queue_timer_running} {
-        return
-    }
-    
+    if {$queue_timer_running} { return }
     timerTickInterval $interval_ms $interval_ms
     set queue_timer_running 1
-    puts "Queue orchestration timer started: ${interval_ms}ms interval"
 }
 
 proc queue_timer_stop {} {
     variable queue_timer_running
-    
-    if {!$queue_timer_running} {
-        return
-    }
-    
+    if {!$queue_timer_running} { return }
     timerStop
     set queue_timer_running 0
-    puts "Queue orchestration timer stopped"
 }
 
-# Initialize timer (but don't start until a queue is started)
 queue_timer_setup
 
 #=========================================================================
-# ESS Run State Monitoring for Queue Orchestration
+# ESS State Monitoring
 #=========================================================================
 
 proc on_ess_run_state_change {dpoint data} {
     ::ess_queues::on_ess_run_state $data
 }
 
-# Subscribe to ESS run_state changes
-# run_state is "active" when running, "complete" when finished normally
-# This is more reliable than ess/status which changes during config loading
 dservAddExactMatch ess/run_state
 dpointSetScript ess/run_state on_ess_run_state_change
 
-#=========================================================================
-# Track ESS Setup Changes
-#=========================================================================
-
-# When ESS snapshot changes, check if it came from a config load.
-# If not, clear configs/current since saved config no longer matches.
 proc on_ess_snapshot_change {dpoint_name value} {
     if {$value ne "" && [json_get $value source] eq "config"} {
         return
     }
-    # User change - clear current config
     dservSet configs/current {}
 }
 
-# Subscribe to ESS snapshot - fires after any setup change completes
 dservAddExactMatch ess/snapshot
 dpointSetScript ess/snapshot on_ess_snapshot_change
 
 #=========================================================================
-# Config Commands - these are what other threads call via send
+# Project Commands
 #=========================================================================
 
-# Save current ESS state as named config
-# Usage: config_save "name" ?-tags {t1 t2}? ?-description "text"?
+proc project_create {name args} { ess::configs::project_create $name {*}$args }
+proc project_get {name} { ess::configs::project_get $name }
+proc project_list {} { ess::configs::project_list }
+proc project_update {name args} { ess::configs::project_update $name {*}$args }
+proc project_delete {name} { ess::configs::project_delete $name }
+proc project_exists {name} { ess::configs::project_exists $name }
+
+proc project_activate {name} { ess::configs::project_activate $name }
+proc project_deactivate {} { ess::configs::project_deactivate }
+proc project_active {} { ess::configs::project_active }
+
+#=========================================================================
+# Config Commands
+#=========================================================================
+
+proc config_publish_all {} { ess::configs::publish_all }
+
+proc config_create {name system protocol variant args} {
+    set project $::ess::configs::active_project
+    ess::configs::create $project $name $system $protocol $variant {*}$args
+}
+
+# Save current ESS state
+# Usage: config_save "name" ?-description text? ?-tags {t1 t2}? ?-file_template "{subject}_{date}"?
 proc config_save {name args} {
     ess::configs::save_current $name {*}$args
 }
 
-# Load a config into ESS
-# Usage: config_load "name" or config_load 42
-proc config_load {name_or_id} {
-    ess::configs::load $name_or_id
+# Load config into ESS (setup only)
+# Usage: config_load "name" ?-project "proj"?
+proc config_load {name_or_id args} {
+    ess::configs::load $name_or_id {*}$args
 }
 
-# List configs with optional filtering
-# Usage: config_list ?-tags {t1 t2}? ?-system "fixcal"? ?-search "text"?
+# Run config (load + open file + start)
+# Usage: config_run "name" ?-project "proj"? ?-auto_start 1?
+proc config_run {name_or_id args} {
+    ess::configs::run $name_or_id {*}$args
+}
+
+# List configs (in active project by default)
+# Usage: config_list ?-project "proj"? ?-tags {t1}? ?-system "sys"? ?-all 1?
 proc config_list {args} {
     ess::configs::list {*}$args
 }
 
 # Get full config details
-# Usage: config_get "name" or config_get 42
-proc config_get {name_or_id} {
-    ess::configs::get $name_or_id
+# Usage: config_get "name" ?-project "proj"?
+proc config_get {name_or_id args} {
+    ess::configs::get $name_or_id {*}$args
 }
 
-# Get full config details as JSON (for web frontend)
-# Usage: config_get_json "name"
-proc config_get_json {name_or_id} {
-    set config [ess::configs::get $name_or_id]
+proc config_get_json {name args} {
+    set config [ess::configs::get $name {*}$args]
     if {$config eq ""} {
         return "{}"
     }
@@ -184,51 +180,30 @@ proc config_get_json {name_or_id} {
 }
 
 # Check if config exists
-# Usage: config_exists "name"
-proc config_exists {name_or_id} {
-    ess::configs::exists $name_or_id
+proc config_exists {name_or_id args} {
+    ess::configs::exists $name_or_id {*}$args
 }
 
-# Clone a config
-# Usage: config_clone "source" "newname" ?-variant_args {k v}? ?-params {k v}?
+# Clone config
+# Usage: config_clone "source" "newname" ?-to_project "proj"? ?-subject "new_subj"?
 proc config_clone {source new_name args} {
     ess::configs::clone $source $new_name {*}$args
 }
 
-# Update config metadata/values
-# Usage: config_update "name" -description "new desc" -tags {t1 t2}
+# Update config
+# Usage: config_update "name" -description "text" -file_template "..."
 proc config_update {name_or_id args} {
     ess::configs::update $name_or_id {*}$args
 }
 
-# Archive (soft delete)
-# Usage: config_archive "name"
-proc config_archive {name_or_id} {
-    ess::configs::archive $name_or_id
+# Archive (soft delete) - fails if config is in any queue
+proc config_archive {name_or_id args} {
+    ess::configs::archive $name_or_id {*}$args
 }
 
-# Hard delete
-# Usage: config_delete "name"
-proc config_delete {name_or_id} {
-    ess::configs::delete $name_or_id
-}
-
-# Restore archived config
-# Usage: config_restore "name"
-proc config_restore {name_or_id} {
-    ess::configs::restore $name_or_id
-}
-
-# Get quick picks (most used)
-# Usage: config_quick_picks ?5?
-proc config_quick_picks {{limit 5}} {
-    ess::configs::quick_picks $limit
-}
-
-# Get all tags in use
-# Usage: config_tags
-proc config_tags {} {
-    ess::configs::get_all_tags
+# Hard delete - fails if config is in any queue
+proc config_delete {name_or_id args} {
+    ess::configs::delete $name_or_id {*}$args
 }
 
 
@@ -345,411 +320,127 @@ proc config_get_variant_options {system protocol variant} {
 }
 
 #=========================================================================
-# Export/Import for Cross-Rig Sync
+# Queue Commands
 #=========================================================================
 
-# Export config as JSON
-# Usage: config_export "name"
-proc config_export {name_or_id} {
-    ess::configs::export $name_or_id
-}
-
-# Import config from JSON
-# Usage: config_import {json_string} ?-remap_script_source "new_source"?
-proc config_import {json args} {
-    ess::configs::import $json {*}$args
-}
-
-# Push config to remote rig
-# Usage: config_push "name" remote_host
-proc config_push {name_or_id remote_host} {
-    set json [ess::configs::export $name_or_id]
-    send $remote_host "config_import {$json}"
-}
-
-# Bulk export all configs matching filter
-# Usage: config_export_all ?-tags {t1 t2}?
-proc config_export_all {args} {
-    set configs [ess::configs::list {*}$args]
-    set exports {}
-    foreach cfg $configs {
-        set name [dict get $cfg name]
-        lappend exports [ess::configs::export $name]
-    }
-    return $exports
-}
-
-# Bulk push to remote rig
-# Usage: config_push_all remote_host ?-tags {t1 t2}?
-proc config_push_all {remote_host args} {
-    set exports [config_export_all {*}$args]
-    set count 0
-    foreach json $exports {
-        if {[catch {send $remote_host "config_import {$json}"} err]} {
-            puts "Warning: failed to push config: $err"
-        } else {
-            incr count
-        }
-    }
-    return $count
-}
-
-#=========================================================================
-# Refresh Publishing
-#=========================================================================
-
-# Manually refresh published datapoints
-proc config_publish_all {} {
-    ess::configs::publish_all
-}
-
-proc config_publish_list {} {
-    ess::configs::publish_list
-}
-
-proc config_publish_tags {} {
-    ess::configs::publish_tags
-}
-
-#=========================================================================
-# Direct Create (for programmatic use)
-#=========================================================================
-
-# Create config from explicit values (not current ESS state)
-# Usage: config_create "name" system protocol variant ?-subject s? ?-variant_args {}? ?-params {}? ?-tags {}?
-proc config_create {name system protocol variant args} {
-    ess::configs::create $name $system $protocol $variant {*}$args
-}
-
-#=========================================================================
-# Queue CRUD Commands
-#=========================================================================
-
-# Create a new queue
-# Usage: queue_create "name" ?-description "text"? ?-auto_start 1? ?-auto_advance 1? 
-#                           ?-auto_datafile 1? ?-datafile_template "{suggest}"?
-#
-# Datafile template substitutions (when not using {suggest}):
-#   {subject}    - Current ESS subject
-#   {system}     - ESS system name
-#   {protocol}   - ESS protocol name  
-#   {variant}    - ESS variant name
-#   {config}     - Config name (or short_name if set)
-#   {queue}      - Queue name
-#   {position}   - Position in queue (0-based)
-#   {run}        - Run number (1-based, for repeats)
-#   {date}       - YYYYMMDD
-#   {date_short} - YYMMDD
-#   {time}       - HHMMSS
-#   {time_short} - HHMM
-#   {timestamp}  - Unix timestamp
-#
-# Example templates:
-#   "{suggest}"                           - Use ESS's default naming (default)
-#   "{subject}_{config}_{date}{time}_r{run}" - Custom with all fields
-#   "{subject}_{date_short}"              - Minimal naming
-#
+# Create queue in active project
+# Usage: queue_create "name" ?-project "proj"? ?-description text? ?-auto_start 1?
 proc queue_create {name args} {
     ::ess_queues::queue_create $name {*}$args
 }
 
-# Delete a queue
-# Usage: queue_delete "name"
-proc queue_delete {name} {
-    ::ess_queues::queue_delete $name
+# Get queue details
+proc queue_get {name args} {
+    ::ess_queues::queue_get $name {*}$args
 }
 
-# List all queues
-# Usage: queue_list
-proc queue_list {} {
-    ::ess_queues::queue_list
+
+# JSON wrapper for queue_get (for JS clients)  
+proc queue_get_json {name args} {
+    ::ess_queues::queue_get_json $name {*}$args
 }
 
-# Get queue details with items
-# Usage: queue_get "name"
-proc queue_get {name} {
-    ::ess_queues::queue_get $name
-}
+proc queue_publish_list {} { ::ess_queues::publish_list }
 
-# Get queue details as JSON (for web frontend)
-# Usage: queue_get_json "name"
-# Uses yajltcl to ensure items is properly encoded as a JSON array
-proc queue_get_json {name} {
-    set queue [::ess_queues::queue_get $name]
-    if {$queue eq ""} {
-        return "{}"
-    }
-    
-    # Build JSON with yajltcl to ensure items is an array
-    package require yajltcl
-    set obj [yajl create #auto]
-    $obj map_open
-    
-    dict for {k v} $queue {
-        if {$k eq "items"} {
-            # Items is a list of dicts - encode as JSON array
-            $obj string "items" array_open
-            foreach item $v {
-                $obj map_open
-                dict for {ik iv} $item {
-                    if {[string is integer -strict $iv]} {
-                        $obj string $ik number $iv
-                    } else {
-                        $obj string $ik string $iv
-                    }
-                }
-                $obj map_close
-            }
-            $obj array_close
-        } elseif {[string is integer -strict $v]} {
-            $obj string $k number $v
-        } else {
-            $obj string $k string $v
-        }
-    }
-    
-    $obj map_close
-    set result [$obj get]
-    $obj delete
-    return $result
+# List queues (in active project by default)
+proc queue_list {args} {
+    ::ess_queues::queue_list {*}$args
 }
 
 # Update queue settings
-# Usage: queue_update "name" ?-description "text"? ?-auto_start 0? ?-auto_advance 0? 
-#                           ?-auto_datafile 0? ?-datafile_template "..."? ?-name "newname"?
 proc queue_update {name args} {
     ::ess_queues::queue_update $name {*}$args
+}
+
+# Delete queue
+proc queue_delete {name args} {
+    ::ess_queues::queue_delete $name {*}$args
 }
 
 #=========================================================================
 # Queue Item Commands
 #=========================================================================
 
-# Add config to queue
-# Usage: queue_add "queue_name" "config_name" ?-position N? ?-repeat N? ?-pause_after N? ?-notes "text"?
+# Add config to queue (by name, looked up in same project)
+# Usage: queue_add "queue" "config" ?-repeat N? ?-pause_after N? ?-notes text?
 proc queue_add {queue_name config_name args} {
     ::ess_queues::queue_add $queue_name $config_name {*}$args
 }
 
-# Remove item from queue
-# Usage: queue_remove "queue_name" position
-proc queue_remove {queue_name position} {
-    ::ess_queues::queue_remove $queue_name $position
-}
-
-# Reorder item in queue
-# Usage: queue_reorder "queue_name" from_pos to_pos
-proc queue_reorder {queue_name from_pos to_pos} {
-    ::ess_queues::queue_reorder $queue_name $from_pos $to_pos
+# Remove item from queue by position
+proc queue_remove {queue_name position args} {
+    ::ess_queues::queue_remove $queue_name $position {*}$args
 }
 
 # Clear all items from queue
-# Usage: queue_clear "queue_name"
-proc queue_clear {queue_name} {
-    ::ess_queues::queue_clear $queue_name
-}
-
-# Update individual queue item
-# Usage: queue_item_update "queue_name" position ?-config_name "name"? ?-repeat N? ?-pause_after N? ?-notes "text"?
-proc queue_item_update {queue_name position args} {
-    ::ess_queues::queue_item_update $queue_name $position {*}$args
+proc queue_clear {queue_name args} {
+    ::ess_queues::queue_clear $queue_name {*}$args
 }
 
 #=========================================================================
-# Queue Run Control Commands
+# Queue Run Control
 #=========================================================================
+
+proc run_close {} {
+    ::ess_queues::run_close
+}
 
 # Start running a queue
-# Usage: queue_start "name" ?-position N?
 proc queue_start {name args} {
-    # Start the orchestration timer
     queue_timer_start 500
     ::ess_queues::queue_start $name {*}$args
 }
 
-# Stop queue (abort entirely)
-# Usage: queue_stop
+# Stop queue entirely
 proc queue_stop {} {
     ::ess_queues::queue_stop
     queue_timer_stop
 }
 
-# Pause queue (stop current run, don't advance)
-# Usage: queue_pause
+# Pause queue
 proc queue_pause {} {
     ::ess_queues::queue_pause
 }
 
 # Resume paused queue
-# Usage: queue_resume
 proc queue_resume {} {
     ::ess_queues::queue_resume
 }
 
-# Manually start run when in ready state (for manual mode)
-# Usage: queue_run
-proc queue_run {} {
-    ::ess_queues::queue_run
-}
-
-# Advance to next item (manual advance)
-# Usage: queue_next
-proc queue_next {} {
-    ::ess_queues::queue_next
-}
-
-# Skip current item entirely (ignore remaining repeats)
-# Usage: queue_skip
+# Skip current item (ignore remaining repeats)
 proc queue_skip {} {
     ::ess_queues::queue_skip
 }
 
-# Retry current item (reload config and restart)
-# Usage: queue_retry
-proc queue_retry {} {
-    ::ess_queues::queue_retry
+# Advance to next run (respects repeats)
+proc queue_next {} {
+    ::ess_queues::queue_next
 }
 
-# Force complete current run (end early, close file, advance queue)
-# Usage: queue_force_complete
-proc queue_force_complete {} {
-    ::ess_queues::force_complete
-}
-
-# Close current run (close datafile, advance to next position)
-# Used when ESS is stopped and user wants to end the current run
-# Usage: run_close
-proc run_close {} {
-    ::ess_queues::run_close
-}
-
-# Reset session to beginning (close file, reset position to 0)
-# Used when user clicks reset button next to session dropdown
-# Usage: queue_reset
+# Reset queue to beginning (position 0, idle state)
 proc queue_reset {} {
     ::ess_queues::queue_reset
 }
 
 # Get current queue state
-# Usage: queue_status
 proc queue_status {} {
     return [list \
         status [dservGet queues/status] \
         active [dservGet queues/active] \
+        project [dservGet queues/project] \
         position [dservGet queues/position] \
         total [dservGet queues/total] \
         current_config [dservGet queues/current_config] \
-        run_count [dservGet queues/run_count]]
+        run_count [dservGet queues/run_count] \
+        repeat_count [dservGet queues/repeat_count]]
 }
 
 #=========================================================================
-# Project procs
+# Export/Import (for cross-rig sync)
 #=========================================================================
 
-proc project_create {name args} { ::ess_projects::create $name {*}$args }
-proc project_get {name} { ::ess_projects::get $name }
-proc project_list {} { ::ess_projects::list }
-proc project_update {name args} { ::ess_projects::update $name {*}$args }
-proc project_delete {name} { ::ess_projects::delete $name }
-proc project_exists {name} { ::ess_projects::exists $name }
-
-proc project_add_config {proj cfg} { ::ess_projects::add_config $proj $cfg }
-proc project_add_configs {proj cfgs} { ::ess_projects::add_configs $proj $cfgs }
-proc project_remove_config {proj cfg} { ::ess_projects::remove_config $proj $cfg }
-proc project_move_config {cfg from to} { ::ess_projects::move_config $cfg $from $to }
-
-proc project_add_queue {proj q} { ::ess_projects::add_queue $proj $q }
-proc project_remove_queue {proj q} { ::ess_projects::remove_queue $proj $q }
-
-proc config_projects {cfg} { ::ess_projects::config_projects $cfg }
-proc queue_projects {q} { ::ess_projects::queue_projects $q }
-
-proc project_activate {name} { ::ess_projects::activate $name }
-proc project_deactivate {} { ::ess_projects::deactivate }
-proc project_active {} { ::ess_projects::active }
-
-proc project_validate {name} { ::ess_projects::validate $name }
-
-proc project_export {name} { ::ess_projects::export $name }
-proc project_import {json args} { ::ess_projects::import $json {*}$args }
-
-proc project_push {name remote_host args} {
-    set json [project_export $name]
-    send $remote_host "project_import {$json} -skip_existing {*}$args"
-}
-
-#=========================================================================
-# Schema Management Commands
-#=========================================================================
-
-# Get schema information
-# Usage: schema_info
-proc schema_info {} {
-    return [ess::configs::schema_info]
-}
-
-# Backup database
-# Usage: schema_backup ?suffix?
-proc schema_backup {{suffix ""}} {
-    ess::configs::backup $suffix
-}
-
-# Reset database (dangerous!)
-# Usage: schema_reset "YES_DELETE_ALL_DATA"
-proc schema_reset {confirm_token} {
-    ess::configs::reset $confirm_token
-}
-
-# Optimize database
-# Usage: schema_optimize
-proc schema_optimize {} {
-    ess::configs::optimize
-}
-
-# Rebuild indexes
-# Usage: schema_rebuild_indexes
-proc schema_rebuild_indexes {} {
-    ess::configs::rebuild_indexes
-}
-
-#=========================================================================
-# Queue Publishing
-#=========================================================================
-
-proc queue_publish_list {} {
-    ::ess_queues::publish_list
-}
-
-#=========================================================================
-# Queue Export/Import for Cross-Rig Sync
-#=========================================================================
-
-# Export queue as JSON
-# Usage: queue_export "name" ?-include_configs?
-# Returns JSON with queue definition and optionally bundled config exports
-proc queue_export {name args} {
-    ::ess_queues::queue_export $name {*}$args
-}
-
-# Import queue from JSON
-# Usage: queue_import {json} ?-skip_existing_configs? ?-overwrite_queue?
-proc queue_import {json args} {
-    ::ess_queues::queue_import $json {*}$args
-}
-
-# Push queue to remote rig
-# Usage: queue_push "name" remote_host ?-include_configs?
-proc queue_push {name remote_host args} {
-    set json [queue_export $name {*}$args]
-    send $remote_host "queue_import {$json} -skip_existing_configs"
-}
-
-# Push queue with configs, overwriting existing queue on remote
-# Usage: queue_push_full "name" remote_host
-proc queue_push_full {name remote_host} {
-    set json [queue_export $name -include_configs]
-    send $remote_host "queue_import {$json} -skip_existing_configs -overwrite_queue"
-}
+# TODO: Implement project_export and project_import
+# These would bundle all configs and queues in a project
 
 #=========================================================================
 # Startup Complete
@@ -757,6 +448,6 @@ proc queue_push_full {name remote_host} {
 
 puts "Configs Manager subprocess ready"
 puts "  Database: $configs_db"
-puts "  Config commands: config_save, config_load, config_list, config_get, etc."
-puts "  Queue commands: queue_create, queue_add, queue_start, queue_stop, etc."
-puts "  Sync commands: config_push, config_import, queue_push, queue_import"
+puts "  Project: project_create, project_activate, project_list"
+puts "  Config:  config_save, config_load, config_run, config_list"
+puts "  Queue:   queue_create, queue_add, queue_start, queue_stop"
