@@ -237,11 +237,19 @@ namespace eval ess::registry {
         
         set project_id [dict get $project id]
         
+        # Ensure systems is always a list
+        set systems_val [dict get $project systems]
+        if {$systems_val eq "" || $systems_val eq "null"} {
+            set systems_val [list]
+        } elseif {[llength $systems_val] == 1 && [lindex $systems_val 0] eq $systems_val} {
+            set systems_val [list $systems_val]
+        }
+        
         # Build project dict for bundle
         set project_data [dict create \
             name [dict get $project name] \
             description [dict get $project description] \
-            systems [dict get $project systems]]
+            systems $systems_val]
         
         # Get configs
         set configs {}
@@ -252,6 +260,15 @@ namespace eval ess::registry {
             WHERE project_id = :project_id AND archived = 0
             ORDER BY name
         } row {
+            # Ensure tags is always a list
+            set tags_val [json_decode $row(tags)]
+            if {$tags_val eq "" || $tags_val eq "null"} {
+                set tags_val [list]
+            } elseif {[llength $tags_val] == 1 && [lindex $tags_val 0] eq $tags_val} {
+                # Single item that isn't already a list structure - wrap it
+                set tags_val [list $tags_val]
+            }
+            
             lappend configs [dict create \
                 id $row(id) \
                 name $row(name) \
@@ -264,7 +281,7 @@ namespace eval ess::registry {
                 variantArgs [json_decode $row(variant_args)] \
                 params [json_decode $row(params)] \
                 fileTemplate $row(file_template) \
-                tags [json_decode $row(tags)] \
+                tags $tags_val \
                 createdBy $row(created_by)]
         }
         
@@ -358,8 +375,15 @@ namespace eval ess::registry {
             # Build map of old config IDs to new config IDs
             set config_id_map [dict create]
             
-            # Import configs
-            foreach cfg [dict get $bundle configs] {
+            # Import configs (handle null/empty and single-item)
+            set configs_list [dict_get_default $bundle configs {}]
+            if {$configs_list eq "null"} { set configs_list {} }
+            # If it's a single dict (not a list of dicts), wrap it
+            if {[llength $configs_list] > 0 && [dict exists $configs_list id]} {
+                set configs_list [list $configs_list]
+            }
+            
+            foreach cfg $configs_list {
                 set old_id [dict get $cfg id]
                 set cfg_name [dict get $cfg name]
                 
@@ -401,8 +425,15 @@ namespace eval ess::registry {
                 }
             }
             
-            # Import queues
-            foreach q [dict get $bundle queues] {
+            # Import queues (handle null/empty and single-item)
+            set queues_list [dict_get_default $bundle queues {}]
+            if {$queues_list eq "null"} { set queues_list {} }
+            # If it's a single dict (not a list of dicts), wrap it
+            if {[llength $queues_list] > 0 && [dict exists $queues_list id]} {
+                set queues_list [list $queues_list]
+            }
+            
+            foreach q $queues_list {
                 set q_name [dict get $q name]
                 
                 # Check if queue exists
@@ -420,7 +451,7 @@ namespace eval ess::registry {
                     dict lappend result created "queue:$q_name"
                 } elseif {$overwrite} {
                     # Delete existing items and recreate
-                    ::ess_queues::queue_clear $q_name -project $project_name
+                    ::ess_queues::queue_clear_items $q_name -project $project_name
                     dict lappend result updated "queue:$q_name"
                 } else {
                     dict lappend result skipped "queue:$q_name"
@@ -428,7 +459,14 @@ namespace eval ess::registry {
                 }
                 
                 # Add items with mapped config IDs
-                foreach item [dict_get_default $q items {}] {
+                set items_list [dict_get_default $q items {}]
+                if {$items_list eq "null"} { set items_list {} }
+                # If it's a single dict (not a list of dicts), wrap it
+                if {[llength $items_list] > 0 && [dict exists $items_list id]} {
+                    set items_list [list $items_list]
+                }
+                
+                foreach item $items_list {
                     set old_config_id [dict get $item configId]
                     
                     if {![dict exists $config_id_map $old_config_id]} {
@@ -443,7 +481,7 @@ namespace eval ess::registry {
                     
                     ::ess_queues::queue_add_item $q_name $cfg_name \
                         -project $project_name \
-                        -repeat_count [dict_get_default $item repeatCount 1] \
+                        -repeat [dict_get_default $item repeatCount 1] \
                         -pause_after [dict_get_default $item pauseAfter 0] \
                         -notes [dict_get_default $item notes ""]
                 }
@@ -463,9 +501,14 @@ namespace eval ess::registry {
             dict lappend result errors $err
         }
         
-        # Update counts
-        dict set result configsCount [llength [dict get $bundle configs]]
-        dict set result queuesCount [llength [dict get $bundle queues]]
+        # Update counts (handle null)
+        set cfg_list [dict_get_default $bundle configs {}]
+        if {$cfg_list eq "null"} { set cfg_list {} }
+        set q_list [dict_get_default $bundle queues {}]
+        if {$q_list eq "null"} { set q_list {} }
+        
+        dict set result configsCount [llength $cfg_list]
+        dict set result queuesCount [llength $q_list]
         
         # Publish updates for UI
         catch { ::ess::configs::publish_all }
@@ -474,80 +517,150 @@ namespace eval ess::registry {
     }
     
     #=========================================================================
-    # JSON Encoding for Bundles (using yajltcl)
+    # JSON Encoding for Bundles (using yajltcl primitives)
     #=========================================================================
     
     proc json_encode_bundle {bundle} {
         package require yajltcl
         
         set obj [yajl create #auto]
-        encode_value_yajl $obj $bundle
+        
+        $obj map_open
+        
+        # Project
+        $obj string "project"
+        encode_project $obj [dict get $bundle project]
+        
+        # Configs array
+        $obj string "configs"
+        $obj array_open
+        foreach cfg [dict get $bundle configs] {
+            encode_config $obj $cfg
+        }
+        $obj array_close
+        
+        # Queues array
+        $obj string "queues"
+        $obj array_open
+        foreach q [dict get $bundle queues] {
+            encode_queue $obj $q
+        }
+        $obj array_close
+        
+        # Metadata
+        $obj string "exportedAt" string [dict get $bundle exportedAt]
+        $obj string "exportedBy" string [dict get $bundle exportedBy]
+        $obj string "sourceRig" string [dict get $bundle sourceRig]
+        
+        $obj map_close
+        
         set result [$obj get]
         $obj delete
         return $result
     }
     
-    proc encode_value_yajl {obj val} {
-        # Handle boolean strings
-        if {$val eq "true"} {
-            $obj bool 1
-            return
-        }
-        if {$val eq "false"} {
-            $obj bool 0
-            return
-        }
+    proc encode_project {obj p} {
+        $obj map_open
+        $obj string "name" string [dict_get_default $p name ""]
+        $obj string "description" string [dict_get_default $p description ""]
         
-        # Handle null/empty
-        if {$val eq "" || $val eq "null"} {
-            $obj null
-            return
+        # Systems is always an array of strings
+        $obj string "systems"
+        $obj array_open
+        foreach s [dict_get_default $p systems {}] {
+            $obj string $s
         }
+        $obj array_close
         
-        # Handle numbers
-        if {[string is integer -strict $val]} {
-            $obj number $val
-            return
-        }
-        if {[string is double -strict $val]} {
-            $obj number $val
-            return
-        }
+        $obj map_close
+    }
+    
+    proc encode_config {obj cfg} {
+        $obj map_open
         
-        # Check if it's a dict (even length, valid keys)
-        if {[llength $val] > 0 && [llength $val] % 2 == 0} {
-            if {![catch {dict keys $val}]} {
-                # It's a dict - encode as object
-                $obj map_open
-                dict for {k v} $val {
-                    $obj string $k
-                    encode_value_yajl $obj $v
-                }
-                $obj map_close
-                return
+        $obj string "id" number [dict get $cfg id]
+        $obj string "name" string [dict get $cfg name]
+        $obj string "description" string [dict_get_default $cfg description ""]
+        $obj string "scriptSource" string [dict_get_default $cfg scriptSource ""]
+        $obj string "system" string [dict get $cfg system]
+        $obj string "protocol" string [dict get $cfg protocol]
+        $obj string "variant" string [dict get $cfg variant]
+        $obj string "subject" string [dict_get_default $cfg subject ""]
+        
+        # variantArgs is an object
+        $obj string "variantArgs"
+        encode_string_map $obj [dict_get_default $cfg variantArgs {}]
+        
+        # params is an object
+        $obj string "params"
+        encode_string_map $obj [dict_get_default $cfg params {}]
+        
+        $obj string "fileTemplate" string [dict_get_default $cfg fileTemplate ""]
+        
+        # tags is always an array of strings
+        $obj string "tags"
+        $obj array_open
+        foreach t [dict_get_default $cfg tags {}] {
+            $obj string $t
+        }
+        $obj array_close
+        
+        $obj string "createdBy" string [dict_get_default $cfg createdBy ""]
+        
+        $obj map_close
+    }
+    
+    proc encode_queue {obj q} {
+        $obj map_open
+        
+        $obj string "id" number [dict get $q id]
+        $obj string "name" string [dict get $q name]
+        $obj string "description" string [dict_get_default $q description ""]
+        $obj string "autoStart" bool [expr {[dict_get_default $q autoStart "true"] eq "true"}]
+        $obj string "autoAdvance" bool [expr {[dict_get_default $q autoAdvance "true"] eq "true"}]
+        $obj string "autoDatafile" bool [expr {[dict_get_default $q autoDatafile "true"] eq "true"}]
+        $obj string "createdBy" string [dict_get_default $q createdBy ""]
+        
+        # items is always an array
+        $obj string "items"
+        $obj array_open
+        foreach item [dict_get_default $q items {}] {
+            encode_queue_item $obj $item
+        }
+        $obj array_close
+        
+        $obj map_close
+    }
+    
+    proc encode_queue_item {obj item} {
+        $obj map_open
+        $obj string "configId" number [dict get $item configId]
+        $obj string "position" number [dict get $item position]
+        $obj string "repeatCount" number [dict_get_default $item repeatCount 1]
+        $obj string "pauseAfter" number [dict_get_default $item pauseAfter 0]
+        $obj string "notes" string [dict_get_default $item notes ""]
+        $obj map_close
+    }
+    
+    # Encode a dict as a JSON object with auto-typed values
+    proc encode_string_map {obj d} {
+        $obj map_open
+        dict for {k v} $d {
+            $obj string $k
+            # Auto-detect type
+            if {[string is integer -strict $v]} {
+                $obj number $v
+            } elseif {[string is double -strict $v]} {
+                $obj number $v
+            } elseif {$v eq "true"} {
+                $obj bool 1
+            } elseif {$v eq "false"} {
+                $obj bool 0
+            } else {
+                $obj string $v
             }
         }
-        
-        # Check if it's a list (multiple elements, not a dict)
-        if {[llength $val] > 1} {
-            # It's a list - encode as array
-            $obj array_open
-            foreach item $val {
-                encode_value_yajl $obj $item
-            }
-            $obj array_close
-            return
-        }
-        
-        # Empty list
-        if {[llength $val] == 0} {
-            $obj array_open
-            $obj array_close
-            return
-        }
-        
-        # Default: string
-        $obj string $val
+        $obj map_close
     }
     
     #=========================================================================

@@ -360,7 +360,7 @@ proc ::ess_queues::queue_update {name args} {
 # Queue Item Management
 # =============================================================================
 
-proc ::ess_queues::queue_add {queue_name config_name args} {
+proc ::ess_queues::queue_add_item {queue_name config_name args} {
     variable db
     
     set project [::ess::configs::project_active]
@@ -412,7 +412,7 @@ proc ::ess_queues::queue_add {queue_name config_name args} {
     return $position
 }
 
-proc ::ess_queues::queue_remove {queue_name position args} {
+proc ::ess_queues::queue_remove_item {queue_name position args} {
     variable db
     
     set project [::ess::configs::project_active]
@@ -431,7 +431,7 @@ proc ::ess_queues::queue_remove {queue_name position args} {
     publish_queue_items $queue_name $project
 }
 
-proc ::ess_queues::queue_clear {queue_name args} {
+proc ::ess_queues::queue_clear_items {queue_name args} {
     variable db
     
     set project [::ess::configs::project_active]
@@ -444,6 +444,51 @@ proc ::ess_queues::queue_clear {queue_name args} {
     $db eval {DELETE FROM queue_items WHERE queue_id = :queue_id}
     
     publish_queue_items $queue_name $project
+}
+
+proc ::ess_queues::queue_update_item {queue_name position args} {
+    variable db
+    
+    set project [::ess::configs::project_active]
+    set repeat_count ""
+    set pause_after ""
+    set notes ""
+    set has_notes 0
+    
+    foreach {opt val} $args {
+        switch -- $opt {
+            -project { set project $val }
+            -repeat { set repeat_count [expr {int($val)}] }
+            -repeat_count { set repeat_count [expr {int($val)}] }
+            -pause_after { set pause_after [expr {int($val)}] }
+            -notes { set notes $val; set has_notes 1 }
+        }
+    }
+    
+    set queue_id [get_queue_id $queue_name $project]
+    set position [expr {int($position)}]
+    
+    # Build update list
+    set updates {}
+    if {$repeat_count ne ""} {
+        lappend updates "repeat_count = :repeat_count"
+    }
+    if {$pause_after ne ""} {
+        lappend updates "pause_after = :pause_after"
+    }
+    if {$has_notes} {
+        lappend updates "notes = :notes"
+    }
+    
+    if {[llength $updates] == 0} {
+        error "No updates specified"
+    }
+    
+    set sql "UPDATE queue_items SET [join $updates ", "] WHERE queue_id = :queue_id AND position = :position"
+    $db eval $sql
+    
+    publish_queue_items $queue_name $project
+    return $position
 }
 
 # =============================================================================

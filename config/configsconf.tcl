@@ -372,18 +372,22 @@ proc queue_delete {name args} {
 
 # Add config to queue (by name, looked up in same project)
 # Usage: queue_add "queue" "config" ?-repeat N? ?-pause_after N? ?-notes text?
-proc queue_add {queue_name config_name args} {
-    ::ess_queues::queue_add $queue_name $config_name {*}$args
+proc queue_add_item {queue_name config_name args} {
+    ::ess_queues::queue_add_item $queue_name $config_name {*}$args
 }
 
 # Remove item from queue by position
-proc queue_remove {queue_name position args} {
-    ::ess_queues::queue_remove $queue_name $position {*}$args
+proc queue_remove_item {queue_name position args} {
+    ::ess_queues::queue_remove_item $queue_name $position {*}$args
 }
 
-# Clear all items from queue
-proc queue_clear {queue_name args} {
-    ::ess_queues::queue_clear $queue_name {*}$args
+# Update item from queue by position
+proc queue_update_item {queue_name position args} {
+    ::ess_queues::queue_update_item $queue_name $position {*}$args
+}
+
+proc queue_clear_items {queue_name args} {
+    ::ess_queues::queue_clear_items $queue_name {*}$args
 }
 
 #=========================================================================

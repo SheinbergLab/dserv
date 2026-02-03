@@ -340,37 +340,25 @@ namespace eval ess::configs {
         publish_projects
         return $name
     }
-    
+
     proc project_delete {name} {
-        set id [project_get_id $name]
-        
-        # Check for configs
-        set config_count [configdb onecolumn {
-            SELECT COUNT(*) FROM configs WHERE project_id = :id AND archived = 0
-        }]
-        if {$config_count > 0} {
-            error "Cannot delete project with $config_count active configs"
-        }
-        
-        # Check for queues
-        set queue_count [configdb onecolumn {
-            SELECT COUNT(*) FROM queues WHERE project_id = :id
-        }]
-        if {$queue_count > 0} {
-            error "Cannot delete project with $queue_count queues"
-        }
-        
-        configdb eval {DELETE FROM projects WHERE id = :id}
-        
-        # Clear active if this was it
-        variable active_project
-        if {$active_project eq $name} {
-            set active_project ""
-            dservSet projects/active ""
-        }
-        
-        log info "Deleted project: $name"
-        publish_projects
+	set id [project_get_id $name]
+	
+	# Delete in order: queue_items -> queues -> configs -> project
+	configdb eval {DELETE FROM queue_items WHERE queue_id IN (SELECT id FROM queues WHERE project_id = :id)}
+	configdb eval {DELETE FROM queues WHERE project_id = :id}
+	configdb eval {DELETE FROM configs WHERE project_id = :id}
+	configdb eval {DELETE FROM projects WHERE id = :id}
+	
+	# Clear active if this was it
+	variable active_project
+	if {$active_project eq $name} {
+	    set active_project ""
+	    dservSet projects/active ""
+	}
+	
+	log info "Deleted project: $name"
+	publish_projects
     }
     
     proc project_exists {name} {
