@@ -25,6 +25,10 @@
 #     queue_start, queue_stop, queue_pause, queue_resume
 #     queue_skip, queue_next
 #
+#   Registry Sync:
+#     registry_configure, registry_push, registry_pull
+#     registry_list_projects, registry_sync_status
+#
 
 package require dlsh
 package require qpcs
@@ -37,6 +41,8 @@ proc exit {args} { error "exit not available for this subprocess" }
 
 package require ess_configs
 package require ess_queues
+package require ess_registry
+package require ess_registry_configs
 
 load ${dspath}/modules/dserv_timer[info sharedlibextension]
 
@@ -49,6 +55,9 @@ file mkdir [file dirname $configs_db]
 
 ess::configs::init $configs_db
 ::ess_queues::init [ess::configs::get_db]
+
+# Initialize registry from saved datapoints
+ess::registry::init_from_dserv
 
 ess::configs::publish_all
 
@@ -436,11 +445,86 @@ proc queue_status {} {
 }
 
 #=========================================================================
-# Export/Import (for cross-rig sync)
+# Registry Sync Commands
 #=========================================================================
 
-# TODO: Implement project_export and project_import
-# These would bundle all configs and queues in a project
+# Configure registry connection
+# Usage: registry_configure -url "http://server:8080" -workgroup "mylab" ?-user "dave"?
+proc registry_configure {args} {
+    ess::registry::configure {*}$args
+    
+    # Publish config for UI
+    dservSet registry/config [dict create \
+        url [ess::registry::cget -url] \
+        workgroup [ess::registry::cget -workgroup] \
+        user [ess::registry::cget -user]]
+}
+
+# Push local project to registry
+# Usage: registry_push "project_name"
+proc registry_push {project_name} {
+    set result [ess::registry::push_project $project_name]
+    
+    # Publish result for UI
+    dservSet registry/last_operation [dict create \
+        action "push" \
+        project $project_name \
+        success [dict get $result success] \
+        timestamp [clock seconds]]
+    
+    return $result
+}
+
+# Pull project from registry to local
+# Usage: registry_pull "project_name" ?-overwrite 1?
+proc registry_pull {project_name args} {
+    set overwrite 0
+    foreach {opt val} $args {
+        if {$opt eq "-overwrite"} {
+            set overwrite $val
+        }
+    }
+    
+    set result [ess::registry::pull_project $project_name -overwrite $overwrite]
+    
+    # Publish result for UI
+    dservSet registry/last_operation [dict create \
+        action "pull" \
+        project $project_name \
+        success [dict get $result success] \
+        timestamp [clock seconds]]
+    
+    # Refresh UI lists
+    ess::configs::publish_all
+    
+    return $result
+}
+
+# List projects available on registry
+# Usage: registry_list_projects
+proc registry_list_projects {} {
+    ess::registry::list_projects
+}
+
+# Get project from registry (without importing)
+# Usage: registry_get_project "project_name"
+proc registry_get_project {name} {
+    ess::registry::get_project $name
+}
+
+# Check sync status of local project
+# Usage: registry_sync_status "project_name"
+proc registry_sync_status {project_name} {
+    ess::registry::project_sync_status $project_name
+}
+
+# Get current registry configuration
+proc registry_config {} {
+    dict create \
+        url [ess::registry::cget -url] \
+        workgroup [ess::registry::cget -workgroup] \
+        user [ess::registry::cget -user]
+}
 
 #=========================================================================
 # Startup Complete
@@ -451,3 +535,4 @@ puts "  Database: $configs_db"
 puts "  Project: project_create, project_activate, project_list"
 puts "  Config:  config_save, config_load, config_run, config_list"
 puts "  Queue:   queue_create, queue_add, queue_start, queue_stop"
+puts "  Registry: registry_configure, registry_push, registry_pull"
