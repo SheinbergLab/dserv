@@ -418,6 +418,9 @@ Environment:
 		
 		// Register HTTP handlers
 		essRegistry.RegisterHandlers(mux, agent.auth)
+
+		// Add projects/configs/queues handlers
+		essRegistry.RegisterConfigsHandlers(mux, agent.auth)
 	}
 	
 	if cfg.ServerMode {
