@@ -61,13 +61,14 @@ namespace eval ess::configs {
         
         set db_path $path
         
-        # Check if database exists and has outdated schema
+	# Check if database exists and has outdated schema
         if {[file exists $path]} {
             sqlite3 configdb_check $path
             set db_version [configdb_check eval {PRAGMA user_version}]
+            set has_tables [configdb_check eval {SELECT count(*) FROM sqlite_master WHERE type='table'}]
             configdb_check close
             
-            if {$db_version > 0 && $db_version < $SCHEMA_VERSION} {
+            if {$db_version < $SCHEMA_VERSION && $has_tables > 0} {
                 log info "Database schema version $db_version is outdated (current: $SCHEMA_VERSION), resetting database"
                 file delete $path
                 # Also delete WAL and SHM files if they exist
