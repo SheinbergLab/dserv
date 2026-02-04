@@ -64,10 +64,7 @@ func (r *ESSRegistry) handleListProjectDefs(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	writeJSON(w, 200, map[string]interface{}{
-		"workgroup": workgroup,
-		"projects":  projects,
-	})
+	writeJSON(w, 200, projects)	
 }
 
 // GET/POST/PUT/DELETE /api/v1/ess/projectdef/{workgroup}/{name}
