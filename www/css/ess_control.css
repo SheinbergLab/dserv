@@ -3158,6 +3158,33 @@ body.ess-app {
     border-color: var(--ess-error);
 }
 
+
+
+/* Danger button (for delete actions) */
+.ess-modal-btn.danger {
+    background: #da3633;
+    color: white;
+    border: 1px solid #da3633;
+}
+
+.ess-modal-btn.danger:hover {
+    background: #f85149;
+    border-color: #f85149;
+}
+
+.ess-modal-btn.danger:disabled {
+    background: #6e2d2d;
+    border-color: #6e2d2d;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: not-allowed;
+}
+
+.ess-modal-warning {
+    color: #8892a2;
+    font-size: 12px;
+    margin-top: 8px;
+}
+
 /* Items list scrollbar */
 .ess-qb-items-list::-webkit-scrollbar {
     width: 6px;

@@ -412,7 +412,9 @@ namespace eval ess::registry {
         
         # Update datapoint for UI
         catch { dservSet ess/registry/last_pull [clock seconds] }
-        
+
+        dservSet ess/registry/sync_status "synced"
+
         return [dict create \
             success 1 \
             type $type \
@@ -468,6 +470,8 @@ namespace eval ess::registry {
         
         # Update datapoint for UI
         catch { dservSet ess/registry/last_push [clock seconds] }
+
+        dservSet ess/registry/sync_status "synced"
         
         return $result
     }

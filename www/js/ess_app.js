@@ -113,6 +113,7 @@ function requestInitialData() {
           configs/remote_servers
           queues/list queues/state queues/items
           projects/list projects/active projects/active_detail
+          ess/registry/url ess/registry/workgroup ess/registry/sync_status
         } {
           catch { dservTouch $v }
         }

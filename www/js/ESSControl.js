@@ -298,8 +298,6 @@ class ESSControl {
                             <div class="ess-config-menu-wrapper">
                                 <button id="ess-config-menu-btn" class="ess-config-menu-btn" title="Config actions">⋮</button>
                                 <div class="ess-config-menu" id="ess-config-menu">
-                                    <button class="ess-config-menu-action" data-action="import">Import from...</button>
-                                    <div class="ess-config-menu-divider"></div>
                                     <button class="ess-config-menu-action" data-action="trash">
                                         🗑 View Trash <span id="ess-config-trash-count"></span>
                                     </button>
@@ -438,8 +436,7 @@ class ESSControl {
                                 <button class="ess-queue-menu-action" data-action="edit">Edit</button>
                                 <button class="ess-queue-menu-action" data-action="new">New</button>
                                 <div class="ess-queue-menu-divider"></div>
-                                <button class="ess-queue-menu-action" data-action="push">Push to...</button>
-                                <button class="ess-queue-menu-action" data-action="import">Import from...</button>
+                                <button class="ess-queue-menu-action" data-action="delete">Delete</button>
                             </div>
                         </div>
                     </div>
@@ -675,9 +672,6 @@ class ESSControl {
                 this.closeConfigMenu();
                 
                 switch (action) {
-                    case 'import':
-                        this.showImportDialog();
-                        break;
                     case 'trash':
                         this.toggleTrashView();
                         break;
@@ -767,25 +761,22 @@ class ESSControl {
                 e.stopPropagation();
                 const action = btn.dataset.action;
                 this.closeQueueMenu();
-                
-                switch (action) {
-                    case 'edit':
-                        if (this.state.selectedQueue) {
-                            this.showQueueBuilderModal(this.state.selectedQueue);
-                        }
-                        break;
-                    case 'new':
-                        this.showQueueBuilderModal();
-                        break;
-                    case 'push':
-                        if (this.state.selectedQueue) {
-                            this.showQueuePushDialog(this.state.selectedQueue);
-                        }
-                        break;
-                    case 'import':
-                        this.showQueueImportDialog();
-                        break;
-                }
+
+		switch (action) {
+                case 'edit':
+                    if (this.state.selectedQueue) {
+                        this.showQueueBuilderModal(this.state.selectedQueue);
+                    }
+                    break;
+                case 'new':
+                    this.showQueueBuilderModal();
+                    break;
+                case 'delete':
+                    if (this.state.selectedQueue) {
+                        this.showDeleteQueueDialog(this.state.selectedQueue);
+                    }
+                    break;
+		}
             });
         });
         
@@ -844,12 +835,10 @@ class ESSControl {
             const action = btn.dataset.action;
             switch (action) {
                 case 'edit':
+                case 'delete':
                     btn.disabled = !hasQueue || isActive;
                     break;
-                case 'push':
-                    btn.disabled = !hasQueue;
-                    break;
-                // 'new' and 'import' are always enabled
+                // 'new' is always enabled
             }
         });
     }
@@ -2515,6 +2504,9 @@ updateConfigRunButtons() {
                 if (newTags && newTags.length > 0) {
                     optArgs.push(`-tags {${newTags.join(' ')}}`);
                 }
+		if (newFileTemplate) {
+		    optArgs.push(`-file_template {${newFileTemplate}}`);
+		}
                 if (Object.keys(newVariantArgs).length > 0) {
                     const vargsStr = Object.entries(newVariantArgs).map(([k, v]) => `${k} {${v}}`).join(' ');
                     optArgs.push(`-variant_args {${vargsStr}}`);
@@ -2551,6 +2543,10 @@ updateConfigRunButtons() {
         if (newSubject !== (original.subject || '')) {
             updateArgs.push(`-subject {${newSubject}}`);
         }
+	// File template - compare
+	if (newFileTemplate !== (original.file_template || '')) {
+	    updateArgs.push(`-file_template {${newFileTemplate}}`);
+	}
         
         // Tags - compare as sorted strings
         const origTags = Array.isArray(original.tags) ? [...original.tags].sort() : [];
@@ -2657,207 +2653,7 @@ updateConfigRunButtons() {
         const backend = this.state.backendRemoteServers || [];
         return [...session, ...backend];
     }
-    
-    /**
-     * Show import dialog - select peer, then select configs to import
-     */
-    async showImportDialog() {
-        const peers = this.getMeshPeers();
-        const recentServers = this.getRemoteServers();
         
-        // Create modal for peer selection
-        const modal = document.createElement('div');
-        modal.className = 'ess-modal-overlay';
-        modal.innerHTML = `
-            <div class="ess-modal">
-                <div class="ess-modal-header">
-                    <span class="ess-modal-title">Import Config</span>
-                    <button class="ess-modal-close">×</button>
-                </div>
-                <div class="ess-modal-body">
-                    <div class="ess-modal-section">
-                        <label class="ess-modal-label">Select source system:</label>
-                        <select class="ess-modal-select" id="ess-import-peer-select">
-                            <option value="">-- Select source --</option>
-                            <option value="__custom__">Enter IP address...</option>
-                            ${recentServers.length > 0 ? `<optgroup label="Recent Servers">
-                                ${recentServers.map(s => `<option value="${this.escapeAttr(s.address)}">${this.escapeHtml(s.label)}</option>`).join('')}
-                            </optgroup>` : ''}
-                            ${peers.length > 0 ? `<optgroup label="Mesh Peers">
-                                ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
-                            </optgroup>` : ''}
-                        </select>
-                    </div>
-                    <div class="ess-modal-section" id="ess-import-custom-ip-section" style="display: none;">
-                        <label class="ess-modal-label">Remote server address:</label>
-                        <input type="text" class="ess-modal-input" id="ess-import-custom-ip" 
-                               placeholder="hostname or IP address">
-                    </div>
-                    <div class="ess-modal-section" id="ess-import-configs-section" style="display: none;">
-                        <label class="ess-modal-label">Select configs to import:</label>
-                        <div class="ess-modal-config-list" id="ess-import-config-list">
-                            <div class="ess-modal-loading">Loading configs...</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="ess-modal-footer">
-                    <button class="ess-modal-btn cancel" id="ess-import-cancel">Cancel</button>
-                    <button class="ess-modal-btn primary" id="ess-import-confirm" disabled>Import Selected</button>
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(modal);
-        
-        const peerSelect = modal.querySelector('#ess-import-peer-select');
-        const customIpSection = modal.querySelector('#ess-import-custom-ip-section');
-        const customIpInput = modal.querySelector('#ess-import-custom-ip');
-        const configsSection = modal.querySelector('#ess-import-configs-section');
-        const configList = modal.querySelector('#ess-import-config-list');
-        const confirmBtn = modal.querySelector('#ess-import-confirm');
-        const cancelBtn = modal.querySelector('#ess-import-cancel');
-        const closeBtn = modal.querySelector('.ess-modal-close');
-        
-        let selectedConfigs = new Set();
-        let remoteConfigs = [];
-        let currentIp = '';
-        
-        // Helper to fetch and display configs from an IP
-        const fetchConfigsFromIp = async (ip) => {
-            if (!ip) return;
-            
-            currentIp = ip;
-            configsSection.style.display = 'block';
-            configList.innerHTML = '<div class="ess-modal-loading">Loading configs...</div>';
-            selectedConfigs.clear();
-            confirmBtn.disabled = true;
-            
-            try {
-                // Fetch remote config list via remoteSend
-                const result = await this.dpManager.connection.sendRaw(`remoteSend ${ip} {dservGet configs/list}`);
-                remoteConfigs = typeof result === 'string' ? JSON.parse(result) : result;
-                
-                if (!Array.isArray(remoteConfigs) || remoteConfigs.length === 0) {
-                    configList.innerHTML = '<div class="ess-modal-empty">No configs on remote system</div>';
-                    return;
-                }
-                
-                configList.innerHTML = remoteConfigs.map(cfg => `
-                    <label class="ess-modal-config-item">
-                        <input type="checkbox" value="${this.escapeAttr(cfg.name)}" class="ess-import-checkbox">
-                        <span class="ess-modal-config-name">${this.escapeHtml(cfg.name)}</span>
-                        <span class="ess-modal-config-path">${this.escapeHtml(cfg.system)}/${this.escapeHtml(cfg.protocol)}/${this.escapeHtml(cfg.variant)}</span>
-                    </label>
-                `).join('');
-                
-                // Bind checkbox changes
-                configList.querySelectorAll('.ess-import-checkbox').forEach(cb => {
-                    cb.addEventListener('change', () => {
-                        if (cb.checked) {
-                            selectedConfigs.add(cb.value);
-                        } else {
-                            selectedConfigs.delete(cb.value);
-                        }
-                        confirmBtn.disabled = selectedConfigs.size === 0;
-                    });
-                });
-                
-            } catch (e) {
-                configList.innerHTML = `<div class="ess-modal-error">Failed to fetch configs: ${this.escapeHtml(e.message)}</div>`;
-            }
-        };
-        
-        // Peer selection change
-        peerSelect.addEventListener('change', async () => {
-            const value = peerSelect.value;
-            
-            if (value === '__custom__') {
-                // Show custom IP input
-                customIpSection.style.display = 'block';
-                configsSection.style.display = 'none';
-                customIpInput.focus();
-                return;
-            }
-            
-            customIpSection.style.display = 'none';
-            
-            if (!value) {
-                configsSection.style.display = 'none';
-                return;
-            }
-            
-            await fetchConfigsFromIp(value);
-        });
-        
-        // Custom IP input - fetch on Enter
-        customIpInput.addEventListener('keydown', async (e) => {
-            if (e.key === 'Enter') {
-                const ip = customIpInput.value.trim();
-                if (ip) {
-                    await fetchConfigsFromIp(ip);
-                }
-            }
-        });
-        
-        // Also add a "Connect" button behavior on blur
-        customIpInput.addEventListener('blur', async () => {
-            const ip = customIpInput.value.trim();
-            if (ip && configsSection.style.display === 'none') {
-                await fetchConfigsFromIp(ip);
-            }
-        });
-        
-        // Confirm import
-        confirmBtn.addEventListener('click', async () => {
-            if (!currentIp || selectedConfigs.size === 0) return;
-            
-            // If this was a custom IP, save it to session list
-            if (peerSelect.value === '__custom__' && customIpInput.value.trim()) {
-                this.addRemoteServer(customIpInput.value.trim());
-            }
-            
-            confirmBtn.disabled = true;
-            confirmBtn.textContent = 'Importing...';
-            
-            let imported = 0;
-            let failed = 0;
-            
-            for (const name of selectedConfigs) {
-                try {
-                    // Get export JSON from remote
-                    const exportJson = await this.dpManager.connection.sendRaw(
-                        `remoteSend ${currentIp} {send configs {config_export {${name}}}}`
-                    );
-                    
-                    // Import locally
-                    await this.sendConfigCommandAsync(`config_import {${exportJson}}`);
-                    imported++;
-                    
-                } catch (e) {
-                    console.error(`Failed to import ${name}:`, e);
-                    failed++;
-                }
-            }
-            
-            modal.remove();
-            this.refreshConfigList();
-            
-            if (failed === 0) {
-                this.emit('log', { message: `Imported ${imported} config(s) from ${currentIp}`, level: 'info' });
-            } else {
-                this.emit('log', { message: `Imported ${imported}, failed ${failed} from ${currentIp}`, level: 'warning' });
-            }
-        });
-        
-        // Cancel/close
-        const closeModal = () => modal.remove();
-        cancelBtn.addEventListener('click', closeModal);
-        closeBtn.addEventListener('click', closeModal);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) closeModal();
-        });
-    }
-    
     /**
      * Show export dialog - select peer to export to
      */
@@ -3833,6 +3629,66 @@ updateConfigRunButtons() {
             console.warn('Failed to refresh config list for queue builder:', e);
         }
     }
+
+    /**
+     * Show confirmation dialog to delete a queue
+     */
+    showDeleteQueueDialog(queueName) {
+        const modal = document.createElement('div');
+        modal.className = 'ess-modal-overlay';
+        modal.innerHTML = `
+            <div class="ess-modal">
+                <div class="ess-modal-header">
+                    <span class="ess-modal-title">Delete Queue</span>
+                    <button class="ess-modal-close">×</button>
+                </div>
+                <div class="ess-modal-body">
+                    <p>Are you sure you want to delete the queue "<strong>${this.escapeHtml(queueName)}</strong>"?</p>
+                    <p class="ess-modal-warning">This action cannot be undone. The configs in this queue will not be deleted.</p>
+                </div>
+                <div class="ess-modal-footer">
+                    <button class="ess-modal-btn cancel">Cancel</button>
+                    <button class="ess-modal-btn danger">Delete Queue</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const closeBtn = modal.querySelector('.ess-modal-close');
+        const cancelBtn = modal.querySelector('.ess-modal-btn.cancel');
+        const deleteBtn = modal.querySelector('.ess-modal-btn.danger');
+        
+        const closeModal = () => modal.remove();
+        
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+        
+        deleteBtn.addEventListener('click', async () => {
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Deleting...';
+            
+            try {
+                await this.sendConfigCommandAsync(`queue_delete {${queueName}}`);
+                this.emit('log', { message: `Deleted queue "${queueName}"`, level: 'info' });
+                
+                // Clear selection and refresh
+                this.state.selectedQueue = '';
+                this.elements.queueSelect.value = '';
+                this.refreshQueueList();
+                this.renderQueuePlaylist();
+                
+                closeModal();
+            } catch (e) {
+                this.emit('log', { message: `Failed to delete queue: ${e.message}`, level: 'error' });
+                deleteBtn.disabled = false;
+                deleteBtn.textContent = 'Delete Queue';
+            }
+        });
+    }
     
     /**
      * Populate the config select dropdown in the queue builder
@@ -3999,7 +3855,7 @@ updateConfigRunButtons() {
                 
                 // Clear items first (using original name, before any rename)
                 console.log(`Clearing items from queue: ${originalName}`);
-                await this.sendConfigCommandAsync(`queue_clear {${originalName}}`);
+                await this.sendConfigCommandAsync(`queue_clear_items {${originalName}}`);
                 
                 // Update settings (including rename if applicable)
                 let updateCmd = `queue_update {${originalName}}`;
@@ -4016,7 +3872,7 @@ updateConfigRunButtons() {
                 
                 // Add items (using new name if renamed)
                 for (const item of this.queueBuilder.items) {
-                    let addCmd = `queue_add {${name}} {${item.config_name}}`;
+                    let addCmd = `queue_add_item {${name}} {${item.config_name}}`;
                     if (item.repeat_count > 1) addCmd += ` -repeat ${item.repeat_count}`;
                     if (item.pause_after > 0) addCmd += ` -pause_after ${item.pause_after}`;
                     if (item.notes) addCmd += ` -notes {${item.notes}}`;
@@ -4037,7 +3893,7 @@ updateConfigRunButtons() {
                 
                 // Add items
                 for (const item of this.queueBuilder.items) {
-                    let addCmd = `queue_add {${name}} {${item.config_name}}`;
+                    let addCmd = `queue_add_item {${name}} {${item.config_name}}`;
                     if (item.repeat_count > 1) addCmd += ` -repeat ${item.repeat_count}`;
                     if (item.pause_after > 0) addCmd += ` -pause_after ${item.pause_after}`;
                     if (item.notes) addCmd += ` -notes {${item.notes}}`;
@@ -4102,333 +3958,6 @@ updateConfigRunButtons() {
             modal.remove();
         }
         this.queueBuilder = null;
-    }
-    
-    // =========================================================================
-    // SECTION 11: QUEUE IMPORT/EXPORT
-    // =========================================================================
-    
-    /**
-     * Show queue import dialog - select peer and queue to import
-     */
-    async showQueueImportDialog() {
-        const peers = this.getMeshPeers();
-        const recentServers = this.getRemoteServers();
-        
-        const modal = document.createElement('div');
-        modal.className = 'ess-modal-overlay';
-        modal.innerHTML = `
-            <div class="ess-modal">
-                <div class="ess-modal-header">
-                    <span class="ess-modal-title">Import Session</span>
-                    <button class="ess-modal-close">×</button>
-                </div>
-                <div class="ess-modal-body">
-                    <div class="ess-modal-section">
-                        <label class="ess-modal-label">Import from:</label>
-                        <select class="ess-modal-select" id="ess-queue-import-peer-select">
-                            <option value="">-- Select source --</option>
-                            <option value="__custom__">Enter IP address...</option>
-                            ${recentServers.length > 0 ? `<optgroup label="Recent Servers">
-                                ${recentServers.map(s => `<option value="${this.escapeAttr(s.address)}">${this.escapeHtml(s.label)}</option>`).join('')}
-                            </optgroup>` : ''}
-                            ${peers.length > 0 ? `<optgroup label="Mesh Peers">
-                                ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
-                            </optgroup>` : ''}
-                        </select>
-                    </div>
-                    <div class="ess-modal-section" id="ess-queue-import-custom-ip-section" style="display: none;">
-                        <label class="ess-modal-label">Remote server address:</label>
-                        <input type="text" class="ess-modal-input" id="ess-queue-import-custom-ip" 
-                               placeholder="hostname or IP address">
-                    </div>
-                    <div class="ess-modal-section" id="ess-queue-import-list-section" style="display: none;">
-                        <label class="ess-modal-label">Select session to import:</label>
-                        <div class="ess-modal-config-list" id="ess-queue-import-list">
-                            <!-- Populated dynamically -->
-                        </div>
-                    </div>
-                    <div class="ess-modal-section" id="ess-queue-import-options-section" style="display: none;">
-                        <label class="ess-qb-checkbox">
-                            <input type="checkbox" id="ess-queue-import-configs" checked>
-                            Also import referenced configs (if missing)
-                        </label>
-                    </div>
-                </div>
-                <div class="ess-modal-footer">
-                    <button class="ess-modal-btn cancel" id="ess-queue-import-cancel">Cancel</button>
-                    <button class="ess-modal-btn primary" id="ess-queue-import-confirm" disabled>Import</button>
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(modal);
-        
-        const peerSelect = modal.querySelector('#ess-queue-import-peer-select');
-        const customIpSection = modal.querySelector('#ess-queue-import-custom-ip-section');
-        const customIpInput = modal.querySelector('#ess-queue-import-custom-ip');
-        const listSection = modal.querySelector('#ess-queue-import-list-section');
-        const queueList = modal.querySelector('#ess-queue-import-list');
-        const optionsSection = modal.querySelector('#ess-queue-import-options-section');
-        const confirmBtn = modal.querySelector('#ess-queue-import-confirm');
-        const cancelBtn = modal.querySelector('#ess-queue-import-cancel');
-        const closeBtn = modal.querySelector('.ess-modal-close');
-        
-        let currentIp = '';
-        let selectedQueue = '';
-        
-        const loadQueuesFromPeer = async (ip) => {
-            currentIp = ip;
-            queueList.innerHTML = '<div class="ess-loading">Loading queues...</div>';
-            listSection.style.display = 'block';
-            optionsSection.style.display = 'none';
-            confirmBtn.disabled = true;
-            selectedQueue = '';
-            
-            try {
-                const response = await this.dpManager.connection.sendRaw(
-                    `remoteSend ${ip} {send configs {queue_list}}`
-                );
-                
-                // Parse the response - it's a Tcl list of dicts
-                let queues = [];
-                if (response) {
-                    queues = TclParser.parseList(response).map(q => {
-                        if (typeof q === 'string') {
-                            return TclParser.parseDict(q);
-                        }
-                        return q;
-                    });
-                }
-                
-                if (queues.length === 0) {
-                    queueList.innerHTML = '<div class="ess-empty">No queues found</div>';
-                    return;
-                }
-                
-                queueList.innerHTML = queues.map(q => `
-                    <div class="ess-import-queue-item" data-name="${this.escapeAttr(q.name)}">
-                        <span class="ess-import-queue-name">${this.escapeHtml(q.name)}</span>
-                        <span class="ess-import-queue-count">${q.item_count || 0} items</span>
-                    </div>
-                `).join('');
-                
-                // Add click handlers for selection
-                queueList.querySelectorAll('.ess-import-queue-item').forEach(item => {
-                    item.addEventListener('click', () => {
-                        queueList.querySelectorAll('.ess-import-queue-item').forEach(i => i.classList.remove('selected'));
-                        item.classList.add('selected');
-                        selectedQueue = item.dataset.name;
-                        optionsSection.style.display = 'block';
-                        confirmBtn.disabled = false;
-                    });
-                });
-                
-            } catch (e) {
-                console.error('Failed to load queues from peer:', e);
-                queueList.innerHTML = `<div class="ess-error">Failed to connect: ${e.message}</div>`;
-            }
-        };
-        
-        peerSelect.addEventListener('change', () => {
-            if (peerSelect.value === '__custom__') {
-                customIpSection.style.display = 'block';
-                listSection.style.display = 'none';
-                optionsSection.style.display = 'none';
-                customIpInput.focus();
-            } else if (peerSelect.value) {
-                customIpSection.style.display = 'none';
-                loadQueuesFromPeer(peerSelect.value);
-            } else {
-                customIpSection.style.display = 'none';
-                listSection.style.display = 'none';
-                optionsSection.style.display = 'none';
-            }
-        });
-        
-        customIpInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && customIpInput.value.trim()) {
-                this.addRemoteServer(customIpInput.value.trim());
-                loadQueuesFromPeer(customIpInput.value.trim());
-            }
-        });
-        
-        confirmBtn.addEventListener('click', async () => {
-            if (!selectedQueue || !currentIp) return;
-            
-            const includeConfigs = modal.querySelector('#ess-queue-import-configs').checked;
-            
-            confirmBtn.disabled = true;
-            confirmBtn.textContent = 'Importing...';
-            
-            try {
-                // Get queue export JSON from remote
-                const exportFlag = includeConfigs ? ' -include_configs' : '';
-                const exportJson = await this.dpManager.connection.sendRaw(
-                    `remoteSend ${currentIp} {send configs {queue_export {${selectedQueue}}${exportFlag}}}`
-                );
-                
-                // Import locally
-                await this.sendConfigCommandAsync(`queue_import {${exportJson}} -skip_existing_configs -overwrite_queue`);
-                
-                modal.remove();
-                this.emit('log', { message: `Imported queue "${selectedQueue}" from ${currentIp}`, level: 'info' });
-                this.refreshQueueList();
-                
-                // Select the imported queue
-                setTimeout(() => this.selectQueue(selectedQueue), 100);
-                
-            } catch (e) {
-                modal.remove();
-                this.emit('log', { message: `Import failed: ${e.message}`, level: 'error' });
-            }
-        });
-        
-        // Cancel/close
-        const closeModal = () => modal.remove();
-        cancelBtn.addEventListener('click', closeModal);
-        closeBtn.addEventListener('click', closeModal);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) closeModal();
-        });
-    }
-    
-    /**
-     * Show queue push dialog - select destination peer
-     */
-    async showQueuePushDialog(queueName) {
-        const peers = this.getMeshPeers();
-        const recentServers = this.getRemoteServers();
-        
-        const modal = document.createElement('div');
-        modal.className = 'ess-modal-overlay';
-        modal.innerHTML = `
-            <div class="ess-modal">
-                <div class="ess-modal-header">
-                    <span class="ess-modal-title">Push Queue</span>
-                    <button class="ess-modal-close">×</button>
-                </div>
-                <div class="ess-modal-body">
-                    <div class="ess-modal-section">
-                        <label class="ess-modal-label">Queue:</label>
-                        <div class="ess-modal-value">${this.escapeHtml(queueName)}</div>
-                    </div>
-                    <div class="ess-modal-section">
-                        <label class="ess-modal-label">Push to:</label>
-                        <select class="ess-modal-select" id="ess-queue-push-peer-select">
-                            <option value="">-- Select destination --</option>
-                            <option value="__custom__">Enter IP address...</option>
-                            ${recentServers.length > 0 ? `<optgroup label="Recent Servers">
-                                ${recentServers.map(s => `<option value="${this.escapeAttr(s.address)}">${this.escapeHtml(s.label)}</option>`).join('')}
-                            </optgroup>` : ''}
-                            ${peers.length > 0 ? `<optgroup label="Mesh Peers">
-                                ${peers.map(p => `<option value="${p.ipAddress}">${this.escapeHtml(p.name)} (${p.ipAddress})</option>`).join('')}
-                            </optgroup>` : ''}
-                        </select>
-                    </div>
-                    <div class="ess-modal-section" id="ess-queue-push-custom-ip-section" style="display: none;">
-                        <label class="ess-modal-label">Remote server address:</label>
-                        <input type="text" class="ess-modal-input" id="ess-queue-push-custom-ip" 
-                               placeholder="hostname or IP address">
-                    </div>
-                    <div class="ess-modal-section">
-                        <label class="ess-qb-checkbox">
-                            <input type="checkbox" id="ess-queue-push-configs" checked>
-                            Include referenced configs
-                        </label>
-                        <label class="ess-qb-checkbox">
-                            <input type="checkbox" id="ess-queue-push-overwrite">
-                            Overwrite if session exists on destination
-                        </label>
-                    </div>
-                </div>
-                <div class="ess-modal-footer">
-                    <button class="ess-modal-btn cancel" id="ess-queue-push-cancel">Cancel</button>
-                    <button class="ess-modal-btn primary" id="ess-queue-push-confirm" disabled>Push</button>
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(modal);
-        
-        const peerSelect = modal.querySelector('#ess-queue-push-peer-select');
-        const customIpSection = modal.querySelector('#ess-queue-push-custom-ip-section');
-        const customIpInput = modal.querySelector('#ess-queue-push-custom-ip');
-        const confirmBtn = modal.querySelector('#ess-queue-push-confirm');
-        const cancelBtn = modal.querySelector('#ess-queue-push-cancel');
-        const closeBtn = modal.querySelector('.ess-modal-close');
-        
-        const getTargetIp = () => {
-            if (peerSelect.value === '__custom__') {
-                return customIpInput.value.trim();
-            }
-            return peerSelect.value;
-        };
-        
-        const updateConfirmState = () => {
-            confirmBtn.disabled = !getTargetIp();
-        };
-        
-        peerSelect.addEventListener('change', () => {
-            if (peerSelect.value === '__custom__') {
-                customIpSection.style.display = 'block';
-                customIpInput.focus();
-                confirmBtn.disabled = true;
-            } else {
-                customIpSection.style.display = 'none';
-                updateConfirmState();
-            }
-        });
-        
-        customIpInput.addEventListener('input', updateConfirmState);
-        
-        confirmBtn.addEventListener('click', async () => {
-            const ip = getTargetIp();
-            if (!ip) return;
-            
-            // Save custom IP if used
-            if (peerSelect.value === '__custom__' && customIpInput.value.trim()) {
-                this.addRemoteServer(customIpInput.value.trim());
-            }
-            
-            const includeConfigs = modal.querySelector('#ess-queue-push-configs').checked;
-            const overwrite = modal.querySelector('#ess-queue-push-overwrite').checked;
-            
-            confirmBtn.disabled = true;
-            confirmBtn.textContent = 'Pushing...';
-            
-            try {
-                // Get queue export JSON locally
-                const exportFlag = includeConfigs ? ' -include_configs' : '';
-                const exportJson = await this.sendConfigCommandAsync(`queue_export {${queueName}}${exportFlag}`);
-                
-                // Build import flags
-                let importFlags = ' -skip_existing_configs';
-                if (overwrite) {
-                    importFlags += ' -overwrite_queue';
-                }
-                
-                // Send to remote
-                await this.dpManager.connection.sendRaw(
-                    `remoteSend ${ip} {send configs {queue_import {${exportJson}}${importFlags}}}`
-                );
-                
-                modal.remove();
-                this.emit('log', { message: `Pushed queue "${queueName}" to ${ip}`, level: 'info' });
-                
-            } catch (e) {
-                modal.remove();
-                this.emit('log', { message: `Push failed: ${e.message}`, level: 'error' });
-            }
-        });
-        
-        // Cancel/close
-        const closeModal = () => modal.remove();
-        cancelBtn.addEventListener('click', closeModal);
-        closeBtn.addEventListener('click', closeModal);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) closeModal();
-        });
     }
 }
 

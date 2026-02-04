@@ -565,7 +565,8 @@ namespace eval ess::configs {
         
         set config_id [configdb last_insert_rowid]
         log info "Created config: $name (id=$config_id)"
-        
+
+	dservSet ess/registry/sync_status "modified"
         publish_configs
         return $config_id
     }
@@ -934,7 +935,7 @@ namespace eval ess::configs {
                 }
             }
         }
-        
+	dservSet ess/registry/sync_status "modified"        
         publish_configs
         return $config_id
     }
@@ -969,6 +970,7 @@ namespace eval ess::configs {
         }	
         
         log info "Archived config: [dict get $config name]"
+	dservSet ess/registry/sync_status "modified"        
         publish_configs
         return $config_id
     }
@@ -997,6 +999,7 @@ namespace eval ess::configs {
         configdb eval {DELETE FROM configs WHERE id = :config_id}
         
         log info "Deleted config: [dict get $config name]"
+	dservSet ess/registry/sync_status "modified"
         publish_configs
         return $config_id
     }
@@ -1057,6 +1060,7 @@ namespace eval ess::configs {
             -tags [dict get $new_config tags] \
             -file_template [dict get $new_config file_template]]
         
+	dservSet ess/registry/sync_status "modified"
         log info "Cloned config [dict get $config name] -> $new_name"
         return $new_id
     }

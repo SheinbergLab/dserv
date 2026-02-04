@@ -510,6 +510,12 @@ proc registry_list_projects {} {
     ess::registry::list_projects
 }
 
+# List projects available on registry as JSON
+# Usage: registry_list_projects_json
+proc registry_list_projects_json {} {
+    ess::registry::list_projects_json
+}
+
 # Get project from registry (without importing)
 # Usage: registry_get_project "project_name"
 proc registry_get_project {name} {

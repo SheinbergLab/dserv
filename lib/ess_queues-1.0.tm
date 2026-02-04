@@ -118,6 +118,7 @@ proc ::ess_queues::queue_create {name args} {
     }
     
     log info "Created queue: $name in project $project"
+    dservSet ess/registry/sync_status "modified"
     publish_list
     
     return $name
@@ -134,7 +135,7 @@ proc ::ess_queues::queue_delete {name args} {
     
     set queue_id [get_queue_id $name $project]
     
-    # Can't delete active queue
+    # Can't delete active queue that's running
     if {$state(status) ne "idle" && $state(queue_id) == $queue_id} {
         error "Cannot delete active queue"
     }
@@ -142,7 +143,19 @@ proc ::ess_queues::queue_delete {name args} {
     # Items deleted via CASCADE
     $db eval {DELETE FROM queues WHERE id = :queue_id}
     
+    # If we deleted the currently selected queue, clear state
+    if {$state(queue_id) == $queue_id} {
+        set state(queue_id) 0
+        set state(queue_name) ""
+        set state(position) 0
+        set state(total_items) 0
+        set state(current_config_name) ""
+        set state(current_config_id) 0
+        publish_state
+    }
+    
     log info "Deleted queue: $name"
+    dservSet ess/registry/sync_status "modified"
     publish_list
     return $name
 }
@@ -352,6 +365,7 @@ proc ::ess_queues::queue_update {name args} {
         $db eval $sql
     }
     
+    dservSet ess/registry/sync_status "modified"
     publish_list
     return $name
 }
@@ -407,7 +421,8 @@ proc ::ess_queues::queue_add_item {queue_name config_name args} {
         INSERT INTO queue_items (queue_id, config_id, position, repeat_count, pause_after, notes)
         VALUES (:queue_id, :config_id, :position, :repeat_count, :pause_after, :notes)
     }
-    
+
+    dservSet ess/registry/sync_status "modified"
     publish_queue_items $queue_name $project
     return $position
 }
@@ -428,6 +443,7 @@ proc ::ess_queues::queue_remove_item {queue_name position args} {
     }
     
     renumber_items $queue_id
+    dservSet ess/registry/sync_status "modified"
     publish_queue_items $queue_name $project
 }
 
@@ -442,7 +458,7 @@ proc ::ess_queues::queue_clear_items {queue_name args} {
     set queue_id [get_queue_id $queue_name $project]
     
     $db eval {DELETE FROM queue_items WHERE queue_id = :queue_id}
-    
+    dservSet ess/registry/sync_status "modified"
     publish_queue_items $queue_name $project
 }
 
@@ -487,6 +503,7 @@ proc ::ess_queues::queue_update_item {queue_name position args} {
     set sql "UPDATE queue_items SET [join $updates ", "] WHERE queue_id = :queue_id AND position = :position"
     $db eval $sql
     
+    dservSet ess/registry/sync_status "modified"
     publish_queue_items $queue_name $project
     return $position
 }

@@ -17,6 +17,7 @@
 #   
 #   # List projects on registry
 #   ess::registry::list_projects
+#   ess::registry::list_projects_json
 #
 
 namespace eval ess::registry {
@@ -79,7 +80,17 @@ namespace eval ess::registry {
         variable config
         return [api_get "/projectdefs?workgroup=$config(workgroup)"]
     }
-    
+
+    # List all projects in workgroup - returns raw JSON for frontend
+    proc list_projects_json {} {
+	variable config
+	if {$config(url) eq ""} {
+	    error "Registry URL not configured"
+	}
+	set url "$config(url)/api/v1/ess/projectdefs?workgroup=$config(workgroup)"
+	return [https_get $url]
+    }
+
     # Get a single project from registry
     proc get_project {name} {
         variable config
@@ -181,6 +192,7 @@ namespace eval ess::registry {
         set result [import_bundle_local $bundle $overwrite]
         
         # Update datapoint for UI
+	dservSet ess/registry/sync_status "synced"
         catch { dservSet ess/registry/last_pull [clock seconds] }
         
         return $result
@@ -216,6 +228,7 @@ namespace eval ess::registry {
         }
         
         # Update datapoint for UI
+	dservSet ess/registry/sync_status "synced"
         catch { dservSet ess/registry/last_push [clock seconds] }
         
         return $result
