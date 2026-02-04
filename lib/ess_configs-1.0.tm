@@ -36,8 +36,8 @@ namespace eval ess::configs {
     variable initialized 0      ;# Whether init has been called
     
     # Current schema version - increment when schema changes incompatibly
-    # Version 2: Project-based configs/queues structure (Feb 2026)
-    variable SCHEMA_VERSION 2
+    # Version 3: Project-based configs/queues structure (Feb 2026)
+    variable SCHEMA_VERSION 3
     
     #=========================================================================
     # Initialization
