@@ -370,7 +370,7 @@ func (r *ESSRegistry) handleListProjects(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	writeJSON(w, 200, map[string]interface{}{"workgroup": workgroup, "projects": projects})
+	writeJSON(w, 200, projects)
 }
 
 // GET/PUT/DELETE /api/v1/ess/project/{workgroup}/{name}
