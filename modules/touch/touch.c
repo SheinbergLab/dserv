@@ -44,6 +44,7 @@ typedef struct touch_info_s
 #endif
   int screen_width;
   int screen_height;
+  int rotation;  /* 0, 90, 180, 270 */  
   int maxx, maxy, minx, miny;
   float rangex, rangey;
   int track_drag;  /* flag to enable/disable drag tracking */
@@ -54,14 +55,16 @@ typedef struct touch_info_s
 void *input_thread(void *arg)
 {
   touch_info_t *info = (touch_info_t *) arg;
-
   char point_name[64];
-  sprintf(point_name, "%s/event", info->dpoint_prefix);  // Unified event stream
-  
+  sprintf(point_name, "%s/event", info->dpoint_prefix);
+
   struct input_event ev;
+  int raw_x = 0, raw_y = 0;
   int x = 0, y = 0;
-  int touch_active = 0;  /* Track if touch is currently active */
-  int first_coordinate_after_press = 0;  /* Track first coordinate after press */
+  int touch_active = 0;
+  int touch_changed = 0;       /* BTN_TOUCH changed this frame */
+  int coords_changed = 0;      /* coordinates updated this frame */
+  int first_coordinate_after_press = 0;
   int rc;
 
   do {
@@ -70,82 +73,128 @@ void *input_thread(void *arg)
       switch (ev.type) {
       case EV_KEY:
 	switch (ev.code) {
-	case 330: /* BTN_TOUCH */
-	  if (ev.value == 1) { 
+	case BTN_TOUCH:
+	  if (ev.value == 1) {
 	    touch_active = 1;
-	    /* Touch press - will be logged when we get coordinates */
+	    touch_changed = 1;
+	    first_coordinate_after_press = 0;
 	  }
-	  else if (ev.value == 0) { 
-	    /* Touch release event */
-	    if (touch_active) {
-	      uint16_t vals[3];  // x, y, event_type
-	      vals[0] = x;
-	      vals[1] = y;
-	      vals[2] = 2;  // RELEASE = 2
-	      ds_datapoint_t *dp = dpoint_new(point_name,
-					      tclserver_now(info->tclserver),
-					      DSERV_SHORT,
-					      sizeof(vals),
-					      (unsigned char *) vals);
-	      tclserver_set_point(info->tclserver, dp);
-	      touch_active = 0;
-	      first_coordinate_after_press = 0;  /* Reset for next touch sequence */
-	    }
+	  else if (ev.value == 0) {
+	    touch_changed = 1;
 	  }
 	  break;
 	}
 	break;
       case EV_ABS:
 	switch (ev.code) {
-	case ABS_X: /* 0 */
+	case ABS_X:
 	  if (ev.value > 0) {
-	    x = (int) (info->screen_width*((ev.value-info->minx)/info->rangex));
+	    raw_x = (int)(info->screen_width * ((ev.value - info->minx) / info->rangex));
+	    coords_changed = 1;
 	  }
 	  break;
-	case ABS_Y: /* 1 */
+	case ABS_Y:
 	  if (ev.value > 0) {
-	    y = (int) (info->screen_height*((ev.value-info->miny)/info->rangey));
-	    
-	    if (touch_active) {
-	      uint16_t vals[3];  // x, y, event_type
-	      vals[0] = x;
-	      vals[1] = y;
-	      
-	      if (!first_coordinate_after_press) {
-		/* This is the initial press with coordinates */
-		vals[2] = 0;  // PRESS = 0
-		ds_datapoint_t *dp = dpoint_new(point_name,
-						tclserver_now(info->tclserver),
-						DSERV_SHORT,
-						sizeof(vals),
-						(unsigned char *) vals);
-		tclserver_set_point(info->tclserver, dp);
-		first_coordinate_after_press = 1;
-	      }
-	      else if (info->track_drag) {
-		/* This is a drag movement */
-		vals[2] = 1;  // DRAG = 1
-		ds_datapoint_t *dp = dpoint_new(point_name,
-						tclserver_now(info->tclserver),
-						DSERV_SHORT,
-						sizeof(vals),
-						(unsigned char *) vals);
-		tclserver_set_point(info->tclserver, dp);
-	      }
-	    }
+	    raw_y = (int)(info->screen_height * ((ev.value - info->miny) / info->rangey));
+	    coords_changed = 1;
 	  }
-	  break;
-	default:
 	  break;
 	}
 	break;
-      default:
+      case EV_SYN:
+	if (ev.code == SYN_REPORT) {
+	  /* Apply rotation transform when coordinates changed */
+	  if (coords_changed) {
+	    switch (info->rotation) {
+	    case 90:
+	      x = raw_y;
+	      y = info->screen_width - 1 - raw_x;
+	      break;
+	    case 180:
+	      x = info->screen_width - 1 - raw_x;
+	      y = info->screen_height - 1 - raw_y;
+	      break;
+	    case 270:
+	      x = info->screen_height - 1 - raw_y;
+	      y = raw_x;
+	      break;
+	    default:
+	      x = raw_x;
+	      y = raw_y;
+	      break;
+	    }
+	  }
+
+	  if (touch_active && (coords_changed || touch_changed)) {
+	    uint16_t vals[3];
+	    vals[0] = x;
+	    vals[1] = y;
+
+	    if (!first_coordinate_after_press) {
+	      vals[2] = 0;  /* PRESS */
+	      first_coordinate_after_press = 1;
+	    }
+	    else if (info->track_drag && coords_changed) {
+	      vals[2] = 1;  /* DRAG */
+	    }
+	    else {
+	      goto sync_done;
+	    }
+
+	    ds_datapoint_t *dp = dpoint_new(point_name,
+					    tclserver_now(info->tclserver),
+					    DSERV_SHORT,
+					    sizeof(vals),
+					    (unsigned char *) vals);
+	    tclserver_set_point(info->tclserver, dp);
+	  }
+	  else if (!touch_active && touch_changed) {
+	    /* Release */
+	    uint16_t vals[3];
+	    vals[0] = x;
+	    vals[1] = y;
+	    vals[2] = 2;  /* RELEASE */
+	    ds_datapoint_t *dp = dpoint_new(point_name,
+					    tclserver_now(info->tclserver),
+					    DSERV_SHORT,
+					    sizeof(vals),
+					    (unsigned char *) vals);
+	    tclserver_set_point(info->tclserver, dp);
+	  }
+
+	sync_done:
+	  touch_changed = 0;
+	  coords_changed = 0;
+	}
 	break;
       }
     }
   } while (rc >= 0);
-  
+
   return NULL;
+}
+
+static int get_hdmi_rotation(const char *output_name) {
+    FILE *f = fopen("/proc/cmdline", "r");
+    if (!f) return 0;
+    
+    char buf[4096];
+    if (!fgets(buf, sizeof(buf), f)) { fclose(f); return 0; }
+    fclose(f);
+    
+    char prefix[64];
+    snprintf(prefix, sizeof(prefix), "video=%s:", output_name);
+    
+    char *p = strstr(buf, prefix);
+    if (!p) return 0;
+    
+    char *rot = strstr(p, "rotate=");
+    if (!rot) return 0;
+    
+    char *space = strchr(p, ' ');
+    if (space && rot > space) return 0;
+    
+    return atoi(rot + 7);
 }
 
 static int touch_open_command(ClientData data,
@@ -215,7 +264,8 @@ static int touch_open_command(ClientData data,
   info->fd = fd;
   info->screen_width = width;
   info->screen_height = height;
-
+  info->rotation = get_hdmi_rotation("HDMI-A-1");
+    
   return TCL_OK;
 }
 
