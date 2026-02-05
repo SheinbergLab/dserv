@@ -3,873 +3,1226 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workgroup Dashboard</title>
+    <title>Lab Mesh Directory</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f5f5;
-            padding: 20px;
-            color: #333;
-        }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        
-        header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-        }
-        
-        header h1 {
-            font-size: 28px;
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        
-        header p {
-            opacity: 0.9;
-            font-size: 14px;
-        }
-        
-        .tabs {
-            display: flex;
-            background: #fafafa;
-            border-bottom: 2px solid #e0e0e0;
-        }
-        
-        .tab-button {
-            padding: 15px 30px;
-            background: none;
-            border: none;
-            cursor: pointer;
-            font-size: 15px;
-            font-weight: 500;
-            color: #666;
-            transition: all 0.2s;
-            border-bottom: 3px solid transparent;
-        }
-        
-        .tab-button:hover {
-            background: #f0f0f0;
-            color: #333;
-        }
-        
-        .tab-button.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
-            background: white;
-        }
-        
-        .tab-content {
-            display: none;
-            padding: 30px;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        /* Machines Tab Styles */
-        .machine-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        
-        .machine-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            padding: 20px;
-            background: #fafafa;
-            transition: all 0.2s;
-        }
-        
-        .machine-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            transform: translateY(-2px);
-        }
-        
-        .machine-card h3 {
-            font-size: 18px;
-            margin-bottom: 12px;
-            color: #667eea;
-        }
-        
-        .machine-info {
-            font-size: 13px;
-            color: #666;
-            line-height: 1.6;
-        }
-        
-        .machine-info div {
-            margin-bottom: 6px;
-        }
-        
-        .machine-info strong {
-            color: #333;
-            display: inline-block;
-            min-width: 80px;
-        }
-        
-        .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 6px;
-        }
-        
-        .status-online {
-            background: #4caf50;
-        }
-        
-        .status-offline {
-            background: #999;
-        }
-        
-        /* Scripts Tab Styles */
-        .system-list {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        
-        .system-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            overflow: hidden;
-        }
-        
-        .system-header {
-            background: #f8f8f8;
-            padding: 15px 20px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            transition: background 0.2s;
-        }
-        
-        .system-header:hover {
-            background: #f0f0f0;
-        }
-        
-        .system-header h3 {
-            font-size: 16px;
-            color: #333;
-        }
-        
-        .system-meta {
-            font-size: 13px;
-            color: #666;
-        }
-        
-        .expand-icon {
-            color: #999;
-            transition: transform 0.2s;
-        }
-        
-        .system-card.expanded .expand-icon {
-            transform: rotate(90deg);
-        }
-        
-        .system-content {
-            display: none;
-            padding: 0;
-        }
-        
-        .system-card.expanded .system-content {
-            display: block;
-        }
-        
-        .protocol-section {
-            border-top: 1px solid #e0e0e0;
-        }
-        
-        .protocol-header {
-            background: #fafafa;
-            padding: 12px 20px;
-            font-weight: 600;
-            color: #555;
-            font-size: 14px;
-        }
-        
-        .script-list {
-            padding: 10px 0;
-        }
-        
-        .script-item {
-            padding: 10px 40px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        
-        .script-item:hover {
-            background: #f8f8f8;
-        }
-        
-        .script-name {
-            font-size: 14px;
-            color: #333;
-            font-family: 'Monaco', 'Courier New', monospace;
-        }
-        
-        .script-type {
-            font-size: 12px;
-            color: #999;
-            padding: 2px 8px;
-            background: #f0f0f0;
-            border-radius: 3px;
-        }
-        
-        /* Projects Tab Styles */
-        .project-list {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        
-        .project-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            overflow: hidden;
-        }
-        
-        .project-header {
-            background: #f8f8f8;
-            padding: 20px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        
-        .project-header:hover {
-            background: #f0f0f0;
-        }
-        
-        .project-title {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        
-        .project-title h3 {
-            font-size: 18px;
-            color: #333;
-        }
-        
-        .project-stats {
-            display: flex;
-            gap: 15px;
-            font-size: 13px;
-            color: #666;
-        }
-        
-        .project-description {
-            font-size: 14px;
-            color: #666;
-            margin-top: 8px;
-        }
-        
-        .project-content {
-            display: none;
-            padding: 20px;
-            background: #fafafa;
-        }
-        
-        .project-card.expanded .project-content {
-            display: block;
-        }
-        
-        .project-section {
-            margin-bottom: 20px;
-        }
-        
-        .project-section:last-child {
-            margin-bottom: 0;
-        }
-        
-        .project-section h4 {
-            font-size: 14px;
-            color: #555;
-            margin-bottom: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .config-item, .queue-item {
-            padding: 12px 15px;
-            background: white;
-            border: 1px solid #e0e0e0;
-            border-radius: 4px;
-            margin-bottom: 8px;
-            font-size: 14px;
-        }
-        
-        .config-item strong, .queue-item strong {
-            color: #667eea;
-        }
-        
-        .config-meta, .queue-meta {
-            font-size: 12px;
-            color: #999;
-            margin-top: 4px;
-        }
-        
-        /* Modal Styles */
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.5);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .modal.active {
-            display: flex;
-        }
-        
-        .modal-content {
-            background: white;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 900px;
-            max-height: 85vh;
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        }
-        
-        .modal-header {
-            padding: 20px 25px;
-            border-bottom: 1px solid #e0e0e0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .modal-header h2 {
-            font-size: 18px;
-            color: #333;
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 24px;
-            color: #999;
-            cursor: pointer;
-            padding: 0;
-            width: 30px;
-            height: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .modal-close:hover {
-            color: #333;
-        }
-        
-        .modal-body {
-            padding: 25px;
-            overflow-y: auto;
-            flex: 1;
-        }
-        
-        .version-selector {
-            margin-bottom: 15px;
-            padding: 15px;
-            background: #f8f8f8;
-            border-radius: 4px;
-        }
-        
-        .version-selector label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            font-size: 13px;
-            color: #555;
-        }
-        
-        .version-selector select {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            background: white;
-        }
-        
-        .script-viewer {
-            background: #282c34;
-            color: #abb2bf;
-            padding: 20px;
-            border-radius: 4px;
-            font-family: 'Monaco', 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            overflow-x: auto;
-            white-space: pre;
-        }
-        
-        .diff-viewer {
-            background: #f8f8f8;
-            border: 1px solid #e0e0e0;
-            border-radius: 4px;
-            padding: 15px;
-            font-family: 'Monaco', 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            overflow-x: auto;
-        }
-        
-        .diff-line {
-            padding: 2px 8px;
-        }
-        
-        .diff-add {
-            background: #e6ffed;
-            color: #24292e;
-        }
-        
-        .diff-remove {
-            background: #ffeef0;
-            color: #24292e;
-        }
-        
-        .diff-context {
-            color: #666;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #999;
-        }
-        
-        .empty-state-icon {
-            font-size: 48px;
-            margin-bottom: 15px;
-            opacity: 0.3;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #999;
-        }
-        
-        .error {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            color: #856404;
-        }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1419;
+    color: #e7e9ea;
+    min-height: 100vh;
+    line-height: 1.5;
+}
+.container { max-width: 1400px; margin: 0 auto; padding: 24px 20px; }
+
+header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid #2f3336;
+    flex-wrap: wrap; gap: 16px;
+}
+header h1 {
+    font-size: 24px; font-weight: 700;
+    color: #e7e9ea;
+}
+
+.header-right { display: flex; align-items: center; gap: 16px; }
+.search-box { position: relative; }
+.search-box input {
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 8px;
+    padding: 8px 12px 8px 36px; color: #e7e9ea; font-size: 14px; width: 200px; outline: none;
+}
+.search-box input:focus { border-color: #3b82f6; }
+.search-box input::placeholder { color: #71767b; }
+.search-box::before { content: "🔍"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.5; }
+
+.filter-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 12px; background: #1a2634; border: 1px solid #2f3336; border-radius: 8px;
+    color: #71767b; font-size: 12px; cursor: pointer; transition: all 0.15s ease;
+}
+.filter-toggle:hover { border-color: #3b82f6; color: #a0aec0; }
+.filter-toggle.active { background: #1a3d2e; border-color: #34d399; color: #34d399; }
+.filter-toggle .filter-icon { font-size: 10px; }
+
+.connection-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; background: #1a2634; border-radius: 20px; font-size: 13px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #71767b; }
+.status-dot.connected { background: #34d399; box-shadow: 0 0 8px #34d39966; }
+.status-dot.connecting { background: #fbbf24; animation: pulse 1s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.node-list { display: flex; flex-direction: column; gap: 6px; max-width: 1000px; margin: 0 auto; }
+.node-row {
+    background: #16202a; border: 1px solid #2f3336; border-radius: 8px;
+    padding: 10px 14px; transition: all 0.2s ease;
+}
+.node-row:hover { border-color: #3b82f6; }
+.node-row.local { border-left: 3px solid #f59e0b; }
+.node-row.stale { opacity: 0.7; }
+.node-row.stale:hover { opacity: 1; }
+
+.node-content { display: flex; flex-direction: column; gap: 4px; }
+.node-line1 {
+    display: grid; 
+    grid-template-columns: minmax(140px, 200px) 70px 1fr auto auto;
+    align-items: center; gap: 12px;
+}
+.node-line2 {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-left: 2px;
+}
+
+.node-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-name-link { color: inherit; text-decoration: none; }
+.node-name-link:hover { text-decoration: underline; }
+.local-label { font-weight: 400; color: #f59e0b; font-size: 12px; }
+
+.last-seen { font-size: 10px; color: #4a5568; font-family: 'SF Mono', Monaco, monospace; }
+.last-seen.stale { color: #f59e0b; }
+
+.node-badges { display: flex; align-items: center; justify-content: flex-start; gap: 4px; min-width: 120px; }
+
+.node-status-badge {
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px; 
+    padding: 2px 8px; width: 70px;
+    border-radius: 8px; font-size: 10px; font-weight: 500; text-transform: capitalize;
+}
+.node-status-badge.running { background: #1a3d2e; color: #34d399; }
+.node-status-badge.stopped { background: #3d1a1a; color: #f87171; }
+.node-status-badge.idle { background: #1a2634; color: #71767b; }
+.node-status-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+.node-info { display: flex; gap: 16px; min-width: 0; }
+.node-info-item { font-size: 12px; color: #a0aec0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-info-item.empty { color: #4a5568; }
+.node-info-item.subject { color: #e7e9ea; font-weight: 500; }
+
+.node-stats { 
+    font-size: 11px; color: #71767b; white-space: nowrap; min-width: 90px; text-align: right;
+    font-family: 'SF Mono', Monaco, monospace;
+}
+.node-stats .trial-num { color: #e7e9ea; }
+.node-stats .perf-num { color: #34d399; }
+.node-stats .stats-sep { color: #4a5568; margin: 0 4px; }
+
+.badge { font-size: 8px; padding: 2px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.3px; }
+.badge.ssl { background: #1a3d2e; color: #34d399; }
+.badge.ip { background: #1e3a5f; color: #60a5fa; font-family: 'SF Mono', Monaco, monospace; text-transform: none; font-size: 9px; min-width: 95px; text-align: center; }
+.badge.ip.local-ip { background: #3d2e1a; color: #f59e0b; }
+
+.node-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.btn {
+    padding: 5px 10px; border: none; border-radius: 6px; font-size: 11px; font-weight: 500;
+    cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; justify-content: center;
+}
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-open { background: #1e3a5f; color: #60a5fa; text-decoration: none; }
+.btn-open:hover { background: #2d5a8f; }
+.btn-gear { background: #2f3336; color: #a0aec0; font-size: 13px; min-width: 32px; padding: 5px 8px; }
+.btn-gear:hover { background: #3f4448; color: #e7e9ea; }
+
+/* Open dropdown menu */
+.open-dropdown { position: relative; display: inline-block; }
+.open-dropdown-btn {
+    background: #1e3a5f; color: #60a5fa; text-decoration: none;
+    padding: 5px 8px 5px 10px; border: none; border-radius: 6px; font-size: 11px; font-weight: 500;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+}
+.open-dropdown-btn:hover { background: #2d5a8f; }
+.open-dropdown-btn .arrow { font-size: 8px; opacity: 0.7; }
+.open-dropdown-menu {
+    position: absolute; top: 100%; right: 0; margin-top: 4px;
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    min-width: 120px; z-index: 100; opacity: 0; visibility: hidden;
+    transform: translateY(-4px); transition: all 0.15s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.open-dropdown:hover .open-dropdown-menu,
+.open-dropdown-menu:hover { opacity: 1; visibility: visible; transform: translateY(0); }
+.open-dropdown-item {
+    display: block; padding: 8px 12px; color: #e7e9ea; text-decoration: none;
+    font-size: 12px; border-bottom: 1px solid #2f3336; transition: background 0.1s ease;
+}
+.open-dropdown-item:last-child { border-bottom: none; }
+.open-dropdown-item:hover { background: #2f3336; }
+.open-dropdown-item .item-label { display: block; font-weight: 500; }
+.open-dropdown-item .item-desc { display: block; font-size: 10px; color: #71767b; margin-top: 2px; }
+.open-dropdown-item.disabled { opacity: 0.4; pointer-events: none; }
+
+.empty-state { text-align: center; padding: 80px 40px; color: #71767b; }
+.empty-state-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state h3 { font-size: 20px; color: #e7e9ea; margin-bottom: 8px; }
+
+.toast {
+    position: fixed; bottom: 24px; right: 24px; padding: 12px 20px;
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 8px;
+    font-size: 14px; z-index: 1000; transform: translateY(100px); opacity: 0; transition: all 0.3s ease;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-color: #34d399; color: #34d399; }
+.toast.error { border-color: #f87171; color: #f87171; }
+
+footer {
+    max-width: 1000px; margin: 40px auto 0; padding-top: 20px; border-top: 1px solid #2f3336;
+    display: flex; justify-content: space-between; color: #71767b; font-size: 13px;
+}
+
+/* Panel */
+.panel-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); z-index: 1000; opacity: 0; visibility: hidden; transition: all 0.3s ease;
+}
+.panel-overlay.open { opacity: 1; visibility: visible; }
+.agent-panel {
+    position: fixed; top: 0; right: 0; width: 480px; max-width: 90vw; height: 100vh;
+    background: #0f1419; border-left: 1px solid #2f3336; z-index: 1001;
+    transform: translateX(100%); transition: transform 0.3s ease, width 0.3s ease;
+    display: flex; flex-direction: column;
+}
+.agent-panel.open { transform: translateX(0); }
+.agent-panel.expanded { width: 750px; }
+.panel-header {
+    padding: 16px 20px; border-bottom: 1px solid #2f3336;
+    display: flex; justify-content: space-between; align-items: center;
+}
+.panel-header h2 { font-size: 18px; font-weight: 600; }
+.panel-header-actions { display: flex; align-items: center; gap: 8px; }
+.panel-expand-btn {
+    background: #2f3336; border: none; color: #a0aec0; padding: 6px 10px;
+    border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+.panel-expand-btn:hover { background: #3f4448; color: #e7e9ea; }
+.panel-close { background: none; border: none; color: #71767b; font-size: 24px; cursor: pointer; }
+.panel-close:hover { color: #e7e9ea; }
+.panel-content { flex: 1; overflow-y: auto; padding: 20px; }
+.panel-section { background: #16202a; border: 1px solid #2f3336; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.panel-section-title {
+    font-size: 14px; font-weight: 600; color: #71767b; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;
+}
+.panel-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.panel-info-item .label { font-size: 11px; color: #71767b; text-transform: uppercase; }
+.panel-info-item .value { font-size: 14px; font-family: 'SF Mono', Monaco, monospace; }
+.panel-btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+.panel-btn {
+    padding: 10px 16px; border: none; border-radius: 8px; font-size: 13px; font-weight: 500;
+    cursor: pointer; flex: 1; min-width: 80px;
+}
+.panel-btn.success { background: #1a3d2e; color: #34d399; }
+.panel-btn.success:hover { background: #2d5a45; }
+.panel-btn.danger { background: #3d1a1a; color: #f87171; }
+.panel-btn.danger:hover { background: #5a2d2d; }
+.panel-btn.secondary { background: #2f3336; color: #a0aec0; }
+.panel-btn.secondary:hover { background: #3f4448; }
+.panel-btn.warning { background: #3d2e1a; color: #fbbf24; }
+.panel-btn.warning:hover { background: #5a451d; }
+.panel-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.service-status { display: inline-flex; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+.service-status.active { background: #1a3d2e; color: #34d399; }
+.service-status.inactive { background: #3d1a1a; color: #f87171; }
+.service-status.unknown { background: #1a2634; color: #71767b; }
+
+/* Component rows with service controls */
+.component-row { 
+    display: flex; flex-direction: column; 
+    padding: 12px 0; border-bottom: 1px solid #2f3336; gap: 10px;
+}
+.component-row:last-child { border-bottom: none; }
+.component-main { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.component-info { flex: 1; min-width: 120px; }
+.component-name { font-weight: 500; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.component-desc { font-size: 11px; color: #71767b; margin-top: 2px; }
+.component-version { font-size: 12px; color: #71767b; font-family: 'SF Mono', Monaco, monospace; }
+.component-version .latest { color: #34d399; }
+.component-actions { display: flex; gap: 8px; align-items: center; }
+.component-select { background: #1a2634; border: 1px solid #2f3336; border-radius: 6px; padding: 6px 8px; color: #e7e9ea; font-size: 11px; max-width: 160px; }
+.component-btn { padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; background: #2f3336; color: #a0aec0; }
+.component-btn:hover { background: #3f4448; }
+.component-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.component-btn.update { background: #3b82f6; color: white; }
+
+/* Service controls within component */
+.component-service { 
+    display: flex; align-items: center; justify-content: space-between;
+    background: #0d1117; border-radius: 6px; padding: 8px 12px;
+    margin-top: 4px;
+}
+.service-info { display: flex; align-items: center; gap: 10px; }
+.service-label { font-size: 11px; color: #71767b; text-transform: uppercase; }
+.service-badge { 
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 500;
+}
+.service-badge.active { background: #1a3d2e; color: #34d399; }
+.service-badge.inactive { background: #3d1a1a; color: #f87171; }
+.service-badge.unknown { background: #1a2634; color: #71767b; }
+.service-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.service-controls { display: flex; gap: 6px; }
+.svc-btn { 
+    padding: 4px 10px; border: none; border-radius: 4px; font-size: 11px; 
+    cursor: pointer; transition: all 0.15s ease;
+}
+.svc-btn.start { background: #1a3d2e; color: #34d399; }
+.svc-btn.start:hover { background: #2d5a45; }
+.svc-btn.stop { background: #3d1a1a; color: #f87171; }
+.svc-btn.stop:hover { background: #5a2d2d; }
+.svc-btn.restart { background: #2f3336; color: #a0aec0; }
+.svc-btn.restart:hover { background: #3f4448; }
+.svc-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Dependency badge */
+.dep-badge {
+    font-size: 9px; padding: 2px 6px; border-radius: 4px;
+    background: #1e3a5f; color: #60a5fa;
+}
+.dep-badge.shared { background: #3d2e1a; color: #fbbf24; }
+
+/* Install workflow modal */
+.install-workflow {
+    background: #0d1117; border: 1px solid #2f3336; border-radius: 8px;
+    padding: 16px; margin-top: 12px;
+}
+.workflow-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #e7e9ea; }
+.workflow-steps { display: flex; flex-direction: column; gap: 8px; }
+.workflow-step {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: #a0aec0;
+}
+.workflow-step .step-icon {
+    width: 20px; height: 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; flex-shrink: 0;
+}
+.workflow-step.pending .step-icon { background: #2f3336; color: #71767b; }
+.workflow-step.active .step-icon { background: #3b82f6; color: white; animation: pulse 1s infinite; }
+.workflow-step.done .step-icon { background: #1a3d2e; color: #34d399; }
+.workflow-step.error .step-icon { background: #3d1a1a; color: #f87171; }
+.workflow-step.active { color: #e7e9ea; }
+.workflow-step.done { color: #71767b; }
+
+.panel-progress { margin-top: 12px; display: none; }
+.panel-progress.visible { display: block; }
+.progress-bar { height: 4px; background: #2f3336; border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: #3b82f6; width: 0%; transition: width 0.3s ease; }
+.progress-text { font-size: 12px; color: #71767b; margin-top: 6px; }
+.panel-not-connected { text-align: center; padding: 40px 20px; color: #71767b; }
+.panel-not-connected h3 { color: #e7e9ea; margin-bottom: 8px; }
+
+.logs-container {
+    background: #0d1117;
+    border: 1px solid #2f3336;
+    border-radius: 6px;
+    padding: 12px;
+    max-height: 300px;
+    overflow-y: auto;
+    overflow-x: auto;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre;
+    color: #8b949e;
+}
+.logs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.logs-header select {
+    background: #1a2634;
+    border: 1px solid #2f3336;
+    border-radius: 4px;
+    padding: 4px 8px;
+    color: #e7e9ea;
+    font-size: 12px;
+}
+
+@media (max-width: 900px) {
+    .node-content { grid-template-columns: minmax(100px, 150px) 70px 1fr auto auto; }
+    .node-stats { display: none; }
+}
+@media (max-width: 700px) {
+    .node-content { grid-template-columns: 1fr 70px auto auto; }
+    .node-info { display: none; }
+    .node-identity { max-width: none; }
+}
+@media (max-width: 500px) {
+    .container { padding: 16px 12px; }
+    .agent-panel { width: 100vw; max-width: 100vw; }
+    .node-row { padding: 8px 10px; }
+    .node-badges .badge.ip { display: none; }
+}
     </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1 id="workgroup-name">Workgroup</h1>
-            <p>Dashboard and resource management</p>
-        </header>
-        
-        <div class="tabs">
-            <button class="tab-button active" data-tab="machines">Machines</button>
-            <button class="tab-button" data-tab="scripts">Scripts</button>
-            <button class="tab-button" data-tab="projects">Projects</button>
-        </div>
-        
-        <!-- Machines Tab -->
-        <div id="machines-tab" class="tab-content active">
-            <div id="machines-list" class="machine-grid"></div>
-        </div>
-        
-        <!-- Scripts Tab -->
-        <div id="scripts-tab" class="tab-content">
-            <div id="scripts-list" class="system-list"></div>
-        </div>
-        
-        <!-- Projects Tab -->
-        <div id="projects-tab" class="tab-content">
-            <div id="projects-list" class="project-list"></div>
-        </div>
-    </div>
-    
-    <!-- Script Viewer Modal -->
-    <div id="script-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 id="modal-script-title">Script Viewer</h2>
-                <button class="modal-close" onclick="closeScriptModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="version-selector">
-                    <label for="version-select">Version History:</label>
-                    <select id="version-select" onchange="loadScriptVersion()">
-                        <option value="current">Current Version</option>
-                    </select>
+            <h1>Lab Mesh Directory</h1>
+            <div class="header-right">
+                <div class="search-box">
+                    <input type="text" id="search-input" placeholder="Filter nodes...">
                 </div>
-                <div id="script-content" class="script-viewer"></div>
+                <button class="filter-toggle" id="running-filter" title="Show only running nodes">
+                    <span class="filter-icon">▶</span>
+                    <span class="filter-label">Running</span>
+                </button>
+                <div class="connection-badge">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+        </header>
+        <div class="node-list" id="node-list">
+            <div class="empty-state">
+                <div class="empty-state-icon">📡</div>
+                <h3>Searching for nodes...</h3>
+                <p>Looking for active experiment systems on the mesh network.</p>
             </div>
         </div>
+        <footer>
+            <span id="node-count"></span>
+            <span>Updated: <span id="last-update">--</span></span>
+        </footer>
     </div>
-    
+    <div class="toast" id="toast"></div>
+    <div class="panel-overlay" id="panel-overlay"></div>
+    <div class="agent-panel" id="agent-panel">
+        <div class="panel-header">
+            <h2 id="panel-title">Node Management</h2>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="component-btn" onclick="app.togglePanelExpand()" id="expand-btn" title="Expand panel">⤢</button>
+                <button class="panel-close" id="panel-close">×</button>
+            </div>
+        </div>
+        <div class="panel-content" id="panel-content"></div>
+    </div>
     <script>
-        // Get workgroup from URL path
-        const pathParts = window.location.pathname.split('/');
-        const workgroup = pathParts[2] || 'default';
-        document.getElementById('workgroup-name').textContent = workgroup;
-        
-        let currentScriptId = null;
-        let scriptVersions = [];
-        
-        // Tab switching
-        document.querySelectorAll('.tab-button').forEach(button => {
-            button.addEventListener('click', () => {
-                const tabName = button.dataset.tab;
-                
-                // Update active states
-                document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                
-                button.classList.add('active');
-                document.getElementById(`${tabName}-tab`).classList.add('active');
-                
-                // Load data for tab if not already loaded
-                if (tabName === 'machines' && !document.querySelector('.machine-card')) {
-                    loadMachines();
-                } else if (tabName === 'scripts' && !document.querySelector('.system-card')) {
-                    loadScripts();
-                } else if (tabName === 'projects' && !document.querySelector('.project-card')) {
-                    loadProjects();
-                }
-            });
-        });
-        
-        // Load machines (existing functionality)
-        async function loadMachines() {
-            const container = document.getElementById('machines-list');
-            container.innerHTML = '<div class="loading">Loading machines...</div>';
-            
-            try {
-                const response = await fetch(`/api/mesh`);
-                if (!response.ok) throw new Error('Failed to load machines');
-                
-                const machines = await response.json();
-                const workgroupMachines = machines.filter(m => m.workgroup === workgroup);
-                
-                if (workgroupMachines.length === 0) {
-                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🖥️</div><p>No machines found in this workgroup</p></div>';
-                    return;
-                }
-                
-                container.innerHTML = workgroupMachines.map(machine => `
-                    <div class="machine-card">
-                        <h3>
-                            <span class="status-dot status-${machine.status || 'offline'}"></span>
-                            ${machine.name}
-                        </h3>
-                        <div class="machine-info">
-                            <div><strong>Host:</strong> ${machine.hostname}</div>
-                            <div><strong>IP:</strong> ${machine.ip}</div>
-                            ${machine.port ? `<div><strong>Port:</strong> ${machine.port}</div>` : ''}
-                            ${machine.version ? `<div><strong>Version:</strong> ${machine.version}</div>` : ''}
-                            ${machine.lastSeen ? `<div><strong>Last Seen:</strong> ${new Date(machine.lastSeen).toLocaleString()}</div>` : ''}
-                        </div>
+     const CONFIG = { reconnectDelay: 2000, agentPort: 80 };
+
+     class LabMeshApp {
+	 constructor() {
+             this.ws = null;
+             this.connected = false;
+             this.nodes = new Map();
+             this.searchTerm = '';
+             this.runningOnly = false;
+             this.panelOpen = false;
+             this.panelNode = null;
+             this.panelWs = null;
+             this.panelStatus = null;
+             this.panelComponents = [];
+             this.installWorkflow = null; // Track multi-step install progress
+             
+             this.el = {
+		 statusDot: document.getElementById('status-dot'),
+		 statusText: document.getElementById('status-text'),
+		 nodeCount: document.getElementById('node-count'),
+		 nodeList: document.getElementById('node-list'),
+		 lastUpdate: document.getElementById('last-update'),
+		 searchInput: document.getElementById('search-input'),
+		 runningFilter: document.getElementById('running-filter'),
+		 toast: document.getElementById('toast'),
+		 panelOverlay: document.getElementById('panel-overlay'),
+		 agentPanel: document.getElementById('agent-panel'),
+		 panelTitle: document.getElementById('panel-title'),
+		 panelContent: document.getElementById('panel-content'),
+		 panelClose: document.getElementById('panel-close')
+             };
+             
+             this.el.searchInput.addEventListener('input', e => { this.searchTerm = e.target.value.toLowerCase(); this.renderNodes(); });
+             this.el.runningFilter.addEventListener('click', () => { 
+		 this.runningOnly = !this.runningOnly; 
+		 this.el.runningFilter.classList.toggle('active', this.runningOnly);
+		 this.renderNodes(); 
+             });
+             this.el.panelClose.addEventListener('click', () => this.closePanel());
+             this.el.panelOverlay.addEventListener('click', () => this.closePanel());
+             document.addEventListener('keydown', e => { if (e.key === 'Escape' && this.panelOpen) this.closePanel(); });
+             
+             this.connect();
+	 }
+	 
+	 connect() {
+             this.setStatus('connecting', 'Connecting...');
+             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+             try {
+		 this.ws = new WebSocket(`${proto}//${location.host}/ws`);
+		 this.ws.onopen = () => { 
+                     this.connected = true; 
+                     this.setStatus('connected', 'Connected'); 
+                     this.ws.send(JSON.stringify({type:'mesh_peers'}));
+                     this.meshRefreshInterval = setInterval(() => {
+			 if (this.connected) this.ws.send(JSON.stringify({type:'mesh_peers'}));
+                     }, 2000);
+		 };
+		 this.ws.onclose = () => { 
+                     this.connected = false; 
+                     this.setStatus('disconnected', 'Disconnected'); 
+                     if (this.meshRefreshInterval) clearInterval(this.meshRefreshInterval);
+                     setTimeout(() => this.connect(), CONFIG.reconnectDelay); 
+		 };
+		 this.ws.onerror = () => this.setStatus('disconnected', 'Error');
+		 this.ws.onmessage = e => this.handleMsg(JSON.parse(e.data));
+             } catch(e) { this.setStatus('disconnected', 'Failed'); setTimeout(() => this.connect(), CONFIG.reconnectDelay); }
+	 }
+	 
+	 setStatus(state, text) { this.el.statusDot.className = 'status-dot ' + state; this.el.statusText.textContent = text; }
+	 
+	 handleMsg(msg) {
+             if (msg.type === 'mesh_peers_response' || msg.type === 'mesh_update') {
+		 if (msg.data) this.updateNodes(msg.data);
+             }
+             if (this.panelOpen && this.panelUsingMainWs) {
+		 this.handlePanelMsg(msg);
+             }
+	 }
+	 
+	 updateNodes(peers) {
+             this.nodes.clear();
+             peers.forEach(p => {
+		 // Support both old field names (applianceId, ipAddress, webPort) and new (hostname, ip, port)
+		 const id = p.applianceId || p.hostname;
+		 const name = p.name || p.hostname;
+		 const ip = p.ipAddress || p.ip;
+		 const webPort = p.webPort || p.port || 2565;
+		 const isStale = p.isStale || (p.state === 'stale') || (p.state === 'unresponsive');
+		 
+		 this.nodes.set(id, {
+                     id: id, name: name, status: p.status, ip: ip,
+                     webPort: webPort, ssl: p.ssl, isLocal: p.isLocal,
+                     lastSeenAgo: p.lastSeenAgo, isStale: isStale,
+                     system: p.customFields?.system, protocol: p.customFields?.protocol,
+                     variant: p.customFields?.variant, subject: p.customFields?.subject,
+                     obs_id: p.customFields?.obs_id, obs_total: p.customFields?.obs_total,
+                     block_pct_correct: p.customFields?.block_pct_correct,
+                     rmt_host: p.customFields?.rmt_host
+		 });
+             });
+             this.renderNodes();
+             this.el.lastUpdate.textContent = new Date().toLocaleTimeString();
+	 }
+	 
+	 renderNodes() {
+             let nodes = Array.from(this.nodes.values());
+             if (this.searchTerm) {
+		 nodes = nodes.filter(n => `${n.name} ${n.id} ${n.system} ${n.protocol} ${n.subject}`.toLowerCase().includes(this.searchTerm));
+             }
+             if (this.runningOnly) {
+		 nodes = nodes.filter(n => n.status === 'running');
+             }
+             nodes.sort((a,b) => { if (a.isLocal && !b.isLocal) return -1; if (!a.isLocal && b.isLocal) return 1; return (a.name||a.id).localeCompare(b.name||b.id); });
+             
+             const totalNodes = this.nodes.size;
+             const filteredCount = nodes.length;
+             const filterActive = this.searchTerm || this.runningOnly;
+             this.el.nodeCount.textContent = filterActive 
+					   ? `${filteredCount} of ${totalNodes} node${totalNodes !== 1 ? 's' : ''}`
+					   : `${totalNodes} node${totalNodes !== 1 ? 's' : ''}`;
+             
+             if (!nodes.length) {
+		 this.el.nodeList.innerHTML = `<div class="empty-state">
+                     <div class="empty-state-icon">📡</div>
+                     <h3>${filterActive ? 'No matches' : 'No nodes found'}</h3>
+                     <p>${filterActive ? 'Try a different filter.' : 'Mesh unavailable - dserv may be stopped.'}</p>
+                     <button class="btn btn-gear" style="margin-top:16px;padding:12px 24px;font-size:14px;" onclick="app.openLocalPanel()">⚙ Manage Local System</button>
+		 </div>`;
+		 return;
+             }
+             
+             const nodeIds = nodes.map(n => n.id);
+             const domIds = Array.from(this.el.nodeList.querySelectorAll('.node-row')).map(el => el.dataset.nodeId);
+             const structureChanged = nodeIds.length !== domIds.length || nodeIds.some((id, i) => id !== domIds[i]);
+             
+             if (structureChanged) {
+		 this.el.nodeList.innerHTML = nodes.map(n => this.renderRow(n)).join('');
+		 this.el.nodeList.querySelectorAll('[data-action]').forEach(btn => {
+                     btn.addEventListener('click', e => {
+			 const action = e.target.dataset.action;
+			 const nodeId = e.target.dataset.nodeId;
+			 if (action === 'manage') {
+                             this.openPanel(nodeId);
+			 }
+                     });
+		 });
+             } else {
+		 nodes.forEach(n => {
+                     const row = this.el.nodeList.querySelector(`.node-row[data-node-id="${n.id}"]`);
+                     if (!row) return;
+                     
+                     const isStale = n.isStale || false;
+                     row.classList.toggle('stale', isStale);
+                     
+                     const statusBadge = row.querySelector('.node-status-badge');
+                     if (statusBadge) {
+			 const st = n.status || 'idle';
+			 statusBadge.className = 'node-status-badge ' + st;
+			 statusBadge.innerHTML = `<span class="dot"></span>${st}`;
+                     }
+                     
+                     const infoEl = row.querySelector('.node-info');
+                     if (infoEl) {
+			 const configParts = [n.system, n.protocol, n.variant].filter(Boolean);
+			 const configHtml = configParts.length 
+					  ? `<span class="node-info-item">${this.esc(configParts.join(' / '))}</span>`
+					  : '<span class="node-info-item empty">—</span>';
+			 const subjectHtml = n.subject 
+					   ? `<span class="node-info-item subject">${this.esc(n.subject)}</span>`
+					   : '';
+			 infoEl.innerHTML = configHtml + subjectHtml;
+                     }
+                     
+                     const statsEl = row.querySelector('.node-stats');
+                     if (statsEl) {
+			 let statsHtml = '';
+			 const hasTrialInfo = n.obs_id != null && n.obs_total != null;
+			 const hasPerfInfo = n.block_pct_correct != null;
+			 if (hasTrialInfo || hasPerfInfo) {
+                             let trialStr = '';
+                             let perfStr = '';
+                             if (hasTrialInfo) {
+				 const t = parseInt(n.obs_id), tot = parseInt(n.obs_total);
+				 if (!isNaN(t) && tot > 0) trialStr = `<span class="trial-num">${t+1}/${tot}</span>`;
+                             }
+                             if (hasPerfInfo) {
+				 const v = parseFloat(n.block_pct_correct);
+				 if (!isNaN(v)) perfStr = `<span class="perf-num">${Math.round(v*100)}%</span>`;
+                             }
+                             if (trialStr && perfStr) {
+				 statsHtml = trialStr + '<span class="stats-sep">·</span>' + perfStr;
+                             } else {
+				 statsHtml = trialStr || perfStr;
+                             }
+			 }
+			 statsEl.innerHTML = statsHtml;
+                     }
+                     
+                     const lastSeenEl = row.querySelector('.last-seen');
+                     if (lastSeenEl) {
+			 const lastSeenAgo = n.lastSeenAgo || 0;
+			 const lastSeenText = lastSeenAgo < 2 ? 'just now' : `${lastSeenAgo}s ago`;
+			 const staleIcon = isStale ? ' ⚠' : '';
+			 lastSeenEl.textContent = lastSeenText + staleIcon;
+			 lastSeenEl.classList.toggle('stale', isStale);
+                     }
+		 });
+             }
+	 }
+	 
+	 renderRow(n) {
+             const st = n.status || 'idle';
+             const name = (n.name || n.id).replace('Lab Station ', '');
+             const url = `${n.ssl?'https':'http'}://${n.isLocal ? location.hostname : n.ip}:${n.webPort||2565}/`;
+             const agentUrl = `http://${n.id.toLowerCase()}.local/`;
+             const localLabel = n.isLocal ? ' <span class="local-label">(local)</span>' : '';
+             const nameHtml = n.isLocal 
+			    ? this.esc(name) + localLabel
+			    : `<a href="${agentUrl}" class="node-name-link" title="Go to ${n.id}'s dashboard">${this.esc(name)}</a>`;
+             
+             const configParts = [n.system, n.protocol, n.variant].filter(Boolean);
+             const configHtml = configParts.length 
+			      ? `<span class="node-info-item">${this.esc(configParts.join(' / '))}</span>`
+			      : '<span class="node-info-item empty">—</span>';
+             
+             const subjectHtml = n.subject 
+			       ? `<span class="node-info-item subject">${this.esc(n.subject)}</span>`
+			       : '';
+             
+             let statsHtml = '';
+             const hasTrialInfo = n.obs_id != null && n.obs_total != null;
+             const hasPerfInfo = n.block_pct_correct != null;
+             if (hasTrialInfo || hasPerfInfo) {
+		 let trialStr = '';
+		 let perfStr = '';
+		 if (hasTrialInfo) {
+                     const t = parseInt(n.obs_id), tot = parseInt(n.obs_total);
+                     if (!isNaN(t) && tot > 0) trialStr = `<span class="trial-num">${t+1}/${tot}</span>`;
+		 }
+		 if (hasPerfInfo) {
+                     const v = parseFloat(n.block_pct_correct);
+                     if (!isNaN(v)) perfStr = `<span class="perf-num">${Math.round(v*100)}%</span>`;
+		 }
+		 if (trialStr && perfStr) {
+                     statsHtml = trialStr + '<span class="stats-sep">·</span>' + perfStr;
+		 } else {
+                     statsHtml = trialStr || perfStr;
+		 }
+             }
+             
+             const lastSeenAgo = n.lastSeenAgo || 0;
+             const isStale = n.isStale || false;
+             const lastSeenText = lastSeenAgo < 2 ? 'just now' : `${lastSeenAgo}s ago`;
+             const staleClass = isStale ? 'stale' : '';
+             const staleIcon = isStale ? ' ⚠' : '';
+             
+             // Build the Open dropdown menu
+             const essUrl = `${url}ess_control.html`;
+             const essDevUrl = `${url}ess_workbench.html`;
+             const termUrl = `${url}terminal.html`;
+             const dlshUrl = `${url}dlsh.html`;
+             const helpUrl = `${url}command_reference.html`;
+             const hasStim = !!n.rmt_host;
+             // For stim, use rmt_host but need to resolve 'localhost' to the actual host
+             // If rmt_host is 'localhost', use the hostname we're viewing from (location.hostname)
+             // or the node's IP for remote nodes
+             const stimHost = n.rmt_host === 'localhost' ? (n.isLocal ? location.hostname : n.ip) : n.rmt_host;
+             const stimUrl = hasStim ? `http://${stimHost}:4613` : '';
+             const stimDevUrl = hasStim ? `http://${stimHost}:4613/stim2-dev.html` : '';
+             
+             const openDropdown = `
+            <div class="open-dropdown">
+                <button class="open-dropdown-btn">Open <span class="arrow">▼</span></button>
+                <div class="open-dropdown-menu">
+                    <a href="${essUrl}" onclick="window.open('${essUrl}', '${n.id}_ess', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">ESS</span>
+                        <span class="item-desc">Experiment control</span>
+                    </a>
+                    <a href="${url}data_manager.html" onclick="window.open('${url}data_manager.html', '${n.id}_dataman', 'width=1000,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">DataMan</span>
+                        <span class="item-desc">Data Manager</span>
+                    </a>
+                    <a href="${essDevUrl}" onclick="window.open('${essDevUrl}', '${n.id}_essdev', 'width=950,height=800,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Workbench</span>
+                        <span class="item-desc">ESS Workbenchl</span>
+                    </a>
+                    <a href="${termUrl}" onclick="window.open('${termUrl}', '${n.id}_term', 'width=950,height=600,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Term</span>
+                        <span class="item-desc">Terminal console</span>
+                    </a>
+                    <a href="${stimUrl}" onclick="window.open('${stimUrl}', '${n.id}_stim', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item ${hasStim ? '' : 'disabled'}">
+                        <span class="item-label">Stim</span>
+                        <span class="item-desc">${hasStim ? 'Stim terminal' : 'Not available'}</span>
+                    </a>
+                    <a href="${stimDevUrl}" onclick="window.open('${stimDevUrl}', '${n.id}_stimdev', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item ${hasStim ? '' : 'disabled'}">
+                        <span class="item-label">Stim Dev</span>
+                        <span class="item-desc">${hasStim ? 'Stim development' : 'Not available'}</span>
+                    </a>
+                    <a href="${dlshUrl}" onclick="window.open('${dlshUrl}', '${n.id}_dlsh', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Dlsh</span>
+                        <span class="item-desc">Dlsh environment</span>
+                    </a>
+                    <a href="${helpUrl}" onclick="window.open('${helpUrl}', '${n.id}_help', 'width=900,height=700,menubar=no,toolbar=no,location=no,status=no'); return false;" class="open-dropdown-item">
+                        <span class="item-label">Help</span>
+                        <span class="item-desc">Command reference</span>
+                    </a>
+                </div>
+            </div>`;
+             
+             return `<div class="node-row ${n.isLocal?'local':''} ${staleClass}" data-node-id="${n.id}">
+            <div class="node-content">
+                <div class="node-line1">
+                    <div class="node-name">${nameHtml}</div>
+                    <div class="node-status-badge ${st}"><span class="dot"></span>${st}</div>
+                    <div class="node-info">${configHtml}${subjectHtml}</div>
+                    <div class="node-stats">${statsHtml}</div>
+                    <div class="node-actions">
+                        ${openDropdown}
+                        <button class="btn btn-gear" data-action="manage" data-node-id="${n.id}" title="System Management">⚙</button>
                     </div>
-                `).join('');
-            } catch (error) {
-                container.innerHTML = `<div class="error">Error loading machines: ${error.message}</div>`;
-            }
-        }
-        
-        // Load scripts
-        async function loadScripts() {
-            const container = document.getElementById('scripts-list');
-            container.innerHTML = '<div class="loading">Loading scripts...</div>';
-            
-            try {
-                const response = await fetch(`/api/workgroups/${workgroup}/systems`);
-                if (!response.ok) throw new Error('Failed to load systems');
-                
-                const systems = await response.json();
-                
-                if (!systems || systems.length === 0) {
-                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📜</div><p>No scripts found in this workgroup</p></div>';
-                    return;
-                }
-                
-                // Load scripts for each system
-                const systemsWithScripts = await Promise.all(
-                    systems.map(async system => {
-                        const scriptsResp = await fetch(`/api/workgroups/${workgroup}/systems/${system.name}/scripts`);
-                        const scripts = await scriptsResp.json();
-                        return { ...system, scripts };
-                    })
-                );
-                
-                container.innerHTML = systemsWithScripts.map(system => {
-                    const scriptsByProtocol = {};
-                    system.scripts.forEach(script => {
-                        const protocol = script.protocol || '_system';
-                        if (!scriptsByProtocol[protocol]) {
-                            scriptsByProtocol[protocol] = [];
-                        }
-                        scriptsByProtocol[protocol].push(script);
-                    });
-                    
-                    const protocolSections = Object.entries(scriptsByProtocol).map(([protocol, scripts]) => `
-                        <div class="protocol-section">
-                            <div class="protocol-header">${protocol === '_system' ? 'System Scripts' : `Protocol: ${protocol}`}</div>
-                            <div class="script-list">
-                                ${scripts.map(script => `
-                                    <div class="script-item" onclick="viewScript(${script.id}, '${system.name}', '${script.filename}')">
-                                        <span class="script-name">${script.filename}</span>
-                                        <span class="script-type">${script.type}</span>
-                                    </div>
-                                `).join('')}
-                            </div>
+                </div>
+                <div class="node-line2">
+                    <span class="node-badges">${n.isLocal?'<span class="badge ip local-ip">local</span>':(n.ip?`<span class="badge ip">${n.ip}</span>`:'')}${n.ssl?'<span class="badge ssl">SSL</span>':''}</span>
+                    <span class="last-seen ${staleClass}">${lastSeenText}${staleIcon}</span>
+                </div>
+            </div>
+        </div>`;
+	 }
+	 
+	 openPanel(nodeId) {
+             const node = this.nodes.get(nodeId);
+             if (!node) return;
+             this.openPanelForNode(node);
+	 }
+	 
+	 openLocalPanel() {
+             const localNode = {
+		 id: 'local',
+		 name: 'Local System',
+		 isLocal: true,
+		 ip: 'localhost'
+             };
+             this.openPanelForNode(localNode);
+	 }
+	 
+	 openPanelForNode(node) {
+             this.panelNode = node;
+             this.panelOpen = true;
+             this.panelStatus = null;
+             this.panelComponents = [];
+             this.installWorkflow = null;
+             this.el.panelTitle.textContent = node.name || node.id;
+             this.el.panelOverlay.classList.add('open');
+             this.el.agentPanel.classList.add('open');
+             this.el.panelContent.innerHTML = '<div class="panel-not-connected"><div class="empty-state-icon">⏳</div><h3>Connecting...</h3></div>';
+             this.connectAgent(node);
+	 }
+	 
+	 closePanel() {
+             this.panelOpen = false;
+             this.panelNode = null;
+             this.installWorkflow = null;
+             this.el.panelOverlay.classList.remove('open');
+             this.el.agentPanel.classList.remove('open');
+             this.el.agentPanel.classList.remove('expanded');
+             if (this.panelWs && !this.panelUsingMainWs) { 
+		 this.panelWs.close(); 
+             }
+             this.panelWs = null;
+             this.panelUsingMainWs = false;
+	 }
+	 
+	 connectAgent(node) {
+             const isSameHost = node.isLocal || 
+				node.ipAddress === location.hostname ||
+				location.hostname === 'localhost' ||
+				location.hostname === '127.0.0.1';
+             
+             if (isSameHost && this.ws && this.connected) {
+		 this.panelWs = this.ws;
+		 this.panelUsingMainWs = true;
+		 this.ws.send(JSON.stringify({type:'status'}));
+		 this.ws.send(JSON.stringify({type:'components'}));
+		 return;
+             }
+             
+             this.panelUsingMainWs = false;
+             let host = node.id.toLowerCase() + '.local';
+             if (node.id.includes(' ') || !/^[a-z0-9-]+$/i.test(node.id)) {
+		 host = node.ipAddress;
+             }
+             try {
+		 this.panelWs = new WebSocket(`ws://${host}:${CONFIG.agentPort}/ws`);
+		 this.panelWs.onopen = () => {
+                     this.panelWs.send(JSON.stringify({type:'status'}));
+                     this.panelWs.send(JSON.stringify({type:'components'}));
+		 };
+		 this.panelWs.onmessage = e => this.handlePanelMsg(JSON.parse(e.data));
+		 this.panelWs.onerror = () => this.showPanelError('Connection error');
+		 this.panelWs.onclose = () => {};
+		 setTimeout(() => { if (this.panelWs?.readyState === WebSocket.CONNECTING) { this.panelWs.close(); this.showPanelError('Timeout'); } }, 5000);
+             } catch(e) { this.showPanelError(e.message); }
+	 }
+	 
+	 showPanelError(err) {
+             this.el.panelContent.innerHTML = `<div class="panel-not-connected"><div class="empty-state-icon">⚠️</div><h3>Agent not available</h3><p>${err}</p><p style="margin-top:12px;font-size:12px;">Make sure dserv-agent is running.</p></div>`;
+	 }
+	 
+	 handlePanelMsg(msg) {
+             if (msg.type === 'status' || msg.type === 'status_response') { 
+		 if (msg.data) { this.panelStatus = msg.data; this.renderPanel(); } 
+             }
+             else if (msg.type === 'components_response') { 
+		 if (msg.data) { this.panelComponents = msg.data; this.renderPanel(); } 
+             }
+             else if (msg.type === 'logs_response') { 
+		 if (msg.data) { this.displayLogs(msg.data.logs); } 
+		 else if (msg.error) { this.displayLogs('Error: ' + msg.error); } 
+             }
+             else if (msg.type === 'dserv_response') { 
+		 this.showToast(msg.success ? 'Command sent' : msg.error, msg.success ? 'success' : 'error'); 
+		 if (msg.success) this.panelWs?.send(JSON.stringify({type:'status'})); 
+             }
+             else if (msg.type === 'service_response') {
+		 // Handle per-component service control responses
+		 this.showToast(msg.success ? `${msg.service}: ${msg.action}` : msg.error, msg.success ? 'success' : 'error');
+		 if (msg.success) {
+                     this.panelWs?.send(JSON.stringify({type:'status'}));
+                     this.panelWs?.send(JSON.stringify({type:'components'}));
+		 }
+             }
+             else if (msg.type === 'install_progress') { 
+		 this.updateInstallWorkflow(msg.data); 
+             }
+             else if (msg.type === 'install_complete') { 
+		 this.completeInstallWorkflow();
+		 this.showToast('Install complete!', 'success'); 
+		 this.panelWs?.send(JSON.stringify({type:'components'})); 
+		 this.panelWs?.send(JSON.stringify({type:'status'})); 
+             }
+             else if (msg.type === 'install_error') { 
+		 this.failInstallWorkflow(msg.error);
+		 this.showToast('Install failed: ' + msg.error, 'error'); 
+             }
+	 }
+	 
+	 // Build dependency graph from components
+	 buildDependencyGraph() {
+             const graph = { dependents: {}, dependencies: {} };
+             this.panelComponents.forEach(comp => {
+		 const c = comp.component || comp;
+		 const id = c.id;
+		 graph.dependencies[id] = c.depends || [];
+		 (c.depends || []).forEach(dep => {
+                     if (!graph.dependents[dep]) graph.dependents[dep] = [];
+                     if (!graph.dependents[dep].includes(id)) graph.dependents[dep].push(id);
+		 });
+             });
+             return graph;
+	 }
+	 
+	 // Get services that need to be stopped before updating a component
+	 getServicesToStop(componentId) {
+             const graph = this.buildDependencyGraph();
+             const services = new Set();
+             
+             // Get all dependents (things that depend on this component)
+             const dependents = graph.dependents[componentId] || [];
+             dependents.forEach(depId => {
+		 const comp = this.panelComponents.find(c => (c.component || c).id === depId);
+		 if (comp && (comp.component || comp).service) {
+                     services.add((comp.component || comp).service);
+		 }
+             });
+             
+             // Also check if this component itself has a service
+             const thisComp = this.panelComponents.find(c => (c.component || c).id === componentId);
+             if (thisComp && (thisComp.component || thisComp).service) {
+		 services.add((thisComp.component || thisComp).service);
+             }
+             
+             return Array.from(services);
+	 }
+	 
+	 renderPanel() {
+             const s = this.panelStatus || {};
+             const d = s.dserv || {};
+             const sys = s.system || {};
+             const agent = s.agent || {};
+             const comps = this.panelComponents || [];
+             const services = s.services || {}; // Per-component service statuses
+             
+             this.el.panelContent.innerHTML = `
+		 <div class="panel-section">
+                     <div class="panel-section-title">System</div>
+                     <div class="panel-info-grid">
+			 <div class="panel-info-item"><div class="label">Hostname</div><div class="value">${sys.hostname||'—'}</div></div>
+			 <div class="panel-info-item"><div class="label">Arch</div><div class="value">${sys.arch||'—'}</div></div>
+			 <div class="panel-info-item"><div class="label">Uptime</div><div class="value">${sys.uptime||'—'}</div></div>
+			 <div class="panel-info-item"><div class="label">Load</div><div class="value">${sys.loadAvg||'—'}</div></div>
+                     </div>
+		 </div>
+		 <div class="panel-section">
+                     <div class="panel-section-title">
+			 <span>Software</span>
+			 <button class="component-btn" onclick="app.refreshComps()">Refresh</button>
+                     </div>
+                     <div id="panel-comps">${comps.length ? comps.map(c => this.renderComp(c, services)).join('') : '<div style="color:#71767b">Loading...</div>'}</div>
+                     ${this.renderInstallWorkflow()}
+		 </div>
+		 <div class="panel-section">
+                     <div class="panel-section-title">
+			 <span>Service Logs</span>
+			 <button class="component-btn" onclick="app.loadLogs()">Refresh</button>
+                     </div>
+                     <div class="logs-header">
+			 <input type="text" id="logs-search" placeholder="Search logs..." oninput="app.filterLogs(this.value)" style="flex:1;background:#1a2634;border:1px solid #2f3336;border-radius:4px;padding:6px 10px;color:#e7e9ea;font-size:12px;">
+			 <span id="logs-match-count" style="font-size:11px;color:#71767b;margin-left:8px;"></span>
+                     </div>
+                     <div class="logs-container" id="panel-logs"><div style="color:#71767b">Click Refresh to load logs...</div></div>
+		 </div>
+		 <div class="panel-section">
+                     <div class="panel-section-title">System Actions</div>
+                     <div class="panel-btn-group">
+			 <button class="panel-btn warning" onclick="app.reboot()">Reboot System</button>
+			 <button class="panel-btn secondary" onclick="app.restartAgent()">Restart Agent</button>
+			 <button class="panel-btn secondary" onclick="app.refreshPanel()">Refresh</button>
+                     </div>
+		 </div>
+		 <div class="panel-section" style="opacity:0.7"><div class="panel-section-title">Agent</div><div style="font-size:12px;color:#71767b">v${agent.version||'?'} · ${agent.uptime||'—'}</div></div>
+             `;
+	 }
+	 
+	 renderComp(comp, services = {}) {
+             const c = comp.component || comp;
+             const hasUpd = comp.updateAvailable;
+             const inst = comp.installed;
+             const hasService = !!c.service;
+             const serviceStatus = services[c.service] || 'unknown';
+             const deps = c.depends || [];
+             const graph = this.buildDependencyGraph();
+             const dependents = graph.dependents[c.id] || [];
+             const isSharedDep = dependents.length > 0;
+             
+             let ver = !inst 
+		     ? '<span style="color:#71767b">Not installed</span>' 
+		     : hasUpd 
+                     ? `${comp.currentVersion} → <span class="latest">${comp.latestVersion}</span>` 
+                     : `${comp.currentVersion||'?'}${comp.latestVersion?' <span style="color:#34d399">✓</span>':''}`;
+             
+             const assets = comp.assets?.length 
+			  ? `<select class="component-select" id="asset-${c.id}">${comp.assets.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>` 
+																       : '';
+             
+             const btn = hasUpd ? 'Update' : inst ? 'Reinstall' : 'Install';
+             
+             // Dependency badges
+             let depBadges = '';
+             if (isSharedDep) {
+		 depBadges += `<span class="dep-badge shared" title="Used by: ${dependents.join(', ')}">shared</span>`;
+             }
+             if (deps.length) {
+		 depBadges += `<span class="dep-badge" title="Requires: ${deps.join(', ')}">→${deps.join(',')}</span>`;
+             }
+             
+             // Service control row (only for components with services)
+             let serviceHtml = '';
+             if (hasService) {
+		 const isActive = serviceStatus === 'active';
+		 serviceHtml = `
+                     <div class="component-service">
+			 <div class="service-info">
+                             <span class="service-label">Service</span>
+                             <span class="service-badge ${serviceStatus}">
+				 <span class="dot"></span>
+				 ${serviceStatus}
+                             </span>
+			 </div>
+			 <div class="service-controls">
+                             <button class="svc-btn start" onclick="app.serviceCmd('${c.service}', 'start')" ${isActive?'disabled':''}>Start</button>
+                             <button class="svc-btn stop" onclick="app.serviceCmd('${c.service}', 'stop')" ${!isActive?'disabled':''}>Stop</button>
+                             <button class="svc-btn restart" onclick="app.serviceCmd('${c.service}', 'restart')">Restart</button>
+			 </div>
+                     </div>
+		 `;
+             }
+             
+             return `
+            <div class="component-row" data-component-id="${c.id}">
+                <div class="component-main">
+                    <div class="component-info">
+                        <div class="component-name">
+                            ${c.name}
+                            ${depBadges}
                         </div>
-                    `).join('');
-                    
-                    return `
-                        <div class="system-card" data-system="${system.name}">
-                            <div class="system-header" onclick="toggleSystem('${system.name}')">
-                                <div>
-                                    <h3>${system.name}</h3>
-                                    <div class="system-meta">
-                                        ${system.version ? `v${system.version}` : ''} 
-                                        • ${system.scripts.length} script${system.scripts.length !== 1 ? 's' : ''}
-                                        ${system.protocols && system.protocols.length > 0 ? ` • ${system.protocols.length} protocol${system.protocols.length !== 1 ? 's' : ''}` : ''}
-                                    </div>
-                                </div>
-                                <span class="expand-icon">▶</span>
-                            </div>
-                            <div class="system-content">
-                                ${protocolSections}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            } catch (error) {
-                container.innerHTML = `<div class="error">Error loading scripts: ${error.message}</div>`;
-            }
-        }
-        
-        function toggleSystem(systemName) {
-            const card = document.querySelector(`[data-system="${systemName}"]`);
-            card.classList.toggle('expanded');
-        }
-        
-        async function viewScript(scriptId, systemName, filename) {
-            currentScriptId = scriptId;
-            
-            // Open modal
-            const modal = document.getElementById('script-modal');
-            modal.classList.add('active');
-            
-            document.getElementById('modal-script-title').textContent = `${systemName} / ${filename}`;
-            
-            // Load script content
-            try {
-                const response = await fetch(`/api/scripts/${scriptId}`);
-                if (!response.ok) throw new Error('Failed to load script');
-                
-                const script = await response.json();
-                document.getElementById('script-content').textContent = script.content;
-                
-                // Load version history
-                const historyResp = await fetch(`/api/scripts/${scriptId}/history`);
-                if (historyResp.ok) {
-                    scriptVersions = await historyResp.json();
-                    
-                    const versionSelect = document.getElementById('version-select');
-                    versionSelect.innerHTML = '<option value="current">Current Version</option>' +
-                        scriptVersions.map((v, i) => `
-                            <option value="${i}">
-                                ${new Date(v.savedAt).toLocaleString()} - ${v.savedBy || 'Unknown'}
-                                ${v.comment ? ` (${v.comment})` : ''}
-                            </option>
-                        `).join('');
-                }
-            } catch (error) {
-                document.getElementById('script-content').textContent = `Error loading script: ${error.message}`;
-            }
-        }
-        
-        async function loadScriptVersion() {
-            const select = document.getElementById('version-select');
-            const versionIndex = select.value;
-            
-            if (versionIndex === 'current') {
-                // Reload current version
-                const response = await fetch(`/api/scripts/${currentScriptId}`);
-                const script = await response.json();
-                document.getElementById('script-content').textContent = script.content;
-            } else {
-                // Load historical version
-                const version = scriptVersions[parseInt(versionIndex)];
-                document.getElementById('script-content').textContent = version.content;
-            }
-        }
-        
-        function closeScriptModal() {
-            document.getElementById('script-modal').classList.remove('active');
-            currentScriptId = null;
-            scriptVersions = [];
-        }
-        
-        // Close modal on background click
-        document.getElementById('script-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'script-modal') {
-                closeScriptModal();
-            }
-        });
-        
-        // Load projects
-        async function loadProjects() {
-            const container = document.getElementById('projects-list');
-            container.innerHTML = '<div class="loading">Loading projects...</div>';
-            
-            try {
-                const response = await fetch(`/api/workgroups/${workgroup}/projects/defs`);
-                if (!response.ok) throw new Error('Failed to load projects');
-                
-                const projects = await response.json();
-                
-                if (!projects || projects.length === 0) {
-                    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📁</div><p>No projects found in this workgroup</p></div>';
-                    return;
-                }
-                
-                container.innerHTML = projects.map(project => `
-                    <div class="project-card" data-project="${project.id}">
-                        <div class="project-header" onclick="toggleProject(${project.id})">
-                            <div>
-                                <div class="project-title">
-                                    <h3>${project.name}</h3>
-                                    <span class="expand-icon">▶</span>
-                                </div>
-                                ${project.description ? `<div class="project-description">${project.description}</div>` : ''}
-                                <div class="project-stats">
-                                    <span>📝 ${project.configCount || 0} config${(project.configCount || 0) !== 1 ? 's' : ''}</span>
-                                    <span>📋 ${project.queueCount || 0} queue${(project.queueCount || 0) !== 1 ? 's' : ''}</span>
-                                    ${project.systems && project.systems.length > 0 ? `<span>🔧 ${project.systems.join(', ')}</span>` : ''}
-                                </div>
-                            </div>
-                        </div>
-                        <div class="project-content" id="project-content-${project.id}">
-                            <div class="loading">Loading project details...</div>
-                        </div>
+                        ${c.description ? `<div class="component-desc">${c.description}</div>` : ''}
+                        <div class="component-version">${ver}</div>
                     </div>
-                `).join('');
-            } catch (error) {
-                container.innerHTML = `<div class="error">Error loading projects: ${error.message}</div>`;
-            }
-        }
-        
-        async function toggleProject(projectId) {
-            const card = document.querySelector(`[data-project="${projectId}"]`);
-            const wasExpanded = card.classList.contains('expanded');
-            
-            card.classList.toggle('expanded');
-            
-            if (!wasExpanded) {
-                // Load project details
-                await loadProjectDetails(projectId);
-            }
-        }
-        
-        async function loadProjectDetails(projectId) {
-            const container = document.getElementById(`project-content-${projectId}`);
-            
-            try {
-                // Load configs
-                const configsResp = await fetch(`/api/workgroups/${workgroup}/projects/defs/${projectId}/configs`);
-                const configs = configsResp.ok ? await configsResp.json() : [];
-                
-                // Load queues
-                const queuesResp = await fetch(`/api/workgroups/${workgroup}/projects/defs/${projectId}/queues`);
-                const queues = queuesResp.ok ? await queuesResp.json() : [];
-                
-                let html = '';
-                
-                if (configs.length > 0) {
-                    html += `
-                        <div class="project-section">
-                            <h4>Configurations</h4>
-                            ${configs.map(config => `
-                                <div class="config-item">
-                                    <strong>${config.name}</strong>
-                                    ${config.description ? ` - ${config.description}` : ''}
-                                    <div class="config-meta">
-                                        ${config.system}/${config.protocol}/${config.variant}
-                                        ${config.subject ? ` • Subject: ${config.subject}` : ''}
-                                        ${config.useCount ? ` • Used ${config.useCount} time${config.useCount !== 1 ? 's' : ''}` : ''}
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    `;
-                }
-                
-                if (queues.length > 0) {
-                    html += `
-                        <div class="project-section">
-                            <h4>Queues</h4>
-                            ${queues.map(queue => `
-                                <div class="queue-item">
-                                    <strong>${queue.name}</strong>
-                                    ${queue.description ? ` - ${queue.description}` : ''}
-                                    <div class="queue-meta">
-                                        ${queue.itemCount || 0} item${(queue.itemCount || 0) !== 1 ? 's' : ''}
-                                        ${queue.autoStart ? ' • Auto-start' : ''}
-                                        ${queue.autoAdvance ? ' • Auto-advance' : ''}
-                                        ${queue.autoDatafile ? ' • Auto-datafile' : ''}
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    `;
-                }
-                
-                if (configs.length === 0 && queues.length === 0) {
-                    html = '<div class="empty-state" style="padding: 30px;"><p>No configurations or queues in this project</p></div>';
-                }
-                
-                container.innerHTML = html;
-            } catch (error) {
-                container.innerHTML = `<div class="error">Error loading project details: ${error.message}</div>`;
-            }
-        }
-        
-        // Initial load
-        loadMachines();
+                    <div class="component-actions">
+                        ${assets}
+                        <button class="component-btn ${hasUpd?'update':''}" onclick="app.install('${c.id}')" ${!comp.assets?.length?'disabled':''}>${btn}</button>
+                    </div>
+                </div>
+                ${serviceHtml}
+            </div>
+			`;
+	 }
+	 
+	 renderInstallWorkflow() {
+             if (!this.installWorkflow) return '<div class="panel-progress" id="panel-progress"><div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div><div class="progress-text" id="progress-text">Installing...</div></div>';
+             
+             const wf = this.installWorkflow;
+             const stepsHtml = wf.steps.map((step, i) => {
+		 let status = 'pending';
+		 let icon = '○';
+		 if (i < wf.currentStep) { status = 'done'; icon = '✓'; }
+		 else if (i === wf.currentStep) { 
+                     status = wf.error ? 'error' : 'active'; 
+                     icon = wf.error ? '✗' : '◉'; 
+		 }
+		 return `<div class="workflow-step ${status}"><span class="step-icon">${icon}</span><span>${step}</span></div>`;
+             }).join('');
+             
+             return `
+            <div class="install-workflow">
+                <div class="workflow-title">Installing ${wf.component}...</div>
+                <div class="workflow-steps">${stepsHtml}</div>
+            </div>
+             `;
+	 }
+	 
+	 // Service control for individual components
+	 serviceCmd(service, action) {
+             this.panelWs?.send(JSON.stringify({
+		 type: 'service',
+		 service: service,
+		 action: action
+             }));
+             this.showToast(`${action}ing ${service}...`);
+	 }
+	 
+	 // Legacy dserv service control (for backward compatibility)
+	 panelCmd(action) { 
+             this.panelWs?.send(JSON.stringify({type:'dserv',action})); 
+             this.showToast(`Sending ${action}...`); 
+	 }
+	 
+	 loadLogs() { this.panelWs?.send(JSON.stringify({type:'logs'})); }
+	 
+	 togglePanelExpand() {
+             const panel = this.el.agentPanel;
+             const btn = document.getElementById('expand-btn');
+             panel.classList.toggle('expanded');
+             if (btn) btn.textContent = panel.classList.contains('expanded') ? '⤡' : '⤢';
+	 }
+	 
+	 displayLogs(logs) {
+             this.currentLogs = logs || '';
+             const el = document.getElementById('panel-logs');
+             if (el) {
+		 el.textContent = this.currentLogs || 'No logs available';
+		 el.scrollTop = el.scrollHeight;
+             }
+             const searchEl = document.getElementById('logs-search');
+             if (searchEl) searchEl.value = '';
+             const countEl = document.getElementById('logs-match-count');
+             if (countEl) countEl.textContent = '';
+	 }
+	 
+	 filterLogs(query) {
+             const el = document.getElementById('panel-logs');
+             const countEl = document.getElementById('logs-match-count');
+             if (!el || !this.currentLogs) return;
+             
+             if (!query) {
+		 el.textContent = this.currentLogs;
+		 if (countEl) countEl.textContent = '';
+		 return;
+             }
+             
+             const lines = this.currentLogs.split('\n');
+             const q = query.toLowerCase();
+             const matches = lines.filter(l => l.toLowerCase().includes(q));
+             
+             el.textContent = matches.length ? matches.join('\n') : 'No matches found';
+             if (countEl) countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+	 }
+	 
+	 reboot() { 
+             if (!confirm('Reboot this system?')) return; 
+             const h = this.panelNode?.isLocal ? 'localhost' : this.panelNode?.ip; 
+             fetch(`http://${h}:${CONFIG.agentPort}/api/system/reboot`,{method:'POST'})
+		 .then(()=>{this.showToast('Reboot scheduled','success');this.closePanel();})
+		 .catch(()=>this.showToast('Reboot failed','error')); 
+	 }
+	 
+	 restartAgent() { 
+             if (!confirm('Restart dserv-agent? The panel will disconnect briefly.')) return; 
+             this.panelWs?.send(JSON.stringify({type:'agent_restart'})); 
+             this.showToast('Agent restarting...', 'success'); 
+             setTimeout(() => this.closePanel(), 1000);
+	 }
+	 
+	 refreshPanel() { 
+             this.panelWs?.send(JSON.stringify({type:'status'})); 
+             this.panelWs?.send(JSON.stringify({type:'components'})); 
+	 }
+	 
+	 refreshComps() { this.panelWs?.send(JSON.stringify({type:'components'})); }
+	 
+	 install(id) { 
+             const sel = document.getElementById('asset-'+id); 
+             const a = sel?.value; 
+             if (!a) { this.showToast('Select an asset','error'); return; }
+             
+             // Check for dependencies that need service stops
+             const servicesToStop = this.getServicesToStop(id);
+             const comp = this.panelComponents.find(c => (c.component || c).id === id);
+             const compName = comp ? (comp.component || comp).name : id;
+             
+             let confirmMsg = `Install ${a}?`;
+             if (servicesToStop.length > 0) {
+		 confirmMsg = `Install ${a}?\n\nThis will temporarily stop: ${servicesToStop.join(', ')}`;
+             }
+             
+             if (!confirm(confirmMsg)) return;
+             
+             // Initialize workflow UI
+             const steps = [];
+             if (servicesToStop.length > 0) {
+		 steps.push(`Stop services (${servicesToStop.join(', ')})`);
+             }
+             steps.push('Download update');
+             steps.push('Install package');
+             if (servicesToStop.length > 0) {
+		 steps.push(`Restart services`);
+             }
+             
+             this.installWorkflow = {
+		 component: compName,
+		 steps: steps,
+		 currentStep: 0,
+		 error: null
+             };
+             this.renderPanel();
+             
+             // Send install request with dependency info
+             this.panelWs?.send(JSON.stringify({
+		 type: 'install',
+		 component: id,
+		 asset: a,
+		 stopServices: servicesToStop
+             }));
+	 }
+	 
+	 updateInstallWorkflow(data) {
+             if (!this.installWorkflow) return;
+             
+             const stageMap = {
+		 'stopping': 0,
+		 'downloading': this.installWorkflow.steps.findIndex(s => s.includes('Download')),
+		 'installing': this.installWorkflow.steps.findIndex(s => s.includes('Install')),
+		 'starting': this.installWorkflow.steps.length - 1
+             };
+             
+             if (data.stage && stageMap[data.stage] !== undefined) {
+		 this.installWorkflow.currentStep = stageMap[data.stage];
+             }
+             
+             this.renderPanel();
+	 }
+	 
+	 completeInstallWorkflow() {
+             if (this.installWorkflow) {
+		 this.installWorkflow.currentStep = this.installWorkflow.steps.length;
+             }
+             setTimeout(() => {
+		 this.installWorkflow = null;
+		 this.renderPanel();
+             }, 2000);
+	 }
+	 
+	 failInstallWorkflow(error) {
+             if (this.installWorkflow) {
+		 this.installWorkflow.error = error;
+             }
+             setTimeout(() => {
+		 this.installWorkflow = null;
+		 this.renderPanel();
+             }, 3000);
+	 }
+	 
+	 showProgress() { document.getElementById('panel-progress')?.classList.add('visible'); }
+	 hideProgress() { document.getElementById('panel-progress')?.classList.remove('visible'); }
+	 
+	 updateProgress(data) { 
+             const stages = {
+		 checking:{p:10,t:'Checking...'},
+		 found:{p:20,t:'Found '+data.version},
+		 downloading:{p:40,t:'Downloading...'},
+		 stopping:{p:60,t:'Stopping...'},
+		 installing:{p:80,t:'Installing...'},
+		 starting:{p:90,t:'Starting...'}
+             }; 
+             const s = stages[data.stage]; 
+             if (s) { 
+		 const f = document.getElementById('progress-fill'); 
+		 const t = document.getElementById('progress-text'); 
+		 if (f) f.style.width = s.p+'%'; 
+		 if (t) t.textContent = s.t; 
+             } 
+	 }
+	 
+	 showToast(msg, type='') { 
+             this.el.toast.textContent = msg; 
+             this.el.toast.className = 'toast show ' + type; 
+             clearTimeout(this.toastTimeout); 
+             this.toastTimeout = setTimeout(() => this.el.toast.className = 'toast', 3000); 
+	 }
+	 
+	 esc(t) { const d = document.createElement('div'); d.textContent = t||''; return d.innerHTML; }
+     }
+
+     let app;
+     document.addEventListener('DOMContentLoaded', () => { app = new LabMeshApp(); });
     </script>
 </body>
 </html>
