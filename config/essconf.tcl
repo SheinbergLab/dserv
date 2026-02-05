@@ -308,7 +308,9 @@ proc joystick_init { } {
 proc connect_touchscreen {} {
     set screens [dict create \
 		     /dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00 {1024 600} \
-                     /dev/input/by-id/usb-ILITEK_ILITEK-TP-event-if00 {1280 800} ]
+                     /dev/input/by-id/usb-ILITEK_ILITEK-TP-event-if00 {1280 800} \
+		     /dev/input/by-id/usb-eGalax_Inc._eGalaxTouch_P80H46_3481_v00_T1_k4.18.204-event-if00 {1280 800} \
+		]
     dict for { dev res } $screens { 
 	if [file exists $dev] {
 	    touchOpen $dev {*}$res
