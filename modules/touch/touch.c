@@ -203,14 +203,14 @@ static int touch_open_command(ClientData data,
 {
   touch_info_t *info = (touch_info_t *) data;
   int width, height;
-
   struct libevdev *dev;
-
   int fd;
   int rc;
+  const char *hdmi_output = "HDMI-A-1";  /* default */
     
   if (objc < 4) {
-    Tcl_WrongNumArgs(interp, 1, objv, "path width height [track_drag]");
+    Tcl_WrongNumArgs(interp, 1, objv,
+		     "path width height [track_drag] [hdmi_output]");
     return TCL_ERROR;
   }
   if (Tcl_GetIntFromObj(interp, objv[2], &width) != TCL_OK) {
@@ -228,7 +228,12 @@ static int touch_open_command(ClientData data,
     }
     info->track_drag = track_drag;
   } else {
-    info->track_drag = 0; /* Default: no drag tracking for backward compatibility */
+    info->track_drag = 0;
+  }
+
+  /* Optional HDMI output name for rotation detection */
+  if (objc >= 6) {
+    hdmi_output = Tcl_GetString(objv[5]);
   }
   
   fd = open(Tcl_GetString(objv[1]), O_RDONLY);
@@ -238,7 +243,6 @@ static int touch_open_command(ClientData data,
 		     NULL);
     return TCL_ERROR;
   }
-
   rc = libevdev_new_from_fd(fd, &dev);
   if (rc < 0) {
     Tcl_AppendResult(interp, Tcl_GetString(objv[0]),
@@ -248,23 +252,17 @@ static int touch_open_command(ClientData data,
     return TCL_ERROR;
   }
   
-  //  libevdev_get_id_vendor(dev);
-  //  libevdev_get_id_product(dev);
-
   info->minx = libevdev_get_abs_minimum(dev, ABS_X);
   info->maxx = libevdev_get_abs_maximum(dev, ABS_X);
-
   info->miny = libevdev_get_abs_minimum(dev, ABS_Y);
   info->maxy = libevdev_get_abs_maximum(dev, ABS_Y);
-
-  info->rangex = info->maxx-info->minx;
-  info->rangey = info->maxy-info->miny;
-
+  info->rangex = info->maxx - info->minx;
+  info->rangey = info->maxy - info->miny;
   info->dev = dev;
   info->fd = fd;
   info->screen_width = width;
   info->screen_height = height;
-  info->rotation = get_hdmi_rotation("HDMI-A-1");
+  info->rotation = get_hdmi_rotation(hdmi_output);
     
   return TCL_OK;
 }
