@@ -366,6 +366,11 @@ proc queue_delete {name args} {
     ::ess_queues::queue_delete $name {*}$args
 }
 
+# Return list of queue names that reference the given config
+proc config_queues_using {config_name args} {
+    ::ess_queues::config_queues_using $config_name {*}$args
+}
+
 #=========================================================================
 # Queue Item Commands
 #=========================================================================
