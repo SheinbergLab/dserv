@@ -1632,7 +1632,17 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 	// Install
 	a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "installing"}})
 
-	if strings.HasSuffix(assetName, ".deb") {
+	if comp.InstallCmd != "" {
+		// Use custom install command with template substitution
+		ver := strings.TrimPrefix(release.TagName, "v")
+		cmdStr := strings.ReplaceAll(comp.InstallCmd, "{file}", localPath)
+		cmdStr = strings.ReplaceAll(cmdStr, "{version}", ver)
+		cmd := exec.Command("sudo", "sh", "-c", cmdStr)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			a.broadcast(WSResponse{Type: "install_error", Error: "Install failed: " + string(output)})
+			return
+		}
+	} else if strings.HasSuffix(assetName, ".deb") {
 		cmd := exec.Command("sudo", "dpkg", "-i", localPath)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			a.broadcast(WSResponse{Type: "install_error", Error: "Install failed: " + string(output)})
@@ -1642,6 +1652,17 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 		if err := a.extractZip(localPath, comp.InstallPath); err != nil {
 			a.broadcast(WSResponse{Type: "install_error", Error: "Extract failed: " + err.Error()})
 			return
+		}
+	}
+
+	// Run post-install commands
+	if len(comp.PostInstall) > 0 {
+		a.broadcast(WSResponse{Type: "install_progress", Data: map[string]string{"stage": "post-install"}})
+		for _, cmdStr := range comp.PostInstall {
+			cmd := exec.Command("sudo", "sh", "-c", cmdStr)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				log.Printf("Post-install command %q failed: %s %v", cmdStr, string(output), err)
+			}
 		}
 	}
 
