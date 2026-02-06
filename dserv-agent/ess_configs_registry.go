@@ -767,7 +767,7 @@ func (r *ESSRegistry) ExportProjectBundle(workgroup, projectName, exportedBy, so
 }
 
 // ImportProjectBundle imports a bundle into a workgroup, creating/updating as needed
-func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBundle) (*SyncResult, error) {
+func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBundle, replace bool) (*SyncResult, error) {
 	result := &SyncResult{
 		Success:     true,
 		ProjectName: bundle.Project.Name,
@@ -937,6 +937,63 @@ func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBu
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("queue %s item %d: %v",
 					q.Name, item.Position, err))
+			}
+		}
+	}
+	
+	// If replace mode, remove configs and queues not in the bundle
+	if replace {
+		// Build sets of names that were in the bundle
+		bundleConfigNames := make(map[string]bool)
+		for _, c := range bundle.Configs {
+			bundleConfigNames[c.Name] = true
+		}
+		bundleQueueNames := make(map[string]bool)
+		for _, q := range bundle.Queues {
+			bundleQueueNames[q.Name] = true
+		}
+		
+		// Delete queues not in bundle (must delete queues first since queue_items reference configs)
+		rows, err := tx.Query("SELECT id, name FROM ess_queues WHERE project_id = ?", projectID)
+		if err == nil {
+			var staleQueues []struct{ id int64; name string }
+			for rows.Next() {
+				var id int64
+				var name string
+				if rows.Scan(&id, &name) == nil && !bundleQueueNames[name] {
+					staleQueues = append(staleQueues, struct{ id int64; name string }{id, name})
+				}
+			}
+			rows.Close()
+			for _, sq := range staleQueues {
+				// Items deleted via CASCADE
+				tx.Exec("DELETE FROM ess_queues WHERE id = ?", sq.id)
+				result.Deleted = append(result.Deleted, "queue:"+sq.name)
+			}
+		}
+		
+		// Delete configs not in bundle (now safe since stale queues are gone)
+		rows, err = tx.Query("SELECT id, name FROM ess_configs WHERE project_id = ? AND archived = 0", projectID)
+		if err == nil {
+			var staleConfigs []struct{ id int64; name string }
+			for rows.Next() {
+				var id int64
+				var name string
+				if rows.Scan(&id, &name) == nil && !bundleConfigNames[name] {
+					staleConfigs = append(staleConfigs, struct{ id int64; name string }{id, name})
+				}
+			}
+			rows.Close()
+			for _, sc := range staleConfigs {
+				// Check if still referenced by any remaining queue
+				var refCount int
+				tx.QueryRow("SELECT COUNT(*) FROM ess_queue_items WHERE config_id = ?", sc.id).Scan(&refCount)
+				if refCount == 0 {
+					tx.Exec("DELETE FROM ess_configs WHERE id = ?", sc.id)
+					result.Deleted = append(result.Deleted, "config:"+sc.name)
+				} else {
+					result.Errors = append(result.Errors, fmt.Sprintf("config %s still referenced by queue items, not deleted", sc.name))
+				}
 			}
 		}
 	}

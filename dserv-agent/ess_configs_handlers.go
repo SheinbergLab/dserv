@@ -845,7 +845,11 @@ func (r *ESSRegistry) handleBundle(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		result, err := r.ImportProjectBundle(workgroup, &bundle)
+		// replace=true makes the bundle authoritative - removes configs/queues
+		// that exist on registry but are not in the bundle
+		replace := req.URL.Query().Get("replace") == "true"
+
+		result, err := r.ImportProjectBundle(workgroup, &bundle, replace)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return

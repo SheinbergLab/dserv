@@ -184,6 +184,7 @@ type SyncResult struct {
 	QueuesCount  int      `json:"queuesCount"`
 	Created      []string `json:"created,omitempty"`
 	Updated      []string `json:"updated,omitempty"`
+	Deleted      []string `json:"deleted,omitempty"`
 	Skipped      []string `json:"skipped,omitempty"`
 	Errors       []string `json:"errors,omitempty"`
 }

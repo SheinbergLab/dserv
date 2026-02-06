@@ -214,8 +214,8 @@ namespace eval ess::registry {
         # Export local project as bundle
         set bundle [export_bundle_local $project $config(user) $source_rig]
         
-        # Push to registry
-        set result [api_post "/bundle/$config(workgroup)/$project" [json_encode_bundle $bundle]]
+        # Push to registry (replace mode removes stale configs/queues)
+        set result [api_post "/bundle/$config(workgroup)/$project?replace=true" [json_encode_bundle $bundle]]
         
         # Update sync timestamp in local project
         catch {
