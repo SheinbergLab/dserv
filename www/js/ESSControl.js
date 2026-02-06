@@ -194,8 +194,13 @@ class ESSControl {
                     <span class="ess-file-label">File:</span>
                     <span class="ess-file-name" id="ess-current-file">(none)</span>
                     <div class="ess-file-spacer"></div>
-                    <button id="ess-btn-file-open" class="ess-mini-btn">Open</button>
-                    <button id="ess-btn-file-close" class="ess-mini-btn close" style="display: none;">Close</button>
+                    <div class="ess-file-actions">
+                        <button id="ess-file-menu-btn" class="ess-file-menu-btn" title="File actions">⋮</button>
+                        <div class="ess-file-menu" id="ess-file-menu">
+                            <button id="ess-btn-file-open" class="ess-file-menu-action">Open File</button>
+                            <button id="ess-btn-file-close" class="ess-file-menu-action" style="display: none;">Close File</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -529,6 +534,8 @@ class ESSControl {
             paramsContainer: this.container.querySelector('#ess-params-container'),
             btnFileOpen: this.container.querySelector('#ess-btn-file-open'),
             btnFileClose: this.container.querySelector('#ess-btn-file-close'),
+            fileMenuBtn: this.container.querySelector('#ess-file-menu-btn'),
+            fileMenu: this.container.querySelector('#ess-file-menu'),
             currentFile: this.container.querySelector('#ess-current-file'),
             
             // Configs tab elements
@@ -649,8 +656,22 @@ class ESSControl {
         this.elements.btnJuice.addEventListener('click', () => this.giveJuice());
         
         // File buttons
-        this.elements.btnFileOpen.addEventListener('click', () => this.openDatafile());
-        this.elements.btnFileClose.addEventListener('click', () => this.closeDatafile());
+        this.elements.btnFileOpen.addEventListener('click', () => {
+            this.openDatafile();
+            this.elements.fileMenu.classList.remove('open');
+        });
+        this.elements.btnFileClose.addEventListener('click', () => {
+            this.closeDatafile();
+            this.elements.fileMenu.classList.remove('open');
+        });
+        this.elements.fileMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.elements.fileMenu.classList.toggle('open');
+        });
+        // Close file menu on outside click
+        document.addEventListener('click', () => {
+            this.elements.fileMenu?.classList.remove('open');
+        });
         
         // Configs tab - Search
         this.elements.configSearch.addEventListener('input', (e) => {
@@ -1777,14 +1798,11 @@ updateConfigRunButtons() {
             // Render normal view
            list.innerHTML = configs.map(cfg => {
                 const isActive = this.state.currentConfig?.name === cfg.name;
-                const tags = this.parseTags(cfg.tags);
                 
                 return `
                     <div class="ess-config-item ${isActive ? 'active' : ''}" data-name="${this.escapeAttr(cfg.name)}">
-                        <div class="ess-config-item-main">
+                        <div class="ess-config-item-name-row">
                             <span class="ess-config-item-name">${this.escapeHtml(cfg.name)}</span>
-                            <button class="ess-config-item-run" title="Load, open file, and start">▶</button>
-                            <button class="ess-config-item-load" title="Load setup only">Load</button>
                             <div class="ess-config-item-actions">
                                 <button class="ess-config-item-menu-btn" title="More actions">⋮</button>
                                 <div class="ess-config-item-menu">
@@ -1797,15 +1815,16 @@ updateConfigRunButtons() {
                                 </div>
                             </div>
                         </div>
-                        <div class="ess-config-item-meta">
-                            ${cfg.subject ? `<span class="ess-config-item-subject">${this.escapeHtml(cfg.subject)}</span>` : ''}
-                            <span class="ess-config-item-path">${this.escapeHtml(cfg.system || '')}/${this.escapeHtml(cfg.protocol || '')}/${this.escapeHtml(cfg.variant || '')}</span>
-                        </div>
-                        ${tags.length > 0 ? `
-                            <div class="ess-config-item-tags">
-                                ${tags.map(t => `<span class="ess-config-tag">${this.escapeHtml(t)}</span>`).join('')}
+                        <div class="ess-config-item-bottom">
+                            <div class="ess-config-item-meta">
+                                ${cfg.subject ? `<span class="ess-config-item-subject">${this.escapeHtml(cfg.subject)}</span>` : ''}
+                                <span class="ess-config-item-path">${this.escapeHtml(cfg.system || '')}/${this.escapeHtml(cfg.protocol || '')}/${this.escapeHtml(cfg.variant || '')}</span>
                             </div>
-                        ` : ''}
+                            <div class="ess-config-item-buttons">
+                                <button class="ess-config-item-run" title="Load, open file, and ready to go">▶</button>
+                                <button class="ess-config-item-load" title="Load setup only">Load</button>
+                            </div>
+                        </div>
                     </div>
                 `;
            }).join('');	    
@@ -1963,16 +1982,16 @@ updateConfigRunButtons() {
     }
 
     /**
-     * Run a config directly (load + open datafile + start)
-     * This is the "one click to run" option - no queue needed
+     * Run a config directly (load + open datafile, ready for Go)
+     * Experimenter presses Go when ready to start
      */
     async runConfig(name) {
 	try {
-            this.emit('log', { message: `Running config: ${name}...`, level: 'info' });
+            this.emit('log', { message: `Preparing config: ${name}...`, level: 'info' });
             this.updateEssStatus('loading');
             
             const result = await this.sendConfigCommandAsync(`queue_run_config {${name}}`);
-            this.emit('log', { message: `Started: ${name}`, level: 'info' });
+            this.emit('log', { message: `Ready: ${name} (press Go to start)`, level: 'info' });
 	} catch (e) {
             this.emit('log', { message: `Failed to run config: ${e.message}`, level: 'error' });
             this.updateEssStatus('stopped');
@@ -2083,6 +2102,29 @@ updateConfigRunButtons() {
     
     async archiveConfig(name) {
         try {
+            // Check if any queues reference this config
+            const result = await this.sendConfigCommandAsync(`config_queues_using {${name}}`);
+            const queueNames = this.parseListData(result);
+            
+            if (queueNames.length > 0) {
+                const queueList = queueNames.join(', ');
+                const action = confirm(
+                    `"${name}" is used by ${queueNames.length === 1 ? 'queue' : 'queues'}: ${queueList}\n\n` +
+                    `Delete ${queueNames.length === 1 ? 'this queue' : 'these queues'} and then move the config to trash?\n\n` +
+                    `Cancel to keep everything as-is.`
+                );
+                
+                if (!action) return;
+                
+                // Delete the referencing queues first
+                for (const qName of queueNames) {
+                    this.emit('log', { message: `Deleting queue: ${qName}...`, level: 'info' });
+                    await this.sendConfigCommandAsync(`queue_delete {${qName}}`);
+                }
+                this.emit('log', { message: `Deleted ${queueNames.length} queue${queueNames.length !== 1 ? 's' : ''}`, level: 'info' });
+                this.refreshQueueList();
+            }
+            
             this.emit('log', { message: `Moving to trash: ${name}...`, level: 'info' });
             await this.sendConfigCommandAsync(`config_archive {${name}}`);
             this.emit('log', { message: `Moved to trash: ${name}`, level: 'info' });
@@ -2090,7 +2132,6 @@ updateConfigRunButtons() {
             // Clear current config if it was the archived one
             if (this.state.currentConfig?.name === name) {
                 this.state.currentConfig = null;
-                this.updateConfigStatusBar();
                 this.updateConfigStatusBar();
             }
             
@@ -2115,10 +2156,29 @@ updateConfigRunButtons() {
     }
     
     async permanentlyDeleteConfig(name) {
-        const confirmed = confirm(`Permanently delete "${name}"?\n\nThis cannot be undone.`);
-        if (!confirmed) return;
-        
         try {
+            // Check if any queues reference this config
+            const result = await this.sendConfigCommandAsync(`config_queues_using {${name}}`);
+            const queueNames = this.parseListData(result);
+            
+            let msg = `Permanently delete "${name}"?\n\nThis cannot be undone.`;
+            if (queueNames.length > 0) {
+                const queueList = queueNames.join(', ');
+                msg = `"${name}" is used by ${queueNames.length === 1 ? 'queue' : 'queues'}: ${queueList}\n\n` +
+                      `${queueNames.length === 1 ? 'This queue' : 'These queues'} will also be deleted.\n\nThis cannot be undone.`;
+            }
+            
+            if (!confirm(msg)) return;
+            
+            // Delete referencing queues first
+            for (const qName of queueNames) {
+                this.emit('log', { message: `Deleting queue: ${qName}...`, level: 'info' });
+                await this.sendConfigCommandAsync(`queue_delete {${qName}}`);
+            }
+            if (queueNames.length > 0) {
+                this.refreshQueueList();
+            }
+            
             this.emit('log', { message: `Permanently deleting: ${name}...`, level: 'info' });
             await this.sendConfigCommandAsync(`config_delete {${name}}`);
             this.emit('log', { message: `Permanently deleted: ${name}`, level: 'info' });
@@ -3078,9 +3138,11 @@ updateConfigRunButtons() {
             if (stillExists) {
                 select.value = this.state.selectedQueue;
             } else {
-                // Selected queue not in current project, clear selection
+                // Selected queue no longer exists, clear selection and playlist
                 this.state.selectedQueue = '';
+                this.state.queueItems = [];
                 select.value = '';
+                this.renderQueuePlaylist();
             }
         }
     }    
@@ -3212,9 +3274,16 @@ updateConfigRunButtons() {
      * Render queue playlist
      */
     renderQueuePlaylist() {
-        const items = this.state.queueItems;
         const qs = this.state.queueState;
         const playlist = this.elements.queuePlaylist;
+        
+        // If no queue selected and no active single run, ensure items are cleared
+        const isSingleRun = qs.queue_name === '(single)' && qs.status !== 'idle';
+        if (!this.state.selectedQueue && !isSingleRun) {
+            this.state.queueItems = [];
+        }
+        
+        const items = this.state.queueItems;
         const isSingleConfig = items.length === 1;
         
         // Adapt UI based on single vs multiple configs
@@ -3381,7 +3450,8 @@ updateConfigRunButtons() {
     
     /**
      * Start a run at the current (or specified) position
-     * Loads config, opens datafile, auto-starts ESS if auto_start enabled
+     * - If queue is between_runs: advance to next item via queue_next
+     * - If queue is idle/finished: start fresh via queue_start
      * @param {number|null} position - Position to start at, or null for current position
      */
     async startRun(position = null) {
@@ -3391,21 +3461,23 @@ updateConfigRunButtons() {
             return;
         }
         
-        // Determine position: use provided, or current, or 0 if finished/idle
-        let pos = position;
-        if (pos === null) {
-            const qs = this.state.queueState;
-            // If finished or idle, start from beginning
-            if (qs.status === 'finished' || qs.status === 'idle') {
-                pos = 0;
-            } else {
-                pos = qs.position;
-            }
-        }
+        const qs = this.state.queueState;
         
         try {
-            this.emit('log', { message: `Starting run: ${this.state.selectedQueue} at position ${pos}`, level: 'info' });
-            await this.sendConfigCommandAsync(`queue_start {${this.state.selectedQueue}} -position ${pos}`);
+            if (qs.status === 'between_runs') {
+                // Queue is active, advance to next item
+                this.emit('log', { message: `Advancing to next run`, level: 'info' });
+                await this.sendConfigCommandAsync('queue_next');
+            } else {
+                // Fresh start (idle or finished)
+                let pos = position;
+                if (pos === null) {
+                    pos = (qs.status === 'finished' || qs.status === 'idle') ? 0 : qs.position;
+                }
+                
+                this.emit('log', { message: `Starting run: ${this.state.selectedQueue} at position ${pos}`, level: 'info' });
+                await this.sendConfigCommandAsync(`queue_start {${this.state.selectedQueue}} -position ${pos}`);
+            }
         } catch (e) {
             this.emit('log', { message: `Failed to start run: ${e.message}`, level: 'error' });
         }

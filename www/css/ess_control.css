@@ -501,6 +501,67 @@ body.ess-app {
     font-size: 10px;
 }
 
+.ess-file-actions {
+    position: relative;
+}
+
+.ess-file-menu-btn {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--ess-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.ess-file-menu-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--ess-text-primary);
+}
+
+.ess-file-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--ess-bg-primary);
+    border: 1px solid var(--ess-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 100;
+    min-width: 100px;
+    overflow: hidden;
+}
+
+.ess-file-menu.open {
+    display: block;
+}
+
+.ess-file-menu-action {
+    display: block;
+    width: 100%;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--ess-text-primary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.ess-file-menu-action:hover {
+    background: rgba(124, 138, 255, 0.15);
+}
+
 /* Scrollable middle section */
 .ess-control-scrollable {
     flex: 1;
@@ -1100,6 +1161,35 @@ body.ess-app {
     z-index: 10;
 }
 
+.ess-bottom-drag-handle {
+    height: 5px;
+    cursor: ns-resize;
+    flex-shrink: 0;
+    position: relative;
+    border-radius: 6px 6px 0 0;
+}
+
+.ess-bottom-drag-handle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 32px;
+    height: 3px;
+    background: var(--ess-border);
+    border-radius: 2px;
+    transition: background 0.15s;
+}
+
+.ess-bottom-drag-handle:hover::after {
+    background: var(--ess-text-muted);
+}
+
+.ess-bottom-panel.collapsed .ess-bottom-drag-handle {
+    display: none;
+}
+
 .ess-bottom-panel.collapsed .ess-bottom-content {
     display: none;
 }
@@ -1252,6 +1342,112 @@ body.ess-app {
 .ess-console-body::-webkit-scrollbar-thumb:hover,
 .ess-params-container::-webkit-scrollbar-thumb:hover {
     background: var(--ess-text-muted);
+}
+
+/* ===========================================
+   Wide screen: Console/Terminal as side panel
+   =========================================== */
+@media (min-width: 1400px) {
+    .ess-container {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+        padding: 8px;
+        gap: 8px;
+    }
+    
+    .ess-status-bar {
+        grid-column: 1 / -1;
+        overflow: visible;
+        position: relative;
+        z-index: 20;
+    }
+    
+    .ess-grid {
+        grid-column: 1;
+        grid-row: 2;
+        grid-template-columns: 280px 295px 500px;
+    }
+    
+    .ess-bottom-panel {
+        grid-column: 2;
+        grid-row: 2;
+        width: 360px;
+        height: auto !important;
+        flex-shrink: unset;
+    }
+    
+    /* Hide tabs, show both panes stacked */
+    .ess-bottom-tabs {
+        display: none;
+    }
+    
+    .ess-bottom-content {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+    }
+    
+    .ess-bottom-pane {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        position: relative;
+    }
+    
+    /* Add labels since tabs are hidden */
+    .ess-bottom-pane::before {
+        content: attr(data-label);
+        display: block;
+        padding: 4px 10px;
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--ess-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        background: var(--ess-bg-panel);
+        border-bottom: 1px solid var(--ess-border);
+        flex-shrink: 0;
+    }
+    
+    .ess-bottom-pane .ess-console-body,
+    .ess-bottom-pane #tcl-terminal-container {
+        flex: 1;
+        min-height: 0;
+    }
+    
+    /* Hide the vertical drag handle, show horizontal one */
+    .ess-bottom-drag-handle {
+        width: 5px;
+        height: auto;
+        cursor: ew-resize;
+        border-radius: 6px 0 0 6px;
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 2;
+    }
+    
+    .ess-bottom-drag-handle::after {
+        width: 3px;
+        height: 32px;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+    }
+    
+    .ess-bottom-panel.collapsed {
+        width: auto;
+        height: auto;
+    }
+    
+    .ess-bottom-panel.collapsed .ess-bottom-content {
+        display: none;
+    }
 }
 
 /* ===========================================
@@ -1825,7 +2021,7 @@ body.ess-app {
 
 /* Config item */
 .ess-config-item {
-    padding: 8px 10px;
+    padding: 5px 10px;
     border-bottom: 1px solid var(--ess-border);
     cursor: pointer;
     transition: background 0.1s;
@@ -1845,11 +2041,11 @@ body.ess-app {
     padding-left: 7px;
 }
 
-.ess-config-item-main {
+.ess-config-item-name-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
+    gap: 6px;
+    margin-bottom: 3px;
 }
 
 .ess-config-item-name {
@@ -1860,6 +2056,20 @@ body.ess-app {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.ess-config-item-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.ess-config-item-buttons {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
 }
 
 .ess-config-item-load {
@@ -1929,6 +2139,9 @@ body.ess-app {
     gap: 6px;
     font-size: 10px;
     color: var(--ess-text-muted);
+    overflow: hidden;
+    min-width: 0;
+    flex: 1;
 }
 
 .ess-config-item-subject {
@@ -1941,6 +2154,9 @@ body.ess-app {
 .ess-config-item-path {
     font-family: 'SF Mono', Monaco, Consolas, monospace;
     font-size: 9px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .ess-config-item-tags {
@@ -3461,7 +3677,6 @@ body.ess-app {
     border-radius: 3px;
     cursor: pointer;
     font-size: 10px;
-    margin-right: 4px;
 }
 
 .ess-config-item-run:hover {

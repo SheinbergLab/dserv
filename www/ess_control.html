@@ -150,6 +150,7 @@
         
         <!-- Bottom Panel (Console + Terminal) -->
         <div class="ess-bottom-panel" id="bottom-panel">
+            <div class="ess-bottom-drag-handle" id="bottom-drag-handle"></div>
             <div class="ess-bottom-tabs">
                 <button class="ess-bottom-tab active" data-tab="console" onclick="switchBottomTab('console')">
                     Console <span class="ess-console-count" id="error-count"></span>
@@ -162,10 +163,10 @@
                 <button class="ess-bottom-action" onclick="toggleBottomPanel()">Toggle</button>
             </div>
             <div class="ess-bottom-content">
-                <div class="ess-bottom-pane active" id="console-pane">
+                <div class="ess-bottom-pane active" id="console-pane" data-label="Console">
                     <div class="ess-console-body" id="console-output"></div>
                 </div>
-                <div class="ess-bottom-pane" id="terminal-pane">
+                <div class="ess-bottom-pane" id="terminal-pane" data-label="Terminal">
                     <div id="tcl-terminal-container"></div>
                 </div>
             </div>
@@ -301,6 +302,88 @@
             // Initialize PageNav dropdown
             PageNav.init('page-nav-container', 'ess_control');
         });
+    </script>
+    <!-- Bottom panel drag resize -->
+    <script>
+    (function() {
+        const handle = document.getElementById('bottom-drag-handle');
+        const panel = document.getElementById('bottom-panel');
+        if (!handle || !panel) return;
+        
+        let dragging = false;
+        let startPos, startSize;
+        let wasSideMode = null;
+        const MIN_SIZE = 80;
+        
+        function isSideMode() {
+            return window.matchMedia('(min-width: 1400px)').matches;
+        }
+        
+        // Clear inline styles when switching between modes
+        window.addEventListener('resize', () => {
+            const sideMode = isSideMode();
+            if (wasSideMode !== null && wasSideMode !== sideMode) {
+                panel.style.height = '';
+                panel.style.width = '';
+                // Initialize terminal when entering side mode (since tabs are hidden)
+                if (sideMode && typeof initTerminal === 'function' && !window.tclTerminal) {
+                    initTerminal();
+                }
+            }
+            wasSideMode = sideMode;
+        });
+        wasSideMode = isSideMode();
+        
+        // Init terminal immediately if starting in side mode
+        if (isSideMode()) {
+            // Defer slightly to let connection establish
+            setTimeout(() => {
+                if (typeof initTerminal === 'function' && !window.tclTerminal) {
+                    initTerminal();
+                }
+            }, 500);
+        }
+        
+        handle.addEventListener('mousedown', (e) => {
+            if (panel.classList.contains('collapsed')) return;
+            dragging = true;
+            
+            if (isSideMode()) {
+                startPos = e.clientX;
+                startSize = panel.offsetWidth;
+                document.body.style.cursor = 'ew-resize';
+            } else {
+                startPos = e.clientY;
+                startSize = panel.offsetHeight;
+                document.body.style.cursor = 'ns-resize';
+            }
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            
+            if (isSideMode()) {
+                const delta = startPos - e.clientX;
+                const maxWidth = window.innerWidth * 0.5;
+                const newWidth = Math.min(maxWidth, Math.max(MIN_SIZE, startSize + delta));
+                panel.style.width = newWidth + 'px';
+            } else {
+                const delta = startPos - e.clientY;
+                const maxHeight = window.innerHeight * 0.6;
+                const newHeight = Math.min(maxHeight, Math.max(MIN_SIZE, startSize + delta));
+                panel.style.height = newHeight + 'px';
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (!dragging) return;
+            dragging = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        });
+    })();
     </script>
 </body>
 </html>
