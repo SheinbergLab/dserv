@@ -160,6 +160,34 @@ proc ::ess_queues::queue_delete {name args} {
     return $name
 }
 
+# Return list of queue names that contain the given config
+proc ::ess_queues::config_queues_using {config_name args} {
+    variable db
+    
+    set project [::ess::configs::project_active]
+    foreach {k v} $args {
+        if {$k eq "-project"} { set project $v }
+    }
+    
+    # Look up config id
+    set config [::ess::configs::get $config_name -project $project]
+    if {$config eq ""} {
+        return [list]
+    }
+    set config_id [dict get $config id]
+    
+    # Find all queues that have this config in their items
+    set queue_names [$db eval {
+        SELECT DISTINCT q.name 
+        FROM queues q
+        JOIN queue_items qi ON qi.queue_id = q.id
+        WHERE qi.config_id = :config_id
+        ORDER BY q.name
+    }]
+    
+    return $queue_names
+}
+
 proc ::ess_queues::queue_list {args} {
     variable db
     
@@ -530,6 +558,7 @@ proc ::ess_queues::run_single {config_name args} {
     set project_name [dict get $config project_name]
     
     # Initialize state for single run (no queue, just one config)
+    # auto_start is always 0 for single configs - experimenter presses Go
     set state(status) loading
     set state(queue_id) 0
     set state(queue_name) "(single)"
@@ -545,11 +574,11 @@ proc ::ess_queues::run_single {config_name args} {
     set state(pause_until) 0
     set state(run_started) 0
     set state(datafile_open) 0
-    set state(auto_start) 1
+    set state(auto_start) 0
     set state(auto_advance) 0
     set state(auto_datafile) 1
     
-    log info "Running single config: $config_name"
+    log info "Preparing single config: $config_name"
     publish_state
     
     # Load the config
@@ -563,7 +592,7 @@ proc ::ess_queues::run_single {config_name args} {
     set state(status) ready
     publish_state
     
-    # Start immediately
+    # Open datafile and set state to running, but don't start ESS
     start_run
     
     return $config_name
@@ -696,9 +725,7 @@ proc ::ess_queues::queue_resume {} {
     set state(status) ready
     publish_state
     
-    if {$state(auto_start)} {
-        start_run
-    }
+    start_run
 }
 
 proc ::ess_queues::queue_skip {} {
@@ -736,9 +763,7 @@ proc ::ess_queues::queue_next {} {
     if {$state(run_count) < $state(current_repeat_count)} {
         set state(status) ready
         publish_state
-        if {$state(auto_start)} {
-            start_run
-        }
+        start_run
     } else {
         advance_position
     }
@@ -803,12 +828,10 @@ proc ::ess_queues::run_close {} {
     
     # For queue runs, check if more repeats needed
     if {$state(run_count) < $state(current_repeat_count)} {
-        # More repeats of this config - stay ready
+        # More repeats of this config
         set state(status) ready
         publish_state
-        if {$state(auto_start)} {
-            start_run
-        }
+        start_run
         return
     }
     
@@ -873,9 +896,9 @@ proc ::ess_queues::load_current_item {} {
     set state(status) ready
     publish_state
     
-    if {$state(auto_start)} {
-        start_run
-    }
+    # Always start the run (opens datafile, transitions to running)
+    # start_run checks auto_start internally before calling ess_start
+    start_run
 }
 
 proc ::ess_queues::start_run {} {
@@ -899,12 +922,18 @@ proc ::ess_queues::start_run {} {
         }
     }
     
-    # Start ESS
-    set state(status) running
-    set state(run_started) [clock seconds]
-    publish_state
-    
-    ess_start
+    # Start ESS (or wait for manual Go if auto_start is off)
+    if {$state(auto_start)} {
+        set state(status) running
+        set state(run_started) [clock seconds]
+        publish_state
+        ess_start
+    } else {
+        set state(status) running
+        set state(run_started) [clock seconds]
+        publish_state
+        log info "Datafile open, waiting for manual start (Go)"
+    }
 }
 
 proc ::ess_queues::open_datafile {} {
@@ -1081,9 +1110,7 @@ proc ::ess_queues::tick {} {
                     set state(pause_until) [expr {[clock seconds] + $state(current_pause_after)}]
                 } elseif {$state(run_count) < $state(current_repeat_count)} {
                     set state(status) ready
-                    if {$state(auto_start)} {
-                        start_run
-                    }
+                    start_run
 } elseif {$state(auto_advance)} {
                     advance_position
                 } elseif {$state(queue_name) eq "(single)"} {
