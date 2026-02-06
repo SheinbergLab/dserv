@@ -14,6 +14,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,6 +42,9 @@ func (r *ESSRegistry) RegisterConfigsHandlers(mux *http.ServeMux, authMiddleware
 
 	// Bundle operations (push/pull)
 	mux.HandleFunc("/api/v1/ess/bundle/", authMiddleware(r.handleBundle))
+
+	// Bundle history (audit/recovery)
+	mux.HandleFunc("/api/v1/ess/bundle-history/", authMiddleware(r.handleBundleHistory))
 }
 
 // ============ Project Definition Handlers ============
@@ -855,6 +859,72 @@ func (r *ESSRegistry) handleBundle(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
+		writeJSON(w, 200, result)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// GET /api/v1/ess/bundle-history/{workgroup}/{project} - list push history
+// GET /api/v1/ess/bundle-history/{workgroup}/{project}/{id} - get full snapshot
+// POST /api/v1/ess/bundle-history/{workgroup}/{project}/{id}/restore - re-import a snapshot
+func (r *ESSRegistry) handleBundleHistory(w http.ResponseWriter, req *http.Request) {
+	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/bundle-history/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) < 2 {
+		http.Error(w, "Invalid path: need workgroup/project", http.StatusBadRequest)
+		return
+	}
+
+	workgroup := parts[0]
+	projectName := parts[1]
+
+	switch {
+	case req.Method == http.MethodGet && len(parts) == 2:
+		// List history
+		limit := 20
+		if l := req.URL.Query().Get("limit"); l != "" {
+			fmt.Sscanf(l, "%d", &limit)
+		}
+
+		entries, err := r.ListBundleHistory(workgroup, projectName, limit)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, entries)
+
+	case req.Method == http.MethodGet && len(parts) >= 3:
+		// Get full snapshot
+		var id int64
+		fmt.Sscanf(parts[2], "%d", &id)
+
+		bundle, err := r.GetBundleSnapshot(id)
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, bundle)
+
+	case req.Method == http.MethodPost && len(parts) >= 4 && parts[3] == "restore":
+		// Restore a snapshot by re-importing it
+		var id int64
+		fmt.Sscanf(parts[2], "%d", &id)
+
+		bundle, err := r.GetBundleSnapshot(id)
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": err.Error()})
+			return
+		}
+
+		// Re-import with replace to make it authoritative
+		result, err := r.ImportProjectBundle(workgroup, bundle, true)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, 200, result)
 
 	default:

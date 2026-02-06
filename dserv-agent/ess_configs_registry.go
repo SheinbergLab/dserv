@@ -102,6 +102,18 @@ func (r *ESSRegistry) migrateConfigsTables() error {
 	CREATE INDEX IF NOT EXISTS idx_ess_queues_project ON ess_queues(project_id);
 	CREATE INDEX IF NOT EXISTS idx_ess_queue_items_queue ON ess_queue_items(queue_id, position);
 	CREATE INDEX IF NOT EXISTS idx_ess_queue_items_config ON ess_queue_items(config_id);
+
+	-- Bundle push history (audit log for recovery)
+	CREATE TABLE IF NOT EXISTS ess_bundle_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		workgroup TEXT NOT NULL,
+		project_name TEXT NOT NULL,
+		bundle_json TEXT NOT NULL,
+		pushed_by TEXT DEFAULT '',
+		source_rig TEXT DEFAULT '',
+		pushed_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_ess_bundle_history_project ON ess_bundle_history(workgroup, project_name);
 	`
 	_, err := r.db.Exec(schema)
 	return err
@@ -780,6 +792,14 @@ func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBu
 	}
 	defer tx.Rollback()
 	
+	// Save bundle snapshot for audit/recovery
+	if bundleJSON, err := json.Marshal(bundle); err == nil {
+		tx.Exec(`
+			INSERT INTO ess_bundle_history (workgroup, project_name, bundle_json, pushed_by, source_rig, pushed_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, workgroup, bundle.Project.Name, string(bundleJSON), bundle.ExportedBy, bundle.SourceRig, time.Now().Unix())
+	}
+	
 	// Create or update project
 	existing, _ := r.GetProjectDef(workgroup, bundle.Project.Name)
 	var projectID int64
@@ -1002,9 +1022,87 @@ func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBu
 		return nil, err
 	}
 	
+	// Auto-prune old history entries (keep last 50 per project)
+	r.PruneBundleHistory(workgroup, bundle.Project.Name, 50)
+	
 	result.ConfigsCount = len(bundle.Configs)
 	result.QueuesCount = len(bundle.Queues)
 	result.Success = len(result.Errors) == 0
 	
 	return result, nil
+}
+
+// ============ Bundle History Operations ============
+
+// BundleHistoryEntry represents a saved bundle snapshot
+type BundleHistoryEntry struct {
+	ID          int64  `json:"id"`
+	Workgroup   string `json:"workgroup"`
+	ProjectName string `json:"projectName"`
+	PushedBy    string `json:"pushedBy"`
+	SourceRig   string `json:"sourceRig"`
+	PushedAt    int64  `json:"pushedAt"`
+}
+
+// ListBundleHistory returns recent push history for a project (without the full JSON)
+func (r *ESSRegistry) ListBundleHistory(workgroup, projectName string, limit int) ([]BundleHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := r.db.Query(`
+		SELECT id, workgroup, project_name, pushed_by, source_rig, pushed_at
+		FROM ess_bundle_history
+		WHERE workgroup = ? AND project_name = ?
+		ORDER BY pushed_at DESC
+		LIMIT ?
+	`, workgroup, projectName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []BundleHistoryEntry
+	for rows.Next() {
+		var e BundleHistoryEntry
+		if err := rows.Scan(&e.ID, &e.Workgroup, &e.ProjectName, &e.PushedBy, &e.SourceRig, &e.PushedAt); err != nil {
+			continue
+		}
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// GetBundleSnapshot retrieves the full bundle JSON for a history entry
+func (r *ESSRegistry) GetBundleSnapshot(id int64) (*ESSProjectBundle, error) {
+	var bundleJSON string
+	err := r.db.QueryRow("SELECT bundle_json FROM ess_bundle_history WHERE id = ?", id).Scan(&bundleJSON)
+	if err != nil {
+		return nil, fmt.Errorf("bundle snapshot not found: %w", err)
+	}
+
+	var bundle ESSProjectBundle
+	if err := json.Unmarshal([]byte(bundleJSON), &bundle); err != nil {
+		return nil, fmt.Errorf("failed to parse bundle snapshot: %w", err)
+	}
+	return &bundle, nil
+}
+
+// PruneBundleHistory removes old entries, keeping the most recent N per project
+func (r *ESSRegistry) PruneBundleHistory(workgroup, projectName string, keep int) (int64, error) {
+	if keep <= 0 {
+		keep = 50
+	}
+	res, err := r.db.Exec(`
+		DELETE FROM ess_bundle_history
+		WHERE workgroup = ? AND project_name = ? AND id NOT IN (
+			SELECT id FROM ess_bundle_history
+			WHERE workgroup = ? AND project_name = ?
+			ORDER BY pushed_at DESC
+			LIMIT ?
+		)
+	`, workgroup, projectName, workgroup, projectName, keep)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
