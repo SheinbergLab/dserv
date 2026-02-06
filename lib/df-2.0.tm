@@ -750,6 +750,8 @@ namespace eval df {
         method event_times_valid {valid_mask type_name {subtype_name ""}} {
             dl_local mask [my select_evt $type_name $subtype_name]
             if {$mask eq ""} { return "" }
+            # Check if event actually occurred in any obs period
+            if {![dl_any [dl_anys $mask]]} { return "" }
             dl_local times_nested [dl_select $g:e_times $mask]
             dl_local valid_indices [dl_indices $valid_mask]
             dl_local times_valid [dl_choose $times_nested $valid_indices]
@@ -759,6 +761,7 @@ namespace eval df {
         method event_params_valid {valid_mask type_name {subtype_name ""}} {
             dl_local mask [my select_evt $type_name $subtype_name]
             if {$mask eq ""} { return "" }
+            if {![dl_any [dl_anys $mask]]} { return "" }
             dl_local params_nested [dl_select $g:e_params $mask]
             dl_local valid_indices [dl_indices $valid_mask]
             dl_local params_valid [dl_choose $params_nested $valid_indices]
@@ -768,6 +771,7 @@ namespace eval df {
         method event_subtypes_valid {valid_mask type_name {subtype_name ""}} {
             dl_local mask [my select_evt $type_name $subtype_name]
             if {$mask eq ""} { return "" }
+            if {![dl_any [dl_anys $mask]]} { return "" }
             dl_local subtypes_nested [dl_select $g:e_subtypes $mask]
             dl_local valid_indices [dl_indices $valid_mask]
             dl_local subtypes_valid [dl_choose $subtypes_nested $valid_indices]
@@ -807,6 +811,14 @@ namespace eval df {
                 return [dict exists $type_names $type_name]
             }
             return [dict exists $type_ids $type_name]
+        }
+        
+        # Check if a specific event type (and optional subtype) actually
+        # occurred in any obs period (not just registered in the event table)
+        method has_event_occurrences {type_name {subtype_name ""}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            if {$mask eq ""} { return 0 }
+            return [dl_any [dl_anys $mask]]
         }
         
         method type_names {} {
