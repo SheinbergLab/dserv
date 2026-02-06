@@ -750,8 +750,6 @@ namespace eval df {
         method event_times_valid {valid_mask type_name {subtype_name ""}} {
             dl_local mask [my select_evt $type_name $subtype_name]
             if {$mask eq ""} { return "" }
-            # Check if event actually occurred in any obs period
-            if {![dl_any [dl_anys $mask]]} { return "" }
             dl_local times_nested [dl_select $g:e_times $mask]
             dl_local valid_indices [dl_indices $valid_mask]
             dl_local times_valid [dl_choose $times_nested $valid_indices]
@@ -761,7 +759,6 @@ namespace eval df {
         method event_params_valid {valid_mask type_name {subtype_name ""}} {
             dl_local mask [my select_evt $type_name $subtype_name]
             if {$mask eq ""} { return "" }
-            if {![dl_any [dl_anys $mask]]} { return "" }
             dl_local params_nested [dl_select $g:e_params $mask]
             dl_local valid_indices [dl_indices $valid_mask]
             dl_local params_valid [dl_choose $params_nested $valid_indices]
@@ -771,11 +768,72 @@ namespace eval df {
         method event_subtypes_valid {valid_mask type_name {subtype_name ""}} {
             dl_local mask [my select_evt $type_name $subtype_name]
             if {$mask eq ""} { return "" }
-            if {![dl_any [dl_anys $mask]]} { return "" }
             dl_local subtypes_nested [dl_select $g:e_subtypes $mask]
             dl_local valid_indices [dl_indices $valid_mask]
             dl_local subtypes_valid [dl_choose $subtypes_nested $valid_indices]
             dl_return [dl_unpack $subtypes_valid]
+        }
+        
+        #
+        # Sparse event extraction methods
+        #
+        # Handle events that may not occur on every trial.
+        # Fill missing trials with a scalar value to maintain rectangularity.
+        # valid_indices is a dl of integer indices (not a boolean mask).
+        #
+        
+        method event_time_sparse {valid_indices type_name subtype_name {fill -1}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            dl_local has_evt [dl_anys $mask]
+            dl_local no_evt [dl_not $has_evt]
+            dl_local times [dl_select $g:e_times $mask]
+            dl_local times [dl_replace $times $no_evt [dl_llist [dl_ilist $fill]]]
+            dl_return [dl_unpack [dl_choose $times $valid_indices]]
+        }
+        
+        method event_subtype_sparse {valid_indices type_name subtype_name {fill -1}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            dl_local has_evt [dl_anys $mask]
+            dl_local no_evt [dl_not $has_evt]
+            dl_local subtypes [dl_select $g:e_subtypes $mask]
+            dl_local subtypes [dl_replace $subtypes $no_evt [dl_llist [dl_ilist $fill]]]
+            dl_return [dl_unpack [dl_choose $subtypes $valid_indices]]
+        }
+        
+        method event_param_sparse {valid_indices type_name subtype_name {fill -1}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            dl_local has_evt [dl_anys $mask]
+            dl_local no_evt [dl_not $has_evt]
+            dl_local params [dl_select $g:e_params $mask]
+            dl_local params [dl_replace $params $no_evt [dl_llist [dl_llist [dl_ilist $fill]]]]
+            dl_return [dl_unpack [dl_unpack [dl_choose $params $valid_indices]]]
+        }
+        
+        #
+        # Nested event extraction methods
+        #
+        # For events with zero or more occurrences per trial.
+        # Returns nested list (one sublist per valid trial).
+        #
+        
+        method event_times_nested {valid_indices type_name {subtype_name ""}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            dl_local times [dl_select $g:e_times $mask]
+            dl_return [dl_choose $times $valid_indices]
+        }
+        
+        method event_params_nested {valid_indices type_name {subtype_name ""}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            dl_local params [dl_select $g:e_params $mask]
+            dl_return [dl_choose $params $valid_indices]
+        }
+        
+        # Check if a specific event type (and optional subtype) actually
+        # occurred in any obs period (not just registered in the event table)
+        method has_event_occurrences {type_name {subtype_name ""}} {
+            dl_local mask [my select_evt $type_name $subtype_name]
+            if {$mask eq ""} { return 0 }
+            return [dl_any [dl_anys $mask]]
         }
         
         #
@@ -811,14 +869,6 @@ namespace eval df {
                 return [dict exists $type_names $type_name]
             }
             return [dict exists $type_ids $type_name]
-        }
-        
-        # Check if a specific event type (and optional subtype) actually
-        # occurred in any obs period (not just registered in the event table)
-        method has_event_occurrences {type_name {subtype_name ""}} {
-            dl_local mask [my select_evt $type_name $subtype_name]
-            if {$mask eq ""} { return 0 }
-            return [dl_any [dl_anys $mask]]
         }
         
         method type_names {} {
