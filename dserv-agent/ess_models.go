@@ -22,6 +22,7 @@ const (
 	ScriptTypeVariants = "variants"
 	ScriptTypeStim     = "stim"
 	ScriptTypeExtract  = "extract"
+	ScriptTypeAnalyze  = "analyze"
 )
 
 // ============ Data Models ============
