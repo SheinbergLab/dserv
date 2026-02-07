@@ -110,47 +110,58 @@ namespace eval ess {
 
         if {[catch {
             set response [https_post $url $body]
-            set data [json_to_dict $response]
         } err]} {
             ess_error "Sync request failed for $system: $err" "sync"
             return [dict create pulled 0 unchanged 0 errors [list "sync request: $err"]]
         }
 
-        set unchanged [dict get $data unchanged]
+        # Use json_get for field extraction — json_to_dict breaks on
+        # script content containing complex Tcl code with braces/spaces
+        set unchanged [json_get $response unchanged]
 
         # Step 3: Write stale files to base
-        foreach script [dict get $data stale] {
-            set protocol [dict get $script protocol]
-            set filename [dict get $script filename]
-            set content  [dict get $script content]
+        # Get stale count from json_to_dict (top-level list length is safe)
+        set stale_type [json_type $response stale]
+        if {$stale_type eq "array"} {
+            # Iterate by index using json_get for each field
+            for {set i 0} {1} {incr i} {
+                set filename [json_get $response stale.$i.filename]
+                if {$filename eq ""} break
 
-            if {$protocol eq ""} {
-                set relpath [file join $project $system $filename]
-            } else {
-                set relpath [file join $project $system $protocol $filename]
-            }
+                set protocol [json_get $response stale.$i.protocol]
+                set content  [json_get $response stale.$i.content]
 
-            set local_file [file join $system_path $relpath]
-
-            if {[catch {
-                set dir [file dirname $local_file]
-                if {![file exists $dir]} {
-                    file mkdir $dir
+                if {$protocol eq ""} {
+                    set relpath [file join $project $system $filename]
+                } else {
+                    set relpath [file join $project $system $protocol $filename]
                 }
-                set f [open $local_file w]
-                puts -nonewline $f $content
-                close $f
-                incr pulled
-                ess_info "  Pulled: $relpath" "sync"
-            } write_err]} {
-                ess_error "  Failed to write $relpath: $write_err" "sync"
-                lappend errors "$relpath: $write_err"
+
+                set local_file [file join $system_path $relpath]
+
+                if {[catch {
+                    set dir [file dirname $local_file]
+                    if {![file exists $dir]} {
+                        file mkdir $dir
+                    }
+                    set f [open $local_file w]
+                    puts -nonewline $f $content
+                    close $f
+                    incr pulled
+                    ess_info "  Pulled: $relpath" "sync"
+                } write_err]} {
+                    ess_error "  Failed to write $relpath: $write_err" "sync"
+                    lappend errors "$relpath: $write_err"
+                }
             }
         }
 
         # Step 4: Report extra local files (client has, server doesn't)
-        if {[dict exists $data extra]} {
-            foreach extra_key [dict get $data extra] {
+        set extra_type [json_type $response extra]
+        if {$extra_type eq "array"} {
+            for {set i 0} {1} {incr i} {
+                set extra_key [json_get $response extra.$i]
+                if {$extra_key eq ""} break
                 ess_info "  Extra local file (not on server): $extra_key" "sync"
             }
         }
