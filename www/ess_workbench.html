@@ -12,6 +12,7 @@
     
     <link rel="stylesheet" href="css/ess_workbench.css">
     <link rel="stylesheet" href="css/ess_workbench_registry.css">
+    <link rel="stylesheet" href="css/ess_workbench_overlay.css">    
 </head>
 <body>
     <div class="workbench-container">
@@ -455,6 +456,30 @@
                                 <span>stim.tcl</span>
                                 <span class="script-status-dot" data-script="stim"></span>
                             </button>
+                            <button class="script-item" data-script="sys_extract">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                </svg>
+                                <span>sys_extract.tcl</span>
+                                <span class="script-status-dot" data-script="sys_extract"></span>
+                            </button>
+                            <button class="script-item" data-script="proto_extract">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                </svg>
+                                <span>proto_extract.tcl</span>
+                                <span class="script-status-dot" data-script="proto_extract"></span>
+                            </button>
+<button class="script-item" data-script="sys_analyze">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                </svg>
+                                <span>sys_analyze.tcl</span>
+                                <span class="script-status-dot" data-script="sys_analyze"></span>
+</button>			    
                         </div>
                     </div>
                     
@@ -735,5 +760,6 @@
     <script src="js/ess_workbench.js"></script>
     <script src="js/ess_registry_integration.js"></script>
     <script src="js/ess_registry_integration_v2.js"></script>
+    <script src="js/ess_overlay_integration.js"></script>    
 </body>
 </html>

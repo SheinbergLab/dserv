@@ -48,14 +48,40 @@
     ESSWorkbench.prototype.initOverlayUI = function() {
         this.bindOverlayEvents();
 
-        // Restore last user from localStorage
+        // Restore last user from localStorage into dropdown (display only)
         const lastUser = localStorage.getItem('ess_overlay_user');
         if (lastUser) {
+            this._pendingOverlayUser = lastUser;
+        }
+
+        // When connected, activate the pending overlay user
+        if (this.connection) {
+            this.connection.on('connected', () => {
+                // Small delay to let subscriptions set up first
+                setTimeout(() => this.activatePendingOverlayUser(), 500);
+            });
+        }
+    };
+
+    /**
+     * Called once after WebSocket connection is established.
+     * Sends the stored overlay user to the backend.
+     */
+    ESSWorkbench.prototype.activatePendingOverlayUser = async function() {
+        const username = this._pendingOverlayUser;
+        if (!username) return;
+        this._pendingOverlayUser = null;
+
+        console.log(`Restoring overlay user from localStorage: "${username}"`);
+        try {
+            await this.setOverlayUser(username);
+        } catch (err) {
+            console.warn('Failed to restore overlay user:', err.message);
+            // Don't loop — just clear and let user re-select manually
+            this.showNotification?.(`Could not activate overlay for "${username}": ${err.message}. Select user manually.`, 'warning');
+            localStorage.removeItem('ess_overlay_user');
             const select = document.getElementById('user-select');
-            if (select) {
-                // Will be set properly once users are populated
-                this._pendingOverlayUser = lastUser;
-            }
+            if (select) select.value = '';
         }
     };
 
@@ -101,13 +127,25 @@
 
     ESSWorkbench.prototype.setOverlayUser = async function(username) {
         try {
-            const cmd = `ess::set_overlay_user {${username}}`;
-            
-            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: cmd
-                }));
+            if (!this.connection?.ws || this.connection.ws.readyState !== WebSocket.OPEN) {
+                console.warn('Cannot set overlay user: not connected');
+                return;
+            }
+
+            // Use execRegistryCmd which handles response routing and error detection
+            const cmd = username
+                ? `ess::set_overlay_user ${username}`
+                : 'ess::set_overlay_user {}';
+            console.log('Setting overlay user via eval:', cmd);
+
+            await this.execRegistryCmd(cmd);
+            console.log('Overlay user set successfully:', username || '(none)');
+
+            // Persist on success
+            if (username) {
+                localStorage.setItem('ess_overlay_user', username);
+            } else {
+                localStorage.removeItem('ess_overlay_user');
             }
 
             // Update local state
@@ -168,16 +206,36 @@
                 this.overlayState.scriptStatus = {};
             }
 
-            // Sync the user selector if it doesn't match
+            // Sync UI to match backend state (snapshot is the source of truth)
             const select = document.getElementById('user-select');
-            if (select && select.value !== this.overlayState.user) {
+            if (select && this.overlayState.user) {
+                // Ensure the user exists as a dropdown option
+                let found = false;
+                for (const opt of select.options) {
+                    if (opt.value === this.overlayState.user) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    const opt = document.createElement('option');
+                    opt.value = this.overlayState.user;
+                    opt.textContent = (this._userMap && this._userMap[this.overlayState.user]) || this.overlayState.user;
+                    select.appendChild(opt);
+                }
                 select.value = this.overlayState.user;
+            } else if (select && !this.overlayState.user) {
+                // Backend has no overlay user — only clear UI if we're not mid-activation
+                if (!this._pendingOverlayUser) {
+                    select.value = '';
+                }
             }
 
             // Update all visual indicators
             this.updateOverlayIndicator();
             this.updateScriptStatusDots();
             this.updateEditorOverlayControls();
+            this.updateDashboardOverlayStatus();
         }
     };
 
@@ -441,23 +499,33 @@
         // Clear and rebuild
         select.innerHTML = '<option value="">No user (read-only)</option>';
 
+        // Store user map for later lookups (username → fullname)
+        this._userMap = {};
+
         if (Array.isArray(users)) {
             users.forEach(u => {
                 const opt = document.createElement('option');
-                const name = typeof u === 'object' ? (u.username || u.name) : u;
-                opt.value = name;
-                opt.textContent = name;
+                let username, displayName;
+
+                if (typeof u === 'object') {
+                    username = u.username || u.name || '';
+                    displayName = u.fullName || u.fullname || u.full_name || u.displayName || username;
+                } else {
+                    username = u;
+                    displayName = u;
+                }
+
+                opt.value = username;
+                opt.textContent = displayName;
                 select.appendChild(opt);
+
+                this._userMap[username] = displayName;
             });
         }
 
-        // Restore selection
+        // Restore selection (display only — activation is handled by activatePendingOverlayUser)
         if (currentVal) {
             select.value = currentVal;
-            // If restored and no overlay is active, activate it
-            if (select.value === currentVal && !this.overlayState.active) {
-                this.setOverlayUser(currentVal);
-            }
         }
 
         this._pendingOverlayUser = null;
@@ -474,8 +542,9 @@
         // After registry is initialized, try to load users for the overlay selector
         if (this.registry?.workgroup) {
             try {
-                const users = await this.registry.getUsers();
-                this.populateOverlayUsers(users.users || users || []);
+                const result = await this.registry.getUsers();
+                const users = Array.isArray(result) ? result : (result.users || result || []);
+                this.populateOverlayUsers(users);
             } catch (err) {
                 console.warn('Could not load users for overlay selector:', err);
                 // Fallback: try to get from dserv datapoint

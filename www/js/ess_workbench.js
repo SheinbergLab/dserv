@@ -404,8 +404,17 @@ class ESSWorkbench {
             
             this.snapshot = snapshot;
             
-            // Parse scripts from the Tcl dict format: "system {...} protocol {...} ..."
-            this.scripts = this.parseScriptsDict(snapshot.scripts);
+	    this.scripts = {
+		system: snapshot.script_system || '',
+		protocol: snapshot.script_protocol || '',
+		loaders: snapshot.script_loaders || '',
+		variants: snapshot.script_variants || '',
+		stim: snapshot.script_stim || '',
+		sys_extract: snapshot.script_sys_extract || '',
+		proto_extract: snapshot.script_proto_extract || '',
+		sys_analyze: snapshot.script_sys_analyze || ''		
+	    };
+	    
             console.log('Parsed scripts:', Object.keys(this.scripts));
             
             // Update displays
@@ -1069,7 +1078,10 @@ class ESSWorkbench {
             protocol: 'protocol.tcl',
             loaders: 'loaders.tcl',
             variants: 'variants.tcl',
-            stim: 'stim.tcl'
+            stim: 'stim.tcl',
+	    sys_extract: 'sys_extract.tcl',
+	    proto_extract: 'proto_extract.tcl',
+	    sys_analyze: 'sys_analyze.tcl'
 	};
 	
 	this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;

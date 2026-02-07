@@ -12,6 +12,28 @@
 
 (function() {
     'use strict';
+
+
+    // ============================================================
+    // Helper: map workbench script type to registry type + protocol
+    // ============================================================
+    // Workbench uses "sys_extract" and "proto_extract" as separate types.
+    // Registry uses "extract" with protocol="" for system-level
+    // and protocol="{name}" for protocol-level.
+    
+    function registryTypeMapping(type, protocol) {
+	if (type === 'sys_extract') {
+            return { registryType: 'extract', registryProtocol: '' };
+	} else if (type === 'proto_extract') {
+            return { registryType: 'extract', registryProtocol: protocol };
+	} else if (type === 'system') {
+            return { registryType: 'system', registryProtocol: '' };
+	} else if (type === 'sys_analyze') {
+	    return { registryType: 'analyze', registryProtocol: '' };
+	} else {
+            return { registryType: type, registryProtocol: protocol };
+	}
+    }
     
     // Wait for ESSWorkbench to be defined
     const originalInit = ESSWorkbench.prototype.init;
@@ -219,7 +241,7 @@
     // Sync Status Management
     // ==========================================
     
-    ESSWorkbench.prototype.checkSyncStatus = async function(scriptType) {
+ ESSWorkbench.prototype.checkSyncStatus = async function(scriptType) {
         if (!this.snapshot || !this.registry) return;
         
         const systemName = this.snapshot.system;
@@ -227,7 +249,7 @@
         
         if (!systemName) return;
         
-        const types = scriptType ? [scriptType] : ['system', 'protocol', 'loaders', 'variants', 'stim'];
+     const types = scriptType ? [scriptType] : ['system', 'protocol', 'loaders', 'variants', 'stim', 'sys_extract', 'proto_extract', 'sys_analyze'];
         
         for (const type of types) {
             try {
@@ -237,10 +259,12 @@
                     continue;
                 }
                 
+                const { registryType, registryProtocol } = registryTypeMapping(type, protocol);
+                
                 const result = await this.registry.compareScript(
                     systemName,
-                    type === 'system' ? '' : protocol,
-                    type,
+                    registryProtocol,
+                    registryType,
                     localContent
                 );
                 
@@ -326,12 +350,13 @@
         
         const systemName = this.snapshot.system;
         const protocol = this.snapshot.protocol;
+        const { registryType, registryProtocol } = registryTypeMapping(scriptType, protocol);
         
         try {
             const script = await this.registry.getScript(
                 systemName,
-                scriptType === 'system' ? '' : protocol,
-                scriptType
+                registryProtocol,
+                registryType
             );
             
             this.scripts[scriptType] = script.content;
@@ -372,7 +397,7 @@
         modal.style.display = 'flex';
     };
     
-    ESSWorkbench.prototype.commitToRegistry = async function(scriptType, comment) {
+   ESSWorkbench.prototype.commitToRegistry = async function(scriptType, comment) {
         if (!this.snapshot || !this.registry || !this.currentUser) {
             alert('Not ready to commit');
             return;
@@ -387,11 +412,13 @@
             return;
         }
         
+        const { registryType, registryProtocol } = registryTypeMapping(scriptType, protocol);
+        
         try {
             const result = await this.registry.saveScript(
                 systemName,
-                scriptType === 'system' ? '' : protocol,
-                scriptType,
+                registryProtocol,
+                registryType,
                 content,
                 this.registryChecksums[scriptType] || '',
                 comment

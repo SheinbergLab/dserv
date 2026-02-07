@@ -831,7 +831,45 @@ namespace eval ess {
         }
     }
 
+    proc sys_extract_script {} {
+	variable current
+	if {$current(system) != ""} {
+	    set fname [resolve_file [file join $current(project) $current(system) ${current(system)}_extract.tcl]]
+	    if {[file exists $fname]} {
+		set script_file [open $fname r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }
+    
+    proc sys_analyze_script {} {
+	variable current
+	if {$current(system) != ""} {
+	    set fname [resolve_file [file join $current(project) $current(system) ${current(system)}_analyze.tcl]]
+	    if {[file exists $fname]} {
+		set script_file [open $fname r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }
 
+    proc proto_extract_script {} {
+	variable current
+	if {$current(system) != "" && $current(protocol) != ""} {
+	    set fname [resolve_file [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_extract.tcl]]
+	    if {[file exists $fname]} {
+		set script_file [open $fname r]
+		set script [read $script_file]
+		close $script_file
+		return $script
+	    }
+	}
+    }
+    
     proc set_loading_progress {stage message {percent 0}} {
         variable loading_progress
         variable loading_operation_id
@@ -2452,6 +2490,9 @@ namespace eval ess {
         dservSet ess/${type}_script $script_content
         ess_info "Successfully saved $type script" "script"
         
+
+	publish_snapshot
+	
         # Clean up old backups
         cleanup_old_backups $type
         
@@ -2559,7 +2600,15 @@ namespace eval ess {
         } elseif {$type == "stim"} {
             if {$current(protocol) eq ""} { return "" }
             return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_stim.tcl]
-        } else {
+        } elseif {$type == "sys_extract"} {
+	    return [file join $current(project) $current(system) ${current(system)}_extract.tcl]
+        } elseif {$type == "sys_analyze"} {
+	    return [file join $current(project) $current(system) ${current(system)}_analyze.tcl]
+	} elseif {$type == "proto_extract"} {
+	    if {$current(protocol) eq ""} { return "" }
+	    return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_extract.tcl]
+	}
+	else {
             error "Unknown script type: $type"
         }
     }
@@ -2734,7 +2783,7 @@ namespace eval ess {
         }
 
         set promoted [list]
-        foreach type {system protocol loaders variants stim} {
+        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract} {
             set relpath [get_script_relpath $type]
             if {$relpath eq ""} continue
             set overlay_file [file join $overlay_path $relpath]
@@ -2807,7 +2856,7 @@ namespace eval ess {
         }
 
         set discarded [list]
-        foreach type {system protocol loaders variants stim} {
+        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract} {
             set relpath [get_script_relpath $type]
             if {$relpath eq ""} continue
             set overlay_file [file join $overlay_path $relpath]
@@ -3490,6 +3539,8 @@ namespace eval ess {
     # Set the active overlay user; empty string disables overlay
     proc set_overlay_user {username} {
         variable overlay_path
+	variable system_path
+	
         if {$username eq ""} {
             set overlay_path ""
         } else {
@@ -3497,6 +3548,9 @@ namespace eval ess {
         }
         dservSet ess/overlay_path $overlay_path
         dservSet ess/overlay_user $username
+
+	publish_snapshot
+	
         ess_info "Overlay user set to '$username', path: $overlay_path" "overlay"
     }
 
@@ -3504,7 +3558,7 @@ namespace eval ess {
     proc get_overlay_status {} {
         variable current
         set result [dict create]
-        foreach type {system protocol loaders variants stim} {
+        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract } {
             set relpath [get_script_relpath $type]
             if {$relpath ne ""} {
                 dict set result $type [resolve_source $relpath]
@@ -4272,13 +4326,16 @@ proc ess::system_snapshot_json {} {
     # Names are derivable: {system}.tcl, {protocol}.tcl, 
     # {protocol}_loaders.tcl, {protocol}_variants.tcl, {protocol}_stim.tcl
     #───────────────────────────────────────────────────────────────────
-    dict set snapshot scripts [dict create \
-        system   [system_script] \
-        protocol [protocol_script] \
-        loaders  [loaders_script] \
-        variants [variants_script] \
-        stim     [stim_script]]
-
+    # Replace the nested scripts dict with flat top-level keys:
+    dict set snapshot script_system       [system_script]
+    dict set snapshot script_protocol     [protocol_script]
+    dict set snapshot script_loaders      [loaders_script]
+    dict set snapshot script_variants     [variants_script]
+    dict set snapshot script_stim         [stim_script]
+    dict set snapshot script_sys_extract  [sys_extract_script]
+    dict set snapshot script_sys_analyze  [sys_analyze_script]
+    dict set snapshot script_proto_extract [proto_extract_script]	
+    
     # Report which layer each script comes from
     dict set snapshot overlay_status [get_overlay_status]
     dict set snapshot overlay_user [expr {$::ess::overlay_path ne "" ? [file tail $::ess::overlay_path] : ""}]

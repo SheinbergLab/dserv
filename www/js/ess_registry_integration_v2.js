@@ -96,7 +96,6 @@
                 if (this.registry) {
                     this.registry.setUser(value);
                 }
-                this.updateUserDisplay(value);
                 break;
                 
             case 'ess/registry/version':
@@ -654,13 +653,6 @@
     ESSWorkbench.prototype.updateWorkgroupDisplay = function(workgroup) {
         const el = document.getElementById('workgroup-name');
         if (el) el.textContent = workgroup || 'Not set';
-    };
-    
-    ESSWorkbench.prototype.updateUserDisplay = function(user) {
-        const select = document.getElementById('user-select');
-        if (select && user) {
-            select.value = user;
-        }
     };
     
     ESSWorkbench.prototype.updateVersionSelector = function(version) {
