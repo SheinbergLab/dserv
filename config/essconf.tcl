@@ -33,6 +33,7 @@ if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
 package require ess
 package require ess_registry
 package require ess_validation
+package require ess_sync
 
 ess::registry::init_from_dserv
 
