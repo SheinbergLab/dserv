@@ -2667,6 +2667,208 @@ namespace eval ess {
     }
 }
 
+
+# ──────────────────────────────────────────────────────────────────
+# Overlay Management: promote and discard
+# ──────────────────────────────────────────────────────────────────
+namespace eval ess {
+
+    # Promote a single overlay script back to the base (main) location.
+    # Copies overlay → base, then removes the overlay file.
+    # Optionally reloads the system afterward.
+    proc promote_overlay {type {reload 0}} {
+        variable current
+        variable overlay_path
+        variable system_path
+
+        if {$overlay_path eq ""} {
+            error "No overlay active"
+        }
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+
+        set relpath [get_script_relpath $type]
+        if {$relpath eq ""} {
+            error "Unknown script type: $type"
+        }
+
+        set overlay_file [file join $overlay_path $relpath]
+        set base_file    [file join $system_path $relpath]
+
+        if {![file exists $overlay_file]} {
+            error "No overlay file for $type"
+        }
+
+        # Backup the current base file before overwriting
+        backup_script $type
+
+        # Copy overlay → base
+        file copy -force $overlay_file $base_file
+        ess_info "Promoted $type: overlay → base" "overlay"
+
+        # Remove the overlay file
+        file delete $overlay_file
+        ess_info "Removed overlay file for $type" "overlay"
+
+        # Clean up empty overlay directories
+        cleanup_empty_overlay_dirs
+
+        # Republish snapshot so workbench sees updated status
+        publish_snapshot
+
+        # Optionally reload
+        if {$reload} {
+            reload_system
+        }
+
+        return "promoted"
+    }
+
+    # Promote ALL overlay scripts back to base at once.
+    proc promote_all_overlays {{reload 1}} {
+        variable overlay_path
+
+        if {$overlay_path eq ""} {
+            error "No overlay active"
+        }
+
+        set promoted [list]
+        foreach type {system protocol loaders variants stim} {
+            set relpath [get_script_relpath $type]
+            if {$relpath eq ""} continue
+            set overlay_file [file join $overlay_path $relpath]
+            if {[file exists $overlay_file]} {
+                promote_overlay $type 0
+                lappend promoted $type
+            }
+        }
+
+        if {[llength $promoted] == 0} {
+            ess_info "No overlay files to promote" "overlay"
+            return "nothing_to_promote"
+        }
+
+        ess_info "Promoted [llength $promoted] script(s): [join $promoted {, }]" "overlay"
+
+        if {$reload} {
+            reload_system
+        }
+
+        return "promoted: [join $promoted {, }]"
+    }
+
+    # Discard a single overlay file, reverting to the base version.
+    proc discard_overlay {type {reload 0}} {
+        variable current
+        variable overlay_path
+
+        if {$overlay_path eq ""} {
+            error "No overlay active"
+        }
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+
+        set relpath [get_script_relpath $type]
+        if {$relpath eq ""} {
+            error "Unknown script type: $type"
+        }
+
+        set overlay_file [file join $overlay_path $relpath]
+
+        if {![file exists $overlay_file]} {
+            ess_info "No overlay file for $type to discard" "overlay"
+            return "no_overlay"
+        }
+
+        file delete $overlay_file
+        ess_info "Discarded overlay for $type (reverted to base)" "overlay"
+
+        # Clean up empty directories
+        cleanup_empty_overlay_dirs
+
+        # Republish
+        publish_snapshot
+
+        if {$reload} {
+            reload_system
+        }
+
+        return "discarded"
+    }
+
+    # Discard ALL overlay files for the current system.
+    proc discard_all_overlays {{reload 1}} {
+        variable overlay_path
+
+        if {$overlay_path eq ""} {
+            error "No overlay active"
+        }
+
+        set discarded [list]
+        foreach type {system protocol loaders variants stim} {
+            set relpath [get_script_relpath $type]
+            if {$relpath eq ""} continue
+            set overlay_file [file join $overlay_path $relpath]
+            if {[file exists $overlay_file]} {
+                file delete $overlay_file
+                lappend discarded $type
+            }
+        }
+
+        if {[llength $discarded] == 0} {
+            ess_info "No overlay files to discard" "overlay"
+            return "nothing_to_discard"
+        }
+
+        cleanup_empty_overlay_dirs
+
+        ess_info "Discarded [llength $discarded] overlay(s): [join $discarded {, }]" "overlay"
+        publish_snapshot
+
+        if {$reload} {
+            reload_system
+        }
+
+        return "discarded: [join $discarded {, }]"
+    }
+
+    # Remove empty directories left behind after overlay operations
+    proc cleanup_empty_overlay_dirs {} {
+        variable overlay_path
+        if {$overlay_path eq ""} return
+
+        # Walk from deepest to shallowest
+        foreach dir [lsort -decreasing [glob -nocomplain -type d [file join $overlay_path *] [file join $overlay_path */*]]] {
+            if {[llength [glob -nocomplain [file join $dir *]]] == 0} {
+                catch {file delete $dir}
+            }
+        }
+    }
+
+    # Get overlay info for the current system: list of {type source} pairs
+    # plus summary counts, useful for UI display
+    proc overlay_summary {} {
+        variable overlay_path
+        set status [get_overlay_status]
+        set overlay_count 0
+        set total 0
+        dict for {type source} $status {
+            incr total
+            if {$source eq "overlay"} {
+                incr overlay_count
+            }
+        }
+        return [dict create \
+            status       $status \
+            overlay_user [expr {$overlay_path ne "" ? [file tail $overlay_path] : ""}] \
+            overlay_active [expr {$overlay_path ne ""}] \
+            overlay_count $overlay_count \
+            total_scripts $total]
+    }
+}
+
 ###############################################################################
 ################################### joystick ##################################
 ###############################################################################

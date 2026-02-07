@@ -1,0 +1,200 @@
+/* ESS Workbench - Overlay Integration Styles */
+
+/* ==========================================
+   Header: Overlay Mode Badge
+   ========================================== */
+
+.overlay-mode-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--wb-radius-sm);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--wb-bg-secondary);
+    color: var(--wb-text-muted);
+}
+
+.overlay-mode-badge.active {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--wb-info);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.overlay-mode-badge.active.modified {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--wb-warning);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* ==========================================
+   Sidebar Script Status Dots
+   ========================================== */
+
+/* Override base dot styles for overlay states */
+.script-status-dot.modified {
+    background: var(--wb-warning);
+    box-shadow: 0 0 4px rgba(245, 158, 11, 0.5);
+}
+
+.script-status-dot.synced {
+    background: var(--wb-success);
+}
+
+/* Subtle pulse on modified dots */
+.script-status-dot.modified {
+    animation: overlay-pulse 2s ease-in-out infinite;
+}
+
+@keyframes overlay-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ==========================================
+   Editor Header: Overlay Controls
+   ========================================== */
+
+.overlay-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--wb-space-xs);
+    margin-right: var(--wb-space-sm);
+}
+
+.overlay-badge-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--wb-radius-sm);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--wb-warning);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.overlay-badge-inline .overlay-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wb-warning);
+}
+
+/* Promote button — success-tinted */
+.btn-overlay-promote {
+    background: transparent;
+    border: 1px solid var(--wb-success);
+    color: var(--wb-success);
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: var(--wb-radius-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--wb-font-sans);
+    transition: all var(--wb-transition-fast);
+}
+
+.btn-overlay-promote:hover {
+    background: rgba(34, 197, 94, 0.15);
+    border-color: var(--wb-success);
+}
+
+.btn-overlay-promote svg {
+    flex-shrink: 0;
+}
+
+/* Discard button — danger-tinted */
+.btn-overlay-discard {
+    background: transparent;
+    border: 1px solid var(--wb-error);
+    color: var(--wb-error);
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: var(--wb-radius-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--wb-font-sans);
+    transition: all var(--wb-transition-fast);
+}
+
+.btn-overlay-discard:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: var(--wb-error);
+}
+
+.btn-overlay-discard svg {
+    flex-shrink: 0;
+}
+
+/* ==========================================
+   Dashboard: Overlay Status in Config Hero
+   ========================================== */
+
+.overlay-user-label {
+    font-weight: 600;
+    color: var(--wb-info);
+    margin-right: var(--wb-space-xs);
+}
+
+.overlay-count-badge {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: var(--wb-radius-sm);
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--wb-warning);
+}
+
+.overlay-clean-badge {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: var(--wb-radius-sm);
+    background: rgba(34, 197, 94, 0.1);
+    color: var(--wb-success);
+}
+
+/* ==========================================
+   User selector: visual state when overlay active
+   ========================================== */
+
+.header-user select.overlay-active {
+    border-color: var(--wb-info);
+    background: rgba(59, 130, 246, 0.08);
+}
+
+/* ==========================================
+   Script item in sidebar: overlay source label
+   ========================================== */
+
+.script-item .script-source-label {
+    font-size: 9px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: auto;
+    margin-right: 4px;
+}
+
+.script-item .script-source-label.overlay {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--wb-warning);
+}
+
+.script-item .script-source-label.base {
+    /* Only show when overlay mode is active, otherwise hidden via JS */
+    background: rgba(34, 197, 94, 0.08);
+    color: var(--wb-text-muted);
+}
