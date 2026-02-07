@@ -278,8 +278,8 @@ oo::class create System {
         rmtSend $rmtcmd
 
         # source this protocol's stim functions
-        set stimfile [file join [set ::ess::system_path] [set ::ess::project] \
-                $_systemname $_protocolname ${_protocolname}_stim.tcl]
+        set stimfile [::ess::resolve_file [file join [set ::ess::project] \
+                $_systemname $_protocolname ${_protocolname}_stim.tcl]]
         if { ![catch {set f [open $stimfile]}] } {
             set script [read $f]
             close $f
@@ -765,12 +765,8 @@ namespace eval ess {
     proc system_script {} {
         variable current
         if {$current(system) != ""} {
-            set f [file join $::ess::system_path $current(project) $current(system)]
-            if {
-                [file isdirectory $f] &&
-                [file exists $f/[file tail $f].tcl]
-            } {
-                set fname [file join $f [file tail $f].tcl]
+            set fname [resolve_file [file join $current(project) $current(system) $current(system).tcl]]
+            if {[file exists $fname]} {
                 set script_file [open $fname r]
                 set script [read $script_file]
                 close $script_file
@@ -782,13 +778,8 @@ namespace eval ess {
     proc protocol_script {} {
         variable current
         if {$current(system) != "" && $current(protocol) != ""} {
-            set f [file join $::ess::system_path $current(project) \
-                $current(system) $current(protocol)]
-            if {
-                [file isdirectory $f] &&
-                [file exists $f/[file tail $f].tcl]
-            } {
-                set fname [file join $f [file tail $f].tcl]
+            set fname [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol).tcl]]
+            if {[file exists $fname]} {
                 set script_file [open $fname r]
                 set script [read $script_file]
                 close $script_file
@@ -803,8 +794,7 @@ namespace eval ess {
             $current(system) != "" &&
             $current(protocol) != "" && $current(variant) != ""
         } {
-            set f [file join $::ess::system_path $current(project) \
-                $current(system) $current(protocol) $current(protocol)_loaders.tcl]
+            set f [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol)_loaders.tcl]]
             if {[file exists $f]} {
                 set script_file [open $f r]
                 set script [read $script_file]
@@ -817,8 +807,7 @@ namespace eval ess {
     proc variants_script {} {
         variable current
         if {$current(system) != "" && $current(protocol) != "" && $current(variant) != ""} {
-            set f [file join $::ess::system_path $current(project) \
-                $current(system) $current(protocol) $current(protocol)_variants.tcl]
+            set f [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol)_variants.tcl]]
             if {[file exists $f]} {
                 set script_file [open $f r]
                 set script [read $script_file]
@@ -832,8 +821,7 @@ namespace eval ess {
     proc stim_script {} {
         variable current
         if {$current(system) != "" && $current(protocol) != "" && $current(variant) != ""} {
-            set f [file join $::ess::system_path $current(project) \
-                $current(system) $current(protocol) $current(protocol)_stim.tcl]
+            set f [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol)_stim.tcl]]
             if {[file exists $f]} {
                 set script_file [open $f r]
                 set script [read $script_file]
@@ -2316,71 +2304,6 @@ proc analyze_ess_patterns {script_content} {
         return $result
     }
 
-    # Enhanced save_script with validation and backup
-  proc save_script {type script_content {validation_level "fast"}} {
-        variable current
-        if {$current(system) == ""} {
-            error "No system loaded"
-        }
-        
-        # Step 1: Validate based on level
-        set validation [validate_script $script_content $type $validation_level]
-        
-        if {![dict get $validation valid]} {
-            set errors [dict get $validation errors]
-            set error_msg "Script validation failed:\n"
-            foreach err $errors {
-                set line [dict get $err line]
-                set message [dict get $err message]
-                append error_msg "Line $line: $message\n"
-            }
-            error $error_msg
-        }
-        
-        # Step 2: Create backup (only if validation passes)
-        set backup_file [backup_script $type]
-        
-        # Step 3: Save the script
-        set f [file join $::ess::system_path $current(project) $current(system)]
-        if {$type == "system"} {
-            set saveto [file join $f $current(system).tcl]
-        } elseif {$type == "protocol"} {
-            set saveto [file join $f $current(protocol) $current(protocol).tcl]
-        } elseif {$type == "loaders"} {
-            set saveto [file join $f $current(protocol) ${current(protocol)}_loaders.tcl]
-        } elseif {$type == "variants"} {
-            set saveto [file join $f $current(protocol) ${current(protocol)}_variants.tcl]
-        } elseif {$type == "stim"} {
-            set saveto [file join $f $current(protocol) ${current(protocol)}_stim.tcl]
-        } else {
-            error "Unknown script type: $type"
-        }
-        
-        if {[catch {
-            set file_handle [open $saveto w]
-            puts $file_handle $script_content
-            close $file_handle
-        } save_error]} {
-            error "Failed to save script: $save_error"
-        }
-        
-        # Step 4: Update datapoints
-        dservSet ess/${type}_script $script_content
-        
-        # Step 5: Clean up old backups
-        cleanup_old_backups $type
-        
-        return "success"
-    }
-    
-    # Convenience methods for different validation levels
-    proc save_script_fast {type script_content} {
-        return [save_script $type $script_content "fast"]
-    }
-    
-    proc save_script_comprehensive {type script_content} {
-        return [save_script $type $script_content "comprehensive"]
-    }
 }
 
 namespace eval ess {
@@ -2480,15 +2403,19 @@ namespace eval ess {
         }
     }
     
-    # Removed duplicate helper functions, kept only essential ones
-    
     proc save_script {type script_content {validation_level "fast"}} {
         variable current
+	variable overlay_path
+	
         if {$current(system) == ""} {
             ess_error "No system loaded" "script"
             return
         }
-        
+
+	if {$overlay_path eq ""} {
+	    error "No user selected. Select a user before editing."
+	}
+	
         ess_info "Saving $type script with $validation_level validation" "script"
         
         # Validate script
@@ -2509,8 +2436,8 @@ namespace eval ess {
         # Create backup
         set backup_file [backup_script $type]
         
-        # Save the script
-        set saveto [get_original_file_path $type]
+        # Save the script (overlay if active, else base)
+        set saveto [get_save_file_path $type]
         
         if {[catch {
             set file_handle [open $saveto w]
@@ -2613,22 +2540,61 @@ namespace eval ess {
     }
     
     # Get original file path for a script type
-    proc get_original_file_path {type} {
+    # Return the relative path for a script type (layer-independent)
+    proc get_script_relpath {type} {
         variable current
-        
+        if {$current(system) eq ""} { return "" }
+
         if {$type == "system"} {
-            return [file join $::ess::system_path $current(project) $current(system) $current(system).tcl]
+            return [file join $current(project) $current(system) $current(system).tcl]
         } elseif {$type == "protocol"} {
-            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) $current(protocol).tcl]
+            if {$current(protocol) eq ""} { return "" }
+            return [file join $current(project) $current(system) $current(protocol) $current(protocol).tcl]
         } elseif {$type == "loaders"} {
-            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) ${current(protocol)}_loaders.tcl]
+            if {$current(protocol) eq ""} { return "" }
+            return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_loaders.tcl]
         } elseif {$type == "variants"} {
-            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) ${current(protocol)}_variants.tcl]
+            if {$current(protocol) eq ""} { return "" }
+            return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_variants.tcl]
         } elseif {$type == "stim"} {
-            return [file join $::ess::system_path $current(project) $current(system) $current(protocol) ${current(protocol)}_stim.tcl]
+            if {$current(protocol) eq ""} { return "" }
+            return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_stim.tcl]
         } else {
             error "Unknown script type: $type"
         }
+    }
+
+    # Get the resolved file path (overlay if exists, else base)
+    proc get_original_file_path {type} {
+        return [resolve_file [get_script_relpath $type]]
+    }
+
+    # Get the base file path (always from system_path, ignoring overlay)
+    proc get_base_file_path {type} {
+        variable system_path
+        return [file join $system_path [get_script_relpath $type]]
+    }
+
+    # Get the overlay file path (may not exist)
+    proc get_overlay_file_path {type} {
+        variable overlay_path
+        if {$overlay_path eq ""} { return "" }
+        return [file join $overlay_path [get_script_relpath $type]]
+    }
+
+    # Get the path where saves should go (overlay if active, else base)
+    proc get_save_file_path {type} {
+        variable overlay_path
+        if {$overlay_path ne ""} {
+            set save_path [file join $overlay_path [get_script_relpath $type]]
+            # Ensure directory exists
+            set dir [file dirname $save_path]
+            if {![file exists $dir]} {
+                file mkdir $dir
+            }
+            return $save_path
+        }
+        return [get_base_file_path $type]
     }
     
     # Enhanced cleanup with centralized directory
@@ -3222,6 +3188,15 @@ namespace eval ess {
         variable system_path /usr/local/dserv/systems
     }
 
+    # Overlay path for per-user development layers
+    # When set, resolve_file checks here first, falling back to system_path
+    # When empty (default), everything resolves from system_path only
+    variable overlay_path {}
+
+    if {[info exists ::env(ESS_OVERLAY_PATH)]} {
+        variable overlay_path $::env(ESS_OVERLAY_PATH)
+    }
+
     if {[info exists ::env(ESS_RMT_HOST)]} {
         variable rmt_host $::env(ESS_RMT_HOST)
     } else {
@@ -3255,7 +3230,86 @@ namespace eval ess {
     foreach v "system_path rmt_host data_dir project" {
         dservSet ess/$v [set $v]
     }
+    dservSet ess/overlay_path $overlay_path
     dservSet ess/block_id 0
+
+    #
+    # Overlay resolution: file-level layering for development
+    #
+    # resolve_file: given a relative path (e.g. ess/match_to_sample/colormatch/colormatch_variants.tcl),
+    #   returns the overlay copy if it exists, otherwise the base copy.
+    #
+    # resolve_glob: given a relative glob pattern (e.g. ess/match_to_sample/*),
+    #   returns a merged list of full paths from both layers, overlay winning on conflicts.
+    #
+    # resolve_source: returns which layer a relative path comes from ("overlay" or "base").
+    #
+
+    proc resolve_file {relpath} {
+        variable overlay_path
+        variable system_path
+        if {$overlay_path ne ""} {
+            set f [file join $overlay_path $relpath]
+            if {[file exists $f]} {
+                return $f
+            }
+        }
+        return [file join $system_path $relpath]
+    }
+
+    proc resolve_glob {relpattern} {
+        variable overlay_path
+        variable system_path
+        # Collect base entries keyed by tail name
+        set entries [dict create]
+        foreach f [glob -nocomplain [file join $system_path $relpattern]] {
+            dict set entries [file tail $f] $f
+        }
+        # Overlay entries win on conflict
+        if {$overlay_path ne ""} {
+            foreach f [glob -nocomplain [file join $overlay_path $relpattern]] {
+                dict set entries [file tail $f] $f
+            }
+        }
+        return [dict values $entries]
+    }
+
+    proc resolve_source {relpath} {
+        variable overlay_path
+        if {$overlay_path ne ""} {
+            set f [file join $overlay_path $relpath]
+            if {[file exists $f]} {
+                return "overlay"
+            }
+        }
+        return "base"
+    }
+
+    # Set the active overlay user; empty string disables overlay
+    proc set_overlay_user {username} {
+        variable overlay_path
+        if {$username eq ""} {
+            set overlay_path ""
+        } else {
+	    set overlay_path [file join $system_path overlays $username]
+        }
+        dservSet ess/overlay_path $overlay_path
+        dservSet ess/overlay_user $username
+        ess_info "Overlay user set to '$username', path: $overlay_path" "overlay"
+    }
+
+    # Report which scripts are overlaid for the current system
+    proc get_overlay_status {} {
+        variable current
+        set result [dict create]
+        foreach type {system protocol loaders variants stim} {
+            set relpath [get_script_relpath $type]
+            if {$relpath ne ""} {
+                dict set result $type [resolve_source $relpath]
+            }
+        }
+        return $result
+    }
 
     proc system_init {system} {
         variable current
@@ -3606,7 +3660,7 @@ namespace eval ess {
     proc find_systems {} {
         variable current
         set systems {}
-        foreach f [glob [file join $::ess::system_path $current(project) *]] {
+        foreach f [resolve_glob [file join $current(project) *]] {
             if {
                 [file isdirectory $f] &&
                 [file exists $f/[file tail $f].tcl]
@@ -3625,7 +3679,7 @@ namespace eval ess {
     proc find_protocols {s} {
         variable current
         set protocols {}
-        foreach f [glob [file join $::ess::system_path $current(project) $s *]] {
+        foreach f [resolve_glob [file join $current(project) $s *]] {
             if {
                 [file isdirectory $f] &&
                 [file exists $f/[file tail $f].tcl]
@@ -3642,9 +3696,9 @@ namespace eval ess {
 
     proc find_variants {s p} {
         variable current
-        set loader_file [file join $::ess::system_path $current(project) $s ${p} ${p}_loaders.tcl]
+        set loader_file [resolve_file [file join $current(project) $s ${p} ${p}_loaders.tcl]]
         source $loader_file
-        set variant_file [file join $::ess::system_path $current(project) $s ${p} ${p}_variants.tcl]
+        set variant_file [resolve_file [file join $current(project) $s ${p} ${p}_variants.tcl]]
         source $variant_file
         return [dict keys [set ::ess::${s}::${p}::variants]]
     }
@@ -3653,7 +3707,7 @@ namespace eval ess {
     proc get_systems {} {
         variable current
         set systems {}
-        foreach f [glob [file join $::ess::system_path $current(project) *]] {
+        foreach f [resolve_glob [file join $current(project) *]] {
             if {
                 [file isdirectory $f] &&
                 [file exists $f/[file tail $f].tcl]
@@ -3667,7 +3721,7 @@ namespace eval ess {
     proc get_protocols {system} {
         variable current
         set protocols {}
-        foreach f [glob [file join $::ess::system_path $current(project) $system *]] {
+        foreach f [resolve_glob [file join $current(project) $system *]] {
             if {
                 [file isdirectory $f] &&
                 [file exists $f/[file tail $f].tcl]
@@ -4022,6 +4076,10 @@ proc ess::system_snapshot_json {} {
         loaders  [loaders_script] \
         variants [variants_script] \
         stim     [stim_script]]
+
+    # Report which layer each script comes from
+    dict set snapshot overlay_status [get_overlay_status]
+    dict set snapshot overlay_user [expr {$::ess::overlay_path ne "" ? [file tail $::ess::overlay_path] : ""}]
 
     if {[info exists _loading_from_config] && $_loading_from_config} {
 	dict set snapshot source "config"
