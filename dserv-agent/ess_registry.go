@@ -692,7 +692,7 @@ func (r *ESSRegistry) AddToWorkgroup(req AddToWorkgroupRequest) (*ESSSystem, err
 	result, err := tx.Exec(`INSERT INTO ess_systems 
 		(workgroup, name, version, description, author, forked_from, forked_at, created_at, updated_at, updated_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.TargetWorkgroup, template.Name, template.Version, template.Description, template.Author,
+		req.TargetWorkgroup, template.Name, "main", template.Description, template.Author,
 		forkedFrom, now.Unix(), now.Unix(), now.Unix(), req.AddedBy)
 	if err != nil {
 		return nil, err
@@ -730,7 +730,7 @@ func (r *ESSRegistry) AddToWorkgroup(req AddToWorkgroupRequest) (*ESSSystem, err
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return r.GetSystem(req.TargetWorkgroup, template.Name, template.Version)
+	return r.GetSystem(req.TargetWorkgroup, template.Name, "main")
 }
 
 func (r *ESSRegistry) SeedFromFilesystem(sourcePath string, systemNames []string) ([]string, error) {
