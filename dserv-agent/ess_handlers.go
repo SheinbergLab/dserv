@@ -47,7 +47,11 @@ func (r *ESSRegistry) RegisterHandlers(mux *http.ServeMux, authMiddleware func(h
 
 	// Sandbox/Version Management
 	mux.HandleFunc("/api/v1/ess/sandbox/", authMiddleware(r.handleSandbox))
-     
+
+	
+	mux.HandleFunc("/api/v1/ess/manifest/", authMiddleware(r.handleManifest))
+	mux.HandleFunc("/api/v1/ess/sync/", authMiddleware(r.handleSync))
+	
 	// Admin
 	mux.HandleFunc("/api/v1/ess/admin/seed-templates", authMiddleware(r.handleSeedTemplates))
 	mux.HandleFunc("/api/v1/ess/admin/backup", authMiddleware(r.handleBackup))
