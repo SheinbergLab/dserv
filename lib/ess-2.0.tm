@@ -5,6 +5,7 @@ package provide ess 2.0
 package require yajltcl
 package require tcljson
 package require dslog
+package require ess_paths
 
 catch {System destroy}
 
@@ -762,113 +763,24 @@ namespace eval ess {
         }
     }
 
-    proc system_script {} {
-        variable current
-        if {$current(system) != ""} {
-            set fname [resolve_file [file join $current(project) $current(system) $current(system).tcl]]
-            if {[file exists $fname]} {
-                set script_file [open $fname r]
-                set script [read $script_file]
-                close $script_file
-                return $script
-            }
-        }
+    # Shared helper: read a script file by type, returns content or ""
+    proc _read_script {type} {
+        set fname [get_original_file_path $type]
+        if {$fname eq "" || ![file exists $fname]} { return "" }
+        set f [open $fname r]
+        set script [read $f]
+        close $f
+        return $script
     }
 
-    proc protocol_script {} {
-        variable current
-        if {$current(system) != "" && $current(protocol) != ""} {
-            set fname [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol).tcl]]
-            if {[file exists $fname]} {
-                set script_file [open $fname r]
-                set script [read $script_file]
-                close $script_file
-                return $script
-            }
-        }
-    }
-
-    proc loaders_script {} {
-        variable current
-        if {
-            $current(system) != "" &&
-            $current(protocol) != "" && $current(variant) != ""
-        } {
-            set f [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol)_loaders.tcl]]
-            if {[file exists $f]} {
-                set script_file [open $f r]
-                set script [read $script_file]
-                close $script_file
-                return $script
-            }
-        }
-    }
-
-    proc variants_script {} {
-        variable current
-        if {$current(system) != "" && $current(protocol) != "" && $current(variant) != ""} {
-            set f [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol)_variants.tcl]]
-            if {[file exists $f]} {
-                set script_file [open $f r]
-                set script [read $script_file]
-                close $script_file
-                return $script
-            }
-        }
-    }
-
-
-    proc stim_script {} {
-        variable current
-        if {$current(system) != "" && $current(protocol) != "" && $current(variant) != ""} {
-            set f [resolve_file [file join $current(project) $current(system) $current(protocol) $current(protocol)_stim.tcl]]
-            if {[file exists $f]} {
-                set script_file [open $f r]
-                set script [read $script_file]
-                close $script_file
-                return $script
-            }
-        }
-    }
-
-    proc sys_extract_script {} {
-	variable current
-	if {$current(system) != ""} {
-	    set fname [resolve_file [file join $current(project) $current(system) ${current(system)}_extract.tcl]]
-	    if {[file exists $fname]} {
-		set script_file [open $fname r]
-		set script [read $script_file]
-		close $script_file
-		return $script
-	    }
-	}
-    }
-    
-    proc sys_analyze_script {} {
-	variable current
-	if {$current(system) != ""} {
-	    set fname [resolve_file [file join $current(project) $current(system) ${current(system)}_analyze.tcl]]
-	    if {[file exists $fname]} {
-		set script_file [open $fname r]
-		set script [read $script_file]
-		close $script_file
-		return $script
-	    }
-	}
-    }
-
-    proc proto_extract_script {} {
-	variable current
-	if {$current(system) != "" && $current(protocol) != ""} {
-	    set fname [resolve_file [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_extract.tcl]]
-	    if {[file exists $fname]} {
-		set script_file [open $fname r]
-		set script [read $script_file]
-		close $script_file
-		return $script
-	    }
-	}
-    }
+    proc system_script {} { return [_read_script system] }
+    proc protocol_script {} { return [_read_script protocol] }
+    proc loaders_script {} { return [_read_script loaders] }
+    proc variants_script {} { return [_read_script variants] }
+    proc stim_script {} { return [_read_script stim] }
+    proc sys_extract_script {} { return [_read_script sys_extract] }
+    proc sys_analyze_script {} { return [_read_script sys_analyze] }
+    proc proto_extract_script {} { return [_read_script proto_extract] }
     
     proc set_loading_progress {stage message {percent 0}} {
         variable loading_progress
@@ -2354,52 +2266,10 @@ namespace eval ess {
     # the appropriate owner and propagate it to newly created dirs/files.
     #
 
-    # Get the owner/group of the nearest existing ancestor directory
-    proc get_path_ownership {path} {
-	set p $path
-	while {$p ne "/" && ![file exists $p]} {
-	    set p [file dirname $p]
-	}
-	list [file attributes $p -owner] [file attributes $p -group]
-    }
-
-    # Create directory tree matching ownership of nearest existing ancestor
-    proc mkdir_matching_owner {dir} {
-	if {[file exists $dir]} return
-
-	lassign [get_path_ownership $dir] owner group
-
-	file mkdir $dir
-
-	# Fix ownership on every newly created component
-	set fixups {}
-	set d $dir
-	while {$d ne "/" && [file attributes $d -owner] ne $owner} {
-	    lappend fixups $d
-	    set d [file dirname $d]
-	}
-	foreach d $fixups {
-	    catch {file attributes $d -owner $owner -group $group}
-	}
-    }
-
-    # Set file/directory ownership to match its parent directory.
-    # Only changes ownership when running as a different user.
-    proc fix_file_ownership {filepath} {
-	if {![file exists $filepath]} return
-	set dir [file dirname $filepath]
-	if {![file exists $dir]} return
-	set owner [file attributes $dir -owner]
-	set group [file attributes $dir -group]
-	if {$owner eq [file attributes $filepath -owner]} return
-	if {[catch {
-	    file attributes $filepath -owner $owner -group $group
-	} error]} {
-	    ess_warning "Could not set ownership on $filepath: $error" "file"
-	} else {
-	    ess_debug "Set ownership on [file tail $filepath] to $owner:$group" "file"
-	}
-    }
+    # Ownership helpers — delegate to ess::paths module
+    proc get_path_ownership {path} { return [ess::paths::get_path_ownership $path] }
+    proc mkdir_matching_owner {dir} { ess::paths::mkdir_matching_owner $dir }
+    proc fix_file_ownership {filepath} { ess::paths::fix_file_ownership $filepath }
 
     variable backup_base_dir
     
@@ -2638,70 +2508,27 @@ namespace eval ess {
         return $sorted_files
     }
     
-    # Get original file path for a script type
-    # Return the relative path for a script type (layer-independent)
+    # Script path helpers — delegate to ess::paths module
+    # get_script_relpath reads current(system/protocol) and calls ess::paths::relpath
     proc get_script_relpath {type} {
         variable current
-        if {$current(system) eq ""} { return "" }
-
-        if {$type == "system"} {
-            return [file join $current(project) $current(system) $current(system).tcl]
-        } elseif {$type == "protocol"} {
-            if {$current(protocol) eq ""} { return "" }
-            return [file join $current(project) $current(system) $current(protocol) $current(protocol).tcl]
-        } elseif {$type == "loaders"} {
-            if {$current(protocol) eq ""} { return "" }
-            return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_loaders.tcl]
-        } elseif {$type == "variants"} {
-            if {$current(protocol) eq ""} { return "" }
-            return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_variants.tcl]
-        } elseif {$type == "stim"} {
-            if {$current(protocol) eq ""} { return "" }
-            return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_stim.tcl]
-        } elseif {$type == "sys_extract"} {
-	    return [file join $current(project) $current(system) ${current(system)}_extract.tcl]
-        } elseif {$type == "sys_analyze"} {
-	    return [file join $current(project) $current(system) ${current(system)}_analyze.tcl]
-	} elseif {$type == "proto_extract"} {
-	    if {$current(protocol) eq ""} { return "" }
-	    return [file join $current(project) $current(system) $current(protocol) ${current(protocol)}_extract.tcl]
-	}
-	else {
-            error "Unknown script type: $type"
-        }
+        return [ess::paths::relpath $current(system) $current(protocol) $type]
     }
 
-    # Get the resolved file path (overlay if exists, else base)
     proc get_original_file_path {type} {
-        return [resolve_file [get_script_relpath $type]]
+        return [ess::paths::resolve [get_script_relpath $type]]
     }
 
-    # Get the base file path (always from system_path, ignoring overlay)
     proc get_base_file_path {type} {
-        variable system_path
-        return [file join $system_path [get_script_relpath $type]]
+        return [ess::paths::base_path [get_script_relpath $type]]
     }
 
-    # Get the overlay file path (may not exist)
     proc get_overlay_file_path {type} {
-        variable overlay_path
-        if {$overlay_path eq ""} { return "" }
-        return [file join $overlay_path [get_script_relpath $type]]
+        return [ess::paths::overlay_path_for [get_script_relpath $type]]
     }
 
-    # Get the path where saves should go (overlay if active, else base)
     proc get_save_file_path {type} {
-        variable overlay_path
-        if {$overlay_path ne ""} {
-            set save_path [file join $overlay_path [get_script_relpath $type]]
-            # Ensure directory exists with correct ownership
-            set dir [file dirname $save_path]
-            if {![file exists $dir]} {
-                mkdir_matching_owner $dir
-            }
-            return $save_path
-        }
-        return [get_base_file_path $type]
+        return [ess::paths::save_path [get_script_relpath $type]]
     }
     
     # Enhanced cleanup with centralized directory
@@ -2944,25 +2771,7 @@ namespace eval ess {
 
     # Remove empty directories left behind after overlay operations
     proc cleanup_empty_overlay_dirs {} {
-	variable overlay_path
-	if {$overlay_path eq ""} return
-	
-	# Recursively collect ALL subdirectories, then walk deepest-first
-	set dirs {}
-	set queue [glob -nocomplain -type d [file join $overlay_path *]]
-	while {[llength $queue] > 0} {
-	    set dir [lindex $queue 0]
-	    set queue [lrange $queue 1 end]
-	    lappend dirs $dir
-	    lappend queue {*}[glob -nocomplain -type d [file join $dir *]]
-	}
-	
-	# Sort decreasing (deepest first) and remove empties
-	foreach dir [lsort -decreasing $dirs] {
-	    if {[llength [glob -nocomplain [file join $dir *]]] == 0} {
-		catch {file delete $dir}
-	    }
-	}
+        ess::paths::cleanup_empty_overlay_dirs
     }
     
     # Get overlay info for the current system: list of {type source} pairs
@@ -3493,6 +3302,7 @@ namespace eval ess {
         variable system_path
         set current(project) $p
         tcl::tm::add [file join $system_path $p lib]
+        ess::paths::configure -project $p
     }
 
     #
@@ -3553,74 +3363,26 @@ namespace eval ess {
     dservSet ess/overlay_path $overlay_path
     dservSet ess/block_id 0
 
-    #
-    # Overlay resolution: file-level layering for development
-    #
-    # resolve_file: given a relative path (e.g. ess/match_to_sample/colormatch/colormatch_variants.tcl),
-    #   returns the overlay copy if it exists, otherwise the base copy.
-    #
-    # resolve_glob: given a relative glob pattern (e.g. ess/match_to_sample/*),
-    #   returns a merged list of full paths from both layers, overlay winning on conflicts.
-    #
-    # resolve_source: returns which layer a relative path comes from ("overlay" or "base").
-    #
+    # Configure the paths module with our resolved values
+    ess::paths::configure \
+        -system_path $system_path \
+        -overlay_path $overlay_path \
+        -project $project
 
-    proc resolve_file {relpath} {
-        variable overlay_path
-        variable system_path
-        if {$overlay_path ne ""} {
-            set f [file join $overlay_path $relpath]
-            if {[file exists $f]} {
-                return $f
-            }
-        }
-        return [file join $system_path $relpath]
-    }
-
-    proc resolve_glob {relpattern} {
-	variable overlay_path
-	variable system_path
-	# Collect base entries keyed by tail name
-	set entries [dict create]
-	foreach f [glob -nocomplain [file join $system_path $relpattern]] {
-	    dict set entries [file tail $f] $f
-	}
-	# Overlay entries win on conflict, but only if they contain
-	# real content (not just empty leftover directories)
-	if {$overlay_path ne ""} {
-	    foreach f [glob -nocomplain [file join $overlay_path $relpattern]] {
-		if {[file isfile $f] || [llength [glob -nocomplain [file join $f *]]] > 0} {
-		    dict set entries [file tail $f] $f
-		}
-	    }
-	}
-	return [dict values $entries]
-    }
-    
-    proc resolve_source {relpath} {
-        variable overlay_path
-        if {$overlay_path ne ""} {
-            set f [file join $overlay_path $relpath]
-            if {[file exists $f]} {
-                return "overlay"
-            }
-        }
-        return "base"
-    }
+    #
+    # Overlay resolution — delegates to ess::paths module
+    #
+    proc resolve_file {relpath} { return [ess::paths::resolve $relpath] }
+    proc resolve_glob {relpattern} { return [ess::paths::resolve_glob $relpattern] }
+    proc resolve_source {relpath} { return [ess::paths::source $relpath] }
 
     # Set the active overlay user; empty string disables overlay
     proc set_overlay_user {username} {
         variable overlay_path
-	variable system_path
-	
-        if {$username eq ""} {
-            set overlay_path ""
-        } else {
-	    set overlay_path [file join $system_path overlays $username]
-	    if {![file exists $overlay_path]} {
-		mkdir_matching_owner $overlay_path
-	    }
-        }
+
+        set overlay_path [ess::paths::set_overlay_user $username]
+        ess::paths::configure -overlay_path $overlay_path
+
         dservSet ess/overlay_path $overlay_path
         dservSet ess/overlay_user $username
 
@@ -3632,14 +3394,7 @@ namespace eval ess {
     # Report which scripts are overlaid for the current system
     proc get_overlay_status {} {
         variable current
-        set result [dict create]
-        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract } {
-            set relpath [get_script_relpath $type]
-            if {$relpath ne ""} {
-                dict set result $type [resolve_source $relpath]
-            }
-        }
-        return $result
+        return [ess::paths::overlay_status $current(system) $current(protocol)]
     }
 
     proc system_init {system} {
@@ -3922,9 +3677,9 @@ namespace eval ess {
 
     proc find_variants {s p} {
         variable current
-        set loader_file [resolve_file [file join $current(project) $s ${p} ${p}_loaders.tcl]]
+        set loader_file [ess::paths::resolve [ess::paths::relpath $s $p loaders]]
         source $loader_file
-        set variant_file [resolve_file [file join $current(project) $s ${p} ${p}_variants.tcl]]
+        set variant_file [ess::paths::resolve [ess::paths::relpath $s $p variants]]
         source $variant_file
         return [dict keys [set ::ess::${s}::${p}::variants]]
     }
