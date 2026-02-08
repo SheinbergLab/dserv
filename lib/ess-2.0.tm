@@ -2346,6 +2346,61 @@ proc analyze_ess_patterns {script_content} {
 
 namespace eval ess {
 
+    #
+    # File ownership helpers
+    #
+    # dserv runs as root, but files should be owned by the user whose
+    # tree we're writing into.  These helpers look up the tree to find
+    # the appropriate owner and propagate it to newly created dirs/files.
+    #
+
+    # Get the owner/group of the nearest existing ancestor directory
+    proc get_path_ownership {path} {
+	set p $path
+	while {$p ne "/" && ![file exists $p]} {
+	    set p [file dirname $p]
+	}
+	list [file attributes $p -owner] [file attributes $p -group]
+    }
+
+    # Create directory tree matching ownership of nearest existing ancestor
+    proc mkdir_matching_owner {dir} {
+	if {[file exists $dir]} return
+
+	lassign [get_path_ownership $dir] owner group
+
+	file mkdir $dir
+
+	# Fix ownership on every newly created component
+	set fixups {}
+	set d $dir
+	while {$d ne "/" && [file attributes $d -owner] ne $owner} {
+	    lappend fixups $d
+	    set d [file dirname $d]
+	}
+	foreach d $fixups {
+	    catch {file attributes $d -owner $owner -group $group}
+	}
+    }
+
+    # Set file/directory ownership to match its parent directory.
+    # Only changes ownership when running as a different user.
+    proc fix_file_ownership {filepath} {
+	if {![file exists $filepath]} return
+	set dir [file dirname $filepath]
+	if {![file exists $dir]} return
+	set owner [file attributes $dir -owner]
+	set group [file attributes $dir -group]
+	if {$owner eq [file attributes $filepath -owner]} return
+	if {[catch {
+	    file attributes $filepath -owner $owner -group $group
+	} error]} {
+	    ess_warning "Could not set ownership on $filepath: $error" "file"
+	} else {
+	    ess_debug "Set ownership on [file tail $filepath] to $owner:$group" "file"
+	}
+    }
+
     variable backup_base_dir
     
     proc init_backup_system {} {
@@ -2355,7 +2410,7 @@ namespace eval ess {
         set backup_base_dir [file join $::ess::system_path "backups"]
         
         if {![file exists $backup_base_dir]} {
-            if {[catch {file mkdir $backup_base_dir} error]} {
+            if {[catch {mkdir_matching_owner $backup_base_dir} error]} {
                 ess_error "Could not create backup directory $backup_base_dir: $error" "backup"
                 return ""
             } else {
@@ -2392,7 +2447,7 @@ namespace eval ess {
         
         # Ensure directory exists
         if {![file exists $backup_dir]} {
-            if {[catch {file mkdir $backup_dir} error]} {
+            if {[catch {mkdir_matching_owner $backup_dir} error]} {
                 ess_warning "Could not create backup directory $backup_dir: $error" "backup"
                 return [get_original_backup_directory $type]
             } else {
@@ -2435,6 +2490,7 @@ namespace eval ess {
             ess_error "Error creating backup: $error" "backup"
             return ""
         } else {
+            fix_file_ownership $backup_file
             ess_info "Created backup: [file tail $backup_file]" "backup"
             create_backup_metadata $backup_file $type $original_file
             return $backup_file
@@ -2481,6 +2537,7 @@ namespace eval ess {
             set file_handle [open $saveto w]
             puts $file_handle $script_content
             close $file_handle
+            fix_file_ownership $saveto
         } save_error]} {
             ess_error "Failed to save script: $save_error" "script"
             error "Failed to save script: $save_error"
@@ -2519,6 +2576,7 @@ namespace eval ess {
             puts $f "file_size: [file size $backup_file]"
             puts $f "file_mtime: [file mtime $original_file]"
             close $f
+            fix_file_ownership $metadata_file
         } error]} {
             puts "Warning: Could not create metadata file: $metadata_file ($error)"
         }
@@ -2636,10 +2694,10 @@ namespace eval ess {
         variable overlay_path
         if {$overlay_path ne ""} {
             set save_path [file join $overlay_path [get_script_relpath $type]]
-            # Ensure directory exists
+            # Ensure directory exists with correct ownership
             set dir [file dirname $save_path]
             if {![file exists $dir]} {
-                file mkdir $dir
+                mkdir_matching_owner $dir
             }
             return $save_path
         }
@@ -2754,6 +2812,7 @@ namespace eval ess {
 
         # Copy overlay → base
         file copy -force $overlay_file $base_file
+        fix_file_ownership $base_file
         ess_info "Promoted $type: overlay → base" "overlay"
 
         # Remove the overlay file
@@ -2885,17 +2944,27 @@ namespace eval ess {
 
     # Remove empty directories left behind after overlay operations
     proc cleanup_empty_overlay_dirs {} {
-        variable overlay_path
-        if {$overlay_path eq ""} return
-
-        # Walk from deepest to shallowest
-        foreach dir [lsort -decreasing [glob -nocomplain -type d [file join $overlay_path *] [file join $overlay_path */*]]] {
-            if {[llength [glob -nocomplain [file join $dir *]]] == 0} {
-                catch {file delete $dir}
-            }
-        }
+	variable overlay_path
+	if {$overlay_path eq ""} return
+	
+	# Recursively collect ALL subdirectories, then walk deepest-first
+	set dirs {}
+	set queue [glob -nocomplain -type d [file join $overlay_path *]]
+	while {[llength $queue] > 0} {
+	    set dir [lindex $queue 0]
+	    set queue [lrange $queue 1 end]
+	    lappend dirs $dir
+	    lappend queue {*}[glob -nocomplain -type d [file join $dir *]]
+	}
+	
+	# Sort decreasing (deepest first) and remove empties
+	foreach dir [lsort -decreasing $dirs] {
+	    if {[llength [glob -nocomplain [file join $dir *]]] == 0} {
+		catch {file delete $dir}
+	    }
+	}
     }
-
+    
     # Get overlay info for the current system: list of {type source} pairs
     # plus summary counts, useful for UI display
     proc overlay_summary {} {
@@ -3461,9 +3530,9 @@ namespace eval ess {
         variable data_dir $::env(ESS_DATA_DIR)
     } else {
         variable data_dir /tmp/essdat
-	if { ![file exists $data_dir] } {
-	    file mkdir $data_dir
-	}
+    }
+    if {![file exists $data_dir]} {
+	mkdir_matching_owner $data_dir
     }
 
     # publish so other processes can access
@@ -3509,22 +3578,25 @@ namespace eval ess {
     }
 
     proc resolve_glob {relpattern} {
-        variable overlay_path
-        variable system_path
-        # Collect base entries keyed by tail name
-        set entries [dict create]
-        foreach f [glob -nocomplain [file join $system_path $relpattern]] {
-            dict set entries [file tail $f] $f
-        }
-        # Overlay entries win on conflict
-        if {$overlay_path ne ""} {
-            foreach f [glob -nocomplain [file join $overlay_path $relpattern]] {
-                dict set entries [file tail $f] $f
-            }
-        }
-        return [dict values $entries]
+	variable overlay_path
+	variable system_path
+	# Collect base entries keyed by tail name
+	set entries [dict create]
+	foreach f [glob -nocomplain [file join $system_path $relpattern]] {
+	    dict set entries [file tail $f] $f
+	}
+	# Overlay entries win on conflict, but only if they contain
+	# real content (not just empty leftover directories)
+	if {$overlay_path ne ""} {
+	    foreach f [glob -nocomplain [file join $overlay_path $relpattern]] {
+		if {[file isfile $f] || [llength [glob -nocomplain [file join $f *]]] > 0} {
+		    dict set entries [file tail $f] $f
+		}
+	    }
+	}
+	return [dict values $entries]
     }
-
+    
     proc resolve_source {relpath} {
         variable overlay_path
         if {$overlay_path ne ""} {
@@ -3545,6 +3617,9 @@ namespace eval ess {
             set overlay_path ""
         } else {
 	    set overlay_path [file join $system_path overlays $username]
+	    if {![file exists $overlay_path]} {
+		mkdir_matching_owner $overlay_path
+	    }
         }
         dservSet ess/overlay_path $overlay_path
         dservSet ess/overlay_user $username
@@ -3723,111 +3798,6 @@ namespace eval ess {
         set loader_args_dict \
             [dict merge $loader_variant_defaults [$s get_variant_args]]
         return $loader_args_dict
-    }
-
-    proc save_settings {} {
-        variable current
-        variable subject_id
-        if {
-            $current(system) == {} ||
-            $current(protocol) == {} ||
-            $current(variant) == {}
-        } {return}
-
-        set vargs [get_variant_args]
-        set param_settings [get_params]
-
-        # locate settings file and create if necessary
-        set path [file join $::ess::system_path $current(project)]
-        set owner [file attributes $path -owner]
-        set group [file attributes $path -group]
-        set uid [exec whoami]
-        set folder [file join $path $current(system) $current(protocol)]
-        set settings_file [file join $folder $current(protocol)_settings.tcl]
-        if {![file exists $settings_file]} {
-            close [open $settings_file w]
-            # change ownership to match owner of systems folder
-            if {$owner != $uid} {
-                file attributes $settings_file -owner $owner -group $group
-            }
-        }
-
-        set new_settings \
-            [dict create variant_args $vargs param_settings $param_settings]
-
-        set f [open $settings_file r]
-        set contents [read $f]
-        close $f
-
-        set settings_dict [dict create {*}$contents]
-        set name ${subject_id}@$current(system)_$current(protocol)_$current(variant)
-        set new_settings_dict [dict merge \
-            $settings_dict \
-            [dict create $name $new_settings]]
-        set f [open $settings_file w]
-        puts $f $new_settings_dict
-        close $f
-    }
-
-    proc load_settings {} {
-        variable current
-        variable subject_id
-        if {
-            $current(system) == {} ||
-            $current(protocol) == {} ||
-            $current(variant) == {}
-        } {return}
-        set path [file join $::ess::system_path $current(project)]
-        set folder [file join $path $current(system) $current(protocol)]
-        set settings_file [file join $folder $current(protocol)_settings.tcl]
-        if {![file exists $settings_file]} {return}
-        set f [open $settings_file r]
-        set contents [read $f]
-        close $f
-        set settings_dict [dict create {*}$contents]
-        set name ${subject_id}@$current(system)_$current(protocol)_$current(variant)
-        if {[dict exists $settings_dict $name]} {
-            set s [dict get $settings_dict $name]
-            set vargs [dict get $s variant_args]
-            set param_settings [dict get $s param_settings]
-            set_variant_args $vargs
-            set_params {*}$param_settings
-        }
-    }
-
-    proc reset_settings {} {
-        variable current
-        variable subject_id
-        if {
-            $current(system) == {} ||
-            $current(protocol) == {} ||
-            $current(variant) == {}
-        } {return}
-        set path [file join $::ess::system_path $current(project)]
-        set folder [file join $path $current(system) $current(protocol)]
-        set settings_file [file join $folder $current(protocol)_settings.tcl]
-        if {![file exists $settings_file]} {return}
-
-        set f [open $settings_file r]
-        set contents [read $f]
-        close $f
-        set settings_dict [dict create {*}$contents]
-
-        set name \
-            ${subject_id}@$current(system)_$current(protocol)_$current(variant)
-
-        if {[dict exists $settings_dict $name]} {
-            set settings_dict [dict unset settings_dict $name]
-        }
-
-        set f [open $settings_file w]
-        puts $f $settings_dict
-        close $f
-
-        # reset param_settings and variant argument
-        set s [::ess::find_system $current(system)]
-        $s set_default_param_vals
-        $s reset_variant_args
     }
 
     proc variant_init {system protocol variant} {
@@ -4667,33 +4637,9 @@ namespace eval ess {
 
 namespace eval ess {
     # Helper to set proper ownership on lib files
+    # Deprecated: use fix_file_ownership directly
     proc set_lib_file_ownership {filepath} {
-        variable system_path
-        variable current
-        
-        if {$current(project) == ""} return
-        
-        set project_path [file join $system_path $current(project)]
-        
-        if {![file exists $project_path]} return
-        
-        # Get ownership from project directory
-        set owner [file attributes $project_path -owner]
-        set group [file attributes $project_path -group]
-        
-        # Use environment variable instead of exec whoami
-        set current_user $::env(USER)
-        
-        # Only change ownership if we're running as different user
-        if {$owner != $current_user && [file exists $filepath]} {
-            if {[catch {
-                file attributes $filepath -owner $owner -group $group
-            } error]} {
-                ess_warning "Could not set ownership on $filepath: $error" "lib"
-            } else {
-                ess_debug "Set ownership on [file tail $filepath] to $owner:$group" "lib"
-            }
-        }
+	fix_file_ownership $filepath
     }
     
     # Get list of all .tm files in the lib directory
@@ -4772,13 +4718,10 @@ namespace eval ess {
         
         # Create lib directory if it doesn't exist
         if {![file isdirectory $lib_dir]} {
-            if {[catch {file mkdir $lib_dir} error]} {
+            if {[catch {mkdir_matching_owner $lib_dir} error]} {
                 error "Failed to create lib directory: $error"
             }
             ess_info "Created lib directory: $lib_dir" "lib"
-            
-            # Set ownership on new directory
-            set_lib_file_ownership $lib_dir
         }
         
         set full_path [file join $lib_dir $filename]
@@ -4867,13 +4810,10 @@ namespace eval ess {
         
         set backup_dir [file join $backup_base_dir $current(project) lib]
         if {![file exists $backup_dir]} {
-            if {[catch {file mkdir $backup_dir} error]} {
+            if {[catch {mkdir_matching_owner $backup_dir} error]} {
                 error "Could not create lib backup directory $backup_dir: $error"
             }
             ess_debug "Created lib backup directory: $backup_dir" "lib"
-            
-            # Set ownership on backup directory
-            set_lib_file_ownership $backup_dir
         }
         
         # Create timestamped backup filename
