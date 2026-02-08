@@ -711,7 +711,7 @@
         document.getElementById('refresh-versions-btn')?.addEventListener('click', () => this.refreshVersionList());
         
         // Add system browser button (if there's a good place for it)
-        this.addSystemBrowserButton();
+//        this.addSystemBrowserButton();
     };
     
     ESSWorkbench.prototype.addSystemBrowserButton = function() {
