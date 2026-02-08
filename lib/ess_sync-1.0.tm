@@ -142,11 +142,12 @@ namespace eval ess {
                 if {[catch {
                     set dir [file dirname $local_file]
                     if {![file exists $dir]} {
-                        file mkdir $dir
+                        mkdir_matching_owner $dir
                     }
                     set f [open $local_file w]
                     puts -nonewline $f $content
                     close $f
+                    fix_file_ownership $local_file
                     incr pulled
                     ess_info "  Pulled: $relpath" "sync"
                 } write_err]} {
@@ -237,12 +238,13 @@ namespace eval ess {
 
                 # Ensure lib directory exists
                 if {![file exists $lib_dir]} {
-                    file mkdir $lib_dir
+                    mkdir_matching_owner $lib_dir
                 }
 
                 set f [open $local_file w]
                 puts -nonewline $f $content
                 close $f
+                fix_file_ownership $local_file
                 incr pulled
                 ess_info "  Pulled lib: $filename" "sync"
             } pull_err]} {
@@ -431,11 +433,12 @@ namespace eval ess {
                 if {[catch {
                     set dir [file dirname $overlay_file]
                     if {![file exists $dir]} {
-                        file mkdir $dir
+                        mkdir_matching_owner $dir
                     }
                     set f [open $overlay_file w]
                     puts -nonewline $f $content
                     close $f
+                    fix_file_ownership $overlay_file
                     incr pulled
                     ess_info "  Pulled overlay: $relpath" "sync"
                 } write_err]} {
