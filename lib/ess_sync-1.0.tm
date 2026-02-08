@@ -345,16 +345,13 @@ namespace eval ess {
         set content [read $f]
         close $f
 
-        # Determine protocol for URL path
-        set protocol $current(protocol)
-        if {$type eq "system"} {
-            set protocol "_"
-        }
+        # Map to registry API type and protocol
+        lassign [_registry_type_mapping $type $current(protocol)] api_type api_protocol
 
         set overlay_user [file tail $overlay_path]
         set system $current(system)
 
-        set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${protocol}/${type}"
+        set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
 
         set body [dict_to_json [dict create \
             content $content \
@@ -451,6 +448,211 @@ namespace eval ess {
         return [dict create pulled $pulled]
     }
 
+    # ── Commit a single base script to registry ────────────────────
+    #
+    # Pushes a promoted (base) script to the registry as the main version.
+    # This is the "publish" step after promote_overlay → base.
+    #
+    # type: system, protocol, loaders, variants, stim, etc.
+    # comment: optional commit message
+    #
+    proc commit_script {type {comment ""}} {
+        variable system_path
+        variable overlay_path
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+
+        # Read from base, not overlay
+        set relpath [get_script_relpath $type]
+        if {$relpath eq ""} {
+            error "Unknown or unavailable script type: $type"
+        }
+        set base_file [file join $system_path $relpath]
+
+        if {![file exists $base_file]} {
+            error "No base file for $type: $base_file"
+        }
+
+        set f [open $base_file r]
+        set content [read $f]
+        close $f
+
+        # Map to registry API type and protocol
+        lassign [_registry_type_mapping $type $current(protocol)] api_type api_protocol
+
+        # Identify who is committing
+        set user ""
+        if {$overlay_path ne ""} {
+            set user [file tail $overlay_path]
+        } elseif {[info exists ::env(USER)]} {
+            set user $::env(USER)
+        }
+
+        # Check user's role before attempting commit
+        if {$user ne ""} {
+            set role [_get_user_role $user]
+            if {$role eq "viewer"} {
+                error "User '$user' has role 'viewer' and cannot commit to registry"
+            }
+        }
+
+        if {$comment eq ""} {
+            set comment "committed from dserv"
+        }
+
+        set system $current(system)
+        set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
+
+        # Include local checksum so server can detect conflicts
+        set checksum [sha256 -file $base_file]
+
+        set body [dict_to_json [dict create \
+            content $content \
+            updatedBy $user \
+            comment $comment \
+            expectedChecksum $checksum]]
+
+        if {[catch {
+            set response [https_put $url $body]
+        } err]} {
+            ess_error "Failed to commit $type to registry: $err" "sync"
+            error "Commit failed: $err"
+        }
+
+        ess_info "Committed $type to registry ($registry_workgroup/$system)" "sync"
+        return "success"
+    }
+
+    # ── Commit all scripts for current system to registry ─────────
+    #
+    # Pushes all base scripts that exist for the current system+protocol.
+    #
+    proc commit_system {{comment ""}} {
+        variable current
+
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+
+        set committed {}
+        set errors {}
+
+        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract} {
+            set relpath [get_script_relpath $type]
+            if {$relpath eq ""} continue
+
+            set base_file [file join $::ess::system_path $relpath]
+            if {![file exists $base_file]} continue
+
+            if {[catch {
+                commit_script $type $comment
+                lappend committed $type
+            } err]} {
+                lappend errors "$type: $err"
+                ess_warning "Failed to commit $type: $err" "sync"
+            }
+        }
+
+        if {[llength $errors] > 0} {
+            ess_warning "Committed [llength $committed], [llength $errors] error(s)" "sync"
+        } else {
+            ess_info "Committed [llength $committed] script(s) to registry" "sync"
+        }
+
+        return [dict create committed $committed errors $errors]
+    }
+
+    # ── Check sync status for current system ──────────────────────
+    #
+    # Compares local base checksums against registry.
+    # Returns dict of type → {status checksum registry_checksum}
+    #   status: synced, modified, local_only, registry_only
+    #
+    proc sync_status {} {
+        variable system_path
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+
+        set system $current(system)
+        set project $current(project)
+        set result [dict create]
+
+        foreach type {system protocol loaders variants stim sys_extract sys_analyze proto_extract} {
+            set relpath [get_script_relpath $type]
+            if {$relpath eq ""} continue
+
+            set base_file [file join $system_path $relpath]
+            if {![file exists $base_file]} continue
+
+            set local_checksum [sha256 -file $base_file]
+
+            # Map to registry API type and protocol
+            lassign [_registry_type_mapping $type $current(protocol)] api_type api_protocol
+
+            set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
+
+            if {[catch {
+                set response [https_get $url]
+                set remote_checksum [json_get $response checksum]
+
+                if {$local_checksum eq $remote_checksum} {
+                    dict set result $type synced
+                } else {
+                    dict set result $type modified
+                }
+            } err]} {
+                # 404 means not on registry yet
+                dict set result $type local_only
+            }
+        }
+
+        return $result
+    }
+
+    # ── Helper: map internal type to registry API type + protocol ────
+    #
+    # Internal names: sys_extract, sys_analyze, proto_extract
+    # Registry API expects: extract, analyze, extract (with protocol)
+    #
+    proc _registry_type_mapping {type current_protocol} {
+        switch $type {
+            sys_extract {
+                return [list extract "_"]
+            }
+            sys_analyze {
+                return [list analyze "_"]
+            }
+            proto_extract {
+                return [list extract $current_protocol]
+            }
+            system {
+                return [list system "_"]
+            }
+            default {
+                return [list $type $current_protocol]
+            }
+        }
+    }
+
     # ── Helper: map script type to filename ───────────────────────────
     proc _script_filename {system protocol type} {
         if {$protocol eq ""} {
@@ -464,6 +666,32 @@ namespace eval ess {
                 protocol { return "${protocol}.tcl" }
                 default  { return "${protocol}_${type}.tcl" }
             }
+        }
+    }
+
+    # ── Helper: look up a user's role from the registry ───────────
+    #
+    # Returns role string (admin, editor, viewer) or "" if unknown.
+    # Failures are non-fatal — returns "" so commit proceeds
+    # (server will enforce if needed).
+    #
+    proc _get_user_role {username} {
+        variable registry_url
+        variable registry_workgroup
+
+        if {$registry_url eq "" || $registry_workgroup eq ""} {
+            return ""
+        }
+
+        set url "${registry_url}/api/v1/ess/user/${registry_workgroup}/${username}"
+
+        if {[catch {
+            set response [https_get $url]
+            set role [json_get $response role]
+            return $role
+        } err]} {
+            ess_debug "Could not fetch role for $username: $err" "sync"
+            return ""
         }
     }
 }
