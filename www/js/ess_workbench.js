@@ -417,6 +417,9 @@ class ESSWorkbench {
 	    
             console.log('Parsed scripts:', Object.keys(this.scripts));
             
+            // Hide sidebar entries for scripts that don't exist
+            this.updateScriptSidebarVisibility();
+            
             // Update displays
             console.log('Updating displays...');
             this.updateConfigDisplay();
@@ -1072,22 +1075,83 @@ class ESSWorkbench {
 	const saveBtn = document.getElementById('script-save-btn');
 	if (saveBtn) saveBtn.disabled = true;
 	
-	// Update filename display
+	// Update filename display with real filename
+	const sys = this.snapshot?.system || '';
+	const proto = this.snapshot?.protocol || '';
 	const filenames = {
-            system: 'system.tcl',
-            protocol: 'protocol.tcl',
-            loaders: 'loaders.tcl',
-            variants: 'variants.tcl',
-            stim: 'stim.tcl',
-	    sys_extract: 'sys_extract.tcl',
-	    proto_extract: 'proto_extract.tcl',
-	    sys_analyze: 'sys_analyze.tcl'
+            system: sys ? `${sys}.tcl` : 'system.tcl',
+            protocol: proto ? `${sys}/${proto}.tcl` : 'protocol.tcl',
+            loaders: proto ? `${sys}/${proto}_loaders.tcl` : 'loaders.tcl',
+            variants: proto ? `${sys}/${proto}_variants.tcl` : 'variants.tcl',
+            stim: proto ? `${sys}/${proto}_stim.tcl` : 'stim.tcl',
+	    sys_extract: sys ? `${sys}_extract.tcl` : 'sys_extract.tcl',
+	    proto_extract: proto ? `${sys}/${proto}_extract.tcl` : 'proto_extract.tcl',
+	    sys_analyze: sys ? `${sys}_analyze.tcl` : 'sys_analyze.tcl'
 	};
 	
 	this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;
 	this.elements.editorStatus.textContent = '';
     }
     
+    // Hide sidebar entries for optional scripts that don't exist on disk
+    // Also update labels to show clean type names
+    updateScriptSidebarVisibility() {
+        // Optional script types — hide when empty, show when present
+        const optionalTypes = ['sys_extract', 'proto_extract', 'sys_analyze'];
+        
+        // Clean display labels (no .tcl)
+        const labels = {
+            system: 'system',
+            protocol: 'protocol',
+            loaders: 'loaders',
+            variants: 'variants',
+            stim: 'stim',
+            sys_extract: 'sys_extract',
+            proto_extract: 'proto_extract',
+            sys_analyze: 'sys_analyze'
+        };
+        
+        // Real filenames for tooltips
+        const sys = this.snapshot?.system || '';
+        const proto = this.snapshot?.protocol || '';
+        const filenames = {
+            system: sys ? `${sys}.tcl` : '',
+            protocol: proto ? `${proto}.tcl` : '',
+            loaders: proto ? `${proto}_loaders.tcl` : '',
+            variants: proto ? `${proto}_variants.tcl` : '',
+            stim: proto ? `${proto}_stim.tcl` : '',
+            sys_extract: sys ? `${sys}_extract.tcl` : '',
+            proto_extract: proto ? `${proto}_extract.tcl` : '',
+            sys_analyze: sys ? `${sys}_analyze.tcl` : ''
+        };
+        
+        this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
+            const scriptType = item.dataset.script;
+            
+            // Update label text
+            const label = item.querySelector('span:not(.script-status-dot)');
+            if (label && labels[scriptType]) {
+                label.textContent = labels[scriptType];
+            }
+            
+            // Set tooltip to real filename
+            if (filenames[scriptType]) {
+                item.title = filenames[scriptType];
+            }
+            
+            // Hide optional types when empty
+            if (optionalTypes.includes(scriptType)) {
+                const hasContent = this.scripts[scriptType] && this.scripts[scriptType].trim() !== '';
+                item.style.display = hasContent ? '' : 'none';
+                
+                // If we're currently viewing a hidden script, switch to system
+                if (!hasContent && this.currentScript === scriptType) {
+                    this.selectScript('system');
+                }
+            }
+        });
+    }
+
     updateScriptEditor() {
         if (this.editor && this.currentTab === 'scripts') {
             this.loadScript(this.currentScript);

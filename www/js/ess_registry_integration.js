@@ -14,27 +14,6 @@
     'use strict';
 
 
-    // ============================================================
-    // Helper: map workbench script type to registry type + protocol
-    // ============================================================
-    // Workbench uses "sys_extract" and "proto_extract" as separate types.
-    // Registry uses "extract" with protocol="" for system-level
-    // and protocol="{name}" for protocol-level.
-    
-    function registryTypeMapping(type, protocol) {
-	if (type === 'sys_extract') {
-            return { registryType: 'extract', registryProtocol: '' };
-	} else if (type === 'proto_extract') {
-            return { registryType: 'extract', registryProtocol: protocol };
-	} else if (type === 'system') {
-            return { registryType: 'system', registryProtocol: '' };
-	} else if (type === 'sys_analyze') {
-	    return { registryType: 'analyze', registryProtocol: '' };
-	} else {
-            return { registryType: type, registryProtocol: protocol };
-	}
-    }
-    
     // Wait for ESSWorkbench to be defined
     const originalInit = ESSWorkbench.prototype.init;
     
@@ -242,50 +221,10 @@
     // ==========================================
     
  ESSWorkbench.prototype.checkSyncStatus = async function(scriptType) {
-        if (!this.snapshot || !this.registry) return;
-        
-        const systemName = this.snapshot.system;
-        const protocol = this.snapshot.protocol;
-        
-        if (!systemName) return;
-        
-     const types = scriptType ? [scriptType] : ['system', 'protocol', 'loaders', 'variants', 'stim', 'sys_extract', 'proto_extract', 'sys_analyze'];
-        
-        for (const type of types) {
-            try {
-                const localContent = this.scripts[type] || '';
-                if (!localContent) {
-                    this.scriptSyncStatus[type] = 'synced';
-                    continue;
-                }
-                
-                const { registryType, registryProtocol } = registryTypeMapping(type, protocol);
-                
-                const result = await this.registry.compareScript(
-                    systemName,
-                    registryProtocol,
-                    registryType,
-                    localContent
-                );
-                
-                if (result.notInRegistry) {
-                    this.scriptSyncStatus[type] = 'modified';
-                } else if (result.inSync) {
-                    this.scriptSyncStatus[type] = 'synced';
-                } else {
-                    this.scriptSyncStatus[type] = 'modified';
-                }
-                
-                this.localChecksums[type] = result.localChecksum;
-                this.registryChecksums[type] = result.registryChecksum;
-                
-            } catch (err) {
-                console.warn(`Sync check failed for ${type}:`, err);
-                this.scriptSyncStatus[type] = 'unknown';
-            }
+        // Delegate to v2 Tcl-based sync status (single round trip)
+        if (this.registrySyncStatus) {
+            await this.registrySyncStatus();
         }
-        
-        this.updateSyncStatusUI();
     };
     
     ESSWorkbench.prototype.updateSyncStatusUI = function() {
@@ -343,38 +282,24 @@
     // ==========================================
     
     ESSWorkbench.prototype.pullFromRegistry = async function(scriptType) {
-        if (!this.snapshot || !this.registry) {
-            alert('Not connected');
+        if (!confirm('Pull latest from registry? This will overwrite local base files and reload.')) {
             return;
         }
         
-        const systemName = this.snapshot.system;
-        const protocol = this.snapshot.protocol;
-        const { registryType, registryProtocol } = registryTypeMapping(scriptType, protocol);
-        
         try {
-            const script = await this.registry.getScript(
-                systemName,
-                registryProtocol,
-                registryType
-            );
+            // Use v2 Tcl-based sync (pulls all scripts for current system)
+            await this.registrySync();
             
-            this.scripts[scriptType] = script.content;
-            
-            // Update editor
-            if (scriptType === 'variants' && this.variantScriptEditor) {
-                this.variantScriptEditor.setValue(script.content);
-            } else if (this.editor && this.currentScript === scriptType) {
-                this.editor.setValue(script.content);
+            // Re-publish snapshot to pick up new file contents
+            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
+                this.connection.ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: 'ess::publish_snapshot'
+                }));
             }
-            
-            this.scriptSyncStatus[scriptType] = 'synced';
-            this.localChecksums[scriptType] = script.checksum;
-            this.registryChecksums[scriptType] = script.checksum;
-            this.updateSyncStatusUI();
-            
-        } catch (err) {
-            alert(`Pull failed: ${err.message}`);
+        } catch(err) {
+            // registrySync already shows notification
+            console.error('Pull failed:', err);
         }
     };
     
@@ -398,47 +323,22 @@
     };
     
    ESSWorkbench.prototype.commitToRegistry = async function(scriptType, comment) {
-        if (!this.snapshot || !this.registry || !this.currentUser) {
-            alert('Not ready to commit');
+        if (!scriptType) {
+            alert('No script type specified');
             return;
         }
-        
-        const systemName = this.snapshot.system;
-        const protocol = this.snapshot.protocol;
-        const content = this.scripts[scriptType] || '';
-        
-        if (!content) {
-            alert('No content to commit');
-            return;
-        }
-        
-        const { registryType, registryProtocol } = registryTypeMapping(scriptType, protocol);
         
         try {
-            const result = await this.registry.saveScript(
-                systemName,
-                registryProtocol,
-                registryType,
-                content,
-                this.registryChecksums[scriptType] || '',
-                comment
-            );
+            // Use v2 Tcl-based commit (base → registry)
+            await this.registryCommit(scriptType, { comment: comment || '' });
             
-            this.scriptSyncStatus[scriptType] = 'synced';
-            this.localChecksums[scriptType] = result.checksum;
-            this.registryChecksums[scriptType] = result.checksum;
-            this.updateSyncStatusUI();
+            // Close commit modal
+            const modal = document.getElementById('commit-modal');
+            if (modal) modal.style.display = 'none';
             
-            document.getElementById('commit-modal').style.display = 'none';
-            
-        } catch (err) {
-            if (err.status === 409) {
-                alert('Conflict! Someone else modified this script. Pull first.');
-                this.scriptSyncStatus[scriptType] = 'conflict';
-                this.updateSyncStatusUI();
-            } else {
-                alert(`Commit failed: ${err.message}`);
-            }
+        } catch(err) {
+            // registryCommit already shows notification
+            console.error('Commit failed:', err);
         }
     };
     
@@ -750,43 +650,9 @@
         };
     }
     
-    // Enhanced pull that also triggers Save & Reload to apply to running system
+    // Pull and apply — pullFromRegistry now handles sync + reload via Tcl backend
     ESSWorkbench.prototype.pullAndApply = async function(scriptType) {
         await this.pullFromRegistry(scriptType);
-        
-        // After pulling, save to local filesystem and reload
-        if (scriptType === 'variants' && this.variantScriptEditor) {
-            const content = this.variantScriptEditor.getValue();
-            
-            // Directly send save command to dserv (bypass modified check)
-            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                const saveCmd = `ess::save_script variants {${content}}`;
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: saveCmd
-                }));
-                
-                console.log('Pull: saved to local filesystem');
-                
-                // Small delay then reload
-                await new Promise(resolve => setTimeout(resolve, 200));
-                
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: 'ess::reload_system'
-                }));
-                
-                console.log('Pull: system reloaded');
-                
-                // Update tracking state
-                this.variantsOriginalContent = content;
-                this.variantsModified = false;
-            }
-            
-            // Now it's synced (pulled from registry, saved locally, reloaded)
-            this.scriptSyncStatus['variants'] = 'synced';
-            this.updateSyncStatusUI();
-        }
     };
     
     // ==========================================
@@ -857,56 +723,11 @@
     };
     
     /**
-     * Pull script from registry and apply to local system
+     * Pull script from registry — delegates to pullFromRegistry which
+     * handles confirmation, sync, and snapshot refresh via Tcl backend
      */
     ESSWorkbench.prototype.pullScriptFromRegistry = async function() {
-        const scriptType = this.currentScript;
-        
-        const confirmed = confirm(
-            `Pull latest ${scriptType}.tcl from registry?\n\n` +
-            'This will replace your local version and reload the system.'
-        );
-        
-        if (!confirmed) return;
-        
-        try {
-            // Get from registry
-            await this.pullFromRegistry(scriptType);
-            
-            // Get the content that was just pulled
-            const content = this.editor?.getValue();
-            if (!content) {
-                throw new Error('No content after pull');
-            }
-            
-            // Save to local filesystem
-            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                const saveCmd = `ess::save_script ${scriptType} {${content}}`;
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: saveCmd
-                }));
-                
-                console.log(`Pull: saved ${scriptType} to local filesystem`);
-                
-                // Reload system
-                await new Promise(resolve => setTimeout(resolve, 200));
-                
-                this.connection.ws.send(JSON.stringify({
-                    cmd: 'eval',
-                    script: 'ess::reload_system'
-                }));
-                
-                console.log('Pull: system reloaded');
-            }
-            
-            // Mark as synced
-            this.scriptSyncStatus[scriptType] = 'synced';
-            this.updateSyncStatusUI();
-            
-        } catch (err) {
-            alert(`Pull failed: ${err.message}`);
-        }
+        await this.pullFromRegistry(this.currentScript);
     };
     
     // Override pull button to use pullAndApply

@@ -2,10 +2,11 @@
  * ESS Registry Integration v2
  * 
  * Enhanced integration with:
+ * - Direct Tcl command execution for all registry operations
+ * - Commit via ess::commit_script (base → registry)
+ * - Sync status via ess::sync_status
  * - System browser for exploring available systems
- * - Direct Tcl command execution for registry operations
- * - Improved sync status with backend validation
- * - Support for opening systems from workbench
+ * - Single path: all registry ops go through dserv/ess Tcl backend
  */
 
 (function() {
@@ -17,12 +18,11 @@
     ESSWorkbench.prototype.init = function() {
         originalInit.call(this);
         
-        // Enhanced registry state
+        // Registry state
         this.registryState = {
             connected: false,
             workgroup: null,
             user: null,
-            version: 'main',
             systems: [],
             currentSystemLocked: false
         };
@@ -35,21 +35,20 @@
     // ==========================================
     
     ESSWorkbench.prototype.initRegistryV2 = function() {
-	// Bind UI events that don't need connection
-	this.bindRegistryV2Events();
-	
-	// Defer datapoint subscriptions until connected
-	// (setupRegistryDatapoints requires an active WebSocket)
-	if (this.connection) {
+        // Bind UI events that don't need connection
+        this.bindRegistryV2Events();
+        
+        // Defer datapoint subscriptions until connected
+        if (this.connection) {
             this.connection.on('connected', () => {
-		this.setupRegistryDatapoints();
+                this.setupRegistryDatapoints();
             });
             
             // If already connected (e.g., reconnect scenario), set up now
             if (this.connection.ws?.readyState === WebSocket.OPEN) {
-		this.setupRegistryDatapoints();
+                this.setupRegistryDatapoints();
             }
-	}
+        }
     };
     
     ESSWorkbench.prototype.setupRegistryDatapoints = function() {
@@ -60,7 +59,6 @@
             'ess/registry/url',
             'ess/registry/workgroup', 
             'ess/registry/user',
-            'ess/registry/version',
             'ess/registry/last_pull',
             'ess/registry/last_push',
             'ess/registry/sync_status'
@@ -98,11 +96,6 @@
                 }
                 break;
                 
-            case 'ess/registry/version':
-                this.registryState.version = value;
-                this.updateVersionSelector(value);
-                break;
-                
             case 'ess/registry/sync_status':
                 if (value) {
                     try {
@@ -122,7 +115,7 @@
     
     ESSWorkbench.prototype.execRegistryCmd = async function(cmd) {
         return new Promise((resolve, reject) => {
-	    if (this.connection?.ws?.readyState !== WebSocket.OPEN) {	    
+            if (this.connection?.ws?.readyState !== WebSocket.OPEN) {
                 reject(new Error('WebSocket not connected'));
                 return;
             }
@@ -170,48 +163,24 @@
     };
     
     // ==========================================
-    // Registry Operations via Tcl Backend
+    // Commit: base → registry (via ess::commit_script)
     // ==========================================
     
-    ESSWorkbench.prototype.registryPull = async function(type, options = {}) {
-        const version = options.version || this.registryState.version;
-        const apply = options.apply !== false;
-        
-        const cmd = `ess::registry::pull ${type} -version ${version} -apply ${apply ? 1 : 0}`;
-        
-        try {
-            const result = await this.execRegistryCmd(cmd);
-            this.showNotification(`Pulled ${type} from registry`, 'success');
-            
-            // Refresh editor if this is the current script
-            if (type === 'variants' && this.variantScriptEditor) {
-                const content = await this.execRegistryCmd(`ess::variants_script`);
-                this.variantScriptEditor.setValue(content);
-            } else if (this.currentScript === type && this.editor) {
-                const content = await this.execRegistryCmd(`ess::${type}_script`);
-                this.editor.setValue(content);
-            }
-            
-            // Update sync status
-            this.checkSyncStatus(type);
-            
-            return result;
-        } catch(err) {
-            this.showNotification(`Pull failed: ${err.message}`, 'error');
-            throw err;
-        }
-    };
-    
-    ESSWorkbench.prototype.registryPush = async function(type, options = {}) {
-        const version = options.version || this.registryState.version;
-        const user = options.user || this.registryState.user || 'unknown';
+    /**
+     * Commit a single script type from local base to registry.
+     * This is the ONLY path to push changes to the registry.
+     * Requires: overlay promoted first (script is in base).
+     */
+    ESSWorkbench.prototype.registryCommit = async function(type, options = {}) {
         const comment = options.comment || '';
         
-        const cmd = `ess::registry::push ${type} -version {${version}} -user {${user}} -comment {${comment}}`;
+        // Escape braces in comment for Tcl
+        const safeComment = comment.replace(/[{}]/g, '');
+        const cmd = `ess::commit_script ${type} {${safeComment}}`;
         
         try {
             const result = await this.execRegistryCmd(cmd);
-            this.showNotification(`Pushed ${type} to registry`, 'success');
+            this.showNotification(`Committed ${type} to registry`, 'success');
             
             // Update sync status
             this.scriptSyncStatus[type] = 'synced';
@@ -220,25 +189,109 @@
             return result;
         } catch(err) {
             if (err.message.includes('conflict')) {
-                this.showNotification('Conflict: someone else modified this script. Pull first.', 'error');
+                this.showNotification('Conflict: registry has a newer version. Sync first.', 'error');
                 this.scriptSyncStatus[type] = 'conflict';
                 this.updateSyncStatusUI();
+            } else if (err.message.includes('viewer')) {
+                this.showNotification('Permission denied: viewers cannot commit to registry.', 'error');
             } else {
-                this.showNotification(`Push failed: ${err.message}`, 'error');
+                this.showNotification(`Commit failed: ${err.message}`, 'error');
             }
             throw err;
         }
     };
     
-    ESSWorkbench.prototype.registryStatus = async function(type) {
-        const version = this.registryState.version;
-        const cmd = `ess::registry::status ${type} ${version}`;
+    /**
+     * Commit all scripts for current system to registry.
+     */
+    ESSWorkbench.prototype.registryCommitAll = async function(options = {}) {
+        const comment = options.comment || '';
+        const safeComment = comment.replace(/[{}]/g, '');
+        const cmd = `ess::commit_system {${safeComment}}`;
         
         try {
-            return await this.execRegistryCmd(cmd);
+            const result = await this.execRegistryCmd(cmd);
+            const committed = result.committed || [];
+            const errors = result.errors || [];
+            
+            if (errors.length > 0) {
+                this.showNotification(
+                    `Committed ${committed.length}, ${errors.length} error(s)`, 'warning'
+                );
+            } else {
+                this.showNotification(
+                    `Committed ${committed.length} script(s) to registry`, 'success'
+                );
+            }
+            
+            // Refresh sync status
+            await this.registrySyncStatus();
+            
+            return result;
         } catch(err) {
-            console.warn(`Status check failed for ${type}:`, err);
-            return { status: 'unknown', error: err.message };
+            this.showNotification(`Commit failed: ${err.message}`, 'error');
+            throw err;
+        }
+    };
+    
+    // ==========================================
+    // Sync Status (via ess::sync_status)
+    // ==========================================
+    
+    /**
+     * Check sync status of all scripts against registry.
+     * Updates scriptSyncStatus dict and UI indicators.
+     */
+    ESSWorkbench.prototype.registrySyncStatus = async function() {
+        try {
+            const result = await this.execRegistryCmd('ess::sync_status');
+            
+            // result is a Tcl dict like: system synced protocol modified ...
+            // Parse it into our JS status map
+            if (typeof result === 'string') {
+                // Tcl dict comes as space-separated key value pairs
+                const parts = result.split(/\s+/);
+                for (let i = 0; i < parts.length - 1; i += 2) {
+                    this.scriptSyncStatus[parts[i]] = parts[i + 1];
+                }
+            } else if (typeof result === 'object') {
+                Object.assign(this.scriptSyncStatus, result);
+            }
+            
+            this.updateSyncStatusUI();
+            
+        } catch(err) {
+            console.warn('Sync status check failed:', err);
+        }
+    };
+    
+    // ==========================================
+    // Sync: registry → local base (via ess::sync_system)
+    // ==========================================
+    
+    /**
+     * Pull latest from registry for the current system.
+     * Writes updated files to local base (system_path).
+     */
+    ESSWorkbench.prototype.registrySync = async function() {
+        try {
+            const result = await this.execRegistryCmd('ess::sync_system $::ess::current(system)');
+            const pulled = result.pulled || 0;
+            const unchanged = result.unchanged || 0;
+            
+            if (pulled > 0) {
+                this.showNotification(`Synced: ${pulled} updated, ${unchanged} unchanged`, 'success');
+            } else {
+                this.showNotification('Already up to date', 'info');
+            }
+            
+            // Refresh sync status
+            await this.registrySyncStatus();
+            
+            return result;
+        } catch(err) {
+            this.showNotification(`Sync failed: ${err.message}`, 'error');
+            throw err;
         }
     };
     
@@ -247,7 +300,6 @@
     // ==========================================
     
     ESSWorkbench.prototype.showSystemBrowser = async function() {
-        // Create or show system browser modal
         let modal = document.getElementById('system-browser-modal');
         
         if (!modal) {
@@ -329,7 +381,7 @@
             return;
         }
         
-        // Group systems by name (may have multiple versions)
+        // Group systems by name
         const grouped = {};
         systems.forEach(sys => {
             if (!grouped[sys.name]) {
@@ -341,7 +393,7 @@
         let html = '<div class="system-list">';
         
         for (const [name, versions] of Object.entries(grouped)) {
-            const latest = versions[0]; // Assume sorted
+            const latest = versions[0];
             const protocols = latest.protocols || [];
             
             html += `
@@ -381,7 +433,6 @@
         let html = '<div class="template-list">';
         
         templates.forEach(tmpl => {
-            // Check if already added to workgroup
             const alreadyAdded = this.registryState.systems.some(s => s.name === tmpl.name);
             
             html += `
@@ -406,22 +457,10 @@
     };
     
     // ==========================================
-    // System Loading from Workbench
+    // System Loading from Browser
     // ==========================================
     
     ESSWorkbench.prototype.openSystemProtocol = async function(system, protocol, variant = '') {
-        // Check if system is being used by someone else
-        const lockCheck = await this.checkSystemLock(system, protocol);
-        
-        if (lockCheck.locked && lockCheck.lockedBy !== this.registryState.user) {
-            const proceed = confirm(
-                `This system is currently being used by ${lockCheck.lockedBy}.\n\n` +
-                `Are you sure you want to open it anyway? Changes may conflict.`
-            );
-            if (!proceed) return;
-        }
-        
-        // Load the system via ess::load_system
         try {
             const cmd = variant ? 
                 `ess::load_system ${system} ${protocol} ${variant}` :
@@ -435,29 +474,8 @@
             const modal = document.getElementById('system-browser-modal');
             if (modal) modal.style.display = 'none';
             
-            // The snapshot subscription will update the UI
-            
         } catch(err) {
             this.showNotification(`Failed to load system: ${err.message}`, 'error');
-        }
-    };
-    
-    ESSWorkbench.prototype.checkSystemLock = async function(system, protocol) {
-        try {
-            const locks = await this.registry.getLocks();
-            const key = protocol ? 
-                `${this.registryState.workgroup}/${system}/${protocol}` :
-                `${this.registryState.workgroup}/${system}`;
-            
-            const lock = (locks.locks || []).find(l => l.key === key);
-            
-            if (lock) {
-                return { locked: true, lockedBy: lock.lockedBy, expiresAt: lock.expiresAt };
-            }
-            return { locked: false };
-        } catch(err) {
-            console.warn('Lock check failed:', err);
-            return { locked: false };
         }
     };
     
@@ -477,145 +495,10 @@
     };
     
     // ==========================================
-    // Sandbox Operations
-    // ==========================================
-    
-    ESSWorkbench.prototype.createSandbox = async function() {
-        const user = this.registryState.user;
-        if (!user) {
-            this.showNotification('Please select a user first', 'warning');
-            return;
-        }
-        
-        const comment = prompt('Comment for new sandbox (optional):', '');
-        
-        try {
-            const cmd = `ess::registry::sandbox create -user {${user}} -comment {${comment || ''}}`;
-            await this.execRegistryCmd(cmd);
-            
-            this.showNotification(`Created sandbox for ${user}`, 'success');
-            
-            // Switch to the new sandbox
-            this.registryState.version = user;
-            this.updateVersionSelector(user);
-            await this.refreshVersionList();
-            
-        } catch(err) {
-            this.showNotification(`Failed to create sandbox: ${err.message}`, 'error');
-        }
-    };
-    
-    ESSWorkbench.prototype.promoteSandbox = async function() {
-        const version = this.registryState.version;
-        if (version === 'main') {
-            this.showNotification('Already on main version', 'info');
-            return;
-        }
-        
-        const confirm_msg = `Promote sandbox "${version}" to main?\n\nThis will replace the main version with your changes.`;
-        if (!confirm(confirm_msg)) return;
-        
-        const comment = prompt('Comment for this promotion:', `Promoted from ${version}`);
-        
-        try {
-            const cmd = `ess::registry::sandbox promote -from {${version}} -comment {${comment || ''}}`;
-            await this.execRegistryCmd(cmd);
-            
-            this.showNotification('Sandbox promoted to main!', 'success');
-            
-            // Switch to main
-            this.registryState.version = 'main';
-            this.updateVersionSelector('main');
-            
-        } catch(err) {
-            this.showNotification(`Promotion failed: ${err.message}`, 'error');
-        }
-    };
-    
-    ESSWorkbench.prototype.syncSandbox = async function() {
-        const version = this.registryState.version;
-        if (version === 'main') {
-            this.showNotification('Already on main version', 'info');
-            return;
-        }
-        
-        const confirm_msg = `Sync sandbox "${version}" with latest from main?\n\nThis will overwrite your sandbox with main's current state.`;
-        if (!confirm(confirm_msg)) return;
-        
-        try {
-            const cmd = `ess::registry::sandbox sync -to {${version}}`;
-            await this.execRegistryCmd(cmd);
-            
-            this.showNotification('Sandbox synced with main', 'success');
-            this.checkSyncStatus();
-            
-        } catch(err) {
-            this.showNotification(`Sync failed: ${err.message}`, 'error');
-        }
-    };
-    
-    ESSWorkbench.prototype.deleteSandbox = async function() {
-        const version = this.registryState.version;
-        if (version === 'main') {
-            this.showNotification('Cannot delete main version', 'error');
-            return;
-        }
-        
-        const confirm_msg = `Delete sandbox "${version}"?\n\nThis cannot be undone.`;
-        if (!confirm(confirm_msg)) return;
-        
-        try {
-            const cmd = `ess::registry::sandbox delete -version {${version}}`;
-            await this.execRegistryCmd(cmd);
-            
-            this.showNotification('Sandbox deleted', 'success');
-            
-            // Switch to main
-            this.registryState.version = 'main';
-            this.updateVersionSelector('main');
-            await this.refreshVersionList();
-            
-        } catch(err) {
-            this.showNotification(`Delete failed: ${err.message}`, 'error');
-        }
-    };
-    
-    // ==========================================
-    // Version List Management
-    // ==========================================
-    
-    ESSWorkbench.prototype.refreshVersionList = async function() {
-        try {
-            const result = await this.execRegistryCmd('ess::registry::versions');
-            const versions = result.versions || ['main'];
-            
-            const select = document.getElementById('version-select');
-            if (!select) return;
-            
-            const currentValue = select.value;
-            select.innerHTML = '';
-            
-            versions.forEach(v => {
-                const opt = document.createElement('option');
-                opt.value = v;
-                opt.textContent = v === 'main' ? 'main (production)' : `sandbox/${v}`;
-                if (v === currentValue || v === this.registryState.version) {
-                    opt.selected = true;
-                }
-                select.appendChild(opt);
-            });
-            
-        } catch(err) {
-            console.warn('Failed to refresh version list:', err);
-        }
-    };
-    
-    // ==========================================
     // UI Helpers
     // ==========================================
     
     ESSWorkbench.prototype.showNotification = function(message, type = 'info') {
-        // Create notification element
         const notification = document.createElement('div');
         notification.className = `notification notification-${type}`;
         notification.innerHTML = `
@@ -623,7 +506,6 @@
             <button class="notification-close">&times;</button>
         `;
         
-        // Style it
         Object.assign(notification.style, {
             position: 'fixed',
             bottom: '20px',
@@ -655,67 +537,16 @@
         if (el) el.textContent = workgroup || 'Not set';
     };
     
-    ESSWorkbench.prototype.updateVersionSelector = function(version) {
-        const select = document.getElementById('version-select');
-        if (select) {
-            // Try to select the version, add it if not present
-            let found = false;
-            for (let opt of select.options) {
-                if (opt.value === version) {
-                    opt.selected = true;
-                    found = true;
-                    break;
-                }
-            }
-            
-            if (!found) {
-                const opt = document.createElement('option');
-                opt.value = version;
-                opt.textContent = version === 'main' ? 'main (production)' : `sandbox/${version}`;
-                opt.selected = true;
-                select.appendChild(opt);
-            }
-        }
-        
-        // Update sandbox button visibility
-        const isMain = version === 'main';
-        document.getElementById('sync-sandbox-btn')?.style.setProperty('display', isMain ? 'none' : '');
-        document.getElementById('promote-sandbox-btn')?.style.setProperty('display', isMain ? 'none' : '');
-        document.getElementById('delete-sandbox-btn')?.style.setProperty('display', isMain ? 'none' : '');
-    };
-    
     // ==========================================
     // Event Bindings
     // ==========================================
     
     ESSWorkbench.prototype.bindRegistryV2Events = function() {
-        // Version selector change
-        document.getElementById('version-select')?.addEventListener('change', async (e) => {
-            this.registryState.version = e.target.value;
-            
-            // Update backend
-            await this.execRegistryCmd(`ess::registry::configure -version {${e.target.value}}`);
-            
-            // Update UI
-            this.updateVersionSelector(e.target.value);
-            this.checkSyncStatus();
-        });
-        
-        // Sandbox buttons
-        document.getElementById('create-sandbox-btn')?.addEventListener('click', () => this.createSandbox());
-        document.getElementById('sync-sandbox-btn')?.addEventListener('click', () => this.syncSandbox());
-        document.getElementById('promote-sandbox-btn')?.addEventListener('click', () => this.promoteSandbox());
-        document.getElementById('delete-sandbox-btn')?.addEventListener('click', () => this.deleteSandbox());
-        
-        // Refresh versions
-        document.getElementById('refresh-versions-btn')?.addEventListener('click', () => this.refreshVersionList());
-        
-        // Add system browser button (if there's a good place for it)
-//        this.addSystemBrowserButton();
+        // System browser button (if present)
+        // this.addSystemBrowserButton();
     };
     
     ESSWorkbench.prototype.addSystemBrowserButton = function() {
-        // Add to header or dashboard
         const headerRight = document.querySelector('.header-right');
         if (headerRight) {
             const btn = document.createElement('button');
