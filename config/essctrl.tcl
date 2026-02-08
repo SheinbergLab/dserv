@@ -62,8 +62,6 @@ namespace eval ess {
     proc reload_system args { _protected_call reload_system 1 $args }
     proc reload_protocol args { _protected_call reload_protocol 1 $args }
     proc reload_variant args { _protected_call reload_variant 1 $args }
-    proc save_settings args { _protected_call save_settings 1 $args }
-    proc reset_settings args { _protected_call reset_settings 1 $args }
     proc set_param args { _protected_call set_param 1 $args }
     proc set_params args { _protected_call set_params 1 $args }
     proc set_variant_args args { _protected_call set_variant_args 1 $args }
@@ -79,6 +77,14 @@ namespace eval ess {
     proc discard_all_overlays args { _protected_call discard_all_overlays 1 $args }
     proc overlay_summary args { _protected_call overlay_summary 0 $args }
     proc publish_snapshot args { _protected_call publish_snapshot 0 $args }    
+
+    # Registry sync operations
+    proc sync_status args { _protected_call sync_status 1 $args }
+    proc commit_script args { _protected_call commit_script 1 $args }
+    proc commit_system args { _protected_call commit_system 1 $args }
+    proc sync_system args { _protected_call sync_system 1 $args }
+    proc sync_base args { _protected_call sync_base 0 $args }
+    proc sync_libs args { _protected_call sync_libs 0 $args }
 
     # Blocked when running only
     proc file_close args { _protected_call file_close 0 $args }
