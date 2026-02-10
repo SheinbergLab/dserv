@@ -84,7 +84,7 @@ namespace eval ess {
 
         if {[file exists $sys_dir]} {
             # System-level scripts
-            foreach type {system extract} {
+            foreach type {system extract analyze} {
                 set filename [_script_filename $system "" $type]
                 set filepath [file join $sys_dir $filename]
                 if {[file exists $filepath]} {
