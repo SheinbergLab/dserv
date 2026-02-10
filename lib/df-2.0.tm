@@ -795,9 +795,9 @@ namespace eval df {
             dl_local mask [my select_evt $type_name $subtype_name]
             dl_local has_evt [dl_anys $mask]
             dl_local no_evt [dl_not $has_evt]
-            dl_local subtypes [dl_select $g:e_subtypes $mask]
-            dl_local subtypes [dl_replace $subtypes $no_evt [dl_llist [dl_ilist $fill]]]
-            dl_return [dl_unpack [dl_choose $subtypes $valid_indices]]
+            dl_local svals [dl_select $g:e_subtypes $mask]
+            dl_local svals [dl_replace $svals $no_evt [dl_llist [dl_ilist $fill]]]
+            dl_return [dl_unpack [dl_choose $svals $valid_indices]]
         }
         
         method event_param_sparse {valid_indices type_name subtype_name {fill -1}} {

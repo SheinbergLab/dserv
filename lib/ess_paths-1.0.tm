@@ -148,12 +148,32 @@ namespace eval ess::paths {
             dict set entries [file tail $f] $f
         }
 
-        # Overlay wins, but only non-empty entries
+        # Overlay adds new entries (not in base) but does NOT replace
+        # base directories.  For directories, the overlay may contain only
+        # a subset of files (e.g., one edited variant script).  If we
+        # replaced the base path, callers like find_systems that check
+        # for $dir/$dir.tcl would fail because the overlay directory
+        # lacks the main system .tcl file.
+        #
+        # Individual file resolution still honours overlay-first
+        # precedence via resolve(), which is used when actually loading
+        # each script.
         if {$overlay_path ne ""} {
             foreach f [glob -nocomplain [file join $overlay_path $relpattern]] {
-                if {[file isfile $f] || [llength [glob -nocomplain [file join $f *]]] > 0} {
-                    dict set entries [file tail $f] $f
+                set tail [file tail $f]
+                if {[file isfile $f]} {
+                    # Files: overlay wins unconditionally
+                    dict set entries $tail $f
+                } elseif {![dict exists $entries $tail]} {
+                    # Directories: only add if NOT already present in base.
+                    # This handles overlay-only systems/protocols while
+                    # preserving the base path for systems that exist in both.
+                    if {[llength [glob -nocomplain [file join $f *]]] > 0} {
+                        dict set entries $tail $f
+                    }
                 }
+                # If directory exists in both base and overlay, keep the
+                # base path — resolve() handles per-file overlay precedence.
             }
         }
 

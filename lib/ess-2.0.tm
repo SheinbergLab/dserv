@@ -3642,16 +3642,21 @@ namespace eval ess {
         variable current
         set systems {}
         foreach f [resolve_glob [file join $current(project) *]] {
-            if {
-                [file isdirectory $f] &&
-                [file exists $f/[file tail $f].tcl]
-            } {
-		if { [namespace exists ::ess::[file tail $f]] } {
-		    namespace delete ::ess::[file tail $f]
+            set sysname [file tail $f]
+            if {![file isdirectory $f]} continue
+
+            # Use resolve_file so that an overlay of the system .tcl
+            # is sourced when present, but discovery still works even
+            # if the overlay directory doesn't contain the main .tcl.
+            set relpath [file join $current(project) $sysname ${sysname}.tcl]
+            set fname [resolve_file $relpath]
+
+            if {[file exists $fname]} {
+		if { [namespace exists ::ess::${sysname}] } {
+		    namespace delete ::ess::${sysname}
 		}
-                set fname [file join $f [file tail $f].tcl]
                 source $fname
-                lappend systems [file tail $f]
+                lappend systems $sysname
             }
         }
         return $systems
@@ -3661,15 +3666,19 @@ namespace eval ess {
         variable current
         set protocols {}
         foreach f [resolve_glob [file join $current(project) $s *]] {
-            if {
-                [file isdirectory $f] &&
-                [file exists $f/[file tail $f].tcl]
-            } {
-		if { [namespace exists ::ess::[file tail $f]] } {
-		    namespace delete ::ess::${s}::[file tail $f]
+            set protoname [file tail $f]
+            if {![file isdirectory $f]} continue
+
+            # Use resolve_file so overlay of the protocol .tcl is honoured
+            set relpath [file join $current(project) $s $protoname ${protoname}.tcl]
+            set fname [resolve_file $relpath]
+
+            if {[file exists $fname]} {
+		if { [namespace exists ::ess::${s}::${protoname}] } {
+		    namespace delete ::ess::${s}::${protoname}
 		}
-                source $f/[file tail $f].tcl
-                lappend protocols [file tail $f]
+                source $fname
+                lappend protocols $protoname
             }
         }
         return $protocols
@@ -3689,11 +3698,11 @@ namespace eval ess {
         variable current
         set systems {}
         foreach f [resolve_glob [file join $current(project) *]] {
-            if {
-                [file isdirectory $f] &&
-                [file exists $f/[file tail $f].tcl]
-            } {
-                lappend systems [file tail $f]
+            set sysname [file tail $f]
+            if {![file isdirectory $f]} continue
+            set relpath [file join $current(project) $sysname ${sysname}.tcl]
+            if {[file exists [resolve_file $relpath]]} {
+                lappend systems $sysname
             }
         }
         return $systems
@@ -3703,11 +3712,11 @@ namespace eval ess {
         variable current
         set protocols {}
         foreach f [resolve_glob [file join $current(project) $system *]] {
-            if {
-                [file isdirectory $f] &&
-                [file exists $f/[file tail $f].tcl]
-            } {
-                lappend protocols [file tail $f]
+            set protoname [file tail $f]
+            if {![file isdirectory $f]} continue
+            set relpath [file join $current(project) $system $protoname ${protoname}.tcl]
+            if {[file exists [resolve_file $relpath]]} {
+                lappend protocols $protoname
             }
         }
         return $protocols
