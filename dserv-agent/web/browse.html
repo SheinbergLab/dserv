@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESS Script Browser</title>
+    <style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1419;
+    color: #e7e9ea;
+    height: 100vh;
+    overflow: hidden;
+    line-height: 1.5;
+}
+
+/* Header */
+.top-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 20px; border-bottom: 1px solid #2f3336;
+    background: #0f1419; flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+}
+.top-bar h1 { font-size: 18px; font-weight: 700; white-space: nowrap; }
+.top-bar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.top-select {
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    padding: 6px 10px; color: #e7e9ea; font-size: 13px; outline: none;
+}
+.top-select:focus { border-color: #3b82f6; }
+
+.compare-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 10px; background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    color: #71767b; font-size: 12px; cursor: pointer; transition: all 0.15s; user-select: none;
+}
+.compare-toggle:hover { border-color: #3b82f6; color: #a0aec0; }
+.compare-toggle.active { background: #1a3d2e; border-color: #34d399; color: #34d399; }
+.compare-toggle .toggle-icon { font-size: 11px; }
+
+.search-box { position: relative; }
+.search-box input {
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    padding: 6px 10px 6px 28px; color: #e7e9ea; font-size: 13px; width: 170px; outline: none;
+}
+.search-box input:focus { border-color: #3b82f6; }
+.search-box input::placeholder { color: #71767b; }
+.search-box::before { content: "🔍"; position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; opacity: 0.5; }
+
+.nav-link {
+    color: #71767b; text-decoration: none; font-size: 13px;
+    padding: 6px 10px; border-radius: 6px; white-space: nowrap;
+}
+.nav-link:hover { color: #e7e9ea; background: #1a2634; }
+
+/* Main layout */
+.main-layout { display: flex; height: calc(100vh - 49px); }
+
+/* Tree panel */
+.tree-panel {
+    width: 320px; min-width: 240px; max-width: 500px;
+    border-right: 1px solid #2f3336;
+    overflow-y: auto; overflow-x: hidden;
+    flex-shrink: 0; padding: 8px 0;
+    background: #0d1117;
+}
+.tree-panel::-webkit-scrollbar { width: 6px; }
+.tree-panel::-webkit-scrollbar-thumb { background: #2f3336; border-radius: 3px; }
+.tree-panel::-webkit-scrollbar-thumb:hover { background: #3f4448; }
+
+/* Resize handle */
+.resize-handle {
+    width: 4px; cursor: col-resize; background: transparent;
+    flex-shrink: 0; transition: background 0.15s;
+}
+.resize-handle:hover, .resize-handle.dragging { background: #3b82f6; }
+
+/* Tree items */
+.tree-system { margin-bottom: 2px; }
+.tree-system-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
+    color: #e7e9ea; transition: background 0.1s; user-select: none;
+}
+.tree-system-header:hover { background: #1a2634; }
+.tree-system-header .arrow {
+    font-size: 10px; color: #71767b; width: 14px; text-align: center;
+    transition: transform 0.15s;
+}
+.tree-system-header .arrow.open { transform: rotate(90deg); }
+.tree-system-header .sys-icon { font-size: 14px; }
+.tree-system-header .sys-name { flex: 1; }
+.tree-system-header .script-count {
+    font-size: 10px; color: #71767b; font-weight: 400;
+    background: #1a2634; padding: 1px 6px; border-radius: 8px;
+}
+
+/* Diff summary badge on system header */
+.diff-summary {
+    display: inline-flex; gap: 4px; font-size: 9px; font-weight: 400;
+}
+.diff-chip {
+    padding: 1px 5px; border-radius: 3px; font-family: 'SF Mono', Monaco, monospace;
+}
+.diff-chip.modified { background: #3d2e1a; color: #fbbf24; }
+.diff-chip.added { background: #1a3d2e; color: #34d399; }
+.diff-chip.deleted { background: #3d1a1a; color: #f87171; }
+
+.tree-system-children { display: none; }
+.tree-system-children.open { display: block; }
+
+.tree-protocol { margin-left: 8px; }
+.tree-protocol-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 12px 4px 20px; cursor: pointer; font-size: 12px;
+    color: #a0aec0; transition: background 0.1s; user-select: none;
+}
+.tree-protocol-header:hover { background: #1a2634; }
+.tree-protocol-header .arrow { font-size: 9px; color: #71767b; width: 12px; text-align: center; transition: transform 0.15s; }
+.tree-protocol-header .arrow.open { transform: rotate(90deg); }
+.tree-protocol-header .proto-icon { font-size: 12px; }
+
+.tree-protocol-children { display: none; }
+.tree-protocol-children.open { display: block; }
+
+.tree-script {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 12px 3px 44px; cursor: pointer; font-size: 12px;
+    color: #8b949e; transition: all 0.1s; user-select: none;
+}
+.tree-script:hover { background: #1a2634; color: #e7e9ea; }
+.tree-script.active { background: #1e3a5f; color: #60a5fa; }
+.tree-script .file-icon { font-size: 11px; opacity: 0.6; }
+.tree-script .file-name { flex: 1; font-family: 'SF Mono', Monaco, monospace; font-size: 11px; }
+
+/* Diff status indicators on scripts */
+.tree-script .diff-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.diff-dot.modified { background: #fbbf24; }
+.diff-dot.added { background: #34d399; }
+.diff-dot.deleted { background: #f87171; }
+.diff-dot.same { background: transparent; }
+
+.tree-script.diff-modified .file-name { color: #fbbf24; }
+.tree-script.diff-added .file-name { color: #34d399; }
+.tree-script.diff-deleted { opacity: 0.5; }
+.tree-script.diff-deleted .file-name { color: #f87171; text-decoration: line-through; }
+
+.type-badge {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.3px;
+    background: #1a2634; color: #71767b;
+}
+.type-badge.system { background: #3d2e1a; color: #fbbf24; }
+.type-badge.protocol { background: #1e3a5f; color: #60a5fa; }
+.type-badge.variants { background: #2d1a3d; color: #a78bfa; }
+.type-badge.loaders { background: #1a3d2e; color: #34d399; }
+.type-badge.stim { background: #3d1a2e; color: #f472b6; }
+.type-badge.extract { background: #1a2634; color: #71767b; }
+.type-badge.analyze { background: #1a3d3d; color: #22d3ee; }
+
+/* Viewer panel */
+.viewer-panel {
+    flex: 1; display: flex; flex-direction: column;
+    min-width: 0; background: #0f1419;
+}
+.viewer-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 16px; border-bottom: 1px solid #2f3336;
+    background: #0d1117; min-height: 40px; flex-shrink: 0;
+}
+.viewer-breadcrumb {
+    font-size: 13px; color: #71767b;
+    font-family: 'SF Mono', Monaco, monospace;
+}
+.viewer-breadcrumb .crumb { color: #a0aec0; }
+.viewer-breadcrumb .sep { margin: 0 4px; color: #4a5568; }
+
+.viewer-meta {
+    display: flex; align-items: center; gap: 12px; font-size: 11px; color: #71767b;
+}
+.viewer-meta .checksum {
+    font-family: 'SF Mono', Monaco, monospace;
+    background: #1a2634; padding: 2px 6px; border-radius: 3px;
+    cursor: pointer;
+}
+.viewer-meta .checksum:hover { color: #a0aec0; }
+
+/* Diff header bar (shown when viewing a modified script in compare mode) */
+.diff-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 16px; border-bottom: 1px solid #2f3336;
+    background: #16202a; font-size: 12px; flex-shrink: 0;
+}
+.diff-bar .diff-label {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 4px; font-weight: 500;
+}
+.diff-label.modified { background: #3d2e1a; color: #fbbf24; }
+.diff-label.added { background: #1a3d2e; color: #34d399; }
+.diff-label.deleted { background: #3d1a1a; color: #f87171; }
+.diff-label.same { background: #1a2634; color: #71767b; }
+.diff-bar .diff-info { color: #71767b; }
+
+.viewer-content { flex: 1; overflow: auto; position: relative; }
+.viewer-content::-webkit-scrollbar { width: 8px; height: 8px; }
+.viewer-content::-webkit-scrollbar-thumb { background: #2f3336; border-radius: 4px; }
+.viewer-content::-webkit-scrollbar-corner { background: #0f1419; }
+
+/* Code display */
+.code-container {
+    display: flex; min-height: 100%; font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+    font-size: 12px; line-height: 1.6;
+}
+.line-numbers {
+    padding: 12px 0; text-align: right; user-select: none;
+    color: #4a5568; background: #0d1117; border-right: 1px solid #2f3336;
+    flex-shrink: 0; min-width: 48px;
+}
+.line-numbers .line-num { display: block; padding: 0 12px 0 8px; }
+.line-numbers .line-num.diff-add { color: #34d399; }
+.line-numbers .line-num.diff-del { color: #f87171; }
+
+.code-content {
+    padding: 12px 16px; white-space: pre; flex: 1;
+    color: #e7e9ea; tab-size: 8; min-width: 0;
+}
+
+/* Diff line highlighting */
+.code-line.diff-add { background: rgba(52, 211, 153, 0.08); }
+.code-line.diff-del { background: rgba(248, 113, 113, 0.08); color: #f87171; text-decoration: line-through; }
+.code-line.diff-ctx { opacity: 0.5; }
+
+/* Tcl syntax highlighting */
+.code-content .kw { color: #ff7b72; }
+.code-content .str { color: #a5d6ff; }
+.code-content .var { color: #ffa657; }
+.code-content .cmd { color: #d2a8ff; }
+.code-content .cmt { color: #8b949e; font-style: italic; }
+.code-content .num { color: #79c0ff; }
+.code-content .opt { color: #7ee787; }
+
+/* Empty state */
+.empty-viewer {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; color: #4a5568;
+}
+.empty-viewer .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+.empty-viewer h3 { font-size: 16px; color: #71767b; margin-bottom: 8px; }
+.empty-viewer p { font-size: 13px; }
+
+/* Loading */
+.loading {
+    display: flex; align-items: center; justify-content: center;
+    height: 100%; color: #71767b; font-size: 14px;
+}
+.loading::after {
+    content: ''; width: 20px; height: 20px; margin-left: 12px;
+    border: 2px solid #2f3336; border-top-color: #3b82f6;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Stats bar */
+.stats-bar {
+    padding: 6px 16px; border-top: 1px solid #2f3336;
+    font-size: 11px; color: #71767b; background: #0d1117;
+    display: flex; justify-content: space-between; flex-shrink: 0;
+}
+
+/* Toast */
+.toast {
+    position: fixed; bottom: 24px; right: 24px; padding: 10px 16px;
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    font-size: 13px; z-index: 1000; transform: translateY(80px); opacity: 0;
+    transition: all 0.3s ease;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-color: #34d399; color: #34d399; }
+
+.tree-empty {
+    padding: 24px 16px; text-align: center; color: #4a5568; font-size: 13px;
+}
+
+/* Changes-only filter */
+.filter-changes {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 6px 10px; background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    color: #71767b; font-size: 12px; cursor: pointer; transition: all 0.15s; user-select: none;
+}
+.filter-changes:hover { border-color: #fbbf24; color: #a0aec0; }
+.filter-changes.active { background: #3d2e1a; border-color: #fbbf24; color: #fbbf24; }
+
+@media (max-width: 700px) {
+    .main-layout { flex-direction: column; }
+    .tree-panel { width: 100%; max-width: 100%; height: 40vh; border-right: none; border-bottom: 1px solid #2f3336; }
+    .resize-handle { display: none; }
+    .viewer-panel { height: 60vh; }
+}
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <h1>ESS Script Browser</h1>
+        <div class="top-bar-right">
+            <select class="top-select" id="workgroup-select" title="Workgroup">
+                <option value="">Loading...</option>
+            </select>
+            <select class="top-select" id="version-select" title="Version">
+                <option value="main">main</option>
+            </select>
+            <button class="compare-toggle" id="compare-toggle" title="Compare selected version against main">
+                <span class="toggle-icon">⇄</span> Compare to main
+            </button>
+            <button class="filter-changes" id="filter-changes" style="display:none" title="Show only changed scripts">
+                Δ Changes only
+            </button>
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Filter scripts...">
+            </div>
+            <a href="/" class="nav-link" title="Back to mesh directory">← Mesh</a>
+        </div>
+    </div>
+
+    <div class="main-layout">
+        <div class="tree-panel" id="tree-panel">
+            <div class="loading" id="tree-loading">Loading scripts</div>
+        </div>
+        <div class="resize-handle" id="resize-handle"></div>
+        <div class="viewer-panel">
+            <div class="viewer-header" id="viewer-header">
+                <div class="viewer-breadcrumb" id="viewer-breadcrumb"></div>
+                <div class="viewer-meta" id="viewer-meta"></div>
+            </div>
+            <div id="diff-bar-container"></div>
+            <div class="viewer-content" id="viewer-content">
+                <div class="empty-viewer">
+                    <div class="icon">📜</div>
+                    <h3>Select a script to view</h3>
+                    <p>Browse the tree on the left to explore experiment scripts</p>
+                </div>
+            </div>
+            <div class="stats-bar" id="stats-bar">
+                <span id="stats-left"></span>
+                <span id="stats-right"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+    class ESSBrowser {
+        constructor() {
+            this.el = {
+                treePanel: document.getElementById('tree-panel'),
+                viewerContent: document.getElementById('viewer-content'),
+                viewerBreadcrumb: document.getElementById('viewer-breadcrumb'),
+                viewerMeta: document.getElementById('viewer-meta'),
+                diffBarContainer: document.getElementById('diff-bar-container'),
+                workgroupSelect: document.getElementById('workgroup-select'),
+                versionSelect: document.getElementById('version-select'),
+                compareToggle: document.getElementById('compare-toggle'),
+                filterChanges: document.getElementById('filter-changes'),
+                searchInput: document.getElementById('search-input'),
+                statsLeft: document.getElementById('stats-left'),
+                statsRight: document.getElementById('stats-right'),
+                toast: document.getElementById('toast'),
+            };
+
+            this.tree = null;
+            this.workgroups = [];
+            this.currentWorkgroup = '';
+            this.currentVersion = 'main';
+            this.comparing = false;
+            this.changesOnly = false;
+            this.searchTerm = '';
+            this.activeScript = null;
+            this.allVersions = new Set();
+
+            // Get workgroup from URL
+            const params = new URLSearchParams(location.search);
+            const hashWg = location.hash.replace('#', '');
+            this.initialWorkgroup = params.get('workgroup') || hashWg || '';
+
+            this.el.workgroupSelect.addEventListener('change', e => {
+                this.currentWorkgroup = e.target.value;
+                location.hash = this.currentWorkgroup;
+                this.loadTree();
+            });
+            this.el.versionSelect.addEventListener('change', e => {
+                this.currentVersion = e.target.value;
+                this.updateCompareVisibility();
+                this.loadTree();
+            });
+            this.el.compareToggle.addEventListener('click', () => {
+                this.comparing = !this.comparing;
+                this.el.compareToggle.classList.toggle('active', this.comparing);
+                this.el.filterChanges.style.display = this.comparing ? '' : 'none';
+                if (!this.comparing) {
+                    this.changesOnly = false;
+                    this.el.filterChanges.classList.remove('active');
+                }
+                this.loadTree();
+            });
+            this.el.filterChanges.addEventListener('click', () => {
+                this.changesOnly = !this.changesOnly;
+                this.el.filterChanges.classList.toggle('active', this.changesOnly);
+                this.renderTree();
+            });
+            this.el.searchInput.addEventListener('input', e => {
+                this.searchTerm = e.target.value.toLowerCase();
+                this.renderTree();
+            });
+
+            this.setupResize();
+            this.load();
+        }
+
+        async load() {
+            // First try to get default workgroup from config endpoint
+            try {
+                const cfgResp = await fetch('/api/v1/ess/browse/config');
+                if (cfgResp.ok) {
+                    const cfg = await cfgResp.json();
+                    this.workgroups = cfg.workgroups || [];
+                    if (!this.initialWorkgroup && cfg.defaultWorkgroup) {
+                        this.initialWorkgroup = cfg.defaultWorkgroup;
+                    }
+                    this.populateWorkgroups();
+                    if (this.currentWorkgroup) {
+                        await this.loadTree();
+                    }
+                    return;
+                }
+            } catch (e) {
+                // Config endpoint might not exist on older servers, fall back
+            }
+
+            // Fallback: bootstrap from browse endpoint directly
+            try {
+                const wg = this.initialWorkgroup || '_default_';
+                const resp = await fetch(`/api/v1/ess/browse/${wg}?version=main`);
+                const data = await resp.json();
+                this.workgroups = data.workgroups || [];
+                this.populateWorkgroups();
+                if (this.currentWorkgroup) {
+                    this.setTree(data.tree);
+                }
+            } catch (e) {
+                this.el.treePanel.innerHTML = `<div class="tree-empty">Failed to load: ${this.esc(e.message)}</div>`;
+            }
+        }
+
+        populateWorkgroups() {
+            const sel = this.el.workgroupSelect;
+            sel.innerHTML = '';
+
+            if (!this.workgroups.length) {
+                sel.innerHTML = '<option value="">No workgroups</option>';
+                return;
+            }
+
+            if (!this.initialWorkgroup) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Select workgroup…';
+                sel.appendChild(opt);
+            }
+
+            this.workgroups.forEach(wg => {
+                const opt = document.createElement('option');
+                opt.value = wg;
+                opt.textContent = wg;
+                sel.appendChild(opt);
+            });
+
+            if (this.initialWorkgroup && this.workgroups.includes(this.initialWorkgroup)) {
+                sel.value = this.initialWorkgroup;
+                this.currentWorkgroup = this.initialWorkgroup;
+            } else if (this.workgroups.length === 1) {
+                sel.value = this.workgroups[0];
+                this.currentWorkgroup = this.workgroups[0];
+            }
+        }
+
+        async loadTree() {
+            if (!this.currentWorkgroup) return;
+
+            this.el.treePanel.innerHTML = '<div class="loading">Loading scripts</div>';
+            this.activeScript = null;
+            this.clearViewer();
+
+            try {
+                let url = `/api/v1/ess/browse/${this.currentWorkgroup}?version=${this.currentVersion}`;
+                if (this.comparing && this.currentVersion !== 'main') {
+                    url += '&base=main';
+                }
+                const resp = await fetch(url);
+                const data = await resp.json();
+                this.setTree(data.tree);
+            } catch (e) {
+                this.el.treePanel.innerHTML = `<div class="tree-empty">Failed to load: ${this.esc(e.message)}</div>`;
+            }
+        }
+
+        setTree(tree) {
+            this.tree = tree;
+
+            // Collect all versions across systems
+            this.allVersions = new Set(['main']);
+            if (tree && tree.systems) {
+                tree.systems.forEach(sys => {
+                    (sys.versions || []).forEach(v => this.allVersions.add(v));
+                });
+            }
+            this.populateVersions();
+            this.updateCompareVisibility();
+            this.renderTree();
+            this.updateStats();
+        }
+
+        populateVersions() {
+            const sel = this.el.versionSelect;
+            const current = sel.value;
+            sel.innerHTML = '';
+
+            const sorted = Array.from(this.allVersions).sort((a, b) => {
+                if (a === 'main') return -1;
+                if (b === 'main') return 1;
+                return a.localeCompare(b);
+            });
+
+            sorted.forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                sel.appendChild(opt);
+            });
+
+            sel.value = this.allVersions.has(current) ? current : 'main';
+        }
+
+        updateCompareVisibility() {
+            // Only show compare toggle when viewing a non-main version
+            const show = this.currentVersion !== 'main';
+            this.el.compareToggle.style.display = show ? '' : 'none';
+            if (!show) {
+                this.comparing = false;
+                this.changesOnly = false;
+                this.el.compareToggle.classList.remove('active');
+                this.el.filterChanges.style.display = 'none';
+                this.el.filterChanges.classList.remove('active');
+            }
+        }
+
+        renderTree() {
+            if (!this.tree || !this.tree.systems) {
+                this.el.treePanel.innerHTML = '<div class="tree-empty">No systems found</div>';
+                return;
+            }
+
+            let systems = this.filterSystems(this.tree.systems);
+
+            if (!systems.length) {
+                const msg = this.searchTerm
+                    ? `No matches for "${this.esc(this.searchTerm)}"`
+                    : (this.changesOnly ? 'No changes found' : 'No systems found');
+                this.el.treePanel.innerHTML = `<div class="tree-empty">${msg}</div>`;
+                return;
+            }
+
+            this.el.treePanel.innerHTML = systems.map(sys => this.renderSystem(sys)).join('');
+            this.bindTreeEvents();
+
+            // Auto-expand if searching, filtering changes, or only one system
+            if (this.searchTerm || this.changesOnly || systems.length === 1) {
+                this.el.treePanel.querySelectorAll('.tree-system').forEach(el => {
+                    el.querySelector('.tree-system-children')?.classList.add('open');
+                    el.querySelector('.arrow')?.classList.add('open');
+                    el.querySelectorAll('.tree-protocol-children').forEach(c => c.classList.add('open'));
+                    el.querySelectorAll('.tree-protocol-header .arrow').forEach(a => a.classList.add('open'));
+                });
+            }
+        }
+
+        filterSystems(systems) {
+            let filtered = systems;
+
+            // If changesOnly mode, filter to systems with changes
+            if (this.changesOnly) {
+                filtered = filtered.filter(sys => {
+                    if (!sys.diffSummary) return false;
+                    return sys.diffSummary.modified > 0 || sys.diffSummary.added > 0 || sys.diffSummary.deleted > 0;
+                });
+            }
+
+            if (this.searchTerm) {
+                filtered = filtered.filter(sys => {
+                    if (sys.name.toLowerCase().includes(this.searchTerm)) return true;
+                    for (const [proto, scripts] of Object.entries(sys.scripts)) {
+                        if (proto.toLowerCase().includes(this.searchTerm)) return true;
+                        for (const s of scripts) {
+                            if (s.filename.toLowerCase().includes(this.searchTerm)) return true;
+                            if (s.type.toLowerCase().includes(this.searchTerm)) return true;
+                        }
+                    }
+                    return false;
+                });
+            }
+
+            return filtered;
+        }
+
+        renderSystem(sys) {
+            const scriptCount = Object.values(sys.scripts).reduce((sum, arr) => sum + arr.length, 0);
+            const protocols = Object.keys(sys.scripts).sort((a, b) => {
+                if (a === '_system') return -1;
+                if (b === '_system') return 1;
+                return a.localeCompare(b);
+            });
+
+            // Diff summary badges
+            let diffHtml = '';
+            if (sys.diffSummary) {
+                const ds = sys.diffSummary;
+                const chips = [];
+                if (ds.modified) chips.push(`<span class="diff-chip modified">${ds.modified}M</span>`);
+                if (ds.added) chips.push(`<span class="diff-chip added">${ds.added}A</span>`);
+                if (ds.deleted) chips.push(`<span class="diff-chip deleted">${ds.deleted}D</span>`);
+                if (chips.length) diffHtml = `<span class="diff-summary">${chips.join('')}</span>`;
+            }
+
+            return `
+            <div class="tree-system" data-system="${this.esc(sys.name)}">
+                <div class="tree-system-header">
+                    <span class="arrow">▶</span>
+                    <span class="sys-icon">📦</span>
+                    <span class="sys-name">${this.esc(sys.name)}</span>
+                    ${diffHtml}
+                    <span class="script-count">${scriptCount}</span>
+                </div>
+                <div class="tree-system-children">
+                    ${protocols.map(proto => this.renderProtocol(sys, proto, sys.scripts[proto])).join('')}
+                </div>
+            </div>`;
+        }
+
+        renderProtocol(sys, proto, scripts) {
+            const displayName = proto === '_system' ? 'system' : proto;
+            const icon = proto === '_system' ? '⚙' : '🧪';
+
+            // In changesOnly mode, filter scripts within protocol
+            let displayScripts = scripts;
+            if (this.changesOnly) {
+                displayScripts = scripts.filter(s => s.diffStatus && s.diffStatus !== 'same');
+                if (!displayScripts.length) return '';
+            }
+
+            return `
+            <div class="tree-protocol" data-protocol="${this.esc(proto)}">
+                <div class="tree-protocol-header">
+                    <span class="arrow">▶</span>
+                    <span class="proto-icon">${icon}</span>
+                    ${this.esc(displayName)}
+                </div>
+                <div class="tree-protocol-children">
+                    ${displayScripts.map(s => this.renderScript(sys, proto, s)).join('')}
+                </div>
+            </div>`;
+        }
+
+        renderScript(sys, proto, script) {
+            const activeClass = this.activeScript &&
+                this.activeScript.system === sys.name &&
+                this.activeScript.protocol === proto &&
+                this.activeScript.type === script.type ? ' active' : '';
+
+            const diffClass = script.diffStatus ? ` diff-${script.diffStatus}` : '';
+            const diffDot = script.diffStatus && script.diffStatus !== 'same'
+                ? `<span class="diff-dot ${script.diffStatus}"></span>`
+                : '';
+
+            const isDeleted = script.diffStatus === 'deleted';
+
+            return `
+            <div class="tree-script${activeClass}${diffClass}"
+                 data-system="${this.esc(sys.name)}"
+                 data-protocol="${this.esc(proto)}"
+                 data-type="${this.esc(script.type)}"
+                 data-filename="${this.esc(script.filename)}"
+                 data-diff="${this.esc(script.diffStatus || '')}"
+                 ${isDeleted ? 'data-deleted="true"' : ''}>
+                ${diffDot}
+                <span class="file-icon">📄</span>
+                <span class="file-name">${this.esc(script.filename)}</span>
+                <span class="type-badge ${this.esc(script.type)}">${this.esc(script.type)}</span>
+            </div>`;
+        }
+
+        bindTreeEvents() {
+            this.el.treePanel.querySelectorAll('.tree-system-header').forEach(header => {
+                header.addEventListener('click', () => {
+                    const children = header.nextElementSibling;
+                    const arrow = header.querySelector('.arrow');
+                    children.classList.toggle('open');
+                    arrow.classList.toggle('open');
+                });
+            });
+
+            this.el.treePanel.querySelectorAll('.tree-protocol-header').forEach(header => {
+                header.addEventListener('click', () => {
+                    const children = header.nextElementSibling;
+                    const arrow = header.querySelector('.arrow');
+                    children.classList.toggle('open');
+                    arrow.classList.toggle('open');
+                });
+            });
+
+            this.el.treePanel.querySelectorAll('.tree-script').forEach(el => {
+                el.addEventListener('click', () => {
+                    const system = el.dataset.system;
+                    const protocol = el.dataset.protocol;
+                    const type = el.dataset.type;
+                    const filename = el.dataset.filename;
+                    const diffStatus = el.dataset.diff || '';
+                    const isDeleted = el.dataset.deleted === 'true';
+
+                    if (isDeleted) {
+                        // For deleted scripts, load from base version (main)
+                        this.loadScript(system, protocol, type, filename, diffStatus, 'main');
+                    } else {
+                        this.loadScript(system, protocol, type, filename, diffStatus);
+                    }
+
+                    this.el.treePanel.querySelectorAll('.tree-script.active').forEach(a => a.classList.remove('active'));
+                    el.classList.add('active');
+                });
+            });
+        }
+
+        async loadScript(system, protocol, type, filename, diffStatus, overrideVersion) {
+            const apiProto = protocol === '_system' ? '_' : protocol;
+            const version = overrideVersion || '';
+            // The existing script endpoint uses the system's latest version by default.
+            // For version-specific fetching, we use the system endpoint to get scripts.
+            let url = `/api/v1/ess/script/${this.currentWorkgroup}/${system}/${apiProto}/${type}`;
+
+            this.activeScript = { system, protocol, type, filename, diffStatus };
+
+            // Breadcrumb
+            const protoDisplay = protocol === '_system' ? 'system' : protocol;
+            this.el.viewerBreadcrumb.innerHTML =
+                `<span class="crumb">${this.esc(this.currentWorkgroup)}</span>` +
+                `<span class="sep">/</span>` +
+                `<span class="crumb">${this.esc(system)}</span>` +
+                `<span class="sep">/</span>` +
+                `<span class="crumb">${this.esc(protoDisplay)}</span>` +
+                `<span class="sep">/</span>` +
+                `<span class="crumb">${this.esc(filename)}</span>`;
+            this.el.viewerMeta.innerHTML = '';
+            this.el.diffBarContainer.innerHTML = '';
+            this.el.viewerContent.innerHTML = '<div class="loading">Loading</div>';
+
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.error || 'Not found');
+                }
+                const script = await resp.json();
+
+                // If comparing and modified, also fetch the base version for diff
+                if (this.comparing && diffStatus === 'modified') {
+                    await this.loadDiff(script, system, apiProto, type);
+                } else {
+                    this.displayScript(script, diffStatus);
+                }
+            } catch (e) {
+                this.el.viewerContent.innerHTML =
+                    `<div class="empty-viewer"><div class="icon">⚠️</div><h3>Error</h3><p>${this.esc(e.message)}</p></div>`;
+            }
+        }
+
+        async loadDiff(overlayScript, system, apiProto, type) {
+            // Fetch the base (main) version by querying the main system version
+            try {
+                // Get the main version system to find its scripts
+                const sysResp = await fetch(`/api/v1/ess/system/${this.currentWorkgroup}/${system}/main`);
+                if (!sysResp.ok) {
+                    this.displayScript(overlayScript, 'modified');
+                    return;
+                }
+                const sysData = await sysResp.json();
+                const mainScripts = sysData.scripts || [];
+
+                // Find the matching script in main
+                const proto = apiProto === '_' ? '' : apiProto;
+                const mainScript = mainScripts.find(s => s.protocol === proto && s.type === type);
+
+                if (mainScript) {
+                    this.displayDiff(mainScript, overlayScript);
+                } else {
+                    this.displayScript(overlayScript, 'added');
+                }
+            } catch (e) {
+                // Fall back to normal display
+                this.displayScript(overlayScript, 'modified');
+            }
+        }
+
+        displayScript(script, diffStatus) {
+            const content = script.content || '';
+            const lines = content.split('\n');
+
+            const lineNums = lines.map((_, i) =>
+                `<span class="line-num">${i + 1}</span>`
+            ).join('');
+
+            const highlighted = this.highlightTcl(content);
+
+            this.el.viewerContent.innerHTML = `
+            <div class="code-container">
+                <div class="line-numbers">${lineNums}</div>
+                <div class="code-content">${highlighted}</div>
+            </div>`;
+
+            // Diff bar
+            if (diffStatus && diffStatus !== 'same') {
+                const labels = {
+                    modified: 'Modified — differs from main',
+                    added: 'Added — not in main',
+                    deleted: 'Deleted — exists in main but removed from this version',
+                };
+                this.el.diffBarContainer.innerHTML = `
+                <div class="diff-bar">
+                    <span class="diff-label ${diffStatus}">${diffStatus}</span>
+                    <span class="diff-info">${labels[diffStatus] || ''}</span>
+                </div>`;
+            } else {
+                this.el.diffBarContainer.innerHTML = '';
+            }
+
+            // Meta
+            this.setViewerMeta(script, lines.length);
+        }
+
+        displayDiff(baseScript, overlayScript) {
+            const baseLines = (baseScript.content || '').split('\n');
+            const overlayLines = (overlayScript.content || '').split('\n');
+
+            // Simple line-based diff using LCS
+            const diff = this.computeDiff(baseLines, overlayLines);
+
+            let lineNumsHtml = '';
+            let codeHtml = '';
+            let addCount = 0, delCount = 0;
+
+            diff.forEach(entry => {
+                if (entry.type === 'same') {
+                    lineNumsHtml += `<span class="line-num">${entry.newNum}</span>`;
+                    codeHtml += `<span class="code-line">${this.highlightTclLine(entry.text)}\n</span>`;
+                } else if (entry.type === 'del') {
+                    lineNumsHtml += `<span class="line-num diff-del">-</span>`;
+                    codeHtml += `<span class="code-line diff-del">${this.highlightTclLine(entry.text)}\n</span>`;
+                    delCount++;
+                } else if (entry.type === 'add') {
+                    lineNumsHtml += `<span class="line-num diff-add">+</span>`;
+                    codeHtml += `<span class="code-line diff-add">${this.highlightTclLine(entry.text)}\n</span>`;
+                    addCount++;
+                }
+            });
+
+            this.el.viewerContent.innerHTML = `
+            <div class="code-container">
+                <div class="line-numbers">${lineNumsHtml}</div>
+                <div class="code-content">${codeHtml}</div>
+            </div>`;
+
+            this.el.diffBarContainer.innerHTML = `
+            <div class="diff-bar">
+                <span class="diff-label modified">modified</span>
+                <span class="diff-info">
+                    Comparing <strong>${this.esc(this.currentVersion)}</strong> to <strong>main</strong>
+                    — <span style="color:#34d399">+${addCount}</span> / <span style="color:#f87171">-${delCount}</span> lines
+                </span>
+            </div>`;
+
+            this.setViewerMeta(overlayScript, overlayLines.length);
+        }
+
+        // Simple LCS-based diff
+        computeDiff(oldLines, newLines) {
+            const m = oldLines.length, n = newLines.length;
+
+            // For very large files, fall back to a simple approach
+            if (m * n > 2000000) {
+                return this.simpleDiff(oldLines, newLines);
+            }
+
+            // Build LCS table
+            const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+            for (let i = 1; i <= m; i++) {
+                for (let j = 1; j <= n; j++) {
+                    if (oldLines[i-1] === newLines[j-1]) {
+                        dp[i][j] = dp[i-1][j-1] + 1;
+                    } else {
+                        dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+                    }
+                }
+            }
+
+            // Backtrack to build diff
+            const result = [];
+            let i = m, j = n;
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && oldLines[i-1] === newLines[j-1]) {
+                    result.unshift({ type: 'same', text: newLines[j-1], newNum: j });
+                    i--; j--;
+                } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+                    result.unshift({ type: 'add', text: newLines[j-1], newNum: j });
+                    j--;
+                } else {
+                    result.unshift({ type: 'del', text: oldLines[i-1], oldNum: i });
+                    i--;
+                }
+            }
+
+            return result;
+        }
+
+        // Fallback for very large files
+        simpleDiff(oldLines, newLines) {
+            const result = [];
+            const maxLen = Math.max(oldLines.length, newLines.length);
+            for (let i = 0; i < maxLen; i++) {
+                const oldLine = i < oldLines.length ? oldLines[i] : null;
+                const newLine = i < newLines.length ? newLines[i] : null;
+                if (oldLine === newLine) {
+                    result.push({ type: 'same', text: newLine, newNum: i + 1 });
+                } else {
+                    if (oldLine !== null && oldLine !== newLine) {
+                        result.push({ type: 'del', text: oldLine, oldNum: i + 1 });
+                    }
+                    if (newLine !== null && oldLine !== newLine) {
+                        result.push({ type: 'add', text: newLine, newNum: i + 1 });
+                    }
+                }
+            }
+            return result;
+        }
+
+        setViewerMeta(script, lineCount) {
+            const shortChecksum = (script.checksum || '').substring(0, 12);
+            const ts = script.updatedAt;
+            const updated = ts ? new Date(typeof ts === 'number' && ts < 1e12 ? ts * 1000 : ts).toLocaleString() : '';
+
+            let html = '';
+            if (script.updatedBy) html += `<span>${this.esc(script.updatedBy)}</span>`;
+            if (updated) html += `<span>${updated}</span>`;
+            if (shortChecksum) {
+                html += `<span class="checksum" title="Click to copy full checksum" onclick="app.copyChecksum('${this.esc(script.checksum)}')">${shortChecksum}</span>`;
+            }
+            this.el.viewerMeta.innerHTML = html;
+            this.el.statsRight.textContent = `${lineCount} lines`;
+        }
+
+        clearViewer() {
+            this.el.viewerBreadcrumb.innerHTML = '';
+            this.el.viewerMeta.innerHTML = '';
+            this.el.diffBarContainer.innerHTML = '';
+            this.el.viewerContent.innerHTML = `
+            <div class="empty-viewer">
+                <div class="icon">📜</div>
+                <h3>Select a script to view</h3>
+                <p>Browse the tree on the left to explore experiment scripts</p>
+            </div>`;
+            this.el.statsRight.textContent = '';
+        }
+
+        updateStats() {
+            if (!this.tree || !this.tree.systems) {
+                this.el.statsLeft.textContent = '';
+                return;
+            }
+            const sysCnt = this.tree.systems.length;
+            let scriptCnt = 0;
+            let protoCnt = new Set();
+            this.tree.systems.forEach(sys => {
+                Object.entries(sys.scripts).forEach(([proto, scripts]) => {
+                    if (proto !== '_system') protoCnt.add(sys.name + '/' + proto);
+                    scriptCnt += scripts.length;
+                });
+            });
+            let text = `${sysCnt} system${sysCnt !== 1 ? 's' : ''} · ${protoCnt.size} protocol${protoCnt.size !== 1 ? 's' : ''} · ${scriptCnt} script${scriptCnt !== 1 ? 's' : ''}`;
+
+            if (this.comparing && this.tree.baseVersion) {
+                text += ` · comparing ${this.tree.version} ⇄ ${this.tree.baseVersion}`;
+            }
+            this.el.statsLeft.textContent = text;
+        }
+
+        // ============ Tcl Syntax Highlighting ============
+
+        highlightTcl(code) {
+            let html = this.esc(code);
+            html = html.replace(/^([ \t]*)(#.*)$/gm, '$1<span class="cmt">$2</span>');
+            html = html.replace(/"([^"\\]|\\.)*"/g, match => {
+                const inner = match.replace(/\$[\w:]+/g, '<span class="var">$&</span>');
+                return `<span class="str">${inner}</span>`;
+            });
+            html = html.replace(/\$\{[^}]+\}/g, '<span class="var">$&</span>');
+            html = html.replace(/\$[\w:]+/g, '<span class="var">$&</span>');
+            const keywords = [
+                'proc','set','if','else','elseif','while','for','foreach',
+                'switch','return','break','continue','catch','try','throw',
+                'expr','eval','uplevel','upvar','global','variable',
+                'namespace','package','source','puts','gets','open','close',
+                'read','append','lappend','lindex','llength','lrange','lsort',
+                'lsearch','lreplace','list','join','split','string',
+                'regexp','regsub','format','scan','array','dict',
+                'info','rename','unset','incr','after','update',
+                'trace','interp','apply','coroutine','yield',
+                'error','file','exec','pid','clock','binary'
+            ];
+            const kwPattern = new RegExp(`\\b(${keywords.join('|')})\\b`, 'g');
+            html = html.replace(kwPattern, (match, kw, offset, str) => {
+                const before = str.substring(Math.max(0, offset - 20), offset);
+                if (before.includes('<span') && !before.includes('</span>')) return match;
+                return `<span class="kw">${kw}</span>`;
+            });
+            html = html.replace(/\s(-[\w]+)/g, (match, opt) => {
+                return match.replace(opt, `<span class="opt">${opt}</span>`);
+            });
+            return html;
+        }
+
+        highlightTclLine(line) {
+            return this.highlightTcl(line);
+        }
+
+        // ============ Utilities ============
+
+        copyChecksum(checksum) {
+            navigator.clipboard?.writeText(checksum).then(() => this.showToast('Checksum copied'));
+        }
+
+        showToast(msg) {
+            this.el.toast.textContent = msg;
+            this.el.toast.className = 'toast show success';
+            clearTimeout(this._toastTimer);
+            this._toastTimer = setTimeout(() => this.el.toast.className = 'toast', 2500);
+        }
+
+        setupResize() {
+            const handle = document.getElementById('resize-handle');
+            const tree = this.el.treePanel;
+            let startX, startW;
+            const onMove = e => {
+                const newW = Math.min(Math.max(startW + (e.clientX - startX), 200), 600);
+                tree.style.width = newW + 'px';
+                handle.classList.add('dragging');
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                handle.classList.remove('dragging');
+            };
+            handle.addEventListener('mousedown', e => {
+                startX = e.clientX;
+                startW = tree.offsetWidth;
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+                e.preventDefault();
+            });
+        }
+
+        esc(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+    }
+
+    let app;
+    document.addEventListener('DOMContentLoaded', () => { app = new ESSBrowser(); });
+    </script>
+</body>
+</html>
