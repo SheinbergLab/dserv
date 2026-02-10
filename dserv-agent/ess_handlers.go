@@ -190,10 +190,14 @@ func (r *ESSRegistry) handleScript(w http.ResponseWriter, req *http.Request) {
 
 		var filename string
 		if protocol == "" {
-			filename = fmt.Sprintf("%s.tcl", systemName)
-			if scriptType == ScriptTypeExtract {
+			switch scriptType {
+			case ScriptTypeExtract:
 				filename = fmt.Sprintf("%s_extract.tcl", systemName)
-			}
+			case ScriptTypeAnalyze:
+				filename = fmt.Sprintf("%s_analyze.tcl", systemName)
+			default:
+				filename = fmt.Sprintf("%s.tcl", systemName)
+			}			
 		} else {
 			switch scriptType {
 			case ScriptTypeProtocol:

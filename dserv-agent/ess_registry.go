@@ -812,6 +812,7 @@ func (r *ESSRegistry) importSystem(sysPath, sysName string) error {
 	systemScripts := map[string]string{
 		ScriptTypeSystem:  sysName + ".tcl",
 		ScriptTypeExtract: sysName + "_extract.tcl",
+		ScriptTypeAnalyze: sysName + "_analyze.tcl",		
 	}
 	for scriptType, filename := range systemScripts {
 		filePath := filepath.Join(sysPath, filename)
