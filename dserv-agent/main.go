@@ -421,6 +421,9 @@ Environment:
 
 		// Add projects/configs/queues handlers
 		essRegistry.RegisterConfigsHandlers(mux, agent.auth)
+
+		// Add browser support
+		essRegistry.RegisterBrowseHandlers(mux, agent.auth)		
 	}
 	
 	if cfg.ServerMode {
