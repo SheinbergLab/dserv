@@ -379,7 +379,7 @@ func (r *ESSRegistry) SaveScript(script *ESSScript, expectedChecksum, comment st
 		}
 		// Update script
 		_, err = tx.Exec(`UPDATE ess_scripts SET content = ?, checksum = ?, filename = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-			script.Content, script.Checksum, now.Unix(), script.UpdatedBy, existing.ID)
+			script.Content, script.Checksum, script.Filename, now.Unix(), script.UpdatedBy, existing.ID)
 		if err != nil {
 			return err
 		}
