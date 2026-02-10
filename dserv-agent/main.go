@@ -472,7 +472,8 @@ Environment:
 	mux.HandleFunc("/api/files/", agent.auth(agent.handleFiles))
 	mux.HandleFunc("/api/components", agent.auth(agent.handleComponents))
 	mux.HandleFunc("/api/components/", agent.auth(agent.handleComponentAction))
-
+	mux.HandleFunc("/api/ess/browse-config", agent.auth(agent.handleESSBrowseConfig))
+	
 	// Mesh endpoints (reads from cache)
 	mux.HandleFunc("/api/mesh/peers", agent.auth(agent.handleMeshPeers))
 	if !cfg.ServerMode {
