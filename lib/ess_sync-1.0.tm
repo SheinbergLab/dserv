@@ -27,6 +27,7 @@ namespace eval ess {
 
     variable registry_url {}
     variable registry_workgroup {}
+    variable registry_checksums [dict create]  ;# last-known registry checksums per script type
 
     if {[info exists ::env(ESS_REGISTRY_URL)]} {
         set registry_url $::env(ESS_REGISTRY_URL)
@@ -461,6 +462,7 @@ namespace eval ess {
         variable overlay_path
         variable registry_url
         variable registry_workgroup
+        variable registry_checksums
         variable current
 
         if {$registry_url eq ""} {
@@ -514,20 +516,39 @@ namespace eval ess {
         set system $current(system)
         set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
 
-        # Include local checksum so server can detect conflicts
-        set checksum [sha256 -file $base_file]
+        # Use stored registry checksum for optimistic locking.
+        # If we have one from a prior sync_status, the server will reject
+        # the commit if someone else modified the script in between.
+        # Empty string skips the check (first commit or no prior status).
+        set expected ""
+        if {[dict exists $registry_checksums $type]} {
+            set expected [dict get $registry_checksums $type]
+        }
 
         set body [dict_to_json [dict create \
             content $content \
             updatedBy $user \
             comment $comment \
-            expectedChecksum $checksum]]
+            expectedChecksum $expected]]
 
         if {[catch {
             set response [https_put $url $body]
         } err]} {
             ess_error "Failed to commit $type to registry: $err" "sync"
             error "Commit failed: $err"
+        }
+
+        # Update stored checksum to what the server now has
+        # (the checksum of the content we just pushed)
+        if {[catch {
+            set new_checksum [json_get $response checksum]
+            if {$new_checksum ne ""} {
+                dict set registry_checksums $type $new_checksum
+            }
+        }]} {
+            # If we can't parse the response checksum, clear it
+            # so next commit won't send a stale expected value
+            dict set registry_checksums $type ""
         }
 
         ess_info "Committed $type to registry ($registry_workgroup/$system)" "sync"
@@ -583,6 +604,7 @@ namespace eval ess {
         variable system_path
         variable registry_url
         variable registry_workgroup
+        variable registry_checksums
         variable current
 
         if {$registry_url eq ""} {
@@ -614,6 +636,9 @@ namespace eval ess {
                 set response [https_get $url]
                 set remote_checksum [json_get $response checksum]
 
+                # Store registry checksum for optimistic locking on commit
+                dict set registry_checksums $type $remote_checksum
+
                 if {$local_checksum eq $remote_checksum} {
                     dict set result $type synced
                 } else {
@@ -621,6 +646,7 @@ namespace eval ess {
                 }
             } err]} {
                 # 404 means not on registry yet
+                dict set registry_checksums $type ""
                 dict set result $type local_only
             }
         }
