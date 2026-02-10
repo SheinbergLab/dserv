@@ -1,8 +1,12 @@
 // ess_browse.go - Browse endpoint and handler for ESS Script Registry
 //
 // Provides endpoints for browsing and comparing ESS experiment scripts:
-//   - GET /api/v1/ess/browse/{workgroup}?version=main&base=  — full script tree
-//   - GET /api/v1/ess/browse/config                          — default workgroup for client mode
+//
+//   Registry server (has ESS database):
+//     GET /api/v1/ess/browse/{workgroup}?version=main&base=  — full script tree
+//
+//   Any agent (client or server):
+//     GET /api/ess/browse-config  — tells the browse page where to find the registry
 //
 // When a `base` version is specified (e.g., ?version=dave-dev&base=main),
 // each script is annotated with a diff status relative to the base version,
@@ -67,7 +71,6 @@ func (r *ESSRegistry) GetBrowseTree(workgroup, version, baseVersion string) (*Br
 		version = "main"
 	}
 
-	// Get all systems for this workgroup
 	systems, err := r.ListSystems(workgroup)
 	if err != nil {
 		return nil, err
@@ -88,7 +91,6 @@ func (r *ESSRegistry) GetBrowseTree(workgroup, version, baseVersion string) (*Br
 		systemsByNameVersion[sys.Name+"/"+sys.Version] = sys
 	}
 
-	// For each unique system name, get the requested version
 	seen := make(map[string]bool)
 	for _, sys := range systems {
 		if seen[sys.Name] {
@@ -96,7 +98,6 @@ func (r *ESSRegistry) GetBrowseTree(workgroup, version, baseVersion string) (*Br
 		}
 		seen[sys.Name] = true
 
-		// Find the target version
 		targetSys := systemsByNameVersion[sys.Name+"/"+version]
 		if targetSys == nil {
 			targetSys = systemsByNameVersion[sys.Name+"/main"]
@@ -105,13 +106,11 @@ func (r *ESSRegistry) GetBrowseTree(workgroup, version, baseVersion string) (*Br
 			targetSys = sys
 		}
 
-		// Get scripts (metadata only — no content)
 		scripts, err := r.getBrowseScripts(targetSys.ID)
 		if err != nil {
 			return nil, err
 		}
 
-		// If base version specified and differs from current, compute diff
 		var diffSummary *DiffSummary
 		if baseVersion != "" && baseVersion != version {
 			baseSys := systemsByNameVersion[sys.Name+"/"+baseVersion]
@@ -168,7 +167,6 @@ func (r *ESSRegistry) getBrowseScripts(systemID int64) (map[string][]BrowseScrip
 // annotateDiffs compares scripts against a base version and sets DiffStatus.
 // Also injects "deleted" entries for scripts present in base but not in target.
 func (r *ESSRegistry) annotateDiffs(scripts map[string][]BrowseScript, baseSystemID int64) *DiffSummary {
-	// Build checksum map from base version
 	type baseInfo struct {
 		checksum  string
 		filename  string
@@ -196,15 +194,12 @@ func (r *ESSRegistry) annotateDiffs(scripts map[string][]BrowseScript, baseSyste
 	}
 
 	summary := &DiffSummary{}
-
-	// Track which base scripts we've seen
 	seenBaseKeys := make(map[string]bool)
 
-	// Annotate each script in the target version
 	for proto, scriptList := range scripts {
 		for i := range scriptList {
 			s := &scriptList[i]
-			rawProto := s.Protocol // empty string for _system
+			rawProto := s.Protocol
 			key := rawProto + "/" + s.Type
 
 			base, inBase := baseScripts[key]
@@ -224,7 +219,7 @@ func (r *ESSRegistry) annotateDiffs(scripts map[string][]BrowseScript, baseSyste
 		scripts[proto] = scriptList
 	}
 
-	// Find scripts in base that are not in target (deleted in overlay)
+	// Inject deleted entries (in base but not in target)
 	for key, base := range baseScripts {
 		if seenBaseKeys[key] {
 			continue
@@ -256,41 +251,13 @@ func (r *ESSRegistry) annotateDiffs(scripts map[string][]BrowseScript, baseSyste
 
 // ============ HTTP Handlers ============
 
-// RegisterBrowseHandlers registers the browse endpoint and config endpoint.
-// defaultWorkgroup is the workgroup from the agent's --workgroup flag (may be empty on the registry server).
-func (r *ESSRegistry) RegisterBrowseHandlers(mux *http.ServeMux, authMiddleware func(http.HandlerFunc) http.HandlerFunc, defaultWorkgroup string) {
-	mux.HandleFunc("/api/v1/ess/browse/config", authMiddleware(func(w http.ResponseWriter, req *http.Request) {
-		r.handleBrowseConfig(w, req, defaultWorkgroup)
-	}))
+// RegisterBrowseHandlers registers browse endpoints on the registry server
+// (the machine that has the ESS database).
+func (r *ESSRegistry) RegisterBrowseHandlers(mux *http.ServeMux, authMiddleware func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/api/v1/ess/browse/", authMiddleware(r.handleBrowse))
 }
 
-// GET /api/v1/ess/browse/config
-// Returns default workgroup and available workgroups for UI bootstrapping.
-// On a client-mode agent, defaultWorkgroup will be set from --workgroup,
-// so the browse page can auto-select it without user interaction.
-func (r *ESSRegistry) handleBrowseConfig(w http.ResponseWriter, req *http.Request, defaultWorkgroup string) {
-	if req.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	workgroups, err := r.ListWorkgroups()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, 200, map[string]interface{}{
-		"defaultWorkgroup": defaultWorkgroup,
-		"workgroups":       workgroups,
-	})
-}
-
 // GET /api/v1/ess/browse/{workgroup}?version=main&base=
-// Returns the full script tree for a workgroup.
-// If `base` is specified, scripts are annotated with diff status relative to
-// the base version (typically "main"), enabling overlay diff visualization.
 func (r *ESSRegistry) handleBrowse(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -318,7 +285,6 @@ func (r *ESSRegistry) handleBrowse(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Include available workgroups for the selector
 	workgroups, err := r.ListWorkgroups()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -349,4 +315,49 @@ func (r *ESSRegistry) ListWorkgroups() ([]string, error) {
 		workgroups = append(workgroups, wg)
 	}
 	return workgroups, nil
+}
+
+// ============ Agent-side config endpoint ============
+// This lives on the Agent, not the ESSRegistry, because every agent
+// can serve it regardless of whether it has a local ESS database.
+
+// handleESSBrowseConfig returns the registry URL and workgroup so the
+// browse page knows where to send its ESS API requests.
+//
+// GET /api/ess/browse-config
+//
+// Response:
+//   {
+//     "registryURL": "https://dserv.net",
+//     "workgroup": "brown-sheinberg",
+//     "local": false
+//   }
+//
+// When the agent IS the registry server (has --ess-registry), it returns
+// local=true and no registryURL, telling the page to use relative URLs.
+func (a *Agent) handleESSBrowseConfig(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"workgroup": a.cfg.Workgroup,
+	}
+
+	if a.cfg.ESSRegistryPath != "" {
+		// This agent IS the registry — browse page should use relative URLs
+		resp["local"] = true
+		resp["registryURL"] = ""
+	} else if len(a.cfg.RegistryURLs) > 0 {
+		// This agent talks to a remote registry — tell the page where
+		resp["local"] = false
+		resp["registryURL"] = normalizeURL(a.cfg.RegistryURLs[0])
+	} else {
+		resp["local"] = false
+		resp["registryURL"] = ""
+		resp["error"] = "No ESS registry configured"
+	}
+
+	writeJSON(w, 200, resp)
 }
