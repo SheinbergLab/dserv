@@ -974,20 +974,41 @@ body {
 
         highlightTcl(code) {
             let html = this.esc(code);
-            html = html.replace(/^([ \t]*)(#.*)$/gm, '$1<span class="cmt">$2</span>');
+
+            // Phase 1: Extract comments and strings into placeholders
+            // so later regex passes can't corrupt them
+            const slots = [];
+            const ph = i => `\x00${i}\x00`;
+
+            // Comments: # to end of line
+            html = html.replace(/^([ \t]*)(#.*)$/gm, (m, indent, cmt) => {
+                slots.push(`<span class="cmt">${cmt}</span>`);
+                return indent + ph(slots.length - 1);
+            });
+
+            // Strings: "..." with variable highlighting inside
             html = html.replace(/"([^"\\]|\\.)*"/g, match => {
                 const inner = match.replace(/\$[\w:]+/g, '<span class="var">$&</span>');
-                return `<span class="str">${inner}</span>`;
+                slots.push(`<span class="str">${inner}</span>`);
+                return ph(slots.length - 1);
             });
+
+            // Phase 2: Highlight remaining code (no spans to corrupt)
+
+            // Variables: ${name} and $name
             html = html.replace(/\$\{[^}]+\}/g, '<span class="var">$&</span>');
             html = html.replace(/\$[\w:]+/g, '<span class="var">$&</span>');
+
+            // Keywords
             const kws = 'proc|set|if|else|elseif|while|for|foreach|switch|return|break|continue|catch|try|throw|expr|eval|uplevel|upvar|global|variable|namespace|package|source|puts|gets|open|close|read|append|lappend|lindex|llength|lrange|lsort|lsearch|lreplace|list|join|split|string|regexp|regsub|format|scan|array|dict|info|rename|unset|incr|after|update|trace|interp|apply|coroutine|yield|error|file|exec|pid|clock|binary';
-            html = html.replace(new RegExp(`\\b(${kws})\\b`, 'g'), (m, kw, off, str) => {
-                const before = str.substring(Math.max(0, off - 20), off);
-                if (before.includes('<span') && !before.includes('</span>')) return m;
-                return `<span class="kw">${kw}</span>`;
-            });
-            html = html.replace(/\s(-[\w]+)/g, (m, opt) => m.replace(opt, `<span class="opt">${opt}</span>`));
+            html = html.replace(new RegExp(`\\b(${kws})\\b`, 'g'), '<span class="kw">$1</span>');
+
+            // -options (only preceded by whitespace)
+            html = html.replace(/(\s)(-[a-zA-Z][\w]*)/g, '$1<span class="opt">$2</span>');
+
+            // Phase 3: Restore placeholders
+            html = html.replace(/\x00(\d+)\x00/g, (_, i) => slots[parseInt(i)]);
+
             return html;
         }
 
