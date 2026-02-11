@@ -149,6 +149,27 @@ header h1 {
 .open-dropdown-item .item-desc { display: block; font-size: 10px; color: #71767b; margin-top: 2px; }
 .open-dropdown-item.disabled { opacity: 0.4; pointer-events: none; }
 
+/* App menu (⋮) */
+.app-menu-wrap { position: relative; }
+.app-menu-btn {
+    background: none; border: none; color: #71767b; font-size: 20px;
+    cursor: pointer; padding: 2px 6px; line-height: 1; border-radius: 4px;
+}
+.app-menu-btn:hover { color: #e7e9ea; background: #1a2634; }
+.app-menu {
+    display: none; position: absolute; top: 100%; left: 0; margin-top: 4px;
+    background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
+    min-width: 170px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+.app-menu.open { display: block; }
+.app-menu a {
+    display: block; padding: 9px 14px; color: #e7e9ea; text-decoration: none;
+    font-size: 13px; border-bottom: 1px solid #2f3336; transition: background 0.1s ease;
+}
+.app-menu a:last-child { border-bottom: none; }
+.app-menu a:hover { background: #2f3336; }
+.app-menu .menu-icon { margin-right: 8px; opacity: 0.7; }
+
 .empty-state { text-align: center; padding: 80px 40px; color: #71767b; }
 .empty-state-icon { font-size: 48px; margin-bottom: 16px; }
 .empty-state h3 { font-size: 20px; color: #e7e9ea; margin-bottom: 8px; }
@@ -357,7 +378,15 @@ footer {
 <body>
     <div class="container">
         <header>
-            <h1>Lab Mesh Directory</h1>
+            <div style="display:flex; align-items:center; gap:10px;">
+                <h1>Lab Mesh Directory</h1>
+                <div class="app-menu-wrap">
+                    <button class="app-menu-btn" onclick="document.getElementById('app-menu').classList.toggle('open')" title="Tools">⋮</button>
+                    <div class="app-menu" id="app-menu">
+                        <a href="/browse.html"><span class="menu-icon">📜</span>Script Browser</a>
+                    </div>
+                </div>
+            </div>
             <div class="header-right">
                 <div class="search-box">
                     <input type="text" id="search-input" placeholder="Filter nodes...">
@@ -1223,6 +1252,14 @@ footer {
 
      let app;
      document.addEventListener('DOMContentLoaded', () => { app = new LabMeshApp(); });
+
+     // Close app menu on outside click
+     document.addEventListener('click', e => {
+         const menu = document.getElementById('app-menu');
+         if (menu && !menu.parentElement.contains(e.target)) {
+             menu.classList.remove('open');
+         }
+     });
     </script>
 </body>
 </html>
