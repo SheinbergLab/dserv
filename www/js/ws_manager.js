@@ -245,22 +245,54 @@ class DservConnection {
             data = rawData;
         }
         
+        // Check for requestId-based response matching first (new async path).
+        // If the response carries a requestId that matches a pending request,
+        // route it directly — no FIFO ambiguity.
+        if (typeof data === 'object' && data.requestId) {
+            const reqId = String(data.requestId);
+            if (this.pendingRequests.has(reqId)) {
+                const req = this.pendingRequests.get(reqId);
+                this.pendingRequests.delete(reqId);
+
+                if (data.status === 'error') {
+                    req.reject(new Error(data.error || 'Unknown error'));
+                } else {
+                    req.resolve(data.result !== undefined ? data.result : JSON.stringify(data));
+                }
+
+                // Also emit terminal:response for any listeners (e.g. data_manager.js)
+                this.emit('terminal:response', data);
+
+                // Call legacy callback
+                this.options.onMessage(data);
+                return;
+            }
+        }
+        
         // Determine if this is a datapoint message (should NOT resolve pending requests)
         const isDatapoint = typeof data === 'object' && data.name && 
                            (data.data !== undefined || data.value !== undefined);
         
-        // Only resolve pending requests for non-datapoint messages
+        // Legacy FIFO matching for pending requests without requestId.
+        // This path is only used during connection setup (e.g. 'subprocess -link')
+        // before the async path is active.
         if (this.pendingRequests.size > 0 && !isDatapoint) {
-            const [id, req] = this.pendingRequests.entries().next().value;
-            this.pendingRequests.delete(id);
-            
-            // Resolve with string or result field
-            if (typeof data === 'string') {
-                req.resolve(data);
-            } else if (data && data.result !== undefined) {
-                req.resolve(data.result);
-            } else {
-                req.resolve(JSON.stringify(data));
+            // Only match requests that used the legacy path (numeric keys)
+            const firstEntry = this.pendingRequests.entries().next().value;
+            if (firstEntry) {
+                const [id, req] = firstEntry;
+                // Legacy requests use numeric keys; async requests use string keys
+                if (typeof id === 'number') {
+                    this.pendingRequests.delete(id);
+                    
+                    if (typeof data === 'string') {
+                        req.resolve(data);
+                    } else if (data && data.result !== undefined) {
+                        req.resolve(data.result);
+                    } else {
+                        req.resolve(JSON.stringify(data));
+                    }
+                }
             }
         }
         
@@ -306,7 +338,14 @@ class DservConnection {
         this.options.onMessage(data);
     }
 
-    async sendRaw(command) {
+    /**
+     * Send a command and wait for the response.
+     * Uses the JSON async path with requestId for non-blocking server-side execution.
+     * @param {string} command - The Tcl command to evaluate
+     * @param {number} timeout - Timeout in ms (default 30000)
+     * @returns {Promise<string>} The result string
+     */
+    async sendRaw(command, timeout = 30000) {
         if (!this.connected || !this.ws) {
             throw new Error('Not connected');
         }
@@ -316,8 +355,56 @@ class DservConnection {
             throw new Error(`WebSocket not ready (state: ${this.ws.readyState})`);
         }
         
+        // Use string requestId to distinguish from legacy numeric keys
+        const reqId = String(++this.requestId);
+        
         return new Promise((resolve, reject) => {
-            const id = ++this.requestId;
+            const timer = setTimeout(() => {
+                this.pendingRequests.delete(reqId);
+                reject(new Error('Request timeout'));
+            }, timeout);
+
+            this.pendingRequests.set(reqId, {
+                resolve: (data) => {
+                    clearTimeout(timer);
+                    resolve(data);
+                },
+                reject: (err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                }
+            });
+
+            // Send as JSON eval with requestId — triggers async path on server.
+            // Server evaluates the script without blocking the event loop,
+            // then sends the response back with the matching requestId.
+            const message = JSON.stringify({
+                cmd: 'eval',
+                script: command,
+                requestId: reqId
+            });
+            this.ws.send(message);
+        });
+    }
+
+    /**
+     * Send a command using the legacy plain-text protocol (blocking server-side).
+     * Only used internally for connection setup commands like 'subprocess -link'
+     * that must complete before the async infrastructure is ready.
+     * @param {string} command - Raw text command
+     * @returns {Promise<string>} The result string
+     */
+    _sendRawLegacy(command) {
+        if (!this.connected || !this.ws) {
+            throw new Error('Not connected');
+        }
+        
+        if (this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error(`WebSocket not ready (state: ${this.ws.readyState})`);
+        }
+        
+        return new Promise((resolve, reject) => {
+            const id = ++this.requestId;  // numeric key for legacy FIFO matching
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(id);
                 reject(new Error('Request timeout'));
