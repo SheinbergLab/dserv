@@ -216,6 +216,10 @@ public:
   client_request_t* get_current_request() {
     return current_request;
   }
+
+  void sendToWebSocketClient(const std::string& client_name,
+			     const std::string& message);
+  
   
   void set_linked(bool linked) { is_linked_subprocess = linked; }
   bool is_linked() const { return is_linked_subprocess; }

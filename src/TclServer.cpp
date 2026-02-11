@@ -1132,41 +1132,53 @@ set www_path /usr/local/dserv/www</code>
 
               if (script_obj && json_is_string(script_obj)) {
                 const char *script = json_string_value(script_obj);
-                  
-                // Create request
-                client_request_t req;
-                req.type = REQ_SCRIPT;
-                req.rqueue = userData->rqueue;
-                req.script = std::string(script);
-		req.socket_fd = -1;
-		req.websocket_id = userData->client_name;
-		
-                // Push to queue
-                queue.push_back(req);
-                  
-                // Wait for response
-                std::string result = userData->rqueue->front();
-                userData->rqueue->pop_front();
-                  
-                // Create JSON response
-                json_t *response = json_object();
-                if (result.starts_with("!TCL_ERROR ")) {
-                  json_object_set_new(response, "status", json_string("error"));
-                  json_object_set_new(response, "error", json_string(result.substr(11).c_str()));
-                } else {
-                  json_object_set_new(response, "status", json_string("ok"));
-                  json_object_set_new(response, "result", json_string(result.c_str()));
-                }
 
-                // If a requestId was provided, include it in the response
+                // If client provided a requestId, use async path:
+                // push request and return immediately, freeing the uWS event loop.
+                // The process thread will send the response back via ws_loop->defer().
                 if (requestId_obj && json_is_string(requestId_obj)) {
-                    json_object_set(response, "requestId", requestId_obj);
+                  client_request_t req;
+                  req.type = REQ_SCRIPT_WS_ASYNC;
+                  req.rqueue = nullptr;  // no blocking queue
+                  req.script = std::string(script);
+                  req.socket_fd = -1;
+                  req.websocket_id = userData->client_name;
+                  req.request_id = json_string_value(requestId_obj);
+
+                  queue.push_back(req);
+                  // Event loop is free — response sent from process_requests
                 }
-                  
-                char *response_str = json_dumps(response, 0);
-                ws->send(response_str, uWS::OpCode::TEXT);
-                free(response_str);
-                json_decref(response);
+                else {
+                  // Original blocking path: no requestId provided.
+                  // Kept exactly as-is for backward compatibility.
+                  client_request_t req;
+                  req.type = REQ_SCRIPT;
+                  req.rqueue = userData->rqueue;
+                  req.script = std::string(script);
+                  req.socket_fd = -1;
+                  req.websocket_id = userData->client_name;
+
+                  queue.push_back(req);
+
+                  // Wait for response (blocks uWS event loop — legacy behavior)
+                  std::string result = userData->rqueue->front();
+                  userData->rqueue->pop_front();
+
+                  // Create JSON response
+                  json_t *response = json_object();
+                  if (result.starts_with("!TCL_ERROR ")) {
+                    json_object_set_new(response, "status", json_string("error"));
+                    json_object_set_new(response, "error", json_string(result.substr(11).c_str()));
+                  } else {
+                    json_object_set_new(response, "status", json_string("ok"));
+                    json_object_set_new(response, "result", json_string(result.c_str()));
+                  }
+
+                  char *response_str = json_dumps(response, 0);
+                  ws->send(response_str, uWS::OpCode::TEXT);
+                  free(response_str);
+                  json_decref(response);
+                }
               }
             }
 
@@ -1598,6 +1610,28 @@ void TclServer::sendLargeMessage(WebSocketType* ws,
     }
     
     //    std::cout << "Sent " << totalChunks << " chunks for message " << messageId << std::endl;
+}
+
+// Send a text message to a WebSocket client identified by client_name.
+// Safe to call from any thread — uses ws_loop->defer().
+// If the client has disconnected, the message is silently discarded.
+void TclServer::sendToWebSocketClient(const std::string& client_name,
+                                       const std::string& message) {
+    if (!ws_loop) return;
+
+    ws_loop->defer([this, client_name, message]() {
+        std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
+        auto it = this->ws_connections.find(client_name);
+        if (it == this->ws_connections.end()) return;  // client disconnected
+
+        if (this->websocket_ssl_enabled) {
+            auto *ws = (uWS::WebSocket<true, true, WSPerSocketData>*)it->second;
+            ws->send(message, uWS::OpCode::TEXT);
+        } else {
+            auto *ws = (uWS::WebSocket<false, true, WSPerSocketData>*)it->second;
+            ws->send(message, uWS::OpCode::TEXT);
+        }
+    });
 }
 
 /********************* link subprocess to connection support *******************************/
@@ -2963,6 +2997,44 @@ static int process_requests(TclServer *tserv)
       {
 	const char *script = req.script.c_str();
 	retcode = Tcl_Eval(interp, script);
+      }
+      break;
+    case REQ_SCRIPT_WS_ASYNC:
+      {
+	// Async WebSocket eval: execute script, send response via ws_loop->defer()
+	// This runs on the Tcl process thread (which is allowed to block),
+	// but the uWS event loop was NOT blocked waiting for this.
+	const char *script = req.script.c_str();
+	retcode = Tcl_Eval(interp, script);
+	const char *rcstr = Tcl_GetStringResult(interp);
+	
+	// Build JSON response
+	json_t *response = json_object();
+	if (retcode == TCL_OK) {
+	  json_object_set_new(response, "status", json_string("ok"));
+	  json_object_set_new(response, "result",
+			      json_string(rcstr ? rcstr : ""));
+	} else {
+	  json_object_set_new(response, "status", json_string("error"));
+	  json_object_set_new(response, "error",
+			      json_string(rcstr ? rcstr : "Error"));
+	}
+	
+	// Include the requestId so the client can match this response
+	if (!req.request_id.empty()) {
+	  json_object_set_new(response, "requestId",
+			      json_string(req.request_id.c_str()));
+	}
+	
+	char *response_str = json_dumps(response, 0);
+	std::string msg(response_str);
+	free(response_str);
+	json_decref(response);
+	
+	// Send response back to the WebSocket client via the event loop.
+	// Uses sendToWebSocketClient which handles thread safety and
+	// SSL/non-SSL dispatch, and silently discards if client disconnected.
+	tserv->sendToWebSocketClient(req.websocket_id, msg);
       }
       break;
     case REQ_DPOINT:
