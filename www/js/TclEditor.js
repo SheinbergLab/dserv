@@ -687,11 +687,30 @@ class TclEditor {
     }
     
     code = code.trim();
-    if (!code) return true;
+    if (!code) {
+      // Even if empty, advance to next line
+      if (selection.empty) {
+        const line = state.doc.lineAt(selection.head);
+        if (line.number < state.doc.lines) {
+          const nextLine = state.doc.line(line.number + 1);
+          view.dispatch({ selection: { anchor: nextLine.from } });
+        }
+      }
+      return true;
+    }
     
     // Call the onExecute callback if set
     if (this.onExecute) {
       this.onExecute(code);
+    }
+    
+    // If executing current line (no selection), advance cursor to next line
+    if (selection.empty) {
+      const line = state.doc.lineAt(selection.head);
+      if (line.number < state.doc.lines) {
+        const nextLine = state.doc.line(line.number + 1);
+        view.dispatch({ selection: { anchor: nextLine.from } });
+      }
     }
     
     return true;

@@ -50,6 +50,10 @@ class DlshWorkbench {
             errorCount: document.getElementById('error-count')
         };
         
+        // Editor persistence
+        this.storageKey = 'dlsh-editor-state';
+        this._saveTimer = null;
+        
         // Error tracking
         this.errorCount = 0;
         this.lastErrorInfo = null;
@@ -131,7 +135,21 @@ class DlshWorkbench {
         this.elements.editorContainer.addEventListener('editor-ready', () => {
             this.tclEditor.setWebSocket(this.conn);
             this.tclEditor.setOnExecute((code) => this.executeSnippet(code));
-            this.loadExample();
+            
+            // Restore saved content, or load example if nothing saved
+            const saved = this._loadEditorState();
+            if (saved) {
+                this.tclEditor.setValue(saved);
+            } else {
+                this.loadExample();
+            }
+            
+            // Auto-save editor content on changes (debounced)
+            if (this.tclEditor.view) {
+                this.tclEditor.view.dom.addEventListener('input', () => {
+                    this._debouncedSaveEditor();
+                });
+            }
         }, { once: true });
     }
     
@@ -437,6 +455,7 @@ class DlshWorkbench {
     clearEditor() {
         if (this.tclEditor) {
             this.tclEditor.setValue('');
+            this._saveEditorState();
         }
     }
     
@@ -466,6 +485,44 @@ dg_view $g
 return $g`;
         
         this.tclEditor.setValue(code);
+        this._saveEditorState();
+    }
+    
+    // ============================================================
+    // Editor Persistence
+    // ============================================================
+    
+    _saveEditorState() {
+        if (!this.tclEditor) return;
+        try {
+            const content = this.tclEditor.getValue();
+            localStorage.setItem(this.storageKey, JSON.stringify({
+                content: content,
+                timestamp: Date.now()
+            }));
+        } catch (e) {
+            // localStorage might be full or unavailable
+        }
+    }
+    
+    _loadEditorState() {
+        try {
+            const saved = localStorage.getItem(this.storageKey);
+            if (saved) {
+                const state = JSON.parse(saved);
+                if (state.content && state.content.trim()) {
+                    return state.content;
+                }
+            }
+        } catch (e) {
+            // Ignore parse errors
+        }
+        return null;
+    }
+    
+    _debouncedSaveEditor() {
+        if (this._saveTimer) clearTimeout(this._saveTimer);
+        this._saveTimer = setTimeout(() => this._saveEditorState(), 500);
     }
     
     // ============================================================
