@@ -1046,6 +1046,9 @@ set www_path /usr/local/dserv/www</code>
           try {
             // Create notification queue for this client
             userData->notification_queue = new SharedQueue<client_request_t>();
+
+            // Create async response queue for this client
+            userData->async_responses = new SharedQueue<std::string>();
             
             // Register with Dataserver as a queue-based client
             userData->dataserver_client_id =
@@ -1432,7 +1435,20 @@ set www_path /usr/local/dserv/www</code>
             // Clean up rqueue
             delete userData->rqueue;
             userData->rqueue = nullptr;
-            
+
+            // Clean up async response queue.
+            // The ws_connections entry was already erased above (under mutex),
+            // so no process thread can find this client's queue anymore.
+            // But a process thread might have found it just before we erased,
+            // so we still drain under the same mutex for safety.
+            if (userData->async_responses) {
+              while (userData->async_responses->size() > 0) {
+                userData->async_responses->pop_front();
+              }
+              delete userData->async_responses;
+              userData->async_responses = nullptr;
+            }
+	    
           } catch (const std::exception& e) {
             std::cerr << "Exception in WebSocket close handler: " << e.what() << std::endl;
           }
@@ -1610,28 +1626,6 @@ void TclServer::sendLargeMessage(WebSocketType* ws,
     }
     
     //    std::cout << "Sent " << totalChunks << " chunks for message " << messageId << std::endl;
-}
-
-// Send a text message to a WebSocket client identified by client_name.
-// Safe to call from any thread — uses ws_loop->defer().
-// If the client has disconnected, the message is silently discarded.
-void TclServer::sendToWebSocketClient(const std::string& client_name,
-                                       const std::string& message) {
-    if (!ws_loop) return;
-
-    ws_loop->defer([this, client_name, message]() {
-        std::lock_guard<std::mutex> lock(this->ws_connections_mutex);
-        auto it = this->ws_connections.find(client_name);
-        if (it == this->ws_connections.end()) return;  // client disconnected
-
-        if (this->websocket_ssl_enabled) {
-            auto *ws = (uWS::WebSocket<true, true, WSPerSocketData>*)it->second;
-            ws->send(message, uWS::OpCode::TEXT);
-        } else {
-            auto *ws = (uWS::WebSocket<false, true, WSPerSocketData>*)it->second;
-            ws->send(message, uWS::OpCode::TEXT);
-        }
-    });
 }
 
 /********************* link subprocess to connection support *******************************/
@@ -3001,42 +2995,34 @@ static int process_requests(TclServer *tserv)
       break;
     case REQ_SCRIPT_WS_ASYNC:
       {
-	// Async WebSocket eval: execute script, send response via ws_loop->defer()
-	// This runs on the Tcl process thread (which is allowed to block),
-	// but the uWS event loop was NOT blocked waiting for this.
-	const char *script = req.script.c_str();
-	retcode = Tcl_Eval(interp, script);
-	const char *rcstr = Tcl_GetStringResult(interp);
-	
-	// Build JSON response
-	json_t *response = json_object();
-	if (retcode == TCL_OK) {
-	  json_object_set_new(response, "status", json_string("ok"));
-	  json_object_set_new(response, "result",
-			      json_string(rcstr ? rcstr : ""));
-	} else {
-	  json_object_set_new(response, "status", json_string("error"));
-	  json_object_set_new(response, "error",
-			      json_string(rcstr ? rcstr : "Error"));
-	}
-	
-	// Include the requestId so the client can match this response
-	if (!req.request_id.empty()) {
-	  json_object_set_new(response, "requestId",
-			      json_string(req.request_id.c_str()));
-	}
-	
-	char *response_str = json_dumps(response, 0);
-	std::string msg(response_str);
-	free(response_str);
-	json_decref(response);
-	
-	// Send response back to the WebSocket client via the event loop.
-	// Uses sendToWebSocketClient which handles thread safety and
-	// SSL/non-SSL dispatch, and silently discards if client disconnected.
-	tserv->sendToWebSocketClient(req.websocket_id, msg);
+        const char *script = req.script.c_str();
+        retcode = Tcl_Eval(interp, script);
+        const char *rcstr = Tcl_GetStringResult(interp);
+
+        json_t *response = json_object();
+        if (retcode == TCL_OK) {
+          json_object_set_new(response, "status", json_string("ok"));
+          json_object_set_new(response, "result",
+                              json_string(rcstr ? rcstr : ""));
+        } else {
+          json_object_set_new(response, "status", json_string("error"));
+          json_object_set_new(response, "error",
+                              json_string(rcstr ? rcstr : "Error"));
+        }
+
+        if (!req.request_id.empty()) {
+          json_object_set_new(response, "requestId",
+                              json_string(req.request_id.c_str()));
+        }
+
+        char *response_str = json_dumps(response, 0);
+        std::string msg(response_str);
+        free(response_str);
+        json_decref(response);
+
+        tserv->sendAsyncResponse(req.websocket_id, msg);
       }
-      break;
+      break;      
     case REQ_DPOINT:
       {
 	tserv->ds->set(req.dpoint);
@@ -3310,3 +3296,57 @@ TclServer::message_client_process(TclServer *tserv,
   tserv->unregister_connection(sockfd);
 }
 
+void TclServer::sendAsyncResponse(const std::string& client_name,
+                                   const std::string& message) {
+    if (!ws_loop) return;
+
+    bool pushed = false;
+    {
+        std::lock_guard<std::mutex> lock(ws_connections_mutex);
+        auto it = ws_connections.find(client_name);
+        if (it != ws_connections.end()) {
+            WSPerSocketData *ud = nullptr;
+            if (websocket_ssl_enabled) {
+                auto *ws = (uWS::WebSocket<true, true, WSPerSocketData>*)it->second;
+                ud = (WSPerSocketData *)ws->getUserData();
+            } else {
+                auto *ws = (uWS::WebSocket<false, true, WSPerSocketData>*)it->second;
+                ud = (WSPerSocketData *)ws->getUserData();
+            }
+            if (ud && ud->async_responses) {
+                ud->async_responses->push_back(message);
+                pushed = true;
+            }
+        }
+    }
+
+    if (pushed) {
+        ws_loop->defer([this, client_name]() {
+            std::lock_guard<std::mutex> lock(ws_connections_mutex);
+            auto it = ws_connections.find(client_name);
+            if (it == ws_connections.end()) return;
+
+            if (websocket_ssl_enabled) {
+                auto *ws = (uWS::WebSocket<true, true, WSPerSocketData>*)it->second;
+                WSPerSocketData *ud = (WSPerSocketData *)ws->getUserData();
+                if (ud && ud->async_responses) {
+                    while (ud->async_responses->size() > 0) {
+                        std::string resp = ud->async_responses->front();
+                        ud->async_responses->pop_front();
+                        ws->send(resp, uWS::OpCode::TEXT);
+                    }
+                }
+            } else {
+                auto *ws = (uWS::WebSocket<false, true, WSPerSocketData>*)it->second;
+                WSPerSocketData *ud = (WSPerSocketData *)ws->getUserData();
+                if (ud && ud->async_responses) {
+                    while (ud->async_responses->size() > 0) {
+                        std::string resp = ud->async_responses->front();
+                        ud->async_responses->pop_front();
+                        ws->send(resp, uWS::OpCode::TEXT);
+                    }
+                }
+            }
+        });
+    }
+}

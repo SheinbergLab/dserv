@@ -57,6 +57,9 @@ struct WSPerSocketData {
   // Add datapoint notification queue
   SharedQueue<client_request_t> *notification_queue;
   std::string dataserver_client_id;  // ID for Dataserver registration
+
+  // Queue for async eval responses (fed by process thread, drained by event loop)
+  SharedQueue<std::string> *async_responses = nullptr;  
 };
 
 // To help manage large WebSocket messages (stimdg -> ess/stiminfo)
@@ -217,10 +220,6 @@ public:
     return current_request;
   }
 
-  void sendToWebSocketClient(const std::string& client_name,
-			     const std::string& message);
-  
-  
   void set_linked(bool linked) { is_linked_subprocess = linked; }
   bool is_linked() const { return is_linked_subprocess; }
   
@@ -258,7 +257,8 @@ public:
 		return ws_loop != nullptr;
 	}
 
-
+  void sendAsyncResponse(const std::string& client_name, const std::string& message);
+  
   bool accept_new_connection(const std::string& client_ip) {
     std::lock_guard<std::mutex> lock(connection_mutex);
     
