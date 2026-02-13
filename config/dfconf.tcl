@@ -576,6 +576,13 @@ proc on_datafile_closed {filepath} {
     
     # Auto-export if enabled
     auto_export_file $filename
+    
+    # Clean up trials.dgz from work_dir after export.
+    # The obs.dgz is the stable cache; trials are always re-extracted
+    # from current extract code to avoid stale cached results.
+    if {[info exists trials_path] && [file exists $trials_path]} {
+        file delete $trials_path
+    }
 }
 
 proc create_obs_file {ess_path file_id basename} {
@@ -1485,16 +1492,32 @@ proc export_files {filenames level mode} {
             continue
         }
         
-        # Process file on demand if dgz files are needed but don't exist
+        # Ensure obs and trials are fresh before export
         if {$mode in {both dgz all}} {
-            if {$obs_path eq "" || ![file exists $obs_path] || 
-                (($trials_path eq "" || ![file exists $trials_path]) && $system ne "")} {
-                puts "dfconf: Processing $fn before export..."
-                set proc_result [process_datafile $fn]
-                if {[dict get $proc_result status] eq "ok"} {
-                    # Refresh paths from database
-                    set obs_path [dfdb eval {SELECT obs_path FROM datafiles WHERE filename = $fn}]
-                    set trials_path [dfdb eval {SELECT trials_path FROM datafiles WHERE filename = $fn}]
+            # Create obs from ess if missing
+            if {$obs_path eq "" || ![file exists $obs_path]} {
+                puts "dfconf: Creating obs for $fn..."
+                set basename [file rootname $fn]
+                set obs_result [create_obs_file $filepath $file_id $basename]
+                if {[dict get $obs_result status] eq "ok"} {
+                    set obs_path [dict get $obs_result path]
+                    dfdb eval {UPDATE datafiles SET obs_path = :obs_path WHERE id = :file_id}
+                }
+            }
+            
+            # Always re-extract trials from obs to use latest extract code
+            if {$obs_path ne "" && [file exists $obs_path] && $system ne ""} {
+                puts "dfconf: Extracting trials for $fn..."
+                set basename [file rootname [file rootname [file tail $obs_path]]]
+                set protocol [dfdb eval {SELECT protocol FROM datafiles WHERE id = $file_id}]
+                set trials_result [create_trials_file $obs_path $file_id $basename $system $protocol]
+                if {[dict get $trials_result status] eq "ok"} {
+                    set trials_path [dict get $trials_result path]
+                    set n_trials [dict get $trials_result n_trials]
+                    dfdb eval {
+                        UPDATE datafiles SET trials_path = :trials_path, n_trials = :n_trials 
+                        WHERE id = :file_id
+                    }
                 }
             }
         }
@@ -1554,6 +1577,12 @@ proc export_files {filenames level mode} {
                 VALUES (:file_id, :export_destination,
                         :ess_copied, :obs_copied, :trials_copied,
                         :trials_mtime)
+            }
+            
+            # Clean up trials.dgz from work_dir after successful export.
+            # Obs is the stable cache; trials are re-extracted on demand.
+            if {$trials_path ne "" && [file exists $trials_path]} {
+                file delete $trials_path
             }
         } else {
             incr errors_count
@@ -1756,6 +1785,11 @@ proc _json_ok {extra_dict} {
 # Initialize
 # ============================================================================
 
+# Configure export_path from environment or defaults
+if {[info exists ::env(ESS_EXPORT_PATH)]} {
+    dservSet df/export_destination $::env(ESS_EXPORT_PATH)
+}
+    
 setup_database $df_db_path
 setup_work_dir $df_work_dir
 
