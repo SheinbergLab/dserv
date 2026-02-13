@@ -660,60 +660,34 @@ function handleConnectionError(error) {
     log(`Connection error: ${error}`, 'error');
 }
 
-// Pending async commands keyed by requestId
-let nextRequestId = 0;
-const pendingCommands = new Map();
-
-// Single global listener: route async responses by requestId.
-// Installed once after connection is established.
-let asyncListenerInstalled = false;
-
-function installAsyncListener() {
-    if (asyncListenerInstalled) return;
-    asyncListenerInstalled = true;
-
-    connection.on('terminal:response', (data) => {
-        if (data.requestId && pendingCommands.has(data.requestId)) {
-            const { resolve, reject, timer } = pendingCommands.get(data.requestId);
-            clearTimeout(timer);
-            pendingCommands.delete(data.requestId);
-
+async function sendCommand(cmd) {
+    if (!connection || !connection.isReady()) {
+        throw new Error('Not connected');
+    }
+    
+    return new Promise((resolve, reject) => {
+        const wrappedCmd = `send df {${cmd}}`;
+        const message = { cmd: 'eval', script: wrappedCmd };
+        
+        const handler = (data) => {
             if (data.status === 'error') {
                 reject(new Error(data.error || 'Unknown error'));
             } else {
                 resolve(data.result || '');
             }
-        }
-        // Messages without a matching requestId are ignored here;
-        // they may be handled by other terminal:response listeners
-        // (e.g. legacy pages that use the old pattern).
-    });
-}
-
-async function sendCommand(cmd, timeout = 60000) {
-    if (!connection || !connection.isReady()) {
-        throw new Error('Not connected');
-    }
-
-    // Ensure the response listener is active
-    installAsyncListener();
-
-    const requestId = String(++nextRequestId);
-
-    return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            pendingCommands.delete(requestId);
-            reject(new Error('Command timeout'));
-        }, timeout);
-
-        pendingCommands.set(requestId, { resolve, reject, timer });
-
-        const message = {
-            cmd: 'eval',
-            script: `send df {${cmd}}`,
-            requestId   // ← triggers async path on server
         };
+        
+        const unsubscribe = connection.on('terminal:response', (data) => {
+            unsubscribe();
+            handler(data);
+        });
+        
         connection.ws.send(JSON.stringify(message));
+        
+        setTimeout(() => {
+            unsubscribe();
+            reject(new Error('Command timeout'));
+        }, 60000);  // Longer timeout for file operations
     });
 }
 
