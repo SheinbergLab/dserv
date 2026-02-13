@@ -14,9 +14,6 @@ KillMode=process
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=60
 
-# Pin to isolated core if using isolcpus=3
-CPUAffinity=3
-
 # Lock memory to prevent paging latency
 LimitMEMLOCK=infinity
 
