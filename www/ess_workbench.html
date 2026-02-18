@@ -12,7 +12,22 @@
     
     <link rel="stylesheet" href="css/ess_workbench.css">
     <link rel="stylesheet" href="css/ess_workbench_registry.css">
-    <link rel="stylesheet" href="css/ess_workbench_overlay.css">    
+    <link rel="stylesheet" href="css/ess_workbench_overlay.css">
+    <style>
+        /* Libs sidebar divider */
+        .scripts-sidebar-divider {
+            padding: 8px 12px 4px;
+            margin-top: 4px;
+            border-top: 1px solid var(--wb-border, #333);
+        }
+        .scripts-sidebar-divider-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--wb-text-muted, #888);
+        }
+    </style>    
 </head>
 <body>
     <div class="workbench-container">
@@ -333,7 +348,14 @@
                                 </svg>
                                 <span>sys_analyze.tcl</span>
                                 <span class="script-status-dot" data-script="sys_analyze"></span>
-</button>			    
+</button>
+                            <!-- Libs section -->
+                            <div class="scripts-sidebar-divider" id="libs-divider" style="display:none;">
+                                <span class="scripts-sidebar-divider-label">Shared Libraries</span>
+                            </div>
+                            <div id="libs-list">
+                                <!-- Dynamically populated with .tm module entries -->
+                            </div>			    
                         </div>
                     </div>
                     
@@ -615,5 +637,6 @@
     <script src="js/ess_registry_integration.js"></script>
     <script src="js/ess_registry_integration_v2.js"></script>
     <script src="js/ess_overlay_integration.js"></script>
+    <script src="js/ess_libs_integration.js"></script>
 </body>
 </html>
