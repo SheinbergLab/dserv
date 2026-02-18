@@ -308,6 +308,26 @@ body {
 }
 .filter-changes:hover { border-color: #fbbf24; color: #a0aec0; }
 .filter-changes.active { background: #3d2e1a; border-color: #fbbf24; color: #fbbf24; }
+.download-btn {
+    background: transparent; border: 1px solid #4a5568; color: #718096;
+    padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    position: relative;
+}
+.download-btn:hover { border-color: #63b3ed; color: #a0aec0; }
+.download-menu {
+    display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
+    background: #1e2a3a; border: 1px solid #4a5568; border-radius: 6px;
+    min-width: 220px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    padding: 4px 0;
+}
+.download-menu.show { display: block; }
+.download-menu-item {
+    display: block; width: 100%; padding: 8px 14px; background: none; border: none;
+    color: #cbd5e0; font-size: 12px; text-align: left; cursor: pointer;
+}
+.download-menu-item:hover { background: #2d3a4a; color: #fff; }
+.download-menu-item .dm-label { display: block; font-weight: 500; }
+.download-menu-item .dm-desc { display: block; font-size: 11px; color: #718096; margin-top: 1px; }
 
 @media (max-width: 700px) {
     .main-layout { flex-direction: column; }
@@ -333,6 +353,21 @@ body {
             <button class="filter-changes" id="filter-changes" style="display:none" title="Show only changed scripts">
                 Δ Changes only
             </button>
+            <div style="position:relative;display:inline-block">
+                <button class="download-btn" id="download-btn" title="Download as zip">
+                    ⬇ Download
+                </button>
+                <div class="download-menu" id="download-menu">
+                    <button class="download-menu-item" id="dl-workgroup">
+                        <span class="dm-label">📦 Download workgroup</span>
+                        <span class="dm-desc">All systems + libs as zip</span>
+                    </button>
+                    <button class="download-menu-item" id="dl-system" style="display:none">
+                        <span class="dm-label">📄 Download system</span>
+                        <span class="dm-desc" id="dl-system-desc">Current system scripts</span>
+                    </button>
+                </div>
+            </div>
             <div class="search-box">
                 <input type="text" id="search-input" placeholder="Filter scripts...">
             </div>
@@ -436,6 +471,28 @@ body {
             this.el.searchInput.addEventListener('input', e => {
                 this.searchTerm = e.target.value.toLowerCase();
                 this.renderTree();
+            });
+
+            // Download menu
+            const dlBtn = document.getElementById('download-btn');
+            const dlMenu = document.getElementById('download-menu');
+            dlBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                dlMenu.classList.toggle('show');
+                this.updateDownloadMenu();
+            });
+            document.addEventListener('click', () => dlMenu.classList.remove('show'));
+            dlMenu.addEventListener('click', e => e.stopPropagation());
+
+            document.getElementById('dl-workgroup').addEventListener('click', () => {
+                dlMenu.classList.remove('show');
+                this.downloadExport();
+            });
+            document.getElementById('dl-system').addEventListener('click', () => {
+                dlMenu.classList.remove('show');
+                if (this.activeScript) {
+                    this.downloadExport(this.activeScript.system);
+                }
             });
 
             this.setupResize();
@@ -695,8 +752,10 @@ body {
             this.el.diffBarContainer.innerHTML = '';
             this.el.viewerContent.innerHTML = '<div class="loading">Loading</div>';
 
+            const url = this.essURL(`/api/v1/ess/lib/${this.currentWorkgroup}/${name}/${version}`);
+
             try {
-                const resp = await fetch(this.essURL(`/api/v1/ess/lib/${this.currentWorkgroup}/${name}/${version}`));
+                const resp = await fetch(url);
                 if (!resp.ok) {
                     const err = await resp.json().catch(() => ({}));
                     throw new Error(err.error || `HTTP ${resp.status}`);
@@ -705,8 +764,41 @@ body {
                 this.displayScript(lib, '');
             } catch (e) {
                 this.el.viewerContent.innerHTML =
-                    `<div class="empty-viewer"><div class="icon">⚠️</div><h3>Error</h3><p>${this.esc(e.message)}</p></div>`;
+                    `<div class="empty-viewer"><div class="icon">⚠️</div><h3>Error loading lib</h3><p>${this.esc(e.message)}</p></div>`;
             }
+        }
+
+        // ============ Download / Export ============
+
+        updateDownloadMenu() {
+            const dlSystem = document.getElementById('dl-system');
+            const dlSystemDesc = document.getElementById('dl-system-desc');
+            const dlWgLabel = document.querySelector('#dl-workgroup .dm-desc');
+
+            if (dlWgLabel) {
+                dlWgLabel.textContent = `All systems + libs for ${this.currentWorkgroup}`;
+            }
+
+            if (this.activeScript && this.activeScript.system) {
+                dlSystem.style.display = '';
+                dlSystemDesc.textContent = `Scripts for ${this.activeScript.system}`;
+            } else {
+                dlSystem.style.display = 'none';
+            }
+        }
+
+        downloadExport(system) {
+            let url = this.essURL(`/api/v1/ess/export/${encodeURIComponent(this.currentWorkgroup)}`);
+            if (system) {
+                url += `/${encodeURIComponent(system)}`;
+            }
+            // Trigger browser download via hidden link
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         }
 
         // ============ Tree Rendering ============
