@@ -814,6 +814,120 @@ namespace eval ess {
         return "success"
     }
 
+    # ── Seed/push all local libs to registry ──────────────────────────
+    #
+    # Reads every .tm file from the local lib/ directory and PUTs it
+    # to the registry.  Creates new entries or updates existing ones.
+    # Compares checksums first so unchanged files are skipped.
+    #
+    # Optional workgroup arg overrides the configured workgroup,
+    # allowing:  ess::seed_libs _templates   (to re-seed templates)
+    #
+    # Returns dict: pushed <n> unchanged <n> skipped <n> errors <list>
+    #
+    proc seed_libs {{target_workgroup ""}} {
+        variable system_path
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+
+        set wg $registry_workgroup
+        if {$target_workgroup ne ""} {
+            set wg $target_workgroup
+        }
+        if {$wg eq ""} {
+            error "Workgroup not configured"
+        }
+
+        set project $current(project)
+        set lib_dir [file join $system_path $project lib]
+
+        if {![file isdirectory $lib_dir]} {
+            error "Lib directory not found: $lib_dir"
+        }
+
+        # Get current registry checksums for comparison
+        set reg_checksums [dict create]
+        if {[catch {
+            set resp [https_get "${registry_url}/api/v1/ess/libs?workgroup=${wg}"]
+            set data [json_to_dict $resp]
+            foreach lib [dict get $data libs] {
+                set fn [dict get $lib filename]
+                dict set reg_checksums $fn [dict get $lib checksum]
+            }
+        }]} {
+            # No existing libs or fetch failed — push everything
+        }
+
+        set pushed 0
+        set unchanged 0
+        set skipped 0
+        set errors [list]
+
+        ess_info "Seeding libs from $lib_dir to $wg" "sync"
+
+        foreach f [lsort [glob -nocomplain -directory $lib_dir *.tm]] {
+            set filename [file tail $f]
+
+            # Parse name-version.tm
+            if {![regexp {^(.+)-([0-9]+[._][0-9]+)\.tm$} $filename -> name version]} {
+                ess_debug "  Skipping $filename (doesn't match pattern)" "sync"
+                incr skipped
+                continue
+            }
+            # Normalize underscores to dots for registry
+            set version [string map {_ .} $version]
+
+            # Compare checksum — skip if unchanged
+            set local_checksum [sha256 -file $f]
+            # Registry stores filename with dots (planko-3.0.tm)
+            set reg_filename "${name}-${version}.tm"
+            if {[dict exists $reg_checksums $reg_filename]} {
+                if {$local_checksum eq [dict get $reg_checksums $reg_filename]} {
+                    incr unchanged
+                    continue
+                }
+            }
+
+            # Read local content
+            if {[catch {
+                set fh [open $f r]
+                set content [read $fh]
+                close $fh
+            } read_err]} {
+                ess_error "  Failed to read $filename: $read_err" "sync"
+                lappend errors "$filename: $read_err"
+                continue
+            }
+
+            # Identify who is pushing
+            set user "seed"
+            if {[info exists ::env(USER)]} {
+                set user $::env(USER)
+            }
+
+            # PUT to registry
+            set url "${registry_url}/api/v1/ess/lib/${wg}/${name}/${version}"
+            set body [dict_to_json [dict create content $content updatedBy $user]]
+
+            if {[catch {
+                set response [https_put $url $body]
+                incr pushed
+                ess_info "  Pushed: $filename" "sync"
+            } put_err]} {
+                ess_error "  Failed to push $filename: $put_err" "sync"
+                lappend errors "$filename: $put_err"
+            }
+        }
+
+        ess_info "Seed libs: $pushed pushed, $unchanged unchanged, $skipped skipped" "sync"
+        return [dict create pushed $pushed unchanged $unchanged skipped $skipped errors $errors]
+    }
+
     # ── Lib sync status ──────────────────────────────────────────────
     #
     # Compares local lib checksums against registry.
