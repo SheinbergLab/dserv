@@ -823,9 +823,13 @@ namespace eval ess {
     # Optional workgroup arg overrides the configured workgroup,
     # allowing:  ess::seed_libs _templates   (to re-seed templates)
     #
+    # Use -force to push all files regardless of checksum match:
+    #   ess::seed_libs -force
+    #   ess::seed_libs -force _templates
+    #
     # Returns dict: pushed <n> unchanged <n> skipped <n> errors <list>
     #
-    proc seed_libs {{target_workgroup ""}} {
+    proc seed_libs {args} {
         variable system_path
         variable registry_url
         variable registry_workgroup
@@ -833,6 +837,17 @@ namespace eval ess {
 
         if {$registry_url eq ""} {
             error "Registry URL not configured"
+        }
+
+        # Parse args: optional -force flag and optional workgroup
+        set force 0
+        set target_workgroup ""
+        foreach arg $args {
+            if {$arg eq "-force"} {
+                set force 1
+            } else {
+                set target_workgroup $arg
+            }
         }
 
         set wg $registry_workgroup
@@ -882,11 +897,11 @@ namespace eval ess {
             # Normalize underscores to dots for registry
             set version [string map {_ .} $version]
 
-            # Compare checksum — skip if unchanged
+            # Compare checksum — skip if unchanged (unless -force)
             set local_checksum [sha256 -file $f]
             # Registry stores filename with dots (planko-3.0.tm)
             set reg_filename "${name}-${version}.tm"
-            if {[dict exists $reg_checksums $reg_filename]} {
+            if {!$force && [dict exists $reg_checksums $reg_filename]} {
                 if {$local_checksum eq [dict get $reg_checksums $reg_filename]} {
                     incr unchanged
                     continue
