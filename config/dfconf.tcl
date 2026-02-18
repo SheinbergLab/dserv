@@ -19,6 +19,7 @@ package require qpcs
 package require sqlite3
 package require yajltcl
 package require dslog
+package require em
 
 tcl::tm::add $dspath/lib
 package require df 2.0
