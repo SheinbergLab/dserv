@@ -654,6 +654,231 @@ namespace eval ess {
         return $result
     }
 
+    # ── List local lib modules ──────────────────────────────────────
+    #
+    # Returns a JSON array of {name, version, filename} for all .tm
+    # files in the lib directory. Delegates to get_lib_files for the
+    # file listing (defined in ess-2.0.tm).
+    #
+    proc list_libs {} {
+        set files [get_lib_files]
+
+        set result [list]
+        foreach filename $files {
+            set match [regexp {^(.+)-(\d+[\.\d]*)\.tm$} $filename -> name version]
+            if {$match} {
+                lappend result "{\"name\":\"$name\",\"version\":\"$version\",\"filename\":\"$filename\"}"
+            } else {
+                set name [file rootname $filename]
+                lappend result "{\"name\":\"$name\",\"version\":\"\",\"filename\":\"$filename\"}"
+            }
+        }
+
+        return "\[[join $result ,]\]"
+    }
+
+    # ── Read a lib file ──────────────────────────────────────────────
+    #
+    # Returns content of a lib .tm file.
+    # Checks overlay path first if active, falls back to base via
+    # get_lib_file_content (defined in ess-2.0.tm).
+    #
+    proc read_lib {filename} {
+        variable overlay_path
+        variable current
+
+        # Check overlay first
+        if {$overlay_path ne ""} {
+            set project $current(project)
+            set overlay_file [file join $overlay_path $project lib $filename]
+            if {[file exists $overlay_file]} {
+                set f [open $overlay_file r]
+                set content [read $f]
+                close $f
+                return $content
+            }
+        }
+
+        # Fall back to base (with validation)
+        return [get_lib_file_content $filename]
+    }
+
+    # ── Save a lib file ──────────────────────────────────────────────
+    #
+    # If overlay is active, writes to overlay lib path directly.
+    # If no overlay, delegates to save_lib_file (ess-2.0.tm) which
+    # handles validation, backup creation, and ownership.
+    #
+    proc save_lib {filename content} {
+        variable system_path
+        variable overlay_path
+        variable current
+
+        set project $current(project)
+
+        if {$overlay_path ne ""} {
+            # Save to overlay
+            set dir [file join $overlay_path $project lib]
+            set target [file join $dir $filename]
+
+            if {![file exists $dir]} {
+                mkdir_matching_owner $dir
+            }
+
+            set f [open $target w]
+            puts -nonewline $f $content
+            close $f
+            fix_file_ownership $target
+
+            ess_info "Saved lib $filename to overlay" "sync"
+            return "ok"
+        }
+
+        # No overlay — save to base via save_lib_file (gets backup + validation)
+        return [save_lib_file $filename $content]
+    }
+
+    # ── Commit a lib from base to registry ───────────────────────────
+    #
+    # Reads the base lib file and PUTs it to the registry.
+    # Requires the lib to be promoted (in base) first if overlay was active.
+    #
+    proc commit_lib {filename {comment ""}} {
+        variable system_path
+        variable overlay_path
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+
+        set project $current(project)
+
+        # Read from base (not overlay)
+        set base_file [file join $system_path $project lib $filename]
+        if {![file exists $base_file]} {
+            error "No base lib file: $filename"
+        }
+
+        set f [open $base_file r]
+        set content [read $f]
+        close $f
+
+        # Parse name-version from filename
+        set name $filename
+        set version "1.0"
+        if {[regexp {^(.+)-(\d+[\.\d]*)\.tm$} $filename -> n v]} {
+            set name $n
+            set version $v
+        }
+
+        # Identify user
+        set user ""
+        if {$overlay_path ne ""} {
+            set user [file tail $overlay_path]
+        } elseif {[info exists ::env(USER)]} {
+            set user $::env(USER)
+        }
+
+        # Check role
+        if {$user ne ""} {
+            set role [_get_user_role $user]
+            if {$role eq "viewer"} {
+                error "User '$user' has role 'viewer' and cannot commit to registry"
+            }
+        }
+
+        if {$comment eq ""} {
+            set comment "committed from dserv"
+        }
+
+        set url "${registry_url}/api/v1/ess/lib/${registry_workgroup}/${name}/${version}"
+
+        set body [dict_to_json [dict create \
+            content $content \
+            updatedBy $user]]
+
+        if {[catch {
+            set response [https_put $url $body]
+        } err]} {
+            ess_error "Failed to commit lib $filename to registry: $err" "sync"
+            error "Commit failed: $err"
+        }
+
+        ess_info "Committed lib $filename to registry ($registry_workgroup)" "sync"
+        return "success"
+    }
+
+    # ── Lib sync status ──────────────────────────────────────────────
+    #
+    # Compares local lib checksums against registry.
+    # Returns dict of {filename status} where status is:
+    #   synced, modified, local_only, registry_only
+    #
+    proc lib_sync_status {} {
+        variable system_path
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+
+        set project $current(project)
+        set lib_dir [file join $system_path $project lib]
+        set result [dict create]
+
+        # Get registry lib list with checksums
+        set url "${registry_url}/api/v1/ess/libs?workgroup=${registry_workgroup}"
+        if {[catch {
+            set response [https_get $url]
+            set data [json_to_dict $response]
+        } err]} {
+            ess_error "Failed to fetch lib list for sync status: $err" "sync"
+            return $result
+        }
+
+        set server_libs [dict create]
+        foreach lib [dict get $data libs] {
+            set fname [dict get $lib filename]
+            dict set server_libs $fname [dict get $lib checksum]
+        }
+
+        # Check local files against server
+        if {[file exists $lib_dir]} {
+            foreach f [glob -nocomplain -type f [file join $lib_dir *.tm]] {
+                set fname [file tail $f]
+                set local_checksum [sha256 -file $f]
+
+                if {[dict exists $server_libs $fname]} {
+                    set remote_checksum [dict get $server_libs $fname]
+                    if {$local_checksum eq $remote_checksum} {
+                        dict set result $fname synced
+                    } else {
+                        dict set result $fname modified
+                    }
+                    # Remove from server_libs so we can find registry_only later
+                    dict unset server_libs $fname
+                } else {
+                    dict set result $fname local_only
+                }
+            }
+        }
+
+        # Any remaining server libs are registry_only
+        dict for {fname checksum} $server_libs {
+            dict set result $fname registry_only
+        }
+
+        return $result
+    }
+
     # ── Helper: map internal type to registry API type + protocol ────
     #
     # Internal names: sys_extract, sys_analyze, proto_extract
