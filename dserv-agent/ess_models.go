@@ -140,6 +140,12 @@ type SaveScriptRequest struct {
 	Comment          string `json:"comment,omitempty"`
 }
 
+// SaveLibRequest is the request to create or update a library module
+type SaveLibRequest struct {
+	Content   string `json:"content"`
+	UpdatedBy string `json:"updatedBy,omitempty"`
+}
+
 // LockRequest is the request to acquire or release a lock
 type LockRequest struct {
 	Key      string `json:"key"` // "workgroup/system" or "workgroup/system/protocol"

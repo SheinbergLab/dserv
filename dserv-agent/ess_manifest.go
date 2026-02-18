@@ -21,6 +21,15 @@ type ScriptManifestEntry struct {
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
+// LibManifestEntry is a lightweight lib descriptor (no content)
+type LibManifestEntry struct {
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Filename  string `json:"filename"`
+	Checksum  string `json:"checksum"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
 // SystemManifest is the response for a manifest request
 type SystemManifest struct {
 	Workgroup string                `json:"workgroup"`
@@ -93,6 +102,28 @@ func (r *ESSRegistry) GetWorkgroupManifest(workgroup, version string) ([]SystemM
 	return manifests, nil
 }
 
+// GetLibsManifest returns checksums for all libs in a workgroup (no content)
+func (r *ESSRegistry) GetLibsManifest(workgroup string) ([]LibManifestEntry, error) {
+	rows, err := r.db.Query(`
+		SELECT name, version, filename, checksum, updated_at
+		FROM ess_libs WHERE workgroup = ? ORDER BY name, version`, workgroup)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []LibManifestEntry
+	for rows.Next() {
+		var entry LibManifestEntry
+		if err := rows.Scan(&entry.Name, &entry.Version, &entry.Filename,
+			&entry.Checksum, &entry.UpdatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 // GET /api/v1/ess/manifest/{workgroup}/{system}[?version=main]
 // GET /api/v1/ess/manifest/{workgroup}?version=main  (all systems in workgroup)
 func (r *ESSRegistry) handleManifest(w http.ResponseWriter, req *http.Request) {
@@ -138,10 +169,18 @@ func (r *ESSRegistry) handleManifest(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Include libs manifest
+	libs, err := r.GetLibsManifest(workgroup)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+
 	writeJSON(w, 200, map[string]interface{}{
 		"workgroup": workgroup,
 		"version":   version,
 		"systems":   manifests,
+		"libs":      libs,
 		"timestamp": time.Now().Unix(),
 	})
 }

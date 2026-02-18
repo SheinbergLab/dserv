@@ -324,13 +324,8 @@ func (r *ESSRegistry) handleListLibs(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"workgroup": workgroup, "libs": summaries})
 }
 
-// GET /api/v1/ess/lib/{workgroup}/{name}[/{version}]
+// GET/PUT/DELETE /api/v1/ess/lib/{workgroup}/{name}[/{version}]
 func (r *ESSRegistry) handleLib(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/lib/")
 	parts := strings.Split(path, "/")
 
@@ -346,17 +341,76 @@ func (r *ESSRegistry) handleLib(w http.ResponseWriter, req *http.Request) {
 		version = parts[2]
 	}
 
-	lib, err := r.GetLib(workgroup, name, version)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	if lib == nil {
-		writeJSON(w, 404, map[string]string{"error": "Library not found"})
-		return
-	}
+	switch req.Method {
+	case http.MethodGet:
+		lib, err := r.GetLib(workgroup, name, version)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		if lib == nil {
+			writeJSON(w, 404, map[string]string{"error": "Library not found"})
+			return
+		}
+		writeJSON(w, 200, lib)
 
-	writeJSON(w, 200, lib)
+	case http.MethodPut:
+		var saveReq SaveLibRequest
+		if err := json.NewDecoder(req.Body).Decode(&saveReq); err != nil {
+			writeJSON(w, 400, map[string]string{"error": "Invalid JSON"})
+			return
+		}
+		if saveReq.Content == "" {
+			writeJSON(w, 400, map[string]string{"error": "Content required"})
+			return
+		}
+
+		// Default version to "1.0" if not in path
+		if version == "" {
+			version = "1.0"
+		}
+
+		filename := fmt.Sprintf("%s-%s.tm", name, version)
+
+		lib := &ESSLib{
+			Workgroup: workgroup,
+			Name:      name,
+			Version:   version,
+			Filename:  filename,
+			Content:   saveReq.Content,
+		}
+
+		id, err := r.SaveLib(lib)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+
+		writeJSON(w, 200, map[string]interface{}{
+			"success":  true,
+			"id":       id,
+			"checksum": lib.Checksum,
+			"lib":      lib,
+		})
+
+	case http.MethodDelete:
+		if version == "" {
+			writeJSON(w, 400, map[string]string{"error": "Version required for DELETE"})
+			return
+		}
+		if err := r.DeleteLib(workgroup, name, version); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				writeJSON(w, 404, map[string]string{"error": err.Error()})
+			} else {
+				writeJSON(w, 500, map[string]string{"error": err.Error()})
+			}
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // GET /api/v1/ess/projects?workgroup=xxx

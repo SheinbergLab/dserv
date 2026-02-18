@@ -502,6 +502,19 @@ func (r *ESSRegistry) SaveLib(lib *ESSLib) (int64, error) {
 	return result.LastInsertId()
 }
 
+func (r *ESSRegistry) DeleteLib(workgroup, name, version string) error {
+	result, err := r.db.Exec("DELETE FROM ess_libs WHERE workgroup = ? AND name = ? AND version = ?",
+		workgroup, name, version)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("lib not found: %s-%s", name, version)
+	}
+	return nil
+}
+
 // ============ Project Operations ============
 
 func (r *ESSRegistry) ListProjects(workgroup string) ([]*ESSProject, error) {
