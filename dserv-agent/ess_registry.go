@@ -899,14 +899,25 @@ func (r *ESSRegistry) importLibs(libPath string) error {
 		filename := entry.Name()
 
 		existing, _ := r.GetLib(TemplatesWorkgroup, name, version)
-		if existing != nil {
-			continue
-		}
 
 		content, err := ioutil.ReadFile(filepath.Join(libPath, filename))
 		if err != nil {
 			continue
 		}
+
+		if existing != nil {
+			// Update existing lib with current content
+			existing.Content = string(content)
+			existing.Checksum = computeChecksum(existing.Content)
+			existing.UpdatedAt = now
+			_, err = r.db.Exec(`UPDATE ess_libs SET content = ?, checksum = ?, updated_at = ? WHERE id = ?`,
+				existing.Content, existing.Checksum, now.Unix(), existing.ID)
+			if err != nil {
+				log.Printf("ESS Registry: failed to update lib %s: %v", filename, err)
+			}
+			continue
+		}
+
 		checksum := computeChecksum(string(content))
 
 		_, err = r.db.Exec(`INSERT INTO ess_libs (workgroup, name, version, filename, content, checksum, created_at, updated_at)
