@@ -3,6 +3,7 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -51,6 +52,9 @@ func (r *ESSRegistry) RegisterHandlers(mux *http.ServeMux, authMiddleware func(h
 	
 	mux.HandleFunc("/api/v1/ess/manifest/", authMiddleware(r.handleManifest))
 	mux.HandleFunc("/api/v1/ess/sync/", authMiddleware(r.handleSync))
+
+	// Export
+	mux.HandleFunc("/api/v1/ess/export/", authMiddleware(r.handleExport))
 	
 	// Admin
 	mux.HandleFunc("/api/v1/ess/admin/seed-templates", authMiddleware(r.handleSeedTemplates))
@@ -847,4 +851,133 @@ func (r *ESSRegistry) handleListBackups(w http.ResponseWriter, req *http.Request
 		"backups": backups,
 		"count":   len(backups),
 	})
+}
+
+// GET /api/v1/ess/export/{workgroup}[/{system}]?format=zip
+//
+// Exports a workgroup (or single system) as a zip file with the
+// standard filesystem layout:
+//
+//   lib/
+//     planko-3.0.tm
+//   match_to_sample/
+//     match_to_sample.tcl
+//     colormatch/
+//       colormatch.tcl
+//       colormatch_variants.tcl
+//
+func (r *ESSRegistry) handleExport(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/export/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "Invalid path: need workgroup[/system]", http.StatusBadRequest)
+		return
+	}
+
+	workgroup := parts[0]
+	systemFilter := ""
+	if len(parts) > 1 && parts[1] != "" {
+		systemFilter = parts[1]
+	}
+
+	// Gather systems
+	var systems []*ESSSystem
+	if systemFilter != "" {
+		sys, err := r.GetSystem(workgroup, systemFilter, "")
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		if sys == nil {
+			writeJSON(w, 404, map[string]string{"error": "System not found"})
+			return
+		}
+		systems = []*ESSSystem{sys}
+	} else {
+		var err error
+		systems, err = r.ListSystems(workgroup)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	// Build zip filename
+	zipName := workgroup
+	if systemFilter != "" {
+		zipName = systemFilter
+	}
+	zipName = strings.ReplaceAll(zipName, "/", "-")
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, zipName))
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	fileCount := 0
+
+	// Add system scripts
+	for _, sys := range systems {
+		scripts, err := r.GetScripts(sys.ID)
+		if err != nil {
+			continue
+		}
+		for _, script := range scripts {
+			if script.Content == "" {
+				continue
+			}
+
+			var zipPath string
+			if script.Protocol == "" {
+				// System-level: system/filename
+				zipPath = filepath.Join(sys.Name, script.Filename)
+			} else {
+				// Protocol-level: system/protocol/filename
+				zipPath = filepath.Join(sys.Name, script.Protocol, script.Filename)
+			}
+
+			header := &zip.FileHeader{
+				Name:     zipPath,
+				Method:   zip.Deflate,
+				Modified: script.UpdatedAt,
+			}
+			fw, err := zw.CreateHeader(header)
+			if err != nil {
+				continue
+			}
+			fw.Write([]byte(script.Content))
+			fileCount++
+		}
+	}
+
+	// Add libs (only for full workgroup export or if explicitly requested)
+	if systemFilter == "" {
+		libs, _ := r.ListLibs(workgroup)
+		for _, libSummary := range libs {
+			fullLib, err := r.GetLib(workgroup, libSummary.Name, libSummary.Version)
+			if err != nil || fullLib == nil || fullLib.Content == "" {
+				continue
+			}
+
+			zipPath := filepath.Join("lib", fullLib.Filename)
+			header := &zip.FileHeader{
+				Name:     zipPath,
+				Method:   zip.Deflate,
+				Modified: fullLib.UpdatedAt,
+			}
+			fw, err := zw.CreateHeader(header)
+			if err != nil {
+				continue
+			}
+			fw.Write([]byte(fullLib.Content))
+			fileCount++
+		}
+	}
 }
