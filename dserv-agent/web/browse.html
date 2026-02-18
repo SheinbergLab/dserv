@@ -272,6 +272,35 @@ body {
 
 .tree-empty { padding: 24px 16px; text-align: center; color: #4a5568; font-size: 13px; }
 
+/* Libs section in tree */
+.tree-libs-section { margin-top: 4px; border-top: 1px solid #2f3336; padding-top: 4px; }
+.tree-libs-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 12px; cursor: pointer; font-size: 13px; font-weight: 600;
+    color: #a0aec0; transition: background 0.1s; user-select: none;
+}
+.tree-libs-header:hover { background: #1a2634; }
+.tree-libs-header .arrow {
+    font-size: 10px; color: #71767b; width: 14px; text-align: center;
+    transition: transform 0.15s;
+}
+.tree-libs-header .arrow.open { transform: rotate(90deg); }
+.tree-libs-children { display: none; }
+.tree-libs-children.open { display: block; }
+.tree-lib {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 12px 3px 32px; cursor: pointer; font-size: 12px;
+    color: #8b949e; transition: all 0.1s; user-select: none;
+}
+.tree-lib:hover { background: #1a2634; color: #e7e9ea; }
+.tree-lib.active { background: #1e3a5f; color: #60a5fa; }
+.tree-lib .file-icon { font-size: 11px; opacity: 0.6; }
+.tree-lib .file-name { flex: 1; font-family: 'SF Mono', Monaco, monospace; font-size: 11px; }
+.tree-lib .lib-version {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px;
+    background: #1a3d3d; color: #22d3ee;
+}
+
 .filter-changes {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 6px 10px; background: #1a2634; border: 1px solid #2f3336; border-radius: 6px;
@@ -371,6 +400,8 @@ body {
             this.changesOnly = false;
             this.searchTerm = '';
             this.activeScript = null;
+            this.activeLib = null;
+            this.libs = [];
             this.allVersions = new Set();
 
             const params = new URLSearchParams(location.search);
@@ -482,6 +513,10 @@ body {
                 const data = await resp.json();
                 this.workgroups = data.workgroups || [];
                 this.populateWorkgroups();
+
+                // Also fetch libs
+                await this.fetchLibs();
+
                 if (this.currentWorkgroup) {
                     this.setTree(data.tree);
                 }
@@ -527,6 +562,7 @@ body {
 
             this.el.treePanel.innerHTML = '<div class="loading">Loading scripts</div>';
             this.activeScript = null;
+            this.activeLib = null;
             this.clearViewer();
 
             try {
@@ -537,6 +573,10 @@ body {
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const data = await resp.json();
+
+                // Also fetch libs
+                await this.fetchLibs();
+
                 this.setTree(data.tree);
             } catch (e) {
                 this.el.treePanel.innerHTML = `<div class="tree-empty">Failed to load: ${this.esc(e.message)}</div>`;
@@ -587,22 +627,112 @@ body {
             }
         }
 
+        // ============ Libs ============
+
+        async fetchLibs() {
+            if (!this.currentWorkgroup) { this.libs = []; return; }
+            try {
+                const resp = await fetch(this.essURL(`/api/v1/ess/libs?workgroup=${this.currentWorkgroup}`));
+                if (!resp.ok) { this.libs = []; return; }
+                const data = await resp.json();
+                this.libs = (data.libs || []).sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
+            } catch {
+                this.libs = [];
+            }
+        }
+
+        renderLibsSection() {
+            if (!this.libs.length) return '';
+
+            let filteredLibs = this.libs;
+            if (this.searchTerm) {
+                filteredLibs = filteredLibs.filter(lib =>
+                    (lib.filename || '').toLowerCase().includes(this.searchTerm) ||
+                    (lib.name || '').toLowerCase().includes(this.searchTerm)
+                );
+            }
+            if (!filteredLibs.length) return '';
+
+            return `
+            <div class="tree-libs-section">
+                <div class="tree-libs-header">
+                    <span class="arrow">▶</span>
+                    <span>📚</span>
+                    <span style="flex:1">Shared Libraries</span>
+                    <span class="script-count">${filteredLibs.length}</span>
+                </div>
+                <div class="tree-libs-children">
+                    ${filteredLibs.map(lib => `
+                        <div class="tree-lib${this.activeLib && this.activeLib.filename === lib.filename ? ' active' : ''}"
+                             data-lib-name="${this.esc(lib.name)}"
+                             data-lib-version="${this.esc(lib.version)}"
+                             data-lib-filename="${this.esc(lib.filename)}">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">${this.esc(lib.filename)}</span>
+                            ${lib.version ? `<span class="lib-version">v${this.esc(lib.version)}</span>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+        }
+
+        async loadLib(name, version, filename) {
+            this.activeScript = null;
+            this.activeLib = { name, version, filename };
+
+            // Clear script active states, set lib active
+            this.el.treePanel.querySelectorAll('.tree-script.active').forEach(a => a.classList.remove('active'));
+            this.el.treePanel.querySelectorAll('.tree-lib.active').forEach(a => a.classList.remove('active'));
+            this.el.treePanel.querySelector(`.tree-lib[data-lib-filename="${CSS.escape(filename)}"]`)?.classList.add('active');
+
+            this.el.viewerBreadcrumb.innerHTML =
+                `<span class="crumb">${this.esc(this.currentWorkgroup)}</span>` +
+                `<span class="sep">/</span>` +
+                `<span class="crumb">lib</span>` +
+                `<span class="sep">/</span>` +
+                `<span class="crumb">${this.esc(filename)}</span>`;
+            this.el.viewerMeta.innerHTML = '';
+            this.el.diffBarContainer.innerHTML = '';
+            this.el.viewerContent.innerHTML = '<div class="loading">Loading</div>';
+
+            try {
+                const resp = await fetch(this.essURL(`/api/v1/ess/lib/${this.currentWorkgroup}/${name}/${version}`));
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.error || `HTTP ${resp.status}`);
+                }
+                const lib = await resp.json();
+                this.displayScript(lib, '');
+            } catch (e) {
+                this.el.viewerContent.innerHTML =
+                    `<div class="empty-viewer"><div class="icon">⚠️</div><h3>Error</h3><p>${this.esc(e.message)}</p></div>`;
+            }
+        }
+
         // ============ Tree Rendering ============
 
         renderTree() {
             if (!this.tree || !this.tree.systems) {
+                if (this.libs.length) {
+                    // No systems but we have libs — show libs only
+                    this.el.treePanel.innerHTML = this.renderLibsSection();
+                    this.bindTreeEvents();
+                    return;
+                }
                 this.el.treePanel.innerHTML = '<div class="tree-empty">No systems found</div>';
                 return;
             }
             let systems = this.filterSystems(this.tree.systems);
-            if (!systems.length) {
+            if (!systems.length && !this.libs.length) {
                 const msg = this.searchTerm
                     ? `No matches for "${this.esc(this.searchTerm)}"`
                     : (this.changesOnly ? 'No changes found' : 'No systems found');
                 this.el.treePanel.innerHTML = `<div class="tree-empty">${msg}</div>`;
                 return;
             }
-            this.el.treePanel.innerHTML = systems.map(sys => this.renderSystem(sys)).join('');
+            this.el.treePanel.innerHTML =
+                systems.map(sys => this.renderSystem(sys)).join('') +
+                this.renderLibsSection();
             this.bindTreeEvents();
 
             if (this.searchTerm || this.changesOnly || systems.length === 1) {
@@ -612,6 +742,11 @@ body {
                     el.querySelectorAll('.tree-protocol-children').forEach(c => c.classList.add('open'));
                     el.querySelectorAll('.tree-protocol-header .arrow').forEach(a => a.classList.add('open'));
                 });
+            }
+            // Auto-expand libs if searching
+            if (this.searchTerm) {
+                this.el.treePanel.querySelectorAll('.tree-libs-children').forEach(c => c.classList.add('open'));
+                this.el.treePanel.querySelectorAll('.tree-libs-header .arrow').forEach(a => a.classList.add('open'));
             }
         }
 
@@ -736,9 +871,25 @@ body {
             this.el.treePanel.querySelectorAll('.tree-script').forEach(el => {
                 el.addEventListener('click', () => {
                     const { system, protocol, type, filename, diff, deleted } = el.dataset;
+                    this.activeLib = null;
                     this.loadScript(system, protocol, type, filename, diff || '', deleted === 'true');
                     this.el.treePanel.querySelectorAll('.tree-script.active').forEach(a => a.classList.remove('active'));
+                    this.el.treePanel.querySelectorAll('.tree-lib.active').forEach(a => a.classList.remove('active'));
                     el.classList.add('active');
+                });
+            });
+            // Libs section toggle
+            this.el.treePanel.querySelectorAll('.tree-libs-header').forEach(h => {
+                h.addEventListener('click', () => {
+                    h.nextElementSibling.classList.toggle('open');
+                    h.querySelector('.arrow').classList.toggle('open');
+                });
+            });
+            // Lib item clicks
+            this.el.treePanel.querySelectorAll('.tree-lib').forEach(el => {
+                el.addEventListener('click', () => {
+                    const { libName, libVersion, libFilename } = el.dataset;
+                    this.loadLib(libName, libVersion || '1.0', libFilename);
                 });
             });
         }
@@ -940,6 +1091,7 @@ body {
         }
 
         clearViewer() {
+            this.activeLib = null;
             this.el.viewerBreadcrumb.innerHTML = '';
             this.el.viewerMeta.innerHTML = '';
             this.el.diffBarContainer.innerHTML = '';
@@ -964,6 +1116,9 @@ body {
                 });
             });
             let text = `${sysCnt} system${sysCnt !== 1 ? 's' : ''} · ${protoCnt.size} protocol${protoCnt.size !== 1 ? 's' : ''} · ${scriptCnt} script${scriptCnt !== 1 ? 's' : ''}`;
+            if (this.libs.length) {
+                text += ` · ${this.libs.length} lib${this.libs.length !== 1 ? 's' : ''}`;
+            }
             if (this.comparing && this.tree.baseVersion) {
                 text += ` · comparing ${this.tree.version} ⇄ ${this.tree.baseVersion}`;
             }

@@ -1533,11 +1533,34 @@ func (a *Agent) getLatestRelease(repo string) *ReleaseInfo {
 	return &release
 }
 
+// Known Debian/Ubuntu codenames for distro-aware asset filtering
+var knownCodenames = []string{
+	"bullseye", "bookworm", "trixie", "forky",
+	"focal", "jammy", "noble", "oracular",
+}
+
+// getDebianCodename returns the Debian/Ubuntu version codename (e.g., "bookworm", "trixie")
+// Returns empty string if unable to detect
+func getDebianCodename() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VERSION_CODENAME=") {
+			return strings.Trim(strings.TrimPrefix(line, "VERSION_CODENAME="), "\"")
+		}
+	}
+	return ""
+}
+
 func (a *Agent) filterAssets(release *ReleaseInfo, comp Component) []string {
 	arch := runtime.GOARCH
 	if arch == "arm" {
 		arch = "armhf"
 	}
+
+	codename := getDebianCodename()
 
 	// Compile regex pattern if provided
 	var pattern *regexp.Regexp
@@ -1576,6 +1599,22 @@ func (a *Agent) filterAssets(release *ReleaseInfo, comp Component) []string {
 		}
 		if strings.Contains(nameLower, "armhf") && arch != "armhf" {
 			continue
+		}
+
+		// Debian/Ubuntu codename filtering: if the asset filename contains
+		// a known distro codename, only include it if it matches this system.
+		// Assets without any codename in the name pass through (platform-independent).
+		if codename != "" {
+			assetCodename := ""
+			for _, cn := range knownCodenames {
+				if strings.Contains(nameLower, cn) {
+					assetCodename = cn
+					break
+				}
+			}
+			if assetCodename != "" && assetCodename != codename {
+				continue
+			}
 		}
 
 		assets = append(assets, name)
