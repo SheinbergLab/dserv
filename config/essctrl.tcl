@@ -86,6 +86,12 @@ namespace eval ess {
     proc sync_base args { _protected_call sync_base 0 $args }
     proc sync_libs args { _protected_call sync_libs 0 $args }
 
+    proc list_libs args { _protected_call list_libs 0 $args }
+    proc read_lib args { _protected_call read_lib 0 $args }
+    proc save_lib args { _protected_call save_lib 0 $args }
+    proc commit_lib args { _protected_call commit_lib 1 $args }
+    proc lib_sync_status args { _protected_call lib_sync_status 0 $args }
+
     # Blocked when running only
     proc file_close args { _protected_call file_close 0 $args }
     proc file_suggest {} { _protected_call file_suggest 0 }
