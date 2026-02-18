@@ -324,13 +324,13 @@ func (r *ESSRegistry) handleListLibs(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"workgroup": workgroup, "libs": summaries})
 }
 
-// GET/PUT/DELETE /api/v1/ess/lib/{workgroup}/{name}[/{version}]
+// GET/PUT/DELETE /api/v1/ess/lib/{workgroup}/{name}/{version}
 func (r *ESSRegistry) handleLib(w http.ResponseWriter, req *http.Request) {
 	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/lib/")
 	parts := strings.Split(path, "/")
 
 	if len(parts) < 2 {
-		http.Error(w, "Invalid path: need workgroup/name", http.StatusBadRequest)
+		http.Error(w, "Invalid path: need workgroup/name[/version]", http.StatusBadRequest)
 		return
 	}
 
@@ -355,6 +355,10 @@ func (r *ESSRegistry) handleLib(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, 200, lib)
 
 	case http.MethodPut:
+		if version == "" {
+			writeJSON(w, 400, map[string]string{"error": "Version required for PUT"})
+			return
+		}
 		var saveReq SaveLibRequest
 		if err := json.NewDecoder(req.Body).Decode(&saveReq); err != nil {
 			writeJSON(w, 400, map[string]string{"error": "Invalid JSON"})
@@ -365,13 +369,7 @@ func (r *ESSRegistry) handleLib(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		// Default version to "1.0" if not in path
-		if version == "" {
-			version = "1.0"
-		}
-
 		filename := fmt.Sprintf("%s-%s.tm", name, version)
-
 		lib := &ESSLib{
 			Workgroup: workgroup,
 			Name:      name,
@@ -385,7 +383,6 @@ func (r *ESSRegistry) handleLib(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-
 		writeJSON(w, 200, map[string]interface{}{
 			"success":  true,
 			"id":       id,
