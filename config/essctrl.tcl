@@ -90,6 +90,7 @@ namespace eval ess {
     proc read_lib args { _protected_call read_lib 0 $args }
     proc save_lib args { _protected_call save_lib 0 $args }
     proc commit_lib args { _protected_call commit_lib 1 $args }
+    proc seed_libs args { _protected_call seed_libs 1 $args }	
     proc lib_sync_status args { _protected_call lib_sync_status 0 $args }
 
     # Blocked when running only
