@@ -727,13 +727,18 @@ func (r *ESSRegistry) AddToWorkgroup(req AddToWorkgroupRequest) (*ESSSystem, err
 
 	// Copy libs
 	templateLibs, _ := r.ListLibs(TemplatesWorkgroup)
-	for _, lib := range templateLibs {
-		existingLib, _ := r.GetLib(req.TargetWorkgroup, lib.Name, lib.Version)
+	for _, libSummary := range templateLibs {
+		existingLib, _ := r.GetLib(req.TargetWorkgroup, libSummary.Name, libSummary.Version)
 		if existingLib == nil {
-			libForkedFrom := fmt.Sprintf("%s/%s@%s", TemplatesWorkgroup, lib.Name, lib.Version)
+			// Fetch full lib with content
+			fullLib, err := r.GetLib(TemplatesWorkgroup, libSummary.Name, libSummary.Version)
+			if err != nil || fullLib == nil {
+				continue
+			}
+			libForkedFrom := fmt.Sprintf("%s/%s@%s", TemplatesWorkgroup, fullLib.Name, fullLib.Version)
 			_, err = tx.Exec(`INSERT INTO ess_libs (workgroup, name, version, filename, content, checksum, forked_from, created_at, updated_at)
 			                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				req.TargetWorkgroup, lib.Name, lib.Version, lib.Filename, lib.Content, lib.Checksum, libForkedFrom, now.Unix(), now.Unix())
+				req.TargetWorkgroup, fullLib.Name, fullLib.Version, fullLib.Filename, fullLib.Content, fullLib.Checksum, libForkedFrom, now.Unix(), now.Unix())
 			if err != nil && !strings.Contains(err.Error(), "UNIQUE constraint") {
 				return nil, err
 			}
