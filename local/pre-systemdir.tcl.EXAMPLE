@@ -1,4 +1,12 @@
 # set an alternative path for finding systems
 #   this should point to a folder that includes another
 #   folder called, by default, "ess"
+
+# folder for system script projects
 set env(ESS_SYSTEM_PATH) /home/lab/systems
+
+# folder for data files
+set env(ESS_DATA_DIR)    /usr/data/essdat
+
+# folder for converted/extracted data
+set env(ESS_EXPORT_PATH) /shared/qpcs/data
