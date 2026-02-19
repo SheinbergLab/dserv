@@ -14,9 +14,6 @@ errormon enable
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
 
-# initialize ip addr datapoint
-dservSet ess/ipaddr ""
-
 # load extra modules
 set ess_modules \
     "ain eventlog gpio_input gpio_output \
@@ -28,6 +25,13 @@ foreach f $ess_modules {
 # now ready to start ess
 if { ![info exists ::env(ESS_SYSTEM_PATH)] } {
     set env(ESS_SYSTEM_PATH) [file join $dspath systems]
+}
+
+# initialize ip addr datapoint
+if {[info exists ::env(ESS_IPADDR)]} {
+    dservSet ess/ipaddr $::env(ESS_IPADDR)
+} else {
+    dservSet ess/ipaddr ""
 }
 
 package require ess
