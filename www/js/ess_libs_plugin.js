@@ -28,7 +28,7 @@ const LibsPlugin = {
     },
 
     onSnapshot(wb, snapshot) {
-        if (snapshot?.system_path) {
+        if (snapshot?.system) {
             this._loadLibsList(wb);
         }
     },
@@ -170,6 +170,36 @@ const LibsPlugin = {
     // Render Libs in Sidebar
     // ==========================================
 
+    /**
+     * Filter libs to only the highest version per module name.
+     * Uses Tcl tm versioning: compare dot-separated numeric segments.
+     */
+    _latestVersionOnly(libs) {
+        const best = {};
+        for (const lib of libs) {
+            const existing = best[lib.name];
+            if (!existing || this._compareVersions(lib.version, existing.version) > 0) {
+                best[lib.name] = lib;
+            }
+        }
+        return Object.values(best);
+    },
+
+    /**
+     * Compare two dot-separated version strings (e.g. "2.0" vs "3.0").
+     * Returns positive if a > b, negative if a < b, 0 if equal.
+     */
+    _compareVersions(a, b) {
+        const pa = (a || '0').split('.').map(Number);
+        const pb = (b || '0').split('.').map(Number);
+        const len = Math.max(pa.length, pb.length);
+        for (let i = 0; i < len; i++) {
+            const diff = (pa[i] || 0) - (pb[i] || 0);
+            if (diff !== 0) return diff;
+        }
+        return 0;
+    },
+
     _renderLibsSidebar(wb) {
         const container = document.getElementById('libs-list');
         const divider = document.getElementById('libs-divider');
@@ -185,21 +215,20 @@ const LibsPlugin = {
 
         if (divider) divider.style.display = '';
 
-        const sorted = [...libs].sort((a, b) => a.filename.localeCompare(b.filename));
+        // Only show the latest version of each module
+        const latest = this._latestVersionOnly(libs);
+        const sorted = latest.sort((a, b) => a.name.localeCompare(b.name));
 
         container.innerHTML = sorted.map(lib => {
             const isActive = wb.libsState.currentLib === lib.filename;
             const syncStatus = wb.libsState.syncStatus[lib.filename] || '';
 
             return `
-                <button class="script-item ${isActive ? 'active' : ''}"
+                <button class="script-item lib-item ${isActive ? 'active' : ''}"
                         data-lib-filename="${wb.escapeHtml(lib.filename)}"
                         title="${wb.escapeHtml(lib.filename)}">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                    <span>${wb.escapeHtml(lib.name || lib.filename)}</span>
+                    <span class="lib-name">${wb.escapeHtml(lib.name)}</span>
+                    <span class="lib-version">${wb.escapeHtml(lib.version)}</span>
                     <span class="script-status-dot ${syncStatus}" data-lib="${wb.escapeHtml(lib.filename)}"></span>
                 </button>
             `;

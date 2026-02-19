@@ -14,20 +14,52 @@
     <link rel="stylesheet" href="css/ess_workbench_registry.css">
     <link rel="stylesheet" href="css/ess_workbench_overlay.css">
     <style>
-        /* Libs sidebar divider */
-        .scripts-sidebar-divider {
-            padding: 8px 12px 4px;
-            margin-top: 4px;
-            border-top: 1px solid var(--wb-border, #333);
-        }
-        .scripts-sidebar-divider-label {
-            font-size: 10px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--wb-text-muted, #888);
-        }
-    </style>    
+     /* Libs sidebar divider */
+     .scripts-sidebar-divider {
+         padding: 8px 12px 4px;
+         margin-top: 4px;
+         border-top: 1px solid var(--wb-border, #333);
+     }
+     .scripts-sidebar-divider-label {
+         font-size: 10px;
+         font-weight: 600;
+         text-transform: uppercase;
+         letter-spacing: 0.05em;
+         color: var(--wb-text-muted, #888);
+     }
+
+     /* Lib items — subtler than system scripts */
+     .script-item.lib-item {
+         padding: 4px 12px 4px 16px;
+         font-size: 11px;
+         opacity: 0.7;
+     }
+     .script-item.lib-item:hover {
+         opacity: 1;
+     }
+     .script-item.lib-item.active {
+         opacity: 1;
+     }
+     .lib-name {
+         flex: 1;
+         min-width: 0;
+         overflow: hidden;
+         text-overflow: ellipsis;
+         white-space: nowrap;
+     }
+     .lib-version {
+         font-size: 9px;
+         color: var(--wb-text-muted, #666);
+         background: var(--wb-bg-hover, rgba(255,255,255,0.05));
+         padding: 1px 5px;
+         border-radius: 3px;
+         flex-shrink: 0;
+     }
+     .script-item.lib-item.active .lib-version {
+         color: var(--wb-accent, #6ea4e0);
+         background: rgba(110, 164, 224, 0.1);
+     }
+    </style>
 </head>
 <body>
     <div class="workbench-container">
