@@ -2,42 +2,48 @@
  * ESS Workbench - Main Application Script
  * 
  * Handles:
+ * - Plugin registration and lifecycle hooks
  * - WebSocket connection and snapshot subscription
  * - Tab navigation
  * - Dashboard component rendering
  * - Script editor integration
  * - State diagram visualization
+ * - Variants editor
+ *
+ * Plugin Lifecycle Hooks (called in registration order):
+ *   onInit(wb)                — after core init, before connect()
+ *   onConnected(wb)           — WebSocket connected
+ *   onDisconnected(wb)        — WebSocket disconnected
+ *   onSnapshot(wb, snapshot)  — after snapshot is parsed and core UI updated
+ *   onTabSwitch(wb, tabName)  — after tab switch completes
+ *   onScriptSelect(wb, name)  — after script selected in Scripts tab
+ *   onSaveScript(wb, type, content) — before a script save; return false to handle it
+ *   onPullScript(wb, type)    — before a pull; return false to handle it
+ *   onCommitScript(wb, type, comment) — before a commit; return false to handle it
+ *   onShowCommitDialog(wb, type) — before commit dialog; return false to handle it
  */
 
 
-/**
- * Compute SHA256 hash of a string
- * Uses Web Crypto API when available, falls back to pure JS
- * Returns lowercase hex string (64 chars)
- */
+// ==========================================
+// SHA-256 Utility
+// ==========================================
+
 async function sha256(text) {
     const encoder = new TextEncoder();
     const data = encoder.encode(text);
     
-    // Try Web Crypto API first (only works in secure contexts)
     if (typeof crypto !== 'undefined' && crypto.subtle) {
         const hashBuffer = await crypto.subtle.digest('SHA-256', data);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }
     
-    // Fallback: pure JS SHA256 implementation
     return sha256_fallback(data);
 }
 
-/**
- * Pure JS SHA256 implementation (for non-secure contexts)
- */
 function sha256_fallback(data) {
-    // Convert Uint8Array to array if needed
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     
-    // SHA256 constants
     const K = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -49,21 +55,17 @@ function sha256_fallback(data) {
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
     ];
     
-    // Initial hash values
     let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
     let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
     
-    // Pre-processing: adding padding bits
     const bitLen = bytes.length * 8;
     const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64);
     padded.set(bytes);
     padded[bytes.length] = 0x80;
     
-    // Append length in bits as 64-bit big-endian
     const view = new DataView(padded.buffer);
     view.setUint32(padded.length - 4, bitLen, false);
     
-    // Helper functions
     const rotr = (x, n) => ((x >>> n) | (x << (32 - n))) >>> 0;
     const ch = (x, y, z) => ((x & y) ^ (~x & z)) >>> 0;
     const maj = (x, y, z) => ((x & y) ^ (x & z) ^ (y & z)) >>> 0;
@@ -72,24 +74,17 @@ function sha256_fallback(data) {
     const gamma0 = x => (rotr(x, 7) ^ rotr(x, 18) ^ (x >>> 3)) >>> 0;
     const gamma1 = x => (rotr(x, 17) ^ rotr(x, 19) ^ (x >>> 10)) >>> 0;
     
-    // Process each 64-byte chunk
     for (let i = 0; i < padded.length; i += 64) {
         const w = new Uint32Array(64);
-        
-        // Copy chunk into first 16 words
         for (let j = 0; j < 16; j++) {
             w[j] = view.getUint32(i + j * 4, false);
         }
-        
-        // Extend to 64 words
         for (let j = 16; j < 64; j++) {
             w[j] = (gamma1(w[j-2]) + w[j-7] + gamma0(w[j-15]) + w[j-16]) >>> 0;
         }
         
-        // Initialize working variables
         let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
         
-        // Main loop
         for (let j = 0; j < 64; j++) {
             const t1 = (h + sigma1(e) + ch(e, f, g) + K[j] + w[j]) >>> 0;
             const t2 = (sigma0(a) + maj(a, b, c)) >>> 0;
@@ -99,26 +94,32 @@ function sha256_fallback(data) {
             a = (t1 + t2) >>> 0;
         }
         
-        // Add to hash
         h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0;
         h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0;
         h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0;
         h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
     }
     
-    // Convert to hex string
     const toHex = n => n.toString(16).padStart(8, '0');
     return toHex(h0) + toHex(h1) + toHex(h2) + toHex(h3) +
            toHex(h4) + toHex(h5) + toHex(h6) + toHex(h7);
 }    
 
+
+// ==========================================
+// ESSWorkbench Class
+// ==========================================
+
 class ESSWorkbench {
     constructor() {
+        // Plugin registry
+        this._plugins = [];
+        
         // Connection state
         this.connection = null;
         this.snapshot = null;
         this.autoReload = true;
-        this.registry = null;  // ESS Registry client
+        this.registry = null;
         
         // UI state
         this.currentTab = 'dashboard';
@@ -133,11 +134,66 @@ class ESSWorkbench {
         this.init();
     }
     
+    // ==========================================
+    // Plugin System
+    // ==========================================
+    
+    /**
+     * Register a plugin. Call before instantiation (collected statically)
+     * or during init. Plugins are objects with optional lifecycle methods.
+     */
+    static registerPlugin(plugin) {
+        if (!ESSWorkbench._pendingPlugins) {
+            ESSWorkbench._pendingPlugins = [];
+        }
+        ESSWorkbench._pendingPlugins.push(plugin);
+    }
+    
+    /**
+     * Call a lifecycle hook on all plugins.
+     * If any plugin returns false, returns false (used for override hooks).
+     */
+    _pluginHook(hookName, ...args) {
+        for (const plugin of this._plugins) {
+            if (typeof plugin[hookName] === 'function') {
+                const result = plugin[hookName](this, ...args);
+                if (result === false) return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * Async version of _pluginHook
+     */
+    async _pluginHookAsync(hookName, ...args) {
+        for (const plugin of this._plugins) {
+            if (typeof plugin[hookName] === 'function') {
+                const result = await plugin[hookName](this, ...args);
+                if (result === false) return false;
+            }
+        }
+        return true;
+    }
+    
+    // ==========================================
+    // Initialization
+    // ==========================================
+    
     init() {
+        // Collect statically-registered plugins
+        if (ESSWorkbench._pendingPlugins) {
+            this._plugins = [...ESSWorkbench._pendingPlugins];
+        }
+        
         this.cacheElements();
         this.bindEvents();
         this.startClock();
         this.initVariantsEditor();
+        
+        // Let plugins initialize (before connect, so they can bind events)
+        this._pluginHook('onInit');
+        
         this.connect();
     }
     
@@ -166,7 +222,7 @@ class ESSWorkbench {
             autoReloadCheck: document.getElementById('auto-reload-check'),
             reloadVariantBtn: document.getElementById('reload-variant-btn'),
             
-            // Parameters (legacy - removed from dashboard but may be used elsewhere)
+            // Parameters (legacy)
             paramsContainer: document.getElementById('params-container'),
             paramCount: document.getElementById('param-count'),
             
@@ -255,11 +311,13 @@ class ESSWorkbench {
         this.connection.on('connected', () => {
             this.updateConnectionStatus('connected');
             this.subscribeToSnapshot();
-            this.initRegistry();  // Initialize registry after connection
+            this.initRegistry();
+            this._pluginHook('onConnected');
         });
         
         this.connection.on('disconnected', () => {
             this.updateConnectionStatus('disconnected');
+            this._pluginHook('onDisconnected');
         });
         
         // Connect
@@ -297,49 +355,37 @@ class ESSWorkbench {
         
         console.log('Subscribing to ess/snapshot...');
         
-        // Subscribe using DatapointManager
         this.dpManager.subscribe('ess/snapshot', (data) => {
-            console.log('Snapshot callback fired:', data);
             const value = data.data !== undefined ? data.data : data.value;
-            console.log('Snapshot value:', value);
             this.handleSnapshot(value);
         });
         
-        // Touch the datapoint to trigger initial value
-        if (this.connection && this.connection.ws) {
+        // Touch to trigger initial value
+        if (this.connection?.ws) {
             this.connection.ws.send(JSON.stringify({
                 cmd: 'touch',
                 name: 'ess/snapshot'
             }));
-            console.log('Touch sent for ess/snapshot');
         }
-        
-        console.log('Subscription sent');
     }
     
     async initRegistry() {
         try {
             console.log('Initializing ESS Registry...');
             
-            // Query dserv for registry configuration
             const registryUrlDp = await this.dpManager.get('ess/registry/url');
             const workgroupDp = await this.dpManager.get('ess/registry/workgroup');
             
-            // Extract values from datapoint objects
             const registryUrl = registryUrlDp?.data || registryUrlDp?.value || '';
             const workgroup = workgroupDp?.data || workgroupDp?.value || 'brown-sheinberg';
             
             console.log('Registry config from dserv:', { registryUrl, workgroup });
             
-            // Create registry client
             this.registry = new RegistryClient({
                 baseUrl: registryUrl,
                 workgroup: workgroup
             });
             
-            console.log('Registry client initialized');
-            
-            // Test connection and load available systems
             if (this.registry.workgroup) {
                 try {
                     const systems = await this.registry.getSystems();
@@ -349,10 +395,8 @@ class ESSWorkbench {
                 }
             }
             
-            // Set up registry UI features if the integration module is loaded
-            if (typeof this.setupRegistryUI === 'function') {
-                await this.setupRegistryUI();
-            }
+            // Let plugins know registry is ready
+            await this._pluginHookAsync('onRegistryReady');
             
         } catch (err) {
             console.error('Failed to initialize registry from dserv config:', err);
@@ -363,17 +407,12 @@ class ESSWorkbench {
                 const agentUrl = urlParams.get('agent') || '';
                 const workgroup = urlParams.get('workgroup') || 'brown-sheinberg';
                 
-                console.log('Falling back to URL params:', { agentUrl, workgroup });
-                
                 this.registry = new RegistryClient({
                     baseUrl: agentUrl,
                     workgroup: workgroup
                 });
                 
-                // Set up UI even with fallback
-                if (typeof this.setupRegistryUI === 'function') {
-                    await this.setupRegistryUI();
-                }
+                await this._pluginHookAsync('onRegistryReady');
             } catch (fallbackErr) {
                 console.error('Registry initialization completely failed:', fallbackErr);
             }
@@ -385,11 +424,8 @@ class ESSWorkbench {
     // ==========================================
     
     handleSnapshot(data) {
-        console.log('handleSnapshot called with:', typeof data, data);
         try {
-            // Parse JSON if string
             const snapshot = typeof data === 'string' ? JSON.parse(data) : data;
-            console.log('Parsed snapshot:', snapshot);
             
             if (!snapshot) {
                 console.warn('Snapshot is null/undefined');
@@ -404,24 +440,21 @@ class ESSWorkbench {
             
             this.snapshot = snapshot;
             
-	    this.scripts = {
-		system: snapshot.script_system || '',
-		protocol: snapshot.script_protocol || '',
-		loaders: snapshot.script_loaders || '',
-		variants: snapshot.script_variants || '',
-		stim: snapshot.script_stim || '',
-		sys_extract: snapshot.script_sys_extract || '',
-		proto_extract: snapshot.script_proto_extract || '',
-		sys_analyze: snapshot.script_sys_analyze || ''		
-	    };
-	    
-            console.log('Parsed scripts:', Object.keys(this.scripts));
+            this.scripts = {
+                system: snapshot.script_system || '',
+                protocol: snapshot.script_protocol || '',
+                loaders: snapshot.script_loaders || '',
+                variants: snapshot.script_variants || '',
+                stim: snapshot.script_stim || '',
+                sys_extract: snapshot.script_sys_extract || '',
+                proto_extract: snapshot.script_proto_extract || '',
+                sys_analyze: snapshot.script_sys_analyze || ''
+            };
             
             // Hide sidebar entries for scripts that don't exist
             this.updateScriptSidebarVisibility();
             
-            // Update displays
-            console.log('Updating displays...');
+            // Update core displays
             this.updateConfigDisplay();
             this.updateVariantsEditor();
             this.updateScriptEditor();
@@ -429,7 +462,9 @@ class ESSWorkbench {
             
             // Update timestamp
             this.updateSnapshotTime(snapshot.timestamp);
-            console.log('Display update complete');
+            
+            // Notify plugins
+            this._pluginHook('onSnapshot', snapshot);
             
         } catch (e) {
             console.error('Failed to parse snapshot:', e);
@@ -437,44 +472,31 @@ class ESSWorkbench {
     }
     
     // ==========================================
-    // Tcl Parsing Helpers (using TclParser.js)
+    // Tcl Parsing Helpers
     // ==========================================
     
-    /**
-     * Parse scripts dict: "system {...} protocol {...} loaders {...} variants {...} stim {...}"
-     */
     parseScriptsDict(str) {
         if (!str || typeof str !== 'string') return {};
         return TclParser.parseDict(str);
     }
     
-    /**
-     * Parse current_loader string into structured object
-     * Format: "loader_proc name loader_args {...} loader_arg_names {...} loader_arg_options {...}"
-     */
     parseCurrentLoader(str) {
         if (!str || typeof str !== 'string') return null;
         
         const dict = TclParser.parseDict(str);
         
-        // Parse loader_arg_names as list
         const argNames = TclParser.parseList(dict.loader_arg_names || '');
         
-        // Parse loader_arg_options - each option is "name {{label1 val1} {label2 val2}}"
-        // Format is {label value} where label is display name, value is the actual value
         const argOptions = {};
         if (dict.loader_arg_options) {
             const optDict = TclParser.parseDict(dict.loader_arg_options);
             for (const [name, optStr] of Object.entries(optDict)) {
-                // optStr is like "{{4 4} {6 6}}" or "{{ jittered {...} }}" 
                 const opts = TclParser.parseList(optStr);
                 argOptions[name] = opts.map(opt => {
                     const parts = TclParser.parseList(opt);
                     if (parts.length >= 2) {
-                        // Format: {label value} - label is first, value is second
                         return { label: parts[0], value: parts[1] };
                     } else if (parts.length === 1) {
-                        // Single value, use as both label and value
                         return { label: parts[0], value: parts[0] };
                     }
                     return { label: opt, value: opt };
@@ -482,7 +504,6 @@ class ESSWorkbench {
             }
         }
         
-        // Parse loader_args as list (could be single bare value or braced list)
         const loaderArgsRaw = dict.loader_args || '';
         const loaderArgs = TclParser.parseList(loaderArgsRaw);
         
@@ -494,21 +515,17 @@ class ESSWorkbench {
         };
     }
     
-    /**
-     * Parse params using TclParser's parseParamSettings
-     */
     parseParams(str) {
         if (!str || typeof str !== 'string') return {};
         
         const parsed = TclParser.parseParamSettings(str);
         const params = {};
         
-        // Convert to our expected format
         for (const [name, info] of Object.entries(parsed)) {
             params[name] = {
                 default: info.value,
                 value: info.value,
-                flag: info.varType,   // 1=time, 2=variable, etc.
+                flag: info.varType,
                 type: info.dataType || 'string'
             };
         }
@@ -516,10 +533,6 @@ class ESSWorkbench {
         return params;
     }
     
-    /**
-     * Parse states string: "state1 next1 state2 {next2a next2b} state3 next3"
-     * Returns object with transitions
-     */
     parseStates(str) {
         if (!str || typeof str !== 'string') return {};
         
@@ -529,8 +542,6 @@ class ESSWorkbench {
         for (let i = 0; i < list.length - 1; i += 2) {
             const stateName = list[i];
             const nextStates = list[i + 1];
-            
-            // Parse next states (could be single or braced list)
             const transitions = TclParser.parseList(nextStates);
             
             states[stateName] = {
@@ -541,26 +552,19 @@ class ESSWorkbench {
         return states;
     }
     
-    /**
-     * Parse loaders string: "{name loader1 args {arg1 arg2}} {name loader2 args {...}}"
-     */
     parseLoaders(str) {
         if (!str || typeof str !== 'string') return [];
         
-        // Could be single loader or list of loaders
         const items = TclParser.parseList(str);
         const loaders = [];
         
-        // Check if it's a single loader dict or multiple
         if (items.length > 0 && items[0] === 'name') {
-            // Single loader as flat dict
             const dict = TclParser.parseDict(str);
             loaders.push({
                 name: dict.name,
                 args: TclParser.parseList(dict.args || '')
             });
         } else {
-            // Multiple loaders
             items.forEach(item => {
                 const dict = TclParser.parseDict(item);
                 if (dict.name) {
@@ -575,26 +579,20 @@ class ESSWorkbench {
         return loaders;
     }
     
-    /**
-     * Parse variant_args: "arg1 val1 arg2 val2"
-     */
     parseVariantArgs(str) {
         if (!str || typeof str !== 'string') return {};
         return TclParser.parseDict(str);
     }
     
     clearDashboard() {
-        // Reset config display
         ['cfgProject', 'cfgSystem', 'cfgProtocol', 'cfgVariant', 'cfgVersion', 'cfgSubject'].forEach(key => {
             if (this.elements[key]) this.elements[key].textContent = '—';
         });
         
-        // Reset stats
         ['statStates', 'statParams', 'statLoaders', 'statVariants'].forEach(key => {
             if (this.elements[key]) this.elements[key].textContent = '0';
         });
         
-        // Clear variant args
         if (this.elements.variantArgsContainer) {
             this.elements.variantArgsContainer.innerHTML = this.getEmptyState('No variant loaded');
         }
@@ -622,7 +620,6 @@ class ESSWorkbench {
         
         const s = this.snapshot;
         
-        // Update config hero values
         if (this.elements.cfgProject) this.elements.cfgProject.textContent = s.project || '—';
         if (this.elements.cfgSystem) this.elements.cfgSystem.textContent = s.system || '—';
         if (this.elements.cfgProtocol) this.elements.cfgProtocol.textContent = s.protocol || '—';
@@ -630,7 +627,6 @@ class ESSWorkbench {
         if (this.elements.cfgVersion) this.elements.cfgVersion.textContent = s.version || '—';
         if (this.elements.cfgSubject) this.elements.cfgSubject.textContent = s.subject_id || '—';
         
-        // Update tab mini-heroes
         this.updateTabHeroes();
     }
     
@@ -638,7 +634,6 @@ class ESSWorkbench {
         const s = this.snapshot;
         if (!s) return;
         
-        // Update all tab heroes
         const tabs = ['variants', 'scripts', 'states'];
         
         tabs.forEach(tab => {
@@ -658,32 +653,22 @@ class ESSWorkbench {
         const s = this.snapshot;
         if (!s) return;
         
-        // Count states
         const states = this.parseStates(s.states || '');
-        const stateCount = Object.keys(states).length;
-        if (this.elements.statStates) this.elements.statStates.textContent = stateCount;
+        if (this.elements.statStates) this.elements.statStates.textContent = Object.keys(states).length;
         
-        // Count params
         const params = this.parseParams(s.params || '');
-        const paramCount = Object.keys(params).length;
-        if (this.elements.statParams) this.elements.statParams.textContent = paramCount;
+        if (this.elements.statParams) this.elements.statParams.textContent = Object.keys(params).length;
         
-        // Count loaders
         const loaders = this.parseLoaders(s.loaders || '');
-        const loaderCount = loaders.length;
-        if (this.elements.statLoaders) this.elements.statLoaders.textContent = loaderCount;
+        if (this.elements.statLoaders) this.elements.statLoaders.textContent = loaders.length;
         
-        // Count variants from the variants string
         const variantCount = this.countVariants(s.variants || '');
         if (this.elements.statVariants) this.elements.statVariants.textContent = variantCount;
     }
     
     countVariants(str) {
         if (!str || typeof str !== 'string') return 0;
-        // Variants dict has format: "variant1 {...} variant2 {...}"
-        // Count top-level keys
         const list = TclParser.parseList(str.trim());
-        // Every pair is a variant name + definition
         return Math.floor(list.length / 2);
     }
     
@@ -695,7 +680,6 @@ class ESSWorkbench {
         const container = this.elements.variantArgsContainer;
         if (!container) return;
         
-        // Parse the current_loader string
         const loaderInfo = this.parseCurrentLoader(this.snapshot?.current_loader);
         const variantArgs = this.parseVariantArgs(this.snapshot?.variant_args || '');
         
@@ -719,7 +703,6 @@ class ESSWorkbench {
             const currentValue = variantArgs[argName] || '';
             
             if (Array.isArray(options) && options.length > 0) {
-                // Dropdown for options with choices
                 html += `
                     <div class="variant-arg-row">
                         <span class="variant-arg-label">${this.escapeHtml(argName)}</span>
@@ -727,18 +710,15 @@ class ESSWorkbench {
                             ${options.map((opt, idx) => {
                                 const label = typeof opt === 'object' ? opt.label : opt;
                                 const value = typeof opt === 'object' ? opt.value : opt;
-                                // Normalize whitespace for comparison
                                 const normCurrent = this.normalizeWhitespace(currentValue);
                                 const normValue = this.normalizeWhitespace(value);
                                 const selected = normValue === normCurrent ? 'selected' : '';
-                                // Use index as value to avoid issues with complex dict values
                                 return `<option value="${idx}" ${selected}>${this.escapeHtml(label)}</option>`;
                             }).join('')}
                         </select>
                     </div>
                 `;
             } else {
-                // Text input for free-form values
                 html += `
                     <div class="variant-arg-row">
                         <span class="variant-arg-label">${this.escapeHtml(argName)}</span>
@@ -751,16 +731,13 @@ class ESSWorkbench {
         
         container.innerHTML = html;
         
-        // Store options for lookup when sending commands
         this._currentArgOptions = argOptions;
         
-        // Bind change events
         container.querySelectorAll('.variant-arg-select').forEach(el => {
             el.addEventListener('change', (e) => {
                 const argName = e.target.dataset.arg;
                 let value = e.target.value;
                 
-                // If it's a select (index-based), look up the actual value
                 if (e.target.tagName === 'SELECT' && this._currentArgOptions[argName]) {
                     const idx = parseInt(value, 10);
                     const opt = this._currentArgOptions[argName][idx];
@@ -772,9 +749,6 @@ class ESSWorkbench {
         });
     }
     
-    /**
-     * Normalize whitespace for comparison (collapse multiple spaces/newlines)
-     */
     normalizeWhitespace(str) {
         if (typeof str !== 'string') return String(str);
         return str.replace(/\s+/g, ' ').trim();
@@ -783,13 +757,11 @@ class ESSWorkbench {
     onVariantArgChange(argName, value) {
         if (!this.connection || !this.connection.connected) return;
         
-        // Send the command to update variant args
         const cmd = `ess::set_variant_args ${argName} {${value}}`;
         this.connection.send(cmd).catch(err => {
             console.error('Failed to set variant arg:', err);
         });
         
-        // Auto-reload if enabled
         if (this.autoReload) {
             setTimeout(() => this.reloadVariant(), 100);
         }
@@ -827,7 +799,6 @@ class ESSWorkbench {
             const param = params[name];
             const value = param.value !== undefined ? param.value : param.default;
             const type = param.type || 'string';
-            // flag 1 = time parameter
             const isTime = param.flag === '1' || name.toLowerCase().includes('time');
             
             html += `
@@ -842,7 +813,6 @@ class ESSWorkbench {
         
         container.innerHTML = html;
         
-        // Bind change events
         container.querySelectorAll('.param-input').forEach(el => {
             el.addEventListener('change', (e) => {
                 this.onParamChange(e.target.dataset.param, e.target.value);
@@ -910,8 +880,6 @@ class ESSWorkbench {
             return;
         }
         
-        // Determine start and end states
-        // First state is typically start, state with empty transitions is end
         const startState = stateNames[0];
         const endStates = new Set();
         
@@ -945,12 +913,10 @@ class ESSWorkbench {
     switchTab(tabName) {
         this.currentTab = tabName;
         
-        // Update tab buttons
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tab === tabName);
         });
         
-        // Update tab content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.toggle('active', content.id === `tab-${tabName}`);
         });
@@ -961,9 +927,11 @@ class ESSWorkbench {
         } else if (tabName === 'states') {
             this.updateStatesDiagram();
         } else if (tabName === 'variants') {
-            // Initialize variant editor now that tab is visible
             this.initVariantsTab();
         }
+        
+        // Notify plugins
+        this._pluginHook('onTabSwitch', tabName);
     }
     
     async initVariantsTab() {
@@ -979,10 +947,8 @@ class ESSWorkbench {
         if (!this.variantScriptEditor?.view) return;
         
         if (this.scripts.variants) {
-            console.log('Loading variant script content:', this.scripts.variants.length, 'chars');
             this.variantScriptEditor.setValue(this.scripts.variants);
         } else if (this.snapshot?.variants) {
-            console.log('Loading variant content from snapshot');
             this.variantScriptEditor.setValue(this.snapshot.variants);
         }
     }
@@ -992,114 +958,104 @@ class ESSWorkbench {
     // ==========================================
     
     async initEditor() {
-	if (this.editor) return;
-	
-	try {
+        if (this.editor) return;
+        
+        try {
             this.editor = new TclEditor(this.elements.editorContainer, {
-		theme: 'dark',
-		fontSize: '13px',
-		tabSize: 4,
-		lineNumbers: true,
-		keybindings: 'emacs'
+                theme: 'dark',
+                fontSize: '13px',
+                tabSize: 4,
+                lineNumbers: true,
+                keybindings: 'emacs'
             });
             
-            // Wait for editor to be ready
             await new Promise(resolve => {
-		this.elements.editorContainer.addEventListener('editor-ready', resolve, { once: true });
+                this.elements.editorContainer.addEventListener('editor-ready', resolve, { once: true });
             });
             
-            // Load initial script
             await this.loadScript(this.currentScript);
             
-            // Set up debounced change detection
             let checkTimeout = null;
             const checkModified = async () => {
-		if (this.scriptOriginalHash) {
+                if (this.scriptOriginalHash) {
                     const currentContent = this.editor.getValue();
                     const currentHash = await sha256(currentContent);
                     const isModified = currentHash !== this.scriptOriginalHash;
                     
                     if (isModified !== this.scriptModified) {
-			this.scriptModified = isModified;
-			const saveBtn = document.getElementById('script-save-btn');
-			if (saveBtn) saveBtn.disabled = !isModified;
+                        this.scriptModified = isModified;
+                        const saveBtn = document.getElementById('script-save-btn');
+                        if (saveBtn) saveBtn.disabled = !isModified;
                     }
-		}
+                }
             };
             
-	    // Listen for changes (debounced)
-	    const onEditorChange = () => {
-		if (!this.scriptOriginalHash) return;
-		
-		if (checkTimeout) clearTimeout(checkTimeout);
-		checkTimeout = setTimeout(checkModified, 300);
-		
-		// Clear lint status when editing (user will re-lint manually)
-		if (this.elements.editorStatus.textContent) {
-		    this.elements.editorStatus.textContent = '';
-		    this.elements.editorStatus.style.color = '';
-		    this.elements.editorStatus.onclick = null;
-		}
-	    };
-	    
-	    this.editor.view.dom.addEventListener('input', onEditorChange);
-	    this.editor.view.dom.addEventListener('keyup', onEditorChange);
+            const onEditorChange = () => {
+                if (!this.scriptOriginalHash) return;
+                
+                if (checkTimeout) clearTimeout(checkTimeout);
+                checkTimeout = setTimeout(checkModified, 300);
+                
+                if (this.elements.editorStatus.textContent) {
+                    this.elements.editorStatus.textContent = '';
+                    this.elements.editorStatus.style.color = '';
+                    this.elements.editorStatus.onclick = null;
+                }
+            };
             
-	} catch (e) {
+            this.editor.view.dom.addEventListener('input', onEditorChange);
+            this.editor.view.dom.addEventListener('keyup', onEditorChange);
+            
+        } catch (e) {
             console.error('Failed to initialize editor:', e);
-	}
+        }
     }
 
     async selectScript(scriptName) {
-	this.currentScript = scriptName;
-	
-	// Update selection UI
-	this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
+        this.currentScript = scriptName;
+        
+        this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
             item.classList.toggle('active', item.dataset.script === scriptName);
-	});
-	
-	await this.loadScript(scriptName);
+        });
+        
+        await this.loadScript(scriptName);
+        
+        // Notify plugins
+        this._pluginHook('onScriptSelect', scriptName);
     }
     
     async loadScript(scriptName) {
-	if (!this.editor) return;
-	
-	const content = this.scripts[scriptName] || '';
-	this.editor.setValue(content);
-	
-	// Compute and store hash for change detection
-	this.scriptOriginalHash = await sha256(content);
-	this.scriptModified = false;
-	
-	// Disable save button (no changes yet)
-	const saveBtn = document.getElementById('script-save-btn');
-	if (saveBtn) saveBtn.disabled = true;
-	
-	// Update filename display with real filename
-	const sys = this.snapshot?.system || '';
-	const proto = this.snapshot?.protocol || '';
-	const filenames = {
+        if (!this.editor) return;
+        
+        const content = this.scripts[scriptName] || '';
+        this.editor.setValue(content);
+        
+        this.scriptOriginalHash = await sha256(content);
+        this.scriptModified = false;
+        
+        const saveBtn = document.getElementById('script-save-btn');
+        if (saveBtn) saveBtn.disabled = true;
+        
+        const sys = this.snapshot?.system || '';
+        const proto = this.snapshot?.protocol || '';
+        const filenames = {
             system: sys ? `${sys}.tcl` : 'system.tcl',
             protocol: proto ? `${sys}/${proto}.tcl` : 'protocol.tcl',
             loaders: proto ? `${sys}/${proto}_loaders.tcl` : 'loaders.tcl',
             variants: proto ? `${sys}/${proto}_variants.tcl` : 'variants.tcl',
             stim: proto ? `${sys}/${proto}_stim.tcl` : 'stim.tcl',
-	    sys_extract: sys ? `${sys}_extract.tcl` : 'sys_extract.tcl',
-	    proto_extract: proto ? `${sys}/${proto}_extract.tcl` : 'proto_extract.tcl',
-	    sys_analyze: sys ? `${sys}_analyze.tcl` : 'sys_analyze.tcl'
-	};
-	
-	this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;
-	this.elements.editorStatus.textContent = '';
+            sys_extract: sys ? `${sys}_extract.tcl` : 'sys_extract.tcl',
+            proto_extract: proto ? `${sys}/${proto}_extract.tcl` : 'proto_extract.tcl',
+            sys_analyze: sys ? `${sys}_analyze.tcl` : 'sys_analyze.tcl'
+        };
+        
+        this.elements.editorFilename.textContent = filenames[scriptName] || `${scriptName}.tcl`;
+        this.elements.editorStatus.textContent = '';
     }
     
-    // Hide sidebar entries for optional scripts that don't exist on disk
-    // Also update labels to show clean type names
     updateScriptSidebarVisibility() {
-        // Optional script types — hide when empty, show when present
         const optionalTypes = ['sys_extract', 'proto_extract', 'sys_analyze'];
         
-        // Clean display labels (no .tcl)
         const labels = {
             system: 'system',
             protocol: 'protocol',
@@ -1111,7 +1067,6 @@ class ESSWorkbench {
             sys_analyze: 'sys_analyze'
         };
         
-        // Real filenames for tooltips
         const sys = this.snapshot?.system || '';
         const proto = this.snapshot?.protocol || '';
         const filenames = {
@@ -1128,23 +1083,19 @@ class ESSWorkbench {
         this.elements.scriptsList?.querySelectorAll('.script-item').forEach(item => {
             const scriptType = item.dataset.script;
             
-            // Update label text
             const label = item.querySelector('span:not(.script-status-dot)');
             if (label && labels[scriptType]) {
                 label.textContent = labels[scriptType];
             }
             
-            // Set tooltip to real filename
             if (filenames[scriptType]) {
                 item.title = filenames[scriptType];
             }
             
-            // Hide optional types when empty
             if (optionalTypes.includes(scriptType)) {
                 const hasContent = this.scripts[scriptType] && this.scripts[scriptType].trim() !== '';
                 item.style.display = hasContent ? '' : 'none';
                 
-                // If we're currently viewing a hidden script, switch to system
                 if (!hasContent && this.currentScript === scriptType) {
                     this.selectScript('system');
                 }
@@ -1159,61 +1110,56 @@ class ESSWorkbench {
     }
     
     lintCurrentScript() {
-	if (!this.editor) return;
-	
-	const result = this.editor.lint();
-	
-	if (result.isValid) {
+        if (!this.editor) return;
+        
+        const result = this.editor.lint();
+        
+        if (result.isValid) {
             this.elements.editorStatus.textContent = '✓ No issues';
             this.elements.editorStatus.style.color = 'var(--wb-success)';
             
             setTimeout(() => {
-		this.elements.editorStatus.textContent = '';
-		this.elements.editorStatus.style.color = '';
+                this.elements.editorStatus.textContent = '';
+                this.elements.editorStatus.style.color = '';
             }, 3000);
-	} else {
-            // Show first error with line number
+        } else {
             const firstError = result.errors[0];
             const firstWarning = result.warnings[0];
             const issue = firstError || firstWarning;
             
             if (issue) {
-		this.elements.editorStatus.innerHTML = 
+                this.elements.editorStatus.innerHTML = 
                     `<span style="cursor:pointer" title="Click to see all issues">` +
                     `Line ${issue.line}: ${issue.message}` +
                     (result.errors.length + result.warnings.length > 1 
                      ? ` <small>(+${result.errors.length + result.warnings.length - 1} more)</small>` 
                      : '') +
                     `</span>`;
-		this.elements.editorStatus.style.color = firstError ? 'var(--wb-error)' : 'var(--wb-warning)';
-		
-		// Jump to error line on click
-		this.elements.editorStatus.onclick = () => {
+                this.elements.editorStatus.style.color = firstError ? 'var(--wb-error)' : 'var(--wb-warning)';
+                
+                this.elements.editorStatus.onclick = () => {
                     this.jumpToLine(issue.line);
-                    // Log all issues to console for reference
                     console.log('Lint results:', result);
-		};
+                };
             } else {
-		this.elements.editorStatus.textContent = result.summary;
-		this.elements.editorStatus.style.color = 'var(--wb-error)';
+                this.elements.editorStatus.textContent = result.summary;
+                this.elements.editorStatus.style.color = 'var(--wb-error)';
             }
-            
-            // Don't auto-clear errors - let user see them
-	}
+        }
     }
     
     jumpToLine(lineNum) {
-	if (!this.editor?.view) return;
-	
-	const doc = this.editor.view.state.doc;
-	const line = doc.line(Math.min(lineNum, doc.lines));
-	
-	this.editor.view.dispatch({
+        if (!this.editor?.view) return;
+        
+        const doc = this.editor.view.state.doc;
+        const line = doc.line(Math.min(lineNum, doc.lines));
+        
+        this.editor.view.dispatch({
             selection: { anchor: line.from },
             scrollIntoView: true
-	});
-	
-	this.editor.view.focus();
+        });
+        
+        this.editor.view.focus();
     }
     
     formatCurrentScript() {
@@ -1227,6 +1173,113 @@ class ESSWorkbench {
             this.elements.editorStatus.textContent = '';
             this.elements.editorStatus.style.color = '';
         }, 2000);
+    }
+    
+    // ==========================================
+    // Script Save / Pull / Commit (delegatable to plugins)
+    // ==========================================
+    
+    /**
+     * Save current script. Plugins can intercept via onSaveScript.
+     */
+    async saveCurrentScript() {
+        const scriptType = this.currentScript;
+        const content = this.editor?.getValue();
+        
+        // Let plugins handle it if they want
+        const handled = await this._pluginHookAsync('onSaveScript', scriptType, content);
+        if (handled === false) return;
+        
+        // Default: save via dserv eval
+        if (!this.editor?.view) {
+            alert('No editor available');
+            return;
+        }
+        
+        if (!content) {
+            alert('No content to save');
+            return;
+        }
+        
+        const btn = document.getElementById('script-save-btn');
+        const originalText = btn?.textContent;
+        
+        try {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Saving...';
+            }
+            
+            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
+                const saveCmd = `ess::save_script ${scriptType} {${content}}`;
+                this.connection.ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: saveCmd
+                }));
+                
+                console.log(`Saved ${scriptType} script to local filesystem`);
+                this.scripts[scriptType] = content;
+                
+                if (btn) {
+                    btn.textContent = 'Saved!';
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }, 1500);
+                }
+            } else {
+                throw new Error('WebSocket not connected');
+            }
+        } catch (err) {
+            alert(`Save failed: ${err.message}`);
+            if (btn) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+    }
+    
+    /**
+     * Pull script from registry. Plugins can intercept via onPullScript.
+     */
+    async pullScriptFromRegistry() {
+        const handled = await this._pluginHookAsync('onPullScript', this.currentScript);
+        if (handled === false) return;
+        
+        // Default: no-op (needs registry plugin)
+        console.warn('pullScriptFromRegistry: no handler');
+    }
+    
+    /**
+     * Show commit dialog. Plugins can intercept via onShowCommitDialog.
+     */
+    showCommitDialog(scriptType) {
+        const handled = this._pluginHook('onShowCommitDialog', scriptType);
+        if (handled === false) return;
+        
+        // Default: show the modal
+        const modal = document.getElementById('commit-modal');
+        if (!modal) return;
+        
+        const fileEl = document.getElementById('commit-file');
+        if (fileEl) {
+            fileEl.textContent = `File: ${scriptType}.tcl`;
+        }
+        
+        modal.dataset.scriptType = scriptType;
+        document.getElementById('commit-comment').value = '';
+        modal.style.display = 'flex';
+    }
+    
+    /**
+     * Commit to registry. Plugins can intercept via onCommitScript.
+     */
+    async commitToRegistry(scriptType, comment) {
+        const handled = await this._pluginHookAsync('onCommitScript', scriptType, comment);
+        if (handled === false) return;
+        
+        // Default: no-op (needs registry plugin)
+        console.warn('commitToRegistry: no handler');
     }
     
     // ==========================================
@@ -1266,7 +1319,6 @@ class ESSWorkbench {
         const states = this.parseStates(this.snapshot?.states || '');
         const transitions = [];
         
-        // Extract transitions from state data
         Object.entries(states).forEach(([fromState, stateData]) => {
             if (stateData.transitions && stateData.transitions.length > 0) {
                 stateData.transitions.forEach(toState => {
@@ -1308,14 +1360,12 @@ class ESSWorkbench {
             return;
         }
         
-        // Simple layout algorithm
         const nodeWidth = 120;
         const nodeHeight = 40;
         const hSpacing = 80;
         const vSpacing = 60;
         const padding = 40;
         
-        // Calculate grid layout
         const cols = Math.ceil(Math.sqrt(stateNames.length));
         const rows = Math.ceil(stateNames.length / cols);
         
@@ -1329,14 +1379,12 @@ class ESSWorkbench {
             };
         });
         
-        // Set SVG size
         const width = padding * 2 + cols * (nodeWidth + hSpacing) - hSpacing;
         const height = padding * 2 + rows * (nodeHeight + vSpacing) - vSpacing;
         svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
         
         let svgContent = '';
         
-        // Determine start/end states
         const startState = stateNames[0];
         const endStates = new Set();
         stateNames.forEach(name => {
@@ -1346,7 +1394,7 @@ class ESSWorkbench {
             }
         });
         
-        // Draw edges first (so they appear behind nodes)
+        // Edges
         Object.entries(states).forEach(([fromState, stateData]) => {
             if (stateData.transitions) {
                 stateData.transitions.forEach(toState => {
@@ -1354,7 +1402,6 @@ class ESSWorkbench {
                         const from = positions[fromState];
                         const to = positions[toState];
                         
-                        // Calculate edge points
                         const dx = to.x - from.x;
                         const dy = to.y - from.y;
                         const len = Math.sqrt(dx * dx + dy * dy);
@@ -1368,7 +1415,6 @@ class ESSWorkbench {
                             const endX = to.x - ux * (nodeWidth / 2 + 8);
                             const endY = to.y - uy * (nodeHeight / 2 + 8);
                             
-                            // Draw line
                             svgContent += `
                                 <line x1="${startX}" y1="${startY}" x2="${endX}" y2="${endY}" 
                                       class="state-diagram-edge" marker-end="url(#arrowhead)"/>
@@ -1379,7 +1425,7 @@ class ESSWorkbench {
             }
         });
         
-        // Draw nodes
+        // Nodes
         stateNames.forEach(name => {
             const pos = positions[name];
             
@@ -1397,7 +1443,6 @@ class ESSWorkbench {
             `;
         });
         
-        // Wrap with defs for arrowhead marker
         svg.innerHTML = `
             <defs>
                 <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -1447,11 +1492,103 @@ class ESSWorkbench {
     }
     
     // ==========================================
-    // Variants Editor
+    // Notification (shared utility for plugins)
+    // ==========================================
+    
+    showNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        notification.className = `notification notification-${type}`;
+        notification.innerHTML = `
+            <span class="notification-message">${this.escapeHtml(message)}</span>
+            <button class="notification-close">&times;</button>
+        `;
+        
+        Object.assign(notification.style, {
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            backgroundColor: type === 'error' ? 'var(--wb-error)' : 
+                            type === 'success' ? 'var(--wb-success)' : 
+                            type === 'warning' ? 'var(--wb-warning)' : 'var(--wb-info)',
+            color: 'white',
+            boxShadow: 'var(--wb-shadow-lg)',
+            zIndex: '9999',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            animation: 'slideInRight 0.3s ease'
+        });
+        
+        notification.querySelector('.notification-close').onclick = () => notification.remove();
+        
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), 5000);
+    }
+    
+    // ==========================================
+    // Tcl Command Execution (shared utility for plugins)
+    // ==========================================
+    
+    /**
+     * Execute a Tcl command on the backend with response routing.
+     * Returns a promise that resolves with the result.
+     */
+    async execTclCmd(cmd) {
+        return new Promise((resolve, reject) => {
+            if (this.connection?.ws?.readyState !== WebSocket.OPEN) {
+                reject(new Error('WebSocket not connected'));
+                return;
+            }
+            
+            const responseId = `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            
+            const responseHandler = (data) => {
+                if (data.name === `ess/cmd_response/${responseId}`) {
+                    this.dpManager.unsubscribe(`ess/cmd_response/${responseId}`, responseHandler);
+                    
+                    const value = data.data !== undefined ? data.data : data.value;
+                    if (value && value.error) {
+                        reject(new Error(value.error));
+                    } else {
+                        resolve(value);
+                    }
+                }
+            };
+            
+            this.dpManager.subscribe(`ess/cmd_response/${responseId}`, responseHandler);
+            
+            const wrappedCmd = `
+                if {[catch {${cmd}} result]} {
+                    dservSet ess/cmd_response/${responseId} [list error $result]
+                } else {
+                    dservSet ess/cmd_response/${responseId} $result
+                }
+            `;
+            
+            this.connection.ws.send(JSON.stringify({
+                cmd: 'eval',
+                script: wrappedCmd
+            }));
+            
+            setTimeout(() => {
+                this.dpManager.unsubscribe(`ess/cmd_response/${responseId}`, responseHandler);
+                reject(new Error('Command timeout'));
+            }, 30000);
+        });
+    }
+    
+    // Alias for backward compat (plugins used execRegistryCmd)
+    async execRegistryCmd(cmd) {
+        return this.execTclCmd(cmd);
+    }
+    
+    // ==========================================
+    // Variants Editor (large section, all core)
     // ==========================================
     
     initVariantsEditor() {
-        // Cache variant editor elements
         this.variantElements = {
             scriptEditor: document.getElementById('variant-script-editor'),
             parsedVariantSelect: document.getElementById('parsed-variant-select'),
@@ -1465,11 +1602,9 @@ class ESSWorkbench {
             saveReloadBtn: document.getElementById('variant-save-reload-btn')
         };
         
-        // Track original content for modified detection
         this.variantsOriginalHash = null;
         this.variantsModified = false;
         
-        // Bind button events
         this.variantElements.formatBtn?.addEventListener('click', () => {
             this.formatVariantsScript();
         });
@@ -1490,12 +1625,10 @@ class ESSWorkbench {
             this.saveVariantsScript(true);
         });
         
-        // Bind variant selector dropdown
         this.variantElements.parsedVariantSelect?.addEventListener('change', (e) => {
             this.jumpToVariant(e.target.value);
         });
         
-        // Defer editor init
         this.variantEditorPending = true;
     }
     
@@ -1511,13 +1644,10 @@ class ESSWorkbench {
         
         try {
             const formatted = TclFormatter.formatTclCode(content, 4);
-            
-            // Preserve cursor position roughly
             const cursorPos = this.getCursorPosition();
             
             this.variantScriptEditor.setValue(formatted);
             
-            // Try to restore cursor near original position
             const newLength = formatted.length;
             const newPos = Math.min(cursorPos, newLength);
             
@@ -1525,14 +1655,12 @@ class ESSWorkbench {
                 selection: { anchor: newPos }
             });
 
-	    // Check if modified and update save button
-	    if (this.variantsOriginalHash) {
-		const currentHash = await sha256(formatted);
-		this.variantsModified = currentHash !== this.variantsOriginalHash;
-		this.updateSaveButton();
-	    }
+            if (this.variantsOriginalHash) {
+                const currentHash = await sha256(formatted);
+                this.variantsModified = currentHash !== this.variantsOriginalHash;
+                this.updateSaveButton();
+            }
             
-            // Re-validate
             this.validateEntireFile();
             this.populateVariantDropdown();
             this.updateParsedView();
@@ -1543,14 +1671,12 @@ class ESSWorkbench {
     }
     
     initVariantScriptEditor() {
-        // Defer until tab is visible - CodeMirror needs visible container
         console.log('initVariantScriptEditor called - deferring until tab visible');
         this.variantEditorPending = true;
     }
     
     async ensureVariantScriptEditor() {
         const container = this.variantElements.scriptEditor;
-        console.log('ensureVariantScriptEditor - container:', container, 'pending:', this.variantEditorPending);
         
         if (!container) {
             console.warn('Variant script editor container not found');
@@ -1562,13 +1688,10 @@ class ESSWorkbench {
             return false;
         }
         
-        // If already have a working editor, return true
         if (this.variantScriptEditor && this.variantScriptEditor.view) {
             return true;
         }
         
-        // Create the editor now that tab should be visible
-        console.log('Creating variant script editor now');
         this.variantScriptEditor = new TclEditor(container, {
             theme: 'dark',
             fontSize: '13px',
@@ -1577,15 +1700,12 @@ class ESSWorkbench {
             keybindings: 'emacs'
         });
         
-        // Wait for editor to be ready (same pattern as Scripts tab)
         await new Promise(resolve => {
             container.addEventListener('editor-ready', resolve, { once: true });
         });
         
         this.variantEditorPending = false;
-        console.log('Variant script editor ready, view:', this.variantScriptEditor.view);
         
-        // Setup cursor change listener for tracking current variant
         this.setupCursorTracking();
         
         return this.variantScriptEditor.view !== null;
@@ -1594,7 +1714,6 @@ class ESSWorkbench {
     setupCursorTracking() {
         if (!this.variantScriptEditor?.view) return;
         
-        // Debounced update on cursor/content change
         let updateTimeout = null;
         const debouncedUpdate = () => {
             if (updateTimeout) clearTimeout(updateTimeout);
@@ -1603,7 +1722,6 @@ class ESSWorkbench {
             }, 150);
         };
         
-        // Debounced file validation (longer delay)
         let validateTimeout = null;
         const debouncedValidate = () => {
             if (validateTimeout) clearTimeout(validateTimeout);
@@ -1612,20 +1730,18 @@ class ESSWorkbench {
             }, 500);
         };
         
-        // Check for modifications
-	const checkModified = async () => {
-	    if (this.variantsOriginalHash) {
-		const currentContent = this.variantScriptEditor.getValue();
-		const currentHash = await sha256(currentContent);
-		const isModified = currentHash !== this.variantsOriginalHash;
-		if (isModified !== this.variantsModified) {
-		    this.variantsModified = isModified;
-		    this.updateSaveButton();
-		}
-	    }
-	};
+        const checkModified = async () => {
+            if (this.variantsOriginalHash) {
+                const currentContent = this.variantScriptEditor.getValue();
+                const currentHash = await sha256(currentContent);
+                const isModified = currentHash !== this.variantsOriginalHash;
+                if (isModified !== this.variantsModified) {
+                    this.variantsModified = isModified;
+                    this.updateSaveButton();
+                }
+            }
+        };
         
-        // Listen for cursor position changes via CodeMirror
         const view = this.variantScriptEditor.view;
         if (view) {
             view.dom.addEventListener('keyup', () => {
@@ -1640,7 +1756,6 @@ class ESSWorkbench {
                 checkModified();
             });
             
-            // Refresh highlight on scroll (since CM virtualizes lines)
             view.scrollDOM.addEventListener('scroll', () => {
                 this.applyVariantHighlight();
             });
@@ -1678,14 +1793,12 @@ class ESSWorkbench {
         const content = this.variantScriptEditor.getValue();
         const btn = andReload ? this.variantElements.saveReloadBtn : this.variantElements.saveBtn;
         
-        // Check for errors first
         const statusEl = this.variantElements.fileValidationStatus;
         if (statusEl?.classList.contains('error')) {
             const proceed = confirm('This file has validation errors. Save anyway?');
             if (!proceed) return;
         }
         
-        // Update button to show saving
         const originalHtml = btn?.innerHTML;
         if (btn) {
             btn.disabled = true;
@@ -1693,12 +1806,11 @@ class ESSWorkbench {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
                     <circle cx="12" cy="12" r="10"></circle>
                 </svg>
-                ${andReload ? 'Saving...' : 'Saving...'}
+                Saving...
             `;
         }
         
         try {
-            // Send save command via WebSocket
             const saveCmd = `ess::save_script variants {${content}}`;
             
             if (this.connection?.ws?.readyState === WebSocket.OPEN) {
@@ -1707,13 +1819,11 @@ class ESSWorkbench {
                     script: saveCmd
                 }));
                 
-                // Mark as saved
-		this.variantsOriginalHash = await sha256(content);
+                this.variantsOriginalHash = await sha256(content);
                 this.variantsModified = false;
                 
                 console.log('Variants script saved successfully');
                 
-                // If reload requested, send reload command
                 if (andReload) {
                     if (btn) {
                         btn.innerHTML = `
@@ -1724,18 +1834,17 @@ class ESSWorkbench {
                         `;
                     }
                     
-                    // Small delay then reload
                     await new Promise(resolve => setTimeout(resolve, 200));
                     
                     this.connection.ws.send(JSON.stringify({
                         cmd: 'eval',
                         script: 'ess::reload_system'
                     }));
-                    
-                    console.log('System reload triggered');
                 }
                 
-                // Show success briefly
+                // Notify plugins (e.g., registry tracks sync status)
+                this._pluginHook('onVariantsSaved', content);
+                
                 if (btn) {
                     btn.innerHTML = `
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1796,7 +1905,6 @@ class ESSWorkbench {
         const errors = [];
         const warnings = [];
         
-        // 1. Run TclLinter on entire file
         if (typeof TclLinter !== 'undefined') {
             try {
                 const linter = new TclLinter();
@@ -1811,19 +1919,16 @@ class ESSWorkbench {
             }
         }
         
-        // 2. Check that we can find the variants block
         const variantsMatch = content.match(/variable\s+variants\s*\{/);
         if (!variantsMatch) {
             errors.push('Missing "variable variants { ... }" block');
         }
         
-        // 3. Find all variants and validate each
         const variants = this.findAllVariants(content);
         if (variants.length === 0 && variantsMatch) {
             warnings.push('No variants defined');
         }
         
-        // 4. Check each variant has required fields
         for (const v of variants) {
             const variantInfo = this.findVariantAtPosition(content, v.start + 1);
             if (variantInfo) {
@@ -1838,7 +1943,6 @@ class ESSWorkbench {
             }
         }
         
-        // Update status display
         if (errors.length > 0) {
             statusEl.className = 'file-validation-status error';
             statusEl.textContent = `✗ ${errors.length} error${errors.length > 1 ? 's' : ''}`;
@@ -1857,12 +1961,9 @@ class ESSWorkbench {
     updateVariantsEditor() {
         if (!this.snapshot) return;
         
-        // Parse variants from snapshot (for reference)
         const variantsStr = this.snapshot.variants || '';
         this.parsedVariants = this.parseVariantsDict(variantsStr);
-        console.log('Parsed variants:', Object.keys(this.parsedVariants));
         
-        // Update script editor if it's ready (tab visible)
         if (this.variantScriptEditor?.view) {
             this.loadVariantScriptContent();
         }
@@ -1874,7 +1975,6 @@ class ESSWorkbench {
         const variants = {};
         const list = TclParser.parseList(str.trim());
         
-        // Parse as key-value pairs: variant_name {definition}
         for (let i = 0; i < list.length - 1; i += 2) {
             const name = list[i];
             const defStr = list[i + 1];
@@ -1898,28 +1998,24 @@ class ESSWorkbench {
         
         let content = '';
         if (this.scripts.variants) {
-            console.log('Loading variant script content:', this.scripts.variants.length, 'chars');
             content = this.scripts.variants;
         } else if (this.snapshot?.variants) {
-            console.log('Loading variant content from snapshot');
             content = this.snapshot.variants;
         }
 
-	if (content) {
-	    this.variantScriptEditor.setValue(content);
-	    
-	    // Track original hash for modified detection
-	    this.variantsOriginalHash = await sha256(content);
-	    this.variantsModified = false;
-	    this.updateSaveButton();
-	    
-	    // Populate dropdown, trigger initial parse, and validate file
-	    setTimeout(() => {
-		this.populateVariantDropdown();
-		this.updateParsedView();
-		this.validateEntireFile();
-	    }, 100);
-	}	
+        if (content) {
+            this.variantScriptEditor.setValue(content);
+            
+            this.variantsOriginalHash = await sha256(content);
+            this.variantsModified = false;
+            this.updateSaveButton();
+            
+            setTimeout(() => {
+                this.populateVariantDropdown();
+                this.updateParsedView();
+                this.validateEntireFile();
+            }, 100);
+        }
     }
     
     populateVariantDropdown() {
@@ -1944,13 +2040,11 @@ class ESSWorkbench {
     findAllVariants(content) {
         const variants = [];
         
-        // Find "variable variants {" section
         const variantsMatch = content.match(/variable\s+variants\s*\{/);
         if (!variantsMatch) return variants;
         
         const variantsStart = variantsMatch.index + variantsMatch[0].length;
         
-        // Find matching closing brace
         let braceDepth = 1;
         let variantsEnd = variantsStart;
         for (let i = variantsStart; i < content.length && braceDepth > 0; i++) {
@@ -1963,14 +2057,12 @@ class ESSWorkbench {
         let searchPos = 0;
         
         while (searchPos < variantsBody.length) {
-            // Skip whitespace
             while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
                 searchPos++;
             }
             
             if (searchPos >= variantsBody.length) break;
             
-            // Read variant name
             let nameStart = searchPos;
             while (searchPos < variantsBody.length && /\w/.test(variantsBody[searchPos])) {
                 searchPos++;
@@ -1979,14 +2071,12 @@ class ESSWorkbench {
             
             if (!variantName) break;
             
-            // Skip to opening brace
             while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
                 searchPos++;
             }
             
             if (variantsBody[searchPos] !== '{') break;
             
-            // Find matching close brace
             let depth = 1;
             searchPos++;
             while (searchPos < variantsBody.length && depth > 0) {
@@ -1995,7 +2085,6 @@ class ESSWorkbench {
                 searchPos++;
             }
             
-            // Store variant with absolute position
             variants.push({
                 name: variantName,
                 start: variantsStart + nameStart
@@ -2013,23 +2102,17 @@ class ESSWorkbench {
         
         const view = this.variantScriptEditor.view;
         
-        // Set cursor position to start of variant
         view.dispatch({
             selection: { anchor: variant.start }
         });
         
-        // Scroll so the line is ~25% from top
-        const line = view.state.doc.lineAt(variant.start);
         const lineBlock = view.lineBlockAt(variant.start);
         const editorHeight = view.dom.clientHeight;
         const targetScroll = lineBlock.top - (editorHeight * 0.25);
         
         view.scrollDOM.scrollTop = Math.max(0, targetScroll);
-        
-        // Focus the editor
         view.focus();
         
-        // Trigger parse update
         setTimeout(() => this.updateParsedView(), 50);
     }
     
@@ -2039,7 +2122,6 @@ class ESSWorkbench {
         const content = this.variantScriptEditor.getValue();
         const cursorPos = this.getCursorPosition();
         
-        // Find which variant the cursor is in
         const variantInfo = this.findVariantAtPosition(content, cursorPos);
         
         if (!variantInfo) {
@@ -2048,10 +2130,8 @@ class ESSWorkbench {
             return;
         }
         
-        // Highlight the variant in the editor
         this.highlightVariant(variantInfo.start, variantInfo.end);
         
-        // Parse the variant
         try {
             const parsed = this.parseVariantBlock(variantInfo.body);
             const validationErrors = this.validateVariant(parsed);
@@ -2067,15 +2147,10 @@ class ESSWorkbench {
         const view = this.variantScriptEditor.view;
         const doc = view.state.doc;
         
-        // Get line numbers for start and end
         const startLine = doc.lineAt(start);
         const endLine = doc.lineAt(end);
         
-        // Remove existing highlight and add new one
-        // We'll use a CSS class on the gutter/lines
         this.currentHighlight = { start: startLine.number, end: endLine.number };
-        
-        // Apply highlight via DOM manipulation (simpler than CM extensions)
         this.applyVariantHighlight();
     }
     
@@ -2092,14 +2167,12 @@ class ESSWorkbench {
         
         if (!gutterEl) return;
         
-        // Remove all existing highlights
         view.dom.querySelectorAll('.variant-highlight-gutter').forEach(el => {
             el.classList.remove('variant-highlight-gutter');
         });
         
         if (!this.currentHighlight) return;
         
-        // Highlight gutter line numbers
         const gutterElements = gutterEl.querySelectorAll('.cm-gutterElement');
         
         gutterElements.forEach(gutterEl => {
@@ -2114,18 +2187,15 @@ class ESSWorkbench {
         const errors = [];
         const warnings = [];
         
-        // Get available loaders from snapshot
         const availableLoaders = this.getAvailableLoaders();
         const availableParams = this.getAvailableParams();
         
-        // 1. Check loader_proc exists
         if (!parsed.loader_proc) {
             errors.push('Missing required field: loader_proc');
         } else if (availableLoaders.length > 0 && !availableLoaders.find(l => l.name === parsed.loader_proc)) {
             errors.push(`Unknown loader: "${parsed.loader_proc}". Available: ${availableLoaders.map(l => l.name).join(', ')}`);
         }
         
-        // 2. Check loader_options match loader's expected args
         if (parsed.loader_proc && parsed.loader_options) {
             const loader = availableLoaders.find(l => l.name === parsed.loader_proc);
             if (loader && loader.args) {
@@ -2138,7 +2208,6 @@ class ESSWorkbench {
             }
         }
         
-        // 3. Check params exist in system params
         if (parsed.params && availableParams.length > 0) {
             const paramKeys = Object.keys(parsed.params);
             paramKeys.forEach(key => {
@@ -2148,7 +2217,6 @@ class ESSWorkbench {
             });
         }
         
-        // 4. Run Tcl linter on init/deinit scripts
         if (parsed.init && typeof TclLinter !== 'undefined') {
             try {
                 const linter = new TclLinter();
@@ -2156,9 +2224,7 @@ class ESSWorkbench {
                 if (initLint.errors?.length > 0) {
                     errors.push(`Init script: ${initLint.errors[0].message}`);
                 }
-            } catch (e) {
-                // Linter failed, skip
-            }
+            } catch (e) { /* skip */ }
         }
         
         if (parsed.deinit && typeof TclLinter !== 'undefined') {
@@ -2168,9 +2234,7 @@ class ESSWorkbench {
                 if (deinitLint.errors?.length > 0) {
                     errors.push(`Deinit script: ${deinitLint.errors[0].message}`);
                 }
-            } catch (e) {
-                // Linter failed, skip
-            }
+            } catch (e) { /* skip */ }
         }
         
         return { errors, warnings };
@@ -2194,18 +2258,11 @@ class ESSWorkbench {
     }
     
     findVariantAtPosition(content, pos) {
-        // Structure: namespace eval X::Y { variable variants { variant1 {...} variant2 {...} } }
-        // We need to find variant blocks inside "variable variants { ... }"
-        
-        // First, find the "variable variants {" section
         const variantsMatch = content.match(/variable\s+variants\s*\{/);
-        if (!variantsMatch) {
-            return null;
-        }
+        if (!variantsMatch) return null;
         
         const variantsStart = variantsMatch.index + variantsMatch[0].length;
         
-        // Find the matching closing brace for the variants block
         let braceDepth = 1;
         let variantsEnd = variantsStart;
         for (let i = variantsStart; i < content.length && braceDepth > 0; i++) {
@@ -2215,20 +2272,15 @@ class ESSWorkbench {
         }
         
         const variantsBody = content.substring(variantsStart, variantsEnd);
-        
-        // Now find individual variant blocks within the variants body
-        // Pattern: variant_name { ... }
         let searchPos = 0;
         
         while (searchPos < variantsBody.length) {
-            // Skip whitespace
             while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
                 searchPos++;
             }
             
             if (searchPos >= variantsBody.length) break;
             
-            // Read variant name (identifier)
             let nameStart = searchPos;
             while (searchPos < variantsBody.length && /\w/.test(variantsBody[searchPos])) {
                 searchPos++;
@@ -2237,16 +2289,12 @@ class ESSWorkbench {
             
             if (!variantName) break;
             
-            // Skip whitespace to opening brace
             while (searchPos < variantsBody.length && /\s/.test(variantsBody[searchPos])) {
                 searchPos++;
             }
             
-            if (variantsBody[searchPos] !== '{') {
-                break;
-            }
+            if (variantsBody[searchPos] !== '{') break;
             
-            // Find matching close brace
             const bodyStart = searchPos + 1;
             let depth = 1;
             searchPos++;
@@ -2260,11 +2308,9 @@ class ESSWorkbench {
             const bodyEnd = searchPos - 1;
             const body = variantsBody.substring(bodyStart, bodyEnd);
             
-            // Calculate absolute positions
             const absStart = variantsStart + nameStart;
             const absEnd = variantsStart + searchPos;
             
-            // Check if cursor is in this variant
             if (pos >= absStart && pos <= absEnd) {
                 return {
                     name: variantName,
@@ -2279,7 +2325,6 @@ class ESSWorkbench {
     }
     
     parseVariantBlock(body) {
-        // Parse the variant body as a Tcl dict
         const dict = TclParser.parseDict(body.trim());
         
         return {
@@ -2293,7 +2338,6 @@ class ESSWorkbench {
     }
     
     showNoParsedVariant() {
-        // Reset dropdown selection
         if (this.variantElements.parsedVariantSelect) {
             this.variantElements.parsedVariantSelect.value = '';
         }
@@ -2322,7 +2366,6 @@ class ESSWorkbench {
         const hasErrors = validation.errors.length > 0;
         const hasWarnings = validation.warnings.length > 0;
         
-        // Update dropdown selection
         if (this.variantElements.parsedVariantSelect) {
             this.variantElements.parsedVariantSelect.value = name;
         }
@@ -2341,7 +2384,6 @@ class ESSWorkbench {
         if (this.variantElements.parsedContent) {
             let html = '';
             
-            // Show errors first
             if (hasErrors) {
                 html += `
                     <div class="parsed-validation errors">
@@ -2358,7 +2400,6 @@ class ESSWorkbench {
                 `;
             }
             
-            // Show warnings
             if (hasWarnings) {
                 html += `
                     <div class="parsed-validation warnings">
@@ -2396,7 +2437,7 @@ class ESSWorkbench {
                 </div>
             `;
             
-            // Loader Options - show as dropdown previews with value sent
+            // Loader Options
             const optionKeys = Object.keys(parsed.loader_options);
             if (optionKeys.length > 0) {
                 html += `
@@ -2475,7 +2516,6 @@ class ESSWorkbench {
     }
     
     formatOptionValue(value) {
-        // Truncate long values
         if (value.length > 50) {
             return value.substring(0, 47) + '...';
         }
@@ -2490,11 +2530,6 @@ class ESSWorkbench {
     }
     
     parseLoaderOptionValues(optionStr) {
-        // Parse loader option values:
-        // 1. Bare values: { 2 1 4 } -> each item is label AND value
-        // 2. Label/value pairs: { {Small 0.2} {Large 0.3} } -> exactly 2 parts = {label, value}
-        // Rule: if item splits into exactly 2 parts, it's a pair; otherwise it's a bare value
-        
         const values = [];
         const items = TclParser.parseList(optionStr);
         
@@ -2502,13 +2537,11 @@ class ESSWorkbench {
             const parts = TclParser.parseList(item);
             
             if (parts.length === 2) {
-                // Exactly 2 parts = label/value pair
                 values.push({
                     label: parts[0],
                     value: parts[1]
                 });
             } else {
-                // Anything else = bare value (use whole item as both label and value)
                 values.push({
                     label: item,
                     value: item
@@ -2553,7 +2586,6 @@ class ESSWorkbench {
     }
 `;
         
-        // Append to end of file (before final closing brace if in namespace)
         const content = this.variantScriptEditor.getValue();
         const lastBrace = content.lastIndexOf('}');
         
@@ -2580,14 +2612,11 @@ class ESSWorkbench {
             return;
         }
         
-        // Prompt for new name
         const newName = prompt('Enter name for duplicated variant:', variantInfo.name + '_copy');
         if (!newName || newName === variantInfo.name) return;
         
-        // Create duplicate
         const duplicate = `\n    ${newName} {${variantInfo.body}}\n`;
         
-        // Insert after current variant
         const newContent = content.substring(0, variantInfo.end) + duplicate + content.substring(variantInfo.end);
         this.variantScriptEditor.setValue(newContent);
     }
