@@ -8,3 +8,22 @@ ldconfig
 # Let non-root user access default dserv database file.
 mkdir -p /usr/local/dserv/db
 chmod a+w /usr/local/dserv/db
+
+# Bootstrap dlsh if not already installed
+if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
+    echo "dlsh not found, installing..."
+    DLSH_URL=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest \
+        | grep "browser_download_url.*dlsh.*\.zip" \
+        | head -1 | cut -d'"' -f4)
+
+    if [ -n "$DLSH_URL" ]; then
+        DLSH_VER=$(curl -s https://api.github.com/repos/SheinbergLab/dlsh/releases/latest \
+            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        mkdir -p /usr/local/dlsh
+        curl -fSL "$DLSH_URL" -o /usr/local/dlsh/dlsh.zip
+        echo "$DLSH_VER" > /usr/local/dlsh/VERSION
+        echo "Installed dlsh $DLSH_VER to /usr/local/dlsh/"
+    else
+        echo "Warning: could not determine dlsh download URL"
+    fi
+fi
