@@ -401,6 +401,7 @@ const OverlayPlugin = {
     _updateEditorOverlayControls(wb) {
         this._updateOverlayControlsFor(wb, 'scripts');
         this._updateOverlayControlsFor(wb, 'variants');
+        this._updateOverlayControlsFor(wb, 'loaders');
     },
 
     _updateOverlayControlsFor(wb, tab) {
@@ -412,6 +413,9 @@ const OverlayPlugin = {
         } else if (tab === 'variants') {
             containerId = 'variant-overlay-controls';
             scriptType = 'variants';
+        } else if (tab === 'loaders') {
+            containerId = 'loader-overlay-controls';
+            scriptType = 'loaders';
         } else {
             return;
         }
