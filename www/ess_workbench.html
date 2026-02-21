@@ -11,6 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     
     <link rel="stylesheet" href="css/ess_workbench.css">
+    <link rel="stylesheet" href="css/DGTableViewer.css">
     <link rel="stylesheet" href="css/ess_workbench_registry.css">
     <link rel="stylesheet" href="css/ess_workbench_overlay.css">
     <style>
@@ -99,6 +100,15 @@
                         <line x1="17" y1="16" x2="23" y2="16"></line>
                     </svg>
                     Variants
+                </button>
+                <button class="tab-btn" data-tab="loaders">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="3" y1="9" x2="21" y2="9"></line>
+                        <line x1="3" y1="15" x2="21" y2="15"></line>
+                        <line x1="9" y1="3" x2="9" y2="21"></line>
+                    </svg>
+                    Loaders
                 </button>
                 <button class="tab-btn" data-tab="scripts">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -292,8 +302,124 @@
                         </div>
                     </div>
                 </div>
-            </div>	    
-	    
+            </div>
+
+            <!-- Loaders Tab -->
+            <div class="tab-content" id="tab-loaders">
+                <div class="loaders-editor">
+                    <!-- Mini Hero -->
+                    <div class="tab-hero">
+                        <div class="tab-hero-identity">
+                            <span class="tab-hero-project" id="loaders-hero-project">—</span>
+                            <span class="tab-hero-sep">/</span>
+                            <span class="tab-hero-system" id="loaders-hero-system">—</span>
+                            <span class="tab-hero-sep">/</span>
+                            <span class="tab-hero-protocol" id="loaders-hero-protocol">—</span>
+                        </div>
+                    </div>
+
+                    <!-- Toolbar -->
+                    <div class="loaders-toolbar">
+                        <div class="loaders-toolbar-left">
+                            <div class="loaders-selector">
+                                <label class="loaders-selector-label">Loader:</label>
+                                <select id="loader-select" class="loader-select">
+                                    <option value="">— select loader —</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-sm" id="loader-run-btn" disabled>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                Run
+                            </button>
+                            <span class="loaders-run-status" id="loader-run-status"></span>
+                        </div>
+                        <div class="loaders-toolbar-right">
+                            <div id="loader-overlay-controls"></div>
+                            <span class="loaders-validation-status" id="loader-validation-status"></span>
+                            <button class="btn btn-sm" id="loader-format-btn">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="21" y1="10" x2="3" y2="10"></line>
+                                    <line x1="21" y1="6" x2="3" y2="6"></line>
+                                    <line x1="21" y1="14" x2="3" y2="14"></line>
+                                    <line x1="21" y1="18" x2="3" y2="18"></line>
+                                </svg>
+                                Format
+                            </button>
+                            <div class="toolbar-divider"></div>
+                            <button class="btn btn-sm" id="loader-save-btn" disabled>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                                    <polyline points="7 3 7 8 15 8"></polyline>
+                                </svg>
+                                Save
+                            </button>
+                            <button class="btn btn-sm" id="loader-save-reload-btn" disabled>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="23 4 23 10 17 10"></polyline>
+                                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                                </svg>
+                                Save &amp; Reload
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Split: Script Editor | Args + Table -->
+                    <div class="loaders-split">
+                        <!-- Script Editor (Left) -->
+                        <div class="loaders-script-panel">
+                            <div id="loader-script-editor" class="loader-editor-container"></div>
+                        </div>
+
+                        <!-- Results Panel (Right) -->
+                        <div class="loaders-result-panel">
+                            <!-- Arguments -->
+                            <div class="loaders-args-panel" id="loader-args-panel">
+                                <div class="loaders-args-header">
+                                    <span class="loaders-args-title">Arguments</span>
+                                    <button class="btn btn-xs" id="loader-args-reset-btn" title="Reset to defaults">Reset</button>
+                                </div>
+                                <div class="loaders-args-body" id="loader-args-body">
+                                    <div class="loaders-args-empty">Select a loader to see its arguments</div>
+                                </div>
+                            </div>
+
+                            <!-- Table Viewer -->
+                            <div class="loaders-table-panel">
+                                <div class="loaders-table-header">
+                                    <span class="loaders-table-title">stimdg</span>
+                                    <span class="loaders-table-info" id="loader-table-info"></span>
+                                </div>
+                                <div class="loaders-table-body" id="loader-table-container">
+                                    <div class="loaders-table-empty">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                            <line x1="3" y1="9" x2="21" y2="9"></line>
+                                            <line x1="9" y1="3" x2="9" y2="21"></line>
+                                        </svg>
+                                        <span>Run a loader to see the trial table</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Console -->
+                    <div class="loaders-console" id="loader-console">
+                        <div class="loaders-console-header">
+                            <span class="loaders-console-title">Console</span>
+                            <span class="loaders-console-count" id="loader-error-count"></span>
+                            <div class="loaders-console-actions">
+                                <button class="btn btn-xs" id="loader-console-clear-btn">Clear</button>
+                            </div>
+                        </div>
+                        <div class="loaders-console-body" id="loader-console-output"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Scripts Tab -->
             <div class="tab-content" id="tab-scripts">
                 <!-- Mini Hero - simplified, no "Variant:" -->
@@ -665,6 +791,7 @@
     <script src="js/ws_manager.js"></script>
     <script src="js/DatapointManager.js"></script>
     <script src="js/registry_client.js"></script>
+    <script src="js/DGTableViewer.js"></script>
     <script src="js/ess_workbench.js"></script>
     <script src="js/ess_registry_plugin.js"></script>
     <script src="js/ess_overlay_plugin.js"></script>
