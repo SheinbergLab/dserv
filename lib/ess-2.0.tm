@@ -3524,6 +3524,53 @@ namespace eval ess {
         return "[dict get $d loader_proc] [dict get $d loader_args]"
     }
 
+    # Test a loader by calling it as a method on the system object.
+    # This gives full access to object context (my, arrays, variables).
+    # loader_name: name of the loader proc
+    # args_dict: dict of arg_name -> value pairs
+    # Pushes stimdg JSON to ess/loader_test/stimdg for the workbench viewer.
+    # Returns: summary string "N rows, M columns"
+    proc test_loader {loader_name args_dict} {
+        variable current
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+        set s [::ess::find_system $current(system)]
+
+        # Get the loader's argument names in order
+        set arg_names [lindex [info object definition $s $loader_name] 0]
+
+        # Build ordered argument list from the dict
+        set args {}
+        foreach a $arg_names {
+            if {[dict exists $args_dict $a]} {
+                lappend args [dict get $args_dict $a]
+            } else {
+                error "Missing argument '$a' for loader '$loader_name'"
+            }
+        }
+
+        # Clean previous stimdg
+        if {[dg_exists stimdg]} { dg_delete stimdg }
+
+        # Call loader as a method on the system object
+        $s $loader_name {*}$args
+
+        # Verify stimdg was created
+        if {![dg_exists stimdg]} {
+            error "Loader '$loader_name' did not create stimdg"
+        }
+
+        # Push stimdg JSON to dserv for the workbench viewer
+        dservSet ess/loader_test/stimdg [dg_toHybridJSON stimdg]
+
+        # Return summary
+        set cols [dg_tclListnames stimdg]
+        set nrows [dl_length stimdg:[lindex $cols 0]]
+        set ncols [llength $cols]
+        return "$nrows rows, $ncols columns"
+    }
+
     proc set_variant_args {vargs} {
         variable current
         if {$current(system) == {}} {return}
