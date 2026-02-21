@@ -2428,11 +2428,7 @@ body {
     color: var(--wb-success);
 }
 
-/* DGTableViewer dark theme overrides for workbench */
-.loaders-table-body .dg-table-viewer {
-    background: transparent;
-}
-
+/* Hide DGTableViewer's built-in header (we have our own) */
 .loaders-table-body .dg-header {
-    display: none; /* We have our own header */
+    display: none;
 }
