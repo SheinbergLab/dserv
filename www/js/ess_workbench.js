@@ -3316,15 +3316,31 @@ class ESSWorkbench {
     jumpToLoaderLine(lineNum) {
         if (!this.loaderScriptEditor?.view) return;
 
-        const doc = this.loaderScriptEditor.view.state.doc;
-        const line = doc.line(Math.min(lineNum, doc.lines));
+        const view = this.loaderScriptEditor.view;
+        const doc = view.state.doc;
 
-        this.loaderScriptEditor.view.dispatch({
+        // Save current position before jumping
+        const currentLine = doc.lineAt(view.state.selection.main.anchor).number;
+
+        // If we're already at the target line, jump back to previous position
+        const targetLine = (currentLine === lineNum && this._loaderJumpBackLine)
+            ? this._loaderJumpBackLine
+            : lineNum;
+
+        // Store where we came from (only when jumping to the error)
+        if (targetLine === lineNum) {
+            this._loaderJumpBackLine = currentLine;
+        } else {
+            this._loaderJumpBackLine = null;
+        }
+
+        const line = doc.line(Math.min(targetLine, doc.lines));
+        view.dispatch({
             selection: { anchor: line.from },
             scrollIntoView: true
         });
 
-        this.loaderScriptEditor.view.focus();
+        view.focus();
     }
 
     async formatLoadersScript() {
