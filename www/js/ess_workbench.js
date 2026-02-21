@@ -2992,12 +2992,8 @@ class ESSWorkbench {
 
             const opts = variantOptions[argName];
 
-            // Check if any option has a friendly label (label != value)
-            const hasNamedOptions = opts && opts.some(o => o.label !== o.value);
-
-            // For named options (like dict params), show a select dropdown
-            // instead of a raw text input so user sees friendly names
-            if (hasNamedOptions) {
+            if (opts && opts.length > 0) {
+                // Variant options exist — show a select dropdown
                 const optSelect = document.createElement('select');
                 optSelect.className = 'loader-arg-select';
                 optSelect.dataset.argName = argName;
@@ -3011,48 +3007,13 @@ class ESSWorkbench {
 
                 row.appendChild(optSelect);
             } else {
-                // Plain text input for simple values
+                // No variant options — text input for manual entry
                 const input = document.createElement('input');
                 input.className = 'loader-arg-input';
                 input.type = 'text';
                 input.dataset.argName = argName;
                 input.placeholder = 'value';
-
-                if (opts && opts.length > 0) {
-                    input.value = opts[0].value;
-                }
-
                 row.appendChild(input);
-
-                // Add dropdown helper for multiple plain options
-                if (opts && opts.length > 1) {
-                    const optDiv = document.createElement('div');
-                    optDiv.className = 'loader-arg-options';
-
-                    const helperSelect = document.createElement('select');
-                    helperSelect.title = 'Choose from variant options';
-                    const emptyOpt = document.createElement('option');
-                    emptyOpt.value = '';
-                    emptyOpt.textContent = 'opts...';
-                    helperSelect.appendChild(emptyOpt);
-
-                    opts.forEach(opt => {
-                        const o = document.createElement('option');
-                        o.value = opt.value;
-                        o.textContent = opt.value.length > 25
-                            ? opt.value.substring(0, 22) + '...' : opt.value;
-                        helperSelect.appendChild(o);
-                    });
-
-                    helperSelect.addEventListener('change', () => {
-                        if (helperSelect.value) {
-                            input.value = helperSelect.value;
-                        }
-                    });
-
-                    optDiv.appendChild(helperSelect);
-                    row.appendChild(optDiv);
-                }
             }
 
             body.appendChild(row);
