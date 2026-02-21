@@ -190,7 +190,8 @@ class ESSWorkbench {
         this.bindEvents();
         this.startClock();
         this.initVariantsEditor();
-        
+        this.initLoadersEditor();
+
         // Let plugins initialize (before connect, so they can bind events)
         this._pluginHook('onInit');
         
@@ -457,6 +458,7 @@ class ESSWorkbench {
             // Update core displays
             this.updateConfigDisplay();
             this.updateVariantsEditor();
+            this.updateLoadersEditor();
             this.updateScriptEditor();
             this.updateStatesDiagram();
             
@@ -634,7 +636,7 @@ class ESSWorkbench {
         const s = this.snapshot;
         if (!s) return;
         
-        const tabs = ['variants', 'scripts', 'states'];
+        const tabs = ['variants', 'loaders', 'scripts', 'states'];
         
         tabs.forEach(tab => {
             const project = document.getElementById(`${tab}-hero-project`);
@@ -928,6 +930,8 @@ class ESSWorkbench {
             this.updateStatesDiagram();
         } else if (tabName === 'variants') {
             this.initVariantsTab();
+        } else if (tabName === 'loaders') {
+            this.initLoadersTab();
         }
         
         // Notify plugins
@@ -2619,6 +2623,827 @@ class ESSWorkbench {
         
         const newContent = content.substring(0, variantInfo.end) + duplicate + content.substring(variantInfo.end);
         this.variantScriptEditor.setValue(newContent);
+    }
+
+    // ==========================================
+    // Loaders Editor
+    // ==========================================
+
+    initLoadersEditor() {
+        this.loaderElements = {
+            scriptEditor: document.getElementById('loader-script-editor'),
+            loaderSelect: document.getElementById('loader-select'),
+            runBtn: document.getElementById('loader-run-btn'),
+            runStatus: document.getElementById('loader-run-status'),
+            formatBtn: document.getElementById('loader-format-btn'),
+            saveBtn: document.getElementById('loader-save-btn'),
+            saveReloadBtn: document.getElementById('loader-save-reload-btn'),
+            validationStatus: document.getElementById('loader-validation-status'),
+            argsBody: document.getElementById('loader-args-body'),
+            argsResetBtn: document.getElementById('loader-args-reset-btn'),
+            tableContainer: document.getElementById('loader-table-container'),
+            tableInfo: document.getElementById('loader-table-info'),
+            consoleOutput: document.getElementById('loader-console-output'),
+            errorCount: document.getElementById('loader-error-count'),
+            consoleClearBtn: document.getElementById('loader-console-clear-btn')
+        };
+
+        this.loadersOriginalHash = null;
+        this.loadersModified = false;
+        this.loaderEditorPending = true;
+        this.loaderSandbox = null;         // DservConnection for isolated subprocess
+        this.loaderSandboxPrefix = null;   // private prefix for datapoints
+        this.loaderSandboxDpManager = null;
+        this.loaderErrorCount = 0;
+        this.currentLoaderName = null;
+        this.parsedLoaderDefs = [];        // [{name, args, bodyStart, bodyEnd}, ...]
+
+        // Bind events
+        this.loaderElements.formatBtn?.addEventListener('click', () => this.formatLoadersScript());
+        this.loaderElements.saveBtn?.addEventListener('click', () => this.saveLoadersScript(false));
+        this.loaderElements.saveReloadBtn?.addEventListener('click', () => this.saveLoadersScript(true));
+        this.loaderElements.runBtn?.addEventListener('click', () => this.runLoader());
+        this.loaderElements.consoleClearBtn?.addEventListener('click', () => this.clearLoaderConsole());
+        this.loaderElements.argsResetBtn?.addEventListener('click', () => this.resetLoaderArgs());
+
+        this.loaderElements.loaderSelect?.addEventListener('change', (e) => {
+            this.currentLoaderName = e.target.value || null;
+            this.updateLoaderArgs();
+            this.loaderElements.runBtn.disabled = !this.currentLoaderName || !this.loaderSandbox;
+        });
+    }
+
+    async initLoadersTab() {
+        if (this.loaderEditorPending || !this.loaderScriptEditor?.view) {
+            const ready = await this.ensureLoaderScriptEditor();
+            if (ready) {
+                await this.loadLoaderScriptContent();
+            }
+        }
+        if (!this.loaderSandbox) {
+            await this.initLoaderSandbox();
+        }
+    }
+
+    async ensureLoaderScriptEditor() {
+        const container = this.loaderElements.scriptEditor;
+        if (!container) return false;
+
+        if (typeof TclEditor === 'undefined') return false;
+
+        if (this.loaderScriptEditor && this.loaderScriptEditor.view) {
+            return true;
+        }
+
+        this.loaderScriptEditor = new TclEditor(container, {
+            theme: 'dark',
+            fontSize: '13px',
+            tabSize: 4,
+            lineNumbers: true,
+            keybindings: 'emacs'
+        });
+
+        await new Promise(resolve => {
+            container.addEventListener('editor-ready', resolve, { once: true });
+        });
+
+        this.loaderEditorPending = false;
+
+        // Setup modification tracking
+        this.setupLoaderCursorTracking();
+
+        return this.loaderScriptEditor.view !== null;
+    }
+
+    setupLoaderCursorTracking() {
+        if (!this.loaderScriptEditor?.view) return;
+
+        let validateTimeout = null;
+        const debouncedValidate = () => {
+            if (validateTimeout) clearTimeout(validateTimeout);
+            validateTimeout = setTimeout(() => this.validateLoadersFile(), 500);
+        };
+
+        const checkModified = async () => {
+            if (this.loadersOriginalHash) {
+                const currentContent = this.loaderScriptEditor.getValue();
+                const currentHash = await sha256(currentContent);
+                const isModified = currentHash !== this.loadersOriginalHash;
+                if (isModified !== this.loadersModified) {
+                    this.loadersModified = isModified;
+                    this.updateLoaderSaveButton();
+                }
+            }
+        };
+
+        let parseTimeout = null;
+        const debouncedParse = () => {
+            if (parseTimeout) clearTimeout(parseTimeout);
+            parseTimeout = setTimeout(() => {
+                this.parseAndUpdateLoaderDropdown();
+            }, 300);
+        };
+
+        const view = this.loaderScriptEditor.view;
+        if (view) {
+            view.dom.addEventListener('keyup', () => {
+                debouncedValidate();
+                checkModified();
+                debouncedParse();
+            });
+            view.dom.addEventListener('input', () => {
+                debouncedValidate();
+                checkModified();
+                debouncedParse();
+            });
+        }
+    }
+
+    // ==========================================
+    // Loader Sandbox (Isolated Subprocess)
+    // ==========================================
+
+    async initLoaderSandbox() {
+        try {
+            this.loaderSandbox = new DservConnection({
+                subprocess: 'loader_dev',
+                createLinkedSubprocess: true,
+                autoReconnect: true,
+                onStatus: (status, msg) => {
+                    console.log(`Loader sandbox: ${status} - ${msg}`);
+                },
+                onError: (err) => {
+                    console.error('Loader sandbox error:', err);
+                }
+            });
+
+            await this.loaderSandbox.connect();
+
+            this.loaderSandboxPrefix = this.loaderSandbox.getLinkedSubprocess();
+
+            if (this.loaderSandboxPrefix) {
+                // Initialize with dlsh
+                await this.loaderSandbox.sendToLinked('package require dlsh');
+
+                // Create dg_view proc for pushing tables
+                await this.loaderSandbox.sendToLinked(
+                    `proc dg_view {dg {name ""}} {
+                        if {$name eq ""} { set name $dg }
+                        dservSet ${this.loaderSandboxPrefix}/tables/$name [dg_toHybridJSON $dg]
+                    }`
+                );
+
+                // Subscribe to table updates
+                this.loaderSandboxDpManager = new DatapointManager(this.loaderSandbox, {
+                    autoGetKeys: false
+                });
+
+                this.loaderSandboxDpManager.subscribe(
+                    `${this.loaderSandboxPrefix}/tables/*`,
+                    (dp) => this.handleLoaderTablePush(dp)
+                );
+
+                // Subscribe to errors
+                this.loaderSandboxDpManager.subscribe(
+                    `error/${this.loaderSandboxPrefix}`,
+                    (dp) => this.handleLoaderError(dp)
+                );
+
+                console.log('Loader sandbox ready:', this.loaderSandboxPrefix);
+
+                // Enable run button if a loader is selected
+                if (this.currentLoaderName) {
+                    this.loaderElements.runBtn.disabled = false;
+                }
+            }
+        } catch (e) {
+            console.error('Failed to initialize loader sandbox:', e);
+            this.logToLoaderConsole(`Sandbox init failed: ${e.message}`, 'error');
+        }
+    }
+
+    handleLoaderTablePush(datapoint) {
+        let data;
+        try {
+            data = typeof datapoint.data === 'string'
+                ? JSON.parse(datapoint.data)
+                : datapoint.data;
+        } catch (e) {
+            this.logToLoaderConsole(`Invalid table data: ${e.message}`, 'error');
+            return;
+        }
+
+        // Render in DGTableViewer
+        const container = this.loaderElements.tableContainer;
+        if (container) {
+            container.innerHTML = '';
+            const viewer = new DGTableViewer('loader-table-container', data, {
+                pageSize: 50,
+                maxHeight: '100%',
+                theme: 'dark',
+                compactMode: true
+            });
+            viewer.render();
+
+            // Update info
+            const rowCount = data.rows ? data.rows.length : 0;
+            const colCount = data.rows && data.rows.length > 0 ? Object.keys(data.rows[0]).length : 0;
+            if (this.loaderElements.tableInfo) {
+                this.loaderElements.tableInfo.textContent = `${rowCount} rows, ${colCount} columns`;
+            }
+        }
+    }
+
+    handleLoaderError(datapoint) {
+        const value = datapoint.data !== undefined ? datapoint.data : datapoint.value;
+        if (!value) return;
+
+        let errorInfo;
+        if (typeof value === 'string') {
+            try {
+                const parsed = JSON.parse(value);
+                errorInfo = parsed.errorInfo || parsed.message || value;
+            } catch {
+                errorInfo = value;
+            }
+        } else if (typeof value === 'object') {
+            errorInfo = value.errorInfo || value.message || JSON.stringify(value);
+        } else {
+            return;
+        }
+
+        this.logToLoaderConsole(errorInfo, 'error');
+    }
+
+    // ==========================================
+    // Loader Script Content
+    // ==========================================
+
+    async loadLoaderScriptContent() {
+        if (!this.loaderScriptEditor?.view) return;
+
+        let content = '';
+        if (this.scripts.loaders) {
+            content = this.scripts.loaders;
+        }
+
+        if (content) {
+            this.loaderScriptEditor.setValue(content);
+            this.loadersOriginalHash = await sha256(content);
+            this.loadersModified = false;
+            this.updateLoaderSaveButton();
+
+            setTimeout(() => {
+                this.parseAndUpdateLoaderDropdown();
+                this.validateLoadersFile();
+            }, 100);
+        }
+    }
+
+    updateLoadersEditor() {
+        if (!this.snapshot) return;
+
+        if (this.loaderScriptEditor?.view && !this.loadersModified) {
+            this.loadLoaderScriptContent();
+        }
+
+        // Also update parsed variants for cross-referencing loader_options
+        if (this.snapshot.variants) {
+            this.parsedVariantsForLoaders = this.parseVariantsDict(this.snapshot.variants);
+        }
+    }
+
+    // ==========================================
+    // Loader Parsing
+    // ==========================================
+
+    parseLoadersFromScript(content) {
+        // Find all $s add_loader <name> { <arglist> } { <body> } patterns
+        const loaders = [];
+        const lines = content.split('\n');
+
+        let i = 0;
+        while (i < lines.length) {
+            const line = lines[i];
+            // Match: $s add_loader <name> { <args> } {
+            const match = line.match(/\$\w+\s+add_loader\s+(\w+)\s+\{([^}]*)\}\s*\{/);
+            if (match) {
+                const name = match[1];
+                const args = match[2].trim().split(/\s+/).filter(a => a);
+
+                // Find the body by counting braces
+                let braceCount = 0;
+                let bodyStartLine = i;
+                let bodyEndLine = i;
+
+                // Count braces from the match line
+                for (const ch of line) {
+                    if (ch === '{') braceCount++;
+                    if (ch === '}') braceCount--;
+                }
+
+                // The first two opening braces are for arglist and body
+                // We need to find where the body brace closes
+                if (braceCount > 0) {
+                    let j = i + 1;
+                    while (j < lines.length && braceCount > 0) {
+                        for (const ch of lines[j]) {
+                            if (ch === '{') braceCount++;
+                            if (ch === '}') braceCount--;
+                        }
+                        if (braceCount > 0) j++;
+                        else bodyEndLine = j;
+                    }
+                }
+
+                // Calculate character positions
+                let bodyStart = 0;
+                for (let k = 0; k < bodyStartLine; k++) {
+                    bodyStart += lines[k].length + 1;
+                }
+                let bodyEnd = 0;
+                for (let k = 0; k <= bodyEndLine; k++) {
+                    bodyEnd += lines[k].length + 1;
+                }
+
+                loaders.push({
+                    name,
+                    args,
+                    bodyStartLine,
+                    bodyEndLine,
+                    bodyStart,
+                    bodyEnd
+                });
+            }
+            i++;
+        }
+
+        return loaders;
+    }
+
+    parseAndUpdateLoaderDropdown() {
+        if (!this.loaderScriptEditor?.view) return;
+
+        const content = this.loaderScriptEditor.getValue();
+        this.parsedLoaderDefs = this.parseLoadersFromScript(content);
+
+        const select = this.loaderElements.loaderSelect;
+        if (!select) return;
+
+        const prevValue = select.value;
+
+        select.innerHTML = '<option value="">— select loader —</option>';
+        this.parsedLoaderDefs.forEach(loader => {
+            const opt = document.createElement('option');
+            opt.value = loader.name;
+            opt.textContent = `${loader.name} (${loader.args.join(', ')})`;
+            select.appendChild(opt);
+        });
+
+        // Restore selection
+        if (prevValue && this.parsedLoaderDefs.some(l => l.name === prevValue)) {
+            select.value = prevValue;
+            this.currentLoaderName = prevValue;
+        } else if (this.parsedLoaderDefs.length > 0) {
+            // Auto-select first if nothing selected
+            if (!this.currentLoaderName) {
+                select.value = this.parsedLoaderDefs[0].name;
+                this.currentLoaderName = this.parsedLoaderDefs[0].name;
+            }
+        }
+
+        this.updateLoaderArgs();
+        this.loaderElements.runBtn.disabled = !this.currentLoaderName || !this.loaderSandbox;
+    }
+
+    // ==========================================
+    // Loader Arguments UI
+    // ==========================================
+
+    updateLoaderArgs() {
+        const body = this.loaderElements.argsBody;
+        if (!body) return;
+
+        if (!this.currentLoaderName) {
+            body.innerHTML = '<div class="loaders-args-empty">Select a loader to see its arguments</div>';
+            return;
+        }
+
+        const loaderDef = this.parsedLoaderDefs.find(l => l.name === this.currentLoaderName);
+        if (!loaderDef || loaderDef.args.length === 0) {
+            body.innerHTML = '<div class="loaders-args-empty">This loader has no arguments</div>';
+            return;
+        }
+
+        // Get variant options for this loader (cross-reference from parsed variants)
+        const variantOptions = this.getVariantOptionsForLoader(this.currentLoaderName);
+
+        body.innerHTML = '';
+        loaderDef.args.forEach(argName => {
+            const row = document.createElement('div');
+            row.className = 'loader-arg-row';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'loader-arg-name';
+            nameEl.textContent = argName;
+            row.appendChild(nameEl);
+
+            const input = document.createElement('input');
+            input.className = 'loader-arg-input';
+            input.type = 'text';
+            input.dataset.argName = argName;
+            input.placeholder = 'value';
+
+            // Pre-populate with first option from variants if available
+            const opts = variantOptions[argName];
+            if (opts && opts.length > 0) {
+                // Use the first option value as default
+                input.value = opts[0];
+            }
+
+            row.appendChild(input);
+
+            // Add dropdown for variant options if available
+            if (opts && opts.length > 1) {
+                const optDiv = document.createElement('div');
+                optDiv.className = 'loader-arg-options';
+
+                const optSelect = document.createElement('select');
+                optSelect.title = 'Choose from variant options';
+                const emptyOpt = document.createElement('option');
+                emptyOpt.value = '';
+                emptyOpt.textContent = 'opts...';
+                optSelect.appendChild(emptyOpt);
+
+                opts.forEach(optVal => {
+                    const o = document.createElement('option');
+                    o.value = optVal;
+                    o.textContent = optVal.length > 20 ? optVal.substring(0, 17) + '...' : optVal;
+                    optSelect.appendChild(o);
+                });
+
+                optSelect.addEventListener('change', () => {
+                    if (optSelect.value) {
+                        input.value = optSelect.value;
+                    }
+                });
+
+                optDiv.appendChild(optSelect);
+                row.appendChild(optDiv);
+            }
+
+            body.appendChild(row);
+        });
+    }
+
+    getVariantOptionsForLoader(loaderName) {
+        const options = {};
+        const variants = this.parsedVariantsForLoaders || this.parsedVariants || {};
+
+        // Gather options from all variants that use this loader
+        for (const [, variant] of Object.entries(variants)) {
+            if (variant.loader_proc === loaderName && variant.loader_options) {
+                for (const [argName, optStr] of Object.entries(variant.loader_options)) {
+                    if (!options[argName]) {
+                        options[argName] = [];
+                    }
+                    // Parse the option values from the Tcl list
+                    const optValues = TclParser.parseList(optStr);
+                    optValues.forEach(v => {
+                        if (!options[argName].includes(v)) {
+                            options[argName].push(v);
+                        }
+                    });
+                }
+            }
+        }
+
+        return options;
+    }
+
+    getLoaderArgValues() {
+        const args = {};
+        const inputs = this.loaderElements.argsBody?.querySelectorAll('.loader-arg-input');
+        if (inputs) {
+            inputs.forEach(input => {
+                args[input.dataset.argName] = input.value;
+            });
+        }
+        return args;
+    }
+
+    resetLoaderArgs() {
+        const inputs = this.loaderElements.argsBody?.querySelectorAll('.loader-arg-input');
+        if (inputs) {
+            inputs.forEach(input => { input.value = ''; });
+        }
+        // Re-populate from variant defaults
+        this.updateLoaderArgs();
+    }
+
+    // ==========================================
+    // Run Loader
+    // ==========================================
+
+    async runLoader() {
+        if (!this.loaderSandbox || !this.currentLoaderName) return;
+
+        const loaderDef = this.parsedLoaderDefs.find(l => l.name === this.currentLoaderName);
+        if (!loaderDef) return;
+
+        const argValues = this.getLoaderArgValues();
+
+        // Check all args have values
+        const missingArgs = loaderDef.args.filter(a => !argValues[a] && argValues[a] !== '0');
+        if (missingArgs.length > 0) {
+            this.logToLoaderConsole(`Missing argument values: ${missingArgs.join(', ')}`, 'error');
+            return;
+        }
+
+        // Build test script
+        // 1. Source the entire loaders.tcl content to define all procs
+        // 2. Set args as variables
+        // 3. Extract and run just the body
+        const content = this.loaderScriptEditor.getValue();
+
+        // Build the argument variable assignments
+        const argSetCmds = loaderDef.args.map(a => `set ${a} {${argValues[a]}}`).join('\n');
+
+        // Build test script: define as a proc and call it
+        const testScript = `
+# Clean previous stimdg
+if { [dg_exists stimdg] } { dg_delete stimdg }
+
+# Define test loader proc
+proc _test_loader_ { ${loaderDef.args.join(' ')} } {
+${this.extractLoaderBody(content, loaderDef)}
+}
+
+# Call with args
+set _result_ [_test_loader_ ${loaderDef.args.map(a => `{${argValues[a]}}`).join(' ')}]
+
+# Push to viewer
+dg_view $_result_ stimdg
+
+# Return summary
+set _nrows_ [dl_length stimdg:stimtype]
+set _ncols_ [llength [dg_tclListnames stimdg]]
+return "$_nrows_ rows, $_ncols_ columns"
+`;
+
+        // Update UI
+        this.loaderElements.runBtn.disabled = true;
+        this.setLoaderRunStatus('running...', '');
+
+        try {
+            const response = await this.loaderSandbox.sendToLinked(testScript);
+            this.setLoaderRunStatus(response || 'done', 'success');
+            this.logToLoaderConsole(`${this.currentLoaderName}: ${response}`, 'success');
+        } catch (e) {
+            this.setLoaderRunStatus('error', 'error');
+            this.logToLoaderConsole(`${this.currentLoaderName}: ${e.message}`, 'error');
+        } finally {
+            this.loaderElements.runBtn.disabled = false;
+        }
+    }
+
+    extractLoaderBody(content, loaderDef) {
+        // Extract just the body lines between bodyStartLine and bodyEndLine
+        const lines = content.split('\n');
+        // The body starts after the opening brace line
+        // and ends before the closing brace
+        const bodyLines = [];
+        for (let i = loaderDef.bodyStartLine + 1; i < loaderDef.bodyEndLine; i++) {
+            bodyLines.push(lines[i]);
+        }
+        return bodyLines.join('\n');
+    }
+
+    setLoaderRunStatus(text, type) {
+        const el = this.loaderElements.runStatus;
+        if (el) {
+            el.textContent = text;
+            el.className = 'loaders-run-status';
+            if (type) el.classList.add(type);
+
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => {
+                    el.textContent = '';
+                    el.className = 'loaders-run-status';
+                }, 5000);
+            }
+        }
+    }
+
+    // ==========================================
+    // Save Loaders Script
+    // ==========================================
+
+    async saveLoadersScript(andReload = false) {
+        if (!this.loaderScriptEditor?.view || !this.loadersModified) return;
+
+        const content = this.loaderScriptEditor.getValue();
+        const btn = andReload ? this.loaderElements.saveReloadBtn : this.loaderElements.saveBtn;
+
+        const originalHtml = btn?.innerHTML;
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                    <circle cx="12" cy="12" r="10"></circle>
+                </svg>
+                Saving...
+            `;
+        }
+
+        try {
+            const saveCmd = `ess::save_script loaders {${content}}`;
+
+            if (this.connection?.ws?.readyState === WebSocket.OPEN) {
+                this.connection.ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: saveCmd
+                }));
+
+                this.loadersOriginalHash = await sha256(content);
+                this.loadersModified = false;
+
+                if (andReload) {
+                    if (btn) {
+                        btn.innerHTML = `
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                                <circle cx="12" cy="12" r="10"></circle>
+                            </svg>
+                            Reloading...
+                        `;
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, 200));
+
+                    this.connection.ws.send(JSON.stringify({
+                        cmd: 'eval',
+                        script: 'ess::reload_system'
+                    }));
+                }
+
+                this._pluginHook('onLoadersSaved', content);
+
+                if (btn) {
+                    btn.innerHTML = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        ${andReload ? 'Reloaded!' : 'Saved!'}
+                    `;
+                    setTimeout(() => this.resetLoaderSaveButton(), 2000);
+                }
+            } else {
+                throw new Error('WebSocket not connected');
+            }
+        } catch (error) {
+            console.error('Failed to save loaders script:', error);
+            alert(`Failed to save: ${error.message}`);
+            this.resetLoaderSaveButton();
+        }
+    }
+
+    updateLoaderSaveButton() {
+        const btn = this.loaderElements.saveBtn;
+        const reloadBtn = this.loaderElements.saveReloadBtn;
+
+        if (btn) {
+            btn.disabled = !this.loadersModified;
+            btn.classList.toggle('modified', this.loadersModified);
+        }
+        if (reloadBtn) {
+            reloadBtn.disabled = !this.loadersModified;
+            reloadBtn.classList.toggle('modified', this.loadersModified);
+        }
+    }
+
+    resetLoaderSaveButton() {
+        const btn = this.loaderElements.saveBtn;
+        const reloadBtn = this.loaderElements.saveReloadBtn;
+
+        if (btn) {
+            btn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                    <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+                Save
+            `;
+        }
+        if (reloadBtn) {
+            reloadBtn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                </svg>
+                Save &amp; Reload
+            `;
+        }
+        this.updateLoaderSaveButton();
+    }
+
+    // ==========================================
+    // Loader Validation & Formatting
+    // ==========================================
+
+    validateLoadersFile() {
+        if (!this.loaderScriptEditor?.view) return;
+
+        const content = this.loaderScriptEditor.getValue();
+        const statusEl = this.loaderElements.validationStatus;
+        if (!statusEl) return;
+
+        if (typeof TclLinter !== 'undefined') {
+            try {
+                const linter = new TclLinter();
+                const result = linter.lint(content);
+                if (result.errors?.length > 0) {
+                    statusEl.textContent = `${result.errors.length} error(s)`;
+                    statusEl.className = 'loaders-validation-status error';
+                } else if (result.warnings?.length > 0) {
+                    statusEl.textContent = `${result.warnings.length} warning(s)`;
+                    statusEl.className = 'loaders-validation-status warning';
+                } else {
+                    statusEl.textContent = 'valid';
+                    statusEl.className = 'loaders-validation-status valid';
+                }
+            } catch (e) {
+                statusEl.textContent = 'lint error';
+                statusEl.className = 'loaders-validation-status error';
+            }
+        }
+    }
+
+    async formatLoadersScript() {
+        if (!this.loaderScriptEditor?.view) return;
+
+        if (typeof TclFormatter === 'undefined') return;
+
+        const content = this.loaderScriptEditor.getValue();
+
+        try {
+            const formatted = TclFormatter.formatTclCode(content, 4);
+            this.loaderScriptEditor.setValue(formatted);
+
+            if (this.loadersOriginalHash) {
+                const currentHash = await sha256(formatted);
+                this.loadersModified = currentHash !== this.loadersOriginalHash;
+                this.updateLoaderSaveButton();
+            }
+
+            this.validateLoadersFile();
+            this.parseAndUpdateLoaderDropdown();
+        } catch (e) {
+            console.error('Format error:', e);
+        }
+    }
+
+    // ==========================================
+    // Loader Console
+    // ==========================================
+
+    logToLoaderConsole(message, type = 'info') {
+        const output = this.loaderElements.consoleOutput;
+        if (!output) return;
+
+        const entry = document.createElement('div');
+        entry.className = 'loader-console-entry';
+
+        const time = document.createElement('span');
+        time.className = 'time';
+        time.textContent = new Date().toLocaleTimeString();
+        entry.appendChild(time);
+
+        const msg = document.createElement('span');
+        msg.className = `message ${type}`;
+        msg.textContent = message;
+        entry.appendChild(msg);
+
+        output.appendChild(entry);
+        output.scrollTop = output.scrollHeight;
+
+        if (type === 'error') {
+            this.loaderErrorCount++;
+            if (this.loaderElements.errorCount) {
+                this.loaderElements.errorCount.textContent =
+                    `${this.loaderErrorCount} error${this.loaderErrorCount > 1 ? 's' : ''}`;
+            }
+        }
+    }
+
+    clearLoaderConsole() {
+        if (this.loaderElements.consoleOutput) {
+            this.loaderElements.consoleOutput.innerHTML = '';
+        }
+        this.loaderErrorCount = 0;
+        if (this.loaderElements.errorCount) {
+            this.loaderElements.errorCount.textContent = '';
+        }
     }
 }
 
