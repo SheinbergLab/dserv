@@ -2990,49 +2990,69 @@ class ESSWorkbench {
             nameEl.textContent = argName;
             row.appendChild(nameEl);
 
-            const input = document.createElement('input');
-            input.className = 'loader-arg-input';
-            input.type = 'text';
-            input.dataset.argName = argName;
-            input.placeholder = 'value';
-
-            // Pre-populate with first option from variants if available
-            // Options are {label, value} objects
             const opts = variantOptions[argName];
-            if (opts && opts.length > 0) {
-                input.value = opts[0].value;
-            }
 
-            row.appendChild(input);
+            // Check if any option has a friendly label (label != value)
+            const hasNamedOptions = opts && opts.some(o => o.label !== o.value);
 
-            // Add dropdown for variant options if available
-            if (opts && opts.length > 1) {
-                const optDiv = document.createElement('div');
-                optDiv.className = 'loader-arg-options';
-
+            // For named options (like dict params), show a select dropdown
+            // instead of a raw text input so user sees friendly names
+            if (hasNamedOptions) {
                 const optSelect = document.createElement('select');
-                optSelect.title = 'Choose from variant options';
-                const emptyOpt = document.createElement('option');
-                emptyOpt.value = '';
-                emptyOpt.textContent = 'opts...';
-                optSelect.appendChild(emptyOpt);
+                optSelect.className = 'loader-arg-select';
+                optSelect.dataset.argName = argName;
 
-                opts.forEach(opt => {
+                opts.forEach((opt, idx) => {
                     const o = document.createElement('option');
-                    o.value = opt.value;
-                    const display = opt.label !== opt.value ? opt.label : opt.value;
-                    o.textContent = display.length > 25 ? display.substring(0, 22) + '...' : display;
+                    o.value = idx;
+                    o.textContent = opt.label;
                     optSelect.appendChild(o);
                 });
 
-                optSelect.addEventListener('change', () => {
-                    if (optSelect.value) {
-                        input.value = optSelect.value;
-                    }
-                });
+                row.appendChild(optSelect);
+            } else {
+                // Plain text input for simple values
+                const input = document.createElement('input');
+                input.className = 'loader-arg-input';
+                input.type = 'text';
+                input.dataset.argName = argName;
+                input.placeholder = 'value';
 
-                optDiv.appendChild(optSelect);
-                row.appendChild(optDiv);
+                if (opts && opts.length > 0) {
+                    input.value = opts[0].value;
+                }
+
+                row.appendChild(input);
+
+                // Add dropdown helper for multiple plain options
+                if (opts && opts.length > 1) {
+                    const optDiv = document.createElement('div');
+                    optDiv.className = 'loader-arg-options';
+
+                    const helperSelect = document.createElement('select');
+                    helperSelect.title = 'Choose from variant options';
+                    const emptyOpt = document.createElement('option');
+                    emptyOpt.value = '';
+                    emptyOpt.textContent = 'opts...';
+                    helperSelect.appendChild(emptyOpt);
+
+                    opts.forEach(opt => {
+                        const o = document.createElement('option');
+                        o.value = opt.value;
+                        o.textContent = opt.value.length > 25
+                            ? opt.value.substring(0, 22) + '...' : opt.value;
+                        helperSelect.appendChild(o);
+                    });
+
+                    helperSelect.addEventListener('change', () => {
+                        if (helperSelect.value) {
+                            input.value = helperSelect.value;
+                        }
+                    });
+
+                    optDiv.appendChild(helperSelect);
+                    row.appendChild(optDiv);
+                }
             }
 
             body.appendChild(row);
@@ -3080,20 +3100,32 @@ class ESSWorkbench {
 
     getLoaderArgValues() {
         const args = {};
-        const inputs = this.loaderElements.argsBody?.querySelectorAll('.loader-arg-input');
-        if (inputs) {
-            inputs.forEach(input => {
-                args[input.dataset.argName] = input.value;
-            });
-        }
+        const body = this.loaderElements.argsBody;
+        if (!body) return args;
+
+        // Read text inputs
+        body.querySelectorAll('.loader-arg-input').forEach(input => {
+            args[input.dataset.argName] = input.value;
+        });
+
+        // Read select dropdowns (named options like dict params)
+        const variantOptions = this.getVariantOptionsForLoader(this.currentLoaderName);
+        body.querySelectorAll('.loader-arg-select').forEach(select => {
+            const argName = select.dataset.argName;
+            const opts = variantOptions[argName];
+            if (opts && opts[select.selectedIndex]) {
+                args[argName] = opts[select.selectedIndex].value;
+            }
+        });
+
         return args;
     }
 
     resetLoaderArgs() {
-        const inputs = this.loaderElements.argsBody?.querySelectorAll('.loader-arg-input');
-        if (inputs) {
-            inputs.forEach(input => { input.value = ''; });
-        }
+        const body = this.loaderElements.argsBody;
+        if (!body) return;
+        body.querySelectorAll('.loader-arg-input').forEach(input => { input.value = ''; });
+        body.querySelectorAll('.loader-arg-select').forEach(select => { select.selectedIndex = 0; });
         // Re-populate from variant defaults
         this.updateLoaderArgs();
     }
