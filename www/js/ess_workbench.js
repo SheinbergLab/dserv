@@ -2652,8 +2652,6 @@ class ESSWorkbench {
         this.loadersModified = false;
         this.loaderEditorPending = true;
         this.loaderSandbox = null;         // DservConnection for isolated subprocess
-        this.loaderSandboxPrefix = null;   // private prefix for datapoints
-        this.loaderSandboxDpManager = null;
         this.loaderErrorCount = 0;
         this.currentLoaderName = null;
         this.parsedLoaderDefs = [];        // [{name, args, bodyStart, bodyEnd}, ...]
@@ -2765,67 +2763,25 @@ class ESSWorkbench {
 
     async initLoaderSandbox() {
         try {
-            this.loaderSandbox = new DservConnection({
-                subprocess: 'loader_dev',
-                createLinkedSubprocess: true,
-                autoReconnect: true,
-                onStatus: (status, msg) => {
-                    console.log(`Loader sandbox: ${status} - ${msg}`);
-                },
-                onError: (err) => {
-                    console.error('Loader sandbox error:', err);
-                }
-            });
-
-            await this.loaderSandbox.connect();
-
-            this.loaderSandboxPrefix = this.loaderSandbox.getLinkedSubprocess();
-
-            if (this.loaderSandboxPrefix) {
-                // Initialize with dlsh and add module paths
-                await this.loaderSandbox.sendToLinked('package require dlsh');
-
-                // Add dserv lib and project-specific lib to module path
-                // so package require can find system packages (e.g., planko, points)
-                await this.loaderSandbox.sendToLinked(
-                    `::tcl::tm::add $::dspath/lib
-                     catch {::tcl::tm::add [send ess {set ::ess::system_path}]/[send ess {set ::ess::current(project)}]/lib}`
-                );
-
-                // Create dg_view proc for pushing tables
-                await this.loaderSandbox.sendToLinked(
-                    `proc dg_view {dg {name ""}} {
-                        if {$name eq ""} { set name $dg }
-                        dservSet ${this.loaderSandboxPrefix}/tables/$name [dg_toHybridJSON $dg]
-                    }`
-                );
-
-                // Subscribe to table updates
-                this.loaderSandboxDpManager = new DatapointManager(this.loaderSandbox, {
-                    autoGetKeys: false
-                });
-
-                this.loaderSandboxDpManager.subscribe(
-                    `${this.loaderSandboxPrefix}/tables/*`,
+            // Subscribe to loader test results via the main connection
+            if (this.dpManager) {
+                this.dpManager.subscribe(
+                    'ess/loader_test/stimdg',
                     (dp) => this.handleLoaderTablePush(dp)
                 );
+            }
 
-                // Subscribe to errors
-                this.loaderSandboxDpManager.subscribe(
-                    `error/${this.loaderSandboxPrefix}`,
-                    (dp) => this.handleLoaderError(dp)
-                );
+            // Mark sandbox as ready (no separate subprocess needed)
+            this.loaderSandbox = true;
+            console.log('Loader test environment ready (using ess::test_loader)');
 
-                console.log('Loader sandbox ready:', this.loaderSandboxPrefix);
-
-                // Enable run button if a loader is selected
-                if (this.currentLoaderName) {
-                    this.loaderElements.runBtn.disabled = false;
-                }
+            // Enable run button if a loader is selected
+            if (this.currentLoaderName) {
+                this.loaderElements.runBtn.disabled = false;
             }
         } catch (e) {
-            console.error('Failed to initialize loader sandbox:', e);
-            this.logToLoaderConsole(`Sandbox init failed: ${e.message}`, 'error');
+            console.error('Failed to initialize loader test environment:', e);
+            this.logToLoaderConsole(`Init failed: ${e.message}`, 'error');
         }
     }
 
@@ -2859,27 +2815,6 @@ class ESSWorkbench {
                 this.loaderElements.tableInfo.textContent = `${rowCount} rows, ${colCount} columns`;
             }
         }
-    }
-
-    handleLoaderError(datapoint) {
-        const value = datapoint.data !== undefined ? datapoint.data : datapoint.value;
-        if (!value) return;
-
-        let errorInfo;
-        if (typeof value === 'string') {
-            try {
-                const parsed = JSON.parse(value);
-                errorInfo = parsed.errorInfo || parsed.message || value;
-            } catch {
-                errorInfo = value;
-            }
-        } else if (typeof value === 'object') {
-            errorInfo = value.errorInfo || value.message || JSON.stringify(value);
-        } else {
-            return;
-        }
-
-        this.logToLoaderConsole(errorInfo, 'error');
     }
 
     // ==========================================
@@ -3182,91 +3117,16 @@ class ESSWorkbench {
             return;
         }
 
-        // Build test script
-        const content = this.loaderScriptEditor.getValue();
-
-        // Extract package requirements from the system script
-        // (e.g., "package require points" in search.tcl)
-        let packageCmds = '';
-        const systemScript = this.scripts?.system || '';
-        if (systemScript) {
-            const pkgPattern = /^\s*package\s+require\s+(.+)$/gm;
-            let pkgMatch;
-            while ((pkgMatch = pkgPattern.exec(systemScript)) !== null) {
-                const pkg = pkgMatch[1].trim();
-                // Skip ess itself (system framework, not needed in sandbox)
-                if (pkg !== 'ess') {
-                    packageCmds += `catch {package require ${pkg}}\n`;
-                }
-            }
-        }
-        // Also scan the loaders script itself for package requires
-        const loaderPkgPattern = /^\s*package\s+require\s+(.+)$/gm;
-        let loaderPkgMatch;
-        while ((loaderPkgMatch = loaderPkgPattern.exec(content)) !== null) {
-            const pkg = loaderPkgMatch[1].trim();
-            if (pkg !== 'ess' && !packageCmds.includes(pkg)) {
-                packageCmds += `catch {package require ${pkg}}\n`;
-            }
-        }
-
-        // Fetch all system object variables and set them as globals in the sandbox.
-        // Uses ess::get_variables which returns a dict of all variable name/value pairs.
-        const fetchAllVarsCmd =
-            `dict for {_vname_ _vval_} [send ess {ess::get_variables}] {
-                set $_vname_ $_vval_
-            }`;
-
-        // Build argument assignments
-        const argSetCmds = loaderDef.args.map(a => `set ${a} {${argValues[a]}}`).join('\n');
-
-        // Collect all variable names the proc body might need from global scope
-        const allVarNames = new Set(loaderDef.args);
-        // Match $varname references in the body to upvar from globals
-        const body = this.extractLoaderBody(content, loaderDef);
-        const varRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
-        let varMatch;
-        while ((varMatch = varRefPattern.exec(body)) !== null) {
-            allVarNames.add(varMatch[1]);
-        }
-        const upvarCmds = Array.from(allVarNames).map(v => `    upvar #0 ${v} ${v}`).join('\n');
-
-        const testScript = `
-# Load required packages from system
-${packageCmds}
-# Fetch all system variables from ESS
-${fetchAllVarsCmd}
-
-# Set loader arguments
-${argSetCmds}
-
-# Clean previous stimdg
-if { [dg_exists stimdg] } { dg_delete stimdg }
-
-# Run loader body in proc so return statements work correctly
-proc _test_loader_ {} {
-${upvarCmds}
-${body}
-}
-_test_loader_
-
-# Push to viewer
-set _result_ [expr {[dg_exists stimdg] ? "stimdg" : [lindex [dg_tclListnames] end]}]
-dg_view $_result_ stimdg
-
-# Return summary
-set _cols_ [dg_tclListnames stimdg]
-set _nrows_ [dl_length stimdg:[lindex $_cols_ 0]]
-set _ncols_ [llength $_cols_]
-return "$_nrows_ rows, $_ncols_ columns"
-`;
+        // Build args dict for ess::test_loader
+        const argPairs = loaderDef.args.map(a => `${a} {${argValues[a]}}`).join(' ');
+        const cmd = `ess::test_loader ${this.currentLoaderName} [dict create ${argPairs}]`;
 
         // Update UI
         this.loaderElements.runBtn.disabled = true;
         this.setLoaderRunStatus('running...', '');
 
         try {
-            const response = await this.loaderSandbox.sendToLinked(testScript);
+            const response = await this.connection.send(cmd, 'ess');
             this.setLoaderRunStatus(response || 'done', 'success');
             this.logToLoaderConsole(`${this.currentLoaderName}: ${response}`, 'success');
         } catch (e) {
@@ -3275,18 +3135,6 @@ return "$_nrows_ rows, $_ncols_ columns"
         } finally {
             this.loaderElements.runBtn.disabled = false;
         }
-    }
-
-    extractLoaderBody(content, loaderDef) {
-        // Extract just the body lines between bodyStartLine and bodyEndLine
-        const lines = content.split('\n');
-        // The body starts after the opening brace line
-        // and ends before the closing brace
-        const bodyLines = [];
-        for (let i = loaderDef.bodyStartLine + 1; i < loaderDef.bodyEndLine; i++) {
-            bodyLines.push(lines[i]);
-        }
-        return bodyLines.join('\n');
     }
 
     setLoaderRunStatus(text, type) {
