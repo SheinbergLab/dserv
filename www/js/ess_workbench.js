@@ -3220,6 +3220,17 @@ class ESSWorkbench {
         // Build argument assignments
         const argSetCmds = loaderDef.args.map(a => `set ${a} {${argValues[a]}}`).join('\n');
 
+        // Collect all variable names the proc body might need from global scope
+        const allVarNames = new Set(loaderDef.args);
+        // Match $varname references in the body to upvar from globals
+        const body = this.extractLoaderBody(content, loaderDef);
+        const varRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+        let varMatch;
+        while ((varMatch = varRefPattern.exec(body)) !== null) {
+            allVarNames.add(varMatch[1]);
+        }
+        const upvarCmds = Array.from(allVarNames).map(v => `    upvar #0 ${v} ${v}`).join('\n');
+
         const testScript = `
 # Load required packages from system
 ${packageCmds}
@@ -3232,8 +3243,12 @@ ${argSetCmds}
 # Clean previous stimdg
 if { [dg_exists stimdg] } { dg_delete stimdg }
 
-# Run loader body
-${this.extractLoaderBody(content, loaderDef)}
+# Run loader body in proc so return statements work correctly
+proc _test_loader_ {} {
+${upvarCmds}
+${body}
+}
+_test_loader_
 
 # Push to viewer
 set _result_ [expr {[dg_exists stimdg] ? "stimdg" : [lindex [dg_tclListnames] end]}]
