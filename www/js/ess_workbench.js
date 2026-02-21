@@ -2782,8 +2782,15 @@ class ESSWorkbench {
             this.loaderSandboxPrefix = this.loaderSandbox.getLinkedSubprocess();
 
             if (this.loaderSandboxPrefix) {
-                // Initialize with dlsh
+                // Initialize with dlsh and add module paths
                 await this.loaderSandbox.sendToLinked('package require dlsh');
+
+                // Add dserv lib and project-specific lib to module path
+                // so package require can find system packages (e.g., planko, points)
+                await this.loaderSandbox.sendToLinked(
+                    `::tcl::tm::add $::dspath/lib
+                     catch {::tcl::tm::add [send ess {set ::ess::system_path}]/[send ess {set ::ess::current(project)}]/lib}`
+                );
 
                 // Create dg_view proc for pushing tables
                 await this.loaderSandbox.sendToLinked(
