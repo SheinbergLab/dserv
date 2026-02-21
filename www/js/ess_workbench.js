@@ -3222,8 +3222,9 @@ set _result_ [_test_loader_ ${loaderDef.args.map(a => `{${argValues[a]}}`).join(
 dg_view $_result_ stimdg
 
 # Return summary
-set _nrows_ [dl_length [lindex [dg_tclListnames stimdg] 0]]
-set _ncols_ [llength [dg_tclListnames stimdg]]
+set _cols_ [dg_tclListnames stimdg]
+set _nrows_ [dl_length stimdg:[lindex $_cols_ 0]]
+set _ncols_ [llength $_cols_]
 return "$_nrows_ rows, $_ncols_ columns"
 `;
 
