@@ -2636,7 +2636,6 @@ class ESSWorkbench {
             runBtn: document.getElementById('loader-run-btn'),
             runStatus: document.getElementById('loader-run-status'),
             formatBtn: document.getElementById('loader-format-btn'),
-            saveBtn: document.getElementById('loader-save-btn'),
             saveReloadBtn: document.getElementById('loader-save-reload-btn'),
             validationStatus: document.getElementById('loader-validation-status'),
             argsBody: document.getElementById('loader-args-body'),
@@ -2658,8 +2657,7 @@ class ESSWorkbench {
 
         // Bind events
         this.loaderElements.formatBtn?.addEventListener('click', () => this.formatLoadersScript());
-        this.loaderElements.saveBtn?.addEventListener('click', () => this.saveLoadersScript(false));
-        this.loaderElements.saveReloadBtn?.addEventListener('click', () => this.saveLoadersScript(true));
+        this.loaderElements.saveReloadBtn?.addEventListener('click', () => this.saveLoadersScript());
         this.loaderElements.runBtn?.addEventListener('click', () => this.runLoader());
         this.loaderElements.consoleClearBtn?.addEventListener('click', () => this.clearLoaderConsole());
         this.loaderElements.argsResetBtn?.addEventListener('click', () => this.resetLoaderArgs());
@@ -3150,13 +3148,12 @@ class ESSWorkbench {
     // Save Loaders Script
     // ==========================================
 
-    async saveLoadersScript(andReload = false) {
+    async saveLoadersScript() {
         if (!this.loaderScriptEditor?.view || !this.loadersModified) return;
 
         const content = this.loaderScriptEditor.getValue();
-        const btn = andReload ? this.loaderElements.saveReloadBtn : this.loaderElements.saveBtn;
+        const btn = this.loaderElements.saveReloadBtn;
 
-        const originalHtml = btn?.innerHTML;
         if (btn) {
             btn.disabled = true;
             btn.innerHTML = `
@@ -3179,23 +3176,21 @@ class ESSWorkbench {
                 this.loadersOriginalHash = await sha256(content);
                 this.loadersModified = false;
 
-                if (andReload) {
-                    if (btn) {
-                        btn.innerHTML = `
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
-                                <circle cx="12" cy="12" r="10"></circle>
-                            </svg>
-                            Reloading...
-                        `;
-                    }
-
-                    await new Promise(resolve => setTimeout(resolve, 200));
-
-                    this.connection.ws.send(JSON.stringify({
-                        cmd: 'eval',
-                        script: 'ess::reload_system'
-                    }));
+                if (btn) {
+                    btn.innerHTML = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                            <circle cx="12" cy="12" r="10"></circle>
+                        </svg>
+                        Reloading...
+                    `;
                 }
+
+                await new Promise(resolve => setTimeout(resolve, 200));
+
+                this.connection.ws.send(JSON.stringify({
+                    cmd: 'eval',
+                    script: 'ess::reload_system'
+                }));
 
                 this._pluginHook('onLoadersSaved', content);
 
@@ -3204,7 +3199,7 @@ class ESSWorkbench {
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <polyline points="20 6 9 17 4 12"></polyline>
                         </svg>
-                        ${andReload ? 'Reloaded!' : 'Saved!'}
+                        Saved!
                     `;
                     setTimeout(() => this.resetLoaderSaveButton(), 2000);
                 }
@@ -3219,38 +3214,21 @@ class ESSWorkbench {
     }
 
     updateLoaderSaveButton() {
-        const btn = this.loaderElements.saveBtn;
-        const reloadBtn = this.loaderElements.saveReloadBtn;
-
+        const btn = this.loaderElements.saveReloadBtn;
         if (btn) {
             btn.disabled = !this.loadersModified;
             btn.classList.toggle('modified', this.loadersModified);
         }
-        if (reloadBtn) {
-            reloadBtn.disabled = !this.loadersModified;
-            reloadBtn.classList.toggle('modified', this.loadersModified);
-        }
     }
 
     resetLoaderSaveButton() {
-        const btn = this.loaderElements.saveBtn;
-        const reloadBtn = this.loaderElements.saveReloadBtn;
-
+        const btn = this.loaderElements.saveReloadBtn;
         if (btn) {
             btn.innerHTML = `
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
                     <polyline points="17 21 17 13 7 13 7 21"></polyline>
                     <polyline points="7 3 7 8 15 8"></polyline>
-                </svg>
-                Save
-            `;
-        }
-        if (reloadBtn) {
-            reloadBtn.innerHTML = `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="23 4 23 10 17 10"></polyline>
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                 </svg>
                 Save &amp; Reload
             `;
