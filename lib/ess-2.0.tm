@@ -533,7 +533,9 @@ oo::class create System {
     method get_variables {} {
         set result [dict create]
         foreach var $_vars {
-            catch {dict set result $var [set [self namespace]::$var]}
+            if { ![catch {set [self namespace]::$var} val] } {
+                dict set result $var $val
+            }
         }
         return $result
     }
