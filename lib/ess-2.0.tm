@@ -187,7 +187,7 @@ oo::class create System {
     method configure_stim { host } {
         variable current
         foreach var "screen_halfx screen_halfy screen_w screen_h" {
-            oo::objdefine [self] variable $var
+            my add_variable $var
         }
 
         ::ess::ess_info "Configuring stimulus host: $host" "stim"
@@ -489,9 +489,7 @@ oo::class create System {
         set t [dict get $::ess::param_types [string toupper $type]]
         dict set _params $pname [list $val $t $ptype]
         dict set _default_param_vals $pname $val
-        my variable $pname
-        oo::objdefine [self] variable $pname
-        set $pname $val
+        my add_variable $pname $val
     }
 
     method set_parameters {} {
