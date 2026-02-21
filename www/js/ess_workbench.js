@@ -3163,6 +3163,31 @@ class ESSWorkbench {
         // Build test script
         const content = this.loaderScriptEditor.getValue();
 
+        // Extract package requirements from the system script
+        // (e.g., "package require points" in search.tcl)
+        let packageCmds = '';
+        const systemScript = this.scripts?.system || '';
+        if (systemScript) {
+            const pkgPattern = /^\s*package\s+require\s+(.+)$/gm;
+            let pkgMatch;
+            while ((pkgMatch = pkgPattern.exec(systemScript)) !== null) {
+                const pkg = pkgMatch[1].trim();
+                // Skip ess itself (system framework, not needed in sandbox)
+                if (pkg !== 'ess') {
+                    packageCmds += `catch {package require ${pkg}}\n`;
+                }
+            }
+        }
+        // Also scan the loaders script itself for package requires
+        const loaderPkgPattern = /^\s*package\s+require\s+(.+)$/gm;
+        let loaderPkgMatch;
+        while ((loaderPkgMatch = loaderPkgPattern.exec(content)) !== null) {
+            const pkg = loaderPkgMatch[1].trim();
+            if (pkg !== 'ess' && !packageCmds.includes(pkg)) {
+                packageCmds += `catch {package require ${pkg}}\n`;
+            }
+        }
+
         // Detect free variables in the loader body (screen_halfx, targ_radius, etc.)
         // These are variables referenced but not in the arg list or locally set.
         // We fetch them from the ESS process via "send ess" at run time.
@@ -3177,6 +3202,8 @@ class ESSWorkbench {
         }
 
         const testScript = `
+# Load required packages from system
+${packageCmds}
 # Fetch free variables from ESS system object
 ${fetchVarsCmds}
 # Clean previous stimdg
