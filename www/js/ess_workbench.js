@@ -3062,10 +3062,10 @@ class ESSWorkbench {
             input.placeholder = 'value';
 
             // Pre-populate with first option from variants if available
+            // Options are {label, value} objects
             const opts = variantOptions[argName];
             if (opts && opts.length > 0) {
-                // Use the first option value as default
-                input.value = opts[0];
+                input.value = opts[0].value;
             }
 
             row.appendChild(input);
@@ -3082,10 +3082,11 @@ class ESSWorkbench {
                 emptyOpt.textContent = 'opts...';
                 optSelect.appendChild(emptyOpt);
 
-                opts.forEach(optVal => {
+                opts.forEach(opt => {
                     const o = document.createElement('option');
-                    o.value = optVal;
-                    o.textContent = optVal.length > 20 ? optVal.substring(0, 17) + '...' : optVal;
+                    o.value = opt.value;
+                    const display = opt.label !== opt.value ? opt.label : opt.value;
+                    o.textContent = display.length > 25 ? display.substring(0, 22) + '...' : display;
                     optSelect.appendChild(o);
                 });
 
@@ -3115,10 +3116,24 @@ class ESSWorkbench {
                         options[argName] = [];
                     }
                     // Parse the option values from the Tcl list
+                    // Options can be {label value} pairs or plain values
                     const optValues = TclParser.parseList(optStr);
                     optValues.forEach(v => {
-                        if (!options[argName].includes(v)) {
-                            options[argName].push(v);
+                        const parts = TclParser.parseList(v);
+                        let label, value;
+                        if (parts.length === 2) {
+                            // {label value} pair — display label, use value
+                            label = parts[0];
+                            value = parts[1];
+                        } else {
+                            // plain value — label and value are the same
+                            label = v;
+                            value = v;
+                        }
+                        // Store as {label, value} objects
+                        const existing = options[argName].find(o => o.value === value && o.label === label);
+                        if (!existing) {
+                            options[argName].push({ label, value });
                         }
                     });
                 }
