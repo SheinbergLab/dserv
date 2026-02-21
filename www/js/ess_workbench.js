@@ -2785,13 +2785,6 @@ class ESSWorkbench {
                 // Initialize with dlsh
                 await this.loaderSandbox.sendToLinked('package require dlsh');
 
-                // Fetch screen params from dserv and set as globals
-                await this.loaderSandbox.sendToLinked(
-                    `foreach _v_ {screen_halfx screen_halfy screen_w screen_h} {
-                        set $_v_ [dservGet ess/screen_$_v_]
-                    }`
-                );
-
                 // Create dg_view proc for pushing tables
                 await this.loaderSandbox.sendToLinked(
                     `proc dg_view {dg {name ""}} {
@@ -3170,39 +3163,29 @@ class ESSWorkbench {
         // Build test script
         const content = this.loaderScriptEditor.getValue();
 
-        // Inject system params as global variables (targ_radius, targ_color, etc.)
-        // These are free variables the loader body may reference
-        let paramPreamble = '';
-        if (this.snapshot?.params) {
-            const params = typeof this.snapshot.params === 'string'
-                ? TclParser.parseDict(this.snapshot.params)
-                : this.snapshot.params;
-            for (const [name, value] of Object.entries(params)) {
-                // Skip params that are explicit loader args (those are passed directly)
-                if (!loaderDef.args.includes(name)) {
-                    paramPreamble += `set ${name} {${value}}\n`;
-                }
-            }
+        // Detect free variables in the loader body (screen_halfx, targ_radius, etc.)
+        // These are variables referenced but not in the arg list or locally set.
+        // We fetch them from the ESS process via "send ess" at run time.
+        const freeVars = this.detectFreeVariables(content, loaderDef);
+        let fetchVarsCmds = '';
+        if (freeVars.length > 0) {
+            // Use ess::get_variable to fetch each from the system object
+            // Wrap in catch so missing variables don't abort the whole run
+            fetchVarsCmds = freeVars.map(v =>
+                `catch {set ${v} [send ess {ess::get_variable ${v}}]}`
+            ).join('\n') + '\n';
         }
 
-        // Build test script: define as a proc and call it
-        // The proc body references free variables (screen_halfx, targ_radius, etc.)
-        // which are set as globals via sandbox init and param preamble.
-        // We use upvar to make them accessible inside the proc body.
-        const freeVars = this.detectFreeVariables(content, loaderDef);
-        const upvarCmds = freeVars.length > 0
-            ? freeVars.map(v => `    upvar #0 ${v} ${v}`).join('\n') + '\n'
-            : '';
-
         const testScript = `
-# Inject system/variant params
-${paramPreamble}
+# Fetch free variables from ESS system object
+${fetchVarsCmds}
 # Clean previous stimdg
 if { [dg_exists stimdg] } { dg_delete stimdg }
 
-# Define test loader proc
+# Define test loader proc with access to globals
 proc _test_loader_ { ${loaderDef.args.join(' ')} } {
-${upvarCmds}${this.extractLoaderBody(content, loaderDef)}
+${freeVars.map(v => `    upvar #0 ${v} ${v}`).join('\n')}
+${this.extractLoaderBody(content, loaderDef)}
 }
 
 # Call with args
