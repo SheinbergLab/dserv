@@ -2785,6 +2785,13 @@ class ESSWorkbench {
                 // Initialize with dlsh
                 await this.loaderSandbox.sendToLinked('package require dlsh');
 
+                // Fetch screen params from dserv and set as globals
+                await this.loaderSandbox.sendToLinked(
+                    `foreach _v_ {screen_halfx screen_halfy screen_w screen_h} {
+                        set $_v_ [dservGet ess/screen_$_v_]
+                    }`
+                );
+
                 // Create dg_view proc for pushing tables
                 await this.loaderSandbox.sendToLinked(
                     `proc dg_view {dg {name ""}} {
@@ -3161,22 +3168,41 @@ class ESSWorkbench {
         }
 
         // Build test script
-        // 1. Source the entire loaders.tcl content to define all procs
-        // 2. Set args as variables
-        // 3. Extract and run just the body
         const content = this.loaderScriptEditor.getValue();
 
-        // Build the argument variable assignments
-        const argSetCmds = loaderDef.args.map(a => `set ${a} {${argValues[a]}}`).join('\n');
+        // Inject system params as global variables (targ_radius, targ_color, etc.)
+        // These are free variables the loader body may reference
+        let paramPreamble = '';
+        if (this.snapshot?.params) {
+            const params = typeof this.snapshot.params === 'string'
+                ? TclParser.parseDict(this.snapshot.params)
+                : this.snapshot.params;
+            for (const [name, value] of Object.entries(params)) {
+                // Skip params that are explicit loader args (those are passed directly)
+                if (!loaderDef.args.includes(name)) {
+                    paramPreamble += `set ${name} {${value}}\n`;
+                }
+            }
+        }
 
         // Build test script: define as a proc and call it
+        // The proc body references free variables (screen_halfx, targ_radius, etc.)
+        // which are set as globals via sandbox init and param preamble.
+        // We use upvar to make them accessible inside the proc body.
+        const freeVars = this.detectFreeVariables(content, loaderDef);
+        const upvarCmds = freeVars.length > 0
+            ? freeVars.map(v => `    upvar #0 ${v} ${v}`).join('\n') + '\n'
+            : '';
+
         const testScript = `
+# Inject system/variant params
+${paramPreamble}
 # Clean previous stimdg
 if { [dg_exists stimdg] } { dg_delete stimdg }
 
 # Define test loader proc
 proc _test_loader_ { ${loaderDef.args.join(' ')} } {
-${this.extractLoaderBody(content, loaderDef)}
+${upvarCmds}${this.extractLoaderBody(content, loaderDef)}
 }
 
 # Call with args
@@ -3186,7 +3212,7 @@ set _result_ [_test_loader_ ${loaderDef.args.map(a => `{${argValues[a]}}`).join(
 dg_view $_result_ stimdg
 
 # Return summary
-set _nrows_ [dl_length stimdg:stimtype]
+set _nrows_ [dl_length [lindex [dg_tclListnames stimdg] 0]]
 set _ncols_ [llength [dg_tclListnames stimdg]]
 return "$_nrows_ rows, $_ncols_ columns"
 `;
@@ -3217,6 +3243,42 @@ return "$_nrows_ rows, $_ncols_ columns"
             bodyLines.push(lines[i]);
         }
         return bodyLines.join('\n');
+    }
+
+    /**
+     * Detect variables referenced in a loader body that aren't in its argument list.
+     * These are "free variables" that need upvar to access globals in the sandbox.
+     */
+    detectFreeVariables(content, loaderDef) {
+        const body = this.extractLoaderBody(content, loaderDef);
+        const args = new Set(loaderDef.args);
+
+        // Find $varname references (not ${expr} or $::namespace)
+        const varRefs = new Set();
+        const varPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+        let match;
+        while ((match = varPattern.exec(body)) !== null) {
+            varRefs.add(match[1]);
+        }
+
+        // Find local set assignments (set varname ...)
+        const localVars = new Set();
+        const setPattern = /^\s*set\s+([a-zA-Z_][a-zA-Z0-9_]*)\s/gm;
+        while ((match = setPattern.exec(body)) !== null) {
+            localVars.add(match[1]);
+        }
+
+        // Free variables: referenced but not in args and not locally assigned before use
+        // Also exclude common Tcl built-ins and loop vars
+        const builtins = new Set(['g', 'n_obs', 'i', 'j', 'n', 'result', '_result_']);
+        const freeVars = [];
+        for (const v of varRefs) {
+            if (!args.has(v) && !localVars.has(v) && !builtins.has(v)) {
+                freeVars.push(v);
+            }
+        }
+
+        return freeVars;
     }
 
     setLoaderRunStatus(text, type) {
