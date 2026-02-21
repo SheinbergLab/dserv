@@ -530,6 +530,14 @@ oo::class create System {
         return [set [self namespace]::$var]
     }
 
+    method get_variables {} {
+        set result [dict create]
+        foreach var $_vars {
+            catch {dict set result $var [set [self namespace]::$var]}
+        }
+        return $result
+    }
+
     method set_variable { var val } {
         return [set [self namespace]::$var $val]
     }
@@ -1505,6 +1513,11 @@ namespace eval ess {
         return [set $current(state_system)::$name]
     }
 
+    proc get_variables {} {
+        variable current
+        return [$current(state_system) get_variables]
+    }
+
     proc evt_put {type subtype time args} {
         variable current
         if {[string is int $type]} {
@@ -1802,7 +1815,7 @@ namespace eval ess {
         name get_system set_version get_version set_protocol get_protocol
         set_variants get_variants set_variant get_variant add_variant
         reset_variant_args set_variant_args get_variant_args
-        get_variable set_variable set_parameters set_default_param_vals
+        get_variable get_variables set_variable set_parameters set_default_param_vals
         protocol_init protocol_deinit final_init
     }
     
