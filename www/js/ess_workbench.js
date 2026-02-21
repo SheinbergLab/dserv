@@ -3210,37 +3210,33 @@ class ESSWorkbench {
             }
         }
 
-        // Detect free variables in the loader body (screen_halfx, targ_radius, etc.)
-        // These are variables referenced but not in the arg list or locally set.
-        // We fetch them from the ESS process via "send ess" at run time.
-        const freeVars = this.detectFreeVariables(content, loaderDef);
-        let fetchVarsCmds = '';
-        if (freeVars.length > 0) {
-            // Use ess::get_variable to fetch each from the system object
-            // Wrap in catch so missing variables don't abort the whole run
-            fetchVarsCmds = freeVars.map(v =>
-                `catch {set ${v} [send ess {ess::get_variable ${v}}]}`
-            ).join('\n') + '\n';
-        }
+        // Fetch all system object variables and set them as globals in the sandbox.
+        // Uses ess::get_variables which returns a dict of all variable name/value pairs.
+        const fetchAllVarsCmd =
+            `dict for {_vname_ _vval_} [send ess {ess::get_variables}] {
+                set $_vname_ $_vval_
+            }`;
+
+        // Build argument assignments
+        const argSetCmds = loaderDef.args.map(a => `set ${a} {${argValues[a]}}`).join('\n');
 
         const testScript = `
 # Load required packages from system
 ${packageCmds}
-# Fetch free variables from ESS system object
-${fetchVarsCmds}
+# Fetch all system variables from ESS
+${fetchAllVarsCmd}
+
+# Set loader arguments
+${argSetCmds}
+
 # Clean previous stimdg
 if { [dg_exists stimdg] } { dg_delete stimdg }
 
-# Define test loader proc with access to globals
-proc _test_loader_ { ${loaderDef.args.join(' ')} } {
-${freeVars.map(v => `    upvar #0 ${v} ${v}`).join('\n')}
+# Run loader body
 ${this.extractLoaderBody(content, loaderDef)}
-}
-
-# Call with args
-set _result_ [_test_loader_ ${loaderDef.args.map(a => `{${argValues[a]}}`).join(' ')}]
 
 # Push to viewer
+set _result_ [expr {[dg_exists stimdg] ? "stimdg" : [lindex [dg_tclListnames] end]}]
 dg_view $_result_ stimdg
 
 # Return summary
@@ -3276,42 +3272,6 @@ return "$_nrows_ rows, $_ncols_ columns"
             bodyLines.push(lines[i]);
         }
         return bodyLines.join('\n');
-    }
-
-    /**
-     * Detect variables referenced in a loader body that aren't in its argument list.
-     * These are "free variables" that need upvar to access globals in the sandbox.
-     */
-    detectFreeVariables(content, loaderDef) {
-        const body = this.extractLoaderBody(content, loaderDef);
-        const args = new Set(loaderDef.args);
-
-        // Find $varname references (not ${expr} or $::namespace)
-        const varRefs = new Set();
-        const varPattern = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
-        let match;
-        while ((match = varPattern.exec(body)) !== null) {
-            varRefs.add(match[1]);
-        }
-
-        // Find local set assignments (set varname ...)
-        const localVars = new Set();
-        const setPattern = /^\s*set\s+([a-zA-Z_][a-zA-Z0-9_]*)\s/gm;
-        while ((match = setPattern.exec(body)) !== null) {
-            localVars.add(match[1]);
-        }
-
-        // Free variables: referenced but not in args and not locally assigned before use
-        // Also exclude common Tcl built-ins and loop vars
-        const builtins = new Set(['g', 'n_obs', 'i', 'j', 'n', 'result', '_result_']);
-        const freeVars = [];
-        for (const v of varRefs) {
-            if (!args.has(v) && !localVars.has(v) && !builtins.has(v)) {
-                freeVars.push(v);
-            }
-        }
-
-        return freeVars;
     }
 
     setLoaderRunStatus(text, type) {
