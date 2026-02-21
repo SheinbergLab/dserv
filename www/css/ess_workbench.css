@@ -2296,6 +2296,22 @@ body {
     border-color: var(--wb-accent);
 }
 
+.loader-arg-select {
+    flex: 1;
+    padding: 4px 8px;
+    background: var(--wb-bg-input);
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-sm);
+    color: var(--wb-text);
+    font-size: 0.8125rem;
+    cursor: pointer;
+}
+
+.loader-arg-select:focus {
+    outline: none;
+    border-color: var(--wb-accent);
+}
+
 .loader-arg-options {
     flex-shrink: 0;
 }
