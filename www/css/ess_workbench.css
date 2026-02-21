@@ -2208,6 +2208,7 @@ body {
     border: 1px solid var(--wb-border);
     border-radius: var(--wb-radius-md);
     overflow: hidden;
+    min-width: 0;
 }
 
 .loader-editor-container {
@@ -2221,6 +2222,8 @@ body {
     flex-direction: column;
     gap: var(--wb-space-md);
     min-height: 0;
+    min-width: 0;
+    overflow: hidden;
 }
 
 /* Arguments Panel */
@@ -2342,7 +2345,25 @@ body {
 
 .loaders-table-body {
     flex: 1;
-    overflow: auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.loaders-table-body .dg-table-viewer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.loaders-table-body .dg-table-container {
+    flex: 1;
+    min-height: 0;
+}
+
+.loaders-table-body .dg-pagination {
+    flex-shrink: 0;
 }
 
 .loaders-table-empty {
