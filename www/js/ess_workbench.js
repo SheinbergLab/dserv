@@ -3281,20 +3281,50 @@ class ESSWorkbench {
                 const linter = new TclLinter();
                 const result = linter.lint(content);
                 if (result.errors?.length > 0) {
-                    statusEl.textContent = `${result.errors.length} error(s)`;
+                    const firstError = result.errors[0];
+                    const extra = result.errors.length > 1
+                        ? ` <small>(+${result.errors.length - 1} more)</small>`
+                        : '';
+                    statusEl.innerHTML =
+                        `<span style="cursor:pointer" title="Click to jump to error">` +
+                        `Line ${firstError.line}: ${firstError.message}${extra}</span>`;
                     statusEl.className = 'loaders-validation-status error';
+                    statusEl.onclick = () => this.jumpToLoaderLine(firstError.line);
                 } else if (result.warnings?.length > 0) {
-                    statusEl.textContent = `${result.warnings.length} warning(s)`;
+                    const firstWarning = result.warnings[0];
+                    const extra = result.warnings.length > 1
+                        ? ` <small>(+${result.warnings.length - 1} more)</small>`
+                        : '';
+                    statusEl.innerHTML =
+                        `<span style="cursor:pointer" title="Click to jump to warning">` +
+                        `Line ${firstWarning.line}: ${firstWarning.message}${extra}</span>`;
                     statusEl.className = 'loaders-validation-status warning';
+                    statusEl.onclick = () => this.jumpToLoaderLine(firstWarning.line);
                 } else {
                     statusEl.textContent = 'valid';
                     statusEl.className = 'loaders-validation-status valid';
+                    statusEl.onclick = null;
                 }
             } catch (e) {
                 statusEl.textContent = 'lint error';
                 statusEl.className = 'loaders-validation-status error';
+                statusEl.onclick = null;
             }
         }
+    }
+
+    jumpToLoaderLine(lineNum) {
+        if (!this.loaderScriptEditor?.view) return;
+
+        const doc = this.loaderScriptEditor.view.state.doc;
+        const line = doc.line(Math.min(lineNum, doc.lines));
+
+        this.loaderScriptEditor.view.dispatch({
+            selection: { anchor: line.from },
+            scrollIntoView: true
+        });
+
+        this.loaderScriptEditor.view.focus();
     }
 
     async formatLoadersScript() {
