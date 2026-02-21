@@ -2936,7 +2936,7 @@ class ESSWorkbench {
         this.parsedLoaderDefs.forEach(loader => {
             const opt = document.createElement('option');
             opt.value = loader.name;
-            opt.textContent = `${loader.name} (${loader.args.join(', ')})`;
+            opt.textContent = loader.name;
             select.appendChild(opt);
         });
 
