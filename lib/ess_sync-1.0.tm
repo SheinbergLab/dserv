@@ -1074,4 +1074,324 @@ namespace eval ess {
             return ""
         }
     }
+
+    # ── Scaffold: create new protocol ─────────────────────────────
+    #
+    # Creates a new protocol in the registry by cloning an existing one
+    # or generating from a skeleton (if from_protocol is empty).
+    # After creation, syncs the system locally so the new files appear.
+    #
+    # Usage:
+    #   ess::scaffold_protocol new_proto -from colormatch
+    #   ess::scaffold_protocol new_proto                    ;# skeleton
+    #   ess::scaffold_protocol new_proto -from colormatch -system match_to_sample
+    #
+    # Returns dict: system, protocols, scripts, forkedFrom
+    #
+    proc scaffold_protocol {new_protocol args} {
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured (use ess::registry_configure -url ...)"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured (use ess::registry_configure -workgroup ...)"
+        }
+
+        # Parse options
+        set from_protocol ""
+        set system ""
+        set description ""
+        foreach {key val} $args {
+            switch -- $key {
+                -from        { set from_protocol $val }
+                -system      { set system $val }
+                -description { set description $val }
+                default      { error "Unknown option: $key (use -from, -system, -description)" }
+            }
+        }
+
+        # Default to current system
+        if {$system eq ""} {
+            if {$current(system) eq ""} {
+                error "No system specified and no system loaded"
+            }
+            set system $current(system)
+        }
+
+        # Identify user
+        set user "scaffold"
+        if {[info exists ::env(USER)]} {
+            set user $::env(USER)
+        }
+
+        # Build request
+        set request [dict create \
+            workgroup $registry_workgroup \
+            system    $system \
+            protocol  $new_protocol \
+            createdBy $user]
+
+        if {$from_protocol ne ""} {
+            dict set request fromProtocol $from_protocol
+        }
+        if {$description ne ""} {
+            dict set request description $description
+        }
+
+        set url "${registry_url}/api/v1/ess/scaffold/protocol"
+        set body [dict_to_json $request]
+
+        ess_info "Scaffolding protocol $new_protocol in $system (from: [expr {$from_protocol ne {} ? $from_protocol : {skeleton}}])" "scaffold"
+
+        if {[catch {
+            set response [https_post $url $body]
+        } err]} {
+            ess_error "Scaffold failed: $err" "scaffold"
+            error "Scaffold failed: $err"
+        }
+
+        # Parse response
+        set success [json_get $response success]
+        if {$success ne "true"} {
+            set errmsg [json_get $response error]
+            ess_error "Scaffold failed: $errmsg" "scaffold"
+            error "Scaffold failed: $errmsg"
+        }
+
+        set result_system  [json_get $response result.system]
+        set result_scripts [json_get $response result.scripts]
+        set result_forked  [json_get $response result.forkedFrom]
+
+        ess_info "Created protocol $new_protocol ($result_scripts scripts, forked from $result_forked)" "scaffold"
+
+        # Sync locally so the new files appear on disk
+        ess_info "Syncing $system to pull new protocol files..." "scaffold"
+        set sync_result [sync_system $system]
+
+        return [dict create \
+            system     $result_system \
+            protocol   $new_protocol \
+            scripts    $result_scripts \
+            forkedFrom $result_forked \
+            sync       $sync_result]
+    }
+
+    # ── Scaffold: delete protocol ─────────────────────────────────
+    #
+    # Removes a protocol and all its scripts from the registry.
+    # Does NOT remove local files (run sync_system to reconcile).
+    #
+    # Usage:
+    #   ess::delete_protocol testmatch
+    #   ess::delete_protocol testmatch -system match_to_sample
+    #
+    proc delete_protocol {protocol args} {
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+
+        set system ""
+        foreach {key val} $args {
+            switch -- $key {
+                -system { set system $val }
+                default { error "Unknown option: $key" }
+            }
+        }
+
+        if {$system eq ""} {
+            if {$current(system) eq ""} {
+                error "No system specified and no system loaded"
+            }
+            set system $current(system)
+        }
+
+        set request [dict create \
+            workgroup $registry_workgroup \
+            system    $system \
+            protocol  $protocol]
+
+        set url "${registry_url}/api/v1/ess/scaffold/protocol"
+        set body [dict_to_json $request]
+
+        ess_info "Deleting protocol $protocol from $system" "scaffold"
+
+        if {[catch {
+            set response [https_delete $url $body]
+        } err]} {
+            ess_error "Delete failed: $err" "scaffold"
+            error "Delete failed: $err"
+        }
+
+        set deleted [json_get $response deleted]
+        ess_info "Deleted protocol $protocol ($deleted scripts removed)" "scaffold"
+
+        return [dict create protocol $protocol deleted $deleted]
+    }
+
+    # ── Scaffold: list available protocols to clone ───────────────
+    #
+    # Returns info about what's available for scaffolding in a system.
+    #
+    # Usage:
+    #   ess::scaffold_info                              ;# current system
+    #   ess::scaffold_info -system match_to_sample
+    #
+    proc scaffold_info {args} {
+        variable registry_url
+        variable registry_workgroup
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+
+        set system ""
+        foreach {key val} $args {
+            switch -- $key {
+                -system { set system $val }
+                default { error "Unknown option: $key" }
+            }
+        }
+
+        if {$system eq ""} {
+            if {$current(system) ne ""} {
+                set system $current(system)
+            }
+        }
+
+        if {$system eq ""} {
+            # No system — return templates only
+            set url "${registry_url}/api/v1/ess/scaffold/info/"
+        } else {
+            set url "${registry_url}/api/v1/ess/scaffold/info/${registry_workgroup}/${system}"
+        }
+
+        if {[catch {
+            set response [https_get $url]
+            set data [json_to_dict $response]
+        } err]} {
+            ess_error "Failed to get scaffold info: $err" "scaffold"
+            error "Failed to get scaffold info: $err"
+        }
+
+        return $data
+    }
+
+    # ── Scaffold: create new system ───────────────────────────────
+    #
+    # Creates a new system in the registry by cloning an existing one,
+    # from a template, or from a built-in skeleton.
+    #
+    # Usage:
+    #   ess::scaffold_system my_task -from match_to_sample
+    #   ess::scaffold_system my_task -template match_to_sample
+    #   ess::scaffold_system my_task -protocol first_proto    ;# skeleton
+    #
+    # Returns dict: system, protocols, scripts, forkedFrom, sync
+    #
+    proc scaffold_system {new_system args} {
+        variable registry_url
+        variable registry_workgroup
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+
+        # Parse options
+        set from_system ""
+        set from_workgroup ""
+        set template ""
+        set protocol ""
+        set description ""
+        foreach {key val} $args {
+            switch -- $key {
+                -from          { set from_system $val }
+                -from_workgroup { set from_workgroup $val }
+                -template      { set template $val }
+                -protocol      { set protocol $val }
+                -description   { set description $val }
+                default        { error "Unknown option: $key" }
+            }
+        }
+
+        set user "scaffold"
+        if {[info exists ::env(USER)]} {
+            set user $::env(USER)
+        }
+
+        set request [dict create \
+            workgroup $registry_workgroup \
+            system    $new_system \
+            createdBy $user]
+
+        if {$from_system ne ""} {
+            dict set request fromSystem $from_system
+        }
+        if {$from_workgroup ne ""} {
+            dict set request fromWorkgroup $from_workgroup
+        }
+        if {$template ne ""} {
+            dict set request template $template
+        }
+        if {$protocol ne ""} {
+            dict set request protocol $protocol
+        }
+        if {$description ne ""} {
+            dict set request description $description
+        }
+
+        set url "${registry_url}/api/v1/ess/scaffold/system"
+        set body [dict_to_json $request]
+
+        set source "skeleton"
+        if {$from_system ne ""} {
+            set source $from_system
+        } elseif {$template ne ""} {
+            set source "template:$template"
+        }
+
+        ess_info "Scaffolding system $new_system (from: $source)" "scaffold"
+
+        if {[catch {
+            set response [https_post $url $body]
+        } err]} {
+            ess_error "Scaffold system failed: $err" "scaffold"
+            error "Scaffold system failed: $err"
+        }
+
+        set success [json_get $response success]
+        if {$success ne "true"} {
+            set errmsg [json_get $response error]
+            error "Scaffold system failed: $errmsg"
+        }
+
+        set result_system  [json_get $response result.system]
+        set result_scripts [json_get $response result.scripts]
+        set result_forked  [json_get $response result.forkedFrom]
+
+        ess_info "Created system $new_system ($result_scripts scripts)" "scaffold"
+
+        # Sync locally
+        ess_info "Syncing $new_system to pull files..." "scaffold"
+        set sync_result [sync_system $new_system]
+
+        return [dict create \
+            system     $result_system \
+            scripts    $result_scripts \
+            forkedFrom $result_forked \
+            sync       $sync_result]
+    }
 }
