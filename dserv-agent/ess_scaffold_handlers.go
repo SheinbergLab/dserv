@@ -9,6 +9,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -29,7 +30,21 @@ import (
 //	}
 //
 // Omit fromProtocol to create from skeleton.
+//
+// DELETE /api/v1/ess/scaffold/protocol
+//
+// Remove all scripts for a protocol.
+//
+//	{
+//	    "workgroup": "sheinberg",
+//	    "system": "match_to_sample",
+//	    "protocol": "testmatch"
+//	}
 func (r *ESSRegistry) handleScaffoldProtocol(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodDelete {
+		r.handleDeleteProtocol(w, req)
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -123,6 +138,10 @@ func (r *ESSRegistry) handleScaffoldProtocol(w http.ResponseWriter, req *http.Re
 //	    "createdBy": "dls"
 //	}
 func (r *ESSRegistry) handleScaffoldSystem(w http.ResponseWriter, req *http.Request) {
+	if req.Method == http.MethodDelete {
+		r.handleDeleteSystem(w, req)
+		return
+	}
 	if req.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -269,4 +288,95 @@ func isValidName(name string) bool {
 	// Must start with a letter or underscore
 	first := name[0]
 	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_'
+}
+
+// ============ Delete Operations ============
+
+// DeleteProtocolRequest removes all scripts for a protocol
+type DeleteProtocolRequest struct {
+	Workgroup string `json:"workgroup"`
+	System    string `json:"system"`
+	Protocol  string `json:"protocol"`
+}
+
+// DeleteSystemRequest removes a system and all its scripts
+type DeleteSystemRequest struct {
+	Workgroup string `json:"workgroup"`
+	System    string `json:"system"`
+}
+
+// DELETE /api/v1/ess/scaffold/protocol
+func (r *ESSRegistry) handleDeleteProtocol(w http.ResponseWriter, req *http.Request) {
+	var delReq DeleteProtocolRequest
+	if err := json.NewDecoder(req.Body).Decode(&delReq); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+
+	if delReq.Workgroup == "" || delReq.System == "" || delReq.Protocol == "" {
+		writeJSON(w, 400, map[string]string{"error": "workgroup, system, and protocol are required"})
+		return
+	}
+
+	sys, err := r.GetSystem(delReq.Workgroup, delReq.System, "main")
+	if err != nil || sys == nil {
+		writeJSON(w, 404, map[string]string{"error": "System not found"})
+		return
+	}
+
+	result, err := r.db.Exec(
+		`DELETE FROM ess_scripts WHERE system_id = ? AND protocol = ?`,
+		sys.ID, delReq.Protocol)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		writeJSON(w, 404, map[string]string{"error": fmt.Sprintf("protocol %s not found", delReq.Protocol)})
+		return
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"success":  true,
+		"deleted":  rows,
+		"protocol": delReq.Protocol,
+	})
+}
+
+// DELETE /api/v1/ess/scaffold/system
+func (r *ESSRegistry) handleDeleteSystem(w http.ResponseWriter, req *http.Request) {
+	var delReq DeleteSystemRequest
+	if err := json.NewDecoder(req.Body).Decode(&delReq); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+
+	if delReq.Workgroup == "" || delReq.System == "" {
+		writeJSON(w, 400, map[string]string{"error": "workgroup and system are required"})
+		return
+	}
+
+	sys, err := r.GetSystem(delReq.Workgroup, delReq.System, "main")
+	if err != nil || sys == nil {
+		writeJSON(w, 404, map[string]string{"error": "System not found"})
+		return
+	}
+
+	// Scripts are deleted by CASCADE, but let's count them first
+	var scriptCount int
+	r.db.QueryRow("SELECT COUNT(*) FROM ess_scripts WHERE system_id = ?", sys.ID).Scan(&scriptCount)
+
+	_, err = r.db.Exec("DELETE FROM ess_systems WHERE id = ?", sys.ID)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"success":        true,
+		"deletedSystem":  delReq.System,
+		"deletedScripts": scriptCount,
+	})
 }
