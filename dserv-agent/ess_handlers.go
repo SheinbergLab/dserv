@@ -34,6 +34,11 @@ func (r *ESSRegistry) RegisterHandlers(mux *http.ServeMux, authMiddleware func(h
 	mux.HandleFunc("/api/v1/ess/projects", authMiddleware(r.handleListProjects))
 	mux.HandleFunc("/api/v1/ess/project/", authMiddleware(r.handleProject))
 
+	// Scaffold
+	mux.HandleFunc("/api/v1/ess/scaffold/protocol", authMiddleware(r.handleScaffoldProtocol))
+	mux.HandleFunc("/api/v1/ess/scaffold/system", authMiddleware(r.handleScaffoldSystem))
+	mux.HandleFunc("/api/v1/ess/scaffold/info/", authMiddleware(r.handleScaffoldInfo))
+	
 	// Operations
 	mux.HandleFunc("/api/v1/ess/add-to-workgroup", authMiddleware(r.handleAddToWorkgroup))
 	mux.HandleFunc("/api/v1/ess/lock", authMiddleware(r.handleLock))
