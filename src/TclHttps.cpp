@@ -541,19 +541,30 @@ static int HttpsPutCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
- * https_delete $url ?-timeout ms?
+ * https_delete $url ?body? ?-timeout ms?
  */
 static int HttpsDeleteCmd(ClientData clientData, Tcl_Interp *interp,
                           int objc, Tcl_Obj *const objv[]) {
     if (objc < 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "url ?-timeout ms?");
+        Tcl_WrongNumArgs(interp, 1, objv, "url ?body? ?-timeout ms?");
         return TCL_ERROR;
     }
     
     const char* url = Tcl_GetString(objv[1]);
+    const char* body = "";
     int timeoutMs = 10000;
+    int optStart = 2;
     
-    for (int i = 2; i < objc; i++) {
+    // If next arg exists and isn't an option flag, treat it as body
+    if (objc > 2) {
+        const char* arg2 = Tcl_GetString(objv[2]);
+        if (arg2[0] != '-') {
+            body = arg2;
+            optStart = 3;
+        }
+    }
+    
+    for (int i = optStart; i < objc; i++) {
         const char* opt = Tcl_GetString(objv[i]);
         if (strcmp(opt, "-timeout") == 0 && i + 1 < objc) {
             if (Tcl_GetIntFromObj(interp, objv[i + 1], &timeoutMs) != TCL_OK) {
@@ -563,7 +574,7 @@ static int HttpsDeleteCmd(ClientData clientData, Tcl_Interp *interp,
         }
     }
     
-    HttpResponse resp = doRequest("DELETE", url, "", timeoutMs);
+    HttpResponse resp = doRequest("DELETE", url, body, timeoutMs);
     
     if (!resp.error.empty()) {
         Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.error.c_str(), -1));
