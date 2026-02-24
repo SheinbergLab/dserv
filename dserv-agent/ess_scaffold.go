@@ -380,6 +380,10 @@ func renameInContent(content, oldName, newName, systemName string) string {
 	content = strings.ReplaceAll(content, "::"+oldName+"\n", "::"+newName+"\n")
 	content = strings.ReplaceAll(content, "::"+oldName+"}", "::"+newName+"}")
 
+	// Replace bare namespace eval (no leading ::)
+	content = strings.ReplaceAll(content, "namespace eval "+oldName+" ", "namespace eval "+newName+" ")
+	content = strings.ReplaceAll(content, "namespace eval "+oldName+"::", "namespace eval "+newName+"::")
+
 	// Replace in header comments (lines starting with #)
 	// e.g., "#   match_to_sample colormatch" -> "#   match_to_sample newproto"
 	lines := strings.Split(content, "\n")
