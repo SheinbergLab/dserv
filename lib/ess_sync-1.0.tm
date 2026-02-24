@@ -107,7 +107,12 @@ namespace eval ess {
 
         # Step 2: POST checksums to server
         set url "${registry_url}/api/v1/ess/sync/${registry_workgroup}/${system}"
-        set body [dict_to_json [dict create checksums $checksums version $version] -deep]
+        if {[dict size $checksums] == 0} {
+            # dict_to_json serializes empty dict as "" not {}
+            set body "{\"checksums\":{},\"version\":\"$version\"}"
+        } else {
+            set body [dict_to_json [dict create checksums $checksums version $version] -deep]
+        }
 
         if {[catch {
             set response [https_post $url $body]
@@ -1181,8 +1186,8 @@ namespace eval ess {
 
     # ── Scaffold: delete protocol ─────────────────────────────────
     #
-    # Removes a protocol and all its scripts from the registry.
-    # Does NOT remove local files (run sync_system to reconcile).
+    # Removes a protocol and all its scripts from the registry,
+    # then removes the local protocol directory.
     #
     # Usage:
     #   ess::delete_protocol testmatch
@@ -1191,6 +1196,7 @@ namespace eval ess {
     proc delete_protocol {protocol args} {
         variable registry_url
         variable registry_workgroup
+        variable system_path
         variable current
 
         if {$registry_url eq ""} {
@@ -1233,7 +1239,15 @@ namespace eval ess {
         }
 
         set deleted [json_get $response deleted]
-        ess_info "Deleted protocol $protocol ($deleted scripts removed)" "scaffold"
+        ess_info "Deleted protocol $protocol from registry ($deleted scripts removed)" "scaffold"
+
+        # Remove local protocol directory
+        set project $current(project)
+        set proto_dir [file join $system_path $project $system $protocol]
+        if {[file exists $proto_dir]} {
+            file delete -force $proto_dir
+            ess_info "Removed local directory $proto_dir" "scaffold"
+        }
 
         return [dict create protocol $protocol deleted $deleted]
     }
