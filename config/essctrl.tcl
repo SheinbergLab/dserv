@@ -93,6 +93,12 @@ namespace eval ess {
     proc seed_libs args { _protected_call seed_libs 1 $args }	
     proc lib_sync_status args { _protected_call lib_sync_status 0 $args }
 
+    # Scaffold operations
+    proc scaffold_protocol args { _protected_call scaffold_protocol 1 $args }
+    proc scaffold_system args { _protected_call scaffold_system 1 $args }
+    proc scaffold_info args { _protected_call scaffold_info 0 $args }
+    proc delete_protocol args { _protected_call delete_protocol 1 $args }
+
     # Blocked when running only
     proc file_close args { _protected_call file_close 0 $args }
     proc file_suggest {} { _protected_call file_suggest 0 }
