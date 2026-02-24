@@ -275,14 +275,14 @@ static HttpResponse doHttpsRequest(const std::string& method,
     reqStream << "Connection: close\r\n";
     reqStream << "User-Agent: dserv-tclhttps/1.0\r\n";
     
-    if ((method == "POST" || method == "PUT") && !body.empty()) {
+    if (!body.empty()) {
         reqStream << "Content-Type: application/json\r\n";
         reqStream << "Content-Length: " << body.size() << "\r\n";
     }
     
     reqStream << "\r\n";
     
-    if ((method == "POST" || method == "PUT") && !body.empty()) {
+    if (!body.empty()) {
         reqStream << body;
     }
     
@@ -364,14 +364,14 @@ static HttpResponse doHttpRequest(const std::string& method,
     reqStream << "Host: " << url.host << "\r\n";
     reqStream << "Connection: close\r\n";
     
-    if ((method == "POST" || method == "PUT") && !body.empty()) {
+    if (!body.empty()) {
         reqStream << "Content-Type: application/json\r\n";
         reqStream << "Content-Length: " << body.size() << "\r\n";
     }
     
     reqStream << "\r\n";
     
-    if ((method == "POST" || method == "PUT") && !body.empty()) {
+    if (!body.empty()) {
         reqStream << body;
     }
     
