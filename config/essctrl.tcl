@@ -97,7 +97,9 @@ namespace eval ess {
     proc scaffold_protocol args { _protected_call scaffold_protocol 1 $args }
     proc scaffold_system args { _protected_call scaffold_system 1 $args }
     proc scaffold_info args { _protected_call scaffold_info 0 $args }
+    proc delete_script args { _protected_call delete_script 1 $args }
     proc delete_protocol args { _protected_call delete_protocol 1 $args }
+    proc delete_system args { _protected_call delete_system 1 $args }
 
     # Blocked when running only
     proc file_close args { _protected_call file_close 0 $args }
