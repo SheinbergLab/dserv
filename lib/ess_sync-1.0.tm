@@ -1252,6 +1252,135 @@ namespace eval ess {
         return [dict create protocol $protocol deleted $deleted]
     }
 
+    # ── Scaffold: delete system ───────────────────────────────────
+    #
+    # Removes a system and all its scripts from the registry,
+    # then removes the local system directory.
+    #
+    # Usage:
+    #   ess::delete_system prf
+    #
+    proc delete_system {system} {
+        variable registry_url
+        variable registry_workgroup
+        variable system_path
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+
+        set request [dict create \
+            workgroup $registry_workgroup \
+            system    $system]
+
+        set url "${registry_url}/api/v1/ess/scaffold/system"
+        set body [dict_to_json $request]
+
+        ess_info "Deleting system $system" "scaffold"
+
+        if {[catch {
+            set response [https_delete $url $body]
+        } err]} {
+            ess_error "Delete system failed: $err" "scaffold"
+            error "Delete system failed: $err"
+        }
+
+        set deleted_scripts [json_get $response deletedScripts]
+        ess_info "Deleted system $system from registry ($deleted_scripts scripts removed)" "scaffold"
+
+        # Remove local system directory
+        set project $current(project)
+        set sys_dir [file join $system_path $project $system]
+        if {[file exists $sys_dir]} {
+            file delete -force $sys_dir
+            ess_info "Removed local directory $sys_dir" "scaffold"
+        }
+
+        return [dict create system $system deletedScripts $deleted_scripts]
+    }
+
+    # ── Delete script: remove a single script from the registry ────
+    #
+    # Removes one script (by type) from the registry and optionally
+    # removes the local base-layer file.
+    #
+    # Usage:
+    #   ess::delete_script protocol          ;# delete current protocol script
+    #   ess::delete_script stim              ;# delete stim script
+    #   ess::delete_script extract -protocol mymatch  ;# specific protocol extract
+    #   ess::delete_script system -system prf         ;# explicit system
+    #
+    proc delete_script {type args} {
+        variable registry_url
+        variable registry_workgroup
+        variable registry_checksums
+        variable system_path
+        variable current
+
+        if {$registry_url eq ""} {
+            error "Registry URL not configured"
+        }
+        if {$registry_workgroup eq ""} {
+            error "Workgroup not configured"
+        }
+        if {$current(system) eq ""} {
+            error "No system loaded"
+        }
+
+        # Parse optional overrides
+        set system $current(system)
+        set protocol ""
+        foreach {key val} $args {
+            switch -- $key {
+                -system   { set system $val }
+                -protocol { set protocol $val }
+                default   { error "Unknown option: $key (use -system or -protocol)" }
+            }
+        }
+
+        # Map local type name to registry API type and protocol
+        lassign [_registry_type_mapping $type $current(protocol)] api_type api_protocol
+
+        # Allow explicit -protocol to override
+        if {$protocol ne ""} {
+            set api_protocol $protocol
+        }
+
+        set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
+
+        ess_info "Deleting script $type ($api_type) from $system/$api_protocol" "sync"
+
+        if {[catch {
+            set response [https_delete $url ""]
+        } err]} {
+            ess_error "Delete script failed: $err" "sync"
+            error "Delete script failed: $err"
+        }
+
+        # Clear cached checksum for this type
+        if {[dict exists $registry_checksums $type]} {
+            dict unset registry_checksums $type
+        }
+
+        # Remove local base file if it exists
+        set relpath [get_script_relpath $type]
+        if {$relpath ne ""} {
+            set base_file [file join $system_path $relpath]
+            if {[file exists $base_file]} {
+                file delete $base_file
+                ess_info "Removed local file $base_file" "sync"
+            }
+        }
+
+        ess_info "Deleted script $api_type from registry" "sync"
+        return [dict create type $api_type protocol $api_protocol deleted 1]
+    }
+
+
     # ── Scaffold: list available protocols to clone ───────────────
     #
     # Returns info about what's available for scaffolding in a system.

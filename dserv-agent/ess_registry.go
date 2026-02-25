@@ -424,6 +424,46 @@ func (r *ESSRegistry) GetScriptHistory(scriptID int64, limit int) ([]*ESSScriptH
 	return history, nil
 }
 
+// DeleteScript removes a single script from the registry by system, protocol, and type.
+// Returns the deleted script for confirmation. Script history is also cleaned up.
+func (r *ESSRegistry) DeleteScript(workgroup, systemName, protocol, scriptType string) (*ESSScript, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Find the system
+	sys, err := r.GetSystem(workgroup, systemName, "")
+	if err != nil {
+		return nil, fmt.Errorf("system lookup failed: %w", err)
+	}
+	if sys == nil {
+		return nil, fmt.Errorf("system not found: %s/%s", workgroup, systemName)
+	}
+
+	// Find the script
+	script, err := r.GetScript(sys.ID, protocol, scriptType)
+	if err != nil {
+		return nil, fmt.Errorf("script lookup failed: %w", err)
+	}
+	if script == nil {
+		return nil, fmt.Errorf("script not found: %s/%s in %s", protocol, scriptType, systemName)
+	}
+
+	// Delete history entries for this script
+	_, _ = r.db.Exec("DELETE FROM ess_script_history WHERE script_id = ?", script.ID)
+
+	// Delete the script
+	_, err = r.db.Exec("DELETE FROM ess_scripts WHERE id = ?", script.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete script: %w", err)
+	}
+
+	// Touch the system's updated_at
+	now := time.Now().Unix()
+	_, _ = r.db.Exec("UPDATE ess_systems SET updated_at = ? WHERE id = ?", now, sys.ID)
+
+	return script, nil
+}
+
 // ============ Library Operations ============
 
 func (r *ESSRegistry) ListLibs(workgroup string) ([]*ESSLib, error) {

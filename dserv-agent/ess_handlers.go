@@ -144,7 +144,7 @@ func (r *ESSRegistry) handleSystem(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// GET/PUT /api/v1/ess/script/{workgroup}/{system}/{protocol}/{type}
+// GET/PUT/DELETE /api/v1/ess/script/{workgroup}/{system}/{protocol}/{type}
 func (r *ESSRegistry) handleScript(w http.ResponseWriter, req *http.Request) {
 	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/script/")
 	parts := strings.Split(path, "/")
@@ -238,6 +238,24 @@ func (r *ESSRegistry) handleScript(w http.ResponseWriter, req *http.Request) {
 			"success":  true,
 			"checksum": script.Checksum,
 			"script":   script,
+		})
+
+	case http.MethodDelete:
+		deleted, err := r.DeleteScript(workgroup, systemName, protocol, scriptType)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				writeJSON(w, 404, map[string]string{"error": err.Error()})
+			} else {
+				writeJSON(w, 500, map[string]string{"error": err.Error()})
+			}
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"deleted":  true,
+			"script":   deleted.Type,
+			"protocol": protocol,
+			"system":   systemName,
+			"filename": deleted.Filename,
 		})
 
 	default:
