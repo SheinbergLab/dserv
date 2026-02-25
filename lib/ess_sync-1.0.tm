@@ -1367,13 +1367,18 @@ namespace eval ess {
         }
 
         # Remove local base file if it exists
-        set relpath [get_script_relpath $type]
-        if {$relpath ne ""} {
-            set base_file [file join $system_path $relpath]
-            if {[file exists $base_file]} {
-                file delete $base_file
-                ess_info "Removed local file $base_file" "sync"
-            }
+        # Use explicit system/protocol to build path (not current-system context)
+        set project $current(project)
+        if {$api_protocol eq "_" || $api_protocol eq ""} {
+            set filename [_script_filename $system "" $api_type]
+            set base_file [file join $system_path $project $system $filename]
+        } else {
+            set filename [_script_filename $system $api_protocol $api_type]
+            set base_file [file join $system_path $project $system $api_protocol $filename]
+        }
+        if {[file exists $base_file]} {
+            file delete $base_file
+            ess_info "Removed local file $base_file" "sync"
         }
 
         ess_info "Deleted script $api_type from registry" "sync"
