@@ -107,7 +107,9 @@ class ESSPerformance {
         
         // Subscribe to trial completion to trigger refresh
         this.dpManager?.subscribe('ess/block_n_complete', (data) => {
-            this.requestSortedPerf();
+	    if (data.value !== '' && data.value != null) {
+		this.requestSortedPerf();
+	    }
         });
         
         // Subscribe to overall performance stats
