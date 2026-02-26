@@ -424,7 +424,7 @@ step_install_components() {
         done
 
         remaining=("${next_remaining[@]+"${next_remaining[@]}"}")
-        ((pass++))
+        pass=$((pass + 1))
 
         if ! $progress && [[ ${#remaining[@]} -gt 0 ]]; then
             warn "Unresolvable dependencies, installing remaining"
