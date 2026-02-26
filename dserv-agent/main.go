@@ -442,6 +442,10 @@ Environment:
 		// Workgroup directory page (e.g., /brown-sheinberg)
 		mux.HandleFunc("/w/", agent.handleWorkgroupPage)
 
+		// Bootstrap endpoint: curl -sSL http://server/setup | bash
+		registerBootstrapHandlers(mux, agent)
+		log.Printf("  Bootstrap: /setup")
+		
 		// Start cleanup goroutine
 		go agent.registryCleanupLoop()
 
