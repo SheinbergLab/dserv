@@ -447,6 +447,12 @@ step_install_agent() {
         return
     fi
 
+    # If dserv package already installed the agent binary, skip
+    if command -v dserv-agent &>/dev/null; then
+        ok "dserv-agent already installed (via dserv package)"
+        return
+    fi
+
     info "Installing dserv-agent..."
 
     local release_json
@@ -456,7 +462,11 @@ step_install_agent() {
         return
     fi
 
-    local tag=$(echo "$release_json" | jq -r '.tag_name')
+    local tag=$(echo "$release_json" | jq -r '.tag_name // empty')
+    if [[ -z "$tag" ]]; then
+        warn "No dserv-agent release found"
+        return
+    fi
     info "  Release: ${tag}"
 
     local deb_url
@@ -484,10 +494,13 @@ step_install_agent() {
 step_configure_agent() {
     if $SKIP_AGENT; then return; fi
 
-    info "Configuring dserv-agent..."
-    mkdir -p /etc/dserv-agent
+    info "Configuring dserv-agent for mesh..."
 
-    cat > /etc/systemd/system/dserv-agent.service <<EOF
+    local svc_file="/etc/systemd/system/dserv-agent.service"
+
+    if [[ ! -f "$svc_file" ]]; then
+        # No service file (standalone install) — create one
+        cat > "$svc_file" <<EOF
 [Unit]
 Description=dserv management agent
 After=network-online.target
@@ -506,10 +519,19 @@ Environment=DSERV_AGENT_TOKEN=
 [Install]
 WantedBy=multi-user.target
 EOF
+        ok "dserv-agent service created"
+    else
+        # Service file exists (from deb) — patch in registry/workgroup if not present
+        if ! grep -q "\-\-registry" "$svc_file"; then
+            sed -i "s|ExecStart=.*dserv-agent|& --registry ${REGISTRY_URL} --workgroup ${WORKGROUP}|" "$svc_file"
+            ok "dserv-agent service patched (registry: ${REGISTRY_URL})"
+        else
+            ok "dserv-agent service already configured"
+        fi
+    fi
 
     run systemctl daemon-reload
     run systemctl enable dserv-agent
-    ok "dserv-agent service configured"
 }
 
 step_configure_dserv() {
@@ -530,6 +552,51 @@ EOF
     fi
 
     ok "dserv configured"
+}
+
+step_sync_scripts() {
+    info "Syncing ESS scripts from registry..."
+
+    # The export endpoint returns a zip of all systems + libs for the workgroup
+    local export_url="${REGISTRY_URL}/api/v1/ess/export/${WORKGROUP}"
+    local zip_file="/tmp/ess-export-${WORKGROUP}.zip"
+
+    # Check if the registry has ESS scripts for this workgroup
+    local resp_code
+    resp_code=$(curl -sSL -o /dev/null -w "%{http_code}" "$export_url" 2>/dev/null || echo "000")
+
+    if [[ "$resp_code" != "200" ]]; then
+        info "No ESS scripts available for ${WORKGROUP} (HTTP ${resp_code}), skipping"
+        return
+    fi
+
+    run curl -sSL -o "$zip_file" "$export_url"
+
+    if [[ ! -f "$zip_file" ]] || [[ ! -s "$zip_file" ]]; then
+        warn "Empty or missing export zip, skipping script sync"
+        return
+    fi
+
+    # Scripts live in ~lab/systems/ess/, owned by lab
+    local lab_home="/home/lab"
+    local dest="${lab_home}/systems/ess"
+
+    if [[ ! -d "$lab_home" ]]; then
+        warn "No /home/lab directory, skipping script sync"
+        rm -f "$zip_file"
+        return
+    fi
+
+    mkdir -p "$dest"
+    run unzip -o "$zip_file" -d "$dest"
+    rm -f "$zip_file"
+
+    # Ensure lab owns everything (dserv runs as root but we keep lab ownership)
+    chown -R lab:lab "$dest" 2>/dev/null || true
+
+    local file_count
+    file_count=$(find "$dest" -type f \( -name "*.tcl" -o -name "*.tm" \) 2>/dev/null | wc -l)
+    ok "Synced ${file_count} scripts to ${dest}"
 }
 
 step_start_services() {
@@ -597,6 +664,7 @@ main() {
     step_install_agent
     step_configure_agent
     step_configure_dserv
+    step_sync_scripts
     step_start_services
     step_verify
 
