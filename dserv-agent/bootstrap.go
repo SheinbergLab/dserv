@@ -217,11 +217,25 @@ run() {
     fi
 }
 
+check_not_registry() {
+    [[ "${DSERV_BOOTSTRAP_FORCE:-}" == "1" ]] && return 0
+    local status
+    status=$(curl -sSL "http://localhost/setup/status" 2>/dev/null) || return 0
+    if echo "$status" | jq -re '.mode == "server"' &>/dev/null; then
+        fail "This appears to be the registry server — aborting. Set DSERV_BOOTSTRAP_FORCE=1 to override."
+    fi
+}
+
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         if command -v sudo &>/dev/null; then
             info "Re-running with sudo..."
-            exec sudo bash -c "$(curl -sSL ${REGISTRY_URL}/setup)" -- "$@"
+            local args=""
+            [[ -n "$ROLE" ]]      && args="$args --role $ROLE"
+            [[ -n "$WORKGROUP" ]] && args="$args --workgroup $WORKGROUP"
+            $DRY_RUN              && args="$args --dry-run"
+            $SKIP_AGENT           && args="$args --skip-agent"
+            exec sudo bash -c "$(curl -sSL "${REGISTRY_URL}/setup?profile=${PROFILE}")" -- $args
         else
             fail "This script must be run as root"
         fi
@@ -556,6 +570,9 @@ step_verify() {
 # ============ Main ============
 
 main() {
+    check_not_registry
+    check_root
+
     echo ""
     echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
     echo -e "${BOLD}║       dserv bootstrap installer          ║${NC}"
@@ -566,7 +583,6 @@ main() {
     $DRY_RUN && echo -e "  ${YELLOW}** DRY RUN **${NC}"
     echo ""
 
-    check_root
     detect_platform
 
     echo ""
