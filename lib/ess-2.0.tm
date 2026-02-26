@@ -974,11 +974,6 @@ namespace eval ess {
         # Apply params from config (if loading via load_config)  
 	 apply_pending_config_params
 	
-        set_loading_progress "final_init" "Completing system initialization" 90
-        # Final init
-        $s final_init
-        
-        set_loading_progress "finalization" "Updating system state and scripts" 95
         # Update various datapoints
         dservSet ess/state_table [get_state_transitions]
         dservSet ess/rmt_cmds [get_rmt_cmds]
@@ -1017,6 +1012,12 @@ namespace eval ess {
 
 		# initialize obs status (also found as ess/obs_active)
 		dservSet ess/in_obs 0
+
+        set_loading_progress "final_init" "Completing system initialization" 90
+        # Final init
+        $s final_init
+        
+        set_loading_progress "finalization" "Updating system state and scripts" 95
         
         # Mark loading as complete
         finish_loading_operation true
@@ -1219,6 +1220,10 @@ namespace eval ess {
         return
     }
 
+    proc set_obs_total { count } {
+	dservSet ess/obs_total $count
+    }
+    
     proc set_obs_pin {pin} {
         variable obs_pin
         set obs_pin $pin
