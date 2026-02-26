@@ -80,6 +80,7 @@ void *input_thread(void *arg)
 	    first_coordinate_after_press = 0;
 	  }
 	  else if (ev.value == 0) {
+	    touch_active = 0;
 	    touch_changed = 1;
 	  }
 	  break;
