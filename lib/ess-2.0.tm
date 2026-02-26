@@ -996,7 +996,7 @@ namespace eval ess {
         
         if {$trial_count > 0} {
             ess_info "Loaded $trial_count trials in stimdg" "system"
-            set_loading_progress "complete" "Loaded $trial_count trials successfully" 100
+            set_loading_progress "complete" "Loaded $trial_count trials successfully" 90
             
             # Reset obs counts to reflect new trial count
             dservSet ess/obs_total $trial_count
@@ -1006,18 +1006,18 @@ namespace eval ess {
                 dservSet ess/obs_count "1/$trial_count"
             }
         } else {
-            set_loading_progress "complete" "System loaded (no trials)" 100
+            set_loading_progress "complete" "System loaded (no trials)" 90
             ess_warning "No trials found in stimdg after loading" "system"
         }
 
-		# initialize obs status (also found as ess/obs_active)
-		dservSet ess/in_obs 0
+	# initialize obs status (also found as ess/obs_active)
+	dservSet ess/in_obs 0
 
-        set_loading_progress "final_init" "Completing system initialization" 90
+	ess::reset
+	
+        set_loading_progress "final_init" "Completing system initialization" 100
         # Final init
         $s final_init
-        
-        set_loading_progress "finalization" "Updating system state and scripts" 95
         
         # Mark loading as complete
         finish_loading_operation true
@@ -1025,72 +1025,73 @@ namespace eval ess {
     }
     
     proc reload_system {} {
-		variable current
-		if { $current(system) == {} || 
-		     $current(protocol) == {} || 
-		     $current(variant) == {} } {
-			if {[query_state] == "running"} {return}
-			return
-		}
-		
-		# Add progress tracking
-		set operation_id [start_loading_operation "system_reload"]
-		
-		if {[catch {
-			load_system $current(system) $current(protocol) $current(variant)
-		} error]} {
-			finish_loading_operation false "Reload failed: $error"
-			error $error
-		}
+	variable current
+	if { $current(system) == {} || 
+	     $current(protocol) == {} || 
+	     $current(variant) == {} } {
+	    if {[query_state] == "running"} {return}
+	    return
+	}
+	
+	# Add progress tracking
+	set operation_id [start_loading_operation "system_reload"]
+	
+	if {[catch {
+	    load_system $current(system) $current(protocol) $current(variant)
+	} error]} {
+	    finish_loading_operation false "Reload failed: $error"
+	    error $error
+	}
     }
-
+    
     proc reload_protocol {} {
-		variable current
-		if {$current(system) == {} || $current(protocol) == {}} {
-			if {[query_state] == "running"} {return}
-			return
-		}
-		
-		set operation_id [start_loading_operation "protocol_reload"]
-		
-		if {[catch {
-			load_system $current(system) $current(protocol)
-		} error]} {
-			finish_loading_operation false "Protocol reload failed: $error"
-			error $error
-		}
+	variable current
+	if {$current(system) == {} || $current(protocol) == {}} {
+	    if {[query_state] == "running"} {return}
+	    return
+	}
+	
+	set operation_id [start_loading_operation "protocol_reload"]
+	
+	if {[catch {
+	    load_system $current(system) $current(protocol)
+	} error]} {
+	    finish_loading_operation false "Protocol reload failed: $error"
+	    error $error
+	}
     }
     
     proc reload_variant {} {
-		variable current
-		if { $current(system) == {} || 
-		     $current(protocol) == {} || 
-	  	     $current(variant) == {}} {
-			if {[query_state] == "running"} {return}
-			return
-		}
-		
-		set operation_id [start_loading_operation "variant_reload"] 
-		set_loading_progress "variant_init" "Reloading variant: $current(variant)" 50
-		
-		if {[catch {
-			# initialize the variant by calling the appropriate loader
-			variant_init $current(system) $current(protocol) $current(variant)
-			
-			# reset counters
-			reset
-			
-			set current(trialid) 0
-			if {[dg_exists trialdg]} {dg_delete trialdg}
-			reset_trial_info
-			
-			finish_loading_operation true
-			
-		} error]} {
-			finish_loading_operation false "Variant reload failed: $error"
-			error $error
-		}
+	variable current
+	if { $current(system) == {} || 
+	     $current(protocol) == {} || 
+	     $current(variant) == {}} {
+	    if {[query_state] == "running"} {return}
+	    return
 	}
+	
+	set operation_id [start_loading_operation "variant_reload"] 
+	set_loading_progress "variant_init" "Reloading variant: $current(variant)" 50
+	
+	if {[catch {
+	    # initialize the variant by calling the appropriate loader
+	    variant_init $current(system) $current(protocol) $current(variant)
+	    
+	    set current(trialid) 0
+	    if {[dg_exists trialdg]} {dg_delete trialdg}
+	    reset_trial_info
+
+	    # reset 
+	    ess::reset
+
+	    finish_loading_operation true
+	    
+	} error]} {
+	    finish_loading_operation false "Variant reload failed: $error"
+	    error $error
+	}
+	
+    }
     
     proc set_system {system} {
         variable current
@@ -3689,7 +3690,10 @@ namespace eval ess {
             dservSet ess/obs_id 0
             dservSet ess/obs_count "1/$trial_count"
         }
-        
+
+	# now call system's reset function
+	ess::reset
+	
         # reset basic performance values
         reset_trial_info
         
