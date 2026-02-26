@@ -368,8 +368,11 @@ install_component() {
 
 step_prerequisites() {
     info "Installing prerequisites..."
-    run apt-get update -qq
-    run apt-get install -y -qq curl jq ca-certificates
+    # Always install (even in dry-run) — jq is needed by this script
+    if ! command -v jq &>/dev/null; then
+        apt-get update -qq >> "$LOG_FILE" 2>&1
+        apt-get install -y -qq curl jq ca-certificates >> "$LOG_FILE" 2>&1
+    fi
     ok "Prerequisites"
 }
 
