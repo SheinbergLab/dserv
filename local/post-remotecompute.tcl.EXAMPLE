@@ -1,0 +1,5 @@
+# this script is run from within ess
+# for the planko state system, use a dedicated remote computer to do compute intensive load
+
+package require planko
+planko::set_compute_host psheinbergcit.services.brown.edu
