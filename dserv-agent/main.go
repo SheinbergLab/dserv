@@ -333,6 +333,17 @@ Examples:
   # Enable HTTPS with TLS certificates
   dserv-agent --tls-cert /usr/local/dserv/ssl/cert.pem --tls-key /usr/local/dserv/ssl/key.pem
 
+Bootstrap (server mode):
+  In --server mode, /setup serves a script to provision fresh systems:
+
+  curl -sSL https://yourserver/setup | bash                  # default profile
+  curl -sSL https://yourserver/setup?profile=server | bash   # server only (no stim2)
+  curl -sSL https://yourserver/setup | bash -s -- --dry-run  # preview changes
+  curl -sSL https://yourserver/setup | bash -s -- --workgroup mylab  # override workgroup
+
+  Profiles: incage (all components), server (dserv+dlsh), minimal
+  List profiles: curl -sSL https://yourserver/setup/profiles
+
 Environment:
   DSERV_AGENT_TOKEN  Bearer token for API authentication (or use --token)
 `)
