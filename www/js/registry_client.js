@@ -367,6 +367,18 @@ class RegistryClient {
         });
     }
 
+    async deleteProtocol(system, protocol) {
+        if (!this.workgroup) throw new Error('Workgroup required');
+        return this.fetch('/scaffold/protocol', {
+            method: 'DELETE',
+            body: JSON.stringify({
+                workgroup: this.workgroup,
+                system,
+                protocol
+            })
+        });
+    }
+
     async scaffoldSystem(system, options = {}) {
         if (!this.workgroup) throw new Error('Workgroup required');
         const body = {
