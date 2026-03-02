@@ -340,9 +340,48 @@ class RegistryClient {
 		comment
             })
 	});
-    }    
-    
-    
+    }
+
+
+    // ==========================================
+    // Scaffold
+    // ==========================================
+
+    async getScaffoldInfo(system) {
+        if (!this.workgroup) throw new Error('Workgroup required');
+        return this.fetch(`/scaffold/info/${encodeURIComponent(this.workgroup)}/${encodeURIComponent(system)}`);
+    }
+
+    async scaffoldProtocol(system, protocol, fromProtocol = null) {
+        if (!this.workgroup) throw new Error('Workgroup required');
+        const body = {
+            workgroup: this.workgroup,
+            system,
+            protocol,
+            createdBy: this.getUser() || 'unknown'
+        };
+        if (fromProtocol) body.fromProtocol = fromProtocol;
+        return this.fetch('/scaffold/protocol', {
+            method: 'POST',
+            body: JSON.stringify(body)
+        });
+    }
+
+    async scaffoldSystem(system, options = {}) {
+        if (!this.workgroup) throw new Error('Workgroup required');
+        const body = {
+            workgroup: this.workgroup,
+            system,
+            createdBy: this.getUser() || 'unknown',
+            ...options
+        };
+        return this.fetch('/scaffold/system', {
+            method: 'POST',
+            body: JSON.stringify(body)
+        });
+    }
+
+
     // ==========================================
     // Locks
     // ==========================================

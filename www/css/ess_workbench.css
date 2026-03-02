@@ -347,6 +347,158 @@ body {
 }
 
 /* ==========================================
+   Dashboard Navigator
+   ========================================== */
+
+.dashboard-navigator {
+    margin-top: var(--wb-space-lg);
+}
+
+.dashboard-nav-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--wb-space-lg);
+}
+
+@media (max-width: 700px) {
+    .dashboard-nav-columns {
+        grid-template-columns: 1fr;
+    }
+}
+
+.dash-column {
+    background: var(--wb-bg-secondary);
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-lg);
+    overflow: hidden;
+}
+
+.dash-column-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--wb-space-md) var(--wb-space-lg);
+    border-bottom: 1px solid var(--wb-border);
+    background: var(--wb-bg-elevated);
+}
+
+.dash-column-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--wb-text-secondary);
+}
+
+.dash-systems-list,
+.dash-protocols-list {
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.dash-system-item,
+.dash-protocol-item {
+    display: flex;
+    align-items: center;
+    gap: var(--wb-space-sm);
+    padding: var(--wb-space-md) var(--wb-space-lg);
+    cursor: pointer;
+    border-bottom: 1px solid var(--wb-border-subtle);
+    transition: background var(--wb-transition-fast);
+}
+
+.dash-system-item:last-child,
+.dash-protocol-item:last-child {
+    border-bottom: none;
+}
+
+.dash-system-item:hover,
+.dash-protocol-item:hover {
+    background: var(--wb-bg-hover);
+}
+
+.dash-system-item.selected {
+    background: var(--wb-accent-subtle);
+    border-left: 3px solid var(--wb-accent);
+    padding-left: calc(var(--wb-space-lg) - 3px);
+}
+
+.dash-system-item.active,
+.dash-protocol-item.active {
+    background: var(--wb-success-subtle);
+}
+
+.dash-system-item.selected.active {
+    background: var(--wb-accent-subtle);
+    border-left: 3px solid var(--wb-accent);
+}
+
+.dash-item-name {
+    flex: 1;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--wb-text-primary);
+    font-family: var(--wb-font-mono);
+}
+
+.dash-item-meta {
+    font-size: 0.75rem;
+    color: var(--wb-text-muted);
+    font-family: var(--wb-font-mono);
+}
+
+.dash-active-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--wb-success);
+    background: var(--wb-success-subtle);
+    padding: 2px 6px;
+    border-radius: var(--wb-radius-sm);
+}
+
+.dash-empty {
+    padding: var(--wb-space-xl);
+    text-align: center;
+    color: var(--wb-text-muted);
+    font-size: 0.85rem;
+}
+
+.btn-sm {
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    border-radius: var(--wb-radius-sm);
+}
+
+.btn-accent {
+    background: var(--wb-accent);
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background var(--wb-transition-fast);
+}
+
+.btn-accent:hover {
+    background: var(--wb-accent-hover);
+}
+
+/* Scaffold modal extras */
+.form-static {
+    font-family: var(--wb-font-mono);
+    font-size: 0.875rem;
+    color: var(--wb-text-primary);
+    padding: var(--wb-space-sm) 0;
+}
+
+.scaffold-error {
+    color: var(--wb-error);
+    font-size: 0.8rem;
+    padding: var(--wb-space-sm) 0;
+}
+
+/* ==========================================
    Tab Mini Hero (context header on each tab)
    ========================================== */
 
