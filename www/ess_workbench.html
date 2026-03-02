@@ -172,7 +172,27 @@
                             <span class="config-detail-value config-version" id="cfg-version">—</span>
                         </div>
                     </div>
-                </div>		    
+                </div>
+
+                <!-- System/Protocol Navigator -->
+                <div class="dashboard-navigator" id="dashboard-navigator">
+                    <div class="dashboard-nav-columns">
+                        <div class="dash-column">
+                            <div class="dash-column-header">
+                                <span class="dash-column-title">Systems</span>
+                            </div>
+                            <div class="dash-systems-list"></div>
+                        </div>
+                        <div class="dash-column">
+                            <div class="dash-column-header">
+                                <span class="dash-column-title dash-protocols-header-text">Protocols</span>
+                                <button class="btn btn-sm btn-accent dash-new-protocol-btn" style="display:none;"
+                                        onclick="workbench._dashboardNewProtocol()">+ New</button>
+                            </div>
+                            <div class="dash-protocols-list"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Variants Tab -->
@@ -788,6 +808,7 @@
     <script src="js/ess_workbench.js"></script>
     <script src="js/ess_registry_plugin.js"></script>
     <script src="js/ess_overlay_plugin.js"></script>
-    <script src="js/ess_libs_plugin.js"></script>    
+    <script src="js/ess_libs_plugin.js"></script>
+    <script src="js/ess_dashboard_plugin.js"></script>
 </body>
 </html>
