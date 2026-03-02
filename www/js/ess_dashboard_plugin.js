@@ -19,6 +19,7 @@ const DashboardPlugin = {
         this._systemsData = [];
         this._selectedSystem = null;  // browsing highlight (not necessarily loaded)
         this._createScaffoldModal();
+        this._createDeleteModal();
     },
 
     async onRegistryReady(wb) {
@@ -120,12 +121,20 @@ const DashboardPlugin = {
                         <div class="${classes.join(' ')}" data-protocol="${wb.escapeHtml(proto)}">
                             <span class="dash-item-name">${wb.escapeHtml(proto)}</span>
                             ${isActive ? '<span class="dash-active-badge">active</span>' : ''}
+                            <button class="dash-remove-btn" data-protocol="${wb.escapeHtml(proto)}" title="Remove protocol">&times;</button>
                         </div>`;
                 }).join('');
 
                 protocolsList.querySelectorAll('.dash-protocol-item').forEach(el => {
-                    el.addEventListener('click', () => {
+                    el.querySelector('.dash-item-name').addEventListener('click', () => {
                         this._loadProtocol(wb, this._selectedSystem, el.dataset.protocol);
+                    });
+                });
+
+                protocolsList.querySelectorAll('.dash-remove-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        this._confirmDeleteProtocol(wb, this._selectedSystem, btn.dataset.protocol);
                     });
                 });
             }
@@ -151,7 +160,66 @@ const DashboardPlugin = {
         }
     },
 
+    _confirmDeleteProtocol(wb, system, protocol) {
+        if (!wb.currentUser) {
+            wb.showNotification('Please select a user first', 'warning');
+            return;
+        }
+
+        const modal = document.getElementById('delete-protocol-modal');
+        if (!modal) return;
+
+        const activeProtocol = wb.snapshot?.protocol || null;
+        const activeSystem = wb.snapshot?.system || null;
+        const isActive = (system === activeSystem && protocol === activeProtocol);
+
+        modal.querySelector('#delete-protocol-system').textContent = system;
+        modal.querySelector('#delete-protocol-name').textContent = protocol;
+
+        const warningEl = modal.querySelector('#delete-protocol-warning');
+        if (isActive) {
+            warningEl.textContent = 'This is the currently loaded protocol.';
+            warningEl.style.display = 'block';
+        } else {
+            warningEl.style.display = 'none';
+        }
+
+        const errorEl = modal.querySelector('#delete-protocol-error');
+        errorEl.style.display = 'none';
+        const deleteBtn = modal.querySelector('#delete-protocol-confirm-btn');
+        deleteBtn.disabled = false;
+
+        // Store target for the confirm handler
+        modal._deleteTarget = { system, protocol };
+        modal.style.display = 'flex';
+    },
+
+    async _doDeleteProtocol(wb) {
+        const modal = document.getElementById('delete-protocol-modal');
+        const { system, protocol } = modal._deleteTarget;
+        const errorEl = modal.querySelector('#delete-protocol-error');
+        const deleteBtn = modal.querySelector('#delete-protocol-confirm-btn');
+
+        deleteBtn.disabled = true;
+
+        try {
+            await wb.registry.deleteProtocol(system, protocol);
+            modal.style.display = 'none';
+            wb.showNotification(`Removed protocol ${protocol} from registry`, 'success');
+            await this._refreshSystems(wb);
+        } catch (err) {
+            deleteBtn.disabled = false;
+            errorEl.textContent = err.message || String(err);
+            errorEl.style.display = 'block';
+        }
+    },
+
     _openScaffoldModal(wb) {
+        if (!wb.currentUser) {
+            wb.showNotification('Please select a user first', 'warning');
+            return;
+        }
+
         const modal = document.getElementById('scaffold-protocol-modal');
         if (!modal) return;
 
@@ -207,10 +275,11 @@ const DashboardPlugin = {
         try {
             await wb.registry.scaffoldProtocol(system, protocolName, fromProtocol);
             modal.style.display = 'none';
-            wb.showNotification(`Created protocol ${protocolName}`, 'success');
+            wb.showNotification(`Created protocol ${protocolName} in registry`, 'success');
 
-            // Refresh systems data, then load the new protocol
+            // Refresh navigator, sync files from registry to local, then load
             await this._refreshSystems(wb);
+            await wb.execTclCmd(`ess::sync_system ${system}`);
             await wb.execTclCmd(`ess::load_system ${system} ${protocolName}`);
             wb.showNotification(`Loaded ${system}/${protocolName}`, 'success');
         } catch (err) {
@@ -232,6 +301,45 @@ const DashboardPlugin = {
     // ==========================================
     // Modal Creation
     // ==========================================
+
+    _createDeleteModal() {
+        if (document.getElementById('delete-protocol-modal')) return;
+
+        const modal = document.createElement('div');
+        modal.id = 'delete-protocol-modal';
+        modal.className = 'modal-overlay';
+        modal.style.display = 'none';
+        modal.innerHTML = `
+            <div class="modal" style="width: 420px;">
+                <div class="modal-header">
+                    <h3>Remove Protocol</h3>
+                    <button class="modal-close" onclick="this.closest('.modal-overlay').style.display='none'">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p style="color: var(--wb-text-secondary); margin: 0 0 var(--wb-space-md) 0;">
+                        Remove <strong id="delete-protocol-name" style="color: var(--wb-text-primary);">—</strong>
+                        from <strong id="delete-protocol-system" style="color: var(--wb-text-primary);">—</strong>?
+                    </p>
+                    <p style="color: var(--wb-text-muted); font-size: 0.8rem; margin: 0 0 var(--wb-space-sm) 0;">
+                        This deletes all scripts for this protocol from the registry. Local files are not affected until the next sync.
+                    </p>
+                    <div class="scaffold-error" id="delete-protocol-warning" style="color: var(--wb-warning); display: none;"></div>
+                    <div class="scaffold-error" id="delete-protocol-error" style="display: none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').style.display='none'">Cancel</button>
+                    <button class="btn btn-danger" id="delete-protocol-confirm-btn">Remove</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        modal.querySelector('#delete-protocol-confirm-btn').addEventListener('click', () => {
+            const wb = window.workbench;
+            if (wb) DashboardPlugin._doDeleteProtocol(wb);
+        });
+    },
 
     _createScaffoldModal() {
         if (document.getElementById('scaffold-protocol-modal')) return;
