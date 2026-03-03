@@ -57,7 +57,12 @@ const RegistryPlugin = {
 
     onSnapshot(wb, snapshot) {
         if (wb.registry && snapshot) {
-            this._checkSyncStatus(wb);
+            // Debounce sync status checks — avoid hammering the backend
+            // when multiple snapshots arrive in quick succession
+            clearTimeout(this._syncStatusTimer);
+            this._syncStatusTimer = setTimeout(() => {
+                this._checkSyncStatus(wb);
+            }, 500);
         }
     },
 
@@ -76,7 +81,7 @@ const RegistryPlugin = {
 
     onScriptSelect(wb, scriptName) {
         setTimeout(() => {
-            this._updateSingleSyncStatus(wb, 'scripts-sync-status', scriptName);
+            this._updateSyncStatusUI(wb);
         }, 50);
     },
 

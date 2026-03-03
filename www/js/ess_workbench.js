@@ -454,13 +454,26 @@ class ESSWorkbench {
             
             // Hide sidebar entries for scripts that don't exist
             this.updateScriptSidebarVisibility();
-            
-            // Update core displays
+
+            // Update config display (always visible/cheap)
             this.updateConfigDisplay();
-            this.updateVariantsEditor();
-            this.updateLoadersEditor();
-            this.updateScriptEditor();
-            this.updateStatesDiagram();
+
+            // Only update the active tab's content
+            this._snapshotDirty = true;
+            switch (this.currentTab) {
+                case 'variants':
+                    this.updateVariantsEditor();
+                    break;
+                case 'loaders':
+                    this.updateLoadersEditor();
+                    break;
+                case 'scripts':
+                    this.updateScriptEditor();
+                    break;
+                case 'states':
+                    this.updateStatesDiagram();
+                    break;
+            }
             
             // Update timestamp
             this.updateSnapshotTime(snapshot.timestamp);
@@ -923,16 +936,20 @@ class ESSWorkbench {
             content.classList.toggle('active', content.id === `tab-${tabName}`);
         });
         
-        // Initialize tab-specific content
-        if (tabName === 'scripts' && !this.editor) {
-            this.initEditor();
+        // Initialize tab-specific content and refresh if snapshot arrived while away
+        if (tabName === 'scripts') {
+            if (!this.editor) this.initEditor();
+            if (this._snapshotDirty) this.updateScriptEditor();
         } else if (tabName === 'states') {
             this.updateStatesDiagram();
         } else if (tabName === 'variants') {
             this.initVariantsTab();
+            if (this._snapshotDirty) this.updateVariantsEditor();
         } else if (tabName === 'loaders') {
             this.initLoadersTab();
+            if (this._snapshotDirty) this.updateLoadersEditor();
         }
+        this._snapshotDirty = false;
         
         // Notify plugins
         this._pluginHook('onTabSwitch', tabName);
@@ -1545,13 +1562,28 @@ class ESSWorkbench {
                 reject(new Error('WebSocket not connected'));
                 return;
             }
-            
+
             const responseId = `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            
+            const dpName = `ess/cmd_response/${responseId}`;
+            let settled = false;
+
+            const cleanup = () => {
+                this.dpManager.unsubscribe(dpName, responseHandler);
+                // Remove the temporary datapoint from the server's table
+                if (this.connection?.ws?.readyState === WebSocket.OPEN) {
+                    this.connection.ws.send(JSON.stringify({
+                        cmd: 'eval',
+                        script: `dservClear ${dpName}`
+                    }));
+                }
+            };
+
             const responseHandler = (data) => {
-                if (data.name === `ess/cmd_response/${responseId}`) {
-                    this.dpManager.unsubscribe(`ess/cmd_response/${responseId}`, responseHandler);
-                    
+                if (data.name === dpName) {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
+
                     const value = data.data !== undefined ? data.data : data.value;
                     if (value && value.error) {
                         reject(new Error(value.error));
@@ -1560,24 +1592,26 @@ class ESSWorkbench {
                     }
                 }
             };
-            
-            this.dpManager.subscribe(`ess/cmd_response/${responseId}`, responseHandler);
-            
+
+            this.dpManager.subscribe(dpName, responseHandler);
+
             const wrappedCmd = `
                 if {[catch {${cmd}} result]} {
-                    dservSet ess/cmd_response/${responseId} [list error $result]
+                    dservSet ${dpName} [list error $result]
                 } else {
-                    dservSet ess/cmd_response/${responseId} $result
+                    dservSet ${dpName} $result
                 }
             `;
-            
+
             this.connection.ws.send(JSON.stringify({
                 cmd: 'eval',
                 script: wrappedCmd
             }));
-            
+
             setTimeout(() => {
-                this.dpManager.unsubscribe(`ess/cmd_response/${responseId}`, responseHandler);
+                if (settled) return;
+                settled = true;
+                cleanup();
                 reject(new Error('Command timeout'));
             }, 30000);
         });
