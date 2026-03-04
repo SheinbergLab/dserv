@@ -328,6 +328,11 @@ proc connect_touchscreen {} {
 
 connect_touchscreen
 
+# pull latest workspace scripts if we have registry configured
+if { [info exists ess::registry_url] } {
+    ess::sync_base
+}
+
 # and finally load a default system
 ess::load_system emcalib
 
