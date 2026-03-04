@@ -1185,6 +1185,22 @@ set www_path /usr/local/dserv/www</code>
               }
             }
 
+	    else if (strcmp(cmd, "clear") == 0) {
+	      // Handle datapoint clear (non-blocking, no Tcl eval)
+	      json_t *names_obj = json_object_get(root, "names");
+	      
+	      if (names_obj && json_is_array(names_obj)) {
+		size_t index;
+		json_t *val;
+		json_array_foreach(names_obj, index, val) {
+		  if (json_is_string(val)) {
+		    ds->clear((char *)json_string_value(val));
+		  }
+		}
+	      }
+	      // No response needed — fire and forget
+	    }
+	    
             else if (strcmp(cmd, "touch") == 0) {
               // Handle datapoint touch
               json_t *name_obj = json_object_get(root, "name");
@@ -1221,6 +1237,22 @@ set www_path /usr/local/dserv/www</code>
               }
             }
 	    
+            else if (strcmp(cmd, "clear") == 0) {
+              // Handle datapoint clear (non-blocking, no Tcl eval)
+              json_t *names_obj = json_object_get(root, "names");
+
+              if (names_obj && json_is_array(names_obj)) {
+                size_t index;
+                json_t *val;
+                json_array_foreach(names_obj, index, val) {
+                  if (json_is_string(val)) {
+                    ds->clear((char *)json_string_value(val));
+                  }
+                }
+              }
+              // No response needed — fire and forget
+            }
+
             else if (strcmp(cmd, "subscribe") == 0) {
               json_t *match_obj = json_object_get(root, "match");
               json_t *every_obj = json_object_get(root, "every");
