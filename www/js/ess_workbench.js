@@ -1569,13 +1569,9 @@ class ESSWorkbench {
 
             const cleanup = () => {
                 this.dpManager.unsubscribe(dpName, responseHandler);
-                // Remove the temporary datapoint from the server's table
-                if (this.connection?.ws?.readyState === WebSocket.OPEN) {
-                    this.connection.ws.send(JSON.stringify({
-                        cmd: 'eval',
-                        script: `dservClear ${dpName}`
-                    }));
-                }
+                // Queue for batched cleanup instead of sending an eval
+                // per response (eval blocks the uWS event loop)
+                this._queueDatapointCleanup(dpName);
             };
 
             const responseHandler = (data) => {
@@ -1617,6 +1613,31 @@ class ESSWorkbench {
         });
     }
     
+    /**
+     * Queue a temporary datapoint name for batched cleanup.
+     * Uses the native WebSocket 'clear' command which runs directly
+     * on the dataserver without going through the Tcl interpreter,
+     * so it never blocks the uWS event loop.
+     */
+    _queueDatapointCleanup(dpName) {
+        if (!this._dpCleanupQueue) this._dpCleanupQueue = [];
+        this._dpCleanupQueue.push(dpName);
+
+        if (!this._dpCleanupTimer) {
+            this._dpCleanupTimer = setTimeout(() => {
+                this._dpCleanupTimer = null;
+                const names = this._dpCleanupQueue;
+                this._dpCleanupQueue = [];
+                if (names.length > 0 && this.connection?.ws?.readyState === WebSocket.OPEN) {
+                    this.connection.ws.send(JSON.stringify({
+                        cmd: 'clear',
+                        names: names
+                    }));
+                }
+            }, 2000);
+        }
+    }
+
     // Alias for backward compat (plugins used execRegistryCmd)
     async execRegistryCmd(cmd) {
         return this.execTclCmd(cmd);
