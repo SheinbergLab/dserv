@@ -1657,7 +1657,7 @@ namespace eval ess {
             if {[file exists $filename]} {
                 # Try adding a letter suffix to avoid collision
                 set resolved 0
-                foreach suffix {a b c d e f g h i j} {
+		foreach suffix {01 02 03 04 05 06 07 08 09 10} {
                     set alt_filename [file join $data_dir ${f}_${suffix}.ess]
                     if {![file exists $alt_filename]} {
                         print "file $f already exists, using ${f}_${suffix}"
