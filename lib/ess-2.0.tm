@@ -1655,11 +1655,28 @@ namespace eval ess {
         set filename [file join $data_dir $f.ess]
         if {!$overwrite} {
             if {[file exists $filename]} {
-                print "file $f already exists in directory $data_dir"
-                return 0
+                # Try adding a letter suffix to avoid collision
+                set resolved 0
+                foreach suffix {a b c d e f g h i j} {
+                    set alt_filename [file join $data_dir ${f}_${suffix}.ess]
+                    if {![file exists $alt_filename]} {
+                        print "file $f already exists, using ${f}_${suffix}"
+                        set filename $alt_filename
+                        set f ${f}_${suffix}
+                        set resolved 1
+                        break
+                    }
+                }
+                if {!$resolved} {
+                    print "file $f already exists in directory $data_dir (all suffixes exhausted)"
+                    return 0
+                }
             }
         }
-        dservLoggerOpen $filename 1
+        if {[catch {dservLoggerOpen $filename 1} err]} {
+            print "Failed to open datafile $filename: $err"
+            return -2
+        }
         set open_datafile $filename
 
         dservSet ess/datafile $f              ;# just filename for frontends

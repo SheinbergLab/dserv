@@ -357,7 +357,7 @@ class ESSControl {
                                 <label class="ess-edit-label">File Template</label>
                                 <div class="ess-edit-template-wrapper">
                                     <input type="text" id="ess-edit-file-template" class="ess-edit-input" 
-                                           placeholder="e.g. {subject}_{config}_{date}">
+                                           placeholder="e.g. {subject}_{system}_{protocol}_{date}">
                                     <button type="button" class="ess-edit-template-help-btn" id="ess-edit-template-help">?</button>
                                 </div>
                                 <div class="ess-edit-template-preview" id="ess-edit-template-preview">
@@ -2069,7 +2069,7 @@ updateConfigRunButtons() {
         this.state.editForm = {
             name: '',
             description: '',
-	    file_template: '{subject}_{config}_{date_short}{time}',
+	    file_template: '{subject}_{system}_{protocol}_{date_short}{time}',
             subject: subject,
             tags: subject ? [subject] : [],
             variant_args: { ...variantArgs },
@@ -2385,7 +2385,7 @@ updateConfigRunButtons() {
         
 	let displayTemplate = template;
         if (!displayTemplate) {
-	    displayTemplate = '{subject}_{config}_{date_short}{time}';
+	    displayTemplate = '{subject}_{system}_{protocol}_{date_short}{time}';
         }
         
         // Get current values for preview

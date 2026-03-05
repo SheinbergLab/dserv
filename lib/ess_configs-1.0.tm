@@ -647,19 +647,29 @@ namespace eval ess::configs {
         set basename [generate_file_basename $config]
         log info "Opening datafile: $basename"
         
-        set result [send ess "::ess::file_open {$basename}"]
+        if {[catch {send ess "::ess::file_open {$basename}"} result]} {
+            error "Failed to open datafile: $result"
+        }
         if {$result == 0} {
-            error "Datafile already exists: $basename"
+            error "Datafile already exists: $basename (all suffixes exhausted)"
         } elseif {$result == -1} {
             error "Another datafile is already open"
+        } elseif {$result == -2} {
+            error "Failed to create datafile: $basename (logger error)"
         }
         
+        # result may be the actual basename used (if suffix was added)
         dservSet configs/datafile $basename
         
         # Start if requested
         if {$auto_start} {
             log info "Starting ESS"
-            send ess "ess::start"
+            if {[catch {send ess "ess::start"} err]} {
+                log error "ESS start failed after file open: $err"
+                catch {send ess "::ess::file_close"}
+                dservSet configs/datafile {}
+                error "ESS start failed: $err (datafile closed)"
+            }
         }
         
         return $basename
@@ -671,7 +681,7 @@ namespace eval ess::configs {
         
         # If empty, use ESS default
         if {$template eq ""} {
-            set template "{subject}_{config}_{date_short}{time}"
+            set template "{subject}_{system}_{protocol}_{date_short}{time}"
         }
         
         # Get values
