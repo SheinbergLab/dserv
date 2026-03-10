@@ -511,18 +511,16 @@ oo::class create System {
     method get_loaders {} {
 	return $_loaders
     }
-    
+
     method add_variable { var { val {} } } {
-        set pos [lsearch $_vars $var]
-        if { $pos < 0 } {
-            my variable $var
-            lappend _vars $var
-            oo::objdefine [self] variable $var
-        }
-        if { $val != {} } {
-            variable $var $val
-        }
-    }
+	set pos [lsearch $_vars $var]
+	if { $pos < 0 } {
+	    my variable $var
+	    lappend _vars $var
+	    oo::objdefine [self] variable $var
+	}
+	variable $var $val
+    }    
 
     method get_variable { var } {
         return [set [self namespace]::$var]
