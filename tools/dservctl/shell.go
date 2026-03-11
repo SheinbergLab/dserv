@@ -23,16 +23,21 @@ func (c *DservCompleter) Do(line []rune, pos int) ([][]rune, int) {
 		return nil, 0
 	}
 
-	// Build completion command
-	var completeCmd string
+	// Build and send completion command
+	completeCmd := fmt.Sprintf("complete_token {%s}", input)
+	var resp string
+	var err error
 	if c.interp == "" || c.interp == "dserv" {
-		completeCmd = fmt.Sprintf("complete_token {%s}", input)
+		// Direct to dserv main interpreter
+		resp, err = SendToDserv(c.host, completeCmd)
+	} else if c.interp == "stim" {
+		// Direct to STIM process (port 4612) — not a dserv subprocess
+		resp, err = SendToSTIM(c.host, completeCmd)
 	} else {
-		completeCmd = fmt.Sprintf("send %s {complete_token {%s}}", c.interp, input)
+		// Route through dserv via send
+		wrapped := fmt.Sprintf("send %s {%s}", c.interp, completeCmd)
+		resp, err = SendToDserv(c.host, wrapped)
 	}
-
-	// Send to dserv
-	resp, err := SendToDserv(c.host, completeCmd)
 	if err != nil || resp == "" {
 		return nil, 0
 	}

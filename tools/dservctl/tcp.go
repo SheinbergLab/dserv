@@ -11,6 +11,7 @@ import (
 
 const (
 	DservPort      = 2560
+	DservTextPort  = 4620
 	STIMPort       = 4612
 	ConnectTimeout = 5 * time.Second
 	ReadTimeout    = 30 * time.Second
@@ -97,6 +98,37 @@ func DiscoverInterpreters(host string) ([]string, error) {
 	}
 	interps := strings.Fields(resp)
 	return interps, nil
+}
+
+// SendText sends a command using the text protocol (newline-terminated) on port 4620.
+// Used for %reg and %match commands.
+func SendText(host string, port int, cmd string) (string, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
+	if err != nil {
+		return "", fmt.Errorf("connection to %s failed: %w", addr, err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(ReadTimeout))
+
+	fmt.Fprintf(conn, "%s\n", cmd)
+
+	buf := make([]byte, 4096)
+	n, _ := conn.Read(buf)
+	return strings.TrimSpace(string(buf[:n])), nil
+}
+
+// GetLocalIP determines our IP address as seen by the dserv host.
+func GetLocalIP(host string) (string, error) {
+	addr := fmt.Sprintf("%s:%d", host, DservTextPort)
+	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	localAddr := conn.LocalAddr().String()
+	ip, _, _ := net.SplitHostPort(localAddr)
+	return ip, nil
 }
 
 // TestConnection verifies dserv is reachable on port 2560.

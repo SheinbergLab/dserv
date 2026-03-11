@@ -25,6 +25,7 @@ func init() {
 		{"set", "Set a datapoint value (dservSet)", runSet},
 		{"touch", "Touch a datapoint (notify subscribers)", runTouch},
 		{"clear", "Clear datapoint(s) (dservClear)", runClear},
+		{"listen", "Subscribe to datapoint updates", runListen},
 		{"status", "Show agent and dserv status", runStatus},
 		{"mesh", "List mesh nodes", runMesh},
 		{"service", "Control dserv service (start/stop/restart)", runService},
@@ -80,6 +81,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl get ess/status                       Get a datapoint value\n")
 	fmt.Fprintf(os.Stderr, "  dservctl set ess/state running                Set a datapoint value\n")
 	fmt.Fprintf(os.Stderr, "  dservctl touch ess/em_pos                    Touch (notify subscribers)\n")
+	fmt.Fprintf(os.Stderr, "  dservctl listen \"ess/*\"                       Stream datapoint updates\n")
 	fmt.Fprintf(os.Stderr, "  dservctl script get sys proto type > f.tcl    Download script\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
 }
