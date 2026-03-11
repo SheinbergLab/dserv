@@ -66,7 +66,7 @@ func runSandboxCreate(cfg *Config, args []string) int {
 		}
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.CreateSandbox(cfg.Workgroup, system, fromVersion, toVersion, cfg.User, comment)
 	if err != nil {
 		PrintError("%v", err)
@@ -125,7 +125,7 @@ func runSandboxPromote(cfg *Config, args []string) int {
 		return 2
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.PromoteSandbox(cfg.Workgroup, system, fromVersion, toVersion, cfg.User, comment)
 	if err != nil {
 		PrintError("%v", err)
@@ -165,7 +165,7 @@ func runSandboxSync(cfg *Config, args []string) int {
 		}
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.SyncSandbox(cfg.Workgroup, system, fromVersion, toVersion, cfg.User)
 	if err != nil {
 		PrintError("%v", err)
@@ -199,7 +199,7 @@ func runSandboxDelete(cfg *Config, args []string) int {
 		return 1
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	_, err := client.DeleteSandbox(cfg.Workgroup, system, version)
 	if err != nil {
 		PrintError("%v", err)
@@ -226,7 +226,7 @@ func runSandboxVersions(cfg *Config, args []string) int {
 
 	system := args[0]
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.ListVersions(cfg.Workgroup, system)
 	if err != nil {
 		PrintError("%v", err)

@@ -27,6 +27,17 @@ func NewAgentClient(cfg *Config) *AgentClient {
 	}
 }
 
+// NewRegistryClient creates an AgentClient pointing at the ESS registry server.
+func NewRegistryClient(cfg *Config) *AgentClient {
+	return &AgentClient{
+		BaseURL: cfg.RegistryBaseURL(),
+		Token:   cfg.Token,
+		HTTPClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
 // Do performs an HTTP request with auth and returns parsed JSON.
 func (c *AgentClient) Do(method, path string, body interface{}) (map[string]interface{}, error) {
 	url := c.BaseURL + path
