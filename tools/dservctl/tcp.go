@@ -87,7 +87,7 @@ func Send(host string, interp string, cmd string) (string, error) {
 
 // DiscoverInterpreters queries the dserv/interps datapoint to get available subprocesses.
 func DiscoverInterpreters(host string) ([]string, error) {
-	resp, err := SendToDserv(host, "dpget dserv/interps")
+	resp, err := SendToDserv(host, "dservGet dserv/interps")
 	if err != nil {
 		return nil, err
 	}
