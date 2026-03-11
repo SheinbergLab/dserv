@@ -148,8 +148,8 @@ func runShell(cfg *Config, args []string) int {
 			}
 		}
 
-		// Send command to current interpreter
-		resp, err := Send(cfg.Host, interp, line)
+		// Send command to current interpreter (completer.interp tracks switches)
+		resp, err := Send(cfg.Host, completer.interp, line)
 		if err != nil {
 			PrintError("%v", err)
 			continue
