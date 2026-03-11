@@ -8,8 +8,12 @@ import (
 	"time"
 )
 
-// runSystems lists ESS systems in a workgroup.
+// runSystems lists ESS systems in a workgroup, or deletes a system.
 func runSystems(cfg *Config, args []string) int {
+	if len(args) > 0 && args[0] == "delete" {
+		return runSystemDelete(cfg, args[1:])
+	}
+
 	wg := cfg.Workgroup
 	if len(args) > 0 {
 		wg = args[0]
@@ -19,7 +23,7 @@ func runSystems(cfg *Config, args []string) int {
 		return 2
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	systems, err := client.ListSystems(wg)
 	if err != nil {
 		PrintError("%v", err)
@@ -61,6 +65,34 @@ func runSystems(cfg *Config, args []string) int {
 	return 0
 }
 
+func runSystemDelete(cfg *Config, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: dservctl systems delete <system> [--workgroup WG]\n")
+		return 2
+	}
+	if !requireWorkgroup(cfg) {
+		return 2
+	}
+
+	system := args[0]
+
+	client := NewRegistryClient(cfg)
+	result, err := client.DeleteSystem(cfg.Workgroup, system)
+	if err != nil {
+		PrintError("%v", err)
+		return 1
+	}
+
+	if cfg.JSON {
+		printJSON(result)
+		return 0
+	}
+
+	scriptCount := intVal(result, "deletedScripts")
+	fmt.Printf("Deleted system %q from workgroup %q (%d scripts removed)\n", system, cfg.Workgroup, scriptCount)
+	return 0
+}
+
 // runScripts lists scripts for a system grouped by protocol.
 func runScripts(cfg *Config, args []string) int {
 	if len(args) == 0 {
@@ -80,7 +112,7 @@ func runScripts(cfg *Config, args []string) int {
 		}
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.GetScripts(cfg.Workgroup, system, version)
 	if err != nil {
 		PrintError("%v", err)
@@ -185,7 +217,7 @@ func runScriptGet(cfg *Config, args []string) int {
 		}
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.GetScript(cfg.Workgroup, system, protocol, scriptType, version)
 	if err != nil {
 		PrintError("%v", err)
@@ -270,7 +302,7 @@ func runScriptSave(cfg *Config, args []string) int {
 		return 2
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 
 	// Get current checksum for conflict detection
 	expectedChecksum := ""
@@ -324,7 +356,7 @@ func runScriptDelete(cfg *Config, args []string) int {
 
 	system, protocol, scriptType := args[0], args[1], args[2]
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	_, err := client.DeleteScript(cfg.Workgroup, system, protocol, scriptType)
 	if err != nil {
 		PrintError("%v", err)
@@ -347,7 +379,7 @@ func runHistory(cfg *Config, args []string) int {
 
 	system, protocol, scriptType := args[0], args[1], args[2]
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.GetHistory(cfg.Workgroup, system, protocol, scriptType)
 	if err != nil {
 		PrintError("%v", err)
@@ -385,13 +417,16 @@ func runHistory(cfg *Config, args []string) int {
 	return 0
 }
 
-// runTemplates lists or adds templates.
+// runTemplates lists, adds, or seeds templates.
 func runTemplates(cfg *Config, args []string) int {
 	if len(args) > 0 && args[0] == "add" {
 		return runTemplateAdd(cfg, args[1:])
 	}
+	if len(args) > 0 && args[0] == "seed" {
+		return runTemplateSeed(cfg, args[1:])
+	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	templates, err := client.ListTemplates()
 	if err != nil {
 		PrintError("%v", err)
@@ -446,7 +481,7 @@ func runTemplateAdd(cfg *Config, args []string) int {
 
 	templateName := args[0]
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	result, err := client.AddToWorkgroup(templateName, cfg.Workgroup, cfg.User)
 	if err != nil {
 		PrintError("%v", err)
@@ -459,6 +494,44 @@ func runTemplateAdd(cfg *Config, args []string) int {
 	}
 
 	fmt.Printf("Added template %q to workgroup %q\n", templateName, cfg.Workgroup)
+	return 0
+}
+
+func runTemplateSeed(cfg *Config, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: dservctl templates seed <path> [system...]\n")
+		fmt.Fprintf(os.Stderr, "\nSeeds templates from a filesystem directory into the _templates workgroup.\n")
+		fmt.Fprintf(os.Stderr, "If no systems are specified, all found systems are imported.\n")
+		return 2
+	}
+
+	sourcePath := args[0]
+	systems := args[1:]
+
+	client := NewRegistryClient(cfg)
+	result, err := client.SeedTemplates(sourcePath, systems)
+	if err != nil {
+		PrintError("%v", err)
+		return 1
+	}
+
+	if cfg.JSON {
+		printJSON(result)
+		return 0
+	}
+
+	if seeded, ok := result["systems"].([]interface{}); ok && len(seeded) > 0 {
+		names := make([]string, len(seeded))
+		for i, v := range seeded {
+			names[i] = fmt.Sprintf("%v", v)
+		}
+		fmt.Printf("Seeded %d template(s): %s\n", len(names), strings.Join(names, ", "))
+	} else {
+		fmt.Println("No templates seeded.")
+	}
+	if libs, ok := result["libraries"].([]interface{}); ok && len(libs) > 0 {
+		fmt.Printf("Imported %d library/libraries.\n", len(libs))
+	}
 	return 0
 }
 
@@ -497,7 +570,7 @@ func runExport(cfg *Config, args []string) int {
 		}
 	}
 
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	data, err := client.ExportZip(wg, system)
 	if err != nil {
 		PrintError("%v", err)

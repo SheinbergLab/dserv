@@ -186,6 +186,22 @@ func (c *AgentClient) ListVersions(workgroup, system string) (map[string]interfa
 	return c.Get(path)
 }
 
+// SeedTemplates imports systems from a filesystem path into the _templates workgroup.
+func (c *AgentClient) SeedTemplates(sourcePath string, systems []string) (map[string]interface{}, error) {
+	return c.Post(registryBase+"/admin/seed-templates", map[string]interface{}{
+		"sourcePath": sourcePath,
+		"systems":    systems,
+	})
+}
+
+// DeleteSystem removes a system and all its scripts.
+func (c *AgentClient) DeleteSystem(workgroup, system string) (map[string]interface{}, error) {
+	return c.Do("DELETE", registryBase+"/scaffold/system", map[string]string{
+		"workgroup": workgroup,
+		"system":    system,
+	})
+}
+
 // ExportZip downloads a workgroup or system as ZIP.
 func (c *AgentClient) ExportZip(workgroup, system string) ([]byte, error) {
 	path := fmt.Sprintf("%s/export/%s", registryBase, url.PathEscape(workgroup))

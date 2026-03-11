@@ -31,11 +31,11 @@ func init() {
 		{"service", "Control dserv service (start/stop/restart)", runService},
 		{"components", "List or install components", runComponents},
 		{"logs", "View service logs", runLogs},
-		{"systems", "List ESS systems in workgroup", runSystems},
+		{"systems", "List or delete ESS systems in workgroup", runSystems},
 		{"scripts", "List scripts for a system", runScripts},
 		{"script", "Get or save a script", runScript},
 		{"history", "Show script version history", runHistory},
-		{"templates", "List or add templates", runTemplates},
+		{"templates", "List, add, or seed templates", runTemplates},
 		{"sandbox", "Manage sandboxes (create/promote/sync/delete)", runSandbox},
 		{"export", "Export workgroup or system as ZIP", runExport},
 		{"sync", "Sync scripts with local directory", runSync},
@@ -56,6 +56,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -t, --token TOKEN       Bearer token (env: DSERV_AGENT_TOKEN)\n")
 	fmt.Fprintf(os.Stderr, "  -w, --workgroup WG      Default workgroup (env: DSERV_WORKGROUP)\n")
 	fmt.Fprintf(os.Stderr, "  -u, --user USER         Username for registry ops (env: DSERV_USER)\n")
+	fmt.Fprintf(os.Stderr, "  -r, --registry URL      ESS registry URL (env: DSERV_REGISTRY, or auto-discovered)\n")
 	fmt.Fprintf(os.Stderr, "  --json                  Output JSON\n")
 	fmt.Fprintf(os.Stderr, "  --verbose               Verbose output\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
@@ -84,6 +85,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl listen \"ess/*\"                       Stream datapoint updates\n")
 	fmt.Fprintf(os.Stderr, "  dservctl script get sys proto type > f.tcl    Download script\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
+	fmt.Fprintf(os.Stderr, "  dservctl templates seed /path/to/systems      Seed templates from filesystem\n")
+	fmt.Fprintf(os.Stderr, "  dservctl systems delete sys                   Delete a system and its scripts\n")
 }
 
 func main() {

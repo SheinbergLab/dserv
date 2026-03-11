@@ -49,7 +49,7 @@ func runSync(cfg *Config, args []string) int {
 	}
 
 	// Step 1: Get manifest from server
-	client := NewAgentClient(cfg)
+	client := NewRegistryClient(cfg)
 	manifest, err := client.GetManifest(cfg.Workgroup, system, version)
 	if err != nil {
 		PrintError("fetching manifest: %v", err)

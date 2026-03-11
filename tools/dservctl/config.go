@@ -16,6 +16,7 @@ type Config struct {
 	Token     string // Bearer token for agent API
 	Workgroup string // Default workgroup
 	User      string // Username for registry operations
+	Registry  string // Registry URL (e.g., https://dserv.net)
 	JSON      bool   // JSON output mode
 	Verbose   bool   // Verbose logging
 	Command   string // -c command (single execution)
@@ -89,6 +90,14 @@ func (cfg *Config) ParseFlags(args []string) []string {
 				fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", args[i])
 				os.Exit(2)
 			}
+		case "--registry", "-r":
+			if i+1 < len(args) {
+				cfg.Registry = args[i+1]
+				i += 2
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", args[i])
+				os.Exit(2)
+			}
 		case "-c":
 			if i+1 < len(args) {
 				cfg.Command = args[i+1]
@@ -155,6 +164,8 @@ func (cfg *Config) loadConfigFile() {
 			cfg.Workgroup = value
 		case "user":
 			cfg.User = value
+		case "registry":
+			cfg.Registry = value
 		}
 	}
 }
@@ -178,9 +189,36 @@ func (cfg *Config) loadEnvVars() {
 	if v := os.Getenv("DSERV_USER"); v != "" {
 		cfg.User = v
 	}
+	if v := os.Getenv("DSERV_REGISTRY"); v != "" {
+		cfg.Registry = v
+	}
 }
 
 // AgentBaseURL returns the base URL for agent HTTP API
 func (cfg *Config) AgentBaseURL() string {
 	return fmt.Sprintf("http://%s:%d", cfg.Host, cfg.AgentPort)
+}
+
+// RegistryBaseURL returns the base URL for the ESS registry API.
+// Uses --registry flag, DSERV_REGISTRY env, config file, or auto-discovers
+// from the ess/registry/url datapoint.
+func (cfg *Config) RegistryBaseURL() string {
+	if cfg.Registry != "" {
+		return strings.TrimRight(cfg.Registry, "/")
+	}
+
+	// Try to discover from dserv datapoint
+	resp, err := SendToDserv(cfg.Host, "dservGet ess/registry/url")
+	if err == nil {
+		resp = strings.TrimSpace(resp)
+		if resp != "" && !strings.HasPrefix(resp, "!") {
+			if cfg.Verbose {
+				fmt.Fprintf(os.Stderr, "Discovered registry URL: %s\n", resp)
+			}
+			return strings.TrimRight(resp, "/")
+		}
+	}
+
+	// Fall back to local agent
+	return cfg.AgentBaseURL()
 }
