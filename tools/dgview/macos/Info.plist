@@ -87,6 +87,22 @@
                 <string>lz4</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>ESS Log File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.sheinberglab.ess</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>ess</string>
+            </array>
+        </dict>
     </array>
     
     <!-- Define our custom UTI types -->
@@ -123,6 +139,23 @@
                 <key>public.filename-extension</key>
                 <array>
                     <string>dgz</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.sheinberglab.ess</string>
+            <key>UTTypeDescription</key>
+            <string>ESS Log File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>ess</string>
                 </array>
             </dict>
         </dict>
