@@ -420,6 +420,11 @@ if(GO_EXECUTABLE)
             COMPONENT dservctl
         )
 
+        # Create essctrl -> dservctl symlink for backward compatibility
+        install(CODE "execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink dservctl \$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/bin/essctrl)"
+            COMPONENT dservctl
+        )
+
         set(DSERVCTL_FOUND TRUE)
     else()
         message(STATUS "dservctl source not found at ${DSERVCTL_SOURCE_DIR}")

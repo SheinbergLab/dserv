@@ -92,6 +92,11 @@ func printUsage() {
 func main() {
 	cfg := LoadConfig()
 
+	// If invoked as "essctrl" (via symlink), use essctrl-compatible mode
+	if isEssctrlMode() {
+		os.Exit(runEssctrl(cfg))
+	}
+
 	// Parse global flags from os.Args
 	args := os.Args[1:]
 	args = cfg.ParseFlags(args)
