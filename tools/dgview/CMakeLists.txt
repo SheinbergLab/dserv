@@ -72,12 +72,19 @@ else()
     endif()
 endif()
 
-# Include directories for dlsh/libdg headers
+# Allow override for different source layouts
+set(DLSH_ROOT "${CMAKE_SOURCE_DIR}/../../dlsh" CACHE PATH "Path to dlsh source tree")
+
 include_directories(
     ${FLTK_INCLUDE_DIRS}
     src
-    ${CMAKE_SOURCE_DIR}/../../dlsh/src
-    ${CMAKE_SOURCE_DIR}/../../dlsh/src/lablib
+    ${DLSH_ROOT}/src
+    ${DLSH_ROOT}/src/lablib
+)
+
+# dserv ESS log reader
+set(DSERV_SOURCES
+    ${DLSH_ROOT}/src/lablib/dslog.c
 )
 
 if(WIN32)
@@ -96,6 +103,7 @@ if(APPLE)
         src/DgTable.cxx
         src/DgExport.cxx
         src/MacDropHandler.mm
+        ${DSERV_SOURCES}
     )
 elseif(WIN32)
     # Include resource file for Windows icon
@@ -108,6 +116,7 @@ elseif(WIN32)
         src/DgTable.cxx
         src/DgExport.cxx
         ${WIN_RESOURCES}
+        ${DSERV_SOURCES}
     )
 else()
     # Linux
@@ -115,7 +124,9 @@ else()
         src/dgview.cxx
         src/DgTable.cxx
         src/DgExport.cxx
+        ${DSERV_SOURCES}
     )
+    
 endif()
 
 # Link libraries

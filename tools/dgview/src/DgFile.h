@@ -16,6 +16,7 @@
 
 #include <df.h>
 #include <dynio.h>
+#include <dslog.h>
 
 class DgFile {
 public:
@@ -38,7 +39,26 @@ public:
 
         // Check file extension
         const char* suffix = strrchr(filename, '.');
-        
+
+        // ESS log file -> convert to obs-period oriented DYN_GROUP
+        if (suffix && strcmp(suffix, ".ess") == 0) {
+            dfuFreeDynGroup(dg);  // don't need the pre-allocated one
+            DYN_GROUP* essdg = nullptr;
+            int rc = dslog_to_dg(const_cast<char*>(filename), &essdg);
+            if (rc != DSLOG_OK || !essdg) {
+                if (errorMsg) {
+                    switch (rc) {
+                    case DSLOG_FileNotFound:    *errorMsg = "ESS file not found"; break;
+                    case DSLOG_FileUnreadable:  *errorMsg = "ESS file unreadable"; break;
+                    case DSLOG_InvalidFormat:   *errorMsg = "Not a valid ESS/dslog file"; break;
+                    default:                    *errorMsg = "Failed to read ESS file"; break;
+                    }
+                }
+                return nullptr;
+            }
+            return essdg;
+        }
+
         // Try LZ4 format first
         if (suffix && strlen(suffix) == 4 &&
             ((suffix[1] == 'l' && suffix[2] == 'z' && suffix[3] == '4') ||
