@@ -203,7 +203,7 @@ endif()
 
 add_subdirectory(modules)
 add_subdirectory(processors)
-add_subdirectory(tools/essctrl)
+
 
 find_package(Git QUIET)
 if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
@@ -458,7 +458,7 @@ if(WIN32)
     # TODO
 elseif(APPLE)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
-    set(CPACK_COMPONENTS_ALL dserv essctrl)
+    set(CPACK_COMPONENTS_ALL dserv)
     if(DSERV_AGENT_FOUND)
        list(APPEND CPACK_COMPONENTS_ALL dserv-agent)
     endif()
@@ -499,7 +499,7 @@ else()
 endif()
 
 include(CPack)
-cpack_add_component(dserv essctrl REQUIRED)
+cpack_add_component(dserv REQUIRED)
 if(DSERV_AGENT_FOUND)
     cpack_add_component(dserv-agent)
 endif()
