@@ -219,6 +219,7 @@ if(WIN32)
     set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
         WriteRegStr HKCR '.dg' '' 'dgview.Document'
         WriteRegStr HKCR '.dgz' '' 'dgview.Document'
+        WriteRegStr HKCR '.ess' '' 'dgview.Document'	
         WriteRegStr HKCR 'dgview.Document' '' 'DG Data File'
         WriteRegStr HKCR 'dgview.Document\\\\DefaultIcon' '' '$INSTDIR\\\\bin\\\\dgview.exe,0'
         WriteRegStr HKCR 'dgview.Document\\\\shell\\\\open\\\\command' '' '$INSTDIR\\\\bin\\\\dgview.exe \\\"%1\\\"'
@@ -226,6 +227,7 @@ if(WIN32)
     set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
         DeleteRegKey HKCR '.dg'
         DeleteRegKey HKCR '.dgz'
+        DeleteRegKey HKCR '.ess'	
         DeleteRegKey HKCR 'dgview.Document'
     ")
     
