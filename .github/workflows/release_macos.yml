@@ -131,6 +131,36 @@ jobs:
           echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
 
+  release-dservctl:
+
+    runs-on: macos-14
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Check out our code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build dservctl
+        run: |
+          cd tools/dservctl
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dservctl_darwin_arm64 .
+
+      - name: Upload dservctl binary
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "tools/dservctl/dservctl_darwin_arm64"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
   release-essgui:
 
     # Build on not-the-latest to keep dependency versions modest.
