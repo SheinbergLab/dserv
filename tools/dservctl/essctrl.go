@@ -93,9 +93,11 @@ func runEssctrl(cfg *Config) int {
 		return essctrlStdin(cfg.Host, port, service)
 	}
 
-	// No command, no stdin — print usage (no interactive mode)
-	printEssctrlUsage()
-	return 0
+	// No command, no stdin — launch interactive shell
+	if service != "" && service != "ess" {
+		return runShell(cfg, []string{"-s", service})
+	}
+	return runShell(cfg, nil)
 }
 
 // essctrlSend sends a single command via the appropriate protocol.
