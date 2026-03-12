@@ -387,6 +387,47 @@ else()
     set(DSERV_AGENT_FOUND FALSE)
 endif()
 
+# ============================================================================
+# dservctl (Go-based CLI tool)
+# ============================================================================
+if(GO_EXECUTABLE)
+    set(DSERVCTL_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tools/dservctl)
+    set(DSERVCTL_BINARY ${CMAKE_CURRENT_BINARY_DIR}/bin/dservctl)
+
+    if(EXISTS ${DSERVCTL_SOURCE_DIR}/main.go)
+        message(STATUS "Found dservctl source at ${DSERVCTL_SOURCE_DIR}")
+
+        # Collect Go source files that should trigger rebuild
+        file(GLOB DSERVCTL_GO_SOURCES ${DSERVCTL_SOURCE_DIR}/*.go)
+
+        add_custom_command(
+            OUTPUT ${DSERVCTL_BINARY}
+            COMMAND ${CMAKE_COMMAND} -E env
+                GOOS=${GOOS}
+                GOARCH=${GOARCH}
+                CGO_ENABLED=0
+                ${GO_EXECUTABLE} build -o ${DSERVCTL_BINARY} .
+            WORKING_DIRECTORY ${DSERVCTL_SOURCE_DIR}
+            DEPENDS ${DSERVCTL_GO_SOURCES}
+            COMMENT "Building dservctl for ${GOOS}/${GOARCH}"
+            VERBATIM
+        )
+
+        add_custom_target(dservctl ALL DEPENDS ${DSERVCTL_BINARY})
+
+        install(PROGRAMS ${DSERVCTL_BINARY}
+            DESTINATION bin
+            COMPONENT dservctl
+        )
+
+        set(DSERVCTL_FOUND TRUE)
+    else()
+        message(STATUS "dservctl source not found at ${DSERVCTL_SOURCE_DIR}")
+        set(DSERVCTL_FOUND FALSE)
+    endif()
+else()
+    set(DSERVCTL_FOUND FALSE)
+endif()
 
 install(TARGETS dserv DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY config DESTINATION dserv COMPONENT dserv)
@@ -416,7 +457,10 @@ elseif(APPLE)
     if(DSERV_AGENT_FOUND)
        list(APPEND CPACK_COMPONENTS_ALL dserv-agent)
     endif()
-    
+    if(DSERVCTL_FOUND)
+       list(APPEND CPACK_COMPONENTS_ALL dservctl)
+    endif()
+
     if(DEFINED CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM)
         # Configure for apple code signing, notarization, and gatekeeper/entitlements.
         set(CMAKE_XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--strict --timestamp --options=runtime")
@@ -453,4 +497,7 @@ include(CPack)
 cpack_add_component(dserv essctrl REQUIRED)
 if(DSERV_AGENT_FOUND)
     cpack_add_component(dserv-agent)
+endif()
+if(DSERVCTL_FOUND)
+    cpack_add_component(dservctl)
 endif()

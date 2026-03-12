@@ -97,6 +97,44 @@ jobs:
           generateReleaseNotes: true
           allowUpdates: true
 
+  release-dservctl:
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            goarch: amd64
+          - os: ubuntu-22.04-arm
+            goarch: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build dservctl
+        run: |
+          cd tools/dservctl
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dservctl_linux_${{ matrix.goarch }} .
+
+      - name: Upload dservctl binary
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "tools/dservctl/dservctl_linux_${{ matrix.goarch }}"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+
   release-camera:
 
     strategy:
