@@ -124,13 +124,15 @@ func runScripts(cfg *Config, args []string) int {
 		return 0
 	}
 
-	// Scripts are grouped by protocol key
+	// Scripts are nested under a "scripts" key, grouped by protocol
+	scriptsMap, ok := result["scripts"].(map[string]interface{})
+	if !ok {
+		scriptsMap = result
+	}
+
 	headers := []string{"PROTOCOL", "TYPE", "FILENAME", "CHECKSUM", "UPDATED BY"}
 	var rows [][]string
-	for key, val := range result {
-		if key == "system" || key == "version" || key == "workgroup" {
-			continue
-		}
+	for key, val := range scriptsMap {
 		scripts, ok := val.([]interface{})
 		if !ok {
 			continue
