@@ -1013,9 +1013,10 @@ namespace eval ess {
 
 	ess::reset
 	
-        set_loading_progress "final_init" "Completing system initialization" 100
         # Final init
         $s final_init
+	
+        set_loading_progress "final_init" "Completing system initialization" 100
         
         # Mark loading as complete
         finish_loading_operation true
@@ -3284,16 +3285,20 @@ namespace eval ess {
 namespace eval ess {
     # not sure this gets all rmtSend's !!!
     proc find_rmt_cmds {def} {
-        set pat {rmtSend\s+(\S+)[ \}\";\n]}
-        set rmtcmds [regexp -inline -all $pat $def]
-        set rmtcmds [regsub -all \" $rmtcmds {}]
-        set rmtcmds [lmap a $rmtcmds {lindex $a 1}]
-        set matches {}
-        for {set i 0} {$i < [llength ${rmtcmds}] / 2} {incr i 2} {
-            set cmd [string trimleft [lindex $rmtcmds $i] !]
-            if {[lsearch $matches $cmd] == -1} {lappend matches $cmd}
-        }
-        return $matches
+	set pat {rmtSend\s+(\S+)[ \}\";\n]}
+	set rmtcmds [regexp -inline -all $pat $def]
+	set matches {}
+	# regexp -inline -all returns pairs: {fullmatch capture fullmatch capture ...}
+	for {set i 1} {$i < [llength $rmtcmds]} {incr i 2} {
+	    set cmd [lindex $rmtcmds $i]
+	    # strip leading quotes/bangs
+	    set cmd [string trim $cmd \"]
+	    set cmd [string trimleft $cmd !]
+	    if {$cmd ne "" && [lsearch $matches $cmd] == -1} {
+		lappend matches $cmd
+	    }
+	}
+	return $matches
     }
 
     proc get_rmt_cmds {} {
