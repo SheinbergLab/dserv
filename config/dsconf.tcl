@@ -34,6 +34,9 @@ subprocess sound "source [file join $dspath config/soundconf.tcl]"
 # start a "git" interpreter
 subprocess git "source [file join $dspath config/gitconf.tcl]"
 
+# start an openephys subprocess for handling state/recording
+subprocess openephys "source [file join $dspath config/openephysconf.tcl]"
+
 # start a "powermon"itor if found
 subprocess powermon "source [file join $dspath config/powermonconf.tcl]"
 
