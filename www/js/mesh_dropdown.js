@@ -24,10 +24,10 @@ class MeshDropdown {
         }
         
         this.connection = connection;
+        this.dpManager = options.dpManager || null;
         this.initialized = true;
         
         this.options = {
-            pollInterval: options.pollInterval || 5000,
             guiPath: options.guiPath || '/ess_control',  // Path to append for GUI links
             showLocalBadge: options.showLocalBadge !== false,
             showSSLBadge: options.showSSLBadge !== false,
@@ -37,12 +37,10 @@ class MeshDropdown {
         };
         
         this.meshSystems = new Map();
-        this.pollIntervalId = null;
-        this.requestId = 'mesh-peers-' + Math.random().toString(36).substr(2, 9);
         
         this.render();
         this.setupEventListeners();
-        this.startPolling();
+        this.setupSubscription();
     }
     
     /**
@@ -88,133 +86,57 @@ class MeshDropdown {
             this.elements.dropdown.classList.remove('open');
         };
         document.addEventListener('click', this.closeHandler);
-        
-        // Listen for mesh response from connection
-        this.messageHandler = (data) => {
-            if (data.requestId === this.requestId && data.status === 'ok') {
-                this.handleMeshPeers(data.result);
-            }
-        };
-        this.connection.on('terminal:response', this.messageHandler);
     }
     
     /**
-     * Start polling for mesh peers
+     * Subscribe to mesh/peers datapoint via DatapointManager
      */
-    startPolling() {
-        // Initial fetch
-        this.fetchMeshPeers();
+    setupSubscription() {
+        if (!this.dpManager) {
+            console.warn('MeshDropdown: No DatapointManager, mesh peers will not update');
+            return;
+        }
         
-        // Poll at interval
-        this.pollIntervalId = setInterval(() => this.fetchMeshPeers(), this.options.pollInterval);
+        this.dpManager.subscribe('mesh/peers', (data) => {
+            this.handleMeshPeers(data.value);
+        });
     }
     
     /**
-     * Stop polling
-     */
-    stopPolling() {
-        if (this.pollIntervalId) {
-            clearInterval(this.pollIntervalId);
-            this.pollIntervalId = null;
-        }
-    }
-    
-    /**
-     * Fetch mesh peers from server
-     */
-    fetchMeshPeers() {
-        if (this.connection.connected) {
-            this.connection.send({
-                cmd: 'eval',
-                script: 'send mesh {meshGetPeers}',
-                requestId: this.requestId
-            });
-        }
-    }
-    
-    /**
-     * Parse Tcl list of dicts: {key1 val1 key2 val2} {key1 val1 ...}
-     */
-    parseTclList(str) {
-        const results = [];
-        let depth = 0;
-        let current = '';
-        
-        for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            if (char === '{') {
-                if (depth === 0) {
-                    current = '';
-                } else {
-                    current += char;
-                }
-                depth++;
-            } else if (char === '}') {
-                depth--;
-                if (depth === 0) {
-                    results.push(current.trim());
-                    current = '';
-                } else {
-                    current += char;
-                }
-            } else if (depth > 0) {
-                current += char;
-            }
-        }
-        return results;
-    }
-    
-    /**
-     * Parse Tcl dict: key1 val1 key2 {val with spaces} key3 val3
-     */
-    parseTclDict(str) {
-        const dict = {};
-        const tokens = [];
-        let current = '';
-        let depth = 0;
-        
-        for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            if (char === '{') {
-                if (depth > 0) current += char;
-                depth++;
-            } else if (char === '}') {
-                depth--;
-                if (depth > 0) current += char;
-            } else if (char === ' ' && depth === 0) {
-                if (current) {
-                    tokens.push(current);
-                    current = '';
-                }
-            } else {
-                current += char;
-            }
-        }
-        if (current) tokens.push(current);
-        
-        for (let i = 0; i < tokens.length - 1; i += 2) {
-            dict[tokens[i]] = tokens[i + 1];
-        }
-        return dict;
-    }
-    
-    /**
-     * Handle mesh peers response
+     * Handle mesh peers data from mesh/peers datapoint (JSON array)
+     * Each peer has: hostname, ip, port, ssl, isLocal, status, workgroup, customFields
      */
     handleMeshPeers(result) {
         if (!result) return;
         
         try {
-            const peerStrings = this.parseTclList(result);
+            // mesh/peers is published as JSON by meshconf.tcl
+            let peers = result;
+            if (typeof result === 'string') {
+                peers = JSON.parse(result);
+            }
+            
+            if (!Array.isArray(peers)) return;
             
             this.meshSystems.clear();
-            peerStrings.forEach(peerStr => {
-                const peer = this.parseTclDict(peerStr);
-                if (peer.id) {
-                    peer.ssl = peer.ssl === '1' || peer.ssl === 1;
-                    peer.isLocal = peer.isLocal === '1' || peer.isLocal === 1;
-                    this.meshSystems.set(peer.id, peer);
-                }
+            peers.forEach(peer => {
+                // Normalize field names for renderMenu
+                const key = peer.hostname || peer.ip || 'unknown';
+                const custom = peer.customFields || {};
+                
+                this.meshSystems.set(key, {
+                    hostname: peer.hostname || '',
+                    ip: peer.ip || '',
+                    port: peer.port || 2565,
+                    ssl: !!peer.ssl,
+                    isLocal: !!peer.isLocal,
+                    status: peer.status || 'idle',
+                    workgroup: peer.workgroup || '',
+                    subject: custom.subject || '',
+                    system: custom.system || '',
+                    protocol: custom.protocol || '',
+                    lastSeenAgo: peer.lastSeenAgo || 0
+                });
             });
             
             this.renderMenu();
@@ -231,7 +153,7 @@ class MeshDropdown {
             return window.location.href;
         }
         const protocol = sys.ssl ? 'https' : 'http';
-        const port = sys.webPort || 2565;
+        const port = sys.port || 2565;
         return `${protocol}://${sys.ip}:${port}${this.options.guiPath}`;
     }
     
@@ -244,25 +166,24 @@ class MeshDropdown {
             return;
         }
         
-        // Sort: local first, then by name
+        // Sort: local first, then by hostname
         const sorted = Array.from(this.meshSystems.values()).sort((a, b) => {
             if (a.isLocal && !b.isLocal) return -1;
             if (!a.isLocal && b.isLocal) return 1;
-            return (a.name || a.id).localeCompare(b.name || b.id);
+            return (a.hostname).localeCompare(b.hostname);
         });
         
-        // Update label with local system name
+        // Update button label with local system name
         const local = sorted.find(s => s.isLocal);
         if (local) {
-            const displayName = this.formatName(local.name || local.id);
-            this.elements.label.textContent = displayName;
+            this.elements.label.textContent = this.formatName(local.hostname);
         }
         
         // Render menu items
         this.elements.menu.innerHTML = sorted.map(sys => {
             const url = this.getSystemUrl(sys);
             const status = sys.status || 'idle';
-            const displayName = this.formatName(sys.name || sys.id);
+            const displayName = this.formatName(sys.hostname);
             const target = sys.isLocal ? '_self' : (this.options.openInNewTab ? '_blank' : '_self');
             
             let badges = '';
@@ -316,19 +237,22 @@ class MeshDropdown {
     }
     
     /**
-     * Manually refresh mesh peers
+     * Manually refresh mesh peers (touch the datapoint)
      */
     refresh() {
-        this.fetchMeshPeers();
+        if (this.connection?.connected && this.connection?.ws) {
+            this.connection.ws.send(JSON.stringify({
+                cmd: 'eval',
+                script: 'catch {dservTouch mesh/peers}'
+            }));
+        }
     }
     
     /**
      * Destroy the component and cleanup
      */
     destroy() {
-        this.stopPolling();
         document.removeEventListener('click', this.closeHandler);
-        // Note: connection.off() would be needed if ws_manager supports it
         this.container.innerHTML = '';
     }
 }
