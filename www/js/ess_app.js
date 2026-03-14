@@ -63,6 +63,7 @@ async function init() {
         initMeshManager();
         initEyeSettings();
 	initProjectSelector();
+        initOpenEphysStatus();
         
         // Small delay to ensure subscriptions are registered on server
         // before we touch the datapoints
@@ -108,6 +109,7 @@ function requestInitialData() {
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile ess/sortby_columns ess/block_id
           em/settings mesh/peers
+          openephys/status
           system/hostname system/os
           configs/list configs/tags configs/quick_picks configs/current
           configs/remote_servers
@@ -222,6 +224,36 @@ function initProjectSelector() {
         window.projectSelector = projectSelector;  // For debugging
         log('Project Selector initialized', 'info');
     }
+}
+
+/**
+ * Initialize Open Ephys status indicator
+ * Hidden by default; appears only when openephys subprocess publishes status
+ */
+function initOpenEphysStatus() {
+    const container = document.getElementById('openephys-status');
+    if (!container) return;
+
+    container.innerHTML = '<div class="ess-oe-dot"></div><span class="ess-oe-label"></span>';
+    const label = container.querySelector('.ess-oe-label');
+
+    dpManager.subscribe('openephys/status', (data) => {
+        const mode = (data.value || '').toUpperCase();
+
+        if (!mode || mode === 'DISCONNECTED') {
+            container.className = 'ess-oe-status';
+            return;
+        }
+
+        let stateClass = 'idle';
+        if (mode === 'ACQUIRE') stateClass = 'acquiring';
+        else if (mode === 'RECORD') stateClass = 'recording';
+
+        container.className = `ess-oe-status active ${stateClass}`;
+        label.textContent = `OE: ${mode}`;
+    });
+
+    log('Open Ephys status initialized', 'info');
 }
 
 /**
@@ -403,7 +435,7 @@ function initMeshManager() {
         if (container) {
             meshDropdown = new MeshDropdown(container, connection, {
                 guiPath: '/ess_control.html',
-                pollInterval: 5000
+                dpManager: dpManager
             });
         }
     }

@@ -119,6 +119,37 @@ body.ess-app {
     animation: pulse 1s infinite;
 }
 
+/* Open Ephys status indicator */
+.ess-oe-status {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--ess-text-muted);
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: var(--ess-bg-panel);
+}
+
+.ess-oe-status.active {
+    display: flex;
+}
+
+.ess-oe-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ess-text-muted);
+    flex-shrink: 0;
+}
+
+.ess-oe-status.idle .ess-oe-dot      { background: var(--ess-text-muted); }
+.ess-oe-status.acquiring .ess-oe-dot { background: var(--ess-warning); }
+.ess-oe-status.recording .ess-oe-dot {
+    background: var(--ess-success);
+    animation: pulse 1s infinite;
+}
+
 .ess-status-bar button {
     padding: 6px 12px;
     font-size: 12px;
