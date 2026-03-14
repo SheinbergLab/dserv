@@ -1,0 +1,8 @@
+#
+# Configuration for optional Open Ephys connection 
+#
+#   set oe_ipaddr "192.168.x.x"
+#   set oe_auto_record 1
+#   set oe_auto_acquire 1
+#   set oe_poll_interval 5000
+#   set oe_acquire_settle_ms 500
