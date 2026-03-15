@@ -47,11 +47,19 @@ func resolveHost(host string) string {
 	return addrs[0]
 }
 
+// hostPort formats a host:port address, wrapping IPv6 addresses in brackets.
+func hostPort(host string, port int) string {
+	if strings.Contains(host, ":") {
+		return fmt.Sprintf("[%s]:%d", host, port)
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
 // SendBinary sends a command using the binary message protocol (4-byte length prefix).
 // Used for dserv (port 2560) and STIM (port 4612).
 func SendBinary(host string, port int, msg string) (string, error) {
 	resolved := resolveHost(host)
-	addr := fmt.Sprintf("%s:%d", resolved, port)
+	addr := hostPort(resolved, port)
 	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
 	if err != nil {
 		return "", fmt.Errorf("connection to %s failed: %w", addr, err)
@@ -135,7 +143,7 @@ func DiscoverInterpreters(host string) ([]string, error) {
 // Used for %reg and %match commands.
 func SendText(host string, port int, cmd string) (string, error) {
 	resolved := resolveHost(host)
-	addr := fmt.Sprintf("%s:%d", resolved, port)
+	addr := hostPort(resolved, port)
 	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
 	if err != nil {
 		return "", fmt.Errorf("connection to %s failed: %w", addr, err)
@@ -153,7 +161,7 @@ func SendText(host string, port int, cmd string) (string, error) {
 // GetLocalIP determines our IP address as seen by the dserv host.
 func GetLocalIP(host string) (string, error) {
 	resolved := resolveHost(host)
-	addr := fmt.Sprintf("%s:%d", resolved, DservTextPort)
+	addr := hostPort(resolved, DservTextPort)
 	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
 	if err != nil {
 		return "", err
