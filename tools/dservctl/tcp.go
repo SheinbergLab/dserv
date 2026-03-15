@@ -26,6 +26,7 @@ var (
 
 // resolveHost resolves a hostname once and caches the result.
 // Returns the IP address, or the original string if it's already an IP.
+// Prefers IPv4 addresses since dserv typically binds to 0.0.0.0.
 func resolveHost(host string) string {
 	if net.ParseIP(host) != nil {
 		return host
@@ -43,8 +44,17 @@ func resolveHost(host string) string {
 		return host // fall back to original, let DialTimeout report the error
 	}
 
-	resolveCache[host] = addrs[0]
-	return addrs[0]
+	// Prefer IPv4 address if available
+	chosen := addrs[0]
+	for _, a := range addrs {
+		if net.ParseIP(a) != nil && net.ParseIP(a).To4() != nil {
+			chosen = a
+			break
+		}
+	}
+
+	resolveCache[host] = chosen
+	return chosen
 }
 
 // hostPort formats a host:port address, wrapping IPv6 addresses in brackets.
