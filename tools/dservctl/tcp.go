@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -15,12 +16,42 @@ const (
 	STIMPort       = 4612
 	ConnectTimeout = 5 * time.Second
 	ReadTimeout    = 30 * time.Second
+	ResolveTimeout = 15 * time.Second
 )
+
+var (
+	resolveCache   = map[string]string{}
+	resolveCacheMu sync.Mutex
+)
+
+// resolveHost resolves a hostname once and caches the result.
+// Returns the IP address, or the original string if it's already an IP.
+func resolveHost(host string) string {
+	if net.ParseIP(host) != nil {
+		return host
+	}
+
+	resolveCacheMu.Lock()
+	defer resolveCacheMu.Unlock()
+
+	if cached, ok := resolveCache[host]; ok {
+		return cached
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		return host // fall back to original, let DialTimeout report the error
+	}
+
+	resolveCache[host] = addrs[0]
+	return addrs[0]
+}
 
 // SendBinary sends a command using the binary message protocol (4-byte length prefix).
 // Used for dserv (port 2560) and STIM (port 4612).
 func SendBinary(host string, port int, msg string) (string, error) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	resolved := resolveHost(host)
+	addr := fmt.Sprintf("%s:%d", resolved, port)
 	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
 	if err != nil {
 		return "", fmt.Errorf("connection to %s failed: %w", addr, err)
@@ -103,7 +134,8 @@ func DiscoverInterpreters(host string) ([]string, error) {
 // SendText sends a command using the text protocol (newline-terminated) on port 4620.
 // Used for %reg and %match commands.
 func SendText(host string, port int, cmd string) (string, error) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	resolved := resolveHost(host)
+	addr := fmt.Sprintf("%s:%d", resolved, port)
 	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
 	if err != nil {
 		return "", fmt.Errorf("connection to %s failed: %w", addr, err)
@@ -120,7 +152,8 @@ func SendText(host string, port int, cmd string) (string, error) {
 
 // GetLocalIP determines our IP address as seen by the dserv host.
 func GetLocalIP(host string) (string, error) {
-	addr := fmt.Sprintf("%s:%d", host, DservTextPort)
+	resolved := resolveHost(host)
+	addr := fmt.Sprintf("%s:%d", resolved, DservTextPort)
 	conn, err := net.DialTimeout("tcp", addr, ConnectTimeout)
 	if err != nil {
 		return "", err
