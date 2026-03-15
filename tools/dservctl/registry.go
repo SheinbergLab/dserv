@@ -213,6 +213,37 @@ func (c *AgentClient) ExportZip(workgroup, system string) ([]byte, error) {
 	return data, err
 }
 
+// --- lib API ---
+
+// ListLibs returns shared libraries for a workgroup with checksums.
+func (c *AgentClient) ListLibs(workgroup string) ([]map[string]interface{}, error) {
+	result, err := c.Get(registryBase + "/libs?workgroup=" + url.QueryEscape(workgroup))
+	if err != nil {
+		return nil, err
+	}
+	return extractList(result, "libs"), nil
+}
+
+// GetLib retrieves a single library file.
+func (c *AgentClient) GetLib(workgroup, name, version string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/lib/%s/%s/%s",
+		registryBase,
+		url.PathEscape(workgroup),
+		url.PathEscape(name),
+		url.PathEscape(version))
+	return c.Get(path)
+}
+
+// SaveLib commits a library file to the registry.
+func (c *AgentClient) SaveLib(workgroup, name, version string, req map[string]interface{}) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/lib/%s/%s/%s",
+		registryBase,
+		url.PathEscape(workgroup),
+		url.PathEscape(name),
+		url.PathEscape(version))
+	return c.Do("PUT", path, req)
+}
+
 // --- helpers ---
 
 func extractList(result map[string]interface{}, key string) []map[string]interface{} {
