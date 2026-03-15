@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // runSyncStatus compares local scripts against the registry and reports
@@ -128,7 +129,7 @@ func runSyncStatus(cfg *Config, args []string) int {
 		if !entry.IsDir() {
 			// System-level file
 			relPath := entry.Name()
-			if !seen[relPath] && !isHiddenFile(relPath) {
+			if !seen[relPath] && !shouldIgnoreFile(relPath) {
 				entries = append(entries, statusEntry{
 					relPath:  relPath,
 					protocol: "_",
@@ -148,7 +149,7 @@ func runSyncStatus(cfg *Config, args []string) int {
 					continue
 				}
 				relPath := filepath.Join(proto, sub.Name())
-				if !seen[relPath] {
+				if !seen[relPath] && !shouldIgnoreFile(sub.Name()) {
 					entries = append(entries, statusEntry{
 						relPath:  relPath,
 						protocol: proto,
@@ -218,4 +219,25 @@ func runSyncStatus(cfg *Config, args []string) int {
 
 func isHiddenFile(name string) bool {
 	return len(name) > 0 && name[0] == '.'
+}
+
+// shouldIgnoreFile returns true for files that should be excluded from
+// local-only status reporting: hidden files, editor backups, OS metadata.
+func shouldIgnoreFile(name string) bool {
+	if isHiddenFile(name) {
+		return true
+	}
+	if strings.HasSuffix(name, "~") {
+		return true
+	}
+	if strings.HasSuffix(name, ".swp") || strings.HasSuffix(name, ".swo") {
+		return true
+	}
+	if name == "Thumbs.db" || name == "desktop.ini" {
+		return true
+	}
+	if strings.HasPrefix(name, "#") && strings.HasSuffix(name, "#") {
+		return true
+	}
+	return false
 }
