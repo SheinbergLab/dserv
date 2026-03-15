@@ -248,11 +248,17 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 			filename = scriptType
 		}
 
+		// Normalize empty protocol to "_system" to match server's key format
+		checksumProto := protocol
+		if checksumProto == "" || checksumProto == "_" {
+			checksumProto = "_system"
+		}
+
 		localPath := localFilePath(dir, protocol, filename)
 		data, err := os.ReadFile(localPath)
 		if err == nil {
 			hash := sha256.Sum256(data)
-			localChecksums[protocol+"/"+scriptType] = fmt.Sprintf("%x", hash)
+			localChecksums[checksumProto+"/"+scriptType] = fmt.Sprintf("%x", hash)
 		}
 	}
 
