@@ -38,8 +38,10 @@ func init() {
 		{"templates", "List, add, or seed templates", runTemplates},
 		{"sandbox", "Manage sandboxes (create/promote/sync/delete)", runSandbox},
 		{"export", "Export workgroup or system as ZIP", runExport},
-		{"sync", "Sync scripts from registry to local directory", runSync},
+		{"sync", "Sync scripts from registry (or --all for entire workgroup)", runSync},
 		{"push", "Push locally modified scripts to registry", runPush},
+		{"diff", "Compare local scripts against registry", runSyncStatus},
+		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
 		{"version", "Show version", runVersion},
 		{"help", "Show help", nil},
 	}
@@ -98,8 +100,13 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl script get sys proto type > f.tcl    Download script\n")
 	fmt.Fprintf(os.Stderr, "  dservctl script save sys proto type -f f.tcl  Upload script\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sync prf --dir ./prf                 Pull scripts to local dir\n")
+	fmt.Fprintf(os.Stderr, "  dservctl sync --all --dir ./systems            Pull all systems + libs\n")
 	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf -m \"fix bug\"    Push local changes to registry\n")
 	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf --dry-run       Preview what would be pushed\n")
+	fmt.Fprintf(os.Stderr, "  dservctl diff prf --dir ./prf                 Show modified/synced status\n")
+	fmt.Fprintf(os.Stderr, "  dservctl libs list                            List shared libraries\n")
+	fmt.Fprintf(os.Stderr, "  dservctl libs sync --dir ./lib                Pull libs from registry\n")
+	fmt.Fprintf(os.Stderr, "  dservctl libs push --dir ./lib -m \"update\"    Push changed libs\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
 	fmt.Fprintf(os.Stderr, "  dservctl templates seed /path/to/systems      Seed templates from filesystem\n")
 	fmt.Fprintf(os.Stderr, "  dservctl systems delete sys                   Delete a system and its scripts\n")
