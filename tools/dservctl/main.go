@@ -38,7 +38,8 @@ func init() {
 		{"templates", "List, add, or seed templates", runTemplates},
 		{"sandbox", "Manage sandboxes (create/promote/sync/delete)", runSandbox},
 		{"export", "Export workgroup or system as ZIP", runExport},
-		{"sync", "Sync scripts with local directory", runSync},
+		{"sync", "Sync scripts from registry to local directory", runSync},
+		{"push", "Push locally modified scripts to registry", runPush},
 		{"version", "Show version", runVersion},
 		{"help", "Show help", nil},
 	}
@@ -59,6 +60,17 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  -r, --registry URL      ESS registry URL (env: DSERV_REGISTRY, or auto-discovered)\n")
 	fmt.Fprintf(os.Stderr, "  --json                  Output JSON\n")
 	fmt.Fprintf(os.Stderr, "  --verbose               Verbose output\n\n")
+	fmt.Fprintf(os.Stderr, "Configuration:\n")
+	fmt.Fprintf(os.Stderr, "  Settings are loaded in order (later overrides earlier):\n")
+	fmt.Fprintf(os.Stderr, "    1. ~/.dservctl config file\n")
+	fmt.Fprintf(os.Stderr, "    2. Environment variables (DSERV_HOST, DSERV_WORKGROUP, etc.)\n")
+	fmt.Fprintf(os.Stderr, "    3. Command-line flags\n\n")
+	fmt.Fprintf(os.Stderr, "  Config file format (~/.dservctl):\n")
+	fmt.Fprintf(os.Stderr, "    registry: https://dserv.net\n")
+	fmt.Fprintf(os.Stderr, "    workgroup: brown-sheinberg\n")
+	fmt.Fprintf(os.Stderr, "    user: david\n")
+	fmt.Fprintf(os.Stderr, "    host: localhost\n")
+	fmt.Fprintf(os.Stderr, "    token: my-secret-token\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	maxLen := 0
 	for _, c := range commands {
@@ -84,6 +96,10 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl touch ess/em_pos                    Touch (notify subscribers)\n")
 	fmt.Fprintf(os.Stderr, "  dservctl listen \"ess/*\"                       Stream datapoint updates\n")
 	fmt.Fprintf(os.Stderr, "  dservctl script get sys proto type > f.tcl    Download script\n")
+	fmt.Fprintf(os.Stderr, "  dservctl script save sys proto type -f f.tcl  Upload script\n")
+	fmt.Fprintf(os.Stderr, "  dservctl sync prf --dir ./prf                 Pull scripts to local dir\n")
+	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf -m \"fix bug\"    Push local changes to registry\n")
+	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf --dry-run       Preview what would be pushed\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
 	fmt.Fprintf(os.Stderr, "  dservctl templates seed /path/to/systems      Seed templates from filesystem\n")
 	fmt.Fprintf(os.Stderr, "  dservctl systems delete sys                   Delete a system and its scripts\n")
