@@ -136,14 +136,10 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   };
 
   if (!strcmp(name, "state") && pinfo->pval) {
-    inside = check_state(p, win);
-    if (inside)
-      *pinfo->pval = "0";	/* touches are one shot so always false */
-    else
-      *pinfo->pval = "0";
+    *pinfo->pval = "0";  /* touches are one-shot, state only via onProcess */
     return 1;
-  }
-    
+  }  
+  
   result_str = puGetParamEntry(&params[0], name);
   if (result_str && pinfo->pval) {
     *pinfo->pval = result_str;
