@@ -49,16 +49,6 @@ if {[info exists ::env(ESS_WORKGROUP)]} {
     ess::registry::configure -workgroup $::env(ESS_WORKGROUP)
 }
 
-#
-# TODO: set data dir based on user settings
-#
-foreach d "/shared/qpcs/data/essdat" {
-    if { [file exists $d] } {
-	set ess::data_dir $d
-	break
-    }
-}
-
 # start analog input if available
 catch { ainStart 1 }
 # if we didn't find an A/D still setup 2 channels for virtual inputs
