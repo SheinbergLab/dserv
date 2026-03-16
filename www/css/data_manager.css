@@ -96,6 +96,27 @@
     border-radius: 4px;
 }
 
+.dm-data-dir {
+    color: #8b949e;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    padding: 4px 10px;
+    background: #21262d;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: default;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dm-data-dir.dm-data-dir-warn {
+    color: #d29922;
+    border-color: #d29922;
+    background: #2d2200;
+}
+
 .dm-scan-btn {
     padding: 6px 12px;
     background: #21262d;

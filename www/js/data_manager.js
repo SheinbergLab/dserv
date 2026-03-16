@@ -134,6 +134,18 @@ async function loadStats() {
         document.getElementById('data-summary').textContent = 
             `${stats.total_files} files, ${totalObs.toLocaleString()} obs, ${totalTrials.toLocaleString()} trials`;
         
+        // Show data directory with warning if temporary
+        const dirEl = document.getElementById('data-dir-display');
+        const dataDir = stats.data_dir || '';
+        if (dataDir) {
+            const isTemp = dataDir.startsWith('/tmp');
+            dirEl.textContent = dataDir;
+            dirEl.classList.toggle('dm-data-dir-warn', isTemp);
+            dirEl.title = isTemp
+                ? `⚠ Data is stored in ${dataDir} (temporary — will be lost on reboot). Set ESS_DATA_DIR to use a persistent location.`
+                : `Data directory: ${dataDir}`;
+        }
+        
     } catch (e) {
         log(`Failed to load stats: ${e.message}`, 'error');
     }
