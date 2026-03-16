@@ -1153,6 +1153,12 @@ namespace eval ess {
         return $subject_ids
     }
 
+    # Return the current data directory from the ess/data_dir datapoint.
+    # This is the single source of truth for where .ess files are stored.
+    proc get_data_dir {} {
+        return [dservGet ess/data_dir]
+    }
+
     proc init {} {
         dservRemoveAllMatches
         dpointRemoveAllScripts
@@ -1641,7 +1647,6 @@ namespace eval ess {
         variable current
         variable open_datafile
         variable subject_id
-        variable data_dir
 
         # get all open files
         set open_files [::ess::open_files]
@@ -1651,6 +1656,7 @@ namespace eval ess {
             return -1
         }
 
+        set data_dir [get_data_dir]
         set filename [file join $data_dir $f.ess]
         if {!$overwrite} {
             if {[file exists $filename]} {
@@ -1768,21 +1774,21 @@ namespace eval ess {
     }    
     
     proc file_load_ess {f} {
-	variable data_dir
+        set data_dir [get_data_dir]
         set infile [file join $data_dir $f.ess]
         set g [dslog::readESS $infile]
 	return $g
     }
     
     proc ess_to_dgz {f g} {
-	variable data_dir
+        set data_dir [get_data_dir]
         set dgz_dir [regsub essdat $data_dir dgzdat]
 	set outfile [file join $dgz_dir $f.dgz]
 	dg_write $g $outfile
     }
     
     proc ess_to_json {f g} {
-        variable data_dir
+        set data_dir [get_data_dir]
         set json_dir [regsub essdat $data_dir jsondat]
         set outfile [file join $json_dir $f.json]
 	
@@ -3376,10 +3382,14 @@ namespace eval ess {
     # publish so other processes can access
     dservSet ess/system_path $system_path    
 
+    # Data directory: set from environment, publish as datapoint.
+    # The ess/data_dir datapoint is the single source of truth at runtime;
+    # all code should use get_data_dir (reads the datapoint) not the variable.
     if {[info exists ::env(ESS_DATA_DIR)]} {
         variable data_dir $::env(ESS_DATA_DIR)
     } else {
         variable data_dir /tmp/essdat
+        puts "WARNING: ESS_DATA_DIR not set, using $data_dir (data will not persist across reboots)"
     }
     if {![file exists $data_dir]} {
 	mkdir_matching_owner $data_dir
