@@ -28,6 +28,10 @@ func runPush(cfg *Config, args []string) int {
 	}
 
 	system := args[0]
+	if system == "--all" || system == "-a" {
+		PrintError("push operates on a single system (e.g., dservctl push prf --dir ./prf)")
+		return 2
+	}
 	dir := "."
 	version := ""
 	comment := ""
