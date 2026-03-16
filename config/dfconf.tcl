@@ -1073,6 +1073,8 @@ proc get_stats {} {
     set error_count [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE status IN ('error', 'obs_only')}]
     set exported_count [dfdb eval {SELECT COUNT(*) FROM datafiles WHERE exported = 1}]
     
+    set data_dir [get_ess_dir]
+    
     set json [yajl create #auto]
     $json map_open
     $json string "total_files" number $total_files
@@ -1081,6 +1083,7 @@ proc get_stats {} {
     $json string "ok" number $ok_count
     $json string "errors" number $error_count
     $json string "exported" number $exported_count
+    $json string "data_dir" string $data_dir
     $json map_close
     set result [$json get]
     $json delete
