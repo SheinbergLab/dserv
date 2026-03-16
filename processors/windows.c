@@ -171,11 +171,7 @@ int getProcessParams(dpoint_process_param_setting_t *pinfo)
   };
 
   if (!strcmp(name, "state") && pinfo->pval) {
-    inside = check_state(p, win);
-    if (inside)
-      *pinfo->pval = "1";
-    else
-      *pinfo->pval = "0";
+    *pinfo->pval = (p->state[win] == WINDOW_IN) ? "1" : "0";
     return 1;
   }
     
