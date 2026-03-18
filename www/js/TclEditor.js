@@ -39,7 +39,7 @@ class TclEditor {
 
   async _initEditor() {
     // Import CodeMirror modules
-    const { EditorState } = await import('https://esm.sh/@codemirror/state@6');
+    const { EditorState, Compartment } = await import('https://esm.sh/@codemirror/state@6');
     const { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } = await import('https://esm.sh/@codemirror/view@6');
     const { defaultKeymap, history, historyKeymap, indentWithTab } = await import('https://esm.sh/@codemirror/commands@6');
     const { syntaxHighlighting, defaultHighlightStyle, bracketMatching, StreamLanguage } = await import('https://esm.sh/@codemirror/language@6');
@@ -49,7 +49,10 @@ class TclEditor {
     const { searchKeymap, highlightSelectionMatches } = await import('https://esm.sh/@codemirror/search@6');
 
     // Store references for later use
-    this._cm = { EditorState, EditorView, keymap, StreamLanguage, acceptCompletion, completionStatus, startCompletion };
+    this._cm = { EditorState, EditorView, keymap, StreamLanguage, acceptCompletion, completionStatus, startCompletion, Compartment };
+
+    // Read-only compartment (starts editable)
+    this._readOnlyCompartment = new Compartment();
 
     // Build extensions
     const extensions = [
@@ -67,6 +70,7 @@ class TclEditor {
         override: [this._completionSource.bind(this)],
         defaultKeymap: false  // We'll handle Tab ourselves
       }),
+      this._readOnlyCompartment.of(EditorState.readOnly.of(false)),
     ];
 
     // Custom keybindings
@@ -442,16 +446,37 @@ class TclEditor {
         this._cm.startCompletion(this.view);
         break;
 
-      case 'copy':
-        document.execCommand('copy');
+      case 'copy': {
+        const sel = this.view.state.selection.main;
+        if (!sel.empty) {
+          const text = this.view.state.doc.sliceString(sel.from, sel.to);
+          navigator.clipboard.writeText(text);
+        }
         break;
+      }
 
-      case 'cut':
-        document.execCommand('cut');
+      case 'cut': {
+        const sel = this.view.state.selection.main;
+        if (!sel.empty) {
+          const text = this.view.state.doc.sliceString(sel.from, sel.to);
+          navigator.clipboard.writeText(text);
+          this.view.dispatch({
+            changes: { from: sel.from, to: sel.to, insert: '' },
+          });
+        }
         break;
+      }
 
       case 'paste':
-        document.execCommand('paste');
+        navigator.clipboard.readText().then(text => {
+          if (text) {
+            const sel = this.view.state.selection.main;
+            this.view.dispatch({
+              changes: { from: sel.from, to: sel.to, insert: text },
+              selection: { anchor: sel.from + text.length },
+            });
+          }
+        });
         break;
     }
   }
@@ -1027,6 +1052,15 @@ class TclEditor {
 
   getValue() {
     return this.view ? this.view.state.doc.toString() : '';
+  }
+
+  setReadOnly(readOnly) {
+    if (!this.view || !this._readOnlyCompartment) return;
+    this.view.dispatch({
+      effects: this._readOnlyCompartment.reconfigure(
+        this._cm.EditorState.readOnly.of(readOnly)
+      ),
+    });
   }
 
   focus() {

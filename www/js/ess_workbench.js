@@ -1030,6 +1030,18 @@ class ESSWorkbench {
         } catch (e) {
             console.error('Failed to initialize editor:', e);
         }
+
+        // Editors start read-only until a user is selected
+        this.updateEditorsReadOnly();
+    }
+
+    updateEditorsReadOnly() {
+        const hasUser = !!this.currentUser || !!document.getElementById('user-select')?.value;
+        const readOnly = !hasUser;
+
+        this.editor?.setReadOnly(readOnly);
+        this.variantScriptEditor?.setReadOnly(readOnly);
+        this.loaderScriptEditor?.setReadOnly(readOnly);
     }
 
     async selectScript(scriptName) {

@@ -149,6 +149,7 @@ const RegistryPlugin = {
                 if (wb.registry) {
                     wb.registry.setUser(wb.currentUser);
                 }
+                wb.updateEditorsReadOnly();
             });
         }
 

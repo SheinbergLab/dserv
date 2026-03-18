@@ -114,6 +114,7 @@ const OverlayPlugin = {
         const userSelect = document.getElementById('user-select');
         userSelect?.addEventListener('change', (e) => {
             this._setOverlayUser(wb, e.target.value);
+            wb.updateEditorsReadOnly();
         });
 
         // Promote/discard buttons (delegated)
