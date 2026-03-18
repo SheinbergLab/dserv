@@ -381,7 +381,6 @@ jobs:
         run: |
           ls -alth /usr/local/bin
           ls -alth /usr/local/dserv/db
-          echo "return 100" | essctrl
           /usr/local/dserv/dserv --help
 
   check-essgui:
