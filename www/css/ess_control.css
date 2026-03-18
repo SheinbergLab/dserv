@@ -1381,7 +1381,7 @@ body.ess-app {
 @media (min-width: 1400px) {
     .ess-container {
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: min-content 1fr;
         grid-template-rows: auto 1fr;
         height: 100vh;
         padding: 8px;
@@ -1404,7 +1404,7 @@ body.ess-app {
     .ess-bottom-panel {
         grid-column: 2;
         grid-row: 2;
-        width: 360px;
+        min-width: 360px;
         height: auto !important;
         flex-shrink: unset;
     }
