@@ -27,6 +27,9 @@ class DservConnection {
         this.pendingRequests = new Map();
         this.requestId = 0;
         this.linkedSubprocess = null;
+
+        // Chunked message reassembly
+        this._chunks = new Map(); // messageId -> { chunks: [], totalChunks, timer }
         
         // Event handlers for event emitter pattern
         this.eventHandlers = new Map();
@@ -244,7 +247,36 @@ class DservConnection {
         } catch (e) {
             data = rawData;
         }
-        
+
+        // Chunked message reassembly (server splits messages > 2MB)
+        if (typeof data === 'object' && data.isChunkedMessage) {
+            const { messageId, chunkIndex, totalChunks } = data;
+            if (!this._chunks.has(messageId)) {
+                this._chunks.set(messageId, {
+                    chunks: new Array(totalChunks),
+                    totalChunks,
+                    received: 0,
+                    timer: setTimeout(() => {
+                        console.warn('Chunk reassembly timeout for', messageId);
+                        this._chunks.delete(messageId);
+                    }, 60000),
+                });
+            }
+            const entry = this._chunks.get(messageId);
+            entry.chunks[chunkIndex] = data.data;
+            entry.received++;
+
+            if (entry.received < entry.totalChunks) {
+                return; // Wait for remaining chunks
+            }
+
+            // All chunks received - reassemble and re-enter handleMessage
+            clearTimeout(entry.timer);
+            const assembled = entry.chunks.join('');
+            this._chunks.delete(messageId);
+            return this.handleMessage(assembled);
+        }
+
         // Determine if this is a datapoint message (should NOT resolve pending requests)
         const isDatapoint = typeof data === 'object' && data.name && 
                            (data.data !== undefined || data.value !== undefined);
