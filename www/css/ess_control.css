@@ -166,15 +166,14 @@ body.ess-app {
 }
 
 /* ===========================================
-   Main Grid Layout - 4 Columns
+   Main Grid Layout - 3 Columns
    Col 1: Experiment Control (280px fixed)
    Col 2: Eye/Touch + Input Controls (295px fixed)
    Col 3: Stimulus + Performance (500px fixed)
-   Col 4: Extra/Info (flex)
    =========================================== */
 .ess-grid {
     display: grid;
-    grid-template-columns: 280px 295px 500px 1fr;
+    grid-template-columns: 280px 295px 500px;
     gap: 8px;
     flex: 1;
     min-height: 0;
@@ -193,10 +192,6 @@ body.ess-app {
 }
 
 /* Middle column - Eye/Touch fixed, Input Controls flex */
-.ess-column-middle {
-    width: 295px;
-}
-
 .ess-panel-eyetouch {
     flex: 0 0 auto; /* Don't grow or shrink */
 }
@@ -207,10 +202,6 @@ body.ess-app {
 }
 
 /* Right column - Stim fixed height, Performance flex */
-.ess-column-right {
-    width: 500px;
-}
-
 .ess-panel-stim {
     flex: 0 0 auto; /* Don't grow or shrink */
 }
