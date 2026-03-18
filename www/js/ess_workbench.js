@@ -1776,9 +1776,10 @@ class ESSWorkbench {
         });
         
         this.variantEditorPending = false;
-        
+
         this.setupCursorTracking();
-        
+        this.updateEditorsReadOnly();
+
         return this.variantScriptEditor.view !== null;
     }
     
@@ -2774,6 +2775,7 @@ class ESSWorkbench {
 
         // Setup modification tracking
         this.setupLoaderCursorTracking();
+        this.updateEditorsReadOnly();
 
         return this.loaderScriptEditor.view !== null;
     }
