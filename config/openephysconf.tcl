@@ -334,7 +334,7 @@ proc on_datafile_opened {datafile} {
 
     # Set the filename and start a new recording directory
     if {[catch {
-        oe_set_recording_config -prepend $datafile -new_dir true
+        oe_set_recording_config -prepend ${datafile}_ -new_dir true
     } err]} {
         puts "openephys: WARNING: Failed to set recording config: $err"
         return
