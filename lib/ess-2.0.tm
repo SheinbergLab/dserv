@@ -2904,20 +2904,24 @@ namespace eval ess {
 			 {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
 			 {*}$args]
 
-	    # request GPIO input with edge detection
-	    gpioLineRequestInput $pin BOTH \
-		[dict get $opts debounce_us] \
-		[dict get $opts pull] \
-		[dict get $opts active]
+	    # attempt GPIO setup — falls back to simulation if no hardware
+	    try {
+		gpioLineRequestInput $pin BOTH \
+		    [dict get $opts debounce_us] \
+		    [dict get $opts pull] \
+		    [dict get $opts active]
 
-	    # subscribe and set callback
-	    dservAddExactMatch gpio/input/$pin
-	    dservTouch gpio/input/$pin
-	    dpointSetScript gpio/input/$pin [list ::ess::button_process $chan]
+		dservAddExactMatch gpio/input/$pin
+		dservTouch gpio/input/$pin
+		dpointSetScript gpio/input/$pin \
+		    [list ::ess::button_process $chan]
 
-	    set buttons(pin,$chan) $pin
-	    if {![dservExists gpio/input/$pin]} {
-		dservSet gpio/input/$pin 0
+		set buttons(pin,$chan) $pin
+		if {![dservExists gpio/input/$pin]} {
+		    dservSet gpio/input/$pin 0
+		}
+	    } on error {msg} {
+		ess_log "button_init: no GPIO for pin $pin (simulation mode): $msg"
 	    }
 	}
 
