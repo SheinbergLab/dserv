@@ -2951,9 +2951,13 @@ namespace eval ess {
     }
 
     # Simulate a button press/release for testing without hardware
+    # Only triggers state machine on actual state change (edge-triggered)
     proc button_simulate {chan val} {
 	variable buttons
 	set val [expr {int($val) != 0}]
+	if {[info exists buttons(state,$chan)] && $buttons(state,$chan) == $val} {
+	    return
+	}
 	set buttons(state,$chan) $val
 	dservSet ess/button/$chan $val
 	do_update
