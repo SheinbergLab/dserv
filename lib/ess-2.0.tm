@@ -3755,7 +3755,10 @@ namespace eval ess {
 		if { [namespace exists ::ess::${sysname}] } {
 		    namespace delete ::ess::${sysname}
 		}
-                source $fname
+                if {[catch {source $fname} err]} {
+                    ess_error "Failed to load system $sysname: $err" "system"
+                    continue
+                }
                 lappend systems $sysname
             }
         }
@@ -3777,7 +3780,10 @@ namespace eval ess {
 		if { [namespace exists ::ess::${s}::${protoname}] } {
 		    namespace delete ::ess::${s}::${protoname}
 		}
-                source $fname
+                if {[catch {source $fname} err]} {
+                    ess_error "Failed to load protocol $protoname: $err" "system"
+                    continue
+                }
                 lappend protocols $protoname
             }
         }
@@ -3787,9 +3793,15 @@ namespace eval ess {
     proc find_variants {s p} {
         variable current
         set loader_file [ess::paths::resolve [ess::paths::relpath $s $p loaders]]
-        source $loader_file
+        if {[catch {source $loader_file} err]} {
+            ess_error "Failed to load loaders for $s/$p: $err" "system"
+            error "Failed to load loaders for $s/$p: $err"
+        }
         set variant_file [ess::paths::resolve [ess::paths::relpath $s $p variants]]
-        source $variant_file
+        if {[catch {source $variant_file} err]} {
+            ess_error "Failed to load variants for $s/$p: $err" "system"
+            error "Failed to load variants for $s/$p: $err"
+        }
         return [dict keys [set ::ess::${s}::${p}::variants]]
     }
 
