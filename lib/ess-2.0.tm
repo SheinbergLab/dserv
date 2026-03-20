@@ -2904,7 +2904,7 @@ namespace eval ess {
 			 {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
 			 {*}$args]
 
-	    # attempt GPIO setup — falls back to simulation if no hardware
+	    # attempt GPIO setup - falls back to simulation if no hardware
 	    try {
 		gpioLineRequestInput $pin BOTH \
 		    [dict get $opts debounce_us] \
@@ -2932,6 +2932,19 @@ namespace eval ess {
 	if {$chan >= $buttons(n_channels)} {
 	    set buttons(n_channels) [expr {$chan + 1}]
 	}
+
+	# publish active channel list so UI can show virtual buttons
+	button_publish_channels
+    }
+
+    # Publish list of initialized button channels to ess/buttons/channels
+    proc button_publish_channels {} {
+	variable buttons
+	set channels {}
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    lappend channels $i
+	}
+	dservSet ess/buttons/channels $channels
     }
 
     # Check if a specific button channel is pressed
@@ -2972,6 +2985,7 @@ namespace eval ess {
 	    }
 	}
 	set buttons(n_channels) 0
+	dservSet ess/buttons/channels {}
     }
 }
 

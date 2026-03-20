@@ -20,6 +20,7 @@ let essControl = null;
 let eyeTouchViz = null;
 let stimRenderer = null;
 let eyeSettings = null;
+let buttonControls = null;
 let projectSelector = null;
 
 // Console logging
@@ -62,6 +63,7 @@ async function init() {
         initPerformanceDisplay();
         initMeshManager();
         initEyeSettings();
+        initButtonControls();
 	initProjectSelector();
         initOpenEphysStatus();
         
@@ -108,6 +110,7 @@ function requestInitialData() {
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile ess/sortby_columns ess/block_id
+          ess/buttons/channels
           em/settings mesh/peers
           openephys/status
           system/hostname system/os
@@ -211,6 +214,16 @@ function initEyeSettings() {
         eyeSettings = new EyeSettings(dpManager);
         window.eyeSettings = eyeSettings;
         log('Eye Settings initialized', 'info');
+    }
+}
+
+/**
+ * Initialize virtual button controls
+ */
+function initButtonControls() {
+    if (typeof ButtonControls !== 'undefined') {
+        buttonControls = new ButtonControls(dpManager);
+        log('Button Controls initialized', 'info');
     }
 }
 

@@ -93,7 +93,12 @@
                                     </div>
                                 </div>
                             </div>
-                            <!-- More input sections can be added here -->
+                            <!-- Virtual Buttons (shown when buttons are initialized) -->
+                            <div id="virtual-buttons-section" class="ess-input-section" style="display: none;">
+                                <div class="ess-input-section-title">Buttons</div>
+                                <div id="virtual-buttons-container" class="ess-button-row">
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -288,8 +293,104 @@
              return result;
          }
      }
+
+     class ButtonControls {
+         constructor(dpManager) {
+             this.dpManager = dpManager;
+             this.section = document.getElementById('virtual-buttons-section');
+             this.container = document.getElementById('virtual-buttons-container');
+             this.channels = [];
+             this.setupSubscriptions();
+         }
+
+         sendEssCommand(cmd) {
+             try {
+                 const conn = this.dpManager?.connection;
+                 if (conn && conn.connected && conn.ws) {
+                     conn.ws.send(`send ess {${cmd}}`);
+                 }
+             } catch (error) {
+                 console.error('Failed to send ess command:', error);
+             }
+         }
+
+         setupSubscriptions() {
+             // Show/hide based on which button channels are initialized
+             this.dpManager?.subscribe('ess/buttons/channels', (data) => {
+                 this.updateChannels(data.value);
+             });
+
+             // Track button state changes for visual feedback
+             this.dpManager?.subscribe('ess/button/*', (data) => {
+                 const chan = data.name.split('/').pop();
+                 this.updateButtonState(chan, data.value);
+             });
+         }
+
+         updateChannels(value) {
+             // Parse channel list from Tcl list string
+             const str = (value || '').toString().trim();
+             this.channels = str ? str.split(/\s+/).map(Number) : [];
+
+             if (this.channels.length === 0) {
+                 this.section.style.display = 'none';
+                 return;
+             }
+
+             this.renderButtons();
+             this.section.style.display = '';
+         }
+
+         renderButtons() {
+             this.container.innerHTML = '';
+             this.channels.forEach(ch => {
+                 const btn = document.createElement('button');
+                 btn.className = 'ess-virtual-btn';
+                 btn.textContent = `Button ${ch}`;
+                 btn.dataset.channel = ch;
+
+                 // Press on mousedown/touchstart, release on mouseup/touchend
+                 btn.addEventListener('mousedown', (e) => {
+                     e.preventDefault();
+                     this.sendEssCommand(`::ess::button_simulate ${ch} 1`);
+                 });
+                 btn.addEventListener('mouseup', (e) => {
+                     e.preventDefault();
+                     this.sendEssCommand(`::ess::button_simulate ${ch} 0`);
+                 });
+                 btn.addEventListener('mouseleave', () => {
+                     // Release if mouse leaves while held
+                     if (btn.classList.contains('pressed')) {
+                         this.sendEssCommand(`::ess::button_simulate ${ch} 0`);
+                     }
+                 });
+
+                 // Touch support
+                 btn.addEventListener('touchstart', (e) => {
+                     e.preventDefault();
+                     this.sendEssCommand(`::ess::button_simulate ${ch} 1`);
+                 });
+                 btn.addEventListener('touchend', (e) => {
+                     e.preventDefault();
+                     this.sendEssCommand(`::ess::button_simulate ${ch} 0`);
+                 });
+
+                 this.container.appendChild(btn);
+             });
+         }
+
+         updateButtonState(chan, value) {
+             const btn = this.container?.querySelector(
+                 `[data-channel="${chan}"]`
+             );
+             if (btn) {
+                 const pressed = parseInt(value) !== 0;
+                 btn.classList.toggle('pressed', pressed);
+             }
+         }
+     }
     </script>
-    
+
     <script src="js/ESSPerformance.js"></script>
 
     <script src="js/ProjectSelector.js"></script>

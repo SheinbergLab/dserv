@@ -421,6 +421,38 @@ body.ess-app {
     background: var(--ess-border);
 }
 
+/* Virtual button controls */
+.ess-button-row {
+    display: flex;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+.ess-virtual-btn {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--ess-bg-panel);
+    border: 2px solid var(--ess-border);
+    border-radius: 6px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+    user-select: none;
+    text-align: center;
+}
+
+.ess-virtual-btn:hover {
+    border-color: var(--ess-accent, #4a9eff);
+}
+
+.ess-virtual-btn.pressed {
+    background: var(--ess-accent, #4a9eff);
+    border-color: var(--ess-accent, #4a9eff);
+    color: #fff;
+}
+
 /* ===========================================
    ESS Control Component Styles (unchanged)
    =========================================== */
