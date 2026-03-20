@@ -2868,6 +2868,99 @@ namespace eval ess {
 }
 
 ###############################################################################
+################################### buttons ###################################
+###############################################################################
+
+namespace eval ess {
+    variable buttons
+    array set buttons {
+	n_channels 0
+    }
+
+    # Process a button GPIO event: update ess datapoint and wake state machine
+    proc button_process {chan dpoint data} {
+	variable buttons
+	set val [expr {int($data) != 0}]
+	set buttons(state,$chan) $val
+	dservSet ess/button/$chan $val
+	do_update
+    }
+
+    # Initialize a button channel bound to a GPIO pin
+    #   chan  - channel index (0, 1, ...)
+    #   pin  - GPIO pin number
+    #   opts - optional dict: debounce_us (default 2500),
+    #          pull (default PULL_UP), active (default ACTIVE_LOW)
+    proc button_init {chan pin args} {
+	variable buttons
+
+	# parse options with defaults matching current protocol usage
+	set opts [dict merge {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
+		      {*}$args]
+
+	# request GPIO input with edge detection
+	gpioLineRequestInput $pin BOTH \
+	    [dict get $opts debounce_us] \
+	    [dict get $opts pull] \
+	    [dict get $opts active]
+
+	# subscribe and set callback
+	dservAddExactMatch gpio/input/$pin
+	dservTouch gpio/input/$pin
+	dpointSetScript gpio/input/$pin [list ::ess::button_process $chan]
+
+	# initialize state
+	set buttons(pin,$chan)   $pin
+	set buttons(state,$chan) 0
+	if {![dservExists gpio/input/$pin]} {
+	    dservSet gpio/input/$pin 0
+	}
+	dservSet ess/button/$chan 0
+
+	# track channel count
+	if {$chan >= $buttons(n_channels)} {
+	    set buttons(n_channels) [expr {$chan + 1}]
+	}
+    }
+
+    # Check if a specific button channel is pressed
+    proc button_pressed {chan} {
+	variable buttons
+	if {![info exists buttons(state,$chan)]} { return 0 }
+	return $buttons(state,$chan)
+    }
+
+    # Return first active button channel, or -1 if none
+    proc button_active {} {
+	variable buttons
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {$buttons(state,$i)} { return $i }
+	}
+	return -1
+    }
+
+    # Simulate a button press/release for testing without hardware
+    proc button_simulate {chan val} {
+	variable buttons
+	set val [expr {int($val) != 0}]
+	set buttons(state,$chan) $val
+	dservSet ess/button/$chan $val
+	do_update
+    }
+
+    # Clean up button subscriptions
+    proc button_deinit {} {
+	variable buttons
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {[info exists buttons(pin,$i)]} {
+		dservRemoveMatch gpio/input/$buttons(pin,$i)
+	    }
+	}
+	set buttons(n_channels) 0
+    }
+}
+
+###############################################################################
 ################################## em_windows #################################
 ###############################################################################
 
