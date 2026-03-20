@@ -2911,10 +2911,13 @@ namespace eval ess {
 		    [dict get $opts pull] \
 		    [dict get $opts active]
 
+		# create per-channel callback proc
+		proc ::ess::button_process_$chan {dpoint data} \
+		    "::ess::button_process $chan \$dpoint \$data"
+
 		dservAddExactMatch gpio/input/$pin
 		dservTouch gpio/input/$pin
-		dpointSetScript gpio/input/$pin \
-		    [list ::ess::button_process $chan]
+		dpointSetScript gpio/input/$pin ::ess::button_process_$chan
 
 		set buttons(pin,$chan) $pin
 		if {![dservExists gpio/input/$pin]} {
