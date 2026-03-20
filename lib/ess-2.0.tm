@@ -2886,36 +2886,40 @@ namespace eval ess {
 	do_update
     }
 
-    # Initialize a button channel bound to a GPIO pin
+    # Initialize a button channel, optionally bound to a GPIO pin
     #   chan  - channel index (0, 1, ...)
-    #   pin  - GPIO pin number
+    #   pin  - GPIO pin number (optional: omit for simulation-only channel)
     #   opts - optional dict: debounce_us (default 2500),
     #          pull (default PULL_UP), active (default ACTIVE_LOW)
-    proc button_init {chan pin args} {
+    proc button_init {chan {pin {}} args} {
 	variable buttons
 
-	# parse options with defaults matching current protocol usage
-	set opts [dict merge {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
-		      {*}$args]
-
-	# request GPIO input with edge detection
-	gpioLineRequestInput $pin BOTH \
-	    [dict get $opts debounce_us] \
-	    [dict get $opts pull] \
-	    [dict get $opts active]
-
-	# subscribe and set callback
-	dservAddExactMatch gpio/input/$pin
-	dservTouch gpio/input/$pin
-	dpointSetScript gpio/input/$pin [list ::ess::button_process $chan]
-
-	# initialize state
-	set buttons(pin,$chan)   $pin
+	# initialize channel state and datapoint
 	set buttons(state,$chan) 0
-	if {![dservExists gpio/input/$pin]} {
-	    dservSet gpio/input/$pin 0
-	}
 	dservSet ess/button/$chan 0
+
+	if {$pin ne {}} {
+	    # parse options with defaults matching current protocol usage
+	    set opts [dict merge \
+			 {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
+			 {*}$args]
+
+	    # request GPIO input with edge detection
+	    gpioLineRequestInput $pin BOTH \
+		[dict get $opts debounce_us] \
+		[dict get $opts pull] \
+		[dict get $opts active]
+
+	    # subscribe and set callback
+	    dservAddExactMatch gpio/input/$pin
+	    dservTouch gpio/input/$pin
+	    dpointSetScript gpio/input/$pin [list ::ess::button_process $chan]
+
+	    set buttons(pin,$chan) $pin
+	    if {![dservExists gpio/input/$pin]} {
+		dservSet gpio/input/$pin 0
+	    }
+	}
 
 	# track channel count
 	if {$chan >= $buttons(n_channels)} {
