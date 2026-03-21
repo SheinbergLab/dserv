@@ -2842,10 +2842,29 @@ namespace eval ess {
 ################################### joystick ##################################
 ###############################################################################
 namespace eval ess {
-    # if joystick status changes update ess/joystick/value and wake up ESS
+
+    ########################################################################
+    # after updating ess/joystick/value,
+    # check for button channels bound to joystick directions and update
+    # their state accordingly.
+    ########################################################################
     proc joystick_process_value {dpoint data} {
-        dservSet ess/joystick/value $data
-        do_update
+	variable buttons
+	dservSet ess/joystick/value $data
+
+	# update any button channels bound to joystick directions
+	set joy_int [expr {int($data)}]
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {[info exists buttons(joy_source,$i)]} {
+		set val [expr {($joy_int & $buttons(joy_source,$i)) != 0}]
+		if {$val != $buttons(state,$i)} {
+		    set buttons(state,$i) $val
+		    dservSet ess/button/$i $val
+		}
+	    }
+	}
+
+	do_update
     }
 
     proc joystick_process_button {dpoint data} {
@@ -2865,6 +2884,34 @@ namespace eval ess {
         dpointSetScript joystick/button ::ess::joystick_process_button
         dservSet ess/joystick/button 0
     }
+
+    # Clean up joystick subscriptions
+    proc joystick_deinit {} {
+	if {[dservExists joystick/value]} {
+	    dservRemoveMatch joystick/value
+	}
+	if {[dservExists joystick/button]} {
+	    dservRemoveMatch joystick/button
+	}
+    }
+    
+    ########################################################################
+    # joystick query helpers
+    ########################################################################
+    
+    # Return current joystick value (raw integer from ess/joystick/value)
+    proc joystick_value {} {
+	if {[dservExists ess/joystick/value]} {
+	    return [dservGet ess/joystick/value]
+	}
+	return 0
+    }
+
+    # Return 1 if joystick is deflected in any direction
+    proc joystick_active {} {
+	return [expr {[joystick_value] != 0}]
+    }
+
 }
 
 ###############################################################################
@@ -2886,11 +2933,15 @@ namespace eval ess {
 	do_update
     }
 
-    # Initialize a button channel, optionally bound to a GPIO pin
-    #   chan  - channel index (0, 1, ...)
-    #   pin  - GPIO pin number (optional: omit for simulation-only channel)
-    #   opts - optional dict: debounce_us (default 2500),
-    #          pull (default PULL_UP), active (default ACTIVE_LOW)
+    ########################################################################
+    # button_init: add -joystick option for binding a button
+    # channel to a joystick direction value.
+    #
+    # Usage:
+    #   button_init 0 24                  ;# GPIO pin 24 -> channel 0
+    #   button_init 0 {} joystick 4       ;# joystick value 4 -> channel 0
+    #   button_init 1 {} joystick 8       ;# joystick value 8 -> channel 1
+    ########################################################################
     proc button_init {chan {pin {}} args} {
 	variable buttons
 
@@ -2898,20 +2949,24 @@ namespace eval ess {
 	set buttons(state,$chan) 0
 	dservSet ess/button/$chan 0
 
-	if {$pin ne {}} {
-	    # parse options with defaults matching current protocol usage
-	    set opts [dict merge \
-			 {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
-			 {*}$args]
+	# parse options with defaults
+	set opts [dict merge \
+		      {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
+		      {*}$args]
 
-	    # attempt GPIO setup - falls back to simulation if no hardware
+	if {[dict exists $opts joystick]} {
+	    # bind this channel to a joystick direction value
+	    set joy_val [dict get $opts joystick]
+	    set buttons(joy_source,$chan) $joy_val
+
+	} elseif {$pin ne {}} {
+	    # existing GPIO path - unchanged
 	    try {
 		gpioLineRequestInput $pin BOTH \
 		    [dict get $opts debounce_us] \
 		    [dict get $opts pull] \
 		    [dict get $opts active]
 
-		# create per-channel callback proc
 		proc ::ess::button_process_$chan {dpoint data} \
 		    "::ess::button_process $chan \$dpoint \$data"
 
@@ -2976,12 +3031,69 @@ namespace eval ess {
 	do_update
     }
 
-    # Clean up button subscriptions
+    ########################################################################
+    # aggregate button query helpers
+    ########################################################################
+    
+    # Return 1 if any button channel is currently pressed
+    proc button_any_pressed {} {
+	variable buttons
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {$buttons(state,$i)} { return 1 }
+	}
+	return 0
+    }
+    
+    # Return 1 if no button channels are pressed
+    proc button_none_pressed {} {
+	return [expr {![button_any_pressed]}]
+    }
+    
+    # Return 1 if all initialized button channels are pressed
+    proc button_all_pressed {} {
+	variable buttons
+	if {$buttons(n_channels) == 0} { return 0 }
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {!$buttons(state,$i)} { return 0 }
+	}
+	return 1
+    }
+    
+    # Return count of currently pressed button channels
+    proc button_count {} {
+	variable buttons
+	set count 0
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {$buttons(state,$i)} { incr count }
+	}
+	return $count
+    }
+    
+    # Return list of currently pressed channel indices
+    proc button_active_list {} {
+	variable buttons
+	set result {}
+	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+	    if {$buttons(state,$i)} { lappend result $i }
+	}
+	return $result
+    }
+
+    ########################################################################
+    # button_deinit: also clean up joystick-bound channels
+    ########################################################################
     proc button_deinit {} {
 	variable buttons
 	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
 	    if {[info exists buttons(pin,$i)]} {
 		dservRemoveMatch gpio/input/$buttons(pin,$i)
+		unset buttons(pin,$i)
+	    }
+	    if {[info exists buttons(joy_source,$i)]} {
+		unset buttons(joy_source,$i)
+	    }
+	    if {[info exists buttons(state,$i)]} {
+		unset buttons(state,$i)
 	    }
 	}
 	set buttons(n_channels) 0
