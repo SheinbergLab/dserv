@@ -170,9 +170,17 @@
             </div>
             <div class="ess-bottom-content">
                 <div class="ess-bottom-pane active" id="console-pane" data-label="Console">
+                    <div class="ess-pane-header">
+                        <span class="ess-pane-label">Console</span>
+                        <button class="ess-pane-clear-btn" onclick="clearConsole()" title="Clear console">Clear</button>
+                    </div>
                     <div class="ess-console-body" id="console-output"></div>
                 </div>
                 <div class="ess-bottom-pane" id="terminal-pane" data-label="Terminal">
+                    <div class="ess-pane-header">
+                        <span class="ess-pane-label">Terminal</span>
+                        <button class="ess-pane-clear-btn" onclick="if(window.tclTerminal)tclTerminal.clear()" title="Clear terminal">Clear</button>
+                    </div>
                     <div id="tcl-terminal-container"></div>
                 </div>
             </div>

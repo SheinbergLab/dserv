@@ -1308,6 +1308,11 @@ body.ess-app {
     min-height: 0;
 }
 
+/* Pane headers with clear buttons — hidden in tab mode, shown in side mode */
+.ess-pane-header {
+    display: none;
+}
+
 .ess-bottom-pane {
     display: none;
     height: 100%;
@@ -1452,19 +1457,41 @@ body.ess-app {
         position: relative;
     }
     
-    /* Add labels since tabs are hidden */
+    /* Show pane headers with clear buttons (replaces ::before labels) */
     .ess-bottom-pane::before {
-        content: attr(data-label);
-        display: block;
+        display: none;
+    }
+
+    .ess-pane-header {
+        display: flex;
+        align-items: center;
         padding: 4px 10px;
+        background: var(--ess-bg-panel);
+        border-bottom: 1px solid var(--ess-border);
+        flex-shrink: 0;
+    }
+
+    .ess-pane-label {
         font-size: 10px;
         font-weight: 500;
         color: var(--ess-text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
+        flex: 1;
+    }
+
+    .ess-pane-clear-btn {
+        font-size: 11px;
+        padding: 3px 8px;
+        border: 1px solid var(--ess-border);
+        border-radius: 3px;
         background: var(--ess-bg-panel);
-        border-bottom: 1px solid var(--ess-border);
-        flex-shrink: 0;
+        color: var(--ess-text-secondary);
+        cursor: pointer;
+    }
+
+    .ess-pane-clear-btn:hover {
+        background: var(--ess-border);
     }
     
     .ess-bottom-pane .ess-console-body,
