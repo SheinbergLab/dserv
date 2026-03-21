@@ -18,6 +18,7 @@ const RegistryPlugin = {
         wb.currentUser = null;
         wb.workgroup = null;
         wb.scriptSyncStatus = {};
+        wb.syncDisplacedFiles = [];
         wb.registryState = {
             connected: false,
             workgroup: null,
@@ -232,7 +233,8 @@ const RegistryPlugin = {
         if (!wb.dpManager) return;
 
         ['ess/registry/url', 'ess/registry/workgroup', 'ess/registry/user',
-         'ess/registry/last_pull', 'ess/registry/last_push', 'ess/registry/sync_status'
+         'ess/registry/last_pull', 'ess/registry/last_push', 'ess/registry/sync_status',
+         'ess/sync/displaced'
         ].forEach(dp => {
             wb.dpManager.subscribe(dp, (data) => {
                 this._handleRegistryDatapoint(wb, dp, data);
@@ -266,6 +268,17 @@ const RegistryPlugin = {
                         }
                     } catch (e) {
                         console.warn('Could not parse sync status:', e);
+                    }
+                }
+                break;
+            case 'ess/sync/displaced':
+                if (value) {
+                    try {
+                        const data = typeof value === 'string' ? JSON.parse(value) : value;
+                        wb.syncDisplacedFiles = data.files || [];
+                        this._updateDisplacedBanner(wb);
+                    } catch (e) {
+                        console.warn('Could not parse displaced files:', e);
                     }
                 }
                 break;
@@ -343,7 +356,14 @@ const RegistryPlugin = {
             const unchanged = result.unchanged || 0;
 
             if (pulled > 0) {
-                wb.showNotification(`Synced: ${pulled} updated, ${unchanged} unchanged`, 'success');
+                const displaced = (wb.syncDisplacedFiles || []).length;
+                if (displaced > 0) {
+                    wb.showNotification(
+                        `Synced: ${pulled} updated. ${displaced} local file(s) were displaced — check the banner above.`,
+                        'warning');
+                } else {
+                    wb.showNotification(`Synced: ${pulled} updated, ${unchanged} unchanged`, 'success');
+                }
             } else {
                 wb.showNotification('Already up to date', 'info');
             }
@@ -403,6 +423,92 @@ const RegistryPlugin = {
             wb.showNotification(`Commit failed: ${err.message}`, 'error');
             throw err;
         }
+    },
+
+    // ==========================================
+    // Sync-Displaced Files Banner
+    // ==========================================
+
+    _updateDisplacedBanner(wb) {
+        const files = wb.syncDisplacedFiles || [];
+        let banner = document.getElementById('sync-displaced-banner');
+
+        if (files.length === 0) {
+            if (banner) banner.remove();
+            return;
+        }
+
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'sync-displaced-banner';
+            banner.className = 'displaced-banner';
+            // Insert at top of main content area
+            const main = document.querySelector('.main-content') || document.body;
+            main.insertBefore(banner, main.firstChild);
+        }
+
+        const fileList = files.map(f => {
+            const name = f.relpath.split('/').pop();
+            const system = f.relpath.split('/').slice(1, -1).join('/');
+            return `<div class="displaced-file-entry">
+                <span class="displaced-file-name" title="${this._escapeHtml(f.relpath)}">${this._escapeHtml(system ? system + '/' + name : name)}</span>
+                <span class="displaced-file-time">${this._escapeHtml(f.time)}</span>
+                <button class="displaced-restore-btn" data-file="${this._escapeHtml(f.file)}" title="Restore this file to base">Restore</button>
+                <button class="displaced-dismiss-btn" data-file="${this._escapeHtml(f.file)}" title="Dismiss (file kept in .sync_displaced/)">Dismiss</button>
+            </div>`;
+        }).join('');
+
+        banner.innerHTML = `
+            <div class="displaced-banner-header">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                <strong>${files.length} local file(s) displaced by registry sync</strong>
+                <span class="displaced-subtitle">These files had local changes that were overwritten. Review and restore if needed.</span>
+                <button class="displaced-dismiss-all-btn" title="Dismiss all">Dismiss All</button>
+            </div>
+            <div class="displaced-file-list">${fileList}</div>
+        `;
+
+        // Bind events
+        banner.querySelectorAll('.displaced-restore-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const file = btn.dataset.file;
+                try {
+                    await wb.execTclCmd(`ess::restore_displaced {${file}}`);
+                    wb.showNotification('Restored displaced file to base', 'success');
+                } catch (err) {
+                    wb.showNotification(`Restore failed: ${err.message}`, 'error');
+                }
+            });
+        });
+
+        banner.querySelectorAll('.displaced-dismiss-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const file = btn.dataset.file;
+                try {
+                    await wb.execTclCmd(`ess::dismiss_displaced {${file}}`);
+                } catch (err) {
+                    wb.showNotification(`Dismiss failed: ${err.message}`, 'error');
+                }
+            });
+        });
+
+        banner.querySelector('.displaced-dismiss-all-btn')?.addEventListener('click', async () => {
+            try {
+                await wb.execTclCmd('ess::dismiss_all_displaced');
+            } catch (err) {
+                wb.showNotification(`Dismiss failed: ${err.message}`, 'error');
+            }
+        });
+    },
+
+    _escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     },
 
     // ==========================================

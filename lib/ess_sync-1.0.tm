@@ -28,6 +28,178 @@ namespace eval ess {
     variable registry_url {}
     variable registry_workgroup {}
     variable registry_checksums [dict create]  ;# last-known registry checksums per script type
+    variable sync_displaced [list]             ;# files displaced by sync (local edits overwritten)
+
+    # ── Sync-displaced file management ───────────────────────────────
+    #
+    # When sync_system overwrites a local base file that differs from
+    # the registry, the local version is saved to a "sync_displaced"
+    # directory.  This protects promoted overlay work that hasn't been
+    # pushed to registry yet.
+    #
+    # The displaced list is published as a datapoint so the workbench
+    # can warn the user.
+    #
+
+    proc _sync_displace_file {local_file relpath} {
+        variable system_path
+        variable sync_displaced
+
+        if {![file exists $local_file]} return
+
+        # Build displaced directory under system_path
+        set displaced_dir [file join $system_path .sync_displaced]
+        if {![file exists $displaced_dir]} {
+            ess::paths::mkdir_matching_owner $displaced_dir
+        }
+
+        # Timestamp + flatten relpath for the backup filename
+        set timestamp [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+        set flat_name [string map {/ _} $relpath]
+        set displaced_file [file join $displaced_dir "${timestamp}_${flat_name}"]
+
+        if {[catch {file copy $local_file $displaced_file} err]} {
+            ess_warning "Could not save displaced file $relpath: $err" "sync"
+            return
+        }
+        ess::paths::fix_file_ownership $displaced_file
+
+        # Write metadata alongside the displaced file
+        if {[catch {
+            set mf [open "${displaced_file}.meta" w]
+            puts $mf "# Sync-displaced file"
+            puts $mf "original_path: $local_file"
+            puts $mf "relpath: $relpath"
+            puts $mf "displaced_at: [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]"
+            puts $mf "displaced_timestamp: [clock seconds]"
+            puts $mf "file_size: [file size $displaced_file]"
+            close $mf
+        } merr]} {
+            ess_warning "Could not write displaced metadata: $merr" "sync"
+        }
+
+        lappend sync_displaced [dict create \
+            relpath $relpath \
+            displaced_file $displaced_file \
+            timestamp [clock seconds] \
+            time_formatted [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]]
+
+        ess_warning "Displaced local file: $relpath (saved to [file tail $displaced_file])" "sync"
+    }
+
+    # Publish the current displaced list as a JSON datapoint
+    proc _publish_sync_displaced {} {
+        variable sync_displaced
+
+        if {[llength $sync_displaced] == 0} {
+            dservSet ess/sync/displaced "{\"files\":[]}"
+            return
+        }
+
+        set items [list]
+        foreach entry $sync_displaced {
+            set relpath [dict get $entry relpath]
+            set dfile   [dict get $entry displaced_file]
+            set ts      [dict get $entry timestamp]
+            set tfmt    [dict get $entry time_formatted]
+            lappend items [format {{"relpath":"%s","file":"%s","timestamp":%d,"time":"%s"}} \
+                [string map {\" \\\"} $relpath] \
+                [string map {\" \\\"} $dfile] \
+                $ts $tfmt]
+        }
+        set json "{\"files\":\[[join $items ,]\]}"
+        dservSet ess/sync/displaced $json
+    }
+
+    # Query displaced files (callable from workbench)
+    proc sync_displaced_list {} {
+        variable sync_displaced
+        _publish_sync_displaced
+        return $sync_displaced
+    }
+
+    # Restore a displaced file back to its base location
+    proc restore_displaced {displaced_file} {
+        variable sync_displaced
+
+        if {![file exists $displaced_file]} {
+            error "Displaced file does not exist: $displaced_file"
+        }
+
+        # Find the entry in our list
+        set found 0
+        set new_list [list]
+        foreach entry $sync_displaced {
+            if {[dict get $entry displaced_file] eq $displaced_file} {
+                set found 1
+                set relpath [dict get $entry relpath]
+            } else {
+                lappend new_list $entry
+            }
+        }
+
+        if {!$found} {
+            # Try to recover relpath from metadata
+            set meta_file "${displaced_file}.meta"
+            if {[file exists $meta_file]} {
+                set f [open $meta_file r]
+                set meta_content [read $f]
+                close $f
+                if {[regexp {original_path:\s*(.+)} $meta_content -> orig_path]} {
+                    set relpath ""
+                    # We have the original path, just copy back
+                    file copy -force $displaced_file $orig_path
+                    ess::paths::fix_file_ownership $orig_path
+                    file delete $displaced_file
+                    catch { file delete "${displaced_file}.meta" }
+                    ess_info "Restored displaced file to $orig_path" "sync"
+                    set sync_displaced $new_list
+                    _publish_sync_displaced
+                    return "restored"
+                }
+            }
+            error "Displaced file not found in tracking list"
+        }
+
+        # Restore to base location
+        set base_file [ess::paths::base_path $relpath]
+        file copy -force $displaced_file $base_file
+        ess::paths::fix_file_ownership $base_file
+        file delete $displaced_file
+        catch { file delete "${displaced_file}.meta" }
+
+        set sync_displaced $new_list
+        _publish_sync_displaced
+
+        ess_info "Restored displaced $relpath to base" "sync"
+        return "restored"
+    }
+
+    # Dismiss (acknowledge) a displaced file — user reviewed and doesn't need it
+    proc dismiss_displaced {displaced_file} {
+        variable sync_displaced
+
+        set new_list [list]
+        foreach entry $sync_displaced {
+            if {[dict get $entry displaced_file] ne $displaced_file} {
+                lappend new_list $entry
+            }
+        }
+        set sync_displaced $new_list
+
+        # Don't delete the file — just remove from active list
+        # User can manually clean up .sync_displaced/ later
+        _publish_sync_displaced
+        return "dismissed"
+    }
+
+    # Dismiss all displaced files
+    proc dismiss_all_displaced {} {
+        variable sync_displaced
+        set sync_displaced [list]
+        _publish_sync_displaced
+        return "dismissed"
+    }
 
     if {[info exists ::env(ESS_REGISTRY_URL)]} {
         set registry_url $::env(ESS_REGISTRY_URL)
@@ -150,6 +322,8 @@ namespace eval ess {
                     if {![file exists $dir]} {
                         mkdir_matching_owner $dir
                     }
+                    # Save displaced local file before overwriting
+                    _sync_displace_file $local_file $relpath
                     set f [open $local_file w]
                     puts -nonewline $f $content
                     close $f
@@ -174,6 +348,10 @@ namespace eval ess {
         }
 
         ess_info "Sync $system: $pulled pulled, $unchanged unchanged" "sync"
+
+        # Publish displaced files so workbench can warn user
+        _publish_sync_displaced
+
         return [dict create pulled $pulled unchanged $unchanged errors $errors]
     }
 
@@ -246,6 +424,10 @@ namespace eval ess {
                 if {![file exists $lib_dir]} {
                     mkdir_matching_owner $lib_dir
                 }
+
+                # Save displaced local file before overwriting
+                set lib_relpath [file join $project lib $filename]
+                _sync_displace_file $local_file $lib_relpath
 
                 set f [open $local_file w]
                 puts -nonewline $f $content

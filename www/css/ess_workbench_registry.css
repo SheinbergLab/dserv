@@ -647,11 +647,121 @@
     }
 }
 
+/* ── Sync-Displaced Files Banner ─────────────────────────────── */
+
+.displaced-banner {
+    background: var(--wb-warning-subtle);
+    border: 1px solid var(--wb-warning);
+    border-radius: 6px;
+    margin: 8px 12px;
+    padding: 0;
+    font-size: 13px;
+    animation: slideInDown 0.3s ease;
+}
+
+@keyframes slideInDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.displaced-banner-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    color: var(--wb-warning);
+    flex-wrap: wrap;
+}
+
+.displaced-banner-header svg {
+    flex-shrink: 0;
+}
+
+.displaced-banner-header strong {
+    color: var(--wb-text);
+}
+
+.displaced-subtitle {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    flex: 1;
+}
+
+.displaced-dismiss-all-btn {
+    margin-left: auto;
+    padding: 3px 10px;
+    border: 1px solid var(--wb-border);
+    border-radius: 4px;
+    background: var(--wb-bg-secondary);
+    color: var(--wb-text-secondary);
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.displaced-dismiss-all-btn:hover {
+    background: var(--wb-bg-hover);
+    color: var(--wb-text);
+}
+
+.displaced-file-list {
+    border-top: 1px solid var(--wb-border);
+    padding: 4px 12px;
+}
+
+.displaced-file-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+.displaced-file-entry + .displaced-file-entry {
+    border-top: 1px solid var(--wb-border-subtle, rgba(255,255,255,0.06));
+}
+
+.displaced-file-name {
+    font-family: var(--wb-font-mono, monospace);
+    font-size: 12px;
+    color: var(--wb-text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.displaced-file-time {
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.displaced-restore-btn,
+.displaced-dismiss-btn {
+    padding: 2px 8px;
+    border: 1px solid var(--wb-border);
+    border-radius: 3px;
+    background: var(--wb-bg-secondary);
+    color: var(--wb-text-secondary);
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.displaced-restore-btn:hover {
+    background: var(--wb-accent);
+    color: white;
+    border-color: var(--wb-accent);
+}
+
+.displaced-dismiss-btn:hover {
+    background: var(--wb-bg-hover);
+    color: var(--wb-text);
+}
+
 @media (max-width: 768px) {
     .header-user {
         display: none;
     }
-    
+
     .variants-actions .btn span:not(.btn-icon) {
         display: none;
     }
