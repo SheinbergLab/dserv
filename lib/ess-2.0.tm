@@ -889,7 +889,7 @@ namespace eval ess {
         set ::errorInfo ""
         set ::errorCode NONE
         
-        if {$current(system) != {} && [info exists $current(system)]} {
+        if {$current(system) ne {}} {
             if {[query_state] == "running"} {
                 finish_loading_operation false "Cannot load system while running"
                 ess_warning "Cannot load system while running" "system"
