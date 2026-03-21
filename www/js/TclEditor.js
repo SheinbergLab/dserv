@@ -640,16 +640,9 @@ class TclEditor {
     }
 
     const line = state.doc.lineAt(selection.head);
-    const textBeforeCursor = state.doc.sliceString(line.from, selection.head);
 
-    // If at beginning of line or only whitespace, re-indent
-    if (/^\s*$/.test(textBeforeCursor)) {
-      this._reindentLine(view, line);
-      return true;
-    }
-
-    // Otherwise trigger completion explicitly
-    this._cm.startCompletion(view);
+    // Always re-indent the current line
+    this._reindentLine(view, line);
     return true;
   }
 
@@ -757,9 +750,19 @@ class TclEditor {
     const currentIndent = line.text.match(/^(\s*)/)[0].length;
     const newIndent = ' '.repeat(targetIndent);
 
+    // Preserve cursor position relative to line content
+    const selection = view.state.selection.main;
+    const offsetInLine = selection.head - line.from;
+    const indentDelta = targetIndent - currentIndent;
+    // If cursor is in the indent area, place it at end of new indent;
+    // otherwise shift it by the indent change
+    const newOffset = offsetInLine <= currentIndent
+      ? targetIndent
+      : offsetInLine + indentDelta;
+
     view.dispatch({
       changes: { from: line.from, to: line.from + currentIndent, insert: newIndent },
-      selection: { anchor: line.from + targetIndent },
+      selection: { anchor: line.from + newOffset },
     });
   }
 
@@ -769,13 +772,38 @@ class TclEditor {
     const startLine = state.doc.lineAt(selection.from);
     const endLine = state.doc.lineAt(selection.to);
 
+    const allText = state.doc.toString();
+    const lines = TclFormatter.splitLines(allText);
+
     const changes = [];
     for (let i = startLine.number; i <= endLine.number; i++) {
       const line = state.doc.line(i);
-      changes.push({ from: line.from, insert: '    ' });
+      const lineNum = i - 1;
+      let targetIndent = 0;
+      try {
+        targetIndent = TclFormatter.calculateLineIndent(lines, lineNum, this.options.tabSize);
+      } catch (e) {
+        targetIndent = 0;
+      }
+      const currentIndent = line.text.match(/^(\s*)/)[0].length;
+      if (targetIndent !== currentIndent) {
+        changes.push({
+          from: line.from,
+          to: line.from + currentIndent,
+          insert: ' '.repeat(targetIndent)
+        });
+      }
     }
 
-    view.dispatch({ changes });
+    if (changes.length) {
+      view.dispatch({ changes });
+    }
+    // Re-select the full range of affected lines after indent
+    const newStartLine = view.state.doc.line(startLine.number);
+    const newEndLine = view.state.doc.line(endLine.number);
+    view.dispatch({
+      selection: { anchor: newStartLine.from, head: newEndLine.to }
+    });
     return true;
   }
 
