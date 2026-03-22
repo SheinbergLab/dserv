@@ -263,6 +263,32 @@
                 
                 subscribed = true;
                 console.log('Successfully subscribed to events');
+
+                // Subscribe to event name lookup tables
+                dpManager.subscribe('ess/evt_type_ids', (dpData) => {
+                    const value = dpData.data !== undefined ? dpData.data : dpData.value;
+                    if (viewer && value) {
+                        viewer.loadTypeNames(String(value));
+                    }
+                });
+
+                dpManager.subscribe('ess/evt_subtype_ids', (dpData) => {
+                    const value = dpData.data !== undefined ? dpData.data : dpData.value;
+                    if (viewer && value) {
+                        viewer.loadSubtypeNames(String(value));
+                    }
+                });
+
+                // Touch to get current values (subscriptions only fire on changes)
+                try {
+                    const touchMsg = {
+                        cmd: 'eval',
+                        script: 'foreach v { ess/evt_type_ids ess/evt_subtype_ids } { catch { dservTouch $v } }'
+                    };
+                    conn.ws.send(JSON.stringify(touchMsg));
+                } catch (e) {
+                    console.warn('Could not touch event name datapoints:', e);
+                }
             } catch (e) {
                 console.error('Failed to subscribe:', e);
             }
@@ -324,6 +350,12 @@
             
             try {
                 console.log('Requesting event name refresh...');
+                const message = {
+                    cmd: 'eval',
+                    script: 'foreach v { ess/evt_type_ids ess/evt_subtype_ids } { catch { dservTouch $v } }'
+                };
+                conn.ws.send(JSON.stringify(message));
+                console.log('Event names refresh triggered');
             } catch (e) {
                 console.error('Failed to refresh names:', e);
             }

@@ -404,6 +404,144 @@ class EventViewer {
         const key = `${typeNum}:${subtypeNum}`;
         return this.eventSubtypeNames[key] || `${subtypeNum}`;
     }
+
+    /**
+     * Load event type names from ess/evt_type_ids datapoint
+     * The datapoint is a Tcl dict string: "NAME1 id1 NAME2 id2 ..."
+     */
+    loadTypeNames(dictStr) {
+        if (!dictStr) return;
+        try {
+            const parts = dictStr.trim().split(/\s+/);
+            for (let i = 0; i < parts.length - 1; i += 2) {
+                const name = parts[i];
+                const id = parseInt(parts[i + 1]);
+                if (!isNaN(id) && id >= 0 && id < 256) {
+                    this.eventTypeNames[id] = name;
+                }
+            }
+            console.log('Loaded event type names from datapoint');
+            this.updateTypeFilter();
+            this.render();
+        } catch (e) {
+            console.error('Failed to parse evt_type_ids:', e);
+        }
+    }
+
+    /**
+     * Load event subtype names from ess/evt_subtype_ids datapoint
+     * The datapoint is a nested Tcl dict: "TYPE1 {SUB1 id1 SUB2 id2} TYPE2 {SUB1 id1 ...}"
+     */
+    loadSubtypeNames(dictStr) {
+        if (!dictStr) return;
+        try {
+            // Parse nested Tcl dict: TYPE_NAME {SUBTYPE_NAME id ...} ...
+            // First find the type_id for each type name so we can build "typeId:subtypeId" keys
+            const typeIds = {};
+            for (let i = 0; i < this.eventTypeNames.length; i++) {
+                if (this.eventTypeNames[i]) {
+                    typeIds[this.eventTypeNames[i]] = i;
+                }
+            }
+
+            // Parse the outer dict (handles braced values)
+            const outerPairs = this.parseTclDict(dictStr);
+            for (const [typeName, subtypeStr] of outerPairs) {
+                const typeId = typeIds[typeName];
+                if (typeId === undefined) continue;
+
+                // Parse the inner dict of subtype names to ids
+                const innerPairs = this.parseTclDict(subtypeStr);
+                for (const [subtypeName, subtypeIdStr] of innerPairs) {
+                    const subtypeId = parseInt(subtypeIdStr);
+                    if (!isNaN(subtypeId)) {
+                        const key = `${typeId}:${subtypeId}`;
+                        this.eventSubtypeNames[key] = subtypeName;
+                    }
+                }
+            }
+            console.log('Loaded event subtype names from datapoint');
+            this.render();
+        } catch (e) {
+            console.error('Failed to parse evt_subtype_ids:', e);
+        }
+    }
+
+    /**
+     * Parse a Tcl dict string into [key, value] pairs.
+     * Handles both simple "k1 v1 k2 v2" and braced "k1 {v1a v1b} k2 v2".
+     */
+    parseTclDict(str) {
+        const pairs = [];
+        const tokens = [];
+        let i = 0;
+        const s = str.trim();
+
+        while (i < s.length) {
+            // skip whitespace
+            while (i < s.length && /\s/.test(s[i])) i++;
+            if (i >= s.length) break;
+
+            let token;
+            if (s[i] === '{') {
+                // braced value — find matching close brace
+                let depth = 1;
+                let start = i + 1;
+                i++;
+                while (i < s.length && depth > 0) {
+                    if (s[i] === '{') depth++;
+                    else if (s[i] === '}') depth--;
+                    i++;
+                }
+                token = s.slice(start, i - 1);
+            } else {
+                // bare word
+                let start = i;
+                while (i < s.length && !/\s/.test(s[i])) i++;
+                token = s.slice(start, i);
+            }
+            tokens.push(token);
+        }
+
+        // pair up tokens as key/value
+        for (let j = 0; j < tokens.length - 1; j += 2) {
+            pairs.push([tokens[j], tokens[j + 1]]);
+        }
+        return pairs;
+    }
+
+    /**
+     * Update the type filter dropdown with current known type names
+     */
+    updateTypeFilter() {
+        const select = document.getElementById('type-filter');
+        if (!select) return;
+
+        const current = select.value;
+        // keep "All Types" option
+        select.innerHTML = '<option value="">All Types</option>';
+
+        // collect known types that have real names
+        const entries = [];
+        for (let i = 0; i < this.eventTypeNames.length; i++) {
+            const name = this.eventTypeNames[i];
+            if (name && !name.startsWith('Reserved') &&
+                !name.startsWith('System') && !name.startsWith('User')) {
+                entries.push({ id: i, name: name });
+            }
+        }
+        entries.sort((a, b) => a.id - b.id);
+
+        entries.forEach(({ id, name }) => {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = `${name} (${id})`;
+            select.appendChild(opt);
+        });
+
+        // restore previous selection
+        select.value = current;
+    }
     
     /**
      * Get filtered/searched events for current view
