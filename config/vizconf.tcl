@@ -53,6 +53,54 @@ namespace eval viz {
     }
     
     #########################################################################
+    # Named Event Helpers
+    #########################################################################
+
+    # Event lookup tables - populated from ess/evt_type_ids and
+    # ess/evt_subtype_ids datapoints published by the ess module
+    variable evt_type_ids [dict create]
+    variable evt_subtype_ids [dict create]
+
+    proc on_evt_type_ids {dpoint data} {
+	variable evt_type_ids
+	set evt_type_ids $data
+    }
+
+    proc on_evt_subtype_ids {dpoint data} {
+	variable evt_subtype_ids
+	set evt_subtype_ids $data
+    }
+
+    # evtSetScriptByName - register event handler using symbolic names
+    #
+    # Usage:
+    #   evtSetScriptByName SAMPLE ON  [namespace current]::sample_on
+    #   evtSetScriptByName ENDOBS *   [namespace current]::endobs
+    #
+    proc evtSetScriptByName {type_name subtype_name script} {
+	variable evt_type_ids
+	variable evt_subtype_ids
+
+	if {![dict exists $evt_type_ids $type_name]} {
+	    log error "evtSetScriptByName: unknown event type '$type_name'"
+	    return
+	}
+	set type_id [dict get $evt_type_ids $type_name]
+
+	if {$subtype_name eq "*" || $subtype_name eq "-1"} {
+	    set subtype_id -1
+	} else {
+	    if {![dict exists $evt_subtype_ids $type_name $subtype_name]} {
+		log error "evtSetScriptByName: unknown subtype '$subtype_name' for event '$type_name'"
+		return
+	    }
+	    set subtype_id [dict get $evt_subtype_ids $type_name $subtype_name]
+	}
+
+	evtSetScript $type_id $subtype_id $script
+    }
+
+    #########################################################################
     # Framework Initialization
     #########################################################################
     
@@ -67,15 +115,29 @@ namespace eval viz {
         
         # Subscribe to stimdg (main data source)
         dservAddExactMatch stimdg
+
+	# Subscribe to event lookup tables
+	dservAddExactMatch ess/evt_type_ids
+	dservAddExactMatch ess/evt_subtype_ids
         
         # Set up handlers
         dpointSetScript ess/system [namespace current]::on_system_change
         dpointSetScript ess/protocol [namespace current]::on_protocol_change
         dpointSetScript ess/viz_config [namespace current]::on_viz_config_received
         dpointSetScript stimdg [namespace current]::on_stimdg_received
+	dpointSetScript ess/evt_type_ids [namespace current]::on_evt_type_ids
+	dpointSetScript ess/evt_subtype_ids [namespace current]::on_evt_subtype_ids
 
 	# Subscribe to events
 	dservAddExactMatch eventlog/events
+
+	# Load event tables if already published
+	if {[dservExists ess/evt_type_ids]} {
+	    on_evt_type_ids ess/evt_type_ids [dservGet ess/evt_type_ids]
+	}
+	if {[dservExists ess/evt_subtype_ids]} {
+	    on_evt_subtype_ids ess/evt_subtype_ids [dservGet ess/evt_subtype_ids]
+	}
 	
         # Initialize graphics
         clearwin
@@ -182,6 +244,9 @@ namespace eval viz {
     # scripts can just call flushwin
     namespace inscope :: {
 	proc flushwin {} { ::viz::update_display }
+	proc evtSetScriptByName {type_name subtype_name script} {
+	    ::viz::evtSetScriptByName $type_name $subtype_name $script
+	}
     }
     
     #########################################################################
