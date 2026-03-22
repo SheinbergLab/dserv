@@ -1610,6 +1610,12 @@ namespace eval ess {
                 ::ess::evt_put SUBTYPES $id [now] $subinfo
             }
         }
+
+	# publish event lookup tables for vizconf and other clients
+	dservSet ess/evt_type_ids \
+	    [set $current(state_system)::_evt_type_ids]
+	dservSet ess/evt_subtype_ids \
+	    [set $current(state_system)::_evt_subtype_ids]
     }
 
     proc evt_name_set {type name ptype} {
@@ -2688,8 +2694,8 @@ namespace eval ess {
         file delete $overlay_file
         ess_info "Removed overlay file for $type" "overlay"
 
-        # Clean up empty overlay directories
-        cleanup_empty_overlay_dirs
+        # Clean up empty overlay directories (best-effort, don't abort promote)
+        catch {cleanup_empty_overlay_dirs}
 
         # Republish snapshot so workbench sees updated status
         publish_snapshot
@@ -2727,6 +2733,9 @@ namespace eval ess {
         }
 
         ess_info "Promoted [llength $promoted] script(s): [join $promoted {, }]" "overlay"
+
+        # Clean up empty overlay directories now that all files are promoted
+        catch {cleanup_empty_overlay_dirs}
 
         if {$reload} {
             reload_system

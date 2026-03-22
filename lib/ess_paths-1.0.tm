@@ -323,19 +323,30 @@ namespace eval ess::paths {
         variable overlay_path
         if {$overlay_path eq ""} return
 
+        # Collect all directories under the overlay tree
+        set all_dirs {}
         set queue [glob -nocomplain -type d [file join $overlay_path *]]
         while {[llength $queue] > 0} {
             set dir [lindex $queue 0]
             set queue [lrange $queue 1 end]
-
-            # Add subdirs to queue
+            lappend all_dirs $dir
             foreach sub [glob -nocomplain -type d [file join $dir *]] {
                 lappend queue $sub
             }
+        }
 
-            # Remove if empty
-            if {[llength [glob -nocomplain [file join $dir *]]] == 0} {
-                catch { file delete $dir }
+        # Sort longest path first (deepest directories first)
+        set all_dirs [lsort -command {apply {{a b} {
+            expr {[string length $b] - [string length $a]}
+        }}} $all_dirs]
+
+        # Remove empty directories bottom-up
+        foreach dir $all_dirs {
+            set visible [glob -nocomplain [file join $dir *]]
+            set hidden  [glob -nocomplain [file join $dir .*]]
+            # hidden always includes . and .., so empty means length <= 2
+            if {[llength $visible] == 0 && [llength $hidden] <= 2} {
+                catch { file delete -force $dir }
             }
         }
     }
