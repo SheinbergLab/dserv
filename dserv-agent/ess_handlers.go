@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,6 +65,7 @@ func (r *ESSRegistry) RegisterHandlers(mux *http.ServeMux, authMiddleware func(h
 	// Admin
 	mux.HandleFunc("/api/v1/ess/admin/seed-templates", authMiddleware(r.handleSeedTemplates))
 	mux.HandleFunc("/api/v1/ess/admin/backup", authMiddleware(r.handleBackup))
+	mux.HandleFunc("/api/v1/ess/admin/backup/", authMiddleware(r.handleBackupDownload))
 	mux.HandleFunc("/api/v1/ess/admin/backups", authMiddleware(r.handleListBackups))
 }
 
@@ -874,6 +876,46 @@ func (r *ESSRegistry) handleListBackups(w http.ResponseWriter, req *http.Request
 		"backups": backups,
 		"count":   len(backups),
 	})
+}
+
+// GET /api/v1/ess/admin/backup/{filename}
+func (r *ESSRegistry) handleBackupDownload(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract filename from path
+	prefix := "/api/v1/ess/admin/backup/"
+	filename := strings.TrimPrefix(req.URL.Path, prefix)
+	if filename == "" {
+		writeJSON(w, 400, map[string]string{"error": "filename required"})
+		return
+	}
+
+	// Prevent path traversal — only allow base filenames matching our pattern
+	if filepath.Base(filename) != filename || strings.Contains(filename, "..") {
+		writeJSON(w, 400, map[string]string{"error": "invalid filename"})
+		return
+	}
+	if !strings.HasPrefix(filename, "ess-registry-") || !strings.HasSuffix(filename, ".db") {
+		writeJSON(w, 400, map[string]string{"error": "invalid backup filename"})
+		return
+	}
+
+	backupDir := filepath.Join(filepath.Dir(r.dbPath), "backups")
+	filePath := filepath.Join(backupDir, filename)
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "backup not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	http.ServeFile(w, req, filePath)
 }
 
 // GET /api/v1/ess/export/{workgroup}[/{system}]?format=zip
