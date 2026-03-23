@@ -256,6 +256,12 @@ func (c *AgentClient) ListBackups() (map[string]interface{}, error) {
 	return c.Get(registryBase + "/admin/backups")
 }
 
+// GetBackup downloads a backup file by filename.
+func (c *AgentClient) GetBackup(filename string) ([]byte, error) {
+	data, _, err := c.GetRaw(registryBase + "/admin/backup/" + url.PathEscape(filename))
+	return data, err
+}
+
 // --- helpers ---
 
 func extractList(result map[string]interface{}, key string) []map[string]interface{} {
