@@ -206,7 +206,12 @@ type Config struct {
 	Workgroup    string
 
 	// ESS Registry
-	ESSRegistryPath string	
+	ESSRegistryPath string
+
+	// Backup scheduler (server mode)
+	BackupInterval time.Duration
+	BackupRetention time.Duration
+	BackupMinKeep  int
 }
 
 // registryList is a custom flag type for multiple -registry flags
@@ -376,9 +381,14 @@ Environment:
 	flag.StringVar(&cfg.Workgroup, "workgroup", "", "Mesh workgroup name")
 
 	// ESS Registry
-	flag.StringVar(&cfg.ESSRegistryPath, "ess-registry", "", 
+	flag.StringVar(&cfg.ESSRegistryPath, "ess-registry", "",
 		"Path to ESS registry database (enables ESS script management)")
-	
+
+	// Backup scheduler flags (server mode)
+	flag.DurationVar(&cfg.BackupInterval, "backup-interval", 0, "Automatic backup interval (e.g., 6h, 12h, 24h)")
+	flag.DurationVar(&cfg.BackupRetention, "backup-retention", 7*24*time.Hour, "Maximum age for backup retention (default: 7d)")
+	flag.IntVar(&cfg.BackupMinKeep, "backup-min-keep", 5, "Minimum number of backups to keep")
+
 	flag.Parse()
 
 	cfg.RegistryURLs = registries
@@ -434,7 +444,14 @@ Environment:
 		essRegistry.RegisterConfigsHandlers(mux, agent.auth)
 
 		// Add browser support
-		essRegistry.RegisterBrowseHandlers(mux, agent.auth)		
+		essRegistry.RegisterBrowseHandlers(mux, agent.auth)
+
+		// Start backup scheduler if interval is set
+		if cfg.BackupInterval > 0 {
+			backupDir := filepath.Join(filepath.Dir(cfg.ESSRegistryPath), "backups")
+			essRegistry.StartBackupScheduler(backupDir, cfg.BackupInterval, cfg.BackupRetention, cfg.BackupMinKeep)
+			log.Printf("  ESS Backup: every %s (retention: %s, min keep: %d)", cfg.BackupInterval, cfg.BackupRetention, cfg.BackupMinKeep)
+		}
 	}
 	
 	if cfg.ServerMode {
