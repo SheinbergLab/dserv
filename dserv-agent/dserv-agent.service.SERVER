@@ -1,0 +1,12 @@
+[Unit]
+Description=dserv-agent mesh registry
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dserv-agent --server --landing-page --listen :443 --ess-registry /usr/local/dserv/db/ess.db --backup-interval 12h --workgroup brown-sheinberg
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
