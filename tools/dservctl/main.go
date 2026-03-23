@@ -113,6 +113,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl systems delete sys                   Delete a system and its scripts\n")
 	fmt.Fprintf(os.Stderr, "  dservctl backup                               List available backups\n")
 	fmt.Fprintf(os.Stderr, "  dservctl backup create                        Create a new backup now\n")
+	fmt.Fprintf(os.Stderr, "  dservctl backup get                           Download latest backup\n")
+	fmt.Fprintf(os.Stderr, "  dservctl backup get <filename> -o backup.db   Download specific backup\n")
 }
 
 func main() {
