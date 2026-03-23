@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // runStatus shows agent and dserv status.
@@ -179,9 +180,16 @@ func runService(cfg *Config, args []string) int {
 func runComponents(cfg *Config, args []string) int {
 	client := NewAgentClient(cfg)
 
-	// Check for install subcommand
-	if len(args) > 0 && args[0] == "install" {
-		return runComponentInstall(cfg, client, args[1:])
+	// Check for subcommands
+	if len(args) > 0 {
+		switch args[0] {
+		case "install":
+			return runComponentInstall(cfg, client, args[1:])
+		case "check":
+			return runComponentCheck(cfg, client)
+		case "update":
+			return runComponentUpdate(cfg, client)
+		}
 	}
 
 	result, err := client.Get("/api/components")
@@ -232,6 +240,128 @@ func runComponents(cfg *Config, args []string) int {
 	return 0
 }
 
+// runComponentCheck shows only components with available updates.
+func runComponentCheck(cfg *Config, client *AgentClient) int {
+	result, err := client.Get("/api/components")
+	if err != nil {
+		PrintError("%v", err)
+		return 1
+	}
+
+	if cfg.JSON {
+		printJSON(result)
+		return 0
+	}
+
+	items, ok := result["items"].([]interface{})
+	if !ok {
+		fmt.Println("No components found.")
+		return 0
+	}
+
+	var rows [][]string
+	for _, item := range items {
+		cs, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if cs["updateAvailable"] != true {
+			continue
+		}
+		comp, _ := cs["component"].(map[string]interface{})
+		rows = append(rows, []string{
+			strVal(comp, "id"),
+			strVal(cs, "currentVersion"),
+			strVal(cs, "latestVersion"),
+		})
+	}
+
+	if len(rows) == 0 {
+		fmt.Println("All components are up to date.")
+		return 0
+	}
+
+	PrintTable([]string{"ID", "CURRENT", "LATEST"}, rows)
+	return 0
+}
+
+// runComponentUpdate updates all components that have available updates,
+// installing dependencies first.
+func runComponentUpdate(cfg *Config, client *AgentClient) int {
+	result, err := client.Get("/api/components")
+	if err != nil {
+		PrintError("%v", err)
+		return 1
+	}
+
+	items, ok := result["items"].([]interface{})
+	if !ok {
+		fmt.Println("No components found.")
+		return 0
+	}
+
+	// Collect components with updates, separating dependencies from dependents
+	var deps []string    // components others depend on (install first)
+	var regular []string // everything else
+	depSet := make(map[string]bool)
+
+	// First pass: identify which components are dependencies
+	for _, item := range items {
+		cs, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		comp, _ := cs["component"].(map[string]interface{})
+		if comp == nil {
+			continue
+		}
+		if d, ok := comp["depends"].([]interface{}); ok {
+			for _, dep := range d {
+				if ds, ok := dep.(string); ok {
+					depSet[ds] = true
+				}
+			}
+		}
+	}
+
+	// Second pass: sort updatable components into deps-first order
+	for _, item := range items {
+		cs, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if cs["updateAvailable"] != true {
+			continue
+		}
+		comp, _ := cs["component"].(map[string]interface{})
+		if comp == nil {
+			continue
+		}
+		id := strVal(comp, "id")
+		if depSet[id] {
+			deps = append(deps, id)
+		} else {
+			regular = append(regular, id)
+		}
+	}
+
+	updateOrder := append(deps, regular...)
+	if len(updateOrder) == 0 {
+		fmt.Println("All components are up to date.")
+		return 0
+	}
+
+	fmt.Printf("Components to update: %s\n\n", strings.Join(updateOrder, ", "))
+	for _, id := range updateOrder {
+		rc := runComponentInstall(cfg, client, []string{id})
+		if rc != 0 {
+			return rc
+		}
+		fmt.Println()
+	}
+	return 0
+}
+
 func runComponentInstall(cfg *Config, client *AgentClient, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: dservctl components install <component-id> [--asset ASSET]\n")
@@ -249,12 +379,65 @@ func runComponentInstall(cfg *Config, client *AgentClient, args []string) int {
 		}
 	}
 
-	path := fmt.Sprintf("/api/components/%s/install", componentID)
-	if asset != "" {
-		path += "?asset=" + asset
+	// Fetch component status to get available assets and dependency info
+	statusResult, err := client.Get(fmt.Sprintf("/api/components/%s", componentID))
+	if err != nil {
+		PrintError("failed to get component status: %v", err)
+		return 1
 	}
 
-	result, err := client.Post(path, nil)
+	// Check if update is available
+	currentVer := strVal(statusResult, "currentVersion")
+	latestVer := strVal(statusResult, "latestVersion")
+
+	if currentVer != "" && currentVer == latestVer {
+		fmt.Printf("%s is already up to date (%s)\n", componentID, currentVer)
+		return 0
+	}
+
+	// Auto-select asset if not specified
+	if asset == "" {
+		assets := extractStringArray(statusResult, "assets")
+		if len(assets) == 0 {
+			PrintError("no compatible assets found for %s", componentID)
+			return 1
+		}
+		if len(assets) == 1 {
+			asset = assets[0]
+		} else {
+			fmt.Fprintf(os.Stderr, "Multiple assets available for %s. Specify one with --asset:\n", componentID)
+			for _, a := range assets {
+				fmt.Fprintf(os.Stderr, "  %s\n", a)
+			}
+			return 2
+		}
+	}
+
+	// Build stopServices list from dependency info
+	allComponents, err := client.Get("/api/components")
+	var stopServices []string
+	if err == nil {
+		stopServices = getServicesToStop(componentID, allComponents)
+	}
+
+	// Show what we're about to do
+	if currentVer != "" {
+		fmt.Printf("Updating %s: %s -> %s\n", componentID, currentVer, latestVer)
+	} else {
+		fmt.Printf("Installing %s %s\n", componentID, latestVer)
+	}
+	fmt.Printf("Asset: %s\n", asset)
+	if len(stopServices) > 0 {
+		fmt.Printf("Services to restart: %s\n", strings.Join(stopServices, ", "))
+	}
+
+	// Send install request with asset and stopServices
+	body := map[string]interface{}{
+		"asset":        asset,
+		"stopServices": stopServices,
+	}
+	path := fmt.Sprintf("/api/components/%s/install", componentID)
+	result, err := client.Post(path, body)
 	if err != nil {
 		PrintError("%v", err)
 		return 1
@@ -265,11 +448,85 @@ func runComponentInstall(cfg *Config, client *AgentClient, args []string) int {
 		return 0
 	}
 
-	fmt.Printf("Installation started for %s\n", componentID)
-	if status := strVal(result, "status"); status != "" {
-		fmt.Printf("Status: %s\n", status)
+	// Poll for completion by watching version change
+	fmt.Printf("Installing...")
+	for i := 0; i < 60; i++ {
+		time.Sleep(2 * time.Second)
+		fmt.Printf(".")
+		check, err := client.Get(fmt.Sprintf("/api/components/%s", componentID))
+		if err != nil {
+			continue
+		}
+		newVer := strVal(check, "currentVersion")
+		if newVer != "" && newVer != currentVer {
+			fmt.Printf(" done!\n")
+			fmt.Printf("Installed %s %s\n", componentID, newVer)
+			return 0
+		}
 	}
-	return 0
+
+	fmt.Printf(" timeout waiting for version change\n")
+	fmt.Println("The install may still be in progress. Run 'dservctl components' to check.")
+	return 1
+}
+
+// extractStringArray extracts a []string from a JSON result field.
+func extractStringArray(m map[string]interface{}, key string) []string {
+	arr, ok := m[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []string
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// getServicesToStop computes which services need to be stopped when installing
+// a component, based on dependency relationships.
+func getServicesToStop(componentID string, allComponents map[string]interface{}) []string {
+	items, ok := allComponents["items"].([]interface{})
+	if !ok {
+		return nil
+	}
+
+	services := make(map[string]bool)
+
+	for _, item := range items {
+		cs, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		comp, _ := cs["component"].(map[string]interface{})
+		if comp == nil {
+			continue
+		}
+		id := strVal(comp, "id")
+		svc := strVal(comp, "service")
+
+		// If this component itself has a service, stop it
+		if id == componentID && svc != "" {
+			services[svc] = true
+		}
+
+		// If this component depends on the one being installed, stop its service
+		if deps, ok := comp["depends"].([]interface{}); ok {
+			for _, d := range deps {
+				if ds, ok := d.(string); ok && ds == componentID && svc != "" {
+					services[svc] = true
+				}
+			}
+		}
+	}
+
+	var result []string
+	for svc := range services {
+		result = append(result, svc)
+	}
+	return result
 }
 
 // runLogs shows service logs.

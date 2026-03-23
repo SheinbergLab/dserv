@@ -29,7 +29,7 @@ func init() {
 		{"status", "Show agent and dserv status", runStatus},
 		{"mesh", "List mesh nodes", runMesh},
 		{"service", "Control dserv service (start/stop/restart)", runService},
-		{"components", "List or install components", runComponents},
+		{"components", "List, install, check, or update components", runComponents},
 		{"logs", "View service logs", runLogs},
 		{"systems", "List or delete ESS systems in workgroup", runSystems},
 		{"scripts", "List scripts for a system", runScripts},
