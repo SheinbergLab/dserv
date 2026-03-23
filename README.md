@@ -103,7 +103,7 @@ A complementary Go service that provides out-of-band management for dserv system
 
 ### dservctl CLI (`tools/dservctl`)
 
-A command line program called `dservctl` provides a single executable (written in Go) that can be run from the terminal to interact with the dserv process and other subprocesses and to retrieve and update scripts on a dserv-agent registry server.
+A command line program called `dservctl` provides a single executable (written in Go) that can be run from the terminal to interact with the dserv process and other subprocesses and to retrieve and update scripts on a dserv-agent registry server. Extensive help is available by running `dservctl --help`.
 
 ## Default Endpoints
 
