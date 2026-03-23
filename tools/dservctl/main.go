@@ -37,6 +37,7 @@ func init() {
 		{"history", "Show script version history", runHistory},
 		{"templates", "List, add, or seed templates", runTemplates},
 		{"sandbox", "Manage sandboxes (create/promote/sync/delete)", runSandbox},
+		{"backup", "List or create registry database backups", runBackup},
 		{"export", "Export workgroup or system as ZIP", runExport},
 		{"sync", "Sync scripts from registry (or --all for entire workgroup)", runSync},
 		{"push", "Push locally modified scripts to registry", runPush},
@@ -110,6 +111,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
 	fmt.Fprintf(os.Stderr, "  dservctl templates seed /path/to/systems      Seed templates from filesystem\n")
 	fmt.Fprintf(os.Stderr, "  dservctl systems delete sys                   Delete a system and its scripts\n")
+	fmt.Fprintf(os.Stderr, "  dservctl backup                               List available backups\n")
+	fmt.Fprintf(os.Stderr, "  dservctl backup create                        Create a new backup now\n")
 }
 
 func main() {
