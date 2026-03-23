@@ -244,6 +244,18 @@ func (c *AgentClient) SaveLib(workgroup, name, version string, req map[string]in
 	return c.Do("PUT", path, req)
 }
 
+// --- backup admin API ---
+
+// CreateBackup triggers an immediate database backup on the registry.
+func (c *AgentClient) CreateBackup() (map[string]interface{}, error) {
+	return c.Post(registryBase+"/admin/backup", nil)
+}
+
+// ListBackups returns available database backups from the registry.
+func (c *AgentClient) ListBackups() (map[string]interface{}, error) {
+	return c.Get(registryBase + "/admin/backups")
+}
+
 // --- helpers ---
 
 func extractList(result map[string]interface{}, key string) []map[string]interface{} {
