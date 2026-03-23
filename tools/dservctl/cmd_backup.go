@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-// runBackup handles the "backup" command with subcommands: list, create.
+// runBackup handles the "backup" command with subcommands: list, create, get.
 func runBackup(cfg *Config, args []string) int {
 	if len(args) == 0 {
 		// Default to list
@@ -17,11 +17,14 @@ func runBackup(cfg *Config, args []string) int {
 		return runBackupList(cfg, args[1:])
 	case "create":
 		return runBackupCreate(cfg, args[1:])
+	case "get":
+		return runBackupGet(cfg, args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: dservctl backup [list|create]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dservctl backup [list|create|get]\n")
 		fmt.Fprintf(os.Stderr, "\nSubcommands:\n")
 		fmt.Fprintf(os.Stderr, "  list     List available backups (default)\n")
 		fmt.Fprintf(os.Stderr, "  create   Create a new backup now\n")
+		fmt.Fprintf(os.Stderr, "  get      Download a backup file\n")
 		return 2
 	}
 }
@@ -91,6 +94,61 @@ func runBackupCreate(cfg *Config, args []string) int {
 		size = int64(v)
 	}
 	fmt.Printf("Backup created: %s (%s)\n", strVal(backup, "filename"), formatSize(size))
+	return 0
+}
+
+func runBackupGet(cfg *Config, args []string) int {
+	filename := ""
+	output := ""
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-o", "--output":
+			if i+1 < len(args) {
+				output = args[i+1]
+				i++
+			}
+		default:
+			if filename == "" {
+				filename = args[i]
+			}
+		}
+	}
+
+	// If no filename given, fetch the latest backup
+	if filename == "" {
+		client := NewRegistryClient(cfg)
+		result, err := client.ListBackups()
+		if err != nil {
+			PrintError("%v", err)
+			return 1
+		}
+		backups := extractList(result, "backups")
+		if len(backups) == 0 {
+			PrintError("no backups available")
+			return 1
+		}
+		filename = strVal(backups[0], "filename")
+		fmt.Fprintf(os.Stderr, "Downloading latest backup: %s\n", filename)
+	}
+
+	if output == "" {
+		output = filename
+	}
+
+	client := NewRegistryClient(cfg)
+	data, err := client.GetBackup(filename)
+	if err != nil {
+		PrintError("%v", err)
+		return 1
+	}
+
+	if err := os.WriteFile(output, data, 0644); err != nil {
+		PrintError("writing file: %v", err)
+		return 1
+	}
+
+	fmt.Printf("Downloaded %s (%s)\n", output, formatSize(int64(len(data))))
 	return 0
 }
 
