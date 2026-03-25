@@ -186,7 +186,7 @@ oo::class create System {
 
     method configure_stim { host } {
         variable current
-        foreach var "screen_halfx screen_halfy screen_w screen_h" {
+        foreach var "screen_halfx screen_halfy screen_w screen_h refresh_rate frame_duration" {
             my add_variable $var
         }
 
@@ -198,6 +198,8 @@ oo::class create System {
             variable screen_halfy 9.0
             variable screen_w 1024
             variable screen_h 600
+            variable refresh_rate 60.0
+            variable frame_duration 16.6667
             dservSet ess/rmt_connected [rmtConnected]
             ::ess::ess_warning "Could not connect to stimulus host $host, using defaults" "stim"
             return 0
@@ -211,18 +213,24 @@ oo::class create System {
         set scale_y [rmtSend "screen_set ScaleY"]
         variable screen_w [expr int([rmtSend "screen_set WinWidth"]/$scale_x)]
         variable screen_h [expr int([rmtSend "screen_set WinHeight"]/$scale_y)]
-        
+        variable refresh_rate [rmtSend "screen_set RefreshRate"]
+        variable frame_duration [rmtSend "screen_set FrameDuration"]
+
         if { $screen_halfx == "" } {
             variable screen_halfx 16.0
             variable screen_halfy 9.0
             variable screen_w 1024
             variable screen_h 600
+            variable refresh_rate 60.0
+            variable frame_duration 16.6667
             ::ess::ess_warning "Received empty screen parameters, using defaults" "stim"
         }
 
-        foreach v "halfx halfy w h" { 
-            dservSet ess/screen_${v} [set screen_${v}] 
+        foreach v "halfx halfy w h" {
+            dservSet ess/screen_${v} [set screen_${v}]
         }
+        dservSet ess/screen_refresh_rate $refresh_rate
+        dservSet ess/screen_frame_duration $frame_duration
 
         ::ess::ess_info "Screen configured: ${screen_w}x${screen_h}, ${screen_halfx}°x${screen_halfy}°" "stim"
 
