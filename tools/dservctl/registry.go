@@ -194,6 +194,25 @@ func (c *AgentClient) SeedTemplates(sourcePath string, systems []string) (map[st
 	})
 }
 
+// DeleteProtocol removes all scripts for a protocol within a system.
+func (c *AgentClient) DeleteProtocol(workgroup, system, protocol string) (map[string]interface{}, error) {
+	return c.Do("DELETE", registryBase+"/scaffold/protocol", map[string]string{
+		"workgroup": workgroup,
+		"system":    system,
+		"protocol":  protocol,
+	})
+}
+
+// ScaffoldSystem creates a new skeleton system in a workgroup.
+func (c *AgentClient) ScaffoldSystem(workgroup, system, protocol, createdBy string) (map[string]interface{}, error) {
+	return c.Post(registryBase+"/scaffold/system", map[string]string{
+		"workgroup": workgroup,
+		"system":    system,
+		"protocol":  protocol,
+		"createdBy": createdBy,
+	})
+}
+
 // DeleteSystem removes a system and all its scripts.
 func (c *AgentClient) DeleteSystem(workgroup, system string) (map[string]interface{}, error) {
 	return c.Do("DELETE", registryBase+"/scaffold/system", map[string]string{

@@ -95,8 +95,13 @@ func runSystemDelete(cfg *Config, args []string) int {
 
 // runScripts lists scripts for a system grouped by protocol.
 func runScripts(cfg *Config, args []string) int {
+	if len(args) > 0 && args[0] == "delete-protocol" {
+		return runDeleteProtocol(cfg, args[1:])
+	}
+
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: dservctl scripts <system> [--version V]\n")
+		fmt.Fprintf(os.Stderr, "       dservctl scripts delete-protocol <system> <protocol>\n")
 		return 2
 	}
 	if !requireWorkgroup(cfg) {
@@ -166,6 +171,35 @@ func runScripts(cfg *Config, args []string) int {
 	}
 
 	PrintTable(headers, rows)
+	return 0
+}
+
+func runDeleteProtocol(cfg *Config, args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "Usage: dservctl scripts delete-protocol <system> <protocol>\n")
+		return 2
+	}
+	if !requireWorkgroup(cfg) {
+		return 2
+	}
+
+	system := args[0]
+	protocol := args[1]
+
+	client := NewRegistryClient(cfg)
+	result, err := client.DeleteProtocol(cfg.Workgroup, system, protocol)
+	if err != nil {
+		PrintError("%v", err)
+		return 1
+	}
+
+	if cfg.JSON {
+		printJSON(result)
+		return 0
+	}
+
+	deleted := intVal(result, "deleted")
+	fmt.Printf("Deleted protocol %q from %s (%d scripts removed)\n", protocol, system, deleted)
 	return 0
 }
 

@@ -32,7 +32,7 @@ func init() {
 		{"components", "List, install, check, or update components", runComponents},
 		{"logs", "View service logs", runLogs},
 		{"systems", "List or delete ESS systems in workgroup", runSystems},
-		{"scripts", "List scripts for a system", runScripts},
+		{"scripts", "List scripts for a system, or delete a protocol", runScripts},
 		{"script", "Get or save a script", runScript},
 		{"history", "Show script version history", runHistory},
 		{"templates", "List, add, or seed templates", runTemplates},
@@ -103,6 +103,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl sync prf --dir ./prf                 Pull scripts to local dir\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sync --all --dir ./systems            Pull all systems + libs\n")
 	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf -m \"fix bug\"    Push local changes to registry\n")
+	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf --add           Push changes + add new protocols\n")
+	fmt.Fprintf(os.Stderr, "  dservctl push newsys --dir ./newsys --add     Create new system from local files\n")
 	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf --dry-run       Preview what would be pushed\n")
 	fmt.Fprintf(os.Stderr, "  dservctl diff prf --dir ./prf                 Show modified/synced status\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs list                            List shared libraries\n")
@@ -110,6 +112,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl libs push --dir ./lib -m \"update\"    Push changed libs\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
 	fmt.Fprintf(os.Stderr, "  dservctl templates seed /path/to/systems      Seed templates from filesystem\n")
+	fmt.Fprintf(os.Stderr, "  dservctl scripts delete-protocol prf proto     Delete a protocol from a system\n")
 	fmt.Fprintf(os.Stderr, "  dservctl systems delete sys                   Delete a system and its scripts\n")
 	fmt.Fprintf(os.Stderr, "  dservctl backup                               List available backups\n")
 	fmt.Fprintf(os.Stderr, "  dservctl backup create                        Create a new backup now\n")

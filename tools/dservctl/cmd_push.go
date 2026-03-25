@@ -8,16 +8,28 @@ import (
 	"strings"
 )
 
+// scriptInfo holds registry coordinates and checksum for a script.
+type scriptInfo struct {
+	protocol string
+	stype    string
+	filename string
+	checksum string
+}
+
 // runPush pushes locally modified scripts to the registry.
 // Fetches the server manifest to determine what's changed, then
 // uploads only modified files. No local manifest file needed.
 //
+// With --add, also uploads local-only scripts (new protocols) that
+// don't yet exist in the registry. If the system itself doesn't
+// exist, --add will scaffold it first.
+//
 // Usage:
 //
-//	dservctl push <system> [--dir DIR] [--version V] [--comment MSG] [--dry-run]
+//	dservctl push <system> [--dir DIR] [--version V] [--comment MSG] [--dry-run] [--add]
 func runPush(cfg *Config, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: dservctl push <system> [--dir DIR] [--version V] [--comment MSG] [--dry-run]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dservctl push <system> [--dir DIR] [--version V] [--comment MSG] [--dry-run] [--add]\n")
 		return 2
 	}
 	if !requireWorkgroup(cfg) {
@@ -36,6 +48,7 @@ func runPush(cfg *Config, args []string) int {
 	version := ""
 	comment := ""
 	dryRun := false
+	addNew := false
 
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
@@ -56,6 +69,8 @@ func runPush(cfg *Config, args []string) int {
 			}
 		case "--dry-run", "-n":
 			dryRun = true
+		case "--add":
+			addNew = true
 		}
 	}
 
@@ -66,39 +81,32 @@ func runPush(cfg *Config, args []string) int {
 		PrintError("fetching manifest: %v", err)
 		return 1
 	}
-	if manifest == nil {
-		PrintError("system %q not found", system)
+
+	systemExists := manifest != nil
+
+	if !systemExists && !addNew {
+		PrintError("system %q not found in registry (use --add to create it)", system)
 		return 1
 	}
 
-	scripts := extractList(manifest, "scripts")
-	if len(scripts) == 0 {
-		fmt.Println("No scripts in server manifest.")
-		return 0
-	}
-
-	// Step 2: Build server checksum map and registry coordinate lookup
-	type scriptInfo struct {
-		protocol string
-		stype    string
-		filename string
-		checksum string
-	}
-
+	// Step 2: Build server checksum map from existing scripts
 	serverScripts := make(map[string]scriptInfo) // localRelPath -> info
-	for _, s := range scripts {
-		protocol := strVal(s, "protocol")
-		stype := strVal(s, "type")
-		filename := strVal(s, "filename")
-		if filename == "" {
-			filename = stype
-		}
-		relPath := localRelPath(protocol, filename)
-		serverScripts[relPath] = scriptInfo{
-			protocol: protocol,
-			stype:    stype,
-			filename: filename,
-			checksum: strVal(s, "checksum"),
+	if systemExists {
+		scripts := extractList(manifest, "scripts")
+		for _, s := range scripts {
+			protocol := strVal(s, "protocol")
+			stype := strVal(s, "type")
+			filename := strVal(s, "filename")
+			if filename == "" {
+				filename = stype
+			}
+			relPath := localRelPath(protocol, filename)
+			serverScripts[relPath] = scriptInfo{
+				protocol: protocol,
+				stype:    stype,
+				filename: filename,
+				checksum: strVal(s, "checksum"),
+			}
 		}
 	}
 
@@ -107,11 +115,14 @@ func runPush(cfg *Config, args []string) int {
 		info    scriptInfo
 		relPath string
 		content []byte
+		isNew   bool
 	}
 	var changed []pendingPush
+	var newScripts []pendingPush
 	var missing []string
 	unchanged := 0
 
+	// Check existing server scripts for modifications
 	for relPath, info := range serverScripts {
 		localPath := filepath.Join(dir, relPath)
 		data, err := os.ReadFile(localPath)
@@ -133,35 +144,77 @@ func runPush(cfg *Config, args []string) int {
 		})
 	}
 
-	if len(changed) == 0 {
+	// Step 4: If --add, scan for local-only files (new protocols/scripts)
+	if addNew {
+		localOnly := findLocalOnlyScripts(dir, serverScripts)
+		for _, lo := range localOnly {
+			newScripts = append(newScripts, pendingPush{
+				info:    lo.info,
+				relPath: lo.relPath,
+				content: lo.content,
+				isNew:   true,
+			})
+		}
+	}
+
+	if len(changed) == 0 && len(newScripts) == 0 {
 		fmt.Printf("All %d scripts unchanged.\n", unchanged)
 		if len(missing) > 0 && cfg.Verbose {
 			fmt.Printf("(%d files not found locally)\n", len(missing))
 		}
+		// Still report local-only if --add wasn't used
+		if !addNew {
+			localOnly := findLocalOnlyScripts(dir, serverScripts)
+			if len(localOnly) > 0 {
+				fmt.Printf("%d local-only script(s) not pushed (use --add to include)\n", len(localOnly))
+			}
+		}
 		return 0
 	}
 
+	// --- Dry-run output ---
 	if cfg.JSON && dryRun {
-		var items []map[string]string
+		var changedItems []map[string]string
 		for _, c := range changed {
-			items = append(items, map[string]string{
+			changedItems = append(changedItems, map[string]string{
 				"protocol":  c.info.protocol,
 				"type":      c.info.stype,
 				"localPath": c.relPath,
 			})
 		}
+		var newItems []map[string]string
+		for _, n := range newScripts {
+			newItems = append(newItems, map[string]string{
+				"protocol":  n.info.protocol,
+				"type":      n.info.stype,
+				"localPath": n.relPath,
+			})
+		}
 		printJSON(map[string]interface{}{
-			"changed":   items,
-			"unchanged": unchanged,
-			"missing":   missing,
+			"systemExists": systemExists,
+			"changed":      changedItems,
+			"new":          newItems,
+			"unchanged":    unchanged,
+			"missing":      missing,
 		})
 		return 0
 	}
 
 	if dryRun {
-		fmt.Printf("Would push %d changed script(s):\n", len(changed))
-		for _, c := range changed {
-			fmt.Printf("  ↑ %s/%s ← %s\n", c.info.protocol, c.info.stype, c.relPath)
+		if !systemExists {
+			fmt.Printf("Would create system %q in workgroup %q\n", system, cfg.Workgroup)
+		}
+		if len(changed) > 0 {
+			fmt.Printf("Would push %d changed script(s):\n", len(changed))
+			for _, c := range changed {
+				fmt.Printf("  ↑ %s/%s ← %s\n", c.info.protocol, c.info.stype, c.relPath)
+			}
+		}
+		if len(newScripts) > 0 {
+			fmt.Printf("Would add %d new script(s):\n", len(newScripts))
+			for _, n := range newScripts {
+				fmt.Printf("  + %s/%s ← %s\n", n.info.protocol, n.info.stype, n.relPath)
+			}
 		}
 		if len(missing) > 0 {
 			fmt.Printf("Not found locally (%d):\n", len(missing))
@@ -173,8 +226,24 @@ func runPush(cfg *Config, args []string) int {
 		return 0
 	}
 
-	// Step 4: Push changed files
+	// Step 5: Scaffold system if it doesn't exist
+	if !systemExists {
+		// Find the first protocol name to use for scaffolding
+		firstProto := "_"
+		if len(newScripts) > 0 {
+			firstProto = newScripts[0].info.protocol
+		}
+		fmt.Printf("Creating system %q in workgroup %q...\n", system, cfg.Workgroup)
+		_, err := client.ScaffoldSystem(cfg.Workgroup, system, firstProto, cfg.User)
+		if err != nil {
+			PrintError("creating system: %v", err)
+			return 1
+		}
+	}
+
+	// Step 6: Push changed files
 	pushed := 0
+	added := 0
 	errors := 0
 
 	for _, c := range changed {
@@ -206,7 +275,36 @@ func runPush(cfg *Config, args []string) int {
 		}
 	}
 
-	fmt.Printf("Pushed %d, unchanged %d", pushed, unchanged)
+	// Step 7: Push new scripts
+	for _, n := range newScripts {
+		req := map[string]interface{}{
+			"content":          string(n.content),
+			"expectedChecksum": "", // new script, no prior checksum
+			"updatedBy":        cfg.User,
+			"comment":          comment,
+		}
+
+		result, err := client.SaveScript(cfg.Workgroup, system, n.info.protocol, n.info.stype, version, req)
+		if err != nil {
+			PrintError("%s/%s: %v", n.info.protocol, n.info.stype, err)
+			errors++
+			continue
+		}
+
+		added++
+		if cfg.Verbose {
+			cs := strVal(result, "checksum")
+			if len(cs) > 8 {
+				cs = cs[:8]
+			}
+			fmt.Printf("  + %s/%s (%s)\n", n.info.protocol, n.info.stype, cs)
+		}
+	}
+
+	fmt.Printf("Pushed %d, added %d", pushed, added)
+	if unchanged > 0 {
+		fmt.Printf(", unchanged %d", unchanged)
+	}
 	if errors > 0 {
 		fmt.Printf(", %d error(s)", errors)
 	}
@@ -228,4 +326,126 @@ func localRelPath(protocol, filename string) string {
 		return filename
 	}
 	return filepath.Join(protocol, filename)
+}
+
+// localOnlyScript represents a local file not present in the server manifest.
+type localOnlyScript struct {
+	info    scriptInfo
+	relPath string
+	content []byte
+}
+
+// findLocalOnlyScripts walks the local directory and returns scripts
+// that are not present in the server manifest.
+func findLocalOnlyScripts(dir string, serverScripts map[string]scriptInfo) []localOnlyScript {
+	var results []localOnlyScript
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return results
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if isHiddenFile(entry.Name()) {
+				continue
+			}
+			// Protocol subdirectory
+			proto := entry.Name()
+			subEntries, err := os.ReadDir(filepath.Join(dir, proto))
+			if err != nil {
+				continue
+			}
+			for _, sub := range subEntries {
+				if sub.IsDir() || shouldIgnoreFile(sub.Name()) {
+					continue
+				}
+				relPath := filepath.Join(proto, sub.Name())
+				if _, exists := serverScripts[relPath]; exists {
+					continue
+				}
+				data, err := os.ReadFile(filepath.Join(dir, relPath))
+				if err != nil {
+					continue
+				}
+				stype := deriveScriptType(proto, sub.Name())
+				results = append(results, localOnlyScript{
+					info: scriptInfo{
+						protocol: proto,
+						stype:    stype,
+						filename: sub.Name(),
+					},
+					relPath: relPath,
+					content: data,
+				})
+			}
+		} else {
+			// System-level file
+			name := entry.Name()
+			if shouldIgnoreFile(name) {
+				continue
+			}
+			relPath := name
+			if _, exists := serverScripts[relPath]; exists {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, relPath))
+			if err != nil {
+				continue
+			}
+			stype := deriveSystemScriptType(name)
+			results = append(results, localOnlyScript{
+				info: scriptInfo{
+					protocol: "_",
+					stype:    stype,
+					filename: name,
+				},
+				relPath: relPath,
+				content: data,
+			})
+		}
+	}
+
+	return results
+}
+
+// deriveScriptType determines the registry script type from a protocol
+// script filename. Convention:
+//
+//	<proto>.tcl           → "protocol"
+//	<proto>_loaders.tcl   → "loaders"
+//	<proto>_stim.tcl      → "stim"
+//	<proto>_variants.tcl  → "variants"
+//	<proto>_extract.tcl   → "extract"
+//	<proto>_<suffix>.tcl  → "<suffix>"
+func deriveScriptType(protocol, filename string) string {
+	base := stripExtension(filename)
+	if base == protocol {
+		return "protocol"
+	}
+	prefix := protocol + "_"
+	if strings.HasPrefix(base, prefix) {
+		return base[len(prefix):]
+	}
+	// Fallback: use the bare name
+	return base
+}
+
+// deriveSystemScriptType determines the script type for a system-level
+// file (no protocol). Convention:
+//
+//	<system>.tcl          → "system"
+//	<system>_extract.tcl  → "extract"
+//	<system>_analyze.tcl  → "analyze"
+//
+// Since we don't know the system name here, we check for known suffixes.
+func deriveSystemScriptType(filename string) string {
+	base := stripExtension(filename)
+	if strings.HasSuffix(base, "_extract") {
+		return "extract"
+	}
+	if strings.HasSuffix(base, "_analyze") {
+		return "analyze"
+	}
+	return "system"
 }
