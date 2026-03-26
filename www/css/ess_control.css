@@ -1434,6 +1434,8 @@ body.ess-app {
         grid-row: 2;
         min-width: 360px;
         height: auto !important;
+        min-height: 0;
+        overflow: hidden;
         flex-shrink: unset;
     }
     
