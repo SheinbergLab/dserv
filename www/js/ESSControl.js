@@ -1170,12 +1170,12 @@ updateConfigRunButtons() {
             const isActive = isThisConfig && queueStatus !== 'idle';
             
             if (isActive) {
-                btn.textContent = '✕';
-                btn.title = 'Close';
+                btn.textContent = 'Close';
+                btn.title = 'Close datafile and end run';
                 btn.classList.add('closeable');
             } else {
-                btn.textContent = '▶';
-                btn.title = 'Load, open file, and start';
+                btn.textContent = 'Run';
+                btn.title = 'Load config, open datafile, ready for Go';
                 btn.classList.remove('closeable');
             }
             
@@ -1745,6 +1745,11 @@ updateConfigRunButtons() {
             });
         }
 
+        // Sort alphabetically by name (server may send unordered)
+        configs = [...configs].sort((a, b) =>
+            (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })
+        );
+
         const list = this.elements.configList;
         
         if (configs.length === 0) {
@@ -1798,7 +1803,6 @@ updateConfigRunButtons() {
             // Render normal view
            list.innerHTML = configs.map(cfg => {
                 const isActive = this.state.currentConfig?.name === cfg.name;
-                
                 return `
                     <div class="ess-config-item ${isActive ? 'active' : ''}" data-name="${this.escapeAttr(cfg.name)}">
                         <div class="ess-config-item-name-row">
@@ -1821,7 +1825,7 @@ updateConfigRunButtons() {
                                 <span class="ess-config-item-path">${this.escapeHtml(cfg.system || '')}/${this.escapeHtml(cfg.protocol || '')}/${this.escapeHtml(cfg.variant || '')}</span>
                             </div>
                             <div class="ess-config-item-buttons">
-                                <button class="ess-config-item-run" title="Load, open file, and ready to go">▶</button>
+                                <button class="ess-config-item-run" title="Load config, open datafile, ready for Go">Run</button>
                                 <button class="ess-config-item-load" title="Load setup only">Load</button>
                             </div>
                         </div>
@@ -1848,6 +1852,12 @@ updateConfigRunButtons() {
                     }
                 });
                 
+                // Load button - load config only (no datafile)
+                item.querySelector('.ess-config-item-load')?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.loadConfig(name);
+                });
+
                 // Menu button toggle
                 const menuBtn = item.querySelector('.ess-config-item-menu-btn');
                 const menu = item.querySelector('.ess-config-item-menu');
@@ -1899,8 +1909,11 @@ updateConfigRunButtons() {
                 });
             });
         }
+
+        // Apply run/close button state after rendering
+        this.updateConfigRunButtons();
     }
-    
+
     closeAllConfigMenus() {
         this.elements.configList.querySelectorAll('.ess-config-item-menu.open').forEach(menu => {
             menu.classList.remove('open');
