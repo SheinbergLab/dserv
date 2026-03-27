@@ -164,6 +164,13 @@ class ProjectSelector {
         this.dpManager.subscribe('ess/registry/sync_status', (data) => {
             this.updateSyncStatusFromDatapoint(data.value);
         });
+
+        // Remote update details (who pushed, from which rig)
+        this.dpManager.subscribe('ess/registry/remote_update', (data) => {
+            if (data.value) {
+                this.state.remoteUpdate = data.value;
+            }
+        });
     }
     
     // =========================================================================
@@ -334,6 +341,15 @@ class ProjectSelector {
                 indicator.title = 'Never synced to registry';
                 timeEl.textContent = 'Never synced';
                 break;
+            case 'stale':
+                const info = this.state.remoteUpdate || {};
+                const who = info.pushed_by || 'another rig';
+                const rig = info.source_rig || '';
+                const detail = rig ? `${who} on ${rig}` : who;
+                indicator.title = `Registry updated by ${detail} — click to pull`;
+                timeEl.textContent = `Updated by ${detail}`;
+                this.showQuickPull(true);
+                break;
             case 'error':
                 indicator.title = 'Sync error';
                 timeEl.textContent = 'Error';
@@ -341,6 +357,50 @@ class ProjectSelector {
             default:
                 indicator.title = status;
                 timeEl.textContent = status;
+        }
+
+        // Hide quick-pull button for non-stale states
+        if (status !== 'stale') {
+            this.showQuickPull(false);
+        }
+    }
+
+    /**
+     * Show/hide a small pull button next to the sync indicator
+     */
+    showQuickPull(show) {
+        let btn = this.container.querySelector('#project-quick-pull');
+        if (show) {
+            if (!btn) {
+                btn = document.createElement('button');
+                btn.id = 'project-quick-pull';
+                btn.className = 'project-quick-pull-btn';
+                btn.title = 'Pull latest from registry';
+                btn.textContent = '↓';
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.quickPull();
+                });
+                // Insert after the sync indicator
+                this.elements.syncIndicator.insertAdjacentElement('afterend', btn);
+            }
+            btn.style.display = '';
+        } else if (btn) {
+            btn.style.display = 'none';
+        }
+    }
+
+    /**
+     * Pull latest project from registry (triggered by quick-pull button)
+     */
+    async quickPull() {
+        if (!this.state.activeProject) return;
+        try {
+            await this.sendCommandAsync(
+                `registry_pull ${this.state.activeProject} -overwrite 1`
+            );
+        } catch (err) {
+            console.error('Quick pull failed:', err);
         }
     }
     

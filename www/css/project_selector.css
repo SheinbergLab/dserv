@@ -104,8 +104,36 @@
     background: #d29922;
 }
 
+.project-sync-indicator.sync-stale {
+    background: #e3b341;
+    animation: pulse-stale 2s ease-in-out infinite;
+}
+
+@keyframes pulse-stale {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 .project-sync-indicator.sync-error {
     background: #f85149;
+}
+
+/* Quick pull button (shown when stale) */
+.project-quick-pull-btn {
+    background: #e3b341;
+    color: #1c2128;
+    border: none;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 1px 4px;
+    margin-left: 4px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.project-quick-pull-btn:hover {
+    background: #f0d050;
 }
 
 /* Visual indicator when no project selected */
