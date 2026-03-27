@@ -1250,6 +1250,15 @@ footer {
      let app;
      document.addEventListener('DOMContentLoaded', () => { app = new LabMeshApp(); });
 
+     // Safari bfcache: page restored from cache won't re-fire DOMContentLoaded,
+     // so the WebSocket stays connected to the previous host. Reinitialize.
+     window.addEventListener('pageshow', (e) => {
+         if (e.persisted) {
+             if (app?.ws) { try { app.ws.close(); } catch(_) {} }
+             app = new LabMeshApp();
+         }
+     });
+
      // Close app menu on outside click
      document.addEventListener('click', e => {
          const menu = document.getElementById('app-menu');
