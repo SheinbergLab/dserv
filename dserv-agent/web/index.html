@@ -641,7 +641,7 @@ footer {
              const st = n.status || 'idle';
              const name = (n.name || n.id).replace('Lab Station ', '');
              const url = `${n.ssl?'https':'http'}://${n.isLocal ? location.hostname : n.ip}:${n.webPort||2565}/`;
-             const agentUrl = `http://${n.id.toLowerCase()}.local/`;
+             const agentUrl = n.ip ? `http://${n.ip}/` : `http://${n.id.toLowerCase()}.local/`;
              const localLabel = n.isLocal ? ' <span class="local-label">(local)</span>' : '';
              const nameHtml = n.isLocal 
 			    ? this.esc(name) + localLabel
@@ -814,10 +814,7 @@ footer {
              }
              
              this.panelUsingMainWs = false;
-             let host = node.id.toLowerCase() + '.local';
-             if (node.id.includes(' ') || !/^[a-z0-9-]+$/i.test(node.id)) {
-		 host = node.ipAddress;
-             }
+             let host = node.ip || node.ipAddress || (node.id.toLowerCase() + '.local');
              try {
 		 this.panelWs = new WebSocket(`ws://${host}:${CONFIG.agentPort}/ws`);
 		 this.panelWs.onopen = () => {
