@@ -42,6 +42,7 @@ func init() {
 		{"sync", "Sync scripts from registry (or --all for entire workgroup)", runSync},
 		{"push", "Push locally modified scripts to registry", runPush},
 		{"diff", "Compare local scripts against registry", runSyncStatus},
+		{"configs", "Manage project configs/queues (list/status/push/pull)", runConfigs},
 		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
 		{"version", "Show version", runVersion},
 		{"help", "Show help", nil},

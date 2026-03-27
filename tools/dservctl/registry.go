@@ -281,6 +281,44 @@ func (c *AgentClient) GetBackup(filename string) ([]byte, error) {
 	return data, err
 }
 
+// --- config project API ---
+
+// ListProjectDefs returns project definitions for a workgroup.
+func (c *AgentClient) ListProjectDefs(workgroup string) ([]map[string]interface{}, error) {
+	result, err := c.Get(registryBase + "/projectdefs?workgroup=" + url.QueryEscape(workgroup))
+	if err != nil {
+		return nil, err
+	}
+	if items, ok := result["projects"].([]interface{}); ok {
+		return toMapSlice(items), nil
+	}
+	return extractList(result, "projects"), nil
+}
+
+// GetBundleStatus returns lightweight sync metadata for a project.
+func (c *AgentClient) GetBundleStatus(workgroup, project string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/bundle-status/%s/%s", registryBase, url.PathEscape(workgroup), url.PathEscape(project))
+	return c.Get(path)
+}
+
+// GetBundle exports a complete project bundle from registry.
+func (c *AgentClient) GetBundle(workgroup, project string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/bundle/%s/%s", registryBase, url.PathEscape(workgroup), url.PathEscape(project))
+	return c.Get(path)
+}
+
+// ListBundleHistory returns recent push history for a project.
+func (c *AgentClient) ListBundleHistory(workgroup, project string, limit int) ([]map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/bundle-history/%s/%s?limit=%d", registryBase, url.PathEscape(workgroup), url.PathEscape(project), limit)
+	result, err := c.Get(path)
+	if err != nil {
+		// If the result is actually an array, it comes back as error from Get
+		// Try fetching raw
+		return nil, err
+	}
+	return extractList(result, "entries"), nil
+}
+
 // --- helpers ---
 
 func extractList(result map[string]interface{}, key string) []map[string]interface{} {
