@@ -104,6 +104,83 @@ proc queue_timer_stop {} {
 queue_timer_setup
 
 #=========================================================================
+# Auto-Push (Timer 1) - push local changes to registry after settling
+#=========================================================================
+
+variable auto_push_settle_ms 3000
+variable auto_push_interval_ms 1000
+
+proc auto_push_tick_callback {dpoint data} {
+    # Check if there are pending modifications that have settled
+    if {![::ess::configs::auto_push_ready 3]} { return }
+
+    set project $::ess::configs::active_project
+    if {$project eq ""} { return }
+
+    # Attempt push - failures are silent (network may be down)
+    if {[catch {
+        registry_push $project
+        ::ess::configs::auto_push_clear
+    } err]} {
+        puts "configs: auto-push failed: $err"
+    }
+}
+
+proc auto_push_timer_setup {} {
+    dservAddExactMatch queueTimer/1
+    dpointSetScript queueTimer/1 auto_push_tick_callback
+}
+
+proc auto_push_timer_start {{interval_ms 1000}} {
+    variable auto_push_interval_ms
+    set auto_push_interval_ms $interval_ms
+    timerTickInterval 1 $interval_ms $interval_ms
+    puts "configs: Auto-push polling started (${interval_ms}ms)"
+}
+
+auto_push_timer_setup
+
+#=========================================================================
+# Registry Poll (Timer 2) - check for remote changes
+#=========================================================================
+
+variable registry_poll_interval_ms 30000
+
+proc registry_poll_callback {dpoint data} {
+    set project $::ess::configs::active_project
+    if {$project eq ""} { return }
+
+    if {[catch {
+        set result [ess::registry::check_registry_status $project]
+        set status [dict get $result status]
+
+        if {$status eq "stale"} {
+            dservSet ess/registry/sync_status "stale"
+            dservSet ess/registry/remote_update [dict create \
+                pushed_by [dict get $result pushed_by] \
+                source_rig [dict get $result source_rig] \
+                pushed_at [dict get $result pushed_at]]
+        }
+    } err]} {
+        # Silent failure - registry may be unreachable
+    }
+}
+
+proc registry_poll_setup {} {
+    dservAddExactMatch queueTimer/2
+    dpointSetScript queueTimer/2 registry_poll_callback
+}
+
+proc registry_poll_start {{interval_ms 30000}} {
+    variable registry_poll_interval_ms
+    set registry_poll_interval_ms $interval_ms
+    timerTickInterval 2 $interval_ms $interval_ms
+    puts "configs: Registry polling started (${interval_ms}ms)"
+}
+
+registry_poll_setup
+
+#=========================================================================
 # ESS State Monitoring
 #=========================================================================
 
@@ -545,9 +622,15 @@ proc registry_config {} {
 # Startup Complete
 #=========================================================================
 
+# Start auto-push and registry polling timers
+auto_push_timer_start 1000
+registry_poll_start 30000
+
 puts "Configs Manager subprocess ready"
 puts "  Database: $configs_db"
 puts "  Project: project_create, project_activate, project_list"
 puts "  Config:  config_save, config_load, config_run, config_list"
 puts "  Queue:   queue_create, queue_add, queue_start, queue_stop"
 puts "  Registry: registry_configure, registry_push, registry_pull"
+puts "  Auto-push: enabled (1s check, 3s settle)"
+puts "  Registry poll: enabled (30s interval)"
