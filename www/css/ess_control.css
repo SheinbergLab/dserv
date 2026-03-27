@@ -29,6 +29,7 @@ body.ess-app {
     background: var(--ess-bg-primary);
     color: var(--ess-text-primary);
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
 }
 
@@ -36,6 +37,7 @@ body.ess-app {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;
     padding: 8px;
     gap: 8px;
 }
@@ -1412,10 +1414,11 @@ body.ess-app {
         grid-template-columns: min-content 1fr;
         grid-template-rows: auto 1fr;
         height: 100vh;
+        height: 100dvh;
         padding: 8px;
         gap: 8px;
     }
-    
+
     .ess-status-bar {
         grid-column: 1 / -1;
         overflow: visible;
