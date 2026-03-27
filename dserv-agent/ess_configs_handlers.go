@@ -43,6 +43,9 @@ func (r *ESSRegistry) RegisterConfigsHandlers(mux *http.ServeMux, authMiddleware
 	// Bundle operations (push/pull)
 	mux.HandleFunc("/api/v1/ess/bundle/", authMiddleware(r.handleBundle))
 
+	// Bundle status (lightweight sync check)
+	mux.HandleFunc("/api/v1/ess/bundle-status/", authMiddleware(r.handleBundleStatus))
+
 	// Bundle history (audit/recovery)
 	mux.HandleFunc("/api/v1/ess/bundle-history/", authMiddleware(r.handleBundleHistory))
 }
@@ -864,6 +867,30 @@ func (r *ESSRegistry) handleBundle(w http.ResponseWriter, req *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// GET /api/v1/ess/bundle-status/{workgroup}/{project} - lightweight sync check
+func (r *ESSRegistry) handleBundleStatus(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(req.URL.Path, "/api/v1/ess/bundle-status/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) < 2 {
+		http.Error(w, "Invalid path: need workgroup/project", http.StatusBadRequest)
+		return
+	}
+
+	status, err := r.GetProjectBundleStatus(parts[0], parts[1])
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, status)
 }
 
 // GET /api/v1/ess/bundle-history/{workgroup}/{project} - list push history

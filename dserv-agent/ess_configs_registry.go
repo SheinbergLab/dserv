@@ -1087,6 +1087,43 @@ func (r *ESSRegistry) GetBundleSnapshot(id int64) (*ESSProjectBundle, error) {
 	return &bundle, nil
 }
 
+// BundleStatus contains lightweight sync status for a project
+type BundleStatus struct {
+	Workgroup    string `json:"workgroup"`
+	Project      string `json:"project"`
+	UpdatedAt    int64  `json:"updatedAt"`
+	LastPushedAt int64  `json:"lastPushedAt"`
+	LastPushedBy string `json:"lastPushedBy"`
+	SourceRig    string `json:"sourceRig"`
+}
+
+// GetProjectBundleStatus returns lightweight sync metadata without full bundle export
+func (r *ESSRegistry) GetProjectBundleStatus(workgroup, projectName string) (*BundleStatus, error) {
+	status := &BundleStatus{
+		Workgroup: workgroup,
+		Project:   projectName,
+	}
+
+	// Get project updated_at
+	err := r.db.QueryRow(
+		"SELECT updated_at FROM ess_project_defs WHERE workgroup = ? AND name = ?",
+		workgroup, projectName,
+	).Scan(&status.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %s/%s", workgroup, projectName)
+	}
+
+	// Get latest push info from history
+	r.db.QueryRow(`
+		SELECT pushed_at, pushed_by, source_rig FROM ess_bundle_history
+		WHERE workgroup = ? AND project_name = ?
+		ORDER BY pushed_at DESC LIMIT 1
+	`, workgroup, projectName).Scan(&status.LastPushedAt, &status.LastPushedBy, &status.SourceRig)
+	// Ignore error — no history is fine
+
+	return status, nil
+}
+
 // PruneBundleHistory removes old entries, keeping the most recent N per project
 func (r *ESSRegistry) PruneBundleHistory(workgroup, projectName string, keep int) (int64, error) {
 	if keep <= 0 {
