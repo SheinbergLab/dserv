@@ -728,4 +728,53 @@ namespace eval ess::registry {
         
         return [dict create status "synced" message "Project is in sync"]
     }
+
+    #=========================================================================
+    # Registry Status Check (lightweight poll)
+    #=========================================================================
+
+    # Check if registry has newer data than our last sync
+    # Returns: dict with status (current|stale|error) and metadata
+    proc check_registry_status {project_name} {
+        variable config
+
+        if {$config(url) eq ""} {
+            return [dict create status "error" message "Registry not configured"]
+        }
+
+        # Get lightweight status from registry
+        if {[catch {
+            set remote [api_get "/bundle-status/$config(workgroup)/$project_name"]
+        } err]} {
+            return [dict create status "error" message $err]
+        }
+
+        # Get local sync timestamp
+        set local [::ess::configs::project_get $project_name]
+        if {$local eq ""} {
+            return [dict create status "error" message "Project not found locally"]
+        }
+
+        set local_synced [dict_get_default $local last_sync_at 0]
+        set remote_pushed [dict_get_default $remote lastPushedAt 0]
+        set remote_by [dict_get_default $remote lastPushedBy ""]
+        set remote_rig [dict_get_default $remote sourceRig ""]
+
+        # If registry has a push newer than our last sync, we're stale
+        if {$remote_pushed > $local_synced} {
+            # But not if we were the ones who pushed it
+            set local_rig ""
+            catch { set local_rig [dservGet system/hostname] }
+            if {$remote_rig ne "" && $remote_rig eq $local_rig} {
+                return [dict create status "current" message "In sync (self-pushed)"]
+            }
+            return [dict create status "stale" \
+                message "Registry updated by $remote_by on $remote_rig" \
+                pushed_by $remote_by \
+                source_rig $remote_rig \
+                pushed_at $remote_pushed]
+        }
+
+        return [dict create status "current" message "Up to date"]
+    }
 }

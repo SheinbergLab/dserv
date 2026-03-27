@@ -118,7 +118,7 @@ proc ::ess_queues::queue_create {name args} {
     }
     
     log info "Created queue: $name in project $project"
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_list
     
     return $name
@@ -155,7 +155,7 @@ proc ::ess_queues::queue_delete {name args} {
     }
     
     log info "Deleted queue: $name"
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_list
     return $name
 }
@@ -393,7 +393,7 @@ proc ::ess_queues::queue_update {name args} {
         $db eval $sql
     }
     
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_list
     return $name
 }
@@ -450,7 +450,7 @@ proc ::ess_queues::queue_add_item {queue_name config_name args} {
         VALUES (:queue_id, :config_id, :position, :repeat_count, :pause_after, :notes)
     }
 
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
     return $position
 }
@@ -471,7 +471,7 @@ proc ::ess_queues::queue_remove_item {queue_name position args} {
     }
     
     renumber_items $queue_id
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
 }
 
@@ -486,7 +486,7 @@ proc ::ess_queues::queue_clear_items {queue_name args} {
     set queue_id [get_queue_id $queue_name $project]
     
     $db eval {DELETE FROM queue_items WHERE queue_id = :queue_id}
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
 }
 
@@ -531,7 +531,7 @@ proc ::ess_queues::queue_update_item {queue_name position args} {
     set sql "UPDATE queue_items SET [join $updates ", "] WHERE queue_id = :queue_id AND position = :position"
     $db eval $sql
     
-    dservSet ess/registry/sync_status "modified"
+    ::ess::configs::mark_modified
     publish_queue_items $queue_name $project
     return $position
 }

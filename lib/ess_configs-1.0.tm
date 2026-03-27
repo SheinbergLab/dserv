@@ -38,6 +38,9 @@ namespace eval ess::configs {
     # Current schema version - increment when schema changes incompatibly
     # Version 3: Project-based configs/queues structure (Feb 2026)
     variable SCHEMA_VERSION 3
+
+    # Auto-push: timestamp of last local modification (0 = no pending push)
+    variable auto_push_pending 0
     
     #=========================================================================
     # Initialization
@@ -47,7 +50,31 @@ namespace eval ess::configs {
         variable db
         return $db
     }
-    
+
+    # Mark project as locally modified and schedule auto-push
+    proc mark_modified {} {
+        variable auto_push_pending
+        dservSet ess/registry/sync_status "modified"
+        set auto_push_pending [clock seconds]
+    }
+
+    # Check if auto-push is needed (called by configsconf timer)
+    # Returns 1 if push should be triggered (pending > settle_seconds ago)
+    proc auto_push_ready {{settle_seconds 3}} {
+        variable auto_push_pending
+        if {$auto_push_pending == 0} { return 0 }
+        if {([clock seconds] - $auto_push_pending) >= $settle_seconds} {
+            return 1
+        }
+        return 0
+    }
+
+    # Clear auto-push flag (called after successful push)
+    proc auto_push_clear {} {
+        variable auto_push_pending
+        set auto_push_pending 0
+    }
+
     proc init {path} {
         variable db
         variable db_path
@@ -567,7 +594,7 @@ namespace eval ess::configs {
         set config_id [configdb last_insert_rowid]
         log info "Created config: $name (id=$config_id)"
 
-	dservSet ess/registry/sync_status "modified"
+	mark_modified
         publish_configs
         return $config_id
     }
@@ -946,7 +973,7 @@ namespace eval ess::configs {
                 }
             }
         }
-	dservSet ess/registry/sync_status "modified"        
+	mark_modified        
         publish_configs
         return $config_id
     }
@@ -981,7 +1008,7 @@ namespace eval ess::configs {
         }	
         
         log info "Archived config: [dict get $config name]"
-	dservSet ess/registry/sync_status "modified"        
+	mark_modified        
         publish_configs
         return $config_id
     }
@@ -1010,7 +1037,7 @@ namespace eval ess::configs {
         configdb eval {DELETE FROM configs WHERE id = :config_id}
         
         log info "Deleted config: [dict get $config name]"
-	dservSet ess/registry/sync_status "modified"
+	mark_modified
         publish_configs
         return $config_id
     }
@@ -1071,7 +1098,7 @@ namespace eval ess::configs {
             -tags [dict get $new_config tags] \
             -file_template [dict get $new_config file_template]]
         
-	dservSet ess/registry/sync_status "modified"
+	mark_modified
         log info "Cloned config [dict get $config name] -> $new_name"
         return $new_id
     }
