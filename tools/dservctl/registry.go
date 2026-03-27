@@ -307,6 +307,22 @@ func (c *AgentClient) GetBundle(workgroup, project string) (map[string]interface
 	return c.Get(path)
 }
 
+// ListRegistryConfigs returns configs for a project directly from the registry.
+func (c *AgentClient) ListRegistryConfigs(workgroup, project string) ([]map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/configs/%s/%s", registryBase, url.PathEscape(workgroup), url.PathEscape(project))
+	result, err := c.Get(path)
+	if err != nil {
+		return nil, err
+	}
+	return extractList(result, "configs"), nil
+}
+
+// GetRegistryConfig returns a single config from the registry.
+func (c *AgentClient) GetRegistryConfig(workgroup, project, name string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/config/%s/%s/%s", registryBase, url.PathEscape(workgroup), url.PathEscape(project), url.PathEscape(name))
+	return c.Get(path)
+}
+
 // ListBundleHistory returns recent push history for a project.
 func (c *AgentClient) ListBundleHistory(workgroup, project string, limit int) ([]map[string]interface{}, error) {
 	path := fmt.Sprintf("%s/bundle-history/%s/%s?limit=%d", registryBase, url.PathEscape(workgroup), url.PathEscape(project), limit)

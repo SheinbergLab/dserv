@@ -28,6 +28,10 @@ func runConfigs(cfg *Config, args []string) int {
 	switch subcmd {
 	case "list":
 		return configsList(cfg)
+	case "show":
+		return configsShow(cfg, rest)
+	case "get":
+		return configsGet(cfg, rest)
 	case "status":
 		return configsStatus(cfg, rest)
 	case "history":
@@ -47,6 +51,8 @@ func printConfigsUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: dservctl configs <subcommand>\n\n")
 	fmt.Fprintf(os.Stderr, "Subcommands:\n")
 	fmt.Fprintf(os.Stderr, "  list                    List projects on registry\n")
+	fmt.Fprintf(os.Stderr, "  show <project>          List configs in a project (from registry)\n")
+	fmt.Fprintf(os.Stderr, "  get <project> <config>  Show full config details (from registry)\n")
 	fmt.Fprintf(os.Stderr, "  status [project]        Show sync status for a project\n")
 	fmt.Fprintf(os.Stderr, "  history [project]       Show push history for a project\n")
 	fmt.Fprintf(os.Stderr, "  push [project]          Push project to registry (via dserv)\n")
@@ -100,6 +106,154 @@ func configsList(cfg *Config) int {
 
 	PrintTable(headers, rows)
 	return 0
+}
+
+// configsShow lists configs in a project directly from the registry.
+func configsShow(cfg *Config, args []string) int {
+	if !requireWorkgroup(cfg) {
+		return 2
+	}
+
+	project := ""
+	if len(args) > 0 {
+		project = args[0]
+	}
+	if project == "" {
+		PrintError("project name required: dservctl configs show <project>")
+		return 2
+	}
+
+	client := NewRegistryClient(cfg)
+	configs, err := client.ListRegistryConfigs(cfg.Workgroup, project)
+	if err != nil {
+		PrintError("failed to list configs: %v", err)
+		return 1
+	}
+
+	if len(configs) == 0 {
+		fmt.Println("No configs found")
+		return 0
+	}
+
+	if cfg.JSON {
+		data, _ := json.MarshalIndent(configs, "", "  ")
+		fmt.Println(string(data))
+		return 0
+	}
+
+	headers := []string{"Name", "System", "Protocol", "Variant", "Subject", "VariantArgs", "Params"}
+	var rows [][]string
+	for _, c := range configs {
+		name, _ := c["name"].(string)
+		system, _ := c["system"].(string)
+		protocol, _ := c["protocol"].(string)
+		variant, _ := c["variant"].(string)
+		subject, _ := c["subject"].(string)
+
+		va := summarizeMap(c["variantArgs"])
+		pa := summarizeMap(c["params"])
+
+		rows = append(rows, []string{name, system, protocol, variant, subject, va, pa})
+	}
+
+	PrintTable(headers, rows)
+	return 0
+}
+
+// configsGet shows full details of a single config from the registry.
+func configsGet(cfg *Config, args []string) int {
+	if !requireWorkgroup(cfg) {
+		return 2
+	}
+
+	if len(args) < 2 {
+		PrintError("usage: dservctl configs get <project> <config>")
+		return 2
+	}
+
+	project := args[0]
+	configName := args[1]
+
+	client := NewRegistryClient(cfg)
+	config, err := client.GetRegistryConfig(cfg.Workgroup, project, configName)
+	if err != nil {
+		PrintError("failed to get config: %v", err)
+		return 1
+	}
+
+	if cfg.JSON {
+		data, _ := json.MarshalIndent(config, "", "  ")
+		fmt.Println(string(data))
+		return 0
+	}
+
+	// Pretty-print key fields
+	fmt.Printf("Config: %s/%s/%s\n", cfg.Workgroup, project, configName)
+	fmt.Println()
+
+	printField("System", config["system"])
+	printField("Protocol", config["protocol"])
+	printField("Variant", config["variant"])
+	printField("Subject", config["subject"])
+	printField("Script Source", config["scriptSource"])
+	printField("File Template", config["fileTemplate"])
+	printField("Description", config["description"])
+
+	fmt.Println()
+	fmt.Println("Variant Args:")
+	printMapField(config["variantArgs"])
+
+	fmt.Println()
+	fmt.Println("Params:")
+	printMapField(config["params"])
+
+	if tags, ok := config["tags"].([]interface{}); ok && len(tags) > 0 {
+		fmt.Println()
+		fmt.Printf("Tags: ")
+		for i, t := range tags {
+			if i > 0 {
+				fmt.Print(", ")
+			}
+			fmt.Print(t)
+		}
+		fmt.Println()
+	}
+
+	return 0
+}
+
+// summarizeMap returns a compact key=val summary of a JSON object field.
+func summarizeMap(v interface{}) string {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) == 0 {
+		return "{}"
+	}
+	result := ""
+	for k, val := range m {
+		if result != "" {
+			result += ", "
+		}
+		result += fmt.Sprintf("%s=%v", k, val)
+	}
+	return result
+}
+
+func printField(label string, v interface{}) {
+	s, _ := v.(string)
+	if s != "" {
+		fmt.Printf("  %-16s %s\n", label+":", s)
+	}
+}
+
+func printMapField(v interface{}) {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) == 0 {
+		fmt.Println("  (none)")
+		return
+	}
+	for k, val := range m {
+		fmt.Printf("  %-20s %v\n", k+":", val)
+	}
 }
 
 // configsStatus shows sync status for a project.
