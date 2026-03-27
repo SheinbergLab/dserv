@@ -1174,7 +1174,7 @@ updateConfigRunButtons() {
                 btn.title = 'Close datafile and end run';
                 btn.classList.add('closeable');
             } else {
-                btn.textContent = 'Run';
+                btn.textContent = 'Open';
                 btn.title = 'Load config, open datafile, ready for Go';
                 btn.classList.remove('closeable');
             }
@@ -1825,7 +1825,7 @@ updateConfigRunButtons() {
                                 <span class="ess-config-item-path">${this.escapeHtml(cfg.system || '')}/${this.escapeHtml(cfg.protocol || '')}/${this.escapeHtml(cfg.variant || '')}</span>
                             </div>
                             <div class="ess-config-item-buttons">
-                                <button class="ess-config-item-run" title="Load config, open datafile, ready for Go">Run</button>
+                                <button class="ess-config-item-run" title="Load config, open datafile, ready for Go">Open</button>
                                 <button class="ess-config-item-load" title="Load setup only">Load</button>
                             </div>
                         </div>
