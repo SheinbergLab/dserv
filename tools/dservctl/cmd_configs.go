@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -36,6 +37,8 @@ func runConfigs(cfg *Config, args []string) int {
 		return configsStatus(cfg, rest)
 	case "history":
 		return configsHistory(cfg, rest)
+	case "local-get":
+		return configsLocalGet(cfg, rest)
 	case "push":
 		return configsPush(cfg, rest)
 	case "pull":
@@ -53,6 +56,7 @@ func printConfigsUsage() {
 	fmt.Fprintf(os.Stderr, "  list                    List projects on registry\n")
 	fmt.Fprintf(os.Stderr, "  show <project>          List configs in a project (from registry)\n")
 	fmt.Fprintf(os.Stderr, "  get <project> <config>  Show full config details (from registry)\n")
+	fmt.Fprintf(os.Stderr, "  local-get <config>      Show config from local dserv DB\n")
 	fmt.Fprintf(os.Stderr, "  status [project]        Show sync status for a project\n")
 	fmt.Fprintf(os.Stderr, "  history [project]       Show push history for a project\n")
 	fmt.Fprintf(os.Stderr, "  push [project]          Push project to registry (via dserv)\n")
@@ -369,6 +373,76 @@ func configsHistory(cfg *Config, args []string) int {
 	return 0
 }
 
+// configsLocalGet queries a config from the local dserv configs DB via TCP.
+func configsLocalGet(cfg *Config, args []string) int {
+	if len(args) < 1 {
+		PrintError("usage: dservctl configs local-get <config-name> [--project <project>]")
+		return 2
+	}
+
+	configName := args[0]
+	project := ""
+	for i := 1; i < len(args); i++ {
+		if (args[i] == "--project" || args[i] == "-p") && i+1 < len(args) {
+			project = args[i+1]
+			i++
+		}
+	}
+
+	// Build the Tcl command for the configs subprocess
+	var tclCmd string
+	if project != "" {
+		tclCmd = fmt.Sprintf("config_get_json %s -project %s", configName, project)
+	} else {
+		tclCmd = fmt.Sprintf("config_get_json %s", configName)
+	}
+
+	// Send directly to dserv via TCP, targeting the configs subprocess
+	resp, err := SendToInterp(cfg.Host, "configs", tclCmd)
+	if err != nil {
+		PrintError("failed to get local config: %v", err)
+		return 1
+	}
+
+	resp = strings.TrimSpace(resp)
+	if resp == "" || resp == "{}" {
+		PrintError("config not found: %s", configName)
+		return 1
+	}
+
+	// Try to parse as JSON
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(resp), &config); err != nil {
+		// Not valid JSON — print raw response (might be Tcl dict or error)
+		fmt.Println(resp)
+		return 0
+	}
+
+	if cfg.JSON {
+		data, _ := json.MarshalIndent(config, "", "  ")
+		fmt.Println(string(data))
+		return 0
+	}
+
+	fmt.Printf("Local Config: %s\n\n", configName)
+	printField("System", config["system"])
+	printField("Protocol", config["protocol"])
+	printField("Variant", config["variant"])
+	printField("Subject", config["subject"])
+	printField("Script Source", config["script_source"])
+	printField("File Template", config["file_template"])
+
+	fmt.Println()
+	fmt.Println("Variant Args:")
+	printMapField(config["variant_args"])
+
+	fmt.Println()
+	fmt.Println("Params:")
+	printMapField(config["params"])
+
+	return 0
+}
+
 // configsPush triggers a push via the dserv configs subprocess.
 func configsPush(cfg *Config, args []string) int {
 	project := ""
@@ -380,17 +454,15 @@ func configsPush(cfg *Config, args []string) int {
 		return 2
 	}
 
-	client := NewAgentClient(cfg)
-	cmd := fmt.Sprintf("send configs {registry_push %s}", project)
-	result, err := client.Do("POST", "/api/v1/dserv/eval", map[string]string{"command": cmd})
+	tclCmd := fmt.Sprintf("registry_push %s", project)
+	resp, err := SendToInterp(cfg.Host, "configs", tclCmd)
 	if err != nil {
 		PrintError("push failed: %v", err)
 		return 1
 	}
 
 	if cfg.JSON {
-		data, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Println(string(data))
+		fmt.Println(strings.TrimSpace(resp))
 	} else {
 		fmt.Printf("Pushed project '%s' to registry\n", project)
 	}
@@ -414,21 +486,19 @@ func configsPull(cfg *Config, args []string) int {
 		return 2
 	}
 
-	client := NewAgentClient(cfg)
 	owStr := "0"
 	if overwrite {
 		owStr = "1"
 	}
-	cmd := fmt.Sprintf("send configs {registry_pull %s -overwrite %s}", project, owStr)
-	result, err := client.Do("POST", "/api/v1/dserv/eval", map[string]string{"command": cmd})
+	tclCmd := fmt.Sprintf("registry_pull %s -overwrite %s", project, owStr)
+	resp, err := SendToInterp(cfg.Host, "configs", tclCmd)
 	if err != nil {
 		PrintError("pull failed: %v", err)
 		return 1
 	}
 
 	if cfg.JSON {
-		data, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Println(string(data))
+		fmt.Println(strings.TrimSpace(resp))
 	} else {
 		fmt.Printf("Pulled project '%s' from registry\n", project)
 	}
