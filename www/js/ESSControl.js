@@ -1294,7 +1294,10 @@ updateConfigRunButtons() {
                 } else if (!foundSelected && currentValue !== undefined) {
                     const optValue = String(opt.value).trim();
                     const curValue = String(currentValue).trim();
-                    if (optValue === curValue) {
+                    // Use numeric comparison to handle 2 vs 2.0 mismatches
+                    const numOpt = Number(optValue);
+                    const numCur = Number(curValue);
+                    if ((!isNaN(numOpt) && !isNaN(numCur)) ? numOpt === numCur : optValue === curValue) {
                         selectedIndex = optIndex;
                     }
                 }
@@ -2492,7 +2495,12 @@ updateConfigRunButtons() {
                 const optionsHtml = options.map(opt => {
                     const optLabel = opt.label || opt.value || opt;
                     const optValue = opt.value || opt;
-                    const selected = String(optValue) === String(value) ? 'selected' : '';
+                    // Use numeric comparison to handle 2 vs 2.0 mismatches
+                    const numVal = Number(value);
+                    const numOpt = Number(optValue);
+                    const selected = (!isNaN(numVal) && !isNaN(numOpt))
+                        ? (numVal === numOpt ? 'selected' : '')
+                        : (String(optValue) === String(value) ? 'selected' : '');
                     return `<option value="${this.escapeAttr(String(optValue))}" ${selected}>${this.escapeHtml(String(optLabel))}</option>`;
                 }).join('');
                 
