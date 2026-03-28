@@ -399,7 +399,12 @@ namespace eval ess::registry {
             foreach cfg $configs_list {
                 set old_id [dict get $cfg id]
                 set cfg_name [dict get $cfg name]
-                
+
+                # Diagnostic: log what the bundle contains for this config
+                set _va [dict_get_default $cfg variantArgs {}]
+                set _pa [dict_get_default $cfg params {}]
+                puts "import_bundle: config=$cfg_name variantArgs=[dict size $_va] keys={[dict keys $_va]} params=[dict size $_pa] keys={[dict keys $_pa]}"
+
                 set existing_cfg [::ess::configs::get $cfg_name -project $project_name]
                 
                 if {$existing_cfg eq ""} {
@@ -417,6 +422,7 @@ namespace eval ess::registry {
                         -tags [dict_get_default $cfg tags {}]]
                     dict set config_id_map $old_id $new_id
                     dict lappend result created "config:$cfg_name"
+                    puts "import_bundle:   -> CREATED id=$new_id"
                 } elseif {$overwrite} {
                     # Update existing
                     set new_id [dict get $existing_cfg id]
@@ -431,10 +437,12 @@ namespace eval ess::registry {
                         -tags [dict_get_default $cfg tags {}]
                     dict set config_id_map $old_id $new_id
                     dict lappend result updated "config:$cfg_name"
+                    puts "import_bundle:   -> UPDATED id=$new_id"
                 } else {
                     set new_id [dict get $existing_cfg id]
                     dict set config_id_map $old_id $new_id
                     dict lappend result skipped "config:$cfg_name"
+                    puts "import_bundle:   -> SKIPPED (overwrite=$overwrite)"
                 }
             }
             
