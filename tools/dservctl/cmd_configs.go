@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -273,8 +274,13 @@ func printMapField(v interface{}) {
 			fmt.Println("  (none)")
 			return
 		}
-		for k, v := range val {
-			fmt.Printf("  %-20s %v\n", k+":", v)
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("  %-20s %v\n", k+":", val[k])
 		}
 	case string:
 		// Handle Tcl dict strings like "key1 val1 key2 val2"
@@ -283,6 +289,7 @@ func printMapField(v interface{}) {
 			fmt.Println("  (none)")
 			return
 		}
+		sort.Slice(m, func(i, j int) bool { return m[i][0] < m[j][0] })
 		for _, kv := range m {
 			fmt.Printf("  %-20s %s\n", kv[0]+":", kv[1])
 		}
