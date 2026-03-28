@@ -226,20 +226,37 @@ func configsGet(cfg *Config, args []string) int {
 	return 0
 }
 
-// summarizeMap returns a compact key=val summary of a JSON object field.
+// summarizeMap returns a compact key=val summary of a JSON object or Tcl dict string.
 func summarizeMap(v interface{}) string {
-	m, ok := v.(map[string]interface{})
-	if !ok || len(m) == 0 {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		if len(val) == 0 {
+			return "{}"
+		}
+		result := ""
+		for k, v := range val {
+			if result != "" {
+				result += ", "
+			}
+			result += fmt.Sprintf("%s=%v", k, v)
+		}
+		return result
+	case string:
+		pairs := parseTclDict(val)
+		if len(pairs) == 0 {
+			return "{}"
+		}
+		result := ""
+		for _, kv := range pairs {
+			if result != "" {
+				result += ", "
+			}
+			result += fmt.Sprintf("%s=%s", kv[0], kv[1])
+		}
+		return result
+	default:
 		return "{}"
 	}
-	result := ""
-	for k, val := range m {
-		if result != "" {
-			result += ", "
-		}
-		result += fmt.Sprintf("%s=%v", k, val)
-	}
-	return result
 }
 
 func printField(label string, v interface{}) {
@@ -250,14 +267,82 @@ func printField(label string, v interface{}) {
 }
 
 func printMapField(v interface{}) {
-	m, ok := v.(map[string]interface{})
-	if !ok || len(m) == 0 {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		if len(val) == 0 {
+			fmt.Println("  (none)")
+			return
+		}
+		for k, v := range val {
+			fmt.Printf("  %-20s %v\n", k+":", v)
+		}
+	case string:
+		// Handle Tcl dict strings like "key1 val1 key2 val2"
+		m := parseTclDict(val)
+		if len(m) == 0 {
+			fmt.Println("  (none)")
+			return
+		}
+		for _, kv := range m {
+			fmt.Printf("  %-20s %s\n", kv[0]+":", kv[1])
+		}
+	default:
 		fmt.Println("  (none)")
-		return
 	}
-	for k, val := range m {
-		fmt.Printf("  %-20s %v\n", k+":", val)
+}
+
+// parseTclDict parses a simple Tcl dict string "key1 val1 key2 val2" into ordered pairs.
+// Handles braced values like "key {val with spaces}".
+func parseTclDict(s string) [][2]string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
 	}
+
+	var pairs [][2]string
+	tokens := tclTokenize(s)
+	for i := 0; i+1 < len(tokens); i += 2 {
+		pairs = append(pairs, [2]string{tokens[i], tokens[i+1]})
+	}
+	return pairs
+}
+
+// tclTokenize splits a Tcl-style string into words, respecting braces.
+func tclTokenize(s string) []string {
+	var tokens []string
+	i := 0
+	for i < len(s) {
+		// Skip whitespace
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+			i++
+		}
+		if i >= len(s) {
+			break
+		}
+		if s[i] == '{' {
+			// Braced word
+			depth := 1
+			start := i + 1
+			i++
+			for i < len(s) && depth > 0 {
+				if s[i] == '{' {
+					depth++
+				} else if s[i] == '}' {
+					depth--
+				}
+				i++
+			}
+			tokens = append(tokens, s[start:i-1])
+		} else {
+			// Bare word
+			start := i
+			for i < len(s) && s[i] != ' ' && s[i] != '\t' {
+				i++
+			}
+			tokens = append(tokens, s[start:i])
+		}
+	}
+	return tokens
 }
 
 // configsStatus shows sync status for a project.
