@@ -269,14 +269,15 @@ class EyeTouchVisualizer {
     setupSubscriptions() {
         // Eye position
         this.dpManager.subscribe('ess/em_pos', (data) => {
-            // Don't update if virtual eye is enabled
-            if (this.state.virtualEyeEnabled) return;
-            
             const valueStr = String(data.value);
             const [x, y] = valueStr.split(' ').map(parseFloat);
-            
+
             if (!isNaN(x) && !isNaN(y)) {
                 this.state.eyePos = { x, y };
+
+                // When virtual eye is active, eyePos tracks position
+                // but we don't move the virtual eye circle from here
+                if (this.state.virtualEyeEnabled) return;
                 
                 // Update info display
                 this.updateInfoDisplay();
@@ -441,6 +442,16 @@ class EyeTouchVisualizer {
         this.dpManager.subscribe('ess/screen_halfy', (data) => {
             this.state.screenHalfY = parseFloat(data.value) || 10.0;
         });
+
+        // Virtual eye enabled state - sync checkbox with server state
+        this.dpManager.subscribe('eyetracking/virtual_enabled', (data) => {
+            const enabled = parseInt(data.value) === 1;
+            if (enabled !== this.state.virtualEyeEnabled) {
+                const checkbox = document.getElementById('eyetouch-virtual-eye');
+                if (checkbox) checkbox.checked = enabled;
+                this.applyVirtualEyeState(enabled);
+            }
+        });
     }
     
     /**
@@ -489,6 +500,13 @@ class EyeTouchVisualizer {
             );
         } catch (e) {
             // Silently ignore - regions may not be available
+        }
+
+        try {
+            // Request current virtual eye state to sync checkbox
+            await this.connection.send('dservTouch eyetracking/virtual_enabled');
+        } catch (e) {
+            // Silently ignore - virtual eye may not be configured
         }
     }
     
@@ -774,17 +792,20 @@ class EyeTouchVisualizer {
     }
     
     setVirtualEyeEnabled(enabled) {
-        this.state.virtualEyeEnabled = enabled;
         this.setVirtualEyeControl(enabled);
-        
+        this.applyVirtualEyeState(enabled);
+    }
+
+    applyVirtualEyeState(enabled) {
+        this.state.virtualEyeEnabled = enabled;
+
         if (enabled) {
-            // Initialize virtual eye at current eye position or center
-            if (this.state.eyePos.x !== 0 || this.state.eyePos.y !== 0) {
-                this.updateVirtualEyePosition(this.state.eyePos.x, this.state.eyePos.y);
-            } else {
-                this.updateVirtualEyePosition(0, 0);
-            }
-            
+            // Use current eye position to activate the circle without
+            // sending a new position to the server (avoid jumping the eye)
+            this.state.virtualEye.x = this.state.eyePos.x;
+            this.state.virtualEye.y = this.state.eyePos.y;
+            this.state.virtualEye.active = true;
+
             // Update cursor
             this.canvas.style.cursor = 'crosshair';
         } else {
@@ -792,7 +813,7 @@ class EyeTouchVisualizer {
             this.state.virtualEye.isDragging = false;
             this.canvas.style.cursor = this.state.virtualTouchEnabled ? 'pointer' : 'default';
         }
-        
+
         this.updateInfoDisplay();
     }
     
