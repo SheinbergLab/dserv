@@ -349,9 +349,18 @@ func (r *ESSRegistry) scanConfigs(rows *sql.Rows) ([]*ESSConfig, error) {
 		c.Archived = archived != 0
 		
 		json.Unmarshal([]byte(variantArgsJSON), &c.VariantArgs)
+		if c.VariantArgs == nil {
+			c.VariantArgs = make(map[string]interface{})
+		}
 		json.Unmarshal([]byte(paramsJSON), &c.Params)
+		if c.Params == nil {
+			c.Params = make(map[string]interface{})
+		}
 		json.Unmarshal([]byte(tagsJSON), &c.Tags)
-		
+		if c.Tags == nil {
+			c.Tags = []string{}
+		}
+
 		configs = append(configs, c)
 	}
 	return configs, nil
@@ -848,8 +857,17 @@ func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBu
 			projectID, c.Name).Scan(&existingID)
 		
 		variantArgsJSON, _ := json.Marshal(c.VariantArgs)
+		if c.VariantArgs == nil {
+			variantArgsJSON = []byte("{}")
+		}
 		paramsJSON, _ := json.Marshal(c.Params)
+		if c.Params == nil {
+			paramsJSON = []byte("{}")
+		}
 		tagsJSON, _ := json.Marshal(c.Tags)
+		if c.Tags == nil {
+			tagsJSON = []byte("[]")
+		}
 		now := time.Now()
 		
 		if err == sql.ErrNoRows {
