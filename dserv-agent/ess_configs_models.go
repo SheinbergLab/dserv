@@ -47,14 +47,14 @@ type ESSConfig struct {
 	Protocol     string            `json:"protocol"`
 	Variant      string            `json:"variant"`
 	Subject      string            `json:"subject,omitempty"`
-	VariantArgs  map[string]interface{} `json:"variantArgs,omitempty"`
-	Params       map[string]interface{} `json:"params,omitempty"`
+	VariantArgs  map[string]interface{} `json:"variantArgs"`
+	Params       map[string]interface{} `json:"params"`
 
 	// File naming
 	FileTemplate string `json:"fileTemplate,omitempty"`
 
 	// Metadata
-	Tags       []string   `json:"tags,omitempty"`
+	Tags       []string   `json:"tags"`
 	CreatedBy  string     `json:"createdBy,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
