@@ -56,7 +56,7 @@ func printConfigsUsage() {
 	fmt.Fprintf(os.Stderr, "  list                    List projects on registry\n")
 	fmt.Fprintf(os.Stderr, "  show <project>          List configs in a project (from registry)\n")
 	fmt.Fprintf(os.Stderr, "  get <project> <config>  Show full config details (from registry)\n")
-	fmt.Fprintf(os.Stderr, "  local-get <config>      Show config from local dserv DB\n")
+	fmt.Fprintf(os.Stderr, "  local-get [project] <config>  Show config from local dserv DB\n")
 	fmt.Fprintf(os.Stderr, "  status [project]        Show sync status for a project\n")
 	fmt.Fprintf(os.Stderr, "  history [project]       Show push history for a project\n")
 	fmt.Fprintf(os.Stderr, "  push [project]          Push project to registry (via dserv)\n")
@@ -461,17 +461,16 @@ func configsHistory(cfg *Config, args []string) int {
 // configsLocalGet queries a config from the local dserv configs DB via TCP.
 func configsLocalGet(cfg *Config, args []string) int {
 	if len(args) < 1 {
-		PrintError("usage: dservctl configs local-get <config-name> [--project <project>]")
+		PrintError("usage: dservctl configs local-get <project> <config>\n       dservctl configs local-get <config>          (uses active project)")
 		return 2
 	}
 
-	configName := args[0]
-	project := ""
-	for i := 1; i < len(args); i++ {
-		if (args[i] == "--project" || args[i] == "-p") && i+1 < len(args) {
-			project = args[i+1]
-			i++
-		}
+	var project, configName string
+	if len(args) >= 2 {
+		project = args[0]
+		configName = args[1]
+	} else {
+		configName = args[0]
 	}
 
 	// Build the Tcl command for the configs subprocess
