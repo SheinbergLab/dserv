@@ -262,7 +262,7 @@ proc config_get_json {name args} {
     if {$config eq ""} {
         return "{}"
     }
-    return [dict_to_json $config]
+    return [dict_to_json $config -deep]
 }
 
 # Check if config exists
