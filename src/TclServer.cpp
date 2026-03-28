@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <poll.h>
 
 // JSON support
 #include <jansson.h>
@@ -2583,6 +2584,74 @@ static int Www_Path_Cmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+// =============================================================================
+// Tcl command: tcp_probe
+// =============================================================================
+
+// tcp_probe host ?port? ?timeout_ms?
+// Returns 1 if TCP connection succeeds, 0 otherwise
+static int Tcp_Probe_Cmd(ClientData clientData, Tcl_Interp *interp,
+                         int objc, Tcl_Obj *const objv[])
+{
+  if (objc < 2 || objc > 4) {
+    Tcl_WrongNumArgs(interp, 1, objv, "host ?port? ?timeout_ms?");
+    return TCL_ERROR;
+  }
+
+  const char *host = Tcl_GetString(objv[1]);
+  int port = 2560;
+  int timeout_ms = 2000;
+
+  if (objc >= 3 && Tcl_GetIntFromObj(interp, objv[2], &port) != TCL_OK)
+    return TCL_ERROR;
+  if (objc >= 4 && Tcl_GetIntFromObj(interp, objv[3], &timeout_ms) != TCL_OK)
+    return TCL_ERROR;
+
+  struct addrinfo hints = {}, *res = NULL;
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  char portstr[16];
+  snprintf(portstr, sizeof(portstr), "%d", port);
+
+  if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    return TCL_OK;
+  }
+
+  int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (sock < 0) {
+    freeaddrinfo(res);
+    Tcl_SetObjResult(interp, Tcl_NewIntObj(0));
+    return TCL_OK;
+  }
+
+  // Set non-blocking
+  int flags = fcntl(sock, F_GETFL, 0);
+  fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+  int result = 0;
+  int rc = connect(sock, res->ai_addr, res->ai_addrlen);
+
+  if (rc == 0) {
+    result = 1;
+  } else if (errno == EINPROGRESS) {
+    struct pollfd pfd = { sock, POLLOUT, 0 };
+    if (poll(&pfd, 1, timeout_ms) > 0) {
+      int err = 0;
+      socklen_t len = sizeof(err);
+      getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &len);
+      result = (err == 0) ? 1 : 0;
+    }
+  }
+
+  close(sock);
+  freeaddrinfo(res);
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(result));
+  return TCL_OK;
+}
+
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
@@ -2704,9 +2773,12 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 
   Tcl_CreateObjCommand(interp, "www_path", Www_Path_Cmd,
 		       (ClientData)tserv, NULL);
+
+  Tcl_CreateObjCommand(interp, "www_path", Www_Path_Cmd,
+		       (ClientData)tserv, NULL);
   
-  Tcl_CreateObjCommand(interp, "print",
-               (Tcl_ObjCmdProc *) print_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "tcp_probe",
+               (Tcl_ObjCmdProc *) Tcp_Probe_Cmd, tserv, NULL);
   
   Tcl_LinkVar(interp, "tcpPort", (char *) &tserv->_newline_port,
           TCL_LINK_INT | TCL_LINK_READ_ONLY);
