@@ -743,8 +743,13 @@ namespace eval ess::registry {
 
     # Check if registry has newer data than our last sync
     # Returns: dict with status (current|stale|error) and metadata
-    proc check_registry_status {project_name} {
+    proc check_registry_status {project_name args} {
         variable config
+
+        set timeout ""
+        foreach {opt val} $args {
+            if {$opt eq "-timeout"} { set timeout $val }
+        }
 
         if {$config(url) eq ""} {
             return [dict create status "error" message "Registry not configured"]
@@ -752,7 +757,11 @@ namespace eval ess::registry {
 
         # Get lightweight status from registry
         if {[catch {
-            set remote [api_get "/bundle-status/$config(workgroup)/$project_name"]
+            if {$timeout ne ""} {
+                set remote [api_get "/bundle-status/$config(workgroup)/$project_name" -timeout $timeout]
+            } else {
+                set remote [api_get "/bundle-status/$config(workgroup)/$project_name"]
+            }
         } err]} {
             return [dict create status "error" message $err]
         }

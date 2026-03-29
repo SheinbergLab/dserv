@@ -151,7 +151,7 @@ proc registry_poll_callback {dpoint data} {
     if {$project eq ""} { return }
 
     if {[catch {
-        set result [ess::registry::check_registry_status $project]
+        set result [ess::registry::check_registry_status $project -timeout 2000]
         set status [dict get $result status]
 
         if {$status eq "stale"} {
@@ -626,9 +626,9 @@ proc registry_config {} {
 # Startup Complete
 #=========================================================================
 
-# Start auto-push timer (registry poll disabled for now - can cause hangs)
+# Start auto-push and registry polling timers
 auto_push_timer_start 1000
-# registry_poll_start 30000
+registry_poll_start 30000
 
 puts "Configs Manager subprocess ready"
 puts "  Database: $configs_db"
