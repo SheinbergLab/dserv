@@ -235,6 +235,7 @@ add_executable(dserv
     src/LogClient.cpp 
     src/LogTable.cpp 
     src/TclServer.cpp
+    src/TpoolMap.cpp
     src/TclHttps.cpp    
     src/TclSha256.cpp    
     src/TclCompletion.cpp
