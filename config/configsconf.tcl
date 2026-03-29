@@ -193,8 +193,12 @@ dpointSetScript ess/run_state on_ess_run_state_change
 
 proc on_ess_snapshot_change {dpoint_name value} {
     if {$value ne "" && [json_get $value source] eq "config"} {
+        # Config load completed on ESS side - finalize bookkeeping
+        ess::configs::load_complete
         return
     }
+    # Manual load (not from config) - clear current config
+    ess::configs::load_clear
     dservSet configs/current {}
 }
 
@@ -622,9 +626,9 @@ proc registry_config {} {
 # Startup Complete
 #=========================================================================
 
-# Start auto-push and registry polling timers
+# Start auto-push timer (registry poll disabled for now - can cause hangs)
 auto_push_timer_start 1000
-registry_poll_start 30000
+# registry_poll_start 30000
 
 puts "Configs Manager subprocess ready"
 puts "  Database: $configs_db"

@@ -41,6 +41,10 @@ namespace eval ess::configs {
 
     # Auto-push: timestamp of last local modification (0 = no pending push)
     variable auto_push_pending 0
+
+    # Loading guard: prevents concurrent config loads
+    variable loading 0
+    variable pending_load_info ""   ;# dict with config id/name for post-load bookkeeping
     
     #=========================================================================
     # Initialization
@@ -605,19 +609,32 @@ namespace eval ess::configs {
     
     # Load a config into ESS (setup only, no file, no start)
     proc load {name_or_id args} {
+        variable loading
+        variable pending_load_info
+
         set project ""
         foreach {k v} $args {
             switch -- $k {
                 -project { set project $v }
             }
         }
-        
+
+        # Guard: reject if already loading
+        if {$loading} {
+            error "Config load already in progress"
+        }
+
+        # Guard: reject if ESS is running (matches essctrl pattern)
+        if {[dservExists ess/status] && [dservGet ess/status] eq "running"} {
+            error "Cannot load config while running"
+        }
+
         set config [get $name_or_id -project $project]
-        
+
         if {$config eq ""} {
             error "Config not found: $name_or_id"
         }
-        
+
         # Build ESS config dict
         set ess_config [dict create \
             script_source [dict get $config script_source] \
@@ -628,52 +645,104 @@ namespace eval ess::configs {
             variant_args  [dict get $config variant_args] \
             params        [dict get $config params]]
 
+        # Set loading guard and store info for post-load bookkeeping
+        set loading 1
+        set pending_load_info [dict create \
+            id [dict get $config id] \
+            name [dict get $config name] \
+            project_name [dict get $config project_name]]
+
         log info "Loading config: [dict get $config name]"
-        set result [send ess "::ess::load_config {$ess_config}"]
-        
+
+        # Use sendNoReply (non-blocking, like essctrl does for load_system)
+        # Post-load bookkeeping happens in load_complete via ess/snapshot callback
+        if {[catch {sendNoReply ess "::ess::load_config {$ess_config}"} err]} {
+            set loading 0
+            set pending_load_info ""
+            error "Failed to send load_config: $err"
+        }
+
+        return [dict get $config name]
+    }
+
+    # Called from configsconf.tcl on_ess_snapshot_change when source is "config"
+    proc load_complete {} {
+        variable loading
+        variable pending_load_info
+
+        if {!$loading || $pending_load_info eq ""} {
+            return
+        }
+
+        set config_id [dict get $pending_load_info id]
+        set config_name [dict get $pending_load_info name]
+        set project_name [dict get $pending_load_info project_name]
+
         # Update usage stats
-        set config_id [dict get $config id]
         configdb eval {
-            UPDATE configs SET 
+            UPDATE configs SET
                 use_count = use_count + 1,
                 last_used_at = strftime('%s', 'now')
             WHERE id = :config_id
         }
-        
+
         # Publish current config
         dservSet configs/current [dict_to_json [dict create \
             id   $config_id \
-            name [dict get $config name] \
-            project [dict get $config project_name]]]
-        
+            name $config_name \
+            project $project_name]]
+
         publish_configs
-        return $result
+        log info "Config load complete: $config_name"
+
+        # Clear loading state
+        set loading 0
+        set pending_load_info ""
+    }
+
+    # Clear loading state on error (called if snapshot arrives without config source)
+    proc load_clear {} {
+        variable loading
+        variable pending_load_info
+        set loading 0
+        set pending_load_info ""
     }
     
     # Run a config (load + open file + start)
     proc run {name_or_id args} {
+        variable loading
+
         set project ""
         set auto_start 1
-        
+
         foreach {k v} $args {
             switch -- $k {
                 -project { set project $v }
                 -auto_start { set auto_start $v }
             }
         }
-        
+
+        # Guard: reject if loading or running
+        if {$loading} {
+            error "Config load already in progress"
+        }
+        if {[dservExists ess/status] && [dservGet ess/status] eq "running"} {
+            error "Cannot run config while running"
+        }
+
         set config [get $name_or_id -project $project]
         if {$config eq ""} {
             error "Config not found: $name_or_id"
         }
-        
-        # Load the config
-        load $name_or_id -project $project
-        
+
+        # Run needs synchronous load (file_open depends on load completing)
+        # Use load_sync which blocks but includes guards
+        load_sync $config
+
         # Generate and open datafile
         set basename [generate_file_basename $config]
         log info "Opening datafile: $basename"
-        
+
         if {[catch {send ess "::ess::file_open {$basename}"} result]} {
             error "Failed to open datafile: $result"
         }
@@ -684,10 +753,10 @@ namespace eval ess::configs {
         } elseif {$result == -2} {
             error "Failed to create datafile: $basename (logger error)"
         }
-        
+
         # result may be the actual basename used (if suffix was added)
         dservSet configs/datafile $basename
-        
+
         # Start if requested
         if {$auto_start} {
             log info "Starting ESS"
@@ -698,8 +767,51 @@ namespace eval ess::configs {
                 error "ESS start failed: $err (datafile closed)"
             }
         }
-        
+
         return $basename
+    }
+
+    # Synchronous load for run/queue paths that need load to complete
+    # before proceeding to file_open/start
+    proc load_sync {config} {
+        variable loading
+
+        set loading 1
+
+        set ess_config [dict create \
+            script_source [dict get $config script_source] \
+            system        [dict get $config system] \
+            protocol      [dict get $config protocol] \
+            variant       [dict get $config variant] \
+            subject       [dict get $config subject] \
+            variant_args  [dict get $config variant_args] \
+            params        [dict get $config params]]
+
+        log info "Loading config (sync): [dict get $config name]"
+
+        if {[catch {send ess "::ess::load_config {$ess_config}"} result]} {
+            set loading 0
+            error "Failed to load config: $result"
+        }
+
+        # Do bookkeeping inline since we're synchronous
+        set config_id [dict get $config id]
+        configdb eval {
+            UPDATE configs SET
+                use_count = use_count + 1,
+                last_used_at = strftime('%s', 'now')
+            WHERE id = :config_id
+        }
+
+        dservSet configs/current [dict_to_json [dict create \
+            id   $config_id \
+            name [dict get $config name] \
+            project [dict get $config project_name]]]
+
+        publish_configs
+        set loading 0
+
+        return $result
     }
     
     # Generate filename from config's template

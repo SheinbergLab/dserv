@@ -581,17 +581,24 @@ proc ::ess_queues::run_single {config_name args} {
     log info "Preparing single config: $config_name"
     publish_state
     
-    # Load the config
-    if {[catch {::ess::configs::load $config_id} err]} {
+    # Load the config (synchronous - queue needs load to complete)
+    set config [::ess::configs::get $config_id]
+    if {$config eq ""} {
+        log error "Config not found: $config_id"
+        set state(status) idle
+        publish_state
+        error "Config not found: $config_id"
+    }
+    if {[catch {::ess::configs::load_sync $config} err]} {
         log error "Failed to load config: $err"
         set state(status) idle
         publish_state
         error "Failed to load config: $err"
     }
-    
+
     set state(status) ready
     publish_state
-    
+
     # Open datafile and set state to running, but don't start ESS
     start_run
     
@@ -884,9 +891,16 @@ proc ::ess_queues::load_current_item {} {
     set state(run_count) 0
     
     log info "Loading config: $config_name (repeats: $repeat_count)"
-    
-    # Load the config
-    if {[catch {::ess::configs::load $config_id} err]} {
+
+    # Load the config (synchronous - queue needs load to complete)
+    set config [::ess::configs::get $config_id]
+    if {$config eq ""} {
+        log error "Config not found: $config_id"
+        set state(status) paused
+        publish_state
+        return
+    }
+    if {[catch {::ess::configs::load_sync $config} err]} {
         log error "Failed to load config: $err"
         set state(status) paused
         publish_state

@@ -201,6 +201,11 @@ oo::class create System {
             variable refresh_rate 60.0
             variable frame_duration 16.6667
             dservSet ess/rmt_connected [rmtConnected]
+            foreach v "halfx halfy w h" {
+                dservSet ess/screen_${v} [set screen_${v}]
+            }
+            dservSet ess/screen_refresh_rate $refresh_rate
+            dservSet ess/screen_frame_duration $frame_duration
             ::ess::ess_warning "Could not connect to stimulus host $host, using defaults" "stim"
             return 0
         }
@@ -4586,7 +4591,12 @@ namespace eval ess {
         variable _pending_config_args
         variable _pending_config_params
         variable _loading_from_config
-        
+
+        # Re-entrancy guard: reject if already loading a config
+        if {[info exists _loading_from_config] && $_loading_from_config} {
+            error "Config load already in progress"
+        }
+
         ess_info "load_config starting" "config"
 
 	set _loading_from_config 1
