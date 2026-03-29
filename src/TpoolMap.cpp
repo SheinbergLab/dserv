@@ -17,7 +17,7 @@
  * Each worker's result is expected to be a serialized dg (dg_toString).
  *
  * Returns a Tcl dict:
- *   dg        - per-worker results joined by 0x1e (Record Separator)
+ *   results   - list of per-worker byte arrays (dg_toString output)
  *   missing   - number of work units that failed
  *   errors    - list of error messages
  *   n_threads - number of threads used
@@ -37,7 +37,6 @@
 #include <sstream>
 #include <algorithm>
 #include <iostream>
-#include <mutex>
 
 #ifndef TPOOL_MAP_MAX_THREADS
 #define TPOOL_MAP_MAX_THREADS 64
@@ -154,7 +153,12 @@ static int tpool_map_command(ClientData data, Tcl_Interp *interp,
     std::string args_dict;
     int seed_workers = 1;
 
-    for (int i = 4; i < objc - 1; i += 2) {
+    for (int i = 4; i < objc; i += 2) {
+        if (i + 1 >= objc) {
+            Tcl_AppendResult(interp, "option requires a value: ",
+                             Tcl_GetString(objv[i]), NULL);
+            return TCL_ERROR;
+        }
         std::string opt = Tcl_GetString(objv[i]);
         if (opt == "-threads") {
             if (Tcl_GetIntFromObj(interp, objv[i + 1], &num_threads) != TCL_OK)
@@ -177,7 +181,7 @@ static int tpool_map_command(ClientData data, Tcl_Interp *interp,
     if (n <= 0) {
         Tcl_Obj *dict = Tcl_NewDictObj();
         Tcl_DictObjPut(interp, dict,
-            Tcl_NewStringObj("dg", -1), Tcl_NewStringObj("", -1));
+            Tcl_NewStringObj("results", -1), Tcl_NewListObj(0, NULL));
         Tcl_DictObjPut(interp, dict,
             Tcl_NewStringObj("missing", -1), Tcl_NewIntObj(0));
         Tcl_DictObjPut(interp, dict,
