@@ -2787,6 +2787,10 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   // Completion support
   TclCompletion::RegisterCompletionCommands(interp);
 
+  // TpoolMap Support
+  extern int TpoolMap_Init(Tcl_Interp *interp, TclServer *tserv);
+  TpoolMap_Init(interp, tserv);
+  
   // HTTPS client commands
   TclHttps_RegisterCommands(interp);  
 
