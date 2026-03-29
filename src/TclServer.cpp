@@ -104,19 +104,25 @@ TclServer::TclServer(int argc, char **argv,
 TclServer::~TclServer()
 {
   delete eventDispatcher;
-  
+
   shutdown();
 
   if (websocket_port() >= 0)
     websocket_thread.detach();
-  
-  if (message_port() >= 0) 
+
+  if (message_port() >= 0)
     message_net_thread.detach();
-    
-  if (newline_port() >= 0) 
+
+  if (newline_port() >= 0)
     newline_net_thread.detach();
-  
+
   process_thread.join();
+
+  // Remove our SendClient from the Dataserver's send_table.
+  // This pushes the shutdown_dpoint so the detached SendClient thread exits.
+  if (ds && !client_name.empty()) {
+    ds->remove_send_client_by_id(client_name);
+  }
 }
 
 void TclServer::setPriority(int priority) {
