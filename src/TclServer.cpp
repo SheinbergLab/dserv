@@ -2780,9 +2780,9 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "www_path", Www_Path_Cmd,
 		       (ClientData)tserv, NULL);
 
-  Tcl_CreateObjCommand(interp, "www_path", Www_Path_Cmd,
-		       (ClientData)tserv, NULL);
-  
+  Tcl_CreateObjCommand(interp, "print",
+               (Tcl_ObjCmdProc *) print_command, tserv, NULL);
+
   Tcl_CreateObjCommand(interp, "tcp_probe",
                (Tcl_ObjCmdProc *) Tcp_Probe_Cmd, tserv, NULL);
   
