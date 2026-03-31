@@ -635,6 +635,118 @@
     opacity: 0.8;
 }
 
+/* Actions button (vertical ellipsis) */
+
+.dm-actions-btn {
+    padding: 2px 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    opacity: 0.4;
+    color: #e6edf3;
+    transition: opacity 0.15s, border-color 0.15s;
+    line-height: 1;
+}
+
+.dm-actions-btn:hover {
+    opacity: 1;
+    border-color: #30363d;
+}
+
+.dm-file-table tbody tr:hover .dm-actions-btn {
+    opacity: 0.7;
+}
+
+/* Context menu (positioned absolutely on body) */
+
+.dm-context-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 160px;
+    background: #1c2128;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    padding: 4px 0;
+}
+
+.dm-context-menu button {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    color: #e6edf3;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dm-context-menu button:hover {
+    background: #30363d;
+}
+
+.dm-context-menu button:first-child {
+    border-radius: 6px 6px 0 0;
+}
+
+.dm-context-menu button:last-child {
+    border-radius: 0 0 6px 6px;
+}
+
+.dm-context-menu .dm-dropdown-divider {
+    height: 1px;
+    background: #30363d;
+    margin: 4px 0;
+}
+
+/* Archive button in status bar */
+
+.dm-archive-btn {
+    padding: 4px 10px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #8b949e;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.dm-archive-btn:hover {
+    color: #e6edf3;
+    border-color: #8b949e;
+}
+
+/* Archive modal (narrow variant) */
+
+.dm-modal-narrow {
+    max-width: 500px;
+}
+
+.dm-archive-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid #21262d;
+}
+
+.dm-archive-item:last-child {
+    border-bottom: none;
+}
+
+.dm-archive-name {
+    font-size: 13px;
+    color: #e6edf3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 12px;
+}
+
 /* ============================================================================
    Status Column Colors
    ============================================================================ */
@@ -664,17 +776,35 @@
     border: 1px solid #30363d;
     border-radius: 6px;
     flex-shrink: 0;
-    max-height: 120px;
+    height: 150px;
     display: flex;
     flex-direction: column;
 }
 
-.dm-console.collapsed .dm-console-body {
+.dm-console.collapsed .dm-console-pane {
     display: none;
 }
 
 .dm-console.collapsed {
-    max-height: none;
+    height: auto;
+}
+
+/* Console panes */
+
+.dm-console-pane {
+    display: none;
+    flex: 1;
+    overflow: hidden;
+}
+
+.dm-console-pane.active {
+    display: flex;
+    flex-direction: column;
+}
+
+#df-terminal-container {
+    flex: 1;
+    overflow-y: auto;
 }
 
 .dm-clickable {
@@ -688,8 +818,7 @@
 .dm-console-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 6px 14px;
+    gap: 0;
     background: #21262d;
     border-radius: 6px;
     flex-shrink: 0;
@@ -699,10 +828,24 @@
     border-radius: 6px 6px 0 0;
 }
 
-.dm-console-title {
-    font-weight: 500;
+.dm-console-tab {
+    padding: 6px 12px;
     font-size: 12px;
+    font-weight: 500;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
     color: #8b949e;
+    cursor: pointer;
+}
+
+.dm-console-tab:hover {
+    color: #e6edf3;
+}
+
+.dm-console-tab.active {
+    color: #58a6ff;
+    border-bottom-color: #58a6ff;
 }
 
 .dm-console-count {
@@ -710,31 +853,26 @@
     color: #f85149;
 }
 
-.dm-console-actions {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
+.dm-console-spacer {
+    flex: 1;
 }
 
-.dm-console-actions button {
+.dm-console-action {
     padding: 2px 8px;
     background: transparent;
-    border: 1px solid #30363d;
-    border-radius: 3px;
+    border: none;
     color: #8b949e;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
 }
 
-.dm-console-actions button:hover {
+.dm-console-action:hover {
     color: #e6edf3;
-    border-color: #484f58;
 }
 
 .dm-collapse-icon {
     color: #8b949e;
     font-size: 10px;
-    margin-left: 8px;
 }
 
 .dm-console-body {

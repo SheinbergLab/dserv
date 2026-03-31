@@ -7,8 +7,9 @@
     
     <!-- Component styles -->
     <link rel="stylesheet" href="css/DGTableViewer.css">
+    <link rel="stylesheet" href="css/TclTerminal.css">
     <link rel="stylesheet" href="css/page_nav.css">
-    
+
     <!-- Data Manager styles -->
     <link rel="stylesheet" href="css/data_manager.css">
 </head>
@@ -21,8 +22,9 @@
             <span class="dm-status-text" id="status-text">Connecting...</span>
             <div class="dm-status-spacer"></div>
             <span class="dm-data-summary" id="data-summary">--</span>
-            <span class="dm-data-dir" id="data-dir-display" title="Data directory">--</span>
+            <span class="dm-data-dir" id="data-dir-display" title="Data directory" onclick="openDataDir()" style="cursor: pointer;">--</span>
             <button class="dm-scan-btn" onclick="scanDatafiles()" title="Scan for new datafiles">⟳ Scan</button>
+            <button class="dm-archive-btn" onclick="openArchiveModal()" title="View archived files">Archive</button>
             <div id="page-nav-container"></div>
         </div>
         
@@ -149,18 +151,39 @@
         
         <!-- Console (collapsible, starts collapsed) -->
         <div class="dm-console collapsed" id="console-panel">
-            <div class="dm-console-header dm-clickable" onclick="toggleConsole()">
-                <span class="dm-console-title">Console</span>
-                <span class="dm-console-count" id="error-count"></span>
-                <div class="dm-console-actions">
-                    <button onclick="event.stopPropagation(); clearConsole()">Clear</button>
+            <div class="dm-console-header">
+                <button class="dm-console-tab active" data-tab="log" onclick="switchConsoleTab('log')">
+                    Log <span class="dm-console-count" id="error-count"></span>
+                </button>
+                <button class="dm-console-tab" data-tab="terminal" onclick="switchConsoleTab('terminal')">
+                    Terminal
+                </button>
+                <div class="dm-console-spacer"></div>
+                <button class="dm-console-action" onclick="event.stopPropagation(); clearConsole()">Clear</button>
+                <button class="dm-console-action" onclick="toggleConsole()">
                     <span class="dm-collapse-icon" id="console-collapse-icon">▶</span>
-                </div>
+                </button>
             </div>
-            <div class="dm-console-body" id="console-output"></div>
+            <div class="dm-console-pane active" id="log-pane">
+                <div class="dm-console-body" id="console-output"></div>
+            </div>
+            <div class="dm-console-pane" id="terminal-pane">
+                <div id="df-terminal-container"></div>
+            </div>
         </div>
     </div>
     
+    <!-- Archive Modal -->
+    <div class="dm-modal" id="archive-modal">
+        <div class="dm-modal-content dm-modal-narrow">
+            <div class="dm-modal-header">
+                <h3>Archived Files</h3>
+                <span class="dm-modal-close" onclick="closeArchiveModal()">&times;</span>
+            </div>
+            <div class="dm-modal-body" id="archive-file-list"></div>
+        </div>
+    </div>
+
     <!-- Preview Modal -->
     <div class="dm-modal" id="preview-modal">
         <div class="dm-modal-content">
@@ -177,6 +200,7 @@
     <script src="js/ws_manager.js"></script>
     <script src="js/DatapointManager.js"></script>
     <script src="js/DGTableViewer.js"></script>
+    <script src="js/TclTerminal.js"></script>
     <script src="js/PageNav.js"></script>
     
     <!-- Data Manager script -->

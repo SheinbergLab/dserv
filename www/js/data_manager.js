@@ -34,9 +34,13 @@ let exportEnabled = false;
 // Preview
 let previewViewer = null;
 
+// Terminal
+let dfTerminal = null;
+
 // UI state
 let downloadMenuOpen = false;
 let exportMenuOpen = false;
+let activeContextMenu = null;
 
 // Console
 let errorCount = 0;
@@ -67,12 +71,21 @@ async function init() {
     try {
         await connection.connect();
         log('Connected to dserv', 'info');
-        
+
+        // Initialize df terminal
+        dfTerminal = new TclTerminal('df-terminal-container', connection, {
+            interpreter: 'df',
+            useLinkedSubprocess: false,
+            welcomeMessage: 'df console - commands run in the df subprocess',
+            historyKey: 'dm-df-terminal-history',
+            tabCompletion: false
+        });
+
         await loadExportConfig();
         await loadFilterOptions();
         await loadStats();
         await loadFiles();
-        
+
     } catch (e) {
         log(`Connection failed: ${e.message}`, 'error');
     }
@@ -102,6 +115,9 @@ function setupEventListeners() {
         }
         if (!e.target.closest('#export-dropdown')) {
             closeExportMenu();
+        }
+        if (!e.target.closest('.dm-context-menu') && !e.target.closest('.dm-actions-btn')) {
+            closeContextMenu();
         }
     });
 }
@@ -294,7 +310,7 @@ function renderFileTable() {
                 <td class="dm-col-date">${escapeHtml(file.date || '')}</td>
                 <td class="dm-col-time">${escapeHtml(file.time || '')}</td>
                 <td class="dm-col-actions">
-                    <button class="dm-preview-btn" onclick="event.stopPropagation(); previewFile('${escapeJs(file.filename)}')" title="Preview">👁</button>
+                    <button class="dm-actions-btn" onclick="event.stopPropagation(); toggleContextMenu(event, '${escapeJs(file.filename)}')" title="Actions">⋮</button>
                 </td>
             </tr>
         `;
@@ -644,6 +660,227 @@ async function scanDatafiles() {
 }
 
 // ============================================================================
+// Context Menu (per-file actions)
+// ============================================================================
+
+function toggleContextMenu(event, filename) {
+    // Close any existing menu
+    closeContextMenu();
+
+    const btn = event.currentTarget;
+    const rect = btn.getBoundingClientRect();
+
+    const menu = document.createElement('div');
+    menu.className = 'dm-context-menu';
+    menu.dataset.filename = filename;
+    menu.innerHTML = `
+        <button onclick="contextAction('preview', '${escapeJs(filename)}')">Preview</button>
+        <button onclick="contextAction('openViewer', '${escapeJs(filename)}')">Open in Viewer</button>
+        <button onclick="contextAction('reprocess', '${escapeJs(filename)}')">Reprocess</button>
+        <div class="dm-dropdown-divider"></div>
+        <button onclick="contextAction('removeFromDb', '${escapeJs(filename)}')">Remove from DB</button>
+        <button onclick="contextAction('archive', '${escapeJs(filename)}')">Archive</button>
+    `;
+
+    document.body.appendChild(menu);
+
+    // Position below the button, right-aligned
+    const menuRect = menu.getBoundingClientRect();
+    let top = rect.bottom + 4;
+    let left = rect.right - menuRect.width;
+
+    // Keep within viewport
+    if (top + menuRect.height > window.innerHeight) {
+        top = rect.top - menuRect.height - 4;
+    }
+    if (left < 0) left = rect.left;
+
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+
+    activeContextMenu = menu;
+}
+
+function closeContextMenu() {
+    if (activeContextMenu) {
+        activeContextMenu.remove();
+        activeContextMenu = null;
+    }
+}
+
+async function contextAction(action, filename) {
+    closeContextMenu();
+
+    switch (action) {
+        case 'preview':
+            previewFile(filename);
+            break;
+
+        case 'openViewer':
+            try {
+                const result = await sendCommand(`json_open_datafile {${filename}}`);
+                const response = JSON.parse(result);
+                if (response.status === 'ok') {
+                    log(`Opened ${filename} in viewer`, 'info');
+                } else {
+                    showStatus(`Open failed: ${response.error}`, 'error');
+                    log(`Open failed: ${response.error}`, 'error');
+                }
+            } catch (e) {
+                showStatus(`Open failed: ${e.message}`, 'error');
+                log(`Open failed: ${e.message}`, 'error');
+            }
+            break;
+
+        case 'reprocess':
+            showStatus(`Reprocessing ${filename}...`, 'working');
+            log(`Reprocessing ${filename}...`, 'info');
+            try {
+                const result = await sendCommand(`json_reprocess_datafile {${filename}}`);
+                const response = JSON.parse(result);
+                if (response.status === 'ok') {
+                    showStatus(`Reprocessed: ${response.n_obs} obs, ${response.n_trials} trials`, 'success');
+                    log(`Reprocessed ${filename}: ${response.n_obs} obs, ${response.n_trials} trials`, 'success');
+                    await loadFiles();
+                    await loadStats();
+                } else {
+                    showStatus(`Reprocess error: ${response.error}`, 'error');
+                    log(`Reprocess failed: ${response.error}`, 'error');
+                }
+            } catch (e) {
+                showStatus(`Reprocess error: ${e.message}`, 'error');
+                log(`Reprocess failed: ${e.message}`, 'error');
+            }
+            break;
+
+        case 'removeFromDb':
+            if (!confirm(`Remove "${filename}" from the database?\n\nThe .ess file will NOT be deleted from disk.`)) return;
+            try {
+                const result = await sendCommand(`json_remove_from_catalog {${filename}}`);
+                const response = JSON.parse(result);
+                if (response.status === 'ok') {
+                    showStatus(`Removed ${filename} from catalog`, 'success');
+                    log(`Removed from catalog: ${filename}`, 'success');
+                    selectedFiles.delete(filename);
+                    await loadFiles();
+                    await loadStats();
+                    await loadFilterOptions();
+                } else {
+                    showStatus(`Remove error: ${response.error}`, 'error');
+                    log(`Remove failed: ${response.error}`, 'error');
+                }
+            } catch (e) {
+                showStatus(`Remove error: ${e.message}`, 'error');
+                log(`Remove failed: ${e.message}`, 'error');
+            }
+            break;
+
+        case 'archive':
+            if (!confirm(`Archive "${filename}"?\n\nThe file will be moved to the archive/ folder and removed from the catalog.`)) return;
+            try {
+                const result = await sendCommand(`json_archive_datafile {${filename}}`);
+                const response = JSON.parse(result);
+                if (response.status === 'ok') {
+                    showStatus(`Archived ${filename}`, 'success');
+                    log(`Archived: ${filename}`, 'success');
+                    selectedFiles.delete(filename);
+                    await loadFiles();
+                    await loadStats();
+                    await loadFilterOptions();
+                } else {
+                    showStatus(`Archive error: ${response.error}`, 'error');
+                    log(`Archive failed: ${response.error}`, 'error');
+                }
+            } catch (e) {
+                showStatus(`Archive error: ${e.message}`, 'error');
+                log(`Archive failed: ${e.message}`, 'error');
+            }
+            break;
+    }
+}
+
+// ============================================================================
+// Open Data Directory
+// ============================================================================
+
+async function openDataDir() {
+    try {
+        const result = await sendCommand('json_open_data_dir');
+        const response = JSON.parse(result);
+        if (response.status === 'ok') {
+            log(`Opened data directory`, 'info');
+        } else {
+            showStatus(`Open folder failed: ${response.error}`, 'error');
+        }
+    } catch (e) {
+        showStatus(`Open folder failed: ${e.message}`, 'error');
+    }
+}
+
+// ============================================================================
+// Archive Modal
+// ============================================================================
+
+async function openArchiveModal() {
+    const modal = document.getElementById('archive-modal');
+    const listEl = document.getElementById('archive-file-list');
+
+    listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #8b949e;">Loading...</div>';
+    modal.classList.add('open');
+
+    try {
+        const result = await sendCommand('json_list_archived_files');
+        const files = JSON.parse(result);
+
+        if (files.length === 0) {
+            listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #8b949e;">No archived files</div>';
+            return;
+        }
+
+        listEl.innerHTML = files.map(f => {
+            const displayName = f.replace(/\.ess$/, '');
+            return `
+                <div class="dm-archive-item">
+                    <span class="dm-archive-name" title="${escapeHtml(f)}">${escapeHtml(displayName)}</span>
+                    <button class="dm-btn-small" onclick="restoreFile('${escapeJs(f)}')">Restore</button>
+                </div>
+            `;
+        }).join('');
+
+    } catch (e) {
+        listEl.innerHTML = `<div style="padding: 20px; text-align: center; color: #f85149;">Error: ${escapeHtml(e.message)}</div>`;
+        log(`Failed to list archived files: ${e.message}`, 'error');
+    }
+}
+
+function closeArchiveModal() {
+    document.getElementById('archive-modal').classList.remove('open');
+}
+
+async function restoreFile(filename) {
+    try {
+        const result = await sendCommand(`json_restore_datafile {${filename}}`);
+        const response = JSON.parse(result);
+
+        if (response.status === 'ok') {
+            showStatus(`Restored ${filename}`, 'success');
+            log(`Restored from archive: ${filename}`, 'success');
+            // Refresh both the archive list and the main file list
+            await openArchiveModal();
+            await loadFiles();
+            await loadStats();
+            await loadFilterOptions();
+        } else {
+            showStatus(`Restore error: ${response.error}`, 'error');
+            log(`Restore failed: ${response.error}`, 'error');
+        }
+    } catch (e) {
+        showStatus(`Restore error: ${e.message}`, 'error');
+        log(`Restore failed: ${e.message}`, 'error');
+    }
+}
+
+// ============================================================================
 // Connection
 // ============================================================================
 
@@ -739,9 +976,15 @@ function updateErrorCount() {
 }
 
 function clearConsole() {
-    errorCount = 0;
-    updateErrorCount();
-    document.getElementById('console-output').innerHTML = '';
+    // Clear whichever pane is active
+    const terminalActive = document.getElementById('terminal-pane').classList.contains('active');
+    if (terminalActive && dfTerminal) {
+        dfTerminal.clear();
+    } else {
+        errorCount = 0;
+        updateErrorCount();
+        document.getElementById('console-output').innerHTML = '';
+    }
 }
 
 function toggleConsole() {
@@ -749,6 +992,36 @@ function toggleConsole() {
     const icon = document.getElementById('console-collapse-icon');
     panel.classList.toggle('collapsed');
     icon.textContent = panel.classList.contains('collapsed') ? '▶' : '▼';
+
+    // Focus terminal input when expanding to terminal tab
+    if (!panel.classList.contains('collapsed') && dfTerminal) {
+        const termPane = document.getElementById('terminal-pane');
+        if (termPane.classList.contains('active')) {
+            dfTerminal.focus();
+        }
+    }
+}
+
+function switchConsoleTab(tabName) {
+    // Expand if collapsed
+    const panel = document.getElementById('console-panel');
+    if (panel.classList.contains('collapsed')) {
+        toggleConsole();
+    }
+
+    // Update tab buttons
+    document.querySelectorAll('.dm-console-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    // Update panes
+    document.querySelectorAll('.dm-console-pane').forEach(pane => {
+        pane.classList.toggle('active', pane.id === `${tabName}-pane`);
+    });
+
+    if (tabName === 'terminal' && dfTerminal) {
+        dfTerminal.focus();
+    }
 }
 
 // ============================================================================
@@ -827,5 +1100,12 @@ window.toggleExportMenu = toggleExportMenu;
 window.exportFiles = exportFiles;
 window.previewFile = previewFile;
 window.closePreview = closePreview;
+window.toggleContextMenu = toggleContextMenu;
+window.contextAction = contextAction;
+window.openDataDir = openDataDir;
+window.openArchiveModal = openArchiveModal;
+window.closeArchiveModal = closeArchiveModal;
+window.restoreFile = restoreFile;
 window.clearConsole = clearConsole;
 window.toggleConsole = toggleConsole;
+window.switchConsoleTab = switchConsoleTab;
