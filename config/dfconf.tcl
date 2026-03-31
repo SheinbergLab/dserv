@@ -406,28 +406,30 @@ proc reindex_datafile {filename} {
     }
     
     set meta [df::metadata $filepath]
-    
+
+    set subj [dict get $meta subject]
+    set sys [dict get $meta system]
+    set proto [dict get $meta protocol]
+    set var [dict get $meta variant]
+    set nobs [dict get $meta n_obs]
+    set dt [dict get $meta date]
+    set tm [dict get $meta time]
+    set ts [dict get $meta timestamp]
+    set fsize [dict get $meta file_size]
+
     dfdb eval {
         UPDATE datafiles SET
-            subject = :subj,
-            system = :sys,
-            protocol = :proto,
-            variant = :var,
-            n_obs = :nobs,
-            date = :dt,
-            time = :tm,
-            timestamp = :ts,
-            file_size = :fsize
-        WHERE filename = :filename
-    } subj [dict get $meta subject] \
-      sys [dict get $meta system] \
-      proto [dict get $meta protocol] \
-      var [dict get $meta variant] \
-      nobs [dict get $meta n_obs] \
-      dt [dict get $meta date] \
-      tm [dict get $meta time] \
-      ts [dict get $meta timestamp] \
-      fsize [dict get $meta file_size]
+            subject = $subj,
+            system = $sys,
+            protocol = $proto,
+            variant = $var,
+            n_obs = $nobs,
+            date = $dt,
+            time = $tm,
+            timestamp = $ts,
+            file_size = $fsize
+        WHERE filename = $filename
+    }
     
     # Update column info
     set file_id [dfdb eval {SELECT id FROM datafiles WHERE filename = $filename}]
@@ -1751,6 +1753,275 @@ proc preview_datafile {filename {level trials} {limit 100}} {
     set json [dg_toHybridJSON $g]
     dg_delete $g
     return $json
+}
+
+# ============================================================================
+# Open in External App / Finder
+# ============================================================================
+
+# Open a file in its default application (dgview for .ess/.dgz).
+# Returns 1 on success, 0 on failure.
+proc open_datafile {filename} {
+    set filepath [dfdb eval {SELECT filepath FROM datafiles WHERE filename = $filename}]
+    if {$filepath eq "" || ![file exists $filepath]} {
+        return 0
+    }
+    _open_path $filepath
+    return 1
+}
+
+# Open the data directory in the system file manager.
+# Returns 1 on success, 0 on failure.
+proc open_data_dir {} {
+    set dir [get_ess_dir]
+    if {$dir eq "" || ![file exists $dir]} {
+        return 0
+    }
+    _open_path $dir
+    return 1
+}
+
+# Open a path using the platform's default handler.
+proc _open_path {path} {
+    switch $::tcl_platform(os) {
+        "Darwin" {
+            exec open $path &
+        }
+        default {
+            # Linux / other
+            exec xdg-open $path &
+        }
+    }
+}
+
+# ============================================================================
+# File Management Operations (core procs - return Tcl values)
+# ============================================================================
+
+# Remove a file's catalog entry without touching the actual file on disk.
+# Returns 1 on success, 0 if not found.
+proc remove_from_catalog {filename} {
+    set file_id [dfdb eval {SELECT id FROM datafiles WHERE filename = $filename}]
+
+    if {$file_id eq ""} {
+        return 0
+    }
+
+    # Explicit deletes (foreign key cascades not enabled in SQLite by default)
+    dfdb eval {DELETE FROM processing_log WHERE datafile_id = $file_id}
+    dfdb eval {DELETE FROM exports WHERE datafile_id = $file_id}
+    dfdb eval {DELETE FROM conversions WHERE datafile_id = $file_id}
+    dfdb eval {DELETE FROM file_columns WHERE datafile_id = $file_id}
+    dfdb eval {DELETE FROM datafiles WHERE id = $file_id}
+
+    puts "dfconf: Removed from catalog: $filename"
+    return 1
+}
+
+# Full reprocess: clear cached conversions and re-run the pipeline.
+# Returns Tcl dict: {status ok n_obs N n_trials N} or {status error error "msg"}
+proc reprocess_datafile {filename} {
+    set row [dfdb eval {
+        SELECT id, filepath FROM datafiles WHERE filename = $filename
+    }]
+
+    if {[llength $row] == 0} {
+        return [dict create status error error "File not found: $filename"]
+    }
+
+    lassign $row file_id filepath
+
+    if {![file exists $filepath]} {
+        return [dict create status error error "Source file missing: $filepath"]
+    }
+
+    # Clean up existing work files
+    set obs_path [dfdb eval {SELECT obs_path FROM datafiles WHERE id = $file_id}]
+    set trials_path [dfdb eval {SELECT trials_path FROM datafiles WHERE id = $file_id}]
+    if {$obs_path ne "" && [file exists $obs_path]} {
+        file delete $obs_path
+    }
+    if {$trials_path ne "" && [file exists $trials_path]} {
+        file delete $trials_path
+    }
+
+    # Clear conversion records and cached paths
+    dfdb eval {DELETE FROM conversions WHERE datafile_id = $file_id}
+    dfdb eval {
+        UPDATE datafiles SET obs_path = '', trials_path = '',
+            n_obs = 0, n_trials = 0, status = 'processing'
+        WHERE id = $file_id
+    }
+
+    # Re-index metadata from the .ess file
+    reindex_datafile $filename
+
+    # Run the full processing pipeline
+    set result [process_datafile $filename]
+
+    if {[dict get $result status] eq "ok"} {
+        # Fetch updated counts
+        set counts [dfdb eval {
+            SELECT n_obs, n_trials, status FROM datafiles WHERE id = $file_id
+        }]
+        lassign $counts n_obs n_trials status
+        puts "dfconf: Reprocessed $filename: $n_obs obs, $n_trials trials, status=$status"
+        return [dict create status ok n_obs $n_obs n_trials $n_trials]
+    }
+
+    return $result
+}
+
+# Move .ess file to archive/ subdirectory, clean up work artifacts, remove from catalog.
+# Returns 1 on success, 0 on failure.
+proc archive_datafile {filename} {
+    set row [dfdb eval {
+        SELECT id, filepath, obs_path, trials_path FROM datafiles WHERE filename = $filename
+    }]
+
+    if {[llength $row] == 0} {
+        return 0
+    }
+
+    lassign $row file_id filepath obs_path trials_path
+
+    if {![file exists $filepath]} {
+        # File already gone — just clean up catalog
+        remove_from_catalog $filename
+        return 1
+    }
+
+    # Create archive directory
+    set data_dir [file dirname $filepath]
+    set archive_dir [file join $data_dir archive]
+    if {![file exists $archive_dir]} {
+        file mkdir $archive_dir
+    }
+
+    # Move .ess to archive
+    set dest [file join $archive_dir $filename]
+    if {[catch {file rename -force $filepath $dest} err]} {
+        puts "dfconf: Archive failed for $filename: $err"
+        return 0
+    }
+
+    # Clean up work directory artifacts
+    if {$obs_path ne "" && [file exists $obs_path]} {
+        file delete $obs_path
+    }
+    if {$trials_path ne "" && [file exists $trials_path]} {
+        file delete $trials_path
+    }
+
+    # Remove from catalog
+    remove_from_catalog $filename
+
+    puts "dfconf: Archived $filename to $archive_dir"
+    return 1
+}
+
+# Move .ess file from archive/ back to data directory and re-index.
+# Returns 1 on success, 0 on failure.
+proc restore_datafile {filename} {
+    set data_dir [get_ess_dir]
+    set archive_dir [file join $data_dir archive]
+    set archived_path [file join $archive_dir $filename]
+
+    if {![file exists $archived_path]} {
+        return 0
+    }
+
+    set dest [file join $data_dir $filename]
+    if {[catch {file rename -force $archived_path $dest} err]} {
+        puts "dfconf: Restore failed for $filename: $err"
+        return 0
+    }
+
+    # Index the restored file
+    index_datafile $dest
+
+    puts "dfconf: Restored $filename from archive"
+    return 1
+}
+
+# List .ess files in the archive directory.
+# Returns Tcl list of filenames (not full paths).
+proc list_archived_files {} {
+    set data_dir [get_ess_dir]
+    set archive_dir [file join $data_dir archive]
+
+    if {![file exists $archive_dir]} {
+        return [list]
+    }
+
+    set files [list]
+    foreach f [lsort [glob -nocomplain -directory $archive_dir *.ess]] {
+        lappend files [file tail $f]
+    }
+    return $files
+}
+
+# ============================================================================
+# JSON Wrappers for Frontend
+# ============================================================================
+
+proc json_remove_from_catalog {filename} {
+    if {[remove_from_catalog $filename]} {
+        return [_json_ok [dict create removed $filename]]
+    }
+    return [_json_error "File not found in catalog: $filename"]
+}
+
+proc json_reprocess_datafile {filename} {
+    set result [reprocess_datafile $filename]
+    if {[dict get $result status] eq "ok"} {
+        return [_json_ok [dict create \
+            filename $filename \
+            n_obs [dict get $result n_obs] \
+            n_trials [dict get $result n_trials]]]
+    }
+    return [_json_error [dict get $result error]]
+}
+
+proc json_archive_datafile {filename} {
+    if {[archive_datafile $filename]} {
+        return [_json_ok [dict create archived $filename]]
+    }
+    return [_json_error "Failed to archive: $filename"]
+}
+
+proc json_restore_datafile {filename} {
+    if {[restore_datafile $filename]} {
+        return [_json_ok [dict create restored $filename]]
+    }
+    return [_json_error "Failed to restore: $filename"]
+}
+
+proc json_list_archived_files {} {
+    set files [list_archived_files]
+    set json [yajl create #auto]
+    $json array_open
+    foreach f $files {
+        $json string $f
+    }
+    $json array_close
+    set result [$json get]
+    $json delete
+    return $result
+}
+
+proc json_open_datafile {filename} {
+    if {[open_datafile $filename]} {
+        return [_json_ok [dict create opened $filename]]
+    }
+    return [_json_error "File not found: $filename"]
+}
+
+proc json_open_data_dir {} {
+    if {[open_data_dir]} {
+        return [_json_ok [dict create opened [get_ess_dir]]]
+    }
+    return [_json_error "Data directory not available"]
 }
 
 # ============================================================================
