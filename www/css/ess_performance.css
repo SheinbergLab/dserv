@@ -3,35 +3,47 @@
  * Styles for the ESS Performance monitoring panel
  */
 
-/* Summary stats row */
-.ess-perf-summary {
-    display: flex;
-    gap: 12px;
-    padding: 8px 0;
+/* Stats grid: row-label + 3 stat cells per row */
+.ess-perf-stats-grid {
+    display: grid;
+    grid-template-columns: auto 1fr 1fr 1fr;
+    gap: 2px 8px;
+    padding: 6px 0;
     border-bottom: 1px solid var(--border-color, #3a3a4a);
     margin-bottom: 8px;
+    align-items: center;
+}
+
+.ess-perf-row-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #888);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-right: 4px;
 }
 
 .ess-perf-stat {
     display: flex;
     flex-direction: column;
     align-items: center;
-    flex: 1;
-    min-width: 60px;
+    min-width: 0;
 }
 
 .ess-perf-label {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--text-muted, #888);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    line-height: 1;
 }
 
 .ess-perf-value {
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--text-primary, #e0e0e0);
     font-variant-numeric: tabular-nums;
+    line-height: 1.3;
 }
 
 /* Sort by controls */
@@ -145,13 +157,13 @@
 }
 
 /* Compact mode for small panels */
-.ess-panel-perf.compact .ess-perf-summary {
-    gap: 8px;
-    padding: 6px 0;
+.ess-panel-perf.compact .ess-perf-stats-grid {
+    gap: 1px 6px;
+    padding: 4px 0;
 }
 
 .ess-panel-perf.compact .ess-perf-value {
-    font-size: 14px;
+    font-size: 12px;
 }
 
 .ess-panel-perf.compact .ess-perf-table {

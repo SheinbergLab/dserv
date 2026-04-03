@@ -28,18 +28,32 @@ class ESSPerformance {
     init() {
         // Build the UI
         this.container.innerHTML = `
-            <div class="ess-perf-summary">
+            <div class="ess-perf-stats-grid">
+                <div class="ess-perf-row-label">Block</div>
                 <div class="ess-perf-stat">
                     <span class="ess-perf-label">Trial</span>
                     <span class="ess-perf-value" id="perf-trial">--/--</span>
                 </div>
                 <div class="ess-perf-stat">
-                    <span class="ess-perf-label">% Correct</span>
-                    <span class="ess-perf-value" id="perf-correct">--%</span>
+                    <span class="ess-perf-label">%Corr</span>
+                    <span class="ess-perf-value" id="perf-correct">--</span>
                 </div>
                 <div class="ess-perf-stat">
-                    <span class="ess-perf-label">% Complete</span>
-                    <span class="ess-perf-value" id="perf-complete">--%</span>
+                    <span class="ess-perf-label">%Comp</span>
+                    <span class="ess-perf-value" id="perf-complete">--</span>
+                </div>
+                <div class="ess-perf-row-label">Session</div>
+                <div class="ess-perf-stat">
+                    <span class="ess-perf-label">Trials</span>
+                    <span class="ess-perf-value" id="perf-session-trials">--</span>
+                </div>
+                <div class="ess-perf-stat">
+                    <span class="ess-perf-label">Blocks</span>
+                    <span class="ess-perf-value" id="perf-session-blocks">--</span>
+                </div>
+                <div class="ess-perf-stat">
+                    <span class="ess-perf-label">Juice</span>
+                    <span class="ess-perf-value" id="perf-session-juice">--</span>
                 </div>
             </div>
             <div class="ess-perf-sortby">
@@ -67,28 +81,28 @@ class ESSPerformance {
             </div>
         `;
 
-
         // Cache element references
         this.elements = {
             trial: document.getElementById('perf-trial'),
             correct: document.getElementById('perf-correct'),
             complete: document.getElementById('perf-complete'),
+            sessionTrials: document.getElementById('perf-session-trials'),
+            sessionBlocks: document.getElementById('perf-session-blocks'),
+            sessionJuice: document.getElementById('perf-session-juice'),
             sortby1: document.getElementById('perf-sortby1'),
             sortby2: document.getElementById('perf-sortby2'),
             tableHeader: document.getElementById('perf-table-header'),
             tableBody: document.getElementById('perf-table-body')
         };
-        
+
         // Bind dropdown events
         this.elements.sortby1.addEventListener('change', (e) => {
             this.sortby1 = e.target.value;
-	    console.log('sortby1 changed to:', e.target.value);
             this.requestSortedPerf();
         });
-        
+
         this.elements.sortby2.addEventListener('change', (e) => {
             this.sortby2 = e.target.value;
-	    console.log('sortby2 changed to:', e.target.value);
             this.requestSortedPerf();
         });
     }
@@ -133,6 +147,23 @@ class ESSPerformance {
             this.obsTotal = parseInt(data.value) || 0;
             this.updateTrialCount();
         });
+
+        // Subscribe to session stats
+        this.dpManager?.subscribe('ess/session_stats', (data) => {
+            this.updateSessionStats(data.value);
+        });
+    }
+
+    updateSessionStats(jsonStr) {
+        try {
+            const stats = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+            this.elements.sessionTrials.textContent = stats.total_trials ?? '--';
+            this.elements.sessionBlocks.textContent = stats.n_blocks ?? '--';
+            const mls = parseFloat(stats.juice_mls);
+            this.elements.sessionJuice.textContent = isNaN(mls) ? '--' : `${mls.toFixed(1)} ml`;
+        } catch (e) {
+            // ignore parse errors
+        }
     }
     
     updateTrialCount() {
