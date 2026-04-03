@@ -183,35 +183,34 @@ proc publish_session_stats {} {
     global session_subject session_date
 
     if {$session_subject eq {}} {
-        dservSet ess/session_stats {{"subject":"","total_trials":0,"total_correct":0,"pct_correct":0.0,"n_blocks":0}}
+        dservSet ess/session_stats {{"subject":"","total_trials":0,"n_blocks":0,"juice_mls":0,"juice_count":0}}
         return
     }
 
     set stats [db eval {
         SELECT COUNT(*) as n_blocks,
-               COALESCE(SUM(n_complete), 0) as total_trials,
-               COALESCE(SUM(CAST(n_complete * pct_correct / 100.0 AS INTEGER)), 0) as total_correct
+               COALESCE(SUM(n_complete), 0) as total_trials
         FROM trials
         WHERE subject = $session_subject AND date = $session_date
     }]
 
-    set n_blocks    [lindex $stats 0]
+    set n_blocks     [lindex $stats 0]
     set total_trials [lindex $stats 1]
-    set total_correct [lindex $stats 2]
-    if {$total_trials > 0} {
-        set pct [expr {100.0 * $total_correct / $total_trials}]
-    } else {
-        set pct 0.0
-    }
+
+    # Get juice stats from juicer subprocess
+    set juice_mls   [dservGet juicer/session_mls]
+    set juice_count [dservGet juicer/session_count]
+    if {$juice_mls eq {}} { set juice_mls 0 }
+    if {$juice_count eq {}} { set juice_count 0 }
 
     set json [yajl create #auto]
     $json map_open
     $json string "subject"      string $session_subject
     $json string "date"         string $session_date
     $json string "total_trials" number $total_trials
-    $json string "total_correct" number $total_correct
-    $json string "pct_correct"  number [format "%.1f" $pct]
     $json string "n_blocks"     number $n_blocks
+    $json string "juice_mls"    number [format "%.1f" $juice_mls]
+    $json string "juice_count"  number $juice_count
     $json map_close
     set result [$json get]
     $json delete
@@ -226,6 +225,10 @@ proc session_reset {{new_subject {}}} {
         set session_subject $new_subject
     }
     set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
+
+    # Reset juicer session counters
+    catch { send juicer reset_session }
+
     publish_session_stats
 }
 
