@@ -61,6 +61,24 @@ class SendTable
     map_.clear();
   }
     
+  // Return diagnostic info: list of {key active queue_size matches}
+  std::vector<std::tuple<std::string, int, size_t, std::string>> get_client_info()
+  {
+    std::vector<std::tuple<std::string, int, size_t, std::string>> result;
+    std::lock_guard<std::mutex> mlock(mutex_);
+    for (auto const& [key, send_client] : map_) {
+      if (send_client) {
+	result.emplace_back(
+	  key,
+	  send_client->active,
+	  send_client->dpoint_queue.size(),
+	  send_client->matches.to_string()
+	);
+      }
+    }
+    return result;
+  }
+
   void forward_dpoint(ds_datapoint_t *dpoint)
   {
     std::vector<SendClient *> close_vec;

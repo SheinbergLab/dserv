@@ -627,6 +627,34 @@ int dserv_get_command(ClientData data, Tcl_Interp * interp, int objc,
   return TCL_OK;
 }
 
+int dserv_send_clients_command(ClientData data, Tcl_Interp * interp, int objc,
+			       Tcl_Obj * const objv[])
+{
+  Dataserver *ds = (Dataserver *) data;
+  auto clients = ds->get_send_table().get_client_info();
+
+  Tcl_Obj *listObj = Tcl_NewListObj(0, NULL);
+  for (auto& [key, active, queue_size, matches] : clients) {
+    Tcl_Obj *clientDict = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, clientDict,
+		   Tcl_NewStringObj("id", -1),
+		   Tcl_NewStringObj(key.c_str(), -1));
+    Tcl_DictObjPut(interp, clientDict,
+		   Tcl_NewStringObj("active", -1),
+		   Tcl_NewIntObj(active));
+    Tcl_DictObjPut(interp, clientDict,
+		   Tcl_NewStringObj("queue_size", -1),
+		   Tcl_NewWideIntObj(queue_size));
+    Tcl_DictObjPut(interp, clientDict,
+		   Tcl_NewStringObj("matches", -1),
+		   Tcl_NewStringObj(matches.c_str(), -1));
+    Tcl_ListObjAppendElement(interp, listObj, clientDict);
+  }
+
+  Tcl_SetObjResult(interp, listObj);
+  return TCL_OK;
+}
+
 int dserv_info_command(ClientData data, Tcl_Interp * interp, int objc,
                        Tcl_Obj * const objv[])
 {
@@ -1104,6 +1132,8 @@ static void add_tcl_commands(Tcl_Interp *interp, Dataserver *dserv)
 		       dserv_keys_command, dserv, NULL);
   Tcl_CreateObjCommand(interp, "dservDGDir",
 		       dserv_dgdir_command, dserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservSendClients",
+		       dserv_send_clients_command, dserv, NULL);
 
   Tcl_CreateObjCommand(interp, "processLoad",
 		       process_load_command, dserv, NULL);

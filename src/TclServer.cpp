@@ -2691,6 +2691,8 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 		       dserv_keys_command, tserv->ds, NULL);
   Tcl_CreateObjCommand(interp, "dservDGDir",
 		       dserv_dgdir_command, tserv->ds, NULL);
+  Tcl_CreateObjCommand(interp, "dservSendClients",
+		       dserv_send_clients_command, tserv->ds, NULL);
 
   Tcl_CreateObjCommand(interp, "processGetParam",
                process_get_param_command, tserv->ds, NULL);

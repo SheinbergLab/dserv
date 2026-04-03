@@ -76,6 +76,8 @@ class Dataserver
   SharedQueue<ds_datapoint_t *> logger_queue;
 
 public:
+  SendTable& get_send_table() { return send_table; }
+
   int argc;
   char **argv;
   
