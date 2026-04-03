@@ -7,6 +7,13 @@ set db_path "$dspath/db/dserv.db"
 
 set last_load_time {}
 
+# Number of days of trial data to retain (older trials are pruned)
+set db_max_age_days 7
+
+# Session tracking: current subject and start date for session stats
+set session_subject {}
+set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
+
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
 
@@ -80,6 +87,7 @@ proc setup_database {db_path} {
 #
 
 proc process_trialdg { dpoint data } {
+    global session_subject session_date
     set system       [dservGet ess/system]
     set protocol     [dservGet ess/protocol]
     set variant      [dservGet ess/variant]
@@ -90,18 +98,34 @@ proc process_trialdg { dpoint data } {
     set n_complete   [dservGet ess/block_n_complete]
     set pct_complete [dservGet ess/block_pct_complete]
     set pct_correct  [dservGet ess/block_pct_correct]
-    
+
     db eval { INSERT INTO trials (block_id, subject, project, state_system, protocol, variant, trialdg, sys_time)
         VALUES($block_id, $subject, $project, $system, $protocol, $variant, $data, current_timestamp)
         ON CONFLICT(block_id) DO UPDATE SET
         trialdg=$data, n_complete=$n_complete, n_trials=$n_trials, pct_complete=$pct_complete, pct_correct=$pct_correct, sys_time=current_timestamp;
     }
+
+    # Update session tracking if subject changed
+    if {$session_subject ne $subject} {
+        set session_subject $subject
+        set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
+    }
+    publish_session_stats
 }
 
 proc process_ess { dpoint data } {
-    global last_load_time
+    global last_load_time session_subject session_date
     set host [dservGet system/hostaddr]
     set domain ess
+
+    # Track subject changes for session stats
+    if { [string equal $dpoint ess/subject] } {
+        if {$session_subject ne $data} {
+            set session_subject $data
+            set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
+            publish_session_stats
+        }
+    }
 
     # if the system has changed, update the blockid
     if { [string equal $dpoint ess/last_load_time] } {
@@ -148,6 +172,61 @@ proc process_stimdg { dpoint data } {
     } err]} {
         puts "Error processing stimdg: $err"
     }
+}
+
+#
+# Session stats
+#
+
+# Query DB and publish summary stats for the current session
+proc publish_session_stats {} {
+    global session_subject session_date
+
+    if {$session_subject eq {}} {
+        dservSet ess/session_stats {{"subject":"","total_trials":0,"total_correct":0,"pct_correct":0.0,"n_blocks":0}}
+        return
+    }
+
+    set stats [db eval {
+        SELECT COUNT(*) as n_blocks,
+               COALESCE(SUM(n_complete), 0) as total_trials,
+               COALESCE(SUM(CAST(n_complete * pct_correct / 100.0 AS INTEGER)), 0) as total_correct
+        FROM trials
+        WHERE subject = $session_subject AND date = $session_date
+    }]
+
+    set n_blocks    [lindex $stats 0]
+    set total_trials [lindex $stats 1]
+    set total_correct [lindex $stats 2]
+    if {$total_trials > 0} {
+        set pct [expr {100.0 * $total_correct / $total_trials}]
+    } else {
+        set pct 0.0
+    }
+
+    set json [yajl create #auto]
+    $json map_open
+    $json string "subject"      string $session_subject
+    $json string "date"         string $session_date
+    $json string "total_trials" number $total_trials
+    $json string "total_correct" number $total_correct
+    $json string "pct_correct"  number [format "%.1f" $pct]
+    $json string "n_blocks"     number $n_blocks
+    $json map_close
+    set result [$json get]
+    $json delete
+
+    dservSet ess/session_stats $result
+}
+
+# Reset session stats (e.g., new subject or explicit reset)
+proc session_reset {{new_subject {}}} {
+    global session_subject session_date
+    if {$new_subject ne {}} {
+        set session_subject $new_subject
+    }
+    set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
+    publish_session_stats
 }
 
 #
@@ -359,10 +438,68 @@ proc get_sorted_perf { block_id {sortby1 {}} {sortby2 {}} } {
 }
 
 #
+# Database maintenance
+#
+
+# Track last cleanup date so we only clean once per day
+set last_cleanup_date {}
+
+# Remove trials older than db_max_age_days, checkpoint WAL, and reclaim space
+proc cleanup_database {} {
+    global db_max_age_days last_cleanup_date
+
+    set today [clock format [clock seconds] -format "%Y-%m-%d"]
+
+    # Only run cleanup once per day
+    if {$last_cleanup_date eq $today} { return }
+
+    set cutoff [clock format [clock add [clock seconds] -$db_max_age_days days] \
+                    -format "%Y-%m-%d"]
+
+    set deleted [db eval {
+        DELETE FROM trials WHERE date < $cutoff;
+        SELECT changes();
+    }]
+
+    if {$deleted > 0} {
+        puts "DB cleanup: removed $deleted trials older than $cutoff"
+        db eval { VACUUM; }
+        puts "DB cleanup: VACUUM complete"
+    }
+
+    # Checkpoint WAL to keep it from growing unbounded
+    db eval { PRAGMA wal_checkpoint(TRUNCATE); }
+
+    set last_cleanup_date $today
+    puts "DB cleanup: done for $today (next cleanup tomorrow)"
+}
+
+# Timer callback — check if cleanup is needed
+proc cleanup_timer_callback {dpoint data} {
+    cleanup_database
+}
+
+# Set up periodic cleanup check using dserv_timer
+proc setup_cleanup_timer {} {
+    timerPrefix dbTimer
+    dservAddExactMatch dbTimer/0
+    dpointSetScript dbTimer/0 cleanup_timer_callback
+    # Check every 30 minutes (1800000 ms); cleanup_database gates on date
+    timerTickInterval 1800000 1800000
+    puts "DB cleanup: timer started (30 min check interval)"
+}
+
+#
 # Initialize database and subscriptions
 #
 
+load ${dspath}/modules/dserv_timer[info sharedlibextension]
+
 setup_database $db_path
+
+# Run initial cleanup and start periodic check timer
+cleanup_database
+setup_cleanup_timer
 
 dservAddMatch   ess/*
 dpointSetScript ess/* process_ess
