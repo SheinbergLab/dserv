@@ -224,6 +224,7 @@ proc reward { ml } {
     } else {
 	$::juicer reward $ml
     }
+    publish_session_juice $ml
 }
 
 
@@ -240,6 +241,33 @@ proc set_flow_rate { val } {
 }
 
 init
+
+#
+# Session tracking
+#
+
+# Session juice accumulator
+set session_mls 0.0
+set session_count 0
+
+proc publish_session_juice { ml } {
+    global session_mls session_count
+    set session_mls [expr {$session_mls + $ml}]
+    incr session_count
+    dservSet juicer/session_mls $session_mls
+    dservSet juicer/session_count $session_count
+}
+
+proc reset_session {} {
+    global session_mls session_count
+    set session_mls 0.0
+    set session_count 0
+    dservSet juicer/session_mls 0
+    dservSet juicer/session_count 0
+}
+
+# Initialize session baseline
+reset_session
 
 # local system configuration in /usr/local/dserv/local/juicer.tcl
 if { [file exists $dspath/local/juicer.tcl] } {
