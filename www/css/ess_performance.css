@@ -36,14 +36,16 @@
     text-transform: uppercase;
     letter-spacing: 0.3px;
     line-height: 1;
+    margin: 0;
 }
 
 .ess-perf-value {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary, #e0e0e0);
     font-variant-numeric: tabular-nums;
-    line-height: 1.3;
+    line-height: 1.1;
+    margin: 0;
 }
 
 /* Sort by controls */
