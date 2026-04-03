@@ -477,8 +477,13 @@ proc cleanup_database {} {
     puts "DB cleanup: done for $today (next cleanup tomorrow)"
 }
 
-# Timer callback — check if cleanup is needed
+# Timer callback — check if cleanup is needed and reset session on day rollover
 proc cleanup_timer_callback {dpoint data} {
+    global session_date
+    set today [clock format [clock seconds] -format "%Y-%m-%d"]
+    if {$session_date ne $today} {
+        session_reset
+    }
     cleanup_database
 }
 
