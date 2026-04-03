@@ -10,10 +10,6 @@ set last_load_time {}
 # Number of days of trial data to retain (older trials are pruned)
 set db_max_age_days 7
 
-# Session tracking: current subject and start date for session stats
-set session_subject {}
-set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
-
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
 
@@ -68,6 +64,18 @@ proc setup_database {db_path} {
         );
     }
 
+    # Session tracking — single row, persists across restarts
+    db eval {
+        CREATE TABLE IF NOT EXISTS session (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            subject TEXT DEFAULT '',
+            date TEXT DEFAULT (date()),
+            juice_mls REAL DEFAULT 0,
+            juice_count INTEGER DEFAULT 0
+        );
+        INSERT OR IGNORE INTO session (id) VALUES (1);
+    }
+
     # Create indices for faster lookup
     db eval {
         CREATE INDEX IF NOT EXISTS idx_trials_subject ON trials (subject);
@@ -87,7 +95,6 @@ proc setup_database {db_path} {
 #
 
 proc process_trialdg { dpoint data } {
-    global session_subject session_date
     set system       [dservGet ess/system]
     set protocol     [dservGet ess/protocol]
     set variant      [dservGet ess/variant]
@@ -105,25 +112,25 @@ proc process_trialdg { dpoint data } {
         trialdg=$data, n_complete=$n_complete, n_trials=$n_trials, pct_complete=$pct_complete, pct_correct=$pct_correct, sys_time=current_timestamp;
     }
 
-    # Update session tracking if subject changed
-    if {$session_subject ne $subject} {
-        set session_subject $subject
-        set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
+    # Update session subject if changed
+    set cur_subject [db eval { SELECT subject FROM session WHERE id = 1 }]
+    if {$cur_subject ne $subject} {
+        session_reset $subject
+    } else {
+        publish_session_stats
     }
-    publish_session_stats
 }
 
 proc process_ess { dpoint data } {
-    global last_load_time session_subject session_date
+    global last_load_time
     set host [dservGet system/hostaddr]
     set domain ess
 
     # Track subject changes for session stats
     if { [string equal $dpoint ess/subject] } {
-        if {$session_subject ne $data} {
-            set session_subject $data
-            set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
-            publish_session_stats
+        set cur_subject [db eval { SELECT subject FROM session WHERE id = 1 }]
+        if {$cur_subject ne $data} {
+            session_reset $data
         }
     }
 
@@ -180,7 +187,13 @@ proc process_stimdg { dpoint data } {
 
 # Query DB and publish summary stats for the current session
 proc publish_session_stats {} {
-    global session_subject session_date
+    set session [db eval {
+        SELECT subject, date, juice_mls, juice_count FROM session WHERE id = 1
+    }]
+    set session_subject [lindex $session 0]
+    set session_date    [lindex $session 1]
+    set juice_mls       [lindex $session 2]
+    set juice_count     [lindex $session 3]
 
     if {$session_subject eq {}} {
         dservSet ess/session_stats {{"subject":"","total_trials":0,"n_blocks":0,"juice_mls":0,"juice_count":0}}
@@ -197,12 +210,6 @@ proc publish_session_stats {} {
     set n_blocks     [lindex $stats 0]
     set total_trials [lindex $stats 1]
 
-    # Get juice stats from juicer subprocess
-    set juice_mls   [dservGet juicer/session_mls]
-    set juice_count [dservGet juicer/session_count]
-    if {$juice_mls eq {}} { set juice_mls 0 }
-    if {$juice_count eq {}} { set juice_count 0 }
-
     set json [yajl create #auto]
     $json map_open
     $json string "subject"      string $session_subject
@@ -218,17 +225,33 @@ proc publish_session_stats {} {
     dservSet ess/session_stats $result
 }
 
+# Add juice to session totals (called via datapoint from juicer)
+proc session_add_juice { ml } {
+    db eval {
+        UPDATE session SET
+            juice_mls = juice_mls + $ml,
+            juice_count = juice_count + 1
+        WHERE id = 1
+    }
+    publish_session_stats
+}
+
 # Reset session stats (e.g., new subject or explicit reset)
 proc session_reset {{new_subject {}}} {
-    global session_subject session_date
+    set today [clock format [clock seconds] -format "%Y-%m-%d"]
     if {$new_subject ne {}} {
-        set session_subject $new_subject
+        db eval {
+            UPDATE session SET subject = $new_subject, date = $today,
+                juice_mls = 0, juice_count = 0
+            WHERE id = 1
+        }
+    } else {
+        db eval {
+            UPDATE session SET date = $today,
+                juice_mls = 0, juice_count = 0
+            WHERE id = 1
+        }
     }
-    set session_date [clock format [clock seconds] -format "%Y-%m-%d"]
-
-    # Reset juicer session counters
-    catch { send juicer reset_session }
-
     publish_session_stats
 }
 
@@ -479,8 +502,8 @@ proc cleanup_database {} {
 
 # Timer callback — check if cleanup is needed and reset session on day rollover
 proc cleanup_timer_callback {dpoint data} {
-    global session_date
     set today [clock format [clock seconds] -format "%Y-%m-%d"]
+    set session_date [db eval { SELECT date FROM session WHERE id = 1 }]
     if {$session_date ne $today} {
         session_reset
     }
