@@ -4677,9 +4677,33 @@ namespace eval ess {
     proc apply_pending_config_args {} {
         variable _pending_config_args
         variable _loading_from_config
-        
+        variable current
+
         if {$_loading_from_config && [dict size $_pending_config_args] > 0} {
             ess_info "Applying config variant_args: $_pending_config_args" "config"
+
+            # Check for mismatches between config args and current variant definition
+            if {$current(system) ne "" && $current(variant) ne ""} {
+                if {[catch {
+                    set s [find_system $current(system)]
+                    set vinfo [dict get [$s get_variants] $current(variant)]
+                    set expected [dict keys [dict get $vinfo loader_options]]
+                    set provided [dict keys $_pending_config_args]
+                    foreach arg $expected {
+                        if {$arg ni $provided} {
+                            ess_info "Config missing variant arg '$arg' - will use default" "config"
+                        }
+                    }
+                    foreach arg $provided {
+                        if {$arg ni $expected} {
+                            ess_info "Config has stale variant arg '$arg' - ignoring" "config"
+                        }
+                    }
+                }]} {
+                    # Non-critical - don't fail the load over logging
+                }
+            }
+
             set_variant_args $_pending_config_args
         }
     }
