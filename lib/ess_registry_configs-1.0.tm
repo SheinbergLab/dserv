@@ -508,12 +508,55 @@ namespace eval ess::registry {
                 }
             }
             
+            # If overwrite mode, remove local configs/queues not in the bundle
+            # (mirrors the replace=true logic on the registry side)
+            # Uses direct SQL to avoid triggering mark_modified / auto-push,
+            # since the local state should now match the registry.
+            if {$overwrite} {
+                # Build sets of names from the bundle
+                set bundle_config_names [list]
+                foreach cfg $configs_list {
+                    lappend bundle_config_names [dict get $cfg name]
+                }
+                set bundle_queue_names [list]
+                foreach q $queues_list {
+                    lappend bundle_queue_names [dict get $q name]
+                }
+
+                # Delete local queues not in bundle (queues first, items reference configs)
+                $db eval {
+                    SELECT id, name FROM queues
+                    WHERE project_id = :project_id
+                } qrow {
+                    if {$qrow(name) ni $bundle_queue_names} {
+                        set _qid $qrow(id)
+                        $db eval { DELETE FROM queue_items WHERE queue_id = :_qid }
+                        $db eval { DELETE FROM queues WHERE id = :_qid }
+                        dict lappend result deleted "queue:$qrow(name)"
+                        puts "import_bundle:   -> DELETED stale queue: $qrow(name)"
+                    }
+                }
+
+                # Delete local configs not in bundle
+                $db eval {
+                    SELECT id, name FROM configs
+                    WHERE project_id = :project_id AND archived = 0
+                } crow {
+                    if {$crow(name) ni $bundle_config_names} {
+                        set _cid $crow(id)
+                        $db eval { DELETE FROM configs WHERE id = :_cid }
+                        dict lappend result deleted "config:$crow(name)"
+                        puts "import_bundle:   -> DELETED stale config: $crow(name)"
+                    }
+                }
+            }
+
             # Update project sync timestamp
             $db eval {
                 UPDATE projects SET last_sync_at = strftime('%s','now')
                 WHERE id = :project_id
             }
-            
+
             $db eval {COMMIT}
             
         } err]} {
