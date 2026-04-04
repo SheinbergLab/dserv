@@ -168,7 +168,7 @@ namespace eval update {
             $obj string $key
             if {[string is boolean $value]} {
                 $obj bool $value
-            } elseif {[string is integer $value]} {
+            } elseif {[string is double $value]} {
                 $obj number $value
             } else {
                 $obj string $value
