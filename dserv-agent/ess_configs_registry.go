@@ -10,8 +10,38 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 )
+
+// marshalNumericMap marshals a map[string]interface{} to JSON while preserving
+// decimal points on whole-number floats. Go's encoding/json drops ".0" from
+// values like 6.0, turning them into integer 6 in JSON. When Tcl reads these
+// back, it treats them as integers, which can cause integer division bugs
+// (e.g., expr {1 / (6 * 60)} = 0 instead of 0.00277...).
+func marshalNumericMap(m map[string]interface{}) ([]byte, error) {
+	if m == nil {
+		return []byte("{}"), nil
+	}
+	processed := make(map[string]json.RawMessage, len(m))
+	for k, v := range m {
+		switch val := v.(type) {
+		case float64:
+			if !math.IsNaN(val) && !math.IsInf(val, 0) && val == math.Trunc(val) {
+				// Whole-number float: preserve decimal point (e.g., 6.0 not 6)
+				processed[k] = json.RawMessage(strconv.FormatFloat(val, 'f', 1, 64))
+			} else {
+				b, _ := json.Marshal(val)
+				processed[k] = json.RawMessage(b)
+			}
+		default:
+			b, _ := json.Marshal(val)
+			processed[k] = json.RawMessage(b)
+		}
+	}
+	return json.Marshal(processed)
+}
 
 // ============ Schema Migration ============
 
@@ -371,11 +401,11 @@ func (r *ESSRegistry) CreateConfig(c *ESSConfig) (int64, error) {
 	c.CreatedAt = now
 	c.UpdatedAt = now
 	
-	variantArgsJSON, _ := json.Marshal(c.VariantArgs)
+	variantArgsJSON, _ := marshalNumericMap(c.VariantArgs)
 	if c.VariantArgs == nil {
 		variantArgsJSON = []byte("{}")
 	}
-	paramsJSON, _ := json.Marshal(c.Params)
+	paramsJSON, _ := marshalNumericMap(c.Params)
 	if c.Params == nil {
 		paramsJSON = []byte("{}")
 	}
@@ -402,8 +432,8 @@ func (r *ESSRegistry) UpdateConfig(c *ESSConfig) error {
 	now := time.Now()
 	c.UpdatedAt = now
 	
-	variantArgsJSON, _ := json.Marshal(c.VariantArgs)
-	paramsJSON, _ := json.Marshal(c.Params)
+	variantArgsJSON, _ := marshalNumericMap(c.VariantArgs)
+	paramsJSON, _ := marshalNumericMap(c.Params)
 	tagsJSON, _ := json.Marshal(c.Tags)
 	
 	_, err := r.db.Exec(`
@@ -856,11 +886,11 @@ func (r *ESSRegistry) ImportProjectBundle(workgroup string, bundle *ESSProjectBu
 		err := tx.QueryRow("SELECT id FROM ess_configs WHERE project_id = ? AND name = ?",
 			projectID, c.Name).Scan(&existingID)
 		
-		variantArgsJSON, _ := json.Marshal(c.VariantArgs)
+		variantArgsJSON, _ := marshalNumericMap(c.VariantArgs)
 		if c.VariantArgs == nil {
 			variantArgsJSON = []byte("{}")
 		}
-		paramsJSON, _ := json.Marshal(c.Params)
+		paramsJSON, _ := marshalNumericMap(c.Params)
 		if c.Params == nil {
 			paramsJSON = []byte("{}")
 		}
