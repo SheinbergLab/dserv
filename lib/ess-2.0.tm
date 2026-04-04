@@ -853,7 +853,7 @@ namespace eval ess {
         set obj [yajl create #auto]
         $obj map_open
         dict for {key value} $dict_data {
-            if {[string is integer $value]} {
+            if {[string is double $value]} {
                 $obj string $key number $value
             } else {
                 $obj string $key string $value
