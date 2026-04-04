@@ -2061,6 +2061,14 @@ updateConfigRunButtons() {
             }
         }
         
+        // Fill in defaults for any variant args missing from live state
+        const createOptions = this.state.editVariantOptions || {};
+        for (const [argName, options] of Object.entries(createOptions)) {
+            if (!(argName in variantArgs) && Array.isArray(options) && options.length > 0) {
+                variantArgs[argName] = options[0].value || options[0];
+            }
+        }
+
         // Build a pseudo-config object for create mode
         const subject = this.state.currentSubject || '';
         this.state.editingConfig = {
@@ -2276,15 +2284,25 @@ updateConfigRunButtons() {
                 try { tags = JSON.parse(tags); } catch (e) { tags = []; }
             }
 
+            // Build variant_args from config, then fill in defaults for any
+            // new args that were added to the variant since the config was saved
+            let configVariantArgs = typeof config.variant_args === 'string'
+                ? TclParser.parseDict(config.variant_args)
+                : (config.variant_args || {});
+            const currentOptions = this.state.editVariantOptions || {};
+            for (const [argName, options] of Object.entries(currentOptions)) {
+                if (!(argName in configVariantArgs) && Array.isArray(options) && options.length > 0) {
+                    configVariantArgs[argName] = options[0].value || options[0];
+                }
+            }
+
             this.state.editForm = {
                 name: config.name || '',
                 description: config.description || '',
-                file_template: config.file_template || '',  // NEW
+                file_template: config.file_template || '',
                 subject: config.subject || '',
                 tags: Array.isArray(tags) ? [...tags] : [],
-                variant_args: typeof config.variant_args === 'string' 
-			    ? TclParser.parseDict(config.variant_args) 
-			    : (config.variant_args || {}),
+                variant_args: configVariantArgs,
                 params: typeof config.params === 'string'
                       ? TclParser.parseDict(config.params)
                       : (config.params || {})
