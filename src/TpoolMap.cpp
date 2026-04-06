@@ -80,10 +80,9 @@ static void tpool_worker_func(tpool_worker_t *w)
         return;
     }
 
-    /* Set up zipfs so packages can be found */
-    TclZipfs_AppHook(&w->argc, &w->argv);
-
-    /* Bootstrap auto_path for dlsh packages */
+    /* Bootstrap auto_path for dlsh packages.
+     * Note: zipfs is already mounted by the main thread at startup;
+     * we just need to set auto_path so the worker can find packages. */
     const char *bootstrap = R"(
         set _base [file join [zipfs root] dlsh]
         set ::auto_path [linsert $::auto_path 0 ${_base}/lib]
@@ -115,6 +114,11 @@ static void tpool_worker_func(tpool_worker_t *w)
     }
 
     Tcl_DeleteInterp(interp);
+
+    /* Clean up all Tcl thread-local storage for this thread.
+     * Without this, every worker thread leaks TLS allocated by
+     * Tcl core and loaded packages (box2d, dlsh, etc.).  */
+    Tcl_FinalizeThread();
 }
 
 /*
