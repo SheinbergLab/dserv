@@ -238,6 +238,8 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 	}
 
 	// Step 2: Compute local checksums for comparison
+	// We iterate over the manifest entries (not a fixed type list) so that
+	// all script types — including viewer — are included automatically.
 	localChecksums := make(map[string]string)
 	for _, s := range scripts {
 		protocol := strVal(s, "protocol")

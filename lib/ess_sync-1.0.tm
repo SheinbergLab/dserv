@@ -29,6 +29,7 @@ namespace eval ess {
     variable registry_workgroup {}
     variable registry_checksums [dict create]  ;# last-known registry checksums per script type
     variable sync_displaced [list]             ;# files displaced by sync (local edits overwritten)
+    variable viewers_dir {}                    ;# directory for viewer plugins (served at /viewers/)
 
     # ── Sync-displaced file management ───────────────────────────────
     #
@@ -212,11 +213,13 @@ namespace eval ess {
     proc registry_configure {args} {
         variable registry_url
         variable registry_workgroup
+        variable viewers_dir
         foreach {key val} $args {
             switch -- $key {
-                -url       { set registry_url $val }
-                -workgroup { set registry_workgroup $val }
-                default    { error "Unknown option: $key (use -url or -workgroup)" }
+                -url         { set registry_url $val }
+                -workgroup   { set registry_workgroup $val }
+                -viewers_dir { set viewers_dir $val }
+                default      { error "Unknown option: $key (use -url, -workgroup, or -viewers_dir)" }
             }
         }
         dservSet ess/registry/url $registry_url
@@ -256,7 +259,7 @@ namespace eval ess {
 
         if {[file exists $sys_dir]} {
             # System-level scripts
-            foreach type {system extract analyze} {
+            foreach type {system extract analyze viewer} {
                 set filename [_script_filename $system "" $type]
                 set filepath [file join $sys_dir $filename]
                 if {[file exists $filepath]} {
@@ -267,7 +270,7 @@ namespace eval ess {
             # Protocol-level scripts
             foreach proto_dir [glob -nocomplain -type d [file join $sys_dir *]] {
                 set proto [file tail $proto_dir]
-                foreach type {protocol loaders variants stim extract} {
+                foreach type {protocol loaders variants stim extract viewer} {
                     set filename [_script_filename $system $proto $type]
                     set filepath [file join $proto_dir $filename]
                     if {[file exists $filepath]} {
@@ -348,6 +351,9 @@ namespace eval ess {
         }
 
         ess_info "Sync $system: $pulled pulled, $unchanged unchanged" "sync"
+
+        # Install viewer plugins to the viewers directory (served by dserv-agent)
+        _install_viewers $system
 
         # Publish displaced files so workbench can warn user
         _publish_sync_displaced
@@ -1220,17 +1226,73 @@ namespace eval ess {
         }
     }
 
+    # ── Helper: install viewer plugins to web-accessible directory ────
+    #
+    # After sync, copies any *_viewer.js files from the system directory
+    # to {www_path}/viewers/ where dg_viewer.html can find them.
+    # The target filename is {system}.js so the HTML can load via
+    # import('./viewers/{system}.js').
+    #
+    # Uses www_path from dserv (set via -w flag or config) or the
+    # viewers_dir variable if explicitly configured.
+    #
+    proc _install_viewers {system} {
+        variable system_path
+        variable viewers_dir
+        variable current
+
+        # Determine target directory: explicit config or www_path/viewers
+        set target_dir $viewers_dir
+        if {$target_dir eq ""} {
+            if {[catch {set wp [www_path]}] || $wp eq ""} {
+                return
+            }
+            set target_dir [file join $wp viewers]
+        }
+
+        set project $current(project)
+        set sys_dir [file join $system_path $project $system]
+
+        # System-level viewer files
+        foreach viewer_file [glob -nocomplain [file join $sys_dir *_viewer.js]] {
+            set target [file join $target_dir "${system}.js"]
+            if {[catch {
+                file mkdir $target_dir
+                file copy -force $viewer_file $target
+                ess_info "  Installed viewer: $target" "sync"
+            } err]} {
+                ess_warning "  Could not install viewer $viewer_file: $err" "sync"
+            }
+        }
+
+        # Protocol-level viewer files
+        foreach proto_dir [glob -nocomplain -type d [file join $sys_dir *]] {
+            set proto [file tail $proto_dir]
+            foreach viewer_file [glob -nocomplain [file join $proto_dir *_viewer.js]] {
+                set target [file join $target_dir "${system}_${proto}.js"]
+                if {[catch {
+                    file copy -force $viewer_file $target
+                    ess_info "  Installed viewer: $target" "sync"
+                } err]} {
+                    ess_warning "  Could not install viewer $viewer_file: $err" "sync"
+                }
+            }
+        }
+    }
+
     # ── Helper: map script type to filename ───────────────────────────
     proc _script_filename {system protocol type} {
         if {$protocol eq ""} {
             switch $type {
                 system  { return "${system}.tcl" }
                 extract { return "${system}_extract.tcl" }
+                viewer  { return "${system}_viewer.js" }
                 default { return "${system}_${type}.tcl" }
             }
         } else {
             switch $type {
                 protocol { return "${protocol}.tcl" }
+                viewer   { return "${protocol}_viewer.js" }
                 default  { return "${protocol}_${type}.tcl" }
             }
         }

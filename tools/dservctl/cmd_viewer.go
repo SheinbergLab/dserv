@@ -1,19 +1,22 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 // runViewer handles viewer plugin management.
 //
 // Usage:
-//   dservctl viewer list <system>                       — list viewer scripts for a system
+//   dservctl viewer list [system]                       — list viewer scripts
 //   dservctl viewer get <system> [protocol] [-o FILE]   — download viewer JS
 //   dservctl viewer push <system> [protocol] -f FILE    — upload viewer JS
 //   dservctl viewer delete <system> [protocol]          — remove viewer script
+//   dservctl viewer sync [system] --dir DIR             — sync viewer JS to local directory
 func runViewer(cfg *Config, args []string) int {
 	if len(args) == 0 {
 		printViewerUsage()
@@ -29,8 +32,10 @@ func runViewer(cfg *Config, args []string) int {
 		return viewerPush(cfg, args[1:])
 	case "delete":
 		return viewerDelete(cfg, args[1:])
+	case "sync":
+		return viewerSync(cfg, args[1:])
 	default:
-		PrintError("unknown viewer subcommand %q (use list, get, push, or delete)", args[0])
+		PrintError("unknown viewer subcommand %q (use list, get, push, sync, or delete)", args[0])
 		printViewerUsage()
 		return 2
 	}
@@ -38,21 +43,22 @@ func runViewer(cfg *Config, args []string) int {
 
 func printViewerUsage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  dservctl viewer list <system>                        List viewer scripts
+  dservctl viewer list [system]                        List viewer scripts
   dservctl viewer get <system> [protocol] [-o FILE]    Download viewer JS
   dservctl viewer push <system> [protocol] -f FILE     Upload viewer JS
   dservctl viewer delete <system> [protocol]           Remove viewer script
+  dservctl viewer sync [system] --dir DIR              Sync viewers to local directory
 
 The viewer type is used by dg_viewer.html to load experiment-specific
-visualization plugins. System-level viewers render common elements;
-protocol-level viewers can add stim-specific overlays.
+visualization plugins. Sync pulls viewer JS from the registry into a
+local viewers/ directory where dg_viewer.html can find them.
 
 Examples:
-  dservctl viewer list planko
   dservctl viewer push planko -f planko_world.js
-  dservctl viewer push planko bounce -f planko_bounce_overlay.js
+  dservctl viewer sync --dir www/viewers               Sync all viewers
+  dservctl viewer sync planko --dir www/viewers         Sync one system
+  dservctl viewer list
   dservctl viewer get planko -o planko_world.js
-  dservctl viewer delete planko bounce
 `)
 }
 
@@ -252,9 +258,11 @@ func viewerPush(cfg *Config, args []string) int {
 		expectedChecksum = strVal(existing, "checksum")
 	}
 
-	// Determine filename
-	filename := file
-	if filename == "" {
+	// Viewer filename convention: {system}_viewer.js or {protocol}_viewer.js
+	var filename string
+	if protocol != "_" && protocol != "" {
+		filename = protocol + "_viewer.js"
+	} else {
 		filename = system + "_viewer.js"
 	}
 
@@ -325,5 +333,161 @@ func viewerDelete(cfg *Config, args []string) int {
 		protoLabel = "/" + protocol
 	}
 	fmt.Printf("Deleted viewer for %s%s\n", system, protoLabel)
+	return 0
+}
+
+// viewerSync pulls viewer scripts from the registry into a local directory.
+// Files are named {system}.js so that dg_viewer.html can load them via
+// import('./viewers/{system}.js').
+//
+// Usage:
+//   dservctl viewer sync --dir www/viewers              — sync all viewers
+//   dservctl viewer sync planko --dir www/viewers       — sync one system
+func viewerSync(cfg *Config, args []string) int {
+	if !requireWorkgroup(cfg) {
+		return 2
+	}
+
+	system := ""
+	dir := ""
+	dryRun := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dir", "-d":
+			if i+1 < len(args) {
+				dir = args[i+1]
+				i++
+			}
+		case "--dry-run", "-n":
+			dryRun = true
+		default:
+			if !strings.HasPrefix(args[i], "-") && system == "" {
+				system = args[i]
+			}
+		}
+	}
+
+	if dir == "" {
+		fmt.Fprintf(os.Stderr, "Usage: dservctl viewer sync [system] --dir DIR\n")
+		fmt.Fprintf(os.Stderr, "\nDir should be the viewers/ directory served by dg_viewer.html\n")
+		return 2
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		PrintError("creating directory: %v", err)
+		return 1
+	}
+
+	client := NewRegistryClient(cfg)
+
+	// Get systems to scan for viewer scripts
+	var systemNames []string
+	if system != "" {
+		systemNames = []string{system}
+	} else {
+		systems, err := client.ListSystems(cfg.Workgroup)
+		if err != nil {
+			PrintError("listing systems: %v", err)
+			return 1
+		}
+		for _, sys := range systems {
+			systemNames = append(systemNames, strVal(sys, "name"))
+		}
+	}
+
+	pulled := 0
+	unchanged := 0
+	errors := 0
+
+	for _, sysName := range systemNames {
+		// Check manifest for viewer scripts
+		manifest, err := client.GetManifest(cfg.Workgroup, sysName, "")
+		if err != nil {
+			if cfg.Verbose {
+				fmt.Printf("  %s: %v\n", sysName, err)
+			}
+			continue
+		}
+		if manifest == nil {
+			continue
+		}
+
+		scripts := extractList(manifest, "scripts")
+		for _, s := range scripts {
+			if strVal(s, "type") != "viewer" {
+				continue
+			}
+
+			protocol := strVal(s, "protocol")
+			serverChecksum := strVal(s, "checksum")
+
+			// Determine local filename: {system}.js
+			// (protocol-level viewers could be {system}_{protocol}.js in future)
+			localName := sysName + ".js"
+			if protocol != "" && protocol != "_" {
+				localName = sysName + "_" + protocol + ".js"
+			}
+			localPath := filepath.Join(dir, localName)
+
+			// Compare checksums
+			if data, err := os.ReadFile(localPath); err == nil {
+				localHash := fmt.Sprintf("%x", sha256.Sum256(data))
+				if localHash == serverChecksum {
+					unchanged++
+					if cfg.Verbose {
+						fmt.Printf("  %s: up to date\n", localName)
+					}
+					continue
+				}
+			}
+
+			if dryRun {
+				fmt.Printf("  Would pull: %s\n", localName)
+				pulled++
+				continue
+			}
+
+			// Fetch full script content
+			fetchProto := protocol
+			if fetchProto == "" {
+				fetchProto = "_"
+			}
+			result, err := client.GetScript(cfg.Workgroup, sysName, fetchProto, "viewer", "")
+			if err != nil {
+				PrintError("fetching viewer for %s: %v", sysName, err)
+				errors++
+				continue
+			}
+
+			content := strVal(result, "content")
+			if content == "" {
+				continue
+			}
+
+			if err := os.WriteFile(localPath, []byte(content), 0644); err != nil {
+				PrintError("writing %s: %v", localPath, err)
+				errors++
+				continue
+			}
+
+			pulled++
+			fmt.Printf("  \u2193 %s\n", localName)
+		}
+	}
+
+	if pulled == 0 && unchanged == 0 && errors == 0 {
+		fmt.Println("No viewer scripts found in registry.")
+	} else {
+		fmt.Printf("Viewer sync: %d pulled, %d unchanged", pulled, unchanged)
+		if errors > 0 {
+			fmt.Printf(", %d error(s)", errors)
+		}
+		fmt.Println()
+	}
+
+	if errors > 0 {
+		return 1
+	}
 	return 0
 }

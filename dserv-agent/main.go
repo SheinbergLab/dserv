@@ -249,7 +249,6 @@ type Agent struct {
 
 	// ESS Registry (when running with --ess-registry)
 	essRegistry *ESSRegistry
-	vCache      *viewerCache
 
 	// Mesh cache (client mode) - populated by polling registry
 	meshCache   []*MeshNode
@@ -387,7 +386,6 @@ Environment:
 	// ESS Registry
 	flag.StringVar(&cfg.ESSRegistryPath, "ess-registry", "",
 		"Path to ESS registry database (enables ESS script management)")
-
 	// Backup scheduler flags (server mode)
 	flag.DurationVar(&cfg.BackupInterval, "backup-interval", 0, "Automatic backup interval (e.g., 6h, 12h, 24h)")
 	flag.DurationVar(&cfg.BackupRetention, "backup-retention", 7*24*time.Hour, "Maximum age for backup retention (default: 7d)")
@@ -427,7 +425,6 @@ Environment:
 		clients: make(map[*WSConn]bool),
 		http:    &http.Client{Timeout: cfg.Timeout},
 		localID: localID,
-		vCache:  newViewerCache(filepath.Join(os.TempDir(), "dserv-viewer-cache")),
 	}
 
 	mux := http.NewServeMux()
@@ -514,7 +511,6 @@ Environment:
 	mux.HandleFunc("/api/components", agent.auth(agent.handleComponents))
 	mux.HandleFunc("/api/components/", agent.auth(agent.handleComponentAction))
 	mux.HandleFunc("/api/ess/browse-config", agent.auth(agent.handleESSBrowseConfig))
-	mux.HandleFunc("/api/v1/ess/viewer/", agent.handleViewerPlugin)
 	
 	// Mesh endpoints (reads from cache)
 	mux.HandleFunc("/api/mesh/peers", agent.auth(agent.handleMeshPeers))
