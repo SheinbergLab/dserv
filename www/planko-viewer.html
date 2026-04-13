@@ -129,6 +129,7 @@
       <label class="bt"><input type="checkbox" id="chkMask" checked> blinks</label>
       <label class="bt"><input type="checkbox" id="chkBall" checked> ball</label>
       <label class="bt"><input type="checkbox" id="chkTrail" checked> trail</label>
+      <label class="bt"><input type="checkbox" id="chkFilled" checked> filled</label>
       <div class="sc"><label>Speed</label>
         <select id="speedSel"><option value="0.1">0.1x</option><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="5">5x</option></select>
       </div>
@@ -182,7 +183,7 @@ function countRows(dg) {
 const App = {
   dg:null, nRows:0, cur:-1,
   playing:false, pt:0, speed:1, af:null, lastTs:0,
-  maskBlinks:true, showBall:true, showTrail:true,
+  maskBlinks:true, showBall:true, showTrail:true, showFilled:true,
   vMin:0, vMax:1, drag:null,
   cT:null,xT:null, cW:null,xW:null,
   dpr:window.devicePixelRatio||1,
@@ -210,6 +211,26 @@ const App = {
       else if(e.key===' '){e.preventDefault();this.togglePlay();}
       else if(e.key==='r'||e.key==='R')this.resetZoom();
     });
+
+    // Auto-load from ?file= URL parameter
+    const params=new URLSearchParams(window.location.search);
+    const fileUrl=params.get('file');
+    if(fileUrl)this.loadURL(fileUrl);
+  },
+
+  async loadURL(url){
+    try{
+      const resp=await fetch(url);
+      if(!resp.ok)throw new Error(`${resp.status} ${resp.statusText}`);
+      const buf=await resp.arrayBuffer();
+      const name=url.split('/').pop()||'data.dg';
+      this.dg=await readDGAuto(buf,name);
+      this.dg._fn=name;
+      this.nRows=countRows(this.dg);
+      document.getElementById('fileInfo').textContent=`${name} \u2014 ${this.nRows} rows, ${this.dg.nlists} cols`;
+      this.setupUI();
+      if(this.nRows>0)this.sel(0);
+    }catch(err){console.error(err);document.getElementById('fileInfo').textContent='Error loading '+url+': '+err.message;}
   },
 
   async loadFile(file){
@@ -256,6 +277,7 @@ const App = {
     document.getElementById('chkMask').addEventListener('change',e=>{this.maskBlinks=e.target.checked;this.render();});
     document.getElementById('chkBall').addEventListener('change',e=>{this.showBall=e.target.checked;this.render();});
     document.getElementById('chkTrail').addEventListener('change',e=>{this.showTrail=e.target.checked;this.render();});
+    document.getElementById('chkFilled').addEventListener('change',e=>{this.showFilled=e.target.checked;this.render();});
     const tp=document.getElementById('tracePanel');
     tp.addEventListener('wheel',e=>this.onWheel(e),{passive:false});
     tp.addEventListener('mousedown',e=>this.onDown(e));
@@ -628,16 +650,25 @@ const App = {
         ctx.fillRect(gx,gy,gw,gh);
       }
 
-      // Draw each body part - white filled like planks
+      // Draw each body part
+      const filled=this.showFilled;
       for(const p of parts){
         ctx.save();
         ctx.translate(wx(p.x),wy(p.y));
         ctx.rotate(-p.a);
-        ctx.fillStyle='rgba(255,255,255,0.85)';
-        ctx.strokeStyle=highlight?'rgba(16,185,129,0.8)':'rgba(255,255,255,0.95)';
-        ctx.lineWidth=highlight?2:1;
-        ctx.fillRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
-        ctx.strokeRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+        if(filled){
+          ctx.fillStyle='rgba(255,255,255,0.85)';
+          ctx.strokeStyle=highlight?'rgba(16,185,129,0.8)':'rgba(255,255,255,0.95)';
+          ctx.lineWidth=highlight?2:1;
+          ctx.fillRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+          ctx.strokeRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+        }else{
+          ctx.fillStyle=highlight?'rgba(16,185,129,0.08)':'rgba(148,163,184,0.08)';
+          ctx.strokeStyle=highlight?'rgba(16,185,129,0.8)':'rgba(148,163,184,0.35)';
+          ctx.lineWidth=highlight?2:1;
+          ctx.fillRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+          ctx.strokeRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+        }
         ctx.restore();
       }
 
@@ -652,15 +683,21 @@ const App = {
     drawCatcherBodies('catchl_','L',selL);
     drawCatcherBodies('catchr_','R',!selL);
 
-    // Planks - rotated rectangles, white filled as in experiment
+    // Planks - rotated rectangles
+    const filled=this.showFilled;
     if(td.tx&&td.ty&&td.sx&&td.sy&&td.angle){
       for(let p=0;p<td.nplanks;p++){
         const x=td.tx[p],y=td.ty[p],hx=td.sx[p]/2,hy=td.sy[p]/2,a=td.angle[p];
         ctx.save();
         ctx.translate(wx(x),wy(y));
-        ctx.rotate(-a); // negative because canvas Y is flipped
-        ctx.fillStyle='rgba(255,255,255,0.85)';
-        ctx.strokeStyle='rgba(255,255,255,0.95)';
+        ctx.rotate(-a);
+        if(filled){
+          ctx.fillStyle='rgba(255,255,255,0.85)';
+          ctx.strokeStyle='rgba(255,255,255,0.95)';
+        }else{
+          ctx.fillStyle='rgba(148,163,184,0.2)';
+          ctx.strokeStyle='rgba(148,163,184,0.5)';
+        }
         ctx.lineWidth=1;
         ctx.fillRect(-hx*scale,-hy*scale,td.sx[p]*scale,td.sy[p]*scale);
         ctx.strokeRect(-hx*scale,-hy*scale,td.sx[p]*scale,td.sy[p]*scale);
@@ -671,12 +708,14 @@ const App = {
     // Ball - shown at start position from stimOn, animates after response
     const br=td.ballRadius*scale;
     const bc=td.ballColor||'rgb(0,255,255)';
+    const bcSubtle='rgba(251,191,36,0.4)';
+    const bcFaint='rgba(251,191,36,0.12)';
     const curT=this.pt;
 
     if(this.showBall){
       // Faint full trajectory path (always visible after stimOn)
       if(td.ballT&&td.ballX&&td.ballY){
-        ctx.strokeStyle=bc.replace('rgb','rgba').replace(')',',0.12)');ctx.lineWidth=1;ctx.beginPath();
+        ctx.strokeStyle=filled?bc.replace('rgb','rgba').replace(')',',0.12)'):bcFaint;ctx.lineWidth=1;ctx.beginPath();
         for(let bi=0;bi<td.ballT.length;bi++){
           const bx=wx(td.ballX[bi]),by=wy(td.ballY[bi]);
           if(bi===0)ctx.moveTo(bx,by);else ctx.lineTo(bx,by);
@@ -688,7 +727,7 @@ const App = {
 
       if(simTime>=0&&td.ballT&&td.ballX&&td.ballY){
         // After response: draw trajectory up to current sim time
-        ctx.strokeStyle=bc.replace('rgb','rgba').replace(')',',0.4)');ctx.lineWidth=1.5;ctx.beginPath();
+        ctx.strokeStyle=filled?bc.replace('rgb','rgba').replace(')',',0.4)'):bcSubtle;ctx.lineWidth=1.5;ctx.beginPath();
         for(let bi=0;bi<td.ballT.length&&td.ballT[bi]<=simTime;bi++){
           const bx=wx(td.ballX[bi]),by=wy(td.ballY[bi]);
           if(bi===0)ctx.moveTo(bx,by);else ctx.lineTo(bx,by);
@@ -699,13 +738,26 @@ const App = {
         let bi=0;
         while(bi<td.ballT.length-1&&td.ballT[bi+1]<simTime)bi++;
         if(bi<td.ballT.length){
-          ctx.fillStyle=bc;
-          ctx.beginPath();ctx.arc(wx(td.ballX[bi]),wy(td.ballY[bi]),br,0,Math.PI*2);ctx.fill();
+          if(filled){
+            ctx.fillStyle=bc;
+            ctx.beginPath();ctx.arc(wx(td.ballX[bi]),wy(td.ballY[bi]),br,0,Math.PI*2);ctx.fill();
+          }else{
+            ctx.fillStyle='rgba(251,191,36,0.9)';
+            ctx.beginPath();ctx.arc(wx(td.ballX[bi]),wy(td.ballY[bi]),br,0,Math.PI*2);ctx.fill();
+            ctx.strokeStyle=bcSubtle;ctx.lineWidth=1;
+            ctx.beginPath();ctx.arc(wx(td.ballX[bi]),wy(td.ballY[bi]),br,0,Math.PI*2);ctx.stroke();
+          }
         }
       }else{
         // Before response: ball stationary at start position
-        ctx.fillStyle=bc;
-        ctx.beginPath();ctx.arc(wx(td.ballStartX),wy(td.ballStartY),br,0,Math.PI*2);ctx.fill();
+        if(filled){
+          ctx.fillStyle=bc;
+          ctx.beginPath();ctx.arc(wx(td.ballStartX),wy(td.ballStartY),br,0,Math.PI*2);ctx.fill();
+        }else{
+          ctx.strokeStyle=bcSubtle;ctx.lineWidth=1;ctx.setLineDash([3,3]);
+          ctx.beginPath();ctx.arc(wx(td.ballStartX),wy(td.ballStartY),br,0,Math.PI*2);ctx.stroke();
+          ctx.setLineDash([]);
+        }
       }
     }
 
