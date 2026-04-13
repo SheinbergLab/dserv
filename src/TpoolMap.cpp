@@ -77,6 +77,7 @@ static void tpool_worker_func(tpool_worker_t *w)
         w->error = std::string("Tcl_Init failed: ")
                    + Tcl_GetStringResult(interp);
         Tcl_DeleteInterp(interp);
+        Tcl_FinalizeThread();
         return;
     }
 
