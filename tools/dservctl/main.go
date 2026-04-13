@@ -44,6 +44,7 @@ func init() {
 		{"diff", "Compare local scripts against registry", runSyncStatus},
 		{"configs", "Manage project configs/queues (list/status/push/pull)", runConfigs},
 		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
+		{"viewer", "Manage viewer plugins (list/get/push/delete)", runViewer},
 		{"version", "Show version", runVersion},
 		{"help", "Show help", nil},
 	}
