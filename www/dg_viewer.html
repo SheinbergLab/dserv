@@ -713,32 +713,34 @@ const App = {
       this.xW = this.cW.getContext('2d');
     }
 
-    // Controls
-    document.getElementById('btnPrev').addEventListener('click', () => this.selTrial(Math.max(0, this.cur - 1)));
-    document.getElementById('btnNext').addEventListener('click', () => this.selTrial(Math.min(this.nRows - 1, this.cur + 1)));
-    document.getElementById('btnPlayPause').addEventListener('click', () => this.togglePlay());
-    document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); });
-    document.getElementById('chkMask').addEventListener('change', e => { this.maskBlinks = e.target.checked; this.renderTrial(); });
+    // Controls — only bind once
+    if (!this._controlsBound) {
+      this._controlsBound = true;
+      document.getElementById('btnPrev').addEventListener('click', () => this.selTrial(Math.max(0, this.cur - 1)));
+      document.getElementById('btnNext').addEventListener('click', () => this.selTrial(Math.min(this.nRows - 1, this.cur + 1)));
+      document.getElementById('btnPlayPause').addEventListener('click', () => this.togglePlay());
+      document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); });
+      document.getElementById('chkMask').addEventListener('change', e => { this.maskBlinks = e.target.checked; this.renderTrial(); });
 
-    // Scrub slider
-    const slider = document.getElementById('scrubSlider');
-    slider.addEventListener('input', e => {
-      if (this.td) {
-        this.pt = (e.target.value / 1000) * this.td.dur;
-        this.renderTrial();
+      // Scrub slider
+      document.getElementById('scrubSlider').addEventListener('input', e => {
+        if (this.td) {
+          this.pt = (e.target.value / 1000) * this.td.dur;
+          this.renderTrial();
+        }
+      });
+
+      // Trace panel interactions
+      const tp = document.getElementById('tracePanel');
+      if (this.hasEye) {
+        tp.addEventListener('wheel', e => this.onWheel(e), { passive: false });
+        tp.addEventListener('mousedown', e => this.onDown(e));
+        tp.addEventListener('mousemove', e => this.onMove(e));
+        tp.addEventListener('mouseup', () => { this.drag = null; this.scrubbing = false; });
+        tp.addEventListener('mouseleave', () => { this.drag = null; this.scrubbing = false; document.getElementById('readout').style.display = 'none'; });
+        tp.addEventListener('dblclick', () => this.resetZoom());
       }
-    });
-
-    // Trace panel interactions
-    const tp = document.getElementById('tracePanel');
-    if (this.hasEye) {
-      tp.addEventListener('wheel', e => this.onWheel(e), { passive: false });
-      tp.addEventListener('mousedown', e => this.onDown(e));
-      tp.addEventListener('mousemove', e => this.onMove(e));
-      tp.addEventListener('mouseup', () => { this.drag = null; this.scrubbing = false; });
-      tp.addEventListener('mouseleave', () => { this.drag = null; this.scrubbing = false; document.getElementById('readout').style.display = 'none'; });
-      tp.addEventListener('dblclick', () => this.resetZoom());
-    }
+    } // end _controlsBound
 
     // Plugin controls
     if (this.plugin && this.plugin.controls) {
