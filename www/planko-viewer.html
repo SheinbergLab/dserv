@@ -351,6 +351,13 @@ const App = {
     const reward_time=Number(getScalar(dg,'reward_time',i))||0;
     td.rewardTimeSec=reward_time/1000;
 
+    // Ball color (stored as "R G B" floats 0-1)
+    const bcStr=getScalar(dg,'ball_color',i);
+    if(bcStr&&typeof bcStr==='string'){
+      const p=bcStr.trim().split(/\s+/).map(Number);
+      td.ballColor=`rgb(${Math.round(p[0]*255)},${Math.round(p[1]*255)},${Math.round(p[2]*255)})`;
+    }else{td.ballColor='rgb(0,255,255)';}
+
     // Build row object for detail panel
     for(const list of dg.lists){
       const nm=list.name;
@@ -651,15 +658,15 @@ const App = {
     drawCatcherBodies('catchl_','L',selL);
     drawCatcherBodies('catchr_','R',!selL);
 
-    // Planks - rotated rectangles (sx, sy are full width/height)
+    // Planks - rotated rectangles, white filled as in experiment
     if(td.tx&&td.ty&&td.sx&&td.sy&&td.angle){
       for(let p=0;p<td.nplanks;p++){
         const x=td.tx[p],y=td.ty[p],hx=td.sx[p]/2,hy=td.sy[p]/2,a=td.angle[p];
         ctx.save();
         ctx.translate(wx(x),wy(y));
         ctx.rotate(-a); // negative because canvas Y is flipped
-        ctx.fillStyle='rgba(148,163,184,0.2)';
-        ctx.strokeStyle='rgba(148,163,184,0.5)';
+        ctx.fillStyle='rgba(255,255,255,0.85)';
+        ctx.strokeStyle='rgba(255,255,255,0.95)';
         ctx.lineWidth=1;
         ctx.fillRect(-hx*scale,-hy*scale,td.sx[p]*scale,td.sy[p]*scale);
         ctx.strokeRect(-hx*scale,-hy*scale,td.sx[p]*scale,td.sy[p]*scale);
@@ -667,31 +674,27 @@ const App = {
       }
     }
 
-    // Ball start position
+    // Ball - shown at start position from stimOn, animates after response
     const br=td.ballRadius*scale;
-    ctx.strokeStyle='rgba(251,191,36,0.4)';ctx.lineWidth=1;ctx.setLineDash([3,3]);
-    ctx.beginPath();ctx.arc(wx(td.ballStartX),wy(td.ballStartY),br,0,Math.PI*2);ctx.stroke();
-    ctx.setLineDash([]);
+    const bc=td.ballColor||'rgb(0,255,255)';
+    const curT=this.pt;
 
-    // Ball trajectory (if enabled)
-    const curT=this.pt; // current time in seconds from trial start (em_seconds[0])
-    if(this.showBall&&td.ballT&&td.ballX&&td.ballY){
-      // ball_t is simulation time (0 = release). Ball released at resp_time.
-      // So ball position at trial time t corresponds to ball_t = t - respTimeSec
+    if(this.showBall){
+      // Faint full trajectory path (always visible after stimOn)
+      if(td.ballT&&td.ballX&&td.ballY){
+        ctx.strokeStyle=bc.replace('rgb','rgba').replace(')',',0.12)');ctx.lineWidth=1;ctx.beginPath();
+        for(let bi=0;bi<td.ballT.length;bi++){
+          const bx=wx(td.ballX[bi]),by=wy(td.ballY[bi]);
+          if(bi===0)ctx.moveTo(bx,by);else ctx.lineTo(bx,by);
+        }
+        ctx.stroke();
+      }
+
       const simTime=curT-td.respTimeSec;
 
-      // Draw full trajectory path faintly
-      ctx.strokeStyle='rgba(251,191,36,0.12)';ctx.lineWidth=1;ctx.beginPath();
-      for(let bi=0;bi<td.ballT.length;bi++){
-        const bx=wx(td.ballX[bi]),by=wy(td.ballY[bi]);
-        if(bi===0)ctx.moveTo(bx,by);else ctx.lineTo(bx,by);
-      }
-      ctx.stroke();
-
-      // Animate ball position after release
-      if(simTime>=0){
-        // Draw trajectory up to current sim time
-        ctx.strokeStyle='rgba(251,191,36,0.4)';ctx.lineWidth=1.5;ctx.beginPath();
+      if(simTime>=0&&td.ballT&&td.ballX&&td.ballY){
+        // After response: draw trajectory up to current sim time
+        ctx.strokeStyle=bc.replace('rgb','rgba').replace(')',',0.4)');ctx.lineWidth=1.5;ctx.beginPath();
         for(let bi=0;bi<td.ballT.length&&td.ballT[bi]<=simTime;bi++){
           const bx=wx(td.ballX[bi]),by=wy(td.ballY[bi]);
           if(bi===0)ctx.moveTo(bx,by);else ctx.lineTo(bx,by);
@@ -702,11 +705,13 @@ const App = {
         let bi=0;
         while(bi<td.ballT.length-1&&td.ballT[bi+1]<simTime)bi++;
         if(bi<td.ballT.length){
-          ctx.fillStyle='rgba(251,191,36,0.9)';
+          ctx.fillStyle=bc;
           ctx.beginPath();ctx.arc(wx(td.ballX[bi]),wy(td.ballY[bi]),br,0,Math.PI*2);ctx.fill();
-          ctx.strokeStyle='rgba(251,191,36,0.4)';ctx.lineWidth=1;
-          ctx.beginPath();ctx.arc(wx(td.ballX[bi]),wy(td.ballY[bi]),br,0,Math.PI*2);ctx.stroke();
         }
+      }else{
+        // Before response: ball stationary at start position
+        ctx.fillStyle=bc;
+        ctx.beginPath();ctx.arc(wx(td.ballStartX),wy(td.ballStartY),br,0,Math.PI*2);ctx.fill();
       }
     }
 
