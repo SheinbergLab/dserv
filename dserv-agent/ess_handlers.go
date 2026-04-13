@@ -206,13 +206,17 @@ func (r *ESSRegistry) handleScript(w http.ResponseWriter, req *http.Request) {
 				filename = fmt.Sprintf("%s_extract.tcl", systemName)
 			case ScriptTypeAnalyze:
 				filename = fmt.Sprintf("%s_analyze.tcl", systemName)
+			case ScriptTypeViewer:
+				filename = fmt.Sprintf("%s_viewer.js", systemName)
 			default:
 				filename = fmt.Sprintf("%s.tcl", systemName)
-			}			
+			}
 		} else {
 			switch scriptType {
 			case ScriptTypeProtocol:
 				filename = fmt.Sprintf("%s.tcl", protocol)
+			case ScriptTypeViewer:
+				filename = fmt.Sprintf("%s_viewer.js", protocol)
 			default:
 				filename = fmt.Sprintf("%s_%s.tcl", protocol, scriptType)
 			}
