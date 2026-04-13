@@ -108,6 +108,7 @@
         <div class="li"><div class="lsw" style="background:rgba(239,68,68,.35);height:6px;width:6px;border-radius:1px"></div>Blink</div>
         <div class="li"><div class="lsw" style="background:#fbbf24;height:6px;width:1px"></div>StimOn</div>
         <div class="li"><div class="lsw" style="background:#f472b6;height:6px;width:1px"></div>Resp</div>
+        <div class="li"><div class="lsw" style="background:#10b981;height:6px;width:1px"></div>Reward</div>
       </div>
     </div>
     <div class="plot-area">
@@ -347,6 +348,8 @@ const App = {
     td.landTimeSim=Number(getScalar(dg,'land_time',i))||0; // sim time of landing
     td.response=Number(getScalar(dg,'response',i))||0;
     td.rt=Number(getScalar(dg,'rt',i))||0;
+    const reward_time=Number(getScalar(dg,'reward_time',i))||0;
+    td.rewardTimeSec=reward_time/1000;
 
     // Build row object for detail panel
     for(const list of dg.lists){
@@ -430,6 +433,13 @@ const App = {
       ctx.fillStyle='rgba(244,114,182,0.7)';ctx.font='9px "JetBrains Mono"';ctx.textAlign='left';
       ctx.fillText('resp ('+(td.response===0?'L':'R')+')',toX(td.respTimeSec)+3,m.t+20);
     }
+    // Reward marker
+    if(td.rewardTimeSec>=tMin&&td.rewardTimeSec<=tMax){
+      ctx.strokeStyle='rgba(16,185,129,0.6)';ctx.lineWidth=1.5;ctx.setLineDash([3,2]);
+      ctx.beginPath();ctx.moveTo(toX(td.rewardTimeSec),m.t);ctx.lineTo(toX(td.rewardTimeSec),m.t+pH);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle='rgba(16,185,129,0.7)';ctx.font='9px "JetBrains Mono"';ctx.textAlign='left';
+      ctx.fillText('reward',toX(td.rewardTimeSec)+3,m.t+30);
+    }
     // Observation period shading (stimOn to resp_time) - the key epoch
     {
       const oStart=Math.max(tMin,td.stimOnSec), oEnd=Math.min(tMax,td.respTimeSec);
@@ -454,6 +464,10 @@ const App = {
     for(const v of yT)ctx.fillText(v.toFixed(0)+'\u00B0',m.l-6,toY(v)+3);
     ctx.textAlign='center';
     for(const t of xT)ctx.fillText(t.toFixed(2)+'s',toX(t),m.t+pH+16);
+
+    // Clip traces to plot area so they don't bleed into scrub bar
+    ctx.save();
+    ctx.beginPath();ctx.rect(m.l,m.t,pW,pH);ctx.clip();
 
     // Traces
     const drawT=(arr,color)=>{
@@ -480,6 +494,7 @@ const App = {
       }
     }
 
+    ctx.restore(); // remove plot-area clip
     ctx.strokeStyle='#2a3654';ctx.lineWidth=1;ctx.strokeRect(m.l,m.t,pW,pH);
     document.getElementById('timeDisplay').textContent=this.pt.toFixed(3)+' s';
 
@@ -512,6 +527,7 @@ const App = {
     sMark(td.stimOnSec,'rgba(251,191,36,0.6)');
     sMark(td.respTimeSec,'rgba(244,114,182,0.6)');
     sMark(td.stimOffSec,'rgba(251,191,36,0.3)');
+    sMark(td.rewardTimeSec,'rgba(16,185,129,0.6)');
 
     // Zoom window - darken regions outside the zoomed view
     if(this.vMin>0.001||this.vMax<0.999){
@@ -564,35 +580,76 @@ const App = {
     ctx.beginPath();ctx.moveTo(wx(-11),wy(0));ctx.lineTo(wx(11),wy(0));ctx.stroke();
     ctx.beginPath();ctx.moveTo(wx(0),wy(-10));ctx.lineTo(wx(0),wy(10));ctx.stroke();
 
-    // Catchers - highlight selected one after response
-    const catcherW=3, catcherH=1;
+    // Pre-stim: show only fixation spot
+    const preStim=this.pt<td.stimOnSec;
+    if(preStim){
+      const fx=wx(0),fy=wy(0);
+      ctx.fillStyle='rgba(255,255,255,0.7)';
+      ctx.beginPath();ctx.arc(fx,fy,3,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(fx-8,fy);ctx.lineTo(fx-3,fy);ctx.moveTo(fx+3,fy);ctx.lineTo(fx+8,fy);
+      ctx.moveTo(fx,fy-8);ctx.lineTo(fx,fy-3);ctx.moveTo(fx,fy+3);ctx.lineTo(fx,fy+8);ctx.stroke();
+    }
+
+    if(!preStim){
+    // Catchers - draw from actual body geometry (catchl_*, catchr_*)
     const afterResp=this.pt>=td.respTimeSec;
     const selL=td.response===0; // 0=left, 1=right
 
-    const drawCatcher=(cx,cy,label,isSelected)=>{
+    const drawCatcherBodies=(prefix,label,isSelected)=>{
       const highlight=afterResp&&isSelected;
-      const x0=wx(cx-catcherW/2),y0=wy(cy+catcherH/2),cw=catcherW*scale,ch=catcherH*scale;
-      if(highlight){
-        // Glow
-        ctx.fillStyle='rgba(16,185,129,0.08)';
-        ctx.fillRect(x0-4,y0-4,cw+8,ch+8);
-        ctx.fillStyle='rgba(16,185,129,0.35)';
-        ctx.strokeStyle='rgba(16,185,129,0.8)';
-        ctx.lineWidth=2;
-      }else{
-        ctx.fillStyle='rgba(148,163,184,0.08)';
-        ctx.strokeStyle='rgba(148,163,184,0.25)';
-        ctx.lineWidth=1;
+      // Find all bodies whose name starts with prefix (e.g. "catchl_" or "catchr_")
+      const parts=[];
+      if(td.plankNames&&td.tx&&td.ty&&td.sx&&td.sy&&td.angle){
+        for(let b=0;b<td.plankNames.length;b++){
+          if(td.plankNames[b].startsWith(prefix)){
+            parts.push({x:td.tx[b],y:td.ty[b],hw:td.sx[b]/2,hh:td.sy[b]/2,a:td.angle[b]});
+          }
+        }
       }
-      ctx.fillRect(x0,y0,cw,ch);
-      ctx.strokeRect(x0,y0,cw,ch);
+      if(parts.length===0)return;
+
+      // Draw glow around bounding area if highlighted
+      if(highlight){
+        let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+        for(const p of parts){
+          minX=Math.min(minX,p.x-p.hw);maxX=Math.max(maxX,p.x+p.hw);
+          minY=Math.min(minY,p.y-p.hh);maxY=Math.max(maxY,p.y+p.hh);
+        }
+        ctx.fillStyle='rgba(16,185,129,0.06)';
+        const gx=wx(minX)-4,gy=wy(maxY)-4,gw=(maxX-minX)*scale+8,gh=(maxY-minY)*scale+8;
+        ctx.fillRect(gx,gy,gw,gh);
+      }
+
+      // Draw each body part
+      for(const p of parts){
+        ctx.save();
+        ctx.translate(wx(p.x),wy(p.y));
+        ctx.rotate(-p.a);
+        if(highlight){
+          ctx.fillStyle='rgba(16,185,129,0.35)';
+          ctx.strokeStyle='rgba(16,185,129,0.8)';
+          ctx.lineWidth=2;
+        }else{
+          ctx.fillStyle='rgba(148,163,184,0.12)';
+          ctx.strokeStyle='rgba(148,163,184,0.35)';
+          ctx.lineWidth=1;
+        }
+        ctx.fillRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+        ctx.strokeRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
+        ctx.restore();
+      }
+
+      // Label at catcher center
+      const cx=(prefix==='catchl_')?td.lcatcherX:td.rcatcherX;
+      const cy=(prefix==='catchl_')?td.lcatcherY:td.rcatcherY;
       ctx.fillStyle=highlight?'rgba(16,185,129,0.9)':'rgba(148,163,184,0.4)';
       ctx.font=(highlight?'bold ':'')+`${highlight?11:9}px "JetBrains Mono"`;
       ctx.textAlign='center';
       ctx.fillText(label,wx(cx),wy(cy)+(highlight?4:3));
     };
-    drawCatcher(td.lcatcherX,td.lcatcherY,'L',selL);
-    drawCatcher(td.rcatcherX,td.rcatcherY,'R',!selL);
+    drawCatcherBodies('catchl_','L',selL);
+    drawCatcherBodies('catchr_','R',!selL);
 
     // Planks - rotated rectangles (sx, sy are full width/height)
     if(td.tx&&td.ty&&td.sx&&td.sy&&td.angle){
@@ -652,6 +709,8 @@ const App = {
         }
       }
     }
+
+    } // end if(!preStim)
 
     // Gaze overlay - this is the key visualization
     const si=this.t2i(td.tStart+this.pt);
