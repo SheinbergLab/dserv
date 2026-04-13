@@ -247,6 +247,10 @@ type Agent struct {
 	components []Component
 	localID    string
 
+	// ESS Registry (when running with --ess-registry)
+	essRegistry *ESSRegistry
+	vCache      *viewerCache
+
 	// Mesh cache (client mode) - populated by polling registry
 	meshCache   []*MeshNode
 	meshUpdated time.Time
@@ -423,6 +427,7 @@ Environment:
 		clients: make(map[*WSConn]bool),
 		http:    &http.Client{Timeout: cfg.Timeout},
 		localID: localID,
+		vCache:  newViewerCache(filepath.Join(os.TempDir(), "dserv-viewer-cache")),
 	}
 
 	mux := http.NewServeMux()
@@ -435,8 +440,9 @@ Environment:
 		if err != nil {
 			log.Fatalf("Failed to initialize ESS registry: %v", err)
 		}
+		agent.essRegistry = essRegistry
 		log.Printf("  ESS Registry: %s", cfg.ESSRegistryPath)
-		
+
 		// Register HTTP handlers
 		essRegistry.RegisterHandlers(mux, agent.auth)
 
@@ -508,6 +514,7 @@ Environment:
 	mux.HandleFunc("/api/components", agent.auth(agent.handleComponents))
 	mux.HandleFunc("/api/components/", agent.auth(agent.handleComponentAction))
 	mux.HandleFunc("/api/ess/browse-config", agent.auth(agent.handleESSBrowseConfig))
+	mux.HandleFunc("/api/v1/ess/viewer/", agent.handleViewerPlugin)
 	
 	// Mesh endpoints (reads from cache)
 	mux.HandleFunc("/api/mesh/peers", agent.auth(agent.handleMeshPeers))

@@ -23,6 +23,7 @@ const (
 	ScriptTypeStim     = "stim"
 	ScriptTypeExtract  = "extract"
 	ScriptTypeAnalyze  = "analyze"
+	ScriptTypeViewer   = "viewer"
 )
 
 // ============ Data Models ============
