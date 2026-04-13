@@ -831,16 +831,16 @@ const App = {
       }
     } else {
       // No eye data — use timing fields for duration
-      const stimon = Number(getScalar(dg, 'stimon', i)) || 0;
-      const stimoff = Number(getScalar(dg, 'stimoff', i)) || 0;
+      const stimon = Number(getScalar(dg, 'stimon', i) ?? getScalar(dg, 'stim_on', i)) || 0;
+      const stimoff = Number(getScalar(dg, 'stimoff', i) ?? getScalar(dg, 'stim_off', i)) || 0;
       td.dur = Math.max((stimoff - stimon) / 1000, 1);
       td.tStart = 0;
       td.tEnd = td.dur;
     }
 
     // Standard timing fields
-    const stimon = Number(getScalar(dg, 'stimon', i)) || 0;
-    const stimoff = Number(getScalar(dg, 'stimoff', i)) || 0;
+    const stimon = Number(getScalar(dg, 'stimon', i) ?? getScalar(dg, 'stim_on', i)) || 0;
+    const stimoff = Number(getScalar(dg, 'stimoff', i) ?? getScalar(dg, 'stim_off', i)) || 0;
     const resp_time = Number(getScalar(dg, 'resp_time', i)) || 0;
     const reward_time = Number(getScalar(dg, 'reward_time', i)) || 0;
     td.stimOnSec = stimon / 1000;
