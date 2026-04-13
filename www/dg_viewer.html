@@ -1205,31 +1205,100 @@ const App = {
   },
 
   // ═══ Plugin System ═══
+  registryURL: null,
+  workgroup: null,
+
+  async _discoverRegistry() {
+    if (this.registryURL) return;
+
+    // Try URL parameters first
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('registry')) {
+      this.registryURL = params.get('registry').replace(/\/+$/, '');
+      this.workgroup = params.get('workgroup') || '';
+      return;
+    }
+
+    // Try agent's browse-config endpoint
+    try {
+      const resp = await fetch('/api/ess/browse-config');
+      if (resp.ok) {
+        const cfg = await resp.json();
+        if (cfg.registryURL) {
+          this.registryURL = cfg.registryURL.replace(/\/+$/, '');
+          this.workgroup = cfg.workgroup || '';
+          return;
+        }
+        if (cfg.local) {
+          // Agent IS the registry — use relative URLs
+          this.registryURL = '';
+          this.workgroup = cfg.workgroup || '';
+          return;
+        }
+      }
+    } catch (e) {
+      // Agent not available
+    }
+  },
+
   async loadPlugin(system, protocol) {
     // Loading cascade:
-    //   1. dserv-agent registry endpoint: /api/v1/ess/viewer/{system}[/{protocol}]
-    //   2. Local bundled plugin: ./viewers/{system}.js (fallback for development)
+    //   1. dserv-agent viewer endpoint: /api/v1/ess/viewer/{system}
+    //   2. Direct registry fetch: {registryURL}/api/v1/ess/script/{workgroup}/{system}/_/viewer
+    //   3. Local bundled plugin: ./viewers/{system}.js (development fallback)
 
-    // 1. Try agent registry endpoint (system-level)
-    const agentBase = window.location.origin;
+    await this._discoverRegistry();
+
+    // 1. Try agent viewer endpoint (proxies + caches)
     try {
-      const resp = await fetch(`${agentBase}/api/v1/ess/viewer/${system}`);
+      const resp = await fetch(`/api/v1/ess/viewer/${system}`);
       if (resp.ok) {
         const js = await resp.text();
         this.plugin = await this._evalPlugin(js);
-        this._activatePlugin(system, 'registry');
-
-        // Also try protocol-level overlay if protocol specified
-        if (protocol) {
-          await this._loadProtocolOverlay(agentBase, system, protocol);
-        }
+        this._activatePlugin(system, 'agent');
+        if (protocol) await this._loadProtocolOverlay('', system, protocol);
         return;
       }
     } catch (e) {
-      console.log(`Registry viewer fetch failed: ${e.message}`);
+      // Agent endpoint not available
     }
 
-    // 2. Fallback: try local bundled plugin (for development / offline)
+    // 2. Try direct registry fetch
+    if (this.registryURL !== null && this.workgroup) {
+      const protoPath = protocol || '_';
+      try {
+        // System-level viewer
+        const url = `${this.registryURL}/api/v1/ess/script/${this.workgroup}/${system}/_/viewer`;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.content) {
+            this.plugin = await this._evalPlugin(data.content);
+            this._activatePlugin(system, 'registry');
+            // Try protocol overlay from registry too
+            if (protocol) {
+              try {
+                const purl = `${this.registryURL}/api/v1/ess/script/${this.workgroup}/${system}/${protocol}/viewer`;
+                const presp = await fetch(purl);
+                if (presp.ok) {
+                  const pdata = await presp.json();
+                  if (pdata.content) {
+                    const overlay = await this._evalPlugin(pdata.content);
+                    this._applyOverlay(overlay);
+                    console.log(`Loaded protocol overlay: ${system}/${protocol}`);
+                  }
+                }
+              } catch (e) { /* optional */ }
+            }
+            return;
+          }
+        }
+      } catch (e) {
+        console.log(`Direct registry fetch failed: ${e.message}`);
+      }
+    }
+
+    // 3. Fallback: local bundled plugin (development / offline)
     try {
       const module = await import(`./viewers/${system}.js`);
       this.plugin = module.default;
@@ -1270,27 +1339,29 @@ const App = {
       if (resp.ok) {
         const js = await resp.text();
         const overlay = await this._evalPlugin(js);
-        // Protocol overlay extends the system plugin
-        if (overlay && overlay.parseRow) {
-          const baseParse = this.plugin.parseRow;
-          this.plugin.parseRow = (dg, i, td) => {
-            const base = baseParse ? baseParse(dg, i, td) : {};
-            return Object.assign(base, overlay.parseRow(dg, i, td));
-          };
-        }
-        if (overlay && overlay.render) {
-          const baseRender = this.plugin.render;
-          this.plugin._protoRender = overlay.render;
-          this.plugin.render = (ctx, canvas, td, pt, dpr, opts) => {
-            if (baseRender) baseRender(ctx, canvas, td, pt, dpr, opts);
-            overlay.render(ctx, canvas, td, pt, dpr, opts);
-          };
-        }
+        this._applyOverlay(overlay);
         console.log(`Loaded protocol overlay: ${system}/${protocol}`);
       }
     } catch (e) {
-      // Protocol overlay is optional
       console.log(`No protocol viewer for ${system}/${protocol}`);
+    }
+  },
+
+  _applyOverlay(overlay) {
+    if (!overlay) return;
+    if (overlay.parseRow) {
+      const baseParse = this.plugin.parseRow;
+      this.plugin.parseRow = (dg, i, td) => {
+        const base = baseParse ? baseParse(dg, i, td) : {};
+        return Object.assign(base, overlay.parseRow(dg, i, td));
+      };
+    }
+    if (overlay.render) {
+      const baseRender = this.plugin.render;
+      this.plugin.render = (ctx, canvas, td, pt, dpr, opts) => {
+        if (baseRender) baseRender(ctx, canvas, td, pt, dpr, opts);
+        overlay.render(ctx, canvas, td, pt, dpr, opts);
+      };
     }
   }
 };
