@@ -1207,20 +1207,10 @@ const App = {
   // ═══ Plugin System ═══
   async loadPlugin(system, protocol) {
     // Loading cascade:
-    //   1. Local bundled plugin: ./viewers/{system}.js
-    //   2. dserv-agent registry endpoint: /api/v1/ess/viewer/{system}[/{protocol}]
+    //   1. dserv-agent registry endpoint: /api/v1/ess/viewer/{system}[/{protocol}]
+    //   2. Local bundled plugin: ./viewers/{system}.js (fallback for development)
 
-    // 1. Try bundled plugin
-    try {
-      const module = await import(`./viewers/${system}.js`);
-      this.plugin = module.default;
-      this._activatePlugin(system, 'local');
-      return;
-    } catch (e) {
-      console.log(`No bundled viewer for "${system}", trying registry...`);
-    }
-
-    // 2. Try agent registry endpoint (system-level)
+    // 1. Try agent registry endpoint (system-level)
     const agentBase = window.location.origin;
     try {
       const resp = await fetch(`${agentBase}/api/v1/ess/viewer/${system}`);
@@ -1237,6 +1227,16 @@ const App = {
       }
     } catch (e) {
       console.log(`Registry viewer fetch failed: ${e.message}`);
+    }
+
+    // 2. Fallback: try local bundled plugin (for development / offline)
+    try {
+      const module = await import(`./viewers/${system}.js`);
+      this.plugin = module.default;
+      this._activatePlugin(system, 'local');
+      return;
+    } catch (e) {
+      // No local plugin either
     }
 
     // No plugin found
