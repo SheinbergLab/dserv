@@ -628,20 +628,14 @@ const App = {
         ctx.fillRect(gx,gy,gw,gh);
       }
 
-      // Draw each body part
+      // Draw each body part - white filled like planks
       for(const p of parts){
         ctx.save();
         ctx.translate(wx(p.x),wy(p.y));
         ctx.rotate(-p.a);
-        if(highlight){
-          ctx.fillStyle='rgba(16,185,129,0.35)';
-          ctx.strokeStyle='rgba(16,185,129,0.8)';
-          ctx.lineWidth=2;
-        }else{
-          ctx.fillStyle='rgba(148,163,184,0.12)';
-          ctx.strokeStyle='rgba(148,163,184,0.35)';
-          ctx.lineWidth=1;
-        }
+        ctx.fillStyle='rgba(255,255,255,0.85)';
+        ctx.strokeStyle=highlight?'rgba(16,185,129,0.8)':'rgba(255,255,255,0.95)';
+        ctx.lineWidth=highlight?2:1;
         ctx.fillRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
         ctx.strokeRect(-p.hw*scale,-p.hh*scale,p.hw*2*scale,p.hh*2*scale);
         ctx.restore();
