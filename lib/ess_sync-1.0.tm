@@ -1241,10 +1241,22 @@ namespace eval ess {
         variable viewers_dir
         variable current
 
-        # Determine target directory: explicit config or www_path/viewers
+        # Determine target directory. Priority:
+        #   1. Explicit viewers_dir variable (if configured)
+        #   2. system/www_path datapoint (published by TclServer, available
+        #      from any subprocess via dservGet — more reliable than the
+        #      www_path Tcl command which may not be bound in subprocess
+        #      interps)
         set target_dir $viewers_dir
         if {$target_dir eq ""} {
-            if {[catch {set wp [www_path]}] || $wp eq ""} {
+            set wp ""
+            catch {set wp [dservGet system/www_path]}
+            if {$wp eq ""} {
+                # Last-ditch fallback: try www_path command (main interp only)
+                catch {set wp [www_path]}
+            }
+            if {$wp eq ""} {
+                ess_warning "  _install_viewers: www_path not available (checked dservGet system/www_path and www_path command)" "sync"
                 return
             }
             set target_dir [file join $wp viewers]
@@ -1253,29 +1265,40 @@ namespace eval ess {
         set project $current(project)
         set sys_dir [file join $system_path $project $system]
 
-        # System-level viewer files
+        # Find all candidate viewer files first (system-level and protocol-level)
+        set candidates [list]
         foreach viewer_file [glob -nocomplain [file join $sys_dir *_viewer.js]] {
-            set target [file join $target_dir "${system}.js"]
-            if {[catch {
-                file mkdir $target_dir
-                file copy -force $viewer_file $target
-                ess_info "  Installed viewer: $target" "sync"
-            } err]} {
-                ess_warning "  Could not install viewer $viewer_file: $err" "sync"
-            }
+            lappend candidates [list $viewer_file "${system}.js"]
         }
-
-        # Protocol-level viewer files
         foreach proto_dir [glob -nocomplain -type d [file join $sys_dir *]] {
             set proto [file tail $proto_dir]
             foreach viewer_file [glob -nocomplain [file join $proto_dir *_viewer.js]] {
-                set target [file join $target_dir "${system}_${proto}.js"]
-                if {[catch {
-                    file copy -force $viewer_file $target
-                    ess_info "  Installed viewer: $target" "sync"
-                } err]} {
-                    ess_warning "  Could not install viewer $viewer_file: $err" "sync"
-                }
+                lappend candidates [list $viewer_file "${system}_${proto}.js"]
+            }
+        }
+
+        if {[llength $candidates] == 0} {
+            return
+        }
+
+        ess_info "  _install_viewers: target_dir=$target_dir ([llength $candidates] file(s))" "sync"
+
+        # Make target directory if needed
+        if {![file exists $target_dir]} {
+            if {[catch {file mkdir $target_dir} mk_err]} {
+                ess_warning "  Could not create $target_dir: $mk_err" "sync"
+                return
+            }
+        }
+
+        # Copy each viewer file
+        foreach c $candidates {
+            lassign $c src dst_name
+            set target [file join $target_dir $dst_name]
+            if {[catch {file copy -force $src $target} err]} {
+                ess_warning "  Could not install viewer $src -> $target: $err" "sync"
+            } else {
+                ess_info "  Installed viewer: $target" "sync"
             }
         }
     }
