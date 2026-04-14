@@ -254,6 +254,7 @@
         <input type="range" id="scrubSlider" min="0" max="1000" value="0">
         <span class="td" id="timeDisplay">0.000 s</span>
         <label class="bt"><input type="checkbox" id="chkMask" checked> blinks</label>
+        <label class="bt"><input type="checkbox" id="chkEvents" checked> events</label>
         <div class="sc" id="pluginControls"></div>
         <div class="sc"><label>Speed</label>
           <select id="speedSel"><option value="0.1">0.1x</option><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="5">5x</option></select>
@@ -284,6 +285,7 @@ const App = {
   // Trial view state
   cur: -1, playing: false, pt: 0, speed: 1, af: null, lastTs: 0,
   maskBlinks: true,
+  showEvents: true,
   vMin: 0, vMax: 1, drag: null,
   cT: null, xT: null, cW: null, xW: null,
   dpr: window.devicePixelRatio || 1,
@@ -721,6 +723,7 @@ const App = {
       document.getElementById('btnPlayPause').addEventListener('click', () => this.togglePlay());
       document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); });
       document.getElementById('chkMask').addEventListener('change', e => { this.maskBlinks = e.target.checked; this.renderTrial(); });
+      document.getElementById('chkEvents').addEventListener('change', e => { this.showEvents = e.target.checked; this.renderTrial(); });
 
       // Scrub slider
       document.getElementById('scrubSlider').addEventListener('input', e => {
@@ -803,7 +806,8 @@ const App = {
     const td = {
       eyeH: null, eyeV: null, eyeT: null, blink: null, blinkRanges: [], dur: 0, nSamples: 0, nBlinks: 0,
       tStart: 0, tEnd: 1, stimOnSec: 0, stimOffSec: 0, respTimeSec: 0, rewardTimeSec: 0,
-      side: 0, outcome: 0, response: 0, rt: 0, row: {}
+      side: 0, outcome: 0, response: 0, rt: 0, row: {},
+      sacs: [], psos: [], purs: []
     };
 
     // Eye data (if available)
@@ -828,6 +832,52 @@ const App = {
         }
         if (inB) td.blinkRanges.push({ s: st, e: td.blink.length });
         td.nBlinks = td.blinkRanges.length;
+      }
+
+      // Saccade / PSO events (from em::extract_events output columns)
+      const sacT0  = getSublistData(dg, 'sac_t_start',   i);
+      const sacT1  = getSublistData(dg, 'sac_t_stop',    i);
+      const sacAmp = getSublistData(dg, 'sac_amps',      i);
+      const sacDir = getSublistData(dg, 'sac_dirs',      i);
+      const sacPk  = getSublistData(dg, 'sac_peakvels',  i);
+      if (sacT0 && sacT1) {
+        for (let k = 0; k < sacT0.length; k++) {
+          td.sacs.push({
+            t0: sacT0[k], t1: sacT1[k],
+            amp: sacAmp ? sacAmp[k] : null,
+            dir: sacDir ? sacDir[k] : null,
+            pk:  sacPk  ? sacPk[k]  : null
+          });
+        }
+      }
+      const psoT0  = getSublistData(dg, 'pso_t_start',   i);
+      const psoT1  = getSublistData(dg, 'pso_t_stop',    i);
+      const psoPk  = getSublistData(dg, 'pso_peakvels',  i);
+      const psoAmp = getSublistData(dg, 'pso_amps',      i);
+      if (psoT0 && psoT1) {
+        for (let k = 0; k < psoT0.length; k++) {
+          td.psos.push({
+            t0: psoT0[k], t1: psoT1[k],
+            pk:  psoPk  ? psoPk[k]  : null,
+            amp: psoAmp ? psoAmp[k] : null
+          });
+        }
+      }
+      // Pursuit events
+      const purT0  = getSublistData(dg, 'pur_t_start',    i);
+      const purT1  = getSublistData(dg, 'pur_t_stop',     i);
+      const purMv  = getSublistData(dg, 'pur_mean_vel',   i);
+      const purMd  = getSublistData(dg, 'pur_mean_dir',   i);
+      const purCo  = getSublistData(dg, 'pur_coherence',  i);
+      if (purT0 && purT1) {
+        for (let k = 0; k < purT0.length; k++) {
+          td.purs.push({
+            t0: purT0[k], t1: purT1[k],
+            mv: purMv ? purMv[k] : null,
+            md: purMd ? purMd[k] : null,
+            co: purCo ? purCo[k] : null
+          });
+        }
       }
     } else {
       // No eye data — use timing fields for duration
@@ -990,6 +1040,41 @@ const App = {
         const t0 = td.eyeT[br.s], t1 = td.eyeT[Math.min(br.e, td.eyeT.length - 1)];
         if (t1 < tMin || t0 > tMax) continue;
         ctx.fillRect(Math.max(m.l, toX(t0)), m.t, Math.min(m.l + pW, toX(t1)) - Math.max(m.l, toX(t0)), pH);
+      }
+    }
+
+    // Saccade + PSO event shading
+    if (this.showEvents) {
+      // Saccade bands — soft blue
+      ctx.fillStyle = 'rgba(91,164,245,0.14)';
+      for (const s of td.sacs) {
+        if (s.t1 < tMin || s.t0 > tMax) continue;
+        const x0 = Math.max(m.l, toX(s.t0));
+        const x1 = Math.min(m.l + pW, toX(s.t1));
+        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, pH);
+      }
+      // PSO bands — soft amber, drawn over sac bands
+      ctx.fillStyle = 'rgba(245,158,11,0.16)';
+      for (const p of td.psos) {
+        if (p.t1 < tMin || p.t0 > tMax) continue;
+        const x0 = Math.max(m.l, toX(p.t0));
+        const x1 = Math.min(m.l + pW, toX(p.t1));
+        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, pH);
+      }
+      // Pursuit bands — soft green
+      ctx.fillStyle = 'rgba(16,185,129,0.12)';
+      for (const p of td.purs) {
+        if (p.t1 < tMin || p.t0 > tMax) continue;
+        const x0 = Math.max(m.l, toX(p.t0));
+        const x1 = Math.min(m.l + pW, toX(p.t1));
+        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, pH);
+      }
+      // Saccade onset tick marks at the top of the trace area
+      ctx.fillStyle = 'rgba(91,164,245,0.9)';
+      for (const s of td.sacs) {
+        if (s.t0 < tMin || s.t0 > tMax) continue;
+        const x = toX(s.t0);
+        ctx.fillRect(x - 0.5, m.t, 1, 4);
       }
     }
 
