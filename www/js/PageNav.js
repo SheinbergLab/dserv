@@ -51,6 +51,15 @@ class PageNav {
             windowSize: { width: 900, height: 600 }
         },
         {
+            id: 'dg_viewer',
+            title: 'DG Viewer',
+            desc: 'View trial data files (.dgz)',
+            icon: '📈',
+            href: 'dg_viewer.html',
+            category: 'viewers',
+            windowSize: { width: 1200, height: 800 }
+        },
+        {
             id: 'event_viewer',
             title: 'Event Viewer',
             desc: 'Real-time event log',
