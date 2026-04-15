@@ -25,6 +25,12 @@ foreach f [glob [file join $dspath local pre-*.tcl]] {
 # start an eye movement subprocess
 subprocess em "source [file join $dspath config/emconf.tcl]"
 
+# start the analog-input subprocess (owns the MCP320x SPI driver)
+subprocess ain "source [file join $dspath config/ainconf.tcl]"
+
+# start the slider subprocess (calibrates ain channels into slider/position)
+subprocess slider "source [file join $dspath config/sliderconf.tcl]"
+
 # start a juicer subprocess
 subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 
