@@ -15,8 +15,10 @@ errormon enable
 proc exit {args} { error "exit not available for this subprocess" }
 
 # load extra modules
+# (The `ain` module is owned by the dedicated `ain` subprocess — see
+# config/ainconf.tcl — so it is no longer loaded here.)
 set ess_modules \
-    "ain eventlog gpio_input gpio_output \
+    "eventlog gpio_input gpio_output \
     joystick4 rmt timer touch usbio"
 foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
@@ -48,11 +50,6 @@ if {[info exists ::env(ESS_REGISTRY_URL)]} {
 if {[info exists ::env(ESS_WORKGROUP)]} {
     ess::registry::configure -workgroup $::env(ESS_WORKGROUP)
 }
-
-# start analog input if available
-catch { ainStart 1 }
-# if we didn't find an A/D still setup 2 channels for virtual inputs
-ainSetNchan 2
 
 proc dpointGet { d } { return [dservGet $d] }
 proc rpioPinOn { pin } { gpioLineSetValue $pin 1 }
