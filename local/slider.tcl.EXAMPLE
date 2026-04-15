@@ -1,0 +1,53 @@
+#
+# Per-rig overrides for the slider subprocess.
+#
+# Sourced from config/sliderconf.tcl at the end of its startup, so the
+# slider namespace and its subscriptions to ain/vals and slider/virtual
+# are already in place. Use this file to pick which ain channel the
+# physical slider is wired to and to set calibration defaults that
+# match the pot and workspace on this rig.
+#
+
+# --- Channel mapping ---------------------------------------------------
+#
+# chan_x = 0 means the slider pot is wired to ain channel 0.
+# chan_y = -1 disables the y axis (1D slider setup; the default).
+# For a 2D setup (two pots, or a non-centering thumbstick), set chan_y.
+#
+# slider::set_chan_x 0
+# slider::set_chan_y -1
+
+# --- Calibration -------------------------------------------------------
+#
+# Linear model: out = scale * ((raw - center) minus deadzone), with
+# optional invert and symmetric clamp.
+#
+#   center:    raw ADC value when the slider is at its neutral /
+#              experimentally-zero position. For a 12-bit ADC with a
+#              symmetric pot wired between 0 and 3.3V, center ~= 2048.
+#              Alternatively, park the slider where you want zero and
+#              call slider::set_current_as_center.
+#
+#   scale:     output units per raw ADC count. If your experiment's
+#              world uses visual degrees and full pot deflection covers
+#              +/- 10 deg of travel, scale = 10.0 / 2048 ~= 0.00488.
+#
+#   deadzone:  raw ADC counts around center to treat as zero. Useful
+#              for cheap pots with noisy rest position.
+#
+#   invert:    flip the sign of the axis (if the pot is wired such
+#              that increasing pot position decreases the output).
+#
+#   limit:     symmetric clamp on the calibrated output, < 0 to
+#              disable. Useful to prevent runaway if the subject
+#              deflects to the mechanical stop.
+#
+# slider::set_center_x   2048.0
+# slider::set_scale_x    0.00488
+# slider::set_deadzone_x 20.0
+# slider::set_invert_x   0
+# slider::set_limit_x    10.0
+
+# Print the resulting settings so the log clearly shows the current
+# per-rig calibration.
+puts "slider (local): [dservGet slider/settings]"

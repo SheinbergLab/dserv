@@ -1,0 +1,32 @@
+#
+# Per-rig overrides for the ain subprocess.
+#
+# Sourced from config/ainconf.tcl at the end of its startup, so the
+# dserv_ain module is loaded and ainStart/ainSetNchan have already run.
+# Use this file for anything rig-specific: different acquisition rate,
+# non-default channel count, signal inversions, or a custom dpoint
+# prefix if this rig wants to isolate its ain output.
+#
+
+# Example: lower the acquisition rate from 1 kHz to 500 Hz.
+# Ain is already running at 1 ms interval when this file is sourced,
+# so ainStop/ainStart must be used to change it.
+#
+# ainStop
+# ainStart 2
+
+# Example: invert channel 1 (signal maps 4095..0 instead of 0..4095).
+# Useful if the pot is wired "backwards" from what the experiment
+# expects.
+#
+# ainInvertSignal 1 1
+
+# Example: change the output prefix so this rig's ain module publishes
+# to "foo/vals" instead of "ain/vals". Leave commented out to keep the
+# default (which is what the slider subprocess subscribes to).
+#
+# ainSetPrefix foo
+
+# Print a summary of the resulting state so the log clearly shows what
+# this rig is configured for.
+puts "ain (local): [ainGetInfo]"
