@@ -51,4 +51,12 @@ namespace eval ain {
 
 ain::publish_info
 
+# Local deployment overrides (per-rig channel inversions, non-default
+# rate or prefix, etc.). Not tracked in git - each deployment owns its
+# own local/ain.tcl. See local/ain.tcl.EXAMPLE for the template.
+if { [file exists $dspath/local/ain.tcl] } {
+    source $dspath/local/ain.tcl
+    ain::publish_info
+}
+
 puts "ain subprocessor started"
