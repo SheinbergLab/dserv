@@ -139,31 +139,32 @@ namespace eval slider {
     # Process raw ain/vals data.
     #
     # ain/vals is a packed array of uint16 samples, one per active channel,
-    # produced by the ain subprocess via dserv_ain. We pick chan_x / chan_y
-    # by index, apply per-axis calibration, and publish slider/position.
+    # produced by the ain subprocess via dserv_ain. dserv auto-decodes
+    # DSERV_SHORT multi-element buffers into a Tcl list of ints before
+    # dispatch to script callbacks, so $data is already "{v0 v1 ...}".
+    # We pick chan_x / chan_y by index, apply per-axis calibration, and
+    # publish slider/position.
     proc process_ain { dpoint data } {
         variable settings
         variable current_raw_x
         variable current_raw_y
 
-        # Unpack all channels as unsigned 16-bit ints
-        binary scan $data su* vals
-        set nchan [llength $vals]
+        set nchan [llength $data]
         if { $nchan == 0 } return
 
         dict with settings {
             # X axis
             if { $chan_x >= 0 && $chan_x < $nchan } {
-                set raw_x [lindex $vals $chan_x]
+                set raw_x [lindex $data $chan_x]
             } else {
-                set raw_x 0.0
+                set raw_x 0
             }
 
             # Y axis (optional - chan_y < 0 disables)
             if { $chan_y >= 0 && $chan_y < $nchan } {
-                set raw_y [lindex $vals $chan_y]
+                set raw_y [lindex $data $chan_y]
             } else {
-                set raw_y 0.0
+                set raw_y 0
             }
 
             set current_raw_x $raw_x
@@ -172,8 +173,7 @@ namespace eval slider {
             # Publish raw ADC counts for calibration UIs. These are the
             # exact uint16 values from ain/vals for the selected channels,
             # so downstream readers can treat them identically to ain/vals.
-            set rawvals [binary format ss [expr {int($raw_x)}] \
-                                          [expr {int($raw_y)}]]
+            set rawvals [binary format ss $raw_x $raw_y]
             dservSetData slider/raw [now] 4 $rawvals ;# 4 = DSERV_SHORT
 
             set x [calibrate_axis $raw_x $center_x $scale_x \
