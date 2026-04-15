@@ -725,6 +725,13 @@ namespace eval ess {
 
     variable em_active 0
     variable touch_active 0
+    variable slider_active 0
+
+    # Latest calibrated slider position, updated by slider_process
+    # callback. Defaults of 0.0/0.0 are what you see before any slider
+    # data has arrived (no connected hardware, or pre-first-sample).
+    variable slider_x 0.0
+    variable slider_y 0.0
 
     # if this is set, there is a callback associated with errorInfo to set the ess/errorInfo dpoint
     variable error_trace 0
@@ -1185,6 +1192,10 @@ namespace eval ess {
         # default to not tracking touch, but ::ess::touch_init will turn on
         variable touch_active
         set touch_active 0
+
+        # default to not tracking slider, but ::ess::slider_init will turn on
+        variable slider_active
+        set slider_active 0
     }
 
     proc do_update {args} {
@@ -1733,6 +1744,16 @@ namespace eval ess {
         if {$touch_active} {
             dservLoggerAddMatch $filename mtouch/touchvals
         }
+        variable slider_active
+        if {$slider_active} {
+            # Record both the calibrated slider position (for trial
+            # reconstruction / yoked playback) and the raw ADC counts
+            # (for calibration audits). These are fast-updating, so log
+            # with obs_limited + 80-byte buffer mirroring eyetracking/raw.
+            dservLoggerAddMatch $filename slider/position 1 80 1
+            dservLoggerAddMatch $filename slider/raw      1 80 1
+            dservLoggerAddMatch $filename slider/settings
+        }
 
         # call the system's specific file_open callback
         #  to add matches
@@ -1887,6 +1908,8 @@ namespace eval ess {
         em_region_on em_region_off em_fixwin_set em_eye_in_region
         em_sampler_enable em_sampler_start em_sampler_status em_sampler_vals
         touch_region_on touch_region_off touch_win_set touch_in_region
+        slider_init slider_deinit slider_x slider_y slider_pos
+        slider_virtual_set
         reward print my
     }
 
@@ -3305,6 +3328,92 @@ namespace eval ess {
     proc em_sampler_rate {{slot 0}} {
 	# Return current sample rate in Hz
 	return [samplerGetRate $slot]
+    }
+
+    ###########################################################################
+    ############################## slider support ############################
+    ###########################################################################
+    #
+    # Mirrors em_init: makes calibrated slider position available to state
+    # machines as slider_x / slider_y / slider_pos without each protocol
+    # having to subscribe manually. The slider subprocess (sliderconf.tcl)
+    # owns calibration; this end just reads the processed values.
+    #
+    # slider/position is published by sliderconf as a DSERV_FLOAT pair, so
+    # dserv auto-decodes $data into a 2-element Tcl list on dispatch.
+    #
+    proc slider_process { dpoint data } {
+        variable slider_x
+        variable slider_y
+        lassign $data x y
+        if { $x ne "" } { set slider_x $x }
+        if { $y ne "" } { set slider_y $y }
+        # Intentionally NOT calling do_update: the state machine polls
+        # slider_x / slider_y from transitions when needed. Calling
+        # do_update on every sample would wake the SM ~1 kHz, which is
+        # overkill for paradigms where the slider drives a stimulus
+        # attribute rather than a state transition.
+    }
+
+    proc slider_init {} {
+        # set flag so data files automatically log slider data
+        variable slider_active
+        set slider_active 1
+
+        # start from a known position rather than leaving whatever stale
+        # values were left over from a previous protocol
+        variable slider_x
+        variable slider_y
+        set slider_x 0.0
+        set slider_y 0.0
+
+        dservAddExactMatch slider/position
+        dpointSetScript    slider/position ::ess::slider_process
+    }
+
+    proc slider_deinit {} {
+        variable slider_active
+        set slider_active 0
+        # Note: dpointRemoveAllScripts is called in ess::init on every
+        # system load, so no need to explicitly remove our script here.
+    }
+
+    proc slider_x {} {
+        variable slider_x
+        return $slider_x
+    }
+
+    proc slider_y {} {
+        variable slider_y
+        return $slider_y
+    }
+
+    proc slider_pos {} {
+        variable slider_x
+        variable slider_y
+        return [list $slider_x $slider_y]
+    }
+
+    # Publish a one-shot virtual slider sample. Useful for yoked playback
+    # where the state machine steps through a recorded trajectory on its
+    # own schedule, or for edge cases that want to force a specific value
+    # immediately. Values are in already-calibrated output units (same
+    # coordinate system as slider/position).
+    #
+    # For *sustained* virtual input (browser UI drag, "hold position X
+    # while I run a protocol", automated tests), prefer the virtual_slider
+    # subprocess which emits a steady stream:
+    #
+    #     send virtual_slider "start 4"          ;# begin 250 Hz stream
+    #     send virtual_slider "set_slider $x $y" ;# update held position
+    #     send virtual_slider stop               ;# halt stream
+    #
+    # A steady stream structurally matches real hardware (which produces
+    # samples continuously whether or not the subject moves), whereas
+    # one-shots leave gaps that can confuse derivative computation or
+    # "subject disengaged" heuristics.
+    proc slider_virtual_set { x y } {
+        dservSetData slider/virtual [now] 6 [list $x $y]
     }
 
 }
