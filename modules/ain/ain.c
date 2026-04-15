@@ -303,7 +303,7 @@ static int ain_set_prefix_command (ClientData data, Tcl_Interp *interp,
     return TCL_ERROR;
   }
 
-  int len;
+  Tcl_Size len;
   const char *new_prefix = Tcl_GetStringFromObj(objv[1], &len);
   if (len <= 0 || len > 64) {
     Tcl_AppendResult(interp, "prefix must be 1..64 characters", NULL);
