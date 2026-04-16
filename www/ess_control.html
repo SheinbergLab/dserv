@@ -70,6 +70,26 @@
                                 <div id="virtual-buttons-container" class="ess-button-row">
                                 </div>
                             </div>
+                            <!-- Slider Controls (shown when slider_init is called) -->
+                            <div id="virtual-slider-section" class="ess-input-section" style="display: none;">
+                                <div class="ess-input-section-title">Slider</div>
+                                <div class="ess-slider-track-container">
+                                    <div id="slider-track" class="ess-slider-track">
+                                        <div id="slider-thumb" class="ess-slider-thumb"></div>
+                                    </div>
+                                    <div class="ess-slider-readout">
+                                        <span class="ess-input-label">pos</span>
+                                        <span id="slider-pos-value" class="ess-slider-value">0.0</span>
+                                    </div>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">Range</span>
+                                    <div class="ess-input-group">
+                                        <label>+/-</label>
+                                        <input type="number" id="slider-range" value="10" min="0.1" max="100" step="0.5">
+                                    </div>
+                                </div>
+                            </div>
                             <!-- Eye Tracker Settings -->
                             <div class="ess-input-section">
                                 <div class="ess-input-section-title">Eye Tracker</div>
@@ -396,6 +416,137 @@
                  const pressed = parseInt(value) !== 0;
                  btn.classList.toggle('pressed', pressed);
              }
+         }
+     }
+
+     class SliderControls {
+         constructor(dpManager) {
+             this.dpManager = dpManager;
+             this.section = document.getElementById('virtual-slider-section');
+             this.track = document.getElementById('slider-track');
+             this.thumb = document.getElementById('slider-thumb');
+             this.posValue = document.getElementById('slider-pos-value');
+             this.rangeInput = document.getElementById('slider-range');
+             this.dragging = false;
+             this.range = 10.0;
+             this.currentX = 0.0;
+             this.virtualStarted = false;
+             this.setupSubscriptions();
+             this.setupDrag();
+             this.setupRange();
+         }
+
+         sendCommand(subprocess, cmd) {
+             try {
+                 const conn = this.dpManager?.connection;
+                 if (conn && conn.connected && conn.ws) {
+                     conn.ws.send(`send ${subprocess} {${cmd}}`);
+                 }
+             } catch (error) {
+                 console.error('SliderControls: failed to send command:', error);
+             }
+         }
+
+         setupSubscriptions() {
+             // Show/hide based on whether a protocol has called slider_init
+             this.dpManager?.subscribe('ess/slider_active', (data) => {
+                 const active = parseInt(data.value) !== 0;
+                 this.section.style.display = active ? '' : 'none';
+                 if (active && !this.virtualStarted) {
+                     // Auto-start the virtual slider stream so drags work immediately
+                     this.sendCommand('virtual_slider', 'start 10');
+                     this.virtualStarted = true;
+                 }
+                 if (!active && this.virtualStarted) {
+                     this.sendCommand('virtual_slider', 'stop');
+                     this.virtualStarted = false;
+                 }
+             });
+
+             // Live position readout from the slider pipeline
+             this.dpManager?.subscribe('ess/slider_pos', (data) => {
+                 const parts = (data.value || '').toString().trim().split(/\s+/);
+                 if (parts.length >= 1) {
+                     const x = parseFloat(parts[0]);
+                     if (!isNaN(x)) {
+                         this.currentX = x;
+                         this.posValue.textContent = x.toFixed(2);
+                         if (!this.dragging) {
+                             this.updateThumbFromValue(x);
+                         }
+                     }
+                 }
+             });
+         }
+
+         setupRange() {
+             this.rangeInput.addEventListener('change', () => {
+                 const val = parseFloat(this.rangeInput.value);
+                 if (!isNaN(val) && val > 0) {
+                     this.range = val;
+                     // Re-position thumb for current value under new range
+                     this.updateThumbFromValue(this.currentX);
+                 }
+             });
+         }
+
+         setupDrag() {
+             const startDrag = (clientX) => {
+                 this.dragging = true;
+                 this.thumb.classList.add('active');
+                 this.updateFromClientX(clientX);
+             };
+
+             const moveDrag = (clientX) => {
+                 if (!this.dragging) return;
+                 this.updateFromClientX(clientX);
+             };
+
+             const endDrag = () => {
+                 if (!this.dragging) return;
+                 this.dragging = false;
+                 this.thumb.classList.remove('active');
+                 // Non-centering: thumb stays where released, like real hardware
+             };
+
+             // Mouse events on track (click anywhere to jump)
+             this.track.addEventListener('mousedown', (e) => {
+                 e.preventDefault();
+                 startDrag(e.clientX);
+             });
+             document.addEventListener('mousemove', (e) => moveDrag(e.clientX));
+             document.addEventListener('mouseup', () => endDrag());
+
+             // Touch support
+             this.track.addEventListener('touchstart', (e) => {
+                 e.preventDefault();
+                 startDrag(e.touches[0].clientX);
+             });
+             document.addEventListener('touchmove', (e) => {
+                 if (this.dragging) moveDrag(e.touches[0].clientX);
+             });
+             document.addEventListener('touchend', () => endDrag());
+         }
+
+         updateFromClientX(clientX) {
+             const rect = this.track.getBoundingClientRect();
+             // Clamp to track bounds
+             let frac = (clientX - rect.left) / rect.width;
+             frac = Math.max(0, Math.min(1, frac));
+             // Map 0..1 to -range..+range
+             const x = (frac * 2 - 1) * this.range;
+             this.currentX = x;
+             this.posValue.textContent = x.toFixed(2);
+             this.thumb.style.left = (frac * 100) + '%';
+             // Send to virtual_slider subprocess
+             this.sendCommand('virtual_slider', `set_slider ${x}`);
+         }
+
+         updateThumbFromValue(x) {
+             // Map value to 0..1 fraction within current range
+             let frac = (x / this.range + 1) / 2;
+             frac = Math.max(0, Math.min(1, frac));
+             this.thumb.style.left = (frac * 100) + '%';
          }
      }
     </script>

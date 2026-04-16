@@ -455,6 +455,60 @@ body.ess-app {
     color: #fff;
 }
 
+/* Virtual slider controls */
+.ess-slider-track-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.ess-slider-track {
+    position: relative;
+    flex: 1;
+    height: 24px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 12px;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+}
+
+.ess-slider-thumb {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 18px;
+    height: 18px;
+    background: var(--ess-text-secondary, #aaa);
+    border: 2px solid var(--ess-border);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: background 0.1s, border-color 0.1s;
+    pointer-events: none;
+}
+
+.ess-slider-thumb.active {
+    background: var(--ess-accent, #4a9eff);
+    border-color: var(--ess-accent, #4a9eff);
+}
+
+.ess-slider-readout {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    min-width: 70px;
+}
+
+.ess-slider-value {
+    font-size: 12px;
+    font-weight: 600;
+    font-family: monospace;
+    color: var(--ess-text-primary);
+}
+
 /* ===========================================
    ESS Control Component Styles (unchanged)
    =========================================== */

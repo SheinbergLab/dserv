@@ -3369,13 +3369,15 @@ namespace eval ess {
 
         dservAddExactMatch slider/position
         dpointSetScript    slider/position ::ess::slider_process
+
+        # Publish so the frontend can conditionally show the slider panel
+        dservSet ess/slider_active 1
     }
 
     proc slider_deinit {} {
         variable slider_active
         set slider_active 0
-        # Note: dpointRemoveAllScripts is called in ess::init on every
-        # system load, so no need to explicitly remove our script here.
+        dservSet ess/slider_active 0
     }
 
     proc slider_x {} {

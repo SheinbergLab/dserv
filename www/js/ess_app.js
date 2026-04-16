@@ -21,6 +21,7 @@ let eyeTouchViz = null;
 let stimRenderer = null;
 let eyeSettings = null;
 let buttonControls = null;
+let sliderControls = null;
 let projectSelector = null;
 
 // Console logging
@@ -64,6 +65,7 @@ async function init() {
         initMeshManager();
         initEyeSettings();
         initButtonControls();
+        initSliderControls();
 	initProjectSelector();
         initOpenEphysStatus();
         
@@ -224,6 +226,16 @@ function initButtonControls() {
     if (typeof ButtonControls !== 'undefined') {
         buttonControls = new ButtonControls(dpManager);
         log('Button Controls initialized', 'info');
+    }
+}
+
+/**
+ * Initialize virtual slider controls
+ */
+function initSliderControls() {
+    if (typeof SliderControls !== 'undefined') {
+        sliderControls = new SliderControls(dpManager);
+        log('Slider Controls initialized', 'info');
     }
 }
 
