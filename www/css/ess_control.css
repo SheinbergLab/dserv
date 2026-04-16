@@ -499,7 +499,6 @@ body.ess-app {
     align-items: center;
     gap: 4px;
     flex-shrink: 0;
-    min-width: 70px;
 }
 
 .ess-slider-value {
@@ -507,6 +506,9 @@ body.ess-app {
     font-weight: 600;
     font-family: monospace;
     color: var(--ess-text-primary);
+    display: inline-block;
+    width: 52px;
+    text-align: right;
 }
 
 .ess-input-select {
