@@ -8,6 +8,21 @@
 # match the pot and workspace on this rig.
 #
 
+# --- Input source ------------------------------------------------------
+#
+# Controls which input path drives slider/position. Prevents the virtual
+# slider and real hardware from competing (whichever fires last wins).
+#
+#   "ain"     - only the ain/vals hardware path publishes (rig default)
+#   "virtual" - only the virtual path publishes (dev / simulation)
+#   "auto"    - both paths active, last writer wins (default out of box)
+#
+# On a rig with a wired slider, set to "ain":
+# slider::set_source ain
+#
+# On a dev laptop with no hardware, set to "virtual":
+# slider::set_source virtual
+
 # --- Channel mapping ---------------------------------------------------
 #
 # chan_x = 0 means the slider pot is wired to ain channel 0.

@@ -89,6 +89,16 @@
                                         <input type="number" id="slider-range" value="10" min="0.1" max="100" step="0.5">
                                     </div>
                                 </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">Source</span>
+                                    <div class="ess-input-group">
+                                        <select id="slider-source" class="ess-input-select">
+                                            <option value="auto">auto</option>
+                                            <option value="ain">ain</option>
+                                            <option value="virtual">virtual</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                             <!-- Eye Tracker Settings -->
                             <div class="ess-input-section">
@@ -427,6 +437,7 @@
              this.thumb = document.getElementById('slider-thumb');
              this.posValue = document.getElementById('slider-pos-value');
              this.rangeInput = document.getElementById('slider-range');
+             this.sourceSelect = document.getElementById('slider-source');
              this.dragging = false;
              this.range = 10.0;
              this.currentX = 0.0;
@@ -434,6 +445,7 @@
              this.setupSubscriptions();
              this.setupDrag();
              this.setupRange();
+             this.setupSource();
          }
 
          sendCommand(subprocess, cmd) {
@@ -488,6 +500,32 @@
                      this.updateThumbFromValue(this.currentX);
                  }
              });
+         }
+
+         setupSource() {
+             // Reflect current source from slider/settings
+             this.dpManager?.subscribe('slider/settings', (data) => {
+                 const str = (data.value || '').toString();
+                 const parsed = this.parseTclDict(str);
+                 if (parsed.source && this.sourceSelect) {
+                     this.sourceSelect.value = parsed.source;
+                 }
+             });
+
+             // On change, send source to slider subprocess
+             this.sourceSelect?.addEventListener('change', () => {
+                 const src = this.sourceSelect.value;
+                 this.sendCommand('slider', `slider::set_source ${src}`);
+             });
+         }
+
+         parseTclDict(str) {
+             const result = {};
+             const parts = str.trim().split(/\s+/);
+             for (let i = 0; i < parts.length - 1; i += 2) {
+                 result[parts[i]] = parts[i + 1];
+             }
+             return result;
          }
 
          setupDrag() {

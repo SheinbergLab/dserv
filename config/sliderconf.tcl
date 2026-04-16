@@ -39,11 +39,17 @@ namespace eval slider {
     # Linear calibration: out = scale * ((raw - center) minus deadzone),
     # then optional invert and symmetric clamp.
     #
+    # source: which input path is active.
+    #   "ain"     - only process_ain publishes (default for rigs with hardware)
+    #   "virtual" - only process_virtual publishes (for dev / simulation)
+    #   "auto"    - whichever fires last wins (not recommended in production)
+    #
     # chan_x / chan_y select which ain channels feed each axis. Set to -1
     # to disable that axis (output will be 0).
     #
     # limit_x / limit_y < 0 disables clamping on that axis.
     variable settings [dict create \
+        source       "auto" \
         chan_x        0 \
         chan_y       -1 \
         scale_x      1.0 \
@@ -77,6 +83,7 @@ namespace eval slider {
         update_settings
     }
 
+    proc set_source     {s} { set_param source     $s }
     proc set_chan_x     {c} { set_param chan_x     $c }
     proc set_chan_y     {c} { set_param chan_y     $c }
     proc set_scale_x    {s} { set_param scale_x    $s }
@@ -149,6 +156,9 @@ namespace eval slider {
         variable current_raw_x
         variable current_raw_y
 
+        # Source gate: skip if virtual mode is active
+        if { [dict get $settings source] eq "virtual" } return
+
         set nchan [llength $data]
         if { $nchan == 0 } return
 
@@ -197,6 +207,10 @@ namespace eval slider {
     # to report, and conflating "fake raw" with true ADC counts would
     # confuse calibration UIs.
     proc process_virtual { dpoint data } {
+        variable settings
+        # Source gate: skip if ain mode is active
+        if { [dict get $settings source] eq "ain" } return
+
         lassign $data x y
         if { $x eq "" } { set x 0.0 }
         if { $y eq "" } { set y 0.0 }

@@ -112,7 +112,8 @@ function requestInitialData() {
           ess/block_pct_complete ess/block_pct_correct
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile ess/sortby_columns ess/block_id
-          ess/buttons/channels ess/slider_active ess/session_stats
+          ess/buttons/channels ess/slider_active slider/settings
+          ess/session_stats
           em/settings mesh/peers
           openephys/status
           system/hostname system/os

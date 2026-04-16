@@ -509,6 +509,21 @@ body.ess-app {
     color: var(--ess-text-primary);
 }
 
+.ess-input-select {
+    padding: 4px 6px;
+    font-size: 11px;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    border-radius: 3px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+}
+
+.ess-input-select:focus {
+    border-color: var(--ess-accent);
+    outline: none;
+}
+
 /* ===========================================
    ESS Control Component Styles (unchanged)
    =========================================== */
