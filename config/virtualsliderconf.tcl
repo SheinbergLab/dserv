@@ -57,10 +57,10 @@ proc setup {} {
     dpointSetScript    virtualsliderTimer/0 timer_callback
 }
 
-proc set_slider { x y } {
+proc set_slider { x {y ""} } {
     global virtual_slider
     set virtual_slider(x) $x
-    set virtual_slider(y) $y
+    if { $y ne "" } { set virtual_slider(y) $y }
 }
 
 setup

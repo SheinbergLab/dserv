@@ -3412,7 +3412,7 @@ namespace eval ess {
     # samples continuously whether or not the subject moves), whereas
     # one-shots leave gaps that can confuse derivative computation or
     # "subject disengaged" heuristics.
-    proc slider_virtual_set { x y } {
+    proc slider_virtual_set { x {y 0.0} } {
         dservSetData slider/virtual [now] 6 [list $x $y]
     }
 
