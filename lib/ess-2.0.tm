@@ -255,19 +255,47 @@ oo::class create System {
             # this sets the callback upon receipt of stimdg
             set ::dsCmds(stimdg) readdg
 
-            namespace inscope :: {
-                proc onMousePress {} {
-                    global dservhost
-                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
-                    qpcs::dsSetData $dservhost mtouch/event $coords
-                }
-                proc onMouseRelease {} {
-                    global dservhost
-                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos 2]
-                    qpcs::dsSetData $dservhost mtouch/event $coords
+            # Persistent binary return socket for stim->dserv data
+            # streaming. Uses the '>' fixed-length binary protocol
+            # via qpcs::dsSocketSendBinary — raw binary, no base64,
+            # no handshake.
+            #
+            # Close any existing socket first (handles protocol
+            # reloads without leaking sockets).
+            if { [info exists ::dserv_return_sock] } {
+                catch { close $::dserv_return_sock }
+                unset ::dserv_return_sock
+            }
+            set ::dserv_return_sock [socket $dservhost 4620]
+            fconfigure $::dserv_return_sock \
+                -translation binary -buffering full
+
+            # Convenience wrapper — stim code calls dserv_send
+            proc dserv_send { varname dl } {
+                if { [info exists ::dserv_return_sock] } {
+                    qpcs::dsSocketSendBinary $::dserv_return_sock $varname $dl
                 }
             }
-            
+
+            # Clean up the return socket (called from protocol deinit)
+            proc dserv_return_close {} {
+                if { [info exists ::dserv_return_sock] } {
+                    catch { close $::dserv_return_sock }
+                    unset ::dserv_return_sock
+                }
+            }
+
+            namespace inscope :: {
+                proc onMousePress {} {
+                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos 0]
+                    dserv_send mtouch/event $coords
+                }
+                proc onMouseRelease {} {
+                    dl_local coords [dl_create short $::MouseXPos $::MouseYPos 2]
+                    dserv_send mtouch/event $coords
+                }
+            }
+
 			rename puts _puts
 			proc puts {args} {
 				global dservhost
@@ -286,7 +314,7 @@ oo::class create System {
 						_puts {*}$args
 					}
 			    }
-			}                        
+			}
         }
 
         rmtSend $rmtcmd
