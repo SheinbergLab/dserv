@@ -1,0 +1,63 @@
+#
+# Per-rig overrides for the input subprocess.
+#
+# Sourced from config/inputconf.tcl AFTER the built-in known-device table
+# is seeded (wch / ILITEK / eGalax touchscreens) and BEFORE
+# inputAutodiscover runs. So local entries override the defaults
+# (last-match-wins) and new entries added here are visible to discovery.
+#
+# On a rig with only the standard known hardware attached, this file is
+# not needed — autodiscover just works. Use it to:
+#
+#   - declare what devices this rig must have (inputExpect)
+#   - teach the module about new hardware (inputKnownDevice)
+#   - override a default rotation or screen size per-rig
+#
+
+# --- Expectations ------------------------------------------------------
+#
+# By default, startup is permissive: missing devices are ignored.
+# Declaring `inputExpect` makes the rig fail loudly at startup if the
+# class has no matched device. `-optional` is available if you want the
+# declaration for documentation / diagnostics but no enforcement.
+#
+# inputExpect touchscreen
+# inputExpect trackpad
+# inputExpect trackpad -optional
+
+# --- Teaching the module about new hardware ----------------------------
+#
+# Touchscreens: must provide screen_w and screen_h. Match against the
+# /dev/input/by-id/<name> basename (Tcl glob) or the libevdev-reported
+# device name.
+#
+# inputKnownDevice touchscreen *MyNewPanel_USB_1024x600* \
+#     -screen_w 1024 -screen_h 600
+#
+# Options:
+#   -screen_w W       pixel width of the display this panel covers
+#   -screen_h H       pixel height
+#   -rotation N       0 / 90 / 180 / 270 (default -1 = auto-detect from
+#                     /proc/cmdline's video=HDMI-A-1:...:rotate=N)
+#   -track_drag 0|1   emit DRAG events on movement while active
+#                     (default 0: only PRESS and RELEASE)
+#   -hdmi_output name HDMI connector name for rotation detection
+#                     (default HDMI-A-1)
+
+# --- Overriding a built-in default -------------------------------------
+#
+# To override the built-in defaults for a known panel on this specific
+# rig (e.g. this ILITEK is mounted rotated), re-declare the same pattern
+# with different values. Last-match-wins.
+#
+# inputKnownDevice touchscreen *ILITEK_ILITEK-TP* \
+#     -screen_w 1280 -screen_h 800 -rotation 180
+
+# --- Debugging discovery -----------------------------------------------
+#
+# inputProbe enumerates every /dev/input/event* with identifiers, the
+# classifier's verdict, and capability bits. Invoke on demand:
+#
+#   send input "inputProbe"
+#
+# Or at startup by setting DSERV_INPUT_PROBE=1 in the environment / unit.
