@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <dirent.h>
+#include <limits.h>
 
 #ifdef __linux__
 #include <libevdev/libevdev.h>
@@ -32,10 +33,16 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
-#define INPUT_MAX_CLASSES    8
-#define INPUT_MAX_EXPECTS    8
-#define INPUT_PATH_MAX       256
-#define INPUT_DPOINT_MAX     64
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+#define INPUT_MAX_CLASSES          8
+#define INPUT_MAX_EXPECTS          8
+#define INPUT_MAX_KNOWN_DEVICES    32
+#define INPUT_PATH_MAX             256
+#define INPUT_DPOINT_MAX           64
+#define INPUT_PATTERN_MAX          128
 
 struct input_state_s;
 struct input_device_s;
@@ -91,6 +98,18 @@ typedef struct input_expect_s {
   int required;               /* 1 = fail startup if missing, 0 = optional */
 } input_expect_t;
 
+/* Sentinels in known_device_t: -1 means "unset" for dims/track_drag;
+   rotation uses -2 = unset, -1 = auto-detect from HDMI, >=0 = explicit. */
+typedef struct known_device_s {
+  char class_name[32];
+  char pattern[INPUT_PATTERN_MAX];
+  int screen_w;
+  int screen_h;
+  int rotation;
+  int track_drag;
+  char hdmi_output[32];
+} known_device_t;
+
 typedef struct input_state_s {
   tclserver_t *tclserver;
 
@@ -102,6 +121,9 @@ typedef struct input_state_s {
 
   input_expect_t expects[INPUT_MAX_EXPECTS];
   int n_expects;
+
+  known_device_t known[INPUT_MAX_KNOWN_DEVICES];
+  int n_known;
 } input_state_t;
 
 static input_class_t *find_class(input_state_t *st, const char *name)
@@ -124,6 +146,62 @@ static int class_has_open_device(input_state_t *st, input_class_t *cls)
   pthread_mutex_unlock(&st->devices_lock);
   return 0;
 }
+
+/* Last-match-wins so local/input.tcl entries override built-in defaults
+   that inputconf.tcl seeded earlier. */
+static known_device_t *find_known_device(input_state_t *st,
+                                         input_class_t *cls,
+                                         const char *by_id_name,
+                                         const char *libevdev_name)
+{
+  for (int i = st->n_known - 1; i >= 0; i--) {
+    known_device_t *k = &st->known[i];
+    if (strcmp(k->class_name, cls->name) != 0) continue;
+    if (by_id_name && *by_id_name &&
+        Tcl_StringMatch(by_id_name, k->pattern)) return k;
+    if (libevdev_name && *libevdev_name &&
+        Tcl_StringMatch(libevdev_name, k->pattern)) return k;
+  }
+  return NULL;
+}
+
+#ifdef __linux__
+/* Reverse-lookup the /dev/input/by-id/* symlink pointing to event_path. */
+static int find_by_id_name(const char *event_path,
+                           char *out, size_t out_size)
+{
+  DIR *dir = opendir("/dev/input/by-id");
+  if (!dir) return 0;
+
+  char resolved_event[PATH_MAX];
+  if (!realpath(event_path, resolved_event)) {
+    closedir(dir);
+    return 0;
+  }
+
+  struct dirent *ent;
+  int found = 0;
+  while ((ent = readdir(dir)) != NULL) {
+    if (ent->d_name[0] == '.') continue;
+    if (!strstr(ent->d_name, "-event")) continue;
+
+    char sym[PATH_MAX];
+    snprintf(sym, sizeof(sym), "/dev/input/by-id/%s", ent->d_name);
+
+    char resolved_link[PATH_MAX];
+    if (!realpath(sym, resolved_link)) continue;
+
+    if (strcmp(resolved_link, resolved_event) == 0) {
+      strncpy(out, ent->d_name, out_size - 1);
+      out[out_size - 1] = '\0';
+      found = 1;
+      break;
+    }
+  }
+  closedir(dir);
+  return found;
+}
+#endif
 
 #ifdef __linux__
 
@@ -518,11 +596,46 @@ static void destroy_all_devices(input_state_t *st)
  * Autodiscover (Linux)
  *****************************************************************************/
 
+static void unlink_and_free_device(input_state_t *st, input_device_t *d)
+{
+  pthread_mutex_lock(&st->devices_lock);
+  if (st->devices == d) {
+    st->devices = d->next;
+  } else {
+    for (input_device_t *p = st->devices; p && p->next; p = p->next) {
+      if (p->next == d) { p->next = d->next; break; }
+    }
+  }
+  pthread_mutex_unlock(&st->devices_lock);
+  stop_device(d);
+  free(d);
+}
+
+static void apply_known_overrides(input_device_t *d, known_device_t *kd,
+                                  input_class_t *cls)
+{
+  if (!kd) return;
+  if (strcmp(cls->name, "touchscreen") == 0) {
+    if (kd->screen_w > 0)    d->screen_width  = kd->screen_w;
+    if (kd->screen_h > 0)    d->screen_height = kd->screen_h;
+    if (kd->track_drag >= 0) d->track_drag    = kd->track_drag;
+    if (kd->rotation != -2) {
+      if (kd->rotation >= 0) {
+        d->rotation = kd->rotation;
+      } else {
+        const char *hdmi = kd->hdmi_output[0] ? kd->hdmi_output
+                                              : cls->hdmi_output;
+        d->rotation = get_hdmi_rotation(hdmi);
+      }
+    }
+  }
+}
+
 static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
                              Tcl_Obj *result_dict)
 {
   DIR *dir = opendir("/dev/input");
-  if (!dir) return TCL_OK;  /* no devices; not fatal */
+  if (!dir) return TCL_OK;
 
   struct dirent *entry;
   while ((entry = readdir(dir)) != NULL) {
@@ -535,13 +648,8 @@ static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
     if (fd < 0) continue;
 
     struct libevdev *dev = NULL;
-    if (libevdev_new_from_fd(fd, &dev) < 0) {
-      close(fd);
-      continue;
-    }
+    if (libevdev_new_from_fd(fd, &dev) < 0) { close(fd); continue; }
 
-    /* Pick the first class whose predicate matches and that doesn't
-       already have an open device. Phase 1 is single-device-per-class. */
     input_class_t *matched = NULL;
     for (int i = 0; i < st->n_classes; i++) {
       input_class_t *c = &st->classes[i];
@@ -551,33 +659,66 @@ static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
       }
     }
 
+    if (!matched) {
+      libevdev_free(dev);
+      close(fd);
+      continue;
+    }
+
+    const char *lib_name = libevdev_get_name(dev);
+    char by_id[INPUT_PATH_MAX] = "";
+    find_by_id_name(path, by_id, sizeof(by_id));
+
+    known_device_t *kd = find_known_device(st, matched, by_id, lib_name);
+
+    /* Touchscreen needs dimensions from the known-device entry or from
+       class-level inputConfigure. Without either, skip with a warning —
+       inputValidateExpectations will then fail loudly if it was required. */
+    if (strcmp(matched->name, "touchscreen") == 0) {
+      int sw = (kd && kd->screen_w > 0) ? kd->screen_w : matched->screen_width;
+      int sh = (kd && kd->screen_h > 0) ? kd->screen_h : matched->screen_height;
+      if (sw <= 0 || sh <= 0) {
+        fprintf(stderr,
+                "input: touchscreen at %s (%s) has no known dimensions; "
+                "skipping. Add inputKnownDevice or inputConfigure to enable.\n",
+                path, lib_name ? lib_name : "?");
+        libevdev_free(dev);
+        close(fd);
+        continue;
+      }
+    }
+
     libevdev_free(dev);
     close(fd);
 
-    if (!matched) continue;
-
     input_device_t *d = open_device(st, matched, path, interp);
     if (!d) continue;
+
+    apply_known_overrides(d, kd, matched);
+
     if (start_device(d) < 0) {
-      /* Unlink and free; open_device already put it in the list. */
-      pthread_mutex_lock(&st->devices_lock);
-      if (st->devices == d) {
-        st->devices = d->next;
-      } else {
-        for (input_device_t *p = st->devices; p && p->next; p = p->next) {
-          if (p->next == d) { p->next = d->next; break; }
-        }
-      }
-      pthread_mutex_unlock(&st->devices_lock);
-      stop_device(d);
-      free(d);
+      unlink_and_free_device(st, d);
       continue;
     }
 
     if (result_dict) {
+      Tcl_Obj *info = Tcl_NewDictObj();
+      Tcl_DictObjPut(interp, info,
+                     Tcl_NewStringObj("path", -1),
+                     Tcl_NewStringObj(path, -1));
+      if (*by_id) {
+        Tcl_DictObjPut(interp, info,
+                       Tcl_NewStringObj("by_id", -1),
+                       Tcl_NewStringObj(by_id, -1));
+      }
+      if (lib_name) {
+        Tcl_DictObjPut(interp, info,
+                       Tcl_NewStringObj("name", -1),
+                       Tcl_NewStringObj(lib_name, -1));
+      }
       Tcl_DictObjPut(interp, result_dict,
                      Tcl_NewStringObj(matched->name, -1),
-                     Tcl_NewStringObj(path, -1));
+                     info);
     }
   }
 
@@ -656,6 +797,67 @@ static int input_open_cmd(ClientData data, Tcl_Interp *interp,
     Tcl_AppendResult(interp, "input: failed to start reader thread", NULL);
     return TCL_ERROR;
   }
+  return TCL_OK;
+}
+
+static int input_known_device_cmd(ClientData data, Tcl_Interp *interp,
+                                  int objc, Tcl_Obj *const objv[])
+{
+  input_state_t *st = (input_state_t *) data;
+
+  if (objc < 3 || (objc % 2) != 1) {
+    Tcl_WrongNumArgs(interp, 1, objv,
+                     "class pattern ?-screen_w W? ?-screen_h H? "
+                     "?-rotation R? ?-track_drag {0|1}? ?-hdmi_output name?");
+    return TCL_ERROR;
+  }
+
+  if (!find_class(st, Tcl_GetString(objv[1]))) {
+    Tcl_AppendResult(interp, "input: unknown class ",
+                     Tcl_GetString(objv[1]), NULL);
+    return TCL_ERROR;
+  }
+
+  if (st->n_known >= INPUT_MAX_KNOWN_DEVICES) {
+    Tcl_AppendResult(interp, "input: too many known-device entries", NULL);
+    return TCL_ERROR;
+  }
+
+  known_device_t *k = &st->known[st->n_known];
+  memset(k, 0, sizeof(*k));
+  strncpy(k->class_name, Tcl_GetString(objv[1]), sizeof(k->class_name) - 1);
+  strncpy(k->pattern, Tcl_GetString(objv[2]), sizeof(k->pattern) - 1);
+  k->screen_w = -1;
+  k->screen_h = -1;
+  k->rotation = -2;
+  k->track_drag = -1;
+
+  for (int i = 3; i < objc; i += 2) {
+    const char *key = Tcl_GetString(objv[i]);
+    Tcl_Obj *val = objv[i + 1];
+    int ival;
+    if (strcmp(key, "-screen_w") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      k->screen_w = ival;
+    } else if (strcmp(key, "-screen_h") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      k->screen_h = ival;
+    } else if (strcmp(key, "-rotation") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      k->rotation = ival;
+    } else if (strcmp(key, "-track_drag") == 0) {
+      if (Tcl_GetIntFromObj(interp, val, &ival) != TCL_OK) return TCL_ERROR;
+      k->track_drag = ival;
+    } else if (strcmp(key, "-hdmi_output") == 0) {
+      strncpy(k->hdmi_output, Tcl_GetString(val),
+              sizeof(k->hdmi_output) - 1);
+    } else {
+      Tcl_AppendResult(interp, "input: unknown option ", key, NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  st->n_known++;
   return TCL_OK;
 }
 
@@ -801,6 +1003,135 @@ static int input_close_cmd(ClientData data, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* Diagnostic: enumerate every /dev/input/event* device with identifiers,
+   classification result, and the capability bits we classify on. Does not
+   open readers or publish anything. Useful for figuring out why a device
+   isn't being picked up — or for writing the right inputKnownDevice
+   pattern for new hardware. */
+static int input_probe_cmd(ClientData data, Tcl_Interp *interp,
+                           int objc, Tcl_Obj *const objv[])
+{
+  input_state_t *st = (input_state_t *) data;
+  (void)objc; (void)objv;
+
+  Tcl_Obj *result = Tcl_NewListObj(0, NULL);
+
+#ifdef __linux__
+  DIR *dir = opendir("/dev/input");
+  if (!dir) {
+    Tcl_SetObjResult(interp, result);
+    return TCL_OK;
+  }
+
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strncmp(entry->d_name, "event", 5) != 0) continue;
+
+    char path[INPUT_PATH_MAX];
+    snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
+
+    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) continue;
+
+    struct libevdev *dev = NULL;
+    if (libevdev_new_from_fd(fd, &dev) < 0) { close(fd); continue; }
+
+    const char *classified = "unclassified";
+    for (int i = 0; i < st->n_classes; i++) {
+      if (st->classes[i].matches && st->classes[i].matches(dev)) {
+        classified = st->classes[i].name;
+        break;
+      }
+    }
+
+    const char *lib_name = libevdev_get_name(dev);
+    char by_id[INPUT_PATH_MAX] = "";
+    find_by_id_name(path, by_id, sizeof(by_id));
+
+    Tcl_Obj *info = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, info, Tcl_NewStringObj("path", -1),
+                   Tcl_NewStringObj(path, -1));
+    Tcl_DictObjPut(interp, info, Tcl_NewStringObj("class", -1),
+                   Tcl_NewStringObj(classified, -1));
+    Tcl_DictObjPut(interp, info, Tcl_NewStringObj("name", -1),
+                   Tcl_NewStringObj(lib_name ? lib_name : "", -1));
+    if (*by_id) {
+      Tcl_DictObjPut(interp, info, Tcl_NewStringObj("by_id", -1),
+                     Tcl_NewStringObj(by_id, -1));
+    }
+
+    Tcl_Obj *caps = Tcl_NewDictObj();
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("INPUT_PROP_DIRECT", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_property(dev, INPUT_PROP_DIRECT)));
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("INPUT_PROP_POINTER", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_property(dev, INPUT_PROP_POINTER)));
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("ABS_X", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_event_code(dev, EV_ABS, ABS_X)));
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("ABS_MT_POSITION_X", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_event_code(dev, EV_ABS, ABS_MT_POSITION_X)));
+    Tcl_DictObjPut(interp, caps, Tcl_NewStringObj("BTN_TOUCH", -1),
+                   Tcl_NewIntObj(
+                     libevdev_has_event_code(dev, EV_KEY, BTN_TOUCH)));
+    Tcl_DictObjPut(interp, info, Tcl_NewStringObj("caps", -1), caps);
+
+    /* Axis ranges for the axes this device actually exposes — helpful
+       for picking sensible -screen_w/-screen_h in inputKnownDevice. */
+    Tcl_Obj *axes = Tcl_NewDictObj();
+    if (libevdev_has_event_code(dev, EV_ABS, ABS_X)) {
+      Tcl_Obj *r = Tcl_NewListObj(0, NULL);
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_minimum(dev, ABS_X)));
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_maximum(dev, ABS_X)));
+      Tcl_DictObjPut(interp, axes, Tcl_NewStringObj("ABS_X", -1), r);
+    }
+    if (libevdev_has_event_code(dev, EV_ABS, ABS_Y)) {
+      Tcl_Obj *r = Tcl_NewListObj(0, NULL);
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_minimum(dev, ABS_Y)));
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_maximum(dev, ABS_Y)));
+      Tcl_DictObjPut(interp, axes, Tcl_NewStringObj("ABS_Y", -1), r);
+    }
+    if (libevdev_has_event_code(dev, EV_ABS, ABS_MT_POSITION_X)) {
+      Tcl_Obj *r = Tcl_NewListObj(0, NULL);
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_minimum(dev, ABS_MT_POSITION_X)));
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_maximum(dev, ABS_MT_POSITION_X)));
+      Tcl_DictObjPut(interp, axes,
+                     Tcl_NewStringObj("ABS_MT_POSITION_X", -1), r);
+    }
+    if (libevdev_has_event_code(dev, EV_ABS, ABS_MT_POSITION_Y)) {
+      Tcl_Obj *r = Tcl_NewListObj(0, NULL);
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_minimum(dev, ABS_MT_POSITION_Y)));
+      Tcl_ListObjAppendElement(interp, r,
+          Tcl_NewIntObj(libevdev_get_abs_maximum(dev, ABS_MT_POSITION_Y)));
+      Tcl_DictObjPut(interp, axes,
+                     Tcl_NewStringObj("ABS_MT_POSITION_Y", -1), r);
+    }
+    Tcl_DictObjPut(interp, info, Tcl_NewStringObj("axes", -1), axes);
+
+    Tcl_ListObjAppendElement(interp, result, info);
+
+    libevdev_free(dev);
+    close(fd);
+  }
+
+  closedir(dir);
+#else
+  (void)st;
+#endif
+
+  Tcl_SetObjResult(interp, result);
+  return TCL_OK;
+}
+
 /*****************************************************************************
  * Class registration (internal, at module init)
  *****************************************************************************/
@@ -871,12 +1202,16 @@ int Dserv_input_Init(Tcl_Interp *interp)
                        input_open_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputConfigure",
                        input_configure_cmd, st, NULL);
+  Tcl_CreateObjCommand(interp, "inputKnownDevice",
+                       input_known_device_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputExpect",
                        input_expect_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputValidateExpectations",
                        input_validate_expectations_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputList",
                        input_list_cmd, st, NULL);
+  Tcl_CreateObjCommand(interp, "inputProbe",
+                       input_probe_cmd, st, NULL);
   Tcl_CreateObjCommand(interp, "inputClose",
                        input_close_cmd, st, NULL);
 
