@@ -276,6 +276,19 @@ set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
 target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
 
 ##
+## input (multi-class kernel input: touchscreen now, trackpad next)
+##
+set(MODULE input)
+project(${MODULE})
+if (UNIX AND NOT APPLE)
+set (EVDEVLIB evdev)
+include_directories(/usr/include/libevdev-1.0)
+endif()
+add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
+set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
+target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
+
+##
 ## mesh
 ##
 set(MODULE mesh)
@@ -288,12 +301,12 @@ target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${LIBJANSSON} pthread)
 # Install targets - conditionally include camera
 if(BUILD_CAMERA)
     install(TARGETS
-        ain juicer gpio_input gpio_output touch mesh
+        ain juicer gpio_input gpio_output touch input mesh
         rmt eventlog sound timer usbio ina226 joystick4 camera_capture
         DESTINATION dserv/modules COMPONENT dserv)
 else()
     install(TARGETS
-        ain juicer gpio_input gpio_output touch mesh
+        ain juicer gpio_input gpio_output touch input mesh
         rmt eventlog sound timer usbio ina226 joystick4
         DESTINATION dserv/modules COMPONENT dserv)
 endif()
