@@ -3383,7 +3383,39 @@ namespace eval ess {
         # attribute rather than a state transition.
     }
 
-    proc slider_init {} {
+    # ::ess::slider_init -mode <absolute|continuous> ?-release <hold|stop|recenter>?
+    #
+    # -mode is required. It tells the slider subprocess how to interpret
+    # contact-based input (trackpad, virtual press_drag_release). For a
+    # steering / tracking paradigm use "continuous"; for a hand-in-space
+    # / absolute-pointing paradigm use "absolute". On a pot-based rig
+    # (ain source) the setting has no effect — pot is always continuous.
+    #
+    # -release defaults to "hold" (cursor stays at last position after
+    # RELEASE). Set "recenter" to snap to (0, 0) or "stop" to freeze
+    # publishing and let consumers key off slider/active.
+    proc slider_init { args } {
+        set mode ""
+        set release "hold"
+        for { set i 0 } { $i < [llength $args] } { incr i 2 } {
+            set k [lindex $args $i]
+            set v [lindex $args [expr {$i + 1}]]
+            switch -- $k {
+                -mode    { set mode $v }
+                -release { set release $v }
+                default  {
+                    error "::ess::slider_init: unknown option '$k'"
+                }
+            }
+        }
+        if { $mode eq "" } {
+            error "::ess::slider_init requires -mode {absolute|continuous}"
+        }
+
+        # Forward semantics to the slider subprocess.
+        send slider "slider::set_mode $mode"
+        send slider "slider::set_release $release"
+
         # set flag so data files automatically log slider data
         variable slider_active
         set slider_active 1
