@@ -80,6 +80,7 @@
                                     <div class="ess-slider-readout">
                                         <span class="ess-input-label">pos</span>
                                         <span id="slider-pos-value" class="ess-slider-value">0.0</span>
+                                        <span id="slider-engaged-indicator" class="ess-slider-engaged-indicator" title="Subject engaged (slider/active)"></span>
                                     </div>
                                 </div>
                                 <div class="ess-input-row">
@@ -95,9 +96,14 @@
                                         <select id="slider-source" class="ess-input-select">
                                             <option value="auto">auto</option>
                                             <option value="ain">ain</option>
+                                            <option value="trackpad">trackpad</option>
                                             <option value="virtual">virtual</option>
                                         </select>
                                     </div>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">Mode</span>
+                                    <span id="slider-mode-value" class="ess-slider-mode-value">—</span>
                                 </div>
                             </div>
                             <!-- Eye Tracker Settings -->
@@ -436,16 +442,24 @@
              this.track = document.getElementById('slider-track');
              this.thumb = document.getElementById('slider-thumb');
              this.posValue = document.getElementById('slider-pos-value');
+             this.engagedIndicator = document.getElementById('slider-engaged-indicator');
+             this.modeValue = document.getElementById('slider-mode-value');
              this.rangeInput = document.getElementById('slider-range');
              this.sourceSelect = document.getElementById('slider-source');
              this.dragging = false;
              this.range = 10.0;
              this.currentX = 0.0;
+             // Gating state: stream is started and track is interactive only
+             // when a protocol has called slider_init (experimentActive) AND
+             // the slider subprocess's source is one the UI actually drives.
+             this.experimentActive = false;
+             this.currentSource = 'auto';
              this.virtualStarted = false;
              this.setupSubscriptions();
              this.setupDrag();
              this.setupRange();
              this.setupSource();
+             this.updateInteractivity();
          }
 
          sendCommand(subprocess, cmd) {
@@ -460,19 +474,13 @@
          }
 
          setupSubscriptions() {
-             // Show/hide based on whether a protocol has called slider_init
+             // Show/hide panel based on whether a protocol called slider_init.
+             // Stream start / drag enablement also depends on source — handled
+             // in updateInteractivity().
              this.dpManager?.subscribe('ess/slider_active', (data) => {
-                 const active = parseInt(data.value) !== 0;
-                 this.section.style.display = active ? '' : 'none';
-                 if (active && !this.virtualStarted) {
-                     // Auto-start the virtual slider stream so drags work immediately
-                     this.sendCommand('virtual_slider', 'start 10');
-                     this.virtualStarted = true;
-                 }
-                 if (!active && this.virtualStarted) {
-                     this.sendCommand('virtual_slider', 'stop');
-                     this.virtualStarted = false;
-                 }
+                 this.experimentActive = parseInt(data.value) !== 0;
+                 this.section.style.display = this.experimentActive ? '' : 'none';
+                 this.updateInteractivity();
              });
 
              // Live position readout from the slider pipeline
@@ -489,6 +497,38 @@
                      }
                  }
              });
+
+             // Engagement dot: subject's finger on trackpad, or pot-wired,
+             // or virtual stream active. Different from ess/slider_active,
+             // which is the "is slider_init called" flag.
+             this.dpManager?.subscribe('slider/active', (data) => {
+                 const engaged = parseInt(data.value) !== 0;
+                 if (this.engagedIndicator) {
+                     this.engagedIndicator.classList.toggle('active', engaged);
+                 }
+             });
+         }
+
+         // Stream should run and the track should be draggable only when a
+         // protocol is using the slider AND the chosen source is one the UI
+         // can actually drive. `auto` is permissive: the UI participates,
+         // competing inputs (ain, trackpad) override via last-writer-wins.
+         updateInteractivity() {
+             const uiCanDrive = (this.currentSource === 'virtual' ||
+                                 this.currentSource === 'auto');
+             const needsStream = this.experimentActive && uiCanDrive;
+
+             if (needsStream && !this.virtualStarted) {
+                 this.sendCommand('virtual_slider', 'start 10');
+                 this.virtualStarted = true;
+             } else if (!needsStream && this.virtualStarted) {
+                 this.sendCommand('virtual_slider', 'stop');
+                 this.virtualStarted = false;
+             }
+
+             if (this.track) {
+                 this.track.classList.toggle('readonly', !needsStream);
+             }
          }
 
          setupRange() {
@@ -503,16 +543,34 @@
          }
 
          setupSource() {
-             // Reflect current source from slider/settings
+             // Reflect settings from the slider subprocess: source drives
+             // UI interactivity (gating drag + virtual_slider stream), mode
+             // is a passive readout of what the current system declared.
              this.dpManager?.subscribe('slider/settings', (data) => {
                  const str = (data.value || '').toString();
                  const parsed = this.parseTclDict(str);
-                 if (parsed.source && this.sourceSelect) {
-                     this.sourceSelect.value = parsed.source;
+                 if (parsed.source) {
+                     if (this.sourceSelect) {
+                         this.sourceSelect.value = parsed.source;
+                     }
+                     if (parsed.source !== this.currentSource) {
+                         this.currentSource = parsed.source;
+                         this.updateInteractivity();
+                     }
+                 }
+                 if (this.modeValue) {
+                     const mode = parsed.continuity_mode || '—';
+                     const release = parsed.release_behavior;
+                     this.modeValue.textContent = release
+                         ? `${mode} (release: ${release})`
+                         : mode;
                  }
              });
 
-             // On change, send source to slider subprocess
+             // On change, send source to slider subprocess. The matching
+             // slider/settings publish will round-trip through the handler
+             // above and trigger updateInteractivity(), so we don't need
+             // to call it directly here.
              this.sourceSelect?.addEventListener('change', () => {
                  const src = this.sourceSelect.value;
                  this.sendCommand('slider', `slider::set_source ${src}`);

@@ -511,6 +511,34 @@ body.ess-app {
     text-align: right;
 }
 
+.ess-slider-engaged-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ess-bg-panel);
+    border: 1px solid var(--ess-border);
+    display: inline-block;
+    margin-left: 6px;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.ess-slider-engaged-indicator.active {
+    background: #4ade80;
+    border-color: #4ade80;
+}
+
+.ess-slider-mode-value {
+    font-size: 11px;
+    color: var(--ess-text-secondary);
+    font-family: monospace;
+}
+
+.ess-slider-track.readonly {
+    pointer-events: none;
+    cursor: default;
+    opacity: 0.7;
+}
+
 .ess-input-select {
     padding: 4px 6px;
     font-size: 11px;
