@@ -31,6 +31,10 @@ subprocess ain "source [file join $dspath config/ainconf.tcl]"
 # start the slider subprocess (calibrates ain channels into slider/position)
 subprocess slider "source [file join $dspath config/sliderconf.tcl]"
 
+# start the input subprocess (owns kernel input devices: touchscreen,
+# and soon trackpad; publishes mtouch/event and friends)
+subprocess input "source [file join $dspath config/inputconf.tcl]"
+
 # start a juicer subprocess
 subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 

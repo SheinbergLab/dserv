@@ -16,10 +16,12 @@ proc exit {args} { error "exit not available for this subprocess" }
 
 # load extra modules
 # (The `ain` module is owned by the dedicated `ain` subprocess — see
-# config/ainconf.tcl — so it is no longer loaded here.)
+# config/ainconf.tcl. Touchscreen/trackpad reading is owned by the
+# dedicated `input` subprocess — see config/inputconf.tcl. State systems
+# subscribe to mtouch/event via ::ess::touch_win_set as before.)
 set ess_modules \
     "eventlog gpio_input gpio_output \
-    joystick4 rmt timer touch usbio"
+    joystick4 rmt timer usbio"
 foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }
@@ -297,23 +299,12 @@ proc joystick_init { } {
     }
 }
 
-proc connect_touchscreen {} {
-    set screens [dict create \
-		     /dev/input/by-id/usb-wch.cn_USB2IIC_CTP_CONTROL-event-if00 {1024 600} \
-                     /dev/input/by-id/usb-ILITEK_ILITEK-TP-event-if00 {1280 800} \
-		     /dev/input/by-id/usb-eGalax_Inc._eGalaxTouch_P80H46_3481_v00_T1_k4.18.204-event-if00 {1280 800} \
-		]
-    dict for { dev res } $screens { 
-	if [file exists $dev] {
-	    touchOpen $dev {*}$res
-	    touchStart
-	    break
-	}
-    }
-}
-
-
-connect_touchscreen
+# Touchscreen discovery has moved to the `input` subprocess
+# (config/inputconf.tcl). Rigs that previously relied on the hardcoded
+# USB paths above should declare screen dimensions and expectations in
+# local/input.tcl, e.g.:
+#   inputConfigure touchscreen -screen_w 1280 -screen_h 800
+#   inputExpect touchscreen
 
 # pull latest workspace scripts if we have registry configured
 if { [info exists ess::registry_url] } {
