@@ -10,16 +10,24 @@
 # Input sources:
 #   ain/vals         - MCP3204 packed uint16 samples produced by the ain
 #                      subprocess; channels selected via chan_x / chan_y
-#                      settings. This is the primary hardware path.
-#   slider/virtual   - already-calibrated [x y] values from browser / sim
+#                      settings. Primary hardware path.
+#   mtouch/trackpad  - absolute trackpad coords from the input subprocess,
+#                      with mtouch/trackpad/range giving the device's own
+#                      axis extents. Normalized to the same 0..4095 space
+#                      as ain, so ain-style calibration transfers.
+#   slider/virtual   - already-calibrated [x y] values from browser / sim.
 #
 # Output:
 #   slider/position  - calibrated [x y] as binary float pair (DSERV_FLOAT)
+#   slider/active    - 0/1 engagement signal. Pot (ain) always 1 when the
+#                      ain path is the active source. Trackpad 1 between
+#                      PRESS and RELEASE. Consumers that want to react to
+#                      subject engagement subscribe here.
 #   slider/raw       - raw [x y] as binary uint16 pair (DSERV_SHORT), in
 #                      ADC counts; only emitted by the hardware path since
-#                      the virtual path has no raw to report
-#   ess/slider_pos   - "x y" string for visualization/monitoring
-#   slider/settings  - current settings dict for UI introspection
+#                      the virtual path has no raw to report.
+#   ess/slider_pos   - "x y" string for visualization/monitoring.
+#   slider/settings  - current settings dict for UI introspection.
 #
 # Conventions:
 #   - Output uses [x y] ordering (not the ain/vals legacy [y x] quirk).
@@ -39,29 +47,46 @@ namespace eval slider {
     # Linear calibration: out = scale * ((raw - center) minus deadzone),
     # then optional invert and symmetric clamp.
     #
-    # source: which input path is active.
-    #   "ain"     - only process_ain publishes (default for rigs with hardware)
-    #   "virtual" - only process_virtual publishes (for dev / simulation)
-    #   "auto"    - whichever fires last wins (not recommended in production)
+    # source: which input path is active. Each processor publishes iff
+    # source is its own name or "auto".
+    #   "ain"      - only process_ain publishes
+    #   "trackpad" - only process_trackpad publishes
+    #   "virtual"  - only process_virtual publishes
+    #   "auto"     - all paths publish; last writer wins
+    #
+    # continuity_mode: applies only to contact-based sources (trackpad,
+    # virtual). Declared by each experimental system via
+    # ::ess::slider_init -mode.
+    #   "absolute"   - new PRESS sets cursor to the mapped absolute position
+    #                  (hand-in-space / pointing paradigms)
+    #   "continuous" - new PRESS holds cursor at its last value; DRAG moves
+    #                  it by delta from the PRESS point (steering paradigm)
+    #
+    # release_behavior: what slider/position does after RELEASE
+    #   "hold"     - keep publishing last value (default)
+    #   "stop"     - stop updating; consumers key off slider/active
+    #   "recenter" - return to (0, 0)
     #
     # chan_x / chan_y select which ain channels feed each axis. Set to -1
     # to disable that axis (output will be 0).
     #
     # limit_x / limit_y < 0 disables clamping on that axis.
     variable settings [dict create \
-        source       "auto" \
-        chan_x        0 \
-        chan_y       -1 \
-        scale_x      1.0 \
-        scale_y      1.0 \
-        center_x  2048.0 \
-        center_y  2048.0 \
-        deadzone_x   0.0 \
-        deadzone_y   0.0 \
-        invert_x     0 \
-        invert_y     0 \
-        limit_x     -1.0 \
-        limit_y     -1.0]
+        source           "auto" \
+        continuity_mode  "absolute" \
+        release_behavior "hold" \
+        chan_x            0 \
+        chan_y           -1 \
+        scale_x          1.0 \
+        scale_y          1.0 \
+        center_x      2048.0 \
+        center_y      2048.0 \
+        deadzone_x       0.0 \
+        deadzone_y       0.0 \
+        invert_x         0 \
+        invert_y         0 \
+        limit_x         -1.0 \
+        limit_y         -1.0]
 
     # Track current raw values for "set center" functionality
     variable current_raw_x 0.0
@@ -70,6 +95,22 @@ namespace eval slider {
     # Last calibrated output
     variable last_x 0.0
     variable last_y 0.0
+
+    # Last slider/active value (debounce repeat publishes)
+    variable last_active -1
+
+    # Trackpad state (populated from mtouch/trackpad/range at startup)
+    variable trackpad_range_known 0
+    variable trackpad_min_x 0
+    variable trackpad_max_x 1
+    variable trackpad_min_y 0
+    variable trackpad_max_y 1
+
+    # Trackpad contact-lifecycle state for continuous mode
+    variable trackpad_press_raw_x 0
+    variable trackpad_press_raw_y 0
+    variable trackpad_press_out_x 0.0
+    variable trackpad_press_out_y 0.0
 
     proc update_settings {} {
         variable settings
@@ -84,6 +125,18 @@ namespace eval slider {
     }
 
     proc set_source     {s} { set_param source     $s }
+    proc set_mode       {m} {
+        if { $m ne "absolute" && $m ne "continuous" } {
+            error "slider: invalid continuity_mode '$m' (want absolute|continuous)"
+        }
+        set_param continuity_mode $m
+    }
+    proc set_release    {r} {
+        if { $r ni {hold stop recenter} } {
+            error "slider: invalid release_behavior '$r' (want hold|stop|recenter)"
+        }
+        set_param release_behavior $r
+    }
     proc set_chan_x     {c} { set_param chan_x     $c }
     proc set_chan_y     {c} { set_param chan_y     $c }
     proc set_scale_x    {s} { set_param scale_x    $s }
@@ -130,7 +183,7 @@ namespace eval slider {
     }
 
     # Publish calibrated x/y to slider/position + side outputs.
-    # Used by both hardware and virtual input paths.
+    # Used by all input paths.
     proc publish { x y } {
         variable last_x
         variable last_y
@@ -141,6 +194,38 @@ namespace eval slider {
         dservSetData slider/position [now] 2 $posvals ;# 2 = DSERV_FLOAT
 
         dservSet ess/slider_pos "$x $y"
+    }
+
+    # Publish slider/active engagement signal (0 or 1). Debounced so a
+    # high-rate source (ain at kHz) doesn't spam the datapoint bus. Pot
+    # path sets 1 whenever it publishes; trackpad path sets 1 on PRESS,
+    # 0 on RELEASE.
+    proc publish_active { v } {
+        variable last_active
+        if { $v == $last_active } return
+        set last_active $v
+        dservSet slider/active $v
+    }
+
+    # Source gate helper. Returns 1 iff this processor should publish
+    # given the current source setting.
+    proc source_allows { name } {
+        variable settings
+        set s [dict get $settings source]
+        return [expr {$s eq $name || $s eq "auto"}]
+    }
+
+    # Cache the trackpad surface range published one-shot at input-
+    # subprocess startup. Consumed by process_trackpad for normalization.
+    proc set_trackpad_range { dpoint data } {
+        variable trackpad_min_x
+        variable trackpad_max_x
+        variable trackpad_min_y
+        variable trackpad_max_y
+        variable trackpad_range_known
+        lassign $data trackpad_min_x trackpad_max_x \
+                      trackpad_min_y trackpad_max_y
+        set trackpad_range_known 1
     }
 
     # Process raw ain/vals data.
@@ -156,8 +241,7 @@ namespace eval slider {
         variable current_raw_x
         variable current_raw_y
 
-        # Source gate: skip if virtual mode is active
-        if { [dict get $settings source] eq "virtual" } return
+        if { ![source_allows ain] } return
 
         set nchan [llength $data]
         if { $nchan == 0 } return
@@ -198,6 +282,7 @@ namespace eval slider {
         }
 
         publish $x $y
+        publish_active 1
     }
 
     # Process virtual slider input (already calibrated, in output units).
@@ -207,14 +292,120 @@ namespace eval slider {
     # to report, and conflating "fake raw" with true ADC counts would
     # confuse calibration UIs.
     proc process_virtual { dpoint data } {
-        variable settings
-        # Source gate: skip if ain mode is active
-        if { [dict get $settings source] eq "ain" } return
+        if { ![source_allows virtual] } return
 
         lassign $data x y
         if { $x eq "" } { set x 0.0 }
         if { $y eq "" } { set y 0.0 }
         publish $x $y
+        publish_active 1
+    }
+
+    # Process trackpad input from mtouch/trackpad. Three uint16s per
+    # event: (x, y, event_type) where event_type is 0=PRESS, 1=DRAG,
+    # 2=RELEASE. Surface coords are normalized into the same 0..4095
+    # space ain uses so existing ain-style calibration (center_x,
+    # scale_x, ...) applies unchanged. continuity_mode controls whether
+    # PRESS jumps to the absolute mapped position or holds the last
+    # output and DRAG delta-accumulates from the press point.
+    proc process_trackpad { dpoint data } {
+        variable settings
+        variable trackpad_range_known
+        variable trackpad_min_x
+        variable trackpad_max_x
+        variable trackpad_min_y
+        variable trackpad_max_y
+        variable trackpad_press_raw_x
+        variable trackpad_press_raw_y
+        variable trackpad_press_out_x
+        variable trackpad_press_out_y
+        variable last_x
+        variable last_y
+
+        if { ![source_allows trackpad] } return
+        if { !$trackpad_range_known }    return
+
+        lassign $data raw_x raw_y event_type
+
+        set rangex [expr {double($trackpad_max_x - $trackpad_min_x)}]
+        set rangey [expr {double($trackpad_max_y - $trackpad_min_y)}]
+        if { $rangex <= 0 || $rangey <= 0 } return
+
+        # Normalize raw surface coords to 0..4095 (the ain unit space).
+        set nx [expr {($raw_x - $trackpad_min_x) * 4095.0 / $rangex}]
+        set ny [expr {($raw_y - $trackpad_min_y) * 4095.0 / $rangey}]
+
+        dict with settings {
+            switch $event_type {
+                0 {
+                    # PRESS. Remember the press point for continuous mode
+                    # delta accumulation.
+                    set trackpad_press_raw_x $nx
+                    set trackpad_press_raw_y $ny
+                    set trackpad_press_out_x $last_x
+                    set trackpad_press_out_y $last_y
+                    publish_active 1
+
+                    if { $continuity_mode eq "absolute" } {
+                        set x [calibrate_axis $nx $center_x $scale_x \
+                                   $deadzone_x $invert_x $limit_x]
+                        if { $chan_y >= 0 } {
+                            set y [calibrate_axis $ny $center_y $scale_y \
+                                       $deadzone_y $invert_y $limit_y]
+                        } else {
+                            set y 0.0
+                        }
+                        publish $x $y
+                    }
+                    # continuous mode on PRESS: hold last output, no publish
+                }
+                1 {
+                    # DRAG
+                    if { $continuity_mode eq "absolute" } {
+                        set x [calibrate_axis $nx $center_x $scale_x \
+                                   $deadzone_x $invert_x $limit_x]
+                        if { $chan_y >= 0 } {
+                            set y [calibrate_axis $ny $center_y $scale_y \
+                                       $deadzone_y $invert_y $limit_y]
+                        } else {
+                            set y 0.0
+                        }
+                        publish $x $y
+                    } else {
+                        # continuous: out = out_at_press + scale * delta
+                        set dx [expr {$scale_x * ($nx - $trackpad_press_raw_x)}]
+                        if { $invert_x } { set dx [expr {-$dx}] }
+                        set x [expr {$trackpad_press_out_x + $dx}]
+                        if { $limit_x > 0 } {
+                            if { $x >  $limit_x } { set x  $limit_x }
+                            if { $x < -$limit_x } { set x [expr {-$limit_x}] }
+                        }
+
+                        if { $chan_y >= 0 } {
+                            set dy [expr {$scale_y * ($ny - $trackpad_press_raw_y)}]
+                            if { $invert_y } { set dy [expr {-$dy}] }
+                            set y [expr {$trackpad_press_out_y + $dy}]
+                            if { $limit_y > 0 } {
+                                if { $y >  $limit_y } { set y  $limit_y }
+                                if { $y < -$limit_y } { set y [expr {-$limit_y}] }
+                            }
+                        } else {
+                            set y 0.0
+                        }
+                        publish $x $y
+                    }
+                }
+                2 {
+                    # RELEASE
+                    publish_active 0
+                    switch $release_behavior {
+                        hold     { # last position stays as-is }
+                        stop     { # don't publish position; consumer keys off slider/active }
+                        recenter { publish 0.0 0.0 }
+                    }
+                }
+            }
+        }
     }
 
     update_settings
@@ -227,6 +418,21 @@ dpointSetScript    ain/vals slider::process_ain
 # Subscribe to the virtual path (browser / simulator)
 dservAddExactMatch slider/virtual
 dpointSetScript    slider/virtual slider::process_virtual
+
+# Subscribe to the trackpad feed (input subprocess, mtouch/trackpad).
+# Range is published one-shot at input startup; cache it if it arrived
+# before the slider subprocess came up, and subscribe for future updates
+# (e.g., if the input subprocess restarts).
+dservAddExactMatch mtouch/trackpad
+dpointSetScript    mtouch/trackpad slider::process_trackpad
+
+dservAddExactMatch mtouch/trackpad/range
+dpointSetScript    mtouch/trackpad/range slider::set_trackpad_range
+
+set existing_range [dservGet mtouch/trackpad/range]
+if { [llength $existing_range] == 4 } {
+    slider::set_trackpad_range mtouch/trackpad/range $existing_range
+}
 
 # Local deployment overrides (which ain channel the slider is wired to,
 # per-rig calibration: center / scale / deadzone / invert / limit). Not
