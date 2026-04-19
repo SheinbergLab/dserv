@@ -429,8 +429,13 @@ dpointSetScript    mtouch/trackpad slider::process_trackpad
 dservAddExactMatch mtouch/trackpad/range
 dpointSetScript    mtouch/trackpad/range slider::set_trackpad_range
 
-set existing_range [dservGet mtouch/trackpad/range]
-if { [llength $existing_range] == 4 } {
+# If the input subprocess already published the trackpad range (restart
+# case, or race where input came up first), pick it up synchronously so
+# the first event doesn't get dropped by the range_known gate. Guarded:
+# on a rig (or dev box) with no trackpad, the datapoint never exists and
+# dservGet raises "dpoint not found" — not an error, just nothing to do.
+if { ![catch { dservGet mtouch/trackpad/range } existing_range]
+     && [llength $existing_range] == 4 } {
     slider::set_trackpad_range mtouch/trackpad/range $existing_range
 }
 
