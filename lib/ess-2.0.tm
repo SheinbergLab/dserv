@@ -3557,12 +3557,16 @@ namespace eval ess {
 	    if { [expr ($timestamp-$last_touch_press)>$min_us] } {
 		::ess::evt_put TOUCH PRESS $timestamp $x $y
 		set last_touch_press $timestamp
+		# wake the state machine on a new press so transitions
+		# can fire even when the press lands outside any window
+		do_update
 	    }
 	} elseif { $name == "ess/touch_release" } {
 	    variable last_touch_release
 	    if { [expr ($timestamp-$last_touch_release)>$min_us] } {
 		::ess::evt_put TOUCH RELEASE $timestamp $x $y
 		set last_touch_release $timestamp
+		do_update
 	    }
 	}
     }
@@ -5433,7 +5437,7 @@ namespace eval ess {
     set subtypes [dict create INCORRECT 0 CORRECT 1 ABORT 2]
     dict set evt_info ENDTRIAL [list 40 {EOT} long $subtypes]
 
-    set subtypes [dict create EYE 0 LEVER 1 NORESPONSE 2 STIM 3]
+    set subtypes [dict create EYE 0 LEVER 1 NORESPONSE 2 STIM 3 MISTOUCH 4]
     dict set evt_info ABORT [list 41 {Abort} long $subtypes]
 
     set subtypes [dict create DURATION 0 TYPE 1 MICROLITERS 2]
