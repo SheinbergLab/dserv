@@ -183,6 +183,13 @@ function hasEyeData(dg) {
       && dg.getList('em_seconds') != null;
 }
 
+/** Check for spike data produced by the neuropixel Tcl package */
+function hasSpikeData(dg) {
+  return dg.getList('spike_times') != null
+      && dg.getList('spike_unit') != null
+      && dg.getList('spike_src_trial') != null;
+}
+
 /** Format a cell value for display */
 function formatCellValue(list, rowIdx) {
   if (!list || !list.data) return '';

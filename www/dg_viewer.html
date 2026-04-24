@@ -151,6 +151,9 @@
   .controls select{font-family:var(--mono);font-size:11px;background:var(--bg2);color:var(--t1);border:1px solid var(--bdr);border-radius:3px;padding:2px 5px;}
   .bt{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:11px;color:var(--t3);cursor:pointer;user-select:none;}
   .bt input{cursor:pointer;}
+  #depthLoInput,#depthHiInput{font-family:var(--mono);font-size:11px;background:var(--bg2);color:var(--t1);border:1px solid var(--bdr);border-radius:3px;padding:2px 4px;width:56px;outline:none;-moz-appearance:textfield;}
+  #depthLoInput:focus,#depthHiInput:focus{border-color:var(--acc);}
+  #depthLoInput::-webkit-outer-spin-button,#depthLoInput::-webkit-inner-spin-button,#depthHiInput::-webkit-outer-spin-button,#depthHiInput::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   input[type=range]{flex:1;-webkit-appearance:none;height:4px;background:var(--bdr);border-radius:2px;outline:none;}
   input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--acc);cursor:pointer;border:2px solid var(--bg0);}
   .resize-handle{height:5px;background:var(--bg1);border-top:1px solid var(--bdr);cursor:ns-resize;flex-shrink:0;}
@@ -225,6 +228,7 @@
         <span class="ii" id="infoSamples"></span>
         <span class="ii" id="infoDuration"></span>
         <span class="ii" id="infoBlinks"></span>
+        <span class="ii" id="infoSpikes"></span>
         <span class="ii" id="infoEpoch"></span>
         <div class="legend" id="legendBar">
           <div class="li"><div class="lsw" style="background:#f59e0b;"></div>H</div>
@@ -255,6 +259,13 @@
         <span class="td" id="timeDisplay">0.000 s</span>
         <label class="bt"><input type="checkbox" id="chkMask" checked> blinks</label>
         <label class="bt"><input type="checkbox" id="chkEvents" checked> events</label>
+        <label class="bt" id="depthFilterWrap" style="display:none;">
+          <span style="color:var(--t2);">depth</span>
+          <input type="number" id="depthLoInput" step="100" title="min µm (Enter to apply)">
+          <span style="color:var(--t3);">–</span>
+          <input type="number" id="depthHiInput" step="100" title="max µm (Enter to apply)">
+          <span style="color:var(--t3);">µm</span>
+        </label>
         <div class="sc" id="pluginControls"></div>
         <div class="sc"><label>Speed</label>
           <select id="speedSel"><option value="0.1">0.1x</option><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="5">5x</option></select>
@@ -375,6 +386,8 @@ const App = {
     this.nRows = countRows(this.dg);
     this.isTrial = isTrialDG(this.dg);
     this.hasEye = hasEyeData(this.dg);
+    this.hasSpikes = hasSpikeData(this.dg);
+    if (this.hasSpikes) this._prepSpikeMeta();
 
     // Update header
     document.getElementById('fileInfo').textContent = `${name} \u2014 ${this.nRows} rows, ${this.dg.nlists} cols`;
@@ -645,6 +658,63 @@ const App = {
   },
 
   // ═══════════════════════════════════════════════════════════════
+  // SPIKE DATA (neuropixel package schema v1)
+  // ═══════════════════════════════════════════════════════════════
+  _prepSpikeMeta() {
+    const dg = this.dg;
+    const ids    = getSublistData(dg, 'unit_list_id',    0);
+    const depths = getSublistData(dg, 'unit_list_depth', 0);
+    this.spikeMissing = getScalar(dg, 'spike_missing_value', 0);
+    if (this.spikeMissing == null || isNaN(this.spikeMissing)) this.spikeMissing = -1.0;
+
+    // Build unit_id -> metadata lookup (for future PSTH-by-unit etc.)
+    this.unitLookup = new Map();
+    let dMin = Infinity, dMax = -Infinity;
+    if (ids && depths) {
+      const xs   = getSublistData(dg, 'unit_list_x',        0);
+      const amps = getSublistData(dg, 'unit_list_amp',      0);
+      const snrs = getSublistData(dg, 'unit_list_snr',      0);
+      const frs  = getSublistData(dg, 'unit_list_fr',       0);
+      const pres = getSublistData(dg, 'unit_list_presence', 0);
+      for (let i = 0; i < ids.length; i++) {
+        const d = depths[i];
+        this.unitLookup.set(ids[i], {
+          idx: i, depth: d,
+          x:   xs   ? xs[i]   : this.spikeMissing,
+          amp: amps ? amps[i] : this.spikeMissing,
+          snr: snrs ? snrs[i] : this.spikeMissing,
+          fr:  frs  ? frs[i]  : this.spikeMissing,
+          pres: pres ? pres[i] : this.spikeMissing,
+        });
+        if (d > this.spikeMissing) {
+          if (d < dMin) dMin = d;
+          if (d > dMax) dMax = d;
+        }
+      }
+    }
+    if (!isFinite(dMin)) { dMin = 0; dMax = 1; }
+    // Asymmetric padding: leave the lower bound honest (ticks at the data
+    // minimum will kiss the bottom edge, which reads as "at the probe tip"),
+    // but add a small pad above so top-most units don't sit on the border.
+    const pad = (dMax - dMin) * 0.04 || 10;
+    this.spikeDepthMin = dMin;
+    this.spikeDepthMax = dMax + pad;
+
+    // Reset depth filter to the full data range on every new file.
+    // Rounded to the nearest step (100 µm) for tidy initial values.
+    this.depthLo = Math.floor(dMin / 100) * 100;
+    this.depthHi = Math.ceil(dMax  / 100) * 100;
+    this._syncDepthInputs();
+  },
+
+  _syncDepthInputs() {
+    const lo = document.getElementById('depthLoInput');
+    const hi = document.getElementById('depthHiInput');
+    if (lo) lo.value = this.depthLo;
+    if (hi) hi.value = this.depthHi;
+  },
+
+  // ═══════════════════════════════════════════════════════════════
   // TRIAL VIEW
   // ═══════════════════════════════════════════════════════════════
   buildTrialView() {
@@ -662,6 +732,11 @@ const App = {
     } else {
       legendBar.style.display = 'flex';
     }
+
+    // Depth-filter controls shown only when spike data is present.
+    const dfw = document.getElementById('depthFilterWrap');
+    if (dfw) dfw.style.display = this.hasSpikes ? 'flex' : 'none';
+    if (this.hasSpikes) this._syncDepthInputs();
 
     // Show world panel only if plugin loaded
     document.getElementById('worldPanel').style.display = this.plugin ? 'block' : 'none';
@@ -724,6 +799,25 @@ const App = {
       document.getElementById('speedSel').addEventListener('change', e => { this.speed = parseFloat(e.target.value); });
       document.getElementById('chkMask').addEventListener('change', e => { this.maskBlinks = e.target.checked; this.renderTrial(); });
       document.getElementById('chkEvents').addEventListener('change', e => { this.showEvents = e.target.checked; this.renderTrial(); });
+
+      // Depth-filter inputs. Commit on Enter or blur; ignore live typing.
+      const commitDepth = () => {
+        const loEl = document.getElementById('depthLoInput');
+        const hiEl = document.getElementById('depthHiInput');
+        let lo = Number(loEl.value), hi = Number(hiEl.value);
+        if (!Number.isFinite(lo)) lo = this.spikeDepthMin;
+        if (!Number.isFinite(hi)) hi = this.spikeDepthMax;
+        if (lo > hi) { const t = lo; lo = hi; hi = t; }
+        this.depthLo = lo; this.depthHi = hi;
+        this._syncDepthInputs();
+        this.renderTrial();
+      };
+      for (const id of ['depthLoInput', 'depthHiInput']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.addEventListener('change', commitDepth);
+        el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
+      }
 
       // Scrub slider
       document.getElementById('scrubSlider').addEventListener('input', e => {
@@ -807,8 +901,20 @@ const App = {
       eyeH: null, eyeV: null, eyeT: null, blink: null, blinkRanges: [], dur: 0, nSamples: 0, nBlinks: 0,
       tStart: 0, tEnd: 1, stimOnSec: 0, stimOffSec: 0, respTimeSec: 0, rewardTimeSec: 0,
       side: 0, outcome: 0, response: 0, rt: 0, row: {},
-      sacs: [], psos: [], purs: []
+      sacs: [], psos: [], purs: [],
+      spikeT: null, spikeU: null, spikeD: null, nSpikes: 0
     };
+
+    // Spike data (if available). Times are ms from obs-period start; stored
+    // on the canonical trial referenced by spike_src_trial[i]. See
+    // dlsh/vfs/lib/neuropixel/DATA_SCHEMA.md.
+    if (this.hasSpikes) {
+      const src = Number(getScalar(dg, 'spike_src_trial', i)) | 0;
+      td.spikeT = getSublistData(dg, 'spike_times', src);
+      td.spikeU = getSublistData(dg, 'spike_unit',  src);
+      td.spikeD = getSublistData(dg, 'spike_depth', src);
+      td.nSpikes = td.spikeT ? td.spikeT.length : 0;
+    }
 
     // Eye data (if available)
     if (this.hasEye) {
@@ -934,6 +1040,7 @@ const App = {
       el('infoDuration', `<strong>${td.dur.toFixed(2)}</strong>s`);
       el('infoBlinks', '');
     }
+    el('infoSpikes', this.hasSpikes ? `<strong>${td.nSpikes}</strong> spikes` : '');
 
     // Epoch info
     if (td.respTimeSec > 0 && td.stimOnSec > 0) {
@@ -996,10 +1103,14 @@ const App = {
     }
 
     const td = this.td, m = { t: 20, r: 16, b: 56, l: 54 }, pW = w - m.l - m.r, pH = h - m.t - m.b;
+    // Carve off the bottom of pH for the spike strip when spike data exists.
+    const showSpk = this.hasSpikes && td.spikeT && td.spikeT.length > 0;
+    const spkStripH = showSpk ? Math.max(90, Math.min(180, Math.round(pH * 0.30))) : 0;
+    const eyeH = pH - spkStripH - (showSpk ? 6 : 0);   // 6 px gap above spike strip
     const tMin = td.tStart + this.vMin * td.dur, tMax = td.tStart + this.vMax * td.dur;
     const R = this.R, yMin = -R, yMax = R;
     const toX = t => m.l + ((t - tMin) / (tMax - tMin)) * pW;
-    const toY = v => m.t + pH - ((v - yMin) / (yMax - yMin)) * pH;
+    const toY = v => m.t + eyeH - ((v - yMin) / (yMax - yMin)) * eyeH;
 
     // Grid
     ctx.strokeStyle = '#1a2236'; ctx.lineWidth = 1;
@@ -1033,17 +1144,17 @@ const App = {
       }
     }
 
-    // Blink shading
+    // Blink shading (eye area only)
     if (this.maskBlinks && td.blinkRanges.length > 0 && td.eyeT) {
       ctx.fillStyle = 'rgba(239,68,68,0.06)';
       for (const br of td.blinkRanges) {
         const t0 = td.eyeT[br.s], t1 = td.eyeT[Math.min(br.e, td.eyeT.length - 1)];
         if (t1 < tMin || t0 > tMax) continue;
-        ctx.fillRect(Math.max(m.l, toX(t0)), m.t, Math.min(m.l + pW, toX(t1)) - Math.max(m.l, toX(t0)), pH);
+        ctx.fillRect(Math.max(m.l, toX(t0)), m.t, Math.min(m.l + pW, toX(t1)) - Math.max(m.l, toX(t0)), eyeH);
       }
     }
 
-    // Saccade + PSO event shading
+    // Saccade + PSO event shading (eye area only)
     if (this.showEvents) {
       // Saccade bands — soft blue
       ctx.fillStyle = 'rgba(91,164,245,0.14)';
@@ -1051,7 +1162,7 @@ const App = {
         if (s.t1 < tMin || s.t0 > tMax) continue;
         const x0 = Math.max(m.l, toX(s.t0));
         const x1 = Math.min(m.l + pW, toX(s.t1));
-        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, pH);
+        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, eyeH);
       }
       // PSO bands — soft amber, drawn over sac bands
       ctx.fillStyle = 'rgba(245,158,11,0.16)';
@@ -1059,7 +1170,7 @@ const App = {
         if (p.t1 < tMin || p.t0 > tMax) continue;
         const x0 = Math.max(m.l, toX(p.t0));
         const x1 = Math.min(m.l + pW, toX(p.t1));
-        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, pH);
+        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, eyeH);
       }
       // Pursuit bands — soft green
       ctx.fillStyle = 'rgba(16,185,129,0.12)';
@@ -1067,7 +1178,7 @@ const App = {
         if (p.t1 < tMin || p.t0 > tMax) continue;
         const x0 = Math.max(m.l, toX(p.t0));
         const x1 = Math.min(m.l + pW, toX(p.t1));
-        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, pH);
+        if (x1 > x0) ctx.fillRect(x0, m.t, x1 - x0, eyeH);
       }
       // Saccade onset tick marks at the top of the trace area
       ctx.fillStyle = 'rgba(91,164,245,0.9)';
@@ -1084,9 +1195,9 @@ const App = {
     ctx.textAlign = 'center';
     for (const t of xT) ctx.fillText(t.toFixed(2) + 's', toX(t), m.t + pH + 16);
 
-    // Clip traces
+    // Clip traces (eye area only)
     ctx.save();
-    ctx.beginPath(); ctx.rect(m.l, m.t, pW, pH); ctx.clip();
+    ctx.beginPath(); ctx.rect(m.l, m.t, pW, eyeH); ctx.clip();
 
     // Draw traces
     const drawT = (arr, color) => {
@@ -1114,7 +1225,12 @@ const App = {
     }
 
     ctx.restore();
-    ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1; ctx.strokeRect(m.l, m.t, pW, pH);
+    ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1; ctx.strokeRect(m.l, m.t, pW, eyeH);
+
+    // Spike raster + population rate strip, if available.
+    if (showSpk) {
+      this._renderSpikeStrip(ctx, m, pW, eyeH, spkStripH, tMin, tMax, td);
+    }
     document.getElementById('timeDisplay').textContent = this.pt.toFixed(3) + ' s';
 
     // Scrub bar
@@ -1153,6 +1269,116 @@ const App = {
 
     this._scrubY = scrubY; this._scrubH = scrubH;
     this._pr = { m, pW, pH, tMin, tMax, yMin, yMax, w, h };
+  },
+
+  // ═══ Spike raster + population rate strip ═══
+  // Drawn in a carve-out at the bottom of the trace canvas; x-axis (time)
+  // is shared with the eye plot. y-axis of the raster is probe depth (μm).
+  //
+  // Spike times are stored in ms relative to the trial's obs-period start
+  // — same clock as stim_on/stim_off — so we convert ms → s and use the
+  // existing (tMin, tMax) window.
+  _renderSpikeStrip(ctx, m, pW, eyeH, spkStripH, tMin, tMax, td) {
+    const gap = 6;
+    const psthBand = 26;
+    const rasterY0 = m.t + eyeH + gap;
+    const rasterY1 = m.t + eyeH + gap + (spkStripH - psthBand - 4);
+    const psthY0   = rasterY1 + 4;
+    const psthY1   = psthY0 + psthBand;
+    const rH = rasterY1 - rasterY0;
+
+    // Backgrounds
+    ctx.fillStyle = '#0a0e17'; ctx.fillRect(m.l, rasterY0, pW, rH);
+    ctx.fillStyle = '#0a0e17'; ctx.fillRect(m.l, psthY0,   pW, psthBand);
+
+    // Depth mapping (deeper = lower on the strip by probe convention:
+    // y_um grows toward the top of the probe, so we paint shallow-up)
+    const dMin = this.spikeDepthMin, dMax = this.spikeDepthMax;
+    const dRange = (dMax - dMin) || 1;
+    const toX  = t => m.l + ((t - tMin) / (tMax - tMin)) * pW;
+    const toYd = d => rasterY0 + ((dMax - d) / dRange) * rH;
+
+    // Depth axis labels
+    ctx.fillStyle = '#5a6b85'; ctx.font = '9px "JetBrains Mono"'; ctx.textAlign = 'right';
+    ctx.fillText(dMax.toFixed(0) + 'µm', m.l - 6, rasterY0 + 8);
+    ctx.fillText(dMin.toFixed(0) + 'µm', m.l - 6, rasterY1 - 2);
+
+    // Spike ticks — batch into one path (single stroke call) for speed.
+    // Each tick is a 2-px vertical line centered at its (time, depth) point.
+    // Depth filter: include spikes whose unit depth is within [dLo, dHi].
+    // Rationale: per-spike depth already equals the unit's depth (we stored
+    // it redundantly), so we can filter on spkD directly — no Map lookup
+    // needed per spike.
+    const spkT = td.spikeT, spkD = td.spikeD;
+    const miss = this.spikeMissing;
+    const dLo = this.depthLo, dHi = this.depthHi;
+    ctx.strokeStyle = 'rgba(229,231,235,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let drawn = 0, filtered = 0;
+    for (let k = 0; k < spkT.length; k++) {
+      const t = spkT[k] / 1000;  // ms -> seconds
+      if (t < tMin || t > tMax) continue;
+      const d = spkD[k];
+      if (d <= miss) continue;        // sentinel: skip
+      if (d < dLo || d > dHi) { filtered++; continue; }  // depth filter
+      const x = toX(t), y = toYd(d);
+      ctx.moveTo(x, y - 1.2);
+      ctx.lineTo(x, y + 1.2);
+      drawn++;
+    }
+    ctx.stroke();
+
+    // Population PSTH — simple event-count histogram in equal bins.
+    // No smoothing here (keep it fast + honest); consumers can upgrade
+    // to an SDF later if needed. Respects the same depth filter as the
+    // raster so the two stay visually consistent.
+    const nBins = Math.max(40, Math.min(240, Math.round(pW / 3)));
+    const bins = new Float32Array(nBins);
+    const binW = (tMax - tMin) / nBins;
+    if (binW > 0) {
+      for (let k = 0; k < spkT.length; k++) {
+        const t = spkT[k] / 1000;
+        if (t < tMin || t >= tMax) continue;
+        const d = spkD[k];
+        if (d <= miss) continue;
+        if (d < dLo || d > dHi) continue;
+        const bi = Math.min(nBins - 1, ((t - tMin) / binW) | 0);
+        bins[bi]++;
+      }
+    }
+    let hmax = 1;
+    for (let i = 0; i < nBins; i++) if (bins[i] > hmax) hmax = bins[i];
+
+    ctx.fillStyle = 'rgba(91,164,245,0.25)';
+    ctx.strokeStyle = '#5ba4f5';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(m.l, psthY1);
+    for (let i = 0; i < nBins; i++) {
+      const x = m.l + (i / nBins) * pW;
+      const y = psthY1 - (bins[i] / hmax) * (psthBand - 2);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + pW / nBins, y);
+    }
+    ctx.lineTo(m.l + pW, psthY1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Borders
+    ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1;
+    ctx.strokeRect(m.l, rasterY0, pW, rH);
+    ctx.strokeRect(m.l, psthY0,   pW, psthBand);
+
+    // Labels
+    ctx.fillStyle = 'rgba(226,232,240,0.7)';
+    ctx.font = '9px "JetBrains Mono"'; ctx.textAlign = 'left';
+    const label = filtered > 0
+      ? `spikes (${drawn} drawn · ${filtered} filtered · ${td.nSpikes} total)`
+      : `spikes (${drawn}/${td.nSpikes} in view)`;
+    ctx.fillText(label, m.l + 4, rasterY0 + 10);
+    ctx.fillText(`pop rate · peak ${hmax.toFixed(0)}`, m.l + 4, psthY0 + 11);
   },
 
   _renderTimeline(ctx, w, h) {
