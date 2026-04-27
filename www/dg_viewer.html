@@ -1292,11 +1292,32 @@ const App = {
     ctx.fillStyle = '#0a0e17'; ctx.fillRect(m.l, psthY0,   pW, psthBand);
 
     // Depth mapping (deeper = lower on the strip by probe convention:
-    // y_um grows toward the top of the probe, so we paint shallow-up)
-    const dMin = this.spikeDepthMin, dMax = this.spikeDepthMax;
+    // y_um grows toward the top of the probe, so we paint shallow-up).
+    // Use the user-selected depth filter range as the axis — this makes a
+    // narrow selection fill the full vertical extent of the raster, which
+    // is what users want when drilling into a specific cortical band.
+    const dMin = this.depthLo, dMax = this.depthHi;
     const dRange = (dMax - dMin) || 1;
     const toX  = t => m.l + ((t - tMin) / (tMax - tMin)) * pW;
     const toYd = d => rasterY0 + ((dMax - d) / dRange) * rH;
+
+    // Event markers (dashed verticals matching the eye-area colors).
+    // Drawn here so they span both the raster and the PSTH; rendered
+    // before the ticks/curve but on top of the strip backgrounds, so
+    // a dense spike cluster partially occludes them (same visual
+    // hierarchy as in the eye trace).
+    const spanY0 = rasterY0, spanY1 = psthY1;
+    const drawStripMarker = (sec, color) => {
+      if (sec >= tMin && sec <= tMax) {
+        ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+        ctx.beginPath(); ctx.moveTo(toX(sec), spanY0); ctx.lineTo(toX(sec), spanY1); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    };
+    drawStripMarker(td.stimOnSec,    'rgba(251,191,36,0.6)');
+    drawStripMarker(td.stimOffSec,   'rgba(251,191,36,0.3)');
+    if (td.respTimeSec   > 0) drawStripMarker(td.respTimeSec,   'rgba(244,114,182,0.6)');
+    if (td.rewardTimeSec > 0) drawStripMarker(td.rewardTimeSec, 'rgba(16,185,129,0.6)');
 
     // Depth axis labels
     ctx.fillStyle = '#5a6b85'; ctx.font = '9px "JetBrains Mono"'; ctx.textAlign = 'right';
