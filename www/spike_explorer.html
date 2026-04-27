@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spike Explorer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap');
+  :root {
+    --bg0:#0a0e17;--bg1:#111827;--bg2:#1a2236;--bg3:#1e2a42;
+    --bdr:#2a3654;--bdr-a:#4a6fa5;
+    --t1:#e2e8f0;--t2:#8899b4;--t3:#5a6b85;
+    --acc:#5ba4f5;--acc-d:#2d5a9e;--acc-g:rgba(91,164,245,0.15);
+    --mono:'JetBrains Mono',monospace;--sans:'DM Sans',sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg0);color:var(--t1);min-height:100vh;display:flex;flex-direction:column;}
+
+  .header{display:flex;align-items:center;gap:16px;padding:10px 20px;background:var(--bg1);border-bottom:1px solid var(--bdr);flex-shrink:0;}
+  .header h1{font-family:var(--mono);font-size:15px;font-weight:500;color:var(--acc);}
+  .header .fi{font-family:var(--mono);font-size:12px;color:var(--t2);margin-left:auto;}
+
+  button{font-family:var(--mono);font-size:12px;font-weight:500;padding:6px 14px;border:1px solid var(--bdr);border-radius:4px;background:var(--bg2);color:var(--t1);cursor:pointer;transition:all .15s;white-space:nowrap;}
+  button:hover{background:var(--bg3);border-color:var(--bdr-a);}
+  button.primary{background:var(--acc-d);border-color:var(--acc);color:white;}
+
+  .toolbar{display:flex;align-items:center;gap:14px;padding:8px 20px;background:var(--bg1);border-bottom:1px solid var(--bdr);flex-wrap:wrap;flex-shrink:0;}
+  .toolbar label{font-family:var(--mono);font-size:11px;color:var(--t2);display:flex;align-items:center;gap:6px;}
+  .toolbar select,.toolbar input[type=number]{font-family:var(--mono);font-size:11px;background:var(--bg2);color:var(--t1);border:1px solid var(--bdr);border-radius:3px;padding:3px 6px;outline:none;-moz-appearance:textfield;}
+  .toolbar input[type=number]{width:60px;}
+  .toolbar input[type=number]::-webkit-outer-spin-button,.toolbar input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+  .toolbar select:focus,.toolbar input:focus{border-color:var(--acc);}
+  .toolbar .status{font-family:var(--mono);font-size:11px;color:var(--t3);margin-left:auto;}
+
+  .dropzone{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;border:2px dashed var(--bdr);border-radius:12px;margin:40px;}
+  .dropzone.dragover{border-color:var(--acc);background:var(--acc-g);}
+  .dropzone svg{opacity:.3;}
+  .dropzone p{font-family:var(--mono);font-size:13px;color:var(--t3);}
+  .dropzone .hint{font-size:11px;opacity:.6;}
+
+  .matrix-wrap{display:none;flex:1;overflow:auto;padding:14px;background:var(--bg0);}
+  .matrix-wrap.active{display:block;}
+  .matrix-wrap canvas{display:block;background:var(--bg1);border:1px solid var(--bdr);border-radius:6px;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:18px;}
+  .panel{background:var(--bg1);border:1px solid var(--bdr);border-radius:6px;cursor:pointer;display:flex;flex-direction:column;transition:border-color .12s;overflow:hidden;}
+  .panel:hover{border-color:var(--acc);}
+  .panel-head{padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--t1);display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--bdr);}
+  .panel-head .v{font-weight:600;color:var(--acc);}
+  .panel-head .n{color:var(--t3);font-size:10px;margin-left:auto;}
+  .panel-canvas{display:block;width:100%;background:var(--bg0);}
+
+  .drill{display:none;flex-direction:column;flex:1;padding:0;background:var(--bg0);}
+  .drill.active{display:flex;}
+  .drill-head{display:flex;align-items:baseline;gap:14px;padding:10px 20px;background:var(--bg1);border-bottom:1px solid var(--bdr);}
+  .drill-head h2{font-family:var(--mono);font-size:14px;font-weight:500;color:var(--acc);}
+  .drill-head .meta{font-family:var(--mono);font-size:11px;color:var(--t2);}
+  .drill-body{flex:1;overflow:auto;padding:14px;}
+  .drill-canvas-wrap{background:var(--bg1);border:1px solid var(--bdr);border-radius:6px;}
+
+  .empty{color:var(--t3);font-family:var(--mono);font-size:12px;padding:40px;text-align:center;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Spike Explorer</h1>
+  <button id="btnOpen" class="primary">Open</button>
+  <input type="file" id="fileInput" accept=".dg,.dgz" multiple style="display:none">
+  <span class="fi" id="fileInfo">Drop a .spikes.dgz file</span>
+</div>
+
+<div class="toolbar" id="toolbar" style="display:none;">
+  <label>view <select id="viewMode"><option value="summary">2D summary</option><option value="matrix">matrix (1 dim)</option><option value="overlay">overlay</option></select></label>
+  <label>rasts by <select id="rastsBy"></select></label>
+  <label id="filterLabel">
+    <span id="filterLabelText">filter</span>
+    <select id="filterBy"></select>
+    <span id="filterEquals">=</span>
+    <select id="filterValue"></select>
+  </label>
+  <label>align <select id="alignTo"></select></label>
+  <label>window <input type="number" id="winPre" step="50"> – <input type="number" id="winPost" step="50"> ms</label>
+  <label>depth <input type="number" id="depthLo" step="100"> – <input type="number" id="depthHi" step="100"> µm</label>
+  <button id="btnReset">Reset depth</button>
+  <label><input type="checkbox" id="perPanelScale"> per-panel scale</label>
+  <button id="btnCopyPython" title="Copy a Python snippet that reproduces the current view">Copy as Python</button>
+  <span class="status" id="status"></span>
+</div>
+
+<div class="dropzone" id="dropZone">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+  </svg>
+  <p>Drop one or more .spikes.dgz files here</p>
+  <p class="hint">or click Open · drop multiple complementary banks to combine heatmaps</p>
+</div>
+
+<div class="matrix-wrap" id="matrixWrap"><canvas id="matrixCanvas"></canvas></div>
+<div class="grid" id="grid" style="display:none;"></div>
+
+<div class="drill" id="drill">
+  <div class="drill-head">
+    <button id="btnBack">← Back</button>
+    <h2 id="drillTitle"></h2>
+    <span class="meta" id="drillMeta"></span>
+  </div>
+  <div class="drill-body">
+    <div class="drill-canvas-wrap"><canvas id="drillCanvas"></canvas></div>
+  </div>
+</div>
+
+<script src="js/dg_reader.js"></script>
+<script>
+// ═════════════════════════════════════════════════════════════════════
+// Spike Explorer — overlay rasters across trials of the same condition.
+//
+// Loads a .spikes.dgz produced by the neuropixel Tcl package (schema v1),
+// auto-discovers candidate group-by columns + alignment events, and shows
+// one (time × depth) overlay panel per distinct value of the chosen
+// group-by column. Click a panel to drill into individual trials.
+//
+// Conventions (from DATA_SCHEMA.md):
+//  - spike_times: ms from obs-period start (same clock as stim_on).
+//  - spike_src_trial[i]: index of the canonical trial holding sublists.
+//  - unit_list_*[0]: per-unit metadata (id, depth, x, amp, snr, fr, presence).
+//  - spike_missing_value: float sentinel (default -1.0) for missing.
+// ═════════════════════════════════════════════════════════════════════
+
+const App = {
+  // Loaded data
+  // sources is the source of truth — an array of one or more loaded files,
+  // each with its own dg + per-source metadata. The dg/filename/ntrials/
+  // unitLookup/spikeMissing fields below mirror sources[0] (the "primary"
+  // source) so single-source code paths (matrix, overlay, drilldown) keep
+  // working unchanged. dataDepthMin/Max are the UNION across all sources.
+  sources: [],            // [{dg, filename, ntrials, unitLookup,
+                          //    spikeMissing, dataDepthMin, dataDepthMax}, …]
+  dg: null,
+  filename: '',
+  ntrials: 0,
+
+  // Spike metadata cache (mirrors sources[0])
+  unitLookup: null,       // Map<unit_id, {depth, snr, ...}>
+  spikeMissing: -1.0,
+  dataDepthMin: 0,
+  dataDepthMax: 1,
+
+  // UI / view state
+  mode: 'summary',        // 'summary' | 'matrix' | 'overlay'
+  rastsBy: '',
+  filterBy: '',           // '' = no secondary filter
+  filterValue: '',        // string form of the chosen value
+  alignTo: '',
+  winPre: -100,
+  winPost: 400,
+  depthLo: 0,
+  depthHi: 1,
+  perPanelScale: false,
+
+  // Computed per render
+  panels: [],            // [{value, trials: [...indices]}]
+  dpr: window.devicePixelRatio || 1,
+
+  // ─── Init ───
+  init() {
+    document.getElementById('btnOpen').addEventListener('click',
+      () => document.getElementById('fileInput').click());
+    document.getElementById('fileInput').addEventListener('change',
+      e => this._loadFiles(Array.from(e.target.files)));
+
+    const pickDGFiles = list =>
+      Array.from(list).filter(f => f.name.endsWith('.dg') || f.name.endsWith('.dgz'));
+
+    const dz = document.getElementById('dropZone');
+    ['dragenter','dragover'].forEach(ev =>
+      dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('dragover'); }));
+    ['dragleave','drop'].forEach(ev =>
+      dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('dragover'); }));
+    dz.addEventListener('drop', e => {
+      e.preventDefault();
+      const files = pickDGFiles(e.dataTransfer.files);
+      if (files.length) this._loadFiles(files);
+    });
+    document.body.addEventListener('dragover', e => e.preventDefault());
+    document.body.addEventListener('drop', e => {
+      e.preventDefault();
+      const files = pickDGFiles(e.dataTransfer.files);
+      if (files.length) this._loadFiles(files);
+    });
+
+    // Toolbar bindings
+    document.getElementById('viewMode').addEventListener('change', e => {
+      this.mode = e.target.value;
+      if (this.mode === 'summary') this._ensureFilterPicked();
+      this._updateToolbarLabels();
+      this.exitDrilldown();
+      this.refresh();
+    });
+    document.getElementById('rastsBy').addEventListener('change', () => {
+      this.rastsBy = document.getElementById('rastsBy').value;
+      this.populateFilterDropdowns();
+      // If we're in summary mode and the rastsBy change invalidated the
+      // existing filterBy (e.g. user picked the same column for both),
+      // re-pick a sensible row dimension automatically.
+      if (this.mode === 'summary') this._ensureFilterPicked();
+      this.onControlsChanged();
+    });
+    document.getElementById('filterBy').addEventListener('change', () => {
+      this.filterBy = document.getElementById('filterBy').value;
+      this.populateFilterValueDropdown();
+      this.onControlsChanged();
+    });
+    document.getElementById('filterValue').addEventListener('change', () => {
+      this.filterValue = document.getElementById('filterValue').value;
+      this.onControlsChanged();
+    });
+    document.getElementById('alignTo').addEventListener('change', () => this.onControlsChanged());
+    document.getElementById('perPanelScale').addEventListener('change', e => {
+      this.perPanelScale = e.target.checked;
+      this.refresh();
+    });
+    for (const id of ['winPre','winPost','depthLo','depthHi']) {
+      const el = document.getElementById(id);
+      el.addEventListener('change', () => this.onControlsChanged());
+      el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } });
+    }
+    document.getElementById('btnReset').addEventListener('click', () => {
+      this.depthLo = Math.floor(this.dataDepthMin / 100) * 100;
+      this.depthHi = Math.ceil(this.dataDepthMax / 100) * 100;
+      this.syncDepthInputs();
+      this.refresh();
+    });
+    document.getElementById('btnBack').addEventListener('click', () => this.exitDrilldown());
+    document.getElementById('btnCopyPython').addEventListener('click',
+      () => this._copyPythonSnippet());
+
+    // Click on the matrix canvas — used for summary-mode row drill-in.
+    document.getElementById('matrixCanvas').addEventListener('click',
+      e => this._onMatrixCanvasClick(e));
+    document.getElementById('matrixCanvas').addEventListener('mousemove', e => {
+      const c = document.getElementById('matrixCanvas');
+      c.style.cursor = (this.mode === 'summary' && this._summaryHit) ? 'pointer' : 'default';
+    });
+
+    // ?file= URL param
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('file')) this.loadURL(params.get('file'));
+  },
+
+  // ─── File loading (single or multiple) ───
+  async loadURL(url) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const buf = await resp.arrayBuffer();
+      const name = url.split('/').pop() || 'data.dg';
+      await this._adoptSources([await this._buildSourceFromBuffer(buf, name)]);
+    } catch (err) {
+      console.error(err);
+      document.getElementById('fileInfo').textContent = 'Error: ' + err.message;
+    }
+  },
+
+  async _loadFiles(files) {
+    if (!files || files.length === 0) return;
+    try {
+      const sources = [];
+      for (const f of files) {
+        const buf = await f.arrayBuffer();
+        const src = await this._buildSourceFromBuffer(buf, f.name);
+        if (src) sources.push(src);
+      }
+      if (sources.length === 0) {
+        document.getElementById('fileInfo').textContent =
+          'no spike-augmented files in selection (need *.spikes.dgz)';
+        return;
+      }
+      await this._adoptSources(sources);
+    } catch (err) {
+      console.error(err);
+      document.getElementById('fileInfo').textContent = 'Error: ' + err.message;
+    }
+  },
+
+  // Read a buffer into a fully-formed source object: { dg, filename,
+  // ntrials, unitLookup, spikeMissing, dataDepthMin, dataDepthMax }.
+  // Returns null (and logs) if the file lacks spike data.
+  async _buildSourceFromBuffer(buf, name) {
+    const dg = await readDGAuto(buf, name);
+    if (!hasSpikeData(dg)) {
+      console.warn(`${name}: no spike data, skipping`);
+      return null;
+    }
+    const ntrials = countRows(dg);
+    let spikeMissing = getScalar(dg, 'spike_missing_value', 0);
+    if (spikeMissing == null || isNaN(spikeMissing)) spikeMissing = -1.0;
+
+    const ids    = getSublistData(dg, 'unit_list_id',    0) || [];
+    const depths = getSublistData(dg, 'unit_list_depth', 0) || [];
+    const xs     = getSublistData(dg, 'unit_list_x',     0);
+    const amps   = getSublistData(dg, 'unit_list_amp',   0);
+    const snrs   = getSublistData(dg, 'unit_list_snr',   0);
+    const frs    = getSublistData(dg, 'unit_list_fr',    0);
+    const pres   = getSublistData(dg, 'unit_list_presence', 0);
+
+    const unitLookup = new Map();
+    let dMin = Infinity, dMax = -Infinity;
+    for (let i = 0; i < ids.length; i++) {
+      const d = depths[i];
+      unitLookup.set(ids[i], {
+        idx: i, depth: d,
+        x:   xs   ? xs[i]   : spikeMissing,
+        amp: amps ? amps[i] : spikeMissing,
+        snr: snrs ? snrs[i] : spikeMissing,
+        fr:  frs  ? frs[i]  : spikeMissing,
+        pres: pres ? pres[i] : spikeMissing,
+      });
+      if (d > spikeMissing) {
+        if (d < dMin) dMin = d;
+        if (d > dMax) dMax = d;
+      }
+    }
+    if (!isFinite(dMin)) { dMin = 0; dMax = 1; }
+
+    return {
+      dg, filename: name, ntrials, unitLookup, spikeMissing,
+      dataDepthMin: dMin, dataDepthMax: dMax,
+    };
+  },
+
+  // Adopt a fresh list of sources, replacing whatever was loaded before.
+  // Sets up the primary-source mirror fields, computes union depth range,
+  // refreshes toolbar + view.
+  async _adoptSources(sources) {
+    this.sources = sources;
+    const primary = sources[0];
+    this.dg = primary.dg;
+    this.filename = primary.filename;
+    this.ntrials = primary.ntrials;
+    this.unitLookup = primary.unitLookup;
+    this.spikeMissing = primary.spikeMissing;
+
+    // Union depth range across all sources (multi-bank gets the full probe span).
+    this.dataDepthMin = Math.min(...sources.map(s => s.dataDepthMin));
+    this.dataDepthMax = Math.max(...sources.map(s => s.dataDepthMax));
+    this.depthLo = Math.floor(this.dataDepthMin / 100) * 100;
+    this.depthHi = Math.ceil(this.dataDepthMax / 100) * 100;
+
+    this.populateDropdowns();
+    this._updateFileInfo();
+
+    document.getElementById('dropZone').style.display = 'none';
+    document.getElementById('toolbar').style.display = 'flex';
+
+    if (this.mode === 'summary') this._ensureFilterPicked();
+    this._updateToolbarLabels();
+
+    this.exitDrilldown();
+    this.refresh();
+  },
+
+  _updateFileInfo() {
+    const sources = this.sources;
+    const totalTrials = sources.reduce((s, x) => s + x.ntrials, 0);
+    const totalUnits  = sources.reduce((s, x) => s + x.unitLookup.size, 0);
+    const names = sources.map(s => s.filename).join(' + ');
+    const span = `${this.dataDepthMin.toFixed(0)}–${this.dataDepthMax.toFixed(0)} µm`;
+    const tag = sources.length > 1 ? ` [${sources.length} sources combined]` : '';
+    document.getElementById('fileInfo').textContent =
+      `${names} — ${totalTrials} trials, ${totalUnits} units, depth ${span}${tag}`;
+  },
+
+  // Pick a sensible filter column for summary mode if none is set.
+  _ensureFilterPicked() {
+    if (this.filterBy) return;
+    const cands = this.discoverRastsBy().filter(c => c !== this.rastsBy);
+    if (cands.length > 0) {
+      this.filterBy = cands[0];
+      document.getElementById('filterBy').value = this.filterBy;
+      this.populateFilterValueDropdown();
+    }
+  },
+
+  // Toolbar label & visibility differ between modes. In summary mode the
+  // filter column IS the row dimension, and the value-select is irrelevant
+  // (we render every value as a row). In matrix/overlay modes the value
+  // is meaningful — it selects which subset to drill into.
+  _updateToolbarLabels() {
+    const isSummary = this.mode === 'summary';
+    const lab = document.getElementById('filterLabelText');
+    const eq  = document.getElementById('filterEquals');
+    const val = document.getElementById('filterValue');
+    if (lab) lab.textContent = isSummary ? 'rows' : 'filter';
+    if (eq)  eq.style.display  = isSummary ? 'none' : '';
+    if (val) val.style.display = isSummary ? 'none' : '';
+  },
+
+  // Top-level dispatch: pick the right view for the current mode.
+  refresh() {
+    if (!this.dg) return;
+    this.buildPanels();
+    const grid    = document.getElementById('grid');
+    const matWrap = document.getElementById('matrixWrap');
+    if (this.mode === 'matrix') {
+      grid.style.display = 'none';
+      matWrap.classList.add('active');
+      this.renderMatrix();
+    } else if (this.mode === 'summary') {
+      grid.style.display = 'none';
+      matWrap.classList.add('active');
+      this.renderSummary();
+    } else {
+      grid.style.display = 'grid';
+      matWrap.classList.remove('active');
+      this.renderPanels();
+    }
+  },
+
+  // (per-source metadata is built in _buildSourceFromBuffer; this used to
+  //  be a per-instance helper called prepSpikeMeta.)
+
+  // ─── Discovery heuristics ───
+  // Group-by candidates: scalar columns with a small enumerable value set.
+  // We exclude per-trial-unique columns (filename, trialid, obsid), our
+  // own spike_*/unit_list_* columns, and event-timing columns.
+  discoverRastsBy() {
+    const STIMHINTS = ['stim','sample','choice','response','resp','reward','feedback','onset','offset','acquired','land_time'];
+    const SKIP = new Set(['filename','date','time','hostname','trialid','obsid','system','protocol','variant','subject','spike_src_trial']);
+    const out = [];
+    for (const list of this.dg.lists) {
+      const nm = list.name;
+      if (list.dataType === DF_LIST) continue;
+      if (nm.startsWith('spike_') || nm.startsWith('unit_list_')) continue;
+      if (SKIP.has(nm)) continue;
+      if (STIMHINTS.some(h => nm.toLowerCase().includes(h))) continue;
+      // Bound the unique-set scan to keep this O(ntrials) and not pull in
+      // millions of strings from per-trial-unique columns. The `< 0.5 *
+      // ntrials` guard is what excludes those (trialid, obsid, etc.); we
+      // keep a generous absolute ceiling (64) so paradigms like planko
+      // bits (~20 stimulus snippets) qualify, but a column with truly
+      // many uniques is filtered out as too noisy to group by.
+      const u = new Set();
+      const N = Math.min(this.ntrials, list.data.length || 0);
+      for (let i = 0; i < N && u.size < 96; i++) u.add(list.data[i]);
+      const n = u.size;
+      if (n >= 2 && n <= 64 && n < 0.5 * this.ntrials) out.push(nm);
+    }
+    // Demote paradigm-setup-style columns so the auto-default picks a
+    // stimulus parameter rather than something like obs_duration. They
+    // remain in the dropdown — only the auto-pick order changes.
+    const DEMOTE = new Set([
+      'obs_duration', 'fixate', 'refixate', 'reward_ul',
+      'refresh_rate', 'pointsize', 'lifetime', 'speed_deg_sec',
+      'repeat_count',
+    ]);
+    return out.sort((a, b) => {
+      const da = DEMOTE.has(a) ? 1 : 0;
+      const db = DEMOTE.has(b) ? 1 : 0;
+      return da - db;   // 0s first, 1s last; stable for ties
+    });
+  },
+  // Alignment candidates: numeric scalar columns whose names suggest a
+  // timing event.
+  discoverAlignTo() {
+    const STIMHINTS = ['stim','sample','choice','response','resp','reward','feedback','onset','offset','acquired','land_time','cue','target'];
+    const out = [];
+    for (const list of this.dg.lists) {
+      if (list.dataType === DF_LIST || list.dataType === DF_STRING) continue;
+      const nm = list.name;
+      if (nm.startsWith('spike_') || nm.startsWith('unit_list_')) continue;
+      if (!STIMHINTS.some(h => nm.toLowerCase().includes(h))) continue;
+      out.push(nm);
+    }
+    return out;
+  },
+
+  // ─── Toolbar setup ───
+  populateDropdowns() {
+    const groupOpts = this.discoverRastsBy();
+    const alignOpts = this.discoverAlignTo();
+
+    const fillSelect = (id, opts, current) => {
+      const sel = document.getElementById(id);
+      sel.innerHTML = '';
+      for (const o of opts) {
+        const opt = document.createElement('option');
+        opt.value = o; opt.textContent = o;
+        sel.appendChild(opt);
+      }
+      if (opts.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = '(none found)';
+        sel.appendChild(opt); sel.disabled = true;
+      } else {
+        sel.disabled = false;
+        sel.value = (current && opts.includes(current)) ? current : opts[0];
+      }
+    };
+    fillSelect('rastsBy', groupOpts, this.rastsBy);
+    // Prefer stim_on/stimon as the default alignment for our visual-cell work.
+    const alignDefault = ['stim_on', 'stimon', 'stimulus_on']
+      .find(c => alignOpts.includes(c)) || alignOpts[0];
+    fillSelect('alignTo', alignOpts, this.alignTo || alignDefault);
+    this.rastsBy = document.getElementById('rastsBy').value;
+    this.alignTo = document.getElementById('alignTo').value;
+
+    // Filter dropdowns (depend on the rastsBy choice — populated after).
+    this.populateFilterDropdowns();
+
+    // Window & depth inputs
+    document.getElementById('winPre').value  = this.winPre;
+    document.getElementById('winPost').value = this.winPost;
+    this.syncDepthInputs();
+  },
+
+  // Filter columns: same heuristic as rasts-by, but exclude whichever
+  // column is currently the rasts-by axis. Adds a "(none)" sentinel so
+  // the user can disable the secondary filter.
+  populateFilterDropdowns() {
+    const all = this.discoverRastsBy().filter(c => c !== this.rastsBy);
+    const sel = document.getElementById('filterBy');
+    sel.innerHTML = '';
+    const noneOpt = document.createElement('option');
+    noneOpt.value = ''; noneOpt.textContent = '(none)';
+    sel.appendChild(noneOpt);
+    for (const c of all) {
+      const opt = document.createElement('option');
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    }
+    // Preserve user choice if still valid; else reset to (none)
+    if (this.filterBy && all.includes(this.filterBy)) {
+      sel.value = this.filterBy;
+    } else {
+      sel.value = '';
+      this.filterBy = '';
+      this.filterValue = '';
+    }
+    this.populateFilterValueDropdown();
+  },
+
+  populateFilterValueDropdown() {
+    const sel = document.getElementById('filterValue');
+    sel.innerHTML = '';
+    if (!this.filterBy) {
+      const opt = document.createElement('option');
+      opt.value = ''; opt.textContent = '—';
+      sel.appendChild(opt);
+      sel.disabled = true;
+      this.filterValue = '';
+      return;
+    }
+    sel.disabled = false;
+    const list = this.dg.getList(this.filterBy);
+    if (!list || !list.data) return;
+    const seen = new Set();
+    const values = [];
+    for (let i = 0; i < this.ntrials; i++) {
+      const v = list.data[i];
+      const k = String(v);
+      if (!seen.has(k)) { seen.add(k); values.push(v); }
+    }
+    values.sort((a, b) => {
+      const av = Number(a), bv = Number(b);
+      if (Number.isFinite(av) && Number.isFinite(bv)) return av - bv;
+      return String(a).localeCompare(String(b));
+    });
+    for (const v of values) {
+      const opt = document.createElement('option');
+      opt.value = String(v);
+      opt.textContent = this.formatValue(v);
+      sel.appendChild(opt);
+    }
+    // Preserve previous choice if it still exists; otherwise pick first.
+    if (this.filterValue && values.some(v => String(v) === this.filterValue)) {
+      sel.value = this.filterValue;
+    } else {
+      sel.value = String(values[0]);
+      this.filterValue = sel.value;
+    }
+  },
+  syncDepthInputs() {
+    document.getElementById('depthLo').value = this.depthLo;
+    document.getElementById('depthHi').value = this.depthHi;
+  },
+  onControlsChanged() {
+    this.rastsBy = document.getElementById('rastsBy').value || this.rastsBy;
+    this.alignTo = document.getElementById('alignTo').value || this.alignTo;
+    let pre = Number(document.getElementById('winPre').value);
+    let post = Number(document.getElementById('winPost').value);
+    if (Number.isFinite(pre)) this.winPre = pre;
+    if (Number.isFinite(post)) this.winPost = post;
+    if (this.winPre > this.winPost) { const t = this.winPre; this.winPre = this.winPost; this.winPost = t; }
+    let lo = Number(document.getElementById('depthLo').value);
+    let hi = Number(document.getElementById('depthHi').value);
+    if (Number.isFinite(lo)) this.depthLo = lo;
+    if (Number.isFinite(hi)) this.depthHi = hi;
+    if (this.depthLo > this.depthHi) { const t = this.depthLo; this.depthLo = this.depthHi; this.depthHi = t; }
+    document.getElementById('winPre').value = this.winPre;
+    document.getElementById('winPost').value = this.winPost;
+    this.syncDepthInputs();
+    // If we were drilled in (overlay mode only), redraw the drill view too
+    if (this.drillKey != null) this.renderDrilldown(); else this.refresh();
+  },
+
+  // ─── Build panels: group trials by value of rastsBy column ───
+  // Optionally pre-filter by a secondary condition (filterBy = filterValue),
+  // e.g. "ori panels, but only patch_size=4 trials".
+  buildPanels() {
+    const list = this.dg.getList(this.rastsBy);
+    if (!list || !list.data) { this.panels = []; return; }
+
+    // Resolve secondary filter (column data + canonical string value).
+    const fList = this.filterBy ? this.dg.getList(this.filterBy) : null;
+    const fVal = (fList && this.filterValue !== '') ? this.filterValue : null;
+
+    const groups = new Map();
+    for (let i = 0; i < this.ntrials; i++) {
+      if (fList && fVal !== null && String(fList.data[i]) !== fVal) continue;
+      const v = list.data[i];
+      if (!groups.has(v)) groups.set(v, []);
+      groups.get(v).push(i);
+    }
+    const entries = [...groups.entries()].sort((a, b) => {
+      const av = Number(a[0]), bv = Number(b[0]);
+      if (Number.isFinite(av) && Number.isFinite(bv)) return av - bv;
+      return String(a[0]).localeCompare(String(b[0]));
+    });
+    this.panels = entries.map(([value, trials]) => ({ value, trials }));
+  },
+
+  // ─── Render the panel grid (overlay mode) ───
+  renderPanels() {
+    if (!this.dg) return;
+    this.buildPanels();
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+
+    if (this.panels.length === 0) {
+      grid.innerHTML = '<div class="empty">No groups for this column.</div>';
+      document.getElementById('status').textContent = '';
+      return;
+    }
+
+    const filterDesc = this.filterBy
+      ? ` · filtered to ${this.filterBy}=${this.filterValue}`
+      : '';
+    const nUnits = this.unitsInDepthRange();
+    const multiNote = this.sources.length > 1
+      ? ` · showing source 1/${this.sources.length} (${this.sources[0].filename}); switch to 2D summary to combine`
+      : '';
+    document.getElementById('status').textContent =
+      `${this.panels.length} panels · grouped by ${this.rastsBy}${filterDesc} · aligned to ${this.alignTo} · ${nUnits}/${this.unitsTotal()} units in depth${multiNote}`;
+
+    // Use a fixed canvas height per panel so all panels share scale visually.
+    const CANVAS_W = 220, CANVAS_H = 200;
+    for (const panel of this.panels) {
+      const card = document.createElement('div');
+      card.className = 'panel';
+      card.innerHTML = `
+        <div class="panel-head">
+          <span>${this.rastsBy} =</span>
+          <span class="v">${this.formatValue(panel.value)}</span>
+          <span class="n">n=${panel.trials.length}</span>
+        </div>
+        <canvas class="panel-canvas" width="${CANVAS_W * this.dpr}" height="${CANVAS_H * this.dpr}" style="height:${CANVAS_H}px;"></canvas>
+      `;
+      card.addEventListener('click', () => this.enterDrilldown(panel));
+      grid.appendChild(card);
+      const canvas = card.querySelector('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      this.renderOverlay(ctx, panel, CANVAS_W, CANVAS_H);
+    }
+  },
+
+  formatValue(v) {
+    if (typeof v === 'number') {
+      if (Number.isInteger(v)) return String(v);
+      return Number(v).toPrecision(4);
+    }
+    return String(v);
+  },
+
+  // Build and clipboard-copy a Python snippet that reproduces the current
+  // view in esslab. Saves the user from re-typing rasts_by/filter_by/
+  // align/window/depth_range parameters when going from "I see something"
+  // to "let me run a stat test on it".
+  //
+  // Multi-source note: the snippet always loops over ses.files. For a
+  // single source this is one iteration; for combined banks it gives
+  // you per-bank replication of the same test (the right way to test
+  // multi-bank consistency, since unit_id namespaces don't align across
+  // recordings — see README).
+  _copyPythonSnippet() {
+    // The browser doesn't expose absolute paths from drag-drop, so we
+    // emit obvious placeholders the user has to edit. Filenames are
+    // exact since spike_explorer remembers them.
+    const paths = this.sources.map(s =>
+      `    "/PATH/TO/spikes/${s.filename}",`).join('\n');
+    const isMulti = this.sources.length > 1;
+    const sourcesNote = isMulti
+      ? `# ${this.sources.length} sources loaded — likely complementary banks of the
+# same protocol. The 2D summary view in spike_explorer combines them
+# visually (depth-binned heatmap). Below, we test each bank
+# independently and look for replication — that's the right cross-bank
+# check, since unit_id namespaces don't align across recordings.`
+      : `# Single source.`;
+    const snippet = `# Reproduces the current spike_explorer view in Python.
+# NOTE: the file paths are placeholders — the browser can't expose
+# absolute paths from drag-drop. Edit them before running.
+import numpy as np
+from esslab import SpikeSession
+from esslab.analysis import (
+    windowed_counts, time_resolved_counts,
+    condition_labels, units_in_depth,
+    selectivity, time_resolved_selectivity,
+    decode_window, decode_window_with_null,
+)
+
+ses = SpikeSession([
+${paths}
+])
+${sourcesNote}
+
+# Toolbar state at copy time:
+#   rows (filter)  : ${this.filterBy || '(none)'}
+#   cols (rasts by): ${this.rastsBy}
+#   align          : ${this.alignTo}
+#   window         : (${this.winPre}, ${this.winPost}) ms
+#   depth          : (${this.depthLo}, ${this.depthHi}) µm
+
+# 1) Per-bank windowed counts + ANOVA selectivity for '${this.rastsBy}'.
+#    With a single source this just runs once. With multiple sources it
+#    replicates the test in each bank — both showing enrichment is the
+#    most direct multi-bank "is this real?" answer.
+#    Banks whose depth range doesn't overlap the depth filter contribute
+#    zero units; we skip those with a clear message.
+for sf in ses.files:
+    counts, ids = windowed_counts(
+        sf,
+        window=(${this.winPre}, ${this.winPost}),
+        align_col="${this.alignTo}",
+        depth_range=(${this.depthLo}, ${this.depthHi}),
+    )
+    if len(ids) == 0:
+        bank_lo, bank_hi = sf.depth_range
+        print(f"{sf.path.name}: 0 units — bank covers "
+              f"{bank_lo:.0f}-{bank_hi:.0f} µm, outside selected band")
+        continue
+    labels = condition_labels(sf.trials, "${this.rastsBy}")
+    r = selectivity(counts, labels)
+    print(f"{sf.path.name}: "
+          f"{r['n_significant']:>3d}/{r['n_units']:<4d} units selective "
+          f"(enrichment: {r['enrichment']:.1f}x)")
+
+# 2) Joint population decoder — uses simultaneous-recording structure.
+#    Per-unit ANOVA aggregates marginals; the decoder reads the joint
+#    code and is sensitive to cross-unit patterns (correlated noise,
+#    multi-unit codes) that no per-unit test can see.
+print()
+print("joint linear decoder (LDA + Ledoit-Wolf shrinkage):")
+for sf in ses.files:
+    counts, ids = windowed_counts(
+        sf,
+        window=(${this.winPre}, ${this.winPost}),
+        align_col="${this.alignTo}",
+        depth_range=(${this.depthLo}, ${this.depthHi}),
+    )
+    if len(ids) == 0: continue
+    labels = condition_labels(sf.trials, "${this.rastsBy}")
+    # 50-perm null for a quick p-value; bump to 1000 for paper-grade
+    r = decode_window_with_null(counts, labels, n_perm=50)
+    print(f"  {sf.path.name}: "
+          f"acc={r['mean_accuracy']:.3f} (chance {r['chance_level']:.3f}, "
+          f"{r['mean_accuracy']/r['chance_level']:.1f}x)  "
+          f"null={r['null_mean']:.3f}±{r['null_std']:.3f}  p={r['p_value']:.4f}")
+
+# 3) Time-resolved: when does selectivity emerge? One curve per bank.
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(6, 3))
+centers = np.arange(${this.winPre}, ${this.winPost} + 1, 10)
+for sf in ses.files:
+    cube, ids, _ = time_resolved_counts(
+        sf, centers, width_ms=50,
+        align_col="${this.alignTo}",
+        depth_range=(${this.depthLo}, ${this.depthHi}),
+    )
+    if len(ids) == 0:
+        continue   # bank doesn't cover this depth band
+    labels = condition_labels(sf.trials, "${this.rastsBy}")
+    ts = time_resolved_selectivity(cube, labels)
+    ax.plot(centers, ts["enrichment"], label=sf.path.name)
+ax.axhline(1, ls="--", c="0.5", lw=0.8, label="chance")
+ax.set(xlabel="time vs ${this.alignTo} (ms)",
+       ylabel="enrichment (× chance)",
+       title="selectivity for ${this.rastsBy}")
+ax.legend(fontsize=8)
+plt.tight_layout()
+`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(snippet).then(() => {
+        this._flashStatus('Python snippet copied to clipboard');
+      }).catch(err => {
+        console.warn('clipboard failed:', err);
+        this._showSnippetFallback(snippet);
+      });
+    } else {
+      this._showSnippetFallback(snippet);
+    }
+  },
+
+  _flashStatus(msg) {
+    const el = document.getElementById('status');
+    if (!el) return;
+    const prev = el.textContent;
+    el.textContent = msg;
+    setTimeout(() => { if (el.textContent === msg) el.textContent = prev; }, 1800);
+  },
+
+  _showSnippetFallback(snippet) {
+    // Old browsers / file:// loads where clipboard isn't available
+    console.log(snippet);
+    alert('Clipboard unavailable; snippet logged to console.');
+  },
+
+  // Count how many units have a valid depth inside the current filter,
+  // summed across all loaded sources (multi-bank totals make sense as a
+  // single number once the depth filter is shared across the union axis).
+  // Excludes sentinel-depth units (depth <= spikeMissing).
+  unitsInDepthRange() {
+    if (!this.sources || this.sources.length === 0) return 0;
+    let n = 0;
+    for (const src of this.sources) {
+      for (const u of src.unitLookup.values()) {
+        if (u.depth > src.spikeMissing &&
+            u.depth >= this.depthLo && u.depth <= this.depthHi) n++;
+      }
+    }
+    return n;
+  },
+
+  unitsTotal() {
+    return this.sources.reduce((s, x) => s + x.unitLookup.size, 0);
+  },
+
+  // Build a (depth × time) mean-rate heatmap accumulator combining trials
+  // from any number of sources. Each entry in cellEntries is
+  // {sourceIdx, trialIdx}.
+  //
+  // Per-bin trial-count normalization: each depth-bin's spikes are
+  // divided by the number of trials from sources whose depth range
+  // INCLUDES that bin. This matters for combined banks: a depth bin in
+  // bank_a's range only had a chance of getting spikes from bank_a's
+  // trials, so naively dividing by total trials would halve the rate.
+  _buildCombinedHeatmap(cellEntries, sourceState,
+                        tMin, tMax, dLo, dHi, nDbins, nTbins) {
+    const acc = new Float32Array(nDbins * nTbins);
+    const tRange = (tMax - tMin) || 1;
+    const dRange = (dHi - dLo) || 1;
+    const binTw = tRange / nTbins;
+    const binDw = dRange / nDbins;
+
+    const nTrialsPerSource = new Array(this.sources.length).fill(0);
+
+    for (let e = 0; e < cellEntries.length; e++) {
+      const { sourceIdx, trialIdx } = cellEntries[e];
+      const src = this.sources[sourceIdx];
+      const state = sourceState[sourceIdx];
+      const align = Number(state.alignData[trialIdx]);
+      if (!Number.isFinite(align)) continue;
+      const srcId = Number(state.srcData[trialIdx]) | 0;
+      let cached = state.spikeCache.get(srcId);
+      if (!cached) {
+        cached = {
+          T: getSublistData(src.dg, 'spike_times', srcId),
+          D: getSublistData(src.dg, 'spike_depth', srcId),
+        };
+        state.spikeCache.set(srcId, cached);
+      }
+      const spkT = cached.T, spkD = cached.D;
+      if (!spkT) continue;
+      nTrialsPerSource[sourceIdx]++;
+      const miss = src.spikeMissing;
+      for (let k = 0; k < spkT.length; k++) {
+        const at = spkT[k] - align;
+        if (at < tMin || at >= tMax) continue;
+        const d = spkD[k];
+        if (d <= miss || d < dLo || d >= dHi) continue;
+        const tbi = Math.min(nTbins - 1, ((at - tMin) / binTw) | 0);
+        const dbi = Math.min(nDbins - 1, ((d - dLo) / binDw) | 0);
+        acc[dbi * nTbins + tbi] += 1;
+      }
+    }
+
+    // Per-depth-bin normalization (see header comment).
+    const trialsPerDbin = new Int32Array(nDbins);
+    for (let s = 0; s < this.sources.length; s++) {
+      const sn = nTrialsPerSource[s];
+      if (sn === 0) continue;
+      const src = this.sources[s];
+      const srcLo = Math.max(dLo, src.dataDepthMin);
+      const srcHi = Math.min(dHi, src.dataDepthMax);
+      if (srcLo >= srcHi) continue;
+      const dbiLo = Math.max(0, Math.floor((srcLo - dLo) / binDw));
+      const dbiHi = Math.min(nDbins, Math.ceil((srcHi - dLo) / binDw));
+      for (let dbi = dbiLo; dbi < dbiHi; dbi++) {
+        trialsPerDbin[dbi] += sn;
+      }
+    }
+    for (let dbi = 0; dbi < nDbins; dbi++) {
+      const n = trialsPerDbin[dbi];
+      if (n > 0) {
+        const rowOff = dbi * nTbins;
+        for (let tbi = 0; tbi < nTbins; tbi++) acc[rowOff + tbi] /= n;
+      }
+    }
+
+    let max = 0;
+    for (let i = 0; i < acc.length; i++) if (acc[i] > max) max = acc[i];
+    const totalN = nTrialsPerSource.reduce((s, x) => s + x, 0);
+    return { acc, max, n: totalN };
+  },
+
+  // Build a (depth × time) mean-rate heatmap accumulator for the given
+  // trial indices. Returns {acc, max, n}: acc is a Float32Array of length
+  // nDbins*nTbins (depth-major), normalized to mean spikes per bin per
+  // trial; max is its peak value; n is the trial count actually included.
+  // Single-source variant — used by renderMatrix.
+  _buildHeatmap(trialIndices, alignData, srcData, spikeCache,
+                tMin, tMax, dLo, dHi, nDbins, nTbins) {
+    const acc = new Float32Array(nDbins * nTbins);
+    const tRange = (tMax - tMin) || 1;
+    const dRange = (dHi - dLo) || 1;
+    const binTw = tRange / nTbins;
+    const binDw = dRange / nDbins;
+    const miss = this.spikeMissing;
+    const dg = this.dg;
+
+    let n = 0;
+    for (let ti = 0; ti < trialIndices.length; ti++) {
+      const trialIdx = trialIndices[ti];
+      const align = Number(alignData[trialIdx]);
+      if (!Number.isFinite(align)) continue;
+      const src = Number(srcData[trialIdx]) | 0;
+      let entry = spikeCache.get(src);
+      if (!entry) {
+        entry = {
+          T: getSublistData(dg, 'spike_times', src),
+          D: getSublistData(dg, 'spike_depth', src),
+        };
+        spikeCache.set(src, entry);
+      }
+      const spkT = entry.T, spkD = entry.D;
+      if (!spkT) continue;
+      n++;
+      for (let k = 0; k < spkT.length; k++) {
+        const at = spkT[k] - align;
+        if (at < tMin || at >= tMax) continue;
+        const d = spkD[k];
+        if (d <= miss || d < dLo || d >= dHi) continue;
+        const tbi = Math.min(nTbins - 1, ((at - tMin) / binTw) | 0);
+        const dbi = Math.min(nDbins - 1, ((d - dLo) / binDw) | 0);
+        acc[dbi * nTbins + tbi] += 1;
+      }
+    }
+    if (n > 0) {
+      for (let i = 0; i < acc.length; i++) acc[i] /= n;
+    }
+    let max = 0;
+    for (let i = 0; i < acc.length; i++) if (acc[i] > max) max = acc[i];
+    return { acc, max, n };
+  },
+
+  // Paint a heatmap accumulator into a rectangle on the main canvas.
+  //
+  // Implementation: each call creates its OWN offscreen canvas at native
+  // bin resolution (nTbins × nDbins), writes pixels via putImageData on
+  // that local canvas, then drawImage-scales it onto the main canvas at
+  // (x, y, w, h). Two reasons not to share or skip this layer:
+  //
+  //   1. A single shared offscreen canvas can race the GPU pipeline:
+  //      successive drawImage reads can pick up the same texture upload,
+  //      so cells get drawn with whichever cell's pixels won the race.
+  //      A fresh canvas per call eliminates that aliasing entirely.
+  //
+  //   2. ctx.putImageData on the main canvas ignores the transform — on
+  //      HiDPI displays it writes at half-position/half-size relative
+  //      to CSS coordinates. ctx.drawImage DOES respect the transform,
+  //      so going through it gives correct rendering on any DPR.
+  //
+  // The cost is small: ~40 small canvas allocations per render, well
+  // under a millisecond total.
+  _paintHeatmap(ctx, x, y, w, h, acc, scaleMax, nDbins, nTbins) {
+    if (scaleMax <= 0) scaleMax = 1;
+    const off = document.createElement('canvas');
+    off.width = nTbins; off.height = nDbins;
+    const offCtx = off.getContext('2d');
+    const img = offCtx.createImageData(nTbins, nDbins);
+    const data = img.data;
+    for (let dbi = 0; dbi < nDbins; dbi++) {
+      const flipped = nDbins - 1 - dbi;
+      const rowOff = flipped * nTbins;
+      for (let tbi = 0; tbi < nTbins; tbi++) {
+        const raw = acc[rowOff + tbi] / scaleMax;
+        const v = Math.sqrt(Math.max(0, Math.min(1, raw)));
+        let r, g, b;
+        if (v < 0.5) {
+          const t = v * 2;
+          r = (12 + t * 79)  | 0;
+          g = (16 + t * 148) | 0;
+          b = (24 + t * 221) | 0;
+        } else {
+          const t = (v - 0.5) * 2;
+          r = (91  + t * 164) | 0;
+          g = (164 + t * 91)  | 0;
+          b = (245 + t * 10)  | 0;
+        }
+        const idx = (dbi * nTbins + tbi) * 4;
+        data[idx]   = r;
+        data[idx+1] = g;
+        data[idx+2] = b;
+        data[idx+3] = 255;
+      }
+    }
+    offCtx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, x, y, w, h);
+  },
+
+  // ─── Matrix view: columns = condition, rows = (mean signature) + each trial ───
+  // Single big canvas, horizontally scrollable when many conditions. Mean
+  // signature is a (depth × time) heatmap of mean spike count per bin
+  // averaged across trials of that condition; per-trial rows below are
+  // micro-rasters using identical x-axis so trial-to-mean and
+  // trial-to-trial comparison reads visually.
+  renderMatrix() {
+    const dg = this.dg;
+    if (!this.panels.length) return;
+    if (!dg.getList(this.alignTo) || !dg.getList('spike_src_trial')) return;
+
+    const filterDesc = this.filterBy
+      ? ` · filtered to ${this.filterBy}=${this.filterValue}`
+      : '';
+    document.getElementById('status').textContent =
+      `${this.panels.length} columns · grouped by ${this.rastsBy}${filterDesc} · aligned to ${this.alignTo} · ${this.unitsInDepthRange()}/${this.unitsTotal()} units in depth${this.sources.length > 1 ? ` · showing source 1/${this.sources.length} (${this.sources[0].filename}); switch to 2D summary to combine` : ''}`;
+
+    // ── Geometry ───────────────────────────────────────────────────────
+    const COL_W = 160, COL_GAP = 6;
+    const HEAD_H = 26, SUMMARY_H = 130, SUMMARY_GAP = 6;
+    const TRIAL_H = 30;
+    const TIME_AXIS_H = 18;
+    const LEFT = 60, TOP = 8, BOT = 8;
+
+    const nCols = this.panels.length;
+    const maxTrials = this.panels.reduce((m, p) => Math.max(m, p.trials.length), 0);
+
+    const totalW = LEFT + nCols * (COL_W + COL_GAP) + COL_GAP;
+    const summaryY1 = TOP + HEAD_H + SUMMARY_H;
+    const trialsY0 = summaryY1 + SUMMARY_GAP;
+    const trialsY1 = trialsY0 + maxTrials * TRIAL_H;
+    const totalH = trialsY1 + TIME_AXIS_H + BOT;
+
+    const canvas = document.getElementById('matrixCanvas');
+    canvas.style.width = totalW + 'px';
+    canvas.style.height = totalH + 'px';
+    canvas.width = totalW * this.dpr;
+    canvas.height = totalH * this.dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+
+    // ── Window / depth / binning ───────────────────────────────────────
+    const tMin = this.winPre, tMax = this.winPost;
+    const tRange = (tMax - tMin) || 1;
+    const dLo = this.depthLo, dHi = this.depthHi;
+    const dRange = (dHi - dLo) || 1;
+    const miss = this.spikeMissing;
+
+    // Heatmap bins: chosen to yield comfortable pixel sizes inside SUMMARY_H
+    const nTbins = Math.max(20, Math.min(120, Math.round(COL_W / 2.5)));
+    const nDbins = Math.max(8,  Math.min(80,  Math.round(SUMMARY_H / 3)));
+    const binTw = tRange / nTbins;
+    const binDw = dRange / nDbins;
+
+    // ── Pass 1: accumulate mean-signature heatmaps ─────────────────────
+    const alignData = dg.getList(this.alignTo).data;
+    const srcData = dg.getList('spike_src_trial').data;
+    // Cache per-canonical-trial spike arrays (avoid repeated getSublistData)
+    const spikeCache = new Map();
+    const getSpikes = (src) => {
+      let entry = spikeCache.get(src);
+      if (!entry) {
+        entry = {
+          T: getSublistData(dg, 'spike_times', src),
+          D: getSublistData(dg, 'spike_depth', src),
+        };
+        spikeCache.set(src, entry);
+      }
+      return entry;
+    };
+
+    const heatmaps = new Array(nCols);
+    const perPanelMax = new Array(nCols);
+    let globalMax = 0;
+    for (let ci = 0; ci < nCols; ci++) {
+      const panel = this.panels[ci];
+      const acc = new Float32Array(nDbins * nTbins);
+      const trials = panel.trials;
+      for (let ti = 0; ti < trials.length; ti++) {
+        const trialIdx = trials[ti];
+        const align = Number(alignData[trialIdx]);
+        if (!Number.isFinite(align)) continue;
+        const src = Number(srcData[trialIdx]) | 0;
+        const { T: spkT, D: spkD } = getSpikes(src);
+        if (!spkT) continue;
+        for (let k = 0; k < spkT.length; k++) {
+          const at = spkT[k] - align;
+          if (at < tMin || at >= tMax) continue;
+          const d = spkD[k];
+          if (d <= miss || d < dLo || d >= dHi) continue;
+          const tbi = Math.min(nTbins - 1, ((at - tMin) / binTw) | 0);
+          const dbi = Math.min(nDbins - 1, ((d - dLo) / binDw) | 0);
+          acc[dbi * nTbins + tbi] += 1;
+        }
+      }
+      // Mean per trial
+      const n = Math.max(1, trials.length);
+      for (let i = 0; i < acc.length; i++) acc[i] /= n;
+      // Track per-panel and global maxima for color scaling.
+      let pmax = 0;
+      for (let i = 0; i < acc.length; i++) if (acc[i] > pmax) pmax = acc[i];
+      perPanelMax[ci] = pmax;
+      if (pmax > globalMax) globalMax = pmax;
+      heatmaps[ci] = acc;
+    }
+    if (globalMax === 0) globalMax = 1;
+
+    // ── Pass 2: render columns ─────────────────────────────────────────
+    // Background
+    ctx.fillStyle = '#0a0e17';
+    ctx.fillRect(0, 0, totalW, totalH);
+
+    // Left depth label region (just for the summary band)
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${dHi.toFixed(0)} µm`, LEFT - 6, TOP + HEAD_H + 8);
+    ctx.fillText(`${dLo.toFixed(0)} µm`, LEFT - 6, summaryY1);
+    ctx.fillText('mean', LEFT - 6, TOP + HEAD_H + SUMMARY_H / 2 + 4);
+    // "trials" label
+    ctx.fillText('trials', LEFT - 6, trialsY0 + 12);
+
+    // (heatmap rendering uses _paintHeatmap which writes pixels directly
+    // to the main canvas via putImageData — no shared offscreen buffer.)
+
+    for (let ci = 0; ci < nCols; ci++) {
+      const panel = this.panels[ci];
+      const colX0 = LEFT + ci * (COL_W + COL_GAP) + COL_GAP;
+      const colX1 = colX0 + COL_W;
+
+      // Column header
+      ctx.fillStyle = '#1a2236';
+      ctx.fillRect(colX0, TOP, COL_W, HEAD_H);
+      ctx.fillStyle = '#5ba4f5';
+      ctx.font = '11px "JetBrains Mono"';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${this.rastsBy}=${this.formatValue(panel.value)}`, colX0 + 6, TOP + 12);
+      ctx.fillStyle = '#5a6b85';
+      ctx.fillText(`n=${panel.trials.length}`, colX0 + 6, TOP + 22);
+
+      // Mean-signature heatmap. Color scale: per-panel uses this column's
+      // max, otherwise global. sqrt gamma + bilinear ramp inside the
+      // shared _paintHeatmap helper.
+      const acc = heatmaps[ci];
+      const scaleMax = this.perPanelScale ? (perPanelMax[ci] || 1) : globalMax;
+      this._paintHeatmap(ctx, colX0, TOP + HEAD_H, COL_W, SUMMARY_H,
+                         acc, scaleMax, nDbins, nTbins);
+      // border around heatmap
+      ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1;
+      ctx.strokeRect(colX0, TOP + HEAD_H, COL_W, SUMMARY_H);
+
+      // Event line at t=0 across heatmap
+      if (0 >= tMin && 0 <= tMax) {
+        const x0 = colX0 + ((0 - tMin) / tRange) * COL_W;
+        ctx.strokeStyle = 'rgba(251,191,36,0.6)';
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x0, TOP + HEAD_H);
+        ctx.lineTo(x0, summaryY1);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Per-trial micro-rasters. Zebra-stripe the rows first so dense
+      // ticks don't bleed visually into adjacent trials when the depth
+      // filter is tight enough that there's no natural empty band.
+      const trials = panel.trials;
+      ctx.fillStyle = 'rgba(91,164,245,0.10)';
+      for (let ti = 0; ti < trials.length; ti++) {
+        if (ti % 2 === 1) {
+          ctx.fillRect(colX0, trialsY0 + ti * TRIAL_H, COL_W, TRIAL_H);
+        }
+      }
+
+      ctx.strokeStyle = 'rgba(229,231,235,0.65)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let ti = 0; ti < trials.length; ti++) {
+        const trialIdx = trials[ti];
+        const align = Number(alignData[trialIdx]);
+        if (!Number.isFinite(align)) continue;
+        const src = Number(srcData[trialIdx]) | 0;
+        const { T: spkT, D: spkD } = getSpikes(src);
+        if (!spkT) continue;
+
+        const rowY0 = trialsY0 + ti * TRIAL_H + 1;
+        const rowY1 = trialsY0 + (ti + 1) * TRIAL_H - 1;
+        const rH = rowY1 - rowY0;
+
+        for (let k = 0; k < spkT.length; k++) {
+          const at = spkT[k] - align;
+          if (at < tMin || at > tMax) continue;
+          const d = spkD[k];
+          if (d <= miss || d < dLo || d > dHi) continue;
+          const x = colX0 + ((at - tMin) / tRange) * COL_W;
+          const y = rowY0 + ((dHi - d) / dRange) * rH;
+          ctx.moveTo(x, y - 0.6);
+          ctx.lineTo(x, y + 0.6);
+        }
+      }
+      ctx.stroke();
+
+      // Trial-row backgrounds (subtle stripes) drawn UNDER ticks?
+      // Actually drawn over — so use a faint border between rows instead.
+      ctx.strokeStyle = 'rgba(42,54,84,0.4)';
+      for (let ti = 1; ti < trials.length; ti++) {
+        const y = trialsY0 + ti * TRIAL_H;
+        ctx.beginPath();
+        ctx.moveTo(colX0, y); ctx.lineTo(colX1, y);
+        ctx.stroke();
+      }
+      // Outer column border for the trial block
+      if (trials.length > 0) {
+        ctx.strokeStyle = '#2a3654';
+        ctx.strokeRect(colX0, trialsY0, COL_W, trials.length * TRIAL_H);
+      }
+
+      // Event line down the trial block
+      if (0 >= tMin && 0 <= tMax && trials.length > 0) {
+        const x0 = colX0 + ((0 - tMin) / tRange) * COL_W;
+        ctx.strokeStyle = 'rgba(251,191,36,0.4)';
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x0, trialsY0); ctx.lineTo(x0, trialsY0 + trials.length * TRIAL_H);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Time axis (per column, just min/0/max)
+      ctx.fillStyle = '#5a6b85';
+      ctx.font = '9px "JetBrains Mono"';
+      const axisY = trialsY1 + 12;
+      ctx.textAlign = 'left';   ctx.fillText(`${tMin}`, colX0, axisY);
+      ctx.textAlign = 'right';  ctx.fillText(`${tMax}`, colX1, axisY);
+      ctx.textAlign = 'center';
+      if (0 >= tMin && 0 <= tMax) {
+        const x0 = colX0 + ((0 - tMin) / tRange) * COL_W;
+        ctx.fillText('0', x0, axisY);
+      }
+    }
+
+    // Footer: describe the color scale + gamma being used so the heatmap
+    // intensity stays interpretable.
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'left';
+    const scaleDesc = this.perPanelScale
+      ? `each column scaled to its own max`
+      : `0 → ${globalMax.toFixed(2)} spikes/bin · shared across columns`;
+    ctx.fillText(
+      `color: sqrt(intensity) · ${scaleDesc}`,
+      LEFT, totalH - 2);
+  },
+
+  // ─── Overlay rendering: all matching trials' spikes drawn at low alpha ───
+  // Per spike, we get its absolute obs-time (ms) and unit depth (µm).
+  // Aligned time = spikeT - alignT[trialIdx]. Filter by window + depth.
+  renderOverlay(ctx, panel, w, h) {
+    const dg = this.dg;
+    const m = { t: 4, r: 6, b: 22, l: 28 };
+    const pW = w - m.l - m.r;
+    const psthH = 18;
+    const rasterY0 = m.t;
+    const rasterY1 = h - m.b - psthH - 2;
+    const rH = rasterY1 - rasterY0;
+    const psthY0 = rasterY1 + 2;
+    const psthY1 = h - m.b;
+    const tMin = this.winPre, tMax = this.winPost;
+    const dLo = this.depthLo, dHi = this.depthHi;
+    const dRange = (dHi - dLo) || 1;
+    const miss = this.spikeMissing;
+
+    // bg
+    ctx.fillStyle = '#0a0e17';
+    ctx.fillRect(m.l, rasterY0, pW, rH);
+    ctx.fillRect(m.l, psthY0, pW, psthY1 - psthY0);
+
+    // axes
+    const toX  = t => m.l + ((t - tMin) / (tMax - tMin)) * pW;
+    const toYd = d => rasterY0 + ((dHi - d) / dRange) * rH;
+
+    // 0-line in raster (event time)
+    if (0 >= tMin && 0 <= tMax) {
+      ctx.strokeStyle = 'rgba(251,191,36,0.5)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(toX(0), rasterY0); ctx.lineTo(toX(0), psthY1);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // PSTH bins
+    const nBins = Math.max(40, Math.min(160, Math.round(pW / 2)));
+    const bins = new Float32Array(nBins);
+    const binW = (tMax - tMin) / nBins;
+
+    // Spike ticks: collect all-trials-overlay into one path for one stroke.
+    // Low alpha so density reads as darkness.
+    ctx.strokeStyle = 'rgba(229,231,235,0.20)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    // Pre-fetch alignment column data for speed
+    const alignCol = dg.getList(this.alignTo);
+    const alignData = alignCol && alignCol.data ? alignCol.data : null;
+    if (!alignData) return;
+
+    // Pre-fetch source-trial pointer once — we'll iterate canonical sublists.
+    const srcCol = dg.getList('spike_src_trial');
+    if (!srcCol || !srcCol.data) return;
+
+    const trials = panel.trials;
+    let drawn = 0;
+
+    for (let ti = 0; ti < trials.length; ti++) {
+      const trialIdx = trials[ti];
+      const src = Number(srcCol.data[trialIdx]) | 0;
+      const spkT = getSublistData(dg, 'spike_times', src);
+      const spkD = getSublistData(dg, 'spike_depth', src);
+      if (!spkT || spkT.length === 0) continue;
+      const align = Number(alignData[trialIdx]);
+      if (!Number.isFinite(align)) continue;
+
+      for (let k = 0; k < spkT.length; k++) {
+        const at = spkT[k] - align;          // ms, aligned to event
+        if (at < tMin || at > tMax) continue;
+        const d = spkD[k];
+        if (d <= miss) continue;
+        if (d < dLo || d > dHi) continue;
+        const x = toX(at), y = toYd(d);
+        ctx.moveTo(x, y - 0.8);
+        ctx.lineTo(x, y + 0.8);
+        // PSTH binning (matches the same filter)
+        const bi = Math.min(nBins - 1, ((at - tMin) / binW) | 0);
+        if (bi >= 0) bins[bi]++;
+        drawn++;
+      }
+    }
+    ctx.stroke();
+
+    // Normalize PSTH to per-trial mean rate (Hz) for readability
+    let hmax = 1;
+    for (let i = 0; i < nBins; i++) if (bins[i] > hmax) hmax = bins[i];
+    ctx.fillStyle = 'rgba(91,164,245,0.30)';
+    ctx.strokeStyle = '#5ba4f5';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(m.l, psthY1);
+    for (let i = 0; i < nBins; i++) {
+      const x  = m.l + (i / nBins) * pW;
+      const xn = m.l + ((i + 1) / nBins) * pW;
+      const y  = psthY1 - (bins[i] / hmax) * (psthY1 - psthY0 - 1);
+      ctx.lineTo(x, y); ctx.lineTo(xn, y);
+    }
+    ctx.lineTo(m.l + pW, psthY1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Borders
+    ctx.strokeStyle = '#2a3654';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(m.l, rasterY0, pW, rH);
+    ctx.strokeRect(m.l, psthY0, pW, psthY1 - psthY0);
+
+    // Axis ticks (sparse, just min/max)
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '9px "JetBrains Mono"';
+    ctx.textAlign = 'right';
+    ctx.fillText(dHi.toFixed(0), m.l - 4, rasterY0 + 8);
+    ctx.fillText(dLo.toFixed(0), m.l - 4, rasterY1 - 1);
+    ctx.textAlign = 'left';
+    ctx.fillText(`${tMin}`, m.l, psthY1 + 11);
+    ctx.textAlign = 'right';
+    ctx.fillText(`${tMax}`, m.l + pW, psthY1 + 11);
+    ctx.textAlign = 'center';
+    ctx.fillText('0', toX(0), psthY1 + 11);
+  },
+
+  // ─── Summary view: 2D grid of heatmap-only cells ───────────────────
+  // Rows = unique values of filterBy (the "secondary" condition).
+  // Cols = unique values of rastsBy (the "primary" condition).
+  // Each cell: mean (depth × time) heatmap of trials matching both.
+  // Click a row → set filter to that row's value, switch to matrix mode
+  //              (so individual trials become visible for that slice).
+  renderSummary() {
+    const canvas = document.getElementById('matrixCanvas');
+    if (!this.filterBy) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = canvas.width;
+      canvas.style.width = '100%';
+      canvas.style.height = '0px';
+      document.getElementById('status').textContent =
+        'summary view needs a filter dimension; pick one in the toolbar.';
+      this._summaryHit = null;
+      return;
+    }
+    if (this.rastsBy === this.filterBy) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = canvas.width;
+      canvas.style.height = '0px';
+      document.getElementById('status').textContent =
+        `summary view needs two distinct dimensions; rows and cols are both '${this.rastsBy}'.`;
+      this._summaryHit = null;
+      return;
+    }
+
+    // Build per-source state: align/src column data, plus a fresh spike
+    // cache. We assume all sources have the same column structure (same
+    // protocol). Sources missing any required column are skipped.
+    const sourceState = [];
+    for (const src of this.sources) {
+      const alignCol = src.dg.getList(this.alignTo);
+      const srcCol   = src.dg.getList('spike_src_trial');
+      const groupCol = src.dg.getList(this.rastsBy);
+      const filtCol  = src.dg.getList(this.filterBy);
+      if (!alignCol || !srcCol || !groupCol || !filtCol) {
+        sourceState.push(null);
+        continue;
+      }
+      sourceState.push({
+        alignData: alignCol.data,
+        srcData:   srcCol.data,
+        groupCol, filtCol,
+        spikeCache: new Map(),
+      });
+    }
+
+    // Union row/col values across all sources (same protocol → same set).
+    const sortVals = arr => arr.slice().sort((a, b) => {
+      const av = Number(a), bv = Number(b);
+      if (Number.isFinite(av) && Number.isFinite(bv)) return av - bv;
+      return String(a).localeCompare(String(b));
+    });
+    const colSet = new Set(), rowSet = new Set();
+    for (let s = 0; s < this.sources.length; s++) {
+      const st = sourceState[s];
+      if (!st) continue;
+      const ntr = this.sources[s].ntrials;
+      for (let i = 0; i < ntr; i++) {
+        colSet.add(st.groupCol.data[i]);
+        rowSet.add(st.filtCol.data[i]);
+      }
+    }
+    const colVals = sortVals([...colSet]);
+    const rowVals = sortVals([...rowSet]);
+
+    // Bucket trials by (row, col) with source tagging — single pass per source.
+    const cellTrials = new Map();   // "ri|ci" -> [{sourceIdx, trialIdx}, …]
+    const rowCounts  = new Array(rowVals.length).fill(0);
+    const rowIdx = new Map(rowVals.map((v, i) => [String(v), i]));
+    const colIdx = new Map(colVals.map((v, i) => [String(v), i]));
+    for (let s = 0; s < this.sources.length; s++) {
+      const st = sourceState[s];
+      if (!st) continue;
+      const ntr = this.sources[s].ntrials;
+      for (let i = 0; i < ntr; i++) {
+        const ri = rowIdx.get(String(st.filtCol.data[i]));
+        const ci = colIdx.get(String(st.groupCol.data[i]));
+        if (ri == null || ci == null) continue;
+        const key = ri + '|' + ci;
+        let arr = cellTrials.get(key);
+        if (!arr) { arr = []; cellTrials.set(key, arr); }
+        arr.push({ sourceIdx: s, trialIdx: i });
+        rowCounts[ri]++;
+      }
+    }
+
+    // Geometry
+    const CELL_W = 130, CELL_H = 80, CELL_GAP = 4;
+    const HEAD_H = 28;          // column headers
+    const ROW_LABEL_W = 90;     // left labels
+    const TIME_AXIS_H = 18;     // bottom
+    const LEFT_AXIS_W = 50;     // depth labels strip on the very left
+    const TOP = 8, BOT = 8;
+
+    const nCols = colVals.length, nRows = rowVals.length;
+    const totalW = LEFT_AXIS_W + ROW_LABEL_W + nCols * (CELL_W + CELL_GAP) + CELL_GAP;
+    const totalH = TOP + HEAD_H + nRows * (CELL_H + CELL_GAP) + TIME_AXIS_H + BOT;
+
+    canvas.style.width = totalW + 'px';
+    canvas.style.height = totalH + 'px';
+    canvas.width = totalW * this.dpr;
+    canvas.height = totalH * this.dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+
+    // Window / depth / binning (same as matrix mode)
+    const tMin = this.winPre, tMax = this.winPost;
+    const tRange = (tMax - tMin) || 1;
+    const dLo = this.depthLo, dHi = this.depthHi;
+    const nTbins = Math.max(20, Math.min(80, Math.round(CELL_W / 3)));
+    const nDbins = Math.max(8,  Math.min(60, Math.round(CELL_H / 2)));
+
+    // Pass 1: build heatmap accumulators for every cell — multi-source
+    // aware via _buildCombinedHeatmap, which does per-depth-bin trial-
+    // count normalization so combining banks doesn't artificially halve
+    // the apparent rate at depths only one bank covered.
+    const heatmaps = new Array(nRows * nCols);
+    let globalMax = 0;
+    for (let ri = 0; ri < nRows; ri++) {
+      for (let ci = 0; ci < nCols; ci++) {
+        const entries = cellTrials.get(ri + '|' + ci) || [];
+        const r = this._buildCombinedHeatmap(
+          entries, sourceState, tMin, tMax, dLo, dHi, nDbins, nTbins);
+        heatmaps[ri * nCols + ci] = r;
+        if (r.max > globalMax) globalMax = r.max;
+      }
+    }
+    if (globalMax === 0) globalMax = 1;
+
+    // Pass 2: paint
+    ctx.fillStyle = '#0a0e17';
+    ctx.fillRect(0, 0, totalW, totalH);
+
+    // Column headers
+    ctx.font = '11px "JetBrains Mono"';
+    for (let ci = 0; ci < nCols; ci++) {
+      const cx0 = LEFT_AXIS_W + ROW_LABEL_W + ci * (CELL_W + CELL_GAP) + CELL_GAP;
+      ctx.fillStyle = '#1a2236';
+      ctx.fillRect(cx0, TOP, CELL_W, HEAD_H);
+      ctx.fillStyle = '#5ba4f5';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${this.rastsBy}=${this.formatValue(colVals[ci])}`, cx0 + 6, TOP + 18);
+    }
+
+    // Depth axis on the very left (one strip across all rows)
+    const depthLabelTop = TOP + HEAD_H;
+    const depthLabelBot = depthLabelTop + nRows * (CELL_H + CELL_GAP);
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${dHi.toFixed(0)} µm`, LEFT_AXIS_W - 4, depthLabelTop + 9);
+    ctx.fillText(`${dLo.toFixed(0)} µm`, LEFT_AXIS_W - 4, depthLabelBot - 4);
+
+    // Hit-rect table for click-drill (rebuilt each render)
+    this._summaryHit = { rowVals, rows: [] };
+
+    for (let ri = 0; ri < nRows; ri++) {
+      const ry0 = TOP + HEAD_H + ri * (CELL_H + CELL_GAP);
+      // Row label
+      ctx.fillStyle = '#1a2236';
+      ctx.fillRect(LEFT_AXIS_W, ry0, ROW_LABEL_W, CELL_H);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '11px "JetBrains Mono"';
+      ctx.textAlign = 'left';
+      ctx.fillText(this.filterBy, LEFT_AXIS_W + 6, ry0 + 16);
+      ctx.fillStyle = '#5ba4f5';
+      ctx.font = '12px "JetBrains Mono"';
+      ctx.fillText(`= ${this.formatValue(rowVals[ri])}`, LEFT_AXIS_W + 6, ry0 + 32);
+      ctx.fillStyle = '#5a6b85';
+      ctx.font = '10px "JetBrains Mono"';
+      ctx.fillText(`n=${rowCounts[ri]}`, LEFT_AXIS_W + 6, ry0 + 48);
+      ctx.fillStyle = '#5ba4f5';
+      ctx.font = '10px "JetBrains Mono"';
+      ctx.fillText('› drill', LEFT_AXIS_W + 6, ry0 + 66);
+
+      // Cells in this row
+      for (let ci = 0; ci < nCols; ci++) {
+        const cx0 = LEFT_AXIS_W + ROW_LABEL_W + ci * (CELL_W + CELL_GAP) + CELL_GAP;
+        const { acc, max, n } = heatmaps[ri * nCols + ci];
+        const scaleMax = this.perPanelScale ? (max || 1) : globalMax;
+        if (n > 0) {
+          this._paintHeatmap(ctx, cx0, ry0, CELL_W, CELL_H, acc, scaleMax, nDbins, nTbins);
+        } else {
+          // empty cell
+          ctx.fillStyle = '#0a0e17';
+          ctx.fillRect(cx0, ry0, CELL_W, CELL_H);
+          ctx.fillStyle = '#5a6b85';
+          ctx.font = '10px "JetBrains Mono"';
+          ctx.textAlign = 'center';
+          ctx.fillText('(none)', cx0 + CELL_W / 2, ry0 + CELL_H / 2 + 4);
+        }
+        // Cell border + event line
+        ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1;
+        ctx.strokeRect(cx0, ry0, CELL_W, CELL_H);
+        if (0 >= tMin && 0 <= tMax) {
+          const x0 = cx0 + ((0 - tMin) / tRange) * CELL_W;
+          ctx.strokeStyle = 'rgba(251,191,36,0.5)';
+          ctx.setLineDash([2, 2]);
+          ctx.beginPath();
+          ctx.moveTo(x0, ry0); ctx.lineTo(x0, ry0 + CELL_H);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // Tiny n badge
+        ctx.fillStyle = 'rgba(10,14,23,0.7)';
+        ctx.fillRect(cx0 + CELL_W - 28, ry0 + CELL_H - 12, 26, 10);
+        ctx.fillStyle = '#8899b4';
+        ctx.font = '9px "JetBrains Mono"';
+        ctx.textAlign = 'right';
+        ctx.fillText(`n=${n}`, cx0 + CELL_W - 4, ry0 + CELL_H - 4);
+      }
+
+      // Record hit-test rect for this row (entire span including label).
+      this._summaryHit.rows.push({
+        y0: ry0,
+        y1: ry0 + CELL_H,
+        rowValue: rowVals[ri],
+      });
+    }
+
+    // Time axis at bottom (single, shared)
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    const axisY = TOP + HEAD_H + nRows * (CELL_H + CELL_GAP) + 12;
+    for (let ci = 0; ci < nCols; ci++) {
+      const cx0 = LEFT_AXIS_W + ROW_LABEL_W + ci * (CELL_W + CELL_GAP) + CELL_GAP;
+      ctx.textAlign = 'left';   ctx.fillText(`${tMin}`, cx0, axisY);
+      ctx.textAlign = 'right';  ctx.fillText(`${tMax}`, cx0 + CELL_W, axisY);
+      if (0 >= tMin && 0 <= tMax) {
+        const x0 = cx0 + ((0 - tMin) / tRange) * CELL_W;
+        ctx.textAlign = 'center';
+        ctx.fillText('0', x0, axisY);
+      }
+    }
+
+    // Status
+    const scaleDesc = this.perPanelScale
+      ? 'per-cell scale'
+      : `0 → ${globalMax.toFixed(2)} spikes/bin · shared`;
+    document.getElementById('status').textContent =
+      `${nRows} rows (${this.filterBy}) × ${nCols} cols (${this.rastsBy}) · aligned to ${this.alignTo} · ${this.unitsInDepthRange()}/${this.unitsTotal()} units · ${this.sources.length > 1 ? this.sources.length + ' sources combined · ' : ''}color: sqrt · ${scaleDesc}`;
+  },
+
+  // Click handler for the matrix canvas: in summary mode, hit-test which
+  // row was clicked and drill into that filter value (matrix mode).
+  _onMatrixCanvasClick(e) {
+    if (this.mode !== 'summary' || !this._summaryHit) return;
+    const canvas = document.getElementById('matrixCanvas');
+    const rect = canvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    for (const r of this._summaryHit.rows) {
+      if (y >= r.y0 && y <= r.y1) {
+        // Set filter to this row's value, switch to matrix mode. Also
+        // re-skin the toolbar — the second select changes meaning from
+        // "rows" (hidden value-select) back to "filter = value" so the
+        // user sees what they're now drilled into.
+        this.filterValue = String(r.rowValue);
+        document.getElementById('filterValue').value = this.filterValue;
+        this.mode = 'matrix';
+        document.getElementById('viewMode').value = 'matrix';
+        this._updateToolbarLabels();
+        this.refresh();
+        return;
+      }
+    }
+  },
+
+  // ─── Drilldown: stacked individual trials of one panel ───
+  enterDrilldown(panel) {
+    this.drillKey = panel.value;
+    this.drillTrials = panel.trials;
+    document.getElementById('grid').style.display = 'none';
+    document.getElementById('drill').classList.add('active');
+    document.getElementById('drillTitle').textContent =
+      `${this.rastsBy} = ${this.formatValue(panel.value)}`;
+    document.getElementById('drillMeta').textContent =
+      `${panel.trials.length} trials · aligned to ${this.alignTo}`;
+    this.renderDrilldown();
+  },
+  exitDrilldown() {
+    this.drillKey = null;
+    this.drillTrials = null;
+    document.getElementById('drill').classList.remove('active');
+    document.getElementById('grid').style.display = 'grid';
+  },
+  renderDrilldown() {
+    if (this.drillTrials == null) return;
+    const dg = this.dg;
+    const trials = this.drillTrials;
+    const canvas = document.getElementById('drillCanvas');
+    const wrap = canvas.parentElement;
+    const cssW = wrap.clientWidth - 20;
+    const ROW_H = 36;
+    const HEAD_H = 22, FOOT_H = 22;
+    const cssH = HEAD_H + FOOT_H + ROW_H * trials.length;
+
+    canvas.style.width  = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    canvas.width  = cssW * this.dpr;
+    canvas.height = cssH * this.dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    const m = { t: HEAD_H, r: 12, b: FOOT_H, l: 60 };
+    const pW = cssW - m.l - m.r;
+    const tMin = this.winPre, tMax = this.winPost;
+    const dLo = this.depthLo, dHi = this.depthHi;
+    const dRange = (dHi - dLo) || 1;
+    const miss = this.spikeMissing;
+    const toX  = t => m.l + ((t - tMin) / (tMax - tMin)) * pW;
+
+    ctx.fillStyle = '#0a0e17';
+    ctx.fillRect(m.l, m.t, pW, ROW_H * trials.length);
+
+    // Zebra striping (matches matrix-mode trial rows)
+    ctx.fillStyle = 'rgba(91,164,245,0.10)';
+    for (let ti = 0; ti < trials.length; ti++) {
+      if (ti % 2 === 1) ctx.fillRect(m.l, m.t + ti * ROW_H, pW, ROW_H);
+    }
+
+    // Vertical grid lines: 0 (event), and a few ticks
+    const ticks = this.niceTicks(tMin, tMax, 8);
+    ctx.strokeStyle = '#1a2236';
+    ctx.lineWidth = 1;
+    for (const t of ticks) {
+      ctx.beginPath();
+      ctx.moveTo(toX(t), m.t);
+      ctx.lineTo(toX(t), m.t + ROW_H * trials.length);
+      ctx.stroke();
+    }
+    // event line
+    if (0 >= tMin && 0 <= tMax) {
+      ctx.strokeStyle = 'rgba(251,191,36,0.5)';
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(toX(0), m.t);
+      ctx.lineTo(toX(0), m.t + ROW_H * trials.length);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Trial rows: each is a (time × depth) micro-strip
+    const alignCol = dg.getList(this.alignTo);
+    const srcCol = dg.getList('spike_src_trial');
+    const alignData = alignCol && alignCol.data;
+    const srcData = srcCol && srcCol.data;
+    if (!alignData || !srcData) return;
+
+    ctx.strokeStyle = 'rgba(229,231,235,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    for (let ti = 0; ti < trials.length; ti++) {
+      const trialIdx = trials[ti];
+      const rowY0 = m.t + ti * ROW_H + 2;
+      const rowY1 = m.t + (ti + 1) * ROW_H - 2;
+      const rH = rowY1 - rowY0;
+      const toYd = d => rowY0 + ((dHi - d) / dRange) * rH;
+
+      const src = Number(srcData[trialIdx]) | 0;
+      const spkT = getSublistData(dg, 'spike_times', src);
+      const spkD = getSublistData(dg, 'spike_depth', src);
+      if (!spkT) continue;
+      const align = Number(alignData[trialIdx]);
+      if (!Number.isFinite(align)) continue;
+
+      for (let k = 0; k < spkT.length; k++) {
+        const at = spkT[k] - align;
+        if (at < tMin || at > tMax) continue;
+        const d = spkD[k];
+        if (d <= miss) continue;
+        if (d < dLo || d > dHi) continue;
+        const x = toX(at), y = toYd(d);
+        ctx.moveTo(x, y - 0.6);
+        ctx.lineTo(x, y + 0.6);
+      }
+    }
+    ctx.stroke();
+
+    // Row separators + trial-index labels
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'right';
+    for (let ti = 0; ti < trials.length; ti++) {
+      const rowY = m.t + ti * ROW_H;
+      if (ti > 0) {
+        ctx.strokeStyle = 'rgba(42,54,84,0.5)';
+        ctx.beginPath();
+        ctx.moveTo(m.l, rowY);
+        ctx.lineTo(m.l + pW, rowY);
+        ctx.stroke();
+      }
+      ctx.fillText(`#${trials[ti]}`, m.l - 4, rowY + ROW_H / 2 + 4);
+    }
+    // Outer border
+    ctx.strokeStyle = '#2a3654';
+    ctx.strokeRect(m.l, m.t, pW, ROW_H * trials.length);
+
+    // Time axis at bottom
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'center';
+    for (const t of ticks) {
+      ctx.fillText(`${t}`, toX(t), m.t + ROW_H * trials.length + 14);
+    }
+    ctx.textAlign = 'right';
+    ctx.fillText(`time vs ${this.alignTo} (ms)`, m.l + pW, m.t - 6);
+    ctx.textAlign = 'left';
+    ctx.fillText(`depth ${dLo}–${dHi} µm`, m.l, m.t - 6);
+  },
+
+  // Simple "nice" tick generator
+  niceTicks(min, max, n) {
+    const range = max - min; if (range <= 0) return [min];
+    const rough = range / n, pow = Math.floor(Math.log10(rough)), base = Math.pow(10, pow);
+    let step;
+    if (rough / base < 1.5) step = base;
+    else if (rough / base < 3.5) step = base * 2;
+    else if (rough / base < 7.5) step = base * 5;
+    else step = base * 10;
+    const ticks = [];
+    let t = Math.ceil(min / step) * step;
+    while (t <= max) { ticks.push(Math.round(t)); t += step; }
+    return ticks;
+  },
+};
+
+App.init();
+</script>
+</body>
+</html>
