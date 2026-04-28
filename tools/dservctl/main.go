@@ -44,6 +44,7 @@ func init() {
 		{"diff", "Compare local scripts against registry", runSyncStatus},
 		{"configs", "Manage project configs/queues (list/status/push/pull)", runConfigs},
 		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
+		{"users", "Manage workgroup users (list/get/add/remove)", runUsers},
 		{"viewer", "Manage viewer plugins (list/get/push/delete)", runViewer},
 		{"version", "Show version", runVersion},
 		{"help", "Show help", nil},
@@ -112,6 +113,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl libs list                            List shared libraries\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs sync --dir ./lib                Pull libs from registry\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs push --dir ./lib -m \"update\"    Push changed libs\n")
+	fmt.Fprintf(os.Stderr, "  dservctl users list                           List users in current workgroup\n")
+	fmt.Fprintf(os.Stderr, "  dservctl users add alice --name \"Alice X\" --role admin   Add a user\n")
 	fmt.Fprintf(os.Stderr, "  dservctl sandbox create sys mybranch          Create sandbox\n")
 	fmt.Fprintf(os.Stderr, "  dservctl templates seed /path/to/systems      Seed templates from filesystem\n")
 	fmt.Fprintf(os.Stderr, "  dservctl scripts delete-protocol prf proto     Delete a protocol from a system\n")

@@ -263,6 +263,47 @@ func (c *AgentClient) SaveLib(workgroup, name, version string, req map[string]in
 	return c.Do("PUT", path, req)
 }
 
+// ListUsers returns the user roster for a workgroup.
+func (c *AgentClient) ListUsers(workgroup string) ([]map[string]interface{}, error) {
+	result, err := c.Get(registryBase + "/users?workgroup=" + url.QueryEscape(workgroup))
+	if err != nil {
+		return nil, err
+	}
+	return extractList(result, "users"), nil
+}
+
+// GetUser retrieves a single user.
+func (c *AgentClient) GetUser(workgroup, username string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/user/%s/%s",
+		registryBase,
+		url.PathEscape(workgroup),
+		url.PathEscape(username))
+	return c.Get(path)
+}
+
+// SaveUser adds or updates a user in a workgroup.
+func (c *AgentClient) SaveUser(workgroup, username, fullName, email, role string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/user/%s/%s",
+		registryBase,
+		url.PathEscape(workgroup),
+		url.PathEscape(username))
+	return c.Post(path, map[string]string{
+		"username": username,
+		"fullName": fullName,
+		"email":    email,
+		"role":     role,
+	})
+}
+
+// DeleteUser removes a user from a workgroup.
+func (c *AgentClient) DeleteUser(workgroup, username string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/user/%s/%s",
+		registryBase,
+		url.PathEscape(workgroup),
+		url.PathEscape(username))
+	return c.Do("DELETE", path, nil)
+}
+
 // --- backup admin API ---
 
 // CreateBackup triggers an immediate database backup on the registry.
