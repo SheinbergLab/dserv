@@ -244,6 +244,8 @@ check_root() {
 
 # ============ Detection ============
 
+KNOWN_CODENAMES="bullseye bookworm trixie forky jammy noble focal"
+
 detect_platform() {
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -252,6 +254,11 @@ detect_platform() {
         x86_64)        PLATFORM="amd64" ;;
         *)             PLATFORM="$ARCH" ;;
     esac
+
+    CODENAME=""
+    if [[ -r /etc/os-release ]]; then
+        CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+    fi
 
     RPI_MODEL=""
     if [[ -f /proc/device-tree/model ]]; then
@@ -263,6 +270,7 @@ detect_platform() {
 
     echo ""
     info "Platform:  ${PLATFORM} (${ARCH})"
+    [[ -n "$CODENAME" ]]  && info "Codename:  ${CODENAME}"
     info "Hostname:  ${HOSTNAME_VAL}"
     info "IP:        ${IP_ADDR}"
     [[ -n "$RPI_MODEL" ]] && info "Hardware:  ${RPI_MODEL}"
@@ -283,18 +291,31 @@ find_asset() {
     local pattern="$2"
     local arch="$3"
 
+    # If the asset name embeds a known Debian/Ubuntu codename, only accept it
+    # when that codename matches this host. Assets with no codename in the name
+    # pass through (platform-independent). If $cn is empty (no /etc/os-release),
+    # disable the filter entirely.
+    local jq_codename_filter='
+        ($known | split(" ")) as $cns
+        | (.name | ascii_downcase) as $n
+        | (([$cns[] as $c | select($n | contains($c)) | $c] | first) // "") as $assetCN
+        | select($cn == "" or $assetCN == "" or $assetCN == ($cn | ascii_downcase))
+    '
+
     # Arch-specific match first
     local url
     url=$(echo "$release_json" | jq -r \
         --arg pat "$pattern" --arg arch "$arch" \
-        '.assets[] | select(.name | test($pat)) | select(.name | test($arch)) | .browser_download_url' \
+        --arg cn "$CODENAME" --arg known "$KNOWN_CODENAMES" \
+        ".assets[] | select(.name | test(\$pat)) | select(.name | test(\$arch)) | ${jq_codename_filter} | .browser_download_url" \
         | head -1)
 
     # Fall back to pattern only (arch-independent assets)
     if [[ -z "$url" || "$url" == "null" ]]; then
         url=$(echo "$release_json" | jq -r \
             --arg pat "$pattern" \
-            '.assets[] | select(.name | test($pat)) | .browser_download_url' \
+            --arg cn "$CODENAME" --arg known "$KNOWN_CODENAMES" \
+            ".assets[] | select(.name | test(\$pat)) | ${jq_codename_filter} | .browser_download_url" \
             | head -1)
     fi
 
