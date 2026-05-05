@@ -31,6 +31,28 @@
   .toolbar input[type=number]::-webkit-outer-spin-button,.toolbar input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   .toolbar select:focus,.toolbar input:focus{border-color:var(--acc);}
   .toolbar .status{font-family:var(--mono);font-size:11px;color:var(--t3);margin-left:auto;}
+  .toolbar-analysis{padding:6px 20px;gap:10px;}
+  .toolbar-analysis .toolbar-label{font-family:var(--mono);font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;}
+  .toolbar-filters{padding:6px 20px;gap:8px;}
+  .toolbar-filters .toolbar-label{font-family:var(--mono);font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;}
+  .filter-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+  .chip{display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 8px;background:var(--bg2);border:1px solid var(--bdr);border-radius:11px;font-family:var(--mono);font-size:11px;color:var(--t1);}
+  .chip .chip-key{color:var(--t2);}
+  .chip .chip-val{color:var(--acc);font-weight:500;}
+  .chip select.chip-val{font-family:var(--mono);font-size:11px;color:var(--acc);font-weight:500;background:transparent;border:none;outline:none;padding:0 2px;cursor:pointer;-webkit-appearance:none;-moz-appearance:none;appearance:none;}
+  .chip select.chip-val:hover{background:var(--bg3);border-radius:3px;}
+  .chip select.chip-val option{color:var(--t1);background:var(--bg2);font-weight:400;}
+  .chip .chip-x{background:transparent;border:none;color:var(--t3);font-size:14px;line-height:1;cursor:pointer;padding:0 4px;border-radius:50%;}
+  .chip .chip-x:hover{color:#f87171;background:transparent;}
+  .chip-add{font-family:var(--mono);font-size:11px;padding:4px 10px;}
+  .chip-or{font-family:var(--mono);font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;padding:0 2px;align-self:center;}
+  .chip-draft{display:inline-flex;align-items:center;gap:4px;padding:3px 4px 3px 8px;background:var(--bg2);border:1px dashed var(--bdr-a);border-radius:11px;}
+  .chip-draft select{font-family:var(--mono);font-size:11px;background:var(--bg1);color:var(--t1);border:1px solid var(--bdr);border-radius:3px;padding:2px 4px;outline:none;}
+  .chip-draft .draft-eq{color:var(--t2);}
+  .chip-draft .draft-go{font-size:11px;padding:2px 8px;}
+  .chip-draft .draft-cancel{background:transparent;border:none;color:var(--t3);cursor:pointer;font-size:14px;line-height:1;padding:0 4px;}
+  .chip-draft .draft-cancel:hover{color:#f87171;}
+  .filter-status{font-family:var(--mono);font-size:11px;color:var(--t3);margin-left:auto;}
 
   .dropzone{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;border:2px dashed var(--bdr);border-radius:12px;margin:40px;}
   .dropzone.dragover{border-color:var(--acc);background:var(--acc-g);}
@@ -59,6 +81,19 @@
   .drill-canvas-wrap{background:var(--bg1);border:1px solid var(--bdr);border-radius:6px;}
 
   .empty{color:var(--t3);font-family:var(--mono);font-size:12px;padding:40px;text-align:center;}
+
+  .analysis-panel{display:none;background:var(--bg1);border-top:1px solid var(--bdr);padding:14px 20px;font-family:var(--mono);font-size:12px;color:var(--t1);max-height:65vh;overflow:auto;}
+  .analysis-panel.active{display:block;}
+  .analysis-panel h3{margin:0 0 8px 0;font-size:12px;color:var(--acc);font-weight:500;}
+  .analysis-panel table{border-collapse:collapse;font-size:11px;margin-top:6px;}
+  .analysis-panel th,.analysis-panel td{padding:3px 12px 3px 0;text-align:left;color:var(--t1);}
+  .analysis-panel th{color:var(--t2);font-weight:400;border-bottom:1px solid var(--bdr);}
+  .analysis-panel .muted{color:var(--t2);}
+  .analysis-panel .sig{color:var(--acc);}
+  .analysis-panel .row{display:flex;align-items:baseline;gap:18px;margin-bottom:4px;}
+  .analysis-panel .close{float:right;background:transparent;border:none;color:var(--t2);cursor:pointer;font-size:14px;padding:0 4px;}
+  .analysis-panel .close:hover{color:var(--t1);background:transparent;}
+  .analysis-panel .err{color:#f87171;}
 </style>
 </head>
 <body>
@@ -71,7 +106,7 @@
 </div>
 
 <div class="toolbar" id="toolbar" style="display:none;">
-  <label>view <select id="viewMode"><option value="summary">2D summary</option><option value="matrix">matrix (1 dim)</option><option value="overlay">overlay</option></select></label>
+  <label>view <select id="viewMode"><option value="summary">2D summary</option><option value="matrix">matrix (1 dim)</option><option value="overlay">overlay</option><option value="spatial">spatial map</option></select></label>
   <label>rasts by <select id="rastsBy"></select></label>
   <label id="filterLabel">
     <span id="filterLabelText">filter</span>
@@ -79,13 +114,27 @@
     <span id="filterEquals">=</span>
     <select id="filterValue"></select>
   </label>
+  <label id="spatialXLabel" style="display:none;">x <select id="spatialX"></select></label>
+  <label id="spatialYLabel" style="display:none;">y <select id="spatialY"></select></label>
+  <label id="flipYLabel" style="display:none;"><input type="checkbox" id="flipY"> flip Y</label>
   <label>align <select id="alignTo"></select></label>
   <label>window <input type="number" id="winPre" step="50"> – <input type="number" id="winPost" step="50"> ms</label>
   <label>depth <input type="number" id="depthLo" step="100"> – <input type="number" id="depthHi" step="100"> µm</label>
   <button id="btnReset">Reset depth</button>
   <label><input type="checkbox" id="perPanelScale"> per-panel scale</label>
-  <button id="btnCopyPython" title="Copy a Python snippet that reproduces the current view">Copy as Python</button>
   <span class="status" id="status"></span>
+</div>
+<div class="toolbar toolbar-filters" id="toolbarFilters" style="display:none;">
+  <span class="toolbar-label">filter</span>
+  <div id="filterChips" class="filter-chips"></div>
+  <button id="btnAddFilter" class="chip-add" title="Add a column = value subset filter">+ add filter</button>
+  <span id="filterStatus" class="filter-status"></span>
+</div>
+<div class="toolbar toolbar-analysis" id="toolbarAnalysis" style="display:none;">
+  <span class="toolbar-label">analysis</span>
+  <button id="btnAnalyzeANOVA" title="ANOVA on per-trial spike count in the current window" style="display:none;">ANOVA</button>
+  <button id="btnAnalyzeOverTime" title="η² over time: when does selectivity emerge?" style="display:none;">η² over time</button>
+  <button id="btnCopyPython" title="Copy a Python snippet that reproduces the current view">Copy as Python</button>
 </div>
 
 <div class="dropzone" id="dropZone">
@@ -99,6 +148,11 @@
 <div class="matrix-wrap" id="matrixWrap"><canvas id="matrixCanvas"></canvas></div>
 <div class="grid" id="grid" style="display:none;"></div>
 
+<div class="analysis-panel" id="analysisPanel">
+  <button class="close" id="btnAnalysisClose" title="Close">×</button>
+  <div id="analysisContent"></div>
+</div>
+
 <div class="drill" id="drill">
   <div class="drill-head">
     <button id="btnBack">← Back</button>
@@ -111,6 +165,7 @@
 </div>
 
 <script src="js/dg_reader.js"></script>
+<script src="js/pyodide_analysis.js?v=2"></script>
 <script>
 // ═════════════════════════════════════════════════════════════════════
 // Spike Explorer — overlay rasters across trials of the same condition.
@@ -147,10 +202,27 @@ const App = {
   dataDepthMax: 1,
 
   // UI / view state
-  mode: 'summary',        // 'summary' | 'matrix' | 'overlay'
+  mode: 'summary',        // 'summary' | 'matrix' | 'overlay' | 'spatial'
   rastsBy: '',
-  filterBy: '',           // '' = no secondary filter
-  filterValue: '',        // string form of the chosen value
+  filterBy: '',           // '' = no secondary axis (2D summary uses this as 'rows')
+  filterValue: '',        // string form of the chosen value (matrix/overlay views)
+  // Y-axis flip for 2D summary view: many of our spatial columns
+  // (*_y, *_pos_y, etc.) use "up is positive" but ascending-sort renders
+  // small values at top, so up ends up at the bottom. Toggle inverts row
+  // order for any 2D summary; auto-defaults on for *_y filter columns.
+  flipY: false,
+  flipYAutoApplied: false,
+  // Spatial map view: x/y are scalar numeric columns whose unique value
+  // pairs define real (x, y) sampling locations (e.g. patch_x/patch_y,
+  // stim_x/stim_y). Heatmaps are placed at their real locations rather
+  // than on a regular grid.
+  spatialX: '',
+  spatialY: '',
+  // Subset filters (apply to all views + analyses uniformly). Each entry
+  // is {col, value:String}. AND together: a trial passes iff every chip
+  // matches. A chip referencing a column a source lacks → all that
+  // source's trials fail (conservative: filter intent is "only these").
+  filters: [],
   alignTo: '',
   winPre: -100,
   winPost: 400,
@@ -192,6 +264,7 @@ const App = {
     // Toolbar bindings
     document.getElementById('viewMode').addEventListener('change', e => {
       this.mode = e.target.value;
+      this._invalidateAnalysisPanel();
       if (this.mode === 'summary') this._ensureFilterPicked();
       this._updateToolbarLabels();
       this.exitDrilldown();
@@ -208,7 +281,24 @@ const App = {
     });
     document.getElementById('filterBy').addEventListener('change', () => {
       this.filterBy = document.getElementById('filterBy').value;
+      // User explicitly changed filterBy: re-evaluate the auto flip-Y
+      // default for the new column. Only override the user's previous
+      // manual choice if we had set it ourselves.
+      this._maybeAutoFlipY();
       this.populateFilterValueDropdown();
+      this.onControlsChanged();
+    });
+    document.getElementById('flipY').addEventListener('change', e => {
+      this.flipY = e.target.checked;
+      this.flipYAutoApplied = false;  // user took manual control
+      this.refresh();
+    });
+    document.getElementById('spatialX').addEventListener('change', e => {
+      this.spatialX = e.target.value;
+      this.onControlsChanged();
+    });
+    document.getElementById('spatialY').addEventListener('change', e => {
+      this.spatialY = e.target.value;
       this.onControlsChanged();
     });
     document.getElementById('filterValue').addEventListener('change', () => {
@@ -229,11 +319,23 @@ const App = {
       this.depthLo = Math.floor(this.dataDepthMin / 100) * 100;
       this.depthHi = Math.ceil(this.dataDepthMax / 100) * 100;
       this.syncDepthInputs();
+      this._invalidateAnalysisPanel();
       this.refresh();
     });
     document.getElementById('btnBack').addEventListener('click', () => this.exitDrilldown());
     document.getElementById('btnCopyPython').addEventListener('click',
       () => this._copyPythonSnippet());
+    document.getElementById('btnAnalyzeANOVA').addEventListener('click',
+      () => this._runANOVA());
+    document.getElementById('btnAnalyzeOverTime').addEventListener('click',
+      () => this._runSelectivityOverTime());
+    document.getElementById('btnAddFilter').addEventListener('click',
+      () => this._addFilterDraft());
+    document.getElementById('btnAnalysisClose').addEventListener('click',
+      () => document.getElementById('analysisPanel').classList.remove('active'));
+    window.addEventListener('pyodide-analysis:status', e => {
+      this._flashStatus(`pyodide: ${e.detail.message}`);
+    });
 
     // Click on the matrix canvas — used for summary-mode row drill-in.
     document.getElementById('matrixCanvas').addEventListener('click',
@@ -352,10 +454,14 @@ const App = {
 
     document.getElementById('dropZone').style.display = 'none';
     document.getElementById('toolbar').style.display = 'flex';
+    document.getElementById('toolbarFilters').style.display = 'flex';
+    document.getElementById('toolbarAnalysis').style.display = 'flex';
+    this._renderFilterChips();
 
     if (this.mode === 'summary') this._ensureFilterPicked();
     this._updateToolbarLabels();
 
+    this._invalidateAnalysisPanel();
     this.exitDrilldown();
     this.refresh();
   },
@@ -382,18 +488,316 @@ const App = {
     }
   },
 
+  // ─── Subset filters ─────────────────────────────────────────────────
+  // Semantics: chips ANDed across distinct columns; ORed within the same
+  // column. So {ori=90, ori=120, size=4} means
+  //   (ori == 90 OR ori == 120) AND size == 4.
+  // This is the natural reading of "I added another filter for the same
+  // dimension" without forcing the user to learn operator precedence.
+  // A column referenced by a chip but missing from a source fails all
+  // that source's trials — filter intent is "only these".
+  _filtersByCol() {
+    const m = new Map();
+    for (const f of this.filters) {
+      if (!m.has(f.col)) m.set(f.col, []);
+      m.get(f.col).push(f.value);
+    }
+    return m;
+  },
+
+  _trialPasses(src, trialIdx) {
+    if (this.filters.length === 0) return true;
+    for (const [col, vals] of this._filtersByCol()) {
+      const list = src.dg.getList(col);
+      if (!list || !list.data) return false;
+      if (!vals.includes(String(list.data[trialIdx]))) return false;
+    }
+    return true;
+  },
+
+  // Sum kept-vs-total trial counts across all sources under current filters.
+  _filterTrialCounts() {
+    let kept = 0, total = 0;
+    for (const src of this.sources) {
+      const ntr = src.ntrials;
+      total += ntr;
+      if (this.filters.length === 0) { kept += ntr; continue; }
+      for (let i = 0; i < ntr; i++) if (this._trialPasses(src, i)) kept++;
+    }
+    return { kept, total };
+  },
+
+  // Short, human-readable list of active subset constraints — for the
+  // ANOVA result header so the user always sees what's been narrowed.
+  // Includes both chip filters AND the legacy filterBy/filterValue when
+  // it's acting as a subset (matrix/overlay views).
+  // OR-within-column → "ori ∈ {45, 90}", AND-across-columns → comma-joined.
+  _activeFiltersDescription() {
+    const parts = [];
+    // Legacy filterBy=value subset only applies in matrix/overlay (where
+    // it actually narrows the trial set). Summary uses filterBy as the
+    // row factor; spatial doesn't use it at all.
+    if (this.mode !== 'summary' && this.mode !== 'spatial'
+        && this.filterBy && this.filterValue !== '') {
+      parts.push(`${this.filterBy}=${this.filterValue}`);
+    }
+    for (const [col, vals] of this._filtersByCol()) {
+      parts.push(vals.length === 1
+        ? `${col}=${vals[0]}`
+        : `${col}∈{${vals.join(',')}}`);
+    }
+    return parts.join(', ');
+  },
+
+  // Distinct values for `col` across the union of all sources, naturally
+  // sorted (numeric if both parse as numbers; lexicographic otherwise).
+  _distinctValuesForCol(col) {
+    const seen = new Set();
+    const vals = [];
+    for (const src of this.sources) {
+      const list = src.dg.getList(col);
+      if (!list || !list.data) continue;
+      const ntr = src.ntrials;
+      for (let i = 0; i < ntr; i++) {
+        const v = list.data[i];
+        const k = String(v);
+        if (seen.has(k)) continue;
+        seen.add(k); vals.push(v);
+      }
+    }
+    vals.sort((a, b) => {
+      const an = Number(a), bn = Number(b);
+      if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+      return String(a).localeCompare(String(b));
+    });
+    return vals;
+  },
+
+  // Render the chips DOM from this.filters. The value is an inline
+  // <select> so the user can flip values without removing + re-adding the
+  // chip — quick a/b/c comparison is the whole point of the explorer.
+  // Column stays as a static label; switching column = different chip.
+  _renderFilterChips() {
+    const host = document.getElementById('filterChips');
+    if (!host) return;
+    host.innerHTML = '';
+    for (let i = 0; i < this.filters.length; i++) {
+      const f = this.filters[i];
+      // OR-within-column: render a small "or" separator between this
+      // chip and the previous one when they share a column.
+      if (i > 0 && this.filters[i - 1].col === f.col) {
+        const orSep = document.createElement('span');
+        orSep.className = 'chip-or'; orSep.textContent = 'or';
+        host.appendChild(orSep);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+
+      const key = document.createElement('span');
+      key.className = 'chip-key';
+      // Hide the "col=" prefix when this chip continues an OR-group, so
+      // we read "ori = 45 or 90" rather than "ori=45 or ori=90".
+      const continuesOr = i > 0 && this.filters[i - 1].col === f.col;
+      key.textContent = continuesOr ? '' : `${f.col}=`;
+      key.style.display = continuesOr ? 'none' : '';
+
+      const valSel = document.createElement('select');
+      valSel.className = 'chip-val';
+      const vals = this._distinctValuesForCol(f.col);
+      // If the current value isn't among the source values (e.g. all
+      // sources lack the column), keep it visible so we don't silently
+      // forget what the chip was set to.
+      const havePresent = vals.some(v => String(v) === f.value);
+      if (!havePresent) {
+        const opt = document.createElement('option');
+        opt.value = f.value; opt.textContent = `${f.value} (missing)`;
+        valSel.appendChild(opt);
+      }
+      for (const v of vals) {
+        const opt = document.createElement('option');
+        opt.value = String(v); opt.textContent = this.formatValue(v);
+        valSel.appendChild(opt);
+      }
+      valSel.value = f.value;
+      // Auto-resize the select to fit its current option label.
+      valSel.style.width =
+        Math.max(2, valSel.options[valSel.selectedIndex]?.text.length ?? 2)
+        + 1.5 + 'ch';
+      valSel.addEventListener('change',
+        () => this._changeFilterValue(i, valSel.value));
+
+      const x = document.createElement('button');
+      x.className = 'chip-x'; x.title = 'Remove'; x.textContent = '×';
+      x.addEventListener('click', () => this._removeFilter(i));
+
+      chip.appendChild(key);
+      chip.appendChild(valSel);
+      chip.appendChild(x);
+      host.appendChild(chip);
+    }
+    const status = document.getElementById('filterStatus');
+    if (status) {
+      if (this.sources.length === 0) {
+        status.textContent = '';
+      } else {
+        const { kept, total } = this._filterTrialCounts();
+        const pct = total ? Math.round(kept / total * 100) : 0;
+        status.textContent = this.filters.length
+          ? `keeping ${kept}/${total} trials (${pct}%)`
+          : `${total} trials, no filter`;
+      }
+    }
+  },
+
+  _changeFilterValue(idx, newValue) {
+    if (idx < 0 || idx >= this.filters.length) return;
+    if (newValue === '' || newValue == null) return;
+    const f = this.filters[idx];
+    const v = String(newValue);
+    // If the new value collides with another chip on the same column,
+    // drop *this* chip instead of creating a duplicate — semantically
+    // identical, less visual noise.
+    const dup = this.filters.findIndex(
+      (g, j) => j !== idx && g.col === f.col && g.value === v);
+    if (dup !== -1) {
+      this.filters.splice(idx, 1);
+    } else {
+      this.filters[idx] = { ...f, value: v };
+    }
+    this._renderFilterChips();
+    this._invalidateAnalysisPanel();
+    this.refresh();
+  },
+
+  // Insert a draft chip with column + value selects. The column dropdown
+  // excludes any column already in this.filters (no point in stacking
+  // contradictory chips on the same column). The value dropdown lists the
+  // distinct values that appear in the union of all sources for that
+  // column. "Add" commits; "×" cancels without adding.
+  _addFilterDraft() {
+    const host = document.getElementById('filterChips');
+    if (!host) return;
+    if (host.querySelector('.chip-draft')) return;   // one draft at a time
+
+    // Candidate columns: same heuristic as group-by. Already-chipped
+    // columns are *allowed* — adding a second chip on the same column
+    // is how you express "ori == 90 OR ori == 120" (OR within column,
+    // AND across columns).
+    const cands = this.discoverRastsBy();
+    if (cands.length === 0) return;
+
+    const draft = document.createElement('span');
+    draft.className = 'chip-draft';
+    const colSel = document.createElement('select');
+    for (const c of cands) {
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      colSel.appendChild(o);
+    }
+    const eq = document.createElement('span');
+    eq.className = 'draft-eq'; eq.textContent = '=';
+    const valSel = document.createElement('select');
+    const go = document.createElement('button');
+    go.className = 'draft-go primary'; go.textContent = 'add';
+    const cancel = document.createElement('button');
+    cancel.className = 'draft-cancel'; cancel.title = 'cancel';
+    cancel.textContent = '×';
+
+    const fillValues = () => {
+      valSel.innerHTML = '';
+      for (const v of this._distinctValuesForCol(colSel.value)) {
+        const o = document.createElement('option');
+        o.value = String(v); o.textContent = this.formatValue(v);
+        valSel.appendChild(o);
+      }
+    };
+    fillValues();
+    colSel.addEventListener('change', fillValues);
+    go.addEventListener('click', () =>
+      this._commitFilter(colSel.value, valSel.value));
+    cancel.addEventListener('click', () => draft.remove());
+
+    draft.appendChild(colSel);
+    draft.appendChild(eq);
+    draft.appendChild(valSel);
+    draft.appendChild(go);
+    draft.appendChild(cancel);
+    host.appendChild(draft);
+    valSel.focus();
+  },
+
+  _commitFilter(col, value) {
+    if (!col || value === '' || value == null) return;
+    const v = String(value);
+    // Drop exact dup — same {col, value} pair already exists.
+    if (this.filters.some(f => f.col === col && f.value === v)) {
+      // Still rerender to clear any draft chip that's open.
+      this._renderFilterChips();
+      return;
+    }
+    this.filters.push({ col, value: v });
+    this._renderFilterChips();
+    this._invalidateAnalysisPanel();
+    this.refresh();
+  },
+
+  _removeFilter(idx) {
+    if (idx < 0 || idx >= this.filters.length) return;
+    this.filters.splice(idx, 1);
+    this._renderFilterChips();
+    this._invalidateAnalysisPanel();
+    this.refresh();
+  },
+
   // Toolbar label & visibility differ between modes. In summary mode the
   // filter column IS the row dimension, and the value-select is irrelevant
   // (we render every value as a row). In matrix/overlay modes the value
   // is meaningful — it selects which subset to drill into.
   _updateToolbarLabels() {
     const isSummary = this.mode === 'summary';
+    const isMatrix  = this.mode === 'matrix';
+    const isSpatial = this.mode === 'spatial';
     const lab = document.getElementById('filterLabelText');
     const eq  = document.getElementById('filterEquals');
     const val = document.getElementById('filterValue');
+    const filterLabel = document.getElementById('filterLabel');
+    const rastsByLabel = document.getElementById('rastsBy').parentElement;
     if (lab) lab.textContent = isSummary ? 'rows' : 'filter';
     if (eq)  eq.style.display  = isSummary ? 'none' : '';
     if (val) val.style.display = isSummary ? 'none' : '';
+    // Spatial mode hides rasts-by/filter and shows X/Y instead.
+    if (filterLabel)  filterLabel.style.display  = isSpatial ? 'none' : '';
+    if (rastsByLabel) rastsByLabel.style.display = isSpatial ? 'none' : '';
+    document.getElementById('spatialXLabel').style.display = isSpatial ? '' : 'none';
+    document.getElementById('spatialYLabel').style.display = isSpatial ? '' : 'none';
+    // flip-Y: relevant for 2D summary (rows axis is up/down). Spatial mode
+    // always uses up-positive convention internally so no toggle needed.
+    document.getElementById('flipYLabel').style.display = isSummary ? '' : 'none';
+    document.getElementById('flipY').checked = !!this.flipY;
+    // Analysis buttons: meaningful in summary (2-way: cols × rows),
+    // matrix (1-way: cols), and spatial (1-way: location). Hidden in
+    // overlay (no aggregate response axis there).
+    const showAnalysis = (isSummary || isMatrix || isSpatial) ? '' : 'none';
+    const a = document.getElementById('btnAnalyzeANOVA');
+    const t = document.getElementById('btnAnalyzeOverTime');
+    if (a) a.style.display = showAnalysis;
+    if (t) t.style.display = showAnalysis;
+    // Hide the analysis-toolbar 'analysis' label too when there's nothing
+    // statistical to do — the row collapses to just Copy-as-Python.
+    const lbl = document.querySelector('#toolbarAnalysis .toolbar-label');
+    if (lbl) lbl.style.display = showAnalysis;
+  },
+
+  // Auto-pick flip-Y when the row column looks like a y/elevation axis.
+  // Only overrides previously-auto-set values; if the user explicitly
+  // toggled the checkbox we leave their choice alone.
+  _maybeAutoFlipY() {
+    if (!this.flipYAutoApplied && this.flipY) return;  // user set true manually
+    const looksLikeY = !!this.filterBy && /(^|_)y($|_|deg|pos)/i.test(this.filterBy);
+    this.flipY = looksLikeY;
+    this.flipYAutoApplied = true;
+    const cb = document.getElementById('flipY');
+    if (cb) cb.checked = looksLikeY;
   },
 
   // Top-level dispatch: pick the right view for the current mode.
@@ -410,6 +814,10 @@ const App = {
       grid.style.display = 'none';
       matWrap.classList.add('active');
       this.renderSummary();
+    } else if (this.mode === 'spatial') {
+      grid.style.display = 'none';
+      matWrap.classList.add('active');
+      this.renderSpatialMap();
     } else {
       grid.style.display = 'grid';
       matWrap.classList.remove('active');
@@ -460,6 +868,66 @@ const App = {
       return da - db;   // 0s first, 1s last; stable for ties
     });
   },
+  // Spatial-pair candidates: numeric scalar columns that pair up by name
+  // as (X, Y). Matches any `<prefix>_x` / `<prefix>_y` pair (covers
+  // stim_x/stim_y, targ_x/targ_y, patch_x/patch_y, dot_x/dot_y, …) plus
+  // a few hand-recognized spellings (h/v, az/el). Both columns must be
+  // numeric scalars with ≥3 unique values and a non-zero range.
+  discoverSpatialPairs() {
+    const candidates = new Map();   // colName -> {prefix, axis: 'x'|'y'}
+    for (const list of this.dg.lists) {
+      if (list.dataType === DF_LIST || list.dataType === DF_STRING) continue;
+      const nm = list.name;
+      if (nm.startsWith('spike_') || nm.startsWith('unit_list_')) continue;
+      // Pattern A: <prefix>_x or <prefix>_y (case-insensitive, must have prefix)
+      let m = nm.match(/^(.+)_([xy])$/i);
+      if (m) { candidates.set(nm, { prefix: m[1].toLowerCase(), axis: m[2].toLowerCase() }); continue; }
+      // Pattern B: <prefix>_h / <prefix>_v (horizontal/vertical)
+      m = nm.match(/^(.+)_([hv])$/i);
+      if (m) { candidates.set(nm, { prefix: m[1].toLowerCase(), axis: m[2].toLowerCase() === 'h' ? 'x' : 'y' }); continue; }
+      // Pattern C: <prefix>_az / <prefix>_el (azimuth/elevation)
+      m = nm.match(/^(.+)_(az|el)$/i);
+      if (m) { candidates.set(nm, { prefix: m[1].toLowerCase(), axis: m[2].toLowerCase() === 'az' ? 'x' : 'y' }); continue; }
+    }
+    // Group by prefix; emit pair only if BOTH axes present and both are
+    // varying (≥3 unique numeric values with a real range).
+    const byPrefix = new Map();
+    for (const [name, info] of candidates) {
+      if (!byPrefix.has(info.prefix)) byPrefix.set(info.prefix, {});
+      byPrefix.get(info.prefix)[info.axis] = name;
+    }
+    const validateCol = (name) => {
+      const list = this.dg.getList(name);
+      if (!list || !list.data) return false;
+      const u = new Set();
+      let mn = Infinity, mx = -Infinity;
+      const N = Math.min(this.ntrials, list.data.length || 0);
+      for (let i = 0; i < N; i++) {
+        const v = Number(list.data[i]);
+        if (!Number.isFinite(v)) continue;
+        u.add(v);
+        if (v < mn) mn = v; if (v > mx) mx = v;
+        if (u.size > 64) return false;   // too dense, not a coord axis
+      }
+      return u.size >= 3 && mx > mn;
+    };
+    const pairs = [];
+    for (const [prefix, axes] of byPrefix) {
+      if (!axes.x || !axes.y) continue;
+      if (!validateCol(axes.x) || !validateCol(axes.y)) continue;
+      pairs.push({ prefix, x: axes.x, y: axes.y });
+    }
+    // Prefer common stimulus-position spellings first.
+    const PRIORITY = ['stim','target','targ','patch','sample','dot','probe','rf'];
+    pairs.sort((a, b) => {
+      const pa = PRIORITY.indexOf(a.prefix); const pb = PRIORITY.indexOf(b.prefix);
+      const ra = pa < 0 ? PRIORITY.length : pa;
+      const rb = pb < 0 ? PRIORITY.length : pb;
+      return ra - rb || a.prefix.localeCompare(b.prefix);
+    });
+    return pairs;
+  },
+
   // Alignment candidates: numeric scalar columns whose names suggest a
   // timing event.
   discoverAlignTo() {
@@ -505,6 +973,22 @@ const App = {
     this.rastsBy = document.getElementById('rastsBy').value;
     this.alignTo = document.getElementById('alignTo').value;
 
+    // Spatial X/Y picks: union across discovered pairs. The X dropdown
+    // lists every X candidate, the Y dropdown every Y candidate, so the
+    // user can mix-and-match if they have, say, stim_x with targ_y. Auto
+    // -default to the highest-priority complete pair.
+    const pairs = this.discoverSpatialPairs();
+    const xOpts = [...new Set(pairs.map(p => p.x))];
+    const yOpts = [...new Set(pairs.map(p => p.y))];
+    const defaultPair = pairs[0] || null;
+    fillSelect('spatialX', xOpts, this.spatialX || (defaultPair ? defaultPair.x : ''));
+    fillSelect('spatialY', yOpts, this.spatialY || (defaultPair ? defaultPair.y : ''));
+    this.spatialX = document.getElementById('spatialX').value;
+    this.spatialY = document.getElementById('spatialY').value;
+    // Disable the spatial-map view-mode option if we couldn't find a pair.
+    const spatialOpt = document.querySelector('#viewMode option[value="spatial"]');
+    if (spatialOpt) spatialOpt.disabled = pairs.length === 0;
+
     // Filter dropdowns (depend on the rastsBy choice — populated after).
     this.populateFilterDropdowns();
 
@@ -537,6 +1021,7 @@ const App = {
       this.filterBy = '';
       this.filterValue = '';
     }
+    this._maybeAutoFlipY();
     this.populateFilterValueDropdown();
   },
 
@@ -585,6 +1070,7 @@ const App = {
     document.getElementById('depthHi').value = this.depthHi;
   },
   onControlsChanged() {
+    this._invalidateAnalysisPanel();
     this.rastsBy = document.getElementById('rastsBy').value || this.rastsBy;
     this.alignTo = document.getElementById('alignTo').value || this.alignTo;
     let pre = Number(document.getElementById('winPre').value);
@@ -614,10 +1100,12 @@ const App = {
     // Resolve secondary filter (column data + canonical string value).
     const fList = this.filterBy ? this.dg.getList(this.filterBy) : null;
     const fVal = (fList && this.filterValue !== '') ? this.filterValue : null;
+    const primary = this.sources[0];
 
     const groups = new Map();
     for (let i = 0; i < this.ntrials; i++) {
       if (fList && fVal !== null && String(fList.data[i]) !== fVal) continue;
+      if (primary && !this._trialPasses(primary, i)) continue;
       const v = list.data[i];
       if (!groups.has(v)) groups.set(v, []);
       groups.get(v).push(i);
@@ -707,16 +1195,29 @@ const App = {
 # independently and look for replication — that's the right cross-bank
 # check, since unit_id namespaces don't align across recordings.`
       : `# Single source.`;
+    const twoWayNote = this.filterBy && this.filterBy !== this.rastsBy;
+    const dim2Repr = twoWayNote ? `"${this.filterBy}"` : 'None';
+    const filtersRepr = this.filters.length
+      ? '[' + this.filters.map(f => `("${f.col}", "${f.value}")`).join(', ') + ']'
+      : '[]';
+    const filtersComment = this.filters.length
+      ? this.filters.map(f => `${f.col}=${f.value}`).join(', ')
+      : '(none)';
     const snippet = `# Reproduces the current spike_explorer view in Python.
-# NOTE: the file paths are placeholders — the browser can't expose
-# absolute paths from drag-drop. Edit them before running.
+# NOTE: file paths are placeholders — the browser can't expose absolute
+# paths from drag-drop. Edit them before running.
+#
+# This snippet matches the in-browser ANOVA the explorer just showed you,
+# and is the off-ramp for anything heavier (per-unit enrichment with
+# multiple-comparison correction, population decoders, continuous /
+# circular factors, etc.) — keep variables in their native types so you
+# can model them properly here.
 import numpy as np
 from esslab import SpikeSession
 from esslab.analysis import (
     windowed_counts, time_resolved_counts,
-    condition_labels, units_in_depth,
-    selectivity, time_resolved_selectivity,
-    decode_window, decode_window_with_null,
+    condition_labels,
+    anova_aggregate, anova_over_time,
 )
 
 ses = SpikeSession([
@@ -725,18 +1226,36 @@ ${paths}
 ${sourcesNote}
 
 # Toolbar state at copy time:
-#   rows (filter)  : ${this.filterBy || '(none)'}
 #   cols (rasts by): ${this.rastsBy}
+#   rows (filter)  : ${this.filterBy || '(none — 1-way ANOVA on cols)'}
 #   align          : ${this.alignTo}
 #   window         : (${this.winPre}, ${this.winPost}) ms
 #   depth          : (${this.depthLo}, ${this.depthHi}) µm
+#   subset filters : ${filtersComment}
 
-# 1) Per-bank windowed counts + ANOVA selectivity for '${this.rastsBy}'.
-#    With a single source this just runs once. With multiple sources it
-#    replicates the test in each bank — both showing enrichment is the
-#    most direct multi-bank "is this real?" answer.
-#    Banks whose depth range doesn't overlap the depth filter contribute
-#    zero units; we skip those with a clear message.
+dim1_col = "${this.rastsBy}"
+dim2_col = ${dim2Repr}     # None → 1-way ANOVA on dim1
+# Filter chips — applied to every per-trial loop below as an AND of equals.
+# Edit / remove tuples to change subsetting. Empty list = use all trials.
+filters  = ${filtersRepr}
+
+def _filter_mask(trials, filters):
+    """AND across distinct columns, OR within the same column.
+    {('ori','90'), ('ori','120'), ('size','4')} →
+        (ori == 90 OR ori == 120) AND (size == 4)."""
+    if not filters: return np.ones(len(trials), dtype=bool)
+    by_col = {}
+    for col, val in filters:
+        by_col.setdefault(col, []).append(str(val))
+    m = np.ones(len(trials), dtype=bool)
+    for col, vals in by_col.items():
+        if col not in trials:
+            return np.zeros(len(trials), dtype=bool)
+        col_data = trials[col].astype(str)
+        m &= np.isin(col_data, vals)
+    return m
+
+# 1) Aggregate ANOVA on per-trial spike count in [${this.winPre}, ${this.winPost}] ms.
 for sf in ses.files:
     counts, ids = windowed_counts(
         sf,
@@ -749,55 +1268,45 @@ for sf in ses.files:
         print(f"{sf.path.name}: 0 units — bank covers "
               f"{bank_lo:.0f}-{bank_hi:.0f} µm, outside selected band")
         continue
-    labels = condition_labels(sf.trials, "${this.rastsBy}")
-    r = selectivity(counts, labels)
-    print(f"{sf.path.name}: "
-          f"{r['n_significant']:>3d}/{r['n_units']:<4d} units selective "
-          f"(enrichment: {r['enrichment']:.1f}x)")
+    keep = _filter_mask(sf.trials, filters)
+    y    = counts[keep].sum(axis=1)   # per-trial summed count across kept units
+    dim1 = condition_labels(sf.trials, dim1_col)[keep]
+    dim2 = condition_labels(sf.trials, dim2_col)[keep] if dim2_col else None
+    r = anova_aggregate(dim1, dim2, y)
+    print(f"{sf.path.name}: N={r['n']} (kept {int(keep.sum())}/{len(keep)})")
+    for e in r["effects"]:
+        print(f"  {e['name']:<14s} F({e['df']},{e['df_resid']})={e['F']:.2f}  "
+              f"p={e['p']:.4g}  η²p={e['partial_eta2']:.3f}")
 
-# 2) Joint population decoder — uses simultaneous-recording structure.
-#    Per-unit ANOVA aggregates marginals; the decoder reads the joint
-#    code and is sensitive to cross-unit patterns (correlated noise,
-#    multi-unit codes) that no per-unit test can see.
-print()
-print("joint linear decoder (LDA + Ledoit-Wolf shrinkage):")
-for sf in ses.files:
-    counts, ids = windowed_counts(
-        sf,
-        window=(${this.winPre}, ${this.winPost}),
-        align_col="${this.alignTo}",
-        depth_range=(${this.depthLo}, ${this.depthHi}),
-    )
-    if len(ids) == 0: continue
-    labels = condition_labels(sf.trials, "${this.rastsBy}")
-    # 50-perm null for a quick p-value; bump to 1000 for paper-grade
-    r = decode_window_with_null(counts, labels, n_perm=50)
-    print(f"  {sf.path.name}: "
-          f"acc={r['mean_accuracy']:.3f} (chance {r['chance_level']:.3f}, "
-          f"{r['mean_accuracy']/r['chance_level']:.1f}x)  "
-          f"null={r['null_mean']:.3f}±{r['null_std']:.3f}  p={r['p_value']:.4f}")
-
-# 3) Time-resolved: when does selectivity emerge? One curve per bank.
+# 2) η² over time — when does each effect lift off baseline?
 import matplotlib.pyplot as plt
 fig, ax = plt.subplots(figsize=(6, 3))
-centers = np.arange(${this.winPre}, ${this.winPost} + 1, 10)
+centers = np.arange(${this.winPre} + 25, ${this.winPost} - 24, 10)  # 50-ms window centers
 for sf in ses.files:
     cube, ids, _ = time_resolved_counts(
         sf, centers, width_ms=50,
         align_col="${this.alignTo}",
         depth_range=(${this.depthLo}, ${this.depthHi}),
     )
-    if len(ids) == 0:
-        continue   # bank doesn't cover this depth band
-    labels = condition_labels(sf.trials, "${this.rastsBy}")
-    ts = time_resolved_selectivity(cube, labels)
-    ax.plot(centers, ts["enrichment"], label=sf.path.name)
-ax.axhline(1, ls="--", c="0.5", lw=0.8, label="chance")
-ax.set(xlabel="time vs ${this.alignTo} (ms)",
-       ylabel="enrichment (× chance)",
-       title="selectivity for ${this.rastsBy}")
+    if len(ids) == 0: continue
+    keep  = _filter_mask(sf.trials, filters)
+    rates = cube[keep] / 0.050   # spikes/sec; cube shape (N_trials, N_units, N_times)
+    dim1  = condition_labels(sf.trials, dim1_col)[keep]
+    dim2  = condition_labels(sf.trials, dim2_col)[keep] if dim2_col else None
+    r = anova_over_time(rates, dim1, dim2)   # returns η² traces per effect
+    for eff in r["effects"]:
+        ax.plot(centers, eff["q50"], label=f'{sf.path.name}: {eff["name"]}')
+ax.set(xlabel=f"time vs ${this.alignTo} (ms)",
+       ylabel="median η² across units",
+       title=f"selectivity for {dim1_col}" + (f" × {dim2_col}" if dim2_col else ""))
 ax.legend(fontsize=8)
 plt.tight_layout()
+
+# 3) Need more? The explorer is intentionally just a quick pass.
+#    For per-unit enrichment with BH correction, population decoders,
+#    or continuous / circular factor handling (orientation, x/y, etc.),
+#    fit those here on the raw arrays — they survive whatever modeling
+#    choices you want to make.
 `;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(snippet).then(() => {
@@ -817,6 +1326,866 @@ plt.tight_layout()
     const prev = el.textContent;
     el.textContent = msg;
     setTimeout(() => { if (el.textContent === msg) el.textContent = prev; }, 1800);
+  },
+
+  // ─── Pyodide analyses ────────────────────────────────────────────────
+  // Extract the per-trial inputs the analyses need, honoring the same
+  // align/window/depth/columns the 2D summary is currently rendering.
+  //
+  // Granularity: if every loaded source carries a per-spike `spike_unit`
+  // column, columns of X are sorted units (depth-filtered by their
+  // `unit_list_depth`). Otherwise we fall back to ~100 µm depth bins.
+  //
+  // Returns:
+  //   { dim1, dim2, y, X, shape, nUnits, granularity, unitsMeta,
+  //     skipped, total, dim1Name, dim2Name, windowMs, depthRange }
+  // y is per-trial spike count summed across kept units in window.
+  // X is (N_trials × nUnits) firing rates in spikes/sec.
+  // Resolve the primary grouping factor for analyses.
+  //   spatial mode → (spatialX, spatialY) pair, label "x|y"
+  //   else         → rastsBy column
+  // Returns { kind, dim1Name, getValueForTrial(src, i) -> string|null }.
+  // `getValueForTrial` returns null when the trial should be skipped (no
+  // source coverage of the grouping columns), letting callers fold that
+  // into their existing skip-counting.
+  _resolveAnalysisGrouping() {
+    if (this.mode === 'spatial') {
+      if (!this.spatialX || !this.spatialY)
+        throw new Error('spatial map needs both x and y columns set');
+      const dim1Name = `${this.spatialX}×${this.spatialY}`;
+      // Per-source column lookups so we don't dg.getList() in the hot loop.
+      const cols = new Map();   // src -> {x, y}
+      const getCols = (src) => {
+        let c = cols.get(src);
+        if (!c) {
+          c = {
+            x: src.dg.getList(this.spatialX),
+            y: src.dg.getList(this.spatialY),
+          };
+          cols.set(src, c);
+        }
+        return c;
+      };
+      return {
+        kind: 'spatial', dim1Name,
+        getValueForTrial(src, i) {
+          const c = getCols(src);
+          if (!c.x || !c.y) return null;
+          const xv = Number(c.x.data[i]), yv = Number(c.y.data[i]);
+          if (!Number.isFinite(xv) || !Number.isFinite(yv)) return null;
+          // Same precision as the spatial-map bucketing so a position with
+          // identical (x, y) trials lands in one group, not many.
+          return `${xv.toFixed(4)}|${yv.toFixed(4)}`;
+        },
+      };
+    }
+    if (!this.rastsBy) throw new Error('need rasts-by (cols) set');
+    const rastsBy = this.rastsBy;
+    return {
+      kind: 'rastsBy', dim1Name: rastsBy,
+      getValueForTrial(src, i) {
+        const col = src.dg.getList(rastsBy);
+        if (!col) return null;
+        return String(col.data[i]);
+      },
+    };
+  },
+
+  _buildAnalysisInputs() {
+    if (!this.sources.length) throw new Error('no data loaded');
+    const grouping = this._resolveAnalysisGrouping();
+    const isSpatial = grouping.kind === 'spatial';
+    // The role of `filterBy` depends on the view:
+    //   summary  → second factor (rows axis); 2-way ANOVA.
+    //   matrix   → subset filter (filterBy = filterValue); 1-way ANOVA
+    //              on rastsBy of the subsetted trials.
+    //   overlay  → analysis is hidden, but treat like matrix if hit.
+    //   spatial  → 1-way on (x, y) location pair; subset filter via filterBy
+    //              follows the same legacy-subset rule as matrix.
+    // This matches what the visualization above is doing — including
+    // filterBy as a second factor in matrix mode would be wrong (every
+    // shown trial has the same filterValue, so the factor has 1 level).
+    const twoWay = this.mode === 'summary'
+      && !!this.filterBy && this.filterBy !== this.rastsBy;
+    if (this.mode === 'summary'
+        && this.filterBy && this.filterBy === this.rastsBy) {
+      throw new Error('rows and cols must be different columns');
+    }
+    const subsetByLegacyFilter =
+      (this.mode !== 'summary' && this.mode !== 'spatial')
+      && !!this.filterBy && this.filterValue !== '';
+    const tMin = this.winPre, tMax = this.winPost;
+    const dLo  = this.depthLo, dHi = this.depthHi;
+    if (!(tMax > tMin)) throw new Error('window is empty (winPost <= winPre)');
+    if (!(dHi  > dLo))  throw new Error('depth range is empty');
+    const tWinSec = Math.max(1e-9, (tMax - tMin) / 1000);
+
+    // Detect granularity: sorted-unit mode requires `spike_unit` in every
+    // source we'll touch. If any source lacks it, fall back to depth bins
+    // for the whole analysis (mixing granularities is confusing).
+    let useUnits = true;
+    for (const src of this.sources) {
+      if (!src.dg.getList('spike_unit')) { useUnits = false; break; }
+    }
+
+    // Per-source kept-unit map (depth-filtered) → global column index.
+    // Column key is `${sourceIdx}|${unitId}` so units from different
+    // sources get distinct columns.
+    const unitsMeta = [];   // [{sourceIdx, unitId, depth, snr, fr}, ...]
+    const unitColBySrc = []; // Map<unitId, colIdx> per source
+    let nUnits = 0;
+    let binDw = 0;
+
+    if (useUnits) {
+      for (let s = 0; s < this.sources.length; s++) {
+        const lookup = this.sources[s].unitLookup;
+        const m = new Map();
+        if (lookup) {
+          // Sort units by depth so columns are interpretable left-to-right.
+          const entries = [...lookup.entries()].sort(
+            (a, b) => Number(a[1].depth) - Number(b[1].depth));
+          for (const [unitId, info] of entries) {
+            const d = Number(info.depth);
+            if (!Number.isFinite(d) || d < dLo || d >= dHi) continue;
+            m.set(unitId, unitsMeta.length);
+            unitsMeta.push({
+              sourceIdx: s, unitId, depth: d,
+              snr: info.snr, fr: info.fr,
+            });
+          }
+        }
+        unitColBySrc.push(m);
+      }
+      nUnits = unitsMeta.length;
+      if (nUnits === 0) {
+        // No units survived depth filter — fall back to bins so the user
+        // gets *something*, with a clear note via granularity field.
+        useUnits = false;
+      }
+    }
+
+    if (!useUnits) {
+      nUnits = Math.max(4, Math.min(64, Math.round((dHi - dLo) / 100)));
+      binDw  = (dHi - dLo) / nUnits;
+      for (let b = 0; b < nUnits; b++) {
+        unitsMeta.push({ sourceIdx: -1, unitId: null,
+                         depth: dLo + (b + 0.5) * binDw,
+                         snr: null, fr: null });
+      }
+    }
+
+    const dim1 = [], dim2 = [], y = [];
+    let skipped = 0, total = 0;
+    const popRows = [];
+
+    for (let s = 0; s < this.sources.length; s++) {
+      const src = this.sources[s];
+      const dg  = src.dg;
+      const alignCol = dg.getList(this.alignTo);
+      const srcCol   = dg.getList('spike_src_trial');
+      const filtCol  = twoWay ? dg.getList(this.filterBy) : null;
+      const subsetCol = subsetByLegacyFilter ? dg.getList(this.filterBy) : null;
+      const subsetVal = subsetByLegacyFilter ? String(this.filterValue) : null;
+      if (!alignCol || !srcCol) continue;
+      if (twoWay && !filtCol) continue;
+      if (subsetByLegacyFilter && !subsetCol) continue;
+      const miss = src.spikeMissing;
+      const colMap = useUnits ? unitColBySrc[s] : null;
+      const cache = new Map();
+      const ntr = src.ntrials;
+      for (let i = 0; i < ntr; i++) {
+        total++;
+        if (subsetCol && String(subsetCol.data[i]) !== subsetVal) { skipped++; continue; }
+        if (!this._trialPasses(src, i)) { skipped++; continue; }
+        const groupVal = grouping.getValueForTrial(src, i);
+        if (groupVal == null) { skipped++; continue; }
+        const align = Number(alignCol.data[i]);
+        if (!Number.isFinite(align)) { skipped++; continue; }
+        const srcId = Number(srcCol.data[i]) | 0;
+        let entry = cache.get(srcId);
+        if (!entry) {
+          entry = {
+            T: getSublistData(dg, 'spike_times', srcId),
+            D: getSublistData(dg, 'spike_depth', srcId),
+            U: useUnits ? getSublistData(dg, 'spike_unit', srcId) : null,
+          };
+          cache.set(srcId, entry);
+        }
+        const spkT = entry.T, spkD = entry.D, spkU = entry.U;
+        if (!spkT) { skipped++; continue; }
+
+        const row = new Float32Array(nUnits);
+        let count = 0;
+        for (let k = 0; k < spkT.length; k++) {
+          const at = spkT[k] - align;
+          if (at < tMin || at >= tMax) continue;
+          let col;
+          if (useUnits) {
+            const uid = spkU[k];
+            col = colMap.get(uid);
+            if (col == null) continue;   // unit filtered out by depth
+          } else {
+            const d = spkD ? spkD[k] : 0;
+            if (d <= miss || d < dLo || d >= dHi) continue;
+            col = Math.min(nUnits - 1, ((d - dLo) / binDw) | 0);
+          }
+          count++;
+          row[col] += 1;
+        }
+        // Counts → rate (spikes/sec).
+        for (let b = 0; b < nUnits; b++) row[b] /= tWinSec;
+
+        dim1.push(groupVal);
+        if (twoWay) dim2.push(String(filtCol.data[i]));
+        y.push(count);
+        popRows.push(row);
+      }
+    }
+    const N = popRows.length;
+    const X = new Float32Array(N * nUnits);
+    for (let i = 0; i < N; i++) X.set(popRows[i], i * nUnits);
+
+    return {
+      dim1,
+      dim2: twoWay ? dim2 : null,
+      y,
+      X, shape: [N, nUnits],
+      nUnits,
+      granularity: useUnits ? 'unit' : 'depth_bin',
+      unitsMeta,
+      skipped, total,
+      twoWay,
+      dim1Name: grouping.dim1Name,
+      dim2Name: twoWay ? this.filterBy : null,
+      windowMs: [tMin, tMax],
+      depthRange: [dLo, dHi],
+    };
+  },
+
+  _showAnalysisHTML(html) {
+    document.getElementById('analysisContent').innerHTML = html;
+    document.getElementById('analysisPanel').classList.add('active');
+  },
+
+  // Close + clear the analysis panel. Called whenever an input that the
+  // last analysis depended on changes (factor, align, window, depth,
+  // filters, view mode, source) — keeping a stale F/p/η² visible above
+  // a freshly-changed view is exactly the misleading-result trap we want
+  // to avoid. NOT called for visual-only changes (per-panel scale).
+  _invalidateAnalysisPanel() {
+    const panel = document.getElementById('analysisPanel');
+    if (!panel || !panel.classList.contains('active')) return;
+    panel.classList.remove('active');
+    document.getElementById('analysisContent').innerHTML = '';
+  },
+
+  _setAnalysisBusy(busy, label) {
+    for (const id of ['btnAnalyzeANOVA', 'btnAnalyzeOverTime']) {
+      const b = document.getElementById(id);
+      if (b) b.disabled = busy;
+    }
+    if (busy && label) this._flashStatus(label);
+  },
+
+  _fmtP(p) {
+    if (p == null || !Number.isFinite(p)) return '—';
+    if (p < 1e-4) return p.toExponential(2);
+    return p.toFixed(4);
+  },
+
+  async _runANOVA() {
+    let inp;
+    try { inp = this._buildAnalysisInputs(); }
+    catch (e) { this._showAnalysisHTML(`<div class="err">${e.message}</div>`); return; }
+    if (inp.y.length < 4) {
+      this._showAnalysisHTML(`<div class="err">only ${inp.y.length} usable trials</div>`);
+      return;
+    }
+    this._setAnalysisBusy(true, 'loading analysis kernel…');
+    const wayLabel = inp.twoWay ? 'two-way' : 'one-way';
+    const titleEffects = inp.twoWay
+      ? `${inp.dim1Name}, ${inp.dim2Name}, and interaction`
+      : inp.dim1Name;
+    this._showAnalysisHTML(`<h3>Quantifying selectivity…</h3>
+      <div class="muted">N = ${inp.y.length} trials · window ${inp.windowMs[0]}–${inp.windowMs[1]} ms · depth ${inp.depthRange[0].toFixed(0)}–${inp.depthRange[1].toFixed(0)} µm</div>`);
+    try {
+      const res = await PyodideAnalysis.anova(
+        { dim1: inp.dim1, dim2: inp.dim2, y: inp.y },
+        { dim1Name: inp.dim1Name, dim2Name: inp.dim2Name,
+          responseName: `spikes in [${inp.windowMs[0]},${inp.windowMs[1]}] ms` });
+      const rows = (res.effects || []).map(e => {
+        const sig = e.p < 0.05 ? ' class="sig"' : '';
+        return `<tr${sig}>
+          <td>${e.name}</td>
+          <td>${e.F.toFixed(3)}</td>
+          <td>${e.df}</td>
+          <td>${e.df_resid}</td>
+          <td>${this._fmtP(e.p)}</td>
+          <td>${e.partial_eta2.toFixed(4)}</td>
+        </tr>`;
+      }).join('');
+      const note = res.note ? `<div class="err">${res.note}</div>` : '';
+      const levelStr = inp.twoWay
+        ? `levels: ${inp.dim1Name}=${res.n_levels.dim1}, ${inp.dim2Name}=${res.n_levels.dim2}`
+        : `levels: ${inp.dim1Name}=${res.n_levels.dim1}`;
+      const filterStr = this._activeFiltersDescription();
+      const filterRow = filterStr
+        ? `<div class="row muted"><span>filters: ${filterStr}</span></div>` : '';
+      this._showAnalysisHTML(`
+        <h3>${wayLabel.charAt(0).toUpperCase()+wayLabel.slice(1)} ANOVA — selectivity for ${titleEffects}</h3>
+        <div class="row muted">
+          <span>N = ${res.n} trials</span>
+          <span>${levelStr}</span>
+          <span>response: spike count in [${inp.windowMs[0]},${inp.windowMs[1]}] ms, depth ${inp.depthRange[0].toFixed(0)}–${inp.depthRange[1].toFixed(0)} µm</span>
+        </div>
+        ${filterRow}
+        ${note}
+        <table>
+          <thead><tr><th>effect</th><th>F</th><th>df</th><th>df<sub>resid</sub></th><th>p</th><th>partial η²</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="muted" style="margin-top:6px;">all factors treated as categorical · significant rows (p&lt;0.05) highlighted · p uncorrected for multiple comparisons.</div>
+      `);
+    } catch (e) {
+      this._showAnalysisHTML(`<div class="err">analysis failed: ${e.message}</div>`);
+    } finally {
+      this._setAnalysisBusy(false);
+    }
+  },
+
+  // Time-resolved version of _buildAnalysisInputs. Returns a 3D
+  // (N_trials × N_units × N_timebins) firing-rate array. Each timebin
+  // is a sliding W-ms window stepped every S ms across [winPre, winPost].
+  // Reuses the same unit-vs-depth-bin granularity logic.
+  _buildAnalysisInputsTimeResolved(opts) {
+    const W = opts?.windowMs ?? 50;
+    const S = opts?.stepMs ?? 10;
+    if (!this.sources.length) throw new Error('no data loaded');
+    const grouping = this._resolveAnalysisGrouping();
+    // Same view-aware logic as the aggregate builder. Matrix = 1-way on
+    // rastsBy, subset trials by filterBy/filterValue. Summary = 2-way.
+    // Spatial = 1-way on (x, y).
+    const twoWay = this.mode === 'summary'
+      && !!this.filterBy && this.filterBy !== this.rastsBy;
+    if (this.mode === 'summary'
+        && this.filterBy && this.filterBy === this.rastsBy) {
+      throw new Error('rows and cols must be different columns');
+    }
+    const subsetByLegacyFilter =
+      (this.mode !== 'summary' && this.mode !== 'spatial')
+      && !!this.filterBy && this.filterValue !== '';
+    const tMin = this.winPre, tMax = this.winPost;
+    if (!(tMax - tMin >= W)) throw new Error(`window ${tMax-tMin} ms < bin width ${W} ms`);
+    const dLo = this.depthLo, dHi = this.depthHi;
+    if (!(dHi > dLo)) throw new Error('depth range is empty');
+
+    // Bin centers: tMin + W/2 + k*S for k = 0,1,...
+    const T = Math.floor((tMax - tMin - W) / S) + 1;
+    const times = new Array(T);
+    for (let k = 0; k < T; k++) times[k] = tMin + W/2 + k*S;
+    const Wsec = W / 1000;
+
+    // Granularity detection (same as _buildAnalysisInputs).
+    let useUnits = true;
+    for (const src of this.sources) {
+      if (!src.dg.getList('spike_unit')) { useUnits = false; break; }
+    }
+    const unitsMeta = [];
+    const unitColBySrc = [];
+    let nUnits = 0, binDw = 0;
+    if (useUnits) {
+      for (let s = 0; s < this.sources.length; s++) {
+        const lookup = this.sources[s].unitLookup;
+        const m = new Map();
+        if (lookup) {
+          const entries = [...lookup.entries()].sort(
+            (a, b) => Number(a[1].depth) - Number(b[1].depth));
+          for (const [uid, info] of entries) {
+            const d = Number(info.depth);
+            if (!Number.isFinite(d) || d < dLo || d >= dHi) continue;
+            m.set(uid, unitsMeta.length);
+            unitsMeta.push({ sourceIdx: s, unitId: uid, depth: d,
+                             snr: info.snr, fr: info.fr });
+          }
+        }
+        unitColBySrc.push(m);
+      }
+      nUnits = unitsMeta.length;
+      if (nUnits === 0) useUnits = false;
+    }
+    if (!useUnits) {
+      nUnits = Math.max(4, Math.min(64, Math.round((dHi - dLo) / 100)));
+      binDw  = (dHi - dLo) / nUnits;
+      for (let b = 0; b < nUnits; b++) {
+        unitsMeta.push({ sourceIdx: -1, unitId: null,
+                         depth: dLo + (b + 0.5) * binDw,
+                         snr: null, fr: null });
+      }
+    }
+
+    const dim1 = [], dim2 = [];
+    let skipped = 0, total = 0;
+    // Build trial rows in a list (we don't know N up front), then flatten
+    // to row-major X[n*U*T + u*T + t]. Each row is a Float32Array of U*T.
+    const rows = [];
+    for (let s = 0; s < this.sources.length; s++) {
+      const src = this.sources[s];
+      const dg  = src.dg;
+      const alignCol = dg.getList(this.alignTo);
+      const srcCol   = dg.getList('spike_src_trial');
+      const filtCol  = twoWay ? dg.getList(this.filterBy) : null;
+      const subsetCol = subsetByLegacyFilter ? dg.getList(this.filterBy) : null;
+      const subsetVal = subsetByLegacyFilter ? String(this.filterValue) : null;
+      if (!alignCol || !srcCol) continue;
+      if (twoWay && !filtCol) continue;
+      if (subsetByLegacyFilter && !subsetCol) continue;
+      const miss = src.spikeMissing;
+      const colMap = useUnits ? unitColBySrc[s] : null;
+      const cache = new Map();
+      const ntr = src.ntrials;
+      for (let i = 0; i < ntr; i++) {
+        total++;
+        if (subsetCol && String(subsetCol.data[i]) !== subsetVal) { skipped++; continue; }
+        if (!this._trialPasses(src, i)) { skipped++; continue; }
+        const groupVal = grouping.getValueForTrial(src, i);
+        if (groupVal == null) { skipped++; continue; }
+        const align = Number(alignCol.data[i]);
+        if (!Number.isFinite(align)) { skipped++; continue; }
+        const srcId = Number(srcCol.data[i]) | 0;
+        let entry = cache.get(srcId);
+        if (!entry) {
+          entry = {
+            T: getSublistData(dg, 'spike_times', srcId),
+            D: getSublistData(dg, 'spike_depth', srcId),
+            U: useUnits ? getSublistData(dg, 'spike_unit', srcId) : null,
+          };
+          cache.set(srcId, entry);
+        }
+        const spkT = entry.T, spkD = entry.D, spkU = entry.U;
+        if (!spkT) { skipped++; continue; }
+
+        // Per-trial row of length U*T (counts; rate-converted at end).
+        const row = new Float32Array(nUnits * T);
+        for (let k = 0; k < spkT.length; k++) {
+          const at = spkT[k] - align;
+          // Spike falls in any timebin t whose window [tMin+t*S, tMin+t*S+W]
+          // contains `at`: tLo = ceil((at - tMin - W)/S); tHi = floor((at - tMin)/S)
+          const tLoRaw = Math.floor((at - tMin - W) / S) + 1;
+          const tHi    = Math.floor((at - tMin) / S);
+          if (tHi < 0 || tLoRaw >= T) continue;
+          const tLo = Math.max(0, tLoRaw);
+          const tHiC = Math.min(T - 1, tHi);
+          if (tLo > tHiC) continue;
+          let col;
+          if (useUnits) {
+            const uid = spkU[k];
+            col = colMap.get(uid);
+            if (col == null) continue;
+          } else {
+            const d = spkD ? spkD[k] : 0;
+            if (d <= miss || d < dLo || d >= dHi) continue;
+            col = Math.min(nUnits - 1, ((d - dLo) / binDw) | 0);
+          }
+          const base = col * T;
+          for (let tb = tLo; tb <= tHiC; tb++) row[base + tb]++;
+        }
+        // Counts → spikes/sec (each bin spans W ms).
+        for (let q = 0; q < row.length; q++) row[q] /= Wsec;
+
+        dim1.push(groupVal);
+        if (twoWay) dim2.push(String(filtCol.data[i]));
+        rows.push(row);
+      }
+    }
+    const N = rows.length;
+    const X3d = new Float32Array(N * nUnits * T);
+    for (let i = 0; i < N; i++) X3d.set(rows[i], i * nUnits * T);
+
+    return {
+      X3d, shape: [N, nUnits, T], times,
+      dim1, dim2: twoWay ? dim2 : null,
+      nUnits, nTimes: T, windowMs: W, stepMs: S,
+      granularity: useUnits ? 'unit' : 'depth_bin',
+      unitsMeta,
+      skipped, total,
+      twoWay,
+      dim1Name: grouping.dim1Name,
+      dim2Name: twoWay ? this.filterBy : null,
+      analysisWindowMs: [tMin, tMax],
+      depthRange: [dLo, dHi],
+    };
+  },
+
+  // General-purpose trace canvas: line traces + optional shaded
+  // percentile bands per trace. Each trace: {label, color, values,
+  // band?: {lo:[], hi:[]}}. yMax sets the y-axis ceiling; the y-axis
+  // label and chance-line are configurable.
+  _renderTimeTraces(canvas, times, traces, opts) {
+    const o = opts || {};
+    const yMax = o.yMax ?? 1.0;
+    const yLabel = o.yLabel ?? 'value';
+    const alignToLabel = o.alignToLabel ?? 'event';
+    const chanceLine = o.chanceLine;   // number or null
+    const height = o.height ?? 200;
+    const W = canvas.width = 720, H = canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    const PAD_L = 50, PAD_R = 12, PAD_T = 10, PAD_B = 26;
+    const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+    ctx.fillStyle = '#0a0e17'; ctx.fillRect(0, 0, W, H);
+    const tMin = times[0], tMax = times[times.length - 1];
+    const tRange = (tMax - tMin) || 1;
+    const xOf = t => PAD_L + ((t - tMin) / tRange) * plotW;
+    const yOf = v => PAD_T + (1 - Math.max(0, Math.min(1, v / yMax))) * plotH;
+    // gridlines
+    const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => f * yMax);
+    ctx.strokeStyle = '#1a2236'; ctx.lineWidth = 1;
+    ctx.font = '10px "JetBrains Mono"';
+    ctx.fillStyle = '#5a6b85'; ctx.textAlign = 'right';
+    for (const v of yTicks) {
+      const y = yOf(v);
+      ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+      ctx.fillText(v < 0.01 ? '0' : v.toFixed(yMax < 0.5 ? 2 : 2), PAD_L - 4, y + 3);
+    }
+    // x ticks
+    ctx.textAlign = 'center';
+    const xTicks = 6;
+    for (let i = 0; i <= xTicks; i++) {
+      const t = tMin + (i / xTicks) * tRange;
+      const x = xOf(t);
+      ctx.strokeStyle = '#1a2236';
+      ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, H - PAD_B); ctx.stroke();
+      ctx.fillStyle = '#5a6b85';
+      ctx.fillText(t.toFixed(0), x, H - PAD_B + 14);
+    }
+    // alignment line (t=0)
+    if (0 >= tMin && 0 <= tMax) {
+      const x0 = xOf(0);
+      ctx.strokeStyle = 'rgba(251,191,36,0.6)';
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(x0, PAD_T); ctx.lineTo(x0, H - PAD_B); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // chance / threshold line
+    if (chanceLine != null) {
+      ctx.strokeStyle = 'rgba(248,113,113,0.5)';
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath(); ctx.moveTo(PAD_L, yOf(chanceLine)); ctx.lineTo(W - PAD_R, yOf(chanceLine)); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // Per-trace baseline reference (e.g. pre-stim noise floor). Drawn in
+    // the trace's color so it's unambiguous which trace it corresponds to.
+    for (const tr of traces) {
+      if (tr.baseline == null || !Number.isFinite(tr.baseline)) continue;
+      ctx.strokeStyle = tr.color + 'aa';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      const yb = yOf(tr.baseline);
+      ctx.moveTo(PAD_L, yb); ctx.lineTo(W - PAD_R, yb); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // axis labels
+    ctx.fillStyle = '#8899b4'; ctx.font = '10px "JetBrains Mono"';
+    ctx.textAlign = 'center';
+    ctx.fillText(`time vs ${alignToLabel} (ms)`, PAD_L + plotW / 2, H - 4);
+    ctx.save();
+    ctx.translate(12, PAD_T + plotH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.fillText(yLabel, 0, 0);
+    ctx.restore();
+    // shaded percentile bands first (so lines paint on top)
+    for (const tr of traces) {
+      if (!tr.band) continue;
+      ctx.fillStyle = tr.color + '33';   // ~20% alpha hex
+      ctx.beginPath();
+      for (let i = 0; i < times.length; i++) {
+        const x = xOf(times[i]);
+        const y = yOf(tr.band.hi[i]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      for (let i = times.length - 1; i >= 0; i--) {
+        const x = xOf(times[i]);
+        const y = yOf(tr.band.lo[i]);
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    // traces
+    ctx.lineWidth = 1.8;
+    for (const tr of traces) {
+      ctx.strokeStyle = tr.color;
+      ctx.beginPath();
+      for (let i = 0; i < times.length; i++) {
+        const x = xOf(times[i]);
+        const y = yOf(tr.values[i]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    // legend — flow horizontally, wrapping when the next entry would
+    // overrun the plot width. Keeps short legends on one line and lets
+    // many-trace cases (depth bands) stack neatly.
+    ctx.font = '11px "JetBrains Mono"';
+    ctx.textAlign = 'left';
+    const LEG_X0 = PAD_L + 8;
+    const LEG_X_MAX = W - PAD_R - 8;
+    const LEG_LINE_H = 14;
+    let lx = LEG_X0, ly = PAD_T + 14;
+    for (const tr of traces) {
+      const w = 16 + ctx.measureText(tr.label).width;
+      if (lx > LEG_X0 && lx + w > LEG_X_MAX) {
+        lx = LEG_X0;
+        ly += LEG_LINE_H;
+      }
+      ctx.fillStyle = tr.color;
+      ctx.fillRect(lx, ly - 8, 12, 10);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.fillText(tr.label, lx + 16, ly);
+      lx += w + 16;
+    }
+  },
+
+  async _runSelectivityOverTime() {
+    let inp;
+    try { inp = this._buildAnalysisInputsTimeResolved({ windowMs: 50, stepMs: 10 }); }
+    catch (e) { this._showAnalysisHTML(`<div class="err">${e.message}</div>`); return; }
+    if (inp.dim1.length < 8) {
+      this._showAnalysisHTML(`<div class="err">only ${inp.dim1.length} usable trials</div>`);
+      return;
+    }
+    const granLabel = inp.granularity === 'unit' ? 'sorted units' : 'depth-bin units';
+    this._setAnalysisBusy(true, 'loading analysis kernel…');
+    this._showAnalysisHTML(`<h3>η² over time…</h3>
+      <div class="muted">${inp.dim1.length} trials × ${inp.nUnits} ${granLabel} × ${inp.nTimes} timebins (${inp.windowMs} ms window, ${inp.stepMs} ms step)</div>`);
+    try {
+      const t0 = performance.now();
+      const res = await PyodideAnalysis.anovaOverTime(
+        inp.X3d, inp.dim1,
+        { shape: inp.shape, dim2: inp.dim2 });
+      const ms = Math.round(performance.now() - t0);
+      if (res.note) {
+        this._showAnalysisHTML(`<div class="err">${res.note}</div>`);
+        return;
+      }
+      const niceName = n => n === 'dim1' ? inp.dim1Name
+                          : n === 'dim2' ? inp.dim2Name
+                          : `${inp.dim1Name} × ${inp.dim2Name}`;
+      const colors = { 'dim1': '#7dd3fc', 'dim2': '#a78bfa', 'dim1:dim2': '#fbbf24' };
+
+      // Per-effect pre-stim baseline (q50) and pre-stim noise floor for
+      // latency thresholding (MAD over the same pre-stim window). Using
+      // MAD instead of σ keeps the threshold robust if a single early bin
+      // happens to be high.
+      const preIdx = inp.times
+        .map((t, i) => (t < 0 ? i : -1))
+        .filter(i => i >= 0);
+      const median = (arr) => {
+        const v = arr.filter(x => Number.isFinite(x)).slice().sort((a,b) => a-b);
+        if (v.length === 0) return null;
+        const m = v.length >> 1;
+        return v.length % 2 ? v[m] : 0.5 * (v[m-1] + v[m]);
+      };
+      // For the "noise floor" we use the *empirical envelope* of pre-stim
+      // q50 — not MAD/SD. Reason: with hundreds of units pooled per band,
+      // q50 is heavily smoothed and MAD across pre-stim timebins becomes
+      // tiny, so even a sub-percent post-stim wiggle would trip. The 95th
+      // percentile of the pre-stim q50 trace says "the median rarely
+      // exceeded this value before stim_on" — a clean, intuitive threshold
+      // that scales with how noisy the pre-stim period actually was.
+      const percentileOf = (arr, p) => {
+        const v = arr.filter(x => Number.isFinite(x)).slice().sort((a,b) => a-b);
+        if (v.length === 0) return null;
+        const idx = (v.length - 1) * (p / 100);
+        const lo = Math.floor(idx), hi = Math.ceil(idx);
+        if (lo === hi) return v[lo];
+        return v[lo] + (idx - lo) * (v[hi] - v[lo]);
+      };
+      const summarizeBaseline = (q50) => {
+        if (preIdx.length === 0) return { med: null, thr: null };
+        const pre = preIdx.map(i => q50[i]);
+        return { med: median(pre), thr: percentileOf(pre, 95) };
+      };
+      // Latency = "time to 25% rise". Defined as the first post-stim bin
+      // where q50 crosses max(pre-stim 95p, baseline + 0.25·(peak−baseline))
+      // and stays above for ≥2 bins. Two halves of the threshold cover
+      // the two failure modes:
+      //   - pre-stim 95p stops weak/null traces from triggering on noise
+      //   - 25%-of-peak stops STRONG traces from triggering on the tail of
+      //     a slow ramp that begins almost at stim_on (the magenta band's
+      //     trace can creep above noise within one bin while the visible
+      //     rise hasn't really started yet).
+      // We also require a meaningful peak (>= 1.5× baseline). Without
+      // that, "lat" on a flat trace would just be the first bin where
+      // sampling noise crosses the floor.
+      //
+      // We report the FULL spike-time window of the triggering bin —
+      // [center − W/2, center + W/2] — not its center, and not just the
+      // left edge. With a centered 50 ms window, a triggering bin
+      // centered at t=35 ms includes spikes from 10–60 ms post-stim, and
+      // any distribution of those spikes (early, late, or uniform) could
+      // be driving the detected selectivity. The honest claim is "the
+      // signal lives somewhere in 10–60 ms," not "response emerged at
+      // 35 ms" or "from 10 ms onward."
+      const SUSTAIN = 2;
+      const HALF_W = inp.windowMs / 2;
+      const crossingInterval = (q50, base) => {
+        if (base == null || base.med == null) return null;
+        // post-stim peak (NOT the all-time max — pre-stim outliers would
+        // drag the 25% threshold too low for very weak signals).
+        let peak = -Infinity;
+        for (let i = 0; i < q50.length; i++) {
+          if (inp.times[i] < 0) continue;
+          const v = q50[i];
+          if (Number.isFinite(v) && v > peak) peak = v;
+        }
+        if (!Number.isFinite(peak) || peak < base.med * 1.5) return null;
+        const noiseFloor = base.thr ?? base.med;
+        const riseFloor  = base.med + 0.25 * (peak - base.med);
+        const thr = Math.max(noiseFloor, riseFloor);
+        for (let i = 0; i < q50.length - SUSTAIN + 1; i++) {
+          if (inp.times[i] < 0) continue;
+          let ok = true;
+          for (let k = 0; k < SUSTAIN; k++) {
+            const v = q50[i + k];
+            if (!Number.isFinite(v) || v <= thr) { ok = false; break; }
+          }
+          if (ok) return [inp.times[i] - HALF_W, inp.times[i] + HALF_W];
+        }
+        return null;
+      };
+      const fmtLat = (iv) => iv == null ? null
+        : `${Math.round(iv[0])}–${Math.round(iv[1])} ms`;
+      // Quantile across an array of arrays at a given t. Used for per-
+      // band resampling: subset rows of eta_per_unit to a depth band, take
+      // the per-time q25/q50/q75 across those rows.
+      const percentile = (vals, p) => {
+        const v = vals.filter(x => Number.isFinite(x)).slice().sort((a,b) => a-b);
+        if (v.length === 0) return NaN;
+        const idx = (v.length - 1) * (p / 100);
+        const lo = Math.floor(idx), hi = Math.ceil(idx);
+        if (lo === hi) return v[lo];
+        return v[lo] + (idx - lo) * (v[hi] - v[lo]);
+      };
+      const quantilesForBand = (etaUT, unitIdxs) => {
+        const T = inp.nTimes;
+        const q25 = new Array(T), q50 = new Array(T), q75 = new Array(T);
+        for (let t = 0; t < T; t++) {
+          const col = unitIdxs.map(u => etaUT[u]?.[t]).filter(x => x != null);
+          q25[t] = col.length ? percentile(col, 25) : NaN;
+          q50[t] = col.length ? percentile(col, 50) : NaN;
+          q75[t] = col.length ? percentile(col, 75) : NaN;
+        }
+        return { q25, q50, q75 };
+      };
+
+      // Decide per-band split: only meaningful in 1-way (otherwise we'd
+      // have nBands × 3 effects = 12 traces, too crowded). Need eta_per_unit
+      // from the kernel and at least 2*nBands sortable units.
+      const NBANDS = 4;
+      const canBand = !inp.twoWay
+        && (res.effects || []).every(e => Array.isArray(e.eta_per_unit))
+        && (inp.unitsMeta || []).length >= NBANDS * 2;
+      // Build {band -> [unit indices]} from depth-sorted unitsMeta.
+      let bandSpec = null;
+      if (canBand) {
+        const order = inp.unitsMeta
+          .map((m, i) => ({ i, d: Number(m.depth) }))
+          .filter(x => Number.isFinite(x.d))
+          .sort((a, b) => a.d - b.d);
+        const idx = order.map(x => x.i);
+        const depthsSorted = order.map(x => x.d);
+        const bands = [];
+        for (let b = 0; b < NBANDS; b++) {
+          const lo = Math.floor((b / NBANDS) * idx.length);
+          const hi = Math.floor(((b + 1) / NBANDS) * idx.length);
+          if (hi <= lo) continue;
+          const bIdxs = idx.slice(lo, hi);
+          const dLo = depthsSorted[lo];
+          const dHi = depthsSorted[hi - 1];
+          bands.push({ idxs: bIdxs, dLo, dHi, n: bIdxs.length });
+        }
+        bandSpec = bands;
+      }
+      // Cool→warm ramp for depth bands (superficial=cyan → deep=magenta).
+      const bandColors = ['#7dd3fc', '#a78bfa', '#f472b6', '#fb7185'];
+
+      // Build traces. With per-band split: one trace per (effect, band).
+      // Without: original one-trace-per-effect behavior.
+      const traces = [];
+      const banded = canBand && bandSpec && bandSpec.length > 1;
+      // Per-band traces drop the (constant) effect name from their label
+      // — it's the same across all bands, named in the panel header. We
+      // only have multiple effects in the 2-way case where banded=false,
+      // so this is safe.
+      for (const e of (res.effects || [])) {
+        if (banded) {
+          for (let b = 0; b < bandSpec.length; b++) {
+            const sp = bandSpec[b];
+            const { q25, q50, q75 } = quantilesForBand(e.eta_per_unit, sp.idxs);
+            const baseInfo = summarizeBaseline(q50);
+            const lat = crossingInterval(q50, baseInfo);
+            const depthLabel = `${Math.round(sp.dLo)}–${Math.round(sp.dHi)} µm`;
+            const latLabel = lat != null ? `lat ${fmtLat(lat)}` : 'lat —';
+            traces.push({
+              label: `${depthLabel} · n=${sp.n} · ${latLabel}`,
+              color: bandColors[b % bandColors.length],
+              values: q50,
+              band: { lo: q25, hi: q75 },
+              baseline: baseInfo.med,
+              latency: lat,
+            });
+          }
+        } else {
+          const baseInfo = summarizeBaseline(e.q50);
+          const lat = crossingInterval(e.q50, baseInfo);
+          const latLabel = lat != null ? ` · lat ${fmtLat(lat)}` : '';
+          traces.push({
+            label: `${niceName(e.name)}${latLabel}`,
+            color: colors[e.name] || '#5ba4f5',
+            values: e.q50,
+            band: { lo: e.q25, hi: e.q75 },
+            baseline: baseInfo.med,
+            latency: lat,
+          });
+        }
+      }
+      // Auto-scale y to band-hi; clamped to [0.05, 1.0] so weak/strong
+      // effects both render legibly.
+      let yMax = 0;
+      for (const tr of traces) for (const v of tr.band.hi) {
+        if (Number.isFinite(v) && v > yMax) yMax = v;
+      }
+      yMax = Math.max(0.05, Math.min(1.0, yMax * 1.1));
+      const haveBaseline = traces.some(t => t.baseline != null);
+
+      const wayLabel = inp.twoWay ? 'two-way' : 'one-way';
+      const filterStr = this._activeFiltersDescription();
+      const filterRow = filterStr
+        ? `<div class="row muted"><span>filters: ${filterStr}</span></div>` : '';
+      const bandedNote = (bandSpec && bandSpec.length > 1)
+        ? `split into ${bandSpec.length} depth bands (${inp.unitsMeta.length} units sorted by depth, equal-count bins)`
+        : 'population pooled across depth';
+      this._showAnalysisHTML(`
+        <h3>η² over time — ${wayLabel}</h3>
+        <div class="row muted">
+          <span>${inp.dim1.length} trials · ${inp.nUnits} ${granLabel} · ${inp.nTimes} timebins</span>
+          <span>${inp.windowMs} ms window (centered), ${inp.stepMs} ms step · aligned to ${this.alignTo}</span>
+          <span>fit in ${ms} ms</span>
+        </div>
+        ${filterRow}
+        <div style="font-size:11px;color:#5ba4f5;font-weight:500;margin-top:6px;">median η² across units (25–75% band) · ${bandedNote}</div>
+        <canvas id="atEtaTraces" style="width:720px;display:block;margin-top:2px;"></canvas>
+        <div class="muted" style="margin-top:4px;">orange dashed: alignment event${haveBaseline ? ' · per-effect dashed line: pre-stim (t&lt;0) median, the empirical noise floor for that effect' : ''} · time labels are bin <em>centers</em> — a point at t=N includes spikes from t=N−${inp.windowMs/2} to t=N+${inp.windowMs/2} · latency = full spike-time window of the first bin whose q50 sustainably crosses max(pre-stim 95th pct, baseline + 25% of post-stim peak) for ${'≥2'} bins — the signal lives somewhere in the reported interval, no claim about distribution within it · η² under the null isn't zero (sparse-firing cells inflate it) — read real selectivity as the trace lifting <em>above its dashed baseline</em>, not above zero.</div>
+      `);
+      this._renderTimeTraces(
+        document.getElementById('atEtaTraces'),
+        inp.times, traces,
+        { yMax, yLabel: 'median η²',
+          alignToLabel: this.alignTo, height: 200, chanceLine: null });
+    } catch (e) {
+      this._showAnalysisHTML(`<div class="err">analysis failed: ${e.message}</div>`);
+    } finally {
+      this._setAnalysisBusy(false);
+    }
   },
 
   _showSnippetFallback(snippet) {
@@ -1476,7 +2845,10 @@ plt.tight_layout()
       }
     }
     const colVals = sortVals([...colSet]);
-    const rowVals = sortVals([...rowSet]);
+    let rowVals = sortVals([...rowSet]);
+    // Y-flip: reverse row order so high values render at top.
+    // Done before building rowIdx so the bucketing matches the rendered order.
+    if (this.flipY) rowVals = rowVals.slice().reverse();
 
     // Bucket trials by (row, col) with source tagging — single pass per source.
     const cellTrials = new Map();   // "ri|ci" -> [{sourceIdx, trialIdx}, …]
@@ -1486,8 +2858,10 @@ plt.tight_layout()
     for (let s = 0; s < this.sources.length; s++) {
       const st = sourceState[s];
       if (!st) continue;
-      const ntr = this.sources[s].ntrials;
+      const src = this.sources[s];
+      const ntr = src.ntrials;
       for (let i = 0; i < ntr; i++) {
+        if (!this._trialPasses(src, i)) continue;
         const ri = rowIdx.get(String(st.filtCol.data[i]));
         const ci = colIdx.get(String(st.groupCol.data[i]));
         if (ri == null || ci == null) continue;
@@ -1655,6 +3029,249 @@ plt.tight_layout()
       : `0 → ${globalMax.toFixed(2)} spikes/bin · shared`;
     document.getElementById('status').textContent =
       `${nRows} rows (${this.filterBy}) × ${nCols} cols (${this.rastsBy}) · aligned to ${this.alignTo} · ${this.unitsInDepthRange()}/${this.unitsTotal()} units · ${this.sources.length > 1 ? this.sources.length + ' sources combined · ' : ''}color: sqrt · ${scaleDesc}`;
+  },
+
+  // ─── Spatial map view ──────────────────────────────────────────────
+  // Places each (spatialX, spatialY) sample location's heatmap at its
+  // real coordinate on a single canvas. Works for any sampling layout
+  // (rect, hex, scatter) — we never assume a regular grid; we just plot
+  // wherever the trial says the stimulus was. Y is "up positive" by
+  // convention (canvas coordinates are flipped internally).
+  //
+  // Cell size is half the median nearest-neighbour spacing so adjacent
+  // hex/grid cells touch but don't overlap. Multi-source trials at the
+  // same (x, y) bucket together via _buildCombinedHeatmap, so a sparse
+  // hex layout shows depth × time profile per real position.
+  renderSpatialMap() {
+    const canvas = document.getElementById('matrixCanvas');
+    const ctx = canvas.getContext('2d');
+    const setStatus = msg => document.getElementById('status').textContent = msg;
+
+    if (!this.spatialX || !this.spatialY) {
+      canvas.style.height = '0px';
+      setStatus('spatial map needs an X and a Y column; pick a pair in the toolbar.');
+      this._summaryHit = null;
+      return;
+    }
+
+    // Collect (x, y) per trial across all sources, plus per-source align
+    // and group state for the heatmap builder.
+    const sourceState = [];
+    for (const src of this.sources) {
+      const alignCol = src.dg.getList(this.alignTo);
+      const srcCol   = src.dg.getList('spike_src_trial');
+      const xCol     = src.dg.getList(this.spatialX);
+      const yCol     = src.dg.getList(this.spatialY);
+      if (!alignCol || !srcCol || !xCol || !yCol) {
+        sourceState.push(null); continue;
+      }
+      sourceState.push({
+        alignData: alignCol.data, srcData: srcCol.data,
+        xData: xCol.data, yData: yCol.data,
+        spikeCache: new Map(),
+      });
+    }
+    const anyOk = sourceState.some(s => s !== null);
+    if (!anyOk) {
+      canvas.style.height = '0px';
+      setStatus(`spatial map: no source has both '${this.spatialX}' and '${this.spatialY}'.`);
+      this._summaryHit = null;
+      return;
+    }
+
+    // Bucket trials by (x, y). We round to a sensible precision so
+    // floating-point jitter doesn't fragment cells; 4 decimals is safe
+    // for degree-scale visual coords.
+    const cellTrials = new Map();   // "x|y" -> [{sourceIdx, trialIdx}, …]
+    const positions  = new Map();   // key -> {x, y}
+    const roundKey = (x, y) =>
+      `${Number(x).toFixed(4)}|${Number(y).toFixed(4)}`;
+    for (let s = 0; s < this.sources.length; s++) {
+      const st = sourceState[s];
+      if (!st) continue;
+      const src = this.sources[s];
+      const ntr = src.ntrials;
+      for (let i = 0; i < ntr; i++) {
+        if (!this._trialPasses(src, i)) continue;
+        const x = Number(st.xData[i]), y = Number(st.yData[i]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const k = roundKey(x, y);
+        if (!positions.has(k)) positions.set(k, { x, y });
+        let arr = cellTrials.get(k);
+        if (!arr) { arr = []; cellTrials.set(k, arr); }
+        arr.push({ sourceIdx: s, trialIdx: i });
+      }
+    }
+
+    if (positions.size === 0) {
+      canvas.style.height = '0px';
+      setStatus('spatial map: no trials match current filters.');
+      this._summaryHit = null;
+      return;
+    }
+
+    // Compute axis range and tile size from nearest-neighbour spacing.
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+    const pts = [...positions.values()];
+    for (const p of pts) {
+      if (p.x < xMin) xMin = p.x; if (p.x > xMax) xMax = p.x;
+      if (p.y < yMin) yMin = p.y; if (p.y > yMax) yMax = p.y;
+    }
+    // Median nearest-neighbour distance. O(N²) is fine for the dozens
+    // of unique sampling points we typically have.
+    const nn = [];
+    for (let i = 0; i < pts.length; i++) {
+      let best = Infinity;
+      for (let j = 0; j < pts.length; j++) {
+        if (i === j) continue;
+        const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d > 0 && d < best) best = d;
+      }
+      if (Number.isFinite(best)) nn.push(best);
+    }
+    nn.sort((a, b) => a - b);
+    const medSpacing = nn.length ? nn[(nn.length / 2) | 0] : 1;
+
+    // Geometry: pick a square data-pixel scale so a tile of `cellData`
+    // wide in data space renders as `cellPx` wide on canvas. We size the
+    // tile a bit smaller than the nearest-neighbour distance so adjacent
+    // cells just touch without overlap.
+    const MARGIN_L = 56, MARGIN_R = 16, MARGIN_T = 24, MARGIN_B = 36;
+    // Heatmap aspect: time × depth. Use a tile aspect that respects this.
+    const TILE_ASPECT = 1.4;   // wider than tall
+    // Decide a target tile size in CSS px. Floor at 60×42 (≈ readable
+    // heatmap), and choose the data→pixel scale so a tile of size
+    // `medSpacing × medSpacing/TILE_ASPECT` data-units fits in tilePx.
+    const MIN_TILE_W = 90, MIN_TILE_H = 64;
+    const TILE_FRAC = 0.95;     // tile is this fraction of nn spacing
+    const tileWdata = medSpacing * TILE_FRAC;
+    const tileHdata = tileWdata / TILE_ASPECT;
+    // Pixel scale: enough to make MIN_TILE_W satisfied at the smallest
+    // permitted tile. Use the same scale on both axes (square data).
+    const pxPerData = Math.max(MIN_TILE_W / tileWdata, MIN_TILE_H / tileHdata);
+
+    const dataW = (xMax - xMin) + tileWdata;   // half-tile padding each side
+    const dataH = (yMax - yMin) + tileHdata;
+    const plotW = dataW * pxPerData;
+    const plotH = dataH * pxPerData;
+    const tilePxW = tileWdata * pxPerData;
+    const tilePxH = tileHdata * pxPerData;
+
+    const totalW = MARGIN_L + plotW + MARGIN_R;
+    const totalH = MARGIN_T + plotH + MARGIN_B;
+
+    canvas.style.width = totalW + 'px';
+    canvas.style.height = totalH + 'px';
+    canvas.width = totalW * this.dpr;
+    canvas.height = totalH * this.dpr;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+
+    // Coordinate mapping: x grows right, y grows UP (canvas y inverted).
+    const xToPx = (x) =>
+      MARGIN_L + (x - xMin + tileWdata / 2) * pxPerData;
+    const yToPx = (y) =>
+      MARGIN_T + plotH - (y - yMin + tileHdata / 2) * pxPerData;
+
+    // Heatmap binning (per cell).
+    const tMin = this.winPre, tMax = this.winPost;
+    const tRange = (tMax - tMin) || 1;
+    const dLo = this.depthLo, dHi = this.depthHi;
+    const nTbins = Math.max(20, Math.min(80, Math.round(tilePxW / 3)));
+    const nDbins = Math.max(8,  Math.min(60, Math.round(tilePxH / 2)));
+
+    // Pass 1: build heatmap accumulators for every populated cell.
+    const heatmaps = new Map();   // key -> {acc, max, n}
+    let globalMax = 0;
+    for (const [key, entries] of cellTrials) {
+      const r = this._buildCombinedHeatmap(
+        entries, sourceState, tMin, tMax, dLo, dHi, nDbins, nTbins);
+      heatmaps.set(key, r);
+      if (r.max > globalMax) globalMax = r.max;
+    }
+    if (globalMax === 0) globalMax = 1;
+
+    // Background.
+    ctx.fillStyle = '#0a0e17';
+    ctx.fillRect(0, 0, totalW, totalH);
+
+    // Title strip / axis labels.
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '11px "JetBrains Mono"';
+    ctx.textAlign = 'left';
+    ctx.fillText(`x: ${this.spatialX}`, MARGIN_L, MARGIN_T - 8);
+    ctx.textAlign = 'right';
+    ctx.fillText(`y: ${this.spatialY}`, totalW - MARGIN_R, MARGIN_T - 8);
+
+    // Plot frame.
+    ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1;
+    ctx.strokeRect(MARGIN_L, MARGIN_T, plotW, plotH);
+
+    // Axis ticks: min/0/max on each axis.
+    ctx.fillStyle = '#5a6b85';
+    ctx.font = '10px "JetBrains Mono"';
+    const drawXTick = (val) => {
+      const px = xToPx(val);
+      ctx.beginPath(); ctx.strokeStyle = '#2a3654';
+      ctx.moveTo(px, MARGIN_T + plotH); ctx.lineTo(px, MARGIN_T + plotH + 4); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillText(this.formatValue(val), px, MARGIN_T + plotH + 16);
+    };
+    const drawYTick = (val) => {
+      const py = yToPx(val);
+      ctx.beginPath(); ctx.strokeStyle = '#2a3654';
+      ctx.moveTo(MARGIN_L - 4, py); ctx.lineTo(MARGIN_L, py); ctx.stroke();
+      ctx.textAlign = 'right';
+      ctx.fillText(this.formatValue(val), MARGIN_L - 6, py + 4);
+    };
+    drawXTick(xMin); drawXTick(xMax);
+    if (xMin < 0 && xMax > 0) drawXTick(0);
+    drawYTick(yMin); drawYTick(yMax);
+    if (yMin < 0 && yMax > 0) drawYTick(0);
+
+    // Pass 2: paint each cell at its real (x, y) location.
+    for (const [key, pos] of positions) {
+      const cx = xToPx(pos.x);
+      const cy = yToPx(pos.y);
+      const x0 = cx - tilePxW / 2, y0 = cy - tilePxH / 2;
+      const r = heatmaps.get(key);
+      const scaleMax = this.perPanelScale ? (r.max || 1) : globalMax;
+      if (r.n > 0) {
+        this._paintHeatmap(ctx, x0, y0, tilePxW, tilePxH, r.acc, scaleMax, nDbins, nTbins);
+      }
+      ctx.strokeStyle = '#2a3654'; ctx.lineWidth = 1;
+      ctx.strokeRect(x0, y0, tilePxW, tilePxH);
+      // Event line at t=0
+      if (0 >= tMin && 0 <= tMax) {
+        const ex = x0 + ((0 - tMin) / tRange) * tilePxW;
+        ctx.strokeStyle = 'rgba(251,191,36,0.5)';
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(ex, y0); ctx.lineTo(ex, y0 + tilePxH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Tiny n badge in lower-right of tile
+      ctx.fillStyle = 'rgba(10,14,23,0.7)';
+      ctx.fillRect(x0 + tilePxW - 28, y0 + tilePxH - 12, 26, 10);
+      ctx.fillStyle = '#8899b4';
+      ctx.font = '9px "JetBrains Mono"';
+      ctx.textAlign = 'right';
+      ctx.fillText(`n=${r.n}`, x0 + tilePxW - 4, y0 + tilePxH - 4);
+    }
+
+    this._summaryHit = null;   // no per-row drill in spatial mode
+
+    const scaleDesc = this.perPanelScale
+      ? 'per-tile scale'
+      : `0 → ${globalMax.toFixed(2)} spikes/bin · shared`;
+    setStatus(
+      `${positions.size} positions · x=${this.spatialX} (${xMin}→${xMax}) · ` +
+      `y=${this.spatialY} (${yMin}→${yMax}) · aligned to ${this.alignTo} · ` +
+      `${this.unitsInDepthRange()}/${this.unitsTotal()} units · ` +
+      `${this.sources.length > 1 ? this.sources.length + ' sources combined · ' : ''}` +
+      `tile=depth×time · ${scaleDesc}`);
   },
 
   // Click handler for the matrix canvas: in summary mode, hit-test which

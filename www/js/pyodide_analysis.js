@@ -1,190 +1,304 @@
 /**
- * pyodide_analysis.js — in-browser statistical analysis kernel
+ * pyodide_analysis.js — in-browser ANOVA kernel for Spike Explorer.
  *
- * Lazy-loads Pyodide (CPython + numpy/pandas/scipy/statsmodels/scikit-learn)
- * the first time an analysis is requested, then exposes a small API for
- * the kinds of quantitative follow-ups the spike_explorer 2D summary
- * naturally raises:
+ * Deliberately scoped to "quick-pass statistical support for what the user
+ * is already looking at" — not a substitute for a real analysis notebook.
+ * Two functions, both vectorized in numpy:
  *
- *   • twoWayANOVA(trials)       — selectivity for dim1, dim2, dim1×dim2
- *                                 on a per-trial scalar (e.g. spike count
- *                                 in a window). Reports F, p, df, and
- *                                 partial η² for each effect.
+ *   anova({dim1, dim2?, y})
+ *     Per-trial scalar response (e.g. spike count in window).
+ *     - dim2 omitted → 1-way ANOVA on dim1.
+ *     - both given  → 2-way Type II ANOVA on dim1, dim2, dim1:dim2.
+ *     Returns F, df, p, partial η² per effect.
  *
- *   • decodePopulation(X, y)    — cross-validated population decoding
- *                                 with a "shuffle within condition"
- *                                 control, so the gap between the two
- *                                 quantifies information carried by
- *                                 simultaneous (vs independent) trials.
+ *   anovaOverTime(X3d_flat, [N,U,T], dim1, dim2?)
+ *     Per-(unit,time) firing rate, fit independently for each (u,t) cell
+ *     by a single batched-OLS pass per design. Same Type II hierarchy.
+ *     Returns η² traces only — median across units with 25–75% band per
+ *     effect. No per-cell p arrays, no heatmaps. The trace is what the
+ *     spike_explorer overlays on its raster/PSTH view to read latency
+ *     to selectivity.
  *
- * Inputs are plain JS arrays / typed arrays. Outputs are plain JS
- * objects. The module never touches App state directly — callers extract
- * trial-level numbers however they like (the helper countSpikesInWindow
- * below mirrors what the heatmap pass already does) and hand them in.
+ * Inputs: plain JS arrays / typed arrays. Outputs: plain JS objects.
+ * All factor levels are treated as categorical — continuous / circular
+ * variables (orientation, position) belong in a notebook with the right
+ * basis; this kernel doesn't try to guess.
  *
- * Dispatches CustomEvents on window for UI progress:
- *   'pyodide-analysis:status' { detail: { phase, message } }
- *
- * Usage:
- *   await PyodideAnalysis.ready();             // first call: ~10MB download
- *   const r = await PyodideAnalysis.twoWayANOVA({
- *     dim1: ['A','A','B','B', ...],
- *     dim2: ['1','2','1','2', ...],
- *     y:    [12, 8, 4, 6,  ...],
- *   });
- *   console.log(r.effects);  // [{name:'dim1', F, p, df, partial_eta2}, ...]
+ * Status events on window for UI: 'pyodide-analysis:status'.
  */
 
 (function () {
   'use strict';
 
-  // Pin a version so we get reproducible behavior; bump when intentional.
   const PYODIDE_VERSION = '0.26.4';
   const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+  // numpy + scipy is all we need — no statsmodels, no sklearn.
+  const PY_PACKAGES = ['numpy', 'scipy'];
 
-  // Packages loaded eagerly once Pyodide boots. statsmodels pulls in
-  // patsy + scipy + numpy; scikit-learn pulls in joblib + threadpoolctl.
-  const PY_PACKAGES = ['numpy', 'pandas', 'scipy', 'statsmodels', 'scikit-learn'];
-
-  // Python module installed into the Pyodide FS once. Keeping it as a
-  // single string makes the JS file self-contained.
   const PY_MODULE = `
 import numpy as np
-import pandas as pd
-from scipy import stats as _scistats
+from scipy import stats as _sps
 
-def two_way_anova(dim1, dim2, y):
-    """Type-II two-way ANOVA. Returns a list of effects with F, p, df,
-    and partial eta-squared. Falls back to one-way if a dimension is
-    constant. Empty cells are tolerated by statsmodels' formula path."""
-    import statsmodels.formula.api as smf
-    import statsmodels.api as sm
-    df = pd.DataFrame({'d1': dim1, 'd2': dim2, 'y': np.asarray(y, dtype=float)})
-    df = df.dropna(subset=['y'])
-    n = len(df)
-    n1 = df['d1'].nunique()
-    n2 = df['d2'].nunique()
-    out = {'n': int(n), 'n_levels': {'dim1': int(n1), 'dim2': int(n2)},
+# ─── shared helpers ────────────────────────────────────────────────────
+
+def _design_1way(d1):
+    """Treatment-coded 1-way design: intercept + (n1-1) contrast columns.
+    Returns (D, info). info.A holds the contrast-column indices for d1."""
+    d1 = np.asarray(d1)
+    cats = np.unique(d1)
+    n1 = len(cats) - 1
+    N = len(d1)
+    cols = [np.ones(N)]
+    for c in cats[1:]:
+        cols.append((d1 == c).astype(float))
+    D = np.column_stack(cols) if cols else np.ones((N, 1))
+    return D, {'N': N, 'n1': n1,
+               'A': list(range(1, 1 + n1))}
+
+def _design_2way(d1, d2):
+    """Treatment-coded 2-way design with interaction:
+    intercept + (n1-1) A + (n2-1) B + (n1-1)*(n2-1) AB."""
+    d1 = np.asarray(d1); d2 = np.asarray(d2)
+    cats1 = np.unique(d1); cats2 = np.unique(d2)
+    n1, n2 = len(cats1) - 1, len(cats2) - 1
+    N = len(d1)
+    cols = [np.ones(N)]
+    for c in cats1[1:]: cols.append((d1 == c).astype(float))
+    for c in cats2[1:]: cols.append((d2 == c).astype(float))
+    for ca in cats1[1:]:
+        for cb in cats2[1:]:
+            cols.append(((d1 == ca) & (d2 == cb)).astype(float))
+    D = np.column_stack(cols)
+    return D, {'N': N, 'n1': n1, 'n2': n2,
+               'A':  list(range(1, 1 + n1)),
+               'B':  list(range(1 + n1, 1 + n1 + n2)),
+               'AB': list(range(1 + n1 + n2, 1 + n1 + n2 + n1*n2))}
+
+def _ss_resid(D, cols, Y):
+    """SS-residual for OLS fit of Y on D[:, cols]. Y can be (N,) or (N,M);
+    returns scalar or (M,) accordingly."""
+    Dm = D[:, cols]
+    beta, _, _, _ = np.linalg.lstsq(Dm, Y, rcond=None)
+    r = Y - Dm @ beta
+    return (r * r).sum(axis=0)
+
+# ─── aggregate (per-trial scalar) ANOVA ────────────────────────────────
+
+def anova_aggregate(dim1, dim2, y):
+    """One- or two-way ANOVA on a per-trial scalar response.
+
+    dim2 may be None (or len==0) for the 1-way case.
+    Hierarchical Type II SS:
+      1-way: SS(A) = SS_total - SS(intercept+A) is just the obvious split.
+      2-way: SS(A) = SSR(B)   - SSR(A+B);  SS(B) = SSR(A) - SSR(A+B);
+             SS(AB) = SSR(A+B) - SSR(A+B+AB).
+    Returns {n, n_levels, effects:[{name,F,df,p,partial_eta2,sum_sq}], note}.
+    """
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(y)
+    y = y[finite]
+    d1 = np.asarray(dim1)[finite]
+    has_d2 = dim2 is not None and len(dim2) == len(finite)
+    if has_d2:
+        d2 = np.asarray(dim2)[finite]
+
+    n = len(y)
+    n1 = int(len(np.unique(d1))) if n else 0
+    n2 = int(len(np.unique(d2))) if (has_d2 and n) else 0
+    out = {'n': int(n),
+           'n_levels': {'dim1': n1, 'dim2': n2 if has_d2 else None},
            'effects': [], 'note': None}
-    if n < 4 or (n1 < 2 and n2 < 2):
-        out['note'] = 'not enough data for ANOVA'
+
+    if n < 4 or n1 < 2:
+        out['note'] = 'not enough data / levels'
         return out
-    if n1 < 2:
-        formula, terms = 'y ~ C(d2)', [('dim2', 'C(d2)')]
-    elif n2 < 2:
-        formula, terms = 'y ~ C(d1)', [('dim1', 'C(d1)')]
-    else:
-        formula = 'y ~ C(d1) + C(d2) + C(d1):C(d2)'
-        terms = [('dim1', 'C(d1)'), ('dim2', 'C(d2)'),
-                 ('dim1:dim2', 'C(d1):C(d2)')]
-    try:
-        model = smf.ols(formula, data=df).fit()
-    except Exception as e:
-        out['note'] = f'fit failed: {e}'
-        return out
-    # Type II is the standard choice for unbalanced designs.
-    table = sm.stats.anova_lm(model, typ=2)
-    ss_resid = float(table.loc['Residual', 'sum_sq'])
-    for label, term in terms:
-        if term not in table.index:
-            continue
-        ss = float(table.loc[term, 'sum_sq'])
-        df_term = float(table.loc[term, 'df'])
-        F = float(table.loc[term, 'F'])
-        p = float(table.loc[term, 'PR(>F)'])
-        denom = ss + ss_resid
-        peta2 = float(ss / denom) if denom > 0 else float('nan')
+
+    if has_d2 and n2 < 2:
+        # Degenerate 2-way → fall through to 1-way on dim1.
+        has_d2 = False
+        out['n_levels']['dim2'] = n2
+
+    if not has_d2:
+        D, info = _design_1way(d1)
+        intercept = [0]
+        full   = intercept + info['A']
+        df_full = n - len(full)
+        if df_full <= 0:
+            out['note'] = f'too few trials ({n}) for {len(full)} parameters'
+            return out
+        ss_int  = _ss_resid(D, intercept, y)
+        ss_full = _ss_resid(D, full,      y)
+        ss_a    = max(0.0, float(ss_int - ss_full))
+        ss_full = float(ss_full)
+        df_a    = info['n1']
+        mse     = ss_full / df_full
+        if mse <= 0:
+            out['note'] = 'zero residual variance'
+            return out
+        F = (ss_a / df_a) / mse
+        p = float(_sps.f.sf(F, df_a, df_full))
         out['effects'].append({
-            'name': label, 'F': F, 'p': p,
-            'df': df_term, 'partial_eta2': peta2, 'sum_sq': ss,
+            'name': 'dim1', 'F': float(F), 'df': int(df_a),
+            'df_resid': int(df_full),
+            'p': p,
+            'partial_eta2': ss_a / (ss_a + ss_full) if (ss_a + ss_full) > 0 else float('nan'),
+            'sum_sq': ss_a,
         })
-    out['ss_residual'] = ss_resid
-    out['df_residual'] = float(table.loc['Residual', 'df'])
+        out['ss_residual'] = ss_full
+        out['df_residual'] = int(df_full)
+        return out
+
+    # 2-way
+    D, info = _design_2way(d1, d2)
+    intercept = [0]
+    full      = intercept + info['A'] + info['B'] + info['AB']
+    no_a      = intercept + info['B']
+    no_b      = intercept + info['A']
+    no_ab     = intercept + info['A'] + info['B']
+    df_full   = n - len(full)
+    if df_full <= 0:
+        out['note'] = f'too few trials ({n}) for {len(full)} parameters'
+        return out
+    ss_full   = float(_ss_resid(D, full,   y))
+    ss_no_a   = float(_ss_resid(D, no_a,   y))
+    ss_no_b   = float(_ss_resid(D, no_b,   y))
+    ss_no_ab  = float(_ss_resid(D, no_ab,  y))
+    ss_a  = max(0.0, ss_no_a  - ss_no_ab)
+    ss_b  = max(0.0, ss_no_b  - ss_no_ab)
+    ss_ab = max(0.0, ss_no_ab - ss_full)
+    df_a, df_b, df_ab = info['n1'], info['n2'], info['n1'] * info['n2']
+    mse = ss_full / df_full
+    if mse <= 0:
+        out['note'] = 'zero residual variance'
+        return out
+    for label, ss, df_t in [
+        ('dim1',      ss_a,  df_a),
+        ('dim2',      ss_b,  df_b),
+        ('dim1:dim2', ss_ab, df_ab),
+    ]:
+        F = (ss / df_t) / mse
+        p = float(_sps.f.sf(F, df_t, df_full))
+        out['effects'].append({
+            'name': label, 'F': float(F),
+            'df': int(df_t), 'df_resid': int(df_full),
+            'p': p,
+            'partial_eta2': ss / (ss + ss_full) if (ss + ss_full) > 0 else float('nan'),
+            'sum_sq': ss,
+        })
+    out['ss_residual'] = ss_full
+    out['df_residual'] = int(df_full)
     return out
 
-def decode_population(X, y, n_folds=5, n_shuffles=200, classifier='logreg', seed=0):
-    """Stratified-CV decoding accuracy on (N_trials × N_units) X.
+# ─── time-resolved per-(unit,time) ANOVA ────────────────────────────────
 
-    Compares 'real' (simultaneous) trials vs 'shuffled' (each unit
-    independently re-paired with a trial of the same label). The gap is
-    the contribution of simultaneous-trial structure beyond per-unit
-    selectivity. Permutation p-value: fraction of shuffles >= real."""
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-    from sklearn.model_selection import StratifiedKFold, cross_val_score
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.pipeline import Pipeline
+def _quantiles_across_units(eta_ut):
+    """Per-timepoint q25/q50/q75 across units (NaN-aware). eta_ut is (U,T)."""
+    U, T = eta_ut.shape
+    out = np.full((3, T), np.nan)
+    for t in range(T):
+        col = eta_ut[:, t]
+        col = col[np.isfinite(col)]
+        if col.size == 0:
+            continue
+        out[0, t] = np.percentile(col, 25)
+        out[1, t] = np.percentile(col, 50)
+        out[2, t] = np.percentile(col, 75)
+    return out  # rows: q25, q50, q75
 
-    X = np.asarray(X, dtype=float)
-    y = np.asarray(y)
-    if X.ndim != 2 or X.shape[0] != y.shape[0]:
-        raise ValueError(f'X must be (N_trials, N_units); got {X.shape} vs y {y.shape}')
+def anova_over_time(X_flat, shape, dim1, dim2):
+    """Per-(unit,time) one- or two-way ANOVA via batched OLS.
 
-    # Drop classes with too few trials for stratified CV.
-    classes, counts = np.unique(y, return_counts=True)
-    keep_classes = classes[counts >= n_folds]
-    mask = np.isin(y, keep_classes)
-    X, y = X[mask], y[mask]
-    if len(np.unique(y)) < 2:
-        return {'note': 'fewer than 2 classes with enough trials',
-                'n_trials': int(X.shape[0]), 'n_units': int(X.shape[1])}
+    X_flat: 1D length N*U*T (row-major: trial, unit, time).
+    shape:  [N, U, T]
+    dim2:   None or empty → 1-way; else 2-way with interaction.
 
-    if classifier == 'lda':
-        clf = Pipeline([('s', StandardScaler()),
-                        ('m', LinearDiscriminantAnalysis())])
+    Returns η² traces (median across units + q25/q75 band) per effect:
+      {'shape':[U,T], 'effects':[{name, q25, q50, q75}, ...],
+       'eta2_per_unit':{name: (U,T) list-of-lists}}   ← retained but small;
+                                                        callers can ignore.
+    """
+    N, U, T = int(shape[0]), int(shape[1]), int(shape[2])
+    Y = np.asarray(X_flat, dtype=float).reshape(N, U, T)
+    Y2 = Y.reshape(N, U * T)
+
+    has_d2 = dim2 is not None and len(dim2) == N
+    if has_d2:
+        d2_arr = np.asarray(dim2)
+        if len(np.unique(d2_arr)) < 2:
+            has_d2 = False
+
+    if has_d2:
+        D, info = _design_2way(np.asarray(dim1), d2_arr)
     else:
-        clf = Pipeline([('s', StandardScaler()),
-                        ('m', LogisticRegression(max_iter=1000,
-                                                 multi_class='auto'))])
-    cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+        D, info = _design_1way(np.asarray(dim1))
 
-    acc_real = cross_val_score(clf, X, y, cv=cv, scoring='accuracy')
+    intercept = [0]
+    if has_d2:
+        full   = intercept + info['A'] + info['B'] + info['AB']
+        no_a   = intercept + info['B']
+        no_b   = intercept + info['A']
+        no_ab  = intercept + info['A'] + info['B']
+    else:
+        full   = intercept + info['A']
 
-    rng = np.random.default_rng(seed)
-    shuffled = np.empty(n_shuffles, dtype=float)
-    Xs = X.copy()
-    n_units = X.shape[1]
-    # Within-condition shuffle: for each class, permute the trial order
-    # of each unit independently. Per-unit marginals are preserved; the
-    # joint trial-by-trial structure is broken.
-    class_idx = {c: np.where(y == c)[0] for c in np.unique(y)}
-    for s in range(n_shuffles):
-        for idx in class_idx.values():
-            for u in range(n_units):
-                Xs[idx, u] = X[rng.permutation(idx), u]
-        shuffled[s] = cross_val_score(clf, Xs, y, cv=cv,
-                                      scoring='accuracy').mean()
+    df_full = N - len(full)
+    if df_full <= 0:
+        return {'note': f'too few trials ({N}) for {len(full)} parameters'}
+    if (has_d2 and (info['n1'] < 1 or info['n2'] < 1)) or \
+       (not has_d2 and info['n1'] < 1):
+        return {'note': 'need >=2 levels'}
 
-    real_mean = float(acc_real.mean())
-    shuf_mean = float(shuffled.mean())
-    chance = float(1.0 / len(np.unique(y)))
-    # Permutation p: how often does the null reach the observed real mean?
-    p = float((np.sum(shuffled >= real_mean) + 1) / (n_shuffles + 1))
+    ss_full = _ss_resid(D, full, Y2)        # (U*T,)
+    if has_d2:
+        ss_no_a   = _ss_resid(D, no_a,  Y2)
+        ss_no_b   = _ss_resid(D, no_b,  Y2)
+        ss_no_ab  = _ss_resid(D, no_ab, Y2)
+        ss_a  = np.maximum(0.0, ss_no_a  - ss_no_ab)
+        ss_b  = np.maximum(0.0, ss_no_b  - ss_no_ab)
+        ss_ab = np.maximum(0.0, ss_no_ab - ss_full)
+        ss_by_eff = [('dim1', ss_a), ('dim2', ss_b), ('dim1:dim2', ss_ab)]
+    else:
+        ss_int = _ss_resid(D, intercept, Y2)
+        ss_a   = np.maximum(0.0, ss_int - ss_full)
+        ss_by_eff = [('dim1', ss_a)]
 
-    def ci(arr):
-        lo, hi = np.percentile(arr, [2.5, 97.5])
-        return [float(lo), float(hi)]
+    # η² per (unit, time). Mark zero-variance cells NaN so they don't
+    # pollute the across-unit summary.
+    var_ut = Y.var(axis=0)            # (U, T)
+    bad = (var_ut == 0) | ~np.isfinite(var_ut)
+
+    effects = []
+    eta_per_eff = {}
+    for label, ss in ss_by_eff:
+        eta = ss / (ss + ss_full + 1e-30)
+        eta_ut = eta.reshape(U, T)
+        eta_ut[bad] = np.nan
+        eta_per_eff[label] = eta_ut
+        q = _quantiles_across_units(eta_ut)
+        # Per-unit η² (U flat × T) — enables JS-side resampling by depth
+        # band without re-running the fit. None for non-finite (zero-variance
+        # cells, etc.) so the JSON stays clean.
+        eta_flat = []
+        for u in range(U):
+            eta_flat.append([None if not np.isfinite(v) else float(v)
+                             for v in eta_ut[u]])
+        effects.append({
+            'name': label,
+            'q25': [None if not np.isfinite(v) else float(v) for v in q[0]],
+            'q50': [None if not np.isfinite(v) else float(v) for v in q[1]],
+            'q75': [None if not np.isfinite(v) else float(v) for v in q[2]],
+            'eta_per_unit': eta_flat,    # shape: (U, T), nullable
+        })
 
     return {
-        'n_trials': int(X.shape[0]),
-        'n_units': int(X.shape[1]),
-        'n_classes': int(len(np.unique(y))),
-        'classes': [str(c) for c in np.unique(y).tolist()],
-        'chance': chance,
-        'acc_real_mean': real_mean,
-        'acc_real_folds': [float(v) for v in acc_real],
-        'acc_real_ci': ci(acc_real) if len(acc_real) >= 4 else None,
-        'acc_shuffled_mean': shuf_mean,
-        'acc_shuffled_ci': ci(shuffled),
-        'gain': real_mean - shuf_mean,
-        'p_value': p,
-        'n_shuffles': int(n_shuffles),
+        'shape': [int(U), int(T)],
+        'n_trials': int(N),
+        'df_resid': int(df_full),
+        'effects': effects,
     }
 `;
 
-  // ────────────────────────────────────────────────────────────────────
-  // Pyodide bootstrap (lazy, single-flight)
-  // ────────────────────────────────────────────────────────────────────
+  // ─── Pyodide bootstrap ────────────────────────────────────────────────
 
   let _pyPromise = null;
   let _py = null;
@@ -214,7 +328,7 @@ def decode_population(X, y, n_folds=5, n_shuffles=200, classifier='logreg', seed
         await loadScript(PYODIDE_CDN + 'pyodide.js');
       }
       const py = await loadPyodide({ indexURL: PYODIDE_CDN });
-      emit('loading-packages', 'installing scientific stack');
+      emit('loading-packages', 'installing numpy + scipy');
       await py.loadPackage(PY_PACKAGES);
       emit('initializing', 'compiling analysis module');
       py.runPython(PY_MODULE);
@@ -225,102 +339,35 @@ def decode_population(X, y, n_folds=5, n_shuffles=200, classifier='logreg', seed
     return _pyPromise;
   }
 
-  // ────────────────────────────────────────────────────────────────────
-  // JS-side helpers (extract trial-level numbers from spike arrays).
-  // These mirror the count-in-window pass the heatmap already does, so
-  // the analyses see the same data the user sees.
-  // ────────────────────────────────────────────────────────────────────
+  // ─── Public API ───────────────────────────────────────────────────────
 
   /**
-   * Count spikes in [tMin, tMax] (and optional [dLo, dHi]) for one trial.
-   *   spkT, spkD: typed arrays of spike times / depths for this trial's
-   *               canonical source row.
-   *   align:      time origin (e.g. stim_on) in same clock as spkT.
-   * Returns integer count.
+   * One- or two-way ANOVA on a per-trial scalar.
+   *   trials: { dim1, dim2?, y }    (dim2 optional → 1-way)
+   *   labels: { dim1Name, dim2Name?, responseName? }   (display only)
    */
-  function countSpikesInWindow(spkT, spkD, align, tMin, tMax,
-                                dLo, dHi, missing) {
-    if (!spkT) return 0;
-    const useDepth = (dLo != null && dHi != null);
-    const miss = (missing == null) ? -Infinity : missing;
-    let n = 0;
-    for (let k = 0; k < spkT.length; k++) {
-      const at = spkT[k] - align;
-      if (at < tMin || at >= tMax) continue;
-      if (useDepth) {
-        const d = spkD ? spkD[k] : 0;
-        if (d <= miss || d < dLo || d >= dHi) continue;
-      }
-      n++;
-    }
-    return n;
-  }
-
-  /**
-   * Build a (N_trials × N_depthBins) firing-rate matrix for population
-   * decoding. Treats each depth bin as a pseudo-unit (same scheme used
-   * by the heatmap). Rates are spikes/second.
-   *   trialSpikes: array of {spkT, spkD, align} per trial
-   *   tMin, tMax in ms relative to align
-   *   dLo, dHi, nDbins, missing as in the heatmap
-   */
-  function buildPopulationMatrix(trialSpikes, tMin, tMax,
-                                  dLo, dHi, nDbins, missing) {
-    const N = trialSpikes.length;
-    const X = new Float32Array(N * nDbins);
-    const tWinSec = Math.max(1e-9, (tMax - tMin) / 1000);
-    const dRange = (dHi - dLo) || 1;
-    const binDw = dRange / nDbins;
-    const miss = (missing == null) ? -Infinity : missing;
-    for (let i = 0; i < N; i++) {
-      const { spkT, spkD, align } = trialSpikes[i];
-      if (!spkT || !Number.isFinite(align)) continue;
-      const row = i * nDbins;
-      for (let k = 0; k < spkT.length; k++) {
-        const at = spkT[k] - align;
-        if (at < tMin || at >= tMax) continue;
-        const d = spkD ? spkD[k] : 0;
-        if (d <= miss || d < dLo || d >= dHi) continue;
-        const dbi = Math.min(nDbins - 1, ((d - dLo) / binDw) | 0);
-        X[row + dbi] += 1;
-      }
-      // Convert counts to rate.
-      for (let b = 0; b < nDbins; b++) X[row + b] /= tWinSec;
-    }
-    return { X, shape: [N, nDbins] };
-  }
-
-  // ────────────────────────────────────────────────────────────────────
-  // Public API
-  // ────────────────────────────────────────────────────────────────────
-
-  /**
-   * Two-way ANOVA on per-trial scalar response.
-   *   trials: { dim1: array, dim2: array, y: array } — equal length
-   * Optional names for prettier output:
-   *   labels: { dim1Name, dim2Name, responseName }
-   */
-  async function twoWayANOVA(trials, labels) {
+  async function anova(trials, labels) {
     const py = await bootPyodide();
-    const { dim1, dim2, y } = trials;
-    if (!dim1 || !dim2 || !y) throw new Error('need {dim1, dim2, y}');
-    if (dim1.length !== dim2.length || dim1.length !== y.length) {
-      throw new Error('dim1, dim2, y must be the same length');
+    const { dim1, y } = trials;
+    let { dim2 } = trials;
+    if (!dim1 || !y) throw new Error('need {dim1, y}');
+    if (dim1.length !== y.length) throw new Error('dim1 and y length mismatch');
+    if (dim2 != null && dim2.length !== dim1.length) {
+      throw new Error('dim2 length mismatch');
     }
-    // Stringify factor levels (numeric levels are fine, but Python side
-    // treats everything categorical via C(...)).
     const d1 = Array.from(dim1, v => String(v));
-    const d2 = Array.from(dim2, v => String(v));
+    const d2 = dim2 ? Array.from(dim2, v => String(v)) : null;
     const yy = Float64Array.from(y, v => Number.isFinite(+v) ? +v : NaN);
-    const ns = py.toPy({ d1, d2, y: yy });
-    py.globals.set('_in', ns);
-    const res = py.runPython(
-      'two_way_anova(_in["d1"], _in["d2"], _in["y"])'
-    ).toJs({ dict_converter: Object.fromEntries });
-    ns.destroy();
+    py.globals.set('_d1', py.toPy(d1));
+    py.globals.set('_d2', d2 ? py.toPy(d2) : py.toPy(null));
+    py.globals.set('_y',  py.toPy(yy));
+    const res = py.runPython('anova_aggregate(_d1, _d2, _y)')
+                  .toJs({ dict_converter: Object.fromEntries });
     if (labels) {
-      const map = { dim1: labels.dim1Name, dim2: labels.dim2Name,
-                    'dim1:dim2': `${labels.dim1Name}:${labels.dim2Name}` };
+      const map = { dim1: labels.dim1Name,
+                    dim2: labels.dim2Name,
+                    'dim1:dim2': labels.dim2Name
+                      ? `${labels.dim1Name}:${labels.dim2Name}` : null };
       for (const e of res.effects || []) if (map[e.name]) e.name = map[e.name];
       res.response_name = labels.responseName || 'y';
     }
@@ -328,64 +375,37 @@ def decode_population(X, y, n_folds=5, n_shuffles=200, classifier='logreg', seed
   }
 
   /**
-   * Population decoding with simultaneous-vs-shuffled comparison.
-   *   X: Float32Array | number[][]  (N × U)  — typed-array form must
-   *      be paired with `shape: [N, U]` in opts.
-   *   y: array of N labels
-   *   opts: { shape?, nFolds=5, nShuffles=200, classifier='logreg', seed=0 }
+   * Time-resolved per-(unit,time) ANOVA. Returns η² traces only.
+   *   X3d:  Float32Array (or number[]) length N*U*T, row-major (trial, unit, time)
+   *   dim1: array length N
+   *   opts: { shape: [N,U,T], dim2?: array length N }
    */
-  async function decodePopulation(X, y, opts = {}) {
+  async function anovaOverTime(X3d, dim1, opts) {
     const py = await bootPyodide();
-    const nFolds = opts.nFolds ?? 5;
-    const nShuffles = opts.nShuffles ?? 200;
-    const classifier = opts.classifier ?? 'logreg';
-    const seed = opts.seed ?? 0;
-
-    let Xpy;
-    if (ArrayBuffer.isView(X)) {
-      if (!opts.shape || opts.shape.length !== 2) {
-        throw new Error('typed-array X requires opts.shape = [N, U]');
-      }
-      // Ship the flat buffer + shape; reshape on the Python side.
-      py.globals.set('_xflat', py.toPy(Array.from(X)));
-      py.globals.set('_xshape', py.toPy(opts.shape));
-      Xpy = py.runPython(
-        'np.asarray(_xflat, dtype=float).reshape(_xshape)'
-      );
-    } else {
-      Xpy = py.toPy(X);
+    if (!opts || !opts.shape || opts.shape.length !== 3) {
+      throw new Error('anovaOverTime requires opts.shape = [N, U, T]');
     }
-    const ypy = py.toPy(Array.from(y, v => String(v)));
-    py.globals.set('_X', Xpy);
-    py.globals.set('_y', ypy);
-    py.globals.set('_kw', py.toPy({
-      n_folds: nFolds, n_shuffles: nShuffles,
-      classifier, seed,
-    }));
-    emit('running', `decoding (${nShuffles} shuffles)`);
-    const res = py.runPython(
-      'decode_population(_X, _y, **_kw)'
-    ).toJs({ dict_converter: Object.fromEntries });
-    Xpy.destroy(); ypy.destroy();
+    const dim2 = opts.dim2 ?? null;
+    py.globals.set('_xflat',  py.toPy(Array.from(X3d)));
+    py.globals.set('_xshape', py.toPy(opts.shape));
+    py.globals.set('_d1', py.toPy(Array.from(dim1, v => String(v))));
+    py.globals.set('_d2', dim2 ? py.toPy(Array.from(dim2, v => String(v))) : py.toPy(null));
+    emit('running',
+      `time-resolved ANOVA: ${opts.shape[1]} units × ${opts.shape[2]} timebins`);
+    const res = py.runPython('anova_over_time(_xflat, _xshape, _d1, _d2)')
+                  .toJs({ dict_converter: Object.fromEntries });
     emit('idle', 'done');
     return res;
   }
 
-  // True iff Pyodide is fully loaded and ready (no work pending).
   function isReady() { return _py != null; }
-
-  // Pre-warm — useful to call from a "Load analysis kernel" button so
-  // the heavy download doesn't block the first analysis click.
   async function ready() { await bootPyodide(); return true; }
 
   window.PyodideAnalysis = {
     ready,
     isReady,
-    twoWayANOVA,
-    decodePopulation,
-    // Helpers exposed so callers can shape data without duplicating logic.
-    countSpikesInWindow,
-    buildPopulationMatrix,
+    anova,
+    anovaOverTime,
     version: PYODIDE_VERSION,
   };
 })();
