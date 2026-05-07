@@ -504,12 +504,23 @@ oo::class create System {
 
     method set_param { var val } {
         if { [dict exists $_params $var] } {
-            lassign [dict get $_params $var] oldval type ptype
-            dict set _params $var "$val $type $ptype"
+            set entry [dict get $_params $var]
+            set oldval [lindex $entry 0]
+            set type   [lindex $entry 1]
+            set ptype  [lindex $entry 2]
+            set live   [expr {[llength $entry] >= 4 ? [lindex $entry 3] : 0}]
+            dict set _params $var [list $val $type $ptype $live]
             my add_variable $var $val
             return $oldval
         }
         return
+    }
+
+    # is the named param marked as live (twiddleable mid-recording)?
+    method is_live_param { pname } {
+        if { ![dict exists $_params $pname] } { return 0 }
+        set entry [dict get $_params $pname]
+        return [expr {[llength $entry] >= 4 ? [lindex $entry 3] : 0}]
     }
 
     method get_params {} {
@@ -528,7 +539,16 @@ oo::class create System {
 
     method add_param { pname val type ptype } {
         set t [dict get $::ess::param_types [string toupper $type]]
-        dict set _params $pname [list $val $t $ptype]
+        dict set _params $pname [list $val $t $ptype 0]
+        dict set _default_param_vals $pname $val
+        my add_variable $pname $val
+    }
+
+    # Register a runtime "live" param: designed to be twiddled mid-recording.
+    # Always classified as VARIABLE; live=1 marks it for set_live_param dispatch.
+    method add_live_param { pname val ptype } {
+        set t [dict get $::ess::param_types VARIABLE]
+        dict set _params $pname [list $val $t $ptype 1]
         dict set _default_param_vals $pname $val
         my add_variable $pname $val
     }
@@ -1553,6 +1573,21 @@ namespace eval ess {
         dservSet ess/params [get_param_vals]
     }
 
+    # Twiddle a live param. Errors if $param is not registered as live.
+    # Allowed mid-recording (the whole point); change is logged via PARAM LIVE.
+    proc set_live_param {param val} {
+        variable current
+        if { ![$current(state_system) is_live_param $param] } {
+            error "param '$param' is not a live param"
+        }
+        $current(state_system) set_param $param $val
+        ::ess::evt_put PARAM NAME [now] $param
+        ::ess::evt_put PARAM VAL  [now] $val
+        ::ess::evt_put PARAM LIVE [now] $param
+
+        dservSet ess/params [get_param_vals]
+    }
+
     proc set_params {args} {
         variable current
 
@@ -1899,9 +1934,11 @@ namespace eval ess {
 namespace eval ess {
     # Complete list of ESS system methods
     variable ess_system_methods {
-        add_state add_action add_transition add_param add_variable add_method
+        add_state add_action add_transition add_param add_live_param
+        add_variable add_method
 	add_loader get_loaders
-        set_start set_end get_params set_param get_states status set_status
+        set_start set_end get_params set_param is_live_param
+        get_states status set_status
         init deinit start stop reset update do_action do_transition
         set_init_callback set_deinit_callback set_protocol_init_callback
         set_protocol_deinit_callback set_final_init_callback
@@ -4965,7 +5002,7 @@ namespace eval ess {
     namespace export start stop reset
     namespace export query_state query_system query_system_by_index
     namespace export query_system_name query_system_name_by_index
-    namespace export query_param get_params set_param query_remote
+    namespace export query_param get_params set_param set_live_param query_remote
     namespace export evt_name_set
     namespace export file_open file_close
     namespace ensemble create
@@ -5368,7 +5405,7 @@ namespace eval ess {
     set subtypes [dict create ACT 0 TRANS 1]
     dict set evt_info TRACE [list 4 {State System Trace} string $subtypes]
 
-    set subtypes [dict create NAME 0 VAL 1]
+    set subtypes [dict create NAME 0 VAL 1 LIVE 2]
     dict set evt_info PARAM [list 5 {Parameter Set} string $subtypes]
 
     dict set evt_info SUBTYPES [list 6 {Subtype Names} string]
