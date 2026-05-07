@@ -33,12 +33,18 @@ namespace eval ess {
     }
 
     
+    # check_file:
+    #   0 = blocked while running
+    #   1 = blocked while running OR file open
+    #   2 = always allowed (used for set_live_param)
     proc _protected_call {cmd check_file args} {
-        if {[query_running_state]} {
-            error "Cannot call $cmd while running"
-        }
-        if {$check_file && [query_open_file]} {
-            error "Cannot call $cmd while file is open"
+        if { $check_file != 2 } {
+            if {[query_running_state]} {
+                error "Cannot call $cmd while running"
+            }
+            if {$check_file && [query_open_file]} {
+                error "Cannot call $cmd while file is open"
+            }
         }
 	set noreply_functions \
 	    "load_system reload_system reload_protocol reload_variant"
@@ -64,6 +70,11 @@ namespace eval ess {
     proc reload_variant args { _protected_call reload_variant 1 $args }
     proc set_param args { _protected_call set_param 1 $args }
     proc set_params args { _protected_call set_params 1 $args }
+
+    # Always allowed — for params declared with add_live_param.
+    # The underlying ::ess::set_live_param errors if the named param
+    # is not actually marked live.
+    proc set_live_param args { _protected_call set_live_param 2 $args }
     proc set_variant_args args { _protected_call set_variant_args 1 $args }
     proc save_script args { _protected_call save_script 1 $args }
     proc get_lib_files args { _protected_call get_lib_files 1 $args }
