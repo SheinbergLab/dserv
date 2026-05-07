@@ -1192,6 +1192,22 @@ body.ess-app {
     color: var(--ess-text-primary);
 }
 
+.ess-param-label.live {
+    color: #e89a3c;
+}
+
+/* Live Controls panel — amber accent marks it as runtime-twiddleable. */
+.ess-panel-live {
+    border-left: 3px solid #e89a3c;
+}
+
+.ess-panel-live .ess-panel-title::before {
+    content: "● ";
+    color: #e89a3c;
+    font-size: 9px;
+    vertical-align: middle;
+}
+
 .ess-param-input {
     flex: 1;
     padding: 4px 6px;
@@ -1205,6 +1221,11 @@ body.ess-app {
 
 .ess-param-input:focus {
     border-color: var(--ess-accent);
+}
+
+select.ess-param-select {
+    cursor: pointer;
+    appearance: auto;
 }
 
 .ess-param-checkbox {

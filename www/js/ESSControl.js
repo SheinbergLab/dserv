@@ -532,6 +532,9 @@ class ESSControl {
             reloadOptionsBtn: this.container.querySelector('#ess-reload-options-btn'),
             paramsSection: this.container.querySelector('#ess-params-section'),
             paramsContainer: this.container.querySelector('#ess-params-container'),
+            // Live Controls panel lives in the middle column, outside this.container.
+            liveParamsPanel: document.querySelector('#ess-live-params-panel'),
+            liveParamsContainer: document.querySelector('#ess-live-params-container'),
             btnFileOpen: this.container.querySelector('#ess-btn-file-open'),
             btnFileClose: this.container.querySelector('#ess-btn-file-close'),
             fileMenuBtn: this.container.querySelector('#ess-file-menu-btn'),
@@ -1231,9 +1234,24 @@ updateConfigRunButtons() {
         this.elements.reloadProtocol.disabled = !enabled;
         this.elements.reloadVariant.disabled = !enabled;
         this.elements.reloadOptionsBtn.disabled = !enabled;
-        
+
         const optionSelects = this.elements.optionsContainer.querySelectorAll('select');
         optionSelects.forEach(select => select.disabled = !enabled);
+
+        this._applyParamGating();
+    }
+
+    // Mirror the backend gate on config params:
+    //   ess::set_param is blocked when running OR file open.
+    // Live params (in liveParamsContainer) are intentionally NOT gated —
+    // they're the whole point of the Live Controls panel.
+    _applyParamGating() {
+        const editable =
+            this.state.essStatus === 'stopped' && !this.state.currentDatafile;
+        if (!this.elements.paramsContainer) return;
+        const inputs = this.elements.paramsContainer
+            .querySelectorAll('input, select');
+        inputs.forEach(el => { el.disabled = !editable; });
     }
     
     updateVariantInfo(data) {
@@ -1327,54 +1345,106 @@ updateConfigRunButtons() {
         try {
             const params = TclParser.parseParamSettings(data);
             this.state.params = params;
-            
-            if (Object.keys(params).length === 0) {
-                this.elements.paramsSection.style.display = 'none';
-                return;
+
+            // Split by the live flag so the two panels can be sized
+            // and shown/hidden independently.
+            const configParams = {};
+            const liveParams = {};
+            for (const [name, info] of Object.entries(params)) {
+                if (info.live) {
+                    liveParams[name] = info;
+                } else {
+                    configParams[name] = info;
+                }
             }
-            
-            this.renderParams(params);
-            this.elements.paramsSection.style.display = 'block';
-            
+
+            this.renderParams(configParams);
+            this.elements.paramsSection.style.display =
+                Object.keys(configParams).length === 0 ? 'none' : 'block';
+
+            this.renderLiveParams(liveParams);
+            if (this.elements.liveParamsPanel) {
+                this.elements.liveParamsPanel.style.display =
+                    Object.keys(liveParams).length === 0 ? 'none' : '';
+            }
+
+            // freshly-rendered inputs need the current gating state
+            this._applyParamGating();
+
         } catch (e) {
             console.error('Failed to parse params:', e);
             this.elements.paramsSection.style.display = 'none';
+            if (this.elements.liveParamsPanel) {
+                this.elements.liveParamsPanel.style.display = 'none';
+            }
         }
     }
-    
+
+    renderLiveParams(params) {
+        if (!this.elements.liveParamsContainer) return;
+        this._renderParamsInto(this.elements.liveParamsContainer, params);
+    }
+
     renderParams(params) {
-        const container = this.elements.paramsContainer;
+        this._renderParamsInto(this.elements.paramsContainer, params);
+    }
+
+    _renderParamsInto(container, params) {
         container.innerHTML = '';
-        
+
         for (const [name, info] of Object.entries(params)) {
             const row = document.createElement('div');
             row.className = 'ess-param-row';
-            
+
             const label = document.createElement('span');
             label.className = 'ess-param-label';
             label.textContent = name;
             label.title = name;
-            
-            if (info.varType === '1') {
+
+            if (info.live) {
+                label.classList.add('live');
+            } else if (info.varType === '1') {
                 label.classList.add('time');
             } else {
                 label.classList.add('variable');
             }
-            
+
             row.appendChild(label);
             
-            if (info.dataType === 'bool' || info.dataType === 'boolean') {
+            // Choices form: dataType is a multi-token list like "none left right".
+            // Tcl side: add_live_param forced_side none {none left right}
+            const choices = (info.dataType && /\s/.test(info.dataType))
+                ? info.dataType.trim().split(/\s+/)
+                : null;
+
+            if (choices) {
+                const select = document.createElement('select');
+                select.className = 'ess-param-input ess-param-select';
+                select.dataset.paramName = name;
+                select.dataset.dataType = 'choices';
+                for (const c of choices) {
+                    const opt = document.createElement('option');
+                    opt.value = c;
+                    opt.textContent = c;
+                    if (c === info.value) opt.selected = true;
+                    select.appendChild(opt);
+                }
+                select.addEventListener('change', (e) => {
+                    this.onParamChange(name, e.target.value);
+                });
+                row.appendChild(select);
+            } else if (info.dataType === 'bool' || info.dataType === 'boolean') {
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
                 checkbox.className = 'ess-param-checkbox';
                 checkbox.checked = info.value === '1' || info.value === 'true' || info.value === true || info.value === 1;
                 checkbox.dataset.paramName = name;
                 checkbox.dataset.dataType = info.dataType;
-                
+
                 checkbox.addEventListener('change', (e) => {
                     this.onParamChange(name, e.target.checked ? '1' : '0');
                 });
-                
+
                 row.appendChild(checkbox);
             } else {
                 const input = document.createElement('input');
@@ -1426,7 +1496,9 @@ updateConfigRunButtons() {
     }
     
     onParamChange(name, value) {
-        const cmd = `ess::set_param ${name} ${value}`;
+        const info = this.state.params[name];
+        const verb = (info && info.live) ? 'set_live_param' : 'set_param';
+        const cmd = `ess::${verb} ${name} ${value}`;
         this.sendCommand(cmd);
         this.emit('paramChange', { name, value });
     }
@@ -1519,16 +1591,16 @@ updateConfigRunButtons() {
     updateDatafileStatus(filepath) {
         const wasOpen = !!this.state.currentDatafile;
         const isOpen = !!filepath;
-        
+
         this.state.currentDatafile = filepath || '';
-        
+
         if (filepath) {
             const filename = filepath.split('/').pop().replace('.ess', '');
             this.elements.currentFile.textContent = filename;
             this.elements.currentFile.classList.add('open');
             this.elements.btnFileOpen.style.display = 'none';
             this.elements.btnFileClose.style.display = '';
-            
+
             if (!wasOpen && isOpen) {
                 this.emit('log', { message: `Datafile opened: ${filename}`, level: 'info' });
             }
@@ -1537,11 +1609,14 @@ updateConfigRunButtons() {
             this.elements.currentFile.classList.remove('open');
             this.elements.btnFileOpen.style.display = '';
             this.elements.btnFileClose.style.display = 'none';
-            
+
             if (wasOpen && !isOpen) {
                 this.emit('log', { message: 'Datafile closed', level: 'info' });
             }
         }
+
+        // File-open state gates config params just like running state does.
+        this._applyParamGating();
     }
     
     // =========================================================================

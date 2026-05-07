@@ -138,35 +138,38 @@ class TclParser {
     
     /**
      * Parse parameter settings dict format
-     * Input: {param1 {value type dtype} param2 {value type dtype}}
-     * Output: { param1: { value, type, dtype }, param2: { value, type, dtype } }
-     * 
+     * Input: {param1 {value type dtype [live]} ...}
+     * The optional 4th element marks live (runtime-twiddleable) params.
+     * Output: { param1: { value, varType, dataType, live }, ... }
+     *
      * @param {string} str - The param settings string
      * @returns {Object} Parsed parameters
      */
     static parseParamSettings(str) {
         const params = {};
         const dict = this.parseDict(str);
-        
+
         for (const [key, value] of Object.entries(dict)) {
             const parts = this.parseList(value);
-            
-            if (parts.length === 3) {
+
+            if (parts.length >= 3) {
                 params[key] = {
                     value: parts[0],
                     varType: parts[1],  // 1=time, 2=variable
-                    dataType: parts[2]  // int, float, string
+                    dataType: parts[2], // int, float, string
+                    live: parts.length >= 4 ? parts[3] === '1' : false
                 };
             } else if (parts.length === 2) {
                 // Missing value
                 params[key] = {
                     value: '',
                     varType: parts[0],
-                    dataType: parts[1]
+                    dataType: parts[1],
+                    live: false
                 };
             }
         }
-        
+
         return params;
     }
     
