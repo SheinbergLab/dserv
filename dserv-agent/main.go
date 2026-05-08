@@ -184,9 +184,10 @@ type Config struct {
 	Verbose    bool
 
 	// TLS
-	TLSCert string
-	TLSKey  string
-	NoTLS   bool
+	TLSCert        string
+	TLSKey         string
+	NoTLS          bool
+	HTTPRedirect   string // when serving HTTPS, also listen here and 301-redirect to HTTPS ("" disables)
 
 	// Server mode
 	ServerMode   bool
@@ -303,6 +304,32 @@ func corsMiddleware(next http.Handler) http.Handler {
     })
 }
 
+// startHTTPRedirect runs a tiny HTTP server on `addr` that 301-redirects
+// every request to the equivalent https:// URL. The Host header is
+// preserved so virtual hosts (e.g. dserv.net vs an IP) keep working.
+func startHTTPRedirect(addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		// Strip any :port the client sent, since we're redirecting to
+		// the default HTTPS port.
+		if i := strings.IndexByte(host, ':'); i >= 0 {
+			host = host[:i]
+		}
+		target := "https://" + host + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	})
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("HTTP redirect listener on %s failed: %v", addr, err)
+	}
+}
+
 // ============ Main ============
 
 func main() {
@@ -365,6 +392,7 @@ Environment:
 	flag.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file (enables HTTPS)")
 	flag.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
 	flag.BoolVar(&cfg.NoTLS, "no-tls", false, "Disable TLS (even if certs exist)")
+	flag.StringVar(&cfg.HTTPRedirect, "http-redirect", ":80", "When serving HTTPS, also listen on this address and 301-redirect to HTTPS (empty to disable)")
 
 	// Mode selection
 	flag.BoolVar(&cfg.ServerMode, "server", false, "Enable registry server mode (receive heartbeats)")
@@ -558,6 +586,14 @@ Environment:
 		if cfg.ServerMode {
 			log.Printf("  Heartbeat URL: %s://%s/api/v1/heartbeat", scheme, cfg.ListenAddr)
 		}
+
+		// Parallel HTTP listener that 301-redirects to HTTPS, so clients
+		// or networks that hit plain http:// don't get connection-refused.
+		if cfg.HTTPRedirect != "" {
+			go startHTTPRedirect(cfg.HTTPRedirect)
+			log.Printf("  HTTP redirect: %s -> https://", cfg.HTTPRedirect)
+		}
+
 		if err := server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
