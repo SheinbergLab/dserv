@@ -8,5 +8,9 @@ ExecStart=/usr/local/bin/dserv-agent --server --landing-page --listen :443 --ess
 Restart=always
 RestartSec=5
 
+# GITHUB_TOKEN lives here (root-only file, chmod 600) so the registry can
+# authenticate to the GitHub API (5000 req/hr vs 60) when caching releases.
+EnvironmentFile=-/etc/dserv-agent/env
+
 [Install]
 WantedBy=multi-user.target
