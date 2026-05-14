@@ -246,6 +246,19 @@ The server pushes these messages during operations:
 }
 ```
 
+## Environment for GITHUB_TOKEN
+```
+sudo mkdir -p /etc/dserv-agent
+printf 'GITHUB_TOKEN=%s\n' 'github_pat_NEW_TOKEN_HERE' | sudo tee /etc/dserv-agent/env >/dev/null
+sudo chown root:root /etc/dserv-agent/env
+sudo chmod 600 /etc/dserv-agent/env
+```
+
+Then in the service file:
+```
+EnvironmentFile=-/etc/dserv-agent/env
+```
+
 ## Web Interface
 
 Access the dashboard at `http://<host>:2580/`
