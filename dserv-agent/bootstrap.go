@@ -32,11 +32,45 @@ type BootstrapProfile struct {
 
 // BootstrapConfig holds parameters for generating the bootstrap script
 type BootstrapConfig struct {
-	ServerURL      string
-	DefaultWG      string
-	Version        string
-	ComponentsJSON string // filtered component list as JSON
-	ProfileName    string
+	ServerURL        string
+	DefaultWG        string
+	Version          string
+	ComponentsJSON   string // filtered component list as JSON, with resolved release assets
+	AgentReleaseJSON string // dserv-agent release {tag, assets:[{name,url}]} as JSON
+	ProfileName      string
+}
+
+// bootstrapAsset is a release asset pre-resolved to a direct download URL.
+// The URL points at GitHub's CDN, which is not rate-limited like the API.
+type bootstrapAsset struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// bootstrapComponent is a Component plus its latest release, resolved
+// server-side so the install script never has to call api.github.com.
+type bootstrapComponent struct {
+	Component
+	LatestTag string           `json:"latestTag,omitempty"`
+	Assets    []bootstrapAsset `json:"resolvedAssets,omitempty"`
+}
+
+// resolveReleaseAssets looks up the latest release for a repo (via the
+// shared cache) and flattens its assets to {name, url}. Returns empty
+// values on failure — the bootstrap script falls back to GitHub directly.
+func (a *Agent) resolveReleaseAssets(repo string) (string, []bootstrapAsset) {
+	if repo == "" {
+		return "", nil
+	}
+	release := a.getLatestRelease(repo)
+	if release == nil {
+		return "", nil
+	}
+	assets := make([]bootstrapAsset, 0, len(release.Assets))
+	for _, asset := range release.Assets {
+		assets = append(assets, bootstrapAsset{Name: asset.Name, URL: asset.DownloadURL})
+	}
+	return release.TagName, assets
 }
 
 // Default profiles - can be overridden via profiles.json alongside components.json
@@ -157,8 +191,12 @@ PROFILE="{{.ProfileName}}"
 DSERV_INSTALL_DIR="/usr/local/dserv"
 LOG_FILE="/tmp/dserv-bootstrap-$(date +%Y%m%d-%H%M%S).log"
 
-# Component definitions (filtered by profile)
+# Component definitions (filtered by profile, with release assets pre-resolved
+# by the registry so installs hit GitHub's CDN, not the rate-limited API)
 COMPONENTS_JSON='{{.ComponentsJSON}}'
+
+# dserv-agent release, pre-resolved by the registry: {tag, assets:[{name,url}]}
+AGENT_RELEASE_JSON='{{.AgentReleaseJSON}}'
 
 # ============ Parse Arguments ============
 
@@ -281,13 +319,19 @@ detect_platform() {
 
 # ============ Component Install ============
 
-github_latest_release() {
+# Fallback only: query GitHub directly and normalize to the same shape the
+# registry inlines — {tag, assets:[{name,url}]}. Used when the registry could
+# not pre-resolve a release (e.g. its cache was cold and GitHub was down).
+github_release_fallback() {
     local repo="$1"
-    curl -sSL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null
+    curl -sSL "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null \
+        | jq -c '{tag: .tag_name, assets: [.assets[] | {name: .name, url: .browser_download_url}]}' 2>/dev/null
 }
 
+# find_asset picks a download URL from a normalized assets array
+# ([{name,url}, ...]) by pattern + arch.
 find_asset() {
-    local release_json="$1"
+    local assets_json="$1"
     local pattern="$2"
     local arch="$3"
 
@@ -304,18 +348,18 @@ find_asset() {
 
     # Arch-specific match first
     local url
-    url=$(echo "$release_json" | jq -r \
+    url=$(echo "$assets_json" | jq -r \
         --arg pat "$pattern" --arg arch "$arch" \
         --arg cn "$CODENAME" --arg known "$KNOWN_CODENAMES" \
-        ".assets[] | select(.name | test(\$pat)) | select(.name | test(\$arch)) | ${jq_codename_filter} | .browser_download_url" \
+        ".[] | select(.name | test(\$pat)) | select(.name | test(\$arch)) | ${jq_codename_filter} | .url" \
         | head -1)
 
     # Fall back to pattern only (arch-independent assets)
     if [[ -z "$url" || "$url" == "null" ]]; then
-        url=$(echo "$release_json" | jq -r \
+        url=$(echo "$assets_json" | jq -r \
             --arg pat "$pattern" \
             --arg cn "$CODENAME" --arg known "$KNOWN_CODENAMES" \
-            ".assets[] | select(.name | test(\$pat)) | ${jq_codename_filter} | .browser_download_url" \
+            ".[] | select(.name | test(\$pat)) | ${jq_codename_filter} | .url" \
             | head -1)
     fi
 
@@ -337,15 +381,27 @@ install_component() {
 
     info "Installing ${comp_name}..."
 
-    local release_json
-    release_json=$(github_latest_release "$repo")
-    if [[ -z "$release_json" || "$release_json" == "null" ]]; then
-        warn "${comp_id}: cannot fetch release from ${repo}"
+    # Release assets are normally pre-resolved by the registry and inlined
+    # above, so this install touches GitHub's CDN only — no api.github.com call.
+    local tag=$(echo "$comp_json" | jq -r '.latestTag // empty')
+    local assets_json=$(echo "$comp_json" | jq -c '.resolvedAssets // empty')
+
+    if [[ -z "$assets_json" || "$assets_json" == "null" ]]; then
+        warn "  ${comp_id}: no pre-resolved release, querying GitHub..."
+        local fallback
+        fallback=$(github_release_fallback "$repo")
+        if [[ -n "$fallback" && "$fallback" != "null" ]]; then
+            tag=$(echo "$fallback" | jq -r '.tag // empty')
+            assets_json=$(echo "$fallback" | jq -c '.assets')
+        fi
+    fi
+
+    if [[ -z "$assets_json" || "$assets_json" == "null" ]]; then
+        warn "${comp_id}: cannot determine release for ${repo}"
         return 1
     fi
 
-    local tag=$(echo "$release_json" | jq -r '.tag_name')
-    info "  Release: ${tag}"
+    [[ -n "$tag" ]] && info "  Release: ${tag}"
 
     if [[ -z "$asset_pattern" ]]; then
         warn "${comp_id}: no assetPattern, skipping"
@@ -353,7 +409,7 @@ install_component() {
     fi
 
     local asset_url
-    asset_url=$(find_asset "$release_json" "$asset_pattern" "$PLATFORM")
+    asset_url=$(find_asset "$assets_json" "$asset_pattern" "$PLATFORM")
 
     if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
         warn "${comp_id}: no asset matching '${asset_pattern}' for ${PLATFORM}"
@@ -476,22 +532,28 @@ step_install_agent() {
 
     info "Installing dserv-agent..."
 
-    local release_json
-    release_json=$(github_latest_release "SheinbergLab/dserv-agent")
-    if [[ -z "$release_json" ]]; then
+    # Pre-resolved by the registry; falls back to GitHub if absent.
+    local tag=$(echo "$AGENT_RELEASE_JSON" | jq -r '.tag // empty')
+    local assets_json=$(echo "$AGENT_RELEASE_JSON" | jq -c '.assets // empty')
+
+    if [[ -z "$assets_json" || "$assets_json" == "null" ]]; then
+        local fallback
+        fallback=$(github_release_fallback "SheinbergLab/dserv-agent")
+        if [[ -n "$fallback" && "$fallback" != "null" ]]; then
+            tag=$(echo "$fallback" | jq -r '.tag // empty')
+            assets_json=$(echo "$fallback" | jq -c '.assets')
+        fi
+    fi
+
+    if [[ -z "$assets_json" || "$assets_json" == "null" ]]; then
         warn "Cannot fetch dserv-agent release"
         return
     fi
 
-    local tag=$(echo "$release_json" | jq -r '.tag_name // empty')
-    if [[ -z "$tag" ]]; then
-        warn "No dserv-agent release found"
-        return
-    fi
-    info "  Release: ${tag}"
+    [[ -n "$tag" ]] && info "  Release: ${tag}"
 
     local deb_url
-    deb_url=$(find_asset "$release_json" "dserv-agent.*\\.deb$" "$PLATFORM")
+    deb_url=$(find_asset "$assets_json" "dserv-agent.*\\.deb$" "$PLATFORM")
 
     if [[ -n "$deb_url" && "$deb_url" != "null" ]]; then
         local deb_file="/tmp/dserv-agent-${tag}.deb"
@@ -500,7 +562,7 @@ step_install_agent() {
         rm -f "$deb_file"
     else
         local bin_url
-        bin_url=$(find_asset "$release_json" "dserv-agent.*linux.*${PLATFORM}" "$PLATFORM")
+        bin_url=$(find_asset "$assets_json" "dserv-agent.*linux.*${PLATFORM}" "$PLATFORM")
         if [[ -z "$bin_url" || "$bin_url" == "null" ]]; then
             warn "No dserv-agent package for ${PLATFORM}"
             return
@@ -754,16 +816,33 @@ func (a *Agent) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	// Filter components based on profile or explicit list
 	components := a.filterComponents(profileName, explicitComponents)
 
+	// Pre-resolve each component's latest release server-side (shared cache),
+	// so fresh boxes download straight from GitHub's CDN without ever calling
+	// the rate-limited api.github.com.
+	resolved := make([]bootstrapComponent, 0, len(components))
+	for _, c := range components {
+		tag, assets := a.resolveReleaseAssets(c.Repo)
+		resolved = append(resolved, bootstrapComponent{Component: c, LatestTag: tag, Assets: assets})
+	}
+
 	compJSON, _ := json.Marshal(struct {
-		Components []Component `json:"components"`
-	}{Components: components})
+		Components []bootstrapComponent `json:"components"`
+	}{Components: resolved})
+
+	// dserv-agent itself is installed by step_install_agent; resolve it too.
+	agentTag, agentAssets := a.resolveReleaseAssets(agentRepo)
+	agentJSON, _ := json.Marshal(struct {
+		Tag    string           `json:"tag"`
+		Assets []bootstrapAsset `json:"assets"`
+	}{Tag: agentTag, Assets: agentAssets})
 
 	cfg := BootstrapConfig{
-		ServerURL:      serverURL,
-		DefaultWG:      workgroup,
-		Version:        version,
-		ComponentsJSON: string(compJSON),
-		ProfileName:    profileName,
+		ServerURL:        serverURL,
+		DefaultWG:        workgroup,
+		Version:          version,
+		ComponentsJSON:   string(compJSON),
+		AgentReleaseJSON: string(agentJSON),
+		ProfileName:      profileName,
 	}
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

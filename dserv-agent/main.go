@@ -202,6 +202,9 @@ type Config struct {
 	Timeout        time.Duration
 	ComponentsFile string
 
+	// GitHub release lookups (GITHUB_TOKEN env: 5000 req/hr authenticated)
+	GitHubToken string
+
 	// Mesh registry (client mode)
 	RegistryURLs []string // Multiple registries for redundancy
 	Workgroup    string
@@ -240,13 +243,14 @@ type Workgroup struct {
 
 // Agent is the main application
 type Agent struct {
-	cfg        Config
-	registry   *Registry // server mode only
-	clients    map[*WSConn]bool
-	mu         sync.RWMutex
-	http       *http.Client
-	components []Component
-	localID    string
+	cfg          Config
+	registry     *Registry // server mode only
+	clients      map[*WSConn]bool
+	mu           sync.RWMutex
+	http         *http.Client
+	components   []Component
+	localID      string
+	releaseCache *ReleaseCache
 
 	// ESS Registry (when running with --ess-registry)
 	essRegistry *ESSRegistry
@@ -445,14 +449,17 @@ Environment:
 		cfg.AuthToken = os.Getenv("DSERV_AGENT_TOKEN")
 	}
 
+	cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
+
 	localID, _ := os.Hostname()
 	localID = strings.ToLower(strings.TrimSuffix(localID, ".local"))
 
 	agent := &Agent{
-		cfg:     cfg,
-		clients: make(map[*WSConn]bool),
-		http:    &http.Client{Timeout: cfg.Timeout},
-		localID: localID,
+		cfg:          cfg,
+		clients:      make(map[*WSConn]bool),
+		http:         &http.Client{Timeout: cfg.Timeout},
+		localID:      localID,
+		releaseCache: NewReleaseCache(),
 	}
 
 	mux := http.NewServeMux()
@@ -497,7 +504,13 @@ Environment:
 		mux.HandleFunc("/api/v1/heartbeat", agent.handleHeartbeat)
 		mux.HandleFunc("/api/v1/mesh", agent.handleMeshQuery)
 		mux.HandleFunc("/api/registry/status", agent.handleServerStatus)
-		
+
+		// Cached GitHub release metadata for deployed agents + bootstrap
+		mux.HandleFunc("/api/releases/", agent.handleReleases)
+		if cfg.GitHubToken != "" {
+			log.Printf("  GitHub: authenticated (GITHUB_TOKEN set)")
+		}
+
 		// Workgroup directory page (e.g., /brown-sheinberg)
 		mux.HandleFunc("/w/", agent.handleWorkgroupPage)
 
@@ -1587,21 +1600,11 @@ func (a *Agent) getInstalledVersion(comp Component) string {
 	return ""
 }
 
+// getLatestRelease returns the latest release for a repo, served from the
+// in-memory cache. The cache fetches via fetchRelease (registry-then-GitHub)
+// and falls back to stale data on error. See releases.go.
 func (a *Agent) getLatestRelease(repo string) *ReleaseInfo {
-	url := fmt.Sprintf("%s/%s/releases/latest", githubAPI, repo)
-	resp, err := a.http.Get(url)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil
-	}
-	var release ReleaseInfo
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil
-	}
-	return &release
+	return a.releaseCache.getOrFetch(repo, a.fetchRelease)
 }
 
 // Known Debian/Ubuntu codenames for distro-aware asset filtering
