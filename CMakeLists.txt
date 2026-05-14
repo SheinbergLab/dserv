@@ -334,20 +334,23 @@ if(GO_EXECUTABLE)
         # Ensure output directory exists
         file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
         
-        # Collect embedded files that should trigger rebuild
-        file(GLOB DSERV_AGENT_WEB_FILES ${DSERV_AGENT_SOURCE_DIR}/web/*)
+        # Collect sources that should trigger a rebuild: all Go sources plus
+        # the embedded web assets and components.json. CONFIGURE_DEPENDS makes
+        # CMake re-glob when files are added/removed.
+        file(GLOB DSERV_AGENT_GO_FILES CONFIGURE_DEPENDS ${DSERV_AGENT_SOURCE_DIR}/*.go)
+        file(GLOB DSERV_AGENT_WEB_FILES CONFIGURE_DEPENDS ${DSERV_AGENT_SOURCE_DIR}/web/*)
         set(DSERV_AGENT_COMPONENTS_JSON ${DSERV_AGENT_SOURCE_DIR}/components.json)
-        
+
         add_custom_command(
             OUTPUT ${DSERV_AGENT_BINARY}
-            COMMAND ${CMAKE_COMMAND} -E env 
-                GOOS=${GOOS} 
+            COMMAND ${CMAKE_COMMAND} -E env
+                GOOS=${GOOS}
                 GOARCH=${GOARCH}
                 CGO_ENABLED=0
                 ${GO_EXECUTABLE} build -o ${DSERV_AGENT_BINARY} .
             WORKING_DIRECTORY ${DSERV_AGENT_SOURCE_DIR}
-            DEPENDS 
-                ${DSERV_AGENT_SOURCE_DIR}/main.go
+            DEPENDS
+                ${DSERV_AGENT_GO_FILES}
                 ${DSERV_AGENT_WEB_FILES}
                 ${DSERV_AGENT_COMPONENTS_JSON}
             COMMENT "Building dserv-agent for ${GOOS}/${GOARCH}"
