@@ -155,6 +155,7 @@ type AgentInfo struct {
 }
 
 type ServiceInfo struct {
+	Name    string `json:"name,omitempty"`
 	Status  string `json:"status"`
 	Version string `json:"version,omitempty"`
 	PID     int    `json:"pid,omitempty"`
@@ -1205,7 +1206,7 @@ func (a *Agent) getStatus() StatusInfo {
 }
 
 func (a *Agent) getDservStatus() ServiceInfo {
-	info := ServiceInfo{Status: "unknown"}
+	info := ServiceInfo{Name: a.cfg.DservService, Status: "unknown"}
 	out, err := exec.Command("systemctl", "is-active", a.cfg.DservService).Output()
 	if err == nil {
 		info.Status = strings.TrimSpace(string(out))

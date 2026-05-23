@@ -27,10 +27,17 @@ func runStatus(cfg *Config, args []string) int {
 		fmt.Printf("Agent:    v%s (up %s)\n", strVal(agent, "version"), strVal(agent, "uptime"))
 	}
 
-	// Dserv info
+	// Primary managed service info (the agent's --service flag).
+	// "dserv" is the response key for historical reasons; the name inside
+	// reflects what the agent is actually managing (stim2-x11, stim2, ...).
 	if dserv, ok := result["dserv"].(map[string]interface{}); ok {
+		name := strVal(dserv, "name")
+		if name == "" {
+			name = "dserv" // older agents pre-name field
+		}
+		label := strings.ToUpper(name[:1]) + name[1:] + ":"
 		status := strVal(dserv, "status")
-		line := fmt.Sprintf("Dserv:    %s", status)
+		line := fmt.Sprintf("%-10s%s", label, status)
 		if v := strVal(dserv, "version"); v != "" {
 			line += fmt.Sprintf(" v%s", v)
 		}
