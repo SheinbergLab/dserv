@@ -86,7 +86,8 @@ namespace eval slider {
         invert_x         0 \
         invert_y         0 \
         limit_x         -1.0 \
-        limit_y         -1.0]
+        limit_y         -1.0 \
+        swipe_threshold  1.0]
 
     # Track current raw values for "set center" functionality
     variable current_raw_x 0.0
@@ -112,6 +113,16 @@ namespace eval slider {
     variable trackpad_press_out_x 0.0
     variable trackpad_press_out_y 0.0
 
+    # Swipe-mode state. Engagement = magnitude crossed swipe_threshold
+    # at any point during the current touch. last_engaged_{x,y} is the
+    # position at the most recent engaged sample, used to compute the
+    # committed angle on RELEASE (not the release position itself, in
+    # case the subject pulled back toward center before lifting).
+    variable swipe_engaged 0
+    variable swipe_last_engaged_x 0.0
+    variable swipe_last_engaged_y 0.0
+    variable last_swipe_engaged_pub -1
+
     proc update_settings {} {
         variable settings
         dservSet slider/settings $settings
@@ -126,8 +137,9 @@ namespace eval slider {
 
     proc set_source     {s} { set_param source     $s }
     proc set_mode       {m} {
-        if { $m ne "absolute" && $m ne "continuous" } {
-            error "slider: invalid continuity_mode '$m' (want absolute|continuous)"
+        if { $m ni {absolute continuous swipe} } {
+            error "slider: invalid continuity_mode '$m'\
+                (want absolute|continuous|swipe)"
         }
         set_param continuity_mode $m
     }
@@ -149,6 +161,7 @@ namespace eval slider {
     proc set_invert_y   {o} { set_param invert_y   $o }
     proc set_limit_x    {l} { set_param limit_x    $l }
     proc set_limit_y    {l} { set_param limit_y    $l }
+    proc set_swipe_threshold {t} { set_param swipe_threshold $t }
 
     # Set current raw position as center. Call this when the slider is
     # physically parked at the experimentally-neutral position.
@@ -205,6 +218,17 @@ namespace eval slider {
         if { $v == $last_active } return
         set last_active $v
         dservSet slider/active $v
+    }
+
+    # Debounced engagement signal for swipe mode. Edges:
+    #   0 -> 1 when magnitude first crosses swipe_threshold during a touch
+    #   1 -> 0 on RELEASE
+    # Stays 0 for a touch that never exceeds threshold.
+    proc publish_swipe_engaged { v } {
+        variable last_swipe_engaged_pub
+        if { $v == $last_swipe_engaged_pub } return
+        set last_swipe_engaged_pub $v
+        dservSet slider/swipe/engaged $v
     }
 
     # Source gate helper. Returns 1 iff this processor should publish
@@ -319,6 +343,9 @@ namespace eval slider {
         variable trackpad_press_raw_y
         variable trackpad_press_out_x
         variable trackpad_press_out_y
+        variable swipe_engaged
+        variable swipe_last_engaged_x
+        variable swipe_last_engaged_y
         variable last_x
         variable last_y
 
@@ -346,7 +373,8 @@ namespace eval slider {
                     set trackpad_press_out_y $last_y
                     publish_active 1
 
-                    if { $continuity_mode eq "absolute" } {
+                    if { $continuity_mode eq "absolute" ||
+                         $continuity_mode eq "swipe" } {
                         set x [calibrate_axis $nx $center_x $scale_x \
                                    $deadzone_x $invert_x $limit_x]
                         if { $chan_y >= 0 } {
@@ -356,12 +384,21 @@ namespace eval slider {
                             set y 0.0
                         }
                         publish $x $y
+
+                        if { $continuity_mode eq "swipe" } {
+                            # Reset swipe engagement state for the new touch
+                            set swipe_engaged 0
+                            set swipe_last_engaged_x 0.0
+                            set swipe_last_engaged_y 0.0
+                            publish_swipe_engaged 0
+                        }
                     }
                     # continuous mode on PRESS: hold last output, no publish
                 }
                 1 {
                     # DRAG
-                    if { $continuity_mode eq "absolute" } {
+                    if { $continuity_mode eq "absolute" ||
+                         $continuity_mode eq "swipe" } {
                         set x [calibrate_axis $nx $center_x $scale_x \
                                    $deadzone_x $invert_x $limit_x]
                         if { $chan_y >= 0 } {
@@ -371,6 +408,23 @@ namespace eval slider {
                             set y 0.0
                         }
                         publish $x $y
+
+                        if { $continuity_mode eq "swipe" } {
+                            # Track engagement: once magnitude crosses
+                            # swipe_threshold, remember the position so we
+                            # can compute the committed angle on RELEASE
+                            # even if the subject pulls back toward center
+                            # before lifting.
+                            set mag [expr {sqrt($x*$x + $y*$y)}]
+                            if { $mag >= $swipe_threshold } {
+                                if { !$swipe_engaged } {
+                                    set swipe_engaged 1
+                                    publish_swipe_engaged 1
+                                }
+                                set swipe_last_engaged_x $x
+                                set swipe_last_engaged_y $y
+                            }
+                        }
                     } else {
                         # continuous: out = out_at_press + scale * delta
                         set dx [expr {$scale_x * ($nx - $trackpad_press_raw_x)}]
@@ -397,6 +451,21 @@ namespace eval slider {
                 }
                 2 {
                     # RELEASE
+                    if { $continuity_mode eq "swipe" && $swipe_engaged } {
+                        # Commit: compute angle from last engaged position
+                        # and publish slider/swipe/angle (radians, [0, 2π)).
+                        set angle [expr {atan2($swipe_last_engaged_y,\
+                                               $swipe_last_engaged_x)}]
+                        if { $angle < 0 } {
+                            set angle [expr {$angle + 2.0*3.14159265358979}]
+                        }
+                        dservSetData slider/swipe/angle [now] 2 \
+                            [binary format f $angle] ;# 2 = DSERV_FLOAT
+                    }
+                    if { $continuity_mode eq "swipe" } {
+                        set swipe_engaged 0
+                        publish_swipe_engaged 0
+                    }
                     publish_active 0
                     switch $release_behavior {
                         hold     { # last position stays as-is }
