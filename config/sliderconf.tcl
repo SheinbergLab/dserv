@@ -366,73 +366,80 @@ namespace eval slider {
             switch $event_type {
                 0 {
                     # PRESS. Remember the press point for continuous mode
-                    # delta accumulation.
+                    # delta accumulation and swipe mode displacement.
                     set trackpad_press_raw_x $nx
                     set trackpad_press_raw_y $ny
                     set trackpad_press_out_x $last_x
                     set trackpad_press_out_y $last_y
                     publish_active 1
 
-                    if { $continuity_mode eq "absolute" ||
-                         $continuity_mode eq "swipe" } {
+                    if { $continuity_mode eq "absolute" } {
+                        # absolute: publish current mapped position now
                         set x [calibrate_axis $nx $center_x $scale_x \
                                    $deadzone_x $invert_x $limit_x]
-                        # On the trackpad path the Y axis is inherent
-                        # (it's a 2D surface, not an ain channel
-                        # selection), so always compute it in swipe
-                        # mode regardless of chan_y. Without this, atan2
-                        # collapses to ±π and only east/west swipes
-                        # register.
-                        if { $chan_y >= 0 ||
-                             $continuity_mode eq "swipe" } {
+                        if { $chan_y >= 0 } {
                             set y [calibrate_axis $ny $center_y $scale_y \
                                        $deadzone_y $invert_y $limit_y]
                         } else {
                             set y 0.0
                         }
                         publish $x $y
-
-                        if { $continuity_mode eq "swipe" } {
-                            # Reset swipe engagement state for the new touch
-                            set swipe_engaged 0
-                            set swipe_last_engaged_x 0.0
-                            set swipe_last_engaged_y 0.0
-                            publish_swipe_engaged 0
-                        }
+                    } elseif { $continuity_mode eq "swipe" } {
+                        # swipe: published position is displacement from
+                        # the press point so atan2(y, x) reflects swipe
+                        # *direction* rather than absolute trackpad
+                        # location. At PRESS displacement is (0, 0) by
+                        # definition, so start the cursor at center.
+                        publish 0.0 0.0
+                        # Reset swipe engagement state for the new touch.
+                        set swipe_engaged 0
+                        set swipe_last_engaged_x 0.0
+                        set swipe_last_engaged_y 0.0
+                        publish_swipe_engaged 0
                     }
                     # continuous mode on PRESS: hold last output, no publish
                 }
                 1 {
                     # DRAG
-                    if { $continuity_mode eq "absolute" ||
-                         $continuity_mode eq "swipe" } {
+                    if { $continuity_mode eq "absolute" } {
+                        # absolute: publish current mapped position
                         set x [calibrate_axis $nx $center_x $scale_x \
                                    $deadzone_x $invert_x $limit_x]
-                        # Same Y-always-on-for-swipe rationale as PRESS.
-                        if { $chan_y >= 0 ||
-                             $continuity_mode eq "swipe" } {
+                        if { $chan_y >= 0 } {
                             set y [calibrate_axis $ny $center_y $scale_y \
                                        $deadzone_y $invert_y $limit_y]
                         } else {
                             set y 0.0
                         }
                         publish $x $y
+                    } elseif { $continuity_mode eq "swipe" } {
+                        # swipe: publish displacement from press point.
+                        # calibrate_axis with center=press_raw gives us
+                        # scale_x * (nx - press_raw_x) with the standard
+                        # deadzone/invert/limit applied. Engagement and
+                        # commit-angle then both work in "swipe distance"
+                        # / "swipe direction" terms, which is what the
+                        # subject sees and what the threshold compares.
+                        set dx [calibrate_axis $nx \
+                                    $trackpad_press_raw_x $scale_x \
+                                    $deadzone_x $invert_x $limit_x]
+                        set dy [calibrate_axis $ny \
+                                    $trackpad_press_raw_y $scale_y \
+                                    $deadzone_y $invert_y $limit_y]
+                        publish $dx $dy
 
-                        if { $continuity_mode eq "swipe" } {
-                            # Track engagement: once magnitude crosses
-                            # swipe_threshold, remember the position so we
-                            # can compute the committed angle on RELEASE
-                            # even if the subject pulls back toward center
-                            # before lifting.
-                            set mag [expr {sqrt($x*$x + $y*$y)}]
-                            if { $mag >= $swipe_threshold } {
-                                if { !$swipe_engaged } {
-                                    set swipe_engaged 1
-                                    publish_swipe_engaged 1
-                                }
-                                set swipe_last_engaged_x $x
-                                set swipe_last_engaged_y $y
+                        set mag [expr {sqrt($dx*$dx + $dy*$dy)}]
+                        if { $mag >= $swipe_threshold } {
+                            if { !$swipe_engaged } {
+                                set swipe_engaged 1
+                                publish_swipe_engaged 1
                             }
+                            # Remember the position so we can commit
+                            # the right angle on RELEASE even if the
+                            # subject pulls back toward press before
+                            # lifting.
+                            set swipe_last_engaged_x $dx
+                            set swipe_last_engaged_y $dy
                         }
                     } else {
                         # continuous: out = out_at_press + scale * delta
