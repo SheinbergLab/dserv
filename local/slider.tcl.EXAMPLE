@@ -13,9 +13,10 @@
 # Controls which input path drives slider/position. Prevents the virtual
 # slider and real hardware from competing (whichever fires last wins).
 #
-#   "ain"     - only the ain/vals hardware path publishes (rig default)
-#   "virtual" - only the virtual path publishes (dev / simulation)
-#   "auto"    - both paths active, last writer wins (default out of box)
+#   "ain"      - only the ain/vals hardware path publishes (rig default)
+#   "trackpad" - use USB trackpad as source for slider
+#   "virtual"  - only the virtual path publishes (dev / simulation)
+#   "auto"     - both paths active, last writer wins (default out of box)
 #
 # On a rig with a wired slider, set to "ain":
 # slider::set_source ain
