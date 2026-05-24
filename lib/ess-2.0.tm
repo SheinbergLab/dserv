@@ -3420,38 +3420,79 @@ namespace eval ess {
         # attribute rather than a state transition.
     }
 
-    # ::ess::slider_init -mode <absolute|continuous> ?-release <hold|stop|recenter>?
+    # swipe-mode side channels (only published when slider is in swipe mode).
+    # slider/swipe/angle    : float, radians [0, 2π), one shot per commit
+    # slider/swipe/engaged  : 0/1 string, edges on engagement threshold
+    variable slider_swipe_angle   0.0
+    variable slider_swipe_time    0
+    variable slider_swipe_engaged 0
+
+    proc slider_swipe_process { dpoint data } {
+        variable slider_swipe_angle
+        variable slider_swipe_time
+        set v [lindex $data 0]
+        if { $v ne "" } { set slider_swipe_angle $v }
+        set slider_swipe_time [dservTimestamp $dpoint]
+    }
+
+    proc slider_swipe_engaged_process { dpoint data } {
+        variable slider_swipe_engaged
+        set slider_swipe_engaged $data
+    }
+
+    # ::ess::slider_init -mode <absolute|continuous|swipe>
+    #                    ?-release <hold|stop|recenter>?
+    #                    ?-threshold <magnitude>?
     #
     # -mode is required. It tells the slider subprocess how to interpret
-    # contact-based input (trackpad, virtual press_drag_release). For a
-    # steering / tracking paradigm use "continuous"; for a hand-in-space
-    # / absolute-pointing paradigm use "absolute". On a pot-based rig
-    # (ain source) the setting has no effect — pot is always continuous.
+    # contact-based input (trackpad, virtual press_drag_release):
+    #   absolute   - PRESS jumps to mapped position; DRAG follows it.
+    #                (Hand-in-space / pointing paradigms.)
+    #   continuous - PRESS holds last value; DRAG accumulates deltas
+    #                from the press point. (Steering paradigm.)
+    #   swipe      - Like absolute for live position, plus engagement
+    #                tracking. On RELEASE, if magnitude ever crossed
+    #                -threshold during the touch, publishes the
+    #                committed angle to slider/swipe/angle (radians).
+    #                Engagement edges go to slider/swipe/engaged so
+    #                consumers can show/hide a cursor without recomputing
+    #                magnitude themselves.
+    #
+    # On a pot-based rig (ain source) the mode setting has no effect —
+    # pot is always continuous.
     #
     # -release defaults to "hold" (cursor stays at last position after
     # RELEASE). Set "recenter" to snap to (0, 0) or "stop" to freeze
     # publishing and let consumers key off slider/active.
+    #
+    # -threshold sets the swipe-mode engagement magnitude in calibrated
+    # output units. Ignored in absolute / continuous modes.
     proc slider_init { args } {
         set mode ""
         set release "hold"
+        set threshold ""
         for { set i 0 } { $i < [llength $args] } { incr i 2 } {
             set k [lindex $args $i]
             set v [lindex $args [expr {$i + 1}]]
             switch -- $k {
-                -mode    { set mode $v }
-                -release { set release $v }
+                -mode      { set mode $v }
+                -release   { set release $v }
+                -threshold { set threshold $v }
                 default  {
                     error "::ess::slider_init: unknown option '$k'"
                 }
             }
         }
         if { $mode eq "" } {
-            error "::ess::slider_init requires -mode {absolute|continuous}"
+            error "::ess::slider_init requires -mode {absolute|continuous|swipe}"
         }
 
         # Forward semantics to the slider subprocess.
         send slider "slider::set_mode $mode"
         send slider "slider::set_release $release"
+        if { $threshold ne "" } {
+            send slider "slider::set_swipe_threshold $threshold"
+        }
 
         # set flag so data files automatically log slider data
         variable slider_active
@@ -3464,8 +3505,23 @@ namespace eval ess {
         set slider_x 0.0
         set slider_y 0.0
 
+        # reset swipe-mode side channels too
+        variable slider_swipe_angle
+        variable slider_swipe_time
+        variable slider_swipe_engaged
+        set slider_swipe_angle   0.0
+        set slider_swipe_time    0
+        set slider_swipe_engaged 0
+
         dservAddExactMatch slider/position
         dpointSetScript    slider/position ::ess::slider_process
+
+        # Subscribe to swipe-mode side channels. Harmless in other modes
+        # (sliderconf never publishes them outside swipe).
+        dservAddExactMatch slider/swipe/angle
+        dpointSetScript    slider/swipe/angle ::ess::slider_swipe_process
+        dservAddExactMatch slider/swipe/engaged
+        dpointSetScript    slider/swipe/engaged ::ess::slider_swipe_engaged_process
 
         # Publish so the frontend can conditionally show the slider panel
         dservSet ess/slider_active 1
@@ -3491,6 +3547,32 @@ namespace eval ess {
         variable slider_x
         variable slider_y
         return [list $slider_x $slider_y]
+    }
+
+    # swipe-mode accessors.
+    #
+    # slider_swipe_angle   - last committed swipe angle in radians [0, 2π).
+    #                        Only meaningful when slider_swipe_time has
+    #                        advanced since the protocol last consumed it
+    #                        (e.g., after cue_on_time).
+    # slider_swipe_time    - dservTimestamp (µs) of the last commit.
+    #                        Protocol code compares this to its own
+    #                        cue_on_time / last-processed marker to detect
+    #                        a fresh commit.
+    # slider_swipe_engaged - 0/1. 1 from the moment magnitude first crosses
+    #                        the swipe threshold during a touch, back to 0
+    #                        on RELEASE. Use for cursor show/hide.
+    proc slider_swipe_angle {} {
+        variable slider_swipe_angle
+        return $slider_swipe_angle
+    }
+    proc slider_swipe_time {} {
+        variable slider_swipe_time
+        return $slider_swipe_time
+    }
+    proc slider_swipe_engaged {} {
+        variable slider_swipe_engaged
+        return $slider_swipe_engaged
     }
 
     # Publish a one-shot virtual slider sample. Useful for yoked playback
