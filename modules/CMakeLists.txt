@@ -284,9 +284,13 @@ if (UNIX AND NOT APPLE)
 set (EVDEVLIB evdev)
 include_directories(/usr/include/libevdev-1.0)
 endif()
+if (APPLE)
+# IOKit + CoreFoundation needed for the macOS HID backend in input.c
+set (INPUT_APPLE_FRAMEWORKS "-framework IOKit" "-framework CoreFoundation")
+endif()
 add_library(${MODULE} MODULE ${MODULE}/${MODULE}.c)
 set_target_properties(${MODULE} PROPERTIES PREFIX "dserv_")
-target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} pthread)
+target_link_libraries(${MODULE} ${DLSH} ${TCLLIB} ${EVDEVLIB} ${INPUT_APPLE_FRAMEWORKS} pthread)
 
 ##
 ## mesh
