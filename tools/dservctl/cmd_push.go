@@ -78,8 +78,16 @@ func runPush(cfg *Config, args []string) int {
 	client := NewRegistryClient(cfg)
 	manifest, err := client.GetManifest(cfg.Workgroup, system, version)
 	if err != nil {
-		PrintError("fetching manifest: %v", err)
-		return 1
+		// A "system not found" error is the normal first-push case;
+		// when --add is set, treat it as "manifest == nil" and let
+		// the scaffolding path below create the system. Other errors
+		// (network, auth, etc.) still abort.
+		if addNew && strings.Contains(strings.ToLower(err.Error()), "not found") {
+			manifest = nil
+		} else {
+			PrintError("fetching manifest: %v", err)
+			return 1
+		}
 	}
 
 	systemExists := manifest != nil
