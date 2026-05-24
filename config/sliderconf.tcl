@@ -489,24 +489,18 @@ dservAddExactMatch slider/virtual
 dpointSetScript    slider/virtual slider::process_virtual
 
 # Subscribe to the trackpad feed (input subprocess, mtouch/trackpad).
-# Range is published one-shot at input startup; cache it if it arrived
-# before the slider subprocess came up, and subscribe for future updates
-# (e.g., if the input subprocess restarts).
+# Range is published one-shot at input startup; if input came up before
+# us we'd otherwise miss it, so after subscribing we dservTouch to
+# re-fire any existing value through the callback. Single code path for
+# both "value arrives later" and "value already there" — and it doesn't
+# leave a misleading "dpoint not found" trace in errorInfo when no
+# trackpad is present (just a quiet no-op).
 dservAddExactMatch mtouch/trackpad
 dpointSetScript    mtouch/trackpad slider::process_trackpad
 
 dservAddExactMatch mtouch/trackpad/range
 dpointSetScript    mtouch/trackpad/range slider::set_trackpad_range
-
-# If the input subprocess already published the trackpad range (restart
-# case, or race where input came up first), pick it up synchronously so
-# the first event doesn't get dropped by the range_known gate. Guarded:
-# on a rig (or dev box) with no trackpad, the datapoint never exists and
-# dservGet raises "dpoint not found" — not an error, just nothing to do.
-if { ![catch { dservGet mtouch/trackpad/range } existing_range]
-     && [llength $existing_range] == 4 } {
-    slider::set_trackpad_range mtouch/trackpad/range $existing_range
-}
+catch { dservTouch mtouch/trackpad/range }
 
 # Local deployment overrides (which ain channel the slider is wired to,
 # per-rig calibration: center / scale / deadzone / invert / limit). Not
