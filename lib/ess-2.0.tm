@@ -5617,7 +5617,13 @@ namespace eval ess {
 
     set subtypes [dict create OFF 0 ON 1 ]
     dict set evt_info CHOICES [list 50 {Choices} long $subtypes]
-    
+
+    set subtypes [dict create ENGAGE 0 RELEASE 1 COMMIT 2 ABORT 3]
+    dict set evt_info SWIPE [list 51 {Analog Swipe} float $subtypes]
+
+    set subtypes [dict create POSITION 0 BUTTON 1]
+    dict set evt_info SLIDER [list 52 {Slider/Trackpad Input} float $subtypes]
+
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
     dict set evt_info SACCADE_INFO [list 130 {Saccade Data} float]
