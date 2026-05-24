@@ -3583,16 +3583,35 @@ namespace eval ess {
         dservTouch mtouch/touchvals
     }
 
+    # Convert a raw screen-pixel touch position to calibrated stimulus
+    # coordinates (degrees of visual angle). Mirrors the inverse of the
+    # mapping used by touch_win_set. Requires touch_init to have been
+    # called (sets up the touch_win_* scale/offset vars).
+    proc touch_pixels_to_deg { px py } {
+        variable touch_win_half_w
+        variable touch_win_half_h
+        variable touch_win_scale_w
+        variable touch_win_scale_h
+        set x_deg [expr {($px - $touch_win_half_w) / double($touch_win_scale_w)}]
+        set y_deg [expr {($touch_win_half_h - $py) / double($touch_win_scale_h)}]
+        return [list $x_deg $y_deg]
+    }
+
     proc touch_evt_put { name data } {
 	# events closer than 15ms aparts skipped
 	set min_us 15000
 	set timestamp [dservTimestamp $name]
 	if {!$::ess::in_obs} return
 	lassign $data x y
+	# calibrated-deg version, parallel to the raw-pixel datapoint —
+	# protocols and viz that work in stim space subscribe to
+	# ess/touch_{press,release}_deg instead of the raw pixel pair.
+	lassign [touch_pixels_to_deg $x $y] x_deg y_deg
 	if { $name == "ess/touch_press" } {
 	    variable last_touch_press
 	    if { [expr ($timestamp-$last_touch_press)>$min_us] } {
 		::ess::evt_put TOUCH PRESS $timestamp $x $y
+		dservSet ess/touch_press_deg [list $x_deg $y_deg]
 		set last_touch_press $timestamp
 		# wake the state machine on a new press so transitions
 		# can fire even when the press lands outside any window
@@ -3602,6 +3621,7 @@ namespace eval ess {
 	    variable last_touch_release
 	    if { [expr ($timestamp-$last_touch_release)>$min_us] } {
 		::ess::evt_put TOUCH RELEASE $timestamp $x $y
+		dservSet ess/touch_release_deg [list $x_deg $y_deg]
 		set last_touch_release $timestamp
 		do_update
 	    }
