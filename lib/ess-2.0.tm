@@ -3407,17 +3407,27 @@ namespace eval ess {
     # slider/position is published by sliderconf as a DSERV_FLOAT pair, so
     # dserv auto-decodes $data into a 2-element Tcl list on dispatch.
     #
+    # Tracks the mode passed to slider_init so slider_process knows
+    # whether to wake the state machine on every position update. In
+    # swipe mode we need the SM to tick on each sample so the cursor
+    # follows the finger live; in other modes (ain pot at kHz) we
+    # don't.
+    variable slider_mode ""
+
     proc slider_process { dpoint data } {
         variable slider_x
         variable slider_y
+        variable slider_mode
         lassign $data x y
         if { $x ne "" } { set slider_x $x }
         if { $y ne "" } { set slider_y $y }
-        # Intentionally NOT calling do_update: the state machine polls
-        # slider_x / slider_y from transitions when needed. Calling
-        # do_update on every sample would wake the SM ~1 kHz, which is
-        # overkill for paradigms where the slider drives a stimulus
-        # attribute rather than a state transition.
+        # Wake the state machine on every sample in swipe mode (for
+        # live cursor tracking). In other modes (notably ain at kHz)
+        # the SM polls slider_x / slider_y from its own transitions,
+        # so we skip the wake to avoid burning cycles.
+        if { $slider_mode eq "swipe" } {
+            do_update
+        }
     }
 
     # swipe-mode side channels (only published when slider is in swipe mode).
@@ -3433,11 +3443,16 @@ namespace eval ess {
         set v [lindex $data 0]
         if { $v ne "" } { set slider_swipe_angle $v }
         set slider_swipe_time [dservTimestamp $dpoint]
+        # Wake the SM so responded_swipe can pick up the commit.
+        do_update
     }
 
     proc slider_swipe_engaged_process { dpoint data } {
         variable slider_swipe_engaged
         set slider_swipe_engaged $data
+        # Wake the SM on engagement edges so the cursor show/hide
+        # transitions don't have to wait for the next timer fire.
+        do_update
     }
 
     # ::ess::slider_init -mode <absolute|continuous|swipe>
@@ -3493,6 +3508,10 @@ namespace eval ess {
         if { $threshold ne "" } {
             send slider "slider::set_swipe_threshold $threshold"
         }
+
+        # Record mode so slider_process knows whether to wake the SM.
+        variable slider_mode
+        set slider_mode $mode
 
         # set flag so data files automatically log slider data
         variable slider_active

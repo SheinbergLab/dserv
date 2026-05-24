@@ -377,7 +377,14 @@ namespace eval slider {
                          $continuity_mode eq "swipe" } {
                         set x [calibrate_axis $nx $center_x $scale_x \
                                    $deadzone_x $invert_x $limit_x]
-                        if { $chan_y >= 0 } {
+                        # On the trackpad path the Y axis is inherent
+                        # (it's a 2D surface, not an ain channel
+                        # selection), so always compute it in swipe
+                        # mode regardless of chan_y. Without this, atan2
+                        # collapses to ±π and only east/west swipes
+                        # register.
+                        if { $chan_y >= 0 ||
+                             $continuity_mode eq "swipe" } {
                             set y [calibrate_axis $ny $center_y $scale_y \
                                        $deadzone_y $invert_y $limit_y]
                         } else {
@@ -401,7 +408,9 @@ namespace eval slider {
                          $continuity_mode eq "swipe" } {
                         set x [calibrate_axis $nx $center_x $scale_x \
                                    $deadzone_x $invert_x $limit_x]
-                        if { $chan_y >= 0 } {
+                        # Same Y-always-on-for-swipe rationale as PRESS.
+                        if { $chan_y >= 0 ||
+                             $continuity_mode eq "swipe" } {
                             set y [calibrate_axis $ny $center_y $scale_y \
                                        $deadzone_y $invert_y $limit_y]
                         } else {
