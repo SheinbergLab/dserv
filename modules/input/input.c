@@ -28,6 +28,13 @@
 #include <linux/input.h>
 #endif
 
+#ifdef __APPLE__
+#include <IOKit/hid/IOHIDManager.h>
+#include <IOKit/hid/IOHIDDevice.h>
+#include <IOKit/hid/IOHIDKeys.h>
+#include <stdint.h>
+#endif
+
 #include <tcl.h>
 
 #include "Datapoint.h"
@@ -81,6 +88,20 @@ typedef struct input_device_s {
 
 #ifdef __linux__
   struct libevdev *dev;
+#endif
+
+#ifdef __APPLE__
+  /* macOS IOKit HID state. The reader thread runs a CFRunLoop and
+     parses raw input reports from a WPTP-class trackpad. */
+  IOHIDDeviceRef hid_device;
+  CFRunLoopRef   run_loop;          /* set by reader; CFRunLoopStop wakes it */
+  uint8_t        report_buf[256];   /* IOKit fills this for each input report */
+  /* Slot 0 state for press/drag/release detection (mirrors the Linux
+     trackpad_reader; v1 tracks the primary contact only). */
+  int            slot0_tip;
+  int            slot0_x;
+  int            slot0_y;
+  int            slot0_first_after_press;
 #endif
 
   /* Per-device touchscreen state. Lives here (not in the class) so each
@@ -729,27 +750,389 @@ static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
 #else /* !__linux__ */
 
 /*****************************************************************************
- * macOS / non-Linux stubs
+ * macOS implementation (IOKit HID, WPTP touchpads)
+ *
+ * Strategy:
+ *   - autodiscover_impl uses IOHIDManager to enumerate trackpads matching
+ *     a known VID/PID table. For each match, it allocates an input_device_t
+ *     and starts a reader thread.
+ *   - The reader thread opens the device with kIOHIDOptionsTypeSeizeDevice
+ *     (otherwise macOS's HID stack silently consumes the reports), writes
+ *     two Feature reports to switch the device from default mouse mode
+ *     into Windows Precision Touchpad mode (this is what hid-multitouch.ko
+ *     does on Linux probe), then runs a CFRunLoop on which IOKit
+ *     dispatches raw input reports.
+ *   - Each input report (ID 4) is parsed and publishes mtouch/trackpad
+ *     events with the same uint16[3] (x, y, event_type) format as the
+ *     Linux trackpad_reader. Range is published once at open.
+ *
+ * Touchscreens are not yet supported on macOS (would need a similar
+ * IOKit backend with Digitizer-class matching). Stubs left in place.
  *****************************************************************************/
 
+/* Known WPTP-class trackpads. Extend this table to enable additional
+ * devices. Axis ranges come from the device's HID descriptor (which
+ * Linux's evtest also reports). */
+typedef struct {
+  int vid;
+  int pid;
+  int min_x, max_x;
+  int min_y, max_y;
+} mac_known_trackpad_t;
+
+static const mac_known_trackpad_t MAC_KNOWN_TRACKPADS[] = {
+  /* HTX HID Device — Holtek HTK2288 master + Pixcir PCT1335QN touch IC */
+  { 0x048d, 0x8911, 0, 1599, 0, 1199 },
+};
+#define MAC_KNOWN_TRACKPAD_COUNT \
+  (sizeof(MAC_KNOWN_TRACKPADS) / sizeof(MAC_KNOWN_TRACKPADS[0]))
+
+static const mac_known_trackpad_t *find_mac_known_trackpad(int vid, int pid)
+{
+  for (size_t i = 0; i < MAC_KNOWN_TRACKPAD_COUNT; i++) {
+    if (MAC_KNOWN_TRACKPADS[i].vid == vid &&
+        MAC_KNOWN_TRACKPADS[i].pid == pid) {
+      return &MAC_KNOWN_TRACKPADS[i];
+    }
+  }
+  return NULL;
+}
+
+/* Class-table stubs. Real matching on macOS happens in autodiscover_impl
+ * via IOHIDManager's matching dictionary — these per-device callbacks
+ * are not used. */
 static int touchscreen_matches(void *dev) { (void)dev; return 0; }
 static void *touchscreen_reader(void *arg) { (void)arg; return NULL; }
 static int trackpad_matches(void *dev) { (void)dev; return 0; }
-static void *trackpad_reader(void *arg) { (void)arg; return NULL; }
 
+/* ----- WPTP enable + report parsing helpers ------------------------- */
+
+static int enable_wptp_mode(IOHIDDeviceRef dev)
+{
+  /* Report ID 3 (Input Mode): 0 = legacy mouse, 3 = WPTP */
+  uint8_t mode[2] = { 0x03, 0x03 };
+  IOReturn r1 = IOHIDDeviceSetReport(dev, kIOHIDReportTypeFeature, 0x03,
+                                     mode, sizeof(mode));
+  /* Report ID 5 (Surface Switch | Button Switch): both enabled */
+  uint8_t sel[2] = { 0x05, 0x03 };
+  IOReturn r2 = IOHIDDeviceSetReport(dev, kIOHIDReportTypeFeature, 0x05,
+                                     sel, sizeof(sel));
+  return (r1 == kIOReturnSuccess && r2 == kIOReturnSuccess) ? 0 : -1;
+}
+
+static void publish_trackpad_event_mac(input_device_t *d,
+                                       int x, int y, int evt)
+{
+  uint16_t vals[3];
+  vals[0] = (uint16_t) x;
+  vals[1] = (uint16_t) y;
+  vals[2] = (uint16_t) evt;
+  ds_datapoint_t *dp = dpoint_new(d->point_name,
+                                  tclserver_now(d->state->tclserver),
+                                  DSERV_SHORT,
+                                  sizeof(vals),
+                                  (unsigned char *) vals);
+  tclserver_set_point(d->state->tclserver, dp);
+}
+
+static void publish_trackpad_range_mac(input_device_t *d)
+{
+  char range_name[INPUT_DPOINT_MAX];
+  snprintf(range_name, sizeof(range_name), "%s/range", d->point_name);
+  int32_t vals[4];
+  vals[0] = d->minx;
+  vals[1] = d->maxx;
+  vals[2] = d->miny;
+  vals[3] = d->maxy;
+  ds_datapoint_t *dp = dpoint_new(range_name,
+                                  tclserver_now(d->state->tclserver),
+                                  DSERV_INT,
+                                  sizeof(vals),
+                                  (unsigned char *) vals);
+  tclserver_set_point(d->state->tclserver, dp);
+}
+
+/* WPTP Report ID 4 layout (see hid_test.c for full breakdown):
+ *   byte 0    : report ID (= 4)
+ *   bytes 1-5 : finger slot 0 — flags + 16-bit X + 16-bit Y (little-endian)
+ *   bytes 6-25: slots 1-4 (same shape)
+ *   bytes 26-27: scan time, byte 28: contact count, byte 29: buttons
+ * Slot 0 byte 0: bit 0 confidence, bit 1 tip switch, bits 2-4 contact ID. */
+static void parse_wptp_report_mac(input_device_t *d, uint8_t *r, CFIndex len)
+{
+  if (len < 30 || r[0] != 4) return;
+
+  const uint8_t *b = &r[1];
+  int tip = (b[0] >> 1) & 0x01;
+  int x = b[1] | (b[2] << 8);
+  int y = b[3] | (b[4] << 8);
+
+  if (!d->slot0_tip && tip) {
+    /* PRESS */
+    d->slot0_tip = 1;
+    d->slot0_x = x;
+    d->slot0_y = y;
+    d->slot0_first_after_press = 1;
+    publish_trackpad_event_mac(d, x, y, 0);
+  } else if (d->slot0_tip && !tip) {
+    /* RELEASE — use last known position (device sends final position
+     * with tip=0; we keep the previous coords for consistency with the
+     * Linux trackpad_reader). */
+    d->slot0_tip = 0;
+    publish_trackpad_event_mac(d, d->slot0_x, d->slot0_y, 2);
+  } else if (tip && (d->slot0_x != x || d->slot0_y != y)) {
+    /* DRAG */
+    d->slot0_x = x;
+    d->slot0_y = y;
+    publish_trackpad_event_mac(d, x, y, 1);
+  }
+}
+
+static void on_hid_report_callback(void *ctx, IOReturn result, void *sender,
+                                   IOHIDReportType type, uint32_t reportID,
+                                   uint8_t *report, CFIndex reportLength)
+{
+  (void)sender; (void)type;
+  if (result != kIOReturnSuccess) return;
+  if (reportID != 4) return;
+  parse_wptp_report_mac((input_device_t *) ctx, report, reportLength);
+}
+
+/* Reader thread: open device, enable WPTP, publish range, register
+ * callback, run CFRunLoop until stop_device tells us to exit. */
+static void *trackpad_reader(void *arg)
+{
+  input_device_t *d = (input_device_t *) arg;
+  if (!d->hid_device) return NULL;
+
+  if (IOHIDDeviceOpen(d->hid_device, kIOHIDOptionsTypeSeizeDevice)
+      != kIOReturnSuccess) {
+    return NULL;
+  }
+  if (enable_wptp_mode(d->hid_device) < 0) {
+    IOHIDDeviceClose(d->hid_device, kIOHIDOptionsTypeNone);
+    return NULL;
+  }
+
+  publish_trackpad_range_mac(d);
+
+  d->slot0_tip = 0;
+  d->slot0_x = 0;
+  d->slot0_y = 0;
+  d->slot0_first_after_press = 0;
+
+  d->run_loop = CFRunLoopGetCurrent();
+  IOHIDDeviceScheduleWithRunLoop(d->hid_device, d->run_loop,
+                                 kCFRunLoopDefaultMode);
+  IOHIDDeviceRegisterInputReportCallback(d->hid_device,
+                                         d->report_buf,
+                                         (CFIndex)sizeof(d->report_buf),
+                                         on_hid_report_callback, d);
+
+  CFRunLoopRun();  /* blocks until CFRunLoopStop in stop_device */
+
+  IOHIDDeviceUnscheduleFromRunLoop(d->hid_device, d->run_loop,
+                                   kCFRunLoopDefaultMode);
+  IOHIDDeviceClose(d->hid_device, kIOHIDOptionsTypeNone);
+  return NULL;
+}
+
+/* ----- Device lifecycle (macOS) -------------------------------- */
+
+/* Construct input_device_t bound to an IOHIDDeviceRef discovered by
+ * autodiscover_impl. CFRetain keeps the device alive while we hold it. */
+static input_device_t *open_device_from_hid(input_state_t *st,
+                                            input_class_t *cls,
+                                            IOHIDDeviceRef hid_dev)
+{
+  int vid = 0, pid = 0;
+  CFTypeRef vt = IOHIDDeviceGetProperty(hid_dev, CFSTR(kIOHIDVendorIDKey));
+  CFTypeRef pt = IOHIDDeviceGetProperty(hid_dev, CFSTR(kIOHIDProductIDKey));
+  if (vt) CFNumberGetValue((CFNumberRef)vt, kCFNumberIntType, &vid);
+  if (pt) CFNumberGetValue((CFNumberRef)pt, kCFNumberIntType, &pid);
+
+  const mac_known_trackpad_t *kt = find_mac_known_trackpad(vid, pid);
+  if (!kt) return NULL;
+
+  input_device_t *d = (input_device_t *) calloc(1, sizeof(*d));
+  d->state = st;
+  d->cls = cls;
+  d->fd = -1;
+  snprintf(d->path, INPUT_PATH_MAX, "iohid:%04x:%04x", vid, pid);
+  strncpy(d->point_name, cls->datapoint, INPUT_DPOINT_MAX - 1);
+  d->hid_device = hid_dev;
+  CFRetain(d->hid_device);
+
+  d->minx = kt->min_x;
+  d->maxx = kt->max_x;
+  d->miny = kt->min_y;
+  d->maxy = kt->max_y;
+  d->rangex = (float)(d->maxx - d->minx);
+  d->rangey = (float)(d->maxy - d->miny);
+
+  pthread_mutex_lock(&st->devices_lock);
+  d->next = st->devices;
+  st->devices = d;
+  pthread_mutex_unlock(&st->devices_lock);
+
+  return d;
+}
+
+/* inputOpen Tcl command — Linux takes a /dev/input/eventN path. On macOS
+ * that doesn't apply; force users through inputAutodiscover. */
 static input_device_t *open_device(input_state_t *st, input_class_t *cls,
                                    const char *path, Tcl_Interp *interp)
 {
-  (void)st; (void)cls; (void)path; (void)interp;
+  (void)st; (void)cls; (void)path;
+  if (interp) {
+    Tcl_AppendResult(interp,
+      "input: inputOpen by path not supported on macOS — "
+      "use inputAutodiscover", NULL);
+  }
   return NULL;
 }
-static int start_device(input_device_t *d) { (void)d; return 0; }
-static void stop_device(input_device_t *d) { (void)d; }
-static void destroy_all_devices(input_state_t *st) { (void)st; }
+
+static int start_device(input_device_t *d)
+{
+  if (d->thread_running) return 0;
+  if (pthread_create(&d->thread_id, NULL, d->cls->reader, d) != 0) return -1;
+  d->thread_running = 1;
+  return 0;
+}
+
+static void stop_device(input_device_t *d)
+{
+  if (d->thread_running) {
+    if (d->run_loop) CFRunLoopStop(d->run_loop);
+    pthread_join(d->thread_id, NULL);
+    d->thread_running = 0;
+    d->run_loop = NULL;
+  }
+  if (d->hid_device) {
+    CFRelease(d->hid_device);
+    d->hid_device = NULL;
+  }
+}
+
+static void unlink_and_free_device(input_state_t *st, input_device_t *d)
+{
+  pthread_mutex_lock(&st->devices_lock);
+  if (st->devices == d) {
+    st->devices = d->next;
+  } else {
+    for (input_device_t *p = st->devices; p && p->next; p = p->next) {
+      if (p->next == d) { p->next = d->next; break; }
+    }
+  }
+  pthread_mutex_unlock(&st->devices_lock);
+  stop_device(d);
+  free(d);
+}
+
+static void destroy_all_devices(input_state_t *st)
+{
+  pthread_mutex_lock(&st->devices_lock);
+  input_device_t *d = st->devices;
+  st->devices = NULL;
+  pthread_mutex_unlock(&st->devices_lock);
+  while (d) {
+    input_device_t *next = d->next;
+    stop_device(d);
+    free(d);
+    d = next;
+  }
+}
+
+/* Autodiscover: build a multi-match dictionary from MAC_KNOWN_TRACKPADS
+ * (filtered to the Mouse interface — the WPTP touchpad exposes data on
+ * UsagePage=1 Usage=2), enumerate currently-attached matches, and start
+ * a reader thread for each. */
 static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
                              Tcl_Obj *result_dict)
 {
-  (void)st; (void)interp; (void)result_dict;
+  input_class_t *cls = find_class(st, "trackpad");
+  if (!cls) return TCL_OK;
+
+  CFMutableArrayRef match_arr = CFArrayCreateMutable(
+    kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+
+  int upage_v = 0x01, usage_v = 0x02;
+  CFNumberRef upage_num = CFNumberCreate(NULL, kCFNumberIntType, &upage_v);
+  CFNumberRef usage_num = CFNumberCreate(NULL, kCFNumberIntType, &usage_v);
+
+  for (size_t i = 0; i < MAC_KNOWN_TRACKPAD_COUNT; i++) {
+    int vid = MAC_KNOWN_TRACKPADS[i].vid;
+    int pid = MAC_KNOWN_TRACKPADS[i].pid;
+    CFNumberRef vid_num = CFNumberCreate(NULL, kCFNumberIntType, &vid);
+    CFNumberRef pid_num = CFNumberCreate(NULL, kCFNumberIntType, &pid);
+    const void *keys[] = {
+      CFSTR(kIOHIDVendorIDKey),
+      CFSTR(kIOHIDProductIDKey),
+      CFSTR(kIOHIDPrimaryUsagePageKey),
+      CFSTR(kIOHIDPrimaryUsageKey),
+    };
+    const void *vals[] = { vid_num, pid_num, upage_num, usage_num };
+    CFDictionaryRef dict = CFDictionaryCreate(
+      NULL, keys, vals, 4,
+      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFArrayAppendValue(match_arr, dict);
+    CFRelease(dict);
+    CFRelease(vid_num);
+    CFRelease(pid_num);
+  }
+  CFRelease(upage_num);
+  CFRelease(usage_num);
+
+  IOHIDManagerRef mgr = IOHIDManagerCreate(kCFAllocatorDefault,
+                                           kIOHIDOptionsTypeNone);
+  IOHIDManagerSetDeviceMatchingMultiple(mgr, match_arr);
+  CFRelease(match_arr);
+
+  if (IOHIDManagerOpen(mgr, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {
+    CFRelease(mgr);
+    return TCL_OK;
+  }
+
+  CFSetRef devices = IOHIDManagerCopyDevices(mgr);
+  if (!devices) {
+    IOHIDManagerClose(mgr, kIOHIDOptionsTypeNone);
+    CFRelease(mgr);
+    return TCL_OK;
+  }
+
+  CFIndex count = CFSetGetCount(devices);
+  if (count > 0) {
+    IOHIDDeviceRef *devs =
+      (IOHIDDeviceRef *) malloc(sizeof(IOHIDDeviceRef) * count);
+    CFSetGetValues(devices, (const void **) devs);
+
+    for (CFIndex i = 0; i < count; i++) {
+      if (class_has_open_device(st, cls)) break;  /* v1: at most one trackpad */
+      input_device_t *d = open_device_from_hid(st, cls, devs[i]);
+      if (!d) continue;
+      if (start_device(d) < 0) {
+        unlink_and_free_device(st, d);
+        continue;
+      }
+      if (result_dict && interp) {
+        Tcl_Obj *info = Tcl_NewDictObj();
+        Tcl_DictObjPut(interp, info,
+                       Tcl_NewStringObj("path", -1),
+                       Tcl_NewStringObj(d->path, -1));
+        Tcl_DictObjPut(interp, info,
+                       Tcl_NewStringObj("datapoint", -1),
+                       Tcl_NewStringObj(d->point_name, -1));
+        Tcl_DictObjPut(interp, result_dict,
+                       Tcl_NewStringObj(cls->name, -1),
+                       info);
+      }
+    }
+    free(devs);
+  }
+
+  CFRelease(devices);
+  IOHIDManagerClose(mgr, kIOHIDOptionsTypeNone);
+  CFRelease(mgr);
   return TCL_OK;
 }
 
