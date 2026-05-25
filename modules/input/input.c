@@ -386,11 +386,18 @@ static void *touchscreen_reader(void *arg)
  *
  * Publishes:
  *   mtouch/trackpad         uint16[3] (x, y, event_type)  per contact update
- *   mtouch/trackpad/range   int32[4]  (min_x, max_x, min_y, max_y) once at open
+ *   mtouch/trackpad/range   int32[4]  (0, span_x, 0, span_y) once at open
  *
  * Event semantics mirror touchscreen (0 = PRESS, 1 = DRAG, 2 = RELEASE).
- * Coordinates are raw trackpad surface units; the slider subprocess maps
- * them to stimulus space using the range datapoint. v1 tracks slot 0 only.
+ * Coordinates are **shifted** so the published values are always
+ * non-negative, regardless of the device's native coordinate system.
+ * The Apple Magic Trackpad reports a signed range centered on (0, 0)
+ * (e.g. X: -3678..3934); the Holtek HTX uses [0, max]. We subtract the
+ * device's min so the wire values fit cleanly into uint16 and the
+ * downstream Tcl normalize math `(raw - 0) * 4095 / span` works the
+ * same for both classes. Range is published as (0, span_x, 0, span_y)
+ * to match.
+ * v1 tracks slot 0 only.
  *****************************************************************************/
 
 static int trackpad_matches(struct libevdev *dev)
@@ -407,11 +414,13 @@ static void publish_trackpad_range(input_device_t *d)
   char range_name[INPUT_DPOINT_MAX];
   snprintf(range_name, sizeof(range_name), "%s/range", d->point_name);
 
+  /* Publish the shifted range so it matches the shifted per-event
+     coords (see header comment). Min is always 0; max is the span. */
   int32_t vals[4];
-  vals[0] = d->minx;
-  vals[1] = d->maxx;
-  vals[2] = d->miny;
-  vals[3] = d->maxy;
+  vals[0] = 0;
+  vals[1] = d->maxx - d->minx;
+  vals[2] = 0;
+  vals[3] = d->maxy - d->miny;
   ds_datapoint_t *dp = dpoint_new(range_name,
                                   tclserver_now(d->state->tclserver),
                                   DSERV_INT,
@@ -473,8 +482,11 @@ static void *trackpad_reader(void *arg)
 
       if (slot0_active && (coords_changed || slot0_changed)) {
         uint16_t vals[3];
-        vals[0] = (uint16_t) x;
-        vals[1] = (uint16_t) y;
+        /* Shift by device min so signed-range devices (Apple Magic
+           Trackpad: X -3678..3934) map to non-negative uint16 cleanly.
+           For non-negative-range devices (HTX: minx=0) this is a no-op. */
+        vals[0] = (uint16_t) (x - d->minx);
+        vals[1] = (uint16_t) (y - d->miny);
 
         if (!first_coord_after_press) {
           vals[2] = 0;  /* PRESS */
@@ -493,8 +505,8 @@ static void *trackpad_reader(void *arg)
         tclserver_set_point(d->state->tclserver, dp);
       } else if (!slot0_active && slot0_changed) {
         uint16_t vals[3];
-        vals[0] = (uint16_t) x;
-        vals[1] = (uint16_t) y;
+        vals[0] = (uint16_t) (x - d->minx);
+        vals[1] = (uint16_t) (y - d->miny);
         vals[2] = 2;  /* RELEASE */
         ds_datapoint_t *dp = dpoint_new(d->point_name,
                                         tclserver_now(d->state->tclserver),
@@ -510,6 +522,19 @@ static void *trackpad_reader(void *arg)
       break;
     }
   } while (rc >= 0);
+
+  /* Reader exits when libevdev_next_event returns a negative errno —
+     typically -ENODEV from a USB disconnect (autosuspend that didn't
+     resume, hub reset, cable yank). There's no reopen path yet, so log
+     loudly so we can tell after-the-fact whether the next failure was
+     autosuspend (now disabled via udev rule for VID 048d:8911), a real
+     unplug, or something else. */
+  if (rc < 0) {
+    fprintf(stderr,
+            "input: trackpad_reader exited: %s (errno=%d, path=%s, point=%s)\n",
+            strerror(-rc), -rc, d->path, d->point_name);
+    fflush(stderr);
+  }
 
   return NULL;
 }
@@ -824,8 +849,10 @@ static void publish_trackpad_event_mac(input_device_t *d,
                                        int x, int y, int evt)
 {
   uint16_t vals[3];
-  vals[0] = (uint16_t) x;
-  vals[1] = (uint16_t) y;
+  /* Shift by device min so signed-range devices (Magic Trackpad) map
+     to non-negative uint16. No-op for non-negative-range devices. */
+  vals[0] = (uint16_t) (x - d->minx);
+  vals[1] = (uint16_t) (y - d->miny);
   vals[2] = (uint16_t) evt;
   ds_datapoint_t *dp = dpoint_new(d->point_name,
                                   tclserver_now(d->state->tclserver),
@@ -839,11 +866,13 @@ static void publish_trackpad_range_mac(input_device_t *d)
 {
   char range_name[INPUT_DPOINT_MAX];
   snprintf(range_name, sizeof(range_name), "%s/range", d->point_name);
+  /* Publish the shifted range so it matches the shifted per-event
+     coords (see header comment). Min is always 0; max is the span. */
   int32_t vals[4];
-  vals[0] = d->minx;
-  vals[1] = d->maxx;
-  vals[2] = d->miny;
-  vals[3] = d->maxy;
+  vals[0] = 0;
+  vals[1] = d->maxx - d->minx;
+  vals[2] = 0;
+  vals[3] = d->maxy - d->miny;
   ds_datapoint_t *dp = dpoint_new(range_name,
                                   tclserver_now(d->state->tclserver),
                                   DSERV_INT,
