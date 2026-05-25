@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const releaseCacheTTL = 10 * time.Minute
+const releaseCacheTTL = 1 * time.Minute
 
 // agentRepo is the dserv-agent source repo, installed by the bootstrap
 // script and allowed through the /api/releases endpoint.
