@@ -397,7 +397,13 @@ static void *touchscreen_reader(void *arg)
  * downstream Tcl normalize math `(raw - 0) * 4095 / span` works the
  * same for both classes. Range is published as (0, span_x, 0, span_y)
  * to match.
- * v1 tracks slot 0 only.
+ * Single-contact tracking: we adopt the first slot a contact lands
+ * on (any slot, not just slot 0 — the Apple Magic Trackpad assigns
+ * slots from a pool, so the first contact can come in on slot 2 or
+ * higher) and follow it through DRAG until its tracking_id goes -1.
+ * Additional concurrent contacts (multi-finger) are ignored while a
+ * contact is tracked. Sufficient for the swipe paradigm; revisit if
+ * a paradigm ever needs multi-finger semantics.
  *****************************************************************************/
 
 static int trackpad_matches(struct libevdev *dev)
@@ -429,21 +435,116 @@ static void publish_trackpad_range(input_device_t *d)
   tclserver_set_point(d->state->tclserver, dp);
 }
 
+/* Wait for a /dev/input/event* node matching d's class to appear,
+   reopen it, and refresh d's fd/dev/path/range fields in place. Used
+   by trackpad_reader on -ENODEV (cable yank / hub blip / power glitch)
+   so the session survives a replug without a dserv restart.
+
+   Returns 0 on success, -1 on timeout. nanosleep is a pthread
+   cancellation point so stop_device's pthread_cancel still interrupts
+   cleanly while we're waiting.
+
+   Race note: while d->dev is NULL, class_has_open_device sees this
+   class as "available", so a concurrent inputAutodiscover could in
+   principle pick up the new device and create a *second* device record
+   for the same path. In practice autodiscover is one-shot at startup
+   and not called again during a session, so this isn't exercised.
+   If it ever becomes a concern, add a per-device 'recovering' flag
+   that class_has_open_device respects. */
+static int trackpad_reconnect(input_device_t *d)
+{
+  const int max_wait_seconds = 120;
+  const int poll_interval_ms = 500;
+  int elapsed_ms = 0;
+
+  fprintf(stderr,
+          "input: trackpad_reader: waiting up to %ds for a matching"
+          " device to reappear at /dev/input\n", max_wait_seconds);
+  fflush(stderr);
+
+  while (elapsed_ms < max_wait_seconds * 1000) {
+    DIR *dir = opendir("/dev/input");
+    if (dir) {
+      struct dirent *entry;
+      while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "event", 5) != 0) continue;
+
+        char path[INPUT_PATH_MAX];
+        snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
+
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) continue;
+
+        struct libevdev *dev = NULL;
+        if (libevdev_new_from_fd(fd, &dev) < 0) {
+          close(fd);
+          continue;
+        }
+
+        if (!d->cls->matches || !d->cls->matches(dev)) {
+          libevdev_free(dev);
+          close(fd);
+          continue;
+        }
+
+        /* Found a match. Adopt into d in place — keep the same
+           input_device_t struct so the linked list, thread id, and
+           point_name all remain valid. */
+        d->fd = fd;
+        d->dev = dev;
+        strncpy(d->path, path, sizeof(d->path) - 1);
+        d->path[sizeof(d->path) - 1] = '\0';
+        d->minx = libevdev_get_abs_minimum(dev, ABS_MT_POSITION_X);
+        d->maxx = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_X);
+        d->miny = libevdev_get_abs_minimum(dev, ABS_MT_POSITION_Y);
+        d->maxy = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_Y);
+
+        closedir(dir);
+        fprintf(stderr, "input: trackpad_reader: reconnected on %s\n", path);
+        fflush(stderr);
+        return 0;
+      }
+      closedir(dir);
+    }
+
+    struct timespec ts;
+    ts.tv_sec  = 0;
+    ts.tv_nsec = (long) poll_interval_ms * 1000000L;
+    nanosleep(&ts, NULL);
+    elapsed_ms += poll_interval_ms;
+  }
+
+  return -1;
+}
+
 static void *trackpad_reader(void *arg)
 {
   input_device_t *d = (input_device_t *) arg;
-  struct input_event ev;
-  int current_slot = 0;
-  int slot0_active = 0;
-  int slot0_changed = 0;
-  int coords_changed = 0;
-  int first_coord_after_press = 0;
-  int x = 0, y = 0;
-  int rc;
 
-  publish_trackpad_range(d);
+  /* Outer loop: each iteration is one "incarnation" of the connected
+     device. We re-enter on a successful reconnect after disconnect.
+     State (slot tracking, press/drag bookkeeping) is declared inside
+     the loop so it resets cleanly on each incarnation. */
+  for (;;) {
+    struct input_event ev;
+    int current_slot = 0;
+    /* tracked_slot = the slot we're following for the current contact,
+       or -1 if no contact is in progress. We adopt the first slot that
+       becomes active (any slot — the Apple Magic Trackpad assigns from
+       a pool of 16, so the first finger contact often lands on slot 2+
+       after any prior touch history). The HTX always used slot 0; this
+       code is a strict superset that handles both. */
+    int tracked_slot = -1;
+    int contact_active = 0;
+    int contact_changed = 0;
+    int coords_changed = 0;
+    int first_coord_after_press = 0;
+    int x = 0, y = 0;
+    int rc;
 
-  do {
+    publish_trackpad_range(d);
+
+    do {
     rc = libevdev_next_event(d->dev, LIBEVDEV_READ_FLAG_BLOCKING, &ev);
     if (rc != LIBEVDEV_READ_STATUS_SUCCESS) continue;
 
@@ -455,24 +556,32 @@ static void *trackpad_reader(void *arg)
         break;
 
       case ABS_MT_TRACKING_ID:
-        if (current_slot == 0) {
-          if (ev.value >= 0) {
-            slot0_active = 1;
-            slot0_changed = 1;
+        if (ev.value >= 0) {
+          /* Contact press on current_slot. Adopt as the tracked slot
+             only if no contact is currently in progress; additional
+             concurrent contacts (multi-finger touches) are ignored. */
+          if (tracked_slot == -1) {
+            tracked_slot = current_slot;
+            contact_active = 1;
+            contact_changed = 1;
             first_coord_after_press = 0;
-          } else {
-            slot0_active = 0;
-            slot0_changed = 1;
           }
+        } else if (current_slot == tracked_slot) {
+          /* Release on the tracked slot. Releases on other slots
+             (a secondary finger lifting while the primary is still
+             down) are ignored. */
+          contact_active = 0;
+          contact_changed = 1;
+          tracked_slot = -1;
         }
         break;
 
       case ABS_MT_POSITION_X:
-        if (current_slot == 0) { x = ev.value; coords_changed = 1; }
+        if (current_slot == tracked_slot) { x = ev.value; coords_changed = 1; }
         break;
 
       case ABS_MT_POSITION_Y:
-        if (current_slot == 0) { y = ev.value; coords_changed = 1; }
+        if (current_slot == tracked_slot) { y = ev.value; coords_changed = 1; }
         break;
       }
       break;
@@ -480,7 +589,7 @@ static void *trackpad_reader(void *arg)
     case EV_SYN:
       if (ev.code != SYN_REPORT) break;
 
-      if (slot0_active && (coords_changed || slot0_changed)) {
+      if (contact_active && (coords_changed || contact_changed)) {
         uint16_t vals[3];
         /* Shift by device min so signed-range devices (Apple Magic
            Trackpad: X -3678..3934) map to non-negative uint16 cleanly.
@@ -503,7 +612,7 @@ static void *trackpad_reader(void *arg)
                                         sizeof(vals),
                                         (unsigned char *) vals);
         tclserver_set_point(d->state->tclserver, dp);
-      } else if (!slot0_active && slot0_changed) {
+      } else if (!contact_active && contact_changed) {
         uint16_t vals[3];
         vals[0] = (uint16_t) (x - d->minx);
         vals[1] = (uint16_t) (y - d->miny);
@@ -517,26 +626,40 @@ static void *trackpad_reader(void *arg)
       }
 
     sync_done_tp:
-      slot0_changed = 0;
+      contact_changed = 0;
       coords_changed = 0;
       break;
     }
   } while (rc >= 0);
 
-  /* Reader exits when libevdev_next_event returns a negative errno —
-     typically -ENODEV from a USB disconnect (autosuspend that didn't
-     resume, hub reset, cable yank). There's no reopen path yet, so log
-     loudly so we can tell after-the-fact whether the next failure was
-     autosuspend (now disabled via udev rule for VID 048d:8911), a real
-     unplug, or something else. */
-  if (rc < 0) {
-    fprintf(stderr,
-            "input: trackpad_reader exited: %s (errno=%d, path=%s, point=%s)\n",
-            strerror(-rc), -rc, d->path, d->point_name);
-    fflush(stderr);
-  }
+    /* Read loop exited — libevdev_next_event returned a negative
+       errno. -ENODEV is the expected path on a USB replug; other
+       errnos (EIO etc.) indicate a deeper problem. Log it, tear down
+       the current device, then wait via trackpad_reconnect for a
+       replacement and resume. If the device never comes back within
+       trackpad_reconnect's timeout, the thread exits — at which
+       point dserv must be restarted to pick the device up again. */
+    if (rc < 0) {
+      fprintf(stderr,
+              "input: trackpad_reader: read loop exited: %s (errno=%d,"
+              " path=%s, point=%s); attempting reconnect\n",
+              strerror(-rc), -rc, d->path, d->point_name);
+      fflush(stderr);
+    }
 
-  return NULL;
+    if (d->dev) { libevdev_free(d->dev); d->dev = NULL; }
+    if (d->fd >= 0) { close(d->fd); d->fd = -1; }
+
+    if (trackpad_reconnect(d) < 0) {
+      fprintf(stderr,
+              "input: trackpad_reader: reconnect timed out; giving up."
+              " Restart dserv after replugging.\n");
+      fflush(stderr);
+      return NULL;
+    }
+    /* Reconnect succeeded — outer for-loop reiterates: re-publishes
+       trackpad_range, resets per-incarnation state, re-enters read loop. */
+  }
 }
 
 /*****************************************************************************
