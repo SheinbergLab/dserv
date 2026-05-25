@@ -270,16 +270,22 @@ static int touchscreen_matches(struct libevdev *dev)
 static void *touchscreen_reader(void *arg)
 {
   input_device_t *d = (input_device_t *) arg;
-  struct input_event ev;
-  int raw_x = 0, raw_y = 0;
-  int x = 0, y = 0;
-  int touch_active = 0;
-  int touch_changed = 0;
-  int coords_changed = 0;
-  int first_coordinate_after_press = 0;
-  int rc;
 
-  do {
+  /* Outer loop: each iteration is one "incarnation" of the connected
+     device. We re-enter on a successful reconnect after disconnect.
+     Per-incarnation state is declared inside the loop so it resets
+     cleanly on each reconnect. */
+  for (;;) {
+    struct input_event ev;
+    int raw_x = 0, raw_y = 0;
+    int x = 0, y = 0;
+    int touch_active = 0;
+    int touch_changed = 0;
+    int coords_changed = 0;
+    int first_coordinate_after_press = 0;
+    int rc;
+
+    do {
     rc = libevdev_next_event(d->dev, LIBEVDEV_READ_FLAG_BLOCKING, &ev);
     if (rc != LIBEVDEV_READ_STATUS_SUCCESS) continue;
 
@@ -373,7 +379,31 @@ static void *touchscreen_reader(void *arg)
     }
   } while (rc >= 0);
 
-  return NULL;
+    /* Read loop exited — libevdev_next_event returned a negative
+       errno. Mirror trackpad_reader's reconnect flow: log, tear down,
+       wait via device_reconnect for a replacement, resume. */
+    if (rc < 0) {
+      fprintf(stderr,
+              "input: touchscreen_reader: read loop exited: %s (errno=%d,"
+              " path=%s, point=%s); attempting reconnect\n",
+              strerror(-rc), -rc, d->path, d->point_name);
+      fflush(stderr);
+    }
+
+    if (d->dev) { libevdev_free(d->dev); d->dev = NULL; }
+    if (d->fd >= 0) { close(d->fd); d->fd = -1; }
+
+    if (device_reconnect(d) < 0) {
+      fprintf(stderr,
+              "input: touchscreen_reader: reconnect timed out; giving"
+              " up. Restart dserv after replugging.\n");
+      fflush(stderr);
+      return NULL;
+    }
+    /* Reconnect succeeded — outer for-loop reiterates: resets state,
+       re-enters read loop. (Touchscreens don't publish a per-device
+       range datapoint the way trackpads do.) */
+  }
 }
 
 /*****************************************************************************
@@ -437,8 +467,20 @@ static void publish_trackpad_range(input_device_t *d)
 
 /* Wait for a /dev/input/event* node matching d's class to appear,
    reopen it, and refresh d's fd/dev/path/range fields in place. Used
-   by trackpad_reader on -ENODEV (cable yank / hub blip / power glitch)
-   so the session survives a replug without a dserv restart.
+   by trackpad_reader and touchscreen_reader on -ENODEV (cable yank /
+   hub blip / power glitch / HDMI flicker for resistive touchscreens)
+   so a session survives a replug without a dserv restart.
+
+   Class-agnostic except for the axis-range refresh, which dispatches
+   on cls->name to mirror what open_device does (ABS_X/ABS_Y for
+   touchscreens, ABS_MT_POSITION_X/Y for trackpads). Per-rig overrides
+   (screen_width/height/rotation/track_drag for touchscreens) live on
+   d already and are intentionally NOT touched here — they describe
+   the rig, not the device's firmware, and persist across a replug
+   of the same physical device. If someone hot-swaps a touchscreen
+   for a different model, the saved overrides will be stale; a full
+   dserv restart re-runs autodiscover and reapplies known_device
+   overrides from scratch.
 
    Returns 0 on success, -1 on timeout. nanosleep is a pthread
    cancellation point so stop_device's pthread_cancel still interrupts
@@ -451,15 +493,16 @@ static void publish_trackpad_range(input_device_t *d)
    and not called again during a session, so this isn't exercised.
    If it ever becomes a concern, add a per-device 'recovering' flag
    that class_has_open_device respects. */
-static int trackpad_reconnect(input_device_t *d)
+static int device_reconnect(input_device_t *d)
 {
   const int max_wait_seconds = 120;
   const int poll_interval_ms = 500;
   int elapsed_ms = 0;
 
   fprintf(stderr,
-          "input: trackpad_reader: waiting up to %ds for a matching"
-          " device to reappear at /dev/input\n", max_wait_seconds);
+          "input: %s_reader: waiting up to %ds for a matching device"
+          " to reappear at /dev/input\n",
+          d->cls->name, max_wait_seconds);
   fflush(stderr);
 
   while (elapsed_ms < max_wait_seconds * 1000) {
@@ -494,13 +537,26 @@ static int trackpad_reconnect(input_device_t *d)
         d->dev = dev;
         strncpy(d->path, path, sizeof(d->path) - 1);
         d->path[sizeof(d->path) - 1] = '\0';
-        d->minx = libevdev_get_abs_minimum(dev, ABS_MT_POSITION_X);
-        d->maxx = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_X);
-        d->miny = libevdev_get_abs_minimum(dev, ABS_MT_POSITION_Y);
-        d->maxy = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_Y);
+
+        /* Refresh axis ranges. Class-specific — mirrors open_device. */
+        if (strcmp(d->cls->name, "touchscreen") == 0) {
+          d->minx = libevdev_get_abs_minimum(dev, ABS_X);
+          d->maxx = libevdev_get_abs_maximum(dev, ABS_X);
+          d->miny = libevdev_get_abs_minimum(dev, ABS_Y);
+          d->maxy = libevdev_get_abs_maximum(dev, ABS_Y);
+        } else if (strcmp(d->cls->name, "trackpad") == 0) {
+          d->minx = libevdev_get_abs_minimum(dev, ABS_MT_POSITION_X);
+          d->maxx = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_X);
+          d->miny = libevdev_get_abs_minimum(dev, ABS_MT_POSITION_Y);
+          d->maxy = libevdev_get_abs_maximum(dev, ABS_MT_POSITION_Y);
+        }
+        d->rangex = (float)(d->maxx - d->minx);
+        d->rangey = (float)(d->maxy - d->miny);
 
         closedir(dir);
-        fprintf(stderr, "input: trackpad_reader: reconnected on %s\n", path);
+        fprintf(stderr,
+                "input: %s_reader: reconnected on %s\n",
+                d->cls->name, path);
         fflush(stderr);
         return 0;
       }
@@ -635,9 +691,9 @@ static void *trackpad_reader(void *arg)
     /* Read loop exited — libevdev_next_event returned a negative
        errno. -ENODEV is the expected path on a USB replug; other
        errnos (EIO etc.) indicate a deeper problem. Log it, tear down
-       the current device, then wait via trackpad_reconnect for a
+       the current device, then wait via device_reconnect for a
        replacement and resume. If the device never comes back within
-       trackpad_reconnect's timeout, the thread exits — at which
+       device_reconnect's timeout, the thread exits — at which
        point dserv must be restarted to pick the device up again. */
     if (rc < 0) {
       fprintf(stderr,
@@ -650,7 +706,7 @@ static void *trackpad_reader(void *arg)
     if (d->dev) { libevdev_free(d->dev); d->dev = NULL; }
     if (d->fd >= 0) { close(d->fd); d->fd = -1; }
 
-    if (trackpad_reconnect(d) < 0) {
+    if (device_reconnect(d) < 0) {
       fprintf(stderr,
               "input: trackpad_reader: reconnect timed out; giving up."
               " Restart dserv after replugging.\n");
