@@ -805,7 +805,14 @@ namespace eval df {
             dl_local has_evt [dl_anys $mask]
             dl_local no_evt [dl_not $has_evt]
             dl_local params [dl_select $g:e_params $mask]
-            dl_local params [dl_replace $params $no_evt [dl_llist [dl_llist [dl_ilist $fill]]]]
+            # Use a float fill list when the fill value isn't an integer, so
+            # float-typed param columns (e.g. SWIPE COMMIT angles) unpack cleanly.
+            if {[string is integer -strict $fill]} {
+                dl_local fill_sub [dl_ilist $fill]
+            } else {
+                dl_local fill_sub [dl_flist $fill]
+            }
+            dl_local params [dl_replace $params $no_evt [dl_llist [dl_llist $fill_sub]]]
             dl_return [dl_unpack [dl_unpack [dl_choose $params $valid_indices]]]
         }
         
