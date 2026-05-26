@@ -258,6 +258,13 @@ static int get_hdmi_rotation(const char *output_name)
  * Touchscreen class (lifted from touch.c)
  *****************************************************************************/
 
+/* Forward declaration — device_reconnect is defined below (between
+   touchscreen_reader and trackpad_reader) but both readers need to
+   call it on disconnect. Without this forward decl, the touchscreen
+   reader's call site sees an implicit declaration and conflicts with
+   the later static definition on stricter Linux gcc. */
+static int device_reconnect(input_device_t *d);
+
 static int touchscreen_matches(struct libevdev *dev)
 {
   if (!libevdev_has_property(dev, INPUT_PROP_DIRECT)) return 0;
