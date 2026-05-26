@@ -251,6 +251,7 @@ type Agent struct {
 	http         *http.Client
 	components   []Component
 	localID      string
+	selfService  string // systemd unit name running this process (for self-restart)
 	releaseCache *ReleaseCache
 
 	// ESS Registry (when running with --ess-registry)
@@ -460,6 +461,7 @@ Environment:
 		clients:      make(map[*WSConn]bool),
 		http:         &http.Client{Timeout: cfg.Timeout},
 		localID:      localID,
+		selfService:  detectSelfService(),
 		releaseCache: NewReleaseCache(),
 	}
 
@@ -1345,6 +1347,35 @@ func (a *Agent) handleService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "service": service, "status": a.getServiceStatus(service)})
 }
 
+// detectSelfService returns the systemd unit name this process is running
+// under (e.g. "dserv-agent.service" or "stim2-agent.service") by parsing
+// /proc/self/cgroup. Falls back to "dserv-agent" when detection fails so
+// behavior on systemd-less dev runs or unexpected layouts is unchanged.
+func detectSelfService() string {
+	const fallback = "dserv-agent"
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return fallback
+	}
+	// cgroup v2:  "0::/system.slice/dserv-agent.service"
+	// cgroup v1:  "1:name=systemd:/system.slice/dserv-agent.service"
+	for _, line := range strings.Split(string(data), "\n") {
+		i := strings.LastIndex(line, ".service")
+		if i <= 0 {
+			continue
+		}
+		start := strings.LastIndex(line[:i], "/")
+		if start < 0 {
+			continue
+		}
+		unit := line[start+1 : i+len(".service")]
+		if unit != ".service" && !strings.ContainsAny(unit, " \t") {
+			return unit
+		}
+	}
+	return fallback
+}
+
 func (a *Agent) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", 405)
@@ -1356,7 +1387,7 @@ func (a *Agent) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		exec.Command("sudo", "systemctl", "restart", "dserv-agent").Run()
+		exec.Command("sudo", "systemctl", "restart", a.selfService).Run()
 	}()
 }
 
@@ -1761,7 +1792,22 @@ func (a *Agent) installComponent(comp Component, assetName string, stopServices 
 			return
 		}
 	} else if strings.HasSuffix(assetName, ".deb") {
-		cmd := exec.Command("sudo", "dpkg", "-i", localPath)
+		// Refresh apt cache so the resolver sees any system deps that the new
+		// .deb declares but aren't in the local index yet. Best-effort: an
+		// update failure (e.g. transient network) shouldn't block the install
+		// when the cache is already good enough.
+		exec.Command("sudo", "apt-get", "update").Run()
+
+		// Use apt-get install (not dpkg -i) so new system dependencies are
+		// resolved and pulled in as part of the same transaction. With dpkg -i
+		// a .deb that introduces a new Depends: leaves the package
+		// half-configured and requires a manual `apt --fix-broken install`.
+		// --force-confold preserves admin-edited conffiles; DEBIAN_FRONTEND
+		// keeps any maintainer-script debconf prompts non-interactive.
+		cmd := exec.Command("sudo", "apt-get", "install", "-y",
+			"-o", "Dpkg::Options::=--force-confold",
+			localPath)
+		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			a.broadcast(WSResponse{Type: "install_error", Error: "Install failed: " + string(output)})
 			return
@@ -2026,7 +2072,7 @@ func (a *Agent) handleWSMessage(msg WSMessage) WSResponse {
 		resp.Data = map[string]string{"status": "restarting"}
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			exec.Command("sudo", "systemctl", "restart", "dserv-agent").Run()
+			exec.Command("sudo", "systemctl", "restart", a.selfService).Run()
 		}()
 	}
 
