@@ -975,8 +975,26 @@ static int autodiscover_impl(input_state_t *st, Tcl_Interp *interp,
  *****************************************************************************/
 
 /* Known WPTP-class trackpads. Extend this table to enable additional
- * devices. Axis ranges come from the device's HID descriptor (which
- * Linux's evtest also reports). */
+ * devices that speak the Windows Precision Touchpad HID protocol
+ * (report ID 4, the layout parse_wptp_report_mac knows about). Axis
+ * ranges come from the device's HID descriptor (which Linux's evtest
+ * also reports).
+ *
+ * **Apple Magic Trackpad is NOT WPTP-class.** Adding it here will
+ * cause find_mac_known_trackpad to succeed, but enable_wptp_mode will
+ * fail (Apple's firmware ignores WPTP feature reports) and even if it
+ * didn't, parse_wptp_report_mac won't recognize Apple's report format.
+ * Magic-Trackpad-on-macOS requires a parallel implementation:
+ *   1. A per-device "needs_wptp" flag in this struct (false for Apple).
+ *   2. Conditional enable_wptp_mode() call (skip if !needs_wptp).
+ *   3. A new parser for Apple's proprietary touch reports, modeled
+ *      after Linux's drivers/hid/hid-magicmouse.c (~600 lines, GPL).
+ *      Note: report IDs and field layouts vary across Magic Trackpad
+ *      generations (A1535 vs A2449) and across firmware revisions —
+ *      hardware-in-the-loop iteration is essentially required.
+ * Linux supports Magic Trackpad natively via hid-magicmouse, so today
+ * the Magic Trackpad story is "use it on the Pi, use HTX on macOS."
+ * Revisit if/when a macOS rig actually needs Magic Trackpad. */
 typedef struct {
   int vid;
   int pid;
