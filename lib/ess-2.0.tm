@@ -5585,7 +5585,10 @@ namespace eval ess {
     set subtypes [dict create OUT 0 IN 1 REFIXATE 2]
     dict set evt_info FIXATE [list 36 {Fixation} long $subtypes]
 
-    set subtypes [dict create NONE 0 LEFT 1 RIGHT 2 BOTH 3]
+    # ACT (4): single-channel "response made" — for go/nogo, detection,
+    # oddball paradigms where there is no left/right semantic; the system
+    # logs ACT when it accepts a press/key as the trial's response.
+    set subtypes [dict create NONE 0 LEFT 1 RIGHT 2 BOTH 3 ACT 4]
     dict set evt_info RESP [list 37 {Response} long $subtypes]
     dict set evt_info SACCADE [list 38 {Saccade} long]
 
@@ -5595,7 +5598,10 @@ namespace eval ess {
     set subtypes [dict create INCORRECT 0 CORRECT 1 ABORT 2]
     dict set evt_info ENDTRIAL [list 40 {EOT} long $subtypes]
 
-    set subtypes [dict create EYE 0 LEVER 1 NORESPONSE 2 STIM 3 MISTOUCH 4]
+    # HOLD (5): subject failed to release/let go a touch or button before
+    # the trial could start. Distinct from MISTOUCH which is "touched the
+    # wrong place during the trial."
+    set subtypes [dict create EYE 0 LEVER 1 NORESPONSE 2 STIM 3 MISTOUCH 4 HOLD 5]
     dict set evt_info ABORT [list 41 {Abort} long $subtypes]
 
     set subtypes [dict create DURATION 0 TYPE 1 MICROLITERS 2]
