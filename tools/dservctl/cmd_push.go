@@ -39,7 +39,7 @@ func runPush(cfg *Config, args []string) int {
 		return 2
 	}
 
-	system := args[0]
+	system := strings.TrimRight(args[0], "/")
 	if system == "--all" || system == "-a" {
 		PrintError("push operates on a single system (e.g., dservctl push prf --dir ./prf)")
 		return 2
