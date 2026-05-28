@@ -447,17 +447,58 @@ install(DIRECTORY lib DESTINATION dserv COMPONENT dserv)
 # is already a transitive dep of the docs subprocess. The .sql is shipped
 # alongside for recovery / re-init scenarios.
 find_program(SQLITE3_EXECUTABLE sqlite3 REQUIRED)
+
+# Building the full-text index needs sqlite3 compiled with the fts5 module.
+# The sqlite3 first on PATH doesn't always have it (notably on some macOS CI
+# runners), so verify and fall back to known-good locations. If none has
+# fts5 the build still proceeds (see cmake/build_docs_db.cmake) — the docs
+# subprocess rebuilds the index at runtime with dlsh's fts5-capable sqlite.
+function(_sqlite3_has_fts5 exe outvar)
+    execute_process(
+        COMMAND "${exe}" :memory: "CREATE VIRTUAL TABLE t USING fts5(x);"
+        RESULT_VARIABLE _rc OUTPUT_QUIET ERROR_QUIET)
+    if(_rc EQUAL 0)
+        set(${outvar} TRUE PARENT_SCOPE)
+    else()
+        set(${outvar} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+_sqlite3_has_fts5("${SQLITE3_EXECUTABLE}" _have_fts5)
+if(NOT _have_fts5)
+    foreach(_cand /usr/bin/sqlite3
+                  /opt/homebrew/opt/sqlite/bin/sqlite3
+                  /usr/local/opt/sqlite/bin/sqlite3)
+        if(EXISTS "${_cand}")
+            _sqlite3_has_fts5("${_cand}" _cand_fts5)
+            if(_cand_fts5)
+                set(SQLITE3_EXECUTABLE "${_cand}")
+                set(_have_fts5 TRUE)
+                break()
+            endif()
+        endif()
+    endforeach()
+endif()
+if(_have_fts5)
+    message(STATUS "docs.db: using ${SQLITE3_EXECUTABLE} (fts5 available)")
+else()
+    message(WARNING "docs.db: no fts5-capable sqlite3 found; full-text index "
+                    "will be rebuilt at runtime by the docs subprocess")
+endif()
+
 set(DOCS_SQL ${CMAKE_CURRENT_SOURCE_DIR}/db/docs.sql)
 set(DOCS_DB  ${CMAKE_CURRENT_BINARY_DIR}/db/docs.db)
 add_custom_command(
     OUTPUT ${DOCS_DB}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/db
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${DOCS_DB}
-    # Use sqlite3's .read rather than shell "<" redirection: add_custom_command
-    # runs COMMANDs directly (no shell) under the Xcode generator, so "<" would
-    # be passed to sqlite3 as a literal arg and fail on macOS CI.
-    COMMAND ${SQLITE3_EXECUTABLE} ${DOCS_DB} ".read ${DOCS_SQL}"
-    DEPENDS ${DOCS_SQL}
+    # Driven through a -P helper (not a shell) so it works under every
+    # generator and so a missing fts5 module degrades gracefully instead
+    # of failing the build.
+    COMMAND ${CMAKE_COMMAND}
+            -DSQLITE3=${SQLITE3_EXECUTABLE}
+            -DSQL=${DOCS_SQL}
+            -DDB=${DOCS_DB}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_docs_db.cmake
+    DEPENDS ${DOCS_SQL} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_docs_db.cmake
     COMMENT "Building docs.db from db/docs.sql"
     VERBATIM
 )
