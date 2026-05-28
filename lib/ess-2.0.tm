@@ -156,9 +156,9 @@ oo::class create System {
     }
     method get_protocol { } { return $_protocolname }
 
-    method set_variants { vdict } { 
-        set _variants $vdict 
-        ::ess::ess_debug "Variants loaded: [dict keys $vdict]" "system"
+    method set_variants { vdict } {
+        set _variants [::ess::normalize_variants $vdict]
+        ::ess::ess_debug "Variants loaded: [dict keys $_variants]" "system"
     }
     method get_variants { } { return $_variants }
 
@@ -4082,6 +4082,55 @@ namespace eval ess {
 	::ess::evt_put ID PROTOCOL [now] $current(system):$protocol
 	set current(protocol) $protocol
 	set current(open_protocol) 1
+    }
+
+    #
+    # strip_comments
+    #
+    # Remove comment lines from a Tcl block. Used to sanitize variant
+    # script blocks (loader_options, params, ...) which are authored as
+    # brace-quoted literals but consumed as dicts: a '#' inside a literal
+    # is data, not a comment, so embedded comment lines would otherwise
+    # shift dict key/value pairing and corrupt the structure.
+    #
+    # Accumulates logical lines with [info complete] so multi-line braced
+    # values are preserved whole; drops any complete command whose first
+    # non-blank character is '#'.
+    #
+    proc strip_comments {body} {
+        set out {}
+        set accum {}
+        foreach line [split $body \n] {
+            if {$accum eq ""} { set accum $line } else { append accum \n $line }
+            if {[info complete $accum]} {
+                if {[string index [string trimleft $accum] 0] ne "#"} {
+                    append out $accum \n
+                }
+                set accum {}
+            }
+        }
+        return $out
+    }
+
+    #
+    # normalize_variants
+    #
+    # Strip comment lines from a variants dict at every level that is later
+    # parsed as a dict: the top level (between variants), each variant body,
+    # and the loader_options / params sub-blocks.
+    #
+    proc normalize_variants {vdict} {
+        set out [dict create]
+        dict for {vname vdef} [strip_comments $vdict] {
+            set vdef [strip_comments $vdef]
+            foreach sub {loader_options params} {
+                if {[dict exists $vdef $sub]} {
+                    dict set vdef $sub [strip_comments [dict get $vdef $sub]]
+                }
+            }
+            dict set out $vname $vdef
+        }
+        return $out
     }
 
     #

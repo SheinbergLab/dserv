@@ -297,6 +297,25 @@ proc config_delete {name_or_id args} {
 }
 
 
+# Local mirror of ::ess::strip_comments — this subprocess does not load the
+# full ess package. Removes comment lines from a Tcl block while preserving
+# multi-line braced values, so '#' lines embedded in variant script blocks
+# don't corrupt the dict parsing below.
+proc strip_comments {body} {
+    set out {}
+    set accum {}
+    foreach line [split $body \n] {
+        if {$accum eq ""} { set accum $line } else { append accum \n $line }
+        if {[info complete $accum]} {
+            if {[string index [string trimleft $accum] 0] ne "#"} {
+                append out $accum \n
+            }
+            set accum {}
+        }
+    }
+    return $out
+}
+
 proc config_get_variant_options {system protocol variant} {
     set system_path [dservGet ess/system_path]
     if {$system_path eq ""} {
@@ -353,20 +372,21 @@ proc config_get_variant_options {system protocol variant} {
     if {$variants_body eq ""} {
         return "{\"error\":\"Could not find variants definition\"}"
     }
-    
+
+    set variants_body [strip_comments $variants_body]
     if {[catch {set variants_dict [dict create {*}$variants_body]} err]} {
         return "{\"error\":\"Could not parse variants: $err\"}"
     }
-    
+
     if {![dict exists $variants_dict $variant]} {
         return "{\"error\":\"Variant '$variant' not found\"}"
     }
-    
-    set variant_def [dict get $variants_dict $variant]
-    
+
+    set variant_def [strip_comments [dict get $variants_dict $variant]]
+
     set loader_options {}
     if {[dict exists $variant_def loader_options]} {
-        set loader_options [dict get $variant_def loader_options]
+        set loader_options [strip_comments [dict get $variant_def loader_options]]
     }
     
     package require yajltcl
