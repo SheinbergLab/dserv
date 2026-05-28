@@ -453,7 +453,10 @@ add_custom_command(
     OUTPUT ${DOCS_DB}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/db
     COMMAND ${CMAKE_COMMAND} -E remove -f ${DOCS_DB}
-    COMMAND ${SQLITE3_EXECUTABLE} ${DOCS_DB} < ${DOCS_SQL}
+    # Use sqlite3's .read rather than shell "<" redirection: add_custom_command
+    # runs COMMANDs directly (no shell) under the Xcode generator, so "<" would
+    # be passed to sqlite3 as a literal arg and fail on macOS CI.
+    COMMAND ${SQLITE3_EXECUTABLE} ${DOCS_DB} ".read ${DOCS_SQL}"
     DEPENDS ${DOCS_SQL}
     COMMENT "Building docs.db from db/docs.sql"
     VERBATIM
