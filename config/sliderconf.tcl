@@ -470,6 +470,17 @@ namespace eval slider {
                     if { $continuity_mode eq "swipe" && $swipe_engaged } {
                         # Commit: compute angle from last engaged position
                         # and publish slider/swipe/angle (radians, [0, 2π)).
+                        #
+                        # Also publish slider/swipe/mag (the commit swipe
+                        # distance) as an additive side channel for
+                        # magnitude-as-confidence readouts. Published
+                        # BEFORE the angle so a consumer woken by the angle
+                        # commit already sees a current magnitude. Nothing
+                        # breaks if unread.
+                        set mag [expr {sqrt($swipe_last_engaged_x*$swipe_last_engaged_x + \
+                                            $swipe_last_engaged_y*$swipe_last_engaged_y)}]
+                        dservSetData slider/swipe/mag [now] 2 \
+                            [binary format f $mag] ;# 2 = DSERV_FLOAT
                         set angle [expr {atan2($swipe_last_engaged_y,\
                                                $swipe_last_engaged_x)}]
                         if { $angle < 0 } {

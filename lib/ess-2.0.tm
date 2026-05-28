@@ -3432,8 +3432,10 @@ namespace eval ess {
 
     # swipe-mode side channels (only published when slider is in swipe mode).
     # slider/swipe/angle    : float, radians [0, 2π), one shot per commit
+    # slider/swipe/mag      : float, commit swipe distance (confidence proxy)
     # slider/swipe/engaged  : 0/1 string, edges on engagement threshold
     variable slider_swipe_angle   0.0
+    variable slider_swipe_mag     0.0
     variable slider_swipe_time    0
     variable slider_swipe_engaged 0
 
@@ -3445,6 +3447,15 @@ namespace eval ess {
         set slider_swipe_time [dservTimestamp $dpoint]
         # Wake the SM so responded_swipe can pick up the commit.
         do_update
+    }
+
+    proc slider_swipe_mag_process { dpoint data } {
+        variable slider_swipe_mag
+        set v [lindex $data 0]
+        if { $v ne "" } { set slider_swipe_mag $v }
+        # No do_update here: the paired slider/swipe/angle commit wakes
+        # the SM, and sliderconf publishes mag just before angle so this
+        # value is already current when responded_swipe reads it.
     }
 
     proc slider_swipe_engaged_process { dpoint data } {
@@ -3526,9 +3537,11 @@ namespace eval ess {
 
         # reset swipe-mode side channels too
         variable slider_swipe_angle
+        variable slider_swipe_mag
         variable slider_swipe_time
         variable slider_swipe_engaged
         set slider_swipe_angle   0.0
+        set slider_swipe_mag     0.0
         set slider_swipe_time    0
         set slider_swipe_engaged 0
 
@@ -3539,6 +3552,8 @@ namespace eval ess {
         # (sliderconf never publishes them outside swipe).
         dservAddExactMatch slider/swipe/angle
         dpointSetScript    slider/swipe/angle ::ess::slider_swipe_process
+        dservAddExactMatch slider/swipe/mag
+        dpointSetScript    slider/swipe/mag ::ess::slider_swipe_mag_process
         dservAddExactMatch slider/swipe/engaged
         dpointSetScript    slider/swipe/engaged ::ess::slider_swipe_engaged_process
 
@@ -3584,6 +3599,14 @@ namespace eval ess {
     proc slider_swipe_angle {} {
         variable slider_swipe_angle
         return $slider_swipe_angle
+    }
+    # slider_swipe_mag - commit swipe distance for the last commit
+    #                    (paired with slider_swipe_angle / _time). Confidence
+    #                    proxy: larger = pushed further. Same freshness
+    #                    semantics as slider_swipe_angle (gate on _time).
+    proc slider_swipe_mag {} {
+        variable slider_swipe_mag
+        return $slider_swipe_mag
     }
     proc slider_swipe_time {} {
         variable slider_swipe_time
