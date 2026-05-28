@@ -55,6 +55,10 @@ class GraphicsRenderer {
         this.windowBounds = null;
         this.scaleX = 1;
         this.scaleY = 1;
+        this.offsetX = 0;
+        this.offsetY = 0;
+        this.llx = 0;
+        this.lly = 0;
         this.currentBackgroundColor = this.options.backgroundColor;
         
         // Last data for redrawing
@@ -196,6 +200,10 @@ class GraphicsRenderer {
         this.windowBounds = null;
         this.scaleX = 1;
         this.scaleY = 1;
+        this.offsetX = 0;
+        this.offsetY = 0;
+        this.llx = 0;
+        this.lly = 0;
     }
     
     /**
@@ -306,8 +314,19 @@ class GraphicsRenderer {
         if (this.options.autoScale && this.windowBounds) {
             const sourceWidth = this.windowBounds.urx - this.windowBounds.llx;
             const sourceHeight = this.windowBounds.ury - this.windowBounds.lly;
-            this.scaleX = this.options.width / sourceWidth;
-            this.scaleY = this.options.height / sourceHeight;
+            // Uniform "fit" scale so the window aspect ratio is preserved
+            // (a circle stays a circle), then center the fitted content in
+            // the canvas via offsets. The origin (llx,lly) is subtracted in
+            // the transforms so centered windows (e.g. -12 -8 12 8) map
+            // correctly instead of running off the left/bottom edge.
+            const scale = Math.min(this.options.width / sourceWidth,
+                                   this.options.height / sourceHeight);
+            this.scaleX = scale;
+            this.scaleY = scale;
+            this.offsetX = (this.options.width - sourceWidth * scale) / 2;
+            this.offsetY = (this.options.height - sourceHeight * scale) / 2;
+            this.llx = this.windowBounds.llx;
+            this.lly = this.windowBounds.lly;
         }
     }
     
@@ -598,11 +617,11 @@ class GraphicsRenderer {
     // ============================================
     
     transformX(x) {
-        return x * this.scaleX;
+        return this.offsetX + (x - this.llx) * this.scaleX;
     }
-    
+
     transformY(y) {
-        return this.options.height - (y * this.scaleY);
+        return this.options.height - this.offsetY - (y - this.lly) * this.scaleY;
     }
     
     transformWidth(w) {
@@ -675,12 +694,11 @@ class GraphicsRenderer {
         // Get fresh context
         this.ctx = this.canvas.getContext('2d');
         
-        // Recalculate scaling if we have window bounds
+        // Recalculate scaling if we have window bounds. Reuse cmdSetWindow so
+        // the uniform-fit + centering math lives in exactly one place.
         if (this.windowBounds && this.options.autoScale) {
-            const sourceWidth = this.windowBounds.urx - this.windowBounds.llx;
-            const sourceHeight = this.windowBounds.ury - this.windowBounds.lly;
-            this.scaleX = width / sourceWidth;
-            this.scaleY = height / sourceHeight;
+            this.cmdSetWindow([this.windowBounds.llx, this.windowBounds.lly,
+                               this.windowBounds.urx, this.windowBounds.ury]);
         }
         
         // Redraw last data

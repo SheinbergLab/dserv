@@ -152,38 +152,35 @@ namespace eval viz {
     # Configuration Reception
     #########################################################################
     
+    # NOTE: teardown of stale viz bindings is NOT done here. ess/system and
+    # ess/protocol are published indirectly (evt_put -> eventlog/events ->
+    # triggers.tcl -> dservSet), so they arrive at this subprocess AFTER the
+    # directly-set ess/viz_config. Tearing down here would therefore wipe the
+    # handlers that on_viz_config_received just installed. Cleanup-then-install
+    # is owned entirely by on_viz_config_received, which is safe because
+    # variant_init publishes ess/viz_config (empty string for systems with no
+    # viz config) on every load, before the new stimdg.
     proc on_system_change {dpoint data} {
         variable current_system
-        if {$current_system ne $data} {
-            set current_system $data
-            # Tear down the previous system's viz bindings + per-system
-            # namespaces NOW, before its stimdg/events are replaced.
-            # Otherwise a stale handler from the prior system (e.g. its
-            # STIMTYPE proc reading stimdg:match_y) fires against the
-            # incoming system's stimdg in the window before the new
-            # ess/viz_config arrives -> "match_y not defined". Order is
-            # safe: set_system publishes ess/system before variant_init
-            # publishes ess/viz_config, so this clear always precedes the
-            # new config's install (it can't wipe a not-yet-installed one).
-            cleanup_namespace
-        }
+        set current_system $data
     }
 
     proc on_protocol_change {dpoint data} {
         variable current_protocol
-        if {$current_protocol ne $data} {
-            set current_protocol $data
-            # Same rationale: a protocol switch within a system swaps
-            # stimdg + viz_config, so clear stale bindings first.
-            cleanup_namespace
-        }
+        set current_protocol $data
     }
     
     proc on_viz_config_received {dpoint data} {
 	variable current_system
-	
+
 	# clear out previous subscriptions and children
 	cleanup_namespace
+
+	# Resolve the target system authoritatively (synchronously) rather than
+	# relying on the ess/system datapoint, which is published indirectly via
+	# eventlog/triggers and may not have arrived yet when this fires. Without
+	# this, the config could install into a stale ::viz::<old-system> ns.
+	set current_system [getVar ess ::ess::current(system)]
 
 	# add path to find system modules that may be required
 	set syspath [getVar ess ::ess::system_path]
