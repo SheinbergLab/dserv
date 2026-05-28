@@ -156,13 +156,26 @@ namespace eval viz {
         variable current_system
         if {$current_system ne $data} {
             set current_system $data
+            # Tear down the previous system's viz bindings + per-system
+            # namespaces NOW, before its stimdg/events are replaced.
+            # Otherwise a stale handler from the prior system (e.g. its
+            # STIMTYPE proc reading stimdg:match_y) fires against the
+            # incoming system's stimdg in the window before the new
+            # ess/viz_config arrives -> "match_y not defined". Order is
+            # safe: set_system publishes ess/system before variant_init
+            # publishes ess/viz_config, so this clear always precedes the
+            # new config's install (it can't wipe a not-yet-installed one).
+            cleanup_namespace
         }
     }
-    
+
     proc on_protocol_change {dpoint data} {
-        variable current_protocol  
+        variable current_protocol
         if {$current_protocol ne $data} {
             set current_protocol $data
+            # Same rationale: a protocol switch within a system swaps
+            # stimdg + viz_config, so clear stale bindings first.
+            cleanup_namespace
         }
     }
     
