@@ -46,6 +46,7 @@ func init() {
 		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
 		{"users", "Manage workgroup users (list/get/add/remove)", runUsers},
 		{"viewer", "Manage viewer plugins (list/get/push/delete)", runViewer},
+		{"docs", "Query the dlsh/dg/ess command-reference DB (show/search/list/export)", runDocs},
 		{"version", "Show version", runVersion},
 		{"help", "Show help", nil},
 	}
@@ -123,6 +124,10 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl backup create                        Create a new backup now\n")
 	fmt.Fprintf(os.Stderr, "  dservctl backup get                           Download latest backup\n")
 	fmt.Fprintf(os.Stderr, "  dservctl backup get <filename> -o backup.db   Download specific backup\n")
+	fmt.Fprintf(os.Stderr, "  dservctl docs show dl_urand                   Show a command's full doc entry\n")
+	fmt.Fprintf(os.Stderr, "  dservctl docs search \"random shape\"           FTS over the docs DB\n")
+	fmt.Fprintf(os.Stderr, "  dservctl docs list --namespace dl             List all dl_* commands\n")
+	fmt.Fprintf(os.Stderr, "  dservctl docs export                          Dump docs.db → db/docs.sql\n")
 }
 
 func main() {

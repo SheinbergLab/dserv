@@ -2,10 +2,39 @@
 
 Working reference for the `dl_*` / `dg_*` commands that show up in ESS loaders,
 extract scripts, and stim files. Optimized for "I want to do X — what's the
-idiom?" rather than alphabetical reference. The per-function wiki under
-`docsys/dokuwiki/4_function_reference/{dl,dg,dlg,df,dlp,dm}_functions/` has
-prose + examples for each command; consult it for parameter details. C source
-is at `/Users/sheinb/src/dlsh/src/{tcl_dl.c, dfana.c}`.
+idiom?" rather than alphabetical reference.
+
+**For per-function lookup**, use `dservctl docs` — it reads `db/docs.db`
+directly (no dserv needed):
+
+```bash
+dservctl docs show dl_urand           # full entry: signature, params, examples, see-also
+dservctl docs show dl_urand --json    # machine-readable
+dservctl docs search "random"          # FTS5 across title/summary/content
+dservctl docs search "shape" --namespace dl
+dservctl docs list --namespace dg      # all dg_* commands
+dservctl docs namespaces               # counts per namespace
+dservctl docs export                   # dump → db/docs.sql for reviewable diffs
+```
+
+If `dservctl` isn't available, fall back to raw sqlite3 against
+`/usr/local/dserv/db/docs.db` (or `db/docs.db` in dev):
+
+```bash
+sqlite3 db/docs.db -cmd ".mode line" \
+  "SELECT title, summary, syntax, content FROM entries WHERE slug='dl_urand';"
+sqlite3 db/docs.db \
+  "SELECT title, snippet(entries_fts,-1,'[',']','...',8)
+     FROM entries_fts WHERE entries_fts MATCH 'random' LIMIT 8;"
+```
+
+The DB covers 307 commands across `dl` (203) / `dlp` (44) / `dg` (28) /
+`dm` (21) / `dlg` (11) — broader than the dokuwiki .txt dump. Brand-new
+ops (e.g. `dl_zip` added 2026-05-27) live in the C source but may not
+yet be ingested; if a `dservctl docs show <name>` returns "not found,"
+fall back to the C source at `/Users/sheinb/src/dlsh/src/{tcl_dl.c,
+dfana.c}` or the dokuwiki entry under
+`docsys/dokuwiki/4_function_reference/{dl,dg,dlg,df,dlp,dm}_functions/<name>.txt`.
 
 ## Core mental model
 

@@ -441,7 +441,28 @@ endif()
 install(TARGETS dserv DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY config DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY lib DESTINATION dserv COMPONENT dserv)
-install(DIRECTORY db DESTINATION dserv COMPONENT dserv)
+
+# docs.db is built from db/docs.sql (the committed source of truth) so the
+# binary doesn't churn in git. Requires sqlite3 on the build machine — which
+# is already a transitive dep of the docs subprocess. The .sql is shipped
+# alongside for recovery / re-init scenarios.
+find_program(SQLITE3_EXECUTABLE sqlite3 REQUIRED)
+set(DOCS_SQL ${CMAKE_CURRENT_SOURCE_DIR}/db/docs.sql)
+set(DOCS_DB  ${CMAKE_CURRENT_BINARY_DIR}/db/docs.db)
+add_custom_command(
+    OUTPUT ${DOCS_DB}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/db
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${DOCS_DB}
+    COMMAND ${SQLITE3_EXECUTABLE} ${DOCS_DB} < ${DOCS_SQL}
+    DEPENDS ${DOCS_SQL}
+    COMMENT "Building docs.db from db/docs.sql"
+    VERBATIM
+)
+add_custom_target(docs_db ALL DEPENDS ${DOCS_DB})
+install(FILES ${DOCS_DB}                              DESTINATION dserv/db COMPONENT dserv)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/db/docs.sql DESTINATION dserv/db COMPONENT dserv)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/db/README   DESTINATION dserv/db COMPONENT dserv OPTIONAL)
+
 install(DIRECTORY local DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY systems DESTINATION dserv COMPONENT dserv)
 install(DIRECTORY systemd DESTINATION dserv COMPONENT dserv)
