@@ -59,18 +59,22 @@ static int gpio_output_init_command(ClientData data,
     return TCL_ERROR;
   }
 
-  /* clean up if we already initialized */
+  /* clean up if we already initialized, so a re-init can switch chips */
   if (info->fd >= 0) {
-    close(info->fd);
-    if (info->nlines) {
+    if (info->line_requests) {
       for (int i = 0; i < info->nlines; i++) {
 	struct gpiohandle_request *req = info->line_requests[i];
-	if (req) {		/* already opened, so close */
+	if (req) {		/* line handle was opened, so close it */
 	  close(req->fd);
+	  free(req);
 	}
-	free(info->line_requests);
       }
+      free(info->line_requests);
+      info->line_requests = NULL;
     }
+    close(info->fd);
+    info->fd = -1;
+    info->nlines = 0;
   }
   
   info->fd = open(Tcl_GetString(objv[1]), O_RDONLY);

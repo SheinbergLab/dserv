@@ -203,8 +203,24 @@ static int gpio_input_init_command(ClientData data,
     chipstr = Tcl_GetString(objv[1]);
   }
 
-  if (info->fd >= 0) return TCL_OK; /* should clean up and allow to open */
-  
+  /* clean up if we already initialized, so a re-init can switch chips */
+  if (info->fd >= 0) {
+    if (info->input_requests) {
+      for (int i = 0; i < info->nlines; i++) {
+	gpio_input_t *ireq = info->input_requests[i];
+	if (ireq) {		/* line was requested, so tear it down */
+	  shutdown_input_thread(ireq);
+	  free(ireq);
+	}
+      }
+      free(info->input_requests);
+      info->input_requests = NULL;
+    }
+    close(info->fd);
+    info->fd = -1;
+    info->nlines = 0;
+  }
+
   info->fd = open(chipstr, O_RDONLY);
   if (info->fd < 0) {
     Tcl_AppendResult(interp, "error opening gpio chip", chipstr, NULL);

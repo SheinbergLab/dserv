@@ -11,6 +11,21 @@ switch $board_type {
         gpioLineRequestOutput 26  ;# obs sync output
 	::ess::set_obs_pin 26
     }
+    "orangepi5" - "orangepi5plus" {
+        # Orange Pi 5 (RK3588S) defaults.
+        # essconf opens /dev/gpiochip3 (== bank gpio3) for this board, so all
+        # three lines below MUST be in bank 3. Offsets are line# within gpio3:
+        #   offset = group*8 + index   (A=0 B=1 C=2 D=3)
+        # Chosen pins are plain GPIO on the 40-pin header (not muxed by default):
+        #   phys 11 = GPIO3_C6 -> offset 22  (button 1)
+        #   phys 12 = GPIO3_C7 -> offset 23  (button 2)
+        #   phys 13 = GPIO3_D0 -> offset 24  (obs sync output)
+        # VERIFY against `gpio readall` on the board before relying on these.
+        gpioLineRequestInput 22   ;# phys 11 / GPIO3_C6 - button 1
+        gpioLineRequestInput 23   ;# phys 12 / GPIO3_C7 - button 2
+        gpioLineRequestOutput 24  ;# phys 13 / GPIO3_D0 - obs sync output
+	::ess::set_obs_pin 24
+    }
     "pocketbeagle" - "beagleplay" {
         # PocketBeagle 2 defaults (accessible header pins)
         gpioLineRequestInput 49   ;# P2.20 - button 1

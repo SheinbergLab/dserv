@@ -190,8 +190,14 @@ proc detect_board_type {} {
         return "pocketbeagle"
     } elseif { [string match "*BeagleBone*" $model] } {
         return "beaglebone"
+    } elseif { [string match "*Orange Pi 5 Plus*" $model] } {
+        return "orangepi5plus"
+    } elseif { [string match "*Orange Pi 5*" $model] || [string match "*OrangePi 5*" $model] } {
+        return "orangepi5"
+    } elseif { [string match "*Orange Pi*" $model] || [string match "*OrangePi*" $model] } {
+        return "orangepi"
     }
-    
+
     return "unknown"
 }
 
@@ -205,6 +211,9 @@ set gpio_chip_map {
     beagley-ai   /dev/gpiochip2
     pocketbeagle /dev/gpiochip2
     beaglebone   /dev/gpiochip0
+    orangepi5    /dev/gpiochip3
+    orangepi5plus /dev/gpiochip3
+    orangepi     /dev/gpiochip0
     unknown      /dev/gpiochip0
 }
 
