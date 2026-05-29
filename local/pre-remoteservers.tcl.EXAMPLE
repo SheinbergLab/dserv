@@ -5,3 +5,6 @@
 
 # Or with labels
 #dservSet configs/remote_servers {[{"address":"central.server.edu","label":"Central Lab Server"}]}
+
+# postgres ingest server 
+# dservSet configs/trial_ingest_base_url https://example.com/ingest.php
