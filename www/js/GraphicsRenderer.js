@@ -588,7 +588,7 @@ class GraphicsRenderer {
                 imageData.data[dstIdx] = bytes[srcIdx] || 0;         // R
                 imageData.data[dstIdx + 1] = bytes[srcIdx + 1] || 0; // G
                 imageData.data[dstIdx + 2] = bytes[srcIdx + 2] || 0; // B
-                imageData.data[dstIdx + 3] = bytes[srcIdx + 3] || 255; // A
+                imageData.data[dstIdx + 3] = bytes[srcIdx + 3] ?? 255; // A
             }
         } else {
             console.warn(`Unsupported image depth: ${depth}, treating as grayscale`);
