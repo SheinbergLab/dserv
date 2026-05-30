@@ -244,6 +244,20 @@ oo::class create System {
         set rmtcmd {
             # connect to data server receive stimdg updates
             package require qpcs
+
+            # Clean slate on every system/protocol load: a prior system may
+            # have left dispatch callbacks (::dsCmds), cached values (::dsVals),
+            # and server-side forward matches behind in this persistent stim
+            # process. The state-system side gets reset by ::ess::init
+            # (dservRemoveAllMatches/dpointRemoveAllScripts); this is the
+            # equivalent reset for the stim side. dsStimUnregister drops all
+            # of this process's matches on the server; we then re-register and
+            # re-add the matches this protocol needs (stimdg below, plus any
+            # the protocol adds in its init callback).
+            catch { qpcs::dsStimUnregister $dservhost }
+            catch { array unset ::dsCmds }
+            catch { array unset ::dsVals }
+
             qpcs::dsStimRegister $dservhost
             qpcs::dsStimAddMatch $dservhost stimdg
 
@@ -5701,6 +5715,15 @@ namespace eval ess {
 
     set subtypes [dict create POSITION 0 BUTTON 1]
     dict set evt_info SLIDER [list 52 {Slider/Trackpad Input} float $subtypes]
+
+    # RESPWIN: the response-acceptance window opening/closing. This is a
+    # FUNCTIONAL marker ("the system will now accept a response"), distinct
+    # from any perceptual event. Use it instead of overloading CUE (the
+    # perceptual cue) or TARGET (the actual target onset) to mark when
+    # responses become valid — RT and response-gating key off this. The
+    # window may open at, before, or after the target depending on paradigm.
+    set subtypes [dict create OFF 0 ON 1]
+    dict set evt_info RESPWIN [list 53 {Response Window} long $subtypes]
 
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
