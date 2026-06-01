@@ -110,7 +110,7 @@ subprocess mesh "source [file join $dspath config/meshconf.tcl]"
 subprocess db 2571 "source [file join $dspath config/sqliteconf.tcl]"
 
 # start trial sync process to send to cloud
-subprocess trial_syncconf "source [file join $dspath config trial_syncconf.tcl]"
+subprocess trialsync "source [file join $dspath config trialsyncconf.tcl]"
 
 # start a virtual eye subprocess
 subprocess virtual_eye "source [file join $dspath config/virtualeyeconf.tcl]"
