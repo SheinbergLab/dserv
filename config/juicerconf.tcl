@@ -224,8 +224,9 @@ proc reward { ml } {
     } else {
 	$::juicer reward $ml
     }
-    # Notify db subprocess to accumulate juice in session table
+    # Notify db subprocesses to accumulate juice in session table
     catch { send db "session_add_juice $ml" }
+    catch { send trialsync [list trialsync::add_reward_ml $ml] }
 }
 
 
