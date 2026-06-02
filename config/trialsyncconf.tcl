@@ -1,9 +1,9 @@
 # trialsync subprocess — queue ess/trialinfo to SQLite outbox, POST batches over HTTP.
 # Incomplete trials (numeric status < 0 in smallint range) omit top-level stiminfo in the outbox payload to save SQLite space; ingest stores stim_info NULL for those rows.
-# Bootstrapped from local/pre-trial-sync.tcl. Subscribes to ess/trialinfo and eventlog/events when the ingest secret file is readable at init.
-# Per-trial reward volume: eventlog/events via dpointSetScript (evt:T:S + Tcl int/list data, not JSON listen format).
-# Obs window: evt:19:* (BEGINOBS) opens; sum evt:42:2 (REWARD/MICROLITERS) while open; hold ess/trialinfo;
-# on evt:20:* (ENDOBS) merge reward_ml (µL sum / 1000) into held trialinfo and enqueue.
+# Bootstrapped from local/pre-trial-sync.tcl. Subscribes to ess/trialinfo and ess/obs_active when the ingest secret file is readable at init.
+# Per-trial reward volume: juicer dispense -> send trialsync::add_reward_ml (ml); summed while obs open.
+# Obs window: ess/obs_active (triggers.tcl on evt:19 BEGINOBS / evt:20 ENDOBS) opens/closes; hold ess/trialinfo;
+# on obs close merge reward_ml (ml sum) into held trialinfo and enqueue.
 # On each ess/trialinfo, if ingest URL is unset or blank, no-op (no enqueue).
 # URL is resolved on every call via trialsync::_ingest_base_url (env first, then datapoint).
 # Base URL must be the full ingest script URL (e.g. …/ingest.php); trialsync::ingest_endpoint posts there as-is.
@@ -50,7 +50,7 @@ namespace eval trialsync {
     variable startup_drain_active 0
 
     variable obs_active 0
-    variable obs_reward_ul 0
+    variable obs_reward_ml 0.0
     variable pending_trialinfo ""
 }
 
@@ -919,55 +919,44 @@ proc trialsync::startup_drain_outbox {} {
     return [list $initial $final]
 }
 
-# eventlog/events dpointSetScript: first arg is evt:T:S, not "eventlog/events".
-proc trialsync::reward_ul_from_data {data} {
-    if {[string is integer -strict $data]} {
-        return [expr {int($data)}]
+proc trialsync::add_reward_ml {ml} {
+    variable obs_active
+    variable obs_reward_ml
+    if {!$obs_active} {
+        return
     }
-    return [expr {int([lindex $data 0])}]
+    set obs_reward_ml [expr {$obs_reward_ml + double($ml)}]
+    trialsync::_dbg "add_reward_ml: +${ml}ml total=$obs_reward_ml"
 }
 
-proc trialsync::on_event {name data} {
-    if {[catch { trialsync::_on_event_body $name $data } err]} {
-        puts stderr "trialsync: on_event failed ($name): $err"
+proc trialsync::on_obs_active {dpoint data} {
+    if {[catch { trialsync::_on_obs_active_body $dpoint $data } err]} {
+        puts stderr "trialsync: on_obs_active failed ($data): $err"
         flush stderr
     }
 }
 
-proc trialsync::_on_event_body {name data} {
-    lassign [split $name :] _ etype esubtype
-    if {![string is integer -strict $etype] || ![string is integer -strict $esubtype]} {
-        return
-    }
-    set etype [expr {int($etype)}]
-    set esubtype [expr {int($esubtype)}]
+proc trialsync::_on_obs_active_body {dpoint data} {
     variable obs_active
-    variable obs_reward_ul
+    variable obs_reward_ml
     variable pending_trialinfo
 
-    if {$etype == 19} {
+    if {$data == 1 || $data eq "1"} {
         set obs_active 1
-        set obs_reward_ul 0
+        set obs_reward_ml 0.0
         set pending_trialinfo ""
-        trialsync::_dbg "on_event: BEGINOBS obs open"
+        trialsync::_dbg "on_obs_active: obs open"
         return
     }
-    if {$etype == 20} {
+    if {$data == 0 || $data eq "0"} {
         set obs_active 0
         if {$pending_trialinfo ne ""} {
-            set ml [expr {$obs_reward_ul / 1000.0}]
             trialsync::_enqueue_trialinfo_from_data \
-                [trialsync::_merge_reward_ml_into_trialinfo $pending_trialinfo $ml]
+                [trialsync::_merge_reward_ml_into_trialinfo $pending_trialinfo $obs_reward_ml]
             set pending_trialinfo ""
-            trialsync::_dbg "on_event: ENDOBS enqueue reward_ml=$ml"
+            trialsync::_dbg "on_obs_active: obs close enqueue reward_ml=$obs_reward_ml"
         }
-        set obs_reward_ul 0
-        return
-    }
-    if {$etype == 42 && $esubtype == 2 && $obs_active} {
-        set ul [trialsync::reward_ul_from_data $data]
-        incr obs_reward_ul $ul
-        trialsync::_dbg "on_event: evt:42:2 +${ul}ul total=$obs_reward_ul"
+        set obs_reward_ml 0.0
     }
 }
 
@@ -1058,7 +1047,7 @@ proc trialsync::_on_trialinfo_body {dpoint data nbytes} {
     variable pending_trialinfo
     if {$obs_active} {
         set pending_trialinfo $data
-        trialsync::_dbg "on_trialinfo: hold until ENDOBS"
+        trialsync::_dbg "on_trialinfo: hold until obs close"
         return
     }
     trialsync::_enqueue_trialinfo_from_data \
@@ -1099,6 +1088,6 @@ dservAddExactMatch ess/trialinfo
 dpointSetScript ess/trialinfo trialsync::on_trialinfo
 trialsync::_dbg "init: subscribed ess/trialinfo -> trialsync::on_trialinfo"
 
-dservAddExactMatch eventlog/events
-dpointSetScript eventlog/events trialsync::on_event
-trialsync::_dbg "init: subscribed eventlog/events -> trialsync::on_event"
+dservAddExactMatch ess/obs_active
+dpointSetScript ess/obs_active trialsync::on_obs_active
+trialsync::_dbg "init: subscribed ess/obs_active -> trialsync::on_obs_active"
