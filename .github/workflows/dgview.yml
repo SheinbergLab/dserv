@@ -300,12 +300,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path C:/deps/lib
           New-Item -ItemType Directory -Force -Path C:/deps/include
           
-          git clone https://github.com/madler/zlib.git zlib-src
+          # Pin to a stable release. Cloning HEAD tracks zlib's unstable
+          # develop branch, whose MSVC static-lib name has drifted
+          # (zlibstatic.lib -> zs.lib -> libzs.lib) and repeatedly broke this copy.
+          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git zlib-src
           cd zlib-src
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps
           ninja -C build zlibstatic
-          # Library is named zs.lib on Windows
-          Copy-Item build/zs.lib -Destination C:/deps/lib/
+          # Copy whatever the static target produced (zlibstatic.lib on v1.3.1/MSVC);
+          # dgview's find_library searches NAMES zs/zlibstatic, so the exact name is tolerated.
+          Copy-Item build/*.lib -Destination C:/deps/lib/
           Copy-Item zlib.h -Destination C:/deps/include/
           Copy-Item build/zconf.h -Destination C:/deps/include/
         shell: pwsh
