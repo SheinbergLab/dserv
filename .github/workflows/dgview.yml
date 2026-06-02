@@ -19,7 +19,7 @@ jobs:
       contents: write
       
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       
@@ -108,7 +108,7 @@ jobs:
           mv dgview-$VERSION-Darwin.dmg dgview-macos-x64.dmg
             
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dgview-macos-x64
           path: tools/dgview/dgview-macos-x64.dmg
@@ -120,7 +120,7 @@ jobs:
       contents: write
       
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       
@@ -209,7 +209,7 @@ jobs:
           mv dgview-$VERSION-Darwin.dmg dgview-macos-arm64.dmg
             
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dgview-macos-arm64
           path: tools/dgview/dgview-macos-arm64.dmg
@@ -225,7 +225,7 @@ jobs:
     
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       
@@ -272,7 +272,7 @@ jobs:
           mv *.deb dgview-linux-${{ matrix.arch }}.deb
           
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dgview-linux-${{ matrix.arch }}
           path: tools/dgview/build/dgview-linux-${{ matrix.arch }}.deb
@@ -280,7 +280,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       
@@ -316,7 +316,8 @@ jobs:
           
       - name: Build and install lz4
         run: |
-          git clone https://github.com/lz4/lz4.git lz4-src
+          # Pin to a stable release (avoid tracking lz4's moving dev branch).
+          git clone --depth 1 --branch v1.10.0 https://github.com/lz4/lz4.git lz4-src
           cd lz4-src/build/cmake
           cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DBUILD_SHARED_LIBS=OFF -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
           ninja -C build
@@ -357,7 +358,7 @@ jobs:
           cpack -G NSIS
           
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dgview-windows-x64
           path: tools/dgview/build/dgview-*-win64.exe
@@ -372,10 +373,10 @@ jobs:
       
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dgview-macos-x64/*.dmg
