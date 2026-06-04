@@ -124,6 +124,69 @@ func (cfg *Config) ParseFlags(args []string) []string {
 	return remaining
 }
 
+// ParseInlineGlobalFlags extracts global flags that appear *after* the
+// subcommand (e.g. "dservctl push prf --dir ./prf -w mygroup"). ParseFlags
+// only consumes flags before the first positional, so without this pass a
+// global flag placed after the subcommand is silently swallowed by the
+// subcommand's own arg loop (which has no case for it) and ignored.
+//
+// To guarantee no regressions, this only handles flags that do NOT collide
+// with any subcommand's own flags. Deliberately excluded:
+//   - -r        collides with `users add ... -r <role>` (use --registry instead)
+//   - --json    collides with `docs --json` (handled by that subcommand)
+//   - -c        only meaningful before the subcommand (direct-command mode)
+//   - -h/--help handled by main/subcommands directly
+//
+// A literal "--" stops parsing and passes the remaining args through
+// untouched, so a positional value that happens to match a global flag name
+// can still be sent with e.g. `dservctl set key -- --workgroup`.
+func (cfg *Config) ParseInlineGlobalFlags(args []string) []string {
+	var remaining []string
+	i := 0
+	needValue := func() string {
+		if i+1 >= len(args) {
+			fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", args[i])
+			os.Exit(2)
+		}
+		v := args[i+1]
+		i += 2
+		return v
+	}
+	for i < len(args) {
+		switch args[i] {
+		case "--":
+			// Option terminator: drop it and pass the rest through verbatim.
+			remaining = append(remaining, args[i+1:]...)
+			return remaining
+		case "-H", "--host":
+			cfg.Host = needValue()
+		case "--agent-port":
+			v := needValue()
+			port, err := strconv.Atoi(v)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid port: %s\n", v)
+				os.Exit(2)
+			}
+			cfg.AgentPort = port
+		case "-t", "--token":
+			cfg.Token = needValue()
+		case "-w", "--workgroup":
+			cfg.Workgroup = needValue()
+		case "-u", "--user":
+			cfg.User = needValue()
+		case "--registry":
+			cfg.Registry = needValue()
+		case "--verbose":
+			cfg.Verbose = true
+			i++
+		default:
+			remaining = append(remaining, args[i])
+			i++
+		}
+	}
+	return remaining
+}
+
 // loadConfigFile reads ~/.dservctl if it exists.
 // Format: key: value (one per line, # comments)
 func (cfg *Config) loadConfigFile() {

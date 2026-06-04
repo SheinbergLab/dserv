@@ -141,6 +141,9 @@ func main() {
 	// Parse global flags from os.Args
 	args := os.Args[1:]
 	args = cfg.ParseFlags(args)
+	// Also accept collision-free global flags placed after the subcommand
+	// (e.g. "dservctl push prf --dir ./prf -w mygroup").
+	args = cfg.ParseInlineGlobalFlags(args)
 
 	if len(args) == 0 {
 		// No command: if stdin is piped, read commands; if -c was set, already handled; otherwise shell
