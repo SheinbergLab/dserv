@@ -18,8 +18,14 @@ if(WIN32)
     add_compile_definitions(WIN32)
     
     # Find lz4
+    # The exported target namespace differs by lz4 version:
+    #   stable releases (e.g. v1.10.0) export LZ4::lz4 (NAMESPACE LZ4::)
+    #   lz4's dev/HEAD branch exports lz4::lz4 (lowercase)
+    # so probe for whichever target the config package actually defined.
     find_package(lz4 CONFIG QUIET)
-    if(lz4_FOUND)
+    if(lz4_FOUND AND TARGET LZ4::lz4)
+        set(LZ4_LIBRARIES LZ4::lz4)
+    elseif(lz4_FOUND AND TARGET lz4::lz4)
         set(LZ4_LIBRARIES lz4::lz4)
     else()
         find_library(LZ4_LIBRARIES NAMES lz4_static liblz4_static lz4 liblz4 PATHS ${CMAKE_PREFIX_PATH}/lib)
