@@ -1,9 +1,9 @@
 # trialsync subprocess — queue ess/trialinfo to SQLite outbox, POST batches over HTTP.
 # Incomplete trials (numeric status < 0 in smallint range) omit top-level stiminfo in the outbox payload to save SQLite space; ingest stores stim_info NULL for those rows.
 # Bootstrapped from local/pre-trial-sync.tcl. Subscribes to ess/trialinfo and ess/obs_active when the ingest secret file is readable at init.
-# Per-trial reward volume: juicer dispense -> send trialsync::add_reward_ml (ml); summed while obs open.
+# Per-trial reward_ml comes from ESS trialinfo JSON (set at save_trial_info).
 # Obs window: ess/obs_active (triggers.tcl on evt:19 BEGINOBS / evt:20 ENDOBS) opens/closes; hold ess/trialinfo;
-# on obs close merge reward_ml (ml sum) into held trialinfo and enqueue.
+# on obs close enqueue held trialinfo as-is.
 # On each ess/trialinfo, if ingest URL is unset or blank, no-op (no enqueue).
 # URL is resolved on every call via trialsync::_ingest_base_url (env first, then datapoint).
 # Base URL must be the full ingest script URL (e.g. …/ingest.php); trialsync::ingest_endpoint posts there as-is.
@@ -50,7 +50,6 @@ namespace eval trialsync {
     variable startup_drain_active 0
 
     variable obs_active 0
-    variable obs_reward_ml 0.0
     variable pending_trialinfo ""
 }
 
@@ -919,16 +918,6 @@ proc trialsync::startup_drain_outbox {} {
     return [list $initial $final]
 }
 
-proc trialsync::add_reward_ml {ml} {
-    variable obs_active
-    variable obs_reward_ml
-    if {!$obs_active} {
-        return
-    }
-    set obs_reward_ml [expr {$obs_reward_ml + double($ml)}]
-    trialsync::_dbg "add_reward_ml: +${ml}ml total=$obs_reward_ml"
-}
-
 proc trialsync::on_obs_active {dpoint data} {
     if {[catch { trialsync::_on_obs_active_body $dpoint $data } err]} {
         puts stderr "trialsync: on_obs_active failed ($data): $err"
@@ -938,12 +927,10 @@ proc trialsync::on_obs_active {dpoint data} {
 
 proc trialsync::_on_obs_active_body {dpoint data} {
     variable obs_active
-    variable obs_reward_ml
     variable pending_trialinfo
 
     if {$data == 1 || $data eq "1"} {
         set obs_active 1
-        set obs_reward_ml 0.0
         set pending_trialinfo ""
         trialsync::_dbg "on_obs_active: obs open"
         return
@@ -951,24 +938,11 @@ proc trialsync::_on_obs_active_body {dpoint data} {
     if {$data == 0 || $data eq "0"} {
         set obs_active 0
         if {$pending_trialinfo ne ""} {
-            trialsync::_enqueue_trialinfo_from_data \
-                [trialsync::_merge_reward_ml_into_trialinfo $pending_trialinfo $obs_reward_ml]
+            trialsync::_enqueue_trialinfo_from_data $pending_trialinfo
             set pending_trialinfo ""
-            trialsync::_dbg "on_obs_active: obs close enqueue reward_ml=$obs_reward_ml"
+            trialsync::_dbg "on_obs_active: obs close enqueue"
         }
-        set obs_reward_ml 0.0
     }
-}
-
-proc trialsync::_trialinfo_json_dict {data} {
-    set jd {}
-    if {[info commands ::yajl::json2dict_ex] ne "" && ![catch {::yajl::json2dict_ex $data} jd]} {
-        return $jd
-    }
-    if {![catch {::yajl::json2dict $data} jd]} {
-        return $jd
-    }
-    return {}
 }
 
 proc trialsync::_enqueue_trialinfo_from_data {data} {
@@ -1006,23 +980,6 @@ proc trialsync::_enqueue_trialinfo_from_data {data} {
     trialsync::schedule_flush_after_pace
 }
 
-proc trialsync::_merge_reward_ml_into_trialinfo {data ml} {
-    set jd [trialsync::_trialinfo_json_dict $data]
-    if {[dict size $jd] == 0} {
-        return $data
-    }
-    dict set jd reward_ml $ml
-    if {![catch {trialsync::_json_dict_ex_to_string $jd} out]} {
-        return $out
-    }
-    if {![catch {::yajl::json2string $jd} out]} {
-        return $out
-    }
-    puts stderr "trialsync: could not merge reward_ml=$ml into trialinfo JSON"
-    flush stderr
-    return $data
-}
-
 proc trialsync::on_trialinfo {dpoint data} {
     set nbytes [string length $data]
     trialsync::_dbg "on_trialinfo: len=$nbytes"
@@ -1050,8 +1007,7 @@ proc trialsync::_on_trialinfo_body {dpoint data nbytes} {
         trialsync::_dbg "on_trialinfo: hold until obs close"
         return
     }
-    trialsync::_enqueue_trialinfo_from_data \
-        [trialsync::_merge_reward_ml_into_trialinfo $data 0.0]
+    trialsync::_enqueue_trialinfo_from_data $data
 }
 
 if {[trialsync::_ingest_key] eq ""} {
