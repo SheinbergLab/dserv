@@ -1341,6 +1341,8 @@ namespace eval ess {
         ::ess::evt_put BEGINOBS INFO [now] $current $total
         set in_obs 1
         dservSet ess/in_obs 1
+        variable trial_reward_ml
+        set trial_reward_ml 0.0
     }
 
 
@@ -1430,6 +1432,8 @@ namespace eval ess {
         $obj string subject string $subject_id
         $obj string status number $status
         $obj string rt number $rt
+        variable trial_reward_ml
+        $obj string reward_ml double $trial_reward_ml
         $obj string filename string $open_datafile
 
         # if a trial id is supplied, add addition info
@@ -3703,6 +3707,8 @@ namespace eval ess {
 namespace eval ess {
     proc juicer_init {} {}
     proc reward {ml} {
+        variable trial_reward_ml
+        set trial_reward_ml [expr {$trial_reward_ml + double($ml)}]
 		send juicer "reward $ml"
     }
 }
