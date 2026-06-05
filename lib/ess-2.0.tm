@@ -176,6 +176,9 @@ oo::class create System {
     method set_variant_args { vdict } {
         set _variant_args [dict merge  $_variant_args $vdict]
         ::ess::ess_debug "Variant args updated: $vdict" "system"
+        if { [info exists _callbacks(variant_args)] } {
+            my $_callbacks(variant_args) $vdict
+        }
     }
     method get_variant_args { } { return $_variant_args }
 
@@ -444,6 +447,16 @@ oo::class create System {
     method set_subject_callback { cb } {
         oo::objdefine [self] method subject_cb {} $cb
         set _callbacks(subject) subject_cb
+    }
+
+    # Fired by set_variant_args after merging; cb body receives `vargs`
+    # (the just-changed dict) and runs as a method on the system object,
+    # so [my get_variant_args] gives the full current args. Lets a protocol
+    # react to interdependent loader options (e.g. clamp one arg to another)
+    # without monkeypatching the global set_variant_args proc.
+    method set_variant_args_callback { cb } {
+        oo::objdefine [self] method variant_args_cb { vargs } $cb
+        set _callbacks(variant_args) variant_args_cb
     }
 
     method get_states {} {
@@ -1328,6 +1341,8 @@ namespace eval ess {
         ::ess::evt_put BEGINOBS INFO [now] $current $total
         set in_obs 1
         dservSet ess/in_obs 1
+        variable trial_reward_ml
+        set trial_reward_ml 0.0
     }
 
 
@@ -1417,6 +1432,8 @@ namespace eval ess {
         $obj string subject string $subject_id
         $obj string status number $status
         $obj string rt number $rt
+        variable trial_reward_ml
+        $obj string reward_ml double $trial_reward_ml
         $obj string filename string $open_datafile
 
         # if a trial id is supplied, add addition info
@@ -1958,7 +1975,7 @@ namespace eval ess {
         set_protocol_deinit_callback set_final_init_callback
         set_start_callback set_end_callback set_reset_callback set_quit_callback
         set_file_suggest_callback set_file_open_callback set_file_close_callback
-        set_subject_callback configure_stim update_stimdg
+        set_subject_callback set_variant_args_callback configure_stim update_stimdg
         file_suggest file_open file_close set_subject
         name get_system set_version get_version set_protocol get_protocol
         set_variants get_variants set_variant get_variant add_variant
@@ -3690,6 +3707,8 @@ namespace eval ess {
 namespace eval ess {
     proc juicer_init {} {}
     proc reward {ml} {
+        variable trial_reward_ml
+        set trial_reward_ml [expr {$trial_reward_ml + double($ml)}]
 		send juicer "reward $ml"
     }
 }
