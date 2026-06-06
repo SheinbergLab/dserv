@@ -25,8 +25,9 @@ type ScaffoldProtocolRequest struct {
 	Protocol  string `json:"protocol"` // New protocol name
 
 	// Source (optional — if empty, creates from skeleton)
-	FromProtocol string `json:"fromProtocol,omitempty"` // Clone from this protocol
-	FromSystem   string `json:"fromSystem,omitempty"`   // Clone from different system (default: same)
+	FromProtocol  string `json:"fromProtocol,omitempty"`  // Clone from this protocol
+	FromSystem    string `json:"fromSystem,omitempty"`    // Clone from different system (default: same)
+	FromWorkgroup string `json:"fromWorkgroup,omitempty"` // Clone from different workgroup (default: same)
 
 	// Metadata
 	Description string `json:"description,omitempty"`
@@ -45,17 +46,18 @@ type ScaffoldSystemRequest struct {
 	Template      string `json:"template,omitempty"`      // Create from named template (e.g., "_templates/match_to_sample")
 
 	// Options
-	Protocol    string `json:"protocol,omitempty"`    // Initial protocol name (for new system from skeleton)
-	Description string `json:"description,omitempty"`
-	CreatedBy   string `json:"createdBy"`
+	Protocol    string   `json:"protocol,omitempty"`  // Initial protocol name (for new system from skeleton)
+	Protocols   []string `json:"protocols,omitempty"` // Restrict a clone to this subset of protocols (system-level scripts always included); empty = all
+	Description string   `json:"description,omitempty"`
+	CreatedBy   string   `json:"createdBy"`
 }
 
 // ScaffoldResponse is returned by scaffold operations
 type ScaffoldResponse struct {
-	System    string   `json:"system"`
-	Protocols []string `json:"protocols"`
-	Scripts   int      `json:"scripts"`
-	ForkedFrom string  `json:"forkedFrom,omitempty"`
+	System     string   `json:"system"`
+	Protocols  []string `json:"protocols"`
+	Scripts    int      `json:"scripts"`
+	ForkedFrom string   `json:"forkedFrom,omitempty"`
 }
 
 // ============ Protocol Scaffolding ============
@@ -101,6 +103,9 @@ func (r *ESSRegistry) ScaffoldProtocol(req ScaffoldProtocolRequest) (*ScaffoldRe
 		sourceWorkgroup := req.Workgroup
 		if req.FromSystem != "" {
 			sourceSystem = req.FromSystem
+		}
+		if req.FromWorkgroup != "" {
+			sourceWorkgroup = req.FromWorkgroup
 		}
 
 		sourceSys, err := r.GetSystem(sourceWorkgroup, sourceSystem, "main")
@@ -256,6 +261,32 @@ func (r *ESSRegistry) ScaffoldSystem(req ScaffoldSystemRequest) (*ScaffoldRespon
 		sourceSystemName = req.System // no renaming needed
 		sourceDescription = req.Description
 		forkedFrom = "_skeleton"
+	}
+
+	// Optional protocol subset filter (clone/template only). System-level
+	// scripts (protocol == "") are always retained so the parent system is
+	// functional; only the named protocols are carried across.
+	if len(req.Protocols) > 0 && (req.FromSystem != "" || req.Template != "") {
+		want := make(map[string]bool, len(req.Protocols))
+		for _, p := range req.Protocols {
+			want[p] = true
+		}
+		found := make(map[string]bool)
+		filtered := sourceScripts[:0:0]
+		for _, s := range sourceScripts {
+			if s.Protocol == "" || want[s.Protocol] {
+				filtered = append(filtered, s)
+				if s.Protocol != "" {
+					found[s.Protocol] = true
+				}
+			}
+		}
+		for p := range want {
+			if !found[p] {
+				return nil, fmt.Errorf("protocol %q not found in source system %s", p, sourceSystemName)
+			}
+		}
+		sourceScripts = filtered
 	}
 
 	// Begin transaction
