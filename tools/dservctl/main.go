@@ -40,6 +40,7 @@ func init() {
 		{"backup", "List or create registry database backups", runBackup},
 		{"export", "Export workgroup or system as ZIP", runExport},
 		{"sync", "Sync scripts from registry (or --all for entire workgroup)", runSync},
+		{"clone", "Clone a system or protocol from another workgroup", runClone},
 		{"push", "Push locally modified scripts to registry", runPush},
 		{"diff", "Compare local scripts against registry", runSyncStatus},
 		{"configs", "Manage project configs/queues (list/status/push/pull)", runConfigs},
@@ -110,6 +111,8 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf --add           Push changes + add new protocols\n")
 	fmt.Fprintf(os.Stderr, "  dservctl push newsys --dir ./newsys --add     Create new system from local files\n")
 	fmt.Fprintf(os.Stderr, "  dservctl push prf --dir ./prf --dry-run       Preview what would be pushed\n")
+	fmt.Fprintf(os.Stderr, "  dservctl clone seq --from-workgroup other -w mine        Clone a whole system into another workgroup\n")
+	fmt.Fprintf(os.Stderr, "  dservctl clone seq --from-workgroup other --protocol p1 --with-libs -w mine  Clone one protocol + parent system + its libs\n")
 	fmt.Fprintf(os.Stderr, "  dservctl diff prf --dir ./prf                 Show modified/synced status\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs list                            List shared libraries\n")
 	fmt.Fprintf(os.Stderr, "  dservctl libs sync --dir ./lib                Pull libs from registry\n")

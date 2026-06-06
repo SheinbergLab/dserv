@@ -213,6 +213,38 @@ func (c *AgentClient) ScaffoldSystem(workgroup, system, protocol, createdBy stri
 	})
 }
 
+// CloneSystem clones an entire system (or a protocol subset) from another
+// workgroup into targetWG, creating the system. protocols restricts the copy
+// to that subset (system-level scripts are always included); empty = all.
+func (c *AgentClient) CloneSystem(targetWG, newName, fromWG, fromSystem string, protocols []string, createdBy string) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"workgroup":     targetWG,
+		"system":        newName,
+		"fromSystem":    fromSystem,
+		"fromWorkgroup": fromWG,
+		"createdBy":     createdBy,
+	}
+	if len(protocols) > 0 {
+		body["protocols"] = protocols
+	}
+	return c.Post(registryBase+"/scaffold/system", body)
+}
+
+// CloneProtocol clones a single protocol from another workgroup/system into an
+// already-existing target system. newProtocol names the protocol in the target
+// (pass the same value as protocol to keep the name).
+func (c *AgentClient) CloneProtocol(targetWG, targetSystem, newProtocol, fromProtocol, fromWG, fromSystem, createdBy string) (map[string]interface{}, error) {
+	return c.Post(registryBase+"/scaffold/protocol", map[string]interface{}{
+		"workgroup":     targetWG,
+		"system":        targetSystem,
+		"protocol":      newProtocol,
+		"fromProtocol":  fromProtocol,
+		"fromSystem":    fromSystem,
+		"fromWorkgroup": fromWG,
+		"createdBy":     createdBy,
+	})
+}
+
 // DeleteSystem removes a system and all its scripts.
 func (c *AgentClient) DeleteSystem(workgroup, system string) (map[string]interface{}, error) {
 	return c.Do("DELETE", registryBase+"/scaffold/system", map[string]string{
