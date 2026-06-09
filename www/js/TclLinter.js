@@ -55,7 +55,6 @@ class TclLinter {
     this.warnings = [];
 
     try {
-      this.checkBasicSyntax(code);
       this.checkBraceBalance(code);
       this.checkQuoteBalance(code);
       this.checkEssPatterns(code);
@@ -196,27 +195,6 @@ class TclLinter {
     }
   }
 
-  checkBasicSyntax(code) {
-    const lines = code.split('\n');
-
-    lines.forEach((line, lineNum) => {
-      const trimmed = line.trim();
-
-      if (!trimmed || trimmed.startsWith('#')) {
-        return;
-      }
-
-      if (this.hasUnterminatedString(line)) {
-        this.errors.push({
-          line: lineNum + 1,
-          column: line.length,
-          message: 'Unterminated string',
-          severity: 'error'
-        });
-      }
-    });
-  }
-
   checkBraceBalance(code) {
     let braceStack = [];
     let braceCount = 0;
@@ -267,45 +245,62 @@ class TclLinter {
   }
 
   checkQuoteBalance(code) {
+    // Stateful scan: a Tcl double-quoted string legally spans multiple physical
+    // lines, both via a trailing backslash continuation and via literal embedded
+    // newlines, so quotes must be tracked across lines — not counted per line.
+    // Quotes are only string delimiters at brace depth 0 (inside braces '"' is
+    // literal), and '#' begins a comment when it starts a word outside a string.
+    // A string is only "unterminated" if it is still open at end of file.
     const lines = code.split('\n');
-    let inMultiLineString = false;
+    let inString = false;
+    let stringStartLine = 0;
+    let braceDepth = 0;
 
-    lines.forEach((line, lineNum) => {
-      let quoteCount = 0;
-      let escapeNext = false;
+    for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+      const line = lines[lineNum];
 
-      for (let char of line) {
+      // Whole-line comment (only when not already mid-string / inside braces).
+      if (!inString && braceDepth === 0 && line.trim().startsWith('#')) {
+        continue;
+      }
+
+      let escapeNext = false; // a trailing '\' continues the line but does not escape the next line's first char
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+
         if (escapeNext) { escapeNext = false; continue; }
         if (char === '\\') { escapeNext = true; continue; }
-        if (char === '"') quoteCount++;
-      }
 
-      if (quoteCount % 2 !== 0) {
-        inMultiLineString = !inMultiLineString;
-      }
-    });
+        if (inString) {
+          if (char === '"') {
+            inString = false;
+          }
+          continue;
+        }
 
-    if (inMultiLineString) {
+        if (char === '{') {
+          braceDepth++;
+        } else if (char === '}') {
+          if (braceDepth > 0) braceDepth--;
+        } else if (char === '"' && braceDepth === 0) {
+          inString = true;
+          stringStartLine = lineNum + 1;
+        } else if (char === '#' && braceDepth === 0 &&
+                   (i === 0 || /[\s;]/.test(line[i - 1]))) {
+          // Comment begins a word in command position — ignore rest of line.
+          break;
+        }
+      }
+    }
+
+    if (inString) {
       this.errors.push({
-        line: lines.length,
+        line: stringStartLine || lines.length,
         column: 1,
-        message: 'Unterminated multi-line string',
+        message: 'Unterminated string',
         severity: 'error'
       });
     }
-  }
-
-  hasUnterminatedString(line) {
-    let quoteCount = 0;
-    let escapeNext = false;
-
-    for (let char of line) {
-      if (escapeNext) { escapeNext = false; continue; }
-      if (char === '\\') { escapeNext = true; continue; }
-      if (char === '"') quoteCount++;
-    }
-
-    return quoteCount % 2 !== 0;
   }
 
   getSummary() {

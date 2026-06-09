@@ -270,6 +270,14 @@ body {
 #tab-dashboard {
     padding: var(--wb-space-lg);
     max-width: 1200px;
+    height: 100%;
+}
+
+/* When active, lay the dashboard out as a column so the navigator (and its
+   Systems/Protocols lists) can grow to fill the remaining vertical space. */
+#tab-dashboard.active {
+    display: flex;
+    flex-direction: column;
 }
 
 /* ==========================================
@@ -352,17 +360,23 @@ body {
 
 .dashboard-navigator {
     margin-top: var(--wb-space-lg);
+    /* Fill the dashboard's remaining vertical space (see #tab-dashboard.active) */
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .dashboard-nav-columns {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr);
     gap: var(--wb-space-lg);
+    height: 100%;
 }
 
 @media (max-width: 700px) {
     .dashboard-nav-columns {
         grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     }
 }
 
@@ -371,6 +385,9 @@ body {
     border: 1px solid var(--wb-border);
     border-radius: var(--wb-radius-lg);
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .dash-column-header {
@@ -392,7 +409,8 @@ body {
 
 .dash-systems-list,
 .dash-protocols-list {
-    max-height: 320px;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
 }
 

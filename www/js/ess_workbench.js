@@ -2045,20 +2045,22 @@ class ESSWorkbench {
         if (!str || typeof str !== 'string') return {};
         
         const variants = {};
-        const list = TclParser.parseList(str.trim());
-        
+        // Strip comment lines at each dict level, mirroring ess::normalize_variants
+        // in lib/ess-2.0.tm — variant files now allow comments the server sanitizes.
+        const list = TclParser.parseList(TclParser.stripComments(str.trim()));
+
         for (let i = 0; i < list.length - 1; i += 2) {
             const name = list[i];
             const defStr = list[i + 1];
-            const def = TclParser.parseDict(defStr);
-            
+            const def = TclParser.parseDict(TclParser.stripComments(defStr));
+
             variants[name] = {
                 description: def.description || '',
                 loader_proc: def.loader_proc || '',
-                loader_options: def.loader_options ? TclParser.parseDict(def.loader_options) : {},
+                loader_options: def.loader_options ? TclParser.parseDict(TclParser.stripComments(def.loader_options)) : {},
                 init: def.init || '',
                 deinit: def.deinit || '',
-                params: def.params ? TclParser.parseDict(def.params) : {}
+                params: def.params ? TclParser.parseDict(TclParser.stripComments(def.params)) : {}
             };
         }
         
@@ -2397,15 +2399,17 @@ class ESSWorkbench {
     }
     
     parseVariantBlock(body) {
-        const dict = TclParser.parseDict(body.trim());
-        
+        // Strip comment lines at each dict level, mirroring ess::normalize_variants
+        // in lib/ess-2.0.tm, so embedded '#' lines don't corrupt key/value pairing.
+        const dict = TclParser.parseDict(TclParser.stripComments(body.trim()));
+
         return {
             description: dict.description || '',
             loader_proc: dict.loader_proc || '',
-            loader_options: dict.loader_options ? TclParser.parseDict(dict.loader_options) : {},
+            loader_options: dict.loader_options ? TclParser.parseDict(TclParser.stripComments(dict.loader_options)) : {},
             init: dict.init || '',
             deinit: dict.deinit || '',
-            params: dict.params ? TclParser.parseDict(dict.params) : {}
+            params: dict.params ? TclParser.parseDict(TclParser.stripComments(dict.params)) : {}
         };
     }
     
@@ -2926,65 +2930,71 @@ class ESSWorkbench {
     // Loader Parsing
     // ==========================================
 
-    parseLoadersFromScript(content) {
-        // Find all $s add_loader <name> { <arglist> } { <body> } patterns
-        const loaders = [];
-        const lines = content.split('\n');
+    // Starting at index `from`, skip whitespace and backslash-newline line
+    // continuations, then read a brace-balanced { ... } group. Returns
+    // { content, start, end } (start = index of the opening brace, end = one
+    // past the closing brace) or null if no balanced group is found.
+    readBraceGroup(content, from) {
+        let i = from;
+        while (i < content.length) {
+            const c = content[i];
+            if (c === '\\' && content[i + 1] === '\n') { i += 2; continue; }
+            if (/\s/.test(c)) { i++; continue; }
+            break;
+        }
+        if (content[i] !== '{') return null;
 
-        let i = 0;
-        while (i < lines.length) {
-            const line = lines[i];
-            // Match: $s add_loader <name> { <args> } {
-            const match = line.match(/\$\w+\s+add_loader\s+(\w+)\s+\{([^}]*)\}\s*\{/);
-            if (match) {
-                const name = match[1];
-                const args = match[2].trim().split(/\s+/).filter(a => a);
-
-                // Find the body by counting braces
-                let braceCount = 0;
-                let bodyStartLine = i;
-                let bodyEndLine = i;
-
-                // Count braces from the match line
-                for (const ch of line) {
-                    if (ch === '{') braceCount++;
-                    if (ch === '}') braceCount--;
-                }
-
-                // The first two opening braces are for arglist and body
-                // We need to find where the body brace closes
-                if (braceCount > 0) {
-                    let j = i + 1;
-                    while (j < lines.length && braceCount > 0) {
-                        for (const ch of lines[j]) {
-                            if (ch === '{') braceCount++;
-                            if (ch === '}') braceCount--;
-                        }
-                        if (braceCount > 0) j++;
-                        else bodyEndLine = j;
-                    }
-                }
-
-                // Calculate character positions
-                let bodyStart = 0;
-                for (let k = 0; k < bodyStartLine; k++) {
-                    bodyStart += lines[k].length + 1;
-                }
-                let bodyEnd = 0;
-                for (let k = 0; k <= bodyEndLine; k++) {
-                    bodyEnd += lines[k].length + 1;
-                }
-
-                loaders.push({
-                    name,
-                    args,
-                    bodyStartLine,
-                    bodyEndLine,
-                    bodyStart,
-                    bodyEnd
-                });
+        const start = i;
+        let depth = 0;
+        for (; i < content.length; i++) {
+            const c = content[i];
+            if (c === '\\') { i++; continue; } // skip escaped char (\{ \} \newline)
+            if (c === '{') depth++;
+            else if (c === '}') {
+                depth--;
+                if (depth === 0) return { content: content.slice(start + 1, i), start, end: i + 1 };
             }
-            i++;
+        }
+        return null; // unbalanced
+    }
+
+    parseLoadersFromScript(content) {
+        // Find all `<$s> add_loader <name> { <arglist> } { <body> }` definitions.
+        // The name immediately follows add_loader, but the arglist and body brace
+        // groups may span multiple lines and use backslash continuations, so we
+        // scan the whole content and read balanced brace groups rather than
+        // matching a single line.
+        const loaders = [];
+        const re = /(?:\$\w+|\w+)\s+add_loader\s+(\w+)/g;
+        let m;
+
+        while ((m = re.exec(content)) !== null) {
+            const name = m[1];
+
+            // Arglist brace group.
+            const argsGroup = this.readBraceGroup(content, m.index + m[0].length);
+            if (!argsGroup) continue;
+            // Tokens are whitespace-separated; drop stray '\' continuation markers.
+            const args = argsGroup.content.trim().split(/\s+/).filter(a => a && a !== '\\');
+
+            // Body brace group.
+            const bodyGroup = this.readBraceGroup(content, argsGroup.end);
+            if (!bodyGroup) continue;
+
+            const bodyStartLine = content.slice(0, bodyGroup.start).split('\n').length - 1;
+            const bodyEndLine = content.slice(0, bodyGroup.end).split('\n').length - 1;
+
+            loaders.push({
+                name,
+                args,
+                bodyStartLine,
+                bodyEndLine,
+                bodyStart: bodyGroup.start,
+                bodyEnd: bodyGroup.end
+            });
+
+            // Resume scanning after the body so we don't re-match inside it.
+            re.lastIndex = bodyGroup.end;
         }
 
         return loaders;

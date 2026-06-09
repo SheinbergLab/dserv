@@ -7,9 +7,71 @@
 
 class TclParser {
     /**
+     * Test whether a Tcl string forms a complete command (balanced braces and
+     * quotes). JS approximation of Tcl's [info complete]: inside braces only
+     * braces/backslash are special; at brace depth 0 a double-quote opens a
+     * quoted run. Used by stripComments to accumulate logical lines.
+     *
+     * @param {string} str
+     * @returns {boolean}
+     */
+    static isComplete(str) {
+        let depth = 0;
+        let inQuote = false;
+        for (let i = 0; i < str.length; i++) {
+            const c = str[i];
+            if (c === '\\') { i++; continue; } // skip escaped char
+            if (inQuote) {
+                if (c === '"') inQuote = false;
+            } else if (depth > 0) {
+                if (c === '{') depth++;
+                else if (c === '}') depth--;
+            } else {
+                if (c === '"') inQuote = true;
+                else if (c === '{') depth++;
+                else if (c === '}') depth--;
+            }
+        }
+        return depth <= 0 && !inQuote;
+    }
+
+    /**
+     * Remove comment lines from a Tcl block before it is consumed as a dict.
+     *
+     * Mirrors ess::strip_comments in lib/ess-2.0.tm: variant blocks are
+     * authored as brace-quoted literals but parsed as dicts, so a '#' that
+     * starts a logical line is a comment, not data — left in place it would
+     * shift dict key/value pairing. Accumulates logical lines with
+     * isComplete() so multi-line braced values are preserved whole, then
+     * drops any complete command whose first non-blank char is '#'.
+     *
+     * @param {string} body
+     * @returns {string}
+     */
+    static stripComments(body) {
+        if (!body || typeof body !== 'string') return body;
+
+        let out = '';
+        let accum = '';
+        for (const line of body.split('\n')) {
+            accum = accum === '' ? line : accum + '\n' + line;
+            if (this.isComplete(accum)) {
+                if (accum.replace(/^\s+/, '')[0] !== '#') {
+                    out += accum + '\n';
+                }
+                accum = '';
+            }
+        }
+        // Preserve any trailing incomplete fragment (e.g. mid-edit) verbatim
+        // so live parsing never silently drops a half-typed final line.
+        if (accum !== '') out += accum;
+        return out;
+    }
+
+    /**
      * Parse a Tcl list string into an array
      * Handles: {item1} {item2} item3 "quoted item"
-     * 
+     *
      * @param {string} str - The Tcl list string
      * @returns {string[]} Array of list elements
      */
