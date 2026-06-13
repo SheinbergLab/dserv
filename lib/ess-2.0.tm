@@ -1665,6 +1665,51 @@ namespace eval ess {
         evtPut $type_id $subtype_id $time $ptype {*}$args
     }
 
+    # ----------------------------------------------------------------------
+    # Response-window markers (RESPWIN).
+    #
+    # respwin_on/off emit the canonical RESPWIN event AND publish the
+    # ess/respwin datapoint (1=open, 0=closed), so external drivers (and
+    # simulators) can subscribe to a single datapoint instead of parsing the
+    # event stream. respwin_on records the open time (the RT zero-point) and
+    # an optional minimum response latency in ms: responses faster than
+    # min_rt after the window opens are "impossibly fast", and respwin_active
+    # reports the window as not-yet-acceptable until that floor passes.
+    # Protocols gate response collection on respwin_active so the floor is
+    # enforced in exactly one place rather than re-derived per protocol.
+    #
+    # See the RESPWIN event registration for the semantics: this is the
+    # FUNCTIONAL "responses are now valid" marker, distinct from perceptual
+    # events like CUE/TARGET/CHOICES.
+    # ----------------------------------------------------------------------
+    variable respwin_open_time -1
+    variable respwin_min_rt 0
+
+    proc respwin_on { {min_rt 0} } {
+        variable respwin_open_time
+        variable respwin_min_rt
+        set respwin_open_time [now]
+        set respwin_min_rt $min_rt
+        dservSet ess/respwin 1
+        evt_put RESPWIN ON $respwin_open_time
+    }
+
+    proc respwin_off {} {
+        variable respwin_open_time
+        set respwin_open_time -1
+        dservSet ess/respwin 0
+        evt_put RESPWIN OFF [now]
+    }
+
+    # 1 when the window is open and the minimum-latency floor has passed.
+    # min_rt is in ms; now() is microseconds, hence the *1000.
+    proc respwin_active {} {
+        variable respwin_open_time
+        variable respwin_min_rt
+        if { $respwin_open_time < 0 } { return 0 }
+        return [expr {([now] - $respwin_open_time) >= $respwin_min_rt * 1000}]
+    }
+
     proc evt_id {type {subtype {}}} {
         variable current
         if {[string is int $type]} {
