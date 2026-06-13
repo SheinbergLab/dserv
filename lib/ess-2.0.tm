@@ -3218,6 +3218,44 @@ namespace eval ess {
     }
 
     ########################################################################
+    # input simulation helpers (companions to button_simulate)
+    #
+    # Each owns the datapoint write + wire format and wakes the state
+    # machine, so callers (simulators, agents, CLI tests) never hand-craft
+    # binary blobs. Drive the SAME datapoints real hardware does, so the
+    # full input path (processors, window membership, commit detection) is
+    # exercised exactly as in a live session.
+    ########################################################################
+
+    # Analog swipe response: publish a commit (magnitude then angle, in
+    # radians), matching the order sliderconf emits on a real trackpad
+    # RELEASE. The angle is what response-detection keys off; mag must
+    # exceed the system's swipe_threshold to count as engaged.
+    proc swipe_simulate { angle_rad {mag 2.0} } {
+	dservSetData slider/swipe/mag   [now] 2 [binary format f $mag]
+	dservSetData slider/swipe/angle [now] 2 [binary format f $angle_rad]
+	do_update
+    }
+
+    # Touchscreen press+release at a pixel coordinate, injected via
+    # mtouch/event (the same path the web GUI uses) so the touch processor
+    # computes window membership. event_type: 0=press, 2=release.
+    proc touch_simulate { x y } {
+	dservSetData mtouch/event [now] 4 [binary format s3 [list $x $y 0]]
+	dservSetData mtouch/event [now] 4 [binary format s3 [list $x $y 2]]
+	do_update
+    }
+
+    # Convenience: tap the center of touch window <win> (reads the window's
+    # stored pixel center), so a caller can "respond in window N" without
+    # knowing screen geometry.
+    proc touch_win_simulate { win } {
+	set cx [touchGetIndexedParam $win center_x]
+	set cy [touchGetIndexedParam $win center_y]
+	touch_simulate $cx $cy
+    }
+
+    ########################################################################
     # aggregate button query helpers
     ########################################################################
     
