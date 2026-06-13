@@ -3255,6 +3255,31 @@ namespace eval ess {
 	touch_simulate $cx $cy
     }
 
+    # Eye position: delegate to the virtual_eye subprocess (the eye analog of
+    # "the device"), which republishes the held position via its timer so a
+    # fixation persists. h/v are in DEGREES, same space as em windows. Unlike
+    # the transient touch/swipe helpers, this SETS A HELD position: call again
+    # to saccade, or set outside all windows to break fixation. No do_update
+    # here — the feed is async (timer -> em::process_virtual -> windows
+    # processor) and em_window_process wakes the state machine on the actual
+    # membership change.
+    proc em_simulate { h v } {
+	if { ![dservExists eyetracking/virtual_enabled] ||
+	     ![dservGet eyetracking/virtual_enabled] } {
+	    send virtual_eye start
+	}
+	send virtual_eye "set_eye $h $v"
+    }
+
+    # Convenience: move the (virtual) eye to the center of em window <win>,
+    # e.g. to acquire a fixation or land a saccade on a choice window. Eye
+    # windows and set_eye are both in degrees, so no conversion is needed.
+    proc em_win_simulate { win } {
+	set cx [ainGetIndexedParam $win center_x]
+	set cy [ainGetIndexedParam $win center_y]
+	em_simulate $cx $cy
+    }
+
     ########################################################################
     # aggregate button query helpers
     ########################################################################
