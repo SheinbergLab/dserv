@@ -21,6 +21,9 @@ func init() {
 	commands = []Command{
 		{"shell", "Interactive REPL with tab completion", runShell},
 		{"stim", "Send command to STIM (separate process, port 4612)", runStim},
+		{"load", "Load an ESS system (ess::load_system)", runLoad},
+		{"stimdg", "Dump a stimulus dynamic group as JSON (default: stimdg)", runStimdg},
+		{"wait", "Block until a datapoint reaches a value (event-driven)", runWait},
 		{"get", "Get a datapoint value (dservGet)", runGet},
 		{"set", "Set a datapoint value (dservSet)", runSet},
 		{"touch", "Touch a datapoint (notify subscribers)", runTouch},
@@ -95,6 +98,9 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  dservctl stim \"command\"  Send to STIM (direct, port 4612)\n\n")
 	fmt.Fprintf(os.Stderr, "Examples:\n")
 	fmt.Fprintf(os.Stderr, "  dservctl -c \"expr 2+2\"                       Direct to dserv interpreter\n")
+	fmt.Fprintf(os.Stderr, "  dservctl load match_to_sample colormatch easy Load a system/protocol/variant\n")
+	fmt.Fprintf(os.Stderr, "  dservctl stimdg                               Dump stimdg as JSON\n")
+	fmt.Fprintf(os.Stderr, "  dservctl wait ess/run_state complete --timeout 120  Block until a datapoint hits a value\n")
 	fmt.Fprintf(os.Stderr, "  dservctl ess \"ess::status\"                    Send to ESS subprocess\n")
 	fmt.Fprintf(os.Stderr, "  echo \"expr 5*5\" | dservctl ess               Pipe to ESS\n")
 	fmt.Fprintf(os.Stderr, "  dservctl shell                                Interactive REPL\n")
