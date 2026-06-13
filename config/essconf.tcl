@@ -45,6 +45,11 @@ package require ess_sync
 
 ess::registry::init_from_dserv
 
+# Convenience control aliases so bare verbs work over the wire,
+# e.g. "dservctl ess reset" instead of "dservctl ess ess::reset".
+# start/stop can be added the same way if desired.
+proc reset {} { ess::reset }
+
 # Configure registry from environment or defaults
 if {[info exists ::env(ESS_REGISTRY_URL)]} {
     ess::registry::configure -url $::env(ESS_REGISTRY_URL)
