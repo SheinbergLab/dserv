@@ -202,6 +202,163 @@ namespace eval ess {
         return "dismissed"
     }
 
+    # ── Base manifest (sync ancestor tracking) ───────────────────────
+    #
+    # Each system directory carries a hidden .sync_base.json recording,
+    # per file, the checksum the registry had the last time we pulled it
+    # (or the checksum we last committed).  This "base" is the merge
+    # ancestor: comparing base vs local vs registry lets sync tell apart
+    #   - a stale local copy (registry moved; safe to overwrite),
+    #   - genuine unpushed local edits (must be preserved), and
+    #   - a true conflict (both changed since the base).
+    # Without it, sync_system displaced *every* file whose checksum
+    # differed from the registry, which both spammed .sync_displaced with
+    # backups of merely-stale files and silently clobbered real edits —
+    # worst of all after a crash+restart, when the old in-memory checksum
+    # cache is gone and sync_base runs cold.
+    #
+    # The manifest lives with the files it describes, keyed relative to
+    # its own directory (matching dservctl's relpath scheme so both tools
+    # share the format):
+    #   <system_path>/<project>/<system>/.sync_base.json  keys "<proto>/<file>" or "<file>"
+    #   <system_path>/<project>/lib/.sync_base.json        keys "<file>"
+    #
+    # The file is a dotfile, so neither dservctl's scanners nor ess_sync's
+    # globs ever treat it as a script.
+
+    variable base_manifest_schema 1
+
+    proc _base_manifest_path {project system} {
+        variable system_path
+        return [file join $system_path $project $system .sync_base.json]
+    }
+
+    proc _base_lib_manifest_path {project} {
+        variable system_path
+        return [file join $system_path $project lib .sync_base.json]
+    }
+
+    # Read a base manifest.  Returns a dict {schemaVersion workgroup
+    # defaultVersion entries}.  A missing file, parse error, or workgroup
+    # mismatch yields an empty manifest so we degrade to cold-start
+    # behavior rather than trusting stale data.
+    proc _base_manifest_read {path} {
+        variable registry_workgroup
+        variable base_manifest_schema
+        set empty [dict create \
+            schemaVersion  $base_manifest_schema \
+            workgroup      $registry_workgroup \
+            defaultVersion main \
+            entries        [dict create]]
+
+        if {![file exists $path]} { return $empty }
+
+        if {[catch {
+            set f [open $path r]
+            set raw [read $f]
+            close $f
+            # Manifest values are hex/strings/ints only (no script bodies),
+            # so json_to_dict is safe here.
+            set m [json_to_dict $raw]
+        } err]} {
+            ess_warning "Base manifest unreadable ($path): $err — ignoring" "sync"
+            return $empty
+        }
+
+        if {[dict exists $m workgroup] &&
+            [dict get $m workgroup] ne $registry_workgroup} {
+            ess_warning "Base manifest workgroup mismatch in $path\
+                ([dict get $m workgroup] != $registry_workgroup) — ignoring" "sync"
+            return $empty
+        }
+        if {![dict exists $m entries]} { dict set m entries [dict create] }
+        return $m
+    }
+
+    # Minimal JSON string escaping for manual serialization.
+    proc _json_str {s} {
+        return "\"[string map [list \\ \\\\ \" \\\" \n \\n \r \\r \t \\t] $s]\""
+    }
+
+    # Serialize a manifest dict to JSON by hand.  We avoid dict_to_json
+    # for the nested entries map because the empty-dict and deep-nesting
+    # cases are unreliable (see the empty-checksums workaround below).
+    proc _base_manifest_to_json {m} {
+        variable base_manifest_schema
+        set wg [dict get $m workgroup]
+        set dv [dict get $m defaultVersion]
+        set items [list]
+        dict for {key e} [dict get $m entries] {
+            set cs  [dict get $e checksum]
+            set ver [expr {[dict exists $e version]  ? [dict get $e version]  : $dv}]
+            set at  [expr {[dict exists $e syncedAt]  ? [dict get $e syncedAt]  : 0}]
+            set by  [expr {[dict exists $e syncedBy]  ? [dict get $e syncedBy]  : ""}]
+            lappend items [format {%s:{"checksum":%s,"version":%s,"syncedAt":%d,"syncedBy":%s}} \
+                [_json_str $key] [_json_str $cs] [_json_str $ver] $at [_json_str $by]]
+        }
+        return [format {{"schemaVersion":%d,"workgroup":%s,"defaultVersion":%s,"entries":{%s}}} \
+            $base_manifest_schema [_json_str $wg] [_json_str $dv] [join $items ,]]
+    }
+
+    # Atomically write a base manifest (temp + rename).
+    #
+    # dserv runs as root but the systems tree is user-owned, so written
+    # files must be chowned back to the directory owner — otherwise this
+    # manifest, which dservctl later writes as the (non-root) user, would
+    # be left root-owned and lock dservctl out (root can write user-owned
+    # files, but not vice versa). We fix ownership of the temp file
+    # *before* the rename so the atomic swap yields an already-correctly-
+    # owned manifest with no root-owned window for a crash to freeze.
+    proc _base_manifest_write {path m} {
+        # PID-tagged temp name so a stale root-owned leftover can't collide
+        # with another writer's temp file.
+        set tmp "${path}.tmp.[pid]"
+        if {[catch {
+            set dir [file dirname $path]
+            if {![file exists $dir]} { mkdir_matching_owner $dir }
+            set f [open $tmp w]
+            puts -nonewline $f [_base_manifest_to_json $m]
+            close $f
+            fix_file_ownership $tmp
+            file rename -force $tmp $path
+        } err]} {
+            catch { file delete $tmp }
+            ess_warning "Could not write base manifest $path: $err" "sync"
+        }
+    }
+
+    proc _base_entry_get {m key} {
+        if {[dict exists $m entries $key checksum]} {
+            return [dict get $m entries $key checksum]
+        }
+        return ""
+    }
+
+    # Set/replace an entry (manifest passed by name).
+    proc _base_entry_set {mvar key checksum version by} {
+        upvar 1 $mvar m
+        dict set m entries $key [dict create \
+            checksum $checksum \
+            version  $version \
+            syncedAt [clock seconds] \
+            syncedBy $by]
+    }
+
+    proc _base_entry_unset {mvar key} {
+        upvar 1 $mvar m
+        if {[dict exists $m entries $key]} { dict unset m entries $key }
+    }
+
+    # 3-way decision from three checksums ("" == absent).
+    # Returns: unchanged | pull | keep_local | conflict | cold
+    proc _base_decide {base local registry} {
+        if {$local eq $registry} { return unchanged }
+        if {$base eq ""}         { return cold }       ;# no ancestor: ambiguous
+        if {$base eq $local}     { return pull }       ;# stale local, registry moved
+        if {$base eq $registry}  { return keep_local } ;# local edits, registry unchanged
+        return conflict                                 ;# both moved since base
+    }
+
     if {[info exists ::env(ESS_REGISTRY_URL)]} {
         set registry_url $::env(ESS_REGISTRY_URL)
     }
@@ -253,8 +410,13 @@ namespace eval ess {
 
         ess_info "Syncing $system from $registry_workgroup (version: $version)" "sync"
 
-        # Step 1: Build local checksum map
+        # Step 1: Build local checksum map.
+        #   checksums         server-key ("proto/type") -> checksum (sent to server)
+        #   local_relsum      manifest relkey -> local checksum
+        #   sentkey_to_relkey server-key -> manifest relkey (to map "extra" back)
         set checksums [dict create]
+        set local_relsum [dict create]
+        set sentkey_to_relkey [dict create]
         set sys_dir [file join $system_path $project $system]
 
         if {[file exists $sys_dir]} {
@@ -263,7 +425,10 @@ namespace eval ess {
                 set filename [_script_filename $system "" $type]
                 set filepath [file join $sys_dir $filename]
                 if {[file exists $filepath]} {
-                    dict set checksums "_system/$type" [sha256 -file $filepath]
+                    set cs [sha256 -file $filepath]
+                    dict set checksums "_system/$type" $cs
+                    dict set local_relsum $filename $cs
+                    dict set sentkey_to_relkey "_system/$type" $filename
                 }
             }
 
@@ -274,11 +439,21 @@ namespace eval ess {
                     set filename [_script_filename $system $proto $type]
                     set filepath [file join $proto_dir $filename]
                     if {[file exists $filepath]} {
-                        dict set checksums "$proto/$type" [sha256 -file $filepath]
+                        set cs [sha256 -file $filepath]
+                        set relkey [file join $proto $filename]
+                        dict set checksums "$proto/$type" $cs
+                        dict set local_relsum $relkey $cs
+                        dict set sentkey_to_relkey "$proto/$type" $relkey
                     }
                 }
             }
         }
+
+        # Load the base manifest for this system (the merge ancestor).
+        set manifest_path [_base_manifest_path $project $system]
+        set manifest [_base_manifest_read $manifest_path]
+        set manifest_dirty 0
+        set seen_relkeys [dict create]
 
         # Step 2: POST checksums to server
         set url "${registry_url}/api/v1/ess/sync/${registry_workgroup}/${system}"
@@ -309,29 +484,63 @@ namespace eval ess {
                 set filename [json_get $response stale.$i.filename]
                 if {$filename eq ""} break
 
-                set protocol [json_get $response stale.$i.protocol]
-                set content  [json_get $response stale.$i.content]
+                set protocol     [json_get $response stale.$i.protocol]
+                set content      [json_get $response stale.$i.content]
+                set reg_checksum [json_get $response stale.$i.checksum]
 
                 if {$protocol eq ""} {
+                    set relkey  $filename
                     set relpath [file join $project $system $filename]
                 } else {
+                    set relkey  [file join $protocol $filename]
                     set relpath [file join $project $system $protocol $filename]
                 }
 
                 set local_file [file join $system_path $relpath]
+                dict set seen_relkeys $relkey 1
+
+                # 3-way decision: base (ancestor) vs local vs registry.
+                set base_checksum [_base_entry_get $manifest $relkey]
+                if {![file exists $local_file]} {
+                    # New file from the registry — nothing local to lose.
+                    set decision pull
+                } else {
+                    set decision [_base_decide $base_checksum \
+                        [sha256 -file $local_file] $reg_checksum]
+                }
+
+                if {$decision eq "keep_local"} {
+                    # Genuine unpushed local edits, registry unchanged since
+                    # our base — preserve local, do not overwrite. Base
+                    # already equals registry, so leave the entry as-is.
+                    ess_warning "  Keeping local edits (registry unchanged): $relpath" "sync"
+                    continue
+                }
+
+                if {$decision eq "conflict" || $decision eq "cold"} {
+                    # conflict: both changed since base.  cold: no ancestor,
+                    # so we can't tell edits from staleness. Either way,
+                    # rescue the local copy before taking the registry's.
+                    _sync_displace_file $local_file $relpath
+                    if {$decision eq "conflict"} {
+                        ess_warning "  CONFLICT (local and registry both changed): $relpath\
+                            — local saved to .sync_displaced" "sync"
+                    }
+                }
 
                 if {[catch {
                     set dir [file dirname $local_file]
                     if {![file exists $dir]} {
                         mkdir_matching_owner $dir
                     }
-                    # Save displaced local file before overwriting
-                    _sync_displace_file $local_file $relpath
                     set f [open $local_file w]
                     puts -nonewline $f $content
                     close $f
                     fix_file_ownership $local_file
                     incr pulled
+                    # Base := the registry checksum we just wrote.
+                    _base_entry_set manifest $relkey $reg_checksum $version "sync"
+                    set manifest_dirty 1
                     ess_info "  Pulled: $relpath" "sync"
                 } write_err]} {
                     ess_error "  Failed to write $relpath: $write_err" "sync"
@@ -340,14 +549,37 @@ namespace eval ess {
             }
         }
 
-        # Step 4: Report extra local files (client has, server doesn't)
+        # Step 4: Report extra local files (client has, server doesn't),
+        # collecting their relkeys so we can exclude them from base seeding.
+        set extra_relkeys [dict create]
         set extra_type [json_type $response extra]
         if {$extra_type eq "array"} {
             for {set i 0} {1} {incr i} {
                 set extra_key [json_get $response extra.$i]
                 if {$extra_key eq ""} break
+                if {[dict exists $sentkey_to_relkey $extra_key]} {
+                    dict set extra_relkeys [dict get $sentkey_to_relkey $extra_key] 1
+                }
                 ess_info "  Extra local file (not on server): $extra_key" "sync"
             }
+        }
+
+        # Step 5: Seed/refresh base for unchanged files.  Any local file
+        # that wasn't stale and isn't local-only matched the registry
+        # (that's why it was unchanged), so its local checksum *is* the
+        # registry's — record it as the base. This is what makes the very
+        # first sync populate the whole manifest, not just changed files.
+        dict for {relkey cs} $local_relsum {
+            if {[dict exists $seen_relkeys $relkey]}  continue ;# stale: base already set
+            if {[dict exists $extra_relkeys $relkey]} continue ;# local-only: no base
+            if {[_base_entry_get $manifest $relkey] ne $cs} {
+                _base_entry_set manifest $relkey $cs $version "sync"
+                set manifest_dirty 1
+            }
+        }
+
+        if {$manifest_dirty} {
+            _base_manifest_write $manifest_path $manifest
         }
 
         ess_info "Sync $system: $pulled pulled, $unchanged unchanged" "sync"
@@ -399,6 +631,11 @@ namespace eval ess {
 
         set libs [dict get $data libs]
 
+        # Load the lib base manifest (keys are bare filenames).
+        set manifest_path [_base_lib_manifest_path $project]
+        set manifest [_base_manifest_read $manifest_path]
+        set manifest_dirty 0
+
         # Step 2: Compare checksums and pull stale
         foreach lib $libs {
             set filename [dict get $lib filename]
@@ -415,6 +652,24 @@ namespace eval ess {
 
             if {$local_checksum eq $server_checksum} {
                 incr unchanged
+                # Seed/refresh base for the unchanged lib.
+                if {[_base_entry_get $manifest $filename] ne $server_checksum} {
+                    _base_entry_set manifest $filename $server_checksum $version "sync"
+                    set manifest_dirty 1
+                }
+                continue
+            }
+
+            # 3-way decision before overwriting.
+            set base_checksum [_base_entry_get $manifest $filename]
+            if {$local_checksum eq ""} {
+                set decision pull
+            } else {
+                set decision [_base_decide $base_checksum $local_checksum $server_checksum]
+            }
+
+            if {$decision eq "keep_local"} {
+                ess_warning "  Keeping local lib edits (registry unchanged): $filename" "sync"
                 continue
             }
 
@@ -431,20 +686,31 @@ namespace eval ess {
                     mkdir_matching_owner $lib_dir
                 }
 
-                # Save displaced local file before overwriting
                 set lib_relpath [file join $project lib $filename]
-                _sync_displace_file $local_file $lib_relpath
+                if {$decision eq "conflict" || $decision eq "cold"} {
+                    _sync_displace_file $local_file $lib_relpath
+                    if {$decision eq "conflict"} {
+                        ess_warning "  CONFLICT (local and registry both changed): $filename\
+                            — local saved to .sync_displaced" "sync"
+                    }
+                }
 
                 set f [open $local_file w]
                 puts -nonewline $f $content
                 close $f
                 fix_file_ownership $local_file
                 incr pulled
+                _base_entry_set manifest $filename $server_checksum $version "sync"
+                set manifest_dirty 1
                 ess_info "  Pulled lib: $filename" "sync"
             } pull_err]} {
                 ess_error "  Failed to pull lib $filename: $pull_err" "sync"
                 lappend errors "$filename: $pull_err"
             }
+        }
+
+        if {$manifest_dirty} {
+            _base_manifest_write $manifest_path $manifest
         }
 
         ess_info "Libs sync: $pulled pulled, $unchanged unchanged" "sync"
@@ -707,14 +973,26 @@ namespace eval ess {
         }
 
         set system $current(system)
+        set project $current(project)
         set url "${registry_url}/api/v1/ess/script/${registry_workgroup}/${system}/${api_protocol}/${api_type}"
 
-        # Use stored registry checksum for optimistic locking.
-        # If we have one from a prior sync_status, the server will reject
-        # the commit if someone else modified the script in between.
-        # Empty string skips the check (first commit or no prior status).
-        set expected ""
-        if {[dict exists $registry_checksums $type]} {
+        # The base manifest is the authoritative ancestor checksum and,
+        # unlike the in-memory registry_checksums cache, survives a
+        # crash+restart. The manifest key is the path relative to the
+        # system dir; strip the "project/system/" prefix from relpath.
+        set manifest_path [_base_manifest_path $project $system]
+        set manifest [_base_manifest_read $manifest_path]
+        set sysprefix [file join $project $system]
+        set relkey $relpath
+        if {[string first "${sysprefix}/" $relpath] == 0} {
+            set relkey [string range $relpath [string length "${sysprefix}/"] end]
+        }
+
+        # Use stored base checksum for optimistic locking. The server
+        # rejects the commit if someone else modified the script since our
+        # base. Empty string skips the check (first commit / no base yet).
+        set expected [_base_entry_get $manifest $relkey]
+        if {$expected eq "" && [dict exists $registry_checksums $type]} {
             set expected [dict get $registry_checksums $type]
         }
 
@@ -731,18 +1009,19 @@ namespace eval ess {
             error "Commit failed: $err"
         }
 
-        # Update stored checksum to what the server now has
-        # (the checksum of the content we just pushed)
-        if {[catch {
-            set new_checksum [json_get $response checksum]
-            if {$new_checksum ne ""} {
-                dict set registry_checksums $type $new_checksum
-            }
-        }]} {
-            # If we can't parse the response checksum, clear it
-            # so next commit won't send a stale expected value
-            dict set registry_checksums $type ""
+        # Advance the base to what the server now has (the checksum of the
+        # content we just pushed) in both the in-memory cache and the
+        # persistent manifest, so a later sync sees this as a clean
+        # fast-forward rather than a phantom local edit.
+        set new_checksum ""
+        catch { set new_checksum [json_get $response checksum] }
+        if {$new_checksum eq ""} {
+            # Fall back to hashing what we pushed.
+            set new_checksum [sha256 $content]
         }
+        dict set registry_checksums $type $new_checksum
+        _base_entry_set manifest $relkey $new_checksum main $user
+        _base_manifest_write $manifest_path $manifest
 
         ess_info "Committed $type to registry ($registry_workgroup/$system)" "sync"
         return "success"
@@ -1646,6 +1925,21 @@ namespace eval ess {
         if {[file exists $base_file]} {
             file delete $base_file
             ess_info "Removed local file $base_file" "sync"
+        }
+
+        # Drop the base-manifest entry so it doesn't linger as a phantom.
+        # (delete_system/delete_protocol remove the whole dir, taking the
+        # manifest with it; a single-script delete must prune by hand.)
+        set manifest_path [_base_manifest_path $project $system]
+        if {[file exists $manifest_path]} {
+            if {$api_protocol eq "_" || $api_protocol eq ""} {
+                set relkey $filename
+            } else {
+                set relkey [file join $api_protocol $filename]
+            }
+            set manifest [_base_manifest_read $manifest_path]
+            _base_entry_unset manifest $relkey
+            _base_manifest_write $manifest_path $manifest
         }
 
         ess_info "Deleted script $api_type from registry" "sync"
