@@ -118,6 +118,10 @@ func runPush(cfg *Config, args []string) int {
 		}
 	}
 
+	// Load the base manifest (merge ancestor) for this dir.
+	base := readBaseManifest(dir, cfg.Workgroup)
+	baseDirty := false
+
 	// Step 3: Compare local files against server checksums
 	type pendingPush struct {
 		info    scriptInfo
@@ -142,6 +146,11 @@ func runPush(cfg *Config, args []string) int {
 		localHash := fmt.Sprintf("%x", sha256.Sum256(data))
 		if localHash == info.checksum {
 			unchanged++
+			// Local matches the registry — record/refresh the base.
+			if base.get(relPath) != info.checksum {
+				base.set(relPath, info.checksum, version, syncedByOrDefault(cfg.User))
+				baseDirty = true
+			}
 			continue
 		}
 
@@ -169,6 +178,12 @@ func runPush(cfg *Config, args []string) int {
 		fmt.Printf("All %d scripts unchanged.\n", unchanged)
 		if len(missing) > 0 && cfg.Verbose {
 			fmt.Printf("(%d files not found locally)\n", len(missing))
+		}
+		// Persist any base entries seeded from unchanged files.
+		if baseDirty {
+			if err := writeBaseManifest(dir, base); err != nil {
+				PrintError("writing base manifest: %v", err)
+			}
 		}
 		// Still report local-only if --add wasn't used
 		if !addNew {
@@ -255,9 +270,18 @@ func runPush(cfg *Config, args []string) int {
 	errors := 0
 
 	for _, c := range changed {
+		// Optimistic lock against the BASE (the ancestor we last synced/
+		// pushed), not the just-fetched server checksum. If someone else
+		// pushed since our base, server-current != base and the registry
+		// rejects this as a conflict. Falls back to the fetched checksum
+		// when we have no base yet (preserves prior behavior).
+		expected := base.get(c.relPath)
+		if expected == "" {
+			expected = c.info.checksum
+		}
 		req := map[string]interface{}{
 			"content":          string(c.content),
-			"expectedChecksum": c.info.checksum,
+			"expectedChecksum": expected,
 			"updatedBy":        cfg.User,
 			"comment":          comment,
 		}
@@ -265,7 +289,7 @@ func runPush(cfg *Config, args []string) int {
 		result, err := client.SaveScript(cfg.Workgroup, system, c.info.protocol, c.info.stype, version, req)
 		if err != nil {
 			if strings.Contains(err.Error(), "conflict") {
-				PrintError("%s/%s: conflict (modified on server — run sync to update)", c.info.protocol, c.info.stype)
+				PrintError("%s/%s: conflict (modified on server since your base — run sync to reconcile)", c.info.protocol, c.info.stype)
 			} else {
 				PrintError("%s/%s: %v", c.info.protocol, c.info.stype, err)
 			}
@@ -273,9 +297,17 @@ func runPush(cfg *Config, args []string) int {
 			continue
 		}
 
+		// Advance the base to what the server now has.
+		newcs := strVal(result, "checksum")
+		if newcs == "" {
+			newcs = hashBytes(c.content)
+		}
+		base.set(c.relPath, newcs, version, syncedByOrDefault(cfg.User))
+		baseDirty = true
+
 		pushed++
 		if cfg.Verbose {
-			cs := strVal(result, "checksum")
+			cs := newcs
 			if len(cs) > 8 {
 				cs = cs[:8]
 			}
@@ -299,13 +331,27 @@ func runPush(cfg *Config, args []string) int {
 			continue
 		}
 
+		newcs := strVal(result, "checksum")
+		if newcs == "" {
+			newcs = hashBytes(n.content)
+		}
+		base.set(n.relPath, newcs, version, syncedByOrDefault(cfg.User))
+		baseDirty = true
+
 		added++
 		if cfg.Verbose {
-			cs := strVal(result, "checksum")
+			cs := newcs
 			if len(cs) > 8 {
 				cs = cs[:8]
 			}
 			fmt.Printf("  + %s/%s (%s)\n", n.info.protocol, n.info.stype, cs)
+		}
+	}
+
+	// Persist base advances from this push.
+	if baseDirty {
+		if err := writeBaseManifest(dir, base); err != nil {
+			PrintError("writing base manifest: %v", err)
 		}
 	}
 

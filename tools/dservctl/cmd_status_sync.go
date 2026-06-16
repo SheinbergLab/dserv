@@ -91,6 +91,10 @@ func runSyncStatus(cfg *Config, args []string) int {
 		status   string // "synced", "modified", "local_only", "registry_only"
 	}
 
+	// Base manifest (merge ancestor) lets us split "differs" into
+	// local-ahead / behind / conflict instead of a flat "modified".
+	base := readBaseManifest(dir, cfg.Workgroup)
+
 	var entries []statusEntry
 	seen := make(map[string]bool)
 
@@ -111,7 +115,16 @@ func runSyncStatus(cfg *Config, args []string) int {
 		localHash := fmt.Sprintf("%x", sha256.Sum256(data))
 		status := "synced"
 		if localHash != info.checksum {
-			status = "modified"
+			switch baseDecide(base.get(relPath), localHash, info.checksum) {
+			case "keep_local":
+				status = "modified" // local edits, registry unchanged
+			case "pull":
+				status = "behind" // registry moved, local is stale
+			case "conflict":
+				status = "conflict" // both changed since base
+			default:
+				status = "modified" // cold / no base: can't tell
+			}
 		}
 
 		entries = append(entries, statusEntry{
@@ -196,6 +209,10 @@ func runSyncStatus(cfg *Config, args []string) int {
 			marker = "✓"
 		case "modified":
 			marker = "M"
+		case "behind":
+			marker = "↓"
+		case "conflict":
+			marker = "!"
 		case "local_only":
 			marker = "+"
 		case "registry_only":
@@ -211,8 +228,9 @@ func runSyncStatus(cfg *Config, args []string) int {
 
 	PrintTable(headers, rows)
 
-	fmt.Printf("\n%d synced, %d modified, %d local-only, %d registry-only\n",
-		counts["synced"], counts["modified"], counts["local_only"], counts["registry_only"])
+	fmt.Printf("\n%d synced, %d modified, %d behind, %d conflict, %d local-only, %d registry-only\n",
+		counts["synced"], counts["modified"], counts["behind"], counts["conflict"],
+		counts["local_only"], counts["registry_only"])
 
 	return 0
 }

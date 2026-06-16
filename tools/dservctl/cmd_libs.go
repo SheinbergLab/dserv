@@ -84,6 +84,7 @@ func runLibsSync(cfg *Config, args []string) int {
 
 	dir := "lib"
 	dryRun := false
+	force := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--dir", "-d":
@@ -93,11 +94,13 @@ func runLibsSync(cfg *Config, args []string) int {
 			}
 		case "--dry-run", "-n":
 			dryRun = true
+		case "--force", "-f":
+			force = true
 		}
 	}
 
 	client := NewRegistryClient(cfg)
-	result := syncLibsToDir(cfg, client, dir, dryRun)
+	result := syncLibsToDir(cfg, client, dir, dryRun, force)
 
 	if result.pulled == 0 && result.unchanged > 0 && result.errors == 0 {
 		fmt.Printf("All %d libs up to date.\n", result.unchanged)

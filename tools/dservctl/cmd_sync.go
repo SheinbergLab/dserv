@@ -24,6 +24,7 @@ func runSync(cfg *Config, args []string) int {
 	version := ""
 	dryRun := false
 	syncAll := false
+	force := false
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -41,6 +42,8 @@ func runSync(cfg *Config, args []string) int {
 			dryRun = true
 		case "--all", "-a":
 			syncAll = true
+		case "--force", "-f":
+			force = true
 		default:
 			if !strings.HasPrefix(args[i], "-") && system == "" {
 				system = args[i]
@@ -49,16 +52,16 @@ func runSync(cfg *Config, args []string) int {
 	}
 
 	if !syncAll && system == "" {
-		fmt.Fprintf(os.Stderr, "Usage: dservctl sync <system> [--dir DIR] [--version V] [--dry-run]\n")
-		fmt.Fprintf(os.Stderr, "       dservctl sync --all [--dir DIR] [--version V] [--dry-run]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dservctl sync <system> [--dir DIR] [--version V] [--dry-run] [--force]\n")
+		fmt.Fprintf(os.Stderr, "       dservctl sync --all [--dir DIR] [--version V] [--dry-run] [--force]\n")
 		return 2
 	}
 
 	if syncAll {
-		return runSyncAll(cfg, dir, version, dryRun)
+		return runSyncAll(cfg, dir, version, dryRun, force)
 	}
 
-	return syncOneSystem(cfg, system, dir, version, dryRun)
+	return syncOneSystem(cfg, system, dir, version, dryRun, force)
 }
 
 // syncResult tracks counts from a sync operation.
@@ -70,7 +73,7 @@ type syncResult struct {
 
 // runSyncAll syncs all systems in the workgroup plus shared libs.
 // Layout: dir/<system>/..., dir/lib/*.tm
-func runSyncAll(cfg *Config, dir, version string, dryRun bool) int {
+func runSyncAll(cfg *Config, dir, version string, dryRun, force bool) int {
 	client := NewRegistryClient(cfg)
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -80,7 +83,7 @@ func runSyncAll(cfg *Config, dir, version string, dryRun bool) int {
 
 	// Sync libs first (systems may depend on them)
 	fmt.Println("Syncing libs...")
-	libResult := syncLibsToDir(cfg, client, filepath.Join(dir, "lib"), dryRun)
+	libResult := syncLibsToDir(cfg, client, filepath.Join(dir, "lib"), dryRun, force)
 
 	// Get system list
 	systems, err := client.ListSystems(cfg.Workgroup)
@@ -103,7 +106,7 @@ func runSyncAll(cfg *Config, dir, version string, dryRun bool) int {
 		sysDir := filepath.Join(dir, name)
 
 		fmt.Printf("Syncing %s...\n", name)
-		result := syncSystemInner(cfg, client, name, sysDir, version, dryRun)
+		result := syncSystemInner(cfg, client, name, sysDir, version, dryRun, force)
 		totalPulled += result.pulled
 		totalUnchanged += result.unchanged
 		totalErrors += result.errors
@@ -122,7 +125,7 @@ func runSyncAll(cfg *Config, dir, version string, dryRun bool) int {
 }
 
 // syncLibsToDir syncs shared libraries to a local directory.
-func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun bool) syncResult {
+func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, force bool) syncResult {
 	libs, err := client.ListLibs(cfg.Workgroup)
 	if err != nil {
 		PrintError("fetching libs: %v", err)
@@ -138,8 +141,13 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun bool)
 		return syncResult{errors: 1}
 	}
 
+	// Base manifest for the lib dir (keys are bare filenames).
+	manifest := readBaseManifest(libDir, cfg.Workgroup)
+	manifestDirty := false
+
 	pulled := 0
 	unchanged := 0
+	skipped := 0
 	errors := 0
 
 	for _, lib := range libs {
@@ -150,12 +158,28 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun bool)
 		localPath := filepath.Join(libDir, filename)
 
 		// Compare checksums
+		localHash := ""
 		if data, err := os.ReadFile(localPath); err == nil {
-			localHash := fmt.Sprintf("%x", sha256.Sum256(data))
+			localHash = fmt.Sprintf("%x", sha256.Sum256(data))
 			if localHash == serverChecksum {
 				unchanged++
+				if manifest.get(filename) != serverChecksum {
+					manifest.set(filename, serverChecksum, ver, syncedByOrDefault(cfg.User))
+					manifestDirty = true
+				}
 				continue
 			}
+		}
+
+		// 3-way decision (unless --force, which always takes the registry).
+		decision := "pull"
+		if !force {
+			decision = baseDecide(manifest.get(filename), localHash, serverChecksum)
+		}
+		if decision == "keep_local" || decision == "conflict" || decision == "cold" {
+			skipped++
+			noteSyncSkip(decision, "lib/"+filename)
+			continue
 		}
 
 		if dryRun {
@@ -179,28 +203,55 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun bool)
 			continue
 		}
 
+		manifest.set(filename, serverChecksum, ver, syncedByOrDefault(cfg.User))
+		manifestDirty = true
 		pulled++
 		if cfg.Verbose {
 			fmt.Printf("  ↓ lib/%s\n", filename)
 		}
 	}
 
-	if pulled > 0 || (cfg.Verbose && unchanged > 0) {
-		fmt.Printf("  Libs: %d pulled, %d unchanged\n", pulled, unchanged)
+	if manifestDirty && !dryRun {
+		if err := writeBaseManifest(libDir, manifest); err != nil {
+			PrintError("writing lib base manifest: %v", err)
+		}
+	}
+
+	if pulled > 0 || skipped > 0 || (cfg.Verbose && unchanged > 0) {
+		fmt.Printf("  Libs: %d pulled, %d unchanged", pulled, unchanged)
+		if skipped > 0 {
+			fmt.Printf(", %d skipped (local changes — use --force to overwrite)", skipped)
+		}
+		fmt.Println()
 	}
 
 	return syncResult{pulled: pulled, unchanged: unchanged, errors: errors}
 }
 
+// noteSyncSkip prints a per-file warning when sync declines to overwrite a
+// locally-changed or conflicting file. Unlike the rig (which displaces and
+// overwrites to match the registry), dservctl is a dev tool and preserves
+// the working copy, leaving resolution to the user.
+func noteSyncSkip(decision, label string) {
+	switch decision {
+	case "keep_local":
+		fmt.Printf("  ⚠ %s: local changes not on registry — kept local (use --force to discard)\n", label)
+	case "conflict":
+		fmt.Printf("  ⚠ %s: CONFLICT — changed locally AND on registry; resolve manually (or --force)\n", label)
+	case "cold":
+		fmt.Printf("  ⚠ %s: differs from registry, no base to compare — kept local (use --force to overwrite)\n", label)
+	}
+}
+
 // syncOneSystem is the entry point for syncing a single system.
-func syncOneSystem(cfg *Config, system, dir, version string, dryRun bool) int {
+func syncOneSystem(cfg *Config, system, dir, version string, dryRun, force bool) int {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		PrintError("creating directory: %v", err)
 		return 1
 	}
 
 	client := NewRegistryClient(cfg)
-	result := syncSystemInner(cfg, client, system, dir, version, dryRun)
+	result := syncSystemInner(cfg, client, system, dir, version, dryRun, force)
 
 	if cfg.JSON {
 		return 0
@@ -213,7 +264,7 @@ func syncOneSystem(cfg *Config, system, dir, version string, dryRun bool) int {
 }
 
 // syncSystemInner does the actual sync work for a single system.
-func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version string, dryRun bool) syncResult {
+func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version string, dryRun, force bool) syncResult {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		PrintError("creating directory: %v", err)
 		return syncResult{errors: 1}
@@ -237,10 +288,15 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 		return syncResult{}
 	}
 
-	// Step 2: Compute local checksums for comparison
+	// Step 2: Compute local checksums for comparison.
 	// We iterate over the manifest entries (not a fixed type list) so that
 	// all script types — including viewer — are included automatically.
+	//   localChecksums  server-key ("proto/type") -> checksum (sent to server)
+	//   localRelsum     manifest relkey -> local checksum
+	//   sentToRel       server-key -> manifest relkey (to map "extra" back)
 	localChecksums := make(map[string]string)
+	localRelsum := make(map[string]string)
+	sentToRel := make(map[string]string)
 	for _, s := range scripts {
 		protocol := strVal(s, "protocol")
 		scriptType := strVal(s, "type")
@@ -255,12 +311,16 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 		if checksumProto == "" || checksumProto == "_" {
 			checksumProto = "_system"
 		}
+		serverKey := checksumProto + "/" + scriptType
+		relKey := localRelPath(protocol, filename)
 
 		localPath := localFilePath(dir, protocol, filename)
 		data, err := os.ReadFile(localPath)
 		if err == nil {
-			hash := sha256.Sum256(data)
-			localChecksums[checksumProto+"/"+scriptType] = fmt.Sprintf("%x", hash)
+			h := hashBytes(data)
+			localChecksums[serverKey] = h
+			localRelsum[relKey] = h
+			sentToRel[serverKey] = relKey
 		}
 	}
 
@@ -281,11 +341,6 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 	extra := extractStringList(syncResp, "extra")
 	unchanged := intVal(syncResp, "unchanged")
 
-	if len(stale) == 0 && len(extra) == 0 {
-		fmt.Printf("  %s: all %d scripts up to date.\n", system, unchanged)
-		return syncResult{unchanged: unchanged}
-	}
-
 	if dryRun {
 		if len(stale) > 0 {
 			fmt.Printf("  Would download %d script(s) for %s:\n", len(stale), system)
@@ -304,15 +359,41 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 		return syncResult{pulled: len(stale), unchanged: unchanged}
 	}
 
-	// Step 5: Write updated scripts to disk
+	// Load the base manifest (merge ancestor) for this system dir.
+	base := readBaseManifest(dir, cfg.Workgroup)
+	baseDirty := false
+	seen := make(map[string]bool)
+
+	// Step 5: Apply the 3-way decision per stale script and write pulls.
 	downloaded := 0
+	skipped := 0
 	errors := 0
 	for _, s := range stale {
 		protocol := strVal(s, "protocol")
 		filename := fileOrType(s)
 		content := strVal(s, "content")
+		regChecksum := strVal(s, "checksum")
 
+		relKey := localRelPath(protocol, filename)
 		localPath := localFilePath(dir, protocol, filename)
+		seen[relKey] = true
+
+		// Decide. A missing local file is an unambiguous pull (nothing to
+		// lose); --force always takes the registry.
+		decision := "pull"
+		if !force {
+			if data, err := os.ReadFile(localPath); err == nil {
+				decision = baseDecide(base.get(relKey), hashBytes(data), regChecksum)
+			}
+		}
+
+		// dservctl preserves the working copy on local-change/conflict/cold
+		// rather than displacing-and-overwriting like the rig does.
+		if decision == "keep_local" || decision == "conflict" || decision == "cold" {
+			skipped++
+			noteSyncSkip(decision, relKey)
+			continue
+		}
 
 		if subdir := filepath.Dir(localPath); subdir != "." {
 			if err := os.MkdirAll(subdir, 0755); err != nil {
@@ -327,13 +408,45 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 			errors++
 			continue
 		}
+		// Base := the registry checksum we just wrote.
+		base.set(relKey, regChecksum, version, syncedByOrDefault(cfg.User))
+		baseDirty = true
 		downloaded++
 		if cfg.Verbose {
 			fmt.Printf("  ↓ %s\n", localPath)
 		}
 	}
 
+	// Step 6: Seed/refresh base for unchanged files. A local file that was
+	// neither stale nor local-only matched the registry, so its local
+	// checksum is the registry's — record it as the base. This is what
+	// makes the first sync populate the whole manifest, not just changes.
+	extraRel := make(map[string]bool)
+	for _, k := range extra {
+		if rk, ok := sentToRel[k]; ok {
+			extraRel[rk] = true
+		}
+	}
+	for relKey, h := range localRelsum {
+		if seen[relKey] || extraRel[relKey] {
+			continue
+		}
+		if base.get(relKey) != h {
+			base.set(relKey, h, version, syncedByOrDefault(cfg.User))
+			baseDirty = true
+		}
+	}
+
+	if baseDirty {
+		if err := writeBaseManifest(dir, base); err != nil {
+			PrintError("writing base manifest for %s: %v", system, err)
+		}
+	}
+
 	fmt.Printf("  %s: %d updated, %d unchanged", system, downloaded, unchanged)
+	if skipped > 0 {
+		fmt.Printf(", %d skipped (local changes)", skipped)
+	}
 	if len(extra) > 0 {
 		fmt.Printf(", %d local-only", len(extra))
 	}
