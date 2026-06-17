@@ -326,14 +326,14 @@ jobs:
       - name: Build and install jansson
         run: |
           cd deps/jansson
-          cmake -G Ninja -B build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DJANSSON_BUILD_DOCS=OFF -DJANSSON_BUILD_SHARED_LIBS=OFF
+          cmake -G Ninja -B build "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DJANSSON_BUILD_DOCS=OFF -DJANSSON_BUILD_SHARED_LIBS=OFF
           ninja -C build
           ninja -C build install
           
       - name: Build and install FLTK
         run: |
           cd deps/fltk
-          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF -DFLTK_USE_SYSTEM_ZLIB=OFF
+          cmake -G Ninja -B build "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=C:/deps -DFLTK_BUILD_TEST=OFF -DFLTK_USE_SYSTEM_ZLIB=OFF
           ninja -C build
           ninja -C build install
           
