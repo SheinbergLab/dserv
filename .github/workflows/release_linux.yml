@@ -41,7 +41,7 @@ jobs:
       - name: Install Jansson to the build environment.
         run: |
           cd deps/jansson/
-          cmake -B build
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
           cmake --build build
           sudo cmake --install build
 
@@ -227,7 +227,7 @@ jobs:
       - name: Install Jansson (needed for camera module)
         run: |
           cd deps/jansson/
-          cmake -B build
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
           cmake --build build
           sudo cmake --install build
 
@@ -302,7 +302,7 @@ jobs:
       - name: Install Jansson to the build environment.
         run: |
           cd deps/jansson/
-          cmake -B build
+          cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -B build
           cmake --build build
           sudo cmake --install build
 
