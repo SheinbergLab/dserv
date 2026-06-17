@@ -149,6 +149,7 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 	unchanged := 0
 	skipped := 0
 	errors := 0
+	registryLibs := make(map[string]bool) // every lib filename the registry has
 
 	for _, lib := range libs {
 		filename := strVal(lib, "filename")
@@ -156,6 +157,7 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 		name := strVal(lib, "name")
 		ver := strVal(lib, "version")
 		localPath := filepath.Join(libDir, filename)
+		registryLibs[filename] = true
 
 		// Compare checksums
 		localHash := ""
@@ -208,6 +210,17 @@ func syncLibsToDir(cfg *Config, client *AgentClient, libDir string, dryRun, forc
 		pulled++
 		if cfg.Verbose {
 			fmt.Printf("  ↓ lib/%s\n", filename)
+		}
+	}
+
+	// Prune base entries for libs the registry no longer has (libs is
+	// non-empty here — we returned early otherwise — so this is safe).
+	if !dryRun {
+		for k := range manifest.Entries {
+			if !registryLibs[k] {
+				manifest.unset(k)
+				manifestDirty = true
+			}
 		}
 	}
 
@@ -297,6 +310,7 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 	localChecksums := make(map[string]string)
 	localRelsum := make(map[string]string)
 	sentToRel := make(map[string]string)
+	registryKeys := make(map[string]bool) // every relkey the registry has
 	for _, s := range scripts {
 		protocol := strVal(s, "protocol")
 		scriptType := strVal(s, "type")
@@ -313,6 +327,7 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 		}
 		serverKey := checksumProto + "/" + scriptType
 		relKey := localRelPath(protocol, filename)
+		registryKeys[relKey] = true
 
 		localPath := localFilePath(dir, protocol, filename)
 		data, err := os.ReadFile(localPath)
@@ -433,6 +448,18 @@ func syncSystemInner(cfg *Config, client *AgentClient, system, dir, version stri
 		}
 		if base.get(relKey) != h {
 			base.set(relKey, h, version, syncedByOrDefault(cfg.User))
+			baseDirty = true
+		}
+	}
+
+	// Step 7: prune base entries for scripts the registry no longer has.
+	// registryKeys is the authoritative set from the server manifest (we're
+	// past the empty-scripts guard, so it's non-empty), making this safe and
+	// self-healing across tools — a script deleted by anyone gets dropped
+	// from the base on the next sync.
+	for k := range base.Entries {
+		if !registryKeys[k] {
+			base.unset(k)
 			baseDirty = true
 		}
 	}

@@ -578,6 +578,30 @@ namespace eval ess {
             }
         }
 
+        # Step 6: Prune base entries for scripts the registry no longer has,
+        # so a deletion (by any tool/user) self-heals on the next sync. The
+        # registry set this sync = local files we sent that weren't "extra",
+        # plus the stale files the server returned (which includes registry
+        # files missing locally). Guard on a non-empty set so a degenerate or
+        # error response never prunes valid entries.
+        set registry_seen [dict create]
+        dict for {relkey cs} $local_relsum {
+            if {![dict exists $extra_relkeys $relkey]} {
+                dict set registry_seen $relkey 1
+            }
+        }
+        foreach relkey [dict keys $seen_relkeys] {
+            dict set registry_seen $relkey 1
+        }
+        if {[dict size $registry_seen] > 0} {
+            foreach relkey [dict keys [dict get $manifest entries]] {
+                if {![dict exists $registry_seen $relkey]} {
+                    _base_entry_unset manifest $relkey
+                    set manifest_dirty 1
+                }
+            }
+        }
+
         if {$manifest_dirty} {
             _base_manifest_write $manifest_path $manifest
         }
@@ -635,11 +659,13 @@ namespace eval ess {
         set manifest_path [_base_lib_manifest_path $project]
         set manifest [_base_manifest_read $manifest_path]
         set manifest_dirty 0
+        set registry_libs [dict create]
 
         # Step 2: Compare checksums and pull stale
         foreach lib $libs {
             set filename [dict get $lib filename]
             set server_checksum [dict get $lib checksum]
+            dict set registry_libs $filename 1
             set name [dict get $lib name]
             set version [dict get $lib version]
             set local_file [file join $lib_dir $filename]
@@ -706,6 +732,17 @@ namespace eval ess {
             } pull_err]} {
                 ess_error "  Failed to pull lib $filename: $pull_err" "sync"
                 lappend errors "$filename: $pull_err"
+            }
+        }
+
+        # Prune base entries for libs the registry no longer has (guard on a
+        # non-empty lib list so an empty/error response never prunes).
+        if {[llength $libs] > 0} {
+            foreach fname [dict keys [dict get $manifest entries]] {
+                if {![dict exists $registry_libs $fname]} {
+                    _base_entry_unset manifest $fname
+                    set manifest_dirty 1
+                }
             }
         }
 

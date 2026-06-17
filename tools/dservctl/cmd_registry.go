@@ -390,7 +390,7 @@ func runScriptSave(cfg *Config, args []string) int {
 
 func runScriptDelete(cfg *Config, args []string) int {
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: dservctl script delete <system> <protocol> <type>\n")
+		fmt.Fprintf(os.Stderr, "Usage: dservctl script delete <system> <protocol> <type> [--dir DIR]\n")
 		return 2
 	}
 	if !requireWorkgroup(cfg) {
@@ -398,12 +398,34 @@ func runScriptDelete(cfg *Config, args []string) int {
 	}
 
 	system, protocol, scriptType := args[0], args[1], args[2]
+	dir := "."
+	for i := 3; i < len(args); i++ {
+		if (args[i] == "--dir" || args[i] == "-d") && i+1 < len(args) {
+			dir = args[i+1]
+			i++
+		}
+	}
 
 	client := NewRegistryClient(cfg)
 	_, err := client.DeleteScript(cfg.Workgroup, system, protocol, scriptType)
 	if err != nil {
 		PrintError("%v", err)
 		return 1
+	}
+
+	// Best-effort: drop the now-orphaned base-manifest entry so it doesn't
+	// linger. readBaseManifest returns empty if there's no local manifest,
+	// so this is a no-op when run outside a checkout.
+	relKey := localRelPath(protocol, scriptFilename(system, protocol, scriptType))
+	if m := readBaseManifest(dir, cfg.Workgroup); m.get(relKey) != "" {
+		m.unset(relKey)
+		if err := writeBaseManifest(dir, m); err != nil {
+			if cfg.Verbose {
+				PrintError("pruning base entry %s: %v", relKey, err)
+			}
+		} else if cfg.Verbose {
+			fmt.Printf("  pruned base entry %s\n", relKey)
+		}
 	}
 
 	fmt.Printf("Deleted %s/%s/%s\n", system, protocol, scriptType)

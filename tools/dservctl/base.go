@@ -171,6 +171,32 @@ func hashBytes(data []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
+// scriptFilename reconstructs a script's filename from (system, protocol,
+// type) using the same convention as ess_sync's _script_filename. Used to
+// derive the manifest key when only protocol+type are known (e.g. delete).
+func scriptFilename(system, protocol, stype string) string {
+	if protocol == "" || protocol == "_" || protocol == "_system" {
+		switch stype {
+		case "system":
+			return system + ".tcl"
+		case "extract":
+			return system + "_extract.tcl"
+		case "viewer":
+			return system + "_viewer.js"
+		default:
+			return system + "_" + stype + ".tcl"
+		}
+	}
+	switch stype {
+	case "protocol":
+		return protocol + ".tcl"
+	case "viewer":
+		return protocol + "_viewer.js"
+	default:
+		return protocol + "_" + stype + ".tcl"
+	}
+}
+
 // versionOrMain defaults an empty version to "main".
 func versionOrMain(v string) string {
 	if v == "" {
