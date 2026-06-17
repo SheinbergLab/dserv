@@ -98,9 +98,13 @@ func runScripts(cfg *Config, args []string) int {
 	if len(args) > 0 && args[0] == "delete-protocol" {
 		return runDeleteProtocol(cfg, args[1:])
 	}
+	if len(args) > 0 && args[0] == "diff" {
+		return runScriptsDiff(cfg, args[1:])
+	}
 
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Usage: dservctl scripts <system> [--version V]\n")
+		fmt.Fprintf(os.Stderr, "       dservctl scripts diff <system> [--dir DIR] [--base]\n")
 		fmt.Fprintf(os.Stderr, "       dservctl scripts delete-protocol <system> <protocol>\n")
 		return 2
 	}
@@ -210,6 +214,7 @@ func runScript(cfg *Config, args []string) int {
 		fmt.Fprintf(os.Stderr, "  dservctl script get <system> <protocol> <type> [--version V] [--output FILE]\n")
 		fmt.Fprintf(os.Stderr, "  dservctl script save <system> <protocol> <type> [--file FILE] [--comment MSG] [--version V]\n")
 		fmt.Fprintf(os.Stderr, "  dservctl script delete <system> <protocol> <type>\n")
+		fmt.Fprintf(os.Stderr, "  dservctl script diff <system> <protocol> <type> [--dir DIR] [--base]\n")
 		return 2
 	}
 
@@ -220,8 +225,10 @@ func runScript(cfg *Config, args []string) int {
 		return runScriptSave(cfg, args[1:])
 	case "delete":
 		return runScriptDelete(cfg, args[1:])
+	case "diff":
+		return runScriptDiff(cfg, args[1:])
 	default:
-		PrintError("unknown script subcommand %q (use get, save, or delete)", args[0])
+		PrintError("unknown script subcommand %q (use get, save, delete, or diff)", args[0])
 		return 2
 	}
 }

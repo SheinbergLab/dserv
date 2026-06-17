@@ -17,7 +17,9 @@ import (
 //	dservctl status <system> [--dir DIR] [--version V]
 func runSyncStatus(cfg *Config, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: dservctl status <system> [--dir DIR] [--version V]\n")
+		fmt.Fprintf(os.Stderr, "Usage: dservctl diff <system> [--dir DIR] [--version V]\n")
+		fmt.Fprintf(os.Stderr, "  (per-file status; for line-level content diffs use\n")
+		fmt.Fprintf(os.Stderr, "   'dservctl script diff' or 'dservctl scripts diff')\n")
 		return 2
 	}
 	if !requireWorkgroup(cfg) {
