@@ -385,7 +385,6 @@ jobs:
             dgview-linux-arm64/*.deb
             dgview-windows-x64/*.exe
           body: dgview version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
