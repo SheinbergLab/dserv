@@ -30,6 +30,7 @@ let batteryCharging = null;
 let batteryV = null;
 let batteryA = null;
 let batteryW = null;
+let batteryHrsRemaining = null;
 let hasBatteryData = false;
 
 const BOTTLE_CAPACITY_ML = 500;
@@ -136,7 +137,7 @@ function requestInitialData() {
           em/settings mesh/peers
           openephys/status
           system/hostname system/os
-          powermon/pct powermon/charging powermon/v powermon/a powermon/w
+          powermon/pct powermon/charging powermon/hrs_remaining powermon/v powermon/a powermon/w
           juicer/juice_level juicer/reward_mls juicer/reward_number
           configs/list configs/tags configs/quick_picks configs/current
           configs/remote_servers
@@ -389,6 +390,10 @@ function formatBatteryTooltip() {
         parts.push('(charging)');
     }
 
+    if (batteryHrsRemaining != null) {
+        parts.push(`${batteryHrsRemaining.toFixed(1)} hrs remaining`);
+    }
+
     const metrics = [];
     if (batteryV != null) metrics.push(`${batteryV.toFixed(1)} V`);
     if (batteryA != null) metrics.push(`${batteryA.toFixed(2)} A`);
@@ -442,6 +447,15 @@ function initBatteryIndicator() {
         const raw = data.value ?? data.data;
         if (raw !== '' && raw != null) {
             batteryCharging = parseBatteryCharging(raw);
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    dpManager.subscribe('powermon/hrs_remaining', (data) => {
+        const parsed = parseBatteryMetric(data.value ?? data.data);
+        if (parsed != null) {
+            batteryHrsRemaining = parsed;
             hasBatteryData = true;
         }
         updateBatteryDisplay();
