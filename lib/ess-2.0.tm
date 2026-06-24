@@ -83,6 +83,104 @@ namespace eval ess {
             ess_info "Debug mode disabled" "system"
         }
     }
+
+    #
+    # stimdg validation
+    #
+    #   stimdg is the contract the whole control loop runs on. A malformed
+    #   one (columns of unequal length, a stimtype that indexes past the
+    #   rows, a missing required column) otherwise fails late and cryptically
+    #   deep inside nexttrial. validate_stimdg checks the invariants up front
+    #   and publishes the result so the GUI can warn the user immediately.
+    #
+    #   Publishes:
+    #     ess/stimdg_valid   1 if valid, 0 if not (simple gate for any client)
+    #     ess/stimdg_status  dict: valid reason nrows ncols missing mismatched
+    #
+    #   Returns the status dict.
+    #
+    # `required` defaults to just stimtype (the column the control loop keys
+    # on as its row index); a protocol can pass a stricter list, e.g.
+    # {stimtype remaining side}, to demand its own columns.
+    proc validate_stimdg { {required stimtype} } {
+        set status [dict create valid 1 reason ok nrows 0 ncols 0 \
+                        missing {} mismatched {}]
+
+        if { ![dg_exists stimdg] } {
+            dict set status valid 0
+            dict set status reason "stimdg does not exist"
+            publish_stimdg_status $status
+            return $status
+        }
+
+        set cols [dg_tclListnames stimdg]
+        dict set status ncols [llength $cols]
+
+        # reference length: prefer stimtype, else first column
+        if { "stimtype" in $cols } {
+            set nrows [dl_length stimdg:stimtype]
+        } elseif { [llength $cols] } {
+            set nrows [dl_length stimdg:[lindex $cols 0]]
+        } else {
+            set nrows 0
+        }
+        dict set status nrows $nrows
+
+        # all required columns present
+        set missing {}
+        foreach c $required {
+            if { $c ni $cols } { lappend missing $c }
+        }
+        if { [llength $missing] } {
+            dict set status valid 0
+            dict set status missing $missing
+            dict set status reason "missing required column(s): $missing"
+        }
+
+        # every column must be the same length (the invariant that, when
+        # broken, makes cur_id index past a short column)
+        set mismatched {}
+        foreach c $cols {
+            set len [dl_length stimdg:$c]
+            if { $len != $nrows } { lappend mismatched [list $c $len] }
+        }
+        if { [llength $mismatched] } {
+            dict set status valid 0
+            dict set status mismatched $mismatched
+            if { [dict get $status reason] eq "ok" } {
+                dict set status reason \
+                    "column length mismatch (expected $nrows): $mismatched"
+            }
+        }
+
+        # the control loop treats stimtype as a row index, so its values
+        # must fall within [0, nrows)
+        if { "stimtype" in $cols && $nrows > 0 } {
+            set mx [dl_max stimdg:stimtype]
+            set mn [dl_min stimdg:stimtype]
+            if { $mn < 0 || $mx >= $nrows } {
+                dict set status valid 0
+                if { [dict get $status reason] eq "ok" } {
+                    dict set status reason \
+                        "stimtype out of range \[0,$nrows): min=$mn max=$mx"
+                }
+            }
+        }
+
+        publish_stimdg_status $status
+        return $status
+    }
+
+    proc publish_stimdg_status { status } {
+        dservSet ess/stimdg_valid  [dict get $status valid]
+        dservSet ess/stimdg_status $status
+        if { [dict get $status valid] } {
+            ess_info "stimdg valid: [dict get $status nrows] trials,\
+                [dict get $status ncols] columns" "stimdg"
+        } else {
+            ess_error "stimdg INVALID: [dict get $status reason]" "stimdg"
+        }
+    }
 }
 
 #
@@ -364,6 +462,9 @@ oo::class create System {
             }
         }
         dservSet ess/stiminfo [dg_toHybridJSON stimdg]
+
+        # validate structure and publish ess/stimdg_valid + ess/stimdg_status
+        ::ess::validate_stimdg
     }
 
     #
