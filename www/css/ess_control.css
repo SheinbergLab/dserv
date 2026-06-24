@@ -44,7 +44,8 @@ body.ess-app {
 
 /* Status Bar */
 .ess-status-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 12px;
     padding: 8px 16px;
@@ -52,6 +53,127 @@ body.ess-app {
     border-radius: 6px;
     border: 1px solid var(--ess-border);
     flex-shrink: 0;
+}
+
+.ess-status-bar-left,
+.ess-status-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.ess-status-bar-right {
+    justify-content: flex-end;
+}
+
+.ess-status-bar-center {
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ess-hostname-display {
+    font-size: 20px;
+    color: var(--ess-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: min(40vw, 320px);
+    text-align: center;
+}
+
+.ess-hostname-display.disconnected {
+    color: var(--ess-text-muted);
+}
+
+.ess-juice-status {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--ess-text-secondary);
+}
+
+.ess-juice-status[hidden] {
+    display: none;
+}
+
+.ess-juice-icon {
+    width: 16px;
+    height: 22px;
+    display: block;
+}
+
+.ess-juice-body {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+}
+
+.ess-juice-fill {
+    fill: currentColor;
+    width: 8px;
+    height: calc(var(--juice-pct, 0) * 12px / 100);
+    y: calc(19px - (var(--juice-pct, 0) * 12px / 100));
+    transition: height 0.3s ease, y 0.3s ease, fill 0.3s ease;
+}
+
+.ess-juice-status.low .ess-juice-fill {
+    fill: var(--ess-error);
+}
+
+.ess-battery-status {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--ess-text-secondary);
+    margin-top: 3px;
+}
+
+.ess-battery-status[hidden] {
+    display: none;
+}
+
+.ess-battery-icon {
+    width: 26px;
+    height: 12px;
+    display: block;
+}
+
+.ess-battery-body,
+.ess-battery-tip {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+}
+
+.ess-battery-fill {
+    fill: currentColor;
+    width: calc(var(--battery-pct, 0) * 17px / 100);
+    transition: width 0.3s ease;
+}
+
+.ess-battery-bolt {
+    fill: currentColor;
+    opacity: 0;
+}
+
+.ess-battery-status.charging .ess-battery-bolt {
+    opacity: 1;
+}
+
+.ess-battery-status.charging .ess-battery-fill {
+    fill: var(--ess-success);
+}
+
+.ess-battery-status.low .ess-battery-fill {
+    fill: var(--ess-warning);
+}
+
+.ess-battery-status.critical .ess-battery-fill {
+    fill: var(--ess-error);
 }
 
 .ess-status-bar h1 {
@@ -86,10 +208,6 @@ body.ess-app {
 .ess-status-text {
     font-size: 13px;
     color: var(--ess-text-secondary);
-}
-
-.ess-status-spacer {
-    flex: 1;
 }
 
 .ess-system-state {

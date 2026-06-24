@@ -18,16 +18,36 @@
     <div class="ess-container">
         <!-- Status Bar -->
         <div class="ess-status-bar">
-            <h1>ESS Control</h1>
-            <div class="ess-status-indicator" id="status-indicator"></div>
-            <span class="ess-status-text" id="status-text">Connecting...</span>
-            <div id="mesh-dropdown-container"></div>
-            <div id="project-selector-container"></div>
-            <div class="ess-oe-status" id="openephys-status"></div>
-            <div class="ess-status-spacer"></div>
-            <button id="sync-btn" title="Sync scripts (ess::sync_base)" onclick="syncScripts()">⟳ Sync</button>
-            <span class="ess-system-state" id="system-state">--</span>
-            <div id="page-nav-container"></div>
+            <div class="ess-status-bar-left">
+                <h1>ESS Control</h1>
+                <div class="ess-status-indicator" id="status-indicator"></div>
+                <span class="ess-status-text" id="status-text">Connecting...</span>
+                <div id="mesh-dropdown-container"></div>
+                <div id="project-selector-container"></div>
+                <div class="ess-oe-status" id="openephys-status"></div>
+            </div>
+            <div class="ess-status-bar-center">
+                <div class="ess-juice-status" id="juice-status" hidden title="">
+                    <svg class="ess-juice-icon" viewBox="0 0 16 22" aria-hidden="true">
+                        <path class="ess-juice-body" d="M5 1 h6 l2 4 v14 a2 2 0 0 1 -2 2 H5 a2 2 0 0 1 -2 -2 V5 l2 -4 Z"/>
+                        <rect class="ess-juice-fill" x="4" y="7" width="8" height="12" rx="1" ry="1"/>
+                    </svg>
+                </div>
+                <span class="ess-hostname-display" id="hostname-display" title=""></span>
+                <div class="ess-battery-status" id="battery-status" hidden title="">
+                    <svg class="ess-battery-icon" viewBox="0 0 26 12" aria-hidden="true">
+                        <rect class="ess-battery-body" x="0.5" y="0.5" width="21" height="11" rx="2" ry="2"/>
+                        <rect class="ess-battery-tip" x="22" y="3.5" width="3" height="5" rx="1" ry="1"/>
+                        <rect class="ess-battery-fill" x="2" y="2" height="8" rx="1" ry="1"/>
+                        <path class="ess-battery-bolt" d="M11 1.5 L8.5 6.5 H11 L9.5 10.5 L14.5 4.5 H12 L13.5 1.5 Z"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="ess-status-bar-right">
+                <button id="sync-btn" title="Sync scripts (ess::sync_base)" onclick="syncScripts()">⟳ Sync</button>
+                <span class="ess-system-state" id="system-state">--</span>
+                <div id="page-nav-container"></div>
+            </div>
         </div>
         
         <!-- Main 3-Column Layout -->

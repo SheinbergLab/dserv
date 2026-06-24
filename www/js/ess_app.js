@@ -23,6 +23,23 @@ let eyeSettings = null;
 let buttonControls = null;
 let sliderControls = null;
 let projectSelector = null;
+let lastKnownHostname = null;
+let isConnectionActive = false;
+let batteryPct = null;
+let batteryCharging = null;
+let batteryV = null;
+let batteryA = null;
+let batteryW = null;
+let batteryHrsRemaining = null;
+let hasBatteryData = false;
+
+const BOTTLE_CAPACITY_ML = 500;
+const JUICE_LOW_THRESHOLD_ML = 50;
+
+let juiceLevel = null;
+let juiceRewardMls = null;
+let juiceRewardNumber = null;
+let hasJuiceData = false;
 
 // Console logging
 const consoleOutput = [];
@@ -68,6 +85,9 @@ async function init() {
         initSliderControls();
 	initProjectSelector();
         initOpenEphysStatus();
+        initHostnameDisplay();
+        initJuiceIndicator();
+        initBatteryIndicator();
         
         // Small delay to ensure subscriptions are registered on server
         // before we touch the datapoints
@@ -117,6 +137,8 @@ function requestInitialData() {
           em/settings mesh/peers
           openephys/status
           system/hostname system/os
+          powermon/pct powermon/charging powermon/hrs_remaining powermon/v powermon/a powermon/w
+          juicer/juice_level juicer/reward_mls juicer/reward_number
           configs/list configs/tags configs/quick_picks configs/current
           configs/remote_servers
           queues/list queues/state queues/items
@@ -283,6 +305,319 @@ function initOpenEphysStatus() {
 }
 
 /**
+ * Format hostname for display (matches MeshDropdown.formatName)
+ */
+function formatHostname(raw) {
+    return (raw || '').replace('Lab Station ', '');
+}
+
+/**
+ * Update centered hostname display and document title
+ */
+function updateHostnameDisplay() {
+    const display = document.getElementById('hostname-display');
+    const name = lastKnownHostname || '—';
+
+    if (display) {
+        if (isConnectionActive) {
+            display.textContent = name;
+            display.classList.remove('disconnected');
+        } else {
+            display.textContent = `[${name}] - disconnected`;
+            display.classList.add('disconnected');
+        }
+        display.title = display.textContent;
+    }
+
+    updateDocumentTitle();
+}
+
+/**
+ * Update browser tab title with hostname and connection state
+ */
+function updateDocumentTitle() {
+    const name = lastKnownHostname || '—';
+    if (isConnectionActive) {
+        document.title = `${name} | ESS Control`;
+    } else {
+        document.title = `${name} | ESS Control (disconnected)`;
+    }
+}
+
+/**
+ * Initialize hostname display from system/hostname datapoint
+ */
+function initHostnameDisplay() {
+    const display = document.getElementById('hostname-display');
+    if (!display) return;
+
+    dpManager.subscribe('system/hostname', (data) => {
+        const raw = data.value ?? data.data ?? '';
+        if (raw) lastKnownHostname = formatHostname(String(raw));
+        updateHostnameDisplay();
+    });
+
+    updateHostnameDisplay();
+    log('Hostname display initialized', 'info');
+}
+
+/**
+ * Parse powermon/charging datapoint value
+ */
+function parseBatteryCharging(raw) {
+    const value = String(raw ?? '').toLowerCase();
+    return value === '1' || value === 'true';
+}
+
+/**
+ * Parse numeric powermon datapoint value
+ */
+function parseBatteryMetric(raw) {
+    const parsed = parseFloat(raw);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Build battery tooltip with charge state and power metrics
+ */
+function formatBatteryTooltip() {
+    const parts = [];
+
+    if (batteryPct != null) {
+        const pct = Math.round(Math.max(0, Math.min(100, batteryPct)));
+        parts.push(batteryCharging ? `${pct}% (charging)` : `${pct}%`);
+    } else if (batteryCharging) {
+        parts.push('(charging)');
+    }
+
+    if (batteryHrsRemaining != null) {
+        parts.push(`${batteryHrsRemaining.toFixed(1)} hrs remaining`);
+    }
+
+    const metrics = [];
+    if (batteryV != null) metrics.push(`${batteryV.toFixed(1)} V`);
+    if (batteryA != null) metrics.push(`${batteryA.toFixed(2)} A`);
+    if (batteryW != null) metrics.push(`${batteryW.toFixed(2)} W`);
+    if (metrics.length) parts.push(metrics.join(' · '));
+
+    return parts.join(' · ') || '';
+}
+
+/**
+ * Update battery indicator display
+ */
+function updateBatteryDisplay() {
+    const container = document.getElementById('battery-status');
+    if (!container) return;
+
+    if (batteryPct == null && batteryCharging == null) {
+        container.hidden = true;
+        return;
+    }
+
+    container.hidden = false;
+
+    const pct = batteryPct != null ? Math.max(0, Math.min(100, batteryPct)) : 0;
+    container.style.setProperty('--battery-pct', pct);
+    container.classList.toggle('charging', !!batteryCharging);
+    container.classList.toggle('low', pct <= 20 && !batteryCharging);
+    container.classList.toggle('critical', pct <= 10 && !batteryCharging);
+
+    container.title = formatBatteryTooltip();
+}
+
+/**
+ * Initialize battery indicator from powermon datapoints
+ */
+function initBatteryIndicator() {
+    const container = document.getElementById('battery-status');
+    if (!container) return;
+
+    dpManager.subscribe('powermon/pct', (data) => {
+        const raw = data.value ?? data.data;
+        const parsed = parseFloat(raw);
+        if (!Number.isNaN(parsed)) {
+            batteryPct = parsed;
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    dpManager.subscribe('powermon/charging', (data) => {
+        const raw = data.value ?? data.data;
+        if (raw !== '' && raw != null) {
+            batteryCharging = parseBatteryCharging(raw);
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    dpManager.subscribe('powermon/hrs_remaining', (data) => {
+        const parsed = parseBatteryMetric(data.value ?? data.data);
+        if (parsed != null) {
+            batteryHrsRemaining = parsed;
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    dpManager.subscribe('powermon/v', (data) => {
+        const parsed = parseBatteryMetric(data.value ?? data.data);
+        if (parsed != null) {
+            batteryV = parsed;
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    dpManager.subscribe('powermon/a', (data) => {
+        const parsed = parseBatteryMetric(data.value ?? data.data);
+        if (parsed != null) {
+            batteryA = parsed;
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    dpManager.subscribe('powermon/w', (data) => {
+        const parsed = parseBatteryMetric(data.value ?? data.data);
+        if (parsed != null) {
+            batteryW = parsed;
+            hasBatteryData = true;
+        }
+        updateBatteryDisplay();
+    });
+
+    updateBatteryDisplay();
+    log('Battery indicator initialized', 'info');
+}
+
+/**
+ * Parse juicer juice_level string for low sensor state
+ */
+function isJuiceLevelLow(level) {
+    const value = String(level ?? '').trim();
+    if (!value) return false;
+    return value.startsWith('<') || value.includes('<50');
+}
+
+/**
+ * Estimate remaining juice from device cumulative reward_mls
+ */
+function getJuiceRemainingMl() {
+    if (juiceRewardMls == null) return null;
+    return Math.max(0, BOTTLE_CAPACITY_ML - juiceRewardMls);
+}
+
+/**
+ * Remaining volume for display; sensor low wins over inflated estimate
+ */
+function getJuiceDisplayRemainingMl() {
+    const inferred = getJuiceRemainingMl();
+    const sensorLow = isJuiceLevelLow(juiceLevel);
+
+    if (sensorLow && inferred != null && inferred >= JUICE_LOW_THRESHOLD_ML) {
+        return JUICE_LOW_THRESHOLD_ML - 1;
+    }
+    if (sensorLow && inferred == null) {
+        return JUICE_LOW_THRESHOLD_ML - 1;
+    }
+    return inferred;
+}
+
+/**
+ * Build juice indicator tooltip
+ */
+function formatJuiceTooltip() {
+    const inferred = getJuiceRemainingMl();
+    const displayRemainingMl = getJuiceDisplayRemainingMl();
+    const parts = [];
+
+    if (displayRemainingMl != null) {
+        parts.push(`Juice: ${Math.round(displayRemainingMl)} mL remaining`);
+    } else {
+        parts.push('Juice');
+    }
+
+    if (juiceLevel) parts.push(`${juiceLevel} sensor`);
+    if (juiceRewardNumber != null) parts.push(`${juiceRewardNumber} rewards`);
+    if (juiceRewardMls != null) {
+        parts.push(`${juiceRewardMls.toFixed(1)} mL dispensed`);
+    }
+    if (isJuiceLevelLow(juiceLevel) && inferred != null && inferred >= JUICE_LOW_THRESHOLD_ML) {
+        parts.push('low sensor overrides estimate');
+    }
+
+    return parts.join(' · ');
+}
+
+/**
+ * Update juice bottle indicator display
+ */
+function updateJuiceDisplay() {
+    const container = document.getElementById('juice-status');
+    if (!container) return;
+
+    if (!hasJuiceData) {
+        container.hidden = true;
+        return;
+    }
+
+    container.hidden = false;
+
+    const displayRemainingMl = getJuiceDisplayRemainingMl();
+    const pct = displayRemainingMl != null
+        ? Math.max(0, Math.min(100, (displayRemainingMl / BOTTLE_CAPACITY_ML) * 100))
+        : (isJuiceLevelLow(juiceLevel) ? 10 : 100);
+
+    container.style.setProperty('--juice-pct', pct);
+
+    const isLow = isJuiceLevelLow(juiceLevel)
+        || (displayRemainingMl != null && displayRemainingMl < JUICE_LOW_THRESHOLD_ML);
+    container.classList.toggle('low', isLow);
+
+    container.title = formatJuiceTooltip();
+}
+
+/**
+ * Initialize juice indicator from juicer datapoints
+ */
+function initJuiceIndicator() {
+    const container = document.getElementById('juice-status');
+    if (!container) return;
+
+    dpManager.subscribe('juicer/juice_level', (data) => {
+        const raw = data.value ?? data.data;
+        if (raw !== '' && raw != null) {
+            juiceLevel = String(raw);
+            hasJuiceData = true;
+        }
+        updateJuiceDisplay();
+    });
+
+    dpManager.subscribe('juicer/reward_mls', (data) => {
+        const parsed = parseFloat(data.value ?? data.data);
+        if (!Number.isNaN(parsed)) {
+            juiceRewardMls = parsed;
+            hasJuiceData = true;
+        }
+        updateJuiceDisplay();
+    });
+
+    dpManager.subscribe('juicer/reward_number', (data) => {
+        const parsed = parseInt(data.value ?? data.data, 10);
+        if (!Number.isNaN(parsed)) {
+            juiceRewardNumber = parsed;
+            hasJuiceData = true;
+        }
+        updateJuiceDisplay();
+    });
+
+    updateJuiceDisplay();
+    log('Juice indicator initialized', 'info');
+}
+
+/**
  * Store obs_id for display
  */
 function updatePerformanceValue(key, value) {
@@ -313,6 +648,9 @@ function handleConnectionStatus(status, message) {
             statusText.textContent = message || 'Disconnected';
             break;
     }
+
+    isConnectionActive = (status === 'connected');
+    updateHostnameDisplay();
 }
 
 /**

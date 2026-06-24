@@ -1,8 +1,8 @@
 # interacts with power monitor module
 # deals entirely in json requests and responses
-# example get: {"get": ["v", "a", "w", "pct", "charging"]}
+# example get: {"get": ["v", "a", "w", "pct", "charging", "hrs_remaining"]}
 # example set: {"set": {"min_v": 21.0, "max_v": 32.2}}
-# example response {"v": 28.523, "a": 0.1234, "w": 3.5123, "pct": 67.12, "charging": true}
+# example response {"v": 28.523, "a": 0.1234, "w": 3.5123, "pct": 67.12, "charging": true, "hrs_remaining": 9.7}
 # or manually from essctrl: send powermon get_vals pct charging
 # or send powermon set_vals min_v 21.0 max_v 32.2
 
@@ -14,7 +14,7 @@ tcl::tm::add $dspath/lib
 errormon enable
 
 set interval_ms 10000; # update powermon readings every 10 seconds
-set poll_fields {v a w pct charging}
+set poll_fields {v a w pct charging hrs_remaining}
 set device ""
 set timer_prefix powermonTimer
 

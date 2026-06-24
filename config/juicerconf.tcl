@@ -51,6 +51,8 @@ errormon enable
 #  *      - Retrieves the total amount of reward dispensed in milliliters.
 #  *    - {"get": ["reward_number"]}
 #  *      - Retrieves the total number of rewards dispensed.
+#  *    - {"get": ["juice_level"]}
+#  *      - Retrieves the current juice reservoir level (e.g. ">50mLs" or "<50mLs").
 #  *    - {"get": ["pump_voltage"]}
 #  *      - Retrieves the current voltage supplied to the pump
 #  *    - {"get": ["voltage_mult"]}
@@ -71,6 +73,32 @@ errormon enable
 #  *    }
 #  */
 
+
+set ::juicer_status_fields {juice_level reward_mls reward_number}
+
+proc publish_juicer_fields {parsed {keys ""}} {
+    if {$keys eq ""} {
+	set keys $::juicer_status_fields
+    }
+    foreach key $keys {
+	if {![dict exists $parsed $key]} {
+	    continue
+	}
+	set value [dict get $parsed $key]
+	dservSet juicer/${key} $value
+    }
+}
+
+proc publish_juicer_response {response} {
+    if {$response eq ""} {
+	return
+    }
+    if {[catch {
+	publish_juicer_fields [::yajl::json2dict $response]
+    } err]} {
+	puts stderr "Juicer publish error: $err"
+    }
+}
 
 # load juicer module
 set ess_modules "juicer"
@@ -154,9 +182,17 @@ oo::class create Juicer {
 	return [my do_cmd $cmd]
     }
 
-    method reward { v } {
+    method reward { v {get_fields ""} } {
+	if {$get_fields eq ""} {
+	    set get_fields $::juicer_status_fields
+	}
 	set o [yajl create #auto]
-	$o map_open map_key do map_open map_key reward double $v map_close map_close
+	$o map_open
+	$o map_key do map_open map_key reward double $v map_close
+	$o map_key get array_open
+	foreach f $get_fields { $o string $f }
+	$o array_close
+	$o map_close
 	set cmd [$o get]
 	$o delete
 	return [my do_cmd $cmd]
@@ -222,7 +258,7 @@ proc reward { ml } {
 	# currently assume only a single juicer is configured
 	juicerJuiceAmount 0 $ml
     } else {
-	$::juicer reward $ml
+	catch { publish_juicer_response [$::juicer reward $ml] }
     }
     # Notify db subprocesses to accumulate juice in session table
     catch { send db "session_add_juice $ml" }
