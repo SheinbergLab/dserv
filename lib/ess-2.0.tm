@@ -1650,18 +1650,36 @@ namespace eval ess {
 
     proc evt_put {type subtype time args} {
         variable current
+        set ss $current(state_system)
+        # Hot path is a single dict lookup per field (same as a bare dict get);
+        # the descriptive errors are only assembled on an actual miss. Subtype
+        # ids are always integers, so {} is a safe "missing" sentinel (a real
+        # subtype value of 0 is returned as 0, not {}).
         if {[string is int $type]} {
             set type_id $type
         } else {
-            set type_id [dict get [set $current(state_system)::_evt_type_ids] $type]
+            set type_id [dict getdef [set ${ss}::_evt_type_ids] $type {}]
+            if {$type_id eq {}} {
+                error "evt_put: unknown event type \"$type\".\
+                       Valid types: [lsort [dict keys [set ${ss}::_evt_type_ids]]]"
+            }
         }
         if {[string is int $subtype]} {
             set subtype_id $subtype
         } else {
-            set subtype_id [dict get [set $current(state_system)::_evt_subtype_ids] \
-                $type $subtype]
+            set subtype_id [dict getdef [set ${ss}::_evt_subtype_ids] $type $subtype {}]
+            if {$subtype_id eq {}} {
+                if {[dict exists [set ${ss}::_evt_subtype_ids] $type]} {
+                    error "evt_put: unknown subtype \"$subtype\" for event type\
+                           \"$type\". Valid subtypes:\
+                           [lsort [dict keys [dict get [set ${ss}::_evt_subtype_ids] $type]]]"
+                } else {
+                    error "evt_put: event type \"$type\" has no named subtypes;\
+                           pass an integer subtype (e.g. 0)"
+                }
+            }
         }
-        set ptype [dict get [set $current(state_system)::_evt_ptype_ids] $type]
+        set ptype [dict get [set ${ss}::_evt_ptype_ids] $type]
         evtPut $type_id $subtype_id $time $ptype {*}$args
     }
 
