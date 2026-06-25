@@ -5971,6 +5971,15 @@ namespace eval ess {
     set subtypes [dict create OFF 0 ON 1]
     dict set evt_info RESPWIN [list 53 {Response Window} long $subtypes]
 
+    # COHERENCE: a step change in the (motion-defined) target's internal motion
+    # coherence DURING a trial -- DROP to a reduced level, RISE back toward the
+    # peak. The float param carries the post-transition target coherence (0..1).
+    # Distinct from STIMULUS (present/absent) and TARGET (motion onset): this
+    # marks a change in strength of the ONGOING stimulus -- the zero-point for
+    # analyzing pursuit dynamics across a coherence transition.
+    set subtypes [dict create DROP 0 RISE 1]
+    dict set evt_info COHERENCE [list 54 {Coherence Change} float $subtypes]
+
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
     dict set evt_info SACCADE_INFO [list 130 {Saccade Data} float]
