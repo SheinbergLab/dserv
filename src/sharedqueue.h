@@ -12,7 +12,7 @@ public:
   SharedQueue();
   ~SharedQueue();
   
-  T& front();
+  T front();
   void pop_front();
   
   void push_back(const T& item);
@@ -34,16 +34,15 @@ template <typename T>
 SharedQueue<T>::~SharedQueue(){}
 
 template <typename T>
-T& SharedQueue<T>::front()
+T SharedQueue<T>::front()
 {
   std::unique_lock<std::mutex> mlock(mutex_);
   while (queue_.empty())
     {
       cond_.wait(mlock);
     }
-  T& val = queue_.front();
-  mlock.unlock();     // unlock before notificiation to minimize mutex con
-  return val;
+  // Return a COPY made while the lock is held.
+  return queue_.front();
 }
 
 template <typename T>
