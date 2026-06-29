@@ -1,0 +1,62 @@
+name: Publish release
+
+# The two platform release workflows build their assets into a PRERELEASE, so a
+# freshly-tagged build is never returned by the GitHub /releases/latest API
+# while artifacts are still uploading (notarization, multi-arch debs, etc.).
+#
+# This workflow flips that prerelease into a full, "latest" release -- the thing
+# self-updating rigs key off of -- but ONLY once BOTH platform workflows have
+# completed successfully for the tag's commit. It fires whenever either platform
+# workflow finishes; the run that fires when the *other* platform is already
+# green is the one that actually publishes. The earlier run sees the sibling
+# still in flight and exits without publishing. Re-publishing an already-public
+# release is a harmless no-op, so this is safe to fire repeatedly.
+
+on:
+  workflow_run:
+    workflows: ["Release for macOS", "Release for Linux"]
+    types: [completed]
+
+permissions:
+  contents: write   # edit the release
+  actions: read      # query sibling workflow run status
+
+jobs:
+  publish:
+    # A failed platform build must never trigger a publish.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      # For a tag push, head_branch is the tag name (e.g. v1.2.3).
+      TAG: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - name: Publish the release once every platform build has succeeded
+        run: |
+          set -euo pipefail
+
+          # Only act on tag builds (ignore branch-triggered runs, if any).
+          if ! gh api "/repos/$REPO/git/refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::notice::'$TAG' is not a tag ref -- nothing to publish."
+            exit 0
+          fi
+
+          # Every platform workflow must have a successful run at this commit.
+          runs=$(gh api "/repos/$REPO/actions/runs?head_sha=$SHA&event=push&per_page=100")
+          all_ok=true
+          for wf in "Release for macOS" "Release for Linux"; do
+            concl=$(echo "$runs" | jq -r --arg n "$wf" \
+              '[.workflow_runs[] | select(.name==$n)] | sort_by(.run_started_at) | last | .conclusion // "missing"')
+            echo "$wf => $concl"
+            [ "$concl" = "success" ] || all_ok=false
+          done
+
+          if [ "$all_ok" != "true" ]; then
+            echo "::notice::Not all platform workflows are green yet -- the last one to finish will publish."
+            exit 0
+          fi
+
+          echo "All platform builds succeeded -- publishing '$TAG' as the latest release."
+          gh release edit "$TAG" --repo "$REPO" --prerelease=false --latest

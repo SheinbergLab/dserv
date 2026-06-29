@@ -58,6 +58,13 @@ jobs:
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
+          # Build into a prerelease so the tag is never returned by
+          # /releases/latest while artifacts are still uploading. The publish
+          # workflow flips this to a full release once all platforms succeed.
+          # omitPrereleaseDuringUpdate keeps re-runs from reverting a published
+          # release back to prerelease.
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
 
   release-dserv-agent:
 
@@ -96,6 +103,8 @@ jobs:
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
 
   release-dservctl:
 
@@ -134,6 +143,8 @@ jobs:
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
 
   release-camera:
 
@@ -267,6 +278,8 @@ jobs:
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
 
   release-essgui:
 
@@ -351,6 +364,8 @@ jobs:
           body: dserv version ${{ github.ref_name }}
           generateReleaseNotes: true
           allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
 
   check-dserv:
 
