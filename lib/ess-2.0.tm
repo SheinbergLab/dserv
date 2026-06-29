@@ -6,6 +6,7 @@ package require yajltcl
 package require tcljson
 package require dslog
 package require ess_paths
+package require qpcs 3.41 ;# stim-event sync transport: evtPack/evtUnpack/dsSocketSendBytes
 
 catch {System destroy}
 
@@ -344,7 +345,7 @@ oo::class create System {
 
         set rmtcmd {
             # connect to data server receive stimdg updates
-            package require qpcs
+            package require qpcs 3.41
 
             # Clean slate on every system/protocol load: a prior system may
             # have left dispatch callbacks (::dsCmds), cached values (::dsVals),
@@ -389,6 +390,18 @@ oo::class create System {
             proc dserv_send { varname dl } {
                 if { [info exists ::dserv_return_sock] } {
                     qpcs::dsSocketSendBinary $::dserv_return_sock $varname $dl
+                }
+            }
+
+            # Event-bearing send: prepend a sync header {SwapCount StimTicksF},
+            # read live, ahead of an optional float value list, as one
+            # DSERV_BYTE blob (ESS reconstructs the event time from these; see
+            # qpcs::evtPack and ::ess::stim_evt_put). CALL FROM A ThisFrameScript
+            # so the globals reflect the just-flipped frame.
+            proc dserv_send_evt { varname {vals {}} } {
+                if { [info exists ::dserv_return_sock] } {
+                    qpcs::dsSocketSendBytes $::dserv_return_sock $varname \
+                        [qpcs::evtPack $::SwapCount $::StimTicksF $vals]
                 }
             }
 
@@ -1782,6 +1795,56 @@ namespace eval ess {
         }
         set ptype [dict get [set ${ss}::_evt_ptype_ids] $type]
         evtPut $type_id $subtype_id $time $ptype {*}$args
+    }
+
+    # ----------------------------------------------------------------------
+    # Stim-event sync (stim2 -> dserv).
+    #
+    # A remote stim2 pushes timed markers via dserv_send_evt (see the
+    # configure_stim block), prepending a sync header {SwapCount StimTicksF}
+    # captured at the buffer flip. These helpers reconstruct each marker's
+    # dserv-clock time from a per-trial anchor and mint the corresponding
+    # event, so stim-sourced events sit on the same timeline as locally
+    # generated ones. The wire format lives in qpcs (evtPack/evtUnpack).
+    #
+    # Anchor: set once per trial from the stimulus-onset marker (e.g. the
+    # motion-onset TARGET ON) -- ties the stim clock origin (swap0/ticksF0) to
+    # a dserv time (t0). Until set, markers fall back to their raw dserv
+    # receipt time. Relative timing BETWEEN markers is independent of the
+    # anchor (the StimTicksF deltas are exact); the anchor only fixes absolute
+    # placement on the dserv timeline and the drop-check baseline.
+    # ----------------------------------------------------------------------
+    variable stim_evt_anchor {}
+
+    # Set the per-trial anchor from a marker's sync header. `data` is the blob
+    # delivered to the dpoint callback; t0 is that marker's dserv receipt time.
+    proc stim_evt_set_anchor { name data } {
+        variable stim_evt_anchor
+        lassign [qpcs::evtUnpack $data] swap ticksF
+        set stim_evt_anchor [list [dservTimestamp $name] $swap $ticksF]
+    }
+
+    proc stim_evt_reset_anchor {} {
+        variable stim_evt_anchor
+        set stim_evt_anchor {}
+    }
+
+    # Reconstruct a marker's dserv-clock time (us) from its sync header.
+    # StimTicksF is ms; dserv timestamps are us, hence the *1000.
+    proc stim_evt_time { name swap ticksF } {
+        variable stim_evt_anchor
+        if { [llength $stim_evt_anchor] == 0 } {
+            return [dservTimestamp $name]
+        }
+        lassign $stim_evt_anchor t0 swap0 ticksF0
+        return [expr {wide($t0) + round(1000.0 * ($ticksF - $ticksF0))}]
+    }
+
+    # Mint a stim-sourced event on the dserv clock at its reconstructed time.
+    # `data` is the blob from dserv_send_evt; extra args become event params.
+    proc stim_evt_put { type subtype name data args } {
+        lassign [qpcs::evtUnpack $data] swap ticksF
+        evt_put $type $subtype [stim_evt_time $name $swap $ticksF] {*}$args
     }
 
     # ----------------------------------------------------------------------
@@ -5971,16 +6034,20 @@ namespace eval ess {
     set subtypes [dict create OFF 0 ON 1]
     dict set evt_info RESPWIN [list 53 {Response Window} long $subtypes]
 
-    # COHERENCE: a landmark in the (motion-defined) target's internal motion
-    # coherence DURING a trial. Two symmetric pairs of subtypes: directional
-    # threshold crossings (RISE = strengthening, FALL = weakening) and extrema
-    # (PEAK / TROUGH). The float param carries the coherence value at the
-    # landmark (the threshold for RISE/FALL; the extreme value for PEAK/TROUGH).
-    # Distinct from STIMULUS (present/absent) and TARGET (motion onset): these
-    # mark changes in strength of the ONGOING stimulus -- the zero-points for
-    # analyzing pursuit dynamics across a coherence transition.
+    # STIMULUS_CHANGE: a landmark in a continuously-modulated stimulus dimension
+    # DURING a trial -- chiefly a marker for verification and sync checking
+    # against the realized (actual) stimulus. Two symmetric pairs of subtypes:
+    # directional threshold crossings (RISE = strengthening, FALL = weakening)
+    # and extrema (PEAK / TROUGH). The float param carries the dimension's value
+    # at the landmark (the threshold for RISE/FALL; the extreme value for
+    # PEAK/TROUGH). WHICH dimension is modulated (coherence, contrast, speed, ...)
+    # is a design fact that lives in stimdg, linked via STIMTYPE; the event itself
+    # records only the actual realized landmark. Distinct from STIMULUS
+    # (present/absent) and TARGET (motion onset): these mark changes in the
+    # strength of an ONGOING stimulus -- the zero-points for analyzing dynamics
+    # across a transition.
     set subtypes [dict create FALL 0 RISE 1 PEAK 2 TROUGH 3]
-    dict set evt_info COHERENCE [list 54 {Coherence Change} float $subtypes]
+    dict set evt_info STIMULUS_CHANGE [list 54 {Stimulus Change} float $subtypes]
 
     dict set evt_info TARGNAME [list 128 {Target Name} string]
     dict set evt_info SCENENAME [list 129 {Scene Name} string]
