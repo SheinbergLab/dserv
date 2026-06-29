@@ -244,7 +244,9 @@ void* timerWorkerThread(void *arg) {
         dserv_timer_reset(t);
       }
     } else if (s == -1) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      if (errno == EINTR) {
+        continue;               // interrupted by a signal -> just retry the read
+      } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
         usleep(1000);
       } else {
         perror("timerfd read error");
@@ -297,8 +299,11 @@ int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
       return -1;
     }
     
-    // Store in global array for signal handler access
-    g_signal_timers[id] = t;
+    // Store in global array (defensive bound: this array is a fixed size 8,
+    // independent of ntimers). NB the signal handler resolves the timer via
+    // si_value.sival_ptr, so this array is currently vestigial.
+    if (id >= 0 && id < (int)(sizeof(g_signal_timers)/sizeof(g_signal_timers[0])))
+      g_signal_timers[id] = t;
     t->is_armed = 0;
   } else {
     // Initialize timerfd-based timer
@@ -404,6 +409,26 @@ void dserv_timer_fire(dserv_timer_t *t)
 
 #endif
 
+/*
+ * Read a millisecond duration as an integer, accepting a float and rounding
+ * to the nearest ms. Timing values are routinely computed in floating point
+ * (data-group columns, expr division), and a strict integer-only parse turns
+ * e.g. "500.0" into a runtime error that aborts the calling action mid-way --
+ * leaving the timer unarmed while the state machine carries on. Rounding a
+ * numeric duration is harmless (sub-ms precision is meaningless to these
+ * timers); genuinely non-numeric input still errors via Tcl_GetDoubleFromObj.
+ */
+static int timer_get_ms (Tcl_Interp *interp, Tcl_Obj *obj, int *ms)
+{
+  if (Tcl_GetIntFromObj(NULL, obj, ms) == TCL_OK)
+    return TCL_OK;
+  double d;
+  if (Tcl_GetDoubleFromObj(interp, obj, &d) != TCL_OK)
+    return TCL_ERROR;
+  *ms = (int) (d < 0 ? d - 0.5 : d + 0.5);
+  return TCL_OK;
+}
+
 static int timer_tick_command (ClientData data, Tcl_Interp *interp,
                                int objc, Tcl_Obj *objv[])
 {
@@ -417,17 +442,17 @@ static int timer_tick_command (ClientData data, Tcl_Interp *interp,
   }
 
   if (objc == 2) {
-    if (Tcl_GetIntFromObj(interp, objv[1], &ms) != TCL_OK)
+    if (timer_get_ms(interp, objv[1], &ms) != TCL_OK)
       return TCL_ERROR;
   }
   else {
     if (Tcl_GetIntFromObj(interp, objv[1], &timerid) != TCL_OK)
       return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[2], &ms) != TCL_OK)
+    if (timer_get_ms(interp, objv[2], &ms) != TCL_OK)
       return TCL_ERROR;
   }
 
-  if (timerid > info->ntimers) {
+  if (timerid < 0 || timerid >= info->ntimers) {
     Tcl_AppendResult(interp,
                      Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
@@ -452,21 +477,21 @@ static int timer_tick_interval_command (ClientData data, Tcl_Interp *interp,
   }
 
   if (objc == 3) {
-    if (Tcl_GetIntFromObj(interp, objv[1], &start_ms) != TCL_OK)
+    if (timer_get_ms(interp, objv[1], &start_ms) != TCL_OK)
       return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[2], &interval_ms) != TCL_OK)
+    if (timer_get_ms(interp, objv[2], &interval_ms) != TCL_OK)
       return TCL_ERROR;
   }
   else {
     if (Tcl_GetIntFromObj(interp, objv[1], &timerid) != TCL_OK)
       return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[2], &start_ms) != TCL_OK)
+    if (timer_get_ms(interp, objv[2], &start_ms) != TCL_OK)
       return TCL_ERROR;
-    if (Tcl_GetIntFromObj(interp, objv[3], &interval_ms) != TCL_OK)
+    if (timer_get_ms(interp, objv[3], &interval_ms) != TCL_OK)
       return TCL_ERROR;
   }
   
-  if (timerid > info->ntimers) {
+  if (timerid < 0 || timerid >= info->ntimers) {
     Tcl_AppendResult(interp,
                      Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
@@ -488,7 +513,7 @@ static int timer_expired_command (ClientData data, Tcl_Interp *interp,
     if (Tcl_GetIntFromObj(interp, objv[1], &timerid) != TCL_OK)
       return TCL_ERROR;
   }
-  if (timerid > info->ntimers) {
+  if (timerid < 0 || timerid >= info->ntimers) {
     Tcl_AppendResult(interp,
                      Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
@@ -515,7 +540,7 @@ static int timer_stop_command (ClientData data, Tcl_Interp *interp,
       return TCL_ERROR;
   }
   
-  if (timerid > info->ntimers) {
+  if (timerid < 0 || timerid >= info->ntimers) {
     Tcl_AppendResult(interp,
                      Tcl_GetString(objv[0]), ": invalid timer", NULL);
     return TCL_ERROR;
