@@ -2042,6 +2042,19 @@ namespace eval ess {
         dservLoggerAddMatch $filename eventlog/names
         dservLoggerAddMatch $filename stimdg
 
+        # Screen geometry + timing. These are dservSet once at configure (before
+        # the file opens), so add the match and dservTouch each to re-emit its
+        # current value into THIS file -- offline tools (e.g. the sync audit)
+        # can then read the actual refresh / frame_duration instead of deriving
+        # it, and reconstruct dva geometry.
+        foreach _sp {screen_refresh_rate screen_frame_duration \
+                     screen_halfx screen_halfy screen_w screen_h} {
+            if {[dservExists ess/$_sp]} {
+                dservLoggerAddMatch $filename ess/$_sp
+                dservTouch ess/$_sp
+            }
+        }
+
         variable em_active
         if {$em_active} {
             # record raw em data: obs_limited, 80 byte buffer, every sample
