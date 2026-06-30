@@ -3330,10 +3330,13 @@ namespace eval ess {
 	set buttons(state,$chan) 0
 	dservSet ess/button/$chan 0
 
-	# parse options with defaults
+	# parse options with defaults. $args is the flat option dict (e.g.
+	# "joystick 4" or "debounce_us 5000 pull PULL_DOWN"); pass it AS a dict.
+	# {*}$args would expand it into separate words, so dict merge would see
+	# "joystick"/"4" as two dicts -> "missing value to go with key".
 	set opts [dict merge \
 		      {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
-		      {*}$args]
+		      $args]
 
 	if {[dict exists $opts joystick]} {
 	    # bind this channel to a joystick direction value
