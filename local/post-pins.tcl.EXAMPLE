@@ -46,3 +46,44 @@ switch $board_type {
 
 # if joystick has a button, add line for that
 #dservSet joystick/button_line 25
+
+
+#
+# --- external I/O box (extio) --------------------------------------------
+#
+# A remote WIZnet I/O box publishes its inputs as extio/<device>/state/di/<pin>
+# (already stamped on the dserv clock) and takes outputs as extio/<device>/cmd/*.
+# This is how a host with no local GPIO (or an extra rig position) gets buttons
+# and pulsed outputs over Ethernet.
+#
+# 1) Configure the DI pin ON THE BOX (USB CLI, or push as config datapoints).
+#    active_low makes it publish a LOGICAL level (pressed = 1), matching the
+#    local ACTIVE_LOW convention, so ess needs no inversion:
+#
+#      # over the box USB CLI:
+#      #   pin 14 mode in_pullup   ;# button wired to GND
+#      #   pin 14 active_low 1     ;# pressed -> 1
+#      #   pin 14 debounce 25      ;# ms
+#      #   save
+#      # or push the same from dserv:
+#      #dservSet extio/office/config/pin/14/mode in_pullup
+#      #dservSet extio/office/config/pin/14/active_low 1
+#      #dservSet extio/office/config/pin/14/debounce_ms 25
+#      #dservSet extio/office/cmd/save 1
+#
+# 2) Bind logical button channels to box lines here with button_bind. This
+#    OVERRIDES whatever a protocol later passes to button_init, so no protocol
+#    edits are needed -- the protocol still just reads ess/button/<chan>:
+#
+#      #ess::button_bind 0 {} box {office 14}   ;# ess/button/0 <- extio/office/state/di/14
+#      #ess::button_bind 1 {} box {office 13}   ;# ess/button/1 <- extio/office/state/di/13
+#
+#    (button_bind takes the same form as button_init after the channel number;
+#     `{} box {dev pin}` for a box, a bare pin for local GPIO, `{} joystick N`
+#     for a joystick direction. Bindings persist across protocol/system loads.)
+#
+# 3) Box outputs are driven by setting cmd datapoints (level or box-timed pulse):
+#
+#      #dservSet extio/office/cmd/do/5 1               ;# drive pin 5 high
+#      #dservSet extio/office/cmd/do/5/pulse_us 5000   ;# 5 ms box-timed pulse
+#
