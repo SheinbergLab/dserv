@@ -194,12 +194,13 @@ static int run_cli(void)
 {
     persist_load();
     printf("pico box CLI (bootstrap/recovery). type 'help'. ctrl-D to exit.\n");
-    char line[128], out[256];
+    char line[128], out[256]; gpio_cmd_t cmd;
     while (fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\r\n")] = '\0';
-        cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out);
+        cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out, &cmd);
         fputs(out, stdout);
-        if (act == CLI_SAVE)    persist_save();
+        if (act == CLI_GPIO)    sim_gpio_exec(&cmd);
+        else if (act == CLI_SAVE) persist_save();
         else if (act == CLI_FACTORY) { memset(&g_cfg, 0, sizeof g_cfg); remove(CFG_FILE);
                                        printf("  [factory] storage erased\n"); }
         else if (act == CLI_REBOOT)  { printf("  [reboot] (sim exits)\n"); break; }

@@ -23,7 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_SAVE, CLI_FACTORY, CLI_REBOOT } cli_action_t;
+typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT } cli_action_t;
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
@@ -41,15 +41,28 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
                           i, dserv_mode_str(c->pin_mode[i]), c->do_pulse_us[i], c->debounce_ms[i]);
 }
 
-/* Execute one line. Returns an action; fills `out` with a response line. */
+/* Execute one line. Returns an action; fills `out` with a response line.
+ * `cmd` (may be NULL) receives a GPIO command for the `do` verbs (CLI_GPIO). */
 static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
-                                         char *out, int outsz)
+                                         char *out, int outsz, gpio_cmd_t *cmd)
 {
     int n, v; char w[24];
+    if (cmd) cmd->op = GPIO_OP_NONE;
 
     /* skip leading spaces; ignore blank lines */
     while (*line == ' ' || *line == '\t') line++;
     if (*line == '\0') { out[0] = '\0'; return CLI_OK; }
+
+    if (sscanf(line, "do %d pulse %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NPINS || v < 0) { snprintf(out, outsz, "ERR bad do/pulse\r\n"); return CLI_ERR; }
+        if (cmd) { cmd->op = GPIO_OP_PULSE; cmd->pin = (uint8_t) n; cmd->value = (uint32_t) v; }
+        snprintf(out, outsz, "OK do%d pulse=%dus\r\n", n, v); return CLI_GPIO;
+    }
+    if (sscanf(line, "do %d %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR bad do pin\r\n"); return CLI_ERR; }
+        if (cmd) { cmd->op = GPIO_OP_SET; cmd->pin = (uint8_t) n; cmd->value = v ? 1 : 0; }
+        snprintf(out, outsz, "OK do%d=%d\r\n", n, v ? 1 : 0); return CLI_GPIO;
+    }
 
     if (sscanf(line, "name %15s", w) == 1) {
         strncpy(c->name, w, sizeof c->name - 1); c->name[sizeof c->name - 1] = '\0';
@@ -92,7 +105,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         snprintf(out, outsz,
             "cmds: show | name NAME | net ip A.B.C.D | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
-            "      save | factory | reboot\r\n");
+            "      do N 0|1 | do N pulse US | save | factory | reboot\r\n");
         return CLI_OK;
     }
     snprintf(out, outsz, "ERR unknown (try 'help')\r\n");

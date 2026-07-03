@@ -93,7 +93,7 @@ static inline int box_net_server_poll(uint16_t port, uint8_t *buf, int max)
         listen(BOX_NET_SN);
         break;
     case SOCK_CLOSED:
-        socket(BOX_NET_SN, Sn_MR_TCP4, port, SOCK_IO_NONBLOCK);
+        socket(BOX_NET_SN, Sn_MR_TCP4 | SF_TCP_NODELAY, port, SOCK_IO_NONBLOCK);  /* no delayed-ACK */
         break;
     default:
         break;
@@ -124,7 +124,7 @@ static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
     }
     case SOCK_CLOSED:
         bn_cli_ka = 0;
-        socket(BOX_NET_CLI_SN, Sn_MR_TCP4, 50000 + BOX_NET_CLI_SN, SOCK_IO_NONBLOCK);
+        socket(BOX_NET_CLI_SN, Sn_MR_TCP4 | SF_TCP_NODELAY, 50000 + BOX_NET_CLI_SN, SOCK_IO_NONBLOCK);
         return 0;
     default:
         return 0;
@@ -159,7 +159,7 @@ static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
     long i;
 
     disconnect(sn); close(sn);
-    if (socket(sn, Sn_MR_TCP4, 55000, SOCK_IO_NONBLOCK) != sn) return -1;
+    if (socket(sn, Sn_MR_TCP4 | SF_TCP_NODELAY, 55000, SOCK_IO_NONBLOCK) != sn) return -1;
     connect(sn, d, port, 4);                        /* non-blocking: poll below */
 
     for (i = 0; i < 300000; i++) {                  /* bounded wait: ESTABLISHED */

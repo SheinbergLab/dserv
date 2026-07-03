@@ -118,10 +118,11 @@ static void cli_service(void)
     if (ch == '\r' || ch == '\n') {
         putchar('\n');
         line[len] = '\0'; len = 0;
-        char out[256];
-        cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out);
+        char out[256]; gpio_cmd_t cmd;
+        cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out, &cmd);
         fputs(out, stdout);
-        if (act == CLI_SAVE)         printf("flash %s\n", flash_store_save(&g_cfg) == 0 ? "ok" : "FAIL");
+        if (act == CLI_GPIO)         pico_gpio_exec(&g_cfg, &cmd);   /* drive the pin (USB command) */
+        else if (act == CLI_SAVE)    printf("flash %s\n", flash_store_save(&g_cfg) == 0 ? "ok" : "FAIL");
         else if (act == CLI_FACTORY) { flash_store_erase(); memset(&g_cfg, 0, sizeof g_cfg);
                                        pico_gpio_apply_config(&g_cfg); printf("erased\n"); }
         else if (act == CLI_REBOOT)  { sleep_ms(50); watchdog_reboot(0, 0, 0); }
