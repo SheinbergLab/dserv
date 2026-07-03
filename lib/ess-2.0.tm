@@ -3305,6 +3305,24 @@ namespace eval ess {
 	n_channels 0
     }
 
+    # Namespace class for external I/O boxes: their datapoints live under
+    # <io_class>/<device>/... (matches BOX_CLASS in the box firmware).
+    variable io_class "extio"
+
+    # Rig-level source override table (populated in local/post-pins.tcl). Maps a
+    # logical button channel -> its physical source, in exactly the form button_init
+    # takes after `chan` (a pin, or "{} box {dev pin}", or "{} joystick N"). When an
+    # entry exists it WINS over whatever a protocol passes to button_init -- so a rig
+    # can point a channel at a box (or joystick) without editing any protocol. The
+    # protocol still only declares/reads ess/button/<chan>. Persists across systems.
+    variable button_bindings
+    array set button_bindings {}
+
+    proc button_bind {chan args} {
+	variable button_bindings
+	set button_bindings($chan) $args
+    }
+
     # Process a button GPIO event: update ess datapoint and wake state machine
     proc button_process {chan dpoint data} {
 	variable buttons
@@ -3315,16 +3333,29 @@ namespace eval ess {
     }
 
     ########################################################################
-    # button_init: add -joystick option for binding a button
-    # channel to a joystick direction value.
+    # button_init: bind a logical button channel to a source. The source is a
+    # local GPIO pin, a joystick direction, or a remote I/O box DI line -- the
+    # protocol only ever reads ess/button/<chan>, so it never knows which.
     #
     # Usage:
-    #   button_init 0 24                  ;# GPIO pin 24 -> channel 0
+    #   button_init 0 24                  ;# local GPIO pin 24 -> channel 0
     #   button_init 0 {} joystick 4       ;# joystick value 4 -> channel 0
     #   button_init 1 {} joystick 8       ;# joystick value 8 -> channel 1
+    #   button_init 0 {} box {office 14}  ;# box "office" DI pin 14 -> channel 0
+    #                                     ;#   (extio/office/state/di/14)
     ########################################################################
     proc button_init {chan {pin {}} args} {
 	variable buttons
+	variable io_class
+	variable button_bindings
+
+	# a rig-level override (from post-pins) wins over the protocol's request,
+	# so a box/joystick can stand in for a local pin without protocol edits.
+	if {[info exists button_bindings($chan)]} {
+	    set ov   $button_bindings($chan)
+	    set pin  [lindex $ov 0]
+	    set args [lrange $ov 1 end]
+	}
 
 	# initialize channel state and datapoint
 	set buttons(state,$chan) 0
@@ -3338,7 +3369,24 @@ namespace eval ess {
 		      {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
 		      $args]
 
-	if {[dict exists $opts joystick]} {
+	if {[dict exists $opts box]} {
+	    # bind this channel to a remote I/O box DI line:
+	    #   <io_class>/<device>/state/di/<pin>   e.g. extio/office/state/di/14
+	    # The box publishes LOGICAL levels (configure the box pin `active_low`
+	    # so pressed=1), so button_process needs no inversion here.
+	    lassign [dict get $opts box] dev bpin
+	    set dp $io_class/$dev/state/di/$bpin
+
+	    proc ::ess::button_process_$chan {dpoint data} \
+		"::ess::button_process $chan \$dpoint \$data"
+
+	    dservAddExactMatch $dp
+	    dpointSetScript $dp ::ess::button_process_$chan
+	    if {[dservExists $dp]} { button_process $chan $dp [dservGet $dp] }
+
+	    set buttons(box,$chan) $dp
+
+	} elseif {[dict exists $opts joystick]} {
 	    # bind this channel to a joystick direction value
 	    set joy_val [dict get $opts joystick]
 	    set buttons(joy_source,$chan) $joy_val
@@ -3535,6 +3583,10 @@ namespace eval ess {
 	    if {[info exists buttons(pin,$i)]} {
 		dservRemoveMatch gpio/input/$buttons(pin,$i)
 		unset buttons(pin,$i)
+	    }
+	    if {[info exists buttons(box,$i)]} {
+		dservRemoveMatch $buttons(box,$i)
+		unset buttons(box,$i)
 	    }
 	    if {[info exists buttons(joy_source,$i)]} {
 		unset buttons(joy_source,$i)
