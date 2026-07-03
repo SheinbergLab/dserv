@@ -78,6 +78,24 @@ static inline void pico_gpio_apply_config(const pico_config_t *c)
         default: gpio_set_irq_enabled(i, EDGES, false); break;   /* 0 = off */
         }
     }
+
+    /* obs-mirror pin: always an OUTPUT (driven from ess/in_obs), overriding any
+     * pin_mode. Enabled via obs_en (any GPIO incl GP0). Refuses reserved pins. */
+    if (obs_mirror_enabled(c)) {
+        int p = obs_mirror_pin(c);
+        if (p >= 0 && p < PICO_NPINS && !pico_gpio_reserved(p)) {
+            gpio_init(p); gpio_set_dir(p, GPIO_OUT); gpio_put(p, 0);
+            gpio_set_irq_enabled(p, EDGES, false);
+        }
+    }
+}
+
+/* Drive the obs-mirror pin to the box's live copy of ess/in_obs (no-op if off). */
+static inline void pico_gpio_obs_mirror(const pico_config_t *c, int obs)
+{
+    if (!obs_mirror_enabled(c)) return;
+    int p = obs_mirror_pin(c);
+    if (p >= 0 && p < PICO_NPINS && !pico_gpio_reserved(p)) gpio_put(p, obs ? 1 : 0);
 }
 
 /* Execute a gpio command. SET drives a level; PULSE drives high for value us

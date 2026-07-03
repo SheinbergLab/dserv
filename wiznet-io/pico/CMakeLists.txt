@@ -32,6 +32,7 @@ if(BOX_TARGET STREQUAL "pico2w")
 else()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
+        pico_unique_id
         hardware_spi
         hardware_dma
         hardware_flash

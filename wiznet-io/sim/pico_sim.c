@@ -102,11 +102,11 @@ static int run_selftest(void)
     memset(&g_cfg, 0, sizeof g_cfg);
     printf("selftest: build -> frame -> apply (no network)\n");
 
-    dserv_msg_int   (f, "pico/config/pin/5/mode", 0, 1);      dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_int   (f, "pico/config/pin/5/pulse_us", 0, 250);dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_string(f, "pico/config/dserv/ip", 0, "192.168.11.1"); dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_int   (f, "pico/config/dserv/port", 0, 4620);   dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
-    dserv_msg_int   (f, "pico/cmd/save", 0, 1);            dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/pico/config/pin/5/mode", 0, 1);      dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/pico/config/pin/5/pulse_us", 0, 250);dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_string(f, "extio/pico/config/dserv/ip", 0, "192.168.11.1"); dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/pico/config/dserv/port", 0, 4620);   dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
+    dserv_msg_int   (f, "extio/pico/cmd/save", 0, 1);            dserv_framer_feed(&fr, f, DSERV_MSG_LEN, on_frame, 0);
 
     int ok = g_cfg.pin_mode[5] == 1 && g_cfg.do_pulse_us[5] == 250
           && g_cfg.dserv_ip[3] == 1 && g_cfg.dserv_port == 4620
@@ -158,7 +158,7 @@ static int run_watchdog(const char *host, int port)
 
     uint8_t f[DSERV_MSG_LEN];
     for (int i = 0;; i++) {
-        dserv_msg_int(f, "pico/state/watchdog", 0, i);
+        dserv_msg_int(f, "extio/pico/state/watchdog", 0, i);
         if (write(fd, f, DSERV_MSG_LEN) != DSERV_MSG_LEN) { perror("write"); break; }
         printf("  watchdog %d\n", i);
         struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 }; nanosleep(&ts, NULL);
@@ -178,11 +178,11 @@ static int run_send_config(const char *host, int port)
     if (connect(fd, (struct sockaddr *)&d, sizeof d) != 0) { perror("connect"); return 1; }
 
     uint8_t f[DSERV_MSG_LEN];
-    dserv_msg_int   (f, "pico/config/pin/6/mode", 0, 3);      write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_int   (f, "pico/config/pin/6/pulse_us", 0, 750);write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_string(f, "pico/config/dserv/ip", 0, "10.0.0.5"); write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_int   (f, "pico/config/dserv/port", 0, 4620);   write(fd, f, DSERV_MSG_LEN);
-    dserv_msg_int   (f, "pico/cmd/save", 0, 1);            write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/pico/config/pin/6/mode", 0, 3);      write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/pico/config/pin/6/pulse_us", 0, 750);write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_string(f, "extio/pico/config/dserv/ip", 0, "10.0.0.5"); write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/pico/config/dserv/port", 0, 4620);   write(fd, f, DSERV_MSG_LEN);
+    dserv_msg_int   (f, "extio/pico/cmd/save", 0, 1);            write(fd, f, DSERV_MSG_LEN);
     printf("sent 5 config frames to %s:%d\n", host, port);
     close(fd);
     return 0;

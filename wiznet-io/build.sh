@@ -28,7 +28,7 @@ DST="$WIZ/examples/wiznet_io"
 rm -rf "$DST"; mkdir -p "$DST"
 cp "$HERE"/pico/* "$HERE"/common/*.h "$HERE"/net/*.h "$DST"/
 grep -q 'add_subdirectory(wiznet_io)' "$WIZ/examples/CMakeLists.txt" 2>/dev/null \
-  || echo 'add_subdirectory(wiznet_io)' >> "$WIZ/examples/CMakeLists.txt"
+  || printf '\nadd_subdirectory(wiznet_io)\n' >> "$WIZ/examples/CMakeLists.txt"
 
 # 3. configure + build
 if [ "$TARGET" = "pico2w" ]; then

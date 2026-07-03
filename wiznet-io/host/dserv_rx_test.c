@@ -34,18 +34,18 @@ int main(void)
     /* Build a stream of config datapoints (as dserv would relay them). */
     uint8_t stream[14 * DSERV_MSG_LEN];
     int off = 0;
-    off += (dserv_msg_int   (stream + off, "pico/config/pin/5/mode", 0, 1), DSERV_MSG_LEN);
-    off += (dserv_msg_int   (stream + off, "pico/config/pin/6/mode", 0, 3), DSERV_MSG_LEN);
-    off += (dserv_msg_string(stream + off, "pico/config/pin/7/mode", 0, "out"), DSERV_MSG_LEN); /* word */
-    off += (dserv_msg_int   (stream + off, "pico/config/pin/5/pulse_us", 0, 500), DSERV_MSG_LEN);
-    off += (dserv_msg_int   (stream + off, "pico/config/pin/6/debounce_ms", 0, 20), DSERV_MSG_LEN);
-    off += (dserv_msg_string(stream + off, "pico/config/dserv/ip", 0, "192.168.11.1"), DSERV_MSG_LEN);
-    off += (dserv_msg_int   (stream + off, "pico/config/dserv/port", 0, 4620), DSERV_MSG_LEN);
-    off += (dserv_msg_string(stream + off, "pico/config/net/ip", 0, "192.168.11.42"), DSERV_MSG_LEN);
-    off += (dserv_msg_int   (stream + off, "pico/watchdog", 0, 7), DSERV_MSG_LEN);   /* not cmd/config */
-    off += (dserv_msg_int   (stream + off, "pico/cmd/do/5", 0, 1), DSERV_MSG_LEN);         /* do set */
-    off += (dserv_msg_int   (stream + off, "pico/cmd/do/6/pulse_us", 0, 250), DSERV_MSG_LEN); /* pulse */
-    off += (dserv_msg_int   (stream + off, "pico/cmd/save", 0, 1), DSERV_MSG_LEN);
+    off += (dserv_msg_int   (stream + off, "extio/pico/config/pin/5/mode", 0, 1), DSERV_MSG_LEN);
+    off += (dserv_msg_int   (stream + off, "extio/pico/config/pin/6/mode", 0, 3), DSERV_MSG_LEN);
+    off += (dserv_msg_string(stream + off, "extio/pico/config/pin/7/mode", 0, "out"), DSERV_MSG_LEN); /* word */
+    off += (dserv_msg_int   (stream + off, "extio/pico/config/pin/5/pulse_us", 0, 500), DSERV_MSG_LEN);
+    off += (dserv_msg_int   (stream + off, "extio/pico/config/pin/6/debounce_ms", 0, 20), DSERV_MSG_LEN);
+    off += (dserv_msg_string(stream + off, "extio/pico/config/dserv/ip", 0, "192.168.11.1"), DSERV_MSG_LEN);
+    off += (dserv_msg_int   (stream + off, "extio/pico/config/dserv/port", 0, 4620), DSERV_MSG_LEN);
+    off += (dserv_msg_string(stream + off, "extio/pico/config/net/ip", 0, "192.168.11.42"), DSERV_MSG_LEN);
+    off += (dserv_msg_int   (stream + off, "extio/pico/watchdog", 0, 7), DSERV_MSG_LEN);   /* not cmd/config */
+    off += (dserv_msg_int   (stream + off, "extio/pico/cmd/do/5", 0, 1), DSERV_MSG_LEN);         /* do set */
+    off += (dserv_msg_int   (stream + off, "extio/pico/cmd/do/6/pulse_us", 0, 250), DSERV_MSG_LEN); /* pulse */
+    off += (dserv_msg_int   (stream + off, "extio/pico/cmd/save", 0, 1), DSERV_MSG_LEN);
 
     printf("RX path: %d frames, fed in 37-byte chunks (crosses frame boundaries)\n",
            off / DSERV_MSG_LEN);

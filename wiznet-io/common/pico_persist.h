@@ -23,7 +23,9 @@
 #include <string.h>
 
 #define PICO_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define PICO_PERSIST_VERSION  2   /* v2: added per-pin debounce_ms */
+#define PICO_PERSIST_VERSION  6   /* v6: added di_active_low bitmask. Fields are APPEND-ONLY: never
+                                   * reorder/resize existing ones, so an older (shorter) blob loads
+                                   * forward-compatibly with new fields defaulted. */
 #define PICO_PERSIST_BLOB_MAX  (12 + sizeof(pico_config_t))  /* hdr+struct+crc */
 
 static inline uint32_t pico_crc32(const uint8_t *p, uint32_t n)
@@ -54,23 +56,32 @@ static inline uint32_t pico_persist_serialize(const pico_config_t *cfg,
     return total;
 }
 
-/* Validate + load a blob into cfg. Returns 0 on success, -1 if invalid. */
+/* Validate + load a blob into cfg. Returns 0 on success, -1 if invalid.
+ *
+ * Forward-compatible: a blob written by an OLDER firmware (same magic, ver <=
+ * ours, struct only ever grew by appends) loads fine -- we copy the bytes it has
+ * and zero-default the fields it predates. So flashing a new firmware over an old
+ * saved config keeps name/net/dserv/etc. instead of wiping to defaults. A blob
+ * from a NEWER firmware (ver too high, or struct bigger than ours) is rejected. */
 static inline int pico_persist_deserialize(const uint8_t *buf, uint32_t len,
                                            pico_config_t *cfg)
 {
     uint32_t clen = (uint32_t) sizeof *cfg;
-    if (len < 4 + 2 + 2 + clen + 4) return -1;
+    if (len < 12) return -1;                             /* magic+ver+len+crc minimum */
 
     uint32_t magic; memcpy(&magic, buf, 4);
     uint16_t ver;   memcpy(&ver, buf + 4, 2);
     uint16_t blen;  memcpy(&blen, buf + 6, 2);
-    if (magic != PICO_PERSIST_MAGIC || ver != PICO_PERSIST_VERSION || blen != clen)
-        return -1;
+    if (magic != PICO_PERSIST_MAGIC) return -1;
+    if (ver > PICO_PERSIST_VERSION) return -1;           /* newer format we can't read */
+    if (blen > clen) return -1;                          /* struct only appends; bigger = incompatible */
+    if (len < (uint32_t) 8 + blen + 4) return -1;        /* truncated */
 
-    uint32_t want; memcpy(&want, buf + 8 + clen, 4);
-    if (pico_crc32(buf, 8 + clen) != want) return -1;
+    uint32_t want; memcpy(&want, buf + 8 + blen, 4);
+    if (pico_crc32(buf, 8 + blen) != want) return -1;
 
-    memcpy(cfg, buf + 8, clen);
+    memcpy(cfg, buf + 8, blen);                          /* saved fields */
+    if (blen < clen) memset((uint8_t *) cfg + blen, 0, clen - blen);  /* default the rest */
     return 0;
 }
 

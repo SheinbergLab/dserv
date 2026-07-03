@@ -7,7 +7,8 @@
  * Commands:
  *   help
  *   show
- *   net ip A.B.C.D
+ *   net mode dhcp|static
+ *   net ip A.B.C.D       (also sets mode=static)
  *   dserv ip A.B.C.D
  *   dserv port N
  *   pin N mode out|in|in_pullup|off
@@ -29,16 +30,20 @@ typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_RE
 
 static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
 {
+    char obs[8];
+    if (obs_mirror_enabled(c)) snprintf(obs, sizeof obs, "%d", obs_mirror_pin(c));
+    else                       snprintf(obs, sizeof obs, "off");
     int k = snprintf(out, outsz,
-        "name=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u applied=%u\r\n",
-        dserv_cfg_name(c),
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s applied=%u\r\n",
+        dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
-        c->dserv_port, c->applied_count);
-    for (int i = 0; i < PICO_NPINS && k < outsz - 48; i++)
+        c->dserv_port, obs, c->applied_count);
+    for (int i = 0; i < PICO_NPINS && k < outsz - 64; i++)
         if (c->pin_mode[i])
-            k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums\r\n",
-                          i, dserv_mode_str(c->pin_mode[i]), c->do_pulse_us[i], c->debounce_ms[i]);
+            k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums%s\r\n",
+                          i, dserv_mode_str(c->pin_mode[i]), c->do_pulse_us[i], c->debounce_ms[i],
+                          di_active_low(c, i) ? " active_low" : "");
 }
 
 /* Execute one line. Returns an action; fills `out` with a response line.
@@ -65,6 +70,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     }
 
     if (sscanf(line, "name %15s", w) == 1) {
+        if (!dserv_name_valid(w)) { snprintf(out, outsz, "ERR name: printable, no '/'\r\n"); return CLI_ERR; }
         strncpy(c->name, w, sizeof c->name - 1); c->name[sizeof c->name - 1] = '\0';
         c->applied_count++; snprintf(out, outsz, "OK name=%s\r\n", c->name); return CLI_OK;
     }
@@ -84,6 +90,11 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         c->debounce_ms[n] = (uint8_t) v; c->applied_count++;
         snprintf(out, outsz, "OK pin%d debounce=%dms\r\n", n, v); return CLI_OK;
     }
+    if (sscanf(line, "pin %d active_low %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR bad pin\r\n"); return CLI_ERR; }
+        di_active_low_set(c, n, v ? 1 : 0); c->applied_count++;
+        snprintf(out, outsz, "OK pin%d active_low=%d\r\n", n, v ? 1 : 0); return CLI_OK;
+    }
     if (sscanf(line, "dserv ip %23s", w) == 1) {
         if (dserv_cfg__parse_ip(w, c->dserv_ip)) { snprintf(out, outsz, "ERR bad ip\r\n"); return CLI_ERR; }
         c->applied_count++; snprintf(out, outsz, "OK dserv ip=%s\r\n", w); return CLI_OK;
@@ -95,7 +106,23 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     }
     if (sscanf(line, "net ip %23s", w) == 1) {
         if (dserv_cfg__parse_ip(w, c->net_ip)) { snprintf(out, outsz, "ERR bad ip\r\n"); return CLI_ERR; }
-        c->applied_count++; snprintf(out, outsz, "OK net ip=%s (save+reboot to apply)\r\n", w); return CLI_OK;
+        c->net_mode = NET_MODE_STATIC;      /* setting a static IP implies static mode */
+        c->applied_count++; snprintf(out, outsz, "OK net ip=%s mode=static (save+reboot to apply)\r\n", w); return CLI_OK;
+    }
+    if (sscanf(line, "obs pin %d", &n) == 1) {
+        if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR obs pin 0-%d (or 'obs off')\r\n", PICO_NPINS - 1); return CLI_ERR; }
+        obs_mirror_set(c, n); c->applied_count++;
+        snprintf(out, outsz, "OK obs pin=%d\r\n", n); return CLI_PIN;
+    }
+    if (!strcmp(line, "obs off")) {
+        obs_mirror_off(c); c->applied_count++;
+        snprintf(out, outsz, "OK obs off\r\n"); return CLI_PIN;
+    }
+    if (sscanf(line, "net mode %11s", w) == 1) {
+        if      (!strcmp(w, "dhcp"))   c->net_mode = NET_MODE_DHCP;
+        else if (!strcmp(w, "static")) c->net_mode = NET_MODE_STATIC;
+        else { snprintf(out, outsz, "ERR net mode dhcp|static\r\n"); return CLI_ERR; }
+        c->applied_count++; snprintf(out, outsz, "OK net mode=%s (save+reboot to apply)\r\n", dserv_netmode_str(c->net_mode)); return CLI_OK;
     }
     if (!strcmp(line, "show"))    { pico_cli_show(c, out, outsz); return CLI_OK; }
     if (!strcmp(line, "save"))    { snprintf(out, outsz, "saving...\r\n"); return CLI_SAVE; }
@@ -103,8 +130,10 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "reboot"))  { snprintf(out, outsz, "rebooting...\r\n"); return CLI_REBOOT; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | name NAME | net ip A.B.C.D | dserv ip A.B.C.D | dserv port N |\r\n"
+            "cmds: show | name NAME | net mode dhcp|static | net ip A.B.C.D |\r\n"
+            "      dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
+            "      pin N active_low 0|1 | obs pin N | obs off |\r\n"
             "      do N 0|1 | do N pulse US | save | factory | reboot\r\n");
         return CLI_OK;
     }

@@ -32,8 +32,13 @@
 #define PICO_NPINS     30
 #define PICO_NAME_MAX  16
 
+/* Namespace class: every box publishes/subscribes under <BOX_CLASS>/<name>/... so
+ * all external I/O boxes group under one parent (extio/) in the datapoint tree,
+ * clearly separated from local ess/gpio/mtouch/etc. One-line change to rename. */
+#define BOX_CLASS "extio"
+
 typedef struct {
-    char     name[PICO_NAME_MAX];       /* device prefix; "" => "pico"        */
+    char     name[PICO_NAME_MAX];       /* device name (within BOX_CLASS/); "" => "pico" */
     uint8_t  pin_mode[PICO_NPINS];      /* 0 unset, 1 out, 2 in, 3 in_pullup  */
     uint32_t do_pulse_us[PICO_NPINS];
     uint8_t  net_ip[4];
@@ -41,7 +46,18 @@ typedef struct {
     uint16_t dserv_port;
     uint32_t applied_count;             /* persistent settings applied        */
     uint8_t  debounce_ms[PICO_NPINS];   /* per-input debounce window, 0 = off */
+    uint8_t  net_mode;                  /* 0=DHCP (default), 1=static; NET_MODE_* */
+    uint8_t  obs_pin;                   /* GPIO driven to the live ess/in_obs copy (valid iff obs_en) */
+    uint8_t  obs_en;                    /* 1 = obs-mirror on; 0 = off (default). Separate flag so any
+                                         * GPIO incl GP0 is usable and factory-zero == off. */
+    uint32_t di_active_low;             /* bitmask: bit n set => publish state/di/n inverted (pressed=1,
+                                         * matching the local gpio ACTIVE_LOW convention) */
 } pico_config_t;
+
+/* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
+ * fresh box works out of the box on a router; a static net/ip is honored only in
+ * NET_MODE_STATIC. DHCP falls back to the static/default IP if no lease. */
+enum { NET_MODE_DHCP = 0, NET_MODE_STATIC = 1 };
 
 typedef enum { GPIO_OP_NONE = 0, GPIO_OP_SET, GPIO_OP_PULSE } gpio_op_t;
 typedef struct { gpio_op_t op; uint8_t pin; uint32_t value; } gpio_cmd_t;
@@ -53,6 +69,9 @@ typedef enum {
     CFG_DO_PULSE,
     CFG_DEBOUNCE,
     CFG_NET_IP,
+    CFG_NET_MODE,
+    CFG_OBS_PIN,
+    CFG_ACTIVE_LOW,
     CFG_DSERV_IP,
     CFG_DSERV_PORT,
     CFG_GPIO,       /* a cmd/do output command parsed into *cmd */
@@ -62,12 +81,23 @@ typedef enum {
     CFG_UNKNOWN     /* under this box's name but unrecognized */
 } cfg_result_t;
 
-/* Build "<name>/state/<leaf>" for datapoints the box PUBLISHES to dserv. */
+/* Build "<BOX_CLASS>/<name>/state/<leaf>" for datapoints the box PUBLISHES. */
 static inline void dserv_state_name(const pico_config_t *c, char *buf, int sz,
                                     const char *leaf);
 
 static inline const char *dserv_cfg_name(const pico_config_t *c)
 { return c->name[0] ? c->name : "pico"; }
+
+/* The box's datapoint prefix "<BOX_CLASS>/<name>" (e.g. extio/office). Returns len. */
+static inline int dserv_cfg_prefix(const pico_config_t *c, char *buf, int sz)
+{ return snprintf(buf, sz, "%s/%s", BOX_CLASS, dserv_cfg_name(c)); }
+
+/* per-pin active-low (invert published DI level). */
+static inline int  di_active_low(const pico_config_t *c, int pin)
+{ return (pin >= 0 && pin < PICO_NPINS) ? (int) ((c->di_active_low >> pin) & 1u) : 0; }
+static inline void di_active_low_set(pico_config_t *c, int pin, int on)
+{ if (pin < 0 || pin >= PICO_NPINS) return;
+  if (on) c->di_active_low |= (1u << pin); else c->di_active_low &= ~(1u << pin); }
 
 /* pin mode word -> value; -1 if not a recognized word (caller falls back to int) */
 static inline int dserv_mode_val(const char *w)
@@ -80,6 +110,26 @@ static inline int dserv_mode_val(const char *w)
 }
 static inline const char *dserv_mode_str(uint8_t m)
 { return m == 1 ? "out" : m == 2 ? "in" : m == 3 ? "in_pullup" : "off"; }
+
+static inline const char *dserv_netmode_str(uint8_t mode)
+{ return mode == NET_MODE_STATIC ? "static" : "dhcp"; }
+
+/* obs-mirror accessors: enable is a flag distinct from the pin, so GP0 is a
+ * valid mirror pin and the zeroed factory default is "off". */
+static inline int  obs_mirror_enabled(const pico_config_t *c) { return c->obs_en != 0; }
+static inline int  obs_mirror_pin(const pico_config_t *c)     { return (int) c->obs_pin; }
+static inline void obs_mirror_set(pico_config_t *c, int gpio) { c->obs_pin = (uint8_t) gpio; c->obs_en = 1; }
+static inline void obs_mirror_off(pico_config_t *c)          { c->obs_en = 0; }
+
+/* The device name is a datapoint-prefix: it must be non-empty, printable, and
+ * carry no '/' (or a stray control byte from line-editing) -- a bad name breaks
+ * the config/cmd/state namespace match silently. Hyphens are fine. */
+static inline int dserv_name_valid(const char *s)
+{
+    if (!*s) return 0;
+    for (; *s; s++) if ((unsigned char) *s < 0x20 || (unsigned char) *s > 0x7e || *s == '/') return 0;
+    return 1;
+}
 
 static inline int dserv_cfg__parse_ip(const char *s, uint8_t out[4])
 {
@@ -112,13 +162,28 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
         long v = dserv_msg_as_long(m); if (v < 0) v = 0; if (v > 255) v = 255;
         c->debounce_ms[n] = (uint8_t) v; c->applied_count++; return CFG_DEBOUNCE;
     }
+    pos = -1;
+    if (sscanf(k, "pin/%d/active_low%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < PICO_NPINS) {
+        di_active_low_set(c, n, dserv_msg_as_long(m) ? 1 : 0); c->applied_count++; return CFG_ACTIVE_LOW;
+    }
     if (strcmp(k, "name") == 0) {
-        dserv_msg_copy_cstr(m, c->name, sizeof c->name); c->applied_count++; return CFG_NAME;
+        char w[PICO_NAME_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!dserv_name_valid(w)) return CFG_UNKNOWN;
+        strncpy(c->name, w, sizeof c->name - 1); c->name[sizeof c->name - 1] = '\0';
+        c->applied_count++; return CFG_NAME;
     }
     if (strcmp(k, "net/ip") == 0) {
         char ip[24]; dserv_msg_copy_cstr(m, ip, sizeof ip);
         if (dserv_cfg__parse_ip(ip, c->net_ip) == 0) { c->applied_count++; return CFG_NET_IP; }
         return CFG_UNKNOWN;
+    }
+    if (strcmp(k, "net/mode") == 0) {
+        char w[12]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if      (!strcmp(w, "dhcp"))   c->net_mode = NET_MODE_DHCP;
+        else if (!strcmp(w, "static")) c->net_mode = NET_MODE_STATIC;
+        else c->net_mode = dserv_msg_as_long(m) ? NET_MODE_STATIC : NET_MODE_DHCP;
+        c->applied_count++; return CFG_NET_MODE;
     }
     if (strcmp(k, "dserv/ip") == 0) {
         char ip[24]; dserv_msg_copy_cstr(m, ip, sizeof ip);
@@ -127,6 +192,16 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     }
     if (strcmp(k, "dserv/port") == 0) {
         c->dserv_port = (uint16_t) dserv_msg_as_long(m); c->applied_count++; return CFG_DSERV_PORT;
+    }
+    if (strcmp(k, "obs/pin") == 0) {
+        char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
+        else {
+            long v = dserv_msg_as_long(m);
+            if (v >= 0 && v < PICO_NPINS) obs_mirror_set(c, (int) v);  /* 0..29, GP0 ok */
+            else obs_mirror_off(c);                                    /* out-of-range = off */
+        }
+        c->applied_count++; return CFG_OBS_PIN;
     }
     return CFG_UNKNOWN;
 }
@@ -160,15 +235,15 @@ static inline cfg_result_t dserv_dispatch(pico_config_t *c, const dserv_msg_t *m
 {
     if (cmd) cmd->op = GPIO_OP_NONE;
 
-    const char *nm = dserv_cfg_name(c);
-    uint16_t nlen = (uint16_t) strlen(nm);
-    if (m->namelen < (uint16_t)(nlen + 1)) return CFG_NONE;
-    if (memcmp(m->name, nm, nlen) != 0 || m->name[nlen] != '/') return CFG_NONE;
+    char pfx[DSERV_MSG_MAX_PAYLOAD + 1];
+    int plen = dserv_cfg_prefix(c, pfx, sizeof pfx);   /* "extio/<name>" */
+    if (plen <= 0 || m->namelen < (uint16_t)(plen + 1)) return CFG_NONE;
+    if (memcmp(m->name, pfx, (size_t) plen) != 0 || m->name[plen] != '/') return CFG_NONE;
 
     char sub[DSERV_MSG_MAX_PAYLOAD + 1];
-    uint16_t sl = (uint16_t)(m->namelen - (nlen + 1));
+    uint16_t sl = (uint16_t)(m->namelen - (plen + 1));
     if (sl > DSERV_MSG_MAX_PAYLOAD) sl = DSERV_MSG_MAX_PAYLOAD;
-    memcpy(sub, m->name + nlen + 1, sl); sub[sl] = '\0';
+    memcpy(sub, m->name + plen + 1, sl); sub[sl] = '\0';
 
     if (strncmp(sub, "config/", 7) == 0) return dserv_cfg__config(c, sub + 7, m);
     if (strncmp(sub, "cmd/", 4) == 0 && cmd) return dserv_cfg__cmd(sub + 4, m, cmd);
@@ -188,6 +263,9 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_DO_PULSE:   return "do_pulse";
     case CFG_DEBOUNCE:   return "debounce";
     case CFG_NET_IP:     return "net_ip";
+    case CFG_NET_MODE:   return "net_mode";
+    case CFG_OBS_PIN:    return "obs_pin";
+    case CFG_ACTIVE_LOW: return "active_low";
     case CFG_DSERV_IP:   return "dserv_ip";
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";
@@ -200,6 +278,6 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
 
 static inline void dserv_state_name(const pico_config_t *c, char *buf, int sz,
                                     const char *leaf)
-{ snprintf(buf, sz, "%s/state/%s", dserv_cfg_name(c), leaf); }
+{ snprintf(buf, sz, "%s/%s/state/%s", BOX_CLASS, dserv_cfg_name(c), leaf); }
 
 #endif /* DSERV_CONFIG_H */

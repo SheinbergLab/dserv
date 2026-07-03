@@ -7,10 +7,14 @@
  * and fully tested; this is the piece to bring up on the board. Expect to tune
  * the lwIP raw-API callbacks and cyw43 init against real hardware.
  *
- * Model: WiFi STA join (static IP from cfg->net_ip if set, else DHCP), one lwIP
- * raw-API TCP listener. accept/recv callbacks copy bytes into a ring buffer
- * that box_net_server_poll() drains -- so the byte-stream contract matches the
- * W6300 backend and the framer above doesn't change.
+ * Model: WiFi STA join then IP per cfg->net_mode (DHCP default, or static from
+ * cfg->net_ip) -- same net_mode semantics as the W6300 backend. One lwIP raw-API
+ * TCP listener; accept/recv callbacks copy bytes into a ring buffer that
+ * box_net_server_poll() drains -- so the byte-stream contract matches the W6300
+ * backend and the framer above doesn't change. (The CYW43 has a factory-unique
+ * MAC, so the board-id MAC derivation the W6300 backend needs isn't required.)
+ * lwIP's DHCP client renews in the background; on a lease IP change the client
+ * pcb errors -> bn_cli_err_cb -> reconnect -> self-register with the new IP.
  *
  * Needs: pico_cyw43_arch_lwip_poll (link), lwipopts.h + wifi_config.h on the
  * include path, PICO_BOARD=pico2_w.  Poll mode: box_net_poll -> cyw43_arch_poll.
@@ -25,6 +29,7 @@
 #include "lwip/tcp.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/netif.h"
+#include "lwip/dhcp.h"
 #include <string.h>
 
 #define BN_RING_SZ 4096
@@ -83,12 +88,20 @@ static inline int box_net_init(const pico_config_t *cfg)
             CYW43_AUTH_WPA2_AES_PSK, WIFI_CONNECT_TIMEOUT_MS) != 0)
         return -2;
 
-    /* static IP if configured, else DHCP already ran during connect */
-    if (cfg->net_ip[0] || cfg->net_ip[1] || cfg->net_ip[2] || cfg->net_ip[3]) {
+    /* IP mode (same net_mode semantics as W6300): DHCP is the default and is
+     * already running from the connect above; static stops it and pins the addr
+     * (cfg->net_ip, else the compiled default for parity with the wired box). */
+    if (cfg->net_mode == NET_MODE_STATIC) {
         ip4_addr_t ip, mask, gw;
-        IP4_ADDR(&ip,   cfg->net_ip[0], cfg->net_ip[1], cfg->net_ip[2], cfg->net_ip[3]);
+        if (cfg->net_ip[0] || cfg->net_ip[1] || cfg->net_ip[2] || cfg->net_ip[3]) {
+            IP4_ADDR(&ip, cfg->net_ip[0], cfg->net_ip[1], cfg->net_ip[2], cfg->net_ip[3]);
+            IP4_ADDR(&gw, cfg->net_ip[0], cfg->net_ip[1], cfg->net_ip[2], 1);
+        } else {
+            IP4_ADDR(&ip, 192, 168, 11, 2);
+            IP4_ADDR(&gw, 192, 168, 11, 1);
+        }
         IP4_ADDR(&mask, 255, 255, 255, 0);
-        IP4_ADDR(&gw,   cfg->net_ip[0], cfg->net_ip[1], cfg->net_ip[2], 1);
+        dhcp_stop(netif_default);
         netif_set_addr(netif_default, &ip, &mask, &gw);
     }
     return 0;

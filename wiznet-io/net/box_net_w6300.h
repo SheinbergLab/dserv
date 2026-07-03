@@ -11,11 +11,15 @@
 #include "wizchip_conf.h"
 #include "wizchip_spi.h"
 #include "socket.h"
+#include "dhcp.h"
+#include "pico/unique_id.h"
+#include "pico/time.h"
 #include <string.h>
 
 #define BOX_NET_SN     3   /* W6300 socket: config server (dserv -> box)   */
 #define BOX_NET_CLI_SN 4   /* W6300 socket: state client  (box -> dserv)   */
 #define BOX_NET_TMP_SN 5   /* W6300 socket: transient self-registration    */
+#define BN_DHCP_SN     0   /* W6300 socket: DHCP client (lease + renewal)  */
 
 static wiz_NetInfo bn_netinfo = {
     .mac  = {0x00, 0x08, 0xDC, 0x12, 0x34, 0x56},
@@ -36,25 +40,132 @@ static wiz_NetInfo bn_netinfo = {
 };
 
 static uint8_t bn_prev_status = SOCK_CLOSED;
+static uint8_t bn_cli_ka;    /* state-client keepalive set once per connection */
 
 static inline const char *box_net_backend_name(void) { return "w6300"; }
 
-static inline int box_net_init(const pico_config_t *cfg)
+/* ---- unique MAC from the RP2350 board id ----
+ * Every box ships with the same compiled MAC; two on one LAN => ARP/DHCP chaos.
+ * Derive a per-board MAC (WIZnet OUI 00:08:DC + 3 bytes hashed from the flash
+ * unique id) so each box is unique with zero config. Keep the IPv6 link-local
+ * EUI-64 suffix consistent with it. */
+static inline void bn_make_mac(void)
+{
+    pico_unique_board_id_t id;
+    pico_get_unique_board_id(&id);
+    uint32_t h = 2166136261u;                       /* FNV-1a over all id bytes */
+    for (unsigned i = 0; i < sizeof id.id; i++) { h ^= id.id[i]; h *= 16777619u; }
+
+    bn_netinfo.mac[0] = 0x00; bn_netinfo.mac[1] = 0x08; bn_netinfo.mac[2] = 0xDC;
+    bn_netinfo.mac[3] = (uint8_t)(h >> 16);
+    bn_netinfo.mac[4] = (uint8_t)(h >> 8);
+    bn_netinfo.mac[5] = (uint8_t) h;
+#if _WIZCHIP_ > W5500
+    /* fe80::(mac0^0x02):mac1:mac2:ff:fe:mac3:mac4:mac5 (EUI-64, U/L bit flipped) */
+    bn_netinfo.lla[8]  = bn_netinfo.mac[0] ^ 0x02;
+    bn_netinfo.lla[9]  = bn_netinfo.mac[1];
+    bn_netinfo.lla[10] = bn_netinfo.mac[2];
+    bn_netinfo.lla[11] = 0xff; bn_netinfo.lla[12] = 0xfe;
+    bn_netinfo.lla[13] = bn_netinfo.mac[3];
+    bn_netinfo.lla[14] = bn_netinfo.mac[4];
+    bn_netinfo.lla[15] = bn_netinfo.mac[5];
+#endif
+}
+
+/* ---- DHCP ---- */
+static uint8_t          bn_dhcp_buf[1024];          /* >= RIP_MSG (548)          */
+static repeating_timer_t bn_dhcp_timer;
+static uint8_t          bn_dhcp_active;             /* DHCP mode: service in poll */
+static uint8_t          bn_booted;                  /* init done -> sockets may be up */
+static volatile uint8_t bn_leased;                  /* a lease has been applied   */
+static volatile uint8_t bn_ip_changed;              /* post-boot IP change        */
+
+/* WIZnet DHCP wants a 1 Hz tick to drive its retransmit/lease timers. */
+static bool bn_dhcp_1s_cb(repeating_timer_t *t) { (void) t; DHCP_time_handler(); return true; }
+
+/* assign + update callback: pull the lease into bn_netinfo and apply it. Any IP
+ * change AFTER boot (incl. the first lease if it lands once sockets are up, or a
+ * renewal to a new address) flags a recycle so the TCP sockets re-bind. */
+static void bn_dhcp_apply(void)
+{
+    uint8_t ip[4]; getIPfromDHCP(ip);
+    if (bn_booted && memcmp(ip, bn_netinfo.ip, 4) != 0) bn_ip_changed = 1;
+    memcpy(bn_netinfo.ip, ip, 4);
+    getGWfromDHCP(bn_netinfo.gw);
+    getSNfromDHCP(bn_netinfo.sn);
+    getDNSfromDHCP(bn_netinfo.dns);
+    network_initialize(bn_netinfo);
+    bn_leased = 1;
+    printf("dhcp: leased %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
+}
+static void bn_dhcp_conflict(void) { /* keep going; next DHCP_run re-discovers */ }
+
+static inline void bn_apply_static(const pico_config_t *cfg)
 {
     if (cfg->net_ip[0] || cfg->net_ip[1] || cfg->net_ip[2] || cfg->net_ip[3])
-        memcpy(bn_netinfo.ip, cfg->net_ip, 4);      /* persisted static IP */
+        memcpy(bn_netinfo.ip, cfg->net_ip, 4);      /* persisted static IP, else compiled default */
+    bn_netinfo.dhcp   = NETINFO_STATIC;
+#if _WIZCHIP_ > W5500
+    bn_netinfo.ipmode = NETINFO_STATIC_ALL;
+#endif
+    network_initialize(bn_netinfo);
+}
+
+static inline int box_net_init(const pico_config_t *cfg)
+{
+    bn_make_mac();
 
     wizchip_spi_initialize();
     wizchip_cris_initialize();
     wizchip_reset();
     wizchip_initialize();
     wizchip_check();
-    network_initialize(bn_netinfo);
+
+    if (cfg->net_mode == NET_MODE_STATIC) {
+        bn_apply_static(cfg);
+        print_network_information(bn_netinfo);
+        bn_booted = 1;
+        return 0;
+    }
+
+    /* DHCP (default): keep the client running for the box's whole life so it
+     * self-heals a late/rebooted DHCP server or a boot-before-router race. No
+     * static fallback -- the compiled default can't route on the lease subnet,
+     * and `net mode static` is the explicit path for no-DHCP wiring. */
+    bn_netinfo.dhcp   = NETINFO_DHCP;
+#if _WIZCHIP_ > W5500
+    bn_netinfo.ipmode = NETINFO_DHCP_V4;            /* IPv4 lease only            */
+#endif
+    memset(bn_netinfo.ip, 0, 4);                    /* no IP until the lease lands */
+    network_initialize(bn_netinfo);                 /* sets MAC/SHAR before DHCP   */
+    DHCP_init(BN_DHCP_SN, bn_dhcp_buf);
+    reg_dhcp_cbfunc(bn_dhcp_apply, bn_dhcp_apply, bn_dhcp_conflict);
+    add_repeating_timer_ms(1000, bn_dhcp_1s_cb, NULL, &bn_dhcp_timer);
+    bn_dhcp_active = 1;
+
+    absolute_time_t deadline = make_timeout_time_ms(8000);   /* wait to log the IP */
+    while (!bn_leased && absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+        DHCP_run();
+        sleep_ms(10);
+    }
+    if (!bn_leased) printf("dhcp: no lease yet, will keep trying\n");
     print_network_information(bn_netinfo);
+    bn_booted = 1;
     return 0;
 }
 
-static inline void box_net_poll(void) { /* W6300 offloads TCP/IP: nothing to do */ }
+static inline void box_net_poll(void)
+{
+    if (!bn_dhcp_active) return;                     /* static: nothing to service */
+    DHCP_run();                                      /* acquire / maintain / renew */
+    if (bn_ip_changed) {                             /* new IP -> recycle sockets  */
+        bn_ip_changed = 0;
+        disconnect(BOX_NET_SN);     close(BOX_NET_SN);
+        disconnect(BOX_NET_CLI_SN); close(BOX_NET_CLI_SN);
+        bn_prev_status = SOCK_CLOSED;               /* server re-listens          */
+        bn_cli_ka = 0;                              /* client reconnects -> re-reg */
+    }
+}
 
 static inline int box_net_server_poll(uint16_t port, uint8_t *buf, int max)
 {
@@ -103,8 +214,6 @@ static inline int box_net_server_poll(uint16_t port, uint8_t *buf, int max)
 }
 
 /* ---- client: box -> dserv (publish state/(keys)) ---- */
-static uint8_t bn_cli_ka;    /* keepalive set once per connection */
-
 static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
 {
     uint8_t status;
