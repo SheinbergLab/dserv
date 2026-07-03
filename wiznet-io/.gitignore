@@ -1,0 +1,7 @@
+# local build trees created by build.sh (WIZnet-PICO-C clone + cmake build dirs)
+.wiznet-pico-c/
+build_*/
+*.o
+
+# large, regenerable debug binaries (keep .uf2 for convenience)
+dist/*.elf

@@ -273,8 +273,8 @@ void Dataserver::remove_all_triggers(void)
 
 int Dataserver::tcpip_register(char *host, int port, int flags)
 {
-  add_new_send_client(host, port, flags);
-  return 1;
+  /* propagate the connect result so %reg honestly reports reachability */
+  return add_new_send_client(host, port, flags);
 }
 
 int Dataserver::tcpip_unregister(char *host, int port)
@@ -1573,11 +1573,11 @@ int Dataserver::open_send_sock(char *host, int port)
     return -1;
   }
 #else
-  blocking = 1;
+  blocking = 0;   /* non-blocking for the connect step so we can time out */
   flags = fcntl(sendsock, F_GETFL, 0);
   if (flags == -1) return -1;
   flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
-  fcntl(sendsock, F_SETFL, flags); 
+  fcntl(sendsock, F_SETFL, flags);
 #endif
     
   if ((res = connect(sendsock, (struct sockaddr *) &sendserver,
@@ -1629,7 +1629,7 @@ int Dataserver::open_send_sock(char *host, int port)
       return -1;
     }
 #else
-    blocking = 0;
+    blocking = 1;   /* restore blocking mode after connect */
     flags = fcntl(sendsock, F_GETFL, 0);
     if (flags == -1) return -1;
     flags = blocking ? (flags & ~O_NONBLOCK) : (flags | O_NONBLOCK);
@@ -1640,6 +1640,17 @@ int Dataserver::open_send_sock(char *host, int port)
     on = 1;
     setsockopt(sendsock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
   }
+  else {
+    /* immediate connect success (e.g. localhost): restore blocking + options */
+#ifndef _WIN32
+    { int f = fcntl(sendsock, F_GETFL, 0); if (f != -1) fcntl(sendsock, F_SETFL, f & ~O_NONBLOCK); }
+#endif
+    on = 1;
+    setsockopt(sendsock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+  }
+  /* keepalive: detect a dead/rebooted peer even when the client is idle */
+  on = 1;
+  setsockopt(sendsock, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
   return sendsock;
 }
 
