@@ -3323,6 +3323,40 @@ namespace eval ess {
 	set button_bindings($chan) $args
     }
 
+    ########################################################################
+    # box_schedule_pulse / box_schedule_timer: offload a precisely-timed box
+    # output/marker to fire <delay_ms> from NOW.
+    #
+    # The box fires it on its OWN clock (deterministic, us), which beats
+    # host-driving the output at fire time (that carries the network's fire-time
+    # jitter). We anchor the schedule to the current beginobs -- a shared event
+    # both sides captured -- so THIS command's network delay is absorbed: it just
+    # has to arrive before the fire time. The box also posts state/timer/<n> at
+    # the fire instant (accurately timestamped) so the state machine is notified.
+    #
+    # Requires: the box subscribes to ess/in_obs (clock sync) and we're IN an obs
+    # (so [dservTimestamp ess/in_obs] == this obs's beginobs, matching the box's
+    # anchor). Residual timing error is the sync-offset accuracy (sub-ms wired).
+    #
+    #   box_schedule_pulse office 5 200     ;# pulse box "office" pin 5, 200 ms from now
+    #   box_schedule_timer office 3 500     ;# post extio/office/state/timer/3, 500 ms from now
+    ########################################################################
+    proc box_schedule_pulse {dev pin delay_ms} { box_schedule_ $dev do/$pin $delay_ms }
+    proc box_schedule_timer {dev id  delay_ms} { box_schedule_ $dev timer/$id $delay_ms }
+
+    proc box_schedule_ {dev key delay_ms} {
+	variable io_class
+	if {![dservExists ess/in_obs] || [dservGet ess/in_obs] == 0} {
+	    ess_warning "box_schedule: not in an obs period (need the beginobs anchor)" "box"
+	    return 0
+	}
+	# delta = (time already elapsed in this obs) + the requested delay, in us.
+	set beginobs [dservTimestamp ess/in_obs]
+	set delta [expr {([now] - $beginobs) + int($delay_ms * 1000)}]
+	dservSet $io_class/$dev/cmd/$key/at $delta
+	return 1
+    }
+
     # Process a button GPIO event: update ess datapoint and wake state machine
     proc button_process {chan dpoint data} {
 	variable buttons
