@@ -78,15 +78,36 @@ static err_t bn_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     return ERR_OK;
 }
 
+/* client (box->dserv) + WiFi-watchdog state, up here so box_net_poll can reset the
+ * client when the WiFi link recovers. */
+static const pico_config_t *bn_cfg;        /* stashed for reconnect creds        */
+static struct tcp_pcb *bn_cli_pcb;
+static volatile int    bn_cli_connected;
+static volatile int    bn_cli_reg;
+static uint8_t         bn_wifi_was_down;
+static uint32_t        bn_wifi_next_try_ms;
+
 static inline int box_net_init(const pico_config_t *cfg)
 {
+    bn_cfg = cfg;                                          /* for WiFi reconnect */
     if (cyw43_arch_init() != 0) return -1;
     cyw43_arch_enable_sta_mode();
-    cyw43_wifi_pm(&cyw43_state, CYW43_NO_POWERSAVE_MODE);   /* lower latency */
+    /* power-save trades latency for battery life. Off (default) = lowest latency;
+     * on = radio sleeps between beacons -- fine for a battery box since DI edge
+     * timestamps are box-captured, so only delivery (not RT accuracy) is affected. */
+    cyw43_wifi_pm(&cyw43_state, cfg->wifi_pm ? CYW43_DEFAULT_PM : CYW43_NO_POWERSAVE_MODE);
 
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD,
-            CYW43_AUTH_WPA2_AES_PSK, WIFI_CONNECT_TIMEOUT_MS) != 0)
-        return -2;
+    /* runtime creds (USB CLI / datapoint) win; compile-time WIFI_SSID is fallback */
+    const char *ssid = cfg->wifi_ssid[0] ? cfg->wifi_ssid : WIFI_SSID;
+    const char *pass = cfg->wifi_pass[0] ? cfg->wifi_pass : WIFI_PASSWORD;
+    /* the first join right after cyw43 init is often flaky, so retry a few times
+     * (short per-attempt) rather than fail hard; the poll() watchdog covers the rest. */
+    int jr = -1;
+    for (int i = 0; i < 3 && jr != 0; i++) {
+        if (i) printf("wifi: join retry %d...\n", i + 1);
+        jr = cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK, 8000);
+    }
+    if (jr != 0) return -2;
 
     /* IP mode (same net_mode semantics as W6300): DHCP is the default and is
      * already running from the connect above; static stops it and pins the addr
@@ -107,7 +128,35 @@ static inline int box_net_init(const pico_config_t *cfg)
     return 0;
 }
 
-static inline void box_net_poll(void) { cyw43_arch_poll(); }
+/* Service the stack + a WiFi watchdog: rejoin if the link drops, and on recovery
+ * drop the stale client pcb so it reconnects and re-registers immediately (instead
+ * of waiting out lwIP's TCP retransmit timeout). Parity with the W6300 self-heal. */
+static inline void box_net_poll(void)
+{
+    cyw43_arch_poll();
+    if (!bn_cfg) return;
+
+    if (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP) {
+        if (bn_wifi_was_down) {                            /* link just came back */
+            bn_wifi_was_down = 0;
+            if (bn_cli_pcb) { tcp_abort(bn_cli_pcb); bn_cli_pcb = NULL; }
+            bn_cli_connected = 0; bn_cli_reg = 0;          /* -> reconnect + self_register */
+            printf("wifi: link back up\n");
+        }
+        return;
+    }
+
+    /* link down: throttled, bounded, blocking rejoin. Nothing flows over dead WiFi
+     * anyway; DI edges keep their IRQ timestamps and publish once we're back. */
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (bn_wifi_was_down && (int32_t)(now - bn_wifi_next_try_ms) < 0) return;
+    bn_wifi_was_down = 1;
+    bn_wifi_next_try_ms = now + 10000;                     /* >= 10s between attempts */
+    const char *ssid = bn_cfg->wifi_ssid[0] ? bn_cfg->wifi_ssid : WIFI_SSID;
+    const char *pass = bn_cfg->wifi_pass[0] ? bn_cfg->wifi_pass : WIFI_PASSWORD;
+    printf("wifi: link down, reconnecting to %s...\n", ssid);
+    cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK, 8000);
+}
 
 static inline int box_net_server_poll(uint16_t port, uint8_t *buf, int max)
 {
@@ -160,16 +209,26 @@ static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
     return 0;
 }
 
-/* ---- client: box -> dserv (publish state/(keys)) ---- */
-static struct tcp_pcb *bn_cli_pcb;
-static volatile int    bn_cli_connected;
-static volatile int    bn_cli_reg;
-
+/* ---- client: box -> dserv (publish state/(keys)) ---- (state declared above) */
 static err_t bn_cli_conn_cb(void *arg, struct tcp_pcb *pcb, err_t err)
 { (void) arg; (void) pcb; if (err == ERR_OK) bn_cli_connected = 1; return ERR_OK; }
 
 static void bn_cli_err_cb(void *arg, err_t err)
 { (void) arg; (void) err; bn_cli_pcb = NULL; bn_cli_connected = 0; bn_cli_reg = 0; }
+
+/* dserv doesn't send us data on this socket, but a NULL pbuf = it closed the
+ * connection (a graceful dserv restart) -> tear down so we reconnect + re-register. */
+static err_t bn_cli_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
+{
+    (void) arg; (void) err;
+    if (!p) {
+        tcp_close(pcb);
+        if (pcb == bn_cli_pcb) { bn_cli_pcb = NULL; bn_cli_connected = 0; bn_cli_reg = 0; }
+        return ERR_OK;
+    }
+    tcp_recved(pcb, p->tot_len); pbuf_free(p);
+    return ERR_OK;
+}
 
 static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
 {
@@ -181,6 +240,8 @@ static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
         bn_cli_pcb = tcp_new();
         if (!bn_cli_pcb) return 0;
         tcp_err(bn_cli_pcb, bn_cli_err_cb);
+        tcp_recv(bn_cli_pcb, bn_cli_recv_cb);            /* detect a graceful dserv close */
+        ip_set_option(bn_cli_pcb, SOF_KEEPALIVE);        /* detect a silently-dead dserv */
         ip4_addr_t d; IP4_ADDR(&d, ip[0], ip[1], ip[2], ip[3]);
         if (tcp_connect(bn_cli_pcb, &d, port, bn_cli_conn_cb) != ERR_OK)
             bn_cli_pcb = NULL;

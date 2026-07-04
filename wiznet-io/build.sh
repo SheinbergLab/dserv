@@ -30,19 +30,30 @@ cp "$HERE"/pico/* "$HERE"/common/*.h "$HERE"/net/*.h "$DST"/
 grep -q 'add_subdirectory(wiznet_io)' "$WIZ/examples/CMakeLists.txt" 2>/dev/null \
   || printf '\nadd_subdirectory(wiznet_io)\n' >> "$WIZ/examples/CMakeLists.txt"
 
-# 3. configure + build
-if [ "$TARGET" = "pico2w" ]; then
-  FLAGS="-DBOX_TARGET=pico2w -DPICO_BOARD=pico2_w \
-         -DWIFI_SSID=${WIFI_SSID:-change-me} -DWIFI_PASSWORD=${WIFI_PASSWORD:-change-me}"
-else
-  FLAGS="-DPICO_BOARD=pico2"
-fi
+# 3. configure + build. Each target has its OWN build dir + dist artifact name so
+#    they never clobber each other. WiFi targets bake creds only as a fallback;
+#    prefer setting them at runtime over the USB CLI (wifi ssid/pass).
+WIFI="-DWIFI_SSID=${WIFI_SSID:-change-me} -DWIFI_PASSWORD=${WIFI_PASSWORD:-change-me}"
+case "$TARGET" in
+  w6300)                                              # W6300 wired (default)
+    FLAGS="-DPICO_BOARD=pico2" ;;
+  pico2w)                                             # Raspberry Pi Pico 2 W
+    FLAGS="-DBOX_TARGET=pico2w -DPICO_BOARD=pico2_w $WIFI" ;;
+  picoplus2w)                                         # Pimoroni Pico Plus 2 W (RP2350B)
+    FLAGS="-DBOX_TARGET=pico2w -DPICO_BOARD=pimoroni_pico_plus2_w_rp2350 $WIFI" ;;
+  thingplus)                                          # SparkFun Thing Plus RP2350 (RM2 + MAX17048 fuel gauge)
+    FLAGS="-DBOX_TARGET=pico2w -DPICO_BOARD=sparkfun_thingplus_rp2350 -DBOX_FUEL_MAX17048=1 $WIFI" ;;
+  *)
+    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus)" >&2; exit 1 ;;
+esac
+# ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
 BUILD="$WIZ/build_$TARGET"
 mkdir -p "$BUILD"
 ( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 $FLAGS >/dev/null \
   && ninja wizchip_dserv_config )
 
-# 4. publish to dist/
-cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" \
-   "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/"
-echo ">> dist/ updated ($TARGET): $(cd "$HERE" && ls -l dist/wizchip_dserv_config.uf2 | awk '{print $5" bytes"}')"
+# 4. publish to dist/ under a target-specific name (no clobbering across targets)
+OUT="wizchip_dserv_config_$TARGET"
+cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" "$HERE/dist/$OUT.uf2"
+cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/$OUT.elf"
+echo ">> dist/ updated: $OUT.uf2 ($(cd "$HERE" && ls -l dist/$OUT.uf2 | awk '{print $5" bytes"}'))"

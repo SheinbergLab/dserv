@@ -12,9 +12,23 @@
 #include "hardware/gpio.h"
 #include "pico/time.h"
 
-/* W6300 QSPI/INT/CS/RST pins on the EVB-Pico2 */
+/* Pins the box firmware must never drive/route:
+ *  - W6300 wired build: the W6300 QSPI/INT/CS/RST block (GPIO15-22 on EVB-Pico2)
+ *  - pico2w WiFi build:  the CYW43 wireless pins (board-specific; taken from the
+ *    SDK board header, e.g. 23/24/25/29 on the Pimoroni Pico Plus 2 W) */
 static inline int pico_gpio_reserved(int n)
-{ return n >= 15 && n <= 22; }
+{
+#ifdef BOX_NET_LWIP
+#if defined(CYW43_DEFAULT_PIN_WL_REG_ON)
+    if (n == CYW43_DEFAULT_PIN_WL_REG_ON   || n == CYW43_DEFAULT_PIN_WL_CLOCK    ||
+        n == CYW43_DEFAULT_PIN_WL_CS        || n == CYW43_DEFAULT_PIN_WL_DATA_OUT ||
+        n == CYW43_DEFAULT_PIN_WL_DATA_IN) return 1;
+#endif
+    return 0;
+#else
+    return n >= 15 && n <= 22;
+#endif
+}
 
 /* ---- DI edge capture with per-pin debounce ----
  * The IRQ just records edge times per pin (cheap). The main loop reports a
@@ -98,10 +112,16 @@ static inline void pico_gpio_obs_mirror(const pico_config_t *c, int obs)
     if (p >= 0 && p < PICO_NPINS && !pico_gpio_reserved(p)) gpio_put(p, obs ? 1 : 0);
 }
 
-/* Execute a gpio command. SET drives a level; PULSE drives high for value us
- * then low (box-timed via busy_wait -- deterministic width regardless of host/
- * dserv jitter). PULSE blocks the loop for its duration: fine for short DO
- * pulses; use a timer/alarm for long ones. */
+/* Falling edge of a non-blocking DO pulse, fired from a hardware timer alarm
+ * (runs in the timer IRQ). user data carries the pin number. */
+static int64_t pico_gpio_pulse_end(alarm_id_t id, void *pin)
+{ (void) id; gpio_put((uint)(uintptr_t) pin, 0); return 0; }   /* return 0 -> one-shot */
+
+/* Execute a gpio command. SET drives a level; PULSE drives high now and schedules
+ * the falling edge on a HARDWARE ALARM (non-blocking -- the superloop is free for
+ * the whole pulse; box-timed width so it's immune to host/dserv jitter). Concurrent
+ * pulses on different pins are fine (one alarm each). us precision; if you ever
+ * need sub-us stim-grade edges, this is the drop-in point for a PIO pulse. */
 static inline void pico_gpio_exec(const pico_config_t *c, const gpio_cmd_t *cmd)
 {
     (void) c;
@@ -114,10 +134,13 @@ static inline void pico_gpio_exec(const pico_config_t *c, const gpio_cmd_t *cmd)
 
     if (cmd->op == GPIO_OP_SET) {
         gpio_put(cmd->pin, cmd->value ? 1 : 0);
-    } else { /* GPIO_OP_PULSE */
+    } else if (cmd->value) { /* GPIO_OP_PULSE: raise now, drop via alarm (non-blocking) */
         gpio_put(cmd->pin, 1);
-        busy_wait_us(cmd->value);
-        gpio_put(cmd->pin, 0);
+        alarm_id_t a = add_alarm_in_us(cmd->value, pico_gpio_pulse_end,
+                                       (void *)(uintptr_t) cmd->pin, true);
+        if (a <= 0) { busy_wait_us(cmd->value); gpio_put(cmd->pin, 0); }   /* pool full -> fallback */
+    } else {
+        gpio_put(cmd->pin, 0);                                            /* zero width */
     }
 }
 

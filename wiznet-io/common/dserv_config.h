@@ -52,6 +52,14 @@ typedef struct {
                                          * GPIO incl GP0 is usable and factory-zero == off. */
     uint32_t di_active_low;             /* bitmask: bit n set => publish state/di/n inverted (pressed=1,
                                          * matching the local gpio ACTIVE_LOW convention) */
+    char     wifi_ssid[32];             /* pico2w WiFi creds set at RUNTIME (USB CLI / datapoint);
+                                         * empty => fall back to compile-time WIFI_SSID/PASSWORD */
+    char     wifi_pass[64];
+    uint8_t  wifi_pm;                   /* pico2w: 1 = WiFi power-save (battery), 0 = off (low latency) */
+    uint8_t  ain_rate;                  /* ADS1115 data rate: 0=default(128SPS), 1..8=8/16/32/64/128/250/475/860 */
+    uint8_t  ain_gain;                  /* ADS1115 PGA/FSR:   0=default(4.096V), 1..6=6.144/4.096/2.048/1.024/0.512/0.256 */
+    uint8_t  ain_en;                    /* 1 = activate ADS1115 analog-in (ADC must be wired); 0 = off (default),
+                                         * leaves the I2C pins free for GPIO. Applied at boot (save+reboot). */
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -59,7 +67,10 @@ typedef struct {
  * NET_MODE_STATIC. DHCP falls back to the static/default IP if no lease. */
 enum { NET_MODE_DHCP = 0, NET_MODE_STATIC = 1 };
 
-typedef enum { GPIO_OP_NONE = 0, GPIO_OP_SET, GPIO_OP_PULSE } gpio_op_t;
+typedef enum { GPIO_OP_NONE = 0, GPIO_OP_SET, GPIO_OP_PULSE,
+               GPIO_OP_SCHED_PULSE,   /* fire a pulse at beginobs + value(us)  */
+               GPIO_OP_SCHED_TIMER    /* post state/timer/<pin> at beginobs + value(us) */
+} gpio_op_t;
 typedef struct { gpio_op_t op; uint8_t pin; uint32_t value; } gpio_cmd_t;
 
 typedef enum {
@@ -72,6 +83,12 @@ typedef enum {
     CFG_NET_MODE,
     CFG_OBS_PIN,
     CFG_ACTIVE_LOW,
+    CFG_WIFI_SSID,
+    CFG_WIFI_PASS,
+    CFG_WIFI_PM,
+    CFG_AIN_RATE,
+    CFG_AIN_GAIN,
+    CFG_AIN_EN,
     CFG_DSERV_IP,
     CFG_DSERV_PORT,
     CFG_GPIO,       /* a cmd/do output command parsed into *cmd */
@@ -193,6 +210,26 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "dserv/port") == 0) {
         c->dserv_port = (uint16_t) dserv_msg_as_long(m); c->applied_count++; return CFG_DSERV_PORT;
     }
+    if (strcmp(k, "wifi/ssid") == 0) {
+        dserv_msg_copy_cstr(m, c->wifi_ssid, sizeof c->wifi_ssid); c->applied_count++; return CFG_WIFI_SSID;
+    }
+    if (strcmp(k, "wifi/pass") == 0) {
+        dserv_msg_copy_cstr(m, c->wifi_pass, sizeof c->wifi_pass); c->applied_count++; return CFG_WIFI_PASS;
+    }
+    if (strcmp(k, "wifi/pm") == 0) {
+        c->wifi_pm = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_WIFI_PM;
+    }
+    if (strcmp(k, "ain/rate") == 0) {
+        long v = dserv_msg_as_long(m); if (v < 0 || v > 8) return CFG_UNKNOWN;
+        c->ain_rate = (uint8_t) v; c->applied_count++; return CFG_AIN_RATE;
+    }
+    if (strcmp(k, "ain/gain") == 0) {
+        long v = dserv_msg_as_long(m); if (v < 0 || v > 6) return CFG_UNKNOWN;
+        c->ain_gain = (uint8_t) v; c->applied_count++; return CFG_AIN_GAIN;
+    }
+    if (strcmp(k, "ain/enable") == 0) {
+        c->ain_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_AIN_EN;
+    }
     if (strcmp(k, "obs/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
@@ -220,6 +257,18 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
     if (sscanf(k, "do/%d/pulse_us%n", &n, &pos) == 1 && pos > 0 && k[pos] == '\0' &&
         n >= 0 && n < PICO_NPINS) {
         cmd->op = GPIO_OP_PULSE; cmd->pin = (uint8_t) n;
+        cmd->value = (uint32_t) dserv_msg_as_long(m); return CFG_GPIO;
+    }
+    pos = -1;   /* do/<n>/at <us> : schedule a pulse at beginobs + <us> */
+    if (sscanf(k, "do/%d/at%n", &n, &pos) == 1 && pos > 0 && k[pos] == '\0' &&
+        n >= 0 && n < PICO_NPINS) {
+        cmd->op = GPIO_OP_SCHED_PULSE; cmd->pin = (uint8_t) n;
+        cmd->value = (uint32_t) dserv_msg_as_long(m); return CFG_GPIO;
+    }
+    pos = -1;   /* timer/<n>/at <us> : post state/timer/<n> at beginobs + <us> */
+    if (sscanf(k, "timer/%d/at%n", &n, &pos) == 1 && pos > 0 && k[pos] == '\0' &&
+        n >= 0 && n < 64) {
+        cmd->op = GPIO_OP_SCHED_TIMER; cmd->pin = (uint8_t) n;
         cmd->value = (uint32_t) dserv_msg_as_long(m); return CFG_GPIO;
     }
     if (strcmp(k, "save")    == 0) return CFG_SAVE;
@@ -266,6 +315,12 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_NET_MODE:   return "net_mode";
     case CFG_OBS_PIN:    return "obs_pin";
     case CFG_ACTIVE_LOW: return "active_low";
+    case CFG_WIFI_SSID:  return "wifi_ssid";
+    case CFG_WIFI_PASS:  return "wifi_pass";
+    case CFG_WIFI_PM:    return "wifi_pm";
+    case CFG_AIN_RATE:   return "ain_rate";
+    case CFG_AIN_GAIN:   return "ain_gain";
+    case CFG_AIN_EN:     return "ain_en";
     case CFG_DSERV_IP:   return "dserv_ip";
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";

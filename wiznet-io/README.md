@@ -319,7 +319,9 @@ openocd -f interface/jlink.cfg -f target/rp2350.cfg \
 # keep USB plugged in too: printf console + bootstrap CLI over USB-CDC
 ```
 
-(UF2 fallback: hold BOOTSEL, copy `wizchip_dserv_config.uf2` to the RP2350 drive.)
+(UF2 fallback: hold BOOTSEL, copy the target's UF2 to the RP2350 drive —
+`dist/wizchip_dserv_config_w6300.uf2` for the wired box, `_pico2w` / `_picoplus2w`
+for the WiFi builds.)
 
 ## Run the RTT probe (from the Mac, today)
 

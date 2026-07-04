@@ -9,6 +9,8 @@
  *   show
  *   net mode dhcp|static
  *   net ip A.B.C.D       (also sets mode=static)
+ *   wifi ssid SSID       (pico2w; runtime creds, else compile-time fallback)
+ *   wifi pass PASS
  *   dserv ip A.B.C.D
  *   dserv port N
  *   pin N mode out|in|in_pullup|off
@@ -34,11 +36,13 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
     if (obs_mirror_enabled(c)) snprintf(obs, sizeof obs, "%d", obs_mirror_pin(c));
     else                       snprintf(obs, sizeof obs, "off");
     int k = snprintf(out, outsz,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s applied=%u\r\n",
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
-        c->dserv_port, obs, c->applied_count);
+        c->dserv_port, obs,
+        c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
+        c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->applied_count);
     for (int i = 0; i < PICO_NPINS && k < outsz - 64; i++)
         if (c->pin_mode[i])
             k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums%s\r\n",
@@ -118,6 +122,35 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         obs_mirror_off(c); c->applied_count++;
         snprintf(out, outsz, "OK obs off\r\n"); return CLI_PIN;
     }
+    /* wifi creds: value is the rest of the line verbatim (one space separator),
+     * so SSIDs/passwords with spaces or special chars survive intact. */
+    if (!strncmp(line, "wifi ssid ", 10)) {
+        strncpy(c->wifi_ssid, line + 10, sizeof c->wifi_ssid - 1); c->wifi_ssid[sizeof c->wifi_ssid - 1] = '\0';
+        c->applied_count++; snprintf(out, outsz, "OK wifi ssid=%s (save+reboot to apply)\r\n", c->wifi_ssid); return CLI_OK;
+    }
+    if (!strncmp(line, "wifi pass ", 10)) {
+        strncpy(c->wifi_pass, line + 10, sizeof c->wifi_pass - 1); c->wifi_pass[sizeof c->wifi_pass - 1] = '\0';
+        c->applied_count++; snprintf(out, outsz, "OK wifi pass set (save+reboot to apply)\r\n"); return CLI_OK;
+    }
+    if (sscanf(line, "wifi pm %d", &v) == 1) {
+        c->wifi_pm = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK wifi pm=%d (%s; save+reboot to apply)\r\n",
+                 c->wifi_pm, c->wifi_pm ? "power-save/battery" : "off/low-latency"); return CLI_OK;
+    }
+    if (sscanf(line, "ain rate %d", &v) == 1) {   /* ADS1115: 0=default(128SPS), 1..8=8..860 */
+        if (v < 0 || v > 8) { snprintf(out, outsz, "ERR ain rate 0-8 (0=128SPS)\r\n"); return CLI_ERR; }
+        c->ain_rate = (uint8_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain rate=%d\r\n", v); return CLI_OK;   /* live on next sample */
+    }
+    if (sscanf(line, "ain gain %d", &v) == 1) {   /* 0=default(4.096V), 1..6=6.144..0.256 FSR */
+        if (v < 0 || v > 6) { snprintf(out, outsz, "ERR ain gain 0-6 (0=4.096V)\r\n"); return CLI_ERR; }
+        c->ain_gain = (uint8_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain gain=%d\r\n", v); return CLI_OK;
+    }
+    if (sscanf(line, "ain enable %d", &v) == 1) { /* activate the ADS1115 (save+reboot to apply) */
+        c->ain_en = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK ain enable=%d (save+reboot to apply)\r\n", c->ain_en); return CLI_OK;
+    }
     if (sscanf(line, "net mode %11s", w) == 1) {
         if      (!strcmp(w, "dhcp"))   c->net_mode = NET_MODE_DHCP;
         else if (!strcmp(w, "static")) c->net_mode = NET_MODE_STATIC;
@@ -131,9 +164,10 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
             "cmds: show | name NAME | net mode dhcp|static | net ip A.B.C.D |\r\n"
-            "      dserv ip A.B.C.D | dserv port N |\r\n"
+            "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | obs pin N | obs off |\r\n"
+            "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 |\r\n"
             "      do N 0|1 | do N pulse US | save | factory | reboot\r\n");
         return CLI_OK;
     }

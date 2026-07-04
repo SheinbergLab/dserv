@@ -25,6 +25,9 @@ if(BOX_TARGET STREQUAL "pico2w")
         target_compile_definitions(${CFG_NAME} PRIVATE
             WIFI_SSID=\"${WIFI_SSID}\" WIFI_PASSWORD=\"${WIFI_PASSWORD}\")
     endif()
+    if(BOX_FUEL_MAX17048)               # MAX17048 fuel gauge (SparkFun Thing Plus)
+        target_compile_definitions(${CFG_NAME} PRIVATE BOX_FUEL_MAX17048)
+    endif()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
         hardware_flash
@@ -41,6 +44,9 @@ else()
         LOOPBACK_FILES
         DHCP_FILES)
 endif()
+
+# ADS1115 analog-in (pico_ain.h) is always compiled in, runtime-enabled via ain_en.
+target_link_libraries(${CFG_NAME} PRIVATE hardware_i2c)
 
 pico_enable_stdio_usb(${CFG_NAME} 1)
 pico_enable_stdio_uart(${CFG_NAME} 0)

@@ -6,8 +6,11 @@
  *   extio/<name>/config/(keys)  host->box persistent settings (pushed by dserv; saved to flash)
  *   extio/<name>/cmd/(keys)     host->box transient actions   (pushed by dserv)
  *                       cmd/do/<n>=0|1, cmd/do/<n>/pulse_us, cmd/save|reboot|factory
+ *                       cmd/do/<n>/at=<us>   pulse at beginobs+us (box-timed, deterministic)
+ *                       cmd/timer/<n>/at=<us> post state/timer/<n> at beginobs+us
  *   extio/<name>/state/(keys)   box->dserv published status   (box connects to dserv as client)
  *                       state/di/<n> (edge-timestamped, active_low-aware), state/do/<n> readback,
+ *                       state/ain/<n> (ADS1115), state/battery, state/timer/<n> (scheduled-fire stamp),
  *                       state/watchdog, state/uptime_us, state/link
  *                       state/sync/(dserv_us|box_us|offset_us)  clock-align audit trail
  *
@@ -36,6 +39,10 @@
 #include "pico_gpio.h"
 #include "pico_clock.h"
 #include "box_net.h"
+#ifdef BOX_FUEL_MAX17048
+#include "pico_fuel.h"          /* on-board fuel gauge: compiled per board  */
+#endif
+#include "pico_ain.h"           /* ADS1115 analog-in: always compiled, runtime-enabled (ain_en) */
 
 #define CFG_PORT    5010
 #define RXBUF_SIZE  1024
@@ -46,6 +53,7 @@ static uint8_t g_rxbuf[RXBUF_SIZE];
 static pico_config_t  g_cfg;
 static dserv_framer_t g_framer;
 static box_clock_t    g_clock;      /* box->dserv time offset, snapped at obs edges */
+static uint64_t g_obs_begin_us;     /* box-clock time of the last beginobs -> anchor for scheduled events */
 static int32_t g_wdt;
 
 /* ---- publish helpers (box -> dserv, best-effort) ---- */
@@ -93,6 +101,82 @@ static void publish_heartbeat(void)
     dserv_msg_int64(f, nm, 0, (int64_t) time_us_64());   box_net_client_send(f, DSERV_MSG_LEN);
     dserv_state_name(&g_cfg, nm, sizeof nm, "link");
     dserv_msg_int(f, nm, 0, 1);                          box_net_client_send(f, DSERV_MSG_LEN);
+#ifdef BOX_FUEL_MAX17048
+    int soc = fuel_soc_pct();
+    if (soc >= 0) {
+        dserv_state_name(&g_cfg, nm, sizeof nm, "battery");
+        dserv_msg_int(f, nm, 0, soc);                    box_net_client_send(f, DSERV_MSG_LEN);
+    }
+#endif
+}
+
+static int16_t ain_last_pub[AIN_NCH];
+static void publish_ain(int ch, int16_t v)             /* state/ain/<ch>, clock-aligned */
+{
+    char leaf[16], nm[64]; uint8_t f[DSERV_MSG_LEN];
+    snprintf(leaf, sizeof leaf, "ain/%d", ch);
+    dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+    dserv_msg_int(f, nm, box_clock_stamp(&g_clock, time_us_64()), v);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+
+/* ---- scheduled events: "fire at beginobs + delta_us" (do/<n>/at, timer/<n>/at) ----
+ * A hardware alarm fires at the box-clock instant beginobs_box + delta. Its callback
+ * (IRQ) does the timing-critical part -- the non-blocking DO pulse -- and marks the
+ * slot FIRED; the main loop then posts state/timer/<tid> stamped at the fire time
+ * (network I/O must not run in the IRQ). The physical output timing is thus local +
+ * deterministic; the notification is for the host's awareness (accurately logged). */
+#define SCHED_MAX 8
+typedef enum { SCH_FREE = 0, SCH_ARMED, SCH_FIRED } sch_state_t;
+static struct {
+    volatile sch_state_t st;
+    uint8_t  pin;                    /* pulse pin, or 0xFF for timer-only */
+    uint8_t  tid;                    /* -> state/timer/<tid>              */
+    uint32_t width;                  /* pulse width us                    */
+    uint64_t fire_us;                /* box-clock fire time (for the stamp) */
+} g_sched[SCHED_MAX];
+
+static int64_t sched_cb(alarm_id_t id, void *user)     /* runs in the timer IRQ */
+{
+    (void) id;
+    int s = (int)(uintptr_t) user;
+    if (g_sched[s].st != SCH_ARMED) return 0;
+    if (g_sched[s].pin != 0xFF) {                       /* timing-critical: the pulse (non-blocking) */
+        gpio_cmd_t c = { GPIO_OP_PULSE, g_sched[s].pin, g_sched[s].width };
+        pico_gpio_exec(&g_cfg, &c);
+    }
+    g_sched[s].st = SCH_FIRED;                          /* main loop posts state/timer/<tid> */
+    return 0;                                           /* one-shot */
+}
+
+static void sched_arm(int pin, int tid, uint32_t width, uint32_t delta_us)
+{
+    if (g_obs_begin_us == 0) { printf("sched: no beginobs yet, ignoring\n"); return; }
+    int s = -1;
+    for (int i = 0; i < SCHED_MAX; i++) if (g_sched[i].st == SCH_FREE) { s = i; break; }
+    if (s < 0) { printf("sched: table full\n"); return; }
+    g_sched[s].pin = (uint8_t) pin; g_sched[s].tid = (uint8_t) tid; g_sched[s].width = width;
+    g_sched[s].fire_us = g_obs_begin_us + delta_us;
+    g_sched[s].st = SCH_ARMED;
+    add_alarm_at(from_us_since_boot(g_sched[s].fire_us), sched_cb, (void *)(uintptr_t) s, true);
+}
+
+static void publish_timer(int tid, uint64_t fire_us)   /* state/timer/<tid>, stamped at the fire time */
+{
+    char leaf[20], nm[64]; uint8_t f[DSERV_MSG_LEN];
+    snprintf(leaf, sizeof leaf, "timer/%d", tid);
+    dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+    dserv_msg_int(f, nm, box_clock_stamp(&g_clock, fire_us), 1);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+
+static void sched_publish_fired(void)                  /* call from the main loop when connected */
+{
+    for (int i = 0; i < SCHED_MAX; i++)
+        if (g_sched[i].st == SCH_FIRED) {
+            publish_timer(g_sched[i].tid, g_sched[i].fire_us);
+            g_sched[i].st = SCH_FREE;
+        }
 }
 
 /* ---- self-registration: tell dserv to push us config+cmd (box-initiated) ----
@@ -129,6 +213,7 @@ static void on_frame(const uint8_t *frame, void *ud)
     if (dserv_msg_name_eq(&m, SYNC_DP)) {
         int obs = (int) dserv_msg_as_long(&m);
         box_clock_sync(&g_clock, m.timestamp, now_box);
+        if (obs) g_obs_begin_us = now_box;  /* beginobs edge -> anchor for scheduled events */
         pico_gpio_obs_mirror(cfg, obs);    /* LED/scope: box's live copy of obs */
         publish_sync(m.timestamp, now_box, g_clock.offset_us);
         printf("sync: obs=%d dserv=%llu box=%llu off=%lld\n", obs,
@@ -141,7 +226,14 @@ static void on_frame(const uint8_t *frame, void *ud)
     cfg_result_t r = dserv_dispatch(cfg, &m, &cmd);
     printf("dp: %.*s -> %s\n", (int) m.namelen, m.name, dserv_cfg_result_str(r));
 
-    if (cmd.op != GPIO_OP_NONE) {
+    if (cmd.op == GPIO_OP_SCHED_PULSE) {                /* do/<n>/at -> pulse + timer at beginobs+delta */
+        uint32_t w = cfg->do_pulse_us[cmd.pin] ? cfg->do_pulse_us[cmd.pin] : 1000;
+        sched_arm(cmd.pin, cmd.pin, w, cmd.value);
+    }
+    else if (cmd.op == GPIO_OP_SCHED_TIMER) {           /* timer/<n>/at -> notify-only at beginobs+delta */
+        sched_arm(0xFF, cmd.pin, 0, cmd.value);
+    }
+    else if (cmd.op != GPIO_OP_NONE) {
         pico_gpio_exec(cfg, &cmd);
         uint64_t t_act = time_us_64();   /* pin has just moved -> its dserv time */
         if (cmd.op == GPIO_OP_SET)
@@ -203,6 +295,10 @@ int main(void)
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
     dserv_framer_reset(&g_framer);
     box_clock_reset(&g_clock);
+#ifdef BOX_FUEL_MAX17048
+    fuel_init();
+#endif
+    if (g_cfg.ain_en) ain_init();   /* activate ADS1115 only when enabled (else I2C pins stay free) */
     printf("box ready [%s]: config TCP :%d  |  USB-CDC CLI (type 'help')\n",
            box_net_backend_name(), CFG_PORT);
 
@@ -225,6 +321,14 @@ int main(void)
             if (up >= 1) {
                 di_event_t e;
                 while (pico_gpio_poll_di(&g_cfg, &e)) publish_di(&e);   /* debounced edges */
+                if (g_cfg.ain_en) {
+                    int fresh = ain_service(&g_cfg);   /* non-blocking ADS1115 acquire */
+                    for (int ch = 0; ch < AIN_NCH; ch++)
+                        if ((fresh & (1 << ch)) && abs(ain_get(ch) - ain_last_pub[ch]) > AIN_DEADBAND) {
+                            ain_last_pub[ch] = ain_get(ch); publish_ain(ch, ain_last_pub[ch]);
+                        }
+                }
+                sched_publish_fired();                 /* post state/timer/<n> for fired schedules */
                 uint32_t now = to_ms_since_boot(get_absolute_time());
                 if (now - last_hb >= HEARTBEAT_MS) { last_hb = now; publish_heartbeat(); }
             }

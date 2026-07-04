@@ -23,9 +23,9 @@
 #include <string.h>
 
 #define PICO_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define PICO_PERSIST_VERSION  6   /* v6: added di_active_low bitmask. Fields are APPEND-ONLY: never
-                                   * reorder/resize existing ones, so an older (shorter) blob loads
-                                   * forward-compatibly with new fields defaulted. */
+#define PICO_PERSIST_VERSION  10  /* v10: added ain_en. Fields are APPEND-ONLY: never reorder/resize
+                                   * existing ones, so an older (shorter) blob loads forward-compatibly
+                                   * with new fields defaulted. */
 #define PICO_PERSIST_BLOB_MAX  (12 + sizeof(pico_config_t))  /* hdr+struct+crc */
 
 static inline uint32_t pico_crc32(const uint8_t *p, uint32_t n)

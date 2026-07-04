@@ -21,16 +21,19 @@
 
 /* last sector of flash */
 #define FLASH_STORE_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+/* store region = 2 flash pages: the config blob outgrew one 256B page once WiFi
+ * creds were added. Must stay a multiple of FLASH_PAGE_SIZE for flash_range_program. */
+#define FLASH_STORE_BYTES (FLASH_PAGE_SIZE * 2)
 
 static inline int flash_store_save(const pico_config_t *cfg)
 {
-    uint8_t page[FLASH_PAGE_SIZE];              /* 256; blob (~180) fits */
+    uint8_t page[FLASH_STORE_BYTES];
     memset(page, 0xFF, sizeof page);
     if (pico_persist_serialize(cfg, page, sizeof page) == 0) return -1;
 
     uint32_t ints = save_and_disable_interrupts();
     flash_range_erase(FLASH_STORE_OFFSET, FLASH_SECTOR_SIZE);
-    flash_range_program(FLASH_STORE_OFFSET, page, FLASH_PAGE_SIZE);
+    flash_range_program(FLASH_STORE_OFFSET, page, FLASH_STORE_BYTES);
     restore_interrupts(ints);
     return 0;
 }
@@ -39,7 +42,7 @@ static inline int flash_store_save(const pico_config_t *cfg)
 static inline int flash_store_load(pico_config_t *cfg)
 {
     const uint8_t *p = (const uint8_t *)(XIP_BASE + FLASH_STORE_OFFSET);
-    return pico_persist_deserialize(p, FLASH_PAGE_SIZE, cfg);
+    return pico_persist_deserialize(p, FLASH_STORE_BYTES, cfg);
 }
 
 static inline void flash_store_erase(void)
