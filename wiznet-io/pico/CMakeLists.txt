@@ -32,6 +32,17 @@ if(BOX_TARGET STREQUAL "pico2w")
         pico_stdlib
         hardware_flash
         pico_cyw43_arch_lwip_poll)      # CYW43 WiFi + lwIP (poll mode)
+elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv module
+    target_sources(${CFG_NAME} PRIVATE usb_descriptors.c)
+    target_compile_definitions(${CFG_NAME} PRIVATE
+        BOX_NET_USB
+        CFG_TUSB_CONFIG_FILE=\"box_tusb_config.h\")   # our config, not the SDK's (shared source dir)
+    target_link_libraries(${CFG_NAME} PRIVATE
+        pico_stdlib
+        pico_unique_id
+        hardware_flash
+        tinyusb_device                  # we own TinyUSB; pico_stdio_usb is NOT used here
+        tinyusb_board)
 else()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
@@ -48,13 +59,20 @@ endif()
 # ADS1115 analog-in (pico_ain.h) is always compiled in, runtime-enabled via ain_en.
 target_link_libraries(${CFG_NAME} PRIVATE hardware_i2c)
 
-pico_enable_stdio_usb(${CFG_NAME} 1)
-pico_enable_stdio_uart(${CFG_NAME} 0)
+# The usb target owns TinyUSB for the data/CLI CDCs, so its stdio (printf + CLI)
+# goes to UART instead of clashing with pico_stdio_usb. All others: CLI on USB.
+if(BOX_TARGET STREQUAL "usb")
+    pico_enable_stdio_usb(${CFG_NAME} 0)    # we own TinyUSB; console goes to USB CDC0 via
+    pico_enable_stdio_uart(${CFG_NAME} 1)   # box_net_usb_console_init(). UART kept as a boot/fallback console.
+else()
+    pico_enable_stdio_usb(${CFG_NAME} 1)
+    pico_enable_stdio_uart(${CFG_NAME} 0)
+endif()
 pico_add_extra_outputs(${CFG_NAME})
 
 # ===================== W6300-only test firmwares =========================
 # These call ioLibrary directly (not through box_net), so wired-only.
-if(NOT BOX_TARGET STREQUAL "pico2w")
+if(NOT BOX_TARGET STREQUAL "pico2w" AND NOT BOX_TARGET STREQUAL "usb")
 
     set(TARGET_NAME wizchip_udp_do)
     add_executable(${TARGET_NAME} wizchip_udp_do.c)

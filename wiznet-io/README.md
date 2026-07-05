@@ -24,14 +24,17 @@ Board: **W6300-EVB-Pico2**. Debugger: **SEGGER J-Link EDU** (SWD + RTT).
 | `net/box_net.h`           | Transport seam — selects backend at build time |
 | `net/box_net_w6300.h`     | Wired W6300 backend (ioLibrary) — **verified** |
 | `net/box_net_lwip.h`      | Pico 2 W WiFi backend (CYW43 + lwIP) — real code, **needs board to validate** |
+| `net/box_net_usb.h`       | Plain Pico 2 USB-CDC backend (TinyUSB → host `modules/usbio`) — real code, **needs board to validate** |
 | `net/lwipopts.h`, `net/wifi_config.h` | lwIP + WiFi config for the Pico 2 W build |
-| `sim/pico_sim.c`          | **Standalone box simulator (macOS + Linux)** — real codec over POSIX sockets; file-backed persist + `--cli` |
+| `pico/box_tusb_config.h`, `pico/usb_descriptors.c` | TinyUSB config + dual-CDC descriptors, **usb target only** (CLI on CDC0, binary data on CDC1) |
+| `sim/pico_sim.c`          | **Standalone box simulator (macOS + Linux)** — real codec over POSIX sockets; file-backed persist + `--cli`; `--pty` presents a USB-box on `/dev/pts/N` to test `modules/usbio` without a Pico |
 | `host/udp_rtt.c`          | **Portable RTT probe (macOS + Linux)** — the primary dev loop |
 | `host/udp_do_send.c`      | RPi GPIO-trigger sender for the scope/Digilent ground-truth test |
 | `host/dserv_msg_test.c`   | Round-trip test: builds frames, parses them like dserv's `'>'` handler |
 | `host/dserv_rx_test.c`    | RX test: build → stream in awkward chunks → framer → parse → config dispatch |
 | `host/persist_cli_test.c` | Test: persist serialize/validate/crc + CLI command parsing |
 | `host/dserv_bench.c`      | Benchmark dserv's TCP pub/sub RTT + throughput (localhost) |
+| `host/box_transport_test.sh` | Per-rig transport check: ping RTT + sync round-trip + detrended anchor jitter vs the 1 ms budget (runs on any dserv host; `ssh rig 'sh -s' < ...`) |
 
 ## dserv 128-byte binary datapoint message
 
@@ -137,11 +140,12 @@ printf 'net ip 192.168.11.50\ndserv ip 192.168.11.1\npin 5 mode out\nsave\n' | .
 printf 'show\n' | ./pico_sim --cli          # -> config still there
 ```
 
-## Build targets: W6300 (wired) vs Pico 2 W (WiFi)
+## Build targets: W6300 (wired) vs Pico 2 W (WiFi) vs plain Pico 2 (USB)
 
 The box firmware is transport-agnostic — everything above `net/box_net.h`
-(codec, dispatch, config, persist, CLI, GPIO) is identical across both, and is
-the same code the POSIX simulator runs. Pick the backend at build time:
+(codec, dispatch, config, persist, CLI, GPIO) is identical across all three, and is
+the same code the POSIX simulator runs. Pick the backend at build time (or use
+`sh build.sh <w6300|pico2w|usb>` which wraps the cmake/ninja + dist copy):
 
 ```sh
 # wired W6300 (default) — VERIFIED
@@ -152,12 +156,26 @@ cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DBOX_TARGET=pico2w -DPICO_BOARD=pico2_w \
     -DWIFI_SSID="myssid" -DWIFI_PASSWORD="mypass"
 ninja wizchip_dserv_config
+
+# plain Pico 2 / USB-CDC — real code, not yet hardware-validated
+cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DBOX_TARGET=usb -DPICO_BOARD=pico2
+ninja wizchip_dserv_config
 ```
 
 `-DBOX_TARGET=pico2w` swaps `box_net_w6300.h` (ioLibrary) for `box_net_lwip.h`
 (CYW43 + lwIP, poll mode) and links `pico_cyw43_arch_lwip_poll` instead of the
-WIZnet libs. The W6300-only test firmwares (`wizchip_udp_do`, `wizchip_dserv_wdt`)
-are skipped for the WiFi target.
+WIZnet libs. `-DBOX_TARGET=usb` swaps in `box_net_usb.h` (TinyUSB CDC), links
+`tinyusb_device` (the target **owns** TinyUSB, so `pico_stdio_usb` is off and the
+console/CLI+printf go to **UART**), compiles `usb_descriptors.c`, and selects
+`box_tusb_config.h` via `-DCFG_TUSB_CONFIG_FILE`. The W6300-only test firmwares
+(`wizchip_udp_do`, `wizchip_dserv_wdt`) are skipped for the WiFi **and** USB targets.
+
+The USB box has no IP: it speaks the same 128-byte frames over a CDC data interface
+to the host dserv module `modules/usbio`, which injects them with `tclserver_set_point`
+and forwards `ess/in_obs` + `config/*` + `cmd/*` back down. Dev/test transport only —
+USB-CDC is a middle latency tier (better than WiFi, not as clean as wired); DI/output
+timestamps stay box-local. Develop the module against `sim/pico_sim --pty` first.
 
 The Pico 2 W deps are NOT a separate download — `pico_cyw43_arch` ships in the
 pico-sdk, and its `cyw43-driver` (WiFi firmware blob) + `lwip` submodules come
@@ -370,3 +388,18 @@ an address on `192.168.11.0/24`.
 - [ ] Digilent scope calibration of `device` vs. real `DO_PIN` edge
 - [ ] Full DI-event channel over the 128-byte framing (edges + local timestamps)
 - [ ] Step 2: W6300 INT-driven RX (free the core) if desired
+- [x] USB-CDC transport seam **compiles + links clean** (`net/box_net_usb.h` + `box_tusb_config.h`
+      + `usb_descriptors.c`, `sh build.sh usb` → 216KB UF2; W6300 build unaffected) + `sim/pico_sim --pty`
+      host-side test harness (frames verified over a PTY)
+- [x] USB path VALIDATED in software — `modules/usbio` reworked (binary inbound framer + `usbioSendFrame`
+      outbound) and run against `pico_sim --pty` on a live dserv: watchdog inbound (M1) + timestamp-preserving
+      `ess/in_obs`→`state/sync/*` round-trip (M2, 4/4 edges match, offset self-consistent)
+- [x] USB on silicon — M1 (watchdog/uptime/link inbound) + M2 (timestamp-preserving `ess/in_obs`→`sync/*`
+      round-trip, 4/4 edges match) validated on a real board (W6300-EVB running `usb.uf2`, W6300 ignored),
+      data on the CDC1 port (`/dev/cu.usbmodem*3`). Bring-up bugs fixed: `have_dserv_target()` gated publishing
+      on a dserv IP the USB box lacks (→ 1 for `BOX_NET_USB`); `box_net_usb` uses `tud_ready` not DTR;
+      `modules/usbio` interruptible poll-reader (blocking read + close-mid-read wedged the dserv interp)
+- [x] USB M3 + M4 on silicon (macbook board, GP1->GP2 jumper): DI button events over USB; config-push over USB
+      re-applies pin modes; scheduled pulse Tier C = timer/1 on target (0 us logical) + looped di/2 30 ms pulse;
+      dual-CDC USB console (`box_net_usb_console_init` -> stdio on CDC0) gives `show`/CLI like the other firmwares.
+      **USB box fully validated end-to-end.**

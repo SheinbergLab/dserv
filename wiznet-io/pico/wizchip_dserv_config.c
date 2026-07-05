@@ -280,7 +280,13 @@ static void cli_service(void)
 }
 
 static int have_dserv_target(void)
-{ return g_cfg.dserv_ip[0] || g_cfg.dserv_ip[1] || g_cfg.dserv_ip[2] || g_cfg.dserv_ip[3]; }
+{
+#ifdef BOX_NET_USB
+    return 1;   /* USB: the host dserv module is always the target -- no IP to configure */
+#else
+    return g_cfg.dserv_ip[0] || g_cfg.dserv_ip[1] || g_cfg.dserv_ip[2] || g_cfg.dserv_ip[3];
+#endif
+}
 
 int main(void)
 {
@@ -293,6 +299,9 @@ int main(void)
     pico_gpio_apply_config(&g_cfg);
 
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
+#ifdef BOX_NET_USB
+    box_net_usb_console_init();   /* stdio (printf + CLI) -> USB CDC0, data on CDC1 */
+#endif
     dserv_framer_reset(&g_framer);
     box_clock_reset(&g_clock);
 #ifdef BOX_FUEL_MAX17048

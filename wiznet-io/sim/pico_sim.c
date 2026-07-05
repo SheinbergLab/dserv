@@ -34,6 +34,8 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>       /* posix_openpt / O_NONBLOCK for --pty */
+#include <stdint.h>
 
 static pico_config_t g_cfg;
 
@@ -208,11 +210,71 @@ static int run_cli(void)
     return 0;
 }
 
+static uint64_t pty_now_us(void)
+{
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000000ULL + (uint64_t) ts.tv_nsec / 1000ULL;
+}
+
+/* PTY frame handler: dispatch config/cmd as usual, and -- like the real box --
+ * echo the sync trio when ess/in_obs arrives, so the whole clock-sync round-trip
+ * is exercised through the usbio module. `ud` carries the master fd to write back. */
+static void pty_on_frame(const uint8_t *frame, void *ud)
+{
+    int fd = (int)(intptr_t) ud;
+    dserv_msg_t m;
+    if (dserv_msg_parse(frame, &m) == 0 && dserv_msg_name_eq(&m, "ess/in_obs")) {
+        uint64_t dus = m.timestamp;                 /* dserv obs-edge time */
+        int64_t  bus = (int64_t) pty_now_us();      /* our "box" receipt time */
+        int64_t  off = (int64_t) dus - bus;
+        uint8_t f[DSERV_MSG_LEN];
+        dserv_msg_int64(f, "extio/pico/state/sync/dserv_us", dus, (int64_t) dus); if (write(fd, f, DSERV_MSG_LEN)) {}
+        dserv_msg_int64(f, "extio/pico/state/sync/box_us",   dus, bus);           if (write(fd, f, DSERV_MSG_LEN)) {}
+        dserv_msg_int64(f, "extio/pico/state/sync/offset_us",dus, off);           if (write(fd, f, DSERV_MSG_LEN)) {}
+    }
+    on_frame(frame, 0);                             /* normal config/cmd dispatch + logging */
+}
+
+/* Act as a USB-CDC box on a pseudo-terminal: the host-side dserv usbio module
+ * opens the printed /dev/pts/N and speaks the SAME 128-byte frames. Proves the
+ * whole USB path (module binary framing both ways + sync round-trip) with no Pico.
+ * The module sets raw mode on open (its configure_serial_port), so binary passes
+ * untouched; a mangled first frame (pre-raw) self-heals via the framer's '>' resync. */
+static int run_pty(void)
+{
+    int mfd = posix_openpt(O_RDWR | O_NOCTTY);
+    if (mfd < 0 || grantpt(mfd) || unlockpt(mfd)) { perror("openpt"); return 1; }
+    fcntl(mfd, F_SETFL, O_NONBLOCK);
+    const char *slave = ptsname(mfd);
+
+    persist_load();
+    printf("USB-box sim on PTY: %s\n", slave);
+    printf("in dserv:  usbioOpen %s   (watchdog climbs; dservSet ess/in_obs -> sync echoes back)\n", slave);
+
+    dserv_framer_t fr; dserv_framer_reset(&fr);
+    uint8_t chunk[512], f[DSERV_MSG_LEN];
+    int wd = 0;
+    time_t last = 0;
+    for (;;) {
+        ssize_t n = read(mfd, chunk, sizeof chunk);          /* inbound config/cmd/in_obs */
+        if (n > 0) dserv_framer_feed(&fr, chunk, (uint32_t) n, pty_on_frame, (void *)(intptr_t) mfd);
+        time_t now = time(NULL);
+        if (now != last) {                                   /* ~1 Hz watchdog outbound */
+            last = now;
+            dserv_msg_int(f, "extio/pico/state/watchdog", 0, wd++);
+            if (write(mfd, f, DSERV_MSG_LEN)) {}
+        }
+        struct timespec s = { .tv_sec = 0, .tv_nsec = 2 * 1000 * 1000 }; nanosleep(&s, NULL);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);   /* line-buffered so redirected logs flush */
     if (argc >= 2 && !strcmp(argv[1], "--selftest")) return run_selftest();
     if (argc >= 2 && !strcmp(argv[1], "--cli"))      return run_cli();
+    if (argc >= 2 && !strcmp(argv[1], "--pty"))      return run_pty();
     if (argc >= 3 && !strcmp(argv[1], "--listen"))   return run_listen(atoi(argv[2]));
     if (argc >= 4 && !strcmp(argv[1], "--send-config"))
         return run_send_config(argv[2], atoi(argv[3]));
@@ -223,9 +285,10 @@ int main(int argc, char **argv)
         "usage:\n"
         "  %s --selftest\n"
         "  %s --cli                     (USB-CDC-style bootstrap/recovery REPL + persist)\n"
+        "  %s --pty                     (USB-box on a /dev/pts/N; test the usbio module, no Pico)\n"
         "  %s --listen <port>           (config channel; dserv pushes pico/config/*)\n"
         "  %s --send-config <ip> <port> (inject config w/o dserv)\n"
         "  %s --watchdog <host> [port]  (push heartbeats to dserv:4620)\n",
-        argv[0], argv[0], argv[0], argv[0], argv[0]);
+        argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 2;
 }

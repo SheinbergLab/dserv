@@ -4,6 +4,7 @@
  *
  *     default            -> box_net_w6300.h  (WIZnet W6300, hardwired TCP/IP)
  *     -DBOX_NET_LWIP     -> box_net_lwip.h   (Pico 2 W, CYW43 + lwIP software stack)
+ *     -DBOX_NET_USB      -> box_net_usb.h    (plain Pico 2, TinyUSB CDC to a host module)
  *
  * Everything above this seam (dserv_msg / dserv_config / pico_persist / pico_cli
  * / pico_gpio) is identical across both -- the same code the POSIX simulator
@@ -43,6 +44,8 @@
 
 #if defined(BOX_NET_LWIP)
 #include "box_net_lwip.h"
+#elif defined(BOX_NET_USB)
+#include "box_net_usb.h"
 #else
 #include "box_net_w6300.h"
 #endif
