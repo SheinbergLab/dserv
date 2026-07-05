@@ -3,32 +3,26 @@
 # Started from dsconf.tcl:
 #     subprocess extio "source [file join $dspath config/extioconf.tcl]"
 #
-# The box speaks the 128-byte dserv frames over USB-CDC; the usbio module bridges
-# them into the datapoint table from THIS isolated interp -- off the ess/main path,
-# and set up ONCE at dserv startup (it is rig hardware, not per-experiment, so it
-# does NOT belong in the ess post-pins that re-run on every system load).
+# The box speaks the 128-byte dserv frames over USB-CDC; usbio bridges them into the
+# datapoint table from THIS isolated interp -- off the ess/main path, set up once at
+# dserv startup (rig hardware, not per-experiment).
 #
-# Forwarding: this interp registers matches (dservAddMatch) so the dataserver
-# notifies it when ess/in_obs / config / cmd change (from the ess subprocess's
-# begin_obs, etc.), and forwards them to the box -- which is what drives obs_pin
-# and the clock sync. With autoreg firmware (USB_AUTOREG=1) the box self-declares
-# those forwards and usbio auto-wires them here; otherwise wire them in local/extio.tcl.
+# It (a) forwards ess/in_obs TO the box so it snaps its clock / drives obs_pin,
+# (b) AUTO-DISCOVERS each connected box from its telemetry and forwards that box's
+# config/cmd (pin setup, box_schedule_*), (c) injects the box's telemetry/DI/state
+# back into the datatable, and (d) hot-swaps the USB connection. No local config needed.
 #
-# Hot-swap: a 2 s timer (re)opens the box's data port when it (re)appears and
-# closes it when it vanishes -- so unplug/replug "just works" (usbioOpen/Close are
-# crash-proof; on re-open the autoreg box re-declares its forwards and they re-wire).
+# NB: usbio keeps PER-INTERP state, so loading it here (and in essconf) is safe.
 
 proc exit {args} { error "exit not available for this subprocess" }
 errormon enable
 
-# modules: usbio (the box bridge) + timer (periodic hot-swap servicing)
-foreach m {usbio timer} {
+foreach m { usbio timer } {
     load ${dspath}/modules/dserv_${m}[info sharedlibextension]
 }
 
 # The box exposes two CDCs: console (lower-numbered) + data (higher-numbered).
-# We open the DATA port. Override extio_find_data_port in local/extio.tcl if you
-# have other usbmodem/ttyACM devices and the highest one isn't the box.
+# Override in local/extio.tcl if the highest usbmodem/ttyACM isn't the box.
 proc extio_find_data_port {} {
     if { $::tcl_platform(os) == "Darwin" } {
         set ports [lsort -dictionary [glob -nocomplain /dev/cu.usbmodem*]]
@@ -39,9 +33,39 @@ proc extio_find_data_port {} {
     return ""
 }
 
-set ::extio_port ""
+# ---- forwarding (wired once; survives hot-swap re-opens since usbioSendFrame uses
+#      whatever fd is currently open) ----
+proc usbio_forward {dp data} { usbioSendFrame $dp [dservTimestamp $dp] $data }
 
-# open when the box (re)appears; close when our port vanishes (unplugged).
+proc extio_forward_box {name} {             ;# a named box's config/cmd (pin setup, box_schedule_*)
+    foreach pat [list extio/$name/config/* extio/$name/cmd/*] {
+        dservAddMatch $pat
+        dpointSetScript $pat usbio_forward
+    }
+}
+
+# ---- auto-discovery: a box advertises its name in extio/<name>/state/* telemetry.
+#      Scan the datatable (polled from extio_service) and wire each new box once.
+#      Table-scan, not a match script, so it does not depend on self-notification. ----
+array set ::extio_known {}
+proc extio_discover {} {
+    foreach k [dservKeys] {
+        if { [regexp {^extio/([^/]+)/state/} $k -> name] && ![info exists ::extio_known($name)] } {
+            set ::extio_known($name) 1
+            extio_forward_box $name
+            puts "extio: discovered box '$name' -- forwarding config/cmd"
+        }
+    }
+}
+
+proc extio_wire_common {} {                 ;# device-independent: sync + obs_pin
+    dservAddMatch ess/in_obs
+    dpointSetScript ess/in_obs usbio_forward
+}
+
+# ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
+#      (re)appears, close when it vanishes; then pick up any newly-seen box. ----
+set ::extio_port ""
 proc extio_service {} {
     set want [extio_find_data_port]
     if { $::extio_port ne "" && ![file exists $::extio_port] } {
@@ -57,13 +81,14 @@ proc extio_service {} {
             puts "extio: USB box connected on $want"
         }
     }
+    extio_discover
 }
-
 proc extio_timer_cb {dpoint data} { extio_service }
 
 proc init {} {
-    extio_service                       ;# open now if the box is already plugged in
-    timerPrefix extioTimer              ;# then poll for hot-swap every 2 s
+    extio_wire_common                       ;# forward ess/in_obs (persists across re-opens)
+    extio_service                           ;# open now if plugged in + discover
+    timerPrefix extioTimer                  ;# then poll (hot-swap + discovery) every 2 s
     dservAddExactMatch extioTimer/0
     dpointSetScript extioTimer/0 extio_timer_cb
     timerTickInterval 2000 2000
@@ -71,11 +96,8 @@ proc init {} {
 
 init
 
-# rig-specific overrides: explicit port, non-autoreg forwards, extra boxes, etc.
-#   e.g. proc extio_find_data_port {} { return /dev/cu.usbmodem1103 }   ;# pin the port
-#   e.g. proc usbio_forward {dp data} { usbioSendFrame $dp [dservTimestamp $dp] $data }
-#        foreach pat {ess/in_obs extio/macbook/config/* extio/macbook/cmd/*} {
-#            dservAddMatch $pat ; dpointSetScript $pat usbio_forward }   ;# non-autoreg box
+# optional rig-specific overrides (port pinning, extra forwards). Not needed for a
+# single auto-discovered box.
 if { [file exists $dspath/local/extio.tcl] } {
     source $dspath/local/extio.tcl
 }
