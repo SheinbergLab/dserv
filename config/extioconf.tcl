@@ -64,7 +64,8 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
-#      (re)appears, close when it vanishes; then pick up any newly-seen box. ----
+#      (re)appears, close when it vanishes, or when the reader thread has died while the
+#      port stayed put; then pick up any newly-seen box. ----
 set ::extio_port ""
 proc extio_service {} {
     set want [extio_find_data_port]
@@ -73,9 +74,18 @@ proc extio_service {} {
         puts "extio: USB box disconnected ($::extio_port)"
         set ::extio_port ""
     }
-    if { $want ne "" && $want ne $::extio_port } {
+    # A host sleep/wake can kill the reader thread with a transient POLLHUP while the
+    # write fd stays valid -- so the port file never vanishes and the check above misses
+    # it (obs_pin keeps toggling, but nothing is read back). Detect the dead reader and
+    # reopen the same port. usbioOpen stops+joins any prior worker first, so this is safe.
+    set reader_dead [expr { $::extio_port ne "" && ![usbioAlive] }]
+    if { $want ne "" && ($want ne $::extio_port || $reader_dead) } {
+        if { $reader_dead } {
+            puts "extio: reader stopped on $::extio_port -- reopening (wake-from-sleep recovery)"
+        }
         if { [catch { usbioOpen $want } err] } {
             puts stderr "extio: open $want failed: $err"
+            set ::extio_port ""
         } else {
             set ::extio_port $want
             puts "extio: USB box connected on $want"

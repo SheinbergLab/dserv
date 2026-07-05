@@ -127,14 +127,24 @@ static void process_text_line(usbio_info_t *info, char *line, int len)
   /* (%reg lines are ignored -- registration is implicit over USB) */
 }
 
-/* Feed a chunk of received bytes through the dual-mode framer. */
+/* Feed a chunk of received bytes through the dual-mode framer.
+ *
+ * RESYNC: binary frames are a fixed 128 bytes, zero-PADDED (name+value is short, the
+ * rest is 0x00). So opening mid-stream -- a reopen after a restart, hot-swap, or
+ * host sleep/wake -- almost always lands the reader on a 0x00 pad byte, NOT on a '>'.
+ * 0x00 is never a valid first byte of a '>' frame or an ASCII text line (%match /
+ * setdata), so we treat it as inter-frame filler: in idle we skip it (walking the
+ * padding until the next '>' frame start), and in text we treat it as proof we
+ * mis-entered mid-frame and reset to idle. Without this the framer would enter text
+ * mode on the first pad byte and never lock onto a binary boundary (rx_txt climbs,
+ * rx_bin stays 0) -- the exact wedge seen when the reader (re)opened mid-stream. */
 static void usbio_feed(usbio_info_t *info, const uint8_t *data, int n)
 {
   for (int i = 0; i < n; i++) {
     uint8_t b = data[i];
     if (info->fr_mode == 0) {                                 /* idle: pick mode by first byte */
       if (b == DPOINT_BINARY_MSG_CHAR) { info->fr_mode = 1; info->fr[0] = b; info->fr_have = 1; }
-      else if (b == '\n' || b == '\r') { /* skip blank */ }
+      else if (b == '\n' || b == '\r' || b == 0x00) { /* filler / resync: skip */ }
       else { info->fr_mode = 2; info->fr[0] = b; info->fr_have = 1; }
     }
     else if (info->fr_mode == 1) {                            /* binary: collect exactly 128 bytes */
@@ -149,7 +159,8 @@ static void usbio_feed(usbio_info_t *info, const uint8_t *data, int n)
         info->fr[info->fr_have] = '\0';
         process_text_line(info, (char *) info->fr, info->fr_have);
         info->fr_mode = 0; info->fr_have = 0;
-      } else if (info->fr_have < (int) sizeof info->fr - 1) {
+      } else if (b == 0x00) { info->fr_mode = 0; info->fr_have = 0; }  /* NUL: mis-framed -> resync */
+      else if (info->fr_have < (int) sizeof info->fr - 1) {
         info->fr[info->fr_have++] = b;
       } else { info->fr_mode = 0; info->fr_have = 0; }         /* overflow -> resync */
     }
@@ -271,16 +282,32 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   return TCL_OK;
 }
 
+/* usbioAlive  -- 1 if the reader thread is running on an open fd, else 0. A clean
+ * usbio_stop() always leaves fd == -1, so (fd >= 0 && running == 0) uniquely means the
+ * reader EXITED on its own -- e.g. a transient POLLHUP delivered across host sleep/wake
+ * (the flag latches, so the worker rightly breaks rather than busy-loop). The write fd
+ * stays valid, so the device file never vanishes and a file-existence hot-swap check
+ * misses it; a supervisor polls this to reopen. */
+static int usbio_alive_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  (void) objc; (void) objv;
+  usbio_info_t *info = (usbio_info_t *) data;
+  Tcl_SetObjResult(interp, Tcl_NewIntObj((info->usbio_fd >= 0 && info->running) ? 1 : 0));
+  return TCL_OK;
+}
+
 /* usbioStats  -- rx frame counters (no datapoint injection, so it works even if
- * injection is the thing failing). rx_bin = frames parsed, rx_bad = framer desyncs. */
+ * injection is the thing failing). rx_bin = frames parsed, rx_bad = framer desyncs.
+ * alive = reader thread up on an open fd (0 with fd >= 0 => reader died, see usbioAlive). */
 static int usbio_stats_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
   (void) objc; (void) objv;
   usbio_info_t *info = (usbio_info_t *) data;
   char buf[160];
-  snprintf(buf, sizeof buf, "rx_bin %llu rx_bad %llu rx_txt %llu fd %d",
+  snprintf(buf, sizeof buf, "rx_bin %llu rx_bad %llu rx_txt %llu fd %d alive %d",
            (unsigned long long) info->rx_bin, (unsigned long long) info->rx_bad,
-           (unsigned long long) info->rx_txt, info->usbio_fd);
+           (unsigned long long) info->rx_txt, info->usbio_fd,
+           (info->usbio_fd >= 0 && info->running) ? 1 : 0);
   Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
   return TCL_OK;
 }
@@ -359,5 +386,7 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
                        (Tcl_ObjCmdProc *) usbio_sendframe_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioStats",
                        (Tcl_ObjCmdProc *) usbio_stats_command, (ClientData) info, NULL);
+  Tcl_CreateObjCommand(interp, "usbioAlive",
+                       (Tcl_ObjCmdProc *) usbio_alive_command, (ClientData) info, NULL);
   return TCL_OK;
 }
