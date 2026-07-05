@@ -59,10 +59,15 @@ typedef struct usbio_info_s
   /* auto-registration: patterns the box has asked us to forward (from its %match) */
   int  nwired;
   char wired[USBIO_MAXWIRE][96];
+  /* rx instrumentation (queried via usbioStats -- no datapoint injection) */
+  uint64_t rx_bin;    /* binary frames parsed + handed to tclserver_set_point */
+  uint64_t rx_bad;    /* frames failing the bounds check (framer desync) */
+  uint64_t rx_txt;    /* text lines (setdata / %match) */
 } usbio_info_t;
 
-/* global to this module */
-static usbio_info_t g_usbioInfo;
+/* NB: state is PER-INTERP (allocated in Init, passed as command ClientData) -- this
+ * module is loaded into multiple subprocess interps (essconf + extioconf) that share
+ * one address space, so a single static struct would be clobbered/raced across them. */
 
 /* One 128-byte binary frame ('>' + payload, zero-padded) -> datapoint. Mirrors the
  * parse in Dataserver.cpp's '>' handler; bounds every length so a malformed frame
@@ -71,14 +76,15 @@ static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
 {
   const uint8_t *p = frame + 1;                 /* skip '>' */
   uint16_t varlen; memcpy(&varlen, p, sizeof varlen); p += sizeof varlen;
-  if (varlen == 0 || varlen > 100) return;
+  if (varlen == 0 || varlen > 100) { info->rx_bad++; return; }
   char name[128];
   memcpy(name, p, varlen); name[varlen] = '\0'; p += varlen;
   uint64_t ts;    memcpy(&ts,    p, sizeof ts);    p += sizeof ts;
   uint32_t dtype; memcpy(&dtype, p, sizeof dtype); p += sizeof dtype;
   uint32_t dlen;  memcpy(&dlen,  p, sizeof dlen);  p += sizeof dlen;
-  if ((int) varlen + (int) dlen > 109) return;  /* keeps p+dlen inside the 128B frame */
+  if ((int) varlen + (int) dlen > 109) { info->rx_bad++; return; }
 
+  info->rx_bin++;
   if (!ts) ts = tclserver_now(info->tclserver);
   ds_datapoint_t *dp = dpoint_new(name, ts, (ds_datatype_t) dtype, dlen, (unsigned char *) p);
   if (dp) tclserver_set_point(info->tclserver, dp);
@@ -107,6 +113,7 @@ static void usbio_autowire(usbio_info_t *info, const char *line)
 /* Text path: "setdata <string>" -> datapoint; "%match ..." -> auto-wire a forward. */
 static void process_text_line(usbio_info_t *info, char *line, int len)
 {
+  info->rx_txt++;
   if (len > 8 && !strncmp(line, "setdata ", 8)) {
     ds_datapoint_t *dpoint = dpoint_from_string(line + 8, len - 8);
     if (dpoint) {
@@ -264,6 +271,20 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   return TCL_OK;
 }
 
+/* usbioStats  -- rx frame counters (no datapoint injection, so it works even if
+ * injection is the thing failing). rx_bin = frames parsed, rx_bad = framer desyncs. */
+static int usbio_stats_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  (void) objc; (void) objv;
+  usbio_info_t *info = (usbio_info_t *) data;
+  char buf[160];
+  snprintf(buf, sizeof buf, "rx_bin %llu rx_bad %llu rx_txt %llu fd %d",
+           (unsigned long long) info->rx_bin, (unsigned long long) info->rx_bad,
+           (unsigned long long) info->rx_txt, info->usbio_fd);
+  Tcl_SetObjResult(interp, Tcl_NewStringObj(buf, -1));
+  return TCL_OK;
+}
+
 static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
   usbio_info_t *info = (usbio_info_t *) data;
@@ -281,6 +302,7 @@ static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl
   info->usbio_fd = fd;
   info->fr_mode = 0; info->fr_have = 0;           /* fresh framer per open */
   info->nwired = 0;                               /* re-learn forwards from the box */
+  info->rx_bin = info->rx_bad = info->rx_txt = 0; /* fresh rx counters */
   info->running = 1;
   if (pthread_create(&info->worker, NULL, workerThread, info) != 0) {
     info->running = 0; close(fd); info->usbio_fd = -1;
@@ -319,20 +341,23 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
       == NULL) {
     return TCL_ERROR;
   }
-  g_usbioInfo.usbio_fd = -1;
-  g_usbioInfo.running = 0;
-  g_usbioInfo.fr_mode = 0;
-  g_usbioInfo.fr_have = 0;
-  g_usbioInfo.nwired = 0;
-  g_usbioInfo.tclserver = tclserver_get_from_interp(interp);
+  /* per-interp state (see note at g_usbioInfo removal): each Init gets its own
+   * instance so essconf's usbio and extioconf's usbio don't share one struct. */
+  usbio_info_t *info = (usbio_info_t *) calloc(1, sizeof *info);
+  if (!info) return TCL_ERROR;
+  info->usbio_fd = -1;
+  info->tclserver = tclserver_get_from_interp(interp);
+  /* running / fr_mode / fr_have / nwired / rx_* are zero-initialised by calloc */
 
   Tcl_CreateObjCommand(interp, "usbioOpen",
-                       (Tcl_ObjCmdProc *) usbio_open_command, (ClientData) &g_usbioInfo, NULL);
+                       (Tcl_ObjCmdProc *) usbio_open_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioClose",
-                       (Tcl_ObjCmdProc *) usbio_close_command, (ClientData) &g_usbioInfo, NULL);
+                       (Tcl_ObjCmdProc *) usbio_close_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioSend",
-                       (Tcl_ObjCmdProc *) usbio_send_command, (ClientData) &g_usbioInfo, NULL);
+                       (Tcl_ObjCmdProc *) usbio_send_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioSendFrame",
-                       (Tcl_ObjCmdProc *) usbio_sendframe_command, (ClientData) &g_usbioInfo, NULL);
+                       (Tcl_ObjCmdProc *) usbio_sendframe_command, (ClientData) info, NULL);
+  Tcl_CreateObjCommand(interp, "usbioStats",
+                       (Tcl_ObjCmdProc *) usbio_stats_command, (ClientData) info, NULL);
   return TCL_OK;
 }
