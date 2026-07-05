@@ -60,6 +60,8 @@ typedef struct {
     uint8_t  ain_gain;                  /* ADS1115 PGA/FSR:   0=default(4.096V), 1..6=6.144/4.096/2.048/1.024/0.512/0.256 */
     uint8_t  ain_en;                    /* 1 = activate ADS1115 analog-in (ADC must be wired); 0 = off (default),
                                          * leaves the I2C pins free for GPIO. Applied at boot (save+reboot). */
+    uint8_t  transport_mode;            /* DUAL build only: 0=auto (default), 1=eth, 2=usb (XPORT_*). Overrides
+                                         * boot auto-detect. Append-only field -> pico_persist v11. Applied at boot. */
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -130,6 +132,19 @@ static inline const char *dserv_mode_str(uint8_t m)
 
 static inline const char *dserv_netmode_str(uint8_t mode)
 { return mode == NET_MODE_STATIC ? "static" : "dhcp"; }
+
+/* pico_config_t.transport_mode (DUAL build): boot transport override. Values match
+ * box_net_dual.h's BOX_MODE_* (0/1/2). auto (0) = boot auto-detect (link -> Ethernet). */
+enum { XPORT_AUTO = 0, XPORT_ETH = 1, XPORT_USB = 2 };
+static inline const char *dserv_xport_str(uint8_t m)
+{ return m == XPORT_ETH ? "eth" : m == XPORT_USB ? "usb" : "auto"; }
+static inline int dserv_xport_val(const char *w)
+{
+    if (!strcmp(w, "auto")) return XPORT_AUTO;
+    if (!strcmp(w, "eth"))  return XPORT_ETH;
+    if (!strcmp(w, "usb"))  return XPORT_USB;
+    return -1;
+}
 
 /* obs-mirror accessors: enable is a flag distinct from the pin, so GP0 is a
  * valid mirror pin and the zeroed factory default is "off". */

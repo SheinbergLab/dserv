@@ -46,6 +46,31 @@ elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv 
         hardware_flash
         tinyusb_device                  # we own TinyUSB; pico_stdio_usb is NOT used here
         tinyusb_board)
+elseif(BOX_TARGET STREQUAL "dual")      # W6300-EVB: Ethernet OR USB, boot-selected (BOX_NET_DUAL)
+    target_sources(${CFG_NAME} PRIVATE
+        usb_descriptors.c
+        box_net_w6300_impl.c            # both backends compiled in; runtime vtable picks one
+        box_net_usb_impl.c
+        box_net_dual_impl.c)
+    target_compile_definitions(${CFG_NAME} PRIVATE
+        BOX_NET_DUAL
+        BOX_USB_FORWARD_REGISTER        # USB mode self-declares its forwards (modules/usbio auto-wires)
+        CFG_TUSB_CONFIG_FILE=\"box_tusb_config.h\")
+    if(DUAL_STAGE1_ETH)                 # Stage-1 bench: AUTO -> W6300 (default AUTO -> USB)
+        target_compile_definitions(${CFG_NAME} PRIVATE BOX_DUAL_STAGE1_ETH)
+    endif()
+    target_link_libraries(${CFG_NAME} PRIVATE   # UNION of the usb + w6300 link libs
+        pico_stdlib
+        pico_unique_id
+        hardware_spi
+        hardware_dma
+        hardware_flash
+        tinyusb_device                  # own TinyUSB (dual-CDC); NOT pico_stdio_usb
+        tinyusb_board
+        ETHERNET_FILES
+        IOLIBRARY_FILES
+        LOOPBACK_FILES
+        DHCP_FILES)
 else()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
@@ -64,7 +89,7 @@ target_link_libraries(${CFG_NAME} PRIVATE hardware_i2c)
 
 # The usb target owns TinyUSB for the data/CLI CDCs, so its stdio (printf + CLI)
 # goes to UART instead of clashing with pico_stdio_usb. All others: CLI on USB.
-if(BOX_TARGET STREQUAL "usb")
+if(BOX_TARGET STREQUAL "usb" OR BOX_TARGET STREQUAL "dual")
     pico_enable_stdio_usb(${CFG_NAME} 0)    # we own TinyUSB; console goes to USB CDC0 via
     pico_enable_stdio_uart(${CFG_NAME} 1)   # box_net_usb_console_init(). UART kept as a boot/fallback console.
 else()
@@ -75,7 +100,7 @@ pico_add_extra_outputs(${CFG_NAME})
 
 # ===================== W6300-only test firmwares =========================
 # These call ioLibrary directly (not through box_net), so wired-only.
-if(NOT BOX_TARGET STREQUAL "pico2w" AND NOT BOX_TARGET STREQUAL "usb")
+if(NOT BOX_TARGET STREQUAL "pico2w" AND NOT BOX_TARGET STREQUAL "usb" AND NOT BOX_TARGET STREQUAL "dual")
 
     set(TARGET_NAME wizchip_udp_do)
     add_executable(${TARGET_NAME} wizchip_udp_do.c)

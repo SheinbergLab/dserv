@@ -111,15 +111,29 @@ static inline void bn_apply_static(const pico_config_t *cfg)
     network_initialize(bn_netinfo);
 }
 
-static inline int box_net_init(const pico_config_t *cfg)
+/* SPI + wizchip bring-up, done exactly ONCE. Shared (this header's file scope) with
+ * box_net_w6300_link_up() in the dual image so the auto-detect probe and the following
+ * box_net_init() don't re-run wizchip_spi_initialize() and double-claim the PIO/DMA
+ * (which panics). Harmless in the single wired build (called once anyway). */
+static uint8_t bn_hw_up = 0;
+static inline void bn_hw_bringup(void)
 {
-    bn_make_mac();
-
+    if (bn_hw_up) return;
     wizchip_spi_initialize();
     wizchip_cris_initialize();
     wizchip_reset();
     wizchip_initialize();
-    wizchip_check();
+    bn_hw_up = 1;
+}
+
+static inline int box_net_init(const pico_config_t *cfg)
+{
+    bn_make_mac();
+    bn_hw_bringup();
+#ifndef BOX_NET_DUAL
+    wizchip_check();   /* wired build: chip is always present; while(1)-on-mismatch is fine.
+                        * The dual build reads getCIDR() itself in box_net_w6300_link_up(). */
+#endif
 
     if (cfg->net_mode == NET_MODE_STATIC) {
         bn_apply_static(cfg);
@@ -143,6 +157,11 @@ static inline int box_net_init(const pico_config_t *cfg)
     add_repeating_timer_ms(1000, bn_dhcp_1s_cb, NULL, &bn_dhcp_timer);
     bn_dhcp_active = 1;
 
+#ifndef BOX_NET_DUAL
+    /* Wired build: briefly wait for the first lease just to log the IP. The DUAL image
+     * MUST NOT block here -- tusb_init() has already begun USB enumeration and the
+     * console CDC is serviced only from the main loop, so an 8 s stall kills it. DHCP
+     * still runs every loop via box_net_poll(), so the lease just lands a little later. */
     absolute_time_t deadline = make_timeout_time_ms(8000);   /* wait to log the IP */
     while (!bn_leased && absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
         DHCP_run();
@@ -150,6 +169,7 @@ static inline int box_net_init(const pico_config_t *cfg)
     }
     if (!bn_leased) printf("dhcp: no lease yet, will keep trying\n");
     print_network_information(bn_netinfo);
+#endif
     bn_booted = 1;
     return 0;
 }

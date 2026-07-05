@@ -3,6 +3,7 @@
 #
 #   sh build.sh              # W6300 (wired) target, default
 #   sh build.sh pico2w       # Pico 2 W / WiFi target
+#   sh build.sh dual         # W6300-EVB: Ethernet OR USB, auto-selected at boot
 #
 # Env overrides:
 #   WIZNET_PICO_C         path to a WIZnet-PICO-C clone (cloned here if unset/missing)
@@ -46,8 +47,12 @@ case "$TARGET" in
   usb)                                                # plain Pico 2, USB-CDC to a host dserv (modules/usbio)
     FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=pico2"
     [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1" ;;   # box self-declares its forwards
+  dual)                                               # W6300-EVB: Ethernet OR USB, auto-selected at boot
+    # Pass DUAL_STAGE1_ETH ALWAYS (0/1), never conditionally: build_dual's CMake cache
+    # would otherwise retain a stale =1 from a prior ETH build and silently flip AUTO.
+    FLAGS="-DBOX_TARGET=dual -DPICO_BOARD=pico2 -DDUAL_STAGE1_ETH=${DUAL_STAGE1_ETH:-0}" ;;   # Stage-1 bench: set =1 for AUTO->Ethernet
   *)
-    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb)" >&2; exit 1 ;;
+    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | dual)" >&2; exit 1 ;;
 esac
 # ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
 BUILD="$WIZ/build_$TARGET"

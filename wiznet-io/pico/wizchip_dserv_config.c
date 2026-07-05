@@ -282,8 +282,11 @@ static void cli_service(void)
 
 static int have_dserv_target(void)
 {
-#ifdef BOX_NET_USB
+#if defined(BOX_NET_USB)
     return 1;   /* USB: the host dserv module is always the target -- no IP to configure */
+#elif defined(BOX_NET_DUAL)
+    if (box_net_is_usb()) return 1;   /* USB mode: host module is always the target */
+    return g_cfg.dserv_ip[0] || g_cfg.dserv_ip[1] || g_cfg.dserv_ip[2] || g_cfg.dserv_ip[3];
 #else
     return g_cfg.dserv_ip[0] || g_cfg.dserv_ip[1] || g_cfg.dserv_ip[2] || g_cfg.dserv_ip[3];
 #endif
@@ -299,8 +302,13 @@ int main(void)
     else                               printf("config: none/invalid -> defaults\n");
     pico_gpio_apply_config(&g_cfg);
 
+#ifdef BOX_NET_DUAL
+    box_net_dual_usb_init();                 /* own TinyUSB in BOTH modes (CDC0 console) */
+    box_net_dual_usb_console_init();             /* console up BEFORE the probe so net-probe logs are visible */
+    box_net_select(g_cfg.transport_mode, &g_cfg); /* flash override (auto/eth/usb); auto -> live-cable detect */
+#endif
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
-#ifdef BOX_NET_USB
+#if defined(BOX_NET_USB)
     box_net_usb_console_init();   /* stdio (printf + CLI) -> USB CDC0, data on CDC1 */
 #endif
     dserv_framer_reset(&g_framer);
@@ -314,6 +322,9 @@ int main(void)
 
     uint32_t last_hb = 0, reg_tick = 0;
     while (1) {
+#ifdef BOX_NET_DUAL
+        box_net_dual_usb_task();   /* service TinyUSB every loop: CDC0 console always, CDC1 data in USB mode */
+#endif
         box_net_poll();
 
         /* config/cmd in (dserv -> box) */
@@ -327,7 +338,9 @@ int main(void)
         if (have_dserv_target()) {
             uint16_t port = g_cfg.dserv_port ? g_cfg.dserv_port : 4620;
             int up = box_net_client_service(g_cfg.dserv_ip, port);
-#ifndef BOX_USB_FORWARD_REGISTER
+#if defined(BOX_NET_DUAL)
+            if (up == 2 && !box_net_is_usb()) self_register(0);   /* Eth: reg on connect; USB: delayed autoreg below */
+#elif !defined(BOX_USB_FORWARD_REGISTER)
             if (up == 2) self_register(0);     /* wired/wifi: register on connect. (USB autoreg emits later,
                                                 * NOT on connect -- writing CDC1 before macOS finishes creating
                                                 * its tty drops the data port; the delayed periodic below is safe.) */
@@ -346,7 +359,10 @@ int main(void)
                 uint32_t now = to_ms_since_boot(get_absolute_time());
                 if (now - last_hb >= HEARTBEAT_MS) {
                     last_hb = now; publish_heartbeat();
-#ifdef BOX_USB_FORWARD_REGISTER
+#if defined(BOX_NET_DUAL)
+                    /* USB mode only: first emit ~5s in (after macOS has both CDC ttys), then every ~3s */
+                    if (box_net_is_usb() && ++reg_tick >= 5 && reg_tick % 3 == 0) self_register(1);
+#elif defined(BOX_USB_FORWARD_REGISTER)
                     /* first emit ~5s in (after macOS has both CDC ttys), then every ~3s, quietly */
                     if (++reg_tick >= 5 && reg_tick % 3 == 0) self_register(1);
 #endif

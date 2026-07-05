@@ -39,13 +39,14 @@
 
 #include "dserv_config.h"
 #include <stdint.h>
-
-#define BOX_NET_RESET (-1)   /* box_net_server_poll: reset framer on new conn */
+#include "box_net_iface.h"   /* BOX_NET_RESET + the runtime vtable type */
 
 #if defined(BOX_NET_LWIP)
 #include "box_net_lwip.h"
 #elif defined(BOX_NET_USB)
 #include "box_net_usb.h"
+#elif defined(BOX_NET_DUAL)
+#include "box_net_dual.h"    /* one image, Ethernet OR USB, boot-selected */
 #else
 #include "box_net_w6300.h"
 #endif
