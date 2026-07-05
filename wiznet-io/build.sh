@@ -44,7 +44,8 @@ case "$TARGET" in
   thingplus)                                          # SparkFun Thing Plus RP2350 (RM2 + MAX17048 fuel gauge)
     FLAGS="-DBOX_TARGET=pico2w -DPICO_BOARD=sparkfun_thingplus_rp2350 -DBOX_FUEL_MAX17048=1 $WIFI" ;;
   usb)                                                # plain Pico 2, USB-CDC to a host dserv (modules/usbio)
-    FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=pico2" ;;
+    FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=pico2"
+    [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1" ;;   # box self-declares its forwards
   *)
     echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb)" >&2; exit 1 ;;
 esac

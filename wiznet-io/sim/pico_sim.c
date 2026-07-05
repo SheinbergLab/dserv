@@ -263,6 +263,12 @@ static int run_pty(void)
             last = now;
             dserv_msg_int(f, "extio/pico/state/watchdog", 0, wd++);
             if (write(mfd, f, DSERV_MSG_LEN)) {}
+            /* mimic -DBOX_USB_FORWARD_REGISTER: declare our forwards so modules/usbio
+             * auto-wires them (ip/port are ignored over USB). */
+            const char *reg = "%match 0.0.0.0 0 ess/in_obs 1\n"
+                              "%match 0.0.0.0 0 extio/pico/config/* 1\n"
+                              "%match 0.0.0.0 0 extio/pico/cmd/* 1\n";
+            if (write(mfd, reg, strlen(reg))) {}
         }
         struct timespec s = { .tv_sec = 0, .tv_nsec = 2 * 1000 * 1000 }; nanosleep(&s, NULL);
     }

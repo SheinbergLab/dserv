@@ -403,3 +403,8 @@ an address on `192.168.11.0/24`.
       re-applies pin modes; scheduled pulse Tier C = timer/1 on target (0 us logical) + looped di/2 30 ms pulse;
       dual-CDC USB console (`box_net_usb_console_init` -> stdio on CDC0) gives `show`/CLI like the other firmwares.
       **USB box fully validated end-to-end.**
+- [x] USB v2 auto-registration (`USB_AUTOREG=1` -> `BOX_USB_FORWARD_REGISTER`): the box periodically declares its
+      own `%match` forwards over USB; `modules/usbio` parses them and auto-wires the forwards (glob `dpointSetScript`),
+      so a USB box needs only `usbioOpen` in post-pins (see `host/post-pins-usb.tcl`). Validated on silicon — zero-wiring
+      `ess/in_obs`->sync round-trip. **Gotcha:** the box must NOT write the data CDC *on connect* (before macOS creates
+      its tty) or the 2nd CDC port drops and macOS caches the bad enumeration; the `%match` emit is delayed ~5s to avoid it.

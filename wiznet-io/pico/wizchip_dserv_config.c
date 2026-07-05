@@ -182,7 +182,7 @@ static void sched_publish_fired(void)                  /* call from the main loo
 /* ---- self-registration: tell dserv to push us config+cmd (box-initiated) ----
  * Sent on every (re)connect, so the box is autonomous: reset it, or restart
  * dserv, and it re-registers itself from its saved flash config. */
-static void self_register(void)
+static void self_register(int quiet)
 {
     uint8_t bip[4]; box_net_local_ip(bip);
     uint16_t dport = g_cfg.dserv_port ? g_cfg.dserv_port : 4620;
@@ -196,8 +196,9 @@ static void self_register(void)
     box_net_send_command(g_cfg.dserv_ip, dport, s);
     snprintf(s, sizeof s, "%%match %u.%u.%u.%u %u %s 1\n", bip[0], bip[1], bip[2], bip[3], CFG_PORT, SYNC_DP);
     box_net_send_command(g_cfg.dserv_ip, dport, s);   /* obs-period clock sync */
-    printf("self-registered with dserv %u.%u.%u.%u:%u as %s\n",
-           g_cfg.dserv_ip[0], g_cfg.dserv_ip[1], g_cfg.dserv_ip[2], g_cfg.dserv_ip[3], dport, pfx);
+    if (!quiet)
+        printf("self-registered with dserv %u.%u.%u.%u:%u as %s\n",
+               g_cfg.dserv_ip[0], g_cfg.dserv_ip[1], g_cfg.dserv_ip[2], g_cfg.dserv_ip[3], dport, pfx);
 }
 
 /* ---- config/cmd in: dispatch one 128B datapoint frame ---- */
@@ -311,7 +312,7 @@ int main(void)
     printf("box ready [%s]: config TCP :%d  |  USB-CDC CLI (type 'help')\n",
            box_net_backend_name(), CFG_PORT);
 
-    uint32_t last_hb = 0;
+    uint32_t last_hb = 0, reg_tick = 0;
     while (1) {
         box_net_poll();
 
@@ -326,7 +327,11 @@ int main(void)
         if (have_dserv_target()) {
             uint16_t port = g_cfg.dserv_port ? g_cfg.dserv_port : 4620;
             int up = box_net_client_service(g_cfg.dserv_ip, port);
-            if (up == 2) self_register();      /* just (re)connected -> self-register */
+#ifndef BOX_USB_FORWARD_REGISTER
+            if (up == 2) self_register(0);     /* wired/wifi: register on connect. (USB autoreg emits later,
+                                                * NOT on connect -- writing CDC1 before macOS finishes creating
+                                                * its tty drops the data port; the delayed periodic below is safe.) */
+#endif
             if (up >= 1) {
                 di_event_t e;
                 while (pico_gpio_poll_di(&g_cfg, &e)) publish_di(&e);   /* debounced edges */
@@ -339,7 +344,13 @@ int main(void)
                 }
                 sched_publish_fired();                 /* post state/timer/<n> for fired schedules */
                 uint32_t now = to_ms_since_boot(get_absolute_time());
-                if (now - last_hb >= HEARTBEAT_MS) { last_hb = now; publish_heartbeat(); }
+                if (now - last_hb >= HEARTBEAT_MS) {
+                    last_hb = now; publish_heartbeat();
+#ifdef BOX_USB_FORWARD_REGISTER
+                    /* first emit ~5s in (after macOS has both CDC ttys), then every ~3s, quietly */
+                    if (++reg_tick >= 5 && reg_tick % 3 == 0) self_register(1);
+#endif
+                }
             }
         }
     }

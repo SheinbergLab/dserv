@@ -37,6 +37,9 @@ elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv 
     target_compile_definitions(${CFG_NAME} PRIVATE
         BOX_NET_USB
         CFG_TUSB_CONFIG_FILE=\"box_tusb_config.h\")   # our config, not the SDK's (shared source dir)
+    if(BOX_USB_FORWARD_REGISTER)        # box emits its %match forwards over USB (modules/usbio auto-wires)
+        target_compile_definitions(${CFG_NAME} PRIVATE BOX_USB_FORWARD_REGISTER)
+    endif()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
         pico_unique_id
