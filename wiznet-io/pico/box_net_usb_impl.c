@@ -10,6 +10,7 @@
  */
 #include "box_net_iface.h"
 #include "box_net_usb.h"
+#include "pico/time.h"
 
 const box_net_vtable_t box_net_usb_vt = {
     .init           = box_net_init,
@@ -25,3 +26,17 @@ const box_net_vtable_t box_net_usb_vt = {
 void box_net_dual_usb_init(void)         { if (!tusb_inited()) tusb_init(); }
 void box_net_dual_usb_console_init(void) { box_net_usb_console_init(); }
 void box_net_dual_usb_task(void)         { tud_task(); }
+
+/* Pump TinyUSB (tightly) until the host has mounted us -- i.e. the CDCs have
+ * enumerated -- or a timeout elapses. Called BEFORE the transport probe / net init so
+ * the USB console+data ALWAYS come up regardless of what the W6300 side does: neither
+ * the link-detect wait nor a DHCP/connect stall can then prevent enumeration. Times
+ * out harmlessly when USB is power-only (no host will ever mount us). */
+void box_net_dual_usb_wait_mounted(int timeout_ms)
+{
+    absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
+    while (!tud_mounted() && absolute_time_diff_us(get_absolute_time(), deadline) > 0) {
+        tud_task();
+        sleep_us(200);
+    }
+}

@@ -27,6 +27,7 @@ int  box_net_w6300_link_up(void (*service)(void));         /* auto-detect: chip 
 void box_net_dual_usb_init(void);
 void box_net_dual_usb_console_init(void);
 void box_net_dual_usb_task(void);
+void box_net_dual_usb_wait_mounted(int timeout_ms);   /* enumerate USB before the probe can block */
 
 /* seam dispatchers -- keep the main loop's box_net_* call sites unchanged */
 static inline int  box_net_init(const pico_config_t *c)                    { return box_net_active->init(c); }

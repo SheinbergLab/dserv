@@ -304,7 +304,8 @@ int main(void)
 
 #ifdef BOX_NET_DUAL
     box_net_dual_usb_init();                 /* own TinyUSB in BOTH modes (CDC0 console) */
-    box_net_dual_usb_console_init();             /* console up BEFORE the probe so net-probe logs are visible */
+    box_net_dual_usb_console_init();          /* console up BEFORE the probe so net-probe logs are visible */
+    box_net_dual_usb_wait_mounted(1500);      /* CDCs enumerate NOW, before the probe/net-init can block them */
     box_net_select(g_cfg.transport_mode, &g_cfg); /* flash override (auto/eth/usb); auto -> live-cable detect */
 #endif
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
