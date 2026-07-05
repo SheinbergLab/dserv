@@ -43,6 +43,8 @@
 #include "Datapoint.h"
 #include "tclserver_api.h"
 
+#define USBIO_MAXWIRE 12             /* de-dup table for auto-registered forward patterns */
+
 typedef struct usbio_info_s
 {
   int usbio_fd;
@@ -54,6 +56,9 @@ typedef struct usbio_info_s
   int fr_mode;                 /* 0 idle, 1 binary(128B), 2 text(newline) */
   int fr_have;
   uint8_t fr[256];
+  /* auto-registration: patterns the box has asked us to forward (from its %match) */
+  int  nwired;
+  char wired[USBIO_MAXWIRE][96];
 } usbio_info_t;
 
 /* global to this module */
@@ -79,7 +84,27 @@ static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
   if (dp) tclserver_set_point(info->tclserver, dp);
 }
 
-/* Legacy text path: "setdata <string>" -> datapoint. */
+/* Auto-registration: the box (built with -DBOX_USB_FORWARD_REGISTER) periodically
+ * emits its "%match <ip> <port> <pattern> <onoff>" lines down the CDC. We ignore the
+ * ip/port (meaningless over USB), de-dup the pattern, and wire a forward for it:
+ * dservAddMatch + dpointSetScript -> usbioSendFrame (glob-capable, timestamp-exact).
+ * So a USB box self-declares what to forward -- no static post-pins wiring needed. */
+static void usbio_autowire(usbio_info_t *info, const char *line)
+{
+  char pat[96];
+  if (sscanf(line, "%%match %*s %*s %95s", pat) != 1) return;   /* 4th token = pattern */
+  for (int i = 0; i < info->nwired; i++) if (!strcmp(info->wired[i], pat)) return;  /* already wired */
+  if (info->nwired < USBIO_MAXWIRE) strncpy(info->wired[info->nwired++], pat, sizeof info->wired[0] - 1);
+
+  char script[320];
+  snprintf(script, sizeof script,
+    "if {![llength [info procs usbio_forward]]} "
+    "{proc usbio_forward {dp data} {usbioSendFrame $dp [dservTimestamp $dp] $data}} ; "
+    "catch {dservAddMatch {%s}} ; catch {dpointSetScript {%s} usbio_forward}", pat, pat);
+  tclserver_queue_script(info->tclserver, script, 1);          /* run in the interp, no reply */
+}
+
+/* Text path: "setdata <string>" -> datapoint; "%match ..." -> auto-wire a forward. */
 static void process_text_line(usbio_info_t *info, char *line, int len)
 {
   if (len > 8 && !strncmp(line, "setdata ", 8)) {
@@ -89,7 +114,10 @@ static void process_text_line(usbio_info_t *info, char *line, int len)
       tclserver_set_point(info->tclserver, dpoint);
     }
   }
-  /* (v2: else if line[0]=='%' -> parse the box's %match lines to auto-wire forwards) */
+  else if (len > 7 && !strncmp(line, "%match ", 7)) {
+    usbio_autowire(info, line);
+  }
+  /* (%reg lines are ignored -- registration is implicit over USB) */
 }
 
 /* Feed a chunk of received bytes through the dual-mode framer. */
@@ -252,6 +280,7 @@ static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl
   int ret = configure_serial_port(fd);
   info->usbio_fd = fd;
   info->fr_mode = 0; info->fr_have = 0;           /* fresh framer per open */
+  info->nwired = 0;                               /* re-learn forwards from the box */
   info->running = 1;
   if (pthread_create(&info->worker, NULL, workerThread, info) != 0) {
     info->running = 0; close(fd); info->usbio_fd = -1;
@@ -294,6 +323,7 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
   g_usbioInfo.running = 0;
   g_usbioInfo.fr_mode = 0;
   g_usbioInfo.fr_have = 0;
+  g_usbioInfo.nwired = 0;
   g_usbioInfo.tclserver = tclserver_get_from_interp(interp);
 
   Tcl_CreateObjCommand(interp, "usbioOpen",
