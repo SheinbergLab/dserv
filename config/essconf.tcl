@@ -21,7 +21,7 @@ proc exit {args} { error "exit not available for this subprocess" }
 # subscribe to mtouch/event via ::ess::touch_win_set as before.)
 set ess_modules \
     "eventlog gpio_input gpio_output \
-    joystick4 rmt timer usbio"
+    joystick4 rmt timer"
 foreach f $ess_modules {
     load ${dspath}/modules/dserv_${f}[info sharedlibextension]
 }
