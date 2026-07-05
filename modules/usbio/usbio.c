@@ -3,26 +3,40 @@
  *   usbio.c
  *
  * DESCRIPTION
+ *   dserv module bridging a serial/USB-CDC device to the datapoint table.
+ *
+ *   Inbound (device -> dserv): a dual-mode framer. Bytes starting with '>' are
+ *   read as fixed 128-byte binary dserv frames (the SAME format the networked
+ *   wiznet-io box and dserv's '>' TCP handler use) -> dpoint -> tclserver_set_point.
+ *   Other bytes are read as legacy newline-terminated "setdata <string>" text.
+ *
+ *   Outbound (dserv -> device): usbioSendFrame <name> <timestamp> <value> builds a
+ *   128-byte binary frame ('>' + payload, zero-padded) and writes it. Wire it from
+ *   Tcl with dpointSetScript so ess/in_obs and the config and cmd keys reach a USB
+ *   box -- and pass [dservTimestamp $name] so the box's clock-sync anchor is exact:
+ *       proc usbio_forward {dp data} { usbioSendFrame $dp [dservTimestamp $dp] $data }
+ *       dservAddExactMatch ess/in_obs ; dpointSetScript ess/in_obs usbio_forward
+ *
+ *   The reader thread polls with a timeout and honours a stop flag, so a silent
+ *   device never blocks it and usbioClose can stop+join it cleanly (no close of an
+ *   fd with a read in flight -- that deadlocked the interp on macOS).
  *
  * AUTHOR
- *   DLS, 06/24
+ *   DLS, 06/24  (binary framing + outbound frames 07/26; interruptible reader 07/26)
  */
 
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
 #include <stdio.h>
-#include <string.h>
+#include <stdint.h>
 #include <unistd.h>
-#include <stdarg.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/uio.h>
-#include <sys/ioctl.h>
-#include <signal.h>
 #include <termios.h>
+#include <time.h>
 #include <pthread.h>
 
 #include <tcl.h>
@@ -33,183 +47,225 @@ typedef struct usbio_info_s
 {
   int usbio_fd;
   tclserver_t *tclserver;
+  /* reader thread */
+  volatile int running;
+  pthread_t worker;
+  /* inbound dual-mode framer state */
+  int fr_mode;                 /* 0 idle, 1 binary(128B), 2 text(newline) */
+  int fr_have;
+  uint8_t fr[256];
 } usbio_info_t;
 
 /* global to this module */
 static usbio_info_t g_usbioInfo;
 
-static void process_request(usbio_info_t *info, char *buf, int nbytes)
+/* One 128-byte binary frame ('>' + payload, zero-padded) -> datapoint. Mirrors the
+ * parse in Dataserver.cpp's '>' handler; bounds every length so a malformed frame
+ * can never read past the 128-byte buffer. */
+static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
 {
-  if (nbytes > 9 &&
-      buf[1] == 's' && buf[2] == 'e' &&
-      buf[3] == 't' && buf[4] == 'd' &&
-      buf[5] == 'a' && buf[6] == 't' &&
-      buf[7] == 'a' && buf[8] == ' ') {
-    char *p2 = &buf[9];
+  const uint8_t *p = frame + 1;                 /* skip '>' */
+  uint16_t varlen; memcpy(&varlen, p, sizeof varlen); p += sizeof varlen;
+  if (varlen == 0 || varlen > 100) return;
+  char name[128];
+  memcpy(name, p, varlen); name[varlen] = '\0'; p += varlen;
+  uint64_t ts;    memcpy(&ts,    p, sizeof ts);    p += sizeof ts;
+  uint32_t dtype; memcpy(&dtype, p, sizeof dtype); p += sizeof dtype;
+  uint32_t dlen;  memcpy(&dlen,  p, sizeof dlen);  p += sizeof dlen;
+  if ((int) varlen + (int) dlen > 109) return;  /* keeps p+dlen inside the 128B frame */
 
-    ds_datapoint_t *dpoint = dpoint_from_string(p2, nbytes-9);
-	  
+  if (!ts) ts = tclserver_now(info->tclserver);
+  ds_datapoint_t *dp = dpoint_new(name, ts, (ds_datatype_t) dtype, dlen, (unsigned char *) p);
+  if (dp) tclserver_set_point(info->tclserver, dp);
+}
+
+/* Legacy text path: "setdata <string>" -> datapoint. */
+static void process_text_line(usbio_info_t *info, char *line, int len)
+{
+  if (len > 8 && !strncmp(line, "setdata ", 8)) {
+    ds_datapoint_t *dpoint = dpoint_from_string(line + 8, len - 8);
     if (dpoint) {
       if (!dpoint->timestamp) dpoint->timestamp = tclserver_now(info->tclserver);
-
       tclserver_set_point(info->tclserver, dpoint);
     }
   }
+  /* (v2: else if line[0]=='%' -> parse the box's %match lines to auto-wire forwards) */
 }
 
-void* workerThread(void *arg) {
-  usbio_info_t *info = (usbio_info_t *) arg;
-
-  char buf[16384];
-  int port = info->usbio_fd;
-  long n;
-  char output_buf[1024];
-  int bufsize = sizeof(output_buf);
-  int nchar, write_index = 0;
-  char *newline;
-
-  while (1) {
-    n = read(port, buf, sizeof(buf));
-    if (n < 1) {
-      break;
+/* Feed a chunk of received bytes through the dual-mode framer. */
+static void usbio_feed(usbio_info_t *info, const uint8_t *data, int n)
+{
+  for (int i = 0; i < n; i++) {
+    uint8_t b = data[i];
+    if (info->fr_mode == 0) {                                 /* idle: pick mode by first byte */
+      if (b == DPOINT_BINARY_MSG_CHAR) { info->fr_mode = 1; info->fr[0] = b; info->fr_have = 1; }
+      else if (b == '\n' || b == '\r') { /* skip blank */ }
+      else { info->fr_mode = 2; info->fr[0] = b; info->fr_have = 1; }
     }
-    else {
-      if ((newline = strchr(buf, '\n'))) {
-	nchar =  newline-buf;
-	if ((nchar+write_index) < bufsize) {
-	  memcpy(&output_buf[write_index], buf, nchar);
-	  output_buf[write_index+nchar] = '\0';
-
-	  process_request(info, buf, write_index+nchar);
-
-	  write_index = 0;
-	  
-	  /* now put rest of line in output buffer */
-	  if ((nchar = n-(nchar+1)) > 0) {
-	    memcpy(&output_buf[write_index], buf, nchar);
-	    write_index = nchar;
-	  }
-	}
-	else {
-	  /* overflow */
-	  write_index = 0;
-	}
+    else if (info->fr_mode == 1) {                            /* binary: collect exactly 128 bytes */
+      info->fr[info->fr_have++] = b;
+      if (info->fr_have >= DPOINT_BINARY_FIXED_LENGTH) {
+        process_binary_frame(info, info->fr);
+        info->fr_mode = 0; info->fr_have = 0;
       }
-      else {
-	if (write_index+n < bufsize)
-	  memcpy(&output_buf[write_index], buf, n);
-	else
-	  write_index = 0;
-      }
+    }
+    else {                                                    /* text: to newline */
+      if (b == '\n' || b == '\r') {
+        info->fr[info->fr_have] = '\0';
+        process_text_line(info, (char *) info->fr, info->fr_have);
+        info->fr_mode = 0; info->fr_have = 0;
+      } else if (info->fr_have < (int) sizeof info->fr - 1) {
+        info->fr[info->fr_have++] = b;
+      } else { info->fr_mode = 0; info->fr_have = 0; }         /* overflow -> resync */
     }
   }
+}
 
-  close(port);
-  return 0;
+/* Reader thread: poll with a timeout so a silent device never blocks us and we can
+ * be stopped by clearing ->running. Never closes the fd (usbioClose owns that). */
+static void *workerThread(void *arg)
+{
+  usbio_info_t *info = (usbio_info_t *) arg;
+  uint8_t buf[4096];
+  struct pollfd pfd = { .fd = info->usbio_fd, .events = POLLIN };
+
+  while (info->running) {
+    int pr = poll(&pfd, 1, 200);                 /* 200 ms -> re-check ->running */
+    if (pr < 0) { if (errno == EINTR) continue; break; }
+    if (pr == 0) continue;                        /* timeout */
+    if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) break;   /* device gone */
+    if (pfd.revents & POLLIN) {
+      ssize_t n = read(info->usbio_fd, buf, sizeof buf);
+      if (n > 0) usbio_feed(info, buf, (int) n);
+      else if (n == 0) break;                     /* EOF */
+      else if (errno != EAGAIN && errno != EINTR) break;
+    }
+  }
+  info->running = 0;
+  return NULL;
+}
+
+/* Stop the reader (if any) and close the fd -- join first so we never close an fd
+ * with a read in flight. Bounded: the worker checks ->running every <=200 ms. */
+static void usbio_stop(usbio_info_t *info)
+{
+  if (info->usbio_fd < 0) return;
+  info->running = 0;
+  pthread_join(info->worker, NULL);
+  close(info->usbio_fd);
+  info->usbio_fd = -1;
 }
 
 static int configure_serial_port(int fd)
-{  
+{
   struct termios ser;
-  tcflush(fd,TCIFLUSH);
-  tcflush(fd,TCOFLUSH);
-  int res = tcgetattr(fd, &ser);
-  if (res < 0) {
-    return -1;
-  }
-  cfmakeraw(&ser);
-  if ((res = tcsetattr(fd, TCSANOW, &ser)) < 0){
-    return -2;
-  }
+  tcflush(fd, TCIFLUSH);
+  tcflush(fd, TCOFLUSH);
+  if (tcgetattr(fd, &ser) < 0) return -1;
+  cfmakeraw(&ser);                        /* raw: binary frames pass untouched */
+  if (tcsetattr(fd, TCSANOW, &ser) < 0) return -2;
   return 0;
 }
 
-
-static void iovSet(struct iovec *iov, char *buf, int n)
+/* Write exactly len bytes, tolerating EAGAIN (fd is non-blocking). Returns bytes
+ * written (== len on success). A partial frame would desync the box, so callers
+ * treat < len as an error. */
+static int write_all(int fd, const unsigned char *buf, int len)
 {
-  iov->iov_base = buf;
-  iov->iov_len = n;
+  int off = 0, guard = 0;
+  while (off < len) {
+    ssize_t w = write(fd, buf + off, (size_t) (len - off));
+    if (w > 0) { off += (int) w; guard = 0; continue; }
+    if (w < 0 && (errno == EAGAIN || errno == EINTR)) {
+      if (++guard > 2000) break;                 /* device not draining -> give up */
+      struct timespec ts = { 0, 200000 }; nanosleep(&ts, NULL);  /* 0.2 ms */
+      continue;
+    }
+    break;                                        /* real error */
+  }
+  return off;
 }
 
-static int usbio_send_command (ClientData data, Tcl_Interp *interp,
-				   int objc, Tcl_Obj *objv[])
+/* usbioSend <text>  -- write a raw text command + newline (legacy/CLI helper). */
+static int usbio_send_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
   usbio_info_t *info = (usbio_info_t *) data;
-  static char newline_buf[2] = "\n";
-
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "command");
-    return TCL_ERROR;
-  }
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "command"); return TCL_ERROR; }
   if (info->usbio_fd < 0) return TCL_OK;
 
-  char *cmd = Tcl_GetString(objv[1]);
-
-  struct iovec iovs[2];
-  int cmdsize = strlen(cmd);
-  iovSet(&iovs[0], cmd, cmdsize);
-  iovSet(&iovs[1], newline_buf, 1);
-  int bytes_to_send = cmdsize + 1;
-	  
-  int rval = writev(info->usbio_fd, iovs, 2);
-  if (rval != bytes_to_send) {
-    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": send error", NULL);
-    return TCL_ERROR;
-  }
-  else {
-    Tcl_SetObjResult(interp, Tcl_NewIntObj(rval));
-    return TCL_OK;
-  }
-}
-
-static int usbio_open_command (ClientData data, Tcl_Interp *interp,
-				   int objc, Tcl_Obj *objv[])
-{
-  usbio_info_t *info = (usbio_info_t *) data;
-  if (info->usbio_fd >= 0) close(info->usbio_fd);
-
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "port");
-    return TCL_ERROR;
-  }
-
-  /* open read only but don't become "controlling terminal" */
-  info->usbio_fd = open(Tcl_GetString(objv[1]), O_NOCTTY | O_RDWR);
-  
-  if (info->usbio_fd < 0) {
-    Tcl_AppendResult(interp,
-		     Tcl_GetString(objv[0]), ": error opening port \"",
-		     Tcl_GetString(objv[1]), "\"", NULL);
-    return TCL_ERROR;
-  }
-  int ret = configure_serial_port(info->usbio_fd);
-
-  pthread_t id;
-  pthread_create(&id, NULL, workerThread, &g_usbioInfo);
-  
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
-  
+  Tcl_Size clen;
+  char *cmd = Tcl_GetStringFromObj(objv[1], &clen);
+  unsigned char line[512];
+  int n = (int) clen; if (n > (int) sizeof line - 1) n = (int) sizeof line - 1;
+  memcpy(line, cmd, n); line[n] = '\n';
+  int w = write_all(info->usbio_fd, line, n + 1);
+  if (w != n + 1) { Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": send error", NULL); return TCL_ERROR; }
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(w));
   return TCL_OK;
 }
 
-static int usbio_close_command (ClientData data, Tcl_Interp *interp,
-				   int objc, Tcl_Obj *objv[])
+/* usbioSendFrame <name> <timestamp> <value>  -- build one 128-byte binary dserv
+ * frame ('>' + payload, zero-padded) and write it. The value rides as a STRING (the
+ * box parses string-or-numeric); the timestamp is preserved so a forwarded
+ * ess/in_obs edge anchors the box clock correctly. */
+static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
 {
   usbio_info_t *info = (usbio_info_t *) data;
-  if (info->usbio_fd >= 0) close(info->usbio_fd);
+  if (objc < 4) { Tcl_WrongNumArgs(interp, 1, objv, "name timestamp value"); return TCL_ERROR; }
+  if (info->usbio_fd < 0) return TCL_OK;
 
-  if (objc < 2) {
-    Tcl_WrongNumArgs(interp, 1, objv, "port");
+  char *name = Tcl_GetString(objv[1]);
+  Tcl_WideInt ts;
+  if (Tcl_GetWideIntFromObj(interp, objv[2], &ts) != TCL_OK) return TCL_ERROR;
+  Tcl_Size vlen;
+  unsigned char *val = (unsigned char *) Tcl_GetStringFromObj(objv[3], &vlen);
+
+  ds_datapoint_t *dp = dpoint_new(name, (uint64_t) ts, DSERV_STRING, (uint32_t) vlen, val);
+  if (!dp) return TCL_OK;
+
+  unsigned char frame[DPOINT_BINARY_FIXED_LENGTH];
+  memset(frame, 0, sizeof frame);
+  frame[0] = DPOINT_BINARY_MSG_CHAR;
+  int sz = DPOINT_BINARY_FIXED_LENGTH - 1;          /* space after the '>' */
+  int rc = dpoint_to_binary(dp, frame + 1, &sz);    /* >0 bytes written, 0 = too big */
+  dpoint_free(dp);
+  if (rc <= 0) { Tcl_AppendResult(interp, "usbioSendFrame: name+value too large", NULL); return TCL_ERROR; }
+
+  int w = write_all(info->usbio_fd, frame, sizeof frame);   /* always the full 128 */
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(w));
+  return TCL_OK;
+}
+
+static int usbio_open_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  usbio_info_t *info = (usbio_info_t *) data;
+  if (objc < 2) { Tcl_WrongNumArgs(interp, 1, objv, "port"); return TCL_ERROR; }
+
+  usbio_stop(info);                              /* cleanly stop any prior reader */
+
+  int fd = open(Tcl_GetString(objv[1]), O_NOCTTY | O_RDWR | O_NONBLOCK);
+  if (fd < 0) {
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": error opening port \"",
+                     Tcl_GetString(objv[1]), "\"", NULL);
     return TCL_ERROR;
   }
-
-  /* open read only but don't become "controlling terminal" */
-  if (info->usbio_fd < 0) return TCL_OK;
-  else {
-    close(info->usbio_fd);
-    info->usbio_fd = -1;
+  int ret = configure_serial_port(fd);
+  info->usbio_fd = fd;
+  info->fr_mode = 0; info->fr_have = 0;           /* fresh framer per open */
+  info->running = 1;
+  if (pthread_create(&info->worker, NULL, workerThread, info) != 0) {
+    info->running = 0; close(fd); info->usbio_fd = -1;
+    Tcl_AppendResult(interp, Tcl_GetString(objv[0]), ": worker thread failed", NULL);
+    return TCL_ERROR;
   }
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(ret));
+  return TCL_OK;
+}
 
+static int usbio_close_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  (void) interp; (void) objc; (void) objv;
+  usbio_stop((usbio_info_t *) data);
   return TCL_OK;
 }
 
@@ -225,7 +281,6 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
   int Dserv_usbio_Init(Tcl_Interp *interp)
 #endif
 {
-  
   if (
 #ifdef USE_TCL_STUBS
       Tcl_InitStubs(interp, "8.6-", 0)
@@ -236,22 +291,18 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
     return TCL_ERROR;
   }
   g_usbioInfo.usbio_fd = -1;
+  g_usbioInfo.running = 0;
+  g_usbioInfo.fr_mode = 0;
+  g_usbioInfo.fr_have = 0;
   g_usbioInfo.tclserver = tclserver_get_from_interp(interp);
-  
+
   Tcl_CreateObjCommand(interp, "usbioOpen",
-		       (Tcl_ObjCmdProc *) usbio_open_command,
-		       (ClientData) &g_usbioInfo,
-		       (Tcl_CmdDeleteProc *) NULL);
+                       (Tcl_ObjCmdProc *) usbio_open_command, (ClientData) &g_usbioInfo, NULL);
   Tcl_CreateObjCommand(interp, "usbioClose",
-		       (Tcl_ObjCmdProc *) usbio_close_command,
-		       (ClientData) &g_usbioInfo,
-		       (Tcl_CmdDeleteProc *) NULL);
+                       (Tcl_ObjCmdProc *) usbio_close_command, (ClientData) &g_usbioInfo, NULL);
   Tcl_CreateObjCommand(interp, "usbioSend",
-		       (Tcl_ObjCmdProc *) usbio_send_command,
-		       (ClientData) &g_usbioInfo,
-		       (Tcl_CmdDeleteProc *) NULL);
+                       (Tcl_ObjCmdProc *) usbio_send_command, (ClientData) &g_usbioInfo, NULL);
+  Tcl_CreateObjCommand(interp, "usbioSendFrame",
+                       (Tcl_ObjCmdProc *) usbio_sendframe_command, (ClientData) &g_usbioInfo, NULL);
   return TCL_OK;
 }
-
-
-
