@@ -82,7 +82,9 @@ static void process_binary_frame(usbio_info_t *info, const uint8_t *frame)
   uint64_t ts;    memcpy(&ts,    p, sizeof ts);    p += sizeof ts;
   uint32_t dtype; memcpy(&dtype, p, sizeof dtype); p += sizeof dtype;
   uint32_t dlen;  memcpy(&dlen,  p, sizeof dlen);  p += sizeof dlen;
-  if ((int) varlen + (int) dlen > 109) { info->rx_bad++; return; }
+  /* unsigned bound: a large dlen (top bit set) cast to int would go negative and
+     slip past a signed check, letting dpoint_new copy multi-GB out of a 128B frame. */
+  if (dlen > 109 || (uint32_t) varlen + dlen > 109) { info->rx_bad++; return; }
 
   info->rx_bin++;
   if (!ts) ts = tclserver_now(info->tclserver);
