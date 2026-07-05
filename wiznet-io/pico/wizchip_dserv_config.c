@@ -304,9 +304,18 @@ int main(void)
 
 #ifdef BOX_NET_DUAL
     box_net_dual_usb_init();                 /* own TinyUSB in BOTH modes (CDC0 console) */
-    box_net_dual_usb_console_init();          /* console up BEFORE the probe so net-probe logs are visible */
-    box_net_dual_usb_wait_mounted(1500);      /* CDCs enumerate NOW, before the probe/net-init can block them */
-    box_net_select(g_cfg.transport_mode, &g_cfg); /* flash override (auto/eth/usb); auto -> live-cable detect */
+    box_net_dual_usb_console_init();          /* console up before anything that might log */
+    box_net_dual_usb_wait_mounted(1500);      /* CDCs enumerate FIRST -- nothing blocking before this but tusb_init */
+    int xport = g_cfg.transport_mode;         /* persisted: usb (default) / eth / switch */
+    if (xport == XPORT_SWITCH) {              /* enclosure unit: a front-panel switch on the strap pin decides */
+        gpio_init(BOX_MODE_STRAP_PIN);
+        gpio_set_dir(BOX_MODE_STRAP_PIN, GPIO_IN);
+        gpio_pull_up(BOX_MODE_STRAP_PIN);
+        sleep_us(50);                         /* let the pull-up settle */
+        xport = gpio_get(BOX_MODE_STRAP_PIN) ? XPORT_USB : XPORT_ETH;   /* switch closed to GND = Ethernet */
+        printf("mode switch (GP%d): %s\n", BOX_MODE_STRAP_PIN, dserv_xport_str((uint8_t) xport));
+    }
+    box_net_select(xport, &g_cfg);            /* eth -> W6300, else USB */
 #endif
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
 #if defined(BOX_NET_USB)

@@ -14,14 +14,10 @@
 
 #include "box_net_iface.h"
 
-/* mirrors pico_config_t.transport_mode (added in Stage 3) */
-enum { BOX_MODE_AUTO = 0, BOX_MODE_ETH = 1, BOX_MODE_USB = 2 };
-
 extern const box_net_vtable_t *box_net_active;   /* set by box_net_select(); safe default before */
 
-void box_net_select(int mode, const pico_config_t *cfg);   /* choose transport at boot */
+void box_net_select(int mode, const pico_config_t *cfg);   /* pick transport from cfg->transport_mode (XPORT_*) */
 int  box_net_is_usb(void);                                 /* 1 if the USB transport is active */
-int  box_net_w6300_link_up(void (*service)(void));         /* auto-detect: chip present + PHY link, ~2s */
 
 /* dual owns TinyUSB in BOTH modes: bring it up + service it + route the console. */
 void box_net_dual_usb_init(void);

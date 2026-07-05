@@ -159,7 +159,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     }
     if (sscanf(line, "mode %11s", w) == 1) {      /* dual build: transport override (save+reboot) */
         int m = dserv_xport_val(w);
-        if (m < 0) { snprintf(out, outsz, "ERR mode auto|eth|usb\r\n"); return CLI_ERR; }
+        if (m < 0) { snprintf(out, outsz, "ERR mode usb|eth|switch\r\n"); return CLI_ERR; }
         c->transport_mode = (uint8_t) m; c->applied_count++;
         snprintf(out, outsz, "OK transport mode=%s (save+reboot to apply)\r\n", dserv_xport_str((uint8_t)m)); return CLI_OK;
     }
@@ -169,7 +169,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "reboot"))  { snprintf(out, outsz, "rebooting...\r\n"); return CLI_REBOOT; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | name NAME | mode auto|eth|usb | net mode dhcp|static | net ip A.B.C.D |\r\n"
+            "cmds: show | name NAME | mode usb|eth|switch | net mode dhcp|static | net ip A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | obs pin N | obs off |\r\n"

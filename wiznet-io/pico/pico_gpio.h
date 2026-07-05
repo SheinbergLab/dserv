@@ -12,8 +12,16 @@
 #include "hardware/gpio.h"
 #include "pico/time.h"
 
+/* GP28: front-panel Eth/USB mode switch, read at boot when transport_mode==XPORT_SWITCH
+ * (dual build). Free on the W6300-EVB -- the analog-in is the external ADS1115 over I2C,
+ * so the RP2350's own ADC pins are unused. Overridable at build for a different board. */
+#ifndef BOX_MODE_STRAP_PIN
+#define BOX_MODE_STRAP_PIN 28
+#endif
+
 /* Pins the box firmware must never drive/route:
  *  - W6300 wired build: the W6300 QSPI/INT/CS/RST block (GPIO15-22 on EVB-Pico2)
+ *  - dual build:        also the Eth/USB mode strap (BOX_MODE_STRAP_PIN)
  *  - pico2w WiFi build:  the CYW43 wireless pins (board-specific; taken from the
  *    SDK board header, e.g. 23/24/25/29 on the Pimoroni Pico Plus 2 W) */
 static inline int pico_gpio_reserved(int n)
@@ -26,7 +34,11 @@ static inline int pico_gpio_reserved(int n)
 #endif
     return 0;
 #else
-    return n >= 15 && n <= 22;
+    if (n >= 15 && n <= 22) return 1;              /* W6300 QSPI block */
+#ifdef BOX_NET_DUAL
+    if (n == BOX_MODE_STRAP_PIN) return 1;         /* Eth/USB mode strap */
+#endif
+    return 0;
 #endif
 }
 

@@ -56,9 +56,6 @@ elseif(BOX_TARGET STREQUAL "dual")      # W6300-EVB: Ethernet OR USB, boot-selec
         BOX_NET_DUAL
         BOX_USB_FORWARD_REGISTER        # USB mode self-declares its forwards (modules/usbio auto-wires)
         CFG_TUSB_CONFIG_FILE=\"box_tusb_config.h\")
-    if(DUAL_STAGE1_ETH)                 # Stage-1 bench: AUTO -> W6300 (default AUTO -> USB)
-        target_compile_definitions(${CFG_NAME} PRIVATE BOX_DUAL_STAGE1_ETH)
-    endif()
     target_link_libraries(${CFG_NAME} PRIVATE   # UNION of the usb + w6300 link libs
         pico_stdlib
         pico_unique_id

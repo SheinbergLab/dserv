@@ -11,24 +11,16 @@ const box_net_vtable_t *box_net_active = &box_net_usb_vt;
 int box_net_is_usb(void) { return box_net_active == &box_net_usb_vt; }
 
 /*
- * Choose the transport at boot. An explicit BOX_MODE_ETH/USB is honored directly
- * (Stage 3 feeds cfg->transport_mode in as that override). BOX_MODE_AUTO auto-detects:
- * a live Ethernet cable (W6300 present + PHY link up within ~2 s) wins -> Ethernet, the
- * independent/timing tier; otherwise USB. box_net_dual_usb_task is pumped during the
- * probe so the console keeps enumerating. -DBOX_DUAL_STAGE1_ETH forces ETH for bench
- * work without a cable.
+ * Choose the transport at boot from the persisted flash setting (cfg->transport_mode).
+ * Deterministic: XPORT_ETH -> W6300 (the box was explicitly configured `mode eth`);
+ * anything else (including the zero/factory default) -> USB. No boot-time cable
+ * auto-detect -- the W6300 PHY status registers proved unreliable at cold boot, so we
+ * trade zero-config cable sensing for a one-time `mode eth` per wired box. (A future
+ * enclosure switch would slot in here: read a strap GPIO and override `mode` in main
+ * before calling this.)
  */
 void box_net_select(int mode, const pico_config_t *cfg)
 {
     (void) cfg;
-    if      (mode == BOX_MODE_ETH) box_net_active = &box_net_w6300_vt;
-    else if (mode == BOX_MODE_USB) box_net_active = &box_net_usb_vt;
-    else {                                  /* BOX_MODE_AUTO */
-#if defined(BOX_DUAL_STAGE1_ETH)
-        box_net_active = &box_net_w6300_vt;                 /* forced ETH (bench, no cable) */
-#else
-        box_net_active = box_net_w6300_link_up(box_net_dual_usb_task)
-                           ? &box_net_w6300_vt : &box_net_usb_vt;
-#endif
-    }
+    box_net_active = (mode == XPORT_ETH) ? &box_net_w6300_vt : &box_net_usb_vt;
 }
