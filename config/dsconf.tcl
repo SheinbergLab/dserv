@@ -38,6 +38,10 @@ subprocess input "source [file join $dspath config/inputconf.tcl]"
 # start a juicer subprocess
 subprocess juicer "source [file join $dspath config/juicerconf.tcl]"
 
+# start the USB extio box subprocess (owns modules/usbio; bridges the box's 128-byte
+# frames <-> datapoints, forwards ess/in_obs/config/cmd to the box, hot-swaps USB)
+subprocess extio "source [file join $dspath config/extioconf.tcl]"
+
 # start a sound subprocess
 subprocess sound "source [file join $dspath config/soundconf.tcl]"
 
