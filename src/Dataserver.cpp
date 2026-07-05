@@ -2561,6 +2561,10 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	  varlen = *((uint16_t *) bufptr);
 	  bufptr += sizeof(uint16_t);
 
+	  /* bound the name length to the fixed 128-byte frame before copying out of it:
+	     a malformed/desynced frame must not drive an out-of-bounds read (name <= 100). */
+	  if (varlen > 100) goto close_up;
+
 	  varname = (char *) malloc(varlen+1);
 	  if (!varname) goto close_up;
 
@@ -2576,6 +2580,13 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 
 	  datalen = *((uint32_t *) bufptr);
 	  bufptr += sizeof(uint32_t);
+
+	  /* bound the data length to what remains in the frame (name+data <= 109).
+	     Unsigned compare: a huge datalen must not slip through or wrap. */
+	  if (datalen > 109 || (uint32_t) varlen + datalen > 109) {
+	    free(varname);
+	    goto close_up;
+	  }
 
 	  databuf = (unsigned char *) malloc(datalen);
 	  if (!databuf) {
