@@ -7,7 +7,29 @@ on:
 
 jobs:
 
+  # Create the GitHub release once, up front, so the parallel upload jobs below
+  # only ever *update* an existing release. Without this, multiple matrix jobs
+  # race to create the same tag and all but one fail with 422 already_exists.
+  create-release:
+
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create (or reuse) the GitHub release for the current tag.
+        uses: ncipollo/release-action@v1
+        with:
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
+
   release-dserv:
+
+    needs: create-release
 
     # Build on not-the-latest to keep dependency versions modest.
     runs-on: macos-14
@@ -139,6 +161,8 @@ jobs:
 
   release-dservctl:
 
+    needs: create-release
+
     runs-on: macos-14
 
     permissions:
@@ -170,6 +194,8 @@ jobs:
           omitPrereleaseDuringUpdate: true
 
   release-essgui:
+
+    needs: create-release
 
     # Build on not-the-latest to keep dependency versions modest.
     runs-on: macos-14
