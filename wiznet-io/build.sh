@@ -1,9 +1,9 @@
 #!/bin/sh
 # build.sh -- build the box firmware from wiznet-io/ sources and refresh dist/.
 #
-#   sh build.sh              # W6300 (wired) target, default
+#   sh build.sh              # dual (W6300-EVB: USB default / Ethernet via `mode eth`), DEFAULT
+#   sh build.sh w6300        # W6300 wired-only target
 #   sh build.sh pico2w       # Pico 2 W / WiFi target
-#   sh build.sh dual         # W6300-EVB: USB by default, or Ethernet (mode eth, persisted)
 #
 # Env overrides:
 #   WIZNET_PICO_C         path to a WIZnet-PICO-C clone (cloned here if unset/missing)
@@ -12,7 +12,7 @@
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)                 # .../wiznet-io
-TARGET=${1:-w6300}
+TARGET=${1:-dual}
 WIZ=${WIZNET_PICO_C:-$HERE/.wiznet-pico-c}
 : "${PICO_TOOLCHAIN_PATH:=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi}"
 export PICO_TOOLCHAIN_PATH
