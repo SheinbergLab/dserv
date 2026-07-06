@@ -31,6 +31,7 @@
 
 #include "pico/stdlib.h"
 #include "hardware/watchdog.h"
+#include "pico/bootrom.h"          /* reset_usb_boot() -> reboot into USB BOOTSEL */
 
 #include "dserv_config.h"
 #include "pico_persist.h"
@@ -243,6 +244,7 @@ static void on_frame(const uint8_t *frame, void *ud)
     else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN)  pico_gpio_apply_config(cfg);
     else if (r == CFG_SAVE)      printf("flash %s\n", flash_store_save(cfg) == 0 ? "ok" : "FAIL");
     else if (r == CFG_REBOOT)    { sleep_ms(50); watchdog_reboot(0, 0, 0); }
+    else if (r == CFG_BOOTSEL)   { printf("entering BOOTSEL\n"); sleep_ms(50); reset_usb_boot(0, 0); }
     else if (r == CFG_FACTORY)   { flash_store_erase(); memset(cfg, 0, sizeof *cfg);
                                    pico_gpio_apply_config(cfg); printf("factory erased\n"); }
 }
@@ -271,6 +273,7 @@ static void cli_service(void)
         else if (act == CLI_FACTORY) { flash_store_erase(); memset(&g_cfg, 0, sizeof g_cfg);
                                        pico_gpio_apply_config(&g_cfg); printf("erased\n"); }
         else if (act == CLI_REBOOT)  { sleep_ms(50); watchdog_reboot(0, 0, 0); }
+        else if (act == CLI_BOOTSEL) { sleep_ms(50); reset_usb_boot(0, 0); }
         else if (act == CLI_PIN)     pico_gpio_apply_config(&g_cfg);  /* only re-apply on a pin change */
     } else if (ch == 0x08 || ch == 0x7f) {         /* backspace/DEL: edit the line, don't store the raw byte */
         if (len > 0) { len--; fputs("\b \b", stdout); }

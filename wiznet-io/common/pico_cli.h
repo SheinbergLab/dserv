@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT } cli_action_t;
+typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
@@ -35,9 +35,15 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
     char obs[8];
     if (obs_mirror_enabled(c)) snprintf(obs, sizeof obs, "%d", obs_mirror_pin(c));
     else                       snprintf(obs, sizeof obs, "off");
+    char xp[24];                                     /* transport= only on the dual build */
+#ifdef BOX_NET_DUAL
+    snprintf(xp, sizeof xp, "transport=%s ", dserv_xport_str(c->transport_mode));
+#else
+    xp[0] = '\0';
+#endif
     int k = snprintf(out, outsz,
-        "name=%s net.mode=%s transport=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u applied=%u\r\n",
-        dserv_cfg_name(c), dserv_netmode_str(c->net_mode), dserv_xport_str(c->transport_mode),
+        "name=%s net.mode=%s %snet.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u applied=%u\r\n",
+        dserv_cfg_name(c), dserv_netmode_str(c->net_mode), xp,
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
         c->dserv_port, obs,
@@ -60,7 +66,9 @@ static inline void pico_cli_dump(const pico_config_t *c)
     printf("# (uncomment the next line to wipe the target's existing config first)\r\n");
     printf("#factory\r\n");
     if (c->name[0])                       printf("name %s\r\n", c->name);
+#ifdef BOX_NET_DUAL
     if (c->transport_mode != XPORT_USB)   printf("mode %s\r\n", dserv_xport_str(c->transport_mode));
+#endif
     if (c->net_mode == NET_MODE_STATIC) {
         printf("net mode static\r\n");
         printf("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
@@ -193,25 +201,32 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         else { snprintf(out, outsz, "ERR net mode dhcp|static\r\n"); return CLI_ERR; }
         c->applied_count++; snprintf(out, outsz, "OK net mode=%s (save+reboot to apply)\r\n", dserv_netmode_str(c->net_mode)); return CLI_OK;
     }
-    if (sscanf(line, "mode %11s", w) == 1) {      /* dual build: transport override (save+reboot) */
+#ifdef BOX_NET_DUAL
+    if (sscanf(line, "mode %11s", w) == 1) {      /* dual build only: transport override (save+reboot) */
         int m = dserv_xport_val(w);
         if (m < 0) { snprintf(out, outsz, "ERR mode usb|eth|switch\r\n"); return CLI_ERR; }
         c->transport_mode = (uint8_t) m; c->applied_count++;
         snprintf(out, outsz, "OK transport mode=%s (save+reboot to apply)\r\n", dserv_xport_str((uint8_t)m)); return CLI_OK;
     }
+#endif
     if (!strcmp(line, "show"))    { pico_cli_show(c, out, outsz); return CLI_OK; }
     if (!strcmp(line, "dump"))    { pico_cli_dump(c); out[0] = '\0'; return CLI_OK; }  /* config as replayable cmds */
     if (!strcmp(line, "save"))    { snprintf(out, outsz, "saving...\r\n"); return CLI_SAVE; }
     if (!strcmp(line, "factory")) { snprintf(out, outsz, "factory reset...\r\n"); return CLI_FACTORY; }
     if (!strcmp(line, "reboot"))  { snprintf(out, outsz, "rebooting...\r\n"); return CLI_REBOOT; }
+    if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | dump | name NAME | mode usb|eth|switch | net mode dhcp|static | net ip A.B.C.D |\r\n"
+            "cmds: show | dump | name NAME | "
+#ifdef BOX_NET_DUAL
+            "mode usb|eth|switch | "
+#endif
+            "net mode dhcp|static | net ip A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | obs pin N | obs off |\r\n"
             "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 |\r\n"
-            "      do N 0|1 | do N pulse US | save | factory | reboot\r\n");
+            "      do N 0|1 | do N pulse US | save | factory | reboot | bootsel\r\n");
         return CLI_OK;
     }
     snprintf(out, outsz, "ERR unknown (try 'help')\r\n");

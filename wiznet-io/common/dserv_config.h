@@ -97,6 +97,7 @@ typedef enum {
     CFG_SAVE,
     CFG_REBOOT,
     CFG_FACTORY,
+    CFG_BOOTSEL,    /* cmd/bootsel -> reboot into USB BOOTSEL for reflashing */
     CFG_UNKNOWN     /* under this box's name but unrecognized */
 } cfg_result_t;
 
@@ -291,6 +292,7 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
     if (strcmp(k, "save")    == 0) return CFG_SAVE;
     if (strcmp(k, "reboot")  == 0) return CFG_REBOOT;
     if (strcmp(k, "factory") == 0) return CFG_FACTORY;
+    if (strcmp(k, "bootsel") == 0) return CFG_BOOTSEL;
     return CFG_UNKNOWN;
 }
 
@@ -344,6 +346,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_SAVE:       return "save";
     case CFG_REBOOT:     return "reboot";
     case CFG_FACTORY:    return "factory";
+    case CFG_BOOTSEL:    return "bootsel";
     default:             return "unknown";
     }
 }
