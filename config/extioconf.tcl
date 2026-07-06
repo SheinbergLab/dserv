@@ -47,29 +47,57 @@ proc extio_forward_box {name} {             ;# a named box's config/cmd (pin set
 # ---- auto-discovery: a box advertises its name in extio/<name>/state/* telemetry.
 #      Scan the datatable (polled from extio_service) and wire each new box once.
 #      Table-scan, not a match script, so it does not depend on self-notification. ----
-array set ::extio_known {}
-array set ::extio_wd {}
+array set ::extio_known {}   ;# name -> 1     (config/cmd forwards currently wired)
+array set ::extio_wd    {}   ;# name -> last-seen state/watchdog value
+array set ::extio_stale {}   ;# name -> consecutive ticks its watchdog did NOT advance
 set ::extio_boxes_last ""
+
+# Tear down what extio_forward_box wired (inverse). catch: harmless if already gone.
+proc extio_unforward_box {name} {
+    foreach pat [list extio/$name/config/* extio/$name/cmd/*] {
+        catch { dpointSetScript $pat {} }
+        catch { dservRemoveMatch $pat }
+    }
+}
+
 proc extio_discover {} {
-    # (a) wire each newly-seen box's config/cmd forwards once (name-agnostic), and
-    # (b) track which boxes are LIVE right now and publish the set. A vanished box's
-    # last datapoints linger (dserv doesn't delete them), so key-existence can't tell
-    # present from stale -- but its state/watchdog stops advancing, so we use that.
-    set live {}
+    # (a) wire each newly-seen box's config/cmd forwards once (name-agnostic); (b) track
+    # liveness by state/watchdog freshness (a vanished box's datapoints LINGER in the
+    # table -- dserv doesn't delete them -- but its watchdog stops advancing); (c) PRUNE
+    # a box that's gone: tear down its forwards + forget it (so it re-wires cleanly if it
+    # comes back); (d) publish the live set. Works for USB and Ethernet boxes alike.
     foreach k [dservKeys] {
         if { [regexp {^extio/([^/]+)/state/} $k -> name] && ![info exists ::extio_known($name)] } {
             set ::extio_known($name) 1
+            set ::extio_stale($name) 0                        ;# assume live until proven stale
             extio_forward_box $name
             puts "extio: discovered box '$name' -- forwarding config/cmd"
         }
         if { [regexp {^extio/([^/]+)/state/watchdog$} $k -> name] } {
             set wd [dservGet $k]
-            if { ![info exists ::extio_wd($name)] || $wd ne $::extio_wd($name) } { dict set live $name 1 }
+            if { ![info exists ::extio_wd($name)] || $wd ne $::extio_wd($name) } {
+                set ::extio_stale($name) 0                    ;# advancing -> live
+            } elseif { [info exists ::extio_stale($name)] } {
+                incr ::extio_stale($name)                     ;# frozen this tick
+            }
             set ::extio_wd($name) $wd
         }
     }
-    # publish only on change (no per-tick churn). Consumers: button_bind {* pin} globs
-    # (bind-by-glob, so this is just awareness), workbench UI, logging.
+    # classify + prune. Grace of 1 tick (stale<=1 still live) so a single missed heartbeat
+    # window doesn't churn; pruned at stale>=2 (~2 ticks / ~4 s of a frozen watchdog).
+    set live {}
+    foreach name [array names ::extio_known] {
+        set s [expr {[info exists ::extio_stale($name)] ? $::extio_stale($name) : 99}]
+        if { $s <= 1 } {
+            dict set live $name 1
+        } else {
+            extio_unforward_box $name
+            unset -nocomplain ::extio_known($name) ::extio_wd($name) ::extio_stale($name)
+            puts "extio: box '$name' vanished (watchdog stale) -- pruned forwards"
+        }
+    }
+    # publish the live set on change (no per-tick churn). Consumers: button_bind {* pin}
+    # globs (awareness, since the bind self-follows), workbench UI, logging.
     #   extio/boxes    = list of currently-live box device names
     #   extio/primary  = the first of them (the "the box" for a single-box rig)
     set boxes [lsort [dict keys $live]]
