@@ -198,7 +198,7 @@ jobs:
             # Build from source for RPi compatibility
             sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
             sudo pip3 install meson
-            git clone https://git.libcamera.org/libcamera/libcamera.git
+            git clone https://gitlab.freedesktop.org/camera/libcamera.git
             cd libcamera
             git checkout v${{ matrix.libcamera_version }}
             meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
@@ -210,7 +210,7 @@ jobs:
             # For now, also build from source for consistency
             sudo apt install -y ninja-build python3-pip python3-yaml python3-ply python3-jinja2
             sudo pip3 install meson
-            git clone https://git.libcamera.org/libcamera/libcamera.git
+            git clone https://gitlab.freedesktop.org/camera/libcamera.git
             cd libcamera
             git checkout v${{ matrix.libcamera_version }}
             meson setup build --prefix=/usr/local -Dpipelines=rpi/vc4,vimc -Dipas=rpi/vc4 -Dtest=false -Ddocumentation=disabled
