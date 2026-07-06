@@ -50,6 +50,41 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
                           di_active_low(c, i) ? " active_low" : "");
 }
 
+/* Emit the CLI commands that reproduce this config (only the non-default settings), so
+ * pasting the output into a fresh box's console clones this setup. Ends with `save`.
+ * Uses printf (not `out`) so a big config isn't bounded by the response buffer. Comment
+ * (#) lines are ignored by pico_cli_exec, so the whole capture pastes back cleanly. */
+static inline void pico_cli_dump(const pico_config_t *c)
+{
+    printf("# extio box config dump -- paste into a new box's console to clone this setup\r\n");
+    printf("# (uncomment the next line to wipe the target's existing config first)\r\n");
+    printf("#factory\r\n");
+    if (c->name[0])                       printf("name %s\r\n", c->name);
+    if (c->transport_mode != XPORT_USB)   printf("mode %s\r\n", dserv_xport_str(c->transport_mode));
+    if (c->net_mode == NET_MODE_STATIC) {
+        printf("net mode static\r\n");
+        printf("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
+    }
+    if (c->dserv_ip[0] || c->dserv_ip[1] || c->dserv_ip[2] || c->dserv_ip[3])
+        printf("dserv ip %u.%u.%u.%u\r\n", c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3]);
+    if (c->dserv_port)                    printf("dserv port %u\r\n", c->dserv_port);
+    for (int i = 0; i < PICO_NPINS; i++) {
+        if (c->pin_mode[i])      printf("pin %d mode %s\r\n",     i, dserv_mode_str(c->pin_mode[i]));
+        if (c->do_pulse_us[i])   printf("pin %d pulse %u\r\n",    i, (unsigned) c->do_pulse_us[i]);
+        if (c->debounce_ms[i])   printf("pin %d debounce %u\r\n", i, c->debounce_ms[i]);
+        if (di_active_low(c, i)) printf("pin %d active_low 1\r\n", i);
+    }
+    if (obs_mirror_enabled(c))            printf("obs pin %d\r\n", obs_mirror_pin(c));
+    if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
+    if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
+    if (c->wifi_pm)                       printf("wifi pm 1\r\n");
+    if (c->ain_en)                        printf("ain enable 1\r\n");
+    if (c->ain_rate)                      printf("ain rate %u\r\n", c->ain_rate);
+    if (c->ain_gain)                      printf("ain gain %u\r\n", c->ain_gain);
+    printf("save\r\n");
+    printf("# reboot   (uncomment / run to apply mode/net changes)\r\n");
+}
+
 /* Execute one line. Returns an action; fills `out` with a response line.
  * `cmd` (may be NULL) receives a GPIO command for the `do` verbs (CLI_GPIO). */
 static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
@@ -58,9 +93,10 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     int n, v; char w[24];
     if (cmd) cmd->op = GPIO_OP_NONE;
 
-    /* skip leading spaces; ignore blank lines */
+    /* skip leading spaces; ignore blank lines and # comments (so a pasted `dump` -- which
+     * includes header/# lines -- applies cleanly) */
     while (*line == ' ' || *line == '\t') line++;
-    if (*line == '\0') { out[0] = '\0'; return CLI_OK; }
+    if (*line == '\0' || *line == '#') { out[0] = '\0'; return CLI_OK; }
 
     if (sscanf(line, "do %d pulse %d", &n, &v) == 2) {
         if (n < 0 || n >= PICO_NPINS || v < 0) { snprintf(out, outsz, "ERR bad do/pulse\r\n"); return CLI_ERR; }
@@ -164,12 +200,13 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         snprintf(out, outsz, "OK transport mode=%s (save+reboot to apply)\r\n", dserv_xport_str((uint8_t)m)); return CLI_OK;
     }
     if (!strcmp(line, "show"))    { pico_cli_show(c, out, outsz); return CLI_OK; }
+    if (!strcmp(line, "dump"))    { pico_cli_dump(c); out[0] = '\0'; return CLI_OK; }  /* config as replayable cmds */
     if (!strcmp(line, "save"))    { snprintf(out, outsz, "saving...\r\n"); return CLI_SAVE; }
     if (!strcmp(line, "factory")) { snprintf(out, outsz, "factory reset...\r\n"); return CLI_FACTORY; }
     if (!strcmp(line, "reboot"))  { snprintf(out, outsz, "rebooting...\r\n"); return CLI_REBOOT; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | name NAME | mode usb|eth|switch | net mode dhcp|static | net ip A.B.C.D |\r\n"
+            "cmds: show | dump | name NAME | mode usb|eth|switch | net mode dhcp|static | net ip A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | obs pin N | obs off |\r\n"

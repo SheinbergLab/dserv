@@ -263,7 +263,7 @@ static void cli_service(void)
             printf("ip %u.%u.%u.%u\n", bip[0], bip[1], bip[2], bip[3]);
             return;
         }
-        char out[256]; gpio_cmd_t cmd;
+        char out[1024]; gpio_cmd_t cmd;   /* fits the full help (~419 B) + a many-pin `show`; 256 truncated both */
         cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out, &cmd);
         fputs(out, stdout);
         if (act == CLI_GPIO)         pico_gpio_exec(&g_cfg, &cmd);   /* drive the pin (USB command) */
