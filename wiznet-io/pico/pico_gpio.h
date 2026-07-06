@@ -12,9 +12,10 @@
 #include "hardware/gpio.h"
 #include "pico/time.h"
 
-/* GP28: front-panel Eth/USB mode switch, read at boot when transport_mode==XPORT_SWITCH
- * (dual build). Free on the W6300-EVB -- the analog-in is the external ADS1115 over I2C,
- * so the RP2350's own ADC pins are unused. Overridable at build for a different board. */
+/* GP28: Eth/USB mode strap, read at every boot (dual build) to pick the transport --
+ * open/high = USB (safe default, never touches the W6300), tied to GND = Ethernet.
+ * Free on the W6300-EVB -- the analog-in is the external ADS1115 over I2C, so the
+ * RP2350's own ADC pins are unused. Overridable at build for a different board. */
 #ifndef BOX_MODE_STRAP_PIN
 #define BOX_MODE_STRAP_PIN 28
 #endif

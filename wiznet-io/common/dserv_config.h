@@ -60,8 +60,8 @@ typedef struct {
     uint8_t  ain_gain;                  /* ADS1115 PGA/FSR:   0=default(4.096V), 1..6=6.144/4.096/2.048/1.024/0.512/0.256 */
     uint8_t  ain_en;                    /* 1 = activate ADS1115 analog-in (ADC must be wired); 0 = off (default),
                                          * leaves the I2C pins free for GPIO. Applied at boot (save+reboot). */
-    uint8_t  transport_mode;            /* DUAL build only: 0=usb (default), 1=eth, 2=switch (read strap GPIO at
-                                         * boot). XPORT_*. Append-only field -> pico_persist v11. Applied at boot. */
+    uint8_t  transport_mode;            /* DEPRECATED/unused: transport is now the GP28 boot strap, not config.
+                                         * Kept only to preserve the append-only pico_persist v11 layout. */
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -134,20 +134,13 @@ static inline const char *dserv_mode_str(uint8_t m)
 static inline const char *dserv_netmode_str(uint8_t mode)
 { return mode == NET_MODE_STATIC ? "static" : "dhcp"; }
 
-/* pico_config_t.transport_mode (DUAL build): which transport the box boots.
- * USB is the reliable zero-default (plug-and-play); Ethernet is an explicit, persisted
- * choice (`mode eth`); `mode switch` reads a front-panel strap GPIO at boot (enclosure
- * units). No fragile boot-time cable auto-detect. */
+/* Transport backends for the DUAL build. Which one boots is decided by the GP28
+ * hardware strap at boot (see BOX_MODE_STRAP_PIN in pico_gpio.h), not by config:
+ * open/high = USB, tied to GND = Ethernet. dserv_xport_str is used only to log the
+ * strap's decision. No fragile boot-time cable auto-detect. */
 enum { XPORT_USB = 0, XPORT_ETH = 1, XPORT_SWITCH = 2 };
 static inline const char *dserv_xport_str(uint8_t m)
 { return m == XPORT_ETH ? "eth" : m == XPORT_SWITCH ? "switch" : "usb"; }
-static inline int dserv_xport_val(const char *w)
-{
-    if (!strcmp(w, "usb"))    return XPORT_USB;
-    if (!strcmp(w, "eth"))    return XPORT_ETH;
-    if (!strcmp(w, "switch")) return XPORT_SWITCH;
-    return -1;
-}
 
 /* obs-mirror accessors: enable is a flag distinct from the pin, so GP0 is a
  * valid mirror pin and the zeroed factory default is "off". */
