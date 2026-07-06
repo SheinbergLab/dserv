@@ -48,13 +48,36 @@ proc extio_forward_box {name} {             ;# a named box's config/cmd (pin set
 #      Scan the datatable (polled from extio_service) and wire each new box once.
 #      Table-scan, not a match script, so it does not depend on self-notification. ----
 array set ::extio_known {}
+array set ::extio_wd {}
+set ::extio_boxes_last ""
 proc extio_discover {} {
+    # (a) wire each newly-seen box's config/cmd forwards once (name-agnostic), and
+    # (b) track which boxes are LIVE right now and publish the set. A vanished box's
+    # last datapoints linger (dserv doesn't delete them), so key-existence can't tell
+    # present from stale -- but its state/watchdog stops advancing, so we use that.
+    set live {}
     foreach k [dservKeys] {
         if { [regexp {^extio/([^/]+)/state/} $k -> name] && ![info exists ::extio_known($name)] } {
             set ::extio_known($name) 1
             extio_forward_box $name
             puts "extio: discovered box '$name' -- forwarding config/cmd"
         }
+        if { [regexp {^extio/([^/]+)/state/watchdog$} $k -> name] } {
+            set wd [dservGet $k]
+            if { ![info exists ::extio_wd($name)] || $wd ne $::extio_wd($name) } { dict set live $name 1 }
+            set ::extio_wd($name) $wd
+        }
+    }
+    # publish only on change (no per-tick churn). Consumers: button_bind {* pin} globs
+    # (bind-by-glob, so this is just awareness), workbench UI, logging.
+    #   extio/boxes    = list of currently-live box device names
+    #   extio/primary  = the first of them (the "the box" for a single-box rig)
+    set boxes [lsort [dict keys $live]]
+    if { $boxes ne $::extio_boxes_last } {
+        set ::extio_boxes_last $boxes
+        dservSet extio/boxes   $boxes
+        dservSet extio/primary [lindex $boxes 0]
+        puts "extio: live boxes = {$boxes}  primary = [lindex $boxes 0]"
     }
 }
 

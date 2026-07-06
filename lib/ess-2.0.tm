@@ -3408,15 +3408,28 @@ namespace eval ess {
 	    #   <io_class>/<device>/state/di/<pin>   e.g. extio/office/state/di/14
 	    # The box publishes LOGICAL levels (configure the box pin `active_low`
 	    # so pressed=1), so button_process needs no inversion here.
+	    #
+	    # A GLOB <device> (contains '*', e.g. "{* 14}") binds to whatever box is
+	    # present at PUBLISH time -> hot-swap-transparent: a box can be unplugged /
+	    # renamed / replaced and its di/<pin> still drives this channel, with no
+	    # re-binding. A literal <device> binds to exactly that box.
 	    lassign [dict get $opts box] dev bpin
 	    set dp $io_class/$dev/state/di/$bpin
 
 	    proc ::ess::button_process_$chan {dpoint data} \
 		"::ess::button_process $chan \$dpoint \$data"
 
-	    dservAddExactMatch $dp
-	    dpointSetScript $dp ::ess::button_process_$chan
-	    if {[dservExists $dp]} { button_process $chan $dp [dservGet $dp] }
+	    if {[string first * $dev] >= 0} {
+		dservAddMatch $dp                              ;# glob: any matching box, live
+		dpointSetScript $dp ::ess::button_process_$chan
+		foreach k [dservKeys] {                        ;# initial level from an already-present box
+		    if {[string match $dp $k]} { button_process $chan $k [dservGet $k]; break }
+		}
+	    } else {
+		dservAddExactMatch $dp
+		dpointSetScript $dp ::ess::button_process_$chan
+		if {[dservExists $dp]} { button_process $chan $dp [dservGet $dp] }
+	    }
 
 	    set buttons(box,$chan) $dp
 
