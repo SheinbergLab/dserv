@@ -143,8 +143,23 @@ static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
  * data. Independent interfaces, so the console never disturbs the data channel. */
 static void box_usb_con_out(const char *buf, int len)
 {
-    if (!tud_ready()) return;                     /* pre-enum: drop (host isn't there yet) */
-    tud_cdc_n_write(0, (const uint8_t *) buf, (uint32_t) len);
+    /* Gate the CONSOLE (unlike the data channel) on DTR: only write when a terminal is
+     * actually attached (picocom/screen assert it). This (a) lets us safely DRAIN the FIFO
+     * for a real reader -- tud_cdc_n_write() takes only what fits (<=256 B), so a single
+     * write silently truncated long output like `show`/`dump` -- and (b) avoids spinning
+     * the drain loop during normal operation, when nothing reads CDC0 (extio reads the data
+     * CDC1) and the FIFO would otherwise stay full and stall every debug printf. */
+    if (!tud_ready() || !tud_cdc_n_connected(0)) return;   /* no terminal open -> drop fast */
+    int sent = 0, guard = 0;
+    while (sent < len) {
+        uint32_t w = tud_cdc_n_write(0, (const uint8_t *) buf + sent, (uint32_t)(len - sent));
+        sent += (int) w;
+        if (w == 0) {                             /* FIFO full -- let the terminal drain it */
+            tud_cdc_n_write_flush(0);
+            tud_task();
+            if (++guard > 1000) break;            /* terminal stopped reading -> drop rest, don't block */
+        }
+    }
     tud_cdc_n_write_flush(0);
 }
 static void box_usb_con_flush(void) { tud_cdc_n_write_flush(0); }

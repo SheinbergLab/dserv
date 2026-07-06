@@ -298,7 +298,10 @@ static int have_dserv_target(void)
 int main(void)
 {
     stdio_init_all();
-    sleep_ms(3000);
+    sleep_ms(200);   /* brief power/settle delay only. NOT before USB: a long pre-tusb_init
+                      * sleep leaves the box absent from USB for that whole time, so opening a
+                      * terminal right after reboot races enumeration. wait_mounted() (below)
+                      * is what actually waits for the host to enumerate the CDCs. */
 
     memset(&g_cfg, 0, sizeof g_cfg);
     if (flash_store_load(&g_cfg) == 0) printf("config: loaded from flash (name=%s)\n", dserv_cfg_name(&g_cfg));
