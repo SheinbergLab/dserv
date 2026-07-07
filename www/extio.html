@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>extio boxes</title>
+<link rel="stylesheet" href="css/page_nav.css">
+<style>
+  :root {
+    --bg: #16181d; --card: #21252c; --card-edge: #2e343d; --ink: #e8eaed;
+    --muted: #9aa3af; --faint: #6b7280; --green: #4ade80; --blue: #60a5fa;
+    --amber: #fbbf24; --red: #f87171; --off: #3a4048;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 22px;
+           border-bottom: 1px solid var(--card-edge); }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  header a { color: var(--faint); text-decoration: none; font-size: 12px; }
+  header a:hover { color: var(--muted); }
+  #conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #conn .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+               background: var(--off); margin-right: 6px; }
+  #conn.ok .dot { background: var(--green); }
+  #conn.bad .dot { background: var(--red); }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+          gap: 16px; padding: 20px; }
+  #empty { color: var(--faint); padding: 60px 24px; text-align: center; }
+  #empty code { color: var(--muted); }
+
+  .box { background: var(--card); border: 1px solid var(--card-edge); border-radius: 10px;
+         padding: 14px 16px; }
+  .box.offline { opacity: 0.45; }
+  .box .title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .box .name { font-size: 16px; font-weight: 600; }
+  .live { width: 9px; height: 9px; border-radius: 50%; background: var(--off); }
+  .live.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .chip { font-size: 11px; padding: 1px 8px; border-radius: 9px; background: var(--off);
+          color: var(--muted); white-space: nowrap; }
+  .chip.eth { background: #14351f; color: var(--green); }
+  .chip.usb { background: #17293f; color: var(--blue); }
+  .chip.wdg { background: #3f1d1d; color: var(--red); }
+  .meta { color: var(--faint); font-size: 12px; margin-top: 4px;
+          font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--muted); font-weight: 500; }
+  .meta .mono, .name + .mono { font-family: ui-monospace, Menlo, monospace; }
+
+  .sect { margin-top: 12px; }
+  .sect .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+               color: var(--faint); margin-bottom: 6px; }
+  .dis { display: flex; gap: 10px; flex-wrap: wrap; }
+  .di { text-align: center; width: 64px; }   /* FIXED width: growing counts must not reflow the row */
+  .di .btn { width: 44px; height: 44px; border-radius: 50%; background: var(--off);
+             border: 2px solid var(--card-edge); margin: 0 auto;
+             transition: background 60ms, box-shadow 60ms; }
+  .di .btn.on { background: var(--green); border-color: var(--green);
+                box-shadow: 0 0 14px rgba(74, 222, 128, 0.55); }
+  .di .pin { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .di .cnt { font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dos { display: flex; gap: 10px; flex-wrap: wrap; }
+  .do { text-align: center; }
+  .do .led { width: 20px; height: 20px; border-radius: 4px; background: var(--off);
+             border: 1px solid var(--card-edge); margin: 0 auto; }
+  .do .led.on { background: var(--amber); border-color: var(--amber);
+                box-shadow: 0 0 10px rgba(251, 191, 36, 0.5); }
+  .do .pin { font-size: 10px; color: var(--faint); margin-top: 3px; }
+  .ain { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 3px; }
+  .ain .ch { color: var(--faint); width: 34px; }
+  .ain .bar { flex: 1; height: 8px; background: var(--off); border-radius: 4px; overflow: hidden; }
+  .ain .fill { height: 100%; background: var(--blue); width: 0%; }
+  .ain .val { color: var(--muted); width: 56px; text-align: right;
+              font-family: ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>extio boxes</h1>
+  <div id="page-nav-container"></div>
+  <span id="conn"><span class="dot"></span><span id="conn-msg">connecting</span></span>
+</header>
+<div id="grid"></div>
+<div id="empty">no boxes seen yet — waiting for <code>extio/*/state/*</code> datapoints</div>
+
+<script src="js/ws_manager.js"></script>
+<script src="js/DatapointManager.js"></script>
+<script src="js/PageNav.js"></script>
+<script>
+'use strict';
+
+PageNav.init('page-nav-container', 'extio');   /* family nav: jump to any ESS page */
+
+const boxes = new Map();      // name -> model
+const fetched = new Set();    // keys already one-shot fetched at startup
+let dirty = new Set();        // box names needing re-render
+let conn = null, dp = null;
+
+function boxModel(name) {
+    let b = boxes.get(name);
+    if (!b) {
+        b = { name, ident: {}, di: new Map(), dout: new Map(), ain: new Map(),
+              battery: null, syncOffset: null, syncAt: 0, uptimeUs: null,
+              lastSeen: 0, ready: false };
+        boxes.set(name, b);
+    }
+    return b;
+}
+
+/* extio/<name>/state/<leaf> -> update the box model */
+function onExtio(msg) {
+    const m = /^extio\/([^/]+)\/state\/(.+)$/.exec(msg.name);
+    if (!m) return;
+    const b = boxModel(m[1]);
+    const leaf = m[2];
+    const v = msg.data !== undefined ? msg.data : msg.value;
+    const num = typeof v === 'number' ? v : parseFloat(v);
+    b.lastSeen = Date.now();
+
+    let mm;
+    if ((mm = /^di\/(\d+)$/.exec(leaf))) {
+        const pin = +mm[1];
+        const cur = b.di.get(pin) || { v: 0, count: 0 };
+        if (b.ready && num === 1 && cur.v === 0) cur.count++;   /* live press */
+        cur.v = num;
+        b.di.set(pin, cur);
+    } else if ((mm = /^do\/(\d+)$/.exec(leaf))) {
+        b.dout.set(+mm[1], num);
+    } else if ((mm = /^ain\/(\d+)$/.exec(leaf))) {
+        b.ain.set(+mm[1], num);
+    } else if (leaf === 'sync/offset_us') {
+        b.syncOffset = num; b.syncAt = Date.now();
+    } else if (leaf === 'uptime_us') {
+        b.uptimeUs = num;
+    } else if (leaf === 'battery') {
+        b.battery = num;
+    } else if (leaf === 'transport' || leaf === 'boot' || leaf === 'fw' ||
+               leaf === 'ip' || leaf === 'dserv') {
+        b.ident[leaf] = String(v);
+    }
+    /* watchdog/link/timer/sync raw parts: liveness only (lastSeen above) */
+    dirty.add(b.name);
+    scheduleRender();
+}
+
+/* ---- rendering ---- */
+let renderQueued = false;
+function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+function esc(s) {
+    return String(s).replace(/[&<>"']/g,
+        c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fmtAge(ms) {
+    if (ms < 2000) return 'now';
+    const s = Math.floor(ms / 1000);
+    if (s < 120) return s + 's ago';
+    const mns = Math.floor(s / 60);
+    return (mns < 120 ? mns + 'm' : Math.floor(mns / 60) + 'h') + ' ago';
+}
+
+function fmtUptime(us) {
+    if (us == null) return '?';
+    const s = Math.floor(us / 1e6);
+    if (s < 90) return s + 's';
+    const mn = Math.floor(s / 60);
+    if (mn < 120) return mn + 'm';
+    const h = Math.floor(mn / 60);
+    return h < 48 ? h + 'h' : Math.floor(h / 24) + 'd';
+}
+
+function cardHtml(b) {
+    const age = Date.now() - b.lastSeen;
+    const alive = age < 4000;
+    const id = b.ident;
+    const xchip = id.transport
+        ? `<span class="chip ${id.transport === 'usb' ? 'usb' : 'eth'}">${esc(id.transport)}</span>` : '';
+    const bchip = id.boot
+        ? `<span class="chip ${id.boot === 'watchdog' ? 'wdg' : ''}">boot: ${esc(id.boot)}</span>` : '';
+    const fw = id.fw ? `<span class="chip">${esc(id.fw)}</span>` : '';
+    const ip = (id.ip && id.ip !== '0.0.0.0') ? `<span class="meta mono">${esc(id.ip)}</span>` : '';
+
+    let di = '';
+    if (b.di.size) {
+        di = '<div class="sect"><div class="lbl">inputs</div><div class="dis">' +
+            [...b.di.keys()].sort((a, c) => a - c).map(pin => {
+                const d = b.di.get(pin);
+                return `<div class="di"><div class="btn ${d.v ? 'on' : ''}"></div>` +
+                       `<div class="pin">di ${pin}</div>` +
+                       `<div class="cnt" title="${d.count} press${d.count === 1 ? '' : 'es'}">&times;${d.count}</div></div>`;
+            }).join('') + '</div></div>';
+    }
+    let dout = '';
+    if (b.dout.size) {
+        dout = '<div class="sect"><div class="lbl">outputs</div><div class="dos">' +
+            [...b.dout.keys()].sort((a, c) => a - c).map(pin =>
+                `<div class="do"><div class="led ${b.dout.get(pin) ? 'on' : ''}"></div>` +
+                `<div class="pin">do ${pin}</div></div>`).join('') + '</div></div>';
+    }
+    let ain = '';
+    if (b.ain.size) {
+        ain = '<div class="sect"><div class="lbl">analog</div>' +
+            [...b.ain.keys()].sort((a, c) => a - c).map(ch => {
+                const v = b.ain.get(ch);
+                const pct = Math.max(0, Math.min(100, ((v + 32768) / 65535) * 100));
+                return `<div class="ain"><span class="ch">ain ${ch}</span>` +
+                       `<div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
+                       `<span class="val">${v}</span></div>`;
+            }).join('') + '</div>';
+    }
+    const sync = b.syncOffset != null
+        ? ` · <b>sync</b> ${b.syncOffset} µs (${fmtAge(Date.now() - b.syncAt)})` : '';
+    const bat = b.battery != null ? ` · <b>batt</b> ${b.battery}%` : '';
+    const target = id.dserv
+        ? ` · <b>&rarr; dserv</b> <span class="mono">${esc(id.dserv)}</span>` : '';
+
+    return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
+           `<span class="name">${esc(b.name)}</span>${xchip}${fw}${bchip}${ip}</div>` +
+           `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
+           di + dout + ain;
+}
+
+function render() {
+    const grid = document.getElementById('grid');
+    document.getElementById('empty').style.display = boxes.size ? 'none' : '';
+    for (const name of [...boxes.keys()].sort()) {
+        let el = document.getElementById('box-' + name);
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'box-' + name;
+            grid.appendChild(el);
+            dirty.add(name);
+        }
+        const b = boxes.get(name);
+        const alive = Date.now() - b.lastSeen < 4000;
+        el.className = 'box' + (alive ? '' : ' offline');
+        if (dirty.has(name)) el.innerHTML = cardHtml(b);
+    }
+    dirty = new Set();
+}
+
+/* refresh ages + liveness once a second even without updates */
+setInterval(() => { for (const n of boxes.keys()) dirty.add(n); scheduleRender(); }, 1000);
+
+/* after the initial burst of one-shot gets settles, live presses start counting */
+function markReadySoon() {
+    setTimeout(() => { for (const b of boxes.values()) b.ready = true; }, 1500);
+}
+
+function setConn(ok, msg) {
+    const el = document.getElementById('conn');
+    el.className = ok === null ? '' : ok ? 'ok' : 'bad';
+    document.getElementById('conn-msg').textContent = msg;
+}
+
+async function init() {
+    /* ?host=<host[:port]> -> watch a different rig's dserv (default: the one serving this page) */
+    const qsHost = new URLSearchParams(location.search).get('host');
+    conn = new DservConnection({
+        subprocess: 'ess',
+        dservHost: qsHost || null,
+        onStatus: (st, msg) => setConn(st === 'connected' ? true : st === 'connecting' ? null : false, st),
+    });
+    try {
+        await conn.connect();
+    } catch (e) {
+        setConn(false, 'connection failed');
+        return;
+    }
+    setConn(true, 'connected');
+
+    dp = new DatapointManager(conn, { autoGetKeys: false });
+    dp.subscribe('extio/*', onExtio);          /* live stream, all boxes */
+
+    /* @keys is PUSHED by dserv on every key add/remove (set_key_dpoint), so this
+     * fires live: seed retained values for new keys, and PRUNE boxes whose keys
+     * were cleared (dservClear / cleanup) -- offline boxes keep their dim card
+     * as long as their keys remain; cleared boxes disappear. */
+    dp.on('keys:update', ({ keys }) => {
+        const present = new Set();
+        for (const k of keys) {
+            const m = /^extio\/([^/]+)\/state\//.exec(k);
+            if (!m) continue;
+            present.add(m[1]);
+            if (!fetched.has(k)) {
+                fetched.add(k);
+                dp.sendGet(k);
+            }
+        }
+        for (const name of [...boxes.keys()])
+            if (!present.has(name)) {
+                boxes.delete(name);
+                const el = document.getElementById('box-' + name);
+                if (el) el.remove();
+            }
+        document.getElementById('empty').style.display = boxes.size ? 'none' : '';
+        markReadySoon();
+    });
+    dp.refreshKeys();
+}
+
+init();
+</script>
+</body>
+</html>
