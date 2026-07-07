@@ -57,6 +57,12 @@ static box_clock_t    g_clock;      /* box->dserv time offset, snapped at obs ed
 static uint64_t g_obs_begin_us;     /* box-clock time of the last beginobs -> anchor for scheduled events */
 static int32_t g_wdt;
 
+/* Hot-path telemetry (di:/dp:/sync:) is OFF by default: printf blocks the single-threaded
+ * I/O loop on the UART/USB console (baud-rate limited), adding milliseconds to the DO->DI
+ * round trip. Toggle live from the console: `debug 1` / `debug 0` (default off, not persisted). */
+static volatile int g_log_verbose = 0;
+#define DBG(...) do { if (g_log_verbose) printf(__VA_ARGS__); } while (0)
+
 /* ---- publish helpers (box -> dserv, best-effort) ---- */
 static void publish_di(const di_event_t *e)
 {
@@ -67,7 +73,7 @@ static void publish_di(const di_event_t *e)
     /* box edge time mapped into dserv time (0 => dserv arrival-stamps pre-sync) */
     dserv_msg_int(f, nm, box_clock_stamp(&g_clock, e->t_us), lvl);
     box_net_client_send(f, DSERV_MSG_LEN);
-    printf("di: pin%u=%u @%lluus\n", e->pin, lvl, (unsigned long long) e->t_us);
+    DBG("di: pin%u=%u @%lluus\n", e->pin, lvl, (unsigned long long) e->t_us);
 }
 
 /* ts = dserv-time of the actuation (box_clock_stamp of the pin-write instant). */
@@ -218,15 +224,15 @@ static void on_frame(const uint8_t *frame, void *ud)
         if (obs) g_obs_begin_us = now_box;  /* beginobs edge -> anchor for scheduled events */
         pico_gpio_obs_mirror(cfg, obs);    /* LED/scope: box's live copy of obs */
         publish_sync(m.timestamp, now_box, g_clock.offset_us);
-        printf("sync: obs=%d dserv=%llu box=%llu off=%lld\n", obs,
-               (unsigned long long) m.timestamp,
-               (unsigned long long) now_box, (long long) g_clock.offset_us);
+        DBG("sync: obs=%d dserv=%llu box=%llu off=%lld\n", obs,
+            (unsigned long long) m.timestamp,
+            (unsigned long long) now_box, (long long) g_clock.offset_us);
         return;
     }
 
     gpio_cmd_t cmd;
     cfg_result_t r = dserv_dispatch(cfg, &m, &cmd);
-    printf("dp: %.*s -> %s\n", (int) m.namelen, m.name, dserv_cfg_result_str(r));
+    DBG("dp: %.*s -> %s\n", (int) m.namelen, m.name, dserv_cfg_result_str(r));
 
     if (cmd.op == GPIO_OP_SCHED_PULSE) {                /* do/<n>/at -> pulse + timer at beginobs+delta */
         uint32_t w = cfg->do_pulse_us[cmd.pin] ? cfg->do_pulse_us[cmd.pin] : 1000;
@@ -263,6 +269,11 @@ static void cli_service(void)
         if (!strcmp(line, "ip")) {                 /* live address (DHCP lease or static) */
             uint8_t bip[4]; box_net_local_ip(bip);
             printf("ip %u.%u.%u.%u\n", bip[0], bip[1], bip[2], bip[3]);
+            return;
+        }
+        if (!strcmp(line, "debug 1") || !strcmp(line, "debug 0")) {   /* live hot-path log toggle */
+            g_log_verbose = (line[6] == '1');
+            printf("debug log %s\n", g_log_verbose ? "on" : "off");
             return;
         }
         char out[1024]; gpio_cmd_t cmd;   /* fits the full help (~419 B) + a many-pin `show`; 256 truncated both */
