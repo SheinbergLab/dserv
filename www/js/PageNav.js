@@ -69,6 +69,15 @@ class PageNav {
             windowSize: { width: 800, height: 600 }
         },
         {
+            id: 'extio',
+            title: 'Extio Boxes',
+            desc: 'I/O box fleet status',
+            icon: '🔌',
+            href: 'extio.html',
+            category: 'viewers',
+            windowSize: { width: 1000, height: 700 }
+        },
+        {
             id: 'Terminal',
             title: 'Dserv Terminal',
             desc: 'Terminal and datapoint monitor',
