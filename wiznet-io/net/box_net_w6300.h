@@ -40,7 +40,8 @@ static wiz_NetInfo bn_netinfo = {
 };
 
 static uint8_t bn_prev_status = SOCK_CLOSED;
-static uint8_t bn_cli_ka;    /* state-client keepalive set once per connection */
+static uint8_t bn_cli_ka;        /* state-client keepalive set once per connection */
+static uint8_t bn_cli_inflight;  /* state-client SEND issued, SENDOK not yet observed */
 
 static inline const char *box_net_backend_name(void) { return "w6300"; }
 
@@ -183,7 +184,7 @@ static inline void box_net_poll(void)
         disconnect(BOX_NET_SN);     close(BOX_NET_SN);
         disconnect(BOX_NET_CLI_SN); close(BOX_NET_CLI_SN);
         bn_prev_status = SOCK_CLOSED;               /* server re-listens          */
-        bn_cli_ka = 0;                              /* client reconnects -> re-reg */
+        bn_cli_ka = 0; bn_cli_inflight = 0;         /* client reconnects -> re-reg */
     }
 }
 
@@ -244,7 +245,7 @@ static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
         return 1;                                   /* ready to send */
     case SOCK_CLOSE_WAIT:
         disconnect(BOX_NET_CLI_SN);
-        bn_cli_ka = 0;
+        bn_cli_ka = 0; bn_cli_inflight = 0;
         return 0;
     case SOCK_INIT: {
         uint8_t dip[4] = { ip[0], ip[1], ip[2], ip[3] };
@@ -252,7 +253,7 @@ static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
         return 0;
     }
     case SOCK_CLOSED:
-        bn_cli_ka = 0;
+        bn_cli_ka = 0; bn_cli_inflight = 0;
         socket(BOX_NET_CLI_SN, Sn_MR_TCP4 | SF_TCP_NODELAY, 50000 + BOX_NET_CLI_SN, SOCK_IO_NONBLOCK);
         return 0;
     default:
@@ -260,14 +261,37 @@ static inline int box_net_client_service(const uint8_t ip[4], uint16_t port)
     }
 }
 
+/* Publish one 128B frame, best-effort and BOUNDED -- the superloop must never
+ * stall on a slow/stalled dserv.
+ *
+ * The vendored send() (socket.c, the IPV6_AVAILABLE variant the W6300 compiles)
+ * copies the frame into the chip's TX buffer -- advancing Sn_TX_WR -- BEFORE its
+ * "previous SEND finished?" (SENDOK) gate, and signals busy by returning
+ * SOCK_BUSY == 0, not a negative. Two consequences shape this wrapper:
+ *   - NEVER loop retrying on 0: each retry copies a DUPLICATE frame that the
+ *     eventual SEND command then puts on the wire, and a peer that stops reading
+ *     (zero window, socket still ESTABLISHED) turns the retry into an unbounded
+ *     superloop wedge that even the keepalive can't break.
+ *   - a 0 return is not loss: the frame is parked in TX and rides out with the
+ *     next send()'s SEND command (the 1 Hz heartbeat at the latest).
+ * So: bounded wait for the previous SENDOK (sticky IR bit, consumed inside
+ * send(); ~15us wire time for 128B, deadline well above), drop outright if TX
+ * has no room (peer stalled), then call send() exactly once. */
 static inline int box_net_client_send(const uint8_t *buf, int len)
 {
-    int sent = 0;
-    while (sent < len) {
-        int32_t r = send(BOX_NET_CLI_SN, (uint8_t *)(buf + sent), (uint16_t)(len - sent));
-        if (r < 0) return -1;
-        sent += r;
+    if (bn_cli_inflight) {                          /* previous SEND still unconfirmed? */
+        absolute_time_t dl = make_timeout_time_us(400);
+        while (!(getSn_IR(BOX_NET_CLI_SN) & Sn_IR_SENDOK)) {
+            uint8_t st;
+            getsockopt(BOX_NET_CLI_SN, SO_STATUS, &st);
+            if (st != SOCK_ESTABLISHED && st != SOCK_CLOSE_WAIT) { bn_cli_inflight = 0; return -1; }
+            if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) break;   /* frame parks below */
+        }
     }
+    if (getSn_TX_FSR(BOX_NET_CLI_SN) < (uint16_t) len) return -1;   /* no room: drop, stay alive */
+    int32_t r = send(BOX_NET_CLI_SN, (uint8_t *) buf, (uint16_t) len);
+    if (r < 0) { bn_cli_inflight = 0; return -1; }
+    bn_cli_inflight = 1;   /* r==len: SEND issued. r==0: parked behind the pending SEND. */
     return 0;
 }
 
@@ -278,33 +302,38 @@ static inline void box_net_local_ip(uint8_t out[4])
 /* Send ONE text command (e.g. "%reg ...\n") to dserv on a transient
  * connection and wait (bounded) for the reply, so dserv has processed it
  * before we move on. One command per connection sidesteps dserv's greedy '%'
- * reader. Blocks the loop briefly (~ms); only used on (re)connect. 0/-1. */
+ * reader. Blocks the loop briefly (~ms, hard-capped at ~0.3s by TIME -- the old
+ * iteration bounds were ~0.5-2s of SPI polling each when dserv was accepting
+ * but not answering, x4 commands per self_register); only on (re)connect. 0/-1. */
 static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
                                        const char *cmd)
 {
     const uint8_t sn = BOX_NET_TMP_SN;
     uint8_t st, d[4] = { dserv_ip[0], dserv_ip[1], dserv_ip[2], dserv_ip[3] };
     uint16_t sz;
-    long i;
+    absolute_time_t dl;
 
     disconnect(sn); close(sn);
     if (socket(sn, Sn_MR_TCP4 | SF_TCP_NODELAY, 55000, SOCK_IO_NONBLOCK) != sn) return -1;
     connect(sn, d, port, 4);                        /* non-blocking: poll below */
 
-    for (i = 0; i < 300000; i++) {                  /* bounded wait: ESTABLISHED */
+    dl = make_timeout_time_ms(100);                 /* bounded wait: ESTABLISHED */
+    for (;;) {
         getsockopt(sn, SO_STATUS, &st);
         if (st == SOCK_ESTABLISHED || st == SOCK_CLOSED) break;
+        if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) break;
     }
-    getsockopt(sn, SO_STATUS, &st);
     if (st != SOCK_ESTABLISHED) { disconnect(sn); close(sn); return -1; }
 
     send(sn, (uint8_t *) cmd, (uint16_t) strlen(cmd));
 
-    for (i = 0; i < 600000; i++) {                  /* bounded wait: dserv reply */
+    dl = make_timeout_time_ms(200);                 /* bounded wait: dserv reply */
+    for (;;) {
         getsockopt(sn, SO_RECVBUF, &sz);
         if (sz) { uint8_t tmp[16]; recv(sn, tmp, sz > (uint16_t) sizeof tmp ? (uint16_t) sizeof tmp : sz); break; }
         getsockopt(sn, SO_STATUS, &st);
         if (st != SOCK_ESTABLISHED) break;
+        if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) break;
     }
     disconnect(sn); close(sn);
     return 0;
