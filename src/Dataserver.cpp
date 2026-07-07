@@ -286,11 +286,10 @@ int Dataserver::tcpip_unregister(char *host, int port)
 int Dataserver::tcpip_add_match(char *host, int port, char *match, int every)
 {
   char key[128];
-    
-  SendClient *send_client;
   snprintf(key, sizeof(key), "%s:%d", host, port);
 
-  if (!send_table.find(key, &send_client)) return 0;
+  auto send_client = send_table.get(key);
+  if (!send_client) return 0;
 
   MatchSpec m(match, every);
   send_client->matches.insert(match, m);
@@ -300,19 +299,18 @@ int Dataserver::tcpip_add_match(char *host, int port, char *match, int every)
 int Dataserver::tcpip_remove_match(char *host, int port, char *match)
 {
   char key[128];
-    
-  SendClient *send_client;
   snprintf(key, sizeof(key), "%s:%d", host, port);
 
-  if (!send_table.find(key, &send_client)) return 0;
+  auto send_client = send_table.get(key);
+  if (!send_client) return 0;
   send_client->matches.remove(match);
   return 1;
 }
 
 int Dataserver::client_add_match(std::string key, char *match, int every)
 {
-  SendClient *send_client;
-  if (!send_table.find(key.c_str(), &send_client)) return 0;
+  auto send_client = send_table.get(key);
+  if (!send_client) return 0;
   MatchSpec m(match, every);
   send_client->matches.insert(match, m);
   return 1;
@@ -320,8 +318,8 @@ int Dataserver::client_add_match(std::string key, char *match, int every)
 
 int Dataserver::client_add_exact_match(std::string key, char *match, int every)
 {
-  SendClient *send_client;
-  if (!send_table.find(key.c_str(), &send_client)) return 0;
+  auto send_client = send_table.get(key);
+  if (!send_client) return 0;
   MatchSpec m(match, MatchSpec::MATCH_EXACT, every);
   send_client->matches.insert(match, m);
   return 1;
@@ -329,16 +327,16 @@ int Dataserver::client_add_exact_match(std::string key, char *match, int every)
 
 int Dataserver::client_remove_match(std::string key, char *match)
 {
-  SendClient *send_client;
-  if (!send_table.find(key.c_str(), &send_client)) return 0;
+  auto send_client = send_table.get(key);
+  if (!send_client) return 0;
   send_client->matches.remove(match);
   return 1;
 }
 
 int Dataserver::client_remove_all_matches(std::string key)
 {
-  SendClient *send_client;
-  if (!send_table.find(key.c_str(), &send_client)) return 0;
+  auto send_client = send_table.get(key);
+  if (!send_client) return 0;
   send_client->matches.clear();
   return 1;
 }
@@ -346,11 +344,10 @@ int Dataserver::client_remove_all_matches(std::string key)
 std::string Dataserver::get_matches(char *host, int port)
 {
   char key[128];
-    
-  SendClient *send_client;
   snprintf(key, sizeof(key), "%s:%d", host, port);
 
-  if (!send_table.find(key, &send_client)) return std::string("{}");
+  auto send_client = send_table.get(key);
+  if (!send_client) return std::string("{}");
   return (send_client->matches.to_string());
 }
 
@@ -1312,6 +1309,11 @@ static int process_requests(Dataserver *dserv) {
 	  commandArray[2] = dpoint_to_tclobj(interp, &e_dpoint);
 	}
 
+	/* dpoint_to_tclobj returns NULL for types it can't represent
+	   (e.g. DSERV_NONE with data); substitute an empty obj rather
+	   than crash in Tcl_IncrRefCount below */
+	if (!commandArray[2]) commandArray[2] = Tcl_NewObj();
+
 	/* done with this point */
 	dpoint_free(dpoint);
 
@@ -1447,31 +1449,24 @@ int Dataserver::process_send_requests(void) {
 int Dataserver::add_new_send_client(char *host, int port, uint8_t flags)
 {
   int send_socket;
-    
-  int newentry;
-  SendClient *send_client;
-
-  std::thread send_thread_id;
 
   char key[128];
   snprintf(key, sizeof(key), "%s:%d", host, port);
 
-  // remove existing table;
-  if (send_table.find(key, &send_client)) {
-    send_table.remove(key);
-    send_client->dpoint_queue.push_back(&send_client->shutdown_dpoint);
-  }
+  // shut down any existing registration under this key
+  send_table.remove_and_shutdown(key);
 
   // attempt to open new socket
   send_socket =  open_send_sock(host, port);
   if (send_socket < 0)
     return 0;
-    
-  // create a new entry for this client
-  send_client = new SendClient(send_socket, host, port, flags);
-  send_thread_id = std::thread(&SendClient::send_client_process,
-			       send_client);
-  send_thread_id.detach();
+
+  // create a new entry for this client; the thread holds one
+  // shared_ptr, the table another
+  auto send_client = std::make_shared<SendClient>(send_socket, host,
+						  port, flags);
+  send_client->key = key;
+  std::thread(&SendClient::send_client_process, send_client).detach();
   send_table.insert(key, send_client);
 
   return 1;
@@ -1485,54 +1480,37 @@ int Dataserver::add_new_send_client(char *host, int port, uint8_t flags)
 std::string Dataserver::add_new_send_client(SharedQueue<client_request_t> *queue)
 {
   static std::atomic<int> client_counter{0};
-  
+
   // Create a unique client ID combining pointer and counter
   char client_id[64];
   snprintf(client_id, sizeof(client_id), "queue_%p_%d", (void *) queue, client_counter.fetch_add(1));
   std::string client_name = std::string(client_id);
-  const char *key = client_name.c_str();
-  
-  // Remove existing entry if it exists
-  SendClient *existing_client;
-  if (send_table.find(key, &existing_client)) {
-    send_table.remove(key);
-    existing_client->dpoint_queue.push_back(&existing_client->shutdown_dpoint);
-  }
 
-  // Create a new entry for this client
-  SendClient *send_client = new SendClient(queue);
-  std::thread send_thread_id = std::thread(&SendClient::send_client_process, send_client);
-  send_thread_id.detach();
-  send_table.insert(key, send_client);
+  // Remove existing entry if it exists (keys are unique, so this is
+  // just belt-and-suspenders)
+  send_table.remove_and_shutdown(client_name);
+
+  // Create a new entry for this client; the thread holds one
+  // shared_ptr, the table another
+  auto send_client = std::make_shared<SendClient>(queue);
+  send_client->key = client_name;
+  std::thread(&SendClient::send_client_process, send_client).detach();
+  send_table.insert(client_name, send_client);
 
   return client_name;
 }
 
 int Dataserver::remove_send_client_by_id(std::string client_id)
 {
-  SendClient *send_client;
-  
-  if (send_table.find(client_id, &send_client)) {
-    send_table.remove(client_id);
-    send_client->dpoint_queue.push_back(&send_client->shutdown_dpoint);
-    return 1;
-  }
-  return 0;
+  return send_table.remove_and_shutdown(client_id);
 }
 
 int Dataserver::remove_send_client(char *host, int port)
 {
-  SendClient *send_client;
-    
   char key[128];
   snprintf(key, sizeof(key), "%s:%d", host, port);
-    
-  if (send_table.find(key, &send_client)) {
-    send_table.remove(key);
-    send_client->dpoint_queue.push_back(&send_client->shutdown_dpoint);
-    return 1;
-  }
-  else return 0;
+
+  return send_table.remove_and_shutdown(key);
 }
   
 /* open a client socket connection and return socket */  
@@ -1676,22 +1654,38 @@ int Dataserver::process_log_requests(void) {
   int retcode;
   ds_datapoint_t *dpoint;
   LogClient *log_client;
-    
+
+  const uint32_t log_control_flags =
+    DSERV_DPOINT_LOGCLOSE_FLAG | DSERV_DPOINT_LOGPAUSE_FLAG |
+    DSERV_DPOINT_LOGSTART_FLAG | DSERV_DPOINT_LOGFLUSH_FLAG;
+
   /* process until receive a message saying we are done */
   while (!m_bDone) {
-      
+
     dpoint = logger_queue.front();
     logger_queue.pop_front();
 
     if (dpoint->flags & DSERV_DPOINT_SHUTDOWN_FLAG) {
       continue;
     }
-	
+
+    /*
+     * per-client control (pause/start/flush/close) travels through
+     * this queue so it executes in arrival order with the data and on
+     * this thread, the sole owner of all logbuf state
+     */
+    if (dpoint->flags & log_control_flags) {
+      if (dpoint->varname)
+	log_table.control_client(dpoint->varname, dpoint->flags);
+      dpoint_free(dpoint);
+      continue;
+    }
+
     /*
      * loop through all logger_clients and forward if subscribed
      */
     log_table.forward_dpoint(dpoint);
-      
+
     /* dpoints need to be freed after forwarding */
     if (!(dpoint->flags & DSERV_DPOINT_DONTFREE_FLAG)) {
       dpoint_free(dpoint);
@@ -1700,9 +1694,9 @@ int Dataserver::process_log_requests(void) {
   }
 
   // log clients are all closed in the log_table destructor
-  
+
   //  std::cout << "Logger process thread ended" << std::endl;
-  
+
   return 0;
 }
   
@@ -1757,57 +1751,54 @@ int Dataserver::add_new_log_client(std::string filename, bool overwrite)
   return 1;
 }
   
-int Dataserver::remove_log_client(std::string filename)
-
+/*
+ * queue_log_control
+ *
+ *  Route a per-client control request (pause/start/flush/close)
+ * through the logger_queue as a standalone dpoint whose varname is
+ * the target filename.  Two properties fall out of this:
+ *
+ *  - ordering: the request is processed by the logger thread in
+ *    arrival order with the data stream, so a close/pause takes
+ *    effect exactly at its place in the stream and cannot drop
+ *    points that were set before it;
+ *
+ *  - safety: no LogClient pointer is used outside the table lock
+ *    here — the request is resolved by name on the logger thread,
+ *    so a client that closes itself in the meantime is just a no-op.
+ */
+int Dataserver::queue_log_control(std::string filename, uint32_t flag)
 {
-  LogClient *log_client;
+  if (!log_table.find(filename, nullptr)) return 0;
 
-  if (log_table.find(filename, &log_client)) {
-    log_client->dpoint_queue.push_back(&log_client->shutdown_dpoint);
-    return 1;
-  }
-  else return 0;
+  ds_datapoint_t *dpoint = dpoint_new((char *) filename.c_str(), now(),
+				      DSERV_NONE, 0, nullptr);
+  dpoint->flags = flag;
+  logger_queue.push_back(dpoint);
+  return 1;
+}
+
+int Dataserver::remove_log_client(std::string filename)
+{
+  return queue_log_control(filename, DSERV_DPOINT_LOGCLOSE_FLAG);
 }
 
 int Dataserver::pause_log_client(std::string filename)
-
 {
-  LogClient *log_client;
-    
-  if (log_table.find(filename, &log_client)) {
-    log_client->dpoint_queue.push_back(&log_client->pause_dpoint);
-    return 1;
-  }
-  else return 0;
+  return queue_log_control(filename, DSERV_DPOINT_LOGPAUSE_FLAG);
 }
 
 int Dataserver::start_log_client(std::string filename)
-
 {
-  LogClient *log_client;
-    
-  if (log_table.find(filename, &log_client)) {
-    log_client->dpoint_queue.push_back(&log_client->start_dpoint);
-    return 1;
-  }
-  else return 0;
+  return queue_log_control(filename, DSERV_DPOINT_LOGSTART_FLAG);
 }
 
 int Dataserver::log_add_match(std::string filename, std::string varname,
 			      int every, int obs, int buflen)
 {
-  LogClient *log_client;
-  int rval = 0;
-
-  if (log_table.find(filename, &log_client)) {
-    LogMatchSpec *match =
-      new LogMatchSpec(varname.c_str(), every, obs, buflen);
-
-    log_client->matches.insert(match->matchstr, match);
-    log_client->obs_limited_matches += match->obs_limited;
-    rval = 1;
-  }
-  return rval;
+  /* executes under the LogTable lock, which excludes the client's
+     writer thread from removing/deleting itself mid-call */
+  return log_table.add_match(filename, varname.c_str(), every, obs, buflen);
 }
 
 
@@ -1815,13 +1806,16 @@ static int doRead(int fd, char *buf, int size)
 {
   int rbytes = 0;
   int n = 0;
-  
+
   while(rbytes < size) {
     if((n = read(fd, buf + rbytes, size - rbytes)) < 0) {
       perror("reading from client socket");
       return -1;
     }
-    
+    if (n == 0) {	/* EOF: peer closed mid-frame, would spin forever */
+      return -1;
+    }
+
     rbytes += n;
   }
   return 0;
@@ -2079,7 +2073,7 @@ int Dataserver::tcp_process_request(Dataserver *ds,
 	  
 	  if (status) {
 	    char *rep_buf = (char *) malloc(32);
-	    snprintf(rep_buf, sizeof(rep_buf), "%d", dpoint->data.len);
+	    snprintf(rep_buf, 32, "%u", dpoint->data.len);
 	    dpoint_free(dpoint);
 	    status = 1;
 	    *repbuf = rep_buf;
@@ -2260,6 +2254,13 @@ int Dataserver::tcp_process_request(Dataserver *ds,
 }
 
   
+/* sanity bounds on client-supplied lengths in the '@' framed protocol:
+   lengths include a trailing \r\n (so >= 2), and the caps keep a
+   malformed/hostile length from driving huge allocations or the
+   out-of-bounds [len - 2] writes in the handlers below */
+#define DSERV_MAX_VARNAME_LEN (512)
+#define DSERV_MAX_DATA_LEN (128 * 1024 * 1024)
+
 void
 Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 {
@@ -2352,13 +2353,19 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	      if (sscanf(&buf[5], "%d %d %d", &varlen,
 			 &datatype, &datalen) != 3)
 		goto close_up;
-	      
-	      
+
+	      if (varlen < 2 || varlen > DSERV_MAX_VARNAME_LEN ||
+		  datalen > DSERV_MAX_DATA_LEN)
+		goto close_up;
+
 	      // Acknowledge to prevent buffering on sender side
-	      rval = write(sockfd, newline_buf, 1); 
+	      rval = write(sockfd, newline_buf, 1);
 
 	      varname = (char *) malloc(varlen);
-	      doRead(sockfd, varname, varlen);
+	      if (!varname || doRead(sockfd, varname, varlen) < 0) {
+		free(varname);
+		goto close_up;
+	      }
 	      varname[varlen - 2] = '\0';
 	      
 	      //	      std::cerr << "point name: " << varname << std::endl;
@@ -2369,8 +2376,16 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	     
 	      if (datatype == DSERV_STRING || datatype == DSERV_SCRIPT || datatype == DSERV_JSON)
 		{
+		  if (datalen < 2) {	/* includes trailing \r\n */
+		    free(varname);
+		    goto close_up;
+		  }
 		  databuf = (unsigned char *) malloc(datalen);
-		  doRead(sockfd, (char *)databuf, datalen);
+		  if (!databuf || doRead(sockfd, (char *) databuf, datalen) < 0) {
+		    free(databuf);
+		    free(varname);
+		    goto close_up;
+		  }
 		  databuf[datalen - 2] = '\0';
 		  dpoint = (ds_datapoint_t *) malloc(sizeof(ds_datapoint_t));
 		  dpoint_set(dpoint, varname, now(),
@@ -2381,10 +2396,19 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 		{
 		  inlen = (((4 * datalen / 3) + 3) & ~3) + 2;
 		  inbuf = (char *) malloc(inlen);
-		  doRead(sockfd, inbuf, inlen);
+		  if (!inbuf || doRead(sockfd, inbuf, inlen) < 0) {
+		    free(inbuf);
+		    free(varname);
+		    goto close_up;
+		  }
 		  inbuf[inlen - 2] = '\0';
 
 		  databuf = (unsigned char *) malloc(datalen);
+		  if (datalen && !databuf) {
+		    free(inbuf);
+		    free(varname);
+		    goto close_up;
+		  }
 		  outlen = datalen;
 		  base64decode(inbuf, inlen - 2, databuf, &outlen);
 		  free(inbuf);
@@ -2398,11 +2422,20 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 		{
 		  inlen = datalen + 2;
 		  inbuf = (char *) malloc(inlen);
-		  doRead(sockfd, inbuf, inlen);
+		  if (!inbuf || doRead(sockfd, inbuf, inlen) < 0) {
+		    free(inbuf);
+		    free(varname);
+		    goto close_up;
+		  }
 		  inbuf[inlen - 2] = '\0';
 
 		  outlen = (inlen * 4) / 3 + 1;
 		  databuf = (unsigned char *) malloc(outlen);
+		  if (!databuf) {
+		    free(inbuf);
+		    free(varname);
+		    goto close_up;
+		  }
 		  base64decode(inbuf, inlen - 2, databuf, &outlen);
 		  free(inbuf);
 
@@ -2432,15 +2465,22 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 
 	      if (sscanf(&buf[5], "%d", &varlen) != 1)
 		goto close_up;
-	      
+
+	      if (varlen < 2 || varlen > DSERV_MAX_VARNAME_LEN)
+		goto close_up;
+
 	      // Acknowledge to prevent buffering on sender side
 	      rval = write(sockfd, newline_buf, 1);
 
 	      varname = (char *) malloc(varlen);
-	      doRead(sockfd, varname, varlen);
+	      if (!varname || doRead(sockfd, varname, varlen) < 0) {
+		free(varname);
+		goto close_up;
+	      }
 	      varname[varlen - 2] = '\0';
-	      
+
 	      rc = ds->get(varname, &dpoint);
+	      free(varname);
 	      if (!rc)
 		{
 		  rc = 0;
@@ -2465,7 +2505,11 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 		  rval = writev(sockfd, iovs, 2);
 		  
 		  // ack from client
-		  doRead(sockfd, rcbuf, 1);
+		  if (doRead(sockfd, rcbuf, 1) < 0) {
+		    free(dstring_buf);
+		    dpoint_free(dpoint);
+		    goto close_up;
+		  }
 
 		  iovSet(&iovs[0], dstring_buf, dstring_size);
 		  iovSet(&iovs[1], newline_buf, 1);

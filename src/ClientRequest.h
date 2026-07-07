@@ -14,12 +14,17 @@
  *     REQ_TIMER: timer id
  *     REQ_REWARD_TIMER: timer pin
  *     REQ_SHUTDOWN: shutdown message
+ *     REQ_QUEUE_EOS: end-of-stream marker pushed by a queue's sole
+ *       producer (a SendClient) as its final act; a consumer that owns
+ *       the queue may free it only after receiving this.  Consumers
+ *       that never tear their queue down just ignore it.
  */
 
 enum request_t { REQ_SCRIPT, REQ_SCRIPT_NOREPLY,
 		 REQ_SCRIPT_WS_ASYNC,
 		 REQ_TRIGGER, REQ_DPOINT, REQ_DPOINT_SCRIPT, REQ_TIMER,
-		 REQ_REWARD_TIMER, REQ_ADC_TIMER, REQ_SHUTDOWN };
+		 REQ_REWARD_TIMER, REQ_ADC_TIMER, REQ_SHUTDOWN,
+		 REQ_QUEUE_EOS };
 
 typedef struct client_request_s {
   request_t type;

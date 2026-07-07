@@ -170,6 +170,7 @@ public:
   int add_to_logger_queue(ds_datapoint_t *dpoint);
   int move_to_logger_queue(ds_datapoint_t *dpoint);
   int process_log_requests(void);
+  int queue_log_control(std::string filename, uint32_t flag);
   int add_new_log_client(std::string filename, bool overwrite = false);
   int remove_log_client(std::string filename);
   int pause_log_client(std::string filename);

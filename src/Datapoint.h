@@ -34,6 +34,9 @@ typedef enum {
   DSERV_DPOINT_LOGSTART_FLAG = 0x08,
   DSERV_DPOINT_SHUTDOWN_FLAG = 0x10,
   DSERV_DPOINT_LOGFLUSH_FLAG = 0x20,
+  DSERV_DPOINT_LOGCLOSE_FLAG = 0x40,	/* close one log client (varname = filename);
+					   distinct from SHUTDOWN, which ends the
+					   logger thread itself */
 } ds_datapoint_flag_t;
   
 enum { DSERV_CREATE, DSERV_CLEAR, DSERV_SET, DSERV_GET, DSERV_GET_EVENT };

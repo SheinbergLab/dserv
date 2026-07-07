@@ -59,13 +59,7 @@ LogClient::LogClient(std::string filename, int fd): fd(fd), filename(filename)
   
   shutdown_dpoint.flags =
     DSERV_DPOINT_SHUTDOWN_FLAG | DSERV_DPOINT_DONTFREE_FLAG;
-  pause_dpoint.flags =
-    DSERV_DPOINT_LOGPAUSE_FLAG | DSERV_DPOINT_DONTFREE_FLAG;
-  start_dpoint.flags =
-    DSERV_DPOINT_LOGSTART_FLAG | DSERV_DPOINT_DONTFREE_FLAG;
-  flush_dpoint.flags =
-    DSERV_DPOINT_LOGFLUSH_FLAG | DSERV_DPOINT_DONTFREE_FLAG;
-  
+
   state = LOGGER_CLIENT_PAUSED;
   
   if (fd >= 0) write_header(now());
@@ -111,10 +105,8 @@ int LogClient::write_header(uint64_t timestamp)
 
 void LogClient::flush_dpoints(void)
 {
-  for (auto it : matches.get_matches()) {
-    LogMatchSpec *match = it.second;
-    if (!match->active) continue;
-    log_flush(match->logbuf);
+  for (auto logbuf : matches.active_logbufs()) {
+    log_flush(logbuf);
   }
   return;
 }
@@ -273,31 +265,22 @@ void LogClient::log_client_process(LogClient *logclient)
   logclient->cond.notify_one();
   mlock.unlock();
 
-  /* process until receive a message saying we are done */
+  /*
+   * pure writer loop: pause/start/flush/close are all handled on the
+   * dataserver's logger thread (LogTable::control_client), which owns
+   * every logbuf.  Any buffer flushing for a close has already been
+   * queued ahead of the shutdown dpoint, so this thread just writes
+   * what it is handed, in order, until told to stop.
+   */
   while (!done) {
     dpoint = logclient->dpoint_queue.front();
     logclient->dpoint_queue.pop_front();
 
     /* check for shutdown */
     if (dpoint->flags & DSERV_DPOINT_SHUTDOWN_FLAG) {
-
-      //      std::cout << "shutdown dpoint received" << std::endl;
-
-      logclient->flush_dpoints();
       logclient->state = LOGGER_CLIENT_SHUTDOWN;
       logclient->active = 0;
       done = true;
-    }
-    else if (dpoint->flags & DSERV_DPOINT_LOGPAUSE_FLAG) {
-      logclient->flush_dpoints();
-      logclient->state = LOGGER_CLIENT_PAUSED;
-    }
-    else if (dpoint->flags & DSERV_DPOINT_LOGSTART_FLAG) {
-      //      std::cout << "starting logger" << std::endl;
-      logclient->state = LOGGER_CLIENT_RUNNING;
-    }
-    else if (dpoint->flags & DSERV_DPOINT_LOGFLUSH_FLAG) {
-      logclient->flush_dpoints();
     }
     else {
       // actually write this point

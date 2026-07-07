@@ -119,9 +119,27 @@ TclServer::~TclServer()
   process_thread.join();
 
   // Remove our SendClient from the Dataserver's send_table.
-  // This pushes the shutdown_dpoint so the detached SendClient thread exits.
+  // This pushes the shutdown_dpoint so the detached SendClient thread
+  // exits.  That thread may still be draining dpoints into our queue,
+  // and its final act is to push REQ_QUEUE_EOS — so drain until we see
+  // it (bounded), guaranteeing the producer is finished before this
+  // object (and the queue member) is destroyed.
   if (ds && !client_name.empty()) {
-    ds->remove_send_client_by_id(client_name);
+    if (ds->remove_send_client_by_id(client_name)) {
+      auto deadline =
+	std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (std::chrono::steady_clock::now() < deadline) {
+	if (queue.size() == 0) {
+	  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	  continue;
+	}
+	client_request_t req = queue.front();
+	queue.pop_front();
+	if (req.type == REQ_QUEUE_EOS) break;
+	if (req.type == REQ_DPOINT_SCRIPT && req.dpoint)
+	  dpoint_free(req.dpoint);
+      }
+    }
   }
 }
 
@@ -1453,22 +1471,26 @@ set www_path /usr/local/dserv/www</code>
               this->ws_connections.erase(userData->client_name);
             }
             
-            // Remove from Dataserver's send_table
+            // Remove from Dataserver's send_table.  The SendClient
+            // thread will push REQ_QUEUE_EOS into our notification
+            // queue as its final act, and the notification thread
+            // frees the queue only after seeing it — the producer
+            // announces end-of-stream, so no sleep/guess is needed.
+            bool producer_active = false;
             if (!userData->dataserver_client_id.empty()) {
-              this->ds->remove_send_client_by_id(userData->dataserver_client_id);
+              producer_active =
+                this->ds->remove_send_client_by_id(userData->dataserver_client_id) != 0;
             }
 
 	    // Cleanup linked subprocesses
-	    this->cleanup_subprocesses_for_websocket(userData->client_name);	    
-            
-            // Signal shutdown to the notification processing thread
-            if (userData->notification_queue) {
-              client_request_t shutdown_req;
-              shutdown_req.type = REQ_SHUTDOWN;
-              userData->notification_queue->push_back(shutdown_req);
-              
-              // Give the thread a moment to process the shutdown
-              std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	    this->cleanup_subprocesses_for_websocket(userData->client_name);
+
+            // If no producer existed (registration failed or already
+            // removed), unblock the notification thread ourselves
+            if (userData->notification_queue && !producer_active) {
+              client_request_t eos_req;
+              eos_req.type = REQ_QUEUE_EOS;
+              userData->notification_queue->push_back(eos_req);
             }
             
             // Clean up rqueue
@@ -1536,8 +1558,11 @@ void TclServer::process_websocket_client_notifications_template(
         
         client_request_t req = userData->notification_queue->front();
         userData->notification_queue->pop_front();
-            
-        if (req.type == REQ_SHUTDOWN) {
+
+        // REQ_QUEUE_EOS is the producer's (SendClient's) final act;
+        // after it, no further pushes can arrive, so the queue
+        // deletion below cannot race the producer
+        if (req.type == REQ_QUEUE_EOS || req.type == REQ_SHUTDOWN) {
             done = true;
             break;
         }

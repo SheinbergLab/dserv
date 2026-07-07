@@ -76,6 +76,7 @@ class MatchDict
   std::string to_string(void) {
     std::string s("{ ");
 
+    std::lock_guard<std::mutex> mlock(mutex_);
     for (auto it : map_) {
       s += it.first;
       s += " ";
@@ -256,9 +257,12 @@ class MatchDict
 
   // check all match specs for a match
   // need to check all of them to ensure alert_every counter is updated
+  // lock held for the full iteration: insert()/remove() run on other
+  // threads and would otherwise invalidate iterators mid-scan
   bool is_match(char *var)
   {
     bool ret = false;
+    std::lock_guard<std::mutex> mlock(mutex_);
     for (auto&& it : map_) {
       MatchSpec *match = &it.second;
       if (!match->active) continue;

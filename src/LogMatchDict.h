@@ -2,6 +2,7 @@
 #define LOGMATCHDICT_H
 
 #include <unordered_map>
+#include <vector>
 #include <mutex>
 #include "MatchDict.h"
 
@@ -49,13 +50,29 @@ class LogMatchDict
 {
  private:
   std::unordered_map<std::string, LogMatchSpec *> map_;
+
+  /* specs replaced/removed while the logger thread may still hold
+     their logbuf pointer from is_match(); freeing them here would be
+     a use-after-free, so they are parked and reaped in clear() */
+  std::vector<LogMatchSpec *> graveyard_;
+
   std::mutex mutex_;
 
  public:
-  
-  std::unordered_map<std::string, LogMatchSpec *>get_matches(void)
+  ~LogMatchDict() { clear(); }
+
+  /* snapshot of the logbufs of active matches, taken under the lock
+     (iterating map_ directly from another thread races insert/remove) */
+  std::vector<ds_logger_buf_t *> active_logbufs(void)
   {
-    return map_;
+    std::vector<ds_logger_buf_t *> bufs;
+    std::lock_guard<std::mutex> mlock(mutex_);
+    for (auto it : map_) {
+      LogMatchSpec *match = it.second;
+      if (match->active && match->logbuf)
+	bufs.push_back(match->logbuf);
+    }
+    return bufs;
   }
   
   void insert(std::string key, LogMatchSpec *m)
@@ -63,21 +80,21 @@ class LogMatchDict
     std::lock_guard<std::mutex> mlock(mutex_);
     auto iter = map_.find(key);
     if (iter != map_.end()) {
-      delete iter->second;
+      graveyard_.push_back(iter->second);
     }
     map_[key] = m;
   }
-  
+
   void remove(std::string key)
   {
-    LogMatchSpec *old;
     std::lock_guard<std::mutex> mlock(mutex_);
-    if (find(key, &old)) {
-      delete old;
-      map_.erase (key);
+    auto iter = map_.find(key);
+    if (iter != map_.end()) {
+      graveyard_.push_back(iter->second);
+      map_.erase (iter);
     }
   }
-  
+
   void clear(void)
   {
     std::lock_guard<std::mutex> mlock(mutex_);
@@ -86,6 +103,10 @@ class LogMatchDict
       delete match;
     }
     map_.clear ();
+    for (auto match : graveyard_) {
+      delete match;
+    }
+    graveyard_.clear ();
   }
   
   bool find(std::string key, LogMatchSpec **m)
@@ -115,6 +136,9 @@ class LogMatchDict
   bool is_match(char *var, ds_logger_buf_t **logbuf, bool in_obs)
   {
     bool ret = false;
+    /* lock held for the full iteration: insert()/remove() run on other
+       threads and would otherwise invalidate iterators mid-scan */
+    std::lock_guard<std::mutex> mlock(mutex_);
     for (auto it : map_) {
       LogMatchSpec *match = it.second;
       if (!match->active) continue;

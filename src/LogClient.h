@@ -25,11 +25,13 @@ class LogClient {
   
   std::atomic<int> initialized;	/* set to 1 when setup      */
 
+  /* queue drained by this client's writer thread; carries data
+     dpoints and (last) the shutdown dpoint.  pause/start/flush are
+     handled on the dataserver's logger thread (see
+     LogTable::control_client), which is the sole owner of logbuf
+     state, so no other control dpoints travel through here. */
   SharedQueue<ds_datapoint_t *> dpoint_queue;
-    
-  ds_datapoint_t pause_dpoint;    /* dpoint signal pause    */
-  ds_datapoint_t start_dpoint;    /* dpoint signal start    */
-  ds_datapoint_t flush_dpoint;    /* dpoint signal flush    */
+
   ds_datapoint_t shutdown_dpoint; /* dpoint signal shutdown */
 
   ds_datapoint_t beginobs_dpoint; /* dpoint signal beginobs */

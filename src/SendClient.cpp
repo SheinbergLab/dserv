@@ -46,11 +46,9 @@ SendClient::SendClient(int socket, char *hoststr, int port, uint8_t flags):
     port(port), fd(socket)
   {
     uint8_t binary = (flags & 0x01) != 0;
-    uint8_t json = (flags & 0x02) != 0;    
-    active = 1;
+    uint8_t json = (flags & 0x02) != 0;
     type = SOCKET_CLIENT;
     host = strdup(hoststr);
-    port = port;
     send_binary = binary;
     send_json = json;
     shutdown_dpoint.flags = DSERV_DPOINT_SHUTDOWN_FLAG;
@@ -60,7 +58,6 @@ SendClient::SendClient(SharedQueue<client_request_t> *client_queue):
   client_queue(client_queue)
 {
   type = QUEUE_CLIENT;
-  active = 1;
   shutdown_dpoint.flags = DSERV_DPOINT_SHUTDOWN_FLAG;
 }
 
@@ -165,7 +162,7 @@ int SendClient::send_dpoint(ds_datapoint_t *dpoint)
   return active;
 }
 
-void SendClient::send_client_process(SendClient *sendclient)
+void SendClient::send_client_process(std::shared_ptr<SendClient> sendclient)
 {
   ds_datapoint_t *dpoint;
   bool done = false;
@@ -195,7 +192,19 @@ void SendClient::send_client_process(SendClient *sendclient)
       }
     }
   }
-  //  std::cout << "shutting down" << std::endl;
 
-  delete sendclient;
+  /*
+   * end-of-stream contract: this thread is the only producer into
+   * client_queue, and this push is its final touch of that queue.
+   * The queue's owner may free it only after receiving REQ_QUEUE_EOS
+   * (consumers that never tear their queue down just ignore it).
+   */
+  if (sendclient->type == QUEUE_CLIENT && sendclient->client_queue) {
+    client_request_t eos_request;
+    eos_request.type = REQ_QUEUE_EOS;
+    sendclient->client_queue->push_back(eos_request);
+  }
+
+  /* the object is freed when the last shared_ptr (table's or ours)
+     goes away — no delete here */
 }

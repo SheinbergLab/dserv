@@ -65,16 +65,25 @@ extern "C" {
 	}
 }
 
-static std::atomic<bool> shutdownInProgress{false};
+static std::atomic<bool> shutdownRequested{false};
 
+/*
+ * Signal handler: async-signal-safe work only.  Everything the old
+ * handler did here (Tcl evals, registry lookups, deletes, iostreams)
+ * takes locks and allocates — undefined behavior in signal context
+ * and the source of intermittent crashes on ctrl-c.  Now it just
+ * sets a flag; main() runs the teardown in normal thread context.
+ */
 void signalHandler(int signum) {
-  // Prevent double execution
-  if (shutdownInProgress.exchange(true)) {
-    std::cout << "\nForced exit (second signal)" << std::endl;
-    std::_Exit(1);  // Immediate exit without destructors
-    return;
+  if (shutdownRequested.exchange(true)) {
+    // second signal: force exit without destructors
+    const char msg[] = "\nForced exit (second signal)\n";
+    write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    std::_Exit(1);
   }
-  
+}
+
+static void graceful_shutdown(void) {
   std::cout << "\nShutting down gracefully..." << std::endl;
 
   // Shutdown all subprocesses cleanly
@@ -90,14 +99,23 @@ void signalHandler(int signum) {
     }
   }
   // Brief wait for subprocesses to finish cleanup
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));  
-  
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
   std::cout << "Deleting TclServer..." << std::endl;
   delete tclserver;
   std::cout << "Deleting Dataserver..." << std::endl;
-  delete dserver;
+  delete dserver;    // waits (bounded) for log writers: datafiles complete
   std::cout << "Clean shutdown complete." << std::endl;
-  exit(0);
+  std::cout.flush();
+
+  /*
+   * _Exit rather than exit: detached threads (network accept loops,
+   * websocket/uWS event loops, any lingering send clients) are still
+   * running, and letting exit() tear down statics under them is a
+   * crash lottery.  Everything that must be durable — the datafiles —
+   * was already flushed and closed above.
+   */
+  std::_Exit(0);
 }
 
 void setVersionInfo(TclServer* tclserver) {
@@ -163,6 +181,7 @@ int main(int argc, char *argv[])
   }
 
   std::signal(SIGINT, signalHandler);
+  std::signal(SIGTERM, signalHandler);	/* systemd stop: same clean path */
 
   if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
     std::cerr << "mlockall failed: " << strerror(errno) 
@@ -201,5 +220,10 @@ int main(int argc, char *argv[])
     if (result.starts_with("!TCL_ERROR ")) std::cerr << result << std::endl;
   }
 
-  std::promise<void>().get_future().wait();
+  /* park until a signal requests shutdown, then tear down from the
+     main thread (not from signal context) */
+  while (!shutdownRequested.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  graceful_shutdown();
 }
