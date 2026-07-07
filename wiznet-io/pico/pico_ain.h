@@ -40,6 +40,25 @@ static int16_t         ain_val[AIN_NCH];
 static uint8_t         ain_ch, ain_busy;
 static absolute_time_t ain_ready;
 
+/* Failure trip: a yanked Qwiic cable / wedged bus makes every transaction eat its
+ * 3ms I2C timeout, and ain_service would retry EVERY superloop pass -- a ~100x
+ * loop-latency (and DI/sync jitter) hit that persists until reboot. After
+ * AIN_ERR_TRIP consecutive errors, mark the chip gone and re-probe only on a slow
+ * timer (a single NAK'd transaction when absent), which also picks a re-plugged
+ * chip back up without a reboot. */
+#define AIN_ERR_TRIP    5
+#define AIN_REPROBE_MS  5000
+static uint8_t         ain_inited, ain_errs;
+static absolute_time_t ain_reprobe;
+
+static inline void ain_trip(void)
+{
+    ain_present = 0; ain_busy = 0; ain_errs = 0;
+    ain_reprobe = make_timeout_time_ms(AIN_REPROBE_MS);
+    printf("ain: ADS1115 unresponsive -> disabled, re-probing every %ds\n",
+           AIN_REPROBE_MS / 1000);
+}
+
 static inline int ain_wr(uint16_t cfg)
 {
     uint8_t b[3] = { 0x01, (uint8_t)(cfg >> 8), (uint8_t) cfg };   /* reg 0x01 = config */
@@ -63,6 +82,8 @@ static inline void ain_init(void)
     gpio_pull_up(PICO_DEFAULT_I2C_SCL_PIN);
     uint16_t cfg;
     ain_present = (ain_rd(0x01, &cfg) == 0);
+    ain_inited = 1; ain_errs = 0;
+    ain_reprobe = make_timeout_time_ms(AIN_REPROBE_MS);
     printf("ain: ADS1115 %s (I2C%d SDA%d SCL%d)\n", ain_present ? "found" : "absent",
            i2c_hw_index(i2c_default), PICO_DEFAULT_I2C_SDA_PIN, PICO_DEFAULT_I2C_SCL_PIN);
 }
@@ -71,7 +92,17 @@ static inline void ain_init(void)
  * bitmask of channels that just produced a fresh sample (0 = none this call). */
 static inline int ain_service(const pico_config_t *c)
 {
-    if (!ain_present) return 0;
+    if (!ain_present) {                             /* absent at boot or tripped: timed re-probe */
+        if (!ain_inited) return 0;                  /* never init'ed (ain_en off at boot)        */
+        if (absolute_time_diff_us(get_absolute_time(), ain_reprobe) > 0) return 0;
+        ain_reprobe = make_timeout_time_ms(AIN_REPROBE_MS);
+        uint16_t cfg;
+        if (ain_rd(0x01, &cfg) == 0) {
+            ain_present = 1; ain_errs = 0; ain_busy = 0;
+            printf("ain: ADS1115 responding, re-enabled\n");
+        }
+        return 0;
+    }
     int ri = c->ain_rate <= 8 ? c->ain_rate : 0;
     if (!ain_busy) {
         int gi = c->ain_gain <= 6 ? c->ain_gain : 0;
@@ -84,12 +115,14 @@ static inline int ain_service(const pico_config_t *c)
         if (ain_wr(cfg) == 0) {
             ain_ready = make_timeout_time_us(1000000u / ain_dr_sps[ri] + 200);
             ain_busy = 1;
-        }
+            ain_errs = 0;
+        } else if (++ain_errs >= AIN_ERR_TRIP) ain_trip();
         return 0;
     }
     if (absolute_time_diff_us(get_absolute_time(), ain_ready) > 0) return 0;   /* not due yet */
     uint16_t v;
-    if (ain_rd(0x00, &v) == 0) ain_val[ain_ch] = (int16_t) v;                  /* conv register */
+    if (ain_rd(0x00, &v) == 0) { ain_val[ain_ch] = (int16_t) v; ain_errs = 0; } /* conv register */
+    else if (++ain_errs >= AIN_ERR_TRIP) { ain_trip(); return 0; }
     int done = ain_ch;
     ain_busy = 0;
     ain_ch = (ain_ch + 1) % AIN_NCH;                                           /* next channel */
