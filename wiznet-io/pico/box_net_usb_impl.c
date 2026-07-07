@@ -21,10 +21,13 @@ const box_net_vtable_t box_net_usb_vt = {
     .local_ip       = box_net_local_ip,
     .send_command   = box_net_send_command,
     .name           = box_net_backend_name,
+    .phy_link       = box_net_phy_link,     /* -2: no PHY on USB */
+    .server_up      = box_net_server_up,
+    .send_command_start = box_net_send_command_start,
+    .send_command_poll  = box_net_send_command_poll,
 };
 
 void box_net_dual_usb_init(void)         { if (!tusb_inited()) tusb_init(); }
-void box_net_dual_usb_console_init(void) { box_net_usb_console_init(); }
 void box_net_dual_usb_task(void)         { tud_task(); }
 
 /* Pump TinyUSB (tightly) until the host has mounted us -- i.e. the CDCs have

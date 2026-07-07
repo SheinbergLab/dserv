@@ -19,6 +19,10 @@ set(CFG_NAME wizchip_dserv_config)
 add_executable(${CFG_NAME} wizchip_dserv_config.c)
 target_include_directories(${CFG_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+if(DEFINED BOX_FW_VERSION)              # baked by build.sh (git describe)
+    target_compile_definitions(${CFG_NAME} PRIVATE BOX_FW_VERSION=\"${BOX_FW_VERSION}\")
+endif()
+
 if(BOX_TARGET STREQUAL "pico2w")
     target_compile_definitions(${CFG_NAME} PRIVATE BOX_NET_LWIP)
     if(DEFINED WIFI_SSID)
@@ -30,6 +34,8 @@ if(BOX_TARGET STREQUAL "pico2w")
     endif()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
+        pico_multicore                  # core 1 = RT loop (see wizchip_dserv_config.c)
+        pico_flash                      # flash_safe_execute: saves park the RT core
         hardware_flash
         pico_cyw43_arch_lwip_poll)      # CYW43 WiFi + lwIP (poll mode)
 elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv module
@@ -42,6 +48,8 @@ elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv 
     endif()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
+        pico_multicore
+        pico_flash
         pico_unique_id
         hardware_flash
         tinyusb_device                  # we own TinyUSB; pico_stdio_usb is NOT used here
@@ -58,6 +66,8 @@ elseif(BOX_TARGET STREQUAL "dual")      # W6300-EVB: Ethernet OR USB, boot-selec
         CFG_TUSB_CONFIG_FILE=\"box_tusb_config.h\")
     target_link_libraries(${CFG_NAME} PRIVATE   # UNION of the usb + w6300 link libs
         pico_stdlib
+        pico_multicore
+        pico_flash
         pico_unique_id
         hardware_spi
         hardware_dma
@@ -71,6 +81,8 @@ elseif(BOX_TARGET STREQUAL "dual")      # W6300-EVB: Ethernet OR USB, boot-selec
 else()
     target_link_libraries(${CFG_NAME} PRIVATE
         pico_stdlib
+        pico_multicore
+        pico_flash
         pico_unique_id
         hardware_spi
         hardware_dma
@@ -81,8 +93,19 @@ else()
         DHCP_FILES)
 endif()
 
-# ADS1115 analog-in (pico_ain.h) is always compiled in, runtime-enabled via ain_en.
-target_link_libraries(${CFG_NAME} PRIVATE hardware_i2c)
+# ADS1115 analog-in (pico_ain.h, I2C) + SSD1306 status OLED (pico_oled.h, SPI0)
+# are always compiled in, runtime-enabled via ain_en / oled_en.
+target_link_libraries(${CFG_NAME} PRIVATE hardware_i2c hardware_spi)
+
+# Stage 2: run the whole image from SRAM (RP2350: ~150KB image, 520KB SRAM).
+# Flash saves then no longer park core 1 (nothing executes from XIP at runtime;
+# PICO_FLASH_ASSUME_CORE1_SAFE makes flash_safe_execute skip the lockout), and
+# XIP cache misses disappear as an RT jitter source. pico2w excluded: its image
+# plus the cyw43 firmware blob doesn't fit in RAM, so it keeps the lockout path.
+if(NOT BOX_TARGET STREQUAL "pico2w")
+    pico_set_binary_type(${CFG_NAME} copy_to_ram)
+    target_compile_definitions(${CFG_NAME} PRIVATE PICO_FLASH_ASSUME_CORE1_SAFE=1)
+endif()
 
 # The usb target owns TinyUSB for the data/CLI CDCs, so its stdio (printf + CLI)
 # goes to UART instead of clashing with pico_stdio_usb. All others: CLI on USB.

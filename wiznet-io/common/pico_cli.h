@@ -7,6 +7,8 @@
  * Commands:
  *   help
  *   show
+ *   mode auto|usb|eth    (dual image: boot transport policy when the GP28 strap
+ *                         is open; strap to GND still hard-forces Ethernet)
  *   net mode dhcp|static
  *   net ip A.B.C.D       (also sets mode=static)
  *   wifi ssid SSID       (pico2w; runtime creds, else compile-time fallback)
@@ -35,14 +37,18 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
     char obs[8];
     if (obs_mirror_enabled(c)) snprintf(obs, sizeof obs, "%d", obs_mirror_pin(c));
     else                       snprintf(obs, sizeof obs, "off");
-    int k = snprintf(out, outsz,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u applied=%u\r\n",
+    int k = 0;
+#ifdef BOX_NET_DUAL
+    k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
+#endif
+    k += snprintf(out + k, outsz - k,
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u oled.en=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
-        c->dserv_port, obs,
+        dserv_cfg_port(c), obs,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
-        c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->applied_count);
+        c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->oled_en, c->applied_count);
     for (int i = 0; i < PICO_NPINS && k < outsz - 64; i++)
         if (c->pin_mode[i])
             k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums%s\r\n",
@@ -60,7 +66,9 @@ static inline void pico_cli_dump(const pico_config_t *c)
     printf("# (uncomment the next line to wipe the target's existing config first)\r\n");
     printf("#factory\r\n");
     if (c->name[0])                       printf("name %s\r\n", c->name);
-    /* transport is set by the GP28 strap, not config -- nothing to emit here */
+#ifdef BOX_NET_DUAL
+    if (c->transport_mode)                printf("mode %s\r\n", dserv_xmode_str(c->transport_mode));
+#endif
     if (c->net_mode == NET_MODE_STATIC) {
         printf("net mode static\r\n");
         printf("net ip %u.%u.%u.%u\r\n", c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3]);
@@ -81,9 +89,16 @@ static inline void pico_cli_dump(const pico_config_t *c)
     if (c->ain_en)                        printf("ain enable 1\r\n");
     if (c->ain_rate)                      printf("ain rate %u\r\n", c->ain_rate);
     if (c->ain_gain)                      printf("ain gain %u\r\n", c->ain_gain);
+    if (c->oled_en)                       printf("oled enable 1\r\n");
     printf("save\r\n");
     printf("# reboot   (uncomment / run to apply mode/net changes)\r\n");
 }
+
+#ifdef BOX_NET_DUAL
+#define PICO_CLI_HELP_XTRA "mode auto|usb|eth | phylink [1|0] | "
+#else
+#define PICO_CLI_HELP_XTRA ""
+#endif
 
 /* Execute one line. Returns an action; fills `out` with a response line.
  * `cmd` (may be NULL) receives a GPIO command for the `do` verbs (CLI_GPIO). */
@@ -187,14 +202,32 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         c->ain_en = v ? 1 : 0; c->applied_count++;
         snprintf(out, outsz, "OK ain enable=%d (save+reboot to apply)\r\n", c->ain_en); return CLI_OK;
     }
+    if (sscanf(line, "oled enable %d", &v) == 1) { /* SSD1306 SPI status display (see PINMAP.md) */
+        c->oled_en = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK oled enable=%d (claims SPI0 pins; save+reboot to apply)\r\n", c->oled_en);
+        return CLI_OK;
+    }
     if (sscanf(line, "net mode %11s", w) == 1) {
         if      (!strcmp(w, "dhcp"))   c->net_mode = NET_MODE_DHCP;
         else if (!strcmp(w, "static")) c->net_mode = NET_MODE_STATIC;
         else { snprintf(out, outsz, "ERR net mode dhcp|static\r\n"); return CLI_ERR; }
         c->applied_count++; snprintf(out, outsz, "OK net mode=%s (save+reboot to apply)\r\n", dserv_netmode_str(c->net_mode)); return CLI_OK;
     }
-    /* No `mode` command: transport is decided by the GP28 hardware strap at boot
-     * (see main() in wizchip_dserv_config.c), never by a persisted flash setting. */
+#ifdef BOX_NET_DUAL
+    /* Boot transport policy for the open-strap case (GND strap always forces eth).
+     * Safe to persist again: with the core split, a bad choice can't kill the
+     * console -- and auto never commits to a transport it can't bring up. */
+    if (sscanf(line, "mode %7s", w) == 1) {
+        int m = !strcmp(w, "auto") ? XMODE_AUTO :
+                !strcmp(w, "eth")  ? XMODE_ETH  :
+                !strcmp(w, "usb")  ? XMODE_USB  : -1;
+        if (m < 0) { snprintf(out, outsz, "ERR mode auto|usb|eth\r\n"); return CLI_ERR; }
+        c->transport_mode = (uint8_t) m; c->applied_count++;
+        snprintf(out, outsz, "OK mode=%s (GND strap overrides; save+reboot to apply)\r\n",
+                 dserv_xmode_str(c->transport_mode));
+        return CLI_OK;
+    }
+#endif
     if (!strcmp(line, "show"))    { pico_cli_show(c, out, outsz); return CLI_OK; }
     if (!strcmp(line, "dump"))    { pico_cli_dump(c); out[0] = '\0'; return CLI_OK; }  /* config as replayable cmds */
     if (!strcmp(line, "save"))    { snprintf(out, outsz, "saving...\r\n"); return CLI_SAVE; }
@@ -203,13 +236,13 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | dump | name NAME | "
+            "cmds: show | dump | name NAME | " PICO_CLI_HELP_XTRA
             "net mode dhcp|static | net ip A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | obs pin N | obs off |\r\n"
-            "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 |\r\n"
-            "      do N 0|1 | do N pulse US | save | factory | reboot | bootsel\r\n");
+            "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 | oled enable 0|1 |\r\n"
+            "      do N 0|1 | do N pulse US | wdt 0|1|test | save | factory | reboot | bootsel\r\n");
         return CLI_OK;
     }
     snprintf(out, outsz, "ERR unknown (try 'help')\r\n");

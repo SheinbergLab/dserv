@@ -17,8 +17,13 @@ const box_net_vtable_t box_net_w6300_vt = {
     .local_ip       = box_net_local_ip,
     .send_command   = box_net_send_command,
     .name           = box_net_backend_name,
+    .phy_link       = box_net_phy_link,     /* lazy chip bring-up, NO vendored PHY-wait */
+    .server_up      = box_net_server_up,
+    .send_command_start = box_net_send_command_start,
+    .send_command_poll  = box_net_send_command_poll,
 };
 
-/* (Boot-time PHY cable auto-detect was removed: the W6300 PHYSR link/cable bits proved
- * unreliable at cold boot and false-selected Ethernet with no cable. Transport is now
- * the persisted flash setting -- see box_net_select in box_net_dual_impl.c.) */
+/* (The 2026-07-05 boot-time cable auto-detect read PHYSR the instant the chip came
+ * out of reset -- before autonegotiation (1-3s) could complete -- which is why it
+ * proved "unreliable" and was dropped for the strap. phy_link above is the sound
+ * replacement: the caller samples it debounced over a window, from the running loop.) */

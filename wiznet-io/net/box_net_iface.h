@@ -28,6 +28,19 @@ typedef struct {
     void        (*local_ip)(uint8_t out[4]);
     int         (*send_command)(const uint8_t dserv_ip[4], uint16_t port, const char *cmd);
     const char *(*name)(void);
+    int         (*phy_link)(void);     /* 1 up, 0 down, -1 chip error, -2 no PHY on this transport.
+                                        * w6300: lazily brings the chip up (sans the vendored PHY-wait),
+                                        * so the auto probe + `phylink` CLI work while USB is active. */
+    int         (*server_up)(void);    /* 1 iff the dserv->box config path is alive (w6300: config
+                                        * server socket ESTABLISHED; usb: enumerated). Feeds the
+                                        * registration self-heal watchdog. */
+    /* Async variant of send_command for the RT loop: start one command, then
+     * poll each pass (us-bounded: ~1-2 SPI reads) until it resolves. w6300 runs
+     * a per-pass socket state machine; usb resolves immediately (CDC write).
+     *   start: 0 accepted, -1 can't start (previous command still in flight)
+     *   poll:  0 in progress, 1 done + dserv accepted, -1 done + failed        */
+    int         (*send_command_start)(const uint8_t dserv_ip[4], uint16_t port, const char *cmd);
+    int         (*send_command_poll)(void);
 } box_net_vtable_t;
 
 extern const box_net_vtable_t box_net_w6300_vt;

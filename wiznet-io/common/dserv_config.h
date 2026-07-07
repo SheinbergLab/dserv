@@ -32,6 +32,11 @@
 #define PICO_NPINS     30
 #define PICO_NAME_MAX  16
 
+/* dserv's client port when cfg->dserv_port is unset (0). One place, so the
+ * dispatch code and the CLI's `show` agree on the effective value; see
+ * dserv_cfg_port() below. */
+#define DSERV_DEFAULT_PORT 4620
+
 /* Namespace class: every box publishes/subscribes under <BOX_CLASS>/<name>/... so
  * all external I/O boxes group under one parent (extio/) in the datapoint tree,
  * clearly separated from local ess/gpio/mtouch/etc. One-line change to rename. */
@@ -60,8 +65,12 @@ typedef struct {
     uint8_t  ain_gain;                  /* ADS1115 PGA/FSR:   0=default(4.096V), 1..6=6.144/4.096/2.048/1.024/0.512/0.256 */
     uint8_t  ain_en;                    /* 1 = activate ADS1115 analog-in (ADC must be wired); 0 = off (default),
                                          * leaves the I2C pins free for GPIO. Applied at boot (save+reboot). */
-    uint8_t  transport_mode;            /* DEPRECATED/unused: transport is now the GP28 boot strap, not config.
-                                         * Kept only to preserve the append-only pico_persist v11 layout. */
+    uint8_t  transport_mode;            /* DUAL boot policy when the GP28 strap is OPEN (strap to GND still
+                                         * hard-forces Ethernet): XMODE_AUTO (0, default: boot USB, sense the
+                                         * PHY link, upgrade to eth), XMODE_ETH, XMODE_USB. Safe to persist
+                                         * now: the core-0 console stays alive whatever the transport does. */
+    uint8_t  oled_en;                   /* 1 = SSD1306 128x32 SPI status display on the OLED_PIN_* set
+                                         * (pico_gpio.h; those pins become reserved). Applied at boot. */
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -91,6 +100,7 @@ typedef enum {
     CFG_AIN_RATE,
     CFG_AIN_GAIN,
     CFG_AIN_EN,
+    CFG_OLED_EN,
     CFG_DSERV_IP,
     CFG_DSERV_PORT,
     CFG_GPIO,       /* a cmd/do output command parsed into *cmd */
@@ -107,6 +117,9 @@ static inline void dserv_state_name(const pico_config_t *c, char *buf, int sz,
 
 static inline const char *dserv_cfg_name(const pico_config_t *c)
 { return c->name[0] ? c->name : "pico"; }
+
+static inline uint16_t dserv_cfg_port(const pico_config_t *c)
+{ return c->dserv_port ? c->dserv_port : DSERV_DEFAULT_PORT; }
 
 /* The box's datapoint prefix "<BOX_CLASS>/<name>" (e.g. extio/office). Returns len. */
 static inline int dserv_cfg_prefix(const pico_config_t *c, char *buf, int sz)
@@ -134,13 +147,22 @@ static inline const char *dserv_mode_str(uint8_t m)
 static inline const char *dserv_netmode_str(uint8_t mode)
 { return mode == NET_MODE_STATIC ? "static" : "dhcp"; }
 
-/* Transport backends for the DUAL build. Which one boots is decided by the GP28
- * hardware strap at boot (see BOX_MODE_STRAP_PIN in pico_gpio.h), not by config:
- * open/high = USB, tied to GND = Ethernet. dserv_xport_str is used only to log the
- * strap's decision. No fragile boot-time cable auto-detect. */
+/* Transport backends for the DUAL build. XPORT_* is the ACTIVE transport; the
+ * boot policy is: GP28 strap to GND -> Ethernet, hardware-forced (can't go
+ * stale). Strap open -> cfg->transport_mode decides: XMODE_ETH / XMODE_USB
+ * force one, XMODE_AUTO (factory default) boots USB immediately -- the safe,
+ * always-works transport -- then senses the W6300 PHY link (debounced, after
+ * autonegotiation has had time to finish; the old cold-boot instant read was
+ * what made auto-detect unreliable) and upgrades to Ethernet when a live cable
+ * is seen. dserv_xport_str logs the active transport. */
 enum { XPORT_USB = 0, XPORT_ETH = 1, XPORT_SWITCH = 2 };
 static inline const char *dserv_xport_str(uint8_t m)
 { return m == XPORT_ETH ? "eth" : m == XPORT_SWITCH ? "switch" : "usb"; }
+
+/* pico_config_t.transport_mode (persisted policy; 0 default == auto). */
+enum { XMODE_AUTO = 0, XMODE_ETH = 1, XMODE_USB = 2 };
+static inline const char *dserv_xmode_str(uint8_t m)
+{ return m == XMODE_ETH ? "eth" : m == XMODE_USB ? "usb" : "auto"; }
 
 /* obs-mirror accessors: enable is a flag distinct from the pin, so GP0 is a
  * valid mirror pin and the zeroed factory default is "off". */
@@ -241,6 +263,9 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "ain/enable") == 0) {
         c->ain_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_AIN_EN;
     }
+    if (strcmp(k, "oled/enable") == 0) {
+        c->oled_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_OLED_EN;
+    }
     if (strcmp(k, "obs/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
@@ -333,6 +358,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_AIN_RATE:   return "ain_rate";
     case CFG_AIN_GAIN:   return "ain_gain";
     case CFG_AIN_EN:     return "ain_en";
+    case CFG_OLED_EN:    return "oled_en";
     case CFG_DSERV_IP:   return "dserv_ip";
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";

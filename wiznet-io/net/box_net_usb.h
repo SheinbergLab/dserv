@@ -34,9 +34,6 @@
 
 #include "dserv_config.h"
 #include "tusb.h"
-#include "pico/stdio.h"
-#include "pico/stdio/driver.h"
-#include "pico/error.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -59,6 +56,12 @@ static inline void box_net_poll(void)
 }
 
 static inline const char *box_net_backend_name(void) { return "usb"; }
+
+static inline int box_net_phy_link(void) { return -2; }   /* no PHY on the USB transport */
+
+/* Config path liveness == enumerated: the host module reads/writes the data CDC
+ * whenever the device is mounted; there is no separate dserv connect-back. */
+static inline int box_net_server_up(void) { return tud_ready() ? 1 : 0; }
 
 /* ---- "link to dserv": USB enumerated (mounted, not suspended) is our "connected". ----
  * We deliberately do NOT gate on DTR (tud_cdc_n_connected): not every host/opener
@@ -135,48 +138,16 @@ static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
     return 0;
 }
 
-/* ---- USB console on CDC0 ----------------------------------------------------
- * Route stdio (printf + the stdio-based CLI) to CDC0 so the USB box has a console
- * just like the W6300 / pico2w builds -- while binary data stays on CDC1. Call
- * box_net_usb_console_init() once from main() after box_net_init(). On the host
- * you then get two ports: the lower (CDC0) is the console, the higher (CDC1) is
- * data. Independent interfaces, so the console never disturbs the data channel. */
-static void box_usb_con_out(const char *buf, int len)
-{
-    /* Gate the CONSOLE (unlike the data channel) on DTR: only write when a terminal is
-     * actually attached (picocom/screen assert it). This (a) lets us safely DRAIN the FIFO
-     * for a real reader -- tud_cdc_n_write() takes only what fits (<=256 B), so a single
-     * write silently truncated long output like `show`/`dump` -- and (b) avoids spinning
-     * the drain loop during normal operation, when nothing reads CDC0 (extio reads the data
-     * CDC1) and the FIFO would otherwise stay full and stall every debug printf. */
-    if (!tud_ready() || !tud_cdc_n_connected(0)) return;   /* no terminal open -> drop fast */
-    int sent = 0, guard = 0;
-    while (sent < len) {
-        uint32_t w = tud_cdc_n_write(0, (const uint8_t *) buf + sent, (uint32_t)(len - sent));
-        sent += (int) w;
-        if (w == 0) {                             /* FIFO full -- let the terminal drain it */
-            tud_cdc_n_write_flush(0);
-            tud_task();
-            if (++guard > 1000) break;            /* terminal stopped reading -> drop rest, don't block */
-        }
-    }
-    tud_cdc_n_write_flush(0);
-}
-static void box_usb_con_flush(void) { tud_cdc_n_write_flush(0); }
-static int box_usb_con_in(char *buf, int len)
-{
-    if (!tud_cdc_n_available(0)) return PICO_ERROR_NO_DATA;
-    return (int) tud_cdc_n_read(0, (uint8_t *) buf, (uint32_t) len);
-}
-static stdio_driver_t box_usb_con_driver = {
-    .out_chars    = box_usb_con_out,
-    .out_flush    = box_usb_con_flush,
-    .in_chars     = box_usb_con_in,
-    .crlf_enabled = true,                         /* \n -> \r\n for terminals */
-};
-static inline void box_net_usb_console_init(void)
-{
-    stdio_set_driver_enabled(&box_usb_con_driver, true);
-}
+/* Async flavor: the CDC write completes (or best-effort drops) immediately, so
+ * start does the work and poll reports instant success -- the periodic USB
+ * re-registration makes any drop self-healing. */
+static inline int box_net_send_command_start(const uint8_t dserv_ip[4], uint16_t port, const char *cmd)
+{ return box_net_send_command(dserv_ip, port, cmd); }
+static inline int box_net_send_command_poll(void) { return 1; }
+
+/* The CDC0 console (stdio driver + drain loops) that used to live here moved to
+ * box_console.h: printf now lands in a per-core lock-free ring drained by core 0,
+ * and core 1's box_console_cdc0_ferry() moves console bytes to/from CDC0
+ * fire-and-forget -- same DTR gating, no drain loops on any hot path. */
 
 #endif /* BOX_NET_USB_H */

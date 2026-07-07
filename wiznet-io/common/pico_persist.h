@@ -23,9 +23,9 @@
 #include <string.h>
 
 #define PICO_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define PICO_PERSIST_VERSION  11  /* v11: added transport_mode (dual). v10: ain_en. Fields are APPEND-ONLY:
-                                   * never reorder/resize existing ones, so an older (shorter) blob loads
-                                   * forward-compatibly with new fields defaulted (transport_mode -> 0 = auto). */
+#define PICO_PERSIST_VERSION  12  /* v12: oled_en. v11: transport_mode (dual). v10: ain_en. Fields are
+                                   * APPEND-ONLY: never reorder/resize existing ones, so an older (shorter)
+                                   * blob loads forward-compatibly with new fields defaulted (0 = off/auto). */
 #define PICO_PERSIST_BLOB_MAX  (12 + sizeof(pico_config_t))  /* hdr+struct+crc */
 
 static inline uint32_t pico_crc32(const uint8_t *p, uint32_t n)

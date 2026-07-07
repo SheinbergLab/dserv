@@ -12,6 +12,12 @@
 #include "hardware/gpio.h"
 #include "pico/time.h"
 
+/* Alarm pool for pulse/sched timing, created by the RT core (core 1) so those
+ * IRQs fire there -- the DEFAULT pool interrupts core 0 (whichever core ran
+ * runtime init), which would put pulse edges on the UI core. Defined in the
+ * main .c; NULL until core 1 creates it (fallbacks below cover that window). */
+extern alarm_pool_t *box_alarm_pool;
+
 /* GP28: Eth/USB mode strap, read at every boot (dual build) to pick the transport --
  * open/high = USB (safe default, never touches the W6300), tied to GND = Ethernet.
  * Free on the W6300-EVB -- the analog-in is the external ADS1115 over I2C, so the
@@ -20,13 +26,32 @@
 #define BOX_MODE_STRAP_PIN 28
 #endif
 
+/* SSD1306 128x32 SPI status display (Adafruit 661-style), runtime-enabled via
+ * `oled enable 1` + save/reboot. SPI0 on GP2/3 + three control pins -- see
+ * wiznet-io/PINMAP.md for the whole box pin budget. Overridable per board.
+ * The five pins are reserved (below) ONLY while the display is enabled, so a
+ * display-less box keeps them all for user I/O. pico_oled.h drives them,
+ * always from core 0. */
+#ifndef OLED_PIN_SCK
+#define OLED_PIN_SCK  2      /* SPI0 SCK  -> display CLK          */
+#define OLED_PIN_MOSI 3      /* SPI0 TX   -> display DATA         */
+#define OLED_PIN_CS   6      /* chip select                       */
+#define OLED_PIN_DC   7      /* data/command (display SA0 pin)    */
+#define OLED_PIN_RST  8      /* reset                             */
+#endif
+static uint8_t pico_gpio_oled_claim;   /* set at boot (main, core 0) iff cfg->oled_en */
+
 /* Pins the box firmware must never drive/route:
  *  - W6300 wired build: the W6300 QSPI/INT/CS/RST block (GPIO15-22 on EVB-Pico2)
  *  - dual build:        also the Eth/USB mode strap (BOX_MODE_STRAP_PIN)
+ *  - oled enabled:      the 5 display pins (boot-latched claim, like ain_en)
  *  - pico2w WiFi build:  the CYW43 wireless pins (board-specific; taken from the
  *    SDK board header, e.g. 23/24/25/29 on the Pimoroni Pico Plus 2 W) */
 static inline int pico_gpio_reserved(int n)
 {
+    if (pico_gpio_oled_claim &&
+        (n == OLED_PIN_SCK || n == OLED_PIN_MOSI || n == OLED_PIN_CS ||
+         n == OLED_PIN_DC  || n == OLED_PIN_RST)) return 1;
 #ifdef BOX_NET_LWIP
 #if defined(CYW43_DEFAULT_PIN_WL_REG_ON)
     if (n == CYW43_DEFAULT_PIN_WL_REG_ON   || n == CYW43_DEFAULT_PIN_WL_CLOCK    ||
@@ -149,8 +174,11 @@ static inline void pico_gpio_exec(const pico_config_t *c, const gpio_cmd_t *cmd)
         gpio_put(cmd->pin, cmd->value ? 1 : 0);
     } else if (cmd->value) { /* GPIO_OP_PULSE: raise now, drop via alarm (non-blocking) */
         gpio_put(cmd->pin, 1);
-        alarm_id_t a = add_alarm_in_us(cmd->value, pico_gpio_pulse_end,
-                                       (void *)(uintptr_t) cmd->pin, true);
+        alarm_id_t a = box_alarm_pool
+            ? alarm_pool_add_alarm_in_us(box_alarm_pool, cmd->value, pico_gpio_pulse_end,
+                                         (void *)(uintptr_t) cmd->pin, true)
+            : add_alarm_in_us(cmd->value, pico_gpio_pulse_end,
+                              (void *)(uintptr_t) cmd->pin, true);
         if (a <= 0) { busy_wait_us(cmd->value); gpio_put(cmd->pin, 0); }   /* pool full -> fallback */
     } else {
         gpio_put(cmd->pin, 0);                                            /* zero width */

@@ -42,9 +42,12 @@
 #define CFG_TUD_VENDOR      0
 
 /* FIFOs >= 128 so a whole 128-byte dserv frame writes/reads without splitting
- * (the host-side framer resyncs anyway, but atomic frames keep it clean). */
+ * (the host-side framer resyncs anyway, but atomic frames keep it clean).
+ * TX = 1024 so a full publish burst (heartbeat 4 frames, sync 3) fits without
+ * entering client_send's bounded drain-guard -- that loop now runs on the RT
+ * core, so it should only ever trigger when the host truly stalls. */
 #define CFG_TUD_CDC_RX_BUFSIZE 256
-#define CFG_TUD_CDC_TX_BUFSIZE 256
+#define CFG_TUD_CDC_TX_BUFSIZE 1024
 #define CFG_TUD_CDC_EP_BUFSIZE 64      /* full-speed bulk max packet */
 
 #endif /* BOX_TUSB_CONFIG_H */

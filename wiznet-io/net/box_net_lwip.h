@@ -42,6 +42,11 @@ static volatile int bn_new_conn;
 
 static inline const char *box_net_backend_name(void) { return "pico2w"; }
 
+static inline int box_net_phy_link(void) { return -2; }   /* WiFi: no wired PHY to sense */
+
+/* dserv's connect-back into our config server is alive iff we hold its pcb. */
+static inline int box_net_server_up(void) { return bn_conn_pcb != NULL; }
+
 static inline void bn_ring_push(const uint8_t *p, uint32_t n)
 {
     for (uint32_t i = 0; i < n; i++) {
@@ -208,6 +213,13 @@ static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
     tcp_close(pcb);
     return 0;
 }
+
+/* Async flavor: pico2w isn't latency-validated, so keep it simple -- start runs
+ * the (briefly blocking) exchange and poll reports the stashed result. */
+static int bn_cmd_rc;
+static inline int box_net_send_command_start(const uint8_t dserv_ip[4], uint16_t port, const char *cmd)
+{ bn_cmd_rc = box_net_send_command(dserv_ip, port, cmd); return 0; }
+static inline int box_net_send_command_poll(void) { return bn_cmd_rc == 0 ? 1 : -1; }
 
 /* ---- client: box -> dserv (publish state/(keys)) ---- (state declared above) */
 static err_t bn_cli_conn_cb(void *arg, struct tcp_pcb *pcb, err_t err)

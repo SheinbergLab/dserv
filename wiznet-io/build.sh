@@ -35,6 +35,10 @@ grep -q 'add_subdirectory(wiznet_io)' "$WIZ/examples/CMakeLists.txt" 2>/dev/null
 #    they never clobber each other. WiFi targets bake creds only as a fallback;
 #    prefer setting them at runtime over the USB CLI (wifi ssid/pass).
 WIFI="-DWIFI_SSID=${WIFI_SSID:-change-me} -DWIFI_PASSWORD=${WIFI_PASSWORD:-change-me}"
+# Firmware version baked into the image: published as state/fw at every connect,
+# shown in the console greeting + `show` -- fleet inventory for the status web
+# page and, later, the OTA update check.
+FWVER=$(cd "$HERE" && git describe --always --dirty 2>/dev/null || echo dev)
 case "$TARGET" in
   w6300)                                              # W6300 wired (default)
     FLAGS="-DPICO_BOARD=pico2" ;;
@@ -55,11 +59,12 @@ esac
 # ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
 BUILD="$WIZ/build_$TARGET"
 mkdir -p "$BUILD"
-( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 $FLAGS >/dev/null \
+( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DBOX_FW_VERSION="$FWVER" $FLAGS >/dev/null \
   && ninja wizchip_dserv_config )
 
 # 4. publish to dist/ under a target-specific name (no clobbering across targets)
 OUT="wizchip_dserv_config_$TARGET"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" "$HERE/dist/$OUT.uf2"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/$OUT.elf"
-echo ">> dist/ updated: $OUT.uf2 ($(cd "$HERE" && ls -l dist/$OUT.uf2 | awk '{print $5" bytes"}'))"
+echo ">> dist/ updated: $OUT.uf2 ($(cd "$HERE" && ls -l dist/$OUT.uf2 | awk '{print $5" bytes"}'), fw $FWVER)"
