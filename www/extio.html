@@ -45,6 +45,7 @@
           font-variant-numeric: tabular-nums; }
   .meta b { color: var(--muted); font-weight: 500; }
   .meta .mono, .name + .mono { font-family: ui-monospace, Menlo, monospace; }
+  .desc { color: var(--muted); font-size: 12px; margin-top: 3px; font-style: italic; }
 
   .sect { margin-top: 12px; }
   .sect .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
@@ -56,7 +57,9 @@
              transition: background 60ms, box-shadow 60ms; }
   .di .btn.on { background: var(--green); border-color: var(--green);
                 box-shadow: 0 0 14px rgba(74, 222, 128, 0.55); }
-  .di .pin { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .di .pin { font-size: 11px; color: var(--muted); margin-top: 4px;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .di .pin.lbl { color: var(--ink); font-weight: 600; }
   .di .cnt { font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums;
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dos { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -65,13 +68,20 @@
              border: 1px solid var(--card-edge); margin: 0 auto; }
   .do .led.on { background: var(--amber); border-color: var(--amber);
                 box-shadow: 0 0 10px rgba(251, 191, 36, 0.5); }
-  .do .pin { font-size: 10px; color: var(--faint); margin-top: 3px; }
+  .do .pin { font-size: 10px; color: var(--faint); margin-top: 3px;
+             max-width: 52px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .do .pin.lbl { color: var(--muted); font-weight: 600; }
   .ain { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 3px; }
   .ain .ch { color: var(--faint); width: 34px; }
   .ain .bar { flex: 1; height: 8px; background: var(--off); border-radius: 4px; overflow: hidden; }
   .ain .fill { height: 100%; background: var(--blue); width: 0%; }
   .ain .val { color: var(--muted); width: 56px; text-align: right;
               font-family: ui-monospace, Menlo, monospace; }
+  .grp { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .grp .gname { color: var(--faint); font-size: 12px; min-width: 64px; }
+  .grp .gval { font-family: ui-monospace, Menlo, monospace; font-size: 13px; color: var(--muted);
+               padding: 1px 9px; border-radius: 6px; background: var(--off); }
+  .grp .gval.on { background: #14351f; color: var(--green); }
 </style>
 </head>
 <body>
@@ -100,11 +110,30 @@ function boxModel(name) {
     let b = boxes.get(name);
     if (!b) {
         b = { name, ident: {}, di: new Map(), dout: new Map(), ain: new Map(),
+              labels: new Map(), desc: '', groups: new Map(),
               battery: null, syncOffset: null, syncAt: 0, uptimeUs: null,
               lastSeen: 0, ready: false };
         boxes.set(name, b);
     }
     return b;
+}
+
+function groupModel(b, gname) {
+    let g = b.groups.get(gname);
+    if (!g) { g = { val: 0, pins: [] }; b.groups.set(gname, g); }
+    return g;
+}
+
+/* decode a group bitmask to its labels (bit i = i-th member pin, ascending --
+ * matches the box's dserv_pins_str contract), joined; "center" when none set.
+ * Self-contained: uses the box's own announced pins + labels, no extioconf. */
+function decodeGroup(g, labels) {
+    if (!g.pins.length) return null;
+    const on = [];
+    g.pins.forEach((pin, i) => {
+        if ((g.val >> i) & 1) on.push(labels.get(pin) || ('p' + pin));
+    });
+    return on.length ? on.join('_') : 'center';
 }
 
 /* extio/<name>/state/<leaf> -> update the box model */
@@ -128,6 +157,15 @@ function onExtio(msg) {
         b.dout.set(+mm[1], num);
     } else if ((mm = /^ain\/(\d+)$/.exec(leaf))) {
         b.ain.set(+mm[1], num);
+    } else if ((mm = /^label\/(\d+)$/.exec(leaf))) {
+        const s = String(v);
+        if (s) b.labels.set(+mm[1], s); else b.labels.delete(+mm[1]);   /* "" clears */
+    } else if (leaf === 'desc') {
+        b.desc = String(v);
+    } else if ((mm = /^group\/([^/]+)\/pins$/.exec(leaf))) {
+        groupModel(b, mm[1]).pins = String(v).split(',').filter(s => s.length).map(Number);
+    } else if ((mm = /^group\/([^/]+)$/.exec(leaf))) {   /* the bitmask event/seed */
+        groupModel(b, mm[1]).val = num;
     } else if (leaf === 'sync/offset_us') {
         b.syncOffset = num; b.syncAt = Date.now();
     } else if (leaf === 'uptime_us') {
@@ -190,17 +228,34 @@ function cardHtml(b) {
         di = '<div class="sect"><div class="lbl">inputs</div><div class="dis">' +
             [...b.di.keys()].sort((a, c) => a - c).map(pin => {
                 const d = b.di.get(pin);
+                const lbl = b.labels.get(pin);
+                const cap = lbl ? esc(lbl) : 'di ' + pin;
+                const ttl = lbl ? `${esc(lbl)} · di ${pin}` : `di ${pin}`;
                 return `<div class="di"><div class="btn ${d.v ? 'on' : ''}"></div>` +
-                       `<div class="pin">di ${pin}</div>` +
+                       `<div class="pin${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</div>` +
                        `<div class="cnt" title="${d.count} press${d.count === 1 ? '' : 'es'}">&times;${d.count}</div></div>`;
             }).join('') + '</div></div>';
     }
     let dout = '';
     if (b.dout.size) {
         dout = '<div class="sect"><div class="lbl">outputs</div><div class="dos">' +
-            [...b.dout.keys()].sort((a, c) => a - c).map(pin =>
-                `<div class="do"><div class="led ${b.dout.get(pin) ? 'on' : ''}"></div>` +
-                `<div class="pin">do ${pin}</div></div>`).join('') + '</div></div>';
+            [...b.dout.keys()].sort((a, c) => a - c).map(pin => {
+                const lbl = b.labels.get(pin);
+                const cap = lbl ? esc(lbl) : 'do ' + pin;
+                const ttl = lbl ? `${esc(lbl)} · do ${pin}` : `do ${pin}`;
+                return `<div class="do"><div class="led ${b.dout.get(pin) ? 'on' : ''}"></div>` +
+                       `<div class="pin${lbl ? ' lbl' : ''}" title="${ttl}">${cap}</div></div>`;
+            }).join('') + '</div></div>';
+    }
+    let groups = '';
+    if (b.groups.size) {
+        groups = '<div class="sect"><div class="lbl">groups</div>' +
+            [...b.groups.keys()].sort().map(gn => {
+                const dec = decodeGroup(b.groups.get(gn), b.labels);
+                const active = dec && dec !== 'center';
+                return `<div class="grp"><span class="gname">${esc(gn)}</span>` +
+                       `<span class="gval${active ? ' on' : ''}">${esc(dec || '—')}</span></div>`;
+            }).join('') + '</div>';
     }
     let ain = '';
     if (b.ain.size) {
@@ -219,10 +274,12 @@ function cardHtml(b) {
     const target = id.dserv
         ? ` · <b>&rarr; dserv</b> <span class="mono">${esc(id.dserv)}</span>` : '';
 
+    const desc = b.desc ? `<div class="desc">${esc(b.desc)}</div>` : '';
+
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
-           `<span class="name">${esc(b.name)}</span>${xchip}${fw}${bchip}${ip}</div>` +
+           `<span class="name">${esc(b.name)}</span>${xchip}${fw}${bchip}${ip}</div>` + desc +
            `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
-           di + dout + ain;
+           di + groups + dout + ain;
 }
 
 function render() {

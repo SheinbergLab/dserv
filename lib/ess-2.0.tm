@@ -3261,6 +3261,20 @@ namespace eval ess {
     array set joystick_dirmap { 1 0  9 1  8 2  10 3  2 4  6 5  4 6  5 7 }
     variable joystick_dir_names { up up_right right down_right down down_left left up_left }
 
+    # Normalize a pin label to a canonical direction (up|down|left|right), or ""
+    # if it isn't directional. Accepts full words and single-letter forms, case-
+    # insensitively -- so both `label 7 up` and `label 7 U` self-configure the
+    # manifest-derived map. (An explicit `map` on joystick_init still overrides.)
+    proc joystick_dir_canon {label} {
+        switch -nocase -- $label {
+            u - up    { return up }
+            d - down  { return down }
+            l - left  { return left }
+            r - right { return right }
+        }
+        return ""
+    }
+
     # Rig-level source override (populate in local/post-pins.tcl), same
     # contract as button_bind: when set it WINS over whatever a protocol
     # passes to joystick_init, so a rig points "the joystick" at its box
@@ -3386,8 +3400,8 @@ namespace eval ess {
             foreach p [split [dservGet $pinsdp] ,] {
                 set ldp $io/$dev/state/label/$p
                 if { [dservExists $ldp] } {
-                    set l [dservGet $ldp]
-                    if { $l in {up down left right} } { dict set map $l $i }
+                    set c [joystick_dir_canon [dservGet $ldp]]
+                    if { $c ne "" } { dict set map $c $i }
                 }
                 incr i
             }
