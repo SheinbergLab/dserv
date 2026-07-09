@@ -111,6 +111,7 @@ function boxModel(name) {
     if (!b) {
         b = { name, ident: {}, di: new Map(), dout: new Map(), ain: new Map(),
               labels: new Map(), desc: '', groups: new Map(),
+              pinsIn: null, pinsOut: null,   /* announced active sets; null = old fw -> derive from di/do */
               battery: null, syncOffset: null, syncAt: 0, uptimeUs: null,
               lastSeen: 0, ready: false };
         boxes.set(name, b);
@@ -162,6 +163,10 @@ function onExtio(msg) {
         if (s) b.labels.set(+mm[1], s); else b.labels.delete(+mm[1]);   /* "" clears */
     } else if (leaf === 'desc') {
         b.desc = String(v);
+    } else if (leaf === 'pins/in') {
+        b.pinsIn = String(v).split(',').filter(s => s.length).map(Number);
+    } else if (leaf === 'pins/out') {
+        b.pinsOut = String(v).split(',').filter(s => s.length).map(Number);
     } else if ((mm = /^group\/([^/]+)\/pins$/.exec(leaf))) {
         groupModel(b, mm[1]).pins = String(v).split(',').filter(s => s.length).map(Number);
     } else if ((mm = /^group\/([^/]+)$/.exec(leaf))) {   /* the bitmask event/seed */
@@ -223,11 +228,18 @@ function cardHtml(b) {
     const fw = id.fw ? `<span class="chip">${esc(id.fw)}</span>` : '';
     const ip = (id.ip && id.ip !== '0.0.0.0') ? `<span class="meta mono">${esc(id.ip)}</span>` : '';
 
+    /* render EXACTLY the box's active pins when it announces them (pins/in|out);
+     * fall back to whatever di/do datapoints exist for pre-manifest firmware.
+     * The announced set drops a turned-off pin even though its last di/do value
+     * lingers retained in dserv. */
+    const inPins  = b.pinsIn  || [...b.di.keys()].sort((a, c) => a - c);
+    const outPins = b.pinsOut || [...b.dout.keys()].sort((a, c) => a - c);
+
     let di = '';
-    if (b.di.size) {
+    if (inPins.length) {
         di = '<div class="sect"><div class="lbl">inputs</div><div class="dis">' +
-            [...b.di.keys()].sort((a, c) => a - c).map(pin => {
-                const d = b.di.get(pin);
+            inPins.map(pin => {
+                const d = b.di.get(pin) || { v: 0, count: 0 };
                 const lbl = b.labels.get(pin);
                 const cap = lbl ? esc(lbl) : 'di ' + pin;
                 const ttl = lbl ? `${esc(lbl)} · di ${pin}` : `di ${pin}`;
@@ -237,9 +249,9 @@ function cardHtml(b) {
             }).join('') + '</div></div>';
     }
     let dout = '';
-    if (b.dout.size) {
+    if (outPins.length) {
         dout = '<div class="sect"><div class="lbl">outputs</div><div class="dos">' +
-            [...b.dout.keys()].sort((a, c) => a - c).map(pin => {
+            outPins.map(pin => {
                 const lbl = b.labels.get(pin);
                 const cap = lbl ? esc(lbl) : 'do ' + pin;
                 const ttl = lbl ? `${esc(lbl)} · do ${pin}` : `do ${pin}`;

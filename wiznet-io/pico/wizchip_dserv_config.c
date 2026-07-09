@@ -468,6 +468,11 @@ static void groups_reset_all(void)
  *                                   relabel can't leave a stale value behind)
  *   state/group/<name>/pins         "2,3,4,5" ascending = published bit order
  *   state/group/<name>/settle_ms    chord window
+ *   state/pins/in, state/pins/out   csv of configured input / output pins, so a
+ *                                   UI renders EXACTLY the active DIO -- a pin
+ *                                   turned off drops out here even though its
+ *                                   last di/do datapoint lingers retained in
+ *                                   dserv (which would otherwise show a ghost).
  * Consumers: extioconf decode, ess joystick bit-map, fleet page. */
 static void publish_manifest(void)
 {
@@ -476,6 +481,19 @@ static void publish_manifest(void)
     dserv_state_name(&g_cfg, nm, sizeof nm, "desc");
     dserv_msg_string(f, nm, 0, g_cfg.desc);
     box_net_client_send(f, DSERV_MSG_LEN);
+
+    int ki = 0, ko = 0; char in_csv[96], out_csv[96];
+    in_csv[0] = out_csv[0] = '\0';
+    for (int i = 0; i < PICO_NPINS; i++) {
+        if (g_cfg.pin_mode[i] == 2 || g_cfg.pin_mode[i] == 3)
+            ki += snprintf(in_csv + ki, sizeof in_csv - ki, "%s%d", ki ? "," : "", i);
+        else if (g_cfg.pin_mode[i] == 1)
+            ko += snprintf(out_csv + ko, sizeof out_csv - ko, "%s%d", ko ? "," : "", i);
+    }
+    dserv_state_name(&g_cfg, nm, sizeof nm, "pins/in");
+    dserv_msg_string(f, nm, 0, in_csv);   box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "pins/out");
+    dserv_msg_string(f, nm, 0, out_csv);  box_net_client_send(f, DSERV_MSG_LEN);
 
     for (int i = 0; i < PICO_NPINS; i++) {
         if (!g_cfg.pin_label[i][0] && !g_cfg.pin_mode[i]) continue;
@@ -657,6 +675,7 @@ static void on_frame(const uint8_t *frame, void *ud)
     }
     else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN) {
         pico_gpio_apply_config(cfg); groups_reset_all();
+        if (r == CFG_PIN_MODE) publish_manifest();   /* active pin set changed -> re-announce */
     }
     else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
     else if (r == CFG_LABEL || r == CFG_DESC)          publish_manifest();
@@ -738,7 +757,7 @@ static void cmd_exec(const char *line)
                                    pico_gpio_apply_config(&g_cfg); printf("erased\n"); }
     else if (act == CLI_REBOOT)  box_reboot(0);
     else if (act == CLI_BOOTSEL) box_reboot(1);
-    else if (act == CLI_PIN)   { pico_gpio_apply_config(&g_cfg); groups_reset_all(); }
+    else if (act == CLI_PIN)   { pico_gpio_apply_config(&g_cfg); groups_reset_all(); publish_manifest(); }
     else if (act == CLI_GROUP) { groups_reset_all(); publish_manifest(); }  /* label/group/desc changed */
 }
 
