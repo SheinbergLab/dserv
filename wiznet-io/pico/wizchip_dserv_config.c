@@ -932,6 +932,10 @@ static void rt_main(void)
     uint32_t last_hb = 0;
     uint8_t  announce_pending = 0;      /* connect burst deferred until the host reads (USB tty race) */
     uint8_t  announce_hb = 0;           /* heartbeats since defer -> forces a DTR-bypass retry every ~5s */
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+    uint8_t  prev_reading = 0;          /* DTR edge on the data CDC: host (re)opened -> re-announce */
+    uint16_t announce_backstop = 0;     /* ~60s re-announce backstop if a DTR reconnect edge is missed */
+#endif
 #if defined(BOX_NET_DUAL) || defined(BOX_USB_FORWARD_REGISTER)
     uint32_t reg_tick = 0;              /* delayed USB autoregistration cadence */
 #endif
@@ -977,6 +981,17 @@ static void rt_main(void)
             uint16_t port = dserv_cfg_port(&g_cfg);
             int up = box_net_client_service(g_cfg.dserv_ip, port);
             status_update(up);
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+            /* Host re-opened the data CDC (DTR 0->1) = dserv/usbio reconnected
+             * after a restart. A USB box never de-enumerates, so there's no
+             * up==2 to re-fire on -- this DTR edge is the USB equivalent of
+             * eth's reconnect burst, so the manifest self-heals a dserv restart
+             * with no reboot. (Eth via the vtable returns 1 constant -> one
+             * boot edge, harmless; eth's real reconnect goes through up==2.) */
+            int reading = box_net_client_reading();
+            if (reading && !prev_reading) { announce_pending = 1; announce_hb = 0; }
+            prev_reading = (uint8_t) reading;
+#endif
             if (up == 2) {                     /* connect burst; USB may need the host tty first */
                 announce_hb = 0;
                 if (!announce_burst(0)) announce_pending = 1;  /* -> retried on the heartbeat until it lands */
@@ -1016,6 +1031,11 @@ static void rt_main(void)
                 uint32_t now = to_ms_since_boot(get_absolute_time());
                 if (now - last_hb >= HEARTBEAT_MS) {
                     last_hb = now; publish_heartbeat();
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+                    if (++announce_backstop >= 60) {    /* ~60s backstop: re-announce if a DTR edge was missed */
+                        announce_backstop = 0; announce_pending = 1;
+                    }
+#endif
                     if (announce_pending &&              /* deferred burst: DTR-gated, forced every ~5s */
                         announce_burst(++announce_hb % 5 == 0)) announce_pending = 0;
 #if defined(BOX_NET_DUAL)
