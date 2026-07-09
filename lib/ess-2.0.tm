@@ -3225,26 +3225,80 @@ namespace eval ess {
 namespace eval ess {
 
     ########################################################################
-    # after updating ess/joystick/value,
-    # check for button channels bound to joystick directions and update
-    # their state accordingly.
+    # Directional joystick. Two sources share one protocol-facing API:
+    #
+    #   legacy -- ::joystick_init (dsconf.tcl) publishes joystick/value; its
+    #             bits fan out to button channels bound with
+    #             `button_init N {} joystick <bit>` (unchanged behavior)
+    #   box    -- an extio box publishes a chord GROUP datapoint
+    #             (extio/<dev>/state/group/<label>, int bitmask) that the
+    #             firmware chord-settles and stamps at the FIRST switch edge.
+    #             We decode it to an 8-way sector and run a first-crossing
+    #             response latch whose RT is that on-box onset timestamp --
+    #             immune to the settle window, network jitter, and Tcl
+    #             scheduling.
+    #
+    # Protocols read only:
+    #   joystick_dir            current sector: -1 center, 0-7 clockwise from up
+    #   joystick_dir_name       up|up_right|...|center
+    #   joystick_centered       1 while at rest (letgo gating)
+    #   joystick_reset          arm the latch (call alongside respwin_on)
+    #   joystick_response       first settled dir since reset: -1 or 0-7
+    #   joystick_response_time  dserv-clock us of that first crossing
+    # plus the legacy joystick_value / joystick_active.
+    ########################################################################
+    variable joystick
+    array set joystick {
+        source ""  dp ""  mask 0  dir -1
+        armed 0  response -1  response_time 0  map_override ""
+    }
+
+    # canonical nibble up=1 down=2 left=4 right=8 -> sector 0-7 clockwise from
+    # up; anything else (center, impossible chords) -> -1. Impossible chords
+    # are unreachable through a settled box group but a legacy value could
+    # carry them.
+    variable joystick_dirmap
+    array set joystick_dirmap { 1 0  9 1  8 2  10 3  2 4  6 5  4 6  5 7 }
+    variable joystick_dir_names { up up_right right down_right down down_left left up_left }
+
+    # Rig-level source override (populate in local/post-pins.tcl), same
+    # contract as button_bind: when set it WINS over whatever a protocol
+    # passes to joystick_init, so a rig points "the joystick" at its box
+    # group without protocol edits. Persists across systems.
+    #   joystick_bind box {* joystick}      ;# (leading {} placeholder optional)
+    variable joystick_binding {}
+    proc joystick_bind {args} {
+        variable joystick_binding
+        if { [lindex $args 0] eq "box" } { set args [linsert $args 0 {}] }
+        set joystick_binding $args
+    }
+
+    # fan a bitmask out to any button channels bound with `joystick <bit>`
+    # (shared by the legacy value stream and the box-group ingest, so
+    # lever-style protocols work from either source)
+    proc joystick_fan_buttons {v} {
+        variable buttons
+        if {![info exists buttons(n_channels)]} return
+        set v [expr {int($v)}]
+        for {set i 0} {$i < $buttons(n_channels)} {incr i} {
+            if {[info exists buttons(joy_source,$i)]} {
+                set val [expr {($v & $buttons(joy_source,$i)) != 0}]
+                if {$val != $buttons(state,$i)} {
+                    set buttons(state,$i) $val
+                    dservSet ess/button/$i $val
+                }
+            }
+        }
+    }
+
+    ########################################################################
+    # legacy HID stream (dsconf.tcl): raw value -> ess/joystick/value +
+    # button-channel fan-out. Bit meanings are rig-specific, so no sector
+    # decode here -- the box path owns joystick_dir/response.
     ########################################################################
     proc joystick_process_value {dpoint data} {
-	variable buttons
 	dservSet ess/joystick/value $data
-
-	# update any button channels bound to joystick directions
-	set joy_int [expr {int($data)}]
-	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
-	    if {[info exists buttons(joy_source,$i)]} {
-		set val [expr {($joy_int & $buttons(joy_source,$i)) != 0}]
-		if {$val != $buttons(state,$i)} {
-		    set buttons(state,$i) $val
-		    dservSet ess/button/$i $val
-		}
-	    }
-	}
-
+	joystick_fan_buttons $data
 	do_update
     }
 
@@ -3253,33 +3307,199 @@ namespace eval ess {
         do_update
     }
 
-    # call generic joystick initialization (dsconf.tcl) and add callback
-    proc joystick_init {} {
-        ::joystick_init
+    ########################################################################
+    # shared ingest: canonical nibble -> live datapoints, button fan-out,
+    # and the first-crossing latch. ts = event time in dserv-clock us (the
+    # box group's onset stamp via dservTimestamp, or [now] for simulate).
+    # The latch honors an open respwin's min_rt floor (respwin_active); with
+    # no window open, arming alone is enough -- protocols that don't use
+    # respwin still get first-crossing semantics.
+    ########################################################################
+    proc joystick_ingest {nib ts} {
+        variable joystick
+        variable joystick_dirmap
+        set nib [expr {int($nib)}]
+        set dir [expr {[info exists joystick_dirmap($nib)] ? $joystick_dirmap($nib) : -1}]
+        set joystick(mask) $nib
+        set joystick(dir) $dir
+        dservSet ess/joystick/value $nib
+        dservSet ess/joystick/dir $dir
+        joystick_fan_buttons $nib
+        if { $joystick(armed) && $dir >= 0 && $joystick(response) < 0 } {
+            set ok 1
+            if { [dservExists ess/respwin] && [dservGet ess/respwin] } {
+                set ok [respwin_active]
+            }
+            if { $ok } {
+                set joystick(response) $dir
+                set joystick(response_time) $ts
+                dservSet ess/joystick/response $dir
+            }
+        }
+        do_update
+    }
 
-        dservAddExactMatch joystick/value
-        dpointSetScript joystick/value ::ess::joystick_process_value
+    proc joystick_process_group {dpoint data} {
+        joystick_ingest [joystick_nibble $data [joystick_map_for $dpoint]] \
+            [dservTimestamp $dpoint]
+    }
+
+    # incoming group bitmask -> canonical nibble via a {dir bitidx ...} map
+    proc joystick_nibble {data map} {
+        set data [expr {int($data)}]
+        set nib 0
+        foreach {dir bit} $map {
+            if { ($data >> $bit) & 1 } {
+                switch $dir {
+                    up    { incr nib 1 }
+                    down  { incr nib 2 }
+                    left  { incr nib 4 }
+                    right { incr nib 8 }
+                }
+            }
+        }
+        return $nib
+    }
+
+    # bit->direction map for a bound box group. An explicit `map` option to
+    # joystick_init wins; else derive from the box's announced manifest --
+    # group pins (ascending = bit order) whose labels are up/down/left/right
+    # (the plug-and-announce payoff); else assume bits 0-3 = up,down,left,
+    # right and log it. Cached per device; joystick_init clears the cache.
+    variable joystick_maps
+    array set joystick_maps {}
+
+    proc joystick_map_for {dpoint} {
+        variable joystick
+        variable joystick_maps
+        if { $joystick(map_override) ne "" } { return $joystick(map_override) }
+        set parts [split $dpoint /]         ;# <io_class>/<dev>/state/group/<label>
+        set io  [lindex $parts 0]
+        set dev [lindex $parts 1]
+        set glabel [lindex $parts end]
+        set key $dev/$glabel
+        if { [info exists joystick_maps($key)] } { return $joystick_maps($key) }
+        set map {}
+        set pinsdp $io/$dev/state/group/$glabel/pins
+        if { [dservExists $pinsdp] } {
+            set i 0
+            foreach p [split [dservGet $pinsdp] ,] {
+                set ldp $io/$dev/state/label/$p
+                if { [dservExists $ldp] } {
+                    set l [dservGet $ldp]
+                    if { $l in {up down left right} } { dict set map $l $i }
+                }
+                incr i
+            }
+        }
+        if { [dict size $map] != 4 } {
+            ess_log "joystick: no manifest map for $dev/$glabel; assuming bits 0-3 = up,down,left,right"
+            set map {up 0 down 1 left 2 right 3}
+        }
+        set joystick_maps($key) $map
+        return $map
+    }
+
+    proc joystick_state_reset {} {
+        variable joystick
+        variable joystick_maps
+        array unset joystick_maps
+        array set joystick_maps {}
+        set joystick(mask) 0
+        set joystick(dir) -1
+        set joystick(armed) 0
+        set joystick(response) -1
+        set joystick(response_time) 0
+        set joystick(map_override) ""
+        dservSet ess/joystick/dir -1
+        dservSet ess/joystick/response -1
+    }
+
+    ########################################################################
+    # joystick_init: bind the directional joystick to a source. Mirrors
+    # button_init's shape; the protocol never knows which source is wired.
+    #
+    #   joystick_init                        ;# legacy HID (joystick/value)
+    #   joystick_init {} box {* joystick}    ;# any box's group "joystick"
+    #                                        ;#   (glob = hot-swap transparent)
+    #   joystick_init {} box {office hat} map {up 0 down 1 left 2 right 3}
+    ########################################################################
+    proc joystick_init { {pin {}} args } {
+        variable joystick
+        variable joystick_binding
+        variable io_class
+
+        # a rig-level override (from post-pins) wins over the protocol's request
+        if { [llength $joystick_binding] } {
+            set pin  [lindex $joystick_binding 0]
+            set args [lrange $joystick_binding 1 end]
+        }
+        set opts $args                      ;# flat option dict, pass AS a dict
+
+        joystick_state_reset
         dservSet ess/joystick/value 0
 
-        dservAddExactMatch joystick/button
-        dpointSetScript joystick/button ::ess::joystick_process_button
-        dservSet ess/joystick/button 0
+        if { [dict exists $opts box] } {
+            # bind to an extio chord group: extio/<dev>/state/group/<label>.
+            # A glob <dev> follows whatever box is present at publish time.
+            lassign [dict get $opts box] dev glabel
+            if { $glabel eq "" } { set glabel joystick }
+            if { [dict exists $opts map] } {
+                set joystick(map_override) [dict get $opts map]
+            }
+            set dp $io_class/$dev/state/group/$glabel
+            set joystick(source) box
+            set joystick(dp) $dp
+            if { [string first * $dev] >= 0 } {
+                dservAddMatch $dp
+                dpointSetScript $dp ::ess::joystick_process_group
+                foreach k [dservKeys] {     ;# initial state from a present box
+                    if { [string match $dp $k] } {
+                        joystick_process_group $k [dservGet $k]
+                        break
+                    }
+                }
+            } else {
+                dservAddExactMatch $dp
+                dpointSetScript $dp ::ess::joystick_process_group
+                if { [dservExists $dp] } { joystick_process_group $dp [dservGet $dp] }
+            }
+        } else {
+            # legacy HID path (dsconf.tcl) - unchanged
+            set joystick(source) legacy
+            ::joystick_init
+
+            dservAddExactMatch joystick/value
+            dpointSetScript joystick/value ::ess::joystick_process_value
+
+            dservAddExactMatch joystick/button
+            dpointSetScript joystick/button ::ess::joystick_process_button
+            dservSet ess/joystick/button 0
+        }
     }
 
     # Clean up joystick subscriptions
     proc joystick_deinit {} {
+	variable joystick
+	if { $joystick(source) eq "box" && $joystick(dp) ne "" } {
+	    catch { dpointSetScript $joystick(dp) {} }
+	    catch { dservRemoveMatch $joystick(dp) }
+	}
 	if {[dservExists joystick/value]} {
 	    dservRemoveMatch joystick/value
 	}
 	if {[dservExists joystick/button]} {
 	    dservRemoveMatch joystick/button
 	}
+	set joystick(source) ""
+	set joystick(dp) ""
+	joystick_state_reset
     }
-    
+
     ########################################################################
     # joystick query helpers
     ########################################################################
-    
+
     # Return current joystick value (raw integer from ess/joystick/value)
     proc joystick_value {} {
 	if {[dservExists ess/joystick/value]} {
@@ -3291,6 +3511,68 @@ namespace eval ess {
     # Return 1 if joystick is deflected in any direction
     proc joystick_active {} {
 	return [expr {[joystick_value] != 0}]
+    }
+
+    # Return 1 while the stick is at rest (reads well in letgo gating)
+    proc joystick_centered {} {
+	return [expr {[joystick_value] == 0}]
+    }
+
+    # Current sector (-1 center, 0-7 clockwise from up) and its name
+    proc joystick_dir {} {
+	variable joystick
+	return $joystick(dir)
+    }
+    proc joystick_dir_name {} {
+	variable joystick
+	variable joystick_dir_names
+	if { $joystick(dir) < 0 } { return center }
+	return [lindex $joystick_dir_names $joystick(dir)]
+    }
+
+    ########################################################################
+    # response latch: joystick_reset arms it (call at response-window open,
+    # alongside respwin_on); the FIRST settled non-center direction after
+    # that is captured with its onset timestamp and held until the next
+    # reset, so transitions read the response at their leisure.
+    ########################################################################
+    proc joystick_reset {} {
+	variable joystick
+	set joystick(armed) 1
+	set joystick(response) -1
+	set joystick(response_time) 0
+	dservSet ess/joystick/response -1
+    }
+    proc joystick_response {} {
+	variable joystick
+	return $joystick(response)
+    }
+    proc joystick_response_time {} {
+	variable joystick
+	return $joystick(response_time)
+    }
+
+    # Simulate a deflection without hardware (companion to button_simulate):
+    # a direction name (up, up_right, ... or center) or a sector 0-7 / -1.
+    # Drives the SAME ingest path as a real box event -- latch, datapoints,
+    # button fan-out, state-machine wake -- so a simulated 8-way task
+    # validates end-to-end.
+    proc joystick_simulate {what} {
+	variable joystick_dir_names
+	set sector_nibbles {1 9 8 10 2 6 4 5}
+	if { $what eq "center" || $what eq "-1" } {
+	    set nib 0
+	} elseif { [string is integer -strict $what] } {
+	    if { $what < 0 || $what > 7 } {
+		error "joystick_simulate: sector 0-7, direction name, or center"
+	    }
+	    set nib [lindex $sector_nibbles $what]
+	} else {
+	    set i [lsearch -exact $joystick_dir_names $what]
+	    if { $i < 0 } { error "joystick_simulate: unknown direction '$what'" }
+	    set nib [lindex $sector_nibbles $i]
+	}
+	joystick_ingest $nib [now]
     }
 
 }
