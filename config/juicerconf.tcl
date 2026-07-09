@@ -109,22 +109,30 @@ foreach f $ess_modules {
 catch { Juicer destroy }
 
 oo::class create Juicer {
-    variable _fd 
+    variable _fd
     variable _path /dev/ttyACM0
     variable _use_gpio
-    
+    variable _timeout_ms
+
     constructor { { path {} } } {
 	set _fd -1
 	set _path $path
 	set _use_gpio 0
+	set _timeout_ms 10000   ;# bound the pump-reply wait (covers a large dispense/purge)
     }
-    
+
     destructor { my close }
 
     method set_path { path } { set _path $path }
+    method set_timeout { ms } { set _timeout_ms $ms }
     method open {} {
-	set _fd [open $_path RDWR]
-	fconfigure $_fd -buffering line
+	# NOCTTY: a systemd service is a session leader with no controlling
+	# terminal, so opening a tty WITHOUT this makes the pump our ctty (it
+	# showed up as dserv's TT=ttyACM0 + made a pump hangup able to SIGHUP
+	# dserv). NONBLOCK: don't block on modem lines at open, and enable the
+	# timed read in do_cmd. Same flags modules/usbio.c already uses.
+	set _fd [open $_path {RDWR NOCTTY NONBLOCK}]
+	fconfigure $_fd -buffering line -translation lf
     }
 
     method use_gpio {} { set _use_gpio 1 }
@@ -150,11 +158,33 @@ oo::class create Juicer {
 	    set _fd -1
 	}
     }
+    # Send a command and read the pump's one-line reply with a BOUNDED wait.
+    # The old `gets $_fd` was a blocking read with no timeout: a pump that
+    # started a dispense then stopped answering (hang / disconnect / a reply
+    # stolen by another opener) blocked here forever -- and because ess calls
+    # this via a SYNCHRONOUS `send juicer`, that froze all of dserv with the
+    # valve open (2026-07-09). Now: non-blocking poll to a deadline; on timeout,
+    # fire an abort so a started dispense can't run away, and raise an error the
+    # caller can log rather than hang on.
     method do_cmd { cmd } {
 	if { $_fd < 0 } { return }
-	puts $_fd $cmd
-	set result [gets $_fd]
-	return $result
+	# write blocking (small command; the OS tty buffer takes it) so it
+	# definitely goes out even though the channel is otherwise non-blocking.
+	fconfigure $_fd -blocking 1
+	if { [catch { puts $_fd $cmd; flush $_fd } werr] } {
+	    catch { fconfigure $_fd -blocking 0 }
+	    error "juicer: write failed: $werr"
+	}
+	fconfigure $_fd -blocking 0
+	set deadline [expr {[clock milliseconds] + $_timeout_ms}]
+	while { [clock milliseconds] < $deadline } {
+	    if { [gets $_fd line] >= 0 } { return $line }   ;# complete reply line
+	    if { [eof $_fd] } { error "juicer: port closed (EOF)" }
+	    after 10   ;# nothing yet; brief pause, bounded by the deadline
+	}
+	# timed out -> stop the pump so a started dispense can't keep flowing
+	catch { fconfigure $_fd -blocking 1; puts $_fd {{"do": "abort"}}; flush $_fd; fconfigure $_fd -blocking 0 }
+	error "juicer: no reply within ${_timeout_ms}ms (sent abort)"
     }
     
     method get { args } {

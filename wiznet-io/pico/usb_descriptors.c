@@ -2,8 +2,14 @@
  * usb_descriptors.c -- TinyUSB descriptors for the USB-CDC box (BOX_NET_USB only).
  *
  * Composite CDC device: CDC0 = console/CLI, CDC1 = binary dserv data channel.
- * Compiled into the firmware only for the usb target (added to sources in
- * pico/CMakeLists.txt under BOX_TARGET=usb); inert dead file for other targets.
+ * Compiled for the usb AND dual targets (pico/CMakeLists.txt target_sources);
+ * the w6300/pico2w builds don't own TinyUSB so they don't include it.
+ *
+ * The manufacturer/product/serial strings below are the box's stable USB
+ * IDENTITY: on Linux udev exposes them as ID_VENDOR=dserv / ID_MODEL=
+ * extio_USB_box / ID_SERIAL_SHORT=<chip id> and a /dev/serial/by-id/ symlink,
+ * so the host (config/extioconf.tcl) selects the box by identity rather than by
+ * enumeration order -- it can't grab a co-resident CDC device (e.g. a juicer).
  *
  * Standard boilerplate modelled on TinyUSB's cdc_dual_ports example. Scales to a
  * single data-only CDC when built with -DCFG_TUD_CDC=1.

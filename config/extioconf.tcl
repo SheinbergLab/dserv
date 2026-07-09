@@ -21,15 +21,34 @@ foreach m { usbio timer } {
     load ${dspath}/modules/dserv_${m}[info sharedlibextension]
 }
 
-# The box exposes two CDCs: console (lower-numbered) + data (higher-numbered).
-# Override in local/extio.tcl if the highest usbmodem/ttyACM isn't the box.
+# The box exposes two CDCs: console + data. Prefer selecting the DATA CDC by the
+# box's stable USB IDENTITY (descriptors: manufacturer "dserv", product "extio
+# USB box", per-chip serial; data CDC = interface if02) so we can NEVER grab a
+# co-resident CDC device -- a juicer pump, eye tracker, Arduino -- that happens
+# to enumerate as a higher /dev/ttyACM*. On Linux that's /dev/serial/by-id/,
+# which udev builds from those descriptors. The old "highest ttyACM/usbmodem"
+# heuristic remains only as a fallback (older firmware, or if by-id is absent).
+# Override in local/extio.tcl if needed.
 proc extio_find_data_port {} {
-    if { $::tcl_platform(os) == "Darwin" } {
+    if { $::tcl_platform(os) eq "Darwin" } {
+        # macOS has no /dev/serial/by-id; cu.usbmodem<serial>{1,3}, data = *3.
+        # (Dev Macs rarely have contending CDC devices; harden via ioreg later.)
         set ports [lsort -dictionary [glob -nocomplain /dev/cu.usbmodem*]]
-    } else {
-        set ports [lsort -dictionary [glob -nocomplain /dev/ttyACM*]]
+        if {[llength $ports]} { return [lindex $ports end] }
+        return ""
     }
-    if {[llength $ports]} { return [lindex $ports end] }
+    # Linux: ONLY a device positively identified as an extio box (data CDC =
+    # if02), by USB identity -- immune to enumeration order AND to any other CDC
+    # device on the bus. There is DELIBERATELY no /dev/ttyACM* fallback: the old
+    # "grab the highest ttyACM" heuristic opened a JUICER PUMP on a rig with no
+    # USB box (two openers on one serial port -> stolen replies + corrupted
+    # dispense -> dserv wedge + runaway juice, 2026-07-09). A box whose identity
+    # is somehow absent: pin its port by redefining this proc in local/extio.tcl.
+    foreach link [lsort [glob -nocomplain /dev/serial/by-id/*extio*if02*]] {
+        if { ![catch { file readlink $link } tgt] } {
+            return [file normalize [file join [file dirname $link] $tgt]]
+        }
+    }
     return ""
 }
 
