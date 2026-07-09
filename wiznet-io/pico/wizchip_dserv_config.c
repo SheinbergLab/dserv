@@ -218,6 +218,10 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
         dserv_state_name(&g_cfg, nm, sizeof nm, "sync/transport_us");
         dserv_msg_int64(f, nm, dserv_us, transport_us);    box_net_client_send(f, DSERV_MSG_LEN);
     }
+    if (g_clock.rate_valid) {                              /* learned crystal rate (hw anchors) */
+        dserv_state_name(&g_cfg, nm, sizeof nm, "sync/rate_ppb");
+        dserv_msg_int(f, nm, dserv_us, g_clock.rate_ppb);  box_net_client_send(f, DSERV_MSG_LEN);
+    }
 }
 
 static void publish_heartbeat(void)
@@ -621,7 +625,7 @@ static void on_frame(const uint8_t *frame, void *ud)
             uint64_t e = pico_gpio_sync_edge_get(obs);   /* rising for obs=1, falling for obs=0 */
             if (e && now_box - e < SYNC_EDGE_WINDOW_US) { anchor_box = e; hw = 1; }
         }
-        box_clock_sync(&g_clock, m.timestamp, anchor_box);
+        box_clock_sync(&g_clock, m.timestamp, anchor_box, hw);  /* hw anchors also teach the rate */
         if (obs) g_obs_begin_us = anchor_box;  /* beginobs -> anchor for scheduled events
                                                 * (hw: pulses land on the PHYSICAL obs timeline) */
         pico_gpio_obs_mirror(cfg, obs);    /* LED/scope: box's live copy of obs */
