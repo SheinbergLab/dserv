@@ -16,6 +16,8 @@
  *   <name>/config/group/<g>/label (str)  names state/group/<label>; "off" clears
  *   <name>/config/group/<g>/settle_ms (int) chord-settle window (0 = per transition)
  *   <name>/config/group/<g>/quiet (int)  1 = suppress members' state/di/<n>
+ *   <name>/config/sync/pin        (int)  TTL obs-sync INPUT from the rig host
+ *                                        ("off" disables) -- hardware clock anchor
  *   <name>/config/net/ip          (str)  "a.b.c.d" (applied on save/boot)
  *   <name>/config/dserv/ip        (str)  "a.b.c.d"
  *   <name>/config/dserv/port      (int)
@@ -93,6 +95,15 @@ typedef struct {
     char     group_label[PICO_NGROUPS][PICO_LABEL_MAX]; /* names state/group/<label>; "" -> "g<idx>" */
     uint16_t group_settle_ms[PICO_NGROUPS];  /* chord-settle window; 0 = every settled transition */
     uint8_t  group_quiet[PICO_NGROUPS]; /* 1 = suppress members' state/di/<n> publishes */
+    /* v14: hardware obs-sync INPUT -- the rig host's TTL obs line wired to a
+     * box pin. The IRQ-stamped edge replaces frame-arrival time as the clock
+     * anchor (transport drops out of the sync error budget); the ess/in_obs
+     * frame just delivers the dserv-side timestamp. See pico_gpio.h latch +
+     * the pairing in wizchip_dserv_config.c on_frame. High = in obs (matches
+     * ess-2.0.tm begin_obs's rpioPinOn). Separate from obs_pin (the OUTPUT
+     * mirror/LED): both together give a scope-able end-to-end self-test. */
+    uint8_t  sync_pin;                  /* valid iff sync_en */
+    uint8_t  sync_en;                   /* 1 = TTL sync input on; 0 = off (default) */
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -115,6 +126,7 @@ typedef enum {
     CFG_NET_IP,
     CFG_NET_MODE,
     CFG_OBS_PIN,
+    CFG_SYNC_PIN,
     CFG_ACTIVE_LOW,
     CFG_WIFI_SSID,
     CFG_WIFI_PASS,
@@ -245,6 +257,12 @@ static inline int  obs_mirror_enabled(const pico_config_t *c) { return c->obs_en
 static inline int  obs_mirror_pin(const pico_config_t *c)     { return (int) c->obs_pin; }
 static inline void obs_mirror_set(pico_config_t *c, int gpio) { c->obs_pin = (uint8_t) gpio; c->obs_en = 1; }
 static inline void obs_mirror_off(pico_config_t *c)          { c->obs_en = 0; }
+
+/* hardware obs-sync input accessors (TTL from the rig host), same shape. */
+static inline int  sync_input_enabled(const pico_config_t *c) { return c->sync_en != 0; }
+static inline int  sync_input_pin(const pico_config_t *c)     { return (int) c->sync_pin; }
+static inline void sync_input_set(pico_config_t *c, int gpio) { c->sync_pin = (uint8_t) gpio; c->sync_en = 1; }
+static inline void sync_input_off(pico_config_t *c)           { c->sync_en = 0; }
 
 /* The device name is a datapoint-prefix: it must be non-empty, printable, and
  * carry no '/' (or a stray control byte from line-editing) -- a bad name breaks
@@ -391,6 +409,16 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
         }
         c->applied_count++; return CFG_OBS_PIN;
     }
+    if (strcmp(k, "sync/pin") == 0) {
+        char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (m->type == DSERV_STRING && !strcmp(w, "off")) sync_input_off(c);
+        else {
+            long v = dserv_msg_as_long(m);
+            if (v >= 0 && v < PICO_NPINS) sync_input_set(c, (int) v);
+            else sync_input_off(c);
+        }
+        c->applied_count++; return CFG_SYNC_PIN;
+    }
     return CFG_UNKNOWN;
 }
 
@@ -466,6 +494,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_NET_IP:     return "net_ip";
     case CFG_NET_MODE:   return "net_mode";
     case CFG_OBS_PIN:    return "obs_pin";
+    case CFG_SYNC_PIN:   return "sync_pin";
     case CFG_ACTIVE_LOW: return "active_low";
     case CFG_WIFI_SSID:  return "wifi_ssid";
     case CFG_WIFI_PASS:  return "wifi_pass";

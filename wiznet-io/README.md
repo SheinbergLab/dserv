@@ -101,6 +101,23 @@ announces its **manifest** — `state/desc`, `state/label/<n>`,
 its bit→direction map from the announced labels. Semantics stay host-side:
 the box knows pins/groups/labels, never "joystick".
 
+**Hardware obs-sync input (v14).** By default the clock anchor pairs dserv's
+`ess/in_obs` timestamp with the frame's *arrival* time, so one-way transport
+delay bounds the sync error. Wire the rig host's physical obs TTL (ess
+`begin_obs` drives it via `rpioPinOn`, high = in obs) to a box pin and set
+`sync pin N` (`config/sync/pin`): the pin becomes a raw edge-latch input
+(IRQ-stamped, unfiltered, never published as `di/`), and each `ess/in_obs`
+frame pairs its dserv timestamp with the latched *edge* time instead —
+transport drops out of the error budget, leaving the host's
+pin-write-to-timestamp skew (tens of µs, mostly constant). Scheduled events
+(`do/<n>/at`) then anchor to the physical obs edge too. Falls back to
+arrival-time anchoring per-edge when no fresh matching edge exists (unwired
+TTL = old behavior); `state/sync/source` (`hw`/`sw`) says which mode each
+anchor used and `state/sync/transport_us` logs the measured frame-behind-edge
+delay — continuous transport-latency telemetry. Keep `obs pin M` (output
+mirror) configured as well and the TTL-in vs mirror-out pair is a scope-able
+end-to-end software-path self-test.
+
 Tell dserv to relay in **binary** (the `1`) to the box's listen port:
 
 ```

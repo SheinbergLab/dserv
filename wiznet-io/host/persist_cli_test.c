@@ -102,6 +102,14 @@ int main(void)
     act = pico_cli_exec(&c, "group 1 off", out, sizeof out, &cli_cmd);
     CHECK(act == CLI_GROUP && c.group_pins[1] == 0, "group off clears");
 
+    /* ---- v14: TTL obs-sync input ---- */
+    act = pico_cli_exec(&c, "sync pin 3", out, sizeof out, &cli_cmd);
+    CHECK(act == CLI_PIN && c.sync_en == 1 && c.sync_pin == 3, "sync pin (-> CLI_PIN)");
+    CHECK(pico_cli_exec(&c, "sync pin 99", out, sizeof out, &cli_cmd) == CLI_ERR, "reject bad sync pin");
+    act = pico_cli_exec(&c, "sync off", out, sizeof out, &cli_cmd);
+    CHECK(act == CLI_PIN && c.sync_en == 0, "sync off");
+    pico_cli_exec(&c, "sync pin 3", out, sizeof out, &cli_cmd);   /* keep set for persist check */
+
     /* persistence survives a CLI-configured struct */
     n = pico_persist_serialize(&c, blob, sizeof blob);
     pico_config_t d; memset(&d, 0, sizeof d);
@@ -110,6 +118,7 @@ int main(void)
     CHECK(strcmp(d.desc, "training rig box") == 0 && d.group_pins[0] == 0xF0u
           && strcmp(d.group_label[0], "joystick") == 0 && d.group_settle_ms[0] == 25,
           "v13 fields persist");
+    CHECK(d.sync_en == 1 && d.sync_pin == 3, "v14 sync fields persist");
 
     /* ---- forward-compat: a v12 (pre-label) blob loads with v13 fields zeroed ---- */
     uint32_t old_len = (uint32_t) offsetof(pico_config_t, desc);
@@ -124,6 +133,21 @@ int main(void)
     CHECK(strcmp(e.name, "io1") == 0 && e.dserv_port == 4620, "v12 fields preserved");
     CHECK(e.desc[0] == 0 && e.pin_label[5][0] == 0 && e.group_pins[0] == 0
           && e.group_settle_ms[0] == 0, "v13 fields default to none");
+    CHECK(e.sync_en == 0 && e.sync_pin == 0, "v14 fields default to off");
+
+    /* ---- and a v13 (labels/groups, pre-sync) blob likewise ---- */
+    uint32_t v13_len = (uint32_t) offsetof(pico_config_t, sync_pin);
+    uint8_t v13[PICO_PERSIST_BLOB_MAX]; p = v13;
+    memcpy(p, &magic, 4);                p += 4;
+    ver = 13;                            memcpy(p, &ver, 2);  p += 2;
+    blen = (uint16_t) v13_len;           memcpy(p, &blen, 2); p += 2;
+    memcpy(p, &c, v13_len);              p += v13_len;
+    crc = pico_crc32(v13, 8 + v13_len);  memcpy(p, &crc, 4);
+    memset(&e, 0xAA, sizeof e);
+    CHECK(pico_persist_deserialize(v13, 12 + v13_len, &e) == 0, "v13 blob accepted");
+    CHECK(e.group_pins[0] == 0xF0u && strcmp(e.group_label[0], "joystick") == 0,
+          "v13 fields preserved");
+    CHECK(e.sync_en == 0 && e.sync_pin == 0, "v14 fields default to off (from v13)");
 
     printf(fails ? "\nFAILED (%d)\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;

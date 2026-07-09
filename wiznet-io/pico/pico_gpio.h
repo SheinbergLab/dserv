@@ -10,6 +10,7 @@
 
 #include "dserv_config.h"
 #include "hardware/gpio.h"
+#include "hardware/sync.h"      /* save_and_disable_interrupts: torn-read-safe sync latch */
 #include "pico/time.h"
 
 /* Alarm pool for pulse/sched timing, created by the RT core (core 1) so those
@@ -82,9 +83,33 @@ static volatile uint64_t di_first_edge_us[PICO_NPINS];  /* press moment -> event
 static volatile uint8_t  di_unsettled[PICO_NPINS];
 static uint8_t           di_pub_level[PICO_NPINS];       /* last published (main loop only)        */
 
+/* ---- hardware obs-sync input: raw edge latch ----
+ * The rig host's TTL obs line (ess-2.0.tm begin_obs: rpioPinOn, high = in obs)
+ * wired to a box pin. The IRQ latches each edge's box-clock time, unfiltered
+ * and unpublished -- deliberately NOT the debounced DI path: this timestamp
+ * becomes the clock anchor, paired with the dserv timestamp the ess/in_obs
+ * frame delivers later (see on_frame), so transport delay drops out of the
+ * sync error budget entirely. */
+static volatile int      pico_gpio_sync_pin = -1;       /* -1 = no sync input configured */
+static volatile uint64_t pico_gpio_sync_edge[2];        /* [0]=falling(end), [1]=rising(begin) */
+
+/* torn-read-safe snapshot: the IRQ writes the 64-bit latch on this same core */
+static inline uint64_t pico_gpio_sync_edge_get(int rising)
+{
+    uint32_t s = save_and_disable_interrupts();
+    uint64_t t = pico_gpio_sync_edge[rising ? 1 : 0];
+    restore_interrupts(s);
+    return t;
+}
+
 static void pico_gpio_irq_cb(uint gpio, uint32_t events)
 {
-    (void) events;
+    if ((int) gpio == pico_gpio_sync_pin) {             /* TTL obs-sync: latch, don't report */
+        uint64_t t = time_us_64();
+        if (events & GPIO_IRQ_EDGE_RISE) pico_gpio_sync_edge[1] = t;
+        if (events & GPIO_IRQ_EDGE_FALL) pico_gpio_sync_edge[0] = t;
+        return;
+    }
     if (gpio >= PICO_NPINS) return;
     if (!di_unsettled[gpio]) { di_first_edge_us[gpio] = time_us_64(); di_unsettled[gpio] = 1; }
     di_last_edge_us[gpio] = time_us_32();               /* moving quiet-since marker */
@@ -138,6 +163,23 @@ static inline void pico_gpio_apply_config(const pico_config_t *c)
         if (p >= 0 && p < PICO_NPINS && !pico_gpio_reserved(p)) {
             gpio_init(p); gpio_set_dir(p, GPIO_OUT); gpio_put(p, 0);
             gpio_set_irq_enabled(p, EDGES, false);
+        }
+    }
+
+    /* hardware obs-sync input: always an INPUT with the raw edge-latch IRQ,
+     * overriding any pin_mode (the redirect in pico_gpio_irq_cb keeps its
+     * edges out of the DI report path). TTL is actively driven -> no pulls.
+     * Claim LAST so the pin loop can't undo the IRQ enable; stale latches are
+     * cleared so a pin move can't pair an old edge. */
+    pico_gpio_sync_pin = -1;
+    pico_gpio_sync_edge[0] = pico_gpio_sync_edge[1] = 0;
+    if (sync_input_enabled(c)) {
+        int p = sync_input_pin(c);
+        if (p >= 0 && p < PICO_NPINS && !pico_gpio_reserved(p)) {
+            gpio_init(p); gpio_set_dir(p, GPIO_IN); gpio_disable_pulls(p);
+            di_unsettled[p] = 0;                     /* never reports via poll_di */
+            gpio_set_irq_enabled_with_callback(p, EDGES, true, pico_gpio_irq_cb);
+            pico_gpio_sync_pin = p;
         }
     }
 }

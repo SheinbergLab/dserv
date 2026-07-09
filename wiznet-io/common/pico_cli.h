@@ -40,19 +40,21 @@ typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_GPIO, CLI_SAVE, CLI_FACT
 
 static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
 {
-    char obs[8];
-    if (obs_mirror_enabled(c)) snprintf(obs, sizeof obs, "%d", obs_mirror_pin(c));
-    else                       snprintf(obs, sizeof obs, "off");
+    char obs[8], syn[8];
+    if (obs_mirror_enabled(c))  snprintf(obs, sizeof obs, "%d", obs_mirror_pin(c));
+    else                        snprintf(obs, sizeof obs, "off");
+    if (sync_input_enabled(c))  snprintf(syn, sizeof syn, "%d", sync_input_pin(c));
+    else                        snprintf(syn, sizeof syn, "off");
     int k = 0;
 #ifdef BOX_NET_DUAL
     k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
 #endif
     k += snprintf(out + k, outsz - k,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u oled.en=%u applied=%u\r\n",
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u oled.en=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
-        dserv_cfg_port(c), obs,   /* effective port (default when unset), not raw 0 */
+        dserv_cfg_port(c), obs, syn,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
         c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->oled_en, c->applied_count);
     if (c->desc[0] && k < outsz - 8)
@@ -110,6 +112,7 @@ static inline void pico_cli_dump(const pico_config_t *c)
             if (c->group_quiet[g])        printf("group %d quiet 1\r\n",   g);
         }
     if (obs_mirror_enabled(c))            printf("obs pin %d\r\n", obs_mirror_pin(c));
+    if (sync_input_enabled(c))            printf("sync pin %d\r\n", sync_input_pin(c));
     if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
     if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
     if (c->wifi_pm)                       printf("wifi pm 1\r\n");
@@ -251,6 +254,15 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         obs_mirror_off(c); c->applied_count++;
         snprintf(out, outsz, "OK obs off\r\n"); return CLI_PIN;
     }
+    if (sscanf(line, "sync pin %d", &n) == 1) {   /* TTL obs-sync INPUT (hardware clock anchor) */
+        if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR sync pin 0-%d (or 'sync off')\r\n", PICO_NPINS - 1); return CLI_ERR; }
+        sync_input_set(c, n); c->applied_count++;
+        snprintf(out, outsz, "OK sync pin=%d (input; wire the rig host's obs TTL)\r\n", n); return CLI_PIN;
+    }
+    if (!strcmp(line, "sync off")) {
+        sync_input_off(c); c->applied_count++;
+        snprintf(out, outsz, "OK sync off\r\n"); return CLI_PIN;
+    }
     /* wifi creds: value is the rest of the line verbatim (one space separator),
      * so SSIDs/passwords with spaces or special chars survive intact. */
     if (!strncmp(line, "wifi ssid ", 10)) {
@@ -319,6 +331,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
             "      pin N active_low 0|1 | label N TEXT|off | obs pin N | obs off |\r\n"
+            "      sync pin N | sync off |\r\n"
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
             "      group G quiet 0|1 | group G off |\r\n"
             "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 | oled enable 0|1 |\r\n"

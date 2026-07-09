@@ -35,10 +35,16 @@
  * Clock alignment: the box also subscribes to ess/in_obs. Each obs begin/end
  * edge carries dserv's timestamp; the box snaps a box->dserv offset from it
  * (pico_clock.h) and stamps the DI/DO events it publishes in dserv time, so they
- * interleave with local events as if the box were a local device. An optional
- * obs-mirror output (config/obs/pin, or CLI `obs pin N`) is driven to the live
- * ess/in_obs value -- an LED to eyeball obs tracking, or a scope tap to measure
- * the sync latency against the main system's physical obs line.
+ * interleave with local events as if the box were a local device. By default
+ * the anchor's box time is the frame's ARRIVAL (error = transport delay); wire
+ * the rig host's physical obs TTL to a box pin (`sync pin N`) and the anchor
+ * becomes the IRQ-latched EDGE time instead -- transport drops out of the
+ * error budget, leaving only the host's pin-write-to-timestamp skew
+ * (state/sync/source says which mode each anchor used; state/sync/transport_us
+ * logs the measured frame-behind-edge delay). An optional obs-mirror output
+ * (config/obs/pin, or CLI `obs pin N`) is driven to the live ess/in_obs value
+ * -- an LED to eyeball obs tracking, or a scope tap against the TTL input for
+ * an end-to-end software-path latency self-test.
  *
  * dserv relay setup:  %reg <box_ip> <CFG_PORT> 1 ; %match <name>/config keys ; %match <name>/cmd keys ; %match ess/in_obs
  * dserv target for state:  set <name>/config/dserv/ip + dserv/port, then save.
@@ -73,6 +79,13 @@
 #define HEARTBEAT_MS 1000
 #define SYNC_DP     "ess/in_obs"   /* obs begin/end edge -> box->dserv clock anchor */
 #define CLI_LINE_MAX 128
+
+/* Hardware sync anchor sanity window: a latched TTL edge pairs with an
+ * ess/in_obs frame only if the edge is at most this old at frame arrival.
+ * Must exceed the worst transport+stack delay (ms-class on USB) and stay
+ * well under the shortest obs on/off cadence (seconds), so a stale edge
+ * from the previous toggle can never anchor the current one. */
+#define SYNC_EDGE_WINDOW_US 250000
 
 #ifndef BOX_FW_VERSION
 #define BOX_FW_VERSION "dev"       /* build.sh bakes `git describe` here */
@@ -185,8 +198,12 @@ static void publish_do(uint8_t pin, uint8_t level, uint64_t ts)
 }
 
 /* Clock-align audit trail: the raw {dserv_us, box_us} anchor and the resulting
- * offset, one datapoint each, all stamped at the obs edge's dserv time. */
-static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us)
+ * offset, one datapoint each, all stamped at the obs edge's dserv time. Plus
+ * which anchor fed the clock (hw = latched TTL edge, sw = frame arrival) and,
+ * when hw, the measured frame-behind-edge delay -- free per-anchor transport
+ * latency telemetry (receipt - physical edge). */
+static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
+                         int hw, int64_t transport_us)
 {
     char nm[64]; uint8_t f[DSERV_MSG_LEN];
     dserv_state_name(&g_cfg, nm, sizeof nm, "sync/dserv_us");
@@ -195,6 +212,12 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us)
     dserv_msg_int64(f, nm, dserv_us, (int64_t) box_us);    box_net_client_send(f, DSERV_MSG_LEN);
     dserv_state_name(&g_cfg, nm, sizeof nm, "sync/offset_us");
     dserv_msg_int64(f, nm, dserv_us, offset_us);           box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "sync/source");
+    dserv_msg_string(f, nm, dserv_us, hw ? "hw" : "sw");   box_net_client_send(f, DSERV_MSG_LEN);
+    if (transport_us >= 0) {
+        dserv_state_name(&g_cfg, nm, sizeof nm, "sync/transport_us");
+        dserv_msg_int64(f, nm, dserv_us, transport_us);    box_net_client_send(f, DSERV_MSG_LEN);
+    }
 }
 
 static void publish_heartbeat(void)
@@ -579,17 +602,35 @@ static void on_frame(const uint8_t *frame, void *ud)
     if (dserv_msg_parse(frame, &m) != 0) return;
 
     /* obs-period sync edge: re-align box->dserv clock. Both begin(1) and end(0)
-     * edges are anchors (two per obs). m.timestamp = dserv time of the toggle. */
+     * edges are anchors (two per obs). m.timestamp = dserv time of the toggle.
+     *
+     * Anchor choice: with a TTL sync input wired (sync pin N), the rig host's
+     * physical obs edge was already IRQ-latched here BEFORE this frame arrived
+     * -- pair the frame's dserv timestamp with THAT box time and the transport
+     * delay drops out of the error budget (the frame is just the timestamp's
+     * courier). The edge must match this toggle's polarity and be fresh
+     * (SYNC_EDGE_WINDOW_US), else fall back to frame-arrival time exactly as
+     * before -- an unwired/broken TTL degrades gracefully, visibly via
+     * state/sync/source. */
     if (dserv_msg_name_eq(&m, SYNC_DP)) {
         int obs = (int) dserv_msg_as_long(&m);
         g_in_obs = obs;                    /* gate for the %match refresh (never mid-obs) */
-        box_clock_sync(&g_clock, m.timestamp, now_box);
-        if (obs) g_obs_begin_us = now_box;  /* beginobs edge -> anchor for scheduled events */
+        uint64_t anchor_box = now_box;     /* sw fallback: frame receipt time */
+        int hw = 0;
+        if (pico_gpio_sync_pin >= 0) {
+            uint64_t e = pico_gpio_sync_edge_get(obs);   /* rising for obs=1, falling for obs=0 */
+            if (e && now_box - e < SYNC_EDGE_WINDOW_US) { anchor_box = e; hw = 1; }
+        }
+        box_clock_sync(&g_clock, m.timestamp, anchor_box);
+        if (obs) g_obs_begin_us = anchor_box;  /* beginobs -> anchor for scheduled events
+                                                * (hw: pulses land on the PHYSICAL obs timeline) */
         pico_gpio_obs_mirror(cfg, obs);    /* LED/scope: box's live copy of obs */
-        publish_sync(m.timestamp, now_box, g_clock.offset_us);
-        DBG("sync: obs=%d dserv=%llu box=%llu off=%lld\n", obs,
+        publish_sync(m.timestamp, anchor_box, g_clock.offset_us,
+                     hw, hw ? (int64_t)(now_box - anchor_box) : -1);
+        DBG("sync: obs=%d dserv=%llu box=%llu off=%lld %s\n", obs,
             (unsigned long long) m.timestamp,
-            (unsigned long long) now_box, (long long) g_clock.offset_us);
+            (unsigned long long) anchor_box, (long long) g_clock.offset_us,
+            hw ? "hw" : "sw");
         return;
     }
 
@@ -610,7 +651,9 @@ static void on_frame(const uint8_t *frame, void *ud)
         if (cmd.op == GPIO_OP_SET)
             publish_do(cmd.pin, (uint8_t) cmd.value, box_clock_stamp(&g_clock, t_act));  /* actual readback */
     }
-    else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN) { pico_gpio_apply_config(cfg); groups_reset_all(); }
+    else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN) {
+        pico_gpio_apply_config(cfg); groups_reset_all();
+    }
     else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
     else if (r == CFG_LABEL || r == CFG_DESC)          publish_manifest();
     else if (r == CFG_SAVE)      save_request(0);       /* core 0 writes; prints flash ok/FAIL */
