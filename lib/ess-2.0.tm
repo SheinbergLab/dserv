@@ -3261,12 +3261,19 @@ namespace eval ess {
     array set joystick_dirmap { 1 0  9 1  8 2  10 3  2 4  6 5  4 6  5 7 }
     variable joystick_dir_names { up up_right right down_right down down_left left up_left }
 
+    # Cut a box string datapoint at the first NUL. Firmware before the
+    # dserv_msg_string strlen fix sent strlen+1, so labels/pins arrive with a
+    # trailing "\x00" -- which silently breaks an exact `switch` match ("up\0"
+    # != "up") and datapoint-name lookups ("...state/label/9\0"). Defensive so
+    # the auto-map works against any box firmware, not just reflashed ones.
+    proc joystick_denul {s} { return [lindex [split $s \x00] 0] }
+
     # Normalize a pin label to a canonical direction (up|down|left|right), or ""
     # if it isn't directional. Accepts full words and single-letter forms, case-
     # insensitively -- so both `label 7 up` and `label 7 U` self-configure the
     # manifest-derived map. (An explicit `map` on joystick_init still overrides.)
     proc joystick_dir_canon {label} {
-        switch -nocase -- $label {
+        switch -nocase -- [joystick_denul $label] {
             u - up    { return up }
             d - down  { return down }
             l - left  { return left }
@@ -3397,7 +3404,7 @@ namespace eval ess {
         set pinsdp $io/$dev/state/group/$glabel/pins
         if { [dservExists $pinsdp] } {
             set i 0
-            foreach p [split [dservGet $pinsdp] ,] {
+            foreach p [split [joystick_denul [dservGet $pinsdp]] ,] {
                 set ldp $io/$dev/state/label/$p
                 if { [dservExists $ldp] } {
                     set c [joystick_dir_canon [dservGet $ldp]]
@@ -3407,7 +3414,7 @@ namespace eval ess {
             }
         }
         if { [dict size $map] != 4 } {
-            ess_log "joystick: no manifest map for $dev/$glabel; assuming bits 0-3 = up,down,left,right"
+            ess_warning "joystick: no manifest map for $dev/$glabel; assuming bits 0-3 = up,down,left,right" "joystick"
             set map {up 0 down 1 left 2 right 3}
         }
         set joystick_maps($key) $map
@@ -3754,7 +3761,7 @@ namespace eval ess {
 		    dservSet gpio/input/$pin 0
 		}
 	    } on error {msg} {
-		ess_log "button_init: no GPIO for pin $pin (simulation mode): $msg"
+		ess_warning "button_init: no GPIO for pin $pin (simulation mode): $msg" "button"
 	    }
 	}
 
