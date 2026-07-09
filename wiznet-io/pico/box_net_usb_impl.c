@@ -23,6 +23,7 @@ const box_net_vtable_t box_net_usb_vt = {
     .name           = box_net_backend_name,
     .phy_link       = box_net_phy_link,     /* -2: no PHY on USB */
     .server_up      = box_net_server_up,
+    .client_reading = box_net_client_reading,   /* DTR on the data CDC */
     .send_command_start = box_net_send_command_start,
     .send_command_poll  = box_net_send_command_poll,
 };

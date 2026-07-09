@@ -34,6 +34,10 @@ typedef struct {
     int         (*server_up)(void);    /* 1 iff the dserv->box config path is alive (w6300: config
                                         * server socket ESTABLISHED; usb: enumerated). Feeds the
                                         * registration self-heal watchdog. */
+    int         (*client_reading)(void); /* 1 iff the FAR END is actually draining our client stream:
+                                          * usb = host opened the DATA CDC (DTR), NOT mere enumeration;
+                                          * socket = connected peer always reads (return 1). Gates the
+                                          * connect burst so it isn't fired into a not-yet-open USB tty. */
     /* Async variant of send_command for the RT loop: start one command, then
      * poll each pass (us-bounded: ~1-2 SPI reads) until it resolves. w6300 runs
      * a per-pass socket state machine; usb resolves immediately (CDC write).

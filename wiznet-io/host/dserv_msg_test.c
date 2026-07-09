@@ -59,7 +59,7 @@ int main(void)
     { double v = 3.301; parse_and_check(f, "pico/volts", 0, DSERV_DOUBLE, &v, 8); }
 
     r = dserv_msg_string(f, "pico/status", 0, "alive");
-    parse_and_check(f, "pico/status", 0, DSERV_STRING, "alive", 6 /* incl NUL */);
+    parse_and_check(f, "pico/status", 0, DSERV_STRING, "alive", 5 /* datalen = strlen, no NUL */);
 
     /* boundary: varname + data must be <= 109 */
     char big[110]; memset(big, 'x', sizeof big);

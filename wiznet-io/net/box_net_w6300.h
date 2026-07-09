@@ -172,6 +172,11 @@ static inline int box_net_server_up(void)
     return bn_prev_status == SOCK_ESTABLISHED;
 }
 
+/* Socket peer: an ESTABLISHED TCP connection is, by definition, being read by
+ * dserv -- so the connect burst can fire the instant we're connected (this is
+ * only consulted while up). The DTR subtlety is USB-only. */
+static inline int box_net_client_reading(void) { return 1; }
+
 static inline int box_net_init(const pico_config_t *cfg)
 {
     bn_make_mac();

@@ -495,6 +495,15 @@ static void publish_manifest(void)
     dserv_state_name(&g_cfg, nm, sizeof nm, "pins/out");
     dserv_msg_string(f, nm, 0, out_csv);  box_net_client_send(f, DSERV_MSG_LEN);
 
+    /* special-function pins (mirror OUT / TTL sync IN); -1 = off, so disabling
+     * updates the retained value instead of leaving a ghost. */
+    dserv_state_name(&g_cfg, nm, sizeof nm, "obs_pin");
+    dserv_msg_int(f, nm, 0, obs_mirror_enabled(&g_cfg) ? obs_mirror_pin(&g_cfg) : -1);
+    box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "sync_pin");
+    dserv_msg_int(f, nm, 0, sync_input_enabled(&g_cfg) ? sync_input_pin(&g_cfg) : -1);
+    box_net_client_send(f, DSERV_MSG_LEN);
+
     for (int i = 0; i < PICO_NPINS; i++) {
         if (!g_cfg.pin_label[i][0] && !g_cfg.pin_mode[i]) continue;
         snprintf(leaf, sizeof leaf, "label/%d", i);
@@ -525,6 +534,36 @@ static void publish_group_levels(void)
 {
     for (int g = 0; g < PICO_NGROUPS; g++)
         if (g_cfg.group_pins[g]) publish_group(g, g_grp[g].cur, 0);
+}
+
+/* Connect burst: identity card + manifest + input/group seeds -- the one-shot,
+ * retained datapoints a fresh UI needs (fw, pins/in, labels, di seeds).
+ *
+ * On USB these must NOT be fired-and-forgotten at the up==2 enumeration instant:
+ * the host's usbio opens the data tty only on its ~2s discovery poll, so at
+ * up==2 nobody is draining the CDC yet and the whole burst silently drops (edge
+ * publishes like di/<n> land later, once the host reads -- which is why a box
+ * would show di but no fw/pins). Gate on box_net_client_reading() (USB: DTR on
+ * the data CDC = host has the port open; a plain FIFO-write probe FALSE-POSITIVES
+ * because one 128B frame just buffers). Not reading -> report not-delivered so
+ * the caller retries on the next heartbeat until it lands (self-terminating).
+ * Eth is always reading once connected.
+ *
+ * `force` bypasses the DTR gate: DTR gating was abandoned once during bring-up
+ * (some host/opener may not assert it), so as belt-and-suspenders the caller
+ * FORCES a send every ~5s while still pending -- if the host is actually
+ * reading, a forced burst lands even without DTR; if not, it best-effort drops
+ * (di/heartbeat stay ungated, so this can never silence the box). */
+static int announce_burst(int force)
+{
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+    if (!force && !box_net_client_reading()) return 0;   /* host hasn't opened the data CDC yet */
+#else
+    (void) force;
+#endif
+    publish_ident(); publish_manifest();
+    publish_di_levels(); publish_group_levels();
+    return 1;
 }
 
 /* ---- registration self-heal (socket transports; USB re-registers on its own timer) ----
@@ -647,6 +686,11 @@ static void on_frame(const uint8_t *frame, void *ud)
         if (obs) g_obs_begin_us = anchor_box;  /* beginobs -> anchor for scheduled events
                                                 * (hw: pulses land on the PHYSICAL obs timeline) */
         pico_gpio_obs_mirror(cfg, obs);    /* LED/scope: box's live copy of obs */
+        { char onm[64]; uint8_t of[DSERV_MSG_LEN];   /* box's live obs state for UIs -- honest per-box
+                                                      * (only updates while THIS box receives edges) */
+          dserv_state_name(&g_cfg, onm, sizeof onm, "in_obs");
+          dserv_msg_int(of, onm, m.timestamp, obs);
+          box_net_client_send(of, DSERV_MSG_LEN); }
         publish_sync(m.timestamp, anchor_box, g_clock.offset_us,
                      hw, hw ? (int64_t)(now_box - anchor_box) : -1);
         DBG("sync: obs=%d dserv=%llu box=%llu off=%lld %s\n", obs,
@@ -675,7 +719,7 @@ static void on_frame(const uint8_t *frame, void *ud)
     }
     else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN) {
         pico_gpio_apply_config(cfg); groups_reset_all();
-        if (r == CFG_PIN_MODE) publish_manifest();   /* active pin set changed -> re-announce */
+        publish_manifest();   /* active-pin set OR obs/sync pin changed -> re-announce */
     }
     else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
     else if (r == CFG_LABEL || r == CFG_DESC)          publish_manifest();
@@ -886,6 +930,8 @@ static void rt_main(void)
     g_core1_ready = 1;                  /* core 0 announces the ready banner */
 
     uint32_t last_hb = 0;
+    uint8_t  announce_pending = 0;      /* connect burst deferred until the host reads (USB tty race) */
+    uint8_t  announce_hb = 0;           /* heartbeats since defer -> forces a DTR-bypass retry every ~5s */
 #if defined(BOX_NET_DUAL) || defined(BOX_USB_FORWARD_REGISTER)
     uint32_t reg_tick = 0;              /* delayed USB autoregistration cadence */
 #endif
@@ -931,9 +977,9 @@ static void rt_main(void)
             uint16_t port = dserv_cfg_port(&g_cfg);
             int up = box_net_client_service(g_cfg.dserv_ip, port);
             status_update(up);
-            if (up == 2) {                     /* identity card + manifest + input seeds */
-                publish_ident(); publish_manifest();
-                publish_di_levels(); publish_group_levels();
+            if (up == 2) {                     /* connect burst; USB may need the host tty first */
+                announce_hb = 0;
+                if (!announce_burst(0)) announce_pending = 1;  /* -> retried on the heartbeat until it lands */
             }
 #if defined(BOX_NET_DUAL)
             if (up == 2 && !box_net_is_usb()) reg_request(1, 0);  /* Eth: reg on connect; USB: delayed autoreg below */
@@ -970,6 +1016,8 @@ static void rt_main(void)
                 uint32_t now = to_ms_since_boot(get_absolute_time());
                 if (now - last_hb >= HEARTBEAT_MS) {
                     last_hb = now; publish_heartbeat();
+                    if (announce_pending &&              /* deferred burst: DTR-gated, forced every ~5s */
+                        announce_burst(++announce_hb % 5 == 0)) announce_pending = 0;
 #if defined(BOX_NET_DUAL)
                     /* USB mode only: first emit ~5s in (after macOS has both CDC ttys), then every ~3s */
                     if (box_net_is_usb() && ++reg_tick >= 5 && reg_tick % 3 == 0) reg_request(1, 1);

@@ -95,10 +95,16 @@ static inline int dserv_msg_float(uint8_t *f, const char *n, uint64_t ts, float 
 static inline int dserv_msg_double(uint8_t *f, const char *n, uint64_t ts, double v)
 { return dserv_msg_build(f, n, ts, DSERV_DOUBLE, &v, sizeof v); }
 
-/* String datapoint: sends the NUL so C consumers get a terminated string. */
+/* String datapoint: datalen = the string LENGTH, no trailing NUL. Matches
+ * dserv's own string convention (Datapoint.c allocates datalen+1 and appends
+ * its own terminator), so the value carries no spurious NUL byte. Sending the
+ * NUL (the old strlen+1) put it INTO the data -> string consumers that don't
+ * expect it broke: JS Number("14\0")==NaN mangled pins/in, Tcl `switch` on a
+ * label "up\0" never matched "up" (ess joystick map). C consumers still get a
+ * terminated string because dserv re-appends the NUL on receive. */
 static inline int dserv_msg_string(uint8_t *f, const char *n, uint64_t ts,
                                    const char *s)
-{ return dserv_msg_build(f, n, ts, DSERV_STRING, s, (uint32_t) strlen(s) + 1); }
+{ return dserv_msg_build(f, n, ts, DSERV_STRING, s, (uint32_t) strlen(s)); }
 
 static inline int dserv_msg_bytes(uint8_t *f, const char *n, uint64_t ts,
                                   const void *data, uint32_t len)

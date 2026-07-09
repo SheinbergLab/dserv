@@ -41,6 +41,9 @@
   .chip.eth { background: #14351f; color: var(--green); }
   .chip.usb { background: #17293f; color: var(--blue); }
   .chip.wdg { background: #3f1d1d; color: var(--red); }
+  .obs { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 8px;
+         border-radius: 9px; background: var(--off); color: var(--faint); transition: all 120ms; }
+  .obs.on { background: #14351f; color: var(--green); box-shadow: 0 0 8px rgba(74,222,128,0.5); }
   .meta { color: var(--faint); font-size: 12px; margin-top: 4px;
           font-variant-numeric: tabular-nums; }
   .meta b { color: var(--muted); font-weight: 500; }
@@ -112,7 +115,9 @@ function boxModel(name) {
         b = { name, ident: {}, di: new Map(), dout: new Map(), ain: new Map(),
               labels: new Map(), desc: '', groups: new Map(),
               pinsIn: null, pinsOut: null,   /* announced active sets; null = old fw -> derive from di/do */
-              battery: null, syncOffset: null, syncAt: 0, uptimeUs: null,
+              inObs: null, obsPin: -1, syncPin: -1,           /* obs mirror + TTL sync input */
+              syncSource: null, syncTransport: null, syncRate: null, syncAt: 0,
+              battery: null, uptimeUs: null,
               lastSeen: 0, ready: false };
         boxes.set(name, b);
     }
@@ -143,7 +148,10 @@ function onExtio(msg) {
     if (!m) return;
     const b = boxModel(m[1]);
     const leaf = m[2];
-    const v = msg.data !== undefined ? msg.data : msg.value;
+    let v = msg.data !== undefined ? msg.data : msg.value;
+    /* box string datapoints carry a trailing C NUL (dserv_msg_string sends
+     * strlen+1); cut at it, else Number("14\0") -> NaN corrupts pins/in etc. */
+    if (typeof v === 'string') v = v.split('\x00')[0];
     const num = typeof v === 'number' ? v : parseFloat(v);
     b.lastSeen = Date.now();
 
@@ -171,8 +179,18 @@ function onExtio(msg) {
         groupModel(b, mm[1]).pins = String(v).split(',').filter(s => s.length).map(Number);
     } else if ((mm = /^group\/([^/]+)$/.exec(leaf))) {   /* the bitmask event/seed */
         groupModel(b, mm[1]).val = num;
-    } else if (leaf === 'sync/offset_us') {
-        b.syncOffset = num; b.syncAt = Date.now();
+    } else if (leaf === 'in_obs') {
+        b.inObs = num;
+    } else if (leaf === 'obs_pin') {
+        b.obsPin = num;
+    } else if (leaf === 'sync_pin') {
+        b.syncPin = num;
+    } else if (leaf === 'sync/source') {
+        b.syncSource = String(v); b.syncAt = Date.now();   /* raw offset_us is epoch-huge: useless to show */
+    } else if (leaf === 'sync/transport_us') {
+        b.syncTransport = num; b.syncAt = Date.now();
+    } else if (leaf === 'sync/rate_ppb') {
+        b.syncRate = num;
     } else if (leaf === 'uptime_us') {
         b.uptimeUs = num;
     } else if (leaf === 'battery') {
@@ -280,16 +298,31 @@ function cardHtml(b) {
                        `<span class="val">${v}</span></div>`;
             }).join('') + '</div>';
     }
-    const sync = b.syncOffset != null
-        ? ` · <b>sync</b> ${b.syncOffset} µs (${fmtAge(Date.now() - b.syncAt)})` : '';
+    /* sync: show what's meaningful (source hw/sw, transport delay, drift) --
+     * NOT the raw offset_us, which is dserv-epoch minus box-uptime = a huge
+     * number with no human meaning. */
+    let sync = '';
+    if (b.syncSource) {
+        const parts = [b.syncSource];
+        if (b.syncTransport != null) parts.push(b.syncTransport + 'µs');
+        if (b.syncRate != null) parts.push((b.syncRate / 1000).toFixed(0) + 'ppm');
+        const stip = b.syncPin >= 0 ? `TTL sync input on pin ${b.syncPin}`
+                   : b.syncSource === 'hw' ? 'hardware-synced' : 'software-synced (frame arrival)';
+        sync = ` · <b title="${stip}">sync</b> ${parts.join(' ')} (${fmtAge(Date.now() - b.syncAt)})`;
+    }
     const bat = b.battery != null ? ` · <b>batt</b> ${b.battery}%` : '';
     const target = id.dserv
         ? ` · <b>&rarr; dserv</b> <span class="mono">${esc(id.dserv)}</span>` : '';
 
+    /* obs indicator: pulses with the box's OWN received obs periods (honest --
+     * only lights when THIS box is getting edges). Tooltip names the mirror pin. */
+    const obs = b.inObs != null
+        ? `<span class="obs ${b.inObs ? 'on' : ''}" title="${b.obsPin >= 0 ? 'obs mirror on pin ' + b.obsPin : 'obs tracking'}">obs</span>`
+        : '';
     const desc = b.desc ? `<div class="desc">${esc(b.desc)}</div>` : '';
 
     return `<div class="title"><span class="live ${alive ? 'on' : ''}"></span>` +
-           `<span class="name">${esc(b.name)}</span>${xchip}${fw}${bchip}${ip}</div>` + desc +
+           `<span class="name">${esc(b.name)}</span>${obs}${xchip}${fw}${bchip}${ip}</div>` + desc +
            `<div class="meta"><b>up</b> ${fmtUptime(b.uptimeUs)} · <b>seen</b> ${fmtAge(age)}${target}${sync}${bat}</div>` +
            di + groups + dout + ain;
 }

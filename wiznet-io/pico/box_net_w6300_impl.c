@@ -19,6 +19,7 @@ const box_net_vtable_t box_net_w6300_vt = {
     .name           = box_net_backend_name,
     .phy_link       = box_net_phy_link,     /* lazy chip bring-up, NO vendored PHY-wait */
     .server_up      = box_net_server_up,
+    .client_reading = box_net_client_reading,   /* connected socket == read */
     .send_command_start = box_net_send_command_start,
     .send_command_poll  = box_net_send_command_poll,
 };

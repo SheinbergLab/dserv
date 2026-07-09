@@ -38,6 +38,7 @@ static inline int  box_net_send_command_start(const uint8_t ip[4], uint16_t p, c
 static inline int  box_net_send_command_poll(void)                         { return box_net_active->send_command_poll(); }
 static inline const char *box_net_backend_name(void)                       { return box_net_active->name(); }
 static inline int  box_net_server_up(void)                                 { return box_net_active->server_up(); }
+static inline int  box_net_client_reading(void)                            { return box_net_active->client_reading(); }
 
 /* PHY link goes to the W6300 backend DIRECTLY, not through box_net_active: the
  * auto-transport probe (and the `phylink` CLI) senses the cable while USB is

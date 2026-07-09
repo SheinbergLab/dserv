@@ -63,6 +63,16 @@ static inline int box_net_phy_link(void) { return -2; }   /* no PHY on the USB t
  * whenever the device is mounted; there is no separate dserv connect-back. */
 static inline int box_net_server_up(void) { return tud_ready() ? 1 : 0; }
 
+/* Host is actually DRAINING the data CDC: usbio open()s the tty (asserting DTR)
+ * only on its ~2s discovery poll -- WELL after we enumerate -- so tud_ready
+ * (enumerated) is true long before anyone reads. tud_cdc_n_connected reflects
+ * DTR on the data CDC = the host has the port open. Used to hold the one-shot
+ * connect burst until it will actually land (di/heartbeat stay ungated: they
+ * repeat, so a few early drops self-heal, but the burst fires once). DTR is a
+ * proven signal here -- box_console uses it on CDC0 for terminal-attach. */
+static inline int box_net_client_reading(void)
+{ return tud_ready() && tud_cdc_n_connected(BOX_USB_CDC_DATA); }
+
 /* ---- "link to dserv": USB enumerated (mounted, not suspended) is our "connected". ----
  * We deliberately do NOT gate on DTR (tud_cdc_n_connected): not every host/opener
  * asserts it, and telemetry that silently withholds until DTR is a debugging trap.
