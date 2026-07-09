@@ -549,7 +549,9 @@ static void phylink_service(void)
 /* ---- flash ops: core 1 owns g_cfg, so it snapshots; core 0 does the write ---- */
 static void save_request(int erase_only)
 {
-    save_req_t r;
+    static save_req_t r;                /* ~1 KB since v13: static, off the 4KB core-1 stack
+                                         * (cmd_exec's out[1024] is already the deep frame);
+                                         * core 1 is single-threaded, so no reentrancy */
     r.erase_only = (uint8_t) erase_only;
     if (!erase_only) r.cfg = g_cfg;                 /* coherent: only this core writes g_cfg */
     if (!queue_try_add(&g_save_q, &r)) printf("flash busy, retry\n");

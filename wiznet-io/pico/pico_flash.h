@@ -1,7 +1,8 @@
 /*
  * pico_flash.h -- RP2350 flash storage for the config blob. Device-side backend
  * for pico_persist.h (the sim uses a file instead). Reserves the last 4 KB
- * sector of flash; the ~290-byte blob fits in two 256-byte pages.
+ * sector of flash; the blob (PICO_PERSIST_BLOB_MAX, ~1 KB since v13's
+ * labels/groups) is stored in whole 256-byte pages.
  *
  * DUAL-CORE: flash_range_erase/program require that nothing executes from XIP
  * during the op, so they go through flash_safe_execute(). Two build flavors:
@@ -26,9 +27,15 @@
 
 /* last sector of flash */
 #define FLASH_STORE_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
-/* store region = 2 flash pages: the config blob outgrew one 256B page once WiFi
- * creds were added. Must stay a multiple of FLASH_PAGE_SIZE for flash_range_program. */
-#define FLASH_STORE_BYTES (FLASH_PAGE_SIZE * 2)
+/* store region: the persist blob rounded UP to whole flash pages (a
+ * flash_range_program requirement). Derived from the struct, not hardcoded --
+ * the old fixed 2-page region silently under-sized once v13's labels/groups
+ * grew the blob to ~952 B, so pico_persist_serialize() returned 0 and every
+ * `save` printed `flash FAIL`. */
+#define FLASH_STORE_BYTES \
+    (((PICO_PERSIST_BLOB_MAX + FLASH_PAGE_SIZE - 1u) / FLASH_PAGE_SIZE) * FLASH_PAGE_SIZE)
+_Static_assert(FLASH_STORE_BYTES <= FLASH_SECTOR_SIZE,
+               "config blob outgrew the reserved flash sector");
 
 typedef struct { const uint8_t *page; } flash_store_op_t;   /* page NULL => erase only */
 
@@ -41,7 +48,8 @@ static void flash_store_do_op(void *p)      /* runs IRQ-off, other core locked o
 
 static inline int flash_store_save(const pico_config_t *cfg)
 {
-    uint8_t page[FLASH_STORE_BYTES];
+    static uint8_t page[FLASH_STORE_BYTES];   /* ~1 KB: static, off the core-0 stack
+                                               * (save_service already runs one op at a time) */
     memset(page, 0xFF, sizeof page);
     if (pico_persist_serialize(cfg, page, sizeof page) == 0) return -1;
     flash_store_op_t op = { page };
