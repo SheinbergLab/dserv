@@ -196,7 +196,7 @@ static int run_cli(void)
 {
     persist_load();
     printf("pico box CLI (bootstrap/recovery). type 'help'. ctrl-D to exit.\n");
-    char line[128], out[256]; gpio_cmd_t cmd;
+    char line[128], out[1024]; gpio_cmd_t cmd;   /* match the firmware console: full show + help */
     while (fgets(line, sizeof line, stdin)) {
         line[strcspn(line, "\r\n")] = '\0';
         cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out, &cmd);

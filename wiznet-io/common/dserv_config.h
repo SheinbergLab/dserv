@@ -8,8 +8,14 @@
  * to the box (%reg ... 1 + matches).
  *
  *   <name>/config/name            (str)  rename the device
+ *   <name>/config/desc            (str)  free-form box description (announced)
  *   <name>/config/pin/<n>/mode    (int)  0=unset 1=out 2=in 3=in_pullup
  *   <name>/config/pin/<n>/pulse_us(int)  default DO pulse width for pin n
+ *   <name>/config/pin/<n>/label   (str)  role label ("up", "button_left"); "off" clears
+ *   <name>/config/group/<g>/pins  (str)  "2,3,4,5" DI chord group; "off" clears
+ *   <name>/config/group/<g>/label (str)  names state/group/<label>; "off" clears
+ *   <name>/config/group/<g>/settle_ms (int) chord-settle window (0 = per transition)
+ *   <name>/config/group/<g>/quiet (int)  1 = suppress members' state/di/<n>
  *   <name>/config/net/ip          (str)  "a.b.c.d" (applied on save/boot)
  *   <name>/config/dserv/ip        (str)  "a.b.c.d"
  *   <name>/config/dserv/port      (int)
@@ -28,9 +34,13 @@
 
 #include "dserv_msg.h"
 #include <stdio.h>       /* sscanf */
+#include <stdlib.h>      /* strtol (group pin lists) */
 
 #define PICO_NPINS     30
 #define PICO_NAME_MAX  16
+#define PICO_NGROUPS   4     /* DI chord groups (atomic bitmask publishing)   */
+#define PICO_LABEL_MAX 16    /* per-pin / per-group role labels               */
+#define PICO_DESC_MAX  40    /* free-form box description                     */
 
 /* dserv's client port when cfg->dserv_port is unset (0). One place, so the
  * dispatch code and the CLI's `show` agree on the effective value; see
@@ -71,6 +81,18 @@ typedef struct {
                                          * now: the core-0 console stays alive whatever the transport does. */
     uint8_t  oled_en;                   /* 1 = SSD1306 128x32 SPI status display on the OLED_PIN_* set
                                          * (pico_gpio.h; those pins become reserved). Applied at boot. */
+    /* v13: identity + DI chord groups. desc/labels are announced METADATA (the
+     * manifest published at every (re)connect); groups add one generic BEHAVIOR:
+     * member DI edges publish as a single atomic bitmask datapoint, chord-settled
+     * and stamped at the FIRST edge of the episode (pico_group.h). The box knows
+     * pins/groups/labels -- never device types; semantics stay host-side. */
+    char     desc[PICO_DESC_MAX];       /* free-form description, for humans/fleet page */
+    char     pin_label[PICO_NPINS][PICO_LABEL_MAX];     /* role label; "" = none */
+    uint32_t group_pins[PICO_NGROUPS];  /* member DI pins (bit n = GPn); 0 = group unused.
+                                         * Published bit i = i-th LOWEST member pin. */
+    char     group_label[PICO_NGROUPS][PICO_LABEL_MAX]; /* names state/group/<label>; "" -> "g<idx>" */
+    uint16_t group_settle_ms[PICO_NGROUPS];  /* chord-settle window; 0 = every settled transition */
+    uint8_t  group_quiet[PICO_NGROUPS]; /* 1 = suppress members' state/di/<n> publishes */
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -101,6 +123,9 @@ typedef enum {
     CFG_AIN_GAIN,
     CFG_AIN_EN,
     CFG_OLED_EN,
+    CFG_DESC,
+    CFG_LABEL,
+    CFG_GROUP,
     CFG_DSERV_IP,
     CFG_DSERV_PORT,
     CFG_GPIO,       /* a cmd/do output command parsed into *cmd */
@@ -131,6 +156,56 @@ static inline int  di_active_low(const pico_config_t *c, int pin)
 static inline void di_active_low_set(pico_config_t *c, int pin, int on)
 { if (pin < 0 || pin >= PICO_NPINS) return;
   if (on) c->di_active_low |= (1u << pin); else c->di_active_low &= ~(1u << pin); }
+
+/* logical DI level for publishing/grouping: active_low pins read pressed=1. */
+static inline int di_logical(const pico_config_t *c, int pin, int raw)
+{ return di_active_low(c, pin) ? !raw : (raw != 0); }
+
+/* Labels ride inside datapoint names and host-side name algebra: printable,
+ * no '/' and no spaces. Empty is valid (= cleared/none). */
+static inline int dserv_label_valid(const char *s)
+{
+    for (; *s; s++)
+        if ((unsigned char) *s <= 0x20 || (unsigned char) *s > 0x7e || *s == '/') return 0;
+    return 1;
+}
+
+/* "2,3,4,5" -> pin bitmask. Returns the member count, or -1 on a bad token or
+ * out-of-range pin. "off" (or empty) -> mask 0, count 0. */
+static inline int dserv_parse_pins(const char *s, uint32_t *mask)
+{
+    *mask = 0;
+    if (!*s || !strcmp(s, "off")) return 0;
+    int n = 0;
+    while (*s) {
+        char *end; long p = strtol(s, &end, 10);
+        if (end == s || p < 0 || p >= PICO_NPINS) return -1;
+        *mask |= (1u << p); n++;
+        s = end;
+        if (*s == ',') s++;
+        else if (*s) return -1;
+    }
+    return n;
+}
+
+/* pin bitmask -> "2,3,4,5", ascending -- the published bit order (bit i =
+ * i-th lowest member pin), so this string IS the wire-format contract. */
+static inline void dserv_pins_str(uint32_t mask, char *buf, int sz)
+{
+    int k = 0;
+    if (sz <= 0) return;
+    buf[0] = '\0';
+    for (int i = 0; i < PICO_NPINS && k < sz - 1; i++)
+        if ((mask >> i) & 1u)
+            k += snprintf(buf + k, sz - k, "%s%d", k ? "," : "", i);
+}
+
+/* group's datapoint segment: its label, or "g<idx>" while unlabeled. */
+static inline void dserv_group_name(const pico_config_t *c, int g, char *buf, int sz)
+{
+    if (c->group_label[g][0]) snprintf(buf, sz, "%s", c->group_label[g]);
+    else                      snprintf(buf, sz, "g%d", g);
+}
 
 /* pin mode word -> value; -1 if not a recognized word (caller falls back to int) */
 static inline int dserv_mode_val(const char *w)
@@ -216,6 +291,46 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (sscanf(k, "pin/%d/active_low%n", &n, &pos) == 1 && pos > 0 &&
         k[pos] == '\0' && n >= 0 && n < PICO_NPINS) {
         di_active_low_set(c, n, dserv_msg_as_long(m) ? 1 : 0); c->applied_count++; return CFG_ACTIVE_LOW;
+    }
+    pos = -1;
+    if (sscanf(k, "pin/%d/label%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < PICO_NPINS) {
+        char w[PICO_LABEL_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) return CFG_UNKNOWN;
+        snprintf(c->pin_label[n], PICO_LABEL_MAX, "%s", w);
+        c->applied_count++; return CFG_LABEL;
+    }
+    pos = -1;
+    if (sscanf(k, "group/%d/pins%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < PICO_NGROUPS) {
+        char w[96]; dserv_msg_copy_cstr(m, w, sizeof w);
+        uint32_t mask;
+        if (dserv_parse_pins(w, &mask) < 0) return CFG_UNKNOWN;
+        c->group_pins[n] = mask; c->applied_count++; return CFG_GROUP;
+    }
+    pos = -1;
+    if (sscanf(k, "group/%d/label%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < PICO_NGROUPS) {
+        char w[PICO_LABEL_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) return CFG_UNKNOWN;
+        snprintf(c->group_label[n], PICO_LABEL_MAX, "%s", w);
+        c->applied_count++; return CFG_GROUP;
+    }
+    pos = -1;
+    if (sscanf(k, "group/%d/settle_ms%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < PICO_NGROUPS) {
+        long v = dserv_msg_as_long(m); if (v < 0) v = 0; if (v > 65535) v = 65535;
+        c->group_settle_ms[n] = (uint16_t) v; c->applied_count++; return CFG_GROUP;
+    }
+    pos = -1;
+    if (sscanf(k, "group/%d/quiet%n", &n, &pos) == 1 && pos > 0 &&
+        k[pos] == '\0' && n >= 0 && n < PICO_NGROUPS) {
+        c->group_quiet[n] = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_GROUP;
+    }
+    if (strcmp(k, "desc") == 0) {
+        dserv_msg_copy_cstr(m, c->desc, sizeof c->desc); c->applied_count++; return CFG_DESC;
     }
     if (strcmp(k, "name") == 0) {
         char w[PICO_NAME_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
@@ -359,6 +474,9 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_AIN_GAIN:   return "ain_gain";
     case CFG_AIN_EN:     return "ain_en";
     case CFG_OLED_EN:    return "oled_en";
+    case CFG_DESC:       return "desc";
+    case CFG_LABEL:      return "label";
+    case CFG_GROUP:      return "group";
     case CFG_DSERV_IP:   return "dserv_ip";
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";

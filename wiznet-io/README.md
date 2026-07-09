@@ -19,6 +19,7 @@ Board: **W6300-EVB-Pico2**. Debugger: **SEGGER J-Link EDU** (SWD + RTT).
 | `common/dserv_config.h`   | Hardware-independent `pico/config/*` dispatch → `pico_config_t` |
 | `common/pico_persist.h`   | Portable versioned + CRC-checked serialize/validate of `pico_config_t` |
 | `common/pico_cli.h`       | Portable text CLI (bootstrap/recovery command set) |
+| `common/pico_group.h`     | **DI chord groups**: settle state machine — member edges publish as ONE atomic bitmask stamped at the first edge (joystick hats, switch banks) |
 | `pico/pico_flash.h`       | RP2350 flash backend for persistence (last-sector, `flash_range_program`) |
 | `pico/pico_gpio.h`        | RP2350 GPIO layer: apply pin modes + execute set/pulse commands |
 | `net/box_net.h`           | Transport seam — selects backend at build time |
@@ -33,6 +34,7 @@ Board: **W6300-EVB-Pico2**. Debugger: **SEGGER J-Link EDU** (SWD + RTT).
 | `host/dserv_msg_test.c`   | Round-trip test: builds frames, parses them like dserv's `'>'` handler |
 | `host/dserv_rx_test.c`    | RX test: build → stream in awkward chunks → framer → parse → config dispatch |
 | `host/persist_cli_test.c` | Test: persist serialize/validate/crc + CLI command parsing |
+| `host/group_test.c`       | Test: chord-settle machine (corner roll, tap rescue, onset stamps, bit-order contract) |
 | `host/dserv_bench.c`      | Benchmark dserv's TCP pub/sub RTT + throughput (localhost) |
 | `host/box_transport_test.sh` | Per-rig transport check: ping RTT + sync round-trip + detrended anchor jitter vs the 1 ms budget (runs on any dserv host; `ssh rig 'sh -s' < ...`) |
 
@@ -81,6 +83,23 @@ channel. The benchmark showed dserv adds ~9 us, so it's plenty for bring-up; the
 direct-UDP lane stays reserved for measured, loss-driven reasons. Pin modes
 (`<name>/config/pin/<n>/mode out|in|in_pullup|off`, word *or* int) are applied to
 real pins by `pico/pico_gpio.h` at boot and on change (GPIO15-22 refused: W6300).
+
+**Labels, chord groups, and the manifest (v13).** The box carries its own wiring
+description: a free-form `config/desc`, per-pin role labels
+(`config/pin/<n>/label`, e.g. `up`, `button_left`), and up to 4 **DI chord
+groups** (`config/group/<g>/pins "4,5,6,7"` + `label`/`settle_ms`/`quiet`).
+A group publishes `state/group/<label>` as one atomic bitmask (bit i = i-th
+lowest member pin): edges are chord-settled for `settle_ms` (covers the roll
+gap between a hat's switches — a diagonal press emits ONE `up|right` event)
+and stamped at the **first** edge, so downstream reaction times are the true
+movement onset while the value is the completed chord (`common/pico_group.h`;
+sub-window taps still emit — see the header). At every (re)connect the box
+announces its **manifest** — `state/desc`, `state/label/<n>`,
+`state/group/<name>/pins` + `/settle_ms` — so hosts self-configure:
+`config/extioconf.tcl` decodes group events to label algebra
+(`extio/<box>/decoded/joystick = up_right`) and the ess joystick API derives
+its bit→direction map from the announced labels. Semantics stay host-side:
+the box knows pins/groups/labels, never "joystick".
 
 Tell dserv to relay in **binary** (the `1`) to the box's listen port:
 

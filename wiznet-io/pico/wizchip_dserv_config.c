@@ -58,6 +58,7 @@
 #include "pico_cli.h"
 #include "pico_flash.h"
 #include "pico_gpio.h"
+#include "pico_group.h"         /* DI chord groups: settle machine (portable) */
 #include "pico_clock.h"
 #include "box_net.h"
 #include "box_console.h"        /* ring-buffered printf + console byte plumbing */
@@ -149,11 +150,28 @@ static void publish_di(const di_event_t *e)
     char leaf[24], nm[64]; uint8_t f[DSERV_MSG_LEN];
     snprintf(leaf, sizeof leaf, "di/%u", e->pin);
     dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-    uint8_t lvl = di_active_low(&g_cfg, e->pin) ? !e->level : e->level;   /* publish logical level */
+    uint8_t lvl = (uint8_t) di_logical(&g_cfg, e->pin, e->level);   /* publish logical level */
     /* box edge time mapped into dserv time (0 => dserv arrival-stamps pre-sync) */
     dserv_msg_int(f, nm, box_clock_stamp(&g_clock, e->t_us), lvl);
     box_net_client_send(f, DSERV_MSG_LEN);
     DBG("di: pin%u=%u @%lluus\n", e->pin, lvl, (unsigned long long) e->t_us);
+}
+
+/* ---- DI chord groups (pico_group.h): one atomic bitmask per group ----
+ * state/group/<label> (int), stamped at the FIRST edge of the settled episode
+ * so downstream RT is the true movement onset while the value is the completed
+ * chord. t_us == 0 => a (re)connect seed, arrival-stamped like publish_di_levels. */
+static group_rt_t g_grp[PICO_NGROUPS];
+
+static void publish_group(int g, uint8_t bits, uint64_t t_us)
+{
+    char gn[PICO_LABEL_MAX + 4], leaf[40], nm[64]; uint8_t f[DSERV_MSG_LEN];
+    dserv_group_name(&g_cfg, g, gn, sizeof gn);
+    snprintf(leaf, sizeof leaf, "group/%s", gn);
+    dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+    dserv_msg_int(f, nm, t_us ? box_clock_stamp(&g_clock, t_us) : 0, bits);
+    box_net_client_send(f, DSERV_MSG_LEN);
+    DBG("grp: %s=0x%x @%lluus\n", gn, bits, (unsigned long long) t_us);
 }
 
 /* ts = dserv-time of the actuation (box_clock_stamp of the pin-write instant). */
@@ -395,10 +413,73 @@ static void publish_di_levels(void)
             char leaf[16], nm[64]; uint8_t f[DSERV_MSG_LEN];
             snprintf(leaf, sizeof leaf, "di/%d", i);
             dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-            uint8_t lvl = di_active_low(&g_cfg, i) ? !di_pub_level[i] : di_pub_level[i];
+            uint8_t lvl = (uint8_t) di_logical(&g_cfg, i, di_pub_level[i]);
             dserv_msg_int(f, nm, 0, lvl);
             box_net_client_send(f, DSERV_MSG_LEN);
         }
+}
+
+/* Re-derive every group's state from the current (debounced, logical) pin
+ * levels. Call after boot's apply_config and any pin-mode/group config change
+ * -- a mid-episode change abandons the episode rather than emitting from a
+ * stale member set. */
+static void groups_reset_all(void)
+{
+    uint8_t logical[PICO_NPINS];
+    for (int i = 0; i < PICO_NPINS; i++)
+        logical[i] = (uint8_t) di_logical(&g_cfg, i, di_pub_level[i]);
+    for (int g = 0; g < PICO_NGROUPS; g++)
+        group_reset(&g_grp[g], &g_cfg, g, logical);
+}
+
+/* ---- manifest: the box's self-description, announced at every (re)connect
+ * (next to publish_ident) and re-announced on any live label/desc/group
+ * change. Per-item datapoints (house style; each fits the 128-byte frame):
+ *   state/desc                      free-form description
+ *   state/label/<n>                 pin role ("" = cleared; sent for any pin
+ *                                   that is labeled OR configured, so a live
+ *                                   relabel can't leave a stale value behind)
+ *   state/group/<name>/pins         "2,3,4,5" ascending = published bit order
+ *   state/group/<name>/settle_ms    chord window
+ * Consumers: extioconf decode, ess joystick bit-map, fleet page. */
+static void publish_manifest(void)
+{
+    char leaf[48], nm[64], s[96]; uint8_t f[DSERV_MSG_LEN];
+
+    dserv_state_name(&g_cfg, nm, sizeof nm, "desc");
+    dserv_msg_string(f, nm, 0, g_cfg.desc);
+    box_net_client_send(f, DSERV_MSG_LEN);
+
+    for (int i = 0; i < PICO_NPINS; i++) {
+        if (!g_cfg.pin_label[i][0] && !g_cfg.pin_mode[i]) continue;
+        snprintf(leaf, sizeof leaf, "label/%d", i);
+        dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_string(f, nm, 0, g_cfg.pin_label[i]);
+        box_net_client_send(f, DSERV_MSG_LEN);
+    }
+
+    for (int g = 0; g < PICO_NGROUPS; g++) {
+        if (!g_cfg.group_pins[g]) continue;
+        char gn[PICO_LABEL_MAX + 4];
+        dserv_group_name(&g_cfg, g, gn, sizeof gn);
+        dserv_pins_str(g_cfg.group_pins[g], s, sizeof s);
+        snprintf(leaf, sizeof leaf, "group/%s/pins", gn);
+        dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_string(f, nm, 0, s);
+        box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "group/%s/settle_ms", gn);
+        dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, g_cfg.group_settle_ms[g]);
+        box_net_client_send(f, DSERV_MSG_LEN);
+    }
+}
+
+/* Seed state/group/<name> at (re)connect with the settled bitmask, so a UI
+ * shows the chord state immediately -- the group twin of publish_di_levels. */
+static void publish_group_levels(void)
+{
+    for (int g = 0; g < PICO_NGROUPS; g++)
+        if (g_cfg.group_pins[g]) publish_group(g, g_grp[g].cur, 0);
 }
 
 /* ---- registration self-heal (socket transports; USB re-registers on its own timer) ----
@@ -527,7 +608,9 @@ static void on_frame(const uint8_t *frame, void *ud)
         if (cmd.op == GPIO_OP_SET)
             publish_do(cmd.pin, (uint8_t) cmd.value, box_clock_stamp(&g_clock, t_act));  /* actual readback */
     }
-    else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN)  pico_gpio_apply_config(cfg);
+    else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN) { pico_gpio_apply_config(cfg); groups_reset_all(); }
+    else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
+    else if (r == CFG_LABEL || r == CFG_DESC)          publish_manifest();
     else if (r == CFG_SAVE)      save_request(0);       /* core 0 writes; prints flash ok/FAIL */
     else if (r == CFG_REBOOT)    box_reboot(0);
     else if (r == CFG_BOOTSEL)   { printf("entering BOOTSEL\n"); box_reboot(1); }
@@ -606,7 +689,8 @@ static void cmd_exec(const char *line)
                                    pico_gpio_apply_config(&g_cfg); printf("erased\n"); }
     else if (act == CLI_REBOOT)  box_reboot(0);
     else if (act == CLI_BOOTSEL) box_reboot(1);
-    else if (act == CLI_PIN)     pico_gpio_apply_config(&g_cfg);  /* only re-apply on a pin change */
+    else if (act == CLI_PIN)   { pico_gpio_apply_config(&g_cfg); groups_reset_all(); }
+    else if (act == CLI_GROUP) { groups_reset_all(); publish_manifest(); }  /* label/group/desc changed */
 }
 
 static int have_dserv_target(void)
@@ -724,6 +808,7 @@ static void rt_main(void)
     box_net_dual_usb_init();            /* tusb_init HERE: the USB IRQ must land on core 1 */
 #endif
     pico_gpio_apply_config(&g_cfg);     /* HERE: DI edge IRQs must land on core 1 */
+    groups_reset_all();                 /* chord groups start from the seeded levels */
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
     dserv_framer_reset(&g_framer);
     box_clock_reset(&g_clock);
@@ -778,7 +863,10 @@ static void rt_main(void)
             uint16_t port = dserv_cfg_port(&g_cfg);
             int up = box_net_client_service(g_cfg.dserv_ip, port);
             status_update(up);
-            if (up == 2) { publish_ident(); publish_di_levels(); }   /* identity card + button seed */
+            if (up == 2) {                     /* identity card + manifest + input seeds */
+                publish_ident(); publish_manifest();
+                publish_di_levels(); publish_group_levels();
+            }
 #if defined(BOX_NET_DUAL)
             if (up == 2 && !box_net_is_usb()) reg_request(1, 0);  /* Eth: reg on connect; USB: delayed autoreg below */
             if (up >= 1 && !box_net_is_usb()) reg_watchdog_service();
@@ -792,7 +880,22 @@ static void rt_main(void)
 #endif
             if (up >= 1) {
                 di_event_t e;
-                while (pico_gpio_poll_di(&g_cfg, &e)) publish_di(&e);   /* debounced edges */
+                while (pico_gpio_poll_di(&g_cfg, &e)) {   /* debounced edges */
+                    int lvl = di_logical(&g_cfg, e.pin, e.level);
+                    int quiet = 0;                     /* member of a quiet group? */
+                    for (int g = 0; g < PICO_NGROUPS; g++)
+                        if (g_cfg.group_pins[g] &&
+                            group_feed(&g_grp[g], &g_cfg, g, e.pin, lvl, e.t_us) &&
+                            g_cfg.group_quiet[g]) quiet = 1;
+                    if (!quiet) publish_di(&e);
+                }
+                group_out_t go[2];                     /* settle windows expire between edges */
+                uint64_t gnow = time_us_64();
+                for (int g = 0; g < PICO_NGROUPS; g++) {
+                    if (!g_cfg.group_pins[g]) continue;
+                    int gn = group_poll(&g_grp[g], &g_cfg, g, gnow, go);
+                    for (int k = 0; k < gn; k++) publish_group(g, go[k].bits, go[k].t_us);
+                }
                 ain_sample_t s;                        /* acquired on core 0, stamped here */
                 while (queue_try_remove(&g_ain_q, &s)) publish_ain(s.ch, s.val, s.t_us);
                 sched_publish_fired();                 /* post state/timer/<n> for fired schedules */

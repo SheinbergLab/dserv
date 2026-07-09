@@ -17,6 +17,10 @@
  *   dserv port N
  *   pin N mode out|in|in_pullup|off
  *   pin N pulse US
+ *   desc TEXT...         (free-form box description; `desc off` clears)
+ *   label N TEXT|off     (per-pin role label -> announced manifest)
+ *   group G pins 2,3,4,5 (DI chord group; `group G off` clears)
+ *   group G label NAME | group G settle MS | group G quiet 0|1
  *   save          -> CLI_SAVE   (caller persists to flash/file)
  *   factory       -> CLI_FACTORY(caller erases storage + resets cfg)
  *   reboot        -> CLI_REBOOT (caller resets the MCU)
@@ -28,7 +32,9 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
+/* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
+ * and re-announces the manifest (no GPIO re-apply needed). */
+typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
@@ -49,11 +55,22 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
         dserv_cfg_port(c), obs,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
         c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->oled_en, c->applied_count);
+    if (c->desc[0] && k < outsz - 8)
+        k += snprintf(out + k, outsz - k, "  desc=%s\r\n", c->desc);
     for (int i = 0; i < PICO_NPINS && k < outsz - 64; i++)
         if (c->pin_mode[i])
-            k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums%s\r\n",
+            k += snprintf(out + k, outsz - k, "  pin%d=%s pulse=%uus debounce=%ums%s%s%s\r\n",
                           i, dserv_mode_str(c->pin_mode[i]), c->do_pulse_us[i], c->debounce_ms[i],
-                          di_active_low(c, i) ? " active_low" : "");
+                          di_active_low(c, i) ? " active_low" : "",
+                          c->pin_label[i][0] ? " label=" : "", c->pin_label[i]);
+    for (int g = 0; g < PICO_NGROUPS && k < outsz - 96; g++)
+        if (c->group_pins[g]) {
+            char gn[PICO_LABEL_MAX + 4], ps[96];
+            dserv_group_name(c, g, gn, sizeof gn);
+            dserv_pins_str(c->group_pins[g], ps, sizeof ps);
+            k += snprintf(out + k, outsz - k, "  group%d=%s pins=%s settle=%ums%s\r\n",
+                          g, gn, ps, c->group_settle_ms[g], c->group_quiet[g] ? " quiet" : "");
+        }
 }
 
 /* Emit the CLI commands that reproduce this config (only the non-default settings), so
@@ -81,7 +98,17 @@ static inline void pico_cli_dump(const pico_config_t *c)
         if (c->do_pulse_us[i])   printf("pin %d pulse %u\r\n",    i, (unsigned) c->do_pulse_us[i]);
         if (c->debounce_ms[i])   printf("pin %d debounce %u\r\n", i, c->debounce_ms[i]);
         if (di_active_low(c, i)) printf("pin %d active_low 1\r\n", i);
+        if (c->pin_label[i][0])  printf("label %d %s\r\n",        i, c->pin_label[i]);
     }
+    if (c->desc[0])                       printf("desc %s\r\n", c->desc);
+    for (int g = 0; g < PICO_NGROUPS; g++)
+        if (c->group_pins[g]) {
+            char ps[96]; dserv_pins_str(c->group_pins[g], ps, sizeof ps);
+            printf("group %d pins %s\r\n", g, ps);
+            if (c->group_label[g][0])     printf("group %d label %s\r\n",  g, c->group_label[g]);
+            if (c->group_settle_ms[g])    printf("group %d settle %u\r\n", g, c->group_settle_ms[g]);
+            if (c->group_quiet[g])        printf("group %d quiet 1\r\n",   g);
+        }
     if (obs_mirror_enabled(c))            printf("obs pin %d\r\n", obs_mirror_pin(c));
     if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
     if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
@@ -149,6 +176,57 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR bad pin\r\n"); return CLI_ERR; }
         di_active_low_set(c, n, v ? 1 : 0); c->applied_count++;
         snprintf(out, outsz, "OK pin%d active_low=%d\r\n", n, v ? 1 : 0); return CLI_OK;
+    }
+    if (sscanf(line, "label %d %15s", &n, w) == 2) {
+        if (n < 0 || n >= PICO_NPINS) { snprintf(out, outsz, "ERR bad pin\r\n"); return CLI_ERR; }
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) { snprintf(out, outsz, "ERR label: printable, no '/' or spaces\r\n"); return CLI_ERR; }
+        snprintf(c->pin_label[n], PICO_LABEL_MAX, "%s", w);
+        c->applied_count++;
+        snprintf(out, outsz, "OK pin%d label=%s\r\n", n, c->pin_label[n][0] ? c->pin_label[n] : "(none)");
+        return CLI_GROUP;
+    }
+    if (sscanf(line, "group %d pins %23s", &n, w) == 2) {
+        uint32_t mask;
+        if (n < 0 || n >= PICO_NGROUPS || dserv_parse_pins(w, &mask) < 0) {
+            snprintf(out, outsz, "ERR group pins: 'group G pins 2,3,4,5' (G 0-%d, pins 0-%d)\r\n",
+                     PICO_NGROUPS - 1, PICO_NPINS - 1);
+            return CLI_ERR;
+        }
+        c->group_pins[n] = mask; c->applied_count++;
+        snprintf(out, outsz, "OK group%d pins=%s\r\n", n, w); return CLI_GROUP;
+    }
+    if (sscanf(line, "group %d label %15s", &n, w) == 2) {
+        if (n < 0 || n >= PICO_NGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) { snprintf(out, outsz, "ERR label: printable, no '/' or spaces\r\n"); return CLI_ERR; }
+        snprintf(c->group_label[n], PICO_LABEL_MAX, "%s", w);
+        c->applied_count++;
+        snprintf(out, outsz, "OK group%d label=%s\r\n", n, c->group_label[n][0] ? c->group_label[n] : "(none)");
+        return CLI_GROUP;
+    }
+    if (sscanf(line, "group %d settle %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NGROUPS || v < 0 || v > 65535) {
+            snprintf(out, outsz, "ERR group settle 0-65535 ms\r\n"); return CLI_ERR; }
+        c->group_settle_ms[n] = (uint16_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK group%d settle=%dms\r\n", n, v); return CLI_GROUP;
+    }
+    if (sscanf(line, "group %d quiet %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        c->group_quiet[n] = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK group%d quiet=%d\r\n", n, c->group_quiet[n]); return CLI_GROUP;
+    }
+    if (sscanf(line, "group %d %23s", &n, w) == 2 && !strcmp(w, "off")) {
+        if (n < 0 || n >= PICO_NGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        c->group_pins[n] = 0; c->applied_count++;
+        snprintf(out, outsz, "OK group%d off\r\n", n); return CLI_GROUP;
+    }
+    /* desc: value is the rest of the line verbatim, so spaces survive. */
+    if (!strncmp(line, "desc ", 5)) {
+        if (!strcmp(line + 5, "off")) c->desc[0] = '\0';
+        else { strncpy(c->desc, line + 5, sizeof c->desc - 1); c->desc[sizeof c->desc - 1] = '\0'; }
+        c->applied_count++;
+        snprintf(out, outsz, "OK desc=%s\r\n", c->desc[0] ? c->desc : "(none)"); return CLI_GROUP;
     }
     if (sscanf(line, "dserv ip %23s", w) == 1) {
         if (dserv_cfg__parse_ip(w, c->dserv_ip)) { snprintf(out, outsz, "ERR bad ip\r\n"); return CLI_ERR; }
@@ -236,11 +314,13 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | dump | name NAME | " PICO_CLI_HELP_XTRA
+            "cmds: show | dump | name NAME | desc TEXT | " PICO_CLI_HELP_XTRA
             "net mode dhcp|static | net ip A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"
-            "      pin N active_low 0|1 | obs pin N | obs off |\r\n"
+            "      pin N active_low 0|1 | label N TEXT|off | obs pin N | obs off |\r\n"
+            "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
+            "      group G quiet 0|1 | group G off |\r\n"
             "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 | oled enable 0|1 |\r\n"
             "      do N 0|1 | do N pulse US | wdt 0|1|test | save | factory | reboot | bootsel\r\n");
         return CLI_OK;
