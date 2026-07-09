@@ -69,8 +69,10 @@ proc extio_clear {name} {
     catch { extio_unforward_box $name }
     set n 0
     foreach k [dservKeys] {
-        if { [string match extio/$name/state/* $k] } { catch { dservClear $k }; incr n }
+        if { [string match extio/$name/state/* $k] ||
+             [string match extio/$name/decoded/* $k] } { catch { dservClear $k }; incr n }
     }
+    foreach k [array names ::extio_gmap $name/*] { unset -nocomplain ::extio_gmap($k) }
     unset -nocomplain ::extio_known($name) ::extio_wd($name) ::extio_stale($name)
     puts "extio: cleared box '$name' ($n datapoints)"
     return "cleared $name ($n datapoints)"
@@ -132,9 +134,62 @@ proc extio_discover {} {
     }
 }
 
+# ---- group decode (label algebra): a box announces group membership
+# (state/group/<name>/pins, ascending = bit order) and per-pin roles
+# (state/label/<n>); each group EVENT (state/group/<name>, int bitmask) then
+# decodes to the active pins' labels joined with '_' -- "center" for 0,
+# "up_right" for a NE chord -- published to extio/<box>/decoded/<name>.
+# Dashboard/log sugar only: response semantics consume the raw bitmask (ess
+# joystick API), so this never sits in the response path. Device-agnostic:
+# a DIP bank or foot-switch group decodes with the same label algebra. ----
+array set ::extio_gmap {}   ;# "<box>/<gname>" -> bit->label list (manifest cache)
+
+proc extio_group_decode {dp data} {
+    # events are exactly extio/<box>/state/group/<name>; anything deeper is
+    # manifest (pins/settle_ms) -> refresh the cached map instead of decoding
+    if { ![regexp {^extio/([^/]+)/state/group/([^/]+)$} $dp -> box gname] } {
+        if { [regexp {^extio/([^/]+)/state/group/([^/]+)/} $dp -> box gname] } {
+            unset -nocomplain ::extio_gmap($box/$gname)
+        }
+        return
+    }
+    set key $box/$gname
+    if { ![info exists ::extio_gmap($key)] } {
+        set pinsdp extio/$box/state/group/$gname/pins
+        if { ![dservExists $pinsdp] } return    ;# manifest not seen yet; next event retries
+        set map {}
+        foreach p [split [dservGet $pinsdp] ,] {
+            set ldp extio/$box/state/label/$p
+            if { [dservExists $ldp] && [dservGet $ldp] ne "" } {
+                lappend map [dservGet $ldp]
+            } else {
+                lappend map p$p                 ;# unlabeled member -> pin number stands in
+            }
+        }
+        set ::extio_gmap($key) $map
+    }
+    set on {}
+    set i 0
+    foreach l $::extio_gmap($key) {
+        if { ($data >> $i) & 1 } { lappend on $l }
+        incr i
+    }
+    dservSet extio/$box/decoded/$gname [expr {[llength $on] ? [join $on _] : "center"}]
+}
+
+proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for that box
+    if { [regexp {^extio/([^/]+)/state/label/} $dp -> box] } {
+        foreach k [array names ::extio_gmap $box/*] { unset -nocomplain ::extio_gmap($k) }
+    }
+}
+
 proc extio_wire_common {} {                 ;# device-independent: sync + obs_pin
     dservAddMatch ess/in_obs
     dpointSetScript ess/in_obs usbio_forward
+    dservAddMatch extio/*/state/group/*     ;# chord-group events + manifest -> decode
+    dpointSetScript extio/*/state/group/* extio_group_decode
+    dservAddMatch extio/*/state/label/*     ;# relabels invalidate cached maps
+    dpointSetScript extio/*/state/label/* extio_label_invalidate
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
