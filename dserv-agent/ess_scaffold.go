@@ -469,12 +469,6 @@ func (r *ESSRegistry) generateProtocolSkeleton(systemName, protoName, descriptio
 			Filename: protoName + "_stim.tcl",
 			Content:  skeletonStim(systemName, protoName, description),
 		},
-		{
-			Protocol: protoName,
-			Type:     ScriptTypeExtract,
-			Filename: protoName + "_extract.tcl",
-			Content:  skeletonProtoExtract(systemName, protoName),
-		},
 	}
 
 	return scripts
@@ -486,25 +480,17 @@ func (r *ESSRegistry) generateSystemSkeleton(systemName, protoName, description 
 		description = systemName + " system"
 	}
 
-	// System-level scripts
+	// System-level scripts. Only the required, loadable system script is
+	// generated. extract/analyze are optional analysis scripts authored
+	// per-system (usually by copying an existing one), not empty-stub
+	// boilerplate -- generating them here just leaves cruft behind a
+	// `push --add` for any script the author didn't provide.
 	scripts := []*ESSScript{
 		{
 			Protocol: "",
 			Type:     ScriptTypeSystem,
 			Filename: systemName + ".tcl",
 			Content:  skeletonSystem(systemName, description),
-		},
-		{
-			Protocol: "",
-			Type:     ScriptTypeExtract,
-			Filename: systemName + "_extract.tcl",
-			Content:  skeletonSystemExtract(systemName),
-		},
-		{
-			Protocol: "",
-			Type:     ScriptTypeAnalyze,
-			Filename: systemName + "_analyze.tcl",
-			Content:  skeletonSystemAnalyze(systemName),
 		},
 	}
 
