@@ -251,10 +251,16 @@ func runPush(cfg *Config, args []string) int {
 
 	// Step 5: Scaffold system if it doesn't exist
 	if !systemExists {
-		// Find the first protocol name to use for scaffolding
+		// Find the first REAL protocol to scaffold under. findLocalOnlyScripts
+		// lists system-level files (protocol "_") first (dir scan is
+		// name-sorted), so newScripts[0] is usually a "_" entry -- using it
+		// would register a phantom "_" protocol. Skip the sentinels.
 		firstProto := "_"
-		if len(newScripts) > 0 {
-			firstProto = newScripts[0].info.protocol
+		for _, n := range newScripts {
+			if p := n.info.protocol; p != "_" && p != "" && p != "_system" {
+				firstProto = p
+				break
+			}
 		}
 		fmt.Printf("Creating system %q in workgroup %q...\n", system, cfg.Workgroup)
 		_, err := client.ScaffoldSystem(cfg.Workgroup, system, firstProto, cfg.User)
