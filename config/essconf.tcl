@@ -325,16 +325,21 @@ if { [info exists ess::registry_url] } {
     ess::sync_base
 }
 
+# source rig-local configs (local/post-*.tcl) BEFORE the default system
+# loads: rig-level bindings (button_bind/joystick_bind) must exist for the
+# boot load's *_init calls to pick them up, and any legacy activation a
+# post script does (direct *_init) gets cleared by the load's input_reset
+# -- so the input panels reflect the loaded system from the very first
+# page hit, not whatever the rig script switched on.
+foreach f [glob -nocomplain [file join $dspath local post-*.tcl]] {
+    source $f
+}
+
 # and finally load a default system
 ess::load_system emcalib
 
 # set initial subject
 ess::set_subject human
-    
-# look for any .tcl configs in local/*.tcl
-foreach f [glob [file join $dspath local post-*.tcl]] {
-    source $f
-}
 
 puts "ESS thread configured"
 

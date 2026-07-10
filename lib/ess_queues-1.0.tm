@@ -1202,31 +1202,31 @@ proc ::ess_queues::publish_list {} {
     set obj [yajl create #auto]
     $obj array_open
     
-    set where "1=1"
+    # queues/list mirrors configs/list: the ACTIVE project's queues only.
+    # With no active project publish an empty list, never the cross-
+    # project union (same stale-union hazard as configs/list).
     if {$project ne ""} {
         set project_id [::ess::configs::project_get_id $project]
-        set where "q.project_id = $project_id"
-    }
-    
-    $db eval "
-        SELECT q.id, q.name, q.description, q.auto_start, q.auto_advance,
-               q.auto_datafile, p.name as project_name,
-               (SELECT COUNT(*) FROM queue_items WHERE queue_id = q.id) as item_count
-        FROM queues q
-        JOIN projects p ON p.id = q.project_id
-        WHERE $where
-        ORDER BY q.name
-    " row {
-        $obj map_open
-        $obj string "id" number $row(id)
-        $obj string "name" string $row(name)
-        $obj string "description" string $row(description)
-        $obj string "project" string $row(project_name)
-        $obj string "auto_start" bool $row(auto_start)
-        $obj string "auto_advance" bool $row(auto_advance)
-        $obj string "auto_datafile" bool $row(auto_datafile)
-        $obj string "item_count" number $row(item_count)
-        $obj map_close
+        $db eval "
+            SELECT q.id, q.name, q.description, q.auto_start, q.auto_advance,
+                   q.auto_datafile, p.name as project_name,
+                   (SELECT COUNT(*) FROM queue_items WHERE queue_id = q.id) as item_count
+            FROM queues q
+            JOIN projects p ON p.id = q.project_id
+            WHERE q.project_id = $project_id
+            ORDER BY q.name
+        " row {
+            $obj map_open
+            $obj string "id" number $row(id)
+            $obj string "name" string $row(name)
+            $obj string "description" string $row(description)
+            $obj string "project" string $row(project_name)
+            $obj string "auto_start" bool $row(auto_start)
+            $obj string "auto_advance" bool $row(auto_advance)
+            $obj string "auto_datafile" bool $row(auto_datafile)
+            $obj string "item_count" number $row(item_count)
+            $obj map_close
+        }
     }
     
     $obj array_close

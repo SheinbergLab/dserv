@@ -59,6 +59,12 @@ ess::configs::init $configs_db
 # Initialize registry from saved datapoints
 ess::registry::init_from_dserv
 
+# Restore the persisted active project BEFORE the initial publish, so the
+# interp variable, projects/active, and the published lists all come up
+# consistent after any restart (a mismatch here made the GUI render the
+# cross-project config union).
+ess::configs::restore_active_project
+
 ess::configs::publish_all
 
 #=========================================================================

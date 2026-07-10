@@ -211,6 +211,15 @@ namespace eval ess::configs {
             
             CREATE INDEX IF NOT EXISTS idx_queue_items_queue ON queue_items(queue_id, position);
             CREATE INDEX IF NOT EXISTS idx_queue_items_config ON queue_items(config_id);
+
+            -- Small key/value store for state that must survive restarts
+            -- (e.g. active_project). IF NOT EXISTS lets existing rig
+            -- databases pick it up without a schema version bump (a
+            -- version bump resets the whole database -- see init).
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
         }
         
         if {[schema_version] == 0} {
@@ -417,18 +426,45 @@ namespace eval ess::configs {
         
         set active_project $name
         dservSet projects/active $name
-        
+
+        # persist so a restart (subprocess or full dserv) restores the
+        # same scope instead of silently reverting to "no project"
+        configdb eval {
+            INSERT OR REPLACE INTO app_state (key, value)
+            VALUES ('active_project', :name)
+        }
+
         log info "Activated project: $name"
         publish_configs
         publish_queues
     }
-    
+
     proc project_deactivate {} {
         project_activate ""
     }
-    
+
     proc project_active {} {
         variable active_project
+        return $active_project
+    }
+
+    # Restore the persisted active project at subprocess startup: set the
+    # interp variable and the projects/active datapoint but do NOT publish
+    # the lists -- the caller runs publish_all right after. A restart used
+    # to silently reset active_project to "" while the GUI still held the
+    # old projects/active, so publish_configs emitted the cross-project
+    # union and the panel appeared to accumulate configs.
+    proc restore_active_project {} {
+        variable active_project
+        set saved [configdb onecolumn {
+            SELECT value FROM app_state WHERE key = 'active_project'
+        }]
+        if {$saved ne "" && [project_exists $saved]} {
+            set active_project $saved
+        } else {
+            set active_project ""
+        }
+        dservSet projects/active $active_project
         return $active_project
     }
     
@@ -1246,7 +1282,11 @@ namespace eval ess::configs {
         set obj [yajl create #auto]
         $obj array_open
         
-        set configs [list -limit 100]
+        # configs/list is the ACTIVE project's view. With no active project
+        # publish an empty list -- never the cross-project union, which a
+        # GUI holding a stale projects/active renders as an ever-growing
+        # pile of every synced project's configs.
+        set configs {}
         if {$active_project ne ""} {
             set configs [list -project $active_project -limit 100]
         }
