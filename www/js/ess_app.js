@@ -51,10 +51,22 @@ let errorCount = 0;
  */
 async function init() {
     log('Initializing ESS Control Panel...', 'info');
-    
+
+    // ?host=<host[:port]> -> connect to a different dserv than the one
+    // serving this page (mirrors extio.html). Lets a dev copy of the GUI
+    // (e.g. python -m http.server in the repo www/) drive a live dserv
+    // with no install step. ?ssl=1|0 overrides the ws/wss choice, needed
+    // when the page's protocol differs from the target dserv's (an http-
+    // served dev page talking to the SSL dserv on 2565 needs ssl=1).
+    const qs = new URLSearchParams(location.search);
+    const qsHost = qs.get('host');
+    const qsSsl = qs.get('ssl');
+
     // Create WebSocket connection
     connection = new DservConnection({
         subprocess: 'ess',
+        dservHost: qsHost || null,
+        forceSecure: qsSsl !== null ? qsSsl === '1' : undefined,
         autoReconnect: true,
         connectTimeout: 10000,  // 10 second timeout for WiFi connections
         onStatus: handleConnectionStatus,
