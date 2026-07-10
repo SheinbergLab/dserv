@@ -1792,9 +1792,18 @@ updateConfigRunButtons() {
     
     renderConfigList() {
         // Choose source based on view mode
-        let configs = this.state.showingTrash 
-            ? this.state.archivedConfigs 
+        let configs = this.state.showingTrash
+            ? this.state.archivedConfigs
             : this.state.configs;
+
+        // Defense in depth: the publisher scopes configs/list to the active
+        // project, but if a stale cross-project union slips through (e.g.
+        // publisher restarted mid-session), never render other projects'
+        // entries.
+        if (!this.state.showingTrash && this.state.activeProject) {
+            configs = configs.filter(cfg =>
+                !cfg.project || cfg.project === this.state.activeProject);
+        }
         
         // Helper to safely get lowercase string
         const toLower = (val) => {

@@ -100,6 +100,27 @@
                                 <div id="virtual-buttons-container" class="ess-button-row">
                                 </div>
                             </div>
+                            <!-- Virtual D-Pad (shown when joystick_init is called) -->
+                            <div id="virtual-joystick-section" class="ess-input-section" style="display: none;">
+                                <div class="ess-input-section-title">Joystick</div>
+                                <div id="dpad-container" class="ess-dpad">
+                                    <button class="ess-dpad-btn" data-dir="up_left" title="up_left">&#8598;</button>
+                                    <button class="ess-dpad-btn" data-dir="up" title="up">&#8593;</button>
+                                    <button class="ess-dpad-btn" data-dir="up_right" title="up_right">&#8599;</button>
+                                    <button class="ess-dpad-btn" data-dir="left" title="left">&#8592;</button>
+                                    <button id="dpad-center" class="ess-dpad-btn ess-dpad-center" title="center (release)">&#9679;</button>
+                                    <button class="ess-dpad-btn" data-dir="right" title="right">&#8594;</button>
+                                    <button class="ess-dpad-btn" data-dir="down_left" title="down_left">&#8601;</button>
+                                    <button class="ess-dpad-btn" data-dir="down" title="down">&#8595;</button>
+                                    <button class="ess-dpad-btn" data-dir="down_right" title="down_right">&#8600;</button>
+                                </div>
+                                <div class="ess-input-row">
+                                    <span class="ess-input-label">dir</span>
+                                    <span id="joystick-dir-value" class="ess-joystick-readout">center</span>
+                                    <span class="ess-input-label">resp</span>
+                                    <span id="joystick-resp-value" class="ess-joystick-readout">&mdash;</span>
+                                </div>
+                            </div>
                             <!-- Slider Controls (shown when slider_init is called) -->
                             <div id="virtual-slider-section" class="ess-input-section" style="display: none;">
                                 <div class="ess-input-section-title">Slider</div>
@@ -465,6 +486,107 @@
          }
      }
 
+     class JoystickControls {
+         constructor(dpManager) {
+             this.dpManager = dpManager;
+             this.section = document.getElementById('virtual-joystick-section');
+             this.container = document.getElementById('dpad-container');
+             this.centerBtn = document.getElementById('dpad-center');
+             this.dirValue = document.getElementById('joystick-dir-value');
+             this.respValue = document.getElementById('joystick-resp-value');
+             // sector 0-7 clockwise from up (ess-2.0.tm joystick_dir_names)
+             this.dirNames = ['up', 'up_right', 'right', 'down_right',
+                              'down', 'down_left', 'left', 'up_left'];
+             this.held = null;
+             this.bindButtons();
+             this.setupSubscriptions();
+         }
+
+         sendEssCommand(cmd) {
+             try {
+                 const conn = this.dpManager?.connection;
+                 if (conn && conn.connected && conn.ws) {
+                     conn.ws.send(`send ess {${cmd}}`);
+                 }
+             } catch (error) {
+                 console.error('JoystickControls: failed to send command:', error);
+             }
+         }
+
+         // joystick_simulate feeds the same ingest path as a real box
+         // event (dir decode, response latch, button fan-out, SM wake)
+         simulate(dir) {
+             this.sendEssCommand(`::ess::joystick_simulate ${dir}`);
+         }
+
+         bindButtons() {
+             this.container?.querySelectorAll('[data-dir]').forEach(btn => {
+                 const dir = btn.dataset.dir;
+                 const press = (e) => {
+                     e.preventDefault();
+                     this.held = dir;
+                     this.simulate(dir);
+                 };
+                 const release = (e) => {
+                     e.preventDefault();
+                     if (this.held === dir) {
+                         this.held = null;
+                         this.simulate('center');
+                     }
+                 };
+                 btn.addEventListener('mousedown', press);
+                 btn.addEventListener('mouseup', release);
+                 btn.addEventListener('mouseleave', () => {
+                     if (this.held === dir) {
+                         this.held = null;
+                         this.simulate('center');
+                     }
+                 });
+                 btn.addEventListener('touchstart', press);
+                 btn.addEventListener('touchend', release);
+             });
+
+             // explicit release: park the stick back at center
+             this.centerBtn?.addEventListener('click', () => {
+                 this.held = null;
+                 this.simulate('center');
+             });
+         }
+
+         setupSubscriptions() {
+             // Show/hide based on whether the loaded system called
+             // joystick_init (cleared by ::ess::input_reset on load)
+             this.dpManager?.subscribe('ess/joystick_active', (data) => {
+                 // fail closed: NaN/empty must hide, so > 0 not !== 0
+                 const active = parseInt(data.value) > 0;
+                 this.section.style.display = active ? '' : 'none';
+             });
+
+             // Live direction -- real deflections and simulated ones both
+             // land here, so the D-pad mirrors the actual stick
+             this.dpManager?.subscribe('ess/joystick/dir', (data) => {
+                 const dir = parseInt(data.value);
+                 this.updateDirDisplay(isNaN(dir) ? -1 : dir);
+             });
+
+             // First-crossing response latch (armed by joystick_reset)
+             this.dpManager?.subscribe('ess/joystick/response', (data) => {
+                 const r = parseInt(data.value);
+                 this.respValue.textContent =
+                     (isNaN(r) || r < 0) ? '—' : this.dirNames[r];
+             });
+         }
+
+         updateDirDisplay(dir) {
+             const name = dir < 0 ? 'center' : this.dirNames[dir];
+             this.dirValue.textContent = name;
+             this.container?.querySelectorAll('[data-dir]').forEach(btn => {
+                 btn.classList.toggle('active', btn.dataset.dir === name);
+             });
+             this.centerBtn?.classList.toggle('active', dir < 0);
+         }
+     }
+
      class SliderControls {
          constructor(dpManager) {
              this.dpManager = dpManager;
@@ -508,7 +630,8 @@
              // Stream start / drag enablement also depends on source — handled
              // in updateInteractivity().
              this.dpManager?.subscribe('ess/slider_active', (data) => {
-                 this.experimentActive = parseInt(data.value) !== 0;
+                 // fail closed: NaN/empty must hide, so > 0 not !== 0
+                 this.experimentActive = parseInt(data.value) > 0;
                  this.section.style.display = this.experimentActive ? '' : 'none';
                  this.updateInteractivity();
              });

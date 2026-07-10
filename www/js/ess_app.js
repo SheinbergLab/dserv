@@ -21,6 +21,7 @@ let eyeTouchViz = null;
 let stimRenderer = null;
 let eyeSettings = null;
 let buttonControls = null;
+let joystickControls = null;
 let sliderControls = null;
 let projectSelector = null;
 let lastKnownHostname = null;
@@ -82,6 +83,7 @@ async function init() {
         initMeshManager();
         initEyeSettings();
         initButtonControls();
+        initJoystickControls();
         initSliderControls();
 	initProjectSelector();
         initOpenEphysStatus();
@@ -133,6 +135,7 @@ function requestInitialData() {
           ess/screen_w ess/screen_h ess/screen_halfx ess/screen_halfy
           ess/params ess/datafile ess/sortby_columns ess/block_id
           ess/buttons/channels ess/slider_active slider/settings
+          ess/joystick_active ess/joystick/dir ess/joystick/response
           ess/session_stats
           em/settings mesh/peers
           openephys/status
@@ -249,6 +252,16 @@ function initButtonControls() {
     if (typeof ButtonControls !== 'undefined') {
         buttonControls = new ButtonControls(dpManager);
         log('Button Controls initialized', 'info');
+    }
+}
+
+/**
+ * Initialize virtual joystick (D-pad) controls
+ */
+function initJoystickControls() {
+    if (typeof JoystickControls !== 'undefined') {
+        joystickControls = new JoystickControls(dpManager);
+        log('Joystick Controls initialized', 'info');
     }
 }
 

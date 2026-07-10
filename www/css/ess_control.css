@@ -573,6 +573,67 @@ body.ess-app {
     color: #fff;
 }
 
+/* Virtual D-pad (8-way joystick) */
+.ess-dpad {
+    display: grid;
+    /* cells must be square: the center cell is a border-radius:50% circle */
+    grid-template-columns: repeat(3, 42px);
+    grid-auto-rows: 42px;
+    gap: 4px;
+    justify-content: center;
+    padding: 4px 0;
+    margin-bottom: 10px;
+}
+
+.ess-dpad-btn {
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    background: var(--ess-bg-panel);
+    border: 2px solid var(--ess-border);
+    border-radius: 6px;
+    color: var(--ess-text-primary);
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+}
+
+.ess-dpad-btn:hover {
+    border-color: var(--ess-accent, #4a9eff);
+}
+
+.ess-dpad-btn.active {
+    background: var(--ess-accent, #4a9eff);
+    border-color: var(--ess-accent, #4a9eff);
+    color: #fff;
+}
+
+/* center cell doubles as the at-rest indicator (green like the slider
+   engaged dot); placed after .active so it wins the tie on specificity */
+.ess-dpad-center {
+    border-radius: 50%;
+    font-size: 10px;
+    color: var(--ess-text-muted);
+}
+
+.ess-dpad-center.active {
+    background: var(--ess-bg-panel);
+    border-color: #4ade80;
+    color: #4ade80;
+}
+
+.ess-joystick-readout {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: monospace;
+    color: var(--ess-text-primary);
+    min-width: 64px;
+}
+
 /* Virtual slider controls */
 .ess-slider-track-container {
     display: flex;

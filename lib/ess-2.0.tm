@@ -1071,15 +1071,23 @@ namespace eval ess {
             # call variant_deinit if exists
             set vdeinit_method $current(variant)_deinit
 
+            # each step individually guarded: one failing callback must not
+            # keep the later ones (and their hardware teardown) from running
             if {[lsearch [info object methods $s] $vdeinit_method] != -1} {
-                $s $vdeinit_method
+                if {[catch {$s $vdeinit_method} err]} {
+                    ess_warning "variant deinit failed: $err" "system"
+                }
             }
 
             # protocol deinit callback
-            $s protocol_deinit
+            if {[catch {$s protocol_deinit} err]} {
+                ess_warning "protocol deinit failed: $err" "system"
+            }
 
             # system deinit callback
-            $s deinit
+            if {[catch {$s deinit} err]} {
+                ess_warning "system deinit failed: $err" "system"
+            }
 
             set current(open_system) 0
             set current(system) {}
@@ -1382,9 +1390,30 @@ namespace eval ess {
         variable touch_active
         set touch_active 0
 
-        # default to not tracking slider, but ::ess::slider_init will turn on
-        variable slider_active
-        set slider_active 0
+        # framework-owned input reset: buttons/slider/joystick go back to
+        # "not in use" (state AND the datapoints a GUI keys off), so input
+        # panels never outlive the system that declared them. Tools the
+        # incoming system uses are re-declared by its own *_init calls
+        # later in this same load.
+        input_reset
+    }
+
+    ########################################################################
+    # GUI visibility contract for input tools -- what a frontend keys off:
+    #   buttons  -> ess/buttons/channels   (list of initialized channels)
+    #   slider   -> ess/slider_active      (0/1)
+    #   joystick -> ess/joystick_active    (0/1)
+    # Each *_init publishes "in use"; input_reset publishes "not in use"
+    # for every tool. It runs via ::ess::init on EVERY system load, so the
+    # panels track the current system even when the outgoing protocol's
+    # deinit callback forgot (or failed) to clean up. The *_deinit procs
+    # stay protocol-callable for symmetric hardware teardown; all of them
+    # are safe to run redundantly.
+    ########################################################################
+    proc input_reset {} {
+        button_deinit
+        slider_deinit
+        joystick_deinit
     }
 
     proc do_update {args} {
@@ -2246,6 +2275,11 @@ namespace eval ess {
         touch_region_on touch_region_off touch_win_set touch_in_region
         slider_init slider_deinit slider_x slider_y slider_pos
         slider_virtual_set
+        button_init button_deinit button_pressed button_active
+        button_any_pressed button_none_pressed button_simulate
+        joystick_init joystick_deinit joystick_dir joystick_dir_name
+        joystick_centered joystick_reset joystick_response
+        joystick_response_time joystick_simulate
         reward print my
     }
 
@@ -3432,6 +3466,7 @@ namespace eval ess {
         set joystick(response) -1
         set joystick(response_time) 0
         set joystick(map_override) ""
+        dservSet ess/joystick/value 0
         dservSet ess/joystick/dir -1
         dservSet ess/joystick/response -1
     }
@@ -3458,7 +3493,6 @@ namespace eval ess {
         set opts $args                      ;# flat option dict, pass AS a dict
 
         joystick_state_reset
-        dservSet ess/joystick/value 0
 
         if { [dict exists $opts box] } {
             # bind to an extio chord group: extio/<dev>/state/group/<label>.
@@ -3497,6 +3531,9 @@ namespace eval ess {
             dpointSetScript joystick/button ::ess::joystick_process_button
             dservSet ess/joystick/button 0
         }
+
+        # publish so a frontend can show the virtual D-pad
+        dservSet ess/joystick_active 1
     }
 
     # Clean up joystick subscriptions
@@ -3515,6 +3552,7 @@ namespace eval ess {
 	set joystick(source) ""
 	set joystick(dp) ""
 	joystick_state_reset
+	dservSet ess/joystick_active 0
     }
 
     ########################################################################
@@ -3944,6 +3982,7 @@ namespace eval ess {
 	    if {[info exists buttons(state,$i)]} {
 		unset buttons(state,$i)
 	    }
+	    dservSet ess/button/$i 0
 	}
 	set buttons(n_channels) 0
 	dservSet ess/buttons/channels {}
