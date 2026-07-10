@@ -4965,6 +4965,16 @@ namespace eval ess {
             set opts [dict get $loader_arg_options $a]
             set olist {}
             foreach o $opts {
+                # A '#'-leading token here is a comment line that leaked from
+                # INSIDE this option's value braces. strip_comments only strips
+                # top-level comments (between options), so a '## ...' line inside
+                # e.g. coh_params { ... } survives as list words and corrupts the
+                # option -- the default extraction would grab "##". Fail loudly
+                # with the fix instead of a later cryptic "missing value" error.
+                if {[string index [string trimleft $o] 0] eq "#"} {
+                    error "loader_option \"$a\" has a '##' comment inside its value\
+ braces (token \"$o\"); move comment lines to BEFORE the \"$a {\" line"
+                }
                 # if there are two elements, we have name/value, otherwise just copy
                 if {[llength $o] == 2} {
                     lappend olist $o
@@ -5073,6 +5083,16 @@ namespace eval ess {
             set opts [dict get $loader_arg_options $a]
             set olist {}
             foreach o $opts {
+                # A '#'-leading token here is a comment line that leaked from
+                # INSIDE this option's value braces. strip_comments only strips
+                # top-level comments (between options), so a '## ...' line inside
+                # e.g. coh_params { ... } survives as list words and corrupts the
+                # option -- the default extraction would grab "##". Fail loudly
+                # with the fix instead of a later cryptic "missing value" error.
+                if {[string index [string trimleft $o] 0] eq "#"} {
+                    error "loader_option \"$a\" has a '##' comment inside its value\
+ braces (token \"$o\"); move comment lines to BEFORE the \"$a {\" line"
+                }
                 # if there are two elements, we have name/value, otherwise just copy
                 if {[llength $o] == 2} {
                     lappend olist $o
