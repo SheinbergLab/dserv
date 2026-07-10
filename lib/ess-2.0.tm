@@ -4972,8 +4972,8 @@ namespace eval ess {
                 # option -- the default extraction would grab "##". Fail loudly
                 # with the fix instead of a later cryptic "missing value" error.
                 if {[string index [string trimleft $o] 0] eq "#"} {
-                    error "loader_option \"$a\" has a '##' comment inside its value\
- braces (token \"$o\"); move comment lines to BEFORE the \"$a {\" line"
+                    error "loader_option \"$a\" has a comment inside its value\
+ braces (token \"$o\"); move '##' comment lines ABOVE the \"$a\" option"
                 }
                 # if there are two elements, we have name/value, otherwise just copy
                 if {[llength $o] == 2} {
@@ -5090,8 +5090,8 @@ namespace eval ess {
                 # option -- the default extraction would grab "##". Fail loudly
                 # with the fix instead of a later cryptic "missing value" error.
                 if {[string index [string trimleft $o] 0] eq "#"} {
-                    error "loader_option \"$a\" has a '##' comment inside its value\
- braces (token \"$o\"); move comment lines to BEFORE the \"$a {\" line"
+                    error "loader_option \"$a\" has a comment inside its value\
+ braces (token \"$o\"); move '##' comment lines ABOVE the \"$a\" option"
                 }
                 # if there are two elements, we have name/value, otherwise just copy
                 if {[llength $o] == 2} {
