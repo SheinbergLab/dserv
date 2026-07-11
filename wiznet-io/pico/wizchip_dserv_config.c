@@ -74,6 +74,10 @@
 #include "pico_ain.h"           /* ADS1115 analog-in: always compiled, runtime-enabled (ain_en) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 
+/* USB data-CDC publish accounting (box_net_usb.h increments; `txstats` prints).
+ * Defined here unconditionally so every transport build links. */
+volatile uint32_t box_usb_tx_ok, box_usb_tx_wait, box_usb_tx_drop, box_usb_tx_notready;
+
 #define CFG_PORT    5010
 #define RXBUF_SIZE  1024
 #define HEARTBEAT_MS 1000
@@ -741,6 +745,12 @@ static void cmd_exec(const char *line)
     if (!strcmp(line, "debug 1") || !strcmp(line, "debug 0")) {   /* live hot-path log toggle */
         g_log_verbose = (line[6] == '1');
         printf("debug log %s\n", g_log_verbose ? "on" : "off");
+        return;
+    }
+    if (!strcmp(line, "txstats")) {            /* USB data-CDC publish accounting */
+        printf("tx ok=%lu wait=%lu drop=%lu notready=%lu\n",
+               (unsigned long) box_usb_tx_ok, (unsigned long) box_usb_tx_wait,
+               (unsigned long) box_usb_tx_drop, (unsigned long) box_usb_tx_notready);
         return;
     }
     if (!strcmp(line, "wdt 0") || !strcmp(line, "wdt 1")) {   /* watchdog core-1 gate (bench escape) */

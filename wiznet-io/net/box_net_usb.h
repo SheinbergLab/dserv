@@ -106,23 +106,29 @@ static inline int box_net_server_poll(uint16_t port, uint8_t *buf, int max)
     return (int) tud_cdc_n_read(BOX_USB_CDC_DATA, buf, (uint32_t) max);
 }
 
+/* TX accounting (console `txstats`): ok / had-to-wait / dropped / not-ready.
+ * Defined once in the app TU (wizchip_dserv_config.c) so every build links. */
+extern volatile uint32_t box_usb_tx_ok, box_usb_tx_wait, box_usb_tx_drop, box_usb_tx_notready;
+
 /* ---- publish one 128-byte datapoint frame to the host module ----
- * Best-effort and BOUNDED: writes the whole frame (a partial frame would desync the
- * host framer), draining the CDC FIFO between chunks; gives up (<0) if the host is
- * not reading, so the superloop never stalls. 0 ok, <0 not connected / host stalled. */
+ * Best-effort, BOUNDED, and ATOMIC: the frame is written only once the CDC
+ * FIFO has room for ALL of it -- the old chunked loop could give up mid-frame,
+ * leaving a PARTIAL frame on the wire that desynced the host framer (seen
+ * live 2026-07-11 as lost DI edges + host resync skips). Waiting pumps
+ * tud_task so a draining host frees space; a stalled host costs a bounded
+ * spin and one whole dropped frame. 0 ok, <0 not connected / host stalled. */
 static inline int box_net_client_send(const uint8_t *buf, int len)
 {
-    if (!tud_ready()) return -1;
-    int sent = 0, guard = 0;
-    while (sent < len) {
-        uint32_t w = tud_cdc_n_write(BOX_USB_CDC_DATA, buf + sent, (uint32_t)(len - sent));
-        sent += (int) w;
-        if (w == 0) {                       /* FIFO full -- let it drain to the host */
-            tud_task();
-            if (++guard > 2000) return -2;  /* host not draining -> drop, stay alive */
-        }
+    if (!tud_ready()) { box_usb_tx_notready++; return -1; }
+    int guard = 0;
+    while (tud_cdc_n_write_available(BOX_USB_CDC_DATA) < (uint32_t) len) {
+        tud_task();                         /* FIFO full -- let it drain to the host */
+        if (++guard > 2000) { box_usb_tx_drop++; return -2; }  /* whole frame, never partial */
     }
+    if (guard) box_usb_tx_wait++;
+    tud_cdc_n_write(BOX_USB_CDC_DATA, buf, (uint32_t) len);
     tud_cdc_n_write_flush(BOX_USB_CDC_DATA);
+    box_usb_tx_ok++;
     return 0;
 }
 
