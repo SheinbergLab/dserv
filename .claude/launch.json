@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "www",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8090", "--directory", "www"],
+      "port": 8090
+    },
+    {
+      "name": "extio-setup",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["-C", "tools/extio-setup", "run", ".", "-open=false", "-dev"],
+      "port": 2569
+    }
+  ]
+}
