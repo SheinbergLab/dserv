@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>extio setup</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>extio setup</h1>
+  <select id="ports" title="extio boxes found by USB identity"></select>
+  <button id="rescan" title="rescan USB">&#x21bb;</button>
+  <button id="connect">Connect</button>
+  <span id="status" class="badge off">no box</span>
+  <span id="beat" class="hint" title="data-interface heartbeat"></span>
+  <span class="spacer"></span>
+  <button id="refresh" disabled>Re-read</button>
+  <button id="save" disabled>Save to flash</button>
+  <button id="reboot" disabled>Reboot</button>
+</header>
+
+<main>
+  <section id="left">
+    <div class="panel">
+      <div class="panel-title">Pins <span class="hint">click to configure</span></div>
+      <div id="pinmap"></div>
+      <div class="legend">
+        <span><i class="sw fixed"></i>fixed</span>
+        <span><i class="sw claimed"></i>claimed</span>
+        <span><i class="sw in"></i>input</span>
+        <span><i class="sw out"></i>output</span>
+        <span><i class="sw special"></i>obs/sync</span>
+        <span><i class="sw free"></i>free</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="right">
+    <div class="panel" id="boxpanel">
+      <div class="panel-title">Box</div>
+      <div class="grid2">
+        <label>name</label><span class="row"><input id="boxname" size="14"><button data-cmdfrom="boxname" data-verb="name">set</button></span>
+        <label>desc</label><span class="row"><input id="boxdesc" size="22"><button data-cmdfrom="boxdesc" data-verb="desc">set</button></span>
+        <label>fw / mode</label><span id="boxinfo" class="mono muted">&mdash;</span>
+        <label>groups</label><span id="groups" class="mono muted">&mdash;</span>
+      </div>
+    </div>
+
+    <div class="panel" id="editor" hidden>
+      <div class="panel-title">GPIO <span id="pinno"></span> <span id="pinrole" class="hint"></span></div>
+      <div class="grid2">
+        <label>mode</label>
+        <span id="modebtns">
+          <button data-mode="off">off</button><button data-mode="out">out</button><button data-mode="in">in</button><button data-mode="in_pullup">in_pullup</button>
+        </span>
+        <label>label</label><input id="pinlabel" size="12">
+        <label>debounce ms</label><input id="pindebounce" size="6" inputmode="numeric">
+        <label>pulse &micro;s</label><input id="pinpulse" size="8" inputmode="numeric">
+        <label>active_low</label><input id="pinactlow" type="checkbox">
+        <label>role</label>
+        <span class="row">
+          <label class="inline"><input id="pinobs" type="checkbox"> obs mirror</label>
+          <label class="inline"><input id="pinsync" type="checkbox"> sync input</label>
+        </span>
+      </div>
+      <div class="row gap">
+        <button id="pinapply" class="primary">Apply</button>
+        <button id="pintest" title="pulse this output">Test pulse</button>
+        <span id="pinmsg" class="mono muted"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Profiles</div>
+      <div class="row gap">
+        <button id="profsave" disabled>Save profile (dump)</button>
+        <button id="profapply" disabled>Apply profile&hellip;</button>
+        <input id="proffile" type="file" accept=".txt,.cfg,.dump" hidden>
+      </div>
+      <div id="profmsg" class="mono muted"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Firmware</div>
+      <div class="row gap">
+        <select id="fwfiles"></select>
+        <button id="flash">Flash&hellip;</button>
+      </div>
+      <div id="flashmsg" class="mono muted"></div>
+    </div>
+  </section>
+</main>
+
+<section id="consolewrap">
+  <div class="panel-title">Console <span class="hint" id="conhint"></span></div>
+  <pre id="console"></pre>
+  <div class="row">
+    <input id="coninput" placeholder="CLI command (try: help, show, dump)" disabled>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
