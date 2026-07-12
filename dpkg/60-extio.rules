@@ -1,0 +1,10 @@
+# extio USB box (RP2350, dual-CDC, USB identity 2e8a:100b).
+#
+# Installed by the dserv package: the package prefix is /usr/local, which udev
+# does not scan, so dpkg/postinst copies this into /etc/udev/rules.d and
+# reloads. Two goals:
+#   1. Keep ModemManager from probing the CDC as a modem -- it grabs freshly
+#      enumerated /dev/ttyACM* on hotplug and can disrupt the box's data link.
+#   2. Let the dialout group open both CDC interfaces (console + data) without
+#      root, so extio-setup and dserv's usbio module work as a normal user.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="100b", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout"
