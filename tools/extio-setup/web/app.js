@@ -772,6 +772,18 @@ setInterval(async () => {
     reload().catch(() => {});
   } else {
     applyMode("serial");
+    // Smart default: if a dserv is answering locally, this is a rig where its
+    // usbio owns the box's data CDC -- so take events over dserv (combined
+    // mode) instead of colliding on the data port. On a bare bench box (no
+    // dserv) stay plain serial. This also steers the single-box auto-connect.
+    try {
+      const p = await api("/api/dserv/probe");
+      if (p.available) {
+        $("viaDserv").checked = true;
+        $("viaDservHost").hidden = false;
+        conLog("dserv detected -- events will come via dserv (uncheck 'events via dserv' for a bare bench box)");
+      }
+    } catch { /* no dserv reachable: plain serial is right */ }
     if (ports.length === 1) $("connect").click(); // exactly one box: connect on load
   }
 })();

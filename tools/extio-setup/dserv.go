@@ -120,6 +120,27 @@ func openDservLink(host string) (*DservLink, error) {
 	return d, nil
 }
 
+// probeDserv reports whether a dserv is answering on host's text port -- used
+// to pick a sensible default connection mode (a reachable local dserv means
+// this is a rig, where its usbio owns the box's data CDC, so events should
+// come over dserv, not the contended serial data CDC). It sends %version and
+// checks the reply starts with dserv's "<rc> ..." digit, so a random open
+// port isn't mistaken for dserv.
+func probeDserv(host string) bool {
+	c, err := net.DialTimeout("tcp", net.JoinHostPort(host, dservTextPort), 400*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(400 * time.Millisecond))
+	if _, err := c.Write([]byte("%version\n")); err != nil {
+		return false
+	}
+	buf := make([]byte, 64)
+	n, _ := c.Read(buf)
+	return n > 0 && buf[0] >= '0' && buf[0] <= '9'
+}
+
 // resolveIPv4 picks an IPv4 address for host (dserv binds 0.0.0.0 and the
 // %reg host argument must be dialable from its side).
 func resolveIPv4(host string) (string, error) {

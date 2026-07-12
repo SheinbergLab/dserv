@@ -160,9 +160,9 @@ func (d *DataLink) reader() {
 				if shared {
 					d.mu.Lock()
 					d.died = "another process is reading " + d.name +
-						" (a second extio-setup, or a rig's dserv usbio module) -- frames " +
-						"were splitting between us, so live events are OFF. Close the other " +
-						"opener, or switch to the dserv driver (it shares cleanly)."
+						" (a rig's dserv usbio, or a second extio-setup) -- frames were " +
+						"splitting between us, so live events are OFF. Check 'events via " +
+						"dserv' to take events from dserv instead (or close the other opener)."
 					d.mu.Unlock()
 					d.Close()
 					return

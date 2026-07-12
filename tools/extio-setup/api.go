@@ -69,6 +69,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/dserv/disconnect", s.handleDservDisconnect)
 	mux.HandleFunc("GET /api/dserv/state", s.handleDservState)
 	mux.HandleFunc("POST /api/dserv/set", s.handleDservSet)
+	mux.HandleFunc("GET /api/dserv/probe", s.handleDservProbe)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -569,6 +570,16 @@ func (s *server) handleDservState(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{"box": box, "boxes": boxes, "primary": primary,
 		"state": dl.StateFor(box)})
+}
+
+// handleDservProbe reports whether a dserv is reachable at host (default
+// localhost) -- the UI uses it to default to events-via-dserv on a rig.
+func (s *server) handleDservProbe(w http.ResponseWriter, r *http.Request) {
+	host := r.URL.Query().Get("host")
+	if host == "" {
+		host = "localhost"
+	}
+	writeJSON(w, map[string]any{"host": host, "available": probeDserv(host)})
 }
 
 // handleDservSet publishes one extio/<box>/config|cmd datapoint (the key
