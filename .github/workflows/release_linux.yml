@@ -172,6 +172,53 @@ jobs:
           prerelease: true
           omitPrereleaseDuringUpdate: true
 
+  release-extio-setup:
+
+    needs: create-release
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            goarch: amd64
+          - os: ubuntu-22.04-arm
+            goarch: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Check out our dserv code for the current tag.
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Read the required Go from go.mod (extio-setup needs 1.22+ for the
+          # http routing/FileServerFS it uses) rather than pinning a version.
+          go-version-file: tools/extio-setup/go.mod
+
+      - name: Build extio-setup
+        run: |
+          cd tools/extio-setup
+          # Linux enumerator is pure-Go sysfs, so CGO_ENABLED=0 -> a static
+          # binary, same as dservctl (macOS needs cgo for IOKit; the .pkg
+          # covers macOS).
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o extio-setup_linux_${{ matrix.goarch }} .
+
+      - name: Upload extio-setup binary
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "tools/extio-setup/extio-setup_linux_${{ matrix.goarch }}"
+          body: dserv version ${{ github.ref_name }}
+          generateReleaseNotes: true
+          allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
+
   release-camera:
 
     needs: create-release

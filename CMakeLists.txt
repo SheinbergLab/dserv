@@ -429,6 +429,14 @@ if(GO_EXECUTABLE)
             COMPONENT dservctl
         )
 
+        # Unit tests run under ctest (the CI harness already runs `ctest`), so
+        # the Go tool gets coverage with no workflow change.
+        add_test(
+            NAME dservctl-gotest
+            COMMAND ${GO_EXECUTABLE} test ./...
+            WORKING_DIRECTORY ${DSERVCTL_SOURCE_DIR}
+        )
+
         set(DSERVCTL_FOUND TRUE)
     else()
         message(STATUS "dservctl source not found at ${DSERVCTL_SOURCE_DIR}")
@@ -436,6 +444,81 @@ if(GO_EXECUTABLE)
     endif()
 else()
     set(DSERVCTL_FOUND FALSE)
+endif()
+
+# ============================================================================
+# extio-setup (Go-based extio box manager: serial + dserv drivers, embedded UI)
+# ============================================================================
+if(GO_EXECUTABLE)
+    set(EXTIO_SETUP_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tools/extio-setup)
+    set(EXTIO_SETUP_BINARY ${CMAKE_CURRENT_BINARY_DIR}/bin/extio-setup)
+
+    if(EXISTS ${EXTIO_SETUP_SOURCE_DIR}/main.go)
+        message(STATUS "Found extio-setup source at ${EXTIO_SETUP_SOURCE_DIR}")
+
+        # Rebuild triggers: Go sources plus the go:embed'd web/ assets (like
+        # dserv-agent, the UI is embedded, so a web change must relink).
+        file(GLOB EXTIO_SETUP_GO_SOURCES CONFIGURE_DEPENDS ${EXTIO_SETUP_SOURCE_DIR}/*.go)
+        file(GLOB EXTIO_SETUP_WEB_FILES CONFIGURE_DEPENDS ${EXTIO_SETUP_SOURCE_DIR}/web/*)
+
+        # cgo policy differs from dservctl because the serial driver enumerates
+        # USB boxes by identity (2e8a:100b) via go.bug.st/serial's enumerator:
+        #   macOS -> IOKit, which is cgo. CGO_ENABLED=1, and it can only build
+        #            natively (needs the target C toolchain), not cross like
+        #            dservctl. Fine: release_macos builds on a native runner.
+        #   Linux -> pure-Go sysfs (/sys/class/tty), no libudev. Keep
+        #            CGO_ENABLED=0 so the binary stays static/cross-compilable
+        #            and the .deb needs no extra runtime dependency.
+        if(APPLE)
+            set(EXTIO_SETUP_CGO 1)
+        else()
+            set(EXTIO_SETUP_CGO 0)
+        endif()
+        add_custom_command(
+            OUTPUT ${EXTIO_SETUP_BINARY}
+            COMMAND ${CMAKE_COMMAND} -E env
+                GOOS=${GOOS}
+                GOARCH=${GOARCH}
+                CGO_ENABLED=${EXTIO_SETUP_CGO}
+                ${GO_EXECUTABLE} build -o ${EXTIO_SETUP_BINARY} .
+            WORKING_DIRECTORY ${EXTIO_SETUP_SOURCE_DIR}
+            DEPENDS ${EXTIO_SETUP_GO_SOURCES} ${EXTIO_SETUP_WEB_FILES}
+            COMMENT "Building extio-setup for ${GOOS}/${GOARCH} (CGO=${EXTIO_SETUP_CGO})"
+            VERBATIM
+        )
+
+        add_custom_target(extio-setup ALL DEPENDS ${EXTIO_SETUP_BINARY})
+
+        install(PROGRAMS ${EXTIO_SETUP_BINARY}
+            DESTINATION bin
+            COMPONENT extio-setup
+        )
+
+        # Go unit tests (frame/%get parsing, push pipeline, write guard) under ctest.
+        add_test(
+            NAME extio-setup-gotest
+            COMMAND ${GO_EXECUTABLE} test ./...
+            WORKING_DIRECTORY ${EXTIO_SETUP_SOURCE_DIR}
+        )
+
+        set(EXTIO_SETUP_FOUND TRUE)
+    else()
+        message(STATUS "extio-setup source not found at ${EXTIO_SETUP_SOURCE_DIR}")
+        set(EXTIO_SETUP_FOUND FALSE)
+    endif()
+else()
+    set(EXTIO_SETUP_FOUND FALSE)
+endif()
+
+# Linux: ship a udev rule for the extio box's USB identity (2e8a:100b) so the
+# CDC is dialout-accessible without root and ModemManager leaves it alone.
+# Staged into the payload; the .deb postinst copies it into /etc/udev/rules.d
+# and reloads (the /usr/local package prefix is not a path udev scans). No-op
+# on macOS/Windows.
+if(EXTIO_SETUP_FOUND AND NOT APPLE AND NOT WIN32)
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/dpkg/60-extio.rules
+        DESTINATION dserv/udev
+        COMPONENT extio-setup)
 endif()
 
 install(TARGETS dserv DESTINATION dserv COMPONENT dserv)
@@ -534,6 +617,9 @@ elseif(APPLE)
     if(DSERVCTL_FOUND)
        list(APPEND CPACK_COMPONENTS_ALL dservctl)
     endif()
+    if(EXTIO_SETUP_FOUND)
+       list(APPEND CPACK_COMPONENTS_ALL extio-setup)
+    endif()
 
     if(DEFINED CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM)
         # Configure for apple code signing, notarization, and gatekeeper/entitlements.
@@ -574,4 +660,7 @@ if(DSERV_AGENT_FOUND)
 endif()
 if(DSERVCTL_FOUND)
     cpack_add_component(dservctl)
+endif()
+if(EXTIO_SETUP_FOUND)
+    cpack_add_component(extio-setup)
 endif()

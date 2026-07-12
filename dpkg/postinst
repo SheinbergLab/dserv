@@ -9,6 +9,17 @@ ldconfig
 mkdir -p /usr/local/dserv/db
 chmod a+w /usr/local/dserv/db
 
+# Install the extio-box udev rule (the /usr/local package prefix is not a path
+# udev scans) so the box's CDC is dialout-accessible and ModemManager ignores
+# it. Copy + reload; harmless if the payload or udev is absent.
+if [ -f /usr/local/dserv/udev/60-extio.rules ] && [ -d /etc/udev/rules.d ]; then
+    install -m 0644 /usr/local/dserv/udev/60-extio.rules /etc/udev/rules.d/60-extio.rules
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules 2>/dev/null || true
+        udevadm trigger --subsystem-match=tty 2>/dev/null || true
+    fi
+fi
+
 # Bootstrap dlsh if not already installed
 if [ ! -f /usr/local/dlsh/dlsh.zip ]; then
     echo "dlsh not found, installing..."

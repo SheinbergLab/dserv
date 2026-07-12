@@ -97,6 +97,21 @@ jobs:
         run: |
           cmake -B build -G Xcode -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="$TEAM_ID" -D PROJECT_VERSION=${{ github.ref_name }} -D OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
           cmake --build build --config Release
+
+          # The Go tools are built by `go build`, not Xcode, so they land only
+          # ad-hoc signed. Notarization requires Developer ID + hardened runtime
+          # + secure timestamp, so re-sign them before packaging -- the same
+          # step dlsh applies to its non-Xcode binaries. The signature is
+          # embedded in the Mach-O, so it survives the install copy into the pkg.
+          for f in build/bin/dservctl build/bin/dserv-agent build/bin/extio-setup; do
+            [ -f "$f" ] || continue
+            codesign --force --options runtime --timestamp \
+              --sign "Developer ID Application" "$f"
+            codesign --verify --strict --verbose=2 "$f"
+            codesign -dvvv "$f" 2>&1 | grep -q "Authority=Developer ID Application" \
+              || { echo "FAIL: $f not Developer-ID signed"; exit 1; }
+          done
+
           cpack -G productbuild --config build/CPackConfig.cmake
           productsign --sign "$INSTALLLER_CERT_ID" dserv-${{ github.ref_name }}-Darwin.pkg dserv-${{ github.ref_name }}-Darwin-signed.pkg
 
