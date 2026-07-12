@@ -520,6 +520,13 @@ function openEventStream() {
   esd.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
+    // obs marker: the canonical event-driven signal (ess/obs_active, set by the
+    // BEGINOBS/ENDOBS triggers) -- not per-box, so handle before the extio regex.
+    if (ev.name === "ess/obs_active") {
+      setObsLive(!!(+ev.val));
+      if (!ev.snap) conLog(`⚡ obs_active = ${ev.val}`);
+      return;
+    }
     const m0 = ev.name.match(/^extio\/([^/]+)\/state\/(.+)$/);
     if (!m0) return; // extio/boxes, decoded/*, ...: not per-box state
     // a dserv rig can host several boxes; show only the active one
@@ -535,11 +542,6 @@ function openEventStream() {
       liveDI.set(pin, s);
       updateChipLive(pin, !ev.snap);
       if (!ev.snap) conLog(`⚡ ${leaf} = ${ev.val}`);
-    } else if (leaf === "in_obs") {
-      // the box's honest copy of ess/in_obs (it mirrors it to obs_pin): show
-      // the obs marker live. Published whenever THIS box sees the obs edge.
-      setObsLive(!!(+ev.val));
-      if (!ev.snap) conLog(`⚡ in_obs = ${ev.val}`);
     } else if (/^group\/[^/]+$/.test(leaf) || /^timer\//.test(leaf)) {
       conLog(`⚡ ${leaf} = ${ev.val}`);
     } else if (/watchdog|heartbeat/.test(leaf)) {

@@ -51,6 +51,15 @@ jobs:
         with:
           submodules: true
 
+      - name: Set up Go
+        # Without Go on PATH, CMake reports "Go not found" and skips the Go
+        # tools (dserv-agent, dservctl, extio-setup) -- so they never land in
+        # the .pkg. Install the newest required (extio-setup needs 1.22+; its
+        # go.mod pins the floor) so all three build and get codesigned below.
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/extio-setup/go.mod
+
       - name: Build and install jansson static lib.
         run: |
           cd deps/jansson/

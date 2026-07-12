@@ -202,8 +202,16 @@ func (d *DservLink) register() error {
 }
 
 func (d *DservLink) rematch() error {
-	_, _, err := d.command(fmt.Sprintf("%%match %s %s extio/* 1", d.local, d.lport))
-	return err // rc is always 1, even without a registration; only transport errors count
+	if _, _, err := d.command(fmt.Sprintf("%%match %s %s extio/* 1", d.local, d.lport)); err != nil {
+		return err
+	}
+	// obs state: the canonical, event-driven signal -- config/triggers.tcl maps
+	// the BEGINOBS/ENDOBS events (evt 19/20) to ess/obs_active, the same path
+	// the data system relies on (so it always closes on stop). Far more robust
+	// than the box's state/in_obs mirror, which follows the raw ess/in_obs flag
+	// that ess::stop leaves set. Tiny int -> fits the binary frame.
+	_, _, err := d.command(fmt.Sprintf("%%match %s %s ess/obs_active 1", d.local, d.lport))
+	return err // rc is always 1 even without a registration; only transport errors count
 }
 
 // matchRefresher re-asserts the %match set while the link lives. Idempotent
@@ -334,7 +342,7 @@ func (d *DservLink) seed() {
 		return
 	}
 	for _, k := range strings.Fields(body) {
-		if !strings.HasPrefix(k, "extio/") {
+		if !strings.HasPrefix(k, "extio/") && k != "ess/obs_active" {
 			continue
 		}
 		rc, rep, err := d.command("%get " + k)
@@ -418,7 +426,7 @@ func (d *DservLink) Subscribe() (ch chan DataEvent, snap []DataEvent) {
 	}
 	d.subs[ch] = true
 	for name, ev := range d.table {
-		if isPinState(name) || strings.HasSuffix(name, "/state/in_obs") {
+		if isPinState(name) || name == "ess/obs_active" {
 			ev.Snap = true
 			snap = append(snap, ev)
 		}
