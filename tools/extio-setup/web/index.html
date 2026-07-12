@@ -16,6 +16,10 @@
   <span id="serialctl">
     <select id="ports" title="extio boxes found by USB identity"></select>
     <button id="rescan" title="rescan USB">&#x21bb;</button>
+    <label class="inline" title="On a rig, dserv already owns the box's data CDC. Check this to keep the USB console for config/CLI but take live events from dserv instead (no data-port contention).">
+      <input id="viaDserv" type="checkbox"> events via dserv
+    </label>
+    <input id="viaDservHost" size="9" placeholder="dserv host" value="localhost" title="dserv host for events (combined mode)" hidden>
   </span>
   <span id="dservctl" hidden>
     <input id="dhost" size="12" placeholder="rig host" value="localhost" title="dserv host (datapoint port 4620)">
@@ -24,6 +28,7 @@
   <button id="connect">Connect</button>
   <span id="status" class="badge off">no box</span>
   <span id="beat" class="hint" title="data-interface heartbeat"></span>
+  <span id="obs" class="badge" title="box is in an observation (state/in_obs)"></span>
   <span class="spacer"></span>
   <button id="refresh" disabled>Re-read</button>
   <button id="save" disabled>Save to flash</button>

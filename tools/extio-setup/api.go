@@ -185,7 +185,14 @@ func (s *server) handlePorts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleConnect(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Port string }
+	var req struct {
+		Port string
+		// Combined mode: get events from a dserv (opened separately via
+		// /api/dserv/connect with keepSerial) instead of the box's data CDC.
+		// So skip the data-CDC open -- on a rig dserv's usbio already owns it,
+		// and two readers split the stream -- and DON'T drop any dserv session.
+		NoData bool
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Port == "" {
 		httpErr(w, 400, "need {\"port\": ...}")
 		return
@@ -199,7 +206,7 @@ func (s *server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.data.Close()
 		s.data = nil
 	}
-	if s.dserv != nil { // drivers are exclusive: serial connect ends a dserv session
+	if !req.NoData && s.dserv != nil { // pure serial ends a dserv session; combined keeps it
 		s.dserv.Close()
 		s.dserv = nil
 	}
@@ -211,6 +218,10 @@ func (s *server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.link = l
+	if req.NoData { // combined: console only, events come from dserv
+		writeJSON(w, map[string]any{"connected": true, "port": req.Port, "data": false, "noData": true})
+		return
+	}
 	// Best-effort: open the data sibling for the live event stream. One
 	// retry covers transient claims; a persistent failure is REPORTED, not
 	// swallowed -- a missing event stream must be visible, not mysterious.
@@ -482,25 +493,32 @@ func (s *server) handleFlash(w http.ResponseWriter, r *http.Request) {
 // handleDservConnect opens the dserv driver: dial, %reg binary connect-back,
 // %match extio/*, seed retained state. Exclusive with the serial driver.
 func (s *server) handleDservConnect(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Host string }
+	var req struct {
+		Host string
+		// Combined mode: keep the console link open alongside dserv events
+		// (default drops it -- pure dserv mode shouldn't hold the serial port).
+		KeepSerial bool
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Host) == "" {
 		httpErr(w, 400, "need {\"host\": ...}")
 		return
 	}
 	s.mu.Lock()
-	if s.link != nil {
-		s.link.Close()
-		s.link = nil
-	}
-	if s.data != nil {
-		s.data.Close()
-		s.data = nil
+	if !req.KeepSerial {
+		if s.link != nil {
+			s.link.Close()
+			s.link = nil
+		}
+		if s.data != nil {
+			s.data.Close()
+			s.data = nil
+		}
+		s.dataNote = ""
 	}
 	if s.dserv != nil {
 		s.dserv.Close()
 		s.dserv = nil
 	}
-	s.dataNote = ""
 	s.mu.Unlock() // opening can take seconds (resolve+dial+seed); don't hold the lock
 
 	dl, err := openDservLink(req.Host)

@@ -13,18 +13,31 @@ A small Go server bridges the browser to a box through one of two drivers:
   `extio/boxes`, see its live pin map from the announced manifest, watch DI
   edges, and write config/commands via `%set extio/<box>/config|cmd/…`.
   For any box on a machine running dserv.
+- **combined** (serial console + "events via dserv" checkbox) — the box has
+  two USB CDCs: a *console* and a *data* interface. On a rig, dserv's `usbio`
+  owns the *data* CDC but leaves the *console* free. Combined mode uses the
+  console for config/CLI/diagnostics (full `dump`/`show`) and takes events
+  from dserv instead of opening the contended data CDC. Best of both on a dev
+  box: full config readback **and** real dserv-timestamped events, no
+  contention.
 
 The UI is embedded, so the shipped binary is self-contained.
 
 ## Which driver?
 
 The serial driver assumes it is the **sole owner** of the box's USB CDC. On a
-rig, dserv's `usbio` module already holds that port — and macOS does not
+rig, dserv's `usbio` module already holds the *data* CDC — and macOS does not
 reliably enforce exclusive access, so a second reader silently splits the
 frame stream and both sides lose events (the tool detects this and says so,
-then falls back). So: **serial for a bare bench box, dserv for anything
-running dserv.** The dserv driver never opens the port — it subscribes over
-TCP, and dserv fans out to every client, so it never contends.
+then falls back). So:
+
+- **Bare bench box** (nothing else attached): serial — console *and* events
+  off the box's own data CDC.
+- **Box on a machine running dserv:** either dserv (no USB at all — subscribes
+  over TCP, so it never contends), or **combined** if you also want the
+  console for `dump`/`show`/diagnostics and direct CLI. Combined opens only
+  the free console CDC; events come over dserv. Do **not** run plain serial
+  against a dserv-owned box — that's the data-CDC collision.
 
 ## Run
 

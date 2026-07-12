@@ -40,6 +40,7 @@ let esd = null; // data-events EventSource
 let reloadT = null;      // debounce for config re-reads (console OKs, manifest frames)
 const liveDI = new Map(); // pin -> {v, count}: live di/do state from the event stream
 let beats = 0, lastBeat = 0;
+let obsLive = false; // box is currently in an observation (state/in_obs = 1)
 
 function emptyCfg() {
   return { name: "", desc: "", mode: "", obs: null, sync: null,
@@ -54,21 +55,45 @@ function scheduleReload(ms = 700) {
 
 /* ================= drivers ================= */
 
-/* ---- serial: wraps the /api console+dump surface (v1 behavior, unchanged) ---- */
+/* ---- serial: the box's USB console (config, CLI, dump/show, diagnostics).
+ * Events come from the box's own data CDC -- UNLESS "events via dserv" is on
+ * (combined mode): then the console stays here but events arrive over a dserv
+ * that already owns the box's data port, sidestepping the two-reader
+ * contention. eventsVia records which. ---- */
 const SerialDriver = {
   id: "serial",
   hasConsole: true,   // interactive CLI pane
   hasProfiles: true,  // dump-based save/apply
   fullConfig: true,   // pulse/debounce/active_low/in_pullup readable
+  eventsVia: "local", // "local" (box data CDC) or "dserv" (combined mode)
 
   async connect(port) {
-    const j = await api("/api/connect", { port });
+    const combined = $("viaDserv").checked;
+    this.eventsVia = combined ? "dserv" : "local";
+    const j = await api("/api/connect", { port, noData: combined });
     openConsoleStream();
+    if (combined) {
+      const host = $("viaDservHost").value.trim() || "localhost";
+      try {
+        const dj = await api("/api/dserv/connect", { host, keepSerial: true });
+        this.dservHost = dj.host;
+        openEventStream();
+        conLog(`events via dserv @ ${dj.host} (${(dj.boxes || []).join(", ") || "no live boxes"})`);
+      } catch (e) {
+        this.eventsVia = "local"; // dserv failed; console still usable, just no events
+        conLog("events via dserv failed: " + e.message + " (console still active)");
+      }
+      return { label: shortPort(port) + " + dserv" };
+    }
     if (j.data) openEventStream();
     else if (j.dataError) conLog("data interface: " + j.dataError);
     return { label: shortPort(port) };
   },
-  async disconnect() { await api("/api/disconnect", {}); },
+  async disconnect() {
+    await api("/api/disconnect", {}).catch(() => {});
+    if (this.eventsVia === "dserv") await api("/api/dserv/disconnect", {}).catch(() => {});
+    this.eventsVia = "local";
+  },
 
   async read() {
     const j = await api("/api/dump");
@@ -241,7 +266,7 @@ function renderPins() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "chip " + r.cls + (r.locked ? " dis" : "") + (n === selPin ? " sel" : "")
-      + (liveDI.get(n)?.v ? " hi" : "");
+      + (liveDI.get(n)?.v ? " hi" : "") + (obsLive && n === cfg.obs ? " obslive" : "");
     chip.dataset.pin = n;
     chip.textContent = n;
     chip.title = r.locked ? r.note + " (reserved)" : "configure GPIO " + n;
@@ -460,11 +485,34 @@ function updateChipLive(pin, blink = true) {
   }
 }
 
+/* Reflect the box's live obs state: a header badge (always, even with no obs
+ * pin configured) plus a pulse on the obs-mirror chip. */
+function setObsLive(on) {
+  if (on === obsLive) return;
+  obsLive = on;
+  const badge = $("obs");
+  badge.textContent = on ? "◉ obs" : "";
+  badge.className = "badge" + (on ? " obson" : "");
+  if (cfg.obs != null) {
+    const chip = document.querySelector(`.chip[data-pin="${cfg.obs}"]`);
+    if (chip) chip.classList.toggle("obslive", on);
+  }
+}
+
 /* ---- live events (serial data CDC or dserv push -- same frames) ---- */
 
 /* Manifest leaves: a change means the box's announced config moved
  * (a %set we sent, another UI, or a reflash) -- re-read and re-render. */
 const MANIFEST_LEAF = /^(pins\/|label\/|desc$|obs_pin$|sync_pin$|group\/[^/]+\/(pins|settle_ms)$)/;
+
+/* Which box's events to show. dserv mode: the picked box. Combined mode: the
+ * box the console is plugged into (cfg.name). Pure serial: null -- the local
+ * data CDC only ever carries this one box. */
+function activeEventBox() {
+  if (drv.id === "dserv") return drv.box;
+  if (drv.id === "serial" && SerialDriver.eventsVia === "dserv") return cfg.name || null;
+  return null;
+}
 
 function openEventStream() {
   if (esd) esd.close();
@@ -474,8 +522,9 @@ function openEventStream() {
     try { ev = JSON.parse(e.data); } catch { return; }
     const m0 = ev.name.match(/^extio\/([^/]+)\/state\/(.+)$/);
     if (!m0) return; // extio/boxes, decoded/*, ...: not per-box state
-    // a dserv rig can host several boxes; show only the selected one
-    if (drv.id === "dserv" && drv.box && m0[1] !== drv.box) return;
+    // a dserv rig can host several boxes; show only the active one
+    const box = activeEventBox();
+    if (box && m0[1] !== box) return;
     const leaf = m0[2];
     let m;
     if ((m = leaf.match(/^d[io]\/(\d+)$/))) {
@@ -486,12 +535,18 @@ function openEventStream() {
       liveDI.set(pin, s);
       updateChipLive(pin, !ev.snap);
       if (!ev.snap) conLog(`⚡ ${leaf} = ${ev.val}`);
+    } else if (leaf === "in_obs") {
+      // the box's honest copy of ess/in_obs (it mirrors it to obs_pin): show
+      // the obs marker live. Published whenever THIS box sees the obs edge.
+      setObsLive(!!(+ev.val));
+      if (!ev.snap) conLog(`⚡ in_obs = ${ev.val}`);
     } else if (/^group\/[^/]+$/.test(leaf) || /^timer\//.test(leaf)) {
       conLog(`⚡ ${leaf} = ${ev.val}`);
     } else if (/watchdog|heartbeat/.test(leaf)) {
       beats++; lastBeat = Date.now();
       $("beat").textContent = "♥ " + beats;
-    } else if (drv.id === "dserv" && !ev.snap && MANIFEST_LEAF.test(leaf)) {
+    } else if (!ev.snap && MANIFEST_LEAF.test(leaf) &&
+               (drv.id === "dserv" || SerialDriver.eventsVia === "dserv")) {
       scheduleReload(500); // manifest re-announce: converge on the box's truth
     }
     // everything else (telemetry, sync) stays off the console
@@ -568,6 +623,8 @@ function setConnected(on, label) {
   if (!on) {
     $("editor").hidden = true; selPin = null; cfg = emptyCfg();
     liveDI.clear(); beats = 0; $("beat").textContent = "";
+    setObsLive(false);
+    SerialDriver.eventsVia = "local"; // next connect starts clean
     if (esd) { esd.close(); esd = null; }
     if (es) { es.close(); es = null; }
     renderPins(); renderBox();
@@ -593,7 +650,7 @@ $("mode").onchange = async () => {
 $("dboxes").onchange = async () => {
   if (drv.id !== "dserv" || !connected) return;
   drv.box = $("dboxes").value;
-  liveDI.clear(); beats = 0; // per-box live state
+  liveDI.clear(); beats = 0; setObsLive(false); // per-box live state
   $("status").textContent = drv.box + "@" + drv.host;
   openEventStream(); // resubscribe: snapshot repaints the new box's pins
   await reload().catch((e) => conLog(e.message));
@@ -627,7 +684,17 @@ $("save").onclick = () => drv.save().catch((e) => conLog(e.message));
 $("reboot").onclick = async () => {
   if (!confirm("Reboot the box?")) return;
   try { await drv.reboot(); } catch (e) { conLog(e.message); }
-  if (drv.id === "serial") setConnected(false); // dserv session survives a box reboot
+  // Serial console can't survive the reboot's re-enumeration -> tear down (and
+  // the dserv side too, in combined mode). Pure dserv mode rides it out.
+  if (drv.id === "serial") { await drv.disconnect().catch(() => {}); setConnected(false); }
+};
+
+/* "events via dserv" toggle: reveal the host box; a live session must
+ * reconnect to change its event source, so nudge if flipped while connected. */
+$("viaDserv").onchange = () => {
+  $("viaDservHost").hidden = !$("viaDserv").checked;
+  if (connected && drv.id === "serial")
+    conLog("reconnect to " + ($("viaDserv").checked ? "switch events to dserv" : "use the box's data CDC"));
 };
 
 /* Poll status so an unplug / dserv drop flips the UI on its own. */
@@ -639,8 +706,10 @@ setInterval(async () => {
       lastDataNote = st.dataNote;
       conLog("data interface: " + st.dataNote);
     }
+    const combined = drv.id === "serial" && SerialDriver.eventsVia === "dserv";
     if (connected && drv.id === "serial" && !st.connected) {
       conLog("(box disconnected)");
+      if (combined) await drv.disconnect().catch(() => {}); // tear down the dserv side too
       setConnected(false);
     }
     if (connected && drv.id === "dserv") {
@@ -650,7 +719,7 @@ setInterval(async () => {
     }
     // Resurrect a dead event stream (browsers kill EventSource on 4xx, e.g.
     // a retry that landed mid-flash); the snapshot replay repairs pin state.
-    const haveSource = drv.id === "serial" ? st.data : st.mode === "dserv";
+    const haveSource = drv.id === "dserv" ? st.mode === "dserv" : combined ? !!st.dserv : st.data;
     if (connected && haveSource && (!esd || esd.readyState === 2)) openEventStream();
   } catch { /* server gone; leave UI as-is */ }
 }, 2000);
@@ -673,9 +742,19 @@ setInterval(async () => {
     reload().catch(() => {});
   } else if (st.connected) {
     applyMode("serial");
-    setConnected(true, shortPort(st.port));
     openConsoleStream();
-    if (st.data) openEventStream();
+    if (st.dserv) { // combined session (console + dserv events) survived a reload
+      SerialDriver.eventsVia = "dserv";
+      SerialDriver.dservHost = st.dserv.host;
+      $("viaDserv").checked = true;
+      $("viaDservHost").value = st.dserv.host;
+      $("viaDservHost").hidden = false;
+      setConnected(true, shortPort(st.port) + " + dserv");
+      openEventStream();
+    } else {
+      setConnected(true, shortPort(st.port));
+      if (st.data) openEventStream();
+    }
     reload().catch(() => {});
   } else {
     applyMode("serial");
