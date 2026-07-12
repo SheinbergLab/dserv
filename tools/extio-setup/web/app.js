@@ -98,13 +98,25 @@ const SerialDriver = {
   async read() {
     const j = await api("/api/dump");
     const c = parseDump(j.lines);
-    try { // effective identity: dump emits only non-defaults, show has the rest
-      const s = await api("/api/exec", { cmd: "show" });
-      const txt = (s.lines || []).join(" ");
-      if (!c.name) c.name = txt.match(/name=(\S+)/)?.[1] || "";
-      c.info = [txt.match(/transport=(\w+)/)?.[1], txt.match(/fw=(\S+)/)?.[1],
-        c.mode && "mode " + c.mode].filter(Boolean).join(" · ");
-    } catch { /* show is cosmetic; dump already succeeded */ }
+    // effective identity: `dump` emits only non-defaults (a default-named box
+    // has no `name` line), so `show` fills name/fw. But `show` is a second
+    // console command and can lose the single-flight race (errExecBusy) if
+    // another exec is in flight -- retry once, then keep the PRIOR identity
+    // rather than blanking the panel (dump already refreshed pins/labels).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const s = await api("/api/exec", { cmd: "show" });
+        const txt = (s.lines || []).join(" ");
+        if (!c.name) c.name = txt.match(/name=(\S+)/)?.[1] || "";
+        c.info = [txt.match(/transport=(\w+)/)?.[1], txt.match(/fw=(\S+)/)?.[1],
+          c.mode && "mode " + c.mode].filter(Boolean).join(" · ");
+        break;
+      } catch {
+        if (attempt === 0) { await new Promise((r) => setTimeout(r, 250)); continue; }
+        if (!c.name) c.name = cfg.name;                       // preserve prior identity
+        if (!c.info) c.info = cfg.info || (c.mode ? "mode " + c.mode : "");
+      }
+    }
     return c;
   },
 
