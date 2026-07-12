@@ -194,6 +194,7 @@ type Config struct {
 	ServerMode   bool
 	PublicServer bool // Protect mesh queries (requires token)
 	LandingPage  bool // Show landing page instead of mesh UI
+	FirmwareDir  string // root of the extio firmware shelf (see firmware.go)
 
 	// Client mode
 	AuthToken      string
@@ -404,6 +405,7 @@ Environment:
 	flag.BoolVar(&cfg.ServerMode, "server", false, "Enable registry server mode (receive heartbeats)")
 	flag.BoolVar(&cfg.PublicServer, "public", false, "Public server mode (protect mesh data, requires --token)")
 	flag.BoolVar(&cfg.LandingPage, "landing-page", false, "Show simple landing page instead of mesh UI")
+	flag.StringVar(&cfg.FirmwareDir, "firmware-dir", "", "Root directory for the extio firmware shelf (server mode; empty = disabled)")
 
 	// Client mode flags
 	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for API authentication")
@@ -512,6 +514,13 @@ Environment:
 		mux.HandleFunc("/api/releases/", agent.handleReleases)
 		if cfg.GitHubToken != "" {
 			log.Printf("  GitHub: authenticated (GITHUB_TOKEN set)")
+		}
+
+		// extio firmware shelf: versioned .uf2 + manifests for the bench
+		// tools and (later) the on-box A/B updater to pull from.
+		if cfg.FirmwareDir != "" {
+			agent.registerFirmwareHandlers(mux)
+			log.Printf("  Firmware shelf: %s (/api/firmware/extio, /firmware/extio/…)", agent.firmwareRoot())
 		}
 
 		// Workgroup directory page (e.g., /brown-sheinberg)

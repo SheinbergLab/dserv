@@ -288,6 +288,85 @@ Recommended port setup:
 - dserv: 2565 (HTTP), 2570 (internal)
 - dserv-agent: 2580
 
+## extio firmware shelf (server mode)
+
+A registry-mode agent (e.g. dserv.net) can house versioned firmware for the
+extio box (`wiznet-io/`) so bench tools (`tools/extio-setup`) and, later, the
+on-box A/B updater (`wiznet-io/OTA.md`) all pull the same artifact from one
+place. Enable it with `--firmware-dir <root>`. Implemented in `firmware.go`.
+
+**Channels.** `dev` is mutable (overwrite allowed, `-dirty` builds accepted);
+every other channel (`stable`, `extio-fw-vN`, …) is immutable — a version's
+target can be published once, and a `-dirty` build is refused.
+
+**Endpoints.**
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/firmware/extio` | open | all channels + their version manifests |
+| GET | `/api/firmware/extio/<channel>` | open | one channel (`latest` + versions) |
+| GET | `/api/firmware/extio/<channel>/<version>` | open | one version manifest |
+| GET | `/firmware/extio/<channel>/<version>/<file>` | open | download a `.uf2`/`.bin` |
+| POST | `/api/firmware/extio/<channel>` | token | publish one target image |
+
+Read side is unauthenticated on purpose (a fresh box / bench tool needs bare
+access, same as `/api/releases`). Publish is behind `--token`.
+
+**Board matrix.** The box's `build.sh` has two independent axes plus a
+compatibility key, so each image carries three identity fields:
+
+| Field | Source | Role |
+|---|---|---|
+| `build` | `build.sh` target name | **unique key** — the on-box updater fetches the image whose `build` == its own baked build, so it never strays onto another variant |
+| `board` | `PICO_BOARD` | **hard compatibility filter** — bench flash of an unknown board and the on-box updater both refuse a `board` mismatch (a pimoroni image must never land on a sparkfun board) |
+| `variant` | `BOX_TARGET` | descriptive role (`usb\|dual\|w6300\|pico2w`); not unique on its own — the three WiFi builds all share `pico2w`, which is why `build` is the key |
+
+`build` values today: `usb`, `dual`, `w6300` (all `board=pico2`), `pico2w`,
+`picoplus2w`, `thingplus` (each a distinct WiFi `board`). `otaCapable` is set
+per image — WiFi builds are `false` today (bigger images, no `copy_to_ram`),
+so they ship through the shelf for **bench flashing** but are gated out of
+self-update. One version holds all its build images.
+
+**Publish** is multipart, called once per build `.uf2`:
+fields `version` (req, `git describe`), `build` (req, the `build.sh` target),
+`board`, `variant`, `ota` (`1`/`true`), `dirty` (`1`/`true`), `notes`; files
+`uf2` (req) and optional `bin` (flat slot image for the on-box updater).
+sha256 is computed server-side, never trusted from the client.
+
+```bash
+curl -F version=extio-fw-v3 -F build=dual -F board=pico2 -F variant=dual \
+     -F uf2=@wiznet-io/dist/wizchip_dserv_config_dual.uf2 \
+     -H "Authorization: Bearer $TOKEN" \
+     https://dserv.net/api/firmware/extio/stable
+```
+
+**Manifest contract** (`manifest.json`, one per version; the puller verifies
+`sha256` before flashing):
+
+```json
+{
+  "family": "extio", "channel": "stable", "version": "extio-fw-v3",
+  "dirty": false, "publishedAt": "2026-07-12T23:15:09Z",
+  "images": [
+    {"build":"dual","board":"pico2","variant":"dual","otaCapable":false,
+     "file":"wizchip_dserv_config_dual.uf2","size":312480,"sha256":"…",
+     "bin":"…","binSha256":"…"}
+  ]
+}
+```
+
+**On-disk layout** under the firmware root:
+
+```
+<root>/extio/<channel>/<version>/<file>.uf2   # image(s), one per target
+<root>/extio/<channel>/<version>/manifest.json
+<root>/extio/<channel>/latest.json            # {"version": "…"} pointer
+```
+
+Next: a publisher (`build.sh --push` / `dservctl fw push`) and a consumer
+(extio-setup's Firmware panel gains a "pull from dserv.net" path that reuses
+the existing BOOTSEL flash).
+
 ## Development
 
 ```bash
