@@ -193,8 +193,9 @@ type Config struct {
 	// Server mode
 	ServerMode   bool
 	PublicServer bool // Protect mesh queries (requires token)
-	LandingPage  bool // Show landing page instead of mesh UI
-	FirmwareDir  string // root of the extio firmware shelf (see firmware.go)
+	LandingPage   bool   // Show landing page instead of mesh UI
+	FirmwareDir   string // root of the extio firmware shelf (see firmware.go)
+	FirmwareToken string // gates firmware PUBLISH only; read side stays open
 
 	// Client mode
 	AuthToken      string
@@ -406,6 +407,7 @@ Environment:
 	flag.BoolVar(&cfg.PublicServer, "public", false, "Public server mode (protect mesh data, requires --token)")
 	flag.BoolVar(&cfg.LandingPage, "landing-page", false, "Show simple landing page instead of mesh UI")
 	flag.StringVar(&cfg.FirmwareDir, "firmware-dir", "", "Root directory for the extio firmware shelf (server mode; empty = disabled)")
+	flag.StringVar(&cfg.FirmwareToken, "firmware-token", "", "Bearer token required to PUBLISH firmware (read stays open; empty = fall back to --token)")
 
 	// Client mode flags
 	flag.StringVar(&cfg.AuthToken, "token", "", "Bearer token for API authentication")
@@ -451,6 +453,10 @@ Environment:
 
 	if cfg.AuthToken == "" {
 		cfg.AuthToken = os.Getenv("DSERV_AGENT_TOKEN")
+	}
+	// Keep the publish secret out of ExecStart/ps: prefer the EnvironmentFile.
+	if cfg.FirmwareToken == "" {
+		cfg.FirmwareToken = os.Getenv("DSERV_AGENT_FIRMWARE_TOKEN")
 	}
 
 	cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
@@ -520,7 +526,13 @@ Environment:
 		// tools and (later) the on-box A/B updater to pull from.
 		if cfg.FirmwareDir != "" {
 			agent.registerFirmwareHandlers(mux)
-			log.Printf("  Firmware shelf: %s (/api/firmware/extio, /firmware/extio/…)", agent.firmwareRoot())
+			publishAuth := "OPEN (set --firmware-token or --token)"
+			if cfg.FirmwareToken != "" {
+				publishAuth = "token-protected (--firmware-token)"
+			} else if cfg.AuthToken != "" {
+				publishAuth = "token-protected (--token)"
+			}
+			log.Printf("  Firmware shelf: %s (read open; publish %s)", agent.firmwareRoot(), publishAuth)
 		}
 
 		// Workgroup directory page (e.g., /brown-sheinberg)

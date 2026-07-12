@@ -310,7 +310,17 @@ target can be published once, and a `-dirty` build is refused.
 | POST | `/api/firmware/extio/<channel>` | token | publish one target image |
 
 Read side is unauthenticated on purpose (a fresh box / bench tool needs bare
-access, same as `/api/releases`). Publish is behind `--token`.
+access, same as `/api/releases`). **Publish is gated by a dedicated
+`--firmware-token`** (or `DSERV_AGENT_FIRMWARE_TOKEN` env, so the secret can
+live in the `EnvironmentFile` instead of `ExecStart`/`ps`) — this locks
+publishing *without* touching the rest of the agent's API. If no firmware token
+is set, publish falls back to the general `--token`, which is itself open when
+unset (matching every other endpoint). On a public server, set one:
+
+```
+# /etc/dserv-agent/env  (chmod 600)
+DSERV_AGENT_FIRMWARE_TOKEN=<secret>
+```
 
 **Board matrix.** The box's `build.sh` has two independent axes plus a
 compatibility key, so each image carries three identity fields:
@@ -336,7 +346,7 @@ sha256 is computed server-side, never trusted from the client.
 ```bash
 curl -F version=extio-fw-v3 -F build=dual -F board=pico2 -F variant=dual \
      -F uf2=@wiznet-io/dist/wizchip_dserv_config_dual.uf2 \
-     -H "Authorization: Bearer $TOKEN" \
+     -H "Authorization: Bearer $DSERV_AGENT_FIRMWARE_TOKEN" \
      https://dserv.net/api/firmware/extio/stable
 ```
 

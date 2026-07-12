@@ -116,10 +116,31 @@ func (a *Agent) firmwareRoot() string {
 
 // registerFirmwareHandlers wires the shelf into server mode. Read side is
 // open (fresh boxes / bench tools need bare access, same as /api/releases);
-// publish is behind the agent's auth token.
+// publish is behind firmwareAuth.
 func (a *Agent) registerFirmwareHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/firmware/", a.handleFirmwareAPI)
 	mux.HandleFunc("/firmware/", a.handleFirmwareArtifact)
+}
+
+// firmwareAuth gates the PUBLISH endpoint only, without touching the rest of
+// the agent's API. A dedicated --firmware-token (or DSERV_AGENT_FIRMWARE_TOKEN)
+// locks publishing while the read side stays open for fresh boxes. If no
+// firmware token is set, publish falls back to the agent's general --token
+// (a.auth) -- which is itself open when that too is unset, matching every
+// other endpoint's convention.
+func (a *Agent) firmwareAuth(h http.HandlerFunc) http.HandlerFunc {
+	if a.cfg.FirmwareToken == "" {
+		return a.auth(h)
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		token := r.URL.Query().Get("token")
+		if auth != "Bearer "+a.cfg.FirmwareToken && token != a.cfg.FirmwareToken {
+			http.Error(w, "Unauthorized", 401)
+			return
+		}
+		h(w, r)
+	}
 }
 
 // ---- read side ----
@@ -149,7 +170,7 @@ func (a *Agent) handleFirmwareAPI(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": "publish to /api/firmware/extio/<channel>"})
 			return
 		}
-		a.auth(func(w http.ResponseWriter, r *http.Request) {
+		a.firmwareAuth(func(w http.ResponseWriter, r *http.Request) {
 			a.handleFirmwarePublish(w, r, parts[0])
 		})(w, r)
 		return

@@ -184,12 +184,17 @@ See dserv-agent/README.md for the API. Still TODO below: the *publisher*
 
 - build.sh gains a `release` mode: picotool-packaged artifacts (partition-
   aware UF2 for manual loads + flat .bin per slot for the updater) + manifest
-  JSON `{version, target, size, sha256}`; version = existing git describe.
-- Push artifacts + manifest to the dserv.net repo (same infra as dserv-agent
-  component releases; registry service already runs).
-- Agent: watch releases → stage locally → compare each box's `state/fw` →
-  rollout per policy (pin versions, canary one box, manual approve vs auto),
-  gated on ess state. Fleet page = the rollout console.
+  JSON (`{version, build, board, variant, size, sha256}`); version = existing
+  git describe.
+- Publish uploads the artifacts + manifest to the agent's **local firmware
+  shelf** (`--firmware-dir` on the dserv.net box, `firmware.go`) — NOT GitHub.
+  The shelf holds the actual `.uf2`/`.bin` bytes on the server's own disk; the
+  box (and the bench tools) fetch them over the LAN, never the internet. (This
+  is distinct from `releases.go`, which only caches GitHub *metadata* for the
+  `.deb` components — that path is unrelated to firmware.)
+- Agent: watch the shelf → compare each box's reported `state/build`+`state/fw`
+  against the channel pin → rollout per policy (pin versions, canary one box,
+  manual approve vs auto), gated on ess state. Fleet page = the rollout console.
 
 ## Migration (the one awkward step)
 

@@ -21,6 +21,12 @@ func newFwAgent(t *testing.T) *Agent {
 // the recorded response. `build` is the build.sh target name (the unique key).
 func publish(t *testing.T, a *Agent, channel, version, build string, dirty bool, uf2 []byte) *httptest.ResponseRecorder {
 	t.Helper()
+	return publishAuth(t, a, channel, version, build, dirty, uf2, "")
+}
+
+// publishAuth is publish with an optional Bearer token on the request.
+func publishAuth(t *testing.T, a *Agent, channel, version, build string, dirty bool, uf2 []byte, token string) *httptest.ResponseRecorder {
+	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 	_ = mw.WriteField("version", version)
@@ -39,6 +45,9 @@ func publish(t *testing.T, a *Agent, channel, version, build string, dirty bool,
 
 	req := httptest.NewRequest(http.MethodPost, "/api/firmware/extio/"+channel, &body)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	rr := httptest.NewRecorder()
 	a.handleFirmwareAPI(rr, req)
 	return rr
@@ -121,6 +130,30 @@ func TestFirmwarePathTraversalGuard(t *testing.T) {
 	a.handleFirmwareArtifact(rr, req)
 	if rr.Code != 404 {
 		t.Fatalf("traversal should 404, got %d", rr.Code)
+	}
+}
+
+func TestFirmwarePublishToken(t *testing.T) {
+	a := newFwAgent(t)
+	a.cfg.FirmwareToken = "s3cret"
+	img := []byte("img")
+
+	// Read side must stay open even with a publish token set.
+	rr := httptest.NewRecorder()
+	a.handleFirmwareAPI(rr, httptest.NewRequest(http.MethodGet, "/api/firmware/extio", nil))
+	if rr.Code != 200 {
+		t.Fatalf("read should stay open, got %d", rr.Code)
+	}
+
+	// No token / wrong token -> 401; correct token -> 200.
+	if rr := publishAuth(t, a, "dev", "v1", "usb", false, img, ""); rr.Code != 401 {
+		t.Fatalf("no token should 401, got %d", rr.Code)
+	}
+	if rr := publishAuth(t, a, "dev", "v1", "usb", false, img, "wrong"); rr.Code != 401 {
+		t.Fatalf("wrong token should 401, got %d", rr.Code)
+	}
+	if rr := publishAuth(t, a, "dev", "v1", "usb", false, img, "s3cret"); rr.Code != 200 {
+		t.Fatalf("correct token should 200, got %d %s", rr.Code, rr.Body.String())
 	}
 }
 
