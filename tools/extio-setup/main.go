@@ -33,11 +33,23 @@ var webFS embed.FS
 var version = "dev" // stamped by -ldflags at release build
 
 func main() {
-	httpAddr := flag.String("http", "127.0.0.1:2569", "listen address (use :2569 for LAN/rig mode)")
+	httpAddr := flag.String("http", "127.0.0.1:2569", "listen address; 0.0.0.0:2569 (or :2569) to accept LAN connections")
 	open := flag.Bool("open", true, "open the default browser on start")
 	fwDir := flag.String("fw", "", "directory of firmware .uf2 images (default: auto-detect wiznet-io/dist)")
 	dev := flag.Bool("dev", false, "serve web/ from disk instead of the embedded copy")
 	flag.Parse()
+	// Catch the classic Go-flag trap: "-open false" makes `false` a positional
+	// argument, which STOPS flag parsing -- so later flags (e.g. -http) are
+	// silently dropped. Booleans need '=' (-open=false).
+	if extra := flag.Args(); len(extra) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: ignoring extra argument(s) %v; a boolean flag needs "+
+			"'=' (use -open=false, not -open false -- the latter stops flag parsing)\n", extra)
+	}
+	// Accept a bare host with no port (e.g. -http 0.0.0.0) by adding the default.
+	addr := *httpAddr
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "2569")
+	}
 
 	fw := findFirmwareDir(*fwDir)
 
@@ -74,10 +86,10 @@ func main() {
 	}
 	mux.Handle("/", files)
 
-	ln, err := net.Listen("tcp", *httpAddr)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		// Another instance already running? Just front it and exit.
-		url := "http://" + hostURL(*httpAddr)
+		url := "http://" + hostURL(addr)
 		if ping(url) {
 			fmt.Printf("extio-setup already running at %s\n", url)
 			if *open {
@@ -85,11 +97,23 @@ func main() {
 			}
 			return
 		}
-		log.Fatalf("listen %s: %v", *httpAddr, err)
+		log.Fatalf("listen %s: %v", addr, err)
 	}
 
-	url := "http://" + hostURL(ln.Addr().String())
-	fmt.Printf("extio-setup %s serving %s", version, url)
+	// The browser-open URL is always this machine's loopback; the SHOWN url is
+	// LAN-reachable when bound to all interfaces -- hostURL would rewrite
+	// 0.0.0.0 to 127.0.0.1, which misleadingly reads as localhost-only even
+	// though the tool is reachable across the network.
+	localURL := "http://" + hostURL(ln.Addr().String())
+	shownURL := localURL
+	if host, port, _ := net.SplitHostPort(ln.Addr().String()); host == "0.0.0.0" || host == "::" || host == "" {
+		if ip := lanIP(); ip != "" {
+			shownURL = "http://" + net.JoinHostPort(ip, port) + " (all interfaces)"
+		} else {
+			shownURL = "http://<this-host>:" + port + " (all interfaces)"
+		}
+	}
+	fmt.Printf("extio-setup %s serving %s", version, shownURL)
 	if fw != "" {
 		fmt.Printf("  (firmware: %s)", fw)
 	}
@@ -98,7 +122,7 @@ func main() {
 	if *open {
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			openBrowser(url)
+			openBrowser(localURL)
 		}()
 	}
 	log.Fatal(http.Serve(ln, mux))
@@ -114,6 +138,19 @@ func hostURL(addr string) string {
 		host = "127.0.0.1"
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// lanIP returns this host's primary outbound IP -- the source address of the
+// default route. No packet is sent; the UDP socket only resolves the route.
+// "" if there is no usable route (then the caller falls back to the hostname).
+func lanIP() string {
+	c, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	host, _, _ := net.SplitHostPort(c.LocalAddr().String())
+	return host
 }
 
 func ping(url string) bool {
