@@ -9,8 +9,18 @@
 <body>
 <header>
   <h1>extio setup</h1>
-  <select id="ports" title="extio boxes found by USB identity"></select>
-  <button id="rescan" title="rescan USB">&#x21bb;</button>
+  <select id="mode" title="connection type: local USB cable, or a rig's dserv">
+    <option value="serial">USB serial</option>
+    <option value="dserv">dserv</option>
+  </select>
+  <span id="serialctl">
+    <select id="ports" title="extio boxes found by USB identity"></select>
+    <button id="rescan" title="rescan USB">&#x21bb;</button>
+  </span>
+  <span id="dservctl" hidden>
+    <input id="dhost" size="12" placeholder="rig host" value="localhost" title="dserv host (datapoint port 4620)">
+    <select id="dboxes" title="live extio boxes on this rig (extio/boxes)" hidden></select>
+  </span>
   <button id="connect">Connect</button>
   <span id="status" class="badge off">no box</span>
   <span id="beat" class="hint" title="data-interface heartbeat"></span>
@@ -69,6 +79,9 @@
         <button id="pintest" title="pulse this output">Test pulse</button>
         <span id="pinmsg" class="mono muted"></span>
       </div>
+      <div id="drvhint" class="hint" hidden>over dserv the box announces mode &amp; label only:
+        pulse/debounce/active_low apply blind (blank&nbsp;=&nbsp;leave as-is), and in_pullup shows as
+        &ldquo;in&rdquo; &mdash; use the USB serial driver for the full picture</div>
     </div>
 
     <div class="panel">

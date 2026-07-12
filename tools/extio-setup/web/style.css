@@ -36,6 +36,9 @@ header {
   border-bottom: 1px solid var(--line); background: var(--panel);
 }
 header h1 { font-size: 15px; margin: 0 10px 0 0; font-weight: 600; }
+#serialctl, #dservctl { display: inline-flex; align-items: center; gap: 8px; }
+#serialctl[hidden], #dservctl[hidden] { display: none; }
+#drvhint { margin-top: 8px; max-width: 62ch; }
 
 button {
   background: var(--panel); color: var(--ink); border: 1px solid var(--line);

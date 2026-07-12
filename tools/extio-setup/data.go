@@ -2,8 +2,8 @@
 // the 128-byte dserv datapoint frames it publishes (DI edges, DO readbacks,
 // group chords, heartbeat). Same wire format as wiznet-io/common/dserv_msg.h:
 //
-//   off 0: '>'   1-2: u16 namelen   3..: name   then u64 ts, u32 type,
-//   u32 datalen, data, zero pad to 128. Resync = skip bytes until '>'.
+//	off 0: '>'   1-2: u16 namelen   3..: name   then u64 ts, u32 type,
+//	u32 datalen, data, zero pad to 128. Resync = skip bytes until '>'.
 package main
 
 import (
@@ -44,6 +44,7 @@ type DataLink struct {
 	port   serial.Port
 	name   string
 	closed bool
+	died   string // why the reader gave up (shared stream); "" = normal life
 	subs   map[chan DataEvent]bool
 	last   map[string]DataEvent // latest di/do value per name: replayed on subscribe
 	frames uint64               // decoded frames
@@ -52,6 +53,14 @@ type DataLink struct {
 	bytes  uint64               // raw bytes read off the port
 	skip   uint64               // bytes skipped during resync (should stay 0)
 }
+
+// A sole reader resyncs at most once, skipping under one frame of bytes at
+// the initial mid-stream join. Skip climbing past this means ANOTHER PROCESS
+// is consuming the same port and we each see fragments -- observed live
+// 2026-07-11: dserv's usbio (root) held the data CDC, macOS admitted our open
+// anyway (TIOCEXCL can't evict an earlier opener), and both sides lost ~half
+// the frames. Reading on would corrupt the RIG's event stream, so we quit.
+const skipSharedThreshold = 1024
 
 func openDataLink(portName string) (*DataLink, error) {
 	p, err := serial.Open(portName, &serial.Mode{BaudRate: 115200})
@@ -146,7 +155,18 @@ func (d *DataLink) reader() {
 			if have == 0 && b != '>' {
 				d.mu.Lock()
 				d.skip++
+				shared := d.skip > skipSharedThreshold
 				d.mu.Unlock()
+				if shared {
+					d.mu.Lock()
+					d.died = "another process is reading " + d.name +
+						" (a second extio-setup, or a rig's dserv usbio module) -- frames " +
+						"were splitting between us, so live events are OFF. Close the other " +
+						"opener, or switch to the dserv driver (it shares cleanly)."
+					d.mu.Unlock()
+					d.Close()
+					return
+				}
 				continue // resync
 			}
 			frame[have] = b
@@ -165,17 +185,21 @@ func (d *DataLink) reader() {
 	}
 }
 
+// Reason reports why the link closed itself ("" while alive / normal close).
+func (d *DataLink) Reason() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.died
+}
+
 func (d *DataLink) emit(ev DataEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.frames++
 	// Track latest pin state for subscribe-time replay (di/do only: the
 	// names are bounded by pin count, so this map stays small).
-	if i := strings.Index(ev.Name, "/state/d"); i >= 0 {
-		leaf := ev.Name[i+len("/state/"):]
-		if strings.HasPrefix(leaf, "di/") || strings.HasPrefix(leaf, "do/") {
-			d.last[ev.Name] = ev
-		}
+	if isPinState(ev.Name) {
+		d.last[ev.Name] = ev
 	}
 	for ch := range d.subs {
 		select {
@@ -184,6 +208,17 @@ func (d *DataLink) emit(ev DataEvent) {
 			d.drops++ // slow subscriber: drop (visible in /api/status)
 		}
 	}
+}
+
+// isPinState reports whether name is a live pin level (.../state/di/N or
+// do/N) -- the values replayed to fresh subscribers so a UI repaints pin
+// state after a gap.
+func isPinState(name string) bool {
+	if i := strings.Index(name, "/state/d"); i >= 0 {
+		leaf := name[i+len("/state/"):]
+		return strings.HasPrefix(leaf, "di/") || strings.HasPrefix(leaf, "do/")
+	}
+	return false
 }
 
 func parseFrame(f []byte) (DataEvent, bool) {
@@ -203,39 +238,44 @@ func parseFrame(f []byte) (DataEvent, bool) {
 	if namelen+datalen > frameLen-19 {
 		return ev, false
 	}
-	data := f[p+16 : p+16+datalen]
+	ev.Val = decodeVal(ev.Type, f[p+16:p+16+datalen])
+	return ev, true
+}
 
-	switch ev.Type {
+// decodeVal turns a datapoint's raw little-endian payload into a native Go
+// value. Shared by the serial frame parser and the dserv driver's %get
+// snapshot decoder so both produce identical DataEvent values.
+func decodeVal(dtype uint32, data []byte) any {
+	switch dtype {
 	case dtString:
-		ev.Val = string(data)
+		return string(data)
 	case dtInt:
-		if datalen >= 4 {
-			ev.Val = int32(binary.LittleEndian.Uint32(data))
+		if len(data) >= 4 {
+			return int32(binary.LittleEndian.Uint32(data))
 		}
 	case dtShort:
-		if datalen >= 2 {
-			ev.Val = int16(binary.LittleEndian.Uint16(data))
+		if len(data) >= 2 {
+			return int16(binary.LittleEndian.Uint16(data))
 		}
 	case dtInt64:
-		if datalen >= 8 {
-			ev.Val = int64(binary.LittleEndian.Uint64(data))
+		if len(data) >= 8 {
+			return int64(binary.LittleEndian.Uint64(data))
 		}
 	case dtFloat:
-		if datalen >= 4 {
-			ev.Val = math.Float32frombits(binary.LittleEndian.Uint32(data))
+		if len(data) >= 4 {
+			return math.Float32frombits(binary.LittleEndian.Uint32(data))
 		}
 	case dtDouble:
-		if datalen >= 8 {
-			ev.Val = math.Float64frombits(binary.LittleEndian.Uint64(data))
+		if len(data) >= 8 {
+			return math.Float64frombits(binary.LittleEndian.Uint64(data))
 		}
 	case dtByte:
-		if datalen == 1 {
-			ev.Val = int(data[0])
-		} else {
-			ev.Val = hex.EncodeToString(data)
+		if len(data) == 1 {
+			return int(data[0])
 		}
+		return hex.EncodeToString(data)
 	default: // EVT and anything else: hex, small and lossless
-		ev.Val = hex.EncodeToString(data)
+		return hex.EncodeToString(data)
 	}
-	return ev, true
+	return nil
 }

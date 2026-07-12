@@ -15,13 +15,26 @@ import (
 type server struct {
 	mu    sync.Mutex
 	link  *Link
-	data  *DataLink // live event stream from the box's data CDC (may be nil)
-	fwDir string
+	data  *DataLink  // live event stream from the box's data CDC (may be nil)
+	dserv *DservLink // the dserv driver (mutually exclusive with the serial pair)
+	// why the last data link ended itself (shared-port detection); shown by
+	// the UI so a vanished event stream is explained, not mysterious
+	dataNote string
+	fwDir    string
+}
+
+// eventSource is the live-event side shared by both drivers: the serial data
+// CDC and the dserv connect-back push both feed the same DataEvent pipeline.
+type eventSource interface {
+	Subscribe() (chan DataEvent, []DataEvent)
+	Unsubscribe(chan DataEvent)
+	Stats() (frames, bad, drops, bytes, skip uint64)
 }
 
 func newServer(fwDir string) *server { return &server{fwDir: fwDir} }
 
-// shutdown closes both serial links cleanly (releases the OS port claims).
+// shutdown closes all links cleanly (releases OS port claims; unregisters
+// from dserv so it stops pushing at a dead port).
 func (s *server) shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -32,6 +45,10 @@ func (s *server) shutdown() {
 	if s.data != nil {
 		s.data.Close()
 		s.data = nil
+	}
+	if s.dserv != nil {
+		s.dserv.Close()
+		s.dserv = nil
 	}
 }
 
@@ -48,6 +65,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/firmware", s.handleFirmware)
 	mux.HandleFunc("POST /api/flash", s.handleFlash)
+	mux.HandleFunc("POST /api/dserv/connect", s.handleDservConnect)
+	mux.HandleFunc("POST /api/dserv/disconnect", s.handleDservDisconnect)
+	mux.HandleFunc("GET /api/dserv/state", s.handleDservState)
+	mux.HandleFunc("POST /api/dserv/set", s.handleDservSet)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -80,16 +101,47 @@ func (s *server) currentData() *DataLink {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data != nil && s.data.isClosed() {
+		if why := s.data.Reason(); why != "" {
+			s.dataNote = why
+		}
 		s.data = nil
 	}
 	return s.data
 }
 
+func (s *server) currentDserv() *DservLink {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dserv != nil && s.dserv.isClosed() {
+		s.dserv = nil
+	}
+	return s.dserv
+}
+
+// eventSource returns whichever live-event source is active (drivers are
+// mutually exclusive, so at most one is non-nil).
+func (s *server) eventSource() eventSource {
+	if d := s.currentData(); d != nil {
+		return d
+	}
+	if d := s.currentDserv(); d != nil {
+		return d
+	}
+	return nil
+}
+
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	l := s.current()
 	d := s.currentData()
+	dl := s.currentDserv()
+	mode := ""
+	if l != nil {
+		mode = "serial"
+	} else if dl != nil {
+		mode = "dserv"
+	}
 	st := map[string]any{"version": version, "connected": l != nil, "firmwareDir": s.fwDir,
-		"data": d != nil}
+		"data": d != nil, "mode": mode}
 	if l != nil {
 		st["port"] = l.name
 	}
@@ -97,6 +149,25 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		frames, bad, drops, bytes, skip := d.Stats()
 		st["dataStats"] = map[string]uint64{"frames": frames, "bad": bad, "drops": drops,
 			"bytes": bytes, "skip": skip}
+	}
+	s.mu.Lock()
+	if s.dataNote != "" {
+		st["dataNote"] = s.dataNote
+	}
+	s.mu.Unlock()
+	if dl != nil {
+		boxes, primary := dl.Boxes()
+		if boxes == nil {
+			boxes = []string{}
+		}
+		frames, bad, drops, bytes, skip := dl.Stats()
+		reg, pushes := dl.Health()
+		st["dserv"] = map[string]any{
+			"host": dl.host, "boxes": boxes, "primary": primary,
+			"reg": reg, "pushes": pushes, "regAddr": dl.RegAddr(),
+			"stats": map[string]uint64{"frames": frames, "bad": bad, "drops": drops,
+				"bytes": bytes, "skip": skip},
+		}
 	}
 	writeJSON(w, st)
 }
@@ -128,6 +199,11 @@ func (s *server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.data.Close()
 		s.data = nil
 	}
+	if s.dserv != nil { // drivers are exclusive: serial connect ends a dserv session
+		s.dserv.Close()
+		s.dserv = nil
+	}
+	s.dataNote = "" // new session, fresh story
 	l, err := openLink(req.Port)
 	if err != nil {
 		s.link = nil
@@ -173,6 +249,7 @@ func (s *server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 		s.data.Close()
 		s.data = nil
 	}
+	s.dataNote = ""
 	s.mu.Unlock()
 	writeJSON(w, map[string]any{"connected": false})
 }
@@ -298,12 +375,13 @@ func (s *server) handleConsole(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleEvents streams decoded data-CDC frames (DI edges, DO readbacks,
-// groups, heartbeat) as JSON server-sent events.
+// handleEvents streams decoded datapoint frames (DI edges, DO readbacks,
+// groups, heartbeat) as JSON server-sent events, from whichever driver is
+// live: the serial data CDC or the dserv connect-back push.
 func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	d := s.currentData()
+	d := s.eventSource()
 	if d == nil {
-		httpErr(w, 409, "no data interface open")
+		httpErr(w, 409, "no event source open")
 		return
 	}
 	fl, ok := w.(http.Flusher)
@@ -397,4 +475,100 @@ func (s *server) handleFlash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "steps": steps})
+}
+
+/* ---- the dserv driver's HTTP surface ---- */
+
+// handleDservConnect opens the dserv driver: dial, %reg binary connect-back,
+// %match extio/*, seed retained state. Exclusive with the serial driver.
+func (s *server) handleDservConnect(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Host string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Host) == "" {
+		httpErr(w, 400, "need {\"host\": ...}")
+		return
+	}
+	s.mu.Lock()
+	if s.link != nil {
+		s.link.Close()
+		s.link = nil
+	}
+	if s.data != nil {
+		s.data.Close()
+		s.data = nil
+	}
+	if s.dserv != nil {
+		s.dserv.Close()
+		s.dserv = nil
+	}
+	s.dataNote = ""
+	s.mu.Unlock() // opening can take seconds (resolve+dial+seed); don't hold the lock
+
+	dl, err := openDservLink(req.Host)
+	if err != nil {
+		httpErr(w, 502, "%v", err)
+		return
+	}
+	s.mu.Lock()
+	old := s.dserv // a concurrent connect may have raced us; last one wins
+	s.dserv = dl
+	s.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	boxes, primary := dl.Boxes()
+	if boxes == nil {
+		boxes = []string{}
+	}
+	writeJSON(w, map[string]any{"connected": true, "host": dl.host,
+		"boxes": boxes, "primary": primary})
+}
+
+func (s *server) handleDservDisconnect(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.dserv != nil {
+		s.dserv.Close()
+		s.dserv = nil
+	}
+	s.mu.Unlock()
+	writeJSON(w, map[string]any{"connected": false})
+}
+
+// handleDservState returns one box's retained state/* leaves -- the dserv
+// driver's `dump`. No box param = the rig's primary.
+func (s *server) handleDservState(w http.ResponseWriter, r *http.Request) {
+	dl := s.currentDserv()
+	if dl == nil {
+		httpErr(w, 409, "not connected to a dserv")
+		return
+	}
+	boxes, primary := dl.Boxes()
+	if boxes == nil {
+		boxes = []string{}
+	}
+	box := r.URL.Query().Get("box")
+	if box == "" {
+		box = primary
+	}
+	writeJSON(w, map[string]any{"box": box, "boxes": boxes, "primary": primary,
+		"state": dl.StateFor(box)})
+}
+
+// handleDservSet publishes one extio/<box>/config|cmd datapoint (the key
+// whitelist lives in DservLink.Set).
+func (s *server) handleDservSet(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Key, Value string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Key == "" {
+		httpErr(w, 400, "need {\"key\": ..., \"value\": ...}")
+		return
+	}
+	dl := s.currentDserv()
+	if dl == nil {
+		httpErr(w, 409, "not connected to a dserv")
+		return
+	}
+	if err := dl.Set(req.Key, req.Value); err != nil {
+		httpErr(w, 502, "%v", err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
