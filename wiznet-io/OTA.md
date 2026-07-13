@@ -95,6 +95,155 @@ where BOOTSEL is still a safety net while the risky machinery earns trust —
 before a deployed eth box depends on it. The split-path alternative
 (BOOTSEL-for-USB, A/B-only-for-eth) means two update paths to test forever.
 
+## Stage 0 — delivery proof (converged 2026-07-12, transport co-designed with David)
+
+Prove the image crosses the dserv link correctly BEFORE the A/B/TBYB lift. No
+partition table, no boot switch — receive → scratch flash → verify sha → report.
+
+**Transport = box PULLS via dserv's raw binary get, NOT pub/sub.** The pub/sub
+push path is hard-capped at 128B (`SendClient::send_dpoint` →
+`DPOINT_BINARY_FIXED_LENGTH`; `dpoint_to_binary` into a 127B buffer, over-size
+→ returns 0, not sent). But dserv's command port has a raw binary get:
+
+```
+request : '<' + varlen(u16 LE) + varname            (Dataserver.cpp:2541)
+reply   : size(int32 LE) + dpoint_to_binary(varlen+varname+ts+type+datalen+data)
+```
+
+`dpoint_to_binary` copies `data.buf` **raw — no base64** (unlike the `@get` /
+`dsGetDG` text path, which base64s via `dpoint_to_string`; qpcs.tcl `dsGetDG` is
+the base64 reference, deliberately NOT used here — raw streams to flash cleaner).
+
+**Flow:**
+1. **Orchestrator = the `extio` subprocess** (`config/extioconf.tcl`, in-process
+   in dserv → `dservSet` a raw binary datapoint with no wire-size cap, no
+   base64). Stages the image as `extio/<box>/ota/image`, then fires
+   `cmd/ota/begin` (small: sha256 + size, fits the frame, rides pub/sub).
+2. **Box** on `cmd/ota/begin` (dispatched in `on_frame` before `dserv_dispatch`):
+   opens a transient W6300 socket (SN6/SN7 free; SN5 pattern), sends the `<`
+   request, reads `size`, skips the dpoint header, **streams `datalen` bytes
+   straight to a scratch flash region** (sector-by-sector via `pico_flash.h`;
+   never buffers 150KB in SRAM), runs `pico_sha256` (RP2350 hardware) over it,
+   publishes `state/ota/{state,progress,result}`.
+
+**Measured constraints (probe 2026-07-12):** images ~150KB; RP2350 hw SHA256
+present (`pico_sha256`); scratch region = a spare span below the persist sector
+(no PT yet). New box primitive: `box_net_get_binary(key, sink_cb)`. This is
+Stage 0 only — Stage 1 adds the A/B slots + TBYB the pulled image then feeds.
+
+**STATUS: Stage 0 RIG-VALIDATED end-to-end 2026-07-12** on box `pico` (W6300-EVB,
+eth, dserv=rpi500). Positive: `extio_ota_push pico <120KB>` → staging→100%→**ok**,
+on-box hw-SHA256 == host `sha256 -file`, image auto-cleared, **box stayed alive
+through the multi-second RT stall** (the `g_wdt_gate=0` guard held — no wedge).
+Negative: wrong expected sha → **fail/sha_mismatch** (verify is real). All pieces
+(`box_net_get_binary` + vtable, `pico_ota.h` sink/sha, on_frame `cmd/ota/begin`
+hook + core-0/core-1 flash handshake, `extioconf` `extio_ota_push`) proven on
+silicon. The bytes-crossing-the-wire half is DONE; Stage 1 is the boot lifecycle.
+
+## Stage 1 — A/B slots + TBYB (converged 2026-07-12, bootrom APIs verified in SDK)
+
+Turn the delivery proof into a *bootable* update: the pulled image lands in the
+**inactive slot**, boots **once** on trial, and becomes permanent only if it
+proves itself. Every failure path converges on "old image boots." **No custom
+bootloader** — the RP2350 bootrom does slot selection and rollback itself.
+
+**Reuse from Stage 0 (unchanged):** `box_net_get_binary` · `pico_ota.h` sink+hw
+SHA · the **core-0/core-1 flash handshake** (core 1 can't `flash_safe_execute`
+under `ASSUME_CORE1_SAFE`) · `extioconf` orchestrator · `state/ota/*` publish.
+Stage 1 only changes **where** we write (scratch → inactive slot) and adds the
+arm/reboot/buy lifecycle around it.
+
+**Bootrom mechanics (all verified present in the vendored pico-sdk):**
+- `rom_load_partition_table` + `rom_get_partition_table_info` — read the PT, find
+  our A/B pair and the **inactive** partition's storage base + size at runtime.
+- `rom_reboot(BOOT_TYPE_FLASH_UPDATE | NO_RETURN_ON_SUCCESS, delay, inactive_base, 0)`
+  — reboot preferring the just-written slot (`p0` = start of updated region).
+- **TBYB**: an image built with the try flag boots once; `rom_explicit_buy(workarea,
+  size)` commits it. `rom_get_sys_info(SYS_INFO_BOOT_INFO)` →
+  `tbyb_and_update_info & BOOT_TBYB_AND_UPDATE_FLAG_BUY_PENDING` tells the new
+  image it's on trial. Rollback is AUTOMATIC: buy never called → next reset (our
+  Stage-3 watchdog, or power) reverts to the other slot. **The watchdog we already
+  ship IS the rollback trigger — no new mechanism.**
+- `copy_to_ram` (already on) → the image runs from SRAM, position-independent, so
+  **one uf2 runs in either slot**; we flash the same image to whichever is inactive.
+
+**Flash layout — migration target (4MB pico2):**
+```
+0x000000  partition table (unpartitioned front)
+0x004000  slot A   ~512KB   (image ~150KB -> 3x margin)
+0x084000  slot B   ~512KB
+0x104000  spare/data ~2.9MB
+0x3FF000  persist sector (4KB) -- OUTSIDE both slots, reserved in the PT
+```
+
+**Fresh-card / provisioning (the real ergonomic cost):** an A/B card NEEDS a PT
+for the bootrom to know the slots, so the naive "drag one bare image onto the
+BOOTSEL drive" no longer yields a working A/B card (it just recreates the old
+single-image-at-flash-start layout — boots, but no rollback). Softeners:
+1. Drag-and-drop isn't lost — only the "just the image" shortcut is. A UF2 can
+   carry a partition table (its own family id; see `boot/uf2.h`
+   RP2350_ARM_S=0xe48bff59, DATA=0xe48bff58), and picotool can **merge PT +
+   slot-A image into ONE factory uf2** → provisioning stays a single drag of a
+   different file. (Exact `picotool partition create … --embed` recipe = a
+   bench-confirm item, but it's standard picotool.)
+2. It's ONE-TIME: after the first partition+provision, every update is OTA — no
+   drive, no picotool, never touch the box.
+3. Recovery unchanged: BOOTSEL + drag a factory uf2 is always the last resort.
+4. Keep both worlds: a dev/bench box can stay no-PT single-image (drag a plain
+   build exactly like today); only OTA-enrolled boxes get partitioned.
+
+**Build-side changes:**
+- **Versioned image** — embed a monotonic version (picobin `1BS_VERSION`, item
+  0x48) so a clean boot prefers the newer valid slot. **Default: version from
+  `git rev-list --count`** (monotonic int).
+- **TBYB flag** — the image carries the try flag for boot-once. **Default:
+  always-TBYB + always-buy** — one uniform code path (bench flashes self-test and
+  buy too, so a wedging bench flash self-heals the same way a bad OTA does),
+  rather than maintaining separate bench vs OTA artifacts.
+- **PT artifact** — a `partition_table.json` → `picotool partition create` → PT
+  uf2 (the migration payload; or bundled into the factory uf2 above).
+
+**Firmware (new module, ~300 lines, reg-machine-shaped):**
+- **Slot resolver** (`pico_ota_slot.h`): at boot, PT-info → which slot we booted,
+  its A/B pair, the inactive slot's base+size. Publish `state/ota/slot` (A|B).
+- **Retarget the writer**: `pico_ota_begin` takes a runtime `base`+`size` (today
+  `PICO_OTA_SCRATCH_OFFSET`/`_BYTES` are compile constants) → point at the inactive
+  slot. Same core-0 `flash_ota_erase/program` handshake, whole-slot span.
+- **Arm + reboot**: `pico_ota_finish==ok` → publish `state/ota/state=armed` →
+  `rom_reboot(FLASH_UPDATE, ~500ms, inactive_base, 0)`.
+- **Buy / self-test SM** (runs on the NEW boot): if BUY_PENDING, self-test window
+  — transport up + `have_dserv_target` + dserv client connected + **registration
+  acked** + `g_rt_beat` advancing for **N s (default 20)** → `rom_explicit_buy` →
+  `state/ota/result=bought`. Never satisfied / wedge → watchdog → bootrom reverts
+  → old image publishes `state/boot=watchdog` + unchanged `state/fw` (the
+  visible-failure contract). CRITICAL ORDER: never buy before self-test passes;
+  the watchdog window must be long enough for a healthy image to buy first.
+- **Boot-type reporting**: extend `state/boot` with trial/buy-pending/bought so the
+  fleet page narrates a trial vs a committed image.
+
+**Orchestrator/dserv (minimal):** `extio_ota_push` ≈ unchanged (box decides slot +
+lifecycle); the orchestrator just watches `armed → (reboot) → bought | fail` and
+surfaces the trial on the fleet page. Optional `cmd/ota/abort` before arm.
+
+**Chosen defaults (David: "no strong opinions; rollback is the win"):**
+always-TBYB+always-buy · 512KB slots · version = `git rev-list --count` · persist
+stays raw-offset but PT-reserved. All vetoable later; none block rollback. (These
+resolve the "slot size" + close part of the Open-questions list below.)
+
+**Bench-first (J-Link box, before any fleet box; see Adversarial bench checklist):**
+1. PT create + `picotool partition info`; **confirm real flash size / aliasing at
+   PT creation** (write a marker near the claimed top, read back).
+2. A→B OTA of a GOOD image → self-test → buy → runs B.
+3. A→B OTA of a WEDGING image → watchdog → **bootrom reverts to A** +
+   `state/boot=watchdog` (the money test).
+4. Power-cut mid-write → old slot still boots.
+5. Then migrate + trial on rig `pico`.
+
+**Rollback invariant:** only the inactive slot is ever written; the new image must
+EARN permanence (self-test → explicit buy); any failure — bad sha, wedge, power
+loss, failed self-test — leaves buy uncalled → bootrom boots the old slot. Config
+persist lives outside both slots, never touched.
+
 ## Principles (agreed 2026-07-07/09)
 
 1. **Boxes never touch the internet.** dserv-agent is the broker: it polls the
@@ -125,22 +274,33 @@ other slot. Composition with existing machinery:
   the inactive slot while core 1 keeps capturing DI edges (same contract as
   `save`).
 
-## Flash layout (decide after probing)
+## Flash layout — PROBED 2026-07-12 on the rig box `pico` (W6300-EVB)
 
-**First step of the project: probe the real flash size** (`picotool info`
-shows the JEDEC part). The build assumes `PICO_BOARD=pico2` → 4MB, but QSPI
-address aliasing means the working persist-at-"4MB−4KB" does NOT prove 4MB
-physical. Proposed layout at 4MB:
+Measured via `picotool info -a` / `partition info` (bootsel-over-dserv, picotool
+on the box's USB host `.50`, no dialout/sudo needed — plugdev udev rule):
+
+- **Image ~150 KB** (binary `0x10000000`–`0x100255e0` = `0x255e0`), NOT the 300KB
+  earlier guess. Half-size → slot pressure is a non-issue.
+- **No partition table** ("there is no partition table") → the one-time
+  migration reflash is confirmed necessary.
+- **Physical flash size not asserted by OTP** (`flash devinfo 0x0c00`: no CS0
+  size field, picotool prints no size). `PICO_BOARD=pico2` build → 4MB assumed;
+  QSPI aliasing still means confirm-at-PT-creation (write a marker near the
+  claimed top, read back — aliasing reveals a smaller part).
+- Image type `ARM Secure` (signed image-def block), `secure boot: 0`.
+
+Proposed layout at 4MB (generous, since images are only ~150KB):
 
 ```
 0x000000  partition table
-          slot A   1MB   (images ~300KB today, hard-capped by 520KB SRAM)
+          slot A   1MB   (images ~150KB today; huge margin under 520KB SRAM)
           slot B   1MB
           spare    ~2MB  (future: staged assets, logs)
 0x3FF000  persist sector (4KB, OUTSIDE the slots -- FLASH_STORE_OFFSET today)
 ```
 
-At 2MB physical: 2×512KB slots + persist still fits current images. Caveat:
+At 2MB physical: 2×512KB slots + persist still fits ~150KB images ~3× over.
+Caveat:
 **pico2w** images (cyw43 firmware, no copy_to_ram) are much larger — size
 them before promising OTA on WiFi boxes; deferring pico2w OTA is acceptable.
 
@@ -245,7 +405,8 @@ touching deployed hardware. After that generation, updates are OTA.
 
 - physical flash size per board batch (probe; may differ W6300-EVB vs plain
   Pico 2 stock)
-- slot size final call (512KB vs 1MB) after pico2w image sizing
+- slot size: DEFAULTED to 512KB (Stage 1); revisit only if pico2w image sizing
+  (cyw43 blob, no copy_to_ram) forces bigger slots on WiFi boxes
 - **image authenticity vs integrity**: sha256 catches corruption but not a
   malicious image from a compromised agent/LAN. LAN-only distribution + sha256
   is defensible for a lab behind its own network; the upgrade is RP2350 secure
