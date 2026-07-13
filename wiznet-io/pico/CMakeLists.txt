@@ -112,9 +112,35 @@ target_link_libraries(${CFG_NAME} PRIVATE hardware_i2c hardware_spi)
 # PICO_FLASH_ASSUME_CORE1_SAFE makes flash_safe_execute skip the lockout), and
 # XIP cache misses disappear as an RT jitter source. pico2w excluded: its image
 # plus the cyw43 firmware blob doesn't fit in RAM, so it keeps the lockout path.
-if(NOT BOX_TARGET STREQUAL "pico2w")
+if(NOT BOX_TARGET STREQUAL "pico2w" AND NOT BOX_XIP)
     pico_set_binary_type(${CFG_NAME} copy_to_ram)
     target_compile_definitions(${CFG_NAME} PRIVATE PICO_FLASH_ASSUME_CORE1_SAFE=1)
+endif()
+# --xip build (sh build.sh dual --xip): default XIP binary, NO copy_to_ram, so the
+# image can boot from an A/B partition slot via the bootrom's address translation
+# (Stage-1 test). Without PICO_FLASH_ASSUME_CORE1_SAFE, rt_main registers core 1 as
+# a flash-lockout victim, so flash ops park it (the pre-Stage-2 behavior) -- fine
+# for OTA writes (gated !in_obs) and rare saves. BOX_XIP is compiled in for a banner.
+# --tbyb: flag the IMAGE_DEF as try-before-you-buy (PICOBIN_IMAGE_TYPE_EXE_TBYB).
+# A FLASH_UPDATE boot of this image is then buy-pending: the firmware must
+# rom_explicit_buy after its self-test, else the bootrom reverts (rollback). The
+# crt0 embedded block reads this def, so set it project-wide, not just on the target.
+if(BOX_TBYB)
+    target_compile_definitions(${CFG_NAME} PRIVATE PICO_CRT0_IMAGE_TYPE_TBYB=1 BOX_TBYB=1)
+endif()
+if(BOX_XIP)
+    target_compile_definitions(${CFG_NAME} PRIVATE BOX_XIP=1)
+endif()
+# Any A/B SLOT image (--xip OR --tbyb OR signed) needs a hash so the bootrom's
+# slot boot verifies it (boot_diagnostic IMAGE_DEF_VERIFIED_OK), like the official
+# pico-examples pico_w/wifi/ota_update. Optionally sign it (BOX_SIGN_KEY, secp256k1).
+# NOTE: copy_to_ram A/B images (no BOX_XIP) also get this -- copy_to_ram's IRQ-only
+# flash (ASSUME_CORE1_SAFE) makes rom_explicit_buy's flash op WORK, unlike XIP.
+if(BOX_XIP OR BOX_TBYB OR BOX_SIGN_KEY)
+    pico_hash_binary(${CFG_NAME})
+    if(BOX_SIGN_KEY)
+        pico_sign_binary(${CFG_NAME} ${BOX_SIGN_KEY})
+    endif()
 endif()
 
 # The usb target owns TinyUSB for the data/CLI CDCs, so its stdio (printf + CLI)

@@ -22,10 +22,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)                 # .../wiznet-io
 # may appear before or after the flags (sh build.sh dual --push == --push dual).
 TARGET=dual
 PUSH=0
+XIP=0                                               # --xip: build XIP (no copy_to_ram) for A/B slot-boot tests
+TBYB=0                                              # --tbyb: flag the IMAGE_DEF try-before-you-buy (OTA trial image)
 CHANNEL=${PUSH_CHANNEL:-dev}
 while [ $# -gt 0 ]; do
   case "$1" in
     --push)        PUSH=1 ;;
+    --xip)         XIP=1 ;;
+    --tbyb)        TBYB=1 ;;
     --channel)     shift; CHANNEL=$1 ;;
     --channel=*)   CHANNEL=${1#--channel=} ;;
     -*)            echo "unknown flag '$1'" >&2; exit 1 ;;
@@ -33,6 +37,23 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# --xip: build as default (XIP, run-from-flash) instead of copy_to_ram, so the
+# image boots from an A/B partition slot via the bootrom's address translation
+# (Stage-1 experiment). Separate build dir + dist name so it never clobbers the
+# normal copy_to_ram artifact. See OTA.md "Stage 1".
+XIPSUF=""; XIPFLAG=""
+if [ "$XIP" = 1 ]; then XIPSUF="_xip"; XIPFLAG="-DBOX_XIP=1"; fi
+# --tbyb: set PICO_CRT0_IMAGE_TYPE_TBYB in the IMAGE_DEF (PICOBIN_IMAGE_TYPE_EXE_TBYB
+# bit) so a FLASH_UPDATE boot of this image is buy-pending -> the box must
+# rom_explicit_buy or the bootrom reverts. The OTA'd (trial) image is built --tbyb;
+# the committed base image is not. (Same knob the cyw43 firmware TBYB variant uses.)
+TBYBSUF=""; TBYBFLAG=""
+if [ "$TBYB" = 1 ]; then TBYBSUF="_tbyb"; TBYBFLAG="-DBOX_TBYB=1"; fi
+# SIGN_KEY=<secp256k1 .pem>: sign the image (pico_sign_binary). Testing whether
+# rom_explicit_buy requires a signed image to commit a TBYB update.
+SIGNFLAG=""; SIGNSUF=""
+[ -n "$SIGN_KEY" ] && { SIGNFLAG="-DBOX_SIGN_KEY=$SIGN_KEY"; SIGNSUF="_signed"; }
 
 WIZ=${WIZNET_PICO_C:-$HERE/.wiznet-pico-c}
 : "${PICO_TOOLCHAIN_PATH:=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi}"
@@ -59,7 +80,7 @@ WIFI="-DWIFI_SSID=${WIFI_SSID:-change-me} -DWIFI_PASSWORD=${WIFI_PASSWORD:-chang
 # Firmware version baked into the image: published as state/fw at every connect,
 # shown in the console greeting + `show` -- fleet inventory for the status web
 # page and, later, the OTA update check.
-FWVER=$(cd "$HERE" && git describe --always --dirty 2>/dev/null || echo dev)
+FWVER=${OTA_FWVER:-$(cd "$HERE" && git describe --always --dirty 2>/dev/null || echo dev)}   # OTA_FWVER overrides the state/fw string (distinguishable OTA test image; not the picobin A/B version)
 # BOARD (= PICO_BOARD) is the shelf's hard compatibility key; VARIANT (= BOX_TARGET)
 # is the descriptive role. Both ride the manifest on --push (build = $TARGET = the
 # unique key). See dserv-agent/README.md "board matrix".
@@ -81,14 +102,14 @@ case "$TARGET" in
     echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | dual)" >&2; exit 1 ;;
 esac
 # ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
-BUILD="$WIZ/build_$TARGET"
+BUILD="$WIZ/build_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}"
 mkdir -p "$BUILD"
 ( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $FLAGS >/dev/null \
+    -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $XIPFLAG $TBYBFLAG $SIGNFLAG $FLAGS >/dev/null \
   && ninja wizchip_dserv_config )
 
 # 4. publish to dist/ under a target-specific name (no clobbering across targets)
-OUT="wizchip_dserv_config_$TARGET"
+OUT="wizchip_dserv_config_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" "$HERE/dist/$OUT.uf2"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/$OUT.elf"
 echo ">> dist/ updated: $OUT.uf2 ($(cd "$HERE" && ls -l dist/$OUT.uf2 | awk '{print $5" bytes"}'), fw $FWVER)"

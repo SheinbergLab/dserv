@@ -74,6 +74,7 @@
 #include "pico_ain.h"           /* ADS1115 analog-in: always compiled, runtime-enabled (ain_en) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
+#include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
 
 /* USB data-CDC publish accounting (box_net_usb.h increments; `txstats` prints).
  * Defined here unconditionally so every transport build links. */
@@ -446,6 +447,108 @@ static void publish_ident(void)
     box_net_client_send(f, DSERV_MSG_LEN);
 }
 
+/* Stage-1 OTA slot probe, done ONCE at boot (core 1 init) into g_slot; published
+ * at every (re)connect so the fleet sees each box's partition state remotely.
+ *   state/ota/pt      partition count (0 = unpartitioned card, today's baseline)
+ *   state/ota/boot    "<boot_type> part=<n>[ buy_pending]"
+ *   state/ota/target  inactive slot a new image targets: "part=<t> 0x<base>+<size>"
+ *                     or "none" (no PT yet). This IS the future OTA write target. */
+static pico_ota_slot_t g_slot;
+static volatile uint8_t g_slot_probe_req;   /* cmd/ota/probe -> run once in the RT loop */
+static uint8_t g_slot_have;                  /* a probe has completed -> slotinfo is real */
+/* ---- TBYB trial state (captured at boot; self-test + buy on core 0) ---- */
+static uint8_t  g_boot_type;                 /* rom boot_type (4 = FLASH_UPDATE) */
+static int8_t   g_boot_partition = -1;       /* partition we booted from         */
+static uint8_t  g_boot_trial;                /* 1 = FLASH_UPDATE + buy-pending -> on trial */
+static uint8_t  g_ota_bought;                /* explicit_buy attempted this boot */
+static volatile int16_t g_ota_buy_rc = 99;   /* explicit_buy return code (0 = committed); volatile: read via J-Link */
+static volatile int16_t g_fse_rc = 99;       /* DIAG: a flash_safe_execute (save) rc -> is core-0 flash OK on XIP? */
+static volatile uint8_t g_net_up;            /* core 1: dserv state-client connected (box->dserv publishing) */
+static volatile uint8_t g_srv_up;            /* core 1: dserv connected back to our config server (registered) */
+static volatile uint8_t g_ota_arm_req;       /* cmd/ota/arm (or J-Link poke) -> flash-update reboot */
+static void publish_ota_str(const char *leaf, const char *val);   /* defined in the Stage-0 block */
+static void publish_ota_slotinfo(void)
+{
+    if (!g_slot_have) return;                /* don't publish stale zeros before a probe */
+    char nm[64], v[48]; uint8_t f[DSERV_MSG_LEN];
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ota/pt");
+    dserv_msg_int(f, nm, 0, g_slot.pt_count);
+    box_net_client_send(f, DSERV_MSG_LEN);
+
+    snprintf(v, sizeof v, "%s part=%d%s", pico_ota_boot_type_str(g_slot.boot_type),
+             g_slot.boot_partition, pico_ota_buy_pending(&g_slot) ? " buy_pending" : "");
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ota/boot");
+    dserv_msg_string(f, nm, 0, v);
+    box_net_client_send(f, DSERV_MSG_LEN);
+
+    if (g_slot.target_valid)
+        snprintf(v, sizeof v, "part=%d 0x%06lx+%lu", g_slot.target_part,
+                 (unsigned long) g_slot.target_base, (unsigned long) g_slot.target_size);
+    else
+        snprintf(v, sizeof v, "none rc=%ld", (long) g_slot.last_rc);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ota/target");
+    dserv_msg_string(f, nm, 0, v);
+    box_net_client_send(f, DSERV_MSG_LEN);
+
+    /* boot_diagnostic: raw hex (both halfwords: lo=slot0/partA, hi=slot1/partB)
+     * + decoded tokens for the SLOT WE BOOTED. Decodes WHY it did/didn't launch --
+     * the tool for the copy_to_ram-from-slot wedge (a failed slot's own diagnostic
+     * is read via `picotool info -a` in BOOTSEL, since it can't run to publish). */
+    char bd[80], dd[56];
+    uint16_t half = (g_slot.boot_partition == 1) ? (uint16_t)(g_slot.boot_diag >> 16)
+                                                 : (uint16_t) g_slot.boot_diag;
+    pico_ota_bootdiag_str(half, dd, sizeof dd);
+    snprintf(bd, sizeof bd, "%08lx [%s]", (unsigned long) g_slot.boot_diag, dd);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ota/bootdiag");
+    dserv_msg_string(f, nm, 0, bd);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+
+/* On-demand bootrom PT/boot probe (core 1, RT loop -> watchdog-armed). Runs the
+ * ROM partition calls only when explicitly asked via cmd/ota/probe, so boot is
+ * never on the hook for a misbehaving ROM func; if one wedges here the armed
+ * watchdog reboots and the box comes back up un-probed and reachable. */
+static void ota_slot_service_core1(void)
+{
+    if (!g_slot_probe_req) return;
+    g_slot_probe_req = 0;
+    printf("ota probe: running bootrom PT/boot query...\n");
+    pico_ota_slot_probe(&g_slot);
+    g_slot_have = 1;
+    printf("ota probe: pt=%d boot=%s part=%d%s target_valid=%d part=%d 0x%06lx+%lu rc=%ld\n",
+           g_slot.pt_count, pico_ota_boot_type_str(g_slot.boot_type), g_slot.boot_partition,
+           pico_ota_buy_pending(&g_slot) ? " BUY_PENDING" : "", g_slot.target_valid,
+           g_slot.target_part, (unsigned long) g_slot.target_base,
+           (unsigned long) g_slot.target_size, (long) g_slot.last_rc);
+    publish_ota_slotinfo();
+}
+
+/* Arm a TBYB update: probe for the inactive slot, then flash-update-reboot into
+ * it (buy-pending). Triggered by cmd/ota/arm or a J-Link poke of g_ota_arm_req.
+ * Does NOT return (NO_RETURN reboot). Bench-only for now: the full flow will arm
+ * after a slot write + sha verify. Core 1 (owns the ROM probe path). */
+static void ota_arm_service_core1(void)
+{
+    if (!g_ota_arm_req) return;
+    g_ota_arm_req = 0;
+    pico_ota_slot_probe(&g_slot);                 /* resolve the inactive slot (target_*) */
+    if (!g_slot.target_valid) {
+        printf("ota arm: no inactive slot (pt=%d rc=%ld) -- need a partition table\n",
+               g_slot.pt_count, (long) g_slot.last_rc);
+        publish_ota_str("ota/state", "fail");
+        publish_ota_str("ota/result", "no_slot");
+        return;
+    }
+    /* rom_reboot(FLASH_UPDATE) wants the XIP address of the slot, not the raw
+     * storage offset (pico-examples ota_update: code_start_addr + XIP_BASE). */
+    uint32_t update_base = (uint32_t) XIP_BASE + g_slot.target_base;
+    printf("ota arm: FLASH_UPDATE reboot -> slot part %d @0x%08lx (xip) in 1s\n",
+           g_slot.target_part, (unsigned long) update_base);
+    publish_ota_str("ota/state", "armed");
+    pico_ota_arm_update(update_base, 1000);          /* NO_RETURN: box reboots into the slot
+                                                      * after ~1s (core 0 drains the log meanwhile) */
+}
+
 /* Seed state/di/<n> for every configured input at (re)connect, so a UI shows a
  * box's buttons at their settled levels immediately -- not only after the first
  * edge happens to be published. Timestamp 0 = arrival-stamped (a seed, not an
@@ -580,6 +683,7 @@ static int announce_burst(int force)
 #endif
     publish_ident(); publish_manifest();
     publish_di_levels(); publish_group_levels();
+    publish_ota_slotinfo();
     return 1;
 }
 
@@ -759,10 +863,12 @@ static int ota_sink(void *ud, const uint8_t *data, uint32_t len)
     return r;
 }
 
-/* Run one armed OTA pull to completion (core 1; blocks ~seconds). Gated to
- * !in_obs by the caller-visible check here; the HW watchdog is switched to
- * pet-always for the duration (a bounded, intentional RT stall -- same escape
- * `wdt 0` uses), then restored. */
+/* Run one armed OTA to completion (core 1; blocks ~seconds). The full Stage-1
+ * flow: resolve the INACTIVE A/B slot -> pull the image straight into it (streamed
+ * through the core-0/core-1 flash handshake) -> sha-verify -> ARM a flash-update
+ * (TBYB trial) reboot into it. The box then self-tests + buys (ota_buy_service),
+ * or the watchdog reverts to the current slot (rollback). Gated !in_obs; the HW
+ * watchdog is pet-unconditionally for the bounded RT stall (same escape as `wdt 0`). */
 static void ota_service_core1(void)
 {
     if (!g_ota_pending) return;
@@ -775,10 +881,23 @@ static void ota_service_core1(void)
         return;
     }
 
-    printf("ota: staging %u bytes from %s (transport=%s)\n", g_ota_size, g_ota_key,
-           box_net_backend_name());
+    /* Resolve the inactive slot to write into. No PT -> no A/B target -> refuse
+     * (the box must be partition-migrated first; Stage-0 scratch is retired). */
+    pico_ota_slot_probe(&g_slot);
+    if (!g_slot.target_valid) {
+        publish_ota_str("ota/state", "fail");
+        publish_ota_str("ota/result", "no_slot");
+        printf("ota: refused -- no inactive slot (pt=%d rc=%ld); box not partitioned\n",
+               g_slot.pt_count, (long) g_slot.last_rc);
+        return;
+    }
+
+    printf("ota: staging %u bytes -> slot part %d @0x%06lx (cap %lu) from %s\n",
+           g_ota_size, g_slot.target_part, (unsigned long) g_slot.target_base,
+           (unsigned long) g_slot.target_size, g_ota_key);
     uint8_t saved_gate = g_wdt_gate; g_wdt_gate = 0;   /* bounded stall: pet unconditionally */
-    pico_ota_begin(&g_ota, &g_ota_flash_ops, g_ota_sha, g_ota_size);
+    pico_ota_begin(&g_ota, &g_ota_flash_ops, g_slot.target_base, g_slot.target_size,
+                   g_ota_sha, g_ota_size);
     g_ota_pub_at = 0;
     publish_ota_str("ota/state", pico_ota_state_str(g_ota.state));   /* staging */
     publish_ota_progress();
@@ -794,6 +913,16 @@ static void ota_service_core1(void)
     printf("ota: %s (%s) recv=%u/%u datalen_rc=%d\n",
            pico_ota_state_str(g_ota.state), pico_ota_err_str(g_ota.err),
            g_ota.received, g_ota_size, rc);
+
+    /* Verified into the inactive slot -> ARM: flash-update reboot into it as a
+     * TBYB trial. NO_RETURN, so this is the last thing we do. */
+    if (g_ota.state == PICO_OTA_DONE_OK) {
+        uint32_t update_base = (uint32_t) XIP_BASE + g_slot.target_base;
+        publish_ota_str("ota/state", "armed");
+        printf("ota: verified -> FLASH_UPDATE reboot into part %d @0x%08lx (1s)\n",
+               g_slot.target_part, (unsigned long) update_base);
+        pico_ota_arm_update(update_base, 1000);   /* NO_RETURN: reboots into the trial */
+    }
 }
 
 /* ---- config/cmd in: dispatch one 128B datapoint frame ---- */
@@ -849,6 +978,10 @@ static void on_frame(const uint8_t *frame, void *ud)
         char oname[80];
         int pl = dserv_cfg_prefix(cfg, oname, sizeof oname);
         if (pl > 0 && pl < (int)(sizeof oname) - 16) {
+            snprintf(oname + pl, sizeof oname - (size_t) pl, "/cmd/ota/probe");
+            if (dserv_msg_name_eq(&m, oname)) { g_slot_probe_req = 1; return; }  /* on-demand slot probe */
+            snprintf(oname + pl, sizeof oname - (size_t) pl, "/cmd/ota/arm");
+            if (dserv_msg_name_eq(&m, oname)) { g_ota_arm_req = 1; return; }      /* TBYB flash-update reboot */
             snprintf(oname + pl, sizeof oname - (size_t) pl, "/cmd/ota/begin");
             if (dserv_msg_name_eq(&m, oname)) {
                 char val[96]; dserv_msg_copy_cstr(&m, val, sizeof val);
@@ -1096,6 +1229,12 @@ static void rt_main(void)
     pico_gpio_apply_config(&g_cfg);     /* HERE: DI edge IRQs must land on core 1 */
     groups_reset_all();                 /* chord groups start from the seeded levels */
     if (box_net_init(&g_cfg) != 0) printf("net init FAILED\n");
+    /* NOTE: the bootrom PT/boot probe is DELIBERATELY NOT run here. With a real
+     * partition table present, rom_get_uf2_target_partition wedged core 1 during
+     * a slot boot, and running it before g_core1_ready (below, which arms the
+     * watchdog) made that an unrecoverable early-boot hang. It is now on-demand
+     * only (cmd/ota/probe -> ota_slot_service_core1), so boot ALWAYS completes
+     * reachable and a misbehaving ROM call is caught by the armed watchdog. */
     dserv_framer_reset(&g_framer);
     box_clock_reset(&g_clock);
 #ifdef BOX_NET_DUAL
@@ -1151,10 +1290,13 @@ static void rt_main(void)
         /* state out (box -> dserv), once a target is configured */
         if (!have_dserv_target()) {
             status_update(0);                  /* OLED snapshot still refreshes unconfigured */
+            g_net_up = g_srv_up = 0;
         } else {
             uint16_t port = dserv_cfg_port(&g_cfg);
             int up = box_net_client_service(g_cfg.dserv_ip, port);
             status_update(up);
+            g_net_up = (up >= 1);                       /* dserv state-client connected (box->dserv) */
+            g_srv_up = box_net_server_up() == 1;        /* dserv connected back (registered/reachable) */
 #if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
             /* Host re-opened the data CDC (DTR 0->1) = dserv/usbio reconnected
              * after a restart. A USB box never de-enumerates, so there's no
@@ -1182,7 +1324,9 @@ static void rt_main(void)
             if (up >= 1) reg_watchdog_service();   /* wired/wifi: heal lost registrations */
 #endif
             if (up >= 1) {
-                ota_service_core1();   /* run an armed OTA pull (blocks; gated !in_obs) */
+                ota_service_core1();       /* run an armed OTA pull (blocks; gated !in_obs) */
+                ota_slot_service_core1();  /* run an on-demand bootrom PT/boot probe */
+                ota_arm_service_core1();   /* cmd/ota/arm -> flash-update reboot into inactive slot */
                 di_event_t e;
                 while (pico_gpio_poll_di(&g_cfg, &e)) {   /* debounced edges */
                     int lvl = di_logical(&g_cfg, e.pin, e.level);
@@ -1299,6 +1443,49 @@ static void ota_flash_service_core0(void)
     g_otaf.done = 1;
 }
 
+/* TBYB self-test + buy (core 0: rom_explicit_buy is flash_safe_execute'd, and core
+ * 0 is the flash actor). Only acts on a TRIAL boot. The new image must prove it is
+ * FULLY FUNCTIONAL -- not just alive -- before we commit it:
+ *   - core-1 heartbeat advancing (the RT loop isn't wedged), AND
+ *   - the box is publishing to dserv (state client connected), AND
+ *   - dserv has connected back to our config server (== registration acked, so the
+ *     box is reachable for config/cmd -- e.g. the NEXT OTA).
+ * All three must hold CONTINUOUSLY for OTA_SELFTEST_MS; any dip restarts the window.
+ * Pass -> explicit_buy commits. If the new image can't sustain this (wedge, dead
+ * transport, can't reach dserv, reg fails) it never buys -> the Stage-3 watchdog
+ * reboots it -> the bootrom reverts to the previous slot (rollback). */
+#define OTA_SELFTEST_MS 8000u
+static void ota_buy_service_core0(void)
+{
+    static uint32_t healthy_since;    /* 0 = not currently in a healthy window */
+    static uint32_t last_beat, beat_ms;
+    if (!g_boot_trial || g_ota_bought) return;
+    uint32_t now  = to_ms_since_boot(get_absolute_time());
+    uint32_t beat = g_rt_beat;
+    if (beat != last_beat) { last_beat = beat; beat_ms = now; }
+    int alive   = (now - beat_ms) < 1500;             /* heartbeat advanced recently */
+    int healthy = alive && g_net_up && g_srv_up;      /* RT alive + dserv connected + registered */
+
+    if (!healthy) {                                   /* the window only runs while fully healthy */
+        if (healthy_since)
+            printf("ota trial: self-test dipped (alive=%d net=%d srv=%d) -- window restart\n",
+                   alive, g_net_up, g_srv_up);
+        healthy_since = 0;
+        return;
+    }
+    if (healthy_since == 0) {
+        healthy_since = now;
+        printf("ota trial: healthy (RT+dserv+reg) -- self-test window %ums\n", OTA_SELFTEST_MS);
+        return;
+    }
+    if (now - healthy_since < OTA_SELFTEST_MS) return;
+    int rc = pico_ota_buy();
+    g_ota_buy_rc = (int16_t) rc;
+    g_ota_bought = 1;
+    printf("ota trial: self-test PASSED (RT+dserv+reg %ums) -> explicit_buy rc=%d (%s)\n",
+           OTA_SELFTEST_MS, rc, rc == 0 ? "COMMITTED" : "buy FAILED");
+}
+
 /* Render the status snapshot to the OLED, 4 Hz (core 0; ~0.5ms per frame).
  *   row 0: name + transport (+ '*' while auto is still sensing)
  *   row 1: IP / DHCP state / USB host state
@@ -1371,6 +1558,19 @@ int main(void)
     if (g_boot_reason[0] == 'w')
         printf("boot: WATCHDOG RESET -- a core wedged last run (state/boot=watchdog)\n");
 
+    /* TBYB: capture the bootrom boot-info (lightweight, boot-safe -- just
+     * rom_get_boot_info). If this is a FLASH_UPDATE buy-pending boot we're on a
+     * TRIAL: ota_buy_service_core0() self-tests then explicit_buy's, else the
+     * watchdog reboots us and the bootrom reverts. */
+    { boot_info_t bi;
+      if (rom_get_boot_info(&bi)) {
+          g_boot_type      = bi.boot_type;
+          g_boot_partition = (int8_t) bi.partition;
+          g_boot_trial     = pico_ota_boot_is_trial(&bi);
+      }
+      printf("boot: rom_type=%s part=%d%s\n", pico_ota_boot_type_str(g_boot_type),
+             g_boot_partition, g_boot_trial ? " TRIAL(buy-pending)" : ""); }
+
     memset(&g_cfg, 0, sizeof g_cfg);
     if (flash_store_load(&g_cfg) == 0) printf("config: loaded from flash (name=%s)\n", dserv_cfg_name(&g_cfg));
     else                               printf("config: none/invalid -> defaults\n");
@@ -1424,6 +1624,9 @@ int main(void)
 #endif
         save_service();
         ota_flash_service_core0();  /* service core-1 OTA flash requests */
+        ota_buy_service_core0();    /* TBYB: self-test + explicit_buy on a trial boot */
+        { static uint8_t once;      /* DIAG: does a core-0 flash_safe_execute work on XIP? */
+          if (!once && g_core1_ready) { once = 1; g_fse_rc = (int16_t) flash_store_save(&g_cfg); } }
         oled_service_core0();       /* status panel, 4 Hz, ~0.5ms/frame on this core */
         watchdog_service();         /* arm once core 1 is up; pet while its heartbeat advances */
         if (!announced) {

@@ -22,7 +22,9 @@
 #include "pico_persist.h"
 #include "hardware/flash.h"
 #include "pico/flash.h"                 /* flash_safe_execute */
-#include "hardware/regs/addressmap.h"   /* XIP_BASE */
+#include "hardware/regs/addressmap.h"   /* XIP_BASE, XIP_QMI_BASE */
+#include "hardware/regs/qmi.h"          /* QMI_ATRANS* : slot-safe persist read */
+#include "hardware/xip_cache.h"         /* xip_cache_invalidate_all */
 #include <string.h>
 
 /* last sector of flash */
@@ -56,11 +58,35 @@ static inline int flash_store_save(const pico_config_t *cfg)
     return flash_safe_execute(flash_store_do_op, &op, 500) == PICO_OK ? 0 : -1;
 }
 
-/* Load config from flash. Returns 0 on success (valid blob), -1 otherwise. */
+/* Load config from flash. Returns 0 on success (valid blob), -1 otherwise.
+ *
+ * SLOT-SAFE READ: persist lives OUTSIDE the A/B slots at a high flash offset
+ * (FLASH_STORE_OFFSET). When we boot from a partition slot, QMI ATRANS0 maps only
+ * the slot's window at 0x10000000, so the naive pointer (XIP_BASE +
+ * FLASH_STORE_OFFSET) is past ATRANS0.SIZE and faults (BusFault -> HardFault; J-Link
+ * caught this 2026-07-13). So read persist through a SPARE ATRANS window instead:
+ * ATRANS1 covers the +4MiB virtual window (0x10400000), unused by our <512KB image,
+ * so mapping it to the persist sector reaches persist regardless of which slot we
+ * booted (ATRANS0 = the running code's window is left untouched). Identical result
+ * on an absolute boot (ATRANS1 is spare there too). The XIP cache is virtually
+ * addressed, so it's flushed around the ATRANS change. (Writes go through
+ * flash_range_program on the PHYSICAL offset, which is already slot-independent.) */
+#define FLASH_PERSIST_WIN_VADDR (XIP_BASE + 0x400000u)   /* ATRANS1's +4MiB window */
 static inline int flash_store_load(pico_config_t *cfg)
 {
-    const uint8_t *p = (const uint8_t *)(XIP_BASE + FLASH_STORE_OFFSET);
-    return pico_persist_deserialize(p, FLASH_STORE_BYTES, cfg);
+    io_rw_32 *atrans1 = (io_rw_32 *)(uintptr_t)(XIP_QMI_BASE + QMI_ATRANS1_OFFSET);
+    uint32_t  saved   = *atrans1;
+    uint32_t  sector  = FLASH_STORE_OFFSET / FLASH_SECTOR_SIZE;   /* persist sector (4K units) */
+    *atrans1 = ((2u << QMI_ATRANS0_SIZE_LSB) & QMI_ATRANS0_SIZE_BITS)   /* 2-sector aperture */
+             | (sector & QMI_ATRANS0_BASE_BITS);
+    __dmb();
+    xip_cache_invalidate_all();
+    int rc = pico_persist_deserialize((const uint8_t *) FLASH_PERSIST_WIN_VADDR,
+                                      FLASH_STORE_BYTES, cfg);
+    *atrans1 = saved;                          /* restore the bootrom/reset mapping */
+    __dmb();
+    xip_cache_invalidate_all();
+    return rc;
 }
 
 static inline void flash_store_erase(void)

@@ -165,10 +165,12 @@ enum {
 typedef struct {
     pico_ota_state_t         state;
     const pico_ota_flash_t  *flash;
+    uint32_t   base;                         /* flash storage offset to write TO   */
+    uint32_t   cap;                          /* max bytes there (slot/scratch size) */
     uint32_t   expected_size;
     uint8_t    expected_sha[PICO_OTA_SHA_BYTES];
-    uint32_t   received;                     /* real image bytes streamed so far */
-    uint32_t   write_off;                    /* running offset WITHIN scratch    */
+    uint32_t   received;                     /* real image bytes streamed so far   */
+    uint32_t   write_off;                    /* running offset within [base,base+cap) */
     uint8_t    page[PICO_OTA_PAGE];
     uint16_t   page_len;                     /* bytes buffered in `page`         */
     int        err;
@@ -176,11 +178,11 @@ typedef struct {
     uint8_t    result_sha[PICO_OTA_SHA_BYTES];
 } pico_ota_t;
 
-/* Program the currently-buffered page to scratch; erase the sector first when
- * this page opens one. `page` must be full (caller pads the final short page). */
+/* Program the currently-buffered page at o->base + o->write_off; erase the sector
+ * first when this page opens one. `page` must be full (caller pads the final page). */
 static inline int pico_ota_flush_page(pico_ota_t *o)
 {
-    uint32_t off = PICO_OTA_SCRATCH_OFFSET + o->write_off;
+    uint32_t off = o->base + o->write_off;
     if ((o->write_off % PICO_OTA_SECTOR) == 0)                 /* first page of a sector */
         if (o->flash && o->flash->erase && o->flash->erase(off) < 0) { o->err = PICO_OTA_ERR_FLASH; return -1; }
     if (o->flash && o->flash->program && o->flash->program(off, o->page) < 0) { o->err = PICO_OTA_ERR_FLASH; return -1; }
@@ -189,14 +191,19 @@ static inline int pico_ota_flush_page(pico_ota_t *o)
     return 0;
 }
 
-/* Begin a transfer. expected_sha/expected_size come from cmd/ota/begin.
- * Returns 0, or <0 (and state=DONE_FAIL) if the sha engine won't start. */
+/* Begin a transfer into flash [base, base+cap). `base` = the INACTIVE A/B slot's
+ * storage offset (Stage 1) or PICO_OTA_SCRATCH_OFFSET (Stage 0 dry run); `cap` =
+ * that region's size. expected_sha/expected_size come from cmd/ota/begin. Returns
+ * 0, or <0 (state=DONE_FAIL) if the sha engine won't start. */
 static inline int pico_ota_begin(pico_ota_t *o, const pico_ota_flash_t *flash,
+                                 uint32_t base, uint32_t cap,
                                  const uint8_t expected_sha[PICO_OTA_SHA_BYTES],
                                  uint32_t expected_size)
 {
     memset(o, 0, sizeof *o);
     o->flash = flash;
+    o->base  = base;
+    o->cap   = cap;
     o->expected_size = expected_size;
     memcpy(o->expected_sha, expected_sha, PICO_OTA_SHA_BYTES);
     if (ota_sha_start(&o->sha) != 0) { o->state = PICO_OTA_DONE_FAIL; o->err = PICO_OTA_ERR_SHA_INIT; return -1; }
@@ -211,7 +218,7 @@ static inline int pico_ota_sink(void *ud, const uint8_t *data, uint32_t len)
 {
     pico_ota_t *o = (pico_ota_t *) ud;
     if (o->state != PICO_OTA_STAGING) { o->err = PICO_OTA_ERR_STATE; return -1; }
-    if (o->received + len > PICO_OTA_SCRATCH_BYTES) { o->err = PICO_OTA_ERR_TOO_BIG; return -1; }
+    if (o->received + len > o->cap) { o->err = PICO_OTA_ERR_TOO_BIG; return -1; }
     ota_sha_update(&o->sha, data, len);
     while (len) {
         uint32_t take = PICO_OTA_PAGE - o->page_len;
