@@ -22,6 +22,7 @@
 #include <string>
 #include <cstring>
 #include <sstream>
+#include <fstream>
 #include <regex>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -302,9 +303,8 @@ static HttpResponse doHttpsRequest(const std::string& method,
     char buffer[4096];
     int bytesRead;
     
-    while ((bytesRead = SSL_read(ssl, buffer, sizeof(buffer) - 1)) > 0) {
-        buffer[bytesRead] = '\0';
-        rawResponse += buffer;
+    while ((bytesRead = SSL_read(ssl, buffer, sizeof(buffer))) > 0) {
+        rawResponse.append(buffer, bytesRead);   // length-preserving: binary bodies (firmware .bin) contain nulls
     }
     
     // Cleanup
@@ -388,9 +388,8 @@ static HttpResponse doHttpRequest(const std::string& method,
     char buffer[4096];
     ssize_t bytesRead;
     
-    while ((bytesRead = recv(sockfd, buffer, sizeof(buffer) - 1, 0)) > 0) {
-        buffer[bytesRead] = '\0';
-        rawResponse += buffer;
+    while ((bytesRead = recv(sockfd, buffer, sizeof(buffer), 0)) > 0) {
+        rawResponse.append(buffer, bytesRead);   // length-preserving: binary bodies (firmware .bin) contain nulls
     }
     
     close(sockfd);
@@ -460,18 +459,23 @@ static int HttpsPostCmd(ClientData clientData, Tcl_Interp *interp,
 }
 
 /*
- * https_get $url ?-timeout ms?
+ * https_get $url ?-timeout ms? ?-outfile path?
+ *
+ * With -outfile, the raw response body is written to that path in binary and
+ * the result is the byte count -- the binary-safe way to pull a firmware image
+ * (the string return path is re-encoded as UTF-8 and would corrupt binary).
  */
 static int HttpsGetCmd(ClientData clientData, Tcl_Interp *interp,
                        int objc, Tcl_Obj *const objv[]) {
     if (objc < 2) {
-        Tcl_WrongNumArgs(interp, 1, objv, "url ?-timeout ms?");
+        Tcl_WrongNumArgs(interp, 1, objv, "url ?-timeout ms? ?-outfile path?");
         return TCL_ERROR;
     }
-    
+
     const char* url = Tcl_GetString(objv[1]);
     int timeoutMs = 10000;
-    
+    const char* outfile = nullptr;
+
     for (int i = 2; i < objc; i++) {
         const char* opt = Tcl_GetString(objv[i]);
         if (strcmp(opt, "-timeout") == 0 && i + 1 < objc) {
@@ -479,22 +483,41 @@ static int HttpsGetCmd(ClientData clientData, Tcl_Interp *interp,
                 return TCL_ERROR;
             }
             i++;
+        } else if (strcmp(opt, "-outfile") == 0 && i + 1 < objc) {
+            outfile = Tcl_GetString(objv[i + 1]);
+            i++;
         }
     }
-    
+
     HttpResponse resp = doRequest("GET", url, "", timeoutMs);
-    
+
     if (!resp.error.empty()) {
         Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.error.c_str(), -1));
         return TCL_ERROR;
     }
-    
+
     if (!resp.success) {
-        Tcl_SetObjResult(interp, Tcl_ObjPrintf("HTTP %d: %s", 
+        Tcl_SetObjResult(interp, Tcl_ObjPrintf("HTTP %d: %s",
             resp.statusCode, resp.body.c_str()));
         return TCL_ERROR;
     }
-    
+
+    if (outfile) {
+        std::ofstream out(outfile, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            Tcl_SetObjResult(interp, Tcl_ObjPrintf("cannot open outfile: %s", outfile));
+            return TCL_ERROR;
+        }
+        out.write(resp.body.data(), (std::streamsize) resp.body.size());
+        out.close();
+        if (!out) {
+            Tcl_SetObjResult(interp, Tcl_ObjPrintf("write failed: %s", outfile));
+            return TCL_ERROR;
+        }
+        Tcl_SetObjResult(interp, Tcl_NewWideIntObj((Tcl_WideInt) resp.body.size()));
+        return TCL_OK;
+    }
+
     Tcl_SetObjResult(interp, Tcl_NewStringObj(resp.body.c_str(), resp.body.size()));
     return TCL_OK;
 }
