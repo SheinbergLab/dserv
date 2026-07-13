@@ -108,10 +108,15 @@ mkdir -p "$BUILD"
     -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $XIPFLAG $TBYBFLAG $SIGNFLAG $FLAGS >/dev/null \
   && ninja wizchip_dserv_config )
 
-# 4. publish to dist/ under a target-specific name (no clobbering across targets)
+# 4. publish to dist/ under a target-specific name (no clobbering across targets).
+#    The flat .bin is the OTA slot image (what the on-box updater pulls + writes
+#    raw into the inactive A/B slot) -- for a --tbyb --sign build it's the sealed
+#    try-before-you-buy trial image. The .uf2 is the bench-flash artifact.
 OUT="wizchip_dserv_config_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" "$HERE/dist/$OUT.uf2"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/$OUT.elf"
+[ -f "$BUILD/examples/wiznet_io/wizchip_dserv_config.bin" ] && \
+  cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.bin" "$HERE/dist/$OUT.bin"
 echo ">> dist/ updated: $OUT.uf2 ($(cd "$HERE" && ls -l dist/$OUT.uf2 | awk '{print $5" bytes"}'), fw $FWVER)"
 
 # 5. optional: publish JUST this image to the dserv-agent firmware shelf. The
@@ -125,6 +130,14 @@ if [ "$PUSH" = 1 ]; then
   fi
   DIRTY=0; case "$FWVER" in *-dirty) DIRTY=1 ;; esac
   URL="$FW_SHELF_URL/api/firmware/extio/$CHANNEL"
+  # A --tbyb build is an OTA trial image: publish its sealed flat .bin (what the
+  # box's on-box updater pulls) alongside the .uf2 and mark the manifest entry
+  # ota-capable. A plain build ships only the bench-flash .uf2. See OTA.md.
+  BINARGS=""
+  if [ "$TBYB" = 1 ] && [ -f "$HERE/dist/$OUT.bin" ]; then
+    BINARGS="-F ota=1 -F bin=@$HERE/dist/$OUT.bin"
+    echo ">> (OTA trial: also publishing $OUT.bin, ota=1)"
+  fi
   echo ">> push -> $URL (build=$TARGET board=$BOARD variant=$VARIANT version=$FWVER dirty=$DIRTY)"
   RESP=$(mktemp)
   CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
@@ -132,6 +145,7 @@ if [ "$PUSH" = 1 ]; then
     -F "version=$FWVER" -F "build=$TARGET" -F "board=$BOARD" -F "variant=$VARIANT" \
     -F "dirty=$DIRTY" \
     -F "uf2=@$HERE/dist/$OUT.uf2" \
+    $BINARGS \
     "$URL") || { echo "!! push failed (curl error)" >&2; rm -f "$RESP"; exit 1; }
   if [ "$CODE" = 200 ]; then
     echo ">> pushed OK:"; cat "$RESP"; echo
