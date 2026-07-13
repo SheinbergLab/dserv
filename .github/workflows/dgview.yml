@@ -378,6 +378,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.ref_name }}
           files: |
             dgview-macos-x64/*.dmg
             dgview-macos-arm64/*.dmg
