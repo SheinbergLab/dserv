@@ -13,6 +13,20 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+
+// Compare two firmware version strings (git describe: "X.Y.Z[-N-gHASH][-dirty]"
+// or an override like "0.47.16-OTA1"). Returns >0 if a is newer, <0 if b is newer,
+// 0 if equal, by leading X.Y.Z then the git commit count (-N). Fuzzy by design --
+// good enough to avoid calling an OLDER shelf image an "update".
+function cmpFw(a, b) {
+  const parse = (s) => {
+    const m = String(s).match(/(\d+)\.(\d+)\.(\d+)(?:-(\d+))?/);
+    return m ? [+m[1], +m[2], +m[3], m[4] ? +m[4] : 0] : [0, 0, 0, 0];
+  };
+  const pa = parse(a), pb = parse(b);
+  for (let i = 0; i < 4; i++) { const d = pa[i] - pb[i]; if (d) return Math.sign(d); }
+  return String(a) === String(b) ? 0 : 0;   // same version tuple -> treat as equal
+}
 const api = async (path, body) => {
   const opts = body === undefined ? {} :
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -483,13 +497,19 @@ async function loadShelf() {
     $("shelfflash").disabled = !rows.length;
     wrap.style.display = "";
     // Host-side "update available": box fw vs the channel's latest version.
+    // Compare by VERSION (leading X.Y.Z + git-describe commit count), not raw
+    // inequality -- else a box that's NEWER than the shelf (e.g. an image staged
+    // straight to the slot, or a stale shelf) reads as "update available" and would
+    // silently downgrade.
     const boxFw = cfg.fw || "";
-    if (boxFw && j.latest && boxFw !== j.latest)
-      msg.textContent = `update available: dev/${j.latest} (box has ${boxFw})`;
-    else if (boxFw && j.latest && boxFw === j.latest)
-      msg.textContent = `box is up to date with dev/${j.latest}`;
-    else
+    if (boxFw && j.latest) {
+      const cmp = cmpFw(j.latest, boxFw);   // >0 shelf newer, <0 box newer, 0 same
+      if (cmp > 0)      msg.textContent = `update available: dev/${j.latest} (box has ${boxFw})`;
+      else if (cmp < 0) msg.textContent = `box is NEWER than shelf: ${boxFw} (shelf latest dev/${j.latest})`;
+      else              msg.textContent = `box matches shelf dev/${j.latest}`;
+    } else {
       msg.textContent = rows.length ? `${rows.length} image(s) on ${st.shelf}` : "shelf empty";
+    }
   } catch (e) {
     wrap.style.display = "none";
     msg.textContent = "shelf: " + e.message;
