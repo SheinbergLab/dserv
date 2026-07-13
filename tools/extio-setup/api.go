@@ -21,6 +21,7 @@ type server struct {
 	// the UI so a vanished event stream is explained, not mysterious
 	dataNote string
 	fwDir    string
+	shelfURL string // firmware shelf base (e.g. https://dserv.net); "" disables
 }
 
 // eventSource is the live-event side shared by both drivers: the serial data
@@ -31,7 +32,9 @@ type eventSource interface {
 	Stats() (frames, bad, drops, bytes, skip uint64)
 }
 
-func newServer(fwDir string) *server { return &server{fwDir: fwDir} }
+func newServer(fwDir, shelfURL string) *server {
+	return &server{fwDir: fwDir, shelfURL: strings.TrimRight(shelfURL, "/")}
+}
 
 // shutdown closes all links cleanly (releases OS port claims; unregisters
 // from dserv so it stops pushing at a dead port).
@@ -65,6 +68,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/firmware", s.handleFirmware)
 	mux.HandleFunc("POST /api/flash", s.handleFlash)
+	mux.HandleFunc("GET /api/shelf", s.handleShelf)
+	mux.HandleFunc("POST /api/shelf/flash", s.handleShelfFlash)
 	mux.HandleFunc("POST /api/dserv/connect", s.handleDservConnect)
 	mux.HandleFunc("POST /api/dserv/disconnect", s.handleDservDisconnect)
 	mux.HandleFunc("GET /api/dserv/state", s.handleDservState)
@@ -142,7 +147,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		mode = "dserv"
 	}
 	st := map[string]any{"version": version, "connected": l != nil, "firmwareDir": s.fwDir,
-		"data": d != nil, "mode": mode}
+		"data": d != nil, "mode": mode, "shelf": s.shelfURL}
 	if l != nil {
 		st["port"] = l.name
 	}

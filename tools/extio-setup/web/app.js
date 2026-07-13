@@ -108,7 +108,8 @@ const SerialDriver = {
         const s = await api("/api/exec", { cmd: "show" });
         const txt = (s.lines || []).join(" ");
         if (!c.name) c.name = txt.match(/name=(\S+)/)?.[1] || "";
-        c.info = [txt.match(/transport=(\w+)/)?.[1], txt.match(/fw=(\S+)/)?.[1],
+        c.fw = txt.match(/fw=(\S+)/)?.[1] || "";
+        c.info = [txt.match(/transport=(\w+)/)?.[1], c.fw,
           c.mode && "mode " + c.mode].filter(Boolean).join(" · ");
         break;
       } catch {
@@ -243,6 +244,7 @@ function cfgFromState(box, st) {
   }
   if (typeof st["obs_pin"] === "number" && st["obs_pin"] >= 0) c.obs = st["obs_pin"];
   if (typeof st["sync_pin"] === "number" && st["sync_pin"] >= 0) c.sync = st["sync_pin"];
+  c.fw = st["fw"] || "";
   c.info = [st["fw"], st["transport"],
     st["ip"] && st["ip"] !== "0.0.0.0" ? st["ip"] : null,
     st["boot"] ? "boot " + st["boot"] : null].filter(Boolean).join(" · ");
@@ -451,6 +453,66 @@ $("flash").onclick = async () => {
   $("flash").disabled = false;
 };
 
+/* ---- firmware shelf (pull from dserv.net) ---- */
+// reload() calls loadShelf() on every config change, so cache the network
+// fetch briefly; the box-fw compare below is recomputed cheaply each time.
+let _shelf = { t: 0, st: null, j: null };
+async function loadShelf() {
+  const wrap = $("shelfwrap"), msg = $("shelfmsg");
+  try {
+    if (Date.now() - _shelf.t > 30000 || !_shelf.j) {
+      _shelf.st = await api("/api/status");
+      _shelf.j = _shelf.st.shelf ? await api("/api/shelf?channel=dev") : null;
+      _shelf.t = Date.now();
+    }
+    const st = _shelf.st, j = _shelf.j;
+    if (!st.shelf || !j) { wrap.style.display = "none"; return; } // -shelf="" disables
+    const sel = $("shelffiles");
+    sel.innerHTML = "";
+    // Flatten versions × images, newest first (server already sorts versions).
+    const rows = [];
+    for (const v of (j.versions || []))
+      for (const img of (v.images || []))
+        rows.push({ version: v.version, file: img.file, build: img.build, dirty: v.dirty });
+    for (const r of rows) {
+      const o = document.createElement("option");
+      o.value = JSON.stringify({ channel: "dev", version: r.version, file: r.file });
+      o.textContent = `${r.build} · ${r.version}${r.dirty ? " (dirty)" : ""}`;
+      sel.append(o);
+    }
+    $("shelfflash").disabled = !rows.length;
+    wrap.style.display = "";
+    // Host-side "update available": box fw vs the channel's latest version.
+    const boxFw = cfg.fw || "";
+    if (boxFw && j.latest && boxFw !== j.latest)
+      msg.textContent = `update available: dev/${j.latest} (box has ${boxFw})`;
+    else if (boxFw && j.latest && boxFw === j.latest)
+      msg.textContent = `box is up to date with dev/${j.latest}`;
+    else
+      msg.textContent = rows.length ? `${rows.length} image(s) on ${st.shelf}` : "shelf empty";
+  } catch (e) {
+    wrap.style.display = "none";
+    msg.textContent = "shelf: " + e.message;
+  }
+}
+
+$("shelfflash").onclick = async () => {
+  const raw = $("shelffiles").value;
+  if (!raw) return;
+  const spec = JSON.parse(raw);
+  const target = (connected && drv.id === "serial")
+    ? `the connected box (${cfg.name || "unnamed"})` : "a board already in BOOTSEL";
+  if (!confirm(`Fetch ${spec.file} (${spec.version}) from dserv.net and flash it to ${target}?`)) return;
+  $("shelfflash").disabled = true;
+  $("shelfmsg").textContent = "fetching + verifying sha256, then flashing…";
+  try {
+    const j = await api("/api/shelf/flash", spec);
+    $("shelfmsg").textContent = (j.ok ? "done: " : "FAILED: ") + j.steps.join(" → ") + (j.error ? " — " + j.error : "");
+    await refreshPorts();
+  } catch (e) { $("shelfmsg").textContent = e.message; }
+  $("shelfflash").disabled = false;
+};
+
 /* ---- console ---- */
 function conLog(s) {
   const c = $("console");
@@ -622,6 +684,7 @@ async function reload(reselect = null) {
   renderPins();
   renderBox();
   if (reselect !== null) selectPin(reselect);
+  loadShelf(); // refresh the "update available" compare against the box's fw
 }
 
 function setConnected(on, label) {
@@ -743,6 +806,7 @@ setInterval(async () => {
   renderPins();
   renderBox();
   loadFirmware();
+  loadShelf();
   const ports = await refreshPorts();
   const st = await api("/api/status").catch(() => ({}));
   if (st.mode === "dserv") { // server already holds a dserv session (page reload)

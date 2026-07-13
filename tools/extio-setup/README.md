@@ -44,7 +44,8 @@ then falls back). So:
     go run .                    # localhost:2569, opens your browser
     extio-setup -http :2569    # LAN mode (rig helper): reachable from other machines
     extio-setup -open=false   # don't launch a browser
-    extio-setup -fw DIR       # firmware images (default: auto-detect wiznet-io/dist)
+    extio-setup -fw DIR       # local firmware images (default: auto-detect wiznet-io/dist)
+    extio-setup -shelf URL    # firmware shelf for "pull from dserv.net" (default https://dserv.net; "" disables)
     extio-setup -dev          # serve web/ from disk (UI development)
 
 If an instance is already running, a second launch just opens a browser tab
@@ -54,8 +55,12 @@ to it and exits.
 
 1. Plug in a blank board (it mounts as the BOOTSEL drive) or a flashed box
    (it enumerates as `extio USB box`).
-2. Flash: pick a `.uf2`, the tool sends `bootsel` if needed, copies the
-   image, and waits for re-enumeration.
+2. Flash: pick a `.uf2` (a **local** dist image, or one from the **dserv.net**
+   shelf), the tool sends `bootsel` if needed, copies the image, and waits for
+   re-enumeration. Shelf images are downloaded and **sha256-verified against
+   the published manifest before flashing** — a byte mismatch aborts, never
+   flashes. When a box is connected, the shelf row shows "update available" if
+   the box's `fw` differs from the channel's latest.
 3. Configure: click pins on the map, or **Apply profile** to replay a saved
    `dump` (per-line OK/ERR checking; prompts for a new box name so cloning
    a profile doesn't duplicate identity).

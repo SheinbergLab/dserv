@@ -102,10 +102,17 @@
     <div class="panel">
       <div class="panel-title">Firmware</div>
       <div class="row gap">
+        <label>local</label>
         <select id="fwfiles"></select>
         <button id="flash">Flash&hellip;</button>
       </div>
       <div id="flashmsg" class="mono muted"></div>
+      <div id="shelfwrap" class="row gap" style="display:none">
+        <label>dserv.net</label>
+        <select id="shelffiles"></select>
+        <button id="shelfflash">Flash&hellip;</button>
+      </div>
+      <div id="shelfmsg" class="mono muted"></div>
     </div>
   </section>
 </main>

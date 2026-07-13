@@ -36,6 +36,7 @@ func main() {
 	httpAddr := flag.String("http", "127.0.0.1:2569", "listen address; 0.0.0.0:2569 (or :2569) to accept LAN connections")
 	open := flag.Bool("open", true, "open the default browser on start")
 	fwDir := flag.String("fw", "", "directory of firmware .uf2 images (default: auto-detect wiznet-io/dist)")
+	shelf := flag.String("shelf", "https://dserv.net", "firmware shelf base URL for 'pull from dserv.net' (empty to disable)")
 	dev := flag.Bool("dev", false, "serve web/ from disk instead of the embedded copy")
 	flag.Parse()
 	// Catch the classic Go-flag trap: "-open false" makes `false` a positional
@@ -53,7 +54,7 @@ func main() {
 
 	fw := findFirmwareDir(*fwDir)
 
-	srv := newServer(fw)
+	srv := newServer(fw, *shelf)
 	mux := http.NewServeMux()
 	srv.routes(mux)
 
