@@ -375,16 +375,19 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
+      # Idempotent create-or-update, matching release_linux.yml / release_macos.yml.
+      # These three workflows all fire on the same tag and target the same
+      # release; softprops/action-gh-release raced to *create* it and all but one
+      # failed with 422 already_exists. ncipollo + allowUpdates only ever updates
+      # an existing release (adding our artifacts), and the omit*DuringUpdate flags
+      # keep it from stomping the release notes/body the dserv create-release owns.
+      - name: Attach dgview artifacts to the release
+        uses: ncipollo/release-action@v1
         with:
-          files: |
-            dgview-macos-x64/*.dmg
-            dgview-macos-arm64/*.dmg
-            dgview-linux-amd64/*.deb
-            dgview-linux-arm64/*.deb
-            dgview-windows-x64/*.exe
+          artifacts: "dgview-macos-x64/*.dmg,dgview-macos-arm64/*.dmg,dgview-linux-amd64/*.deb,dgview-linux-arm64/*.deb,dgview-windows-x64/*.exe"
           body: dgview version ${{ github.ref_name }}
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
+          prerelease: true
+          omitPrereleaseDuringUpdate: true
+          omitBodyDuringUpdate: true
+          omitNameDuringUpdate: true
