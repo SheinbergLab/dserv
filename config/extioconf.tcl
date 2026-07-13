@@ -220,6 +220,9 @@ proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for t
 # reconnects as the new -- or reverted -- image). Ethernet-only (box_net_get_binary
 # stubs to -1 over USB); USB gets a chunk-push path later.
 set ::extio_ota_slot_max [expr {512*1024}]   ;# A/B slot = 512KB (partition_table.json)
+# dserv-agent firmware shelf the shelf-OTA path pulls from. Default is the public
+# shelf; point it at a rig-local agent (e.g. http://localhost:8080) to OTA offline.
+if { ![info exists ::extio_fw_shelf_url] } { set ::extio_fw_shelf_url "https://dserv.net" }
 
 proc extio_ota_push {box file} {
     if { ![file exists $file] } { error "extio_ota_push: no such file: $file" }
@@ -244,6 +247,77 @@ proc extio_ota_push {box file} {
 proc extio_ota_clear {box} {
     catch { dservClear extio/$box/ota/image }
     return "cleared extio/$box/ota/image"
+}
+
+# extio_ota_push_shelf <box> ?channel? -- OTA a box straight from the firmware
+# shelf: resolve the channel's latest version, pick the image whose `build`
+# matches the box's baked build (with a board-compat guard), pull its sealed
+# .bin binary-safe, verify sha256, then hand off to extio_ota_push (stage+begin).
+# So the whole release loop is: build.sh <t> --tbyb --push  ->  one call per box.
+#   dservctl extio "extio_ota_push_shelf <box>"            ;# latest on dev
+#   dservctl extio "extio_ota_push_shelf <box> stable"
+proc extio_ota_push_shelf {box {channel dev}} {
+    package require yajltcl
+    set base $::extio_fw_shelf_url
+
+    # 1. box identity -- the shelf image must match its build; board is the hard filter.
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_ota_push_shelf: box '$box' hasn't announced state/build yet (connected?)"
+    }
+    set bbuild [dservGet extio/$box/state/build]
+    set bboard ""
+    if { [dservExists extio/$box/state/board] } { set bboard [dservGet extio/$box/state/board] }
+
+    # 2. channel manifest (JSON is text -- https_get string return is fine here).
+    set url "$base/api/firmware/extio/$channel"
+    if { [catch { https_get $url -timeout 15000 } json] } {
+        error "extio_ota_push_shelf: shelf fetch failed ($url): $json"
+    }
+    set d [::yajl::json2dict $json]
+    set version ""
+    if { [dict exists $d latest] } { set version [dict get $d latest] }
+    if { $version eq "" } { error "extio_ota_push_shelf: channel '$channel' has no latest version" }
+
+    # 3. find the OTA image for this box's build in the latest version.
+    set img ""
+    foreach v [dict get $d versions] {
+        if { ![dict exists $v version] || [dict get $v version] ne $version } continue
+        foreach im [dict get $v images] {
+            if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
+            if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
+            set img $im; break
+        }
+    }
+    if { $img eq "" } {
+        error "extio_ota_push_shelf: no OTA (.bin) image for build '$bbuild' in $channel/$version"
+    }
+    if { $bboard ne "" && [dict exists $img board] && [dict get $img board] ne "" \
+         && [dict get $img board] ne $bboard } {
+        error "extio_ota_push_shelf: board mismatch -- box '$bboard' vs shelf '[dict get $img board]', refusing"
+    }
+    set binfile [dict get $img bin]
+    set binsha  [expr {[dict exists $img binSha256] ? [dict get $img binSha256] : ""}]
+
+    # 4. pull the .bin binary-safe (-outfile bypasses Tcl UTF-8 re-encoding).
+    set tmp [file join /tmp "extio_ota_${box}_${version}.bin"]
+    set burl "$base/firmware/extio/$channel/$version/$binfile"
+    if { [catch { https_get $burl -outfile $tmp -timeout 60000 } n] } {
+        catch { file delete $tmp }
+        error "extio_ota_push_shelf: bin fetch failed ($burl): $n"
+    }
+
+    # 5. verify against the manifest sha before we touch the box (extio_ota_push re-hashes too).
+    set got [sha256 -file $tmp]
+    if { $binsha ne "" && ![string equal -nocase $got $binsha] } {
+        catch { file delete $tmp }
+        error "extio_ota_push_shelf: sha mismatch -- shelf $binsha, downloaded $got"
+    }
+    puts "extio ota\[$box\]: pulled $channel/$version $binfile ([file size $tmp] B, sha $got) from shelf"
+
+    # 6. stage + fire via the existing local-file path, then drop the temp (bytes now live in dserv).
+    set r [extio_ota_push $box $tmp]
+    catch { file delete $tmp }
+    return $r
 }
 
 proc extio_ota_on_state {dp data} {
