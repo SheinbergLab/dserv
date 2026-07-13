@@ -221,6 +221,12 @@ static inline int box_net_send_command_start(const uint8_t dserv_ip[4], uint16_t
 { bn_cmd_rc = box_net_send_command(dserv_ip, port, cmd); return 0; }
 static inline int box_net_send_command_poll(void) { return bn_cmd_rc == 0 ? 1 : -1; }
 
+/* Stage-0 OTA pull is Ethernet(W6300)-only; the WiFi backend stubs to -1. (pico2w
+ * images are also too big for copy_to_ram, so OTA there is deferred -- see OTA.md.) */
+static inline int box_net_get_binary(const uint8_t dserv_ip[4], uint16_t port,
+                                     const char *key, box_net_bin_sink sink, void *ud)
+{ (void) dserv_ip; (void) port; (void) key; (void) sink; (void) ud; return -1; }
+
 /* ---- client: box -> dserv (publish state/(keys)) ---- (state declared above) */
 static err_t bn_cli_conn_cb(void *arg, struct tcp_pcb *pcb, err_t err)
 { (void) arg; (void) pcb; if (err == ERR_OK) bn_cli_connected = 1; return ERR_OK; }

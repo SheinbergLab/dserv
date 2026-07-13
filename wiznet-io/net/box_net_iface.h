@@ -19,6 +19,17 @@
 
 #define BOX_NET_RESET (-1)   /* box_net_server_poll: reset framer on new conn */
 
+/* Sink for a streamed binary pull (box_net_get_binary): called with successive
+ * spans of a datapoint's raw VALUE, never the whole thing buffered. 0 = keep
+ * going, <0 = abort. Home of the typedef; the single-transport w6300 build sees
+ * it because box_net.h includes this header before box_net_w6300.h. Guarded so a
+ * TU that reaches it twice (iface + a backend header that once redeclared it)
+ * doesn't double-define. */
+#ifndef BOX_NET_BIN_SINK_DEFINED
+#define BOX_NET_BIN_SINK_DEFINED
+typedef int (*box_net_bin_sink)(void *ud, const uint8_t *data, uint32_t len);
+#endif
+
 typedef struct {
     int         (*init)(const pico_config_t *cfg);
     void        (*poll)(void);
@@ -45,6 +56,12 @@ typedef struct {
      *   poll:  0 in progress, 1 done + dserv accepted, -1 done + failed        */
     int         (*send_command_start)(const uint8_t dserv_ip[4], uint16_t port, const char *cmd);
     int         (*send_command_poll)(void);
+    /* Pull one datapoint's raw binary value, streamed to `sink` (OTA image fetch;
+     * blocks the caller, bounded). Returns datalen (>=0) or -1 on error. Only the
+     * w6300 backend implements it (transient socket + raw '<' get); usb/lwip stub
+     * to -1 (Stage-0 pull is Ethernet-only -- see OTA.md). */
+    int         (*get_binary)(const uint8_t dserv_ip[4], uint16_t port,
+                              const char *key, box_net_bin_sink sink, void *ud);
 } box_net_vtable_t;
 
 extern const box_net_vtable_t box_net_w6300_vt;

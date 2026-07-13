@@ -161,6 +161,14 @@ static inline int box_net_send_command_start(const uint8_t dserv_ip[4], uint16_t
 { return box_net_send_command(dserv_ip, port, cmd); }
 static inline int box_net_send_command_poll(void) { return 1; }
 
+/* No raw binary pull over USB: the Stage-0 OTA fetch is a transient dserv socket
+ * ('<' get), which only the W6300 backend has. The USB path is instead the
+ * chunk-push model (cmd/ota/chunk over the CDC frame channel; see OTA.md). Stub
+ * to -1 so pico_ota reports "not supported on this transport" cleanly. */
+static inline int box_net_get_binary(const uint8_t dserv_ip[4], uint16_t port,
+                                     const char *key, box_net_bin_sink sink, void *ud)
+{ (void) dserv_ip; (void) port; (void) key; (void) sink; (void) ud; return -1; }
+
 /* The CDC0 console (stdio driver + drain loops) that used to live here moved to
  * box_console.h: printf now lands in a per-core lock-free ring drained by core 0,
  * and core 1's box_console_cdc0_ferry() moves console bytes to/from CDC0

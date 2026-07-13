@@ -22,6 +22,7 @@ extern alarm_pool_t *box_alarm_pool;   /* RT-core (core 1) alarm pool; see pico_
 #define BOX_NET_SN     3   /* W6300 socket: config server (dserv -> box)   */
 #define BOX_NET_CLI_SN 4   /* W6300 socket: state client  (box -> dserv)   */
 #define BOX_NET_TMP_SN 5   /* W6300 socket: transient self-registration    */
+#define BOX_NET_OTA_SN 6   /* W6300 socket: transient OTA binary pull       */
 #define BN_DHCP_SN     0   /* W6300 socket: DHCP client (lease + renewal)  */
 
 static wiz_NetInfo bn_netinfo = {
@@ -428,6 +429,100 @@ static inline int box_net_send_command(const uint8_t dserv_ip[4], uint16_t port,
     }
     bn_tmp_close(sn);
     return (got_reply && rep[0] == '1') ? 0 : -1;
+}
+
+/* box_net_bin_sink lives in box_net_iface.h now (box_net.h includes it before
+ * this header for the single-w6300 build; box_net_w6300_impl.c does the same for
+ * the dual build). */
+
+/* Receive exactly n bytes from sn into buf, bounded (idle timer resets on
+ * progress). 0 ok, -1 on close/timeout. */
+static inline int bn_recv_exact(uint8_t sn, uint8_t *buf, uint32_t n, uint32_t to_ms)
+{
+    uint32_t got = 0; uint8_t st;
+    absolute_time_t dl = make_timeout_time_ms(to_ms);
+    while (got < n) {
+        uint16_t avail; getsockopt(sn, SO_RECVBUF, &avail);
+        if (avail) {
+            uint16_t want = (n - got) < avail ? (uint16_t)(n - got) : avail;
+            int32_t r = recv(sn, buf + got, want);
+            if (r <= 0) return -1;
+            got += (uint32_t) r;
+            dl = make_timeout_time_ms(to_ms);
+        } else {
+            getsockopt(sn, SO_STATUS, &st);
+            if (st != SOCK_ESTABLISHED && st != SOCK_CLOSE_WAIT) return -1;
+            if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) return -1;
+        }
+    }
+    return 0;
+}
+
+/* Pull one datapoint's RAW binary value from dserv via the '<' get protocol
+ * (src/Dataserver.cpp): request  '<' + varlen(u16 LE) + varname; reply
+ * size(int32 LE) + dpoint_to_binary = varlen(2)+varname+ts(8)+type(4)+
+ * datalen(4)+data[datalen]. The DATA span is streamed to `sink` -- the 150KB
+ * image never sits in SRAM. Returns datalen (>=0) on success, -1 on any error
+ * (size 0 = key not found). BLOCKS the caller for the transfer (bounded);
+ * OTA-only, gated to !in_obs by the caller. Uses a transient socket (SN6). */
+static inline int box_net_get_binary(const uint8_t dserv_ip[4], uint16_t port,
+                                     const char *key, box_net_bin_sink sink, void *ud)
+{
+    const uint8_t sn = BOX_NET_OTA_SN;
+    uint8_t st, d[4] = { dserv_ip[0], dserv_ip[1], dserv_ip[2], dserv_ip[3] };
+    uint16_t klen = (uint16_t) strlen(key);
+    uint8_t hdr[64];
+    if (klen == 0 || klen > 48) return -1;              /* keys are short (extio/<box>/ota/image) */
+
+    bn_tmp_close(sn);
+    if (socket(sn, Sn_MR_TCP4 | SF_TCP_NODELAY, 55010, SOCK_IO_NONBLOCK) != sn) return -1;
+    connect(sn, d, port, 4);                            /* non-blocking; poll below */
+    absolute_time_t dl = make_timeout_time_ms(300);
+    for (;;) {
+        getsockopt(sn, SO_STATUS, &st);
+        if (st == SOCK_ESTABLISHED || st == SOCK_CLOSED) break;
+        if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) break;
+    }
+    if (st != SOCK_ESTABLISHED) { bn_tmp_close(sn); return -1; }
+
+    /* request: '<' + varlen + varname (raw; NOT a text command) */
+    hdr[0] = '<'; memcpy(&hdr[1], &klen, sizeof klen); memcpy(&hdr[3], key, klen);
+    send(sn, hdr, (uint16_t)(3 + klen));
+
+    /* reply: int32 size, then `size` bytes of dpoint_to_binary */
+    int32_t size = 0;
+    if (bn_recv_exact(sn, (uint8_t *) &size, 4, 2000) || size <= 0) { bn_tmp_close(sn); return -1; }
+
+    /* header: varlen(2)+varname(varlen)+ts(8)+type(4)+datalen(4). We requested
+     * by name, so the reply varlen must equal klen; skip name+ts+type, read datalen. */
+    uint16_t rvarlen = 0;
+    if (bn_recv_exact(sn, (uint8_t *) &rvarlen, 2, 2000) || rvarlen != klen) { bn_tmp_close(sn); return -1; }
+    if (bn_recv_exact(sn, hdr, (uint32_t) rvarlen + 12, 2000)) { bn_tmp_close(sn); return -1; }  /* name+ts+type */
+    uint32_t datalen = 0;
+    if (bn_recv_exact(sn, (uint8_t *) &datalen, 4, 2000)) { bn_tmp_close(sn); return -1; }
+    if (datalen != (uint32_t) size - (2u + rvarlen + 8u + 4u + 4u)) { bn_tmp_close(sn); return -1; }
+
+    /* stream the value to the sink */
+    uint32_t left = datalen;
+    uint8_t chunk[512];
+    dl = make_timeout_time_ms(4000);
+    while (left) {
+        uint16_t avail; getsockopt(sn, SO_RECVBUF, &avail);
+        if (avail) {
+            uint16_t want = left < avail ? (uint16_t) left : avail;
+            if (want > sizeof chunk) want = (uint16_t) sizeof chunk;
+            int32_t r = recv(sn, chunk, want);
+            if (r <= 0 || sink(ud, chunk, (uint32_t) r) < 0) { bn_tmp_close(sn); return -1; }
+            left -= (uint32_t) r;
+            dl = make_timeout_time_ms(4000);
+        } else {
+            getsockopt(sn, SO_STATUS, &st);
+            if (st != SOCK_ESTABLISHED && st != SOCK_CLOSE_WAIT) { bn_tmp_close(sn); return -1; }
+            if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) { bn_tmp_close(sn); return -1; }
+        }
+    }
+    bn_tmp_close(sn);
+    return (int) datalen;
 }
 
 /* ---- async send_command: the same exchange as above, one us-bounded step per
