@@ -202,6 +202,59 @@ proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for t
     }
 }
 
+# ---- STAGE-0 OTA orchestrator ----------------------------------------------
+# Push a firmware image to an (Ethernet) box and prove it crosses the dserv link
+# intact. Transport = the box PULLS: we stage the raw image as a binary datapoint
+# (dserv's `<` binary-get is uncapped + un-base64'd, unlike the 128B pub/sub
+# push), then fire a small cmd/ota/begin the box acts on -- it opens a transient
+# socket, `<`-gets extio/<box>/ota/image, streams it to scratch flash, and
+# verifies sha256. Delivery proof only (no A/B slots / boot switch yet).
+#
+#   dservctl extio "extio_ota_push <box> /path/to/image.bin"
+#
+# The box reports extio/<box>/state/ota/{state,progress,result}; extio_ota_on_state
+# logs those and frees the staged image on ok|fail. USB boxes: the on-box pull is
+# Ethernet-only in Stage 0 (box_net_get_binary stubs to -1 over USB), so this
+# targets eth boxes; USB gets the chunk-push path in a later stage.
+set ::extio_ota_scratch_max 262144       ;# box scratch region = 256KB (pico_ota.h)
+
+proc extio_ota_push {box file} {
+    if { ![file exists $file] } { error "extio_ota_push: no such file: $file" }
+    set size [file size $file]
+    if { $size == 0 }                          { error "extio_ota_push: empty file: $file" }
+    if { $size > $::extio_ota_scratch_max }    { error "extio_ota_push: image $size B exceeds box scratch ($::extio_ota_scratch_max B)" }
+
+    set sha [sha256 -file $file]             ;# hex over the exact file bytes = what the box computes
+
+    set fp [open $file rb]                    ;# same bytes, staged raw (byte array -> Tcl_GetByteArrayFromObj)
+    set bytes [read $fp]
+    close $fp
+
+    dservSetData extio/$box/ota/image 0 0 $bytes      ;# ts 0 = now, datatype 0 = DSERV_BYTE (uncapped)
+    dservSet     extio/$box/cmd/ota/begin "$sha $size"
+
+    puts "extio ota\[$box\]: staged $size B (sha $sha) -> extio/$box/ota/image; begin fired"
+    return "ota begin $box: $size bytes, sha $sha"
+}
+
+# Free a staged image by hand (auto-freed on ok|fail; this is for an aborted run).
+proc extio_ota_clear {box} {
+    catch { dservClear extio/$box/ota/image }
+    return "cleared extio/$box/ota/image"
+}
+
+proc extio_ota_on_state {dp data} {
+    if { ![regexp {^extio/([^/]+)/state/ota/state$} $dp -> box] } return
+    set prog ""
+    if { [dservExists extio/$box/state/ota/progress] } { set prog " [dservGet extio/$box/state/ota/progress]%" }
+    set res ""
+    if { [dservExists extio/$box/state/ota/result] }   { set res " ([dservGet extio/$box/state/ota/result])" }
+    puts "extio ota\[$box\]: $data$prog$res"
+    if { $data eq "ok" || $data eq "fail" } {
+        catch { dservClear extio/$box/ota/image }       ;# box has pulled it; release the ~150KB
+    }
+}
+
 proc extio_wire_common {} {                 ;# device-independent: sync + obs_pin
     dservAddMatch ess/in_obs
     dpointSetScript ess/in_obs usbio_forward
@@ -209,6 +262,8 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/state/group/* extio_group_decode
     dservAddMatch extio/*/state/label/*     ;# relabels invalidate cached maps
     dpointSetScript extio/*/state/label/* extio_label_invalidate
+    dservAddMatch extio/*/state/ota/state   ;# OTA progress log + free the staged image on finish
+    dpointSetScript extio/*/state/ota/state extio_ota_on_state
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port
