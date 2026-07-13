@@ -26,6 +26,7 @@ const box_net_vtable_t box_net_usb_vt = {
     .client_reading = box_net_client_reading,   /* DTR on the data CDC */
     .send_command_start = box_net_send_command_start,
     .send_command_poll  = box_net_send_command_poll,
+    .get_binary         = box_net_get_binary,   /* -1: pull is Ethernet-only (Stage 0) */
 };
 
 void box_net_dual_usb_init(void)         { if (!tusb_inited()) tusb_init(); }

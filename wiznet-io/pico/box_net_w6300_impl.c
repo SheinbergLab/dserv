@@ -22,6 +22,7 @@ const box_net_vtable_t box_net_w6300_vt = {
     .client_reading = box_net_client_reading,   /* connected socket == read */
     .send_command_start = box_net_send_command_start,
     .send_command_poll  = box_net_send_command_poll,
+    .get_binary         = box_net_get_binary,   /* raw '<' pull -> flash (OTA) */
 };
 
 /* (The 2026-07-05 boot-time cable auto-detect read PHYSR the instant the chip came
