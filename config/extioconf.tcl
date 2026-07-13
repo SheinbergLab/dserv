@@ -202,27 +202,30 @@ proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for t
     }
 }
 
-# ---- STAGE-0 OTA orchestrator ----------------------------------------------
-# Push a firmware image to an (Ethernet) box and prove it crosses the dserv link
-# intact. Transport = the box PULLS: we stage the raw image as a binary datapoint
-# (dserv's `<` binary-get is uncapped + un-base64'd, unlike the 128B pub/sub
-# push), then fire a small cmd/ota/begin the box acts on -- it opens a transient
-# socket, `<`-gets extio/<box>/ota/image, streams it to scratch flash, and
-# verifies sha256. Delivery proof only (no A/B slots / boot switch yet).
+# ---- STAGE-1 OTA orchestrator (A/B + TBYB + rollback) ----------------------
+# Push a firmware image to an (Ethernet) box. Transport = the box PULLS: we stage
+# the raw image as a binary datapoint (dserv's `<` binary-get is uncapped +
+# un-base64'd, unlike the 128B pub/sub push), then fire cmd/ota/begin. The box
+# then: resolves its INACTIVE A/B slot, `<`-gets extio/<box>/ota/image and streams
+# it straight into that slot, verifies sha256, and (on success) FLASH_UPDATE-reboots
+# into it as a try-before-you-buy trial. The trial self-tests (transport/heartbeat)
+# and rom_explicit_buy-commits, or the watchdog reverts to the previous image.
 #
-#   dservctl extio "extio_ota_push <box> /path/to/image.bin"
+#   dservctl extio "extio_ota_push <box> /path/to/image.uf2"   ;# stage a TBYB image!
 #
-# The box reports extio/<box>/state/ota/{state,progress,result}; extio_ota_on_state
-# logs those and frees the staged image on ok|fail. USB boxes: the on-box pull is
-# Ethernet-only in Stage 0 (box_net_get_binary stubs to -1 over USB), so this
-# targets eth boxes; USB gets the chunk-push path in a later stage.
-set ::extio_ota_scratch_max 262144       ;# box scratch region = 256KB (pico_ota.h)
+# The staged image MUST be a --tbyb build (its IMAGE_DEF carries the try flag) or
+# the trial boot won't be buy-pending and can't roll back. The box reports
+# extio/<box>/state/ota/{state=staging|verify|ok|armed|fail, progress, result};
+# after "armed" the box reboots into the trial (drops off dserv ~seconds, then
+# reconnects as the new -- or reverted -- image). Ethernet-only (box_net_get_binary
+# stubs to -1 over USB); USB gets a chunk-push path later.
+set ::extio_ota_slot_max [expr {512*1024}]   ;# A/B slot = 512KB (partition_table.json)
 
 proc extio_ota_push {box file} {
     if { ![file exists $file] } { error "extio_ota_push: no such file: $file" }
     set size [file size $file]
-    if { $size == 0 }                          { error "extio_ota_push: empty file: $file" }
-    if { $size > $::extio_ota_scratch_max }    { error "extio_ota_push: image $size B exceeds box scratch ($::extio_ota_scratch_max B)" }
+    if { $size == 0 }                        { error "extio_ota_push: empty file: $file" }
+    if { $size > $::extio_ota_slot_max }     { error "extio_ota_push: image $size B exceeds box A/B slot ($::extio_ota_slot_max B)" }
 
     set sha [sha256 -file $file]             ;# hex over the exact file bytes = what the box computes
 
@@ -250,8 +253,13 @@ proc extio_ota_on_state {dp data} {
     set res ""
     if { [dservExists extio/$box/state/ota/result] }   { set res " ([dservGet extio/$box/state/ota/result])" }
     puts "extio ota\[$box\]: $data$prog$res"
-    if { $data eq "ok" || $data eq "fail" } {
-        catch { dservClear extio/$box/ota/image }       ;# box has pulled it; release the ~150KB
+    if { $data eq "armed" } {
+        puts "extio ota\[$box\]: verified into the inactive slot -- rebooting into the TBYB trial (back in ~10s)"
+    }
+    # By ok/armed the box has fully pulled the image into its slot, so free the
+    # staged ~150KB. (armed also implies ok.)
+    if { $data eq "ok" || $data eq "armed" || $data eq "fail" } {
+        catch { dservClear extio/$box/ota/image }
     }
 }
 
