@@ -84,7 +84,7 @@ esac
 BUILD="$WIZ/build_$TARGET"
 mkdir -p "$BUILD"
 ( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DBOX_FW_VERSION="$FWVER" $FLAGS >/dev/null \
+    -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $FLAGS >/dev/null \
   && ninja wizchip_dserv_config )
 
 # 4. publish to dist/ under a target-specific name (no clobbering across targets)

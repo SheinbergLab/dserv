@@ -94,6 +94,12 @@ volatile uint32_t box_usb_tx_ok, box_usb_tx_wait, box_usb_tx_drop, box_usb_tx_no
 #ifndef BOX_FW_VERSION
 #define BOX_FW_VERSION "dev"       /* build.sh bakes `git describe` here */
 #endif
+#ifndef BOX_BUILD_TARGET
+#define BOX_BUILD_TARGET "dev"     /* build.sh bakes $TARGET -- shelf image match key */
+#endif
+#ifndef BOX_BOARD_ID
+#define BOX_BOARD_ID "pico2"       /* build.sh bakes $PICO_BOARD -- OTA compat filter */
+#endif
 
 alarm_pool_t *box_alarm_pool;       /* core-1 alarm pool (pulse/sched/DHCP-tick IRQs on the RT core);
                                      * extern'd by pico_gpio.h + box_net_w6300.h */
@@ -413,6 +419,12 @@ static void publish_ident(void)
     box_net_client_send(f, DSERV_MSG_LEN);
     dserv_state_name(&g_cfg, nm, sizeof nm, "fw");
     dserv_msg_string(f, nm, 0, BOX_FW_VERSION);
+    box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "build");   /* shelf image match key */
+    dserv_msg_string(f, nm, 0, BOX_BUILD_TARGET);
+    box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "board");   /* OTA compat filter */
+    dserv_msg_string(f, nm, 0, BOX_BOARD_ID);
     box_net_client_send(f, DSERV_MSG_LEN);
     uint8_t ip[4]; box_net_local_ip(ip);           /* 0.0.0.0 over USB: transport says why */
     snprintf(s, sizeof s, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);

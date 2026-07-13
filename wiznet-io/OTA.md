@@ -160,16 +160,37 @@ All phases publish `state/ota/state` + `state/ota/progress` so the fleet page
 narrates the rollout. Commands ride the existing channel: `cmd/ota/begin
 <version|manifest>`, chunks, `cmd/ota/abort`.
 
-## Transports
+## Transports — UNIFIED on the dserv datapoint channel (2026-07-12)
 
-- **Ethernet**: box opens one plain TCP connection to the agent's staging
-  endpoint (W6300 has 8 sockets; reuse the non-blocking send/recv patterns
-  from the reg machine). Simple length+sha framed fetch; HTTP not required.
-- **USB**: chunked over the existing 128-byte framed channel —
-  `cmd/ota/chunk` datapoints carrying offset+crc+payload (~109B), box acks via
-  `state/ota/ack` and the host paces on acks. ~300KB ≈ 2800 frames ≈ seconds.
+Original plan had two delivery methods (eth pulls from an agent socket, USB
+gets pushed chunks). **Unified: push `cmd/ota/chunk` over the dserv datapoint
+channel for ALL transports.** The box already receives every command
+(`cmd/pulse`, `cmd/bootsel`, config writes) as datapoints over whatever
+transport it's on — USB CDC frames or the W6300 TCP link are the *same* 128-byte
+frames to the box's parser. So firmware chunks ride the identical channel:
+
+- **All transports**: `cmd/ota/chunk` datapoints carry offset+crc+payload
+  (~109B of the 128-byte frame); box writes the inactive slot and acks via
+  `state/ota/ack <offset>`; the orchestrator paces on acks. ~300KB ≈ 2800
+  frames. One delivery path in the box, transport-agnostic — no dedicated TCP
+  socket, no staging HTTP endpoint, no box-side TCP client.
+- **Orchestrator** = whoever can `dservSet extio/<box>/cmd/ota/*` on the dserv
+  the box is registered with AND holds the image bytes: the rig's dserv-agent,
+  a dserv-side proc, or extio-setup's dserv driver. It fetches + sha-verifies
+  from the shelf, then relays chunks. **The box never touches the internet** —
+  the orchestrator does; the box only sees LAN datapoints.
+- **Integrity**: per-chunk crc catches a dropped/garbled frame (orchestrator
+  re-sends that offset); the whole slot's sha256 is verified at VERIFY before
+  ARM. A push that stalls times out and aborts (old image untouched).
+- **Efficiency note**: datapoint-push is chattier than a streamed pull (2800
+  individual sets vs one fetch). Fine on a LAN, gated to `!in_obs`. If churn
+  ever bites, a box-initiated pull over a spare W6300 socket remains a drop-in
+  alternative for the eth path — but start with the unified push; it reuses
+  everything.
 - **Recovery of last resort** (all transports): physical BOOTSEL button →
-  `picotool load`. Never removed by any of this.
+  `picotool load`. Never removed by any of this. Also the ONE-TIME migration
+  path: a box with no partition table needs a single USB/BOOTSEL flash to a
+  partition-aware, updater-carrying image; after that it's OTA-over-dserv.
 
 ## Agent + release side
 

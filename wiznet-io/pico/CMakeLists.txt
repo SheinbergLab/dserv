@@ -22,6 +22,12 @@ target_include_directories(${CFG_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 if(DEFINED BOX_FW_VERSION)              # baked by build.sh (git describe)
     target_compile_definitions(${CFG_NAME} PRIVATE BOX_FW_VERSION=\"${BOX_FW_VERSION}\")
 endif()
+if(DEFINED BOX_BUILD_TARGET)           # baked by build.sh ($TARGET) -- the OTA/shelf match key
+    target_compile_definitions(${CFG_NAME} PRIVATE BOX_BUILD_TARGET=\"${BOX_BUILD_TARGET}\")
+endif()
+if(DEFINED BOX_BOARD_ID)               # baked by build.sh ($PICO_BOARD) -- the OTA compat filter
+    target_compile_definitions(${CFG_NAME} PRIVATE BOX_BOARD_ID=\"${BOX_BOARD_ID}\")
+endif()
 
 if(BOX_TARGET STREQUAL "pico2w")
     target_compile_definitions(${CFG_NAME} PRIVATE BOX_NET_LWIP)
