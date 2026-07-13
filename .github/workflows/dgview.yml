@@ -375,19 +375,18 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v7
         
-      # Idempotent create-or-update, matching release_linux.yml / release_macos.yml.
-      # These three workflows all fire on the same tag and target the same
-      # release; softprops/action-gh-release raced to *create* it and all but one
-      # failed with 422 already_exists. ncipollo + allowUpdates only ever updates
-      # an existing release (adding our artifacts), and the omit*DuringUpdate flags
-      # keep it from stomping the release notes/body the dserv create-release owns.
-      - name: Attach dgview artifacts to the release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "dgview-macos-x64/*.dmg,dgview-macos-arm64/*.dmg,dgview-linux-amd64/*.deb,dgview-linux-arm64/*.deb,dgview-windows-x64/*.exe"
-          body: dgview version ${{ github.ref_name }}
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
-          omitBodyDuringUpdate: true
-          omitNameDuringUpdate: true
+      # These three release workflows (dserv linux/macos + dgview) all fire on the
+      # same tag and target the same release; the old softprops create-or-update
+      # here raced the others to *create* it and 422'd on already_exists. dgview
+      # has no create-release job of its own, so guard-create the release (a no-op
+      # if another workflow already made it) then do a pure asset upload -- nothing
+      # to race on. The dserv create-release job owns notes/body/prerelease.
+      - name: Upload dgview artifacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" --prerelease --generate-notes --title "${{ github.ref_name }}" 2>/dev/null || true
+          gh release upload "${{ github.ref_name }}" \
+            dgview-macos-x64/*.dmg dgview-macos-arm64/*.dmg \
+            dgview-linux-amd64/*.deb dgview-linux-arm64/*.deb \
+            dgview-windows-x64/*.exe --clobber

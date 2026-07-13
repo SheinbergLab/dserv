@@ -128,20 +128,14 @@ jobs:
           xcrun notarytool submit dserv-${{ github.ref_name }}-Darwin-signed.pkg --keychain-profile "dserv-signing" --wait
           xcrun stapler staple dserv-${{ github.ref_name }}-Darwin-signed.pkg
 
-      - name: Create a GitHub release for the current tag and package.
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "./*-signed.pkg"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          # Build into a prerelease so the tag is never returned by
-          # /releases/latest while artifacts are still uploading. The publish
-          # workflow flips this to a full release once all platforms succeed.
-          # omitPrereleaseDuringUpdate keeps re-runs from reverting a published
-          # release back to prerelease.
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+      # Pure asset upload to the release the create-release job already made.
+      # At this fan-out, every job calling ncipollo create-or-update raced and
+      # 422'd on already_exists; gh release upload only pushes assets, so there
+      # is nothing to race on. The create-release job owns notes/body/prerelease.
+      - name: Upload the dserv package to the release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" ./*-signed.pkg --clobber
 
   check-dserv:
 
@@ -208,14 +202,9 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dservctl_darwin_arm64 .
 
       - name: Upload dservctl binary
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "tools/dservctl/dservctl_darwin_arm64"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" tools/dservctl/dservctl_darwin_arm64 --clobber
 
   release-essgui:
 
@@ -319,15 +308,10 @@ jobs:
           xcrun notarytool submit essgui-${{ github.ref_name }}-Darwin.dmg --keychain-profile "essgui-signing" --wait
           xcrun stapler staple essgui-${{ github.ref_name }}-Darwin.dmg
 
-      - name: Create a GitHub release for the current tag and package.
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "tools/essgui/*.dmg"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+      - name: Upload the essgui package to the release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" tools/essgui/*.dmg --clobber
 
   check-essgui:
 

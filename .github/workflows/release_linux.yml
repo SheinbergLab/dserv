@@ -73,20 +73,14 @@ jobs:
           cmake --build build --verbose
           cpack -G DEB --config build/CPackConfig.cmake
 
-      - name: Create a GitHub release for the current tag and package.
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "./*.deb"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          # Build into a prerelease so the tag is never returned by
-          # /releases/latest while artifacts are still uploading. The publish
-          # workflow flips this to a full release once all platforms succeed.
-          # omitPrereleaseDuringUpdate keeps re-runs from reverting a published
-          # release back to prerelease.
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+      # Pure asset upload to the release the create-release job already made.
+      # At this fan-out, every job calling ncipollo create-or-update raced and
+      # 422'd on already_exists; gh release upload only pushes assets, so there
+      # is nothing to race on. The create-release job owns notes/body/prerelease.
+      - name: Upload the dserv package to the release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" ./*.deb --clobber
 
   release-dserv-agent:
 
@@ -121,14 +115,9 @@ jobs:
           CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dserv-agent_linux_${{ matrix.goarch }} .
 
       - name: Upload dserv-agent binary
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "dserv-agent/dserv-agent_linux_${{ matrix.goarch }}"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" dserv-agent/dserv-agent_linux_${{ matrix.goarch }} --clobber
 
   release-dservctl:
 
@@ -163,14 +152,9 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o dservctl_linux_${{ matrix.goarch }} .
 
       - name: Upload dservctl binary
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "tools/dservctl/dservctl_linux_${{ matrix.goarch }}"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" tools/dservctl/dservctl_linux_${{ matrix.goarch }} --clobber
 
   release-extio-setup:
 
@@ -210,14 +194,9 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o extio-setup_linux_${{ matrix.goarch }} .
 
       - name: Upload extio-setup binary
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "tools/extio-setup/extio-setup_linux_${{ matrix.goarch }}"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" tools/extio-setup/extio-setup_linux_${{ matrix.goarch }} --clobber
 
   release-camera:
 
@@ -347,14 +326,9 @@ jobs:
           dpkg-deb --build camera-pkg dserv-camera-${{ matrix.target }}_${{ github.ref_name }}_$(dpkg --print-architecture).deb
 
       - name: Upload camera package
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "dserv-camera-*.deb"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" dserv-camera-*.deb --clobber
 
   release-essgui:
 
@@ -434,15 +408,10 @@ jobs:
           cmake --build build
           cpack -G DEB --config build/CPackConfig.cmake
 
-      - name: Create a GitHub release for the current tag and package.
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "./tools/essgui/*.deb"
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+      - name: Upload the essgui package to the release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" ./tools/essgui/*.deb --clobber
 
   check-dserv:
 
