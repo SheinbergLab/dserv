@@ -373,9 +373,11 @@ curl -F version=extio-fw-v3 -F build=dual -F board=pico2 -F variant=dual \
 <root>/extio/<channel>/latest.json            # {"version": "…"} pointer
 ```
 
-Next: a publisher (`build.sh --push` / `dservctl fw push`) and a consumer
-(extio-setup's Firmware panel gains a "pull from dserv.net" path that reuses
-the existing BOOTSEL flash).
+Publisher: `wiznet-io/build.sh <target> --push` builds a target and publishes
+just that image (dev channel by default; `PUSH_CHANNEL`/`--channel` to override,
+`FW_SHELF_URL` for a non-default host, `DSERV_AGENT_FIRMWARE_TOKEN` required).
+Next: the consumer — extio-setup's Firmware panel gains a "pull from dserv.net"
+path that reuses the existing BOOTSEL flash.
 
 ## Development
 
