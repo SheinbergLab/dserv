@@ -359,9 +359,31 @@ frames to the box's parser. So firmware chunks ride the identical channel:
 channel (`dev` mutable / `stable`+`extio-fw-vN` immutable, `-dirty` refused off
 `dev`), server-computed sha256, `manifest.json` contract, open read endpoints
 (`/api/firmware/extio…`, `/firmware/extio/…`) + token-gated multipart publish.
-See dserv-agent/README.md for the API. Still TODO below: the *publisher*
-(build.sh `--push` / `dservctl fw push`) and the *consumer* (extio-setup pull
-→ BOOTSEL flash; then the on-box updater fetching the flat `.bin`).
+See dserv-agent/README.md for the API.
+
+**Status update 2026-07-13 — shelf→OTA path wired (publisher + dserv-side consumer):**
+The whole release loop is now `build.sh <t> --tbyb --push` → one call per box.
+
+- **Publisher** (`build.sh`): a `--tbyb` build now copies its sealed flat `.bin`
+  (the OTA slot image) to `dist/` and, on `--push`, publishes it with `ota=1`
+  alongside the `.uf2` — so the manifest entry carries `OtaCapable`+`Bin`+
+  `BinSHA256`. A plain build still ships only the bench-flash `.uf2`. No agent
+  change was needed (publish already accepted `bin`/`ota`).
+- **Consumer** (`config/extioconf.tcl` → `extio_ota_push_shelf <box> ?channel?`):
+  resolves the channel's `latest`, picks the image whose `build` == the box's
+  announced `state/build` (with a `state/board` compat guard), pulls its `.bin`,
+  sha-verifies against the manifest, and hands off to `extio_ota_push`
+  (stage + `cmd/ota/begin`). Shelf URL is `::extio_fw_shelf_url` (default
+  `https://dserv.net`; point at a rig-local agent to OTA offline).
+- **Binary-safe HTTP** (`src/TclHttps.cpp`): the built-in client's read loops did
+  `rawResponse += buffer` (C-string append) — truncating any body at its first
+  null byte. Fixed to `.append(buffer, n)`, and added `https_get -outfile <path>`
+  (writes raw bytes to a file, returns the byte count) so a firmware `.bin` pulls
+  intact without Tcl's UTF-8 re-encoding. Requires a dserv new enough to carry
+  both this and the new `extioconf` (they ship together in `config/`).
+
+  Interim consumer for pre-partition boxes stays as below: extio-setup pull →
+  BOOTSEL flash. The on-box updater's flat-`.bin` fetch is the same shelf artifact.
 
 - build.sh gains a `release` mode: picotool-packaged artifacts (partition-
   aware UF2 for manual loads + flat .bin per slot for the updater) + manifest
