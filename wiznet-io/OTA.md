@@ -385,6 +385,60 @@ The whole release loop is now `build.sh <t> --tbyb --push` → one call per box.
   Interim consumer for pre-partition boxes stays as below: extio-setup pull →
   BOOTSEL flash. The on-box updater's flat-`.bin` fetch is the same shelf artifact.
 
+## Release signing & publishing — procedure
+
+The publish path takes two secrets, both passed via env, never committed:
+
+- `SIGN_KEY` — path to the **secp256k1** ECDSA private key that signs images
+  (`pico_sign_binary`). secp256k1 is mandatory: the RP2350 bootrom verifies only
+  that curve — NOT P-256/ed25519.
+- `DSERV_AGENT_FIRMWARE_TOKEN` — Bearer token for the shelf publish endpoint
+  (`--push`). Read side is open; only publish is gated.
+
+Optional: `FW_SHELF_URL` (default `https://dserv.net`), `PUSH_CHANNEL` (default
+`dev`; `stable`/`extio-fw-vN` are immutable and refuse `-dirty`), `OTA_FWVER`
+(overrides the `state/fw` label for a distinguishable test image — NOT the
+picobin A/B version).
+
+**The signing key today is a throwaway bench key.** For a real release key:
+
+1. **Generate (secp256k1, once, carefully):**
+   ```sh
+   openssl ecparam -name secp256k1 -genkey -noout -out extio-release.pem
+   # or passphrase-encrypted at rest:
+   openssl ecparam -name secp256k1 -genkey -noout | openssl ec -aes256 -out extio-release.pem
+   ```
+2. **Store it OUTSIDE the repo** — password manager (1Password) or an encrypted
+   volume — and **back it up in two places**. Losing it after secure boot is
+   enabled means you can never sign an update again. `.gitignore` blocks
+   `*-release.pem`/`*-signing.pem` (root) and every `*.pem` under `wiznet-io/`
+   as a backstop, but the key should not live in the tree at all.
+3. **Reference by path at build time:** `SIGN_KEY=/path/to/extio-release.pem`.
+   Dev builds can stay unsigned; only release builds set `SIGN_KEY`.
+
+**Signature is ADVISORY until RP2350 secure boot is enabled.** We proved
+`rom_explicit_buy` commits an *unsigned* image (secure boot off), so signing
+today only gives image *consistency*, not enforced authenticity. Enabling secure
+boot burns the public-key hash into **OTP — one-way, brick-risk, and a key hash
+can't be cleanly removed once in OTP.** DECISION (current): stay LAN-only with
+sha256 integrity enforced + sign for consistency; do NOT burn OTP yet. Revisit
+only if boxes ever fetch off-LAN or the threat model adds a hostile LAN/agent
+(see "Open questions" → image authenticity vs integrity). If secure boot is ever
+adopted: generate the release key first, back it up, then rehearse the OTP burn
+on a sacrificial board before any deployed hardware.
+
+**Release command (per build target):**
+```sh
+export SIGN_KEY=/path/to/extio-release.pem
+export DSERV_AGENT_FIRMWARE_TOKEN=…            # from the shelf host's /etc/dserv-agent/env
+sh build.sh dual --tbyb --push                 # signed TBYB image + flat .bin -> shelf (dev)
+# stable release: sh build.sh dual --tbyb --push --channel stable   (clean tree only)
+```
+Then, per box on its dserv:
+```sh
+dservctl extio "extio_ota_push_shelf <box>"    # latest dev; add a channel arg to pin
+```
+
 - build.sh gains a `release` mode: picotool-packaged artifacts (partition-
   aware UF2 for manual loads + flat .bin per slot for the updater) + manifest
   JSON (`{version, build, board, variant, size, sha256}`); version = existing

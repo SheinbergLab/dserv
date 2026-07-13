@@ -50,8 +50,11 @@ if [ "$XIP" = 1 ]; then XIPSUF="_xip"; XIPFLAG="-DBOX_XIP=1"; fi
 # the committed base image is not. (Same knob the cyw43 firmware TBYB variant uses.)
 TBYBSUF=""; TBYBFLAG=""
 if [ "$TBYB" = 1 ]; then TBYBSUF="_tbyb"; TBYBFLAG="-DBOX_TBYB=1"; fi
-# SIGN_KEY=<secp256k1 .pem>: sign the image (pico_sign_binary). Testing whether
-# rom_explicit_buy requires a signed image to commit a TBYB update.
+# SIGN_KEY=<secp256k1 .pem>: sign the image (pico_sign_binary). secp256k1 is
+# mandatory (the RP2350 bootrom verifies only that curve). Signature is advisory
+# until secure boot is enabled; today it just gives image consistency. Keep the
+# real release key OUTSIDE the repo and pass its path here -- see the "Release
+# signing & publishing" runbook in OTA.md for key generation/storage/OTP notes.
 SIGNFLAG=""; SIGNSUF=""
 [ -n "$SIGN_KEY" ] && { SIGNFLAG="-DBOX_SIGN_KEY=$SIGN_KEY"; SIGNSUF="_signed"; }
 

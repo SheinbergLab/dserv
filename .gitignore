@@ -14,6 +14,13 @@ _CPack_Packages/
 ca-key.pem
 key.pem
 
+# firmware signing keys (secp256k1) must NEVER be committed.
+# Convention: keep the real release key OUTSIDE the repo (password manager /
+# encrypted volume) and pass it via SIGN_KEY=. These patterns are a backstop
+# against a stray local copy. See wiznet-io/OTA.md "Release signing & publishing".
+*-release.pem
+*-signing.pem
+
 # docs.db is a build artifact: CMake builds it from db/docs.sql
 # (the committed source-of-truth) and installs it into the .deb.
 db/docs.db

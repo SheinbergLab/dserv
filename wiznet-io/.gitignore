@@ -5,3 +5,8 @@ build_*/
 
 # large, regenerable debug binaries (keep .uf2 for convenience)
 dist/*.elf
+
+# firmware signing keys must never be committed (see OTA.md "Release signing &
+# publishing"). No .pem is tracked anywhere under wiznet-io/, so ignore them all.
+*.pem
+secrets/
