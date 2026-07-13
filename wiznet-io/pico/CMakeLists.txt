@@ -42,6 +42,7 @@ if(BOX_TARGET STREQUAL "pico2w")
         pico_stdlib
         pico_multicore                  # core 1 = RT loop (see wizchip_dserv_config.c)
         pico_flash                      # flash_safe_execute: saves park the RT core
+        pico_sha256                     # RP2350 hw SHA256 (pico_ota.h image verify)
         hardware_flash
         pico_cyw43_arch_lwip_poll)      # CYW43 WiFi + lwIP (poll mode)
 elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv module
@@ -56,6 +57,7 @@ elseif(BOX_TARGET STREQUAL "usb")       # plain Pico 2, USB-CDC to a host dserv 
         pico_stdlib
         pico_multicore
         pico_flash
+        pico_sha256                     # RP2350 hw SHA256 (pico_ota.h image verify)
         pico_unique_id
         hardware_flash
         tinyusb_device                  # we own TinyUSB; pico_stdio_usb is NOT used here
@@ -74,6 +76,7 @@ elseif(BOX_TARGET STREQUAL "dual")      # W6300-EVB: Ethernet OR USB, boot-selec
         pico_stdlib
         pico_multicore
         pico_flash
+        pico_sha256                     # RP2350 hw SHA256 (pico_ota.h image verify)
         pico_unique_id
         hardware_spi
         hardware_dma
@@ -89,6 +92,7 @@ else()
         pico_stdlib
         pico_multicore
         pico_flash
+        pico_sha256                     # RP2350 hw SHA256 (pico_ota.h image verify)
         pico_unique_id
         hardware_spi
         hardware_dma

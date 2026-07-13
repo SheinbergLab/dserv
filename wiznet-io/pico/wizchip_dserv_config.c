@@ -73,6 +73,7 @@
 #endif
 #include "pico_ain.h"           /* ADS1115 analog-in: always compiled, runtime-enabled (ain_en) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
+#include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 
 /* USB data-CDC publish accounting (box_net_usb.h increments; `txstats` prints).
  * Defined here unconditionally so every transport build links. */
@@ -670,6 +671,131 @@ static void box_reboot(int bootsel)
     else         watchdog_reboot(0, 0, 0);
 }
 
+/* ======================================================================== *
+ *  STAGE-0 OTA: pull a firmware image over the dserv link -> scratch flash.
+ *
+ *  `cmd/ota/begin "<sha256hex> <size>"` (matched in on_frame BEFORE dispatch)
+ *  arms a pull; the RT loop runs it (gated !in_obs) via box_net_get_binary,
+ *  which streams the raw value through pico_ota_sink into scratch flash and
+ *  hashes it. pico_ota.h owns the sink/sha/geometry; this file owns the two
+ *  box-specific bits it can't: (1) flash writes must run on CORE 0 (core 1's
+ *  flash_safe_execute is NOT_PERMITTED under ASSUME_CORE1_SAFE), so the
+ *  pico_ota_flash_t hooks marshal each op to core 0 via a two-flag handshake;
+ *  (2) publishing state/ota/{state,progress,result}. Delivery proof only --
+ *  no partition table / boot switch yet (OTA.md Stage 1 adds A/B + TBYB).
+ * ======================================================================== */
+static pico_ota_t g_ota;                 /* ~320B: static, off the 4KB core-1 stack */
+static volatile uint8_t  g_ota_pending;  /* on_frame -> ota_service_core1 */
+static uint8_t  g_ota_sha[PICO_OTA_SHA_BYTES];
+static uint32_t g_ota_size;
+static char     g_ota_key[80];           /* datapoint the box pulls: <prefix>/ota/image */
+
+/* core1 <-> core0 flash handshake: core 1's sink hook blocks here while core 0
+ * (ota_flash_service_core0) does the actual erase/program. Single in-flight op;
+ * core 1 is stalled in the pull for the whole transfer, so no queue needed. */
+static struct {
+    volatile uint32_t off;
+    const uint8_t    *page;   /* NULL => erase the sector at off */
+    volatile uint8_t  req;
+    volatile uint8_t  done;
+    volatile int8_t   rc;
+} g_otaf;
+
+static int ota_flash_submit(uint32_t off, const uint8_t *page)   /* core 1 */
+{
+    g_otaf.off = off; g_otaf.page = page; g_otaf.rc = 0; g_otaf.done = 0;
+    __dmb();                                  /* publish payload before the request flag */
+    g_otaf.req = 1;
+    absolute_time_t dl = make_timeout_time_ms(2000);   /* core-0 stall guard (erase ~ms) */
+    while (!g_otaf.done)
+        if (absolute_time_diff_us(get_absolute_time(), dl) <= 0) return -1;
+    __dmb();                                  /* read rc after done is observed */
+    return g_otaf.rc;
+}
+static int ota_erase_hook(uint32_t off)                       { return ota_flash_submit(off, NULL); }
+static int ota_program_hook(uint32_t off, const uint8_t *page){ return ota_flash_submit(off, page); }
+static const pico_ota_flash_t g_ota_flash_ops = { ota_erase_hook, ota_program_hook };
+
+/* ---- state/ota publish helpers (box -> dserv) ---- */
+static void publish_ota_str(const char *leaf, const char *val)
+{
+    char nm[64]; uint8_t f[DSERV_MSG_LEN];
+    dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+    dserv_msg_string(f, nm, 0, val);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+static void publish_ota_progress(void)
+{
+    char nm[64]; uint8_t f[DSERV_MSG_LEN];
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ota/progress");
+    dserv_msg_int(f, nm, 0, pico_ota_progress_pct(&g_ota));
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+
+/* Parse `cmd/ota/begin` payload "<64 hex sha256> <decimal size>". 0 ok, -1. */
+static int ota_begin_parse(const char *s, uint8_t sha[PICO_OTA_SHA_BYTES], uint32_t *size)
+{
+    while (*s == ' ') s++;
+    if (pico_ota_parse_sha(s, sha) != 0) return -1;
+    s += 64;
+    while (*s == ' ') s++;
+    if (*s < '0' || *s > '9') return -1;
+    *size = (uint32_t) strtoul(s, NULL, 10);
+    return *size ? 0 : -1;
+}
+
+/* box_net_bin_sink wrapper: core-1 hash+flash (in pico_ota_sink) + throttled
+ * progress telemetry. Runs during the blocking pull; SN4 (state) and SN6 (pull)
+ * sockets are independent and core 1 is single-threaded, so interleaving the
+ * progress send between recvs is safe. */
+static uint32_t g_ota_pub_at;
+static int ota_sink(void *ud, const uint8_t *data, uint32_t len)
+{
+    int r = pico_ota_sink(ud, data, len);
+    if (r == 0 && g_ota.received >= g_ota_pub_at) {
+        g_ota_pub_at = g_ota.received + 32768;   /* ~5 updates over a 150KB image */
+        publish_ota_progress();
+    }
+    return r;
+}
+
+/* Run one armed OTA pull to completion (core 1; blocks ~seconds). Gated to
+ * !in_obs by the caller-visible check here; the HW watchdog is switched to
+ * pet-always for the duration (a bounded, intentional RT stall -- same escape
+ * `wdt 0` uses), then restored. */
+static void ota_service_core1(void)
+{
+    if (!g_ota_pending) return;
+    g_ota_pending = 0;
+
+    if (g_in_obs) {                               /* never mid-observation */
+        publish_ota_str("ota/state", "fail");
+        publish_ota_str("ota/result", "in_obs");
+        printf("ota: refused -- in_obs\n");
+        return;
+    }
+
+    printf("ota: staging %u bytes from %s (transport=%s)\n", g_ota_size, g_ota_key,
+           box_net_backend_name());
+    uint8_t saved_gate = g_wdt_gate; g_wdt_gate = 0;   /* bounded stall: pet unconditionally */
+    pico_ota_begin(&g_ota, &g_ota_flash_ops, g_ota_sha, g_ota_size);
+    g_ota_pub_at = 0;
+    publish_ota_str("ota/state", pico_ota_state_str(g_ota.state));   /* staging */
+    publish_ota_progress();
+
+    int rc = box_net_get_binary(g_cfg.dserv_ip, dserv_cfg_port(&g_cfg),
+                                g_ota_key, ota_sink, &g_ota);
+    pico_ota_finish(&g_ota, rc);
+    g_wdt_gate = saved_gate;
+
+    publish_ota_progress();
+    publish_ota_str("ota/state", pico_ota_state_str(g_ota.state));
+    publish_ota_str("ota/result", g_ota.state == PICO_OTA_DONE_OK ? "ok" : pico_ota_err_str(g_ota.err));
+    printf("ota: %s (%s) recv=%u/%u datalen_rc=%d\n",
+           pico_ota_state_str(g_ota.state), pico_ota_err_str(g_ota.err),
+           g_ota.received, g_ota_size, rc);
+}
+
 /* ---- config/cmd in: dispatch one 128B datapoint frame ---- */
 static void on_frame(const uint8_t *frame, void *ud)
 {
@@ -714,6 +840,32 @@ static void on_frame(const uint8_t *frame, void *ud)
             (unsigned long long) anchor_box, (long long) g_clock.offset_us,
             hw ? "hw" : "sw");
         return;
+    }
+
+    /* OTA arm: <prefix>/cmd/ota/begin -- intercepted here (dserv_dispatch's
+     * cmd router doesn't know it) so the RT loop can run the transfer. Sets a
+     * flag only; the pull itself is deferred to ota_service_core1 (blocking). */
+    {
+        char oname[80];
+        int pl = dserv_cfg_prefix(cfg, oname, sizeof oname);
+        if (pl > 0 && pl < (int)(sizeof oname) - 16) {
+            snprintf(oname + pl, sizeof oname - (size_t) pl, "/cmd/ota/begin");
+            if (dserv_msg_name_eq(&m, oname)) {
+                char val[96]; dserv_msg_copy_cstr(&m, val, sizeof val);
+                if (ota_begin_parse(val, g_ota_sha, &g_ota_size) == 0) {
+                    snprintf(oname + pl, sizeof oname - (size_t) pl, "/ota/image");
+                    strncpy(g_ota_key, oname, sizeof g_ota_key - 1);
+                    g_ota_key[sizeof g_ota_key - 1] = '\0';
+                    g_ota_pending = 1;
+                    printf("ota: armed (%u bytes, pull %s)\n", g_ota_size, g_ota_key);
+                } else {
+                    printf("ota: bad begin payload '%s'\n", val);
+                    publish_ota_str("ota/state", "fail");
+                    publish_ota_str("ota/result", "bad_args");
+                }
+                return;
+            }
+        }
     }
 
     gpio_cmd_t cmd;
@@ -1030,6 +1182,7 @@ static void rt_main(void)
             if (up >= 1) reg_watchdog_service();   /* wired/wifi: heal lost registrations */
 #endif
             if (up >= 1) {
+                ota_service_core1();   /* run an armed OTA pull (blocks; gated !in_obs) */
                 di_event_t e;
                 while (pico_gpio_poll_di(&g_cfg, &e)) {   /* debounced edges */
                     int lvl = di_logical(&g_cfg, e.pin, e.level);
@@ -1129,6 +1282,21 @@ static void save_service(void)          /* execute queued flash ops (core 0; cop
     if (!queue_try_remove(&g_save_q, &g_save_req)) return;
     if (g_save_req.erase_only) flash_store_erase();   /* core 1 already announced it */
     else printf("flash %s\n", flash_store_save(&g_save_req.cfg) == 0 ? "ok" : "FAIL");
+}
+
+/* Execute one OTA flash op requested by core 1's sink hook (core 0: it's the
+ * only core allowed to flash_safe_execute under ASSUME_CORE1_SAFE). Two-flag
+ * handshake with ota_flash_submit; core 1 spins on `done`. */
+static void ota_flash_service_core0(void)
+{
+    if (!g_otaf.req) return;
+    __dmb();                                          /* read payload after req is seen */
+    g_otaf.req = 0;
+    int rc = g_otaf.page ? flash_ota_program(g_otaf.off, g_otaf.page)
+                         : flash_ota_erase(g_otaf.off);
+    g_otaf.rc = (int8_t) rc;
+    __dmb();                                          /* publish rc before done */
+    g_otaf.done = 1;
 }
 
 /* Render the status snapshot to the OLED, 4 Hz (core 0; ~0.5ms per frame).
@@ -1255,6 +1423,7 @@ int main(void)
         fuel_service();
 #endif
         save_service();
+        ota_flash_service_core0();  /* service core-1 OTA flash requests */
         oled_service_core0();       /* status panel, 4 Hz, ~0.5ms/frame on this core */
         watchdog_service();         /* arm once core 1 is up; pet while its heartbeat advances */
         if (!announced) {

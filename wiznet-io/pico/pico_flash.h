@@ -69,4 +69,28 @@ static inline void flash_store_erase(void)
     flash_safe_execute(flash_store_do_op, &op, 500);
 }
 
+/* ---- generic OTA scratch flash ops (pico_ota.h streams through these) ----
+ * Erase one sector / program one page at an ARBITRARY flash offset (unlike
+ * flash_store_* which are pinned to FLASH_STORE_OFFSET). MUST run on core 0:
+ * under copy_to_ram + PICO_FLASH_ASSUME_CORE1_SAFE, flash_safe_execute called
+ * from core 1 returns PICO_ERROR_NOT_PERMITTED (core 0 is the assumed actor),
+ * so the app marshals the pico_ota_flash_t hooks here via a core-0 handshake.
+ * off must be sector- (erase) / page- (program) aligned. 0 ok, -1 fail. */
+typedef struct { uint32_t off; const uint8_t *page; } flash_ota_op_t;
+static void flash_ota_erase_do(void *p)
+{ const flash_ota_op_t *o = (const flash_ota_op_t *) p; flash_range_erase(o->off, FLASH_SECTOR_SIZE); }
+static void flash_ota_program_do(void *p)
+{ const flash_ota_op_t *o = (const flash_ota_op_t *) p; flash_range_program(o->off, o->page, FLASH_PAGE_SIZE); }
+
+static inline int flash_ota_erase(uint32_t off)
+{
+    flash_ota_op_t op = { off, NULL };
+    return flash_safe_execute(flash_ota_erase_do, &op, 1000) == PICO_OK ? 0 : -1;
+}
+static inline int flash_ota_program(uint32_t off, const uint8_t *page)
+{
+    flash_ota_op_t op = { off, page };
+    return flash_safe_execute(flash_ota_program_do, &op, 1000) == PICO_OK ? 0 : -1;
+}
+
 #endif /* PICO_FLASH_H_STORE */
