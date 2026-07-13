@@ -256,7 +256,7 @@ proc extio_ota_clear {box} {
 # So the whole release loop is: build.sh <t> --tbyb --push  ->  one call per box.
 #   dservctl extio "extio_ota_push_shelf <box>"            ;# latest on dev
 #   dservctl extio "extio_ota_push_shelf <box> stable"
-proc extio_ota_push_shelf {box {channel dev}} {
+proc extio_ota_push_shelf {box {channel dev} {version ""}} {
     package require yajltcl
     set base $::extio_fw_shelf_url
 
@@ -274,9 +274,10 @@ proc extio_ota_push_shelf {box {channel dev}} {
         error "extio_ota_push_shelf: shelf fetch failed ($url): $json"
     }
     set d [::yajl::json2dict $json]
-    set version ""
-    if { [dict exists $d latest] } { set version [dict get $d latest] }
-    if { $version eq "" } { error "extio_ota_push_shelf: channel '$channel' has no latest version" }
+    if { $version eq "" } {
+        if { [dict exists $d latest] } { set version [dict get $d latest] }
+    }
+    if { $version eq "" } { error "extio_ota_push_shelf: channel '$channel' has no version to pull" }
 
     # 3. find the OTA image for this box's build in the latest version.
     set img ""
@@ -320,6 +321,30 @@ proc extio_ota_push_shelf {box {channel dev}} {
     return $r
 }
 
+# Datapoint trigger for a network client (extio-setup's dserv driver, which can
+# only %set extio/<box>/cmd/... -- no Tcl eval) to kick off a shelf OTA. Value =
+# "<channel> ?<version>?" (empty -> dev/latest). We DEFER the actual pull with
+# `after 0` so the triggering %set returns its rc immediately: extio_ota_push_shelf
+# blocks a few seconds on the .bin fetch, and the client's command socket would
+# otherwise time out waiting for the reply.
+proc extio_ota_pull_trigger {dp data} {
+    if { ![regexp {^extio/([^/]+)/cmd/ota/pull$} $dp -> box] } return
+    set toks [split [string trim $data]]
+    set channel [expr {[llength $toks] >= 1 && [lindex $toks 0] ne "" ? [lindex $toks 0] : "dev"}]
+    set version [expr {[llength $toks] >= 2 ? [lindex $toks 1] : ""}]
+    after 0 [list extio_ota_pull_run $box $channel $version]
+}
+
+proc extio_ota_pull_run {box channel version} {
+    if { [catch { extio_ota_push_shelf $box $channel $version } r] } {
+        puts "extio ota\[$box\]: shelf pull FAILED: $r"
+        # Surface it to the UI on the same state/ota keys the box would use (the box
+        # never got cmd/ota/begin, so it won't publish these itself on a resolve error).
+        catch { dservSet extio/$box/state/ota/state  fail }
+        catch { dservSet extio/$box/state/ota/result "shelf: $r" }
+    }
+}
+
 proc extio_ota_on_state {dp data} {
     if { ![regexp {^extio/([^/]+)/state/ota/state$} $dp -> box] } return
     set prog ""
@@ -346,6 +371,8 @@ proc extio_wire_common {} {                 ;# device-independent: sync + obs_pi
     dpointSetScript extio/*/state/label/* extio_label_invalidate
     dservAddMatch extio/*/state/ota/state   ;# OTA progress log + free the staged image on finish
     dpointSetScript extio/*/state/ota/state extio_ota_on_state
+    dservAddMatch extio/*/cmd/ota/pull      ;# network-triggered shelf OTA (extio-setup dserv mode)
+    dpointSetScript extio/*/cmd/ota/pull extio_ota_pull_trigger
 }
 
 # ---- hot-swap + discovery: runs every 2 s. (Re)open when the box's data port

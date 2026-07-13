@@ -208,6 +208,14 @@ const DservDriver = {
   },
   async save() { await this.set("cmd/save", 1); conLog("cmd/save sent"); },
   async reboot() { await this.set("cmd/reboot", 1); },
+
+  // Network OTA: no local USB, so kick the box's own A/B updater -- it pulls the
+  // image from the shelf, trials it (try-before-you-buy), self-tests, and commits
+  // or auto-reverts. The dserv-side extioconf turns this cmd/ota/pull into
+  // extio_ota_push_shelf; value = "<channel> ?<version>?" (empty version = latest).
+  async ota(channel, version) {
+    await this.set("cmd/ota/pull", version ? `${channel} ${version}` : (channel || "dev"));
+  },
 };
 
 let drv = SerialDriver;
@@ -454,6 +462,13 @@ async function loadFirmware() {
 $("flash").onclick = async () => {
   const file = $("fwfiles").value;
   if (!file) return;
+  // Local flash is a USB mass-storage copy -- it can't reach a box over the
+  // network. Over dserv, send the user to the shelf OTA below instead of the
+  // old "a board already in BOOTSEL" dead-end.
+  if (drv.id === "dserv") {
+    $("flashmsg").textContent = "local flash needs a serial (USB) connection — use “flash from shelf” below for an over-the-air update";
+    return;
+  }
   const target = (connected && drv.id === "serial")
     ? `the connected box (${cfg.name || "unnamed"})` : "a board already in BOOTSEL";
   if (!confirm(`Flash ${file} to ${target}?`)) return;
@@ -487,14 +502,19 @@ async function loadShelf() {
     const rows = [];
     for (const v of (j.versions || []))
       for (const img of (v.images || []))
-        rows.push({ version: v.version, file: img.file, build: img.build, dirty: v.dirty });
+        rows.push({ version: v.version, file: img.file, build: img.build, dirty: v.dirty,
+                    ota: !!img.otaCapable, bin: img.bin || "" });
     for (const r of rows) {
       const o = document.createElement("option");
-      o.value = JSON.stringify({ channel: "dev", version: r.version, file: r.file });
-      o.textContent = `${r.build} · ${r.version}${r.dirty ? " (dirty)" : ""}`;
+      o.value = JSON.stringify({ channel: "dev", version: r.version, file: r.file,
+                                 build: r.build, ota: r.ota, bin: r.bin });
+      o.textContent = `${r.build} · ${r.version}${r.dirty ? " (dirty)" : ""}${r.ota ? " · OTA" : ""}`;
       sel.append(o);
     }
     $("shelfflash").disabled = !rows.length;
+    // Over dserv it's an over-the-air update (box pulls it itself); over serial
+    // it's a local download + BOOTSEL flash.
+    $("shelfflash").textContent = drv.id === "dserv" ? "OTA…" : "Flash…";
     wrap.style.display = "";
     // Host-side "update available": box fw vs the channel's latest version.
     // Compare by VERSION (leading X.Y.Z + git-describe commit count), not raw
@@ -520,6 +540,28 @@ $("shelfflash").onclick = async () => {
   const raw = $("shelffiles").value;
   if (!raw) return;
   const spec = JSON.parse(raw);
+
+  // dserv (network) mode: there's no local USB, so trigger the box's OWN A/B OTA
+  // -- it pulls this image from the shelf, trials it, self-tests, and commits or
+  // auto-reverts. (The local mass-storage flash below only works over serial.)
+  if (drv.id === "dserv") {
+    const box = drv.box;
+    if (!box) { $("shelfmsg").textContent = "select a box first"; return; }
+    if (!spec.ota || !spec.bin) {
+      $("shelfmsg").textContent = `${spec.version} has no OTA image for over-the-air update (bench-flash only) — pick one marked “OTA”`;
+      return;
+    }
+    if (!confirm(`OTA ${box} to ${spec.version} (${spec.build})?\n\nThe box pulls it from the shelf, boots it as a trial, self-tests (transport + dserv + registration), then commits — or auto-reverts to the current image if the trial can't check in.`)) return;
+    $("shelfflash").disabled = true;
+    $("shelfmsg").textContent = `OTA ${box}: triggering shelf pull of ${spec.version}…`;
+    try {
+      await drv.ota(spec.channel, spec.version);
+      $("shelfmsg").textContent = `OTA ${box}: box pulling ${spec.version} — watch the OTA state (trial boot ~30 s, then it reconnects on the new image, or reverts)`;
+    } catch (e) { $("shelfmsg").textContent = "OTA trigger failed: " + e.message; }
+    $("shelfflash").disabled = false;
+    return;
+  }
+
   const target = (connected && drv.id === "serial")
     ? `the connected box (${cfg.name || "unnamed"})` : "a board already in BOOTSEL";
   if (!confirm(`Fetch ${spec.file} (${spec.version}) from dserv.net and flash it to ${target}?`)) return;
