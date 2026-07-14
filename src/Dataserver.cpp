@@ -341,6 +341,13 @@ int Dataserver::client_remove_all_matches(std::string key)
   return 1;
 }
 
+bool Dataserver::client_covers(std::string key, char *varname)
+{
+  auto send_client = send_table.get(key);
+  if (!send_client) return false;
+  return send_client->matches.is_match(varname);
+}
+
 std::string Dataserver::get_matches(char *host, int port)
 {
   char key[128];

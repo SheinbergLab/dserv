@@ -4,6 +4,7 @@
 #include "dserv.h"
 #include "dservConfig.h"
 #include <vector>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <dirent.h>
@@ -23,6 +24,14 @@ extern "C" int TclSha256_RegisterCommands(Tcl_Interp *interp);
 
 static int process_requests(TclServer *tserv);
 static Tcl_Interp *setup_tcl(TclServer *tserv);
+static int dpoint_tcl_script(Tcl_Interp *interp, const char *script,
+                             ds_datapoint_t *dpoint);
+static void run_when_callbacks(TclServer *tserv, Tcl_Interp *interp,
+                               ds_datapoint_t *dpoint);
+static int dserv_when_command(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *const objv[]);
+static int dserv_when_cancel_command(ClientData data, Tcl_Interp *interp,
+                                     int objc, Tcl_Obj *const objv[]);
 
 // For one off subprocesses don't need name
 TclServer::TclServer(int argc, char **argv, Dataserver *dserv)
@@ -2762,6 +2771,11 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
   Tcl_CreateObjCommand(interp, "getVar",
                     (Tcl_ObjCmdProc *) get_var_command, tserv, NULL);
                                       
+  Tcl_CreateObjCommand(interp, "dservWhen",
+               dserv_when_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservWhenCancel",
+               dserv_when_cancel_command, tserv, NULL);
+
   Tcl_CreateObjCommand(interp, "dservAddMatch",
                dserv_add_match_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservAddExactMatch",
@@ -3009,7 +3023,254 @@ static int dpoint_tcl_script(Tcl_Interp *interp,
   return retcode;
 }
 
-// event-specific script execution 
+/*
+ * dservWhen: non-blocking, predicate-gated datapoint callbacks.
+ *
+ *   dservWhen key predicate script ?-repeat? ?-body?   -> returns an id
+ *   dservWhenCancel id | all
+ *
+ * When a datapoint matching `key` is delivered and satisfies `predicate` -- a
+ * ::tcl::mathop fragment with the datapoint value as the implicit left operand
+ * ({>= 143208}, {in {armed fail}}, {ne staging}); empty means "any update" --
+ * `script` runs as `script name value`.  One-shot by default (auto-removed
+ * after firing); -repeat keeps it live.  A level check at registration fires
+ * immediately for the current value(s) that already satisfy.
+ *
+ * `key` may be a glob (*, ?, []): we then subscribe with a glob match and the
+ * registration watches every matching datapoint (so one dservWhen can cover a
+ * whole family, e.g. all of a box's di lines), and the level check seeds from
+ * every currently-matching datapoint.  An exact key uses an exact subscription.
+ *
+ * By default `script` is a proc name (bytecode-cached by Tcl -> cheap to fire
+ * repeatedly).  With -body, `script` is instead a code snippet: we compile it
+ * once into a generated proc `{name value} {<snippet>}` and use that, so it is
+ * just as fast as a hand-written proc but reads inline.  The snippet sees the
+ * datapoint via `$name` and `$value`.  -body only affects dservWhen; the shared
+ * dpointSetScript path is untouched.
+ *
+ * This is the reactive alternative to a blocking wait: the script runs from the
+ * normal delivery path on the process thread, so it never holds that thread and
+ * cannot deadlock the code that produces the value.  It keeps its own registry
+ * (separate from dpoint_scripts) so it never dislodges a caller's dpointSetScript,
+ * and refcounts any subscription it adds so cleanup never removes the caller's.
+ */
+
+// Evaluate a when predicate against a delivered dpoint.  1 true, 0 false, -1 err.
+static int when_eval_predicate(Tcl_Interp *interp, const std::string &predicate,
+                               ds_datapoint_t *dpoint)
+{
+  if (predicate.empty()) return 1;               // no predicate -> any update
+
+  Tcl_Obj *v = dpoint_to_tclobj(interp, dpoint);
+  if (!v) v = Tcl_NewObj();
+  Tcl_IncrRefCount(v);
+  Tcl_SetVar2Ex(interp, "__dservWhenVal", NULL, v, TCL_GLOBAL_ONLY);
+
+  // Split the predicate into operator (first word) + remaining rhs, and run it
+  // as `::tcl::mathop::<op> $val <rest>` so bareword operands stay strings and
+  // $vars resolve in the caller's frame (same rationale as the value comparison
+  // in a mathop expression, not an expr which rejects barewords).
+  size_t p = 0, n = predicate.size();
+  while (p < n && isspace((unsigned char) predicate[p])) p++;
+  size_t opstart = p;
+  while (p < n && !isspace((unsigned char) predicate[p])) p++;
+  std::string op = predicate.substr(opstart, p - opstart);
+  std::string rest = (p < n) ? predicate.substr(p) : std::string();
+  std::string cmd = "::tcl::mathop::" + op + " $::__dservWhenVal " + rest;
+
+  int b = 0;
+  int rc = Tcl_EvalEx(interp, cmd.c_str(), -1, 0);
+  if (rc == TCL_OK)
+    rc = Tcl_GetBooleanFromObj(interp, Tcl_GetObjResult(interp), &b);
+  Tcl_DecrRefCount(v);
+  return (rc == TCL_OK) ? (b ? 1 : 0) : -1;
+}
+
+// Remove a when registration by id: delete its generated proc (if any), release
+// its subscription refcount (dropping the underlying match once the last owner
+// goes away), and erase it.
+static void when_remove(TclServer *tserv, Tcl_Interp *interp, int id)
+{
+  auto it = std::find_if(tserv->when_callbacks.begin(),
+                         tserv->when_callbacks.end(),
+                         [&](const WhenCallback &c){ return c.id == id; });
+  if (it == tserv->when_callbacks.end()) return;
+
+  if (it->generated)
+    Tcl_DeleteCommand(interp, it->script.c_str());
+
+  if (it->owns_match) {
+    auto rit = tserv->when_match_refs.find(it->pattern);
+    if (rit != tserv->when_match_refs.end() && --rit->second <= 0) {
+      tserv->ds->client_remove_match(tserv->client_name,
+                                     (char *) it->pattern.c_str());
+      tserv->when_match_refs.erase(rit);
+    }
+  }
+  tserv->when_callbacks.erase(it);
+}
+
+// Dispatch delivered datapoint `dpoint` to matching when-callbacks.  Runs on the
+// process thread from the REQ_DPOINT_SCRIPT path.
+static void run_when_callbacks(TclServer *tserv, Tcl_Interp *interp,
+                               ds_datapoint_t *dpoint)
+{
+  if (tserv->when_callbacks.empty()) return;
+
+  const char *varname = dpoint->varname;
+
+  // Collect ids to fire first: a firing script may add/remove callbacks, so we
+  // must not iterate the live vector while firing.
+  std::vector<int> fire_ids;
+  for (auto &cb : tserv->when_callbacks) {
+    if (Tcl_StringMatch(varname, cb.pattern.c_str())) {
+      if (when_eval_predicate(interp, cb.predicate, dpoint) == 1)
+        fire_ids.push_back(cb.id);
+    }
+  }
+
+  for (int id : fire_ids) {
+    auto it = std::find_if(tserv->when_callbacks.begin(),
+                           tserv->when_callbacks.end(),
+                           [&](const WhenCallback &c){ return c.id == id; });
+    if (it == tserv->when_callbacks.end()) continue;   // cancelled meanwhile
+    std::string script = it->script;                   // copy before firing
+    bool once = it->once;
+    dpoint_tcl_script(interp, script.c_str(), dpoint); // runs `script name value`
+    if (once) when_remove(tserv, interp, id);
+  }
+}
+
+static int dserv_when_command(ClientData data, Tcl_Interp *interp,
+                              int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) data;
+
+  if (objc < 4) {
+    Tcl_WrongNumArgs(interp, 1, objv, "key predicate script ?-repeat? ?-body?");
+    return TCL_ERROR;
+  }
+  std::string key = Tcl_GetString(objv[1]);
+  std::string predicate = Tcl_GetString(objv[2]);
+  std::string script = Tcl_GetString(objv[3]);
+  bool once = true, body = false;
+  for (int i = 4; i < objc; i++) {
+    std::string opt = Tcl_GetString(objv[i]);
+    if (opt == "-repeat") once = false;
+    else if (opt == "-body") body = true;
+    else {
+      Tcl_AppendResult(interp, "bad option \"", opt.c_str(),
+                       "\": must be -repeat or -body", NULL);
+      return TCL_ERROR;
+    }
+  }
+
+  int id = tserv->when_next_id++;
+
+  // Resolve the callback command: a caller-supplied proc name, or -- with -body
+  // -- a proc we generate once from the snippet (compiled body cached by Tcl,
+  // so firing is as cheap as a proc while reading inline).  Do this before
+  // touching subscription state so a bad snippet leaves nothing registered.
+  std::string callback = script;
+  bool generated = false;
+  if (body) {
+    callback = "::__dservWhen_cb_" + std::to_string(id);
+    Tcl_Obj *def[4] = {
+      Tcl_NewStringObj("proc", -1), Tcl_NewStringObj(callback.c_str(), -1),
+      Tcl_NewStringObj("name value", -1), Tcl_NewStringObj(script.c_str(), -1)
+    };
+    for (int i = 0; i < 4; i++) Tcl_IncrRefCount(def[i]);
+    int rc = Tcl_EvalObjv(interp, 4, def, 0);
+    for (int i = 0; i < 4; i++) Tcl_DecrRefCount(def[i]);
+    if (rc != TCL_OK) return TCL_ERROR;   // interp result holds the error
+    generated = true;
+  }
+
+  // A key with glob metacharacters watches many datapoints; subscribe (and the
+  // Tcl_StringMatch in run_when_callbacks) glob-match accordingly.
+  bool glob = key.find_first_of("*?[") != std::string::npos;
+
+  // Ensure a subscription so a value change to `key` is delivered to us.  If we
+  // already own one for this pattern, bump its refcount; else add one only if
+  // nothing already covers the key (never clobbering the caller's matches).
+  bool owns = false;
+  auto rit = tserv->when_match_refs.find(key);
+  if (rit != tserv->when_match_refs.end()) {
+    rit->second++;
+    owns = true;
+  }
+  else if (!tserv->ds->client_covers(tserv->client_name, (char *) key.c_str())) {
+    if (glob)
+      tserv->ds->client_add_match(tserv->client_name, (char *) key.c_str(), 1);
+    else
+      tserv->ds->client_add_exact_match(tserv->client_name,
+                                        (char *) key.c_str(), 1);
+    tserv->when_match_refs[key] = 1;
+    owns = true;
+  }
+
+  tserv->when_callbacks.push_back(
+      WhenCallback{ id, key, predicate, callback, once, owns, generated });
+
+  // Level check: fire immediately for the current value(s) already satisfying,
+  // so a datapoint already present at registration isn't missed.  For a glob
+  // key this seeds from every currently-matching datapoint (subsuming the old
+  // `foreach [dservKeys]` seed); a -once registration stops after the first.
+  bool done = false;
+  auto level_try = [&](const char *k) {
+    if (done) return;
+    ds_datapoint_t *dp = tserv->ds->get_datapoint((char *) k);
+    if (!dp) return;
+    if (when_eval_predicate(interp, predicate, dp) == 1) {
+      dpoint_tcl_script(interp, callback.c_str(), dp);
+      if (once) { when_remove(tserv, interp, id); done = true; }
+    }
+    dpoint_free(dp);
+  };
+  if (glob) {
+    char *keys = tserv->ds->get_table_keys();   // space-separated; we free it
+    if (keys) {
+      std::string ks(keys);
+      free(keys);
+      size_t pos = 0;
+      while (pos < ks.size() && !done) {
+        size_t sp = ks.find(' ', pos);
+        std::string k = ks.substr(pos, sp == std::string::npos ? sp : sp - pos);
+        pos = (sp == std::string::npos) ? ks.size() : sp + 1;
+        if (!k.empty() && Tcl_StringMatch(k.c_str(), key.c_str()))
+          level_try(k.c_str());
+      }
+    }
+  }
+  else {
+    level_try(key.c_str());
+  }
+
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+  return TCL_OK;
+}
+
+static int dserv_when_cancel_command(ClientData data, Tcl_Interp *interp,
+                                     int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) data;
+
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "id|all");
+    return TCL_ERROR;
+  }
+  if (std::string(Tcl_GetString(objv[1])) == "all") {
+    while (!tserv->when_callbacks.empty())
+      when_remove(tserv, interp, tserv->when_callbacks.front().id);
+    return TCL_OK;
+  }
+  int id;
+  if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
+  when_remove(tserv, interp, id);
+  return TCL_OK;
+}
+
+// event-specific script execution
 static int event_tcl_script(Tcl_Interp *interp,
                            const char *script,
                            ds_datapoint_t *dpoint)
@@ -3191,7 +3452,10 @@ static int process_requests(TclServer *tserv)
 	  const char *dpoint_script = script.c_str();
 	  int retcode = dpoint_tcl_script(interp, dpoint_script, dpoint);
 	}
-	
+
+	// fire any predicate-gated dservWhen callbacks for this point
+	run_when_callbacks(tserv, interp, dpoint);
+
 	dpoint_free(dpoint);
       }
     default:

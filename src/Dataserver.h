@@ -140,6 +140,8 @@ public:
   int client_add_exact_match(std::string key, char *match, int every=1);
   int client_remove_match(std::string key, char *match);
   int client_remove_all_matches(std::string key);
+  // true if client `key` already has a subscription that matches `varname`
+  bool client_covers(std::string key, char *varname);
   std::string get_matches(char *host, int port);
   std::string get_logger_clients(void);
   int logger_client_open(std::string filename, bool overwrite);

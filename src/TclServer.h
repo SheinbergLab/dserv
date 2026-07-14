@@ -115,6 +115,25 @@ public:
     void removeEventHandler(int type, int subtype);
     void removeAllEventHandlers();
 };
+// A dservWhen registration: run `script` (as `script name value`) when a
+// delivered datapoint matching `pattern` satisfies `predicate` -- a tcl::mathop
+// fragment with the value as the implicit left operand (empty = any update).
+// Edge-triggered on delivery, plus a level check at registration time.  It is
+// non-blocking: the script runs from the normal datapoint-delivery path, so it
+// never holds the interp thread and can't deadlock a producer.  owns_match
+// records whether this registration added the underlying subscription (refcounted
+// in TclServer::when_match_refs) so cleanup never removes a match the caller set up.
+struct WhenCallback {
+  int id;
+  std::string pattern;
+  std::string predicate;
+  std::string script;      // command name to invoke (`script name value`)
+  bool once;
+  bool owns_match;
+  bool generated;          // true if `script` is a proc we created from a -body
+                           // snippet (delete it on removal); false = caller's proc
+};
+
 class TclServer
 {
   std::thread newline_net_thread;
@@ -198,7 +217,14 @@ public:
    
   // scripts attached to dpoints
   TriggerDict dpoint_scripts;
-  
+
+  // dservWhen registrations (predicate-gated one-shot/repeating callbacks) and
+  // a per-pattern refcount of subscriptions dservWhen itself added.  Only ever
+  // touched on this subprocess's process thread, so no locking is needed.
+  std::vector<WhenCallback> when_callbacks;
+  std::map<std::string, int> when_match_refs;
+  int when_next_id = 1;
+
   // for special event scripts
   EventDispatcher* eventDispatcher;
    
