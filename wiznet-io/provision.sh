@@ -17,7 +17,14 @@
 #                  [--channel <ch>]         #   default: dev
 #                  [--build <target>]       #   default: dual (must match the box's board -- check state/build)
 #                  [--version <ver>]        #   default: the channel's latest
-#     env: FW_SHELF_URL (default https://dserv.net)
+#
+# Remote one-liner (this is what dserv.net's /extio/setup serves): every flag
+# above also has an env default so the piped-from-curl form needs no arguments --
+#   curl -fsSL https://dserv.net/extio/setup | bash                 # dev / latest / dual
+#   curl -fsSL https://dserv.net/extio/setup?build=pico2 | bash     # pick the board
+# env knobs (flags still win): FW_SHELF_URL (default https://dserv.net),
+#   PROVISION_FROM_SHELF=1 (make --from-shelf the default), PROVISION_CHANNEL,
+#   PROVISION_BUILD, PROVISION_VERSION.
 #
 # Local images (the default paths) are built with -- signing/hashing is what makes
 # a slot image bootable:
@@ -39,7 +46,10 @@ DIST="$HERE/dist"
 die() { echo "!! $*" >&2; exit 1; }
 
 # ---- args: flags in any order; up to two positional local-image paths ----
-FROM_SHELF=0; SHELF_CH=dev; SHELF_BUILD=dual; SHELF_VER=""
+# Defaults come from the environment (so the curl|bash remote flow needs no
+# arguments); explicit flags below still override them.
+FROM_SHELF=${PROVISION_FROM_SHELF:-0}
+SHELF_CH=${PROVISION_CHANNEL:-dev}; SHELF_BUILD=${PROVISION_BUILD:-dual}; SHELF_VER=${PROVISION_VERSION:-}
 SLOT_A=""; SLOT_B=""; NPOS=0
 while [ $# -gt 0 ]; do
   case "$1" in
