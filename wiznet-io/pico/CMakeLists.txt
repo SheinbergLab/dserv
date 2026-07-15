@@ -136,7 +136,7 @@ endif()
 # pico-examples pico_w/wifi/ota_update. Optionally sign it (BOX_SIGN_KEY, secp256k1).
 # NOTE: copy_to_ram A/B images (no BOX_XIP) also get this -- copy_to_ram's IRQ-only
 # flash (ASSUME_CORE1_SAFE) makes rom_explicit_buy's flash op WORK, unlike XIP.
-if(BOX_XIP OR BOX_TBYB OR BOX_SIGN_KEY)
+if(BOX_XIP OR BOX_TBYB OR BOX_SIGN_KEY OR BOX_HASH)
     pico_hash_binary(${CFG_NAME})
     if(BOX_SIGN_KEY)
         pico_sign_binary(${CFG_NAME} ${BOX_SIGN_KEY})

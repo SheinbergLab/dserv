@@ -4,7 +4,11 @@
 #   sh build.sh              # dual (W6300-EVB: USB default / Ethernet via `mode eth`), DEFAULT
 #   sh build.sh w6300        # W6300 wired-only target
 #   sh build.sh pico2w       # Pico 2 W / WiFi target
-#   sh build.sh dual --push  # build dual, then publish JUST that image to the shelf (dev channel)
+#   sh build.sh dual --push         # publish just this bench uf2 to the shelf (dev channel)
+#   sh build.sh dual --tbyb --push  # RELEASE bundle: publishes bin=TBYB trial (OTA pull) +
+#                                   #   uf2=matching NON-tbyb hashed base (bench flash / provision slot A).
+#                                   #   provision.sh --from-shelf then pulls the uf2. One version = OTA + provision.
+#   sh build.sh dual --hash         # non-tbyb but HASHED -> slot-bootable (the provisioning base, built alone)
 #
 # Env overrides:
 #   WIZNET_PICO_C         path to a WIZnet-PICO-C clone (cloned here if unset/missing)
@@ -24,12 +28,15 @@ TARGET=dual
 PUSH=0
 XIP=0                                               # --xip: build XIP (no copy_to_ram) for A/B slot-boot tests
 TBYB=0                                              # --tbyb: flag the IMAGE_DEF try-before-you-buy (OTA trial image)
+HASH=0                                              # --hash: hash the image (no sign) so it can slot-boot -- the
+                                                    #         provisioning slot-A base image (non-TBYB, but hashed)
 CHANNEL=${PUSH_CHANNEL:-dev}
 while [ $# -gt 0 ]; do
   case "$1" in
     --push)        PUSH=1 ;;
     --xip)         XIP=1 ;;
     --tbyb)        TBYB=1 ;;
+    --hash)        HASH=1 ;;
     --channel)     shift; CHANNEL=$1 ;;
     --channel=*)   CHANNEL=${1#--channel=} ;;
     -*)            echo "unknown flag '$1'" >&2; exit 1 ;;
@@ -57,6 +64,10 @@ if [ "$TBYB" = 1 ]; then TBYBSUF="_tbyb"; TBYBFLAG="-DBOX_TBYB=1"; fi
 # signing & publishing" runbook in OTA.md for key generation/storage/OTP notes.
 SIGNFLAG=""; SIGNSUF=""
 [ -n "$SIGN_KEY" ] && { SIGNFLAG="-DBOX_SIGN_KEY=$SIGN_KEY"; SIGNSUF="_signed"; }
+# --hash: hash (no sign) so a NON-tbyb image is slot-bootable (the provisioning
+# slot-A base). Signing already hashes, so --hash is a no-op when SIGN_KEY is set.
+HASHSUF=""; HASHFLAG=""
+if [ "$HASH" = 1 ] && [ -z "$SIGN_KEY" ]; then HASHSUF="_hashed"; HASHFLAG="-DBOX_HASH=1"; fi
 
 WIZ=${WIZNET_PICO_C:-$HERE/.wiznet-pico-c}
 : "${PICO_TOOLCHAIN_PATH:=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi}"
@@ -87,9 +98,17 @@ FWVER=${OTA_FWVER:-$(cd "$HERE" && git describe --always --dirty 2>/dev/null || 
 # BOARD (= PICO_BOARD) is the shelf's hard compatibility key; VARIANT (= BOX_TARGET)
 # is the descriptive role. Both ride the manifest on --push (build = $TARGET = the
 # unique key). See dserv-agent/README.md "board matrix".
+#
+# The W6300-EVB (dual/w6300 targets) carries a 2 MB QSPI flash, but PICO_BOARD=pico2
+# defaults to 4 MB -- so persist (the last sector, PICO_FLASH_SIZE_BYTES-4K in
+# pico_flash.h) sat at 0x3FF000 and QSPI-aliased down to the real 0x1FF000. Declare
+# the true size so the offset resolves to 0x1FF000 outright -- the SAME physical
+# sector as the old alias, so already-deployed boxes keep their persisted config.
+# Plain Pico 2 (usb) is genuinely 4 MB and keeps the pico2 default.
+EVB_FLASH="-DPICO_FLASH_SIZE_BYTES=2097152"          # W6300-EVB = 2 MB
 case "$TARGET" in
   w6300)                                              # W6300 wired (default)
-    BOARD=pico2; VARIANT=w6300; FLAGS="-DPICO_BOARD=pico2" ;;
+    BOARD=pico2; VARIANT=w6300; FLAGS="-DPICO_BOARD=pico2 $EVB_FLASH" ;;
   pico2w)                                             # Raspberry Pi Pico 2 W
     BOARD=pico2_w; VARIANT=pico2w; FLAGS="-DBOX_TARGET=pico2w -DPICO_BOARD=pico2_w $WIFI" ;;
   picoplus2w)                                         # Pimoroni Pico Plus 2 W (RP2350B)
@@ -100,22 +119,22 @@ case "$TARGET" in
     BOARD=pico2; VARIANT=usb; FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=pico2"
     [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1" ;;   # box self-declares its forwards
   dual)                                               # W6300-EVB: USB by default, Ethernet via `mode eth` (persisted)
-    BOARD=pico2; VARIANT=dual; FLAGS="-DBOX_TARGET=dual -DPICO_BOARD=pico2" ;;
+    BOARD=pico2; VARIANT=dual; FLAGS="-DBOX_TARGET=dual -DPICO_BOARD=pico2 $EVB_FLASH" ;;
   *)
     echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | dual)" >&2; exit 1 ;;
 esac
 # ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
-BUILD="$WIZ/build_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}"
+BUILD="$WIZ/build_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
 mkdir -p "$BUILD"
 ( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $XIPFLAG $TBYBFLAG $SIGNFLAG $FLAGS >/dev/null \
+    -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $XIPFLAG $TBYBFLAG $SIGNFLAG $HASHFLAG $FLAGS >/dev/null \
   && ninja wizchip_dserv_config )
 
 # 4. publish to dist/ under a target-specific name (no clobbering across targets).
 #    The flat .bin is the OTA slot image (what the on-box updater pulls + writes
 #    raw into the inactive A/B slot) -- for a --tbyb --sign build it's the sealed
 #    try-before-you-buy trial image. The .uf2 is the bench-flash artifact.
-OUT="wizchip_dserv_config_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}"
+OUT="wizchip_dserv_config_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" "$HERE/dist/$OUT.uf2"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/$OUT.elf"
 [ -f "$BUILD/examples/wiznet_io/wizchip_dserv_config.bin" ] && \
@@ -133,13 +152,27 @@ if [ "$PUSH" = 1 ]; then
   fi
   DIRTY=0; case "$FWVER" in *-dirty) DIRTY=1 ;; esac
   URL="$FW_SHELF_URL/api/firmware/extio/$CHANNEL"
-  # A --tbyb build is an OTA trial image: publish its sealed flat .bin (what the
-  # box's on-box updater pulls) alongside the .uf2 and mark the manifest entry
-  # ota-capable. A plain build ships only the bench-flash .uf2. See OTA.md.
+  # What a version's `build` entry carries (one shelf image, two files):
+  #   uf2 = the SLOT-A / bench image -- flat-flashable AND provision-able (hashed, NON-TBYB)
+  #   bin = the OTA trial payload    -- the on-box updater pulls this into the inactive slot (TBYB)
+  # A `--tbyb --push` is the RELEASE bundle: it also builds the matching non-TBYB hashed
+  # base so ONE version has everything for BOTH OTA (bin) and provisioning (uf2 -> slot A).
+  # A plain `--push` (no --tbyb) just publishes the single image it built (bench uf2, not
+  # ota-capable, and unhashed unless you passed --hash/SIGN_KEY -> not slot-bootable). See OTA.md.
+  UF2ARG="$HERE/dist/$OUT.uf2"
   BINARGS=""
-  if [ "$TBYB" = 1 ] && [ -f "$HERE/dist/$OUT.bin" ]; then
+  if [ "$TBYB" = 1 ]; then
+    [ -f "$HERE/dist/$OUT.bin" ] || { echo "!! --tbyb --push: no trial .bin at dist/$OUT.bin" >&2; exit 1; }
+    # Build the provisioning base: same target+version, NON-tbyb but HASHED so it slot-boots
+    # (signed if SIGN_KEY is set -- signing hashes; else --hash). Nested build, no --push.
+    if [ -n "$SIGN_KEY" ]; then BASE_SUF="_signed"; BASE_FLAGS=""; else BASE_SUF="_hashed"; BASE_FLAGS="--hash"; fi
+    BASE_OUT="wizchip_dserv_config_${TARGET}${BASE_SUF}"
+    echo ">> building provisioning base ($BASE_OUT.uf2) to publish as the slot-A/bench uf2 ..."
+    OTA_FWVER="$FWVER" sh "$0" "$TARGET" $BASE_FLAGS >/dev/null \
+      || { echo "!! provisioning-base build failed" >&2; exit 1; }
+    UF2ARG="$HERE/dist/$BASE_OUT.uf2"
     BINARGS="-F ota=1 -F bin=@$HERE/dist/$OUT.bin"
-    echo ">> (OTA trial: also publishing $OUT.bin, ota=1)"
+    echo ">> release bundle: uf2=$BASE_OUT.uf2 (slot-A base) + bin=$OUT.bin (OTA trial), ota=1"
   fi
   echo ">> push -> $URL (build=$TARGET board=$BOARD variant=$VARIANT version=$FWVER dirty=$DIRTY)"
   RESP=$(mktemp)
@@ -147,7 +180,7 @@ if [ "$PUSH" = 1 ]; then
     -H "Authorization: Bearer $DSERV_AGENT_FIRMWARE_TOKEN" \
     -F "version=$FWVER" -F "build=$TARGET" -F "board=$BOARD" -F "variant=$VARIANT" \
     -F "dirty=$DIRTY" \
-    -F "uf2=@$HERE/dist/$OUT.uf2" \
+    -F "uf2=@$UF2ARG" \
     $BINARGS \
     "$URL") || { echo "!! push failed (curl error)" >&2; rm -f "$RESP"; exit 1; }
   if [ "$CODE" = 200 ]; then

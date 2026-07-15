@@ -66,6 +66,13 @@ to it and exits.
    a profile doesn't duplicate identity).
 4. **Save to flash** persists; **Save profile** downloads the current dump.
 
+> This flow flashes a **flat** image (drag-to-BOOTSEL-drive). To make a box
+> **A/B OTA-capable** you must additionally lay down a partition table + two slot
+> images — a one-time `picotool` step this tool does **not** do (it needs the
+> picoboot interface, not UF2-drop). The self-contained copy-paste recipe is in
+> [`wiznet-io/OTA.md`](../../wiznet-io/OTA.md) → "Provisioning a box". After that,
+> updates are over-the-air (`extio_ota_push_shelf`), no more BOOTSEL.
+
 ## Watch/configure a box over dserv
 
 1. Switch the connection type to **dserv**, enter the rig host (default

@@ -475,8 +475,9 @@ static void publish_ota_slotinfo(void)
     dserv_msg_int(f, nm, 0, g_slot.pt_count);
     box_net_client_send(f, DSERV_MSG_LEN);
 
-    snprintf(v, sizeof v, "%s part=%d%s", pico_ota_boot_type_str(g_slot.boot_type),
-             g_slot.boot_partition, pico_ota_buy_pending(&g_slot) ? " buy_pending" : "");
+    snprintf(v, sizeof v, "%s %s%s", pico_ota_boot_type_str(g_slot.boot_type),
+             pico_ota_boot_part_str(g_slot.boot_partition),
+             pico_ota_buy_pending(&g_slot) ? " buy_pending" : "");
     dserv_state_name(&g_cfg, nm, sizeof nm, "ota/boot");
     dserv_msg_string(f, nm, 0, v);
     box_net_client_send(f, DSERV_MSG_LEN);
@@ -495,8 +496,11 @@ static void publish_ota_slotinfo(void)
      * the tool for the copy_to_ram-from-slot wedge (a failed slot's own diagnostic
      * is read via `picotool info -a` in BOOTSEL, since it can't run to publish). */
     char bd[80], dd[56];
-    uint16_t half = (g_slot.boot_partition == 1) ? (uint16_t)(g_slot.boot_diag >> 16)
-                                                 : (uint16_t) g_slot.boot_diag;
+    /* hi halfword = slot1/partB diag, lo = slot0/partA (bootrom doc). We boot from
+     * a SLOT, so boot_partition is the -3 sentinel for slot1 (NOT 1 -- the old
+     * `== 1` never matched, so a slot-1 boot decoded slot0's diagnostic). */
+    uint16_t half = (g_slot.boot_partition == BOOT_PARTITION_SLOT1) ? (uint16_t)(g_slot.boot_diag >> 16)
+                                                                    : (uint16_t) g_slot.boot_diag;
     pico_ota_bootdiag_str(half, dd, sizeof dd);
     snprintf(bd, sizeof bd, "%08lx [%s]", (unsigned long) g_slot.boot_diag, dd);
     dserv_state_name(&g_cfg, nm, sizeof nm, "ota/bootdiag");
@@ -828,6 +832,15 @@ static void publish_ota_str(const char *leaf, const char *val)
     dserv_msg_string(f, nm, 0, val);
     box_net_client_send(f, DSERV_MSG_LEN);
 }
+/* RELIABLE publish: a single state send from the RX path (or right before the
+ * arm reboot) can be dropped when the TX FIFO is momentarily full, so a
+ * terminal OTA outcome (armed/ok/committed/fail) would never reach dserv even
+ * though it happened. Re-send N times so at least one lands -- the ack survives
+ * the same way (re-sent every frame). Cheap: only fires on outcome transitions. */
+static void publish_ota_str_n(const char *leaf, const char *val, int n)
+{
+    for (int i = 0; i < n; i++) publish_ota_str(leaf, val);
+}
 static void publish_ota_progress(void)
 {
     char nm[64]; uint8_t f[DSERV_MSG_LEN];
@@ -925,9 +938,169 @@ static void ota_service_core1(void)
     }
 }
 
+/* ---- USB chunk delivery (OTA over USB-CDC) --------------------------------
+ * An Ethernet box PULLS the image over a transient socket (box_net_get_binary);
+ * a USB box has no socket, so the host PUSHES it as a stream of 'D' frames --
+ * 128B frames (marker DSERV_OTA_CHAR, accepted by the framer) whose payload is
+ * raw image bytes fed into the SAME pico_ota sink the eth pull uses. Strictly
+ * sequential: seq_off must equal the sink cursor (g_ota.received). A per-frame
+ * crc32 (== host pico_crc32) rejects a desync'd frame early; the whole-image
+ * sha is the final gate. The box acks the contiguous cursor so the host paces +
+ * resumes. cmd/ota/begin sets it up (RT loop), 'D' frames feed it, size-reached
+ * verifies + arms -- same trial/buy/rollback machinery as eth. See OTA.md.
+ *   'D' frame (128B): [0]='D' [1..4]=seq u32 [5..6]=len u16 [7..10]=crc32 u32
+ *                     [11..127]=data (1..117 valid, rest zero) */
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+/* Pure-USB build is always USB (box_net_is_usb() is a dual-only symbol); a dual
+ * build decides at runtime by the strap-selected transport. */
+#if defined(BOX_NET_USB)
+#  define OTA_IS_USB() 1
+#else
+#  define OTA_IS_USB() box_net_is_usb()
+#endif
+#define OTA_DF_OFF_SEQ    1
+#define OTA_DF_OFF_LEN    5
+#define OTA_DF_OFF_CRC    7
+#define OTA_DF_OFF_DATA   11
+#define OTA_DF_DATA_MAX   (DSERV_MSG_LEN - OTA_DF_OFF_DATA)   /* 117 */
+#define OTA_ACK_EVERY     4096u          /* ack the contiguous cursor at least this often */
+#define OTA_USB_TIMEOUT_US 10000000u     /* abort a stalled push after 10s of silence */
+
+static volatile uint8_t  g_ota_usb_active;     /* receiving D-frames (begin..finish/abort) */
+static volatile uint8_t  g_ota_usb_begin_req;  /* on_frame -> RT loop probes slot + pico_ota_begin */
+static uint32_t          g_ota_usb_last_us;    /* last D-frame arrival (stall timeout) */
+static uint32_t          g_ota_ack_at;         /* next `received` threshold to ack */
+
+static void publish_ota_ack(uint32_t off)
+{
+    char nm[64]; uint8_t f[DSERV_MSG_LEN];
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ota/ack");
+    dserv_msg_int(f, nm, 0, (int32_t) off);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+
+/* Finalize a completed USB push: verify sha + (on ok) arm the TBYB trial. Same
+ * finish/arm as the eth path (ota_service_core1).
+ *
+ * The watchdog gate is NOT held off across finalize. The final flush is a single
+ * page program (~ms, far under the 2s WDT), so a hang here SELF-RECOVERS via the
+ * watchdog (boot=watchdog) instead of dead-consoling. Holding g_wdt_gate=0 across
+ * finalize was what turned a rare finalize stall into a permanent wedge -- the
+ * "tail-stall" the box exhibited was here, not at the mythical offset 143208
+ * (which was only the last periodic ack). See wiznet-io/OTA.md "USB OTA". */
+static void ota_usb_finalize(void)
+{
+    g_ota_usb_active = 0;
+    pico_ota_finish(&g_ota, 0);
+    publish_ota_progress();
+    printf("ota(usb): %s (%s) recv=%u/%u\n", pico_ota_state_str(g_ota.state),
+           pico_ota_err_str(g_ota.err), g_ota.received, g_ota_size);
+    if (g_ota.state == PICO_OTA_DONE_OK) {
+        uint32_t update_base = (uint32_t) XIP_BASE + g_slot.target_base;
+        /* Reliable (n>1): this is the terminal state before a NO_RETURN reboot --
+         * a dropped single send left dserv stuck at "staging" even on success. The
+         * trial then publishes "committed" once it self-tests + buys. */
+        publish_ota_str_n("ota/result", "ok", 6);
+        publish_ota_str_n("ota/state", "armed", 6);
+        printf("ota(usb): verified -> FLASH_UPDATE reboot into part %d @0x%08lx (1s)\n",
+               g_slot.target_part, (unsigned long) update_base);
+        pico_ota_arm_update(update_base, 1000);   /* NO_RETURN: reboots into the trial */
+    } else {
+        publish_ota_str_n("ota/result", pico_ota_err_str(g_ota.err), 6);
+        publish_ota_str_n("ota/state", "fail", 6);
+    }
+}
+
+/* One 'D' data frame (core 1 via on_frame). */
+static void ota_data_frame(const uint8_t *frame)
+{
+    if (!g_ota_usb_active) return;                 /* stray/late frame, no active push */
+    uint32_t seq, crc; uint16_t len;
+    memcpy(&seq, frame + OTA_DF_OFF_SEQ, 4);
+    memcpy(&len, frame + OTA_DF_OFF_LEN, 2);
+    memcpy(&crc, frame + OTA_DF_OFF_CRC, 4);
+    /* Any reject -> re-ack the cursor so the host resends from there (idempotent). */
+    if (len == 0 || len > OTA_DF_DATA_MAX)               { publish_ota_ack(g_ota.received); return; }
+    if (seq != g_ota.received)                           { publish_ota_ack(g_ota.received); return; }
+    if (pico_crc32(frame + OTA_DF_OFF_DATA, len) != crc) { publish_ota_ack(g_ota.received); return; }
+
+    uint8_t saved = g_wdt_gate; g_wdt_gate = 0;    /* the sink may flash-flush (bounded); pet unconditionally */
+    int r = pico_ota_sink(&g_ota, frame + OTA_DF_OFF_DATA, len);
+    g_wdt_gate = saved;
+    g_ota_usb_last_us = (uint32_t) time_us_64();
+
+    if (r != 0) {                                  /* flash/overflow -> abort */
+        g_ota_usb_active = 0;
+        pico_ota_finish(&g_ota, -1);
+        publish_ota_str("ota/state", "fail");
+        publish_ota_str("ota/result", pico_ota_err_str(g_ota.err));
+        return;
+    }
+    if (g_ota.received >= g_ota_size)  { ota_usb_finalize(); return; }   /* all bytes -> verify + arm */
+    if (g_ota.received >= g_ota_ack_at) {
+        g_ota_ack_at = g_ota.received + OTA_ACK_EVERY;
+        publish_ota_ack(g_ota.received);
+    }
+}
+
+/* RT-loop service: honor a USB begin request (probe slot + pico_ota_begin, kept
+ * OUT of on_frame) and abort a stalled push. */
+static void ota_usb_service_core1(void)
+{
+    /* Announce the OTA COMMIT once, from core 1 (safe TinyUSB access), after the
+     * TRIAL boot self-tests + buys. ota_buy_service_core0 sets g_ota_bought on
+     * core 0 but must NOT touch the CDC itself. This is THE definitive "your OTA
+     * worked" signal in dserv -- visible even when base and trial share a version
+     * (so state/fw doesn't change). buy_rc!=0 => the trial failed to commit. */
+    static uint8_t announced_commit;
+    if (g_ota_bought && !announced_commit) {
+        announced_commit = 1;
+        if (g_ota_buy_rc == 0) { publish_ota_str_n("ota/result", "committed", 6);
+                                 publish_ota_str_n("ota/state",  "committed", 6); }
+        else                   { publish_ota_str_n("ota/result", "buy_failed", 6);
+                                 publish_ota_str_n("ota/state",  "fail", 6); }
+    }
+    if (g_ota_usb_begin_req) {
+        g_ota_usb_begin_req = 0;
+        if (g_in_obs) {
+            publish_ota_str("ota/state", "fail"); publish_ota_str("ota/result", "in_obs");
+            printf("ota(usb): refused -- in_obs\n"); return;
+        }
+        pico_ota_slot_probe(&g_slot);
+        if (!g_slot.target_valid) {
+            publish_ota_str("ota/state", "fail"); publish_ota_str("ota/result", "no_slot");
+            printf("ota(usb): refused -- no inactive slot; box not partitioned\n"); return;
+        }
+        pico_ota_begin(&g_ota, &g_ota_flash_ops, g_slot.target_base, g_slot.target_size,
+                       g_ota_sha, g_ota_size);
+        g_ota_ack_at      = OTA_ACK_EVERY;
+        g_ota_usb_last_us = (uint32_t) time_us_64();
+        dserv_framer_reset(&g_framer);             /* discard any stale partial before the D-stream */
+        g_ota_usb_active  = 1;
+        publish_ota_str("ota/state", pico_ota_state_str(g_ota.state));   /* staging */
+        publish_ota_ack(0);                        /* host waits for this before streaming */
+        printf("ota(usb): staging %u bytes -> slot part %d @0x%06lx (cap %lu)\n",
+               g_ota_size, g_slot.target_part, (unsigned long) g_slot.target_base,
+               (unsigned long) g_slot.target_size);
+        return;
+    }
+    if (g_ota_usb_active &&
+        (uint32_t)(time_us_64() - g_ota_usb_last_us) > OTA_USB_TIMEOUT_US) {
+        g_ota_usb_active = 0;
+        pico_ota_finish(&g_ota, -1);
+        publish_ota_str("ota/state", "fail");
+        publish_ota_str("ota/result", "timeout");
+        printf("ota(usb): stalled -- aborted at %u/%u\n", g_ota.received, g_ota_size);
+    }
+}
+#endif /* BOX_NET_USB || BOX_NET_DUAL */
+
 /* ---- config/cmd in: dispatch one 128B datapoint frame ---- */
 static void on_frame(const uint8_t *frame, void *ud)
 {
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+    if (frame[0] == DSERV_OTA_CHAR) { ota_data_frame(frame); return; }   /* USB OTA data, not a datapoint */
+#endif
     uint64_t now_box = time_us_64();   /* receipt time, for the sync anchor */
     pico_config_t *cfg = (pico_config_t *) ud;
     dserv_msg_t m;
@@ -986,6 +1159,13 @@ static void on_frame(const uint8_t *frame, void *ud)
             if (dserv_msg_name_eq(&m, oname)) {
                 char val[96]; dserv_msg_copy_cstr(&m, val, sizeof val);
                 if (ota_begin_parse(val, g_ota_sha, &g_ota_size) == 0) {
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+                    if (OTA_IS_USB()) {              /* no socket to pull over -> host pushes 'D' frames */
+                        g_ota_usb_begin_req = 1;     /* RT loop probes the slot + pico_ota_begin */
+                        printf("ota: armed (%u bytes, USB push)\n", g_ota_size);
+                        return;
+                    }
+#endif
                     snprintf(oname + pl, sizeof oname - (size_t) pl, "/ota/image");
                     strncpy(g_ota_key, oname, sizeof g_ota_key - 1);
                     g_ota_key[sizeof g_ota_key - 1] = '\0';
@@ -1327,6 +1507,9 @@ static void rt_main(void)
                 ota_service_core1();       /* run an armed OTA pull (blocks; gated !in_obs) */
                 ota_slot_service_core1();  /* run an on-demand bootrom PT/boot probe */
                 ota_arm_service_core1();   /* cmd/ota/arm -> flash-update reboot into inactive slot */
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+                ota_usb_service_core1();   /* USB push: begin-setup + stall timeout (data arrives via on_frame) */
+#endif
                 di_event_t e;
                 while (pico_gpio_poll_di(&g_cfg, &e)) {   /* debounced edges */
                     int lvl = di_logical(&g_cfg, e.pin, e.level);
@@ -1567,9 +1750,14 @@ int main(void)
           g_boot_type      = bi.boot_type;
           g_boot_partition = (int8_t) bi.partition;
           g_boot_trial     = pico_ota_boot_is_trial(&bi);
+          /* Reflect an OTA reboot in state/boot (was stuck at "power" -- neither
+           * watchdog nor soft -- so an OTA-committed box looked like a cold boot).
+           * "trial" = FLASH_UPDATE buy-pending; "update" = a committed FLASH_UPDATE. */
+          if (g_boot_type == BOOT_TYPE_FLASH_UPDATE)
+              g_boot_reason = g_boot_trial ? "trial" : "update";
       }
-      printf("boot: rom_type=%s part=%d%s\n", pico_ota_boot_type_str(g_boot_type),
-             g_boot_partition, g_boot_trial ? " TRIAL(buy-pending)" : ""); }
+      printf("boot: rom_type=%s %s%s\n", pico_ota_boot_type_str(g_boot_type),
+             pico_ota_boot_part_str(g_boot_partition), g_boot_trial ? " TRIAL(buy-pending)" : ""); }
 
     memset(&g_cfg, 0, sizeof g_cfg);
     if (flash_store_load(&g_cfg) == 0) printf("config: loaded from flash (name=%s)\n", dserv_cfg_name(&g_cfg));

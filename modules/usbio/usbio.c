@@ -284,6 +284,55 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   return TCL_OK;
 }
 
+/* CRC-32 (zlib/pico_crc32-identical: poly 0xEDB88320, init/final ~0). The box
+ * validates each OTA chunk with the same, so a framer desync is caught early. */
+static uint32_t usbio_crc32(const unsigned char *p, uint32_t n)
+{
+  uint32_t crc = 0xFFFFFFFFu;
+  for (uint32_t i = 0; i < n; i++) {
+    crc ^= p[i];
+    for (int b = 0; b < 8; b++)
+      crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1)));
+  }
+  return ~crc;
+}
+
+/* usbioSendChunk <seq_off> <bytes>  -- build one 128-byte OTA data frame and
+ * write it. Not a datapoint: marker 'D' (DSERV_OTA_CHAR), then the raw firmware
+ * bytes the box feeds into its slot sink. `bytes` is a binary byte array (NULs
+ * are fine). Payload is 1..117 bytes/frame. See wiznet-io/OTA.md "USB OTA".
+ *   frame: [0]='D' [1..4]=seq_off u32 LE [5..6]=len u16 LE [7..10]=crc32 u32 LE [11..127]=data */
+#define USBIO_OTA_CHAR     'D'
+#define USBIO_OTA_DATA_OFF 11
+#define USBIO_OTA_DATA_MAX (DPOINT_BINARY_FIXED_LENGTH - USBIO_OTA_DATA_OFF)   /* 117 */
+static int usbio_sendchunk_command(ClientData data, Tcl_Interp *interp, int objc, Tcl_Obj *objv[])
+{
+  usbio_info_t *info = (usbio_info_t *) data;
+  if (objc < 3) { Tcl_WrongNumArgs(interp, 1, objv, "seq_off bytes"); return TCL_ERROR; }
+  if (info->usbio_fd < 0) return TCL_OK;
+
+  Tcl_WideInt seq;
+  if (Tcl_GetWideIntFromObj(interp, objv[1], &seq) != TCL_OK) return TCL_ERROR;
+  Tcl_Size dlen;
+  unsigned char *dat = Tcl_GetByteArrayFromObj(objv[2], &dlen);
+  if (dlen <= 0 || dlen > USBIO_OTA_DATA_MAX) {
+    Tcl_AppendResult(interp, "usbioSendChunk: payload must be 1..117 bytes", NULL);
+    return TCL_ERROR;
+  }
+
+  unsigned char frame[DPOINT_BINARY_FIXED_LENGTH];
+  memset(frame, 0, sizeof frame);
+  frame[0] = USBIO_OTA_CHAR;
+  uint32_t s = (uint32_t) seq;                     memcpy(frame + 1, &s, 4);
+  uint16_t l = (uint16_t) dlen;                    memcpy(frame + 5, &l, 2);
+  uint32_t c = usbio_crc32(dat, (uint32_t) dlen);  memcpy(frame + 7, &c, 4);
+  memcpy(frame + USBIO_OTA_DATA_OFF, dat, (size_t) dlen);
+
+  int w = write_all(info->usbio_fd, frame, sizeof frame);   /* always the full 128 */
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(w));
+  return TCL_OK;
+}
+
 /* usbioAlive  -- 1 if the reader thread is running on an open fd, else 0. A clean
  * usbio_stop() always leaves fd == -1, so (fd >= 0 && running == 0) uniquely means the
  * reader EXITED on its own -- e.g. a transient POLLHUP delivered across host sleep/wake
@@ -386,6 +435,8 @@ EXPORT(int,Dserv_usbio_Init) (Tcl_Interp *interp)
                        (Tcl_ObjCmdProc *) usbio_send_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioSendFrame",
                        (Tcl_ObjCmdProc *) usbio_sendframe_command, (ClientData) info, NULL);
+  Tcl_CreateObjCommand(interp, "usbioSendChunk",
+                       (Tcl_ObjCmdProc *) usbio_sendchunk_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioStats",
                        (Tcl_ObjCmdProc *) usbio_stats_command, (ClientData) info, NULL);
   Tcl_CreateObjCommand(interp, "usbioAlive",

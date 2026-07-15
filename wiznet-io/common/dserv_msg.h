@@ -34,6 +34,11 @@
 #include <stdlib.h>      /* strtol/strtod for string-typed values */
 
 #define DSERV_MSG_CHAR  '>'
+/* Second start-marker: an OTA data frame carries raw firmware bytes (USB chunk
+ * push), not a datapoint. Same fixed 128-byte framing, so the framer + resync are
+ * unchanged -- it just accepts this as a frame start too, and the frame handler
+ * dispatches on byte 0. See wiznet-io/OTA.md "USB OTA". */
+#define DSERV_OTA_CHAR  'D'
 #define DSERV_MSG_LEN   128
 /* 128 - 1('>') - 2(varlen) - 8(ts) - 4(type) - 4(len) */
 #define DSERV_MSG_MAX_PAYLOAD (DSERV_MSG_LEN - 19)   /* = 109, for varname+data */
@@ -196,7 +201,7 @@ static inline void dserv_framer_feed(dserv_framer_t *f, const uint8_t *in,
 {
     for (uint32_t i = 0; i < n; i++) {
         uint8_t b = in[i];
-        if (f->have == 0 && b != DSERV_MSG_CHAR) continue;   /* resync */
+        if (f->have == 0 && b != DSERV_MSG_CHAR && b != DSERV_OTA_CHAR) continue;   /* resync ('>' datapoint or 'D' OTA) */
         f->buf[f->have++] = b;
         if (f->have == DSERV_MSG_LEN) { cb(f->buf, ud); f->have = 0; }
     }

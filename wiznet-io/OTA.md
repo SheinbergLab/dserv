@@ -283,26 +283,29 @@ on the box's USB host `.50`, no dialout/sudo needed — plugdev udev rule):
   earlier guess. Half-size → slot pressure is a non-issue.
 - **No partition table** ("there is no partition table") → the one-time
   migration reflash is confirmed necessary.
-- **Physical flash size not asserted by OTP** (`flash devinfo 0x0c00`: no CS0
-  size field, picotool prints no size). `PICO_BOARD=pico2` build → 4MB assumed;
-  QSPI aliasing still means confirm-at-PT-creation (write a marker near the
-  claimed top, read back — aliasing reveals a smaller part).
+- **Physical flash = 2 MB** (picotool `flash size: 2048K`), NOT asserted by OTP.
+  **FIXED 2026-07-13:** the W6300-EVB targets (`dual`/`w6300`) now build with
+  `-DPICO_FLASH_SIZE_BYTES=2097152` (build.sh `EVB_FLASH`), so persist
+  (`FLASH_STORE_OFFSET = PICO_FLASH_SIZE_BYTES − 4K`, pico_flash.h) resolves to
+  **0x1FF000** outright instead of 4 MB's 0x3FF000 QSPI-aliasing down to it. Same
+  physical sector as the old alias → **deployed boxes keep their persisted
+  config across this change.** Plain Pico 2 (`usb`) is genuinely 4 MB, unchanged.
 - Image type `ARM Secure` (signed image-def block), `secure boot: 0`.
 
-Proposed layout at 4MB (generous, since images are only ~150KB):
+Layout at 2 MB (images are only ~160 KB, so slots are roomy):
 
 ```
-0x000000  partition table
-          slot A   1MB   (images ~150KB today; huge margin under 520KB SRAM)
-          slot B   1MB
-          spare    ~2MB  (future: staged assets, logs)
-0x3FF000  persist sector (4KB, OUTSIDE the slots -- FLASH_STORE_OFFSET today)
+0x000000  partition table (~8 KB)
+0x002000  slot A   512KB  (partition id 0; committed base, non-TBYB)
+0x082000  slot B   512KB  (partition id 1, linked to A; OTA trial, TBYB)
+          spare    ~1MB   (unpartitioned; future staged assets/logs)
+0x1FF000  persist sector (4KB, last sector, OUTSIDE the slots = FLASH_STORE_OFFSET)
 ```
 
-At 2MB physical: 2×512KB slots + persist still fits ~150KB images ~3× over.
-Caveat:
-**pico2w** images (cyw43 firmware, no copy_to_ram) are much larger — size
-them before promising OTA on WiFi boxes; deferring pico2w OTA is acceptable.
+This is exactly what `wiznet-io/pt.json` + `provision.sh` write (see "Provisioning
+a box" below). **pico2w** images (cyw43 firmware, no copy_to_ram) are much larger
+and those boards are 4 MB+ — size them before promising OTA on WiFi boxes;
+deferring pico2w OTA is acceptable.
 
 ## Box updater state machine (~300–400 lines, module like the reg machine)
 
@@ -351,6 +354,97 @@ frames to the box's parser. So firmware chunks ride the identical channel:
   `picotool load`. Never removed by any of this. Also the ONE-TIME migration
   path: a box with no partition table needs a single USB/BOOTSEL flash to a
   partition-aware, updater-carrying image; after that it's OTA-over-dserv.
+
+## USB OTA — implemented ('D'-frame chunk-push); FULL CHAIN PROVEN + RELIABLE (2026-07-14)
+
+Ethernet boxes PULL the image (transient socket, `box_net_get_binary`). A USB box
+has no socket, so the host PUSHES it as dedicated **'D' frames** over usbio — not
+named datapoints (no name overhead / no datapoint-table churn) and not a variable
+frame (keeps the fixed-128 framer + resync untouched). It's a swappable delivery
+front-end feeding the SAME `pico_ota` sink / slot / verify / TBYB machinery as eth.
+
+- **Wire format (128B):** `[0]='D'` (`DSERV_OTA_CHAR`, a 2nd framer start-marker)
+  `[1..4]` seq_off u32 LE · `[5..6]` len u16 LE · `[7..10]` crc32 u32 LE (== the
+  box's `pico_crc32`, i.e. zlib) · `[11..127]` data (≤117). Strictly sequential:
+  `seq_off` must == the sink cursor; per-frame crc catches desync early, whole-image
+  sha is the final gate; box acks `state/ota/ack <contiguous-offset>`.
+- **Pieces:** `common/dserv_msg.h` (framer accepts 'D'), `pico/wizchip_dserv_config.c`
+  (`ota_data_frame` + `ota_usb_service_core1` + `cmd/ota/begin` branch on
+  `OTA_IS_USB()`), `modules/usbio/usbio.c` (`usbioSendChunk <seq_off> <bytes>`),
+  `config/extioconf.tcl` (`extio_ota_push` branches `state/transport=="usb"`).
+- **PROVEN:** the box committed an image end-to-end over USB — `staging → D-frames
+  → verify → armed → self-test PASSED (RT+dserv+reg 8s) → explicit_buy COMMITTED`.
+  On a plain Pico 2 (4 MB), which also validated 4 MB slot-boot.
+
+**Two host bugs found + fixed:**
+1. **`begin` must be sent synchronously.** `dservSet cmd/ota/begin` reaches the box
+   via `usbio_forward`, a `dpointSetScript` that is **event-loop deferred**; the
+   blocking blast then starves the loop, so `begin` arrived AFTER the blast (box
+   dropped every frame with `active=0`). Fix: `usbioSendFrame extio/<box>/cmd/ota/begin
+   0 "<sha> <size>"` — written synchronously, so the box stages first.
+2. `usbioSendChunk` was mis-called with a stray box arg (it takes `<seq_off> <bytes>`).
+
+**RESOLVED (2026-07-14) — there was NO transfer bug; the USB OTA worked the whole
+time. The "tail stall" was a TELEMETRY illusion. Proven by J-Link.**
+
+- **"143208" was never a failure point** — it's just the **last periodic ack**
+  (`OTA_ACK_EVERY=4096`; the next ack would be past EOF, so `state/ota/ack` parks
+  there for the whole tail regardless of what happens). The box streams the *entire*
+  image every run.
+- **J-Link (halt + read, box alive) settled it in one look:** mid-transfer
+  `g_ota.received == g_ota_size` and `g_ota.state == PICO_OTA_DONE_OK` (sha verified);
+  the last boot showed `g_boot_type=FLASH_UPDATE`, `g_boot_trial=1`, `g_ota_bought=1`,
+  `g_ota_buy_rc=0`. i.e. **transfer → verify → arm → trial → self-test → buy → COMMIT
+  all succeeded.**
+- **Why it LOOKED stuck (the real bug = observability):** (1) finalize's terminal
+  publishes (`armed`/`ok`) are single sends from the RX path and got **dropped** when
+  the TX FIFO was momentarily full (the ack only survives by being re-sent every
+  frame); (2) base and trial shared a **version**, so `state/fw` never changed on
+  commit; (3) `state/boot` only knew power/soft/watchdog, so a **FLASH_UPDATE boot read
+  as `power`**; (4) the trial's re-enumeration drops the USB console — which *is* what
+  a successful arm looks like, and is what the early "dead console" reports actually
+  were. Net: nothing that would show success was visible, even though it succeeded.
+- **Fix = make the outcome observable (`wizchip_dserv_config.c`):**
+  - `publish_ota_str_n()` — re-send a terminal OTA state N× so at least one lands.
+  - finalize emits `armed`/`ok` (and `fail`) reliably.
+  - **`state/ota/state`/`result` = `committed`** announced from **core 1** once the
+    trial self-tests + buys (`g_ota_bought && buy_rc==0`; core 0 must not touch the
+    CDC). This is THE definitive success signal, visible even when versions match.
+  - `state/boot` now reports `trial` (FLASH_UPDATE buy-pending) / `update` (committed
+    FLASH_UPDATE) instead of `power`.
+  - (Kept from the earlier pass: finalize no longer holds `g_wdt_gate=0`, and
+    `dserv_framer_reset()` at begin — harmless robustness, not the actual fix.)
+- **Verified live 2026-07-14:** OTA of a distinct-version trial → dserv showed
+  `staging → committed`, `result=committed`, `state/boot=trial`, `state/fw` flipped to
+  the new version, and the commit **survived a normal reboot** (didn't roll back).
+- **Method note:** the whole hunt was prolonged by trusting dropped/stale dserv
+  telemetry as ground truth. Once the box was reachable-but-"stuck", **J-Link
+  halt+read of `g_ota.*` / the boot-info globals** was the move that ended the
+  guessing — datapoints can't see core 0 or a value that never got published.
+
+**Debugging/bench lessons (worth keeping):**
+- **`bootsel` over CDC0** (`dservSet extio/<box>/cmd/bootsel 1`, or write `bootsel\r\n`
+  to `/dev/cu.usbmodemXXX1`) drops the box into BOOTSEL with **no physical button** —
+  as long as the console is alive. This made a fully-automated flash-and-test loop
+  possible (`picotool load -p 0/-p 1` both slots → `reboot` → push → `dservGet`).
+- **A/B slot targeting bit us for hours:** `picotool load <uf2>` (no `-p`) lands in the
+  **inactive** slot and never boots; `-u` (flash-update boot) or an explicit `-p 0`
+  into the active slot is required, and a fresh partition table only goes resident
+  after `reboot -u` (what `provision.sh` does). Also don't flash a `usb`-build uf2 onto
+  a `dual`-build box — check `state/build` first.
+- **Observability under load:** a one-shot datapoint published from the RX path
+  (`on_frame`) can be silently dropped when the TX FIFO is momentarily full; the ack
+  survives only because it's re-sent every frame. Publish diagnostics from the RT
+  service loop (like `ota/state`) or re-send N× if you need them reliable.
+
+**dserv-subprocess visibility lesson (drove the orchestrator design):** a subprocess
+cannot observe an async datapoint update (usbio injects the ack on another thread)
+from **inside a blocking command** — a mid-command `dservGet` is stale even with
+`dservAddMatch` + a `vwait`-pump. So the tail-resender is **event-driven**
+(`dpointSetScript` on `state/ota/ack`, debounced, resend from the stuck cursor).
+**A blocking `dservWait <key> <predicate> <timeout>`** — implemented in C to service
+the datapoint ingestion while it blocks — would replace both the sync-`begin` dance
+and the event-driven resender with linear code and is worth building.
 
 ## Agent + release side
 
@@ -453,13 +547,87 @@ dservctl extio "extio_ota_push_shelf <box>"    # latest dev; add a channel arg t
   against the channel pin → rollout per policy (pin versions, canary one box,
   manual approve vs auto), gated on ess state. Fleet page = the rollout console.
 
-## Migration (the one awkward step)
+## Provisioning a box (the one awkward step) — self-contained recipe
 
-Existing boxes have no partition table: each needs ONE manual reflash to a
-partition-table + updater-capable image (BOOTSEL/picotool as today; the
-partition table itself is written via picotool or the first boot's init).
-Bench-validate the migration + A/B mechanics on the J-Link box before
-touching deployed hardware. After that generation, updates are OTA.
+A box (blank, or running a pre-partition image) needs ONE manual reflash to lay
+down the A/B partition table + slot images. After that, updates are OTA — no more
+BOOTSEL. `wiznet-io/provision.sh` automates this, **but you don't need it** — the
+whole thing is the copy-paste block below (only `picotool ≥ 2.1` + the repo). Do it
+on the bench over USB; **BOOTSEL always recovers**, so a mistake is never fatal.
+
+```sh
+cd wiznet-io                                           # all paths below are repo-relative
+
+# --- 1. build the two SIGNED slot images (signing also HASHES them; slot-boot needs the hash) ---
+#     Use the target that matches the BOARD: `dual` = W6300-EVB (2 MB). A plain Pico 2 box uses `usb`.
+#     Do NOT flash a usb-build image onto a dual box (or vice-versa) -- check `state/build` first.
+export SIGN_KEY=/path/to/extio-bench.pem               # any secp256k1 key (sig is advisory; box isn't secure-boot):
+                                                       #   openssl ecparam -name secp256k1 -genkey -noout -out extio-bench.pem
+sh build.sh dual                                       # -> dist/wizchip_dserv_config_dual_signed.uf2       (slot A, committed base)
+sh build.sh dual --tbyb                                # -> dist/wizchip_dserv_config_dual_tbyb_signed.uf2  (slot B, trial/TBYB)
+
+# --- 2. put the box in BOOTSEL (no physical button needed if the console is alive) ---
+#     connected box:  dservctl set extio/<box>/cmd/bootsel 1   (or `bootsel` on the CDC0 console)
+#     blank board:    hold BOOTSEL while plugging in USB
+picotool info                                          # confirm ONE RP2350 is in BOOTSEL before continuing
+
+# --- 3. write the partition table, then make it RESIDENT (the bootrom's copy is stale until `reboot -u`) ---
+picotool partition create pt.json /tmp/extio-pt.uf2
+picotool load /tmp/extio-pt.uf2
+picotool reboot -u
+sleep 3 ; until picotool info >/dev/null 2>&1; do sleep 1; done   # wait for it to re-appear in BOOTSEL
+
+# --- 4. load the slots: A = committed base, B = trial (order/`-p` matter; a plain drop can't target a slot) ---
+picotool load dist/wizchip_dserv_config_dual_signed.uf2      -p 0
+picotool load dist/wizchip_dserv_config_dual_tbyb_signed.uf2 -p 1
+
+# --- 5. boot the app ---
+picotool reboot
+```
+
+The box reconnects to dserv, now OTA-capable; set name / mode / pins as usual.
+Verify: `picotool partition info` shows `0(A)` + `1(B w/ 0)`. Future updates are
+over-the-air: `dservctl extio "extio_ota_push_shelf <box>"`.
+
+### …or pull the slot-A image straight from dserv.net (no local build)
+
+`provision.sh --from-shelf` does steps 1 + 3–5 for you — it resolves the channel's
+latest, **downloads the slot-A base uf2 and sha256-verifies it against the manifest**,
+then runs the same picotool sequence (slot B is left empty; the first OTA fills it):
+
+```sh
+# box in BOOTSEL first (dservctl set extio/<box>/cmd/bootsel 1)
+cd wiznet-io
+./provision.sh --from-shelf                       # channel dev, build dual, latest
+./provision.sh --from-shelf --channel stable --build dual --version 0.48.0   # explicit
+```
+
+Or grab it by hand and feed it to the manual recipe above (`… -p 0`):
+
+```sh
+SHELF=https://dserv.net ; CH=dev ; BUILD=dual
+read VER FILE SHA < <(curl -fsS "$SHELF/api/firmware/extio" | python3 -c '
+import sys,json; d=json.load(sys.stdin); ch,b=sys.argv[1],sys.argv[2]
+c=d["channels"][ch]; v=c["latest"]; m=next(x for x in c["versions"] if x["version"]==v)
+i=next(x for x in m["images"] if x["build"]==b); print(v,i["file"],i["sha256"])' "$CH" "$BUILD")
+curl -fsS -o "/tmp/$FILE" "$SHELF/firmware/extio/$CH/$VER/$FILE"
+echo "$SHA  /tmp/$FILE" | shasum -a 256 -c -       # aborts on mismatch; then: picotool load /tmp/$FILE -p 0
+```
+
+This pulls the version's **`uf2`**, which `sh build.sh <target> --tbyb --push` now
+publishes as the hashed, non-TBYB **slot-A base** (the same release also publishes the
+`bin` = TBYB trial that the box OTA-pulls). Versions published before that build.sh
+change carry a TBYB image as their `uf2` — still slot-bootable, just not the intended
+committed base; re-`--push` the release to refresh it.
+
+**Recovery** (undo the partition table, back to a flat absolute image):
+`picotool load <image>.uf2 --ignore-partitions` (writes 0x0, preserves persist).
+
+**Gotchas that cost real time (2026-07-14):** (a) `picotool load` WITHOUT `-p` lands
+in the *inactive* slot and never boots — always use `-p 0`/`-p 1` or `-u`. (b) The
+fresh PT only goes resident after `reboot -u` — skipping it makes the slot loads land
+against a stale table. (c) Slot images must be **signed/hashed + `copy_to_ram`**
+(the default `dual` build) — unsigned or XIP images don't slot-boot / can't `buy`.
 
 ## Adversarial bench checklist (before first fleet rollout)
 
