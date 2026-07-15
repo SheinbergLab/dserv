@@ -2648,7 +2648,56 @@ Dataserver::tcp_client_process(Dataserver *ds, int sockfd)
 	  memcpy(databuf, bufptr, datalen);
 
 	  dpoint = (ds_datapoint_t *) malloc(sizeof(ds_datapoint_t));
-	  dpoint_set(dpoint, varname, timestamp ? timestamp : now(), 
+	  dpoint_set(dpoint, varname, timestamp ? timestamp : now(),
+		     (ds_datatype_t) datatype,
+		     datalen, (unsigned char *) databuf);
+	  // set new dpoint, memory managed by ds
+	  ds->set(dpoint);
+	}
+
+      else if (buf[0] == DPOINT_BINARY_VAR_MSG_CHAR)
+	{
+	  // Variable-length binary datapoint push: fixed 18-byte header, then
+	  // the varname and data read by length via doRead. Same fire-and-forget
+	  // model as '>' (no reply) but with no size cap on the payload.
+	  unsigned char header[DPOINT_BINARY_VAR_HEADER_LEN];
+	  uint16_t varlen;
+	  uint32_t datatype;
+	  uint32_t datalen;
+	  uint64_t timestamp;
+	  ds_datapoint_t *dpoint;
+	  char *varname;
+	  unsigned char *databuf;
+
+	  if (doRead(sockfd, (char *) header, sizeof(header)) < 0)
+	    goto close_up;
+
+	  // memcpy out of the byte buffer (fields are not naturally aligned)
+	  memcpy(&varlen,    header + 0,  sizeof(uint16_t));
+	  memcpy(&datatype,  header + 2,  sizeof(uint32_t));
+	  memcpy(&datalen,   header + 6,  sizeof(uint32_t));
+	  memcpy(&timestamp, header + 10, sizeof(uint64_t));
+
+	  if (varlen < 1 || varlen > DSERV_MAX_VARNAME_LEN ||
+	      datalen > DSERV_MAX_DATA_LEN)
+	    goto close_up;
+
+	  varname = (char *) malloc(varlen + 1);
+	  if (!varname || doRead(sockfd, varname, varlen) < 0) {
+	    free(varname);
+	    goto close_up;
+	  }
+	  varname[varlen] = '\0';
+
+	  databuf = (unsigned char *) malloc(datalen ? datalen : 1);
+	  if (!databuf || doRead(sockfd, (char *) databuf, datalen) < 0) {
+	    free(databuf);
+	    free(varname);
+	    goto close_up;
+	  }
+
+	  dpoint = (ds_datapoint_t *) malloc(sizeof(ds_datapoint_t));
+	  dpoint_set(dpoint, varname, timestamp ? timestamp : now(),
 		     (ds_datatype_t) datatype,
 		     datalen, (unsigned char *) databuf);
 	  // set new dpoint, memory managed by ds

@@ -45,6 +45,14 @@ enum { DSERV_GET_FIRST_KEY, DSERV_GET_NEXT_KEY };
 #define DPOINT_BINARY_MSG_CHAR '>'
 #define DPOINT_BINARY_FIXED_LENGTH (128)
 
+/* Variable-length binary datapoint push: like '>' but length-prefixed instead
+ * of padded to a fixed frame, so payloads of any size go in one fire-and-forget
+ * message with no base64 and no '@set' handshake. Layout after the lead char:
+ *   varlen(u16) type(u32) datalen(u32) timestamp(u64) varname[varlen] data[datalen]
+ * (18-byte fixed header, little-endian, then the two length-prefixed blobs). */
+#define DPOINT_BINARY_VAR_MSG_CHAR '}'
+#define DPOINT_BINARY_VAR_HEADER_LEN (2 + 4 + 4 + 8)
+
 typedef struct ds_event_info_s {
   uint8_t dtype;
   uint8_t type;

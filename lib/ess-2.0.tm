@@ -6,7 +6,7 @@ package require yajltcl
 package require tcljson
 package require dslog
 package require ess_paths
-package require qpcs 3.41 ;# stim-event sync transport: evtPack/evtUnpack/dsSocketSendBytes
+package require qpcs 3.42 ;# stim-event sync + variable-length binary push (dsSocketSendBytesVar)
 
 catch {System destroy}
 
@@ -345,7 +345,7 @@ oo::class create System {
 
         set rmtcmd {
             # connect to data server receive stimdg updates
-            package require qpcs 3.41
+            package require qpcs 3.42
 
             # Clean slate on every system/protocol load: a prior system may
             # have left dispatch callbacks (::dsCmds), cached values (::dsVals),
