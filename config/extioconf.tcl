@@ -232,6 +232,12 @@ proc extio_ota_push {box file} {
 
     set sha [sha256 -file $file]             ;# hex over the exact file bytes = what the box computes
 
+    # A USB box has no socket to pull over -> PUSH the image as 'D' frames instead
+    # of staging it for a pull. Pure-usb and dual-in-USB-mode both report "usb".
+    if { [dservExists extio/$box/state/transport] && [dservGet extio/$box/state/transport] eq "usb" } {
+        return [extio_ota_push_usb $box $file $sha $size]
+    }
+
     set fp [open $file rb]                    ;# same bytes, staged raw (byte array -> Tcl_GetByteArrayFromObj)
     set bytes [read $fp]
     close $fp
@@ -241,6 +247,67 @@ proc extio_ota_push {box file} {
 
     puts "extio ota\[$box\]: staged $size B (sha $sha) -> extio/$box/ota/image; begin fired"
     return "ota begin $box: $size bytes, sha $sha"
+}
+
+# ---- USB OTA delivery: push the image as 'D' frames over usbio. The box
+#      (cmd/ota/begin -> ota_usb_service_core1) writes each frame into the inactive
+#      A/B slot and, on the last byte, verifies the sha + arms the TBYB trial --
+#      same slot/verify/trial machinery as eth. No host-side ack polling: the box
+#      stages in ~0.1s, then USB write_all backpressure paces the blast to the
+#      box's flash rate, and the box's own sha-verify is the correctness gate. (A
+#      polling wait from inside this blocking command can't reliably observe the
+#      box's state anyway -- so we just give it a fixed moment to stage.) ----
+set ::extio_ota_chunk 117                    ;# 'D' frame payload (128 - 11 header)
+
+# begin (synchronous) + initial blast, then an ACK-DRIVEN tail-resender. The extio
+# subprocess CANNOT observe the box's ack from inside a blocking command (usbio
+# injects it on another thread; a mid-command dservGet never sees it), so we return
+# right after the blast and let a dpointSetScript on state/ota/ack resend the tail
+# whenever the box's cursor stalls. Debounced: a resend fires only after the cursor
+# has been stuck ~400ms, so we don't resend on every 4KB ack while it's flowing.
+proc extio_ota_push_usb {box file sha size} {
+    set fp [open $file rb]; fconfigure $fp -translation binary
+    set ::extio_ota_img($box)  [read $fp]; close $fp
+    set ::extio_ota_size($box) $size
+    catch { after cancel $::extio_ota_timer($box) }
+
+    catch { dservClear extio/$box/state/ota/ack }
+    catch { dservClear extio/$box/state/ota/state }
+    catch { dservClear extio/$box/state/ota/result }
+    dservAddMatch   extio/$box/state/ota/ack           ;# so the resender's script fires on each ack
+    dpointSetScript extio/$box/state/ota/ack extio_ota_usb_on_ack
+
+    # begin DIRECT (usbio_forward is event-loop deferred; a dservSet wouldn't reach
+    # the box until this command returns -- after the blast). Synchronous = box
+    # stages before the 'D' frames.
+    usbioSendFrame extio/$box/cmd/ota/begin 0 "$sha $size"
+    exec sleep 2                                       ;# fixed settle (box stages in ~0.1s)
+    extio_ota_usb_blast $box 0
+    return "ota usb $box: streaming $size B (sha $sha); ack-driven tail-resend -- watch state/ota for armed"
+}
+
+proc extio_ota_usb_blast {box from} {                  ;# write every chunk from $from to EOF; backpressure paces us
+    if { ![info exists ::extio_ota_img($box)] } return
+    set data $::extio_ota_img($box); set size $::extio_ota_size($box); set chunk $::extio_ota_chunk
+    for { set off $from } { $off < $size } { incr off $chunk } {
+        set end [expr {min($off + $chunk, $size)}]
+        usbioSendChunk $off [string range $data $off [expr {$end - 1}]]   ;# single usbio box: no box arg
+    }
+}
+
+proc extio_ota_usb_on_ack {dp data} {                  ;# box published a new contiguous cursor
+    if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
+    if { ![info exists ::extio_ota_size($box)] } return
+    if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }   ;# all delivered
+    catch { after cancel $::extio_ota_timer($box) }                                  ;# debounce: resend only
+    set ::extio_ota_timer($box) [after 400 [list extio_ota_usb_blast $box $data]]    ;# when stuck ~400ms
+}
+
+proc extio_ota_usb_cleanup {box} {                     ;# stop resending (delivered, or state -> armed/fail)
+    catch { after cancel $::extio_ota_timer($box) }
+    catch { unset ::extio_ota_img($box) }
+    catch { unset ::extio_ota_size($box) }
+    catch { unset ::extio_ota_timer($box) }
 }
 
 # Free a staged image by hand (auto-freed on ok|fail; this is for an aborted run).
@@ -356,9 +423,10 @@ proc extio_ota_on_state {dp data} {
         puts "extio ota\[$box\]: verified into the inactive slot -- rebooting into the TBYB trial (back in ~10s)"
     }
     # By ok/armed the box has fully pulled the image into its slot, so free the
-    # staged ~150KB. (armed also implies ok.)
+    # staged ~150KB (eth pull) and stop any USB ack-driven resender. (armed => ok.)
     if { $data eq "ok" || $data eq "armed" || $data eq "fail" } {
         catch { dservClear extio/$box/ota/image }
+        catch { extio_ota_usb_cleanup $box }
     }
 }
 
