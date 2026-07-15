@@ -69,10 +69,32 @@ done
 command -v picotool >/dev/null 2>&1 || die "picotool not on PATH (brew install picotool / build it with libusb)"
 [ -f "$PT_JSON" ] || die "missing partition spec: $PT_JSON"
 
-# Require a device in BOOTSEL up front (picotool info fails if none is present).
-picotool info >/dev/null 2>&1 || die "no RP2350 in BOOTSEL.
+# In BOOTSEL, `picotool info` also prints the flash-resident image's metadata
+# ("Program Information") -- that is NOT a running app, just what's stored in
+# flash, so it can't be used to detect BOOTSEL. The reliable signal is the
+# device's boot type (only `-a`/`-d` extended info carries it).
+in_bootsel() { picotool info -a 2>/dev/null | grep -qiE 'boot type:[[:space:]]*bootsel'; }
+
+# If the board isn't in BOOTSEL but is reachable (a cooperative app that exposes
+# picotool's reset interface), bounce it; otherwise point at the physical button.
+if ! in_bootsel; then
+  echo ">> not in BOOTSEL -- trying to reboot the board into the bootloader ..."
+  if picotool reboot -f -u >/dev/null 2>&1; then
+    settled=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 1
+      in_bootsel && { settled=1; break; }
+    done
+    [ "$settled" = 1 ] || die "board did not enter BOOTSEL after reboot (its firmware may not support software BOOTSEL).
+   Hold the physical BOOTSEL button while plugging in USB, then re-run.
+   existing extio box:  console 'bootsel'  OR  dservctl set extio/<box>/cmd/bootsel 1"
+    echo ">> now in BOOTSEL"
+  else
+    die "no RP2350 in BOOTSEL (and none reachable to reboot).
    existing box:  console 'bootsel'  OR  dservctl set extio/<box>/cmd/bootsel 1
    blank board:   hold BOOTSEL while plugging in USB"
+  fi
+fi
 
 TMPD=$(mktemp -d)
 # PROVISION_PT_CLEANUP is set by the remote flow to the temp pt.json it wrote for
@@ -121,7 +143,7 @@ fi
 
 wait_bootsel() {                          # picotool needs the device to re-enumerate after reboot -u
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    picotool info >/dev/null 2>&1 && return 0
+    in_bootsel && return 0                # true BOOTSEL, not just "app answered"
     sleep 1
   done
   die "device did not return to BOOTSEL after 'reboot -u'"
