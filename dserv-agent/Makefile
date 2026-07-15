@@ -4,11 +4,12 @@ BINARY=dserv-agent
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X main.version=$(VERSION)"
 
-# The extio provisioning script (served at /extio/setup) is go:embed'd, so its
-# canonical source in wiznet-io/ must be mirrored into this package dir before
-# any build. The committed copy lets `go build .` work without make; this keeps
-# it fresh whenever the source changes.
+# The extio provisioning script + its partition spec (served at /extio/setup)
+# are go:embed'd, so their canonical sources in wiznet-io/ must be mirrored into
+# this package dir before any build. The committed copies let `go build .` work
+# without make; this keeps them fresh whenever the sources change.
 PROVISION_SRC=../wiznet-io/provision.sh
+PT_JSON_SRC=../wiznet-io/pt.json
 
 # Build targets
 .PHONY: all build clean install uninstall sync-provision
@@ -18,32 +19,35 @@ all: build
 provision.sh: $(PROVISION_SRC)
 	cp $(PROVISION_SRC) $@
 
-sync-provision: provision.sh
+pt.json: $(PT_JSON_SRC)
+	cp $(PT_JSON_SRC) $@
 
-build: provision.sh
+sync-provision: provision.sh pt.json
+
+build: provision.sh pt.json
 	go build $(LDFLAGS) -o $(BINARY) .
 
 # Cross-compile for common targets
 # Note: CGO is required for sqlite3 support
-build-linux-amd64: provision.sh
+build-linux-amd64: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-linux-amd64 .
 
-build-linux-arm64: provision.sh
+build-linux-arm64: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-linux-arm64 .
 
-build-linux-arm: provision.sh
+build-linux-arm: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BINARY)-linux-armhf .
 
-build-darwin-amd64: provision.sh
+build-darwin-amd64: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-darwin-amd64 .
 
-build-darwin-arm64: provision.sh
+build-darwin-arm64: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-darwin-arm64 .
 
-build-windows-arm64: provision.sh
+build-windows-arm64: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-windows-arm64 .
 
-build-windows-amd64: provision.sh
+build-windows-amd64: provision.sh pt.json
 	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-windows-amd64 .
 build-all: build-linux-amd64 build-linux-arm64 build-linux-arm build-darwin-amd64 build-darwin-arm64 build-windows-arm64 build-windows-amd64
 
