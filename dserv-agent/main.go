@@ -540,7 +540,7 @@ Environment:
 
 		// Bootstrap endpoint: curl -sSL http://server/setup | bash
 		registerBootstrapHandlers(mux, agent)
-		log.Printf("  Bootstrap: /setup")
+		log.Printf("  Bootstrap: /setup (box) · /extio/setup (extio board)")
 		
 		// Start cleanup goroutine
 		go agent.registryCleanupLoop()
@@ -768,56 +768,157 @@ func (a *Agent) handleLandingPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Derive the base URL from the request so the copy-paste commands work on
+	// whichever registry served this page (dserv.net or a lab-internal one),
+	// matching how handleBootstrap resolves its serverURL.
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	base := fmt.Sprintf("%s://%s", scheme, r.Host)
+
+	// The extio card is only meaningful when this registry actually serves the
+	// firmware shelf that /extio/setup pulls from.
+	extioCard := ""
+	if a.cfg.FirmwareDir != "" {
+		extioCard = `
+        <div class="card">
+          <div class="card-head">
+            <h3>Provision an extio I/O board</h3>
+            <span class="platform">RP2350 · WIZnet / Pico 2</span>
+          </div>
+          <p class="card-desc">Flash a standalone digital-I/O box that talks to dserv over Ethernet or USB. After the first flash it updates over the air.</p>
+          <div class="cmd">
+            <code>curl -fsSL __BASE__/extio/setup | bash</code>
+            <button class="copy" data-cmd="curl -fsSL __BASE__/extio/setup | bash">Copy</button>
+          </div>
+          <p class="note">Requires <code>picotool</code> on your PATH and the board in BOOTSEL. Pick a board with <code>?build=pico2</code> (or <code>dual</code>, <code>w6300</code>); pick a channel with <code>?channel=stable</code>.</p>
+        </div>`
+	}
+
 	html := `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>dserv.net</title>
+    <title>dserv</title>
     <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #0f1419;
             color: #e7e9ea;
+            line-height: 1.55;
             min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0;
+            -webkit-font-smoothing: antialiased;
         }
-        .container {
-            text-align: center;
-            padding: 40px;
-        }
+        .wrap { max-width: 820px; margin: 0 auto; padding: 72px 24px 48px; }
+        header { text-align: center; margin-bottom: 56px; }
         h1 {
-            font-size: 48px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            color: #e7e9ea;
+            font-size: 64px; font-weight: 800; letter-spacing: -2px; line-height: 1;
+            background: linear-gradient(135deg, #60a5fa, #34d399);
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
-        p {
-            font-size: 18px;
-            color: #71767b;
-            margin-bottom: 32px;
+        header .tagline { font-size: 19px; color: #8b98a5; margin-top: 14px; }
+        h2 {
+            font-size: 13px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 1.5px; color: #71767b; margin-bottom: 18px; padding-left: 2px;
         }
-        a {
-            color: #3b82f6;
-            text-decoration: none;
+        .cards { display: grid; gap: 16px; }
+        .card {
+            background: #16202a; border: 1px solid #2f3336; border-radius: 14px; padding: 24px;
         }
-        a:hover {
-            text-decoration: underline;
+        .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .card h3 { font-size: 19px; font-weight: 650; color: #e7e9ea; }
+        .platform {
+            font-size: 11px; font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+            color: #7f95ab; background: #1a2634; border: 1px solid #2f3336;
+            padding: 3px 9px; border-radius: 20px; white-space: nowrap;
         }
+        .card-desc { font-size: 14.5px; color: #9fb0bf; margin: 8px 0 18px; }
+        .cmd {
+            display: flex; align-items: center; gap: 10px;
+            background: #0b0f14; border: 1px solid #2f3336; border-radius: 10px;
+            padding: 12px 12px 12px 16px;
+        }
+        .cmd code {
+            flex: 1; font-family: 'SF Mono', ui-monospace, Menlo, monospace;
+            font-size: 14px; color: #d7e3ee; overflow-x: auto; white-space: nowrap;
+        }
+        .cmd code::before { content: "$ "; color: #34d399; }
+        .copy {
+            flex-shrink: 0; font-size: 12px; font-weight: 600; color: #cfe0ef;
+            background: #1e2d3d; border: 1px solid #34506b; border-radius: 7px;
+            padding: 7px 13px; cursor: pointer; transition: all .15s;
+        }
+        .copy:hover { background: #244056; border-color: #3b82f6; }
+        .copy.done { color: #34d399; border-color: #34d399; background: #14261d; }
+        .note { font-size: 12.5px; color: #71767b; margin-top: 12px; }
+        .note code {
+            font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px;
+            color: #a9c7e0; background: #16202a; padding: 1px 5px; border-radius: 4px;
+        }
+        footer {
+            margin-top: 56px; padding-top: 28px; border-top: 1px solid #2f3336;
+            text-align: center; font-size: 13.5px; color: #71767b;
+        }
+        footer a { color: #60a5fa; text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+        footer .sep { margin: 0 10px; color: #2f3336; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>dserv.net</h1>
-        <p>Mesh registry for dserv lab systems</p>
-        <p><a href="https://github.com/SheinbergLab/dserv">github.com/SheinbergLab/dserv</a></p>
+    <div class="wrap">
+        <header>
+            <h1>dserv</h1>
+            <p class="tagline">Data acquisition &amp; experimental control for the lab</p>
+        </header>
+
+        <h2>Get started</h2>
+        <div class="cards">
+          <div class="card">
+            <div class="card-head">
+              <h3>Set up an acquisition box</h3>
+              <span class="platform">Linux · Raspberry Pi</span>
+            </div>
+            <p class="card-desc">Turn a fresh Linux machine into a dserv data-acquisition box — installs dserv, dlsh, stim2 and the agent, then registers it with this network.</p>
+            <div class="cmd">
+              <code>curl -sSL __BASE__/setup | bash</code>
+              <button class="copy" data-cmd="curl -sSL __BASE__/setup | bash">Copy</button>
+            </div>
+            <p class="note">Preview first with <code>| bash -s -- --dry-run</code>, or set the workgroup with <code>--workgroup mylab</code>.</p>
+          </div>
+          __EXTIO_CARD__
+        </div>
+
+        <footer>
+            <a href="https://github.com/SheinbergLab/dserv">GitHub</a>
+            <span class="sep">·</span>
+            <span>Lab network directory: <code style="font-family:'SF Mono',ui-monospace,Menlo,monospace;color:#a9c7e0;">/w/&lt;workgroup&gt;</code></span>
+        </footer>
     </div>
+
+    <script>
+    document.querySelectorAll('.copy').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var cmd = btn.getAttribute('data-cmd');
+            navigator.clipboard.writeText(cmd).then(function () {
+                var prev = btn.textContent;
+                btn.textContent = 'Copied';
+                btn.classList.add('done');
+                setTimeout(function () { btn.textContent = prev; btn.classList.remove('done'); }, 1400);
+            });
+        });
+    });
+    </script>
 </body>
 </html>`
+
+	html = strings.ReplaceAll(html, "__EXTIO_CARD__", extioCard)
+	html = strings.ReplaceAll(html, "__BASE__", base)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
 }
 
