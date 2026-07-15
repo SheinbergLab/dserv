@@ -18,14 +18,16 @@ jobs:
       contents: write
 
     steps:
+      # Guard-create: release_linux + release_macos + dgview all fire on the same
+      # tag and target the SAME release. ncipollo's check-then-create isn't atomic
+      # across concurrent workflows, so the losers 422'd on already_exists. Plain
+      # `gh release create ... || true` is idempotent -- whoever wins creates it,
+      # the rest no-op (same idiom as the dgview job). prerelease here;
+      # publish_release.yml flips it to latest after the uploads land.
       - name: Create (or reuse) the GitHub release for the current tag.
-        uses: ncipollo/release-action@v1
-        with:
-          body: dserv version ${{ github.ref_name }}
-          generateReleaseNotes: true
-          allowUpdates: true
-          prerelease: true
-          omitPrereleaseDuringUpdate: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --prerelease --generate-notes --title "${{ github.ref_name }}" 2>/dev/null || true
 
   release-dserv:
 
