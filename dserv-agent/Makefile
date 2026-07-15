@@ -4,35 +4,46 @@ BINARY=dserv-agent
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X main.version=$(VERSION)"
 
+# The extio provisioning script (served at /extio/setup) is go:embed'd, so its
+# canonical source in wiznet-io/ must be mirrored into this package dir before
+# any build. The committed copy lets `go build .` work without make; this keeps
+# it fresh whenever the source changes.
+PROVISION_SRC=../wiznet-io/provision.sh
+
 # Build targets
-.PHONY: all build clean install uninstall
+.PHONY: all build clean install uninstall sync-provision
 
 all: build
 
-build:
+provision.sh: $(PROVISION_SRC)
+	cp $(PROVISION_SRC) $@
+
+sync-provision: provision.sh
+
+build: provision.sh
 	go build $(LDFLAGS) -o $(BINARY) .
 
 # Cross-compile for common targets
 # Note: CGO is required for sqlite3 support
-build-linux-amd64:
+build-linux-amd64: provision.sh
 	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-linux-amd64 .
 
-build-linux-arm64:
+build-linux-arm64: provision.sh
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-linux-arm64 .
 
-build-linux-arm:
+build-linux-arm: provision.sh
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BINARY)-linux-armhf .
 
-build-darwin-amd64:
+build-darwin-amd64: provision.sh
 	CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-darwin-amd64 .
 
-build-darwin-arm64:
+build-darwin-arm64: provision.sh
 	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-darwin-arm64 .
 
-build-windows-arm64:
+build-windows-arm64: provision.sh
 	CGO_ENABLED=1 GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o $(BINARY)-windows-arm64 .
 
-build-windows-amd64:
+build-windows-amd64: provision.sh
 	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY)-windows-amd64 .
 build-all: build-linux-amd64 build-linux-arm64 build-linux-arm build-darwin-amd64 build-darwin-arm64 build-windows-arm64 build-windows-amd64
 

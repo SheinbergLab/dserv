@@ -877,6 +877,9 @@ func registerBootstrapHandlers(mux *http.ServeMux, agent *Agent) {
 	mux.HandleFunc("/setup/status", agent.handleBootstrapStatus)
 	mux.HandleFunc("/setup/profiles", agent.handleBootstrapProfiles)
 
+	// Board-side sibling: curl -fsSL http://server/extio/setup | bash
+	mux.HandleFunc("/extio/setup", agent.handleExtioSetup)
+
 	mux.HandleFunc("/setup/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/setup")
 		path = strings.TrimPrefix(path, "/")
