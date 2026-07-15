@@ -24,12 +24,18 @@ import (
 	"net/http"
 )
 
-// provision.sh is kept in sync from wiznet-io/provision.sh by the Makefile
-// (go:embed can't reach outside this package dir). Edit the canonical copy in
-// wiznet-io/, not this one.
+// provision.sh and pt.json are kept in sync from wiznet-io/ by the Makefile
+// (go:embed can't reach outside this package dir). Edit the canonical copies in
+// wiznet-io/, not these.
 //
 //go:embed provision.sh
 var provisionScript string
+
+// pt.json is the RP2350 A/B partition spec provision.sh feeds to picotool. The
+// curl|bash flow has no script directory to read it from, so we ship it inline.
+//
+//go:embed pt.json
+var partitionSpec string
 
 // extioTokenOK allows only characters that can appear in a channel / build /
 // version token, so a query param can never break out of the shell preamble.
@@ -94,6 +100,17 @@ func (a *Agent) handleExtioSetup(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "export %s=%q\n", k, v)
 		}
 	}
+
+	// The curl|bash flow has no script directory, so materialize the partition
+	// spec to a temp file and hand it to provision.sh via PT_JSON. It cleans up
+	// PROVISION_PT_CLEANUP in its own EXIT trap.
+	fmt.Fprintf(w, "__EXTIO_PT=$(mktemp) || { echo \"!! mktemp failed\" >&2; exit 1; }\n")
+	fmt.Fprintf(w, "cat > \"$__EXTIO_PT\" <<'EXTIO_PT_JSON'\n")
+	fmt.Fprint(w, partitionSpec)
+	fmt.Fprintf(w, "\nEXTIO_PT_JSON\n")
+	fmt.Fprintf(w, "export PT_JSON=\"$__EXTIO_PT\"\n")
+	fmt.Fprintf(w, "export PROVISION_PT_CLEANUP=\"$__EXTIO_PT\"\n")
+
 	fmt.Fprintf(w, "echo \">> extio: provisioning from %s (channel=${PROVISION_CHANNEL:-dev} build=${PROVISION_BUILD:-dual})\" >&2\n", serverURL)
 
 	fmt.Fprint(w, provisionScript)
