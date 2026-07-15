@@ -384,7 +384,10 @@ jobs:
       - name: Upload dgview artifacts to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}     # no checkout in this job -> gh needs the repo explicitly
         run: |
+          # Guard-create (release usually already made by the dserv workflows); the
+          # upload below is the real gate -- it fails loudly if the release is missing.
           gh release create "${{ github.ref_name }}" --prerelease --generate-notes --title "${{ github.ref_name }}" 2>/dev/null || true
           gh release upload "${{ github.ref_name }}" \
             dgview-macos-x64/*.dmg dgview-macos-arm64/*.dmg \
