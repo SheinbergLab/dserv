@@ -104,7 +104,13 @@ func (a *Agent) handleExtioSetup(w http.ResponseWriter, r *http.Request) {
 	// The curl|bash flow has no script directory, so materialize the partition
 	// spec to a temp file and hand it to provision.sh via PT_JSON. It cleans up
 	// PROVISION_PT_CLEANUP in its own EXIT trap.
+	// picotool infers the input format from the filename extension, so the temp
+	// MUST end in .json or `partition create` fails ("does not have a recognized
+	// file type"). mktemp gives no extension; rename it. (portable: mv, not
+	// GNU-only `mktemp --suffix`.)
 	fmt.Fprintf(w, "__EXTIO_PT=$(mktemp) || { echo \"!! mktemp failed\" >&2; exit 1; }\n")
+	fmt.Fprintf(w, "mv \"$__EXTIO_PT\" \"$__EXTIO_PT.json\" || { echo \"!! could not name temp .json\" >&2; exit 1; }\n")
+	fmt.Fprintf(w, "__EXTIO_PT=\"$__EXTIO_PT.json\"\n")
 	fmt.Fprintf(w, "cat > \"$__EXTIO_PT\" <<'EXTIO_PT_JSON'\n")
 	fmt.Fprint(w, partitionSpec)
 	fmt.Fprintf(w, "\nEXTIO_PT_JSON\n")
