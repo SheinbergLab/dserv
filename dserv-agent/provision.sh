@@ -39,7 +39,10 @@
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-PT_JSON="$HERE/pt.json"
+# PT_JSON may be supplied via the environment (the curl|bash remote flow has no
+# script directory, so it writes the embedded spec to a temp file and points us
+# at it); otherwise it sits next to this script.
+PT_JSON="${PT_JSON:-$HERE/pt.json}"
 DIST="$HERE/dist"
 : "${FW_SHELF_URL:=https://dserv.net}"
 
@@ -72,7 +75,9 @@ picotool info >/dev/null 2>&1 || die "no RP2350 in BOOTSEL.
    blank board:   hold BOOTSEL while plugging in USB"
 
 TMPD=$(mktemp -d)
-trap 'rm -rf "$TMPD"' EXIT
+# PROVISION_PT_CLEANUP is set by the remote flow to the temp pt.json it wrote for
+# us; clean it up here too since we own the only EXIT trap.
+trap 'rm -rf "$TMPD"; [ -n "${PROVISION_PT_CLEANUP:-}" ] && rm -f "$PROVISION_PT_CLEANUP"' EXIT
 PT_UF2="$TMPD/pt.uf2"
 
 sha256_of() {   # portable sha256 (macOS shasum / Linux sha256sum)
