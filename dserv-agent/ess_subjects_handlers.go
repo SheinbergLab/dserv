@@ -34,6 +34,8 @@ func (r *ESSRegistry) handleListSubjects(w http.ResponseWriter, req *http.Reques
 		writeJSON(w, 200, subjects)
 
 	case http.MethodPost:
+		// Upsert: create if absent, else replace the mutable fields (so
+		// `dservctl subjects add` is idempotent, matching `users add`).
 		workgroup := req.URL.Query().Get("workgroup")
 		if workgroup == "" {
 			http.Error(w, "workgroup parameter required", http.StatusBadRequest)
@@ -48,34 +50,77 @@ func (r *ESSRegistry) handleListSubjects(w http.ResponseWriter, req *http.Reques
 			writeJSON(w, 400, map[string]string{"error": "name required"})
 			return
 		}
-		active := true // default active on create
-		if sr.Active != nil {
-			active = *sr.Active
-		}
-		subject := &ESSSubject{
-			Workgroup:   workgroup,
-			Name:        sr.Name,
-			DisplayName: sr.DisplayName,
-			Species:     sr.Species,
-			Active:      active,
-			Description: sr.Description,
-			RegistryURL: sr.RegistryURL,
-		}
-		id, err := r.CreateSubject(subject)
+
+		existing, err := r.GetSubject(workgroup, sr.Name)
 		if err != nil {
-			if strings.Contains(err.Error(), "UNIQUE") {
-				writeJSON(w, 409, map[string]string{"error": "Subject already exists"})
-			} else {
-				writeJSON(w, 500, map[string]string{"error": err.Error()})
-			}
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		subject.ID = id
-		writeJSON(w, 201, map[string]interface{}{"success": true, "id": id, "subject": subject})
+		if existing == nil {
+			active := true // default active on create
+			if sr.Active != nil {
+				active = *sr.Active
+			}
+			subject := &ESSSubject{
+				Workgroup:   workgroup,
+				Name:        sr.Name,
+				DisplayName: sr.DisplayName,
+				Species:     sr.Species,
+				Active:      active,
+				Description: sr.Description,
+				RegistryURL: sr.RegistryURL,
+			}
+			id, err := r.CreateSubject(subject)
+			if err != nil {
+				writeJSON(w, 500, map[string]string{"error": err.Error()})
+				return
+			}
+			subject.ID = id
+			writeJSON(w, 201, map[string]interface{}{"success": true, "id": id, "created": true, "subject": subject})
+			return
+		}
+
+		existing.DisplayName = sr.DisplayName
+		existing.Species = sr.Species
+		existing.Description = sr.Description
+		if sr.Active != nil {
+			existing.Active = *sr.Active
+		}
+		if sr.RegistryURL != "" {
+			existing.RegistryURL = sr.RegistryURL
+		}
+		if err := r.UpdateSubject(existing); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]interface{}{"success": true, "id": existing.ID, "created": false, "subject": existing})
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleSeedSubjects: POST — register a subject for each distinct subject
+// referenced by the workgroup's configs that isn't already registered.
+func (r *ESSRegistry) handleSeedSubjects(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	workgroup := req.URL.Query().Get("workgroup")
+	if workgroup == "" {
+		http.Error(w, "workgroup parameter required", http.StatusBadRequest)
+		return
+	}
+	added, err := r.SeedSubjectsFromConfigs(workgroup)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if added == nil {
+		added = []string{}
+	}
+	writeJSON(w, 200, map[string]interface{}{"success": true, "added": added, "count": len(added)})
 }
 
 // handleSubject: GET / PUT / DELETE a single subject at /{workgroup}/{name}.

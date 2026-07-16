@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -97,5 +98,73 @@ func names(subs []*ESSSubject) []string {
 	for i, s := range subs {
 		out[i] = s.Name
 	}
+	return out
+}
+
+func TestSeedSubjectsFromConfigs(t *testing.T) {
+	reg := newTestRegistry(t)
+	const wg = "brown-sheinberg"
+
+	pid, err := reg.CreateProjectDef(&ESSProjectDef{Workgroup: wg, Name: "proj"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	mkConfig := func(name, subject string) int64 {
+		c := &ESSConfig{
+			ProjectID: pid, Name: name, System: "pursuit", Protocol: "pendulum",
+			Variant: "pendulum_spot", Subject: subject,
+			VariantArgs: map[string]interface{}{}, Params: map[string]interface{}{},
+			Tags: []string{},
+		}
+		id, err := reg.CreateConfig(c)
+		if err != nil {
+			t.Fatalf("create config %s: %v", name, err)
+		}
+		return id
+	}
+
+	mkConfig("c1", "Riker") // mixed case
+	mkConfig("c2", "riker") // dup of c1 after lowercasing
+	mkConfig("c3", "momo")
+	mkConfig("c4", "") // empty -> skipped
+	archivedID := mkConfig("c5", "ghost")
+	if err := reg.ArchiveConfig(archivedID); err != nil {
+		t.Fatalf("archive c5: %v", err)
+	}
+
+	added, err := reg.SeedSubjectsFromConfigs(wg)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Riker/riker collapse to one; momo; empty and archived-ghost excluded.
+	if got := sortedCopy(added); len(got) != 2 || got[0] != "momo" || got[1] != "riker" {
+		t.Fatalf("seeded = %v, want [momo riker]", got)
+	}
+
+	// registered as active
+	subs, _ := reg.ListSubjects(wg, false)
+	if got := names(subs); len(got) != 2 {
+		t.Fatalf("after seed, active subjects = %v, want 2", got)
+	}
+
+	// idempotent: second seed adds nothing
+	again, err := reg.SeedSubjectsFromConfigs(wg)
+	if err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("re-seed added %v, want none", again)
+	}
+
+	// archived config's subject was NOT registered
+	if g, _ := reg.GetSubject(wg, "ghost"); g != nil {
+		t.Fatalf("archived-config subject 'ghost' should not have been seeded")
+	}
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
 	return out
 }

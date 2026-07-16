@@ -125,6 +125,53 @@ func (r *ESSRegistry) DeleteSubject(workgroup, name string) error {
 	return nil
 }
 
+// SeedSubjectsFromConfigs registers a subject for each distinct non-empty
+// subject referenced by the workgroup's (non-archived) configs that is not
+// already registered. Idempotent; returns the names it actually added.
+func (r *ESSRegistry) SeedSubjectsFromConfigs(workgroup string) ([]string, error) {
+	rows, err := r.db.Query(`
+		SELECT DISTINCT c.subject
+		FROM ess_configs c
+		JOIN ess_project_defs p ON c.project_id = p.id
+		WHERE p.workgroup = ? AND c.subject != '' AND c.archived = 0
+		ORDER BY c.subject
+	`, workgroup)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		candidates = append(candidates, s)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var added []string
+	for _, name := range candidates {
+		// GetSubject/CreateSubject lowercase, so mixed-case duplicates
+		// (e.g. "Riker" and "riker") collapse to one.
+		existing, err := r.GetSubject(workgroup, name)
+		if err != nil {
+			return added, err
+		}
+		if existing != nil {
+			continue
+		}
+		if _, err := r.CreateSubject(&ESSSubject{Workgroup: workgroup, Name: name, Active: true}); err != nil {
+			continue // skip on a race/unique collision, keep going
+		}
+		added = append(added, strings.ToLower(name))
+	}
+	return added, nil
+}
+
 // scanSubject reads one row into an ESSSubject. Works with *sql.Row and *sql.Rows.
 func scanSubject(row interface{ Scan(...interface{}) error }) (*ESSSubject, error) {
 	s := &ESSSubject{}
