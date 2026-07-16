@@ -16,7 +16,7 @@ tcl::tm::add $dspath/lib
 
 # enable error logging
 errormon enable
-    
+
 # look for any .tcl configs to run before other subprocesses local/*.tcl
 foreach f [glob [file join $dspath local pre-*.tcl]] {
     source $f
@@ -46,7 +46,12 @@ subprocess extio "source [file join $dspath config/extioconf.tcl]"
 subprocess sound "source [file join $dspath config/soundconf.tcl]"
 
 # start a "git" interpreter
-subprocess git "source [file join $dspath config/gitconf.tcl]"
+# RETIRED (superseded by the dserv.net registry): the git subprocess spent
+# ~1.5s at boot running `git branch`/`current_tag`/etc. It published
+# ess/git/{branch,tag,branches,commit,push,pull}; all consumers are guarded
+# (dservExists) so absence is safe — only the git branch/commit UI goes blank.
+# Re-enable this line if you still need git-based script management.
+# subprocess git "source [file join $dspath config/gitconf.tcl]"
 
 # start an openephys subprocess for handling state/recording
 subprocess openephys "source [file join $dspath config/openephysconf.tcl]"
@@ -75,19 +80,38 @@ subprocess df "source [file join $dspath config/dfconf.tcl]"
 # setup docs subprocess
 subprocess docs "source [file join $dspath config/docsconf.tcl]"
 
+# Discover this machine's LAN IP with NO external network dependency: a kernel
+# route lookup (Linux `ip route get`, macOS `route get default` + ipconfig).
+# Replaces a blocking connect to google.com:80 that added a DNS/socket hit at
+# boot, hung with no internet, and returned a public IPv6 rather than the LAN
+# IPv4 stim comms need. Route lookups send no packets and work offline.
+proc get_local_hostaddr {} {
+    set ip ""
+    if { $::tcl_platform(os) == "Linux" } {
+	catch {
+	    if {[regexp {src (\S+)} [exec ip -4 route get 1.1.1.1] -> m]} { set ip $m }
+	}
+    } elseif { $::tcl_platform(os) == "Darwin" } {
+	catch {
+	    set iface [exec sh -c {route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}'}]
+	    if { $iface ne "" } { set ip [string trim [exec ipconfig getifaddr $iface]] }
+	}
+    }
+    return $ip
+}
+
 proc set_hostinfo {} {
-    # target_host allows us to connect using NIC
-    set target_host google.com
-    
     # set IP addresses for use in stim communication
     if { [dservGet ess/ipaddr] == "" } {
 	dservSet ess/ipaddr 127.0.0.1
     }
-    
-    # set host address to identify this machine
-    set s [socket $target_host 80]
-    dservSet system/hostaddr [lindex [fconfigure $s -sockname] 0]
-    close $s
+
+    # set host address to identify this machine (LAN IPv4; loopback fallback)
+    set addr [get_local_hostaddr]
+    if { $addr eq "" } {
+	set addr 127.0.0.1
+    }
+    dservSet system/hostaddr $addr
 
     if { $::tcl_platform(os) == "Darwin" } {
 	set name [exec scutil --get ComputerName]

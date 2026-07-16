@@ -29,6 +29,11 @@ if {![info exists ::dspath]} {
 
 proc exit {args} { error "exit not available for this subprocess" }
 
+# timer module: used only to defer the startup outbox drain off the boot path
+# (fires trialsyncTimer/0 -> trialsync::run_startup_drain). Runtime trial/obs
+# flushing stays event-driven via the ess/trialinfo + ess/obs_active callbacks.
+load ${::dspath}/modules/dserv_timer[info sharedlibextension]
+
 namespace eval trialsync {
     variable debug 0
     variable db_path ""
@@ -51,6 +56,9 @@ namespace eval trialsync {
 
     variable obs_active 0
     variable pending_trialinfo ""
+
+    variable startup_drain_delay_ms 3000 ;# fire the deferred startup drain ~3s after boot
+    variable startup_drain_timer_armed 0
 }
 
 if {[info exists ::env(ESS_TRIAL_SYNC_DEBUG)]} {
@@ -918,6 +926,48 @@ proc trialsync::startup_drain_outbox {} {
     return [list $initial $final]
 }
 
+# Timer callback (trialsyncTimer/0): run the backlog drain ONCE, off the boot
+# path. Disarms itself so it does not repeat; a long synchronous drain here
+# blocks only this subprocess momentarily, never dserv startup.
+proc trialsync::run_startup_drain {dpoint data} {
+    variable startup_drain_timer_armed
+    catch { timerStop }
+    if {!$startup_drain_timer_armed} {
+        return
+    }
+    set startup_drain_timer_armed 0
+    if {[catch {
+        lassign [trialsync::startup_drain_outbox] initial final
+        set drained [expr {$initial - $final}]
+        if {$final == 0} {
+            if {$drained == 0} {
+                puts stderr "trialsync: startup outbox drain -- empty."
+            } else {
+                puts stderr "trialsync: startup outbox drain -- emptied $drained trials."
+            }
+        } elseif {$trialsync::consecutive_failures > 0} {
+            puts stderr "trialsync: startup outbox drain -- $final pending (deferred after ingest failure)."
+        } else {
+            puts stderr "trialsync: startup outbox drain -- $final pending."
+        }
+        flush stderr
+    } err]} {
+        puts stderr "trialsync: deferred startup drain failed: $err"
+        flush stderr
+    }
+}
+
+# Arm the one-shot deferred startup drain via the timer module.
+proc trialsync::arm_startup_drain {} {
+    variable startup_drain_delay_ms
+    variable startup_drain_timer_armed
+    timerPrefix trialsyncTimer
+    dservAddExactMatch trialsyncTimer/0
+    dpointSetScript trialsyncTimer/0 trialsync::run_startup_drain
+    set startup_drain_timer_armed 1
+    timerTickInterval $startup_drain_delay_ms $startup_drain_delay_ms
+}
+
 proc trialsync::on_obs_active {dpoint data} {
     if {[catch { trialsync::_on_obs_active_body $dpoint $data } err]} {
         puts stderr "trialsync: on_obs_active failed ($data): $err"
@@ -1023,23 +1073,8 @@ if {[trialsync::_ingest_base_url] eq ""} {
 }
 
 trialsync::ensure_outbox_open
-lassign [trialsync::startup_drain_outbox] _initial _final
-set _drained [expr {$_initial - $_final}]
-set _prefix "trialsync started. API key and target server loaded."
-if {$_final == 0} {
-    if {$_drained == 0} {
-        puts stderr "$_prefix Outbox empty."
-    } else {
-        puts stderr "$_prefix Outbox emptied of $_drained trials."
-    }
-} elseif {$trialsync::consecutive_failures > 0} {
-    puts stderr "$_prefix Outbox has $_final pending trials (startup drain deferred after ingest failure)."
-} else {
-    puts stderr "$_prefix Outbox has $_final pending trials."
-}
-flush stderr
-unset _initial _final _drained _prefix
 
+# Subscribe to trial/obs events first — new trials drain via these callbacks.
 dservAddExactMatch ess/trialinfo
 dpointSetScript ess/trialinfo trialsync::on_trialinfo
 trialsync::_dbg "init: subscribed ess/trialinfo -> trialsync::on_trialinfo"
@@ -1047,3 +1082,12 @@ trialsync::_dbg "init: subscribed ess/trialinfo -> trialsync::on_trialinfo"
 dservAddExactMatch ess/obs_active
 dpointSetScript ess/obs_active trialsync::on_obs_active
 trialsync::_dbg "init: subscribed ess/obs_active -> trialsync::on_obs_active"
+
+# Drain any pre-existing backlog OFF the boot path. Draining synchronously here
+# would block dserv startup while it POSTs the outbox (up to the HTTP timeout
+# per batch); instead arm a one-shot timer that runs the same drain a few
+# seconds after boot. New trials already drain via the callbacks above, so no
+# trial is lost — the backlog just flushes slightly later, without stalling init.
+trialsync::arm_startup_drain
+puts stderr "trialsync started. API key and target server loaded. Outbox drain deferred ~[expr {$trialsync::startup_drain_delay_ms / 1000}]s (non-blocking)."
+flush stderr

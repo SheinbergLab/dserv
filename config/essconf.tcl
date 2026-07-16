@@ -320,9 +320,29 @@ proc joystick_init { } {
 #   inputConfigure touchscreen -screen_w 1280 -screen_h 800
 #   inputExpect touchscreen
 
-# pull latest workspace scripts if we have registry configured
+# Defer the registry script sync OFF the boot path. ess::sync_base does ~1 HTTP
+# round-trip per system (~12) to the registry (~6s) and is the last thing
+# essconf runs, so it blocks dserv startup (dsconf waits on this subprocess's
+# source). Instead arm a one-shot timer (timer module already loaded) to run it
+# ~4s after boot. Uses a HIGH timer index (7) + the DEFAULT "timer" prefix so it
+# can't collide with the state system's timers (low indices, poll-based via
+# timerExpired, and armed only during runs, which start much later). One-shot:
+# disarm in the callback. The rig boots on its on-disk (last-sync) scripts;
+# updates land seconds later and apply on the next system load.
+proc _deferred_sync_base {dpoint data} {
+    catch { timerStop 7 }
+    if { ![info exists ess::registry_url] } { return }
+    if {[catch {ess::sync_base} r]} {
+        puts stderr "ess: deferred sync_base failed: $r"
+    } else {
+        puts stderr "ess: deferred sync_base complete ($r)"
+    }
+    flush stderr
+}
 if { [info exists ess::registry_url] } {
-    ess::sync_base
+    dservAddExactMatch timer/7
+    dpointSetScript timer/7 _deferred_sync_base
+    timerTickInterval 7 4000 4000
 }
 
 # source rig-local configs (local/post-*.tcl) BEFORE the default system
