@@ -344,7 +344,15 @@ ess::load_system emcalib
 # Registry url+workgroup were configured above via ess::registry::configure.
 # Bare verb so the Workbench (or "dservctl ess refresh_subjects") can re-pull.
 proc refresh_subjects {} {
-    if {[catch {ess::registry::list_subjects} subs] || ![llength $subs]} {
+    # The ess subprocess loads only the BASE ess_registry package (api_get +
+    # config), NOT ess_registry_configs -- that's required by the separate
+    # `configs` subprocess (configsconf.tcl). So hit the endpoint directly via
+    # api_get rather than ess::registry::list_subjects (which lives in the
+    # configs pkg and is undefined here).
+    set wg [set ::ess::registry::config(workgroup)]
+    if {$wg eq "" ||
+        [catch {ess::registry::api_get "/subjects?workgroup=$wg"} subs] ||
+        ![llength $subs]} {
         return 0
     }
     ess::set_subjects {*}[lmap s $subs {dict get $s name}]
