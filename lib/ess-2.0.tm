@@ -1356,7 +1356,9 @@ namespace eval ess {
 
     proc set_subjects {args} {
         variable subject_ids
-        set subject_ids {*}[string tolower $args]
+        # $args is the list of subject names (e.g. from `set_subjects a b c` or
+        # `set_subjects {*}$list`).
+        set subject_ids [string tolower $args]
         dservSet ess/subject_ids $subject_ids
     }
 
