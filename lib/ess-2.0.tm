@@ -347,6 +347,23 @@ oo::class create System {
             # connect to data server receive stimdg updates
             package require qpcs 3.42
 
+            # Stim-side lifecycle hooks (analog of the state system's
+            # init/deinit callbacks). The stim2 interp is persistent across
+            # system/protocol loads, so anything a stim script allocates (dgs,
+            # textures) survives until freed. A script opts in by defining
+            # `proc stim_init {}` / `proc stim_deinit {}`; ESS calls stim_init
+            # after sourcing the new _stim.tcl (see configure_stim) and
+            # stim_deinit here, on the NEXT load, before re-sourcing.
+            #
+            # Order matters: call the OUTGOING system's stim_deinit while its
+            # proc + its dgs still exist (pre-source), THEN reset both hooks to
+            # no-op so a system that doesn't define them can't inherit the
+            # previous system's. (First-ever load: stim_deinit is undefined ->
+            # the catch is a no-op.)
+            catch { stim_deinit }
+            proc stim_init   {} {}
+            proc stim_deinit {} {}
+
             # Clean slate on every system/protocol load: a prior system may
             # have left dispatch callbacks (::dsCmds), cached values (::dsVals),
             # and server-side forward matches behind in this persistent stim
@@ -454,6 +471,9 @@ oo::class create System {
             set script [read $f]
             close $f
             rmtSend $script
+            # run the (possibly overridden) stim_init now that the new script
+            # has been sourced; the no-op default applies if it didn't define one.
+            rmtSend { catch { stim_init } }
             ::ess::ess_info "Loaded stimulus script: $stimfile" "stim"
         } else {
             ::ess::ess_warning "No stimulus script found: $stimfile" "stim"
