@@ -338,6 +338,20 @@ foreach f [glob -nocomplain [file join $dspath local post-*.tcl]] {
 # and finally load a default system
 ess::load_system emcalib
 
+# Pull the workgroup's subject list from the registry. This OVERRIDES the
+# env/hardcoded default that ess-2.0.tm set during load (which stays the
+# fallback); if the registry is unset/unreachable/empty the default remains.
+# Registry url+workgroup were configured above via ess::registry::configure.
+# Bare verb so the Workbench (or "dservctl ess refresh_subjects") can re-pull.
+proc refresh_subjects {} {
+    if {[catch {ess::registry::list_subjects} subs] || ![llength $subs]} {
+        return 0
+    }
+    ess::set_subjects {*}[lmap s $subs {dict get $s name}]
+    return 1
+}
+refresh_subjects
+
 # set initial subject
 ess::set_subject human
 

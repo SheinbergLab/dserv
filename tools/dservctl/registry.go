@@ -425,3 +425,51 @@ func mustJSON(v interface{}) string {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	return string(b)
 }
+
+// ============ Subjects (workgroup-scoped) ============
+
+// ListSubjects returns a workgroup's subjects. When all is true, inactive
+// subjects are included.
+func (c *AgentClient) ListSubjects(workgroup string, all bool) ([]map[string]interface{}, error) {
+	path := registryBase + "/subjects?workgroup=" + url.QueryEscape(workgroup)
+	if all {
+		path += "&all=1"
+	}
+	result, err := c.Get(path)
+	if err != nil {
+		return nil, err
+	}
+	return extractList(result, "subjects"), nil
+}
+
+// GetSubject returns one subject.
+func (c *AgentClient) GetSubject(workgroup, name string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/subject/%s/%s",
+		registryBase, url.PathEscape(workgroup), url.PathEscape(name))
+	return c.Get(path)
+}
+
+// SaveSubject upserts a subject (POST is create-or-update on the server).
+func (c *AgentClient) SaveSubject(workgroup, name, display, species, description string, active bool) (map[string]interface{}, error) {
+	path := registryBase + "/subjects?workgroup=" + url.QueryEscape(workgroup)
+	return c.Post(path, map[string]interface{}{
+		"name":        name,
+		"displayName": display,
+		"species":     species,
+		"description": description,
+		"active":      active,
+	})
+}
+
+// DeleteSubject removes a subject.
+func (c *AgentClient) DeleteSubject(workgroup, name string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("%s/subject/%s/%s",
+		registryBase, url.PathEscape(workgroup), url.PathEscape(name))
+	return c.Do("DELETE", path, nil)
+}
+
+// SeedSubjects registers a subject for each distinct subject referenced by the
+// workgroup's configs that isn't already registered. Returns {added, count}.
+func (c *AgentClient) SeedSubjects(workgroup string) (map[string]interface{}, error) {
+	return c.Post(registryBase+"/subjects/seed?workgroup="+url.QueryEscape(workgroup), nil)
+}

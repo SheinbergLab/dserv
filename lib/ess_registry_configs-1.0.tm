@@ -148,7 +148,16 @@ namespace eval ess::registry {
         variable config
         return [api_get "/config/$config(workgroup)/$project/$name"]
     }
-    
+
+    # List subjects for the configured workgroup (active only unless -all).
+    # Returns a list of dicts (name/displayName/species/active/...).
+    proc list_subjects {args} {
+        variable config
+        set path "/subjects?workgroup=$config(workgroup)"
+        if {[lsearch -exact $args "-all"] >= 0} { append path "&all=1" }
+        return [api_get $path]
+    }
+
     #=========================================================================
     # Queue Operations (on registry)
     #=========================================================================

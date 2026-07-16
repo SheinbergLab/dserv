@@ -49,6 +49,7 @@ func init() {
 		{"configs", "Manage project configs/queues (list/status/push/pull)", runConfigs},
 		{"libs", "Manage shared libraries (list/sync/push/status)", runLibs},
 		{"users", "Manage workgroup users (list/get/add/remove)", runUsers},
+		{"subjects", "Manage workgroup subjects (list/get/add/remove)", runSubjects},
 		{"viewer", "Manage viewer plugins (list/get/push/delete)", runViewer},
 		{"docs", "Query the dlsh/dg/ess command-reference DB (show/search/list/export)", runDocs},
 		{"version", "Show version", runVersion},
