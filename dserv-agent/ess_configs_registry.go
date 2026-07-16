@@ -124,8 +124,26 @@ func (r *ESSRegistry) migrateConfigsTables() error {
 		UNIQUE(queue_id, position)
 	);
 
+	-- Subjects (workgroup-scoped; managed independently of the configs that
+	-- reference them via ess_configs.subject)
+	CREATE TABLE IF NOT EXISTS ess_subjects (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		workgroup TEXT NOT NULL,
+		name TEXT NOT NULL,
+		display_name TEXT DEFAULT '',
+		species TEXT DEFAULT '',
+		active INTEGER DEFAULT 1,
+		description TEXT DEFAULT '',
+		registry_url TEXT DEFAULT '',
+		last_sync_at INTEGER,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		UNIQUE(workgroup, name)
+	);
+
 	-- Indexes
 	CREATE INDEX IF NOT EXISTS idx_ess_project_defs_workgroup ON ess_project_defs(workgroup);
+	CREATE INDEX IF NOT EXISTS idx_ess_subjects_workgroup ON ess_subjects(workgroup);
 	CREATE INDEX IF NOT EXISTS idx_ess_configs_project ON ess_configs(project_id);
 	CREATE INDEX IF NOT EXISTS idx_ess_configs_system ON ess_configs(system, protocol, variant);
 	CREATE INDEX IF NOT EXISTS idx_ess_configs_archived ON ess_configs(archived);

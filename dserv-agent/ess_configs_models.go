@@ -126,6 +126,34 @@ type ProjectDefRequest struct {
 	RegistryURL string   `json:"registryUrl,omitempty"`
 }
 
+// ESSSubject is a workgroup-scoped subject (animal/human), managed independently
+// of the configs that reference it. The ess side reads the active names into the
+// ess/subject_ids datapoint at startup; see ess-2.0.tm.
+type ESSSubject struct {
+	ID          int64      `json:"id"`
+	Workgroup   string     `json:"workgroup"`
+	Name        string     `json:"name"` // datafile id, lowercased (e.g. "riker")
+	DisplayName string     `json:"displayName,omitempty"`
+	Species     string     `json:"species,omitempty"`
+	Active      bool       `json:"active"`
+	Description string     `json:"description,omitempty"`
+	RegistryURL string     `json:"registryUrl,omitempty"`
+	LastSyncAt  *time.Time `json:"lastSyncAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+// SubjectRequest is the create/update payload. Active defaults to true on create
+// (pointer so an omitted field is distinguishable from an explicit false).
+type SubjectRequest struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName,omitempty"`
+	Species     string `json:"species,omitempty"`
+	Active      *bool  `json:"active,omitempty"`
+	Description string `json:"description,omitempty"`
+	RegistryURL string `json:"registryUrl,omitempty"`
+}
+
 // ConfigRequest is used to create or update a config
 type ConfigRequest struct {
 	Name         string                 `json:"name"`

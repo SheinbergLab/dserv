@@ -29,6 +29,10 @@ func (r *ESSRegistry) RegisterConfigsHandlers(mux *http.ServeMux, authMiddleware
 	mux.HandleFunc("/api/v1/ess/projectdefs", authMiddleware(r.handleListProjectDefs))
 	mux.HandleFunc("/api/v1/ess/projectdef/", authMiddleware(r.handleProjectDef))
 
+	// Subjects (workgroup-scoped)
+	mux.HandleFunc("/api/v1/ess/subjects", authMiddleware(r.handleListSubjects))
+	mux.HandleFunc("/api/v1/ess/subject/", authMiddleware(r.handleSubject))
+
 	// Configs
 	mux.HandleFunc("/api/v1/ess/configs/", authMiddleware(r.handleConfigs))
 	mux.HandleFunc("/api/v1/ess/config/", authMiddleware(r.handleConfig))
