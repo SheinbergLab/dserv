@@ -31,6 +31,7 @@ func (r *ESSRegistry) RegisterConfigsHandlers(mux *http.ServeMux, authMiddleware
 
 	// Subjects (workgroup-scoped)
 	mux.HandleFunc("/api/v1/ess/subjects", authMiddleware(r.handleListSubjects))
+	mux.HandleFunc("/api/v1/ess/subjects/seed", authMiddleware(r.handleSeedSubjects))
 	mux.HandleFunc("/api/v1/ess/subject/", authMiddleware(r.handleSubject))
 
 	// Configs
