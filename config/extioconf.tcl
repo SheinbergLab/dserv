@@ -31,8 +31,30 @@ foreach m { usbio timer } {
 # Override in local/extio.tcl if needed.
 proc extio_find_data_port {} {
     if { $::tcl_platform(os) eq "Darwin" } {
-        # macOS has no /dev/serial/by-id; cu.usbmodem<serial>{1,3}, data = *3.
-        # (Dev Macs rarely have contending CDC devices; harden via ioreg later.)
+        # macOS has no /dev/serial/by-id. IDENTITY-FIRST via ioreg (2026-07-17:
+        # the BLE handheld's dead data CDC outsorted the receiver's in the old
+        # highest-cu.usbmodem heuristic, and extioconf read silence -- names
+        # come from USB port TOPOLOGY, so plug order can't fix it). Walk the
+        # USB tree: remember each device's Product Name, and when a serial
+        # client (IODialinDevice) appears under it, accept only ttys belonging
+        # to an "extio USB box" -- the handheld's product is "dserv handheld"
+        # by design (no match). Data CDC = the *3 tty (console = *1).
+        if { ![catch { exec ioreg -r -c IOUSBHostDevice -l -w0 } out] } {
+            set product ""; set best ""
+            foreach line [split $out \n] {
+                if { [regexp {"USB Product Name" = "([^"]+)"} $line -> p] } {
+                    set product $p
+                } elseif { [regexp {"IODialinDevice" = "(/dev/tty\.usbmodem[^"]+)"} $line -> tty] } {
+                    # ioreg reports the tty.* name; we open the cu.* twin
+                    if { $product eq "extio USB box" && [string match {*3} $tty] } {
+                        set best [string map {tty. cu.} $tty]
+                    }
+                }
+            }
+            if { $best ne "" } { return $best }
+        }
+        # fallback: the old heuristic (pre-identity firmware, or ioreg hiccup).
+        # Beware: identity-blind -- a handheld/other CDC device can win the sort.
         set ports [lsort -dictionary [glob -nocomplain /dev/cu.usbmodem*]]
         if {[llength $ports]} { return [lindex $ports end] }
         return ""
