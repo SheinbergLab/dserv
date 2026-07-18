@@ -107,7 +107,7 @@ static void usbio_autowire(usbio_info_t *info, const char *line)
   char script[320];
   snprintf(script, sizeof script,
     "if {![llength [info procs usbio_forward]]} "
-    "{proc usbio_forward {dp data} {usbioSendFrame $dp [dservTimestamp $dp] $data}} ; "
+    "{proc usbio_forward {dp data} {catch {usbioSendFrame $dp [dservTimestamp $dp] $data}}} ; "
     "catch {dservAddMatch {%s}} ; catch {dpointSetScript {%s} usbio_forward}", pat, pat);
   tclserver_queue_script(info->tclserver, script, 1);          /* run in the interp, no reply */
 }
@@ -217,7 +217,12 @@ static int configure_serial_port(int fd)
 
 /* Write exactly len bytes, tolerating EAGAIN (fd is non-blocking). Returns bytes
  * written (== len on success). A partial frame would desync the box, so callers
- * treat < len as an error. */
+ * treat < len as an error. The EAGAIN naps are the PACING mechanism for bulk
+ * streams (OTA blast: the kernel tty buffer backpressures us), so the guard is
+ * generous (~400 ms) -- but it IS the whole bound: a vanished device must be
+ * caught by the caller (short return + errno, or usbioAlive), never waited on.
+ * 2026-07-17: a 4275-chunk blast against a dead fd = ~28 min of per-call
+ * parking; the Tcl layer now aborts on the first failed chunk. */
 static int write_all(int fd, const unsigned char *buf, int len)
 {
   int off = 0, guard = 0;
@@ -225,13 +230,29 @@ static int write_all(int fd, const unsigned char *buf, int len)
     ssize_t w = write(fd, buf + off, (size_t) (len - off));
     if (w > 0) { off += (int) w; guard = 0; continue; }
     if (w < 0 && (errno == EAGAIN || errno == EINTR)) {
-      if (++guard > 2000) break;                 /* device not draining -> give up */
+      if (++guard > 2000) break;                 /* device not draining -> give up (errno = EAGAIN) */
       struct timespec ts = { 0, 200000 }; nanosleep(&ts, NULL);  /* 0.2 ms */
       continue;
     }
-    break;                                        /* real error */
+    break;                                        /* real error (EIO/ENXIO/...): errno says why */
   }
   return off;
+}
+
+/* Shared short-write epilogue for the send commands: a HARD error (device
+ * detached: EIO/ENXIO/EBADF...) becomes a TCL_ERROR so callers can abort a
+ * stream instead of grinding through thousands of doomed writes; an EAGAIN
+ * exhaustion (device alive but not draining) stays a short-count TCL_OK
+ * return -- the caller decides with usbioAlive whether that means dead or
+ * just slow. Returns TCL_OK/TCL_ERROR; sets the count result on TCL_OK. */
+static int write_result(Tcl_Interp *interp, const char *who, int w, int expect)
+{
+  if (w != expect && errno != EAGAIN && errno != EINTR) {
+    Tcl_AppendResult(interp, who, ": write failed (", strerror(errno), ")", NULL);
+    return TCL_ERROR;
+  }
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(w));
+  return TCL_OK;
 }
 
 /* usbioSend <text>  -- write a raw text command + newline (legacy/CLI helper). */
@@ -280,8 +301,7 @@ static int usbio_sendframe_command(ClientData data, Tcl_Interp *interp, int objc
   if (rc <= 0) { Tcl_AppendResult(interp, "usbioSendFrame: name+value too large", NULL); return TCL_ERROR; }
 
   int w = write_all(info->usbio_fd, frame, sizeof frame);   /* always the full 128 */
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(w));
-  return TCL_OK;
+  return write_result(interp, "usbioSendFrame", w, (int) sizeof frame);
 }
 
 /* CRC-32 (zlib/pico_crc32-identical: poly 0xEDB88320, init/final ~0). The box
@@ -329,8 +349,7 @@ static int usbio_sendchunk_command(ClientData data, Tcl_Interp *interp, int objc
   memcpy(frame + USBIO_OTA_DATA_OFF, dat, (size_t) dlen);
 
   int w = write_all(info->usbio_fd, frame, sizeof frame);   /* always the full 128 */
-  Tcl_SetObjResult(interp, Tcl_NewIntObj(w));
-  return TCL_OK;
+  return write_result(interp, "usbioSendChunk", w, (int) sizeof frame);
 }
 
 /* usbioAlive  -- 1 if the reader thread is running on an open fd, else 0. A clean
