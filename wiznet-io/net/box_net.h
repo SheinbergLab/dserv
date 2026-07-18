@@ -45,6 +45,8 @@
 #include "box_net_lwip.h"
 #elif defined(BOX_NET_USB)
 #include "box_net_usb.h"
+#elif defined(BOX_NET_BLE)
+#include "box_net_ble.h"     /* handheld: BLE peripheral to a receiver box (BLE.md) */
 #elif defined(BOX_NET_DUAL)
 #include "box_net_dual.h"    /* one image, Ethernet OR USB, boot-selected */
 #else

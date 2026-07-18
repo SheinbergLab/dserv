@@ -23,10 +23,12 @@
 #include <string.h>
 
 #define PICO_PERSIST_MAGIC    0x57494F31u   /* "WIO1" */
-#define PICO_PERSIST_VERSION  14  /* v14: sync_pin/sync_en (TTL obs-sync input). v13: desc + pin labels +
-                                   * DI chord groups. v12: oled_en. v11: transport_mode (dual). v10:
-                                   * ain_en. Fields are APPEND-ONLY: never reorder/resize existing ones,
-                                   * so an older (shorter) blob loads forward-compatibly with new fields
+#define PICO_PERSIST_VERSION  16  /* v16: pipe_en (receiver relay auto-arm). v15: ble_en (BLE central
+                                   * on radio builds). v14: sync_pin/sync_en (TTL obs-sync input).
+                                   * v13: desc + pin labels + DI chord groups.
+                                   * v12: oled_en. v11: transport_mode (dual). v10: ain_en. Fields are
+                                   * APPEND-ONLY: never reorder/resize existing ones, so an older
+                                   * (shorter) blob loads forward-compatibly with new fields
                                    * defaulted (0 = off/none). */
 #define PICO_PERSIST_BLOB_MAX  (12 + sizeof(pico_config_t))  /* hdr+struct+crc */
 

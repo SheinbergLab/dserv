@@ -1,0 +1,17 @@
+// extio_pipe.gatt -- ATT database for the handheld's frame pipe (BLE.md).
+// Compiled by pico_btstack_make_gatt_header -> extio_pipe.h; the handle
+// macros it generates are aliased in box_ble_periph.h. UUIDs are FROZEN --
+// keep in sync with common/dserv_ble.h (the single source of truth).
+
+PRIMARY_SERVICE, GAP_SERVICE
+CHARACTERISTIC, GAP_DEVICE_NAME, READ | DYNAMIC,
+
+PRIMARY_SERVICE, GATT_SERVICE
+CHARACTERISTIC, GATT_DATABASE_HASH, READ,
+
+// The frame pipe: one unmodified 128-byte dserv frame per ATT PDU.
+PRIMARY_SERVICE, d5e70001-8f2c-4b6a-9ae5-3c7a10a5b2c1
+// TX: handheld -> receiver (events/telemetry)
+CHARACTERISTIC, d5e70002-8f2c-4b6a-9ae5-3c7a10a5b2c1, NOTIFY,
+// RX: receiver -> handheld (config/cmd)
+CHARACTERISTIC, d5e70003-8f2c-4b6a-9ae5-3c7a10a5b2c1, WRITE_WITHOUT_RESPONSE | DYNAMIC,

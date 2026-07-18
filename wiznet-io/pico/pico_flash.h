@@ -48,14 +48,20 @@ static void flash_store_do_op(void *p)      /* runs IRQ-off, other core locked o
     if (op->page) flash_range_program(FLASH_STORE_OFFSET, op->page, FLASH_STORE_BYTES);
 }
 
+/* 0 ok; PICO_ERROR_* (negative) from flash_safe_execute, or -100 = blob didn't
+ * serialize. The DISTINCT codes matter on the lockout builds (radio targets):
+ * -4 NOT_PERMITTED = core 1 never registered as lockout victim, -1 TIMEOUT =
+ * core 1 didn't park -- first seen 2026-07-17 ("flash FAIL" on the thingplus
+ * handheld; the radio builds are the first hardware to run this path). */
 static inline int flash_store_save(const pico_config_t *cfg)
 {
     static uint8_t page[FLASH_STORE_BYTES];   /* ~1 KB: static, off the core-0 stack
                                                * (save_service already runs one op at a time) */
     memset(page, 0xFF, sizeof page);
-    if (pico_persist_serialize(cfg, page, sizeof page) == 0) return -1;
+    if (pico_persist_serialize(cfg, page, sizeof page) == 0) return -100;
     flash_store_op_t op = { page };
-    return flash_safe_execute(flash_store_do_op, &op, 500) == PICO_OK ? 0 : -1;
+    int rc = flash_safe_execute(flash_store_do_op, &op, 500);
+    return rc == PICO_OK ? 0 : rc;
 }
 
 /* Load config from flash. Returns 0 on success (valid blob), -1 otherwise.
@@ -72,20 +78,39 @@ static inline int flash_store_save(const pico_config_t *cfg)
  * addressed, so it's flushed around the ATRANS change. (Writes go through
  * flash_range_program on the PHYSICAL offset, which is already slot-independent.) */
 #define FLASH_PERSIST_WIN_VADDR (XIP_BASE + 0x400000u)   /* ATRANS1's +4MiB window */
+
+/* Post-load diagnostic snapshot: what the persist header LOOKED like at boot,
+ * inspectable later via `show` (boot prints predate terminal attach and are
+ * discarded). Added 2026-07-17 hunting the Thing Plus (16MB) load failure. */
+static uint32_t flash_load_diag_magic;
+static uint16_t flash_load_diag_ver, flash_load_diag_len;
+static int8_t   flash_load_diag_rc = 99;      /* 99 = load never ran */
+
 static inline int flash_store_load(pico_config_t *cfg)
 {
     io_rw_32 *atrans1 = (io_rw_32 *)(uintptr_t)(XIP_QMI_BASE + QMI_ATRANS1_OFFSET);
     uint32_t  saved   = *atrans1;
     uint32_t  sector  = FLASH_STORE_OFFSET / FLASH_SECTOR_SIZE;   /* persist sector (4K units) */
-    *atrans1 = ((2u << QMI_ATRANS0_SIZE_LSB) & QMI_ATRANS0_SIZE_BITS)   /* 2-sector aperture */
+    /* 1-sector aperture: the blob is <=1K and, crucially, persist is the LAST
+     * sector -- a 2-sector aperture at BASE=4095 (16MB parts) overruns the
+     * 4096-sector translation space (4095+2 > 4096). 1 sector never can. */
+    *atrans1 = ((1u << QMI_ATRANS0_SIZE_LSB) & QMI_ATRANS0_SIZE_BITS)
              | (sector & QMI_ATRANS0_BASE_BITS);
     __dmb();
     xip_cache_invalidate_all();
-    int rc = pico_persist_deserialize((const uint8_t *) FLASH_PERSIST_WIN_VADDR,
-                                      FLASH_STORE_BYTES, cfg);
+    const uint8_t *win = (const uint8_t *) FLASH_PERSIST_WIN_VADDR;
+    memcpy(&flash_load_diag_magic, win, 4);            /* header snapshot for `show` */
+    memcpy(&flash_load_diag_ver,   win + 4, 2);
+    memcpy(&flash_load_diag_len,   win + 6, 2);
+    int rc = pico_persist_deserialize(win, FLASH_STORE_BYTES, cfg);
     *atrans1 = saved;                          /* restore the bootrom/reset mapping */
     __dmb();
     xip_cache_invalidate_all();
+    flash_load_diag_rc = (int8_t) rc;
+    if (rc != 0)
+        printf("persist: load FAILED (magic=%08lx ver=%u len=%u; want magic=%08x ver<=%u len<=%u)\n",
+               (unsigned long) flash_load_diag_magic, flash_load_diag_ver, flash_load_diag_len,
+               PICO_PERSIST_MAGIC, PICO_PERSIST_VERSION, (unsigned) sizeof(pico_config_t));
     return rc;
 }
 

@@ -104,6 +104,18 @@ typedef struct {
      * mirror/LED): both together give a scope-able end-to-end self-test. */
     uint8_t  sync_pin;                  /* valid iff sync_en */
     uint8_t  sync_en;                   /* 1 = TTL sync input on; 0 = off (default) */
+    /* v15: BLE central (BOX_BLE radio builds -- pico2w-family boards; no-op
+     * elsewhere). Default OFF: a lab of boxes scanning/advertising unasked is
+     * RF noise + a pairing surprise surface; a rig opts in when a handheld is
+     * bonded. Enable is live (core 0 lazily brings the radio up); disable
+     * quiets it, full power-off at reboot. See wiznet-io/BLE.md. */
+    uint8_t  ble_en;
+
+    /* v16: BLE central relay auto-arm (`ble pipe 1` persisted). When set, the
+     * receiver arms the handheld pipe once per radio-up -- a saved pipe_en
+     * survives reboots, so the relay comes back with zero console touches.
+     * Runtime `ble pipe 0|1` stays live either way; only `save` persists. */
+    uint8_t  pipe_en;
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -135,6 +147,8 @@ typedef enum {
     CFG_AIN_GAIN,
     CFG_AIN_EN,
     CFG_OLED_EN,
+    CFG_BLE_EN,
+    CFG_PIPE_EN,
     CFG_DESC,
     CFG_LABEL,
     CFG_GROUP,
@@ -399,6 +413,12 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "oled/enable") == 0) {
         c->oled_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_OLED_EN;
     }
+    if (strcmp(k, "ble/enable") == 0) {
+        c->ble_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_BLE_EN;
+    }
+    if (strcmp(k, "ble/pipe") == 0) {      /* receiver relay latch; on_frame fires the live request */
+        c->pipe_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_PIPE_EN;
+    }
     if (strcmp(k, "obs/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
@@ -503,6 +523,8 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_AIN_GAIN:   return "ain_gain";
     case CFG_AIN_EN:     return "ain_en";
     case CFG_OLED_EN:    return "oled_en";
+    case CFG_BLE_EN:     return "ble_en";
+    case CFG_PIPE_EN:    return "pipe_en";
     case CFG_DESC:       return "desc";
     case CFG_LABEL:      return "label";
     case CFG_GROUP:      return "group";

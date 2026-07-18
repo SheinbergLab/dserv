@@ -11,11 +11,26 @@
  * so the host (config/extioconf.tcl) selects the box by identity rather than by
  * enumeration order -- it can't grab a co-resident CDC device (e.g. a juicer).
  *
+ * The BLE HANDHELD (BOX_NET_BLE) presents a DIFFERENT identity: its data rides
+ * the radio, so its (console-only-in-practice) CDCs must NEVER match the host's
+ * box discovery -- 2026-07-17 bench: the handheld's dead data CDC outsorted the
+ * receiver's on macOS and extioconf read silence. Product deliberately contains
+ * no "extio" substring (the Linux by-id glob is *extio*if02*), and it gets its
+ * own PID. See BLE.md.
+ *
  * Standard boilerplate modelled on TinyUSB's cdc_dual_ports example. Scales to a
  * single data-only CDC when built with -DCFG_TUD_CDC=1.
  */
 #include "tusb.h"
 #include "pico/unique_id.h"
+
+#ifdef BOX_NET_BLE
+#define EXTIO_USB_PID     0x100C            /* dev PID for the BLE handheld */
+#define EXTIO_USB_PRODUCT "dserv handheld"  /* NO "extio": host box-globs must not match */
+#else
+#define EXTIO_USB_PID     0x100B            /* dev PID for the extio USB box */
+#define EXTIO_USB_PRODUCT "extio USB box"
+#endif
 
 /* ---------------- Device descriptor ---------------- */
 /* Composite (>1 interface assoc) -> use IAD device class. */
@@ -28,7 +43,7 @@ static tusb_desc_device_t const desc_device = {
     .bDeviceProtocol    = MISC_PROTOCOL_IAD,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor           = 0x2E8A,      /* Raspberry Pi VID -- DEV USE. Assign your own PID for production. */
-    .idProduct          = 0x100B,      /* dev PID for the extio USB box */
+    .idProduct          = EXTIO_USB_PID,
     .bcdDevice          = 0x0100,
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,
@@ -80,7 +95,7 @@ enum { STRID_LANGID = 0, STRID_MANUFACTURER, STRID_PRODUCT, STRID_SERIAL, STRID_
 static char const *string_desc_arr[] = {
     (const char[]){0x09, 0x04},   /* 0: supported language = English (0x0409) */
     "dserv",                      /* 1: Manufacturer */
-    "extio USB box",              /* 2: Product */
+    EXTIO_USB_PRODUCT,            /* 2: Product (the identity the host globs match) */
     NULL,                         /* 3: Serial -> filled from the board unique id */
     "extio CLI",                  /* 4: CDC0 interface */
     "extio data",                 /* 5: CDC1 interface */

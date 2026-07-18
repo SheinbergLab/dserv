@@ -28,7 +28,8 @@
  *
  * The cores share nothing but SPSC byte rings, three queues, and a couple of
  * volatile words. g_cfg is written ONLY by core 1 once it's launched; core 0
- * reads just ain_en/ain_rate/ain_gain (benign staleness).
+ * reads just ain_en/ain_rate/ain_gain (+ ble_en/pipe_en on BOX_BLE builds --
+ * the radio also lives on core 0, box_ble_central.h) (benign staleness).
  *   core0 -> core1: console lines (g_cmd_q), AIN samples (g_ain_q)
  *   core1 -> core0: flash ops carrying a config snapshot (g_save_q), log rings
  *
@@ -75,6 +76,12 @@
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 #include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
+#ifdef BOX_BLE
+#include "box_ble_central.h"    /* BLE central (receiver): radio on CORE 0, poll mode, fail-soft */
+#endif
+#ifdef BOX_NET_BLE
+#include "box_ble_periph.h"     /* BLE peripheral (handheld): radio on CORE 0; transport = box_net_ble.h */
+#endif
 
 /* USB data-CDC publish accounting (box_net_usb.h increments; `txstats` prints).
  * Defined here unconditionally so every transport build links. */
@@ -152,6 +159,9 @@ static volatile int g_log_verbose = 0;
 static volatile uint32_t g_rt_beat;       /* core-1 loop heartbeat */
 static volatile uint8_t  g_wdt_gate = 1;  /* 1 = pet only while core 1 advances */
 static const char       *g_boot_reason = "power";
+#ifdef BOX_BLE_BREADCRUMBS
+static uint32_t          g_ble_crumb;        /* last-run radio-path breadcrumb (0 = none) */
+#endif
 
 /* ---- status snapshot for the core-0 OLED (single-writer: core 1) ----
  * Byte fields only, so cross-core reads are benign-stale, never torn --
@@ -439,9 +449,14 @@ static void publish_ident(void)
 #elif defined(BOX_NET_DUAL)
     usb_target = box_net_is_usb();
 #endif
+#ifdef BOX_NET_BLE
+    (void) usb_target;
+    snprintf(s, sizeof s, "ble-receiver");     /* whichever central relays us to dserv */
+#else
     if (usb_target) snprintf(s, sizeof s, "usb-host");
     else snprintf(s, sizeof s, "%u.%u.%u.%u:%u", g_cfg.dserv_ip[0], g_cfg.dserv_ip[1],
                   g_cfg.dserv_ip[2], g_cfg.dserv_ip[3], dserv_cfg_port(&g_cfg));
+#endif
     dserv_state_name(&g_cfg, nm, sizeof nm, "dserv");
     dserv_msg_string(f, nm, 0, s);
     box_net_client_send(f, DSERV_MSG_LEN);
@@ -462,7 +477,6 @@ static int8_t   g_boot_partition = -1;       /* partition we booted from        
 static uint8_t  g_boot_trial;                /* 1 = FLASH_UPDATE + buy-pending -> on trial */
 static uint8_t  g_ota_bought;                /* explicit_buy attempted this boot */
 static volatile int16_t g_ota_buy_rc = 99;   /* explicit_buy return code (0 = committed); volatile: read via J-Link */
-static volatile int16_t g_fse_rc = 99;       /* DIAG: a flash_safe_execute (save) rc -> is core-0 flash OK on XIP? */
 static volatile uint8_t g_net_up;            /* core 1: dserv state-client connected (box->dserv publishing) */
 static volatile uint8_t g_srv_up;            /* core 1: dserv connected back to our config server (registered) */
 static volatile uint8_t g_ota_arm_req;       /* cmd/ota/arm (or J-Link poke) -> flash-update reboot */
@@ -680,8 +694,8 @@ static void publish_group_levels(void)
  * (di/heartbeat stay ungated, so this can never silence the box). */
 static int announce_burst(int force)
 {
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
-    if (!force && !box_net_client_reading()) return 0;   /* host hasn't opened the data CDC yet */
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_NET_BLE)
+    if (!force && !box_net_client_reading()) return 0;   /* host not draining yet (CDC open / BLE subscribed) */
 #else
     (void) force;
 #endif
@@ -706,7 +720,7 @@ static int announce_burst(int force)
 #define REG_RETRY_MS     5000
 #define MATCH_REFRESH_MS 30000
 static volatile int g_in_obs;           /* live ess/in_obs copy (sync frames)   */
-#if !defined(BOX_NET_USB)               /* pure-USB build: host module owns forwarding */
+#if !defined(BOX_NET_USB) && !defined(BOX_NET_BLE)  /* USB/BLE: host module / receiver owns forwarding */
 static uint32_t g_reg_down_ms, g_match_fresh_ms;
 static uint16_t g_rereg_count;
 
@@ -730,7 +744,7 @@ static void reg_watchdog_service(void)
         }
     }
 }
-#endif /* !BOX_NET_USB */
+#endif /* !BOX_NET_USB && !BOX_NET_BLE */
 
 /* ---- `phylink` diagnostic: watch the W6300 PHY link live (bench tool for the
  * auto-transport policy: shows autonegotiation settle time after power-on and
@@ -1185,6 +1199,13 @@ static void on_frame(const uint8_t *frame, void *ud)
     cfg_result_t r = dserv_dispatch(cfg, &m, &cmd);
     DBG("dp: %.*s -> %s\n", (int) m.namelen, m.name, dserv_cfg_result_str(r));
 
+#ifdef BOX_BLE
+    /* Not our name (CFG_NONE) = a frame for a box BEHIND us -- the handheld.
+     * extioconf forwards the handheld's config and cmd keys down our one data
+     * pipe once it auto-discovers the relayed telemetry; we ferry them onward. */
+    if (r == CFG_NONE) { box_ble_pipe_forward(frame); return; }
+#endif
+
     if (cmd.op == GPIO_OP_SCHED_PULSE) {                /* do/<n>/at -> pulse + timer at beginobs+delta */
         uint32_t w = cfg->do_pulse_us[cmd.pin] ? cfg->do_pulse_us[cmd.pin] : 1000;
         sched_arm(cmd.pin, cmd.pin, w, cmd.value);
@@ -1204,6 +1225,11 @@ static void on_frame(const uint8_t *frame, void *ud)
     }
     else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
     else if (r == CFG_LABEL || r == CFG_DESC)          publish_manifest();
+#ifdef BOX_BLE
+    else if (r == CFG_PIPE_EN)   /* ble/pipe datapoint: apply live (remote `ble pipe 1|0`
+                                  * over dserv -- no console); `cmd/save` persists (v16) */
+        box_ble_request(cfg->pipe_en ? BOX_BLE_REQ_PIPE_ON : BOX_BLE_REQ_PIPE_OFF);
+#endif
     else if (r == CFG_SAVE)      save_request(0);       /* core 0 writes; prints flash ok/FAIL */
     else if (r == CFG_REBOOT)    box_reboot(0);
     else if (r == CFG_BOOTSEL)   { printf("entering BOOTSEL\n"); box_reboot(1); }
@@ -1262,6 +1288,24 @@ static void cmd_exec(const char *line)
         }
         return;
     }
+#if defined(BOX_BLE) || defined(BOX_NET_BLE)
+    /* Runtime radio commands -> one-shot requests consumed by core 0 (the
+     * radio's core); replies print from there via the log ring. `ble enable
+     * 0|1` is NOT intercepted: it's persisted config, pico_cli handles it --
+     * but a re-typed enable ALSO pokes RETRY (no return!) so a bring-up that
+     * was skipped after a watchdog boot can be re-armed from the console. */
+    if (!strcmp(line, "ble"))        { box_ble_request(BOX_BLE_REQ_STATUS);   return; }
+    if (!strcmp(line, "ble enable 1")) box_ble_request(BOX_BLE_REQ_RETRY);    /* falls through to pico_cli */
+#endif
+#ifdef BOX_BLE
+    if (!strcmp(line, "ble scan 1")) { box_ble_request(BOX_BLE_REQ_SCAN_ON);  return; }
+    if (!strcmp(line, "ble scan 0")) { box_ble_request(BOX_BLE_REQ_SCAN_OFF); return; }
+    /* `ble pipe 1|0`: fire the live request AND fall through to pico_cli, which
+     * sets cfg->pipe_en (persist v16) -- `save` then makes the relay auto-arm
+     * at every boot (box_ble_service one-shot). Mirrors the `ble enable` split. */
+    if (!strcmp(line, "ble pipe 1")) box_ble_request(BOX_BLE_REQ_PIPE_ON);
+    if (!strcmp(line, "ble pipe 0")) box_ble_request(BOX_BLE_REQ_PIPE_OFF);
+#endif
 #ifdef BOX_NET_DUAL
     if (!strcmp(line, "mode")) {               /* live status; `mode <x>` (with arg) sets policy */
         printf("mode=%s active=%s%s\n", dserv_xmode_str(g_cfg.transport_mode),
@@ -1273,7 +1317,7 @@ static void cmd_exec(const char *line)
     char out[1024]; gpio_cmd_t cmd;   /* fits the full help (~419 B) + a many-pin `show`; 256 truncated both */
     cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out, &cmd);
     fputs(out, stdout);
-    if (!strcmp(line, "show"))         /* live status trailer: transport / boot / uptime / fw */
+    if (!strcmp(line, "show")) {       /* live status trailer: transport / boot / uptime / fw */
         printf("  transport=%s%s boot=%s up=%lus fw=%s\n",
 #ifdef BOX_NET_DUAL
                box_net_is_usb() ? "usb" : "eth",
@@ -1282,6 +1326,22 @@ static void cmd_exec(const char *line)
                box_net_backend_name(), "",
 #endif
                g_boot_reason, (unsigned long)(time_us_64() / 1000000u), BOX_FW_VERSION);
+#ifdef BOX_BLE
+        printf("  ble=%s%s pipe=%s\n", box_ble_state_str(),
+               box_ble_scanning ? " (scanning)" : "", box_pipe_state_str());
+#endif
+#ifdef BOX_NET_BLE
+        printf("  ble=%s pipe=%s\n", box_ble_state_str(), box_ble_link ? "UP" : "down");
+#endif
+        printf("  persist=%s magic=%08lx ver=%u len=%u (want %08x v<=%u)\n",
+               flash_load_diag_rc == 0 ? "loaded" : flash_load_diag_rc == 99 ? "never-ran" : "FAILED",
+               (unsigned long) flash_load_diag_magic, flash_load_diag_ver, flash_load_diag_len,
+               PICO_PERSIST_MAGIC, PICO_PERSIST_VERSION);
+#ifdef BOX_BLE_BREADCRUMBS
+        if (g_ble_crumb)
+            printf("  bledbg: last-run radio crumb=0x%08lx\n", (unsigned long) g_ble_crumb);
+#endif
+    }
     if (act == CLI_GPIO)         pico_gpio_exec(&g_cfg, &cmd);   /* drive the pin (console command) */
     else if (act == CLI_SAVE)    save_request(0);
     else if (act == CLI_FACTORY) { save_request(1); memset(&g_cfg, 0, sizeof g_cfg);
@@ -1294,8 +1354,8 @@ static void cmd_exec(const char *line)
 
 static int have_dserv_target(void)
 {
-#if defined(BOX_NET_USB)
-    return 1;   /* USB: the host dserv module is always the target -- no IP to configure */
+#if defined(BOX_NET_USB) || defined(BOX_NET_BLE)
+    return 1;   /* USB/BLE: the host module / relaying receiver is always the target -- no IP */
 #elif defined(BOX_NET_DUAL)
     if (box_net_is_usb()) return 1;   /* USB mode: host module is always the target */
     return g_cfg.dserv_ip[0] || g_cfg.dserv_ip[1] || g_cfg.dserv_ip[2] || g_cfg.dserv_ip[3];
@@ -1396,10 +1456,17 @@ static void auto_sense_service(void)
  * sinks (printf goes to the ring), no I2C, no flash -- see the file header. */
 static void rt_main(void)
 {
-#ifndef PICO_FLASH_ASSUME_CORE1_SAFE
-    flash_safe_execute_core_init();     /* lockout victim: core 0 flash ops park us safely.
-                                         * copy_to_ram builds define the flag instead: this core
-                                         * never touches flash/XIP, so saves don't park it at all. */
+#if !PICO_FLASH_ASSUME_CORE1_SAFE
+    /* Lockout victim: core 0 flash ops park us safely. copy_to_ram builds set
+     * the flag to 1 instead (this core never touches flash/XIP, so saves don't
+     * park it at all). MUST be `#if !`, NOT `#ifndef`: the SDK's pico/flash.h
+     * defines the macro TO 0 as a PICO_CONFIG default, so `#ifndef` silently
+     * skipped this registration on every XIP build -> every save returned
+     * NOT_PERMITTED (-4). Latent since the 2026-07-07 Stage-2 conversion
+     * (which retired the lockout path on all then-shipping targets); exposed
+     * 2026-07-17 by the radio builds ("flash FAIL" on the first thingplus
+     * handheld save). */
+    flash_safe_execute_core_init();
 #endif
     box_alarm_pool = alarm_pool_create_with_unused_hardware_alarm(24);  /* pulse/sched/DHCP IRQs -> this core;
                                                                          * 24 = 8 sched + many pulses + DHCP tick */
@@ -1425,15 +1492,22 @@ static void rt_main(void)
     uint32_t last_hb = 0;
     uint8_t  announce_pending = 0;      /* connect burst deferred until the host reads (USB tty race) */
     uint8_t  announce_hb = 0;           /* heartbeats since defer -> forces a DTR-bypass retry every ~5s */
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
-    uint8_t  prev_reading = 0;          /* DTR edge on the data CDC: host (re)opened -> re-announce */
-    uint16_t announce_backstop = 0;     /* ~60s re-announce backstop if a DTR reconnect edge is missed */
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_NET_BLE)
+    uint8_t  prev_reading = 0;          /* DTR/subscription edge: far end (re)attached -> re-announce */
+    uint16_t announce_backstop = 0;     /* ~60s re-announce backstop if a reconnect edge is missed */
 #endif
 #if defined(BOX_NET_DUAL) || defined(BOX_USB_FORWARD_REGISTER)
     uint32_t reg_tick = 0;              /* delayed USB autoregistration cadence */
 #endif
     while (1) {
         g_rt_beat++;               /* heartbeat: core 0 pets the HW watchdog only while this advances */
+#if defined(BOX_BLE) || defined(BOX_NET_BLE)
+        if (box_ble_hold_req) {    /* radio bring-up: park so core 0 owns the chip solo (IRQs stay live) */
+            box_ble_held = 1;
+            while (box_ble_hold_req) tight_loop_contents();
+            box_ble_held = 0;
+        }
+#endif
 #ifdef BOX_NET_DUAL
         box_net_dual_usb_task();   /* service TinyUSB every pass: CDC0 console always, CDC1 data in USB mode */
 #endif
@@ -1477,7 +1551,7 @@ static void rt_main(void)
             status_update(up);
             g_net_up = (up >= 1);                       /* dserv state-client connected (box->dserv) */
             g_srv_up = box_net_server_up() == 1;        /* dserv connected back (registered/reachable) */
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_NET_BLE)
             /* Host re-opened the data CDC (DTR 0->1) = dserv/usbio reconnected
              * after a restart. A USB box never de-enumerates, so there's no
              * up==2 to re-fire on -- this DTR edge is the USB equivalent of
@@ -1495,12 +1569,14 @@ static void rt_main(void)
 #if defined(BOX_NET_DUAL)
             if (up == 2 && !box_net_is_usb()) reg_request(1, 0);  /* Eth: reg on connect; USB: delayed autoreg below */
             if (up >= 1 && !box_net_is_usb()) reg_watchdog_service();
-#elif !defined(BOX_USB_FORWARD_REGISTER)
+#elif !defined(BOX_USB_FORWARD_REGISTER) && !defined(BOX_NET_BLE)
             if (up == 2) reg_request(1, 0);    /* wired/wifi: register on connect. (USB autoreg emits later,
                                                 * NOT on connect -- writing CDC1 before macOS finishes creating
-                                                * its tty drops the data port; the delayed periodic below is safe.) */
+                                                * its tty drops the data port; the delayed periodic below is safe.
+                                                * BLE: no registration at all -- the receiver relays, the host
+                                                * module owns forwarding.) */
 #endif
-#if !defined(BOX_NET_USB) && !defined(BOX_NET_DUAL)
+#if !defined(BOX_NET_USB) && !defined(BOX_NET_DUAL) && !defined(BOX_NET_BLE)
             if (up >= 1) reg_watchdog_service();   /* wired/wifi: heal lost registrations */
 #endif
             if (up >= 1) {
@@ -1529,11 +1605,17 @@ static void rt_main(void)
                 }
                 ain_sample_t s;                        /* acquired on core 0, stamped here */
                 while (queue_try_remove(&g_ain_q, &s)) publish_ain(s.ch, s.val, s.t_us);
+#ifdef BOX_BLE
+                { uint8_t pf[DSERV_MSG_LEN];           /* handheld frames from the radio (core 0) ->
+                                                        * straight up our own transport; the name
+                                                        * inside each frame keeps the boxes distinct */
+                  while (box_ble_pipe_pop_rx(pf)) box_net_client_send(pf, DSERV_MSG_LEN); }
+#endif
                 sched_publish_fired();                 /* post state/timer/<n> for fired schedules */
                 uint32_t now = to_ms_since_boot(get_absolute_time());
                 if (now - last_hb >= HEARTBEAT_MS) {
                     last_hb = now; publish_heartbeat();
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_NET_BLE)
                     if (++announce_backstop >= 60) {    /* ~60s backstop: re-announce if a DTR edge was missed */
                         announce_backstop = 0; announce_pending = 1;
                     }
@@ -1608,7 +1690,12 @@ static void save_service(void)          /* execute queued flash ops (core 0; cop
 {
     if (!queue_try_remove(&g_save_q, &g_save_req)) return;
     if (g_save_req.erase_only) flash_store_erase();   /* core 1 already announced it */
-    else printf("flash %s\n", flash_store_save(&g_save_req.cfg) == 0 ? "ok" : "FAIL");
+    else {
+        int rc = flash_store_save(&g_save_req.cfg);
+        if (rc == 0) printf("flash ok\n");
+        else printf("flash FAIL (rc=%d victim1=%d; -4=core1 not lockout-registered, -1=lockout timeout,"
+                    " -100=serialize)\n", rc, (int) multicore_lockout_victim_is_initialized(1));
+    }
 }
 
 /* Execute one OTA flash op requested by core 1's sink hook (core 0: it's the
@@ -1740,6 +1827,20 @@ int main(void)
     else if (watchdog_caused_reboot())        g_boot_reason = "soft";
     if (g_boot_reason[0] == 'w')
         printf("boot: WATCHDOG RESET -- a core wedged last run (state/boot=watchdog)\n");
+#ifdef BOX_BLE_BREADCRUMBS
+    /* Radio-path breadcrumb from the PREVIOUS run (armed at bring-up; scratch
+     * survives a watchdog reset). Names the last stage the cyw43 bus code
+     * reached -- the whole point is diagnosing a bring-up wedge that kills the
+     * console before anything can print. See BLE.md "slot-boot radio wedge". */
+    if (watchdog_hw->scratch[1] == 0xB007CB07u) {   /* [0]/[1] only -- [2]/[3] are
+                                                     * rom_reboot's param parking! */
+        g_ble_crumb = watchdog_hw->scratch[0];
+        watchdog_hw->scratch[1] = 0;
+        printf("bledbg: last-run radio crumb = 0x%08lx (0x01 pre-init, 0x30 bus-init, "
+               "0x33 chip-up, 0x3E fw-check, 0x40xxxxxx fw-dl@offset, 0x5x spi)\n",
+               (unsigned long) g_ble_crumb);
+    }
+#endif
 
     /* TBYB: capture the bootrom boot-info (lightweight, boot-safe -- just
      * rom_get_boot_info). If this is a FLASH_UPDATE buy-pending boot we're on a
@@ -1790,6 +1891,12 @@ int main(void)
     queue_init(&g_cmd_q,  CLI_LINE_MAX,         4);
     queue_init(&g_ain_q,  sizeof(ain_sample_t), 16);
     queue_init(&g_save_q, sizeof(save_req_t),   2);
+#ifdef BOX_BLE
+    box_ble_pipe_queues_init();     /* relay frame queues, before core 1 launches */
+#endif
+#ifdef BOX_NET_BLE
+    box_net_ble_queues_init();      /* transport frame queues, before core 1 launches */
+#endif
 #ifdef BOX_FUEL_MAX17048
     fuel_init();
 #endif
@@ -1813,10 +1920,25 @@ int main(void)
         save_service();
         ota_flash_service_core0();  /* service core-1 OTA flash requests */
         ota_buy_service_core0();    /* TBYB: self-test + explicit_buy on a trial boot */
-        { static uint8_t once;      /* DIAG: does a core-0 flash_safe_execute work on XIP? */
-          if (!once && g_core1_ready) { once = 1; g_fse_rc = (int16_t) flash_store_save(&g_cfg); } }
+        /* (The old boot-time flash-save DIAG lived here. REMOVED 2026-07-17: it
+         * re-saved g_cfg every boot, so any FAILED load overwrote the good
+         * persisted blob with defaults -- it destroyed the Thing Plus's saved
+         * config while we hunted the load bug. Never re-add a boot-time WRITE
+         * probe; `show`'s persist line reads the load diagnostics instead.) */
         oled_service_core0();       /* status panel, 4 Hz, ~0.5ms/frame on this core */
         watchdog_service();         /* arm once core 1 is up; pet while its heartbeat advances */
+#ifdef BOX_BLE
+        box_ble_service(&g_cfg, g_core1_ready,       /* radio on THIS core. core-1-ready gate =
+                                                      * watchdog armed, so bring-up may re-arm it
+                                                      * wider; wdt-boot flag skips auto bring-up
+                                                      * once (no boot loop on a saved ble_en) */
+                        g_boot_reason[0] == 'w');
+#endif
+#ifdef BOX_NET_BLE
+        box_ble_periph_service(&g_cfg, g_core1_ready,   /* handheld: same contract; the radio IS
+                                                         * the transport, so bring-up ignores ble_en */
+                               g_boot_reason[0] == 'w');
+#endif
         if (!announced) {
             if (g_core1_ready) {
                 announced = 1;

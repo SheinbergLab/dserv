@@ -50,13 +50,13 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
     k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
 #endif
     k += snprintf(out + k, outsz - k,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u oled.en=%u applied=%u\r\n",
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
         dserv_cfg_port(c), obs, syn,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
-        c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->oled_en, c->applied_count);
+        c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->oled_en, c->ble_en, c->pipe_en, c->applied_count);
     if (c->desc[0] && k < outsz - 8)
         k += snprintf(out + k, outsz - k, "  desc=%s\r\n", c->desc);
     for (int i = 0; i < PICO_NPINS && k < outsz - 64; i++)
@@ -120,6 +120,8 @@ static inline void pico_cli_dump(const pico_config_t *c)
     if (c->ain_rate)                      printf("ain rate %u\r\n", c->ain_rate);
     if (c->ain_gain)                      printf("ain gain %u\r\n", c->ain_gain);
     if (c->oled_en)                       printf("oled enable 1\r\n");
+    if (c->ble_en)                        printf("ble enable 1\r\n");
+    if (c->pipe_en)                       printf("ble pipe 1\r\n");
     printf("save\r\n");
     printf("# reboot   (uncomment / run to apply mode/net changes)\r\n");
 }
@@ -128,6 +130,13 @@ static inline void pico_cli_dump(const pico_config_t *c)
 #define PICO_CLI_HELP_XTRA "mode auto|usb|eth | phylink [1|0] | "
 #else
 #define PICO_CLI_HELP_XTRA ""
+#endif
+#if defined(BOX_BLE)
+#define PICO_CLI_HELP_BLE "ble | ble scan 1|0 | ble pipe 1|0 | "   /* runtime radio cmds live in cmd_exec */
+#elif defined(BOX_NET_BLE)
+#define PICO_CLI_HELP_BLE "ble | "
+#else
+#define PICO_CLI_HELP_BLE ""
 #endif
 
 /* Execute one line. Returns an action; fills `out` with a response line.
@@ -297,6 +306,17 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         snprintf(out, outsz, "OK oled enable=%d (claims SPI0 pins; save+reboot to apply)\r\n", c->oled_en);
         return CLI_OK;
     }
+    if (sscanf(line, "ble enable %d", &v) == 1) { /* BLE central (BOX_BLE radio builds; see BLE.md) */
+        c->ble_en = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK ble enable=%d (live on radio builds; `save` to persist)\r\n", c->ble_en);
+        return CLI_OK;
+    }
+    if (sscanf(line, "ble pipe %d", &v) == 1) {   /* receiver relay latch (v16); cmd_exec fires the
+                                                   * live request first, then falls through here */
+        c->pipe_en = v ? 1 : 0; c->applied_count++;
+        snprintf(out, outsz, "OK ble pipe=%d (live on the receiver; `save` to auto-arm at boot)\r\n", c->pipe_en);
+        return CLI_OK;
+    }
     if (sscanf(line, "net mode %11s", w) == 1) {
         if      (!strcmp(w, "dhcp"))   c->net_mode = NET_MODE_DHCP;
         else if (!strcmp(w, "static")) c->net_mode = NET_MODE_STATIC;
@@ -335,6 +355,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
             "      group G quiet 0|1 | group G off |\r\n"
             "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 | oled enable 0|1 |\r\n"
+            "      ble enable 0|1 | " PICO_CLI_HELP_BLE "\r\n"
             "      do N 0|1 | do N pulse US | wdt 0|1|test | save | factory | reboot | bootsel\r\n");
         return CLI_OK;
     }
