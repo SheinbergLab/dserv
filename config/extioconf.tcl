@@ -76,7 +76,9 @@ proc extio_find_data_port {} {
 
 # ---- forwarding (wired once; survives hot-swap re-opens since usbioSendFrame uses
 #      whatever fd is currently open) ----
-proc usbio_forward {dp data} { usbioSendFrame $dp [dservTimestamp $dp] $data }
+proc usbio_forward {dp data} { catch { usbioSendFrame $dp [dservTimestamp $dp] $data } }
+;# catch: a vanished device makes sends error (or short-write); forwards just drop --
+;# same semantics as fd-not-open -- until extio_service's supervision reopens/clears.
 
 proc extio_forward_box {name} {             ;# a named box's config/cmd (pin setup, box_schedule_*)
     foreach pat [list extio/$name/config/* extio/$name/cmd/*] {
@@ -293,6 +295,12 @@ set ::extio_ota_chunk 117                    ;# 'D' frame payload (128 - 11 head
 # whenever the box's cursor stalls. Debounced: a resend fires only after the cursor
 # has been stuck ~400ms, so we don't resend on every 4KB ack while it's flowing.
 proc extio_ota_push_usb {box file sha size} {
+    # Vanished-device guard (2026-07-17: a J-Link rescue-reset dropped the box off
+    # USB; a push against the dead fd wedged this subprocess -- and with it dserv's
+    # whole command port -- for the length of the blast). Every write below is now
+    # checked; any failure aborts the push in ~a second instead of grinding on.
+    if { ![usbioAlive] } { error "extio_ota_push: usb device not connected (usbioAlive=0)" }
+
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
     set ::extio_ota_size($box) $size
@@ -307,18 +315,46 @@ proc extio_ota_push_usb {box file sha size} {
     # begin DIRECT (usbio_forward is event-loop deferred; a dservSet wouldn't reach
     # the box until this command returns -- after the blast). Synchronous = box
     # stages before the 'D' frames.
-    usbioSendFrame extio/$box/cmd/ota/begin 0 "$sha $size"
+    if { ![extio_ota_usb_write128 { usbioSendFrame extio/$box/cmd/ota/begin 0 "$sha $size" }] } {
+        extio_ota_usb_fail $box "cmd/ota/begin write failed (device gone?)"
+        error "extio_ota_push: begin write failed -- aborted (state/ota/result=host_io)"
+    }
     exec sleep 2                                       ;# fixed settle (box stages in ~0.1s)
     extio_ota_usb_blast $box 0
+    # deadline armed AFTER the (synchronous, backpressure-paced ~30s+) blast: an
+    # `after` armed before it would be long-expired when the event loop resumes
+    # and could fire ahead of the queued ack events. Skip if the blast aborted.
+    if { [info exists ::extio_ota_img($box)] } { extio_ota_usb_deadline $box }
     return "ota usb $box: streaming $size B (sha $sha); ack-driven tail-resend -- watch state/ota for armed"
+}
+
+# One checked 128-byte send, old-and-new usbio module compatible: the new module
+# throws on a hard write error (device detached), the old one returns a short
+# count on any failure. Either way != 128 means the frame did not go. Runs the
+# send in the CALLER's frame so $box/$sha/$size resolve.
+proc extio_ota_usb_write128 {sendcmd} {
+    if { [catch { uplevel 1 $sendcmd } w] } { return 0 }
+    return [expr {$w == 128}]
 }
 
 proc extio_ota_usb_blast {box from} {                  ;# write every chunk from $from to EOF; backpressure paces us
     if { ![info exists ::extio_ota_img($box)] } return
     set data $::extio_ota_img($box); set size $::extio_ota_size($box); set chunk $::extio_ota_chunk
+    set fails 0
     for { set off $from } { $off < $size } { incr off $chunk } {
         set end [expr {min($off + $chunk, $size)}]
-        usbioSendChunk $off [string range $data $off [expr {$end - 1}]]   ;# single usbio box: no box arg
+        if { [extio_ota_usb_write128 { usbioSendChunk $off [string range $data $off [expr {$end - 1}]] }] } {
+            set fails 0
+            continue
+        }
+        # Failed chunk: reader death = device gone (abort NOW); otherwise allow a
+        # couple of retries for a transient >400ms stall (box mid-sector-erase),
+        # then abort. Bound: worst case ~3 x 400ms parked, never the whole image.
+        if { ![usbioAlive] || [incr fails] >= 3 } {
+            extio_ota_usb_fail $box "chunk write failed at $off/$size (fails=$fails alive=[usbioAlive])"
+            return
+        }
+        incr off -$chunk                               ;# retry this chunk
     }
 }
 
@@ -326,15 +362,51 @@ proc extio_ota_usb_on_ack {dp data} {                  ;# box published a new co
     if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
     if { ![info exists ::extio_ota_size($box)] } return
     if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }   ;# all delivered
+    extio_ota_usb_deadline $box                                                      ;# progress -> re-arm
     catch { after cancel $::extio_ota_timer($box) }                                  ;# debounce: resend only
     set ::extio_ota_timer($box) [after 400 [list extio_ota_usb_blast $box $data]]    ;# when stuck ~400ms
 }
 
+# No-ack deadline: catches the SILENT death shape -- writes "succeed" into a
+# doomed kernel buffer (device detached with room left), so the blast finishes
+# but no ack ever comes and the ack-driven resender never fires. 10 s with no
+# cursor progress (acks normally arrive every ~0.4 s) -> host-side abort. The
+# box's own stall timeout (OTA_USB_TIMEOUT_US, 10 s) is the mirror-image guard.
+# Progress-checked at fire time: a resend blast can outlive the timer, so an
+# expired deadline racing queued ack events must re-arm, not kill the push.
+proc extio_ota_usb_deadline {box} {
+    catch { after cancel $::extio_ota_dead($box) }
+    set at -1
+    catch { set at [dservGet extio/$box/state/ota/ack] }
+    set ::extio_ota_dead($box) [after 10000 [list extio_ota_usb_deadcheck $box $at]]
+}
+
+proc extio_ota_usb_deadcheck {box armed_ack} {
+    if { ![info exists ::extio_ota_img($box)] } return ;# push already delivered/failed
+    set now -1
+    catch { set now [dservGet extio/$box/state/ota/ack] }
+    if { $now != $armed_ack } { extio_ota_usb_deadline $box; return }   ;# progress raced us
+    extio_ota_usb_fail $box "no ack progress in 10s (cursor $now/$::extio_ota_size($box))"
+}
+
+# Host-side abort: free the image, stop the timers, and MARK the failure -- the
+# box owns state/ota/* normally, but a host abort means the box may be
+# unreachable, so the host publishes fail/host_io for the fleet page (the box
+# republishes real state whenever it returns).
+proc extio_ota_usb_fail {box why} {
+    extio_ota_usb_cleanup $box
+    dservSet extio/$box/state/ota/state  fail
+    dservSet extio/$box/state/ota/result host_io
+    puts "extio ota\[$box\]: push ABORTED -- $why"
+}
+
 proc extio_ota_usb_cleanup {box} {                     ;# stop resending (delivered, or state -> armed/fail)
     catch { after cancel $::extio_ota_timer($box) }
+    catch { after cancel $::extio_ota_dead($box) }
     catch { unset ::extio_ota_img($box) }
     catch { unset ::extio_ota_size($box) }
     catch { unset ::extio_ota_timer($box) }
+    catch { unset ::extio_ota_dead($box) }
 }
 
 # Free a staged image by hand (auto-freed on ok|fail; this is for an aborted run).
