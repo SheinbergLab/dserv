@@ -64,7 +64,11 @@ static inline const char *box_ble_state_str(void)
 
 /* ---- connection state (core-0 owned) ---- */
 static hci_con_handle_t hh_con = HCI_CON_HANDLE_INVALID;
+static volatile uint8_t hh_encrypted;          /* bonded/paired link is encrypted (SM); status LED reads it */
 static uint8_t  hh_subscribed, hh_mtu_ok, hh_can_send_pending;
+
+/* Connected to a central (link layer up), regardless of subscribe/encrypt. */
+static inline int hh_connected(void) { return hh_con != HCI_CON_HANDLE_INVALID; }
 static uint16_t hh_mtu;
 static uint32_t hh_rx_drop, hh_notified;
 static volatile uint8_t hh_echo_pending;     /* an echo reply is built + waiting for a send slot */
@@ -220,7 +224,7 @@ static void hh_packet_handler(uint8_t packet_type, uint16_t channel,
 
     case HCI_EVENT_DISCONNECTION_COMPLETE:
         hh_con = HCI_CON_HANDLE_INVALID;
-        hh_subscribed = 0; hh_mtu_ok = 0; hh_mtu = 0; hh_can_send_pending = 0;
+        hh_subscribed = 0; hh_mtu_ok = 0; hh_mtu = 0; hh_can_send_pending = 0; hh_encrypted = 0;
         hh_link_update();
         printf("ble: central disconnected -- advertising again\n");
         gap_advertisements_enable(1);
@@ -247,11 +251,13 @@ static void hh_sm_handler(uint8_t type, uint16_t ch, uint8_t *packet, uint16_t s
         sm_just_works_confirm(sm_event_just_works_request_get_handle(packet));
         break;
     case SM_EVENT_PAIRING_COMPLETE:
+        if (sm_event_pairing_complete_get_status(packet) == 0) hh_encrypted = 1;
         printf("ble: paired with receiver (status=%u) -- %d bond%s stored\n",
                sm_event_pairing_complete_get_status(packet),
                le_device_db_count(), le_device_db_count() == 1 ? "" : "s");
         break;
     case SM_EVENT_REENCRYPTION_COMPLETE:
+        hh_encrypted = 1;
         printf("ble: re-encrypted (bonded receiver)\n");
         break;
     }

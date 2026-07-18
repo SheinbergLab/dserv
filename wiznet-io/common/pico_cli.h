@@ -122,6 +122,7 @@ static inline void pico_cli_dump(const pico_config_t *c)
     if (c->oled_en)                       printf("oled enable 1\r\n");
     if (c->ble_en)                        printf("ble enable 1\r\n");
     if (c->pipe_en)                       printf("ble pipe 1\r\n");
+    if (c->ble_latency)                   printf("ble latency %u\r\n", c->ble_latency);
     printf("save\r\n");
     printf("# reboot   (uncomment / run to apply mode/net changes)\r\n");
 }
@@ -132,7 +133,7 @@ static inline void pico_cli_dump(const pico_config_t *c)
 #define PICO_CLI_HELP_XTRA ""
 #endif
 #if defined(BOX_BLE)
-#define PICO_CLI_HELP_BLE "ble | ble scan 1|0 | ble pipe 1|0 | "   /* runtime radio cmds live in cmd_exec */
+#define PICO_CLI_HELP_BLE "ble | ble scan 1|0 | ble pipe 1|0 | ble latency <n> | ble pair <s> | ble forget | ble bonds | "   /* runtime radio cmds live in cmd_exec */
 #elif defined(BOX_NET_BLE)
 #define PICO_CLI_HELP_BLE "ble | "
 #else
@@ -315,6 +316,15 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
                                                    * live request first, then falls through here */
         c->pipe_en = v ? 1 : 0; c->applied_count++;
         snprintf(out, outsz, "OK ble pipe=%d (live on the receiver; `save` to auto-arm at boot)\r\n", c->pipe_en);
+        return CLI_OK;
+    }
+    if (sscanf(line, "ble latency %d", &v) == 1) { /* idle peripheral-latency target (v17); read live by
+                                                    * box_ble_latency_service. 0 = always-listen default */
+        if (v < 0) v = 0;
+        if (v > 30) v = 30;
+        c->ble_latency = (uint8_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ble latency=%d (0=always listen; raises when synced+idle; `save` to persist)\r\n",
+                 c->ble_latency);
         return CLI_OK;
     }
     if (sscanf(line, "net mode %11s", w) == 1) {

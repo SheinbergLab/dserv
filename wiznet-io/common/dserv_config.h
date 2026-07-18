@@ -116,6 +116,14 @@ typedef struct {
      * survives reboots, so the relay comes back with zero console touches.
      * Runtime `ble pipe 0|1` stays live either way; only `save` persists. */
     uint8_t  pipe_en;
+
+    /* v17: idle peripheral-latency target (BOX_BLE receiver, `ble latency <n>`).
+     * 0 (default) = handheld listens every connection event -- the echo-sync-
+     * validated behavior. N > 0 = once the clock is synced, let the handheld
+     * SKIP up to N events when idle (RX-power win; event RTs unaffected since the
+     * peripheral still wakes to TRANSMIT). The receiver drops back to 0 for a
+     * periodic sync burst. See wiznet-io/BLE.md "Power" + box_ble_central.h. */
+    uint8_t  ble_latency;
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -149,6 +157,7 @@ typedef enum {
     CFG_OLED_EN,
     CFG_BLE_EN,
     CFG_PIPE_EN,
+    CFG_BLE_LATENCY,
     CFG_DESC,
     CFG_LABEL,
     CFG_GROUP,
@@ -159,6 +168,8 @@ typedef enum {
     CFG_REBOOT,
     CFG_FACTORY,
     CFG_BOOTSEL,    /* cmd/bootsel -> reboot into USB BOOTSEL for reflashing */
+    CFG_BLE_PAIR,   /* cmd/ble/pair <secs> -> open the receiver's pairing window (remote `ble pair`) */
+    CFG_BLE_FORGET, /* cmd/ble/forget      -> clear the bond allowlist  (remote `ble forget`)      */
     CFG_UNKNOWN     /* under this box's name but unrecognized */
 } cfg_result_t;
 
@@ -419,6 +430,10 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "ble/pipe") == 0) {      /* receiver relay latch; on_frame fires the live request */
         c->pipe_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_PIPE_EN;
     }
+    if (strcmp(k, "ble/latency") == 0) {   /* idle peripheral latency; box_ble_latency_service reads it live */
+        long v = dserv_msg_as_long(m); if (v < 0) v = 0; if (v > 30) v = 30;
+        c->ble_latency = (uint8_t) v; c->applied_count++; return CFG_BLE_LATENCY;
+    }
     if (strcmp(k, "obs/pin") == 0) {
         char w[8]; dserv_msg_copy_cstr(m, w, sizeof w);
         if (m->type == DSERV_STRING && !strcmp(w, "off")) obs_mirror_off(c);
@@ -474,6 +489,11 @@ static inline cfg_result_t dserv_cfg__cmd(const char *k, const dserv_msg_t *m,
     if (strcmp(k, "reboot")  == 0) return CFG_REBOOT;
     if (strcmp(k, "factory") == 0) return CFG_FACTORY;
     if (strcmp(k, "bootsel") == 0) return CFG_BOOTSEL;
+    /* BLE pairing control, remoteable (BOX_BLE receiver): the value of cmd/ble/pair
+     * is the window length in seconds; cmd/ble/forget takes any value. The firmware
+     * (on_frame) drives the window/allowlist -- these keys are inert elsewhere. */
+    if (strcmp(k, "ble/pair")   == 0) return CFG_BLE_PAIR;
+    if (strcmp(k, "ble/forget") == 0) return CFG_BLE_FORGET;
     return CFG_UNKNOWN;
 }
 
@@ -525,6 +545,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_OLED_EN:    return "oled_en";
     case CFG_BLE_EN:     return "ble_en";
     case CFG_PIPE_EN:    return "pipe_en";
+    case CFG_BLE_LATENCY:return "ble_latency";
     case CFG_DESC:       return "desc";
     case CFG_LABEL:      return "label";
     case CFG_GROUP:      return "group";
@@ -535,6 +556,8 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_REBOOT:     return "reboot";
     case CFG_FACTORY:    return "factory";
     case CFG_BOOTSEL:    return "bootsel";
+    case CFG_BLE_PAIR:   return "ble_pair";
+    case CFG_BLE_FORGET: return "ble_forget";
     default:             return "unknown";
     }
 }

@@ -151,7 +151,7 @@ case "$TARGET" in
     [ "$BLE_DEBUG" = 1 ] && { DBGSUF="_bledbg"; FLAGS="$FLAGS -DBOX_BLE_HANG_FOR_DEBUG=1"; } ;;
   thingplus-handheld)                                 # THE handheld: Thing Plus RP2350 (RM2 radio + LiPo + fuel gauge)
     BOARD=sparkfun_thingplus_rp2350; VARIANT=handheld
-    FLAGS="-DBOX_TARGET=handheld -DPICO_BOARD=$BOARD -DBOX_FUEL_MAX17048=1"
+    FLAGS="-DBOX_TARGET=handheld -DPICO_BOARD=$BOARD -DBOX_FUEL_MAX17048=1 -DBOX_STATUS_LED=1"  # WS2812 status LED (GP14)
     [ "$BLE_DEBUG" = 1 ] && { DBGSUF="_bledbg"; FLAGS="$FLAGS -DBOX_BLE_HANG_FOR_DEBUG=1"; } ;;
   dual)                                               # W6300-EVB: USB by default, Ethernet via `mode eth` (persisted)
     BOARD=pico2; VARIANT=dual; FLAGS="-DBOX_TARGET=dual -DPICO_BOARD=pico2 $EVB_FLASH" ;;

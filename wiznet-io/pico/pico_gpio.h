@@ -50,6 +50,9 @@ static uint8_t pico_gpio_oled_claim;   /* set at boot (main, core 0) iff cfg->ol
  *    SDK board header, e.g. 23/24/25/29 on the Pimoroni Pico Plus 2 W) */
 static inline int pico_gpio_reserved(int n)
 {
+#ifdef BOX_STATUS_LED
+    if (n == PICO_DEFAULT_WS2812_PIN) return 1;    /* onboard WS2812 status LED (pico_status_led.h) */
+#endif
     if (pico_gpio_oled_claim &&
         (n == OLED_PIN_SCK || n == OLED_PIN_MOSI || n == OLED_PIN_CS ||
          n == OLED_PIN_DC  || n == OLED_PIN_RST)) return 1;

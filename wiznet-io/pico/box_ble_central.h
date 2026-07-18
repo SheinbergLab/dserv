@@ -146,6 +146,7 @@ static uint32_t pipe_rx_frames, pipe_rx_badlen, pipe_rx_qdrop;    /* handheld ->
 #define ECHO_INTERVAL_MS 300                            /* ~3 probes/s while streaming */
 static volatile uint32_t g_echo_rtt_us, g_echo_seq;     /* last RTT + a change counter */
 static volatile int64_t  g_echo_off_us;                 /* last implied hh->receiver offset */
+static volatile uint8_t  g_echo_synced;                 /* core-1 estimator mirror (0/1/2) for the latency mgr */
 static uint32_t g_echo_min_us = 0xFFFFFFFFu;            /* running min RTT (the floor to watch) */
 static uint32_t echo_tx_n, echo_rx_n;                   /* requests sent / replies matched */
 
@@ -596,6 +597,55 @@ static void box_ble_init_once(void)
     box_ble_state = BOX_BLE_POWERUP;          /* [4/4] prints from the WORKING transition */
 }
 
+/* ---- adaptive peripheral latency (BLE.md "Power") ------------------------
+ * At connect the pipe runs latency 0: the handheld listens every 15ms event --
+ * best for echo-sync convergence and downstream-cmd delay, worst for its
+ * battery. Once the clock is synced we raise the peripheral latency to
+ * cfg->ble_latency so the handheld may SKIP up to N idle events (a real RX-power
+ * win). What this does NOT cost: handheld->receiver EVENT RTs -- the peripheral
+ * still wakes to TRANSMIT on any event, so button/joystick edges are unaffected;
+ * only receiver->handheld writes and the echo RTT coarsen (both latency-
+ * tolerant). To keep g_hh_clock disciplined against drift, we periodically drop
+ * back to latency 0 for a short SYNC burst. The central dictates all of this via
+ * gap_update_connection_parameters; cfg->ble_latency == 0 keeps the validated
+ * always-listen behavior (and is the factory default). UNTUNED: the burst/idle
+ * windows below are first-cut, pending real battery-life measurement. */
+#define BOX_BLE_LAT_SYNC_MS   3000     /* dense latency-0 window: (re)converge echo-sync */
+#define BOX_BLE_LAT_IDLE_MS  30000     /* low-power window between sync bursts            */
+static uint16_t box_ble_lat_applied;   /* peripheral latency currently negotiated on the pipe */
+
+static void box_ble_latency_service(const pico_config_t *cfg)
+{
+    static uint32_t phase_ms, last_try_ms;
+    static uint8_t  in_idle;
+    if (box_pipe_state != PIPE_STREAM || pipe_con == HCI_CON_HANDLE_INVALID) {
+        box_ble_lat_applied = 0; phase_ms = 0; in_idle = 0;   /* each connect restarts at latency 0 */
+        return;
+    }
+    uint32_t now = box_ble__ms();
+    uint16_t target;
+    if (cfg->ble_latency == 0) {               /* feature off: always listen (the validated default) */
+        target = 0; phase_ms = now; in_idle = 0;
+    } else if (!in_idle) {                      /* SYNC burst: hold latency 0 until settled + min dwell */
+        if (!phase_ms) phase_ms = now;
+        target = 0;
+        if (now - phase_ms >= BOX_BLE_LAT_SYNC_MS && g_echo_synced >= 2) { in_idle = 1; phase_ms = now; }
+    } else {                                    /* IDLE: low-power latency until the next refresh */
+        target = cfg->ble_latency;
+        if (now - phase_ms >= BOX_BLE_LAT_IDLE_MS) { in_idle = 0; phase_ms = now; }
+    }
+    /* Apply on change; throttle retries so a transient failure (an update already
+     * in flight) can't call gap_update every loop pass. Success advances applied. */
+    if (target != box_ble_lat_applied && now - last_try_ms >= 250) {
+        last_try_ms = now;
+        if (gap_update_connection_parameters(pipe_con, 0x000C, 0x000C, target, 0x0190) == 0) {
+            box_ble_lat_applied = target;       /* 15ms interval pinned; only latency moves; 4s timeout */
+            printf("ble: peripheral latency -> %u (%s)\n", target,
+                   target ? "idle power-save" : "sync burst");
+        }
+    }
+}
+
 /* Core-0 service, once per loop pass: lazy bring-up, radio poll, pipe pump,
  * and console requests. ~us when idle or disabled. wdt_boot = last boot was a
  * watchdog reset -> skip the PERSISTED auto-bring-up once (boot-loop guard). */
@@ -641,6 +691,8 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
                     echo_tx_n++;               /* BUSY -> skip this round, next tick retries */
             }
         }
+
+        box_ble_latency_service(cfg);           /* adaptive peripheral latency once streaming (BLE.md "Power") */
     }
 
     /* pipe_en (persist v16): auto-arm the relay ONCE per radio-up, so a saved
@@ -691,8 +743,9 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
                        (unsigned long) pipe_rx_frames, (unsigned long) pipe_rx_qdrop,
                        (unsigned long) pipe_rx_badlen, (unsigned long) pipe_tx_frames,
                        (unsigned long) pipe_tx_qdrop);
-                printf("\nble: conn_int=%u.%02ums echo tx=%lu rx=%lu rtt=%luus min=%luus off=%lldus",
+                printf("\nble: conn_int=%u.%02ums lat=%u/%u synced=%u echo tx=%lu rx=%lu rtt=%luus min=%luus off=%lldus",
                        (pipe_conn_interval * 5) / 4, ((pipe_conn_interval * 5) % 4) * 25,
+                       box_ble_lat_applied, cfg->ble_latency, g_echo_synced,
                        (unsigned long) echo_tx_n, (unsigned long) echo_rx_n,
                        (unsigned long) g_echo_rtt_us,
                        g_echo_min_us == 0xFFFFFFFFu ? 0UL : (unsigned long) g_echo_min_us,

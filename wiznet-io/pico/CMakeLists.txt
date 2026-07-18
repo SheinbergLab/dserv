@@ -116,6 +116,11 @@ elseif(BOX_TARGET STREQUAL "handheld")  # BLE-peripheral handheld / bench TX: tr
     if(BOX_FUEL_MAX17048)               # thingplus handheld: battery telemetry
         target_compile_definitions(${CFG_NAME} PRIVATE BOX_FUEL_MAX17048)
     endif()
+    if(BOX_STATUS_LED)                  # Thing Plus: onboard WS2812 on GP14 -> status LED (pico_status_led.h)
+        target_compile_definitions(${CFG_NAME} PRIVATE BOX_STATUS_LED)
+        pico_generate_pio_header(${CFG_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/ws2812.pio)
+        target_link_libraries(${CFG_NAME} PRIVATE hardware_pio)
+    endif()
     if(BOX_BLE_HANG_FOR_DEBUG)          # J-Link hang build (BLE_DEBUG=1): watchdog off during bring-up
         target_compile_definitions(${CFG_NAME} PRIVATE BOX_BLE_HANG_FOR_DEBUG=1)
     endif()

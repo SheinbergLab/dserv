@@ -82,6 +82,7 @@
 #ifdef BOX_NET_BLE
 #include "box_ble_periph.h"     /* BLE peripheral (handheld): radio on CORE 0; transport = box_net_ble.h */
 #endif
+#include "pico_status_led.h"    /* handheld WS2812 status LED (BOX_STATUS_LED = thingplus-handheld only) */
 
 /* USB data-CDC publish accounting (box_net_usb.h increments; `txstats` prints).
  * Defined here unconditionally so every transport build links. */
@@ -195,8 +196,10 @@ static void echo_estimator_service(void)
     have_best = 0;
 
     char nm[64]; uint8_t f[DSERV_MSG_LEN];             /* once/s sync health */
+    uint8_t synced = g_hh_clock.synced ? (g_hh_clock.rate_valid ? 2 : 1) : 0;
+    g_echo_synced = synced;                            /* mirror for core 0's adaptive-latency manager */
     dserv_state_name(&g_cfg, nm, sizeof nm, "echo/synced");
-    dserv_msg_int(f, nm, 0, g_hh_clock.synced ? (g_hh_clock.rate_valid ? 2 : 1) : 0);
+    dserv_msg_int(f, nm, 0, synced);
     box_net_client_send(f, DSERV_MSG_LEN);
     dserv_state_name(&g_cfg, nm, sizeof nm, "echo/rate_ppb");
     dserv_msg_int(f, nm, 0, g_hh_clock.rate_ppb);
@@ -1317,10 +1320,26 @@ static void on_frame(const uint8_t *frame, void *ud)
     else if (r == CFG_PIPE_EN)   /* ble/pipe datapoint: apply live (remote `ble pipe 1|0`
                                   * over dserv -- no console); `cmd/save` persists (v16) */
         box_ble_request(cfg->pipe_en ? BOX_BLE_REQ_PIPE_ON : BOX_BLE_REQ_PIPE_OFF);
+    else if (r == CFG_BLE_PAIR) {   /* cmd/ble/pair <secs>: remote pairing window (== console `ble pair`).
+                                     * Window var is one volatile word -> core-safe to set from core 1. */
+        uint32_t secs = (uint32_t) dserv_msg_as_long(&m);
+        box_ble_pair_window(secs);
+        printf("ble: pairing window %lus (remote); a NEW handheld will be adopted + bonded\n",
+               (unsigned long) secs);
+    }
+    else if (r == CFG_BLE_FORGET)   /* cmd/ble/forget: clear bonds (== console `ble forget`; core-0 db work) */
+        box_ble_request(BOX_BLE_REQ_FORGET);
 #endif
     else if (r == CFG_SAVE)      save_request(0);       /* core 0 writes; prints flash ok/FAIL */
     else if (r == CFG_REBOOT)    box_reboot(0);
-    else if (r == CFG_BOOTSEL)   { printf("entering BOOTSEL\n"); box_reboot(1); }
+    else if (r == CFG_BOOTSEL) {   /* require a truthy value: a bare `set cmd/bootsel 0`
+                                    * (or a stale re-broadcast) must NOT strand the box in
+                                    * BOOTSEL -- it drops off dserv until physically reflashed,
+                                    * a far worse footgun than reboot/save. The typed console
+                                    * `bootsel` (CLI_BOOTSEL below) stays unconditional. */
+        if (dserv_msg_as_long(&m)) { printf("entering BOOTSEL\n"); box_reboot(1); }
+        else printf("cmd/bootsel: value 0 ignored (write 1 to enter BOOTSEL)\n");
+    }
     else if (r == CFG_FACTORY)   { save_request(1); memset(cfg, 0, sizeof *cfg);
                                    pico_gpio_apply_config(cfg); printf("factory erased\n"); }
 }
@@ -1401,6 +1420,12 @@ static void cmd_exec(const char *line)
       } }
     if (!strcmp(line, "ble forget")) { box_ble_request(BOX_BLE_REQ_FORGET); return; }   /* clear bonds */
     if (!strcmp(line, "ble bonds"))  { box_ble_request(BOX_BLE_REQ_BONDS);  return; }   /* list bonds */
+#endif
+#ifdef BOX_STATUS_LED
+    if (!strncmp(line, "led", 3) && (line[3] == '\0' || line[3] == ' ')) {   /* bench: force LED color/off/auto */
+        status_led_cli(line[3] ? line + 4 : "");
+        return;
+    }
 #endif
 #ifdef BOX_NET_DUAL
     if (!strcmp(line, "mode")) {               /* live status; `mode <x>` (with arg) sets policy */
@@ -2035,6 +2060,9 @@ int main(void)
 #ifdef BOX_FUEL_MAX17048
     fuel_init();
 #endif
+#ifdef BOX_STATUS_LED
+    status_led_init();              /* onboard WS2812 (GP14): the handheld's only status UI */
+#endif
     if (g_cfg.ain_en) ain_init();   /* I2C lives on THIS core (else the pins stay free) */
     if (g_cfg.oled_en) {            /* SPI display likewise; claim pins BEFORE core 1's  */
         pico_gpio_oled_claim = 1;   /* apply_config so user pin modes can't collide      */
@@ -2073,6 +2101,23 @@ int main(void)
         box_ble_periph_service(&g_cfg, g_core1_ready,   /* handheld: same contract; the radio IS
                                                          * the transport, so bring-up ignores ble_en */
                                g_boot_reason[0] == 'w');
+#endif
+#ifdef BOX_STATUS_LED
+        /* Handheld status LED: derive one logical state from the signals this
+         * core owns (radio state/link/encrypt + battery %), priority high->low;
+         * the module renders color + blink. FAIL first (hardware), then low
+         * battery (always worth seeing), then link quality. */
+        { uint8_t st;
+          if      (box_ble_state == BOX_BLE_FAIL)              st = STATUS_LED_FAIL;
+          else if (box_ble_state != BOX_BLE_UP)               st = STATUS_LED_BRINGUP;
+#ifdef BOX_FUEL_MAX17048
+          else if (g_fuel_soc >= 0 && g_fuel_soc < 15)        st = STATUS_LED_LOWBATT;
+#endif
+          else if (box_ble_link && hh_encrypted)              st = STATUS_LED_GOOD;
+          else if (hh_connected())                            st = STATUS_LED_CONNECTING;
+          else                                                st = STATUS_LED_SEARCHING;
+          status_led_service(st);
+        }
 #endif
         if (!announced) {
             if (g_core1_ready) {

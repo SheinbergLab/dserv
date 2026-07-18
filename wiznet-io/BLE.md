@@ -185,6 +185,44 @@ Honest expectations, to be replaced by Phase-1 measurements:
 - Stay **connected with peripheral latency** (skip N intervals when idle); never
   advertise-on-press — 100–300ms reconnect latency would poison first-response
   RTs. RP2350 sleeps between events, wake on GPIO.
+
+### Adaptive peripheral latency — SHIPPED 2026-07-18 (receiver-side, UNTUNED)
+
+The central dictates connection parameters, so the *receiver* owns this
+(`box_ble_latency_service` in box_ble_central.h). Persisted knob `ble latency
+<n>` / `config/ble/latency` (persist **v17**, default **0** = the echo-sync-
+validated always-listen behavior; live + remoteable, read each pass by the
+core-0 manager). When `n > 0`:
+
+- Connect at latency 0; once the clock is synced (`g_echo_synced == 2`, a core-1
+  mirror of the estimator) and past a short dwell, raise peripheral latency to
+  `n` via `gap_update_connection_parameters` (15 ms interval pinned, only latency
+  moves, 4 s supervision timeout).
+- Periodically drop back to latency 0 for a **sync burst** (BOX_BLE_LAT_SYNC_MS
+  = 3 s) between low-power windows (BOX_BLE_LAT_IDLE_MS = 30 s) so `g_hh_clock`
+  stays disciplined against drift. Both windows are first-cut, **pending real
+  battery-life measurement** (Phase 2) — the mechanism is in; the numbers aren't.
+- **The key property that makes this safe:** peripheral latency lets the handheld
+  skip *listening*, but it still **wakes to TRANSMIT** on any event, so
+  handheld→receiver EVENT RTs (button/joystick edges) are unaffected. Only
+  receiver→handheld writes and the echo RTT coarsen (both latency-tolerant).
+- `ble` status now prints `lat=<applied>/<target> synced=<n>`; a latency change
+  logs `peripheral latency -> N (idle power-save | sync burst)`.
+
+### Status LED (handheld) — SHIPPED 2026-07-18 (Thing Plus only, bench-pending)
+
+The Thing Plus has one WS2812 on **GP14** (`PICO_DEFAULT_WS2812_PIN`) and no
+other display, so it's the handheld's entire local UI (`pico_status_led.h`,
+driven via a PIO program from core 0 — one non-blocking FIFO push per color
+change, never a bit-bang on the radio core). Compiled in only for the
+`thingplus-handheld` target (`BOX_STATUS_LED`); GP14 is reserved from user
+pin-config while enabled. States (priority high→low, dim, blips to keep average
+draw ~µA): radio-fail = red fast blink · bring-up = dim white · low battery
+(<15%) = red slow pulse · linked+encrypted+streaming = brief green blip/3 s ·
+central connected (securing) = amber solid · advertising/searching = blue
+blip/1.5 s. Bench override: `led auto|off | led <r> <g> <b>`. The WS2812 shares
+the GP13-gated peripheral rail with the fuel gauge (on by default; never drive
+GP13 low).
 - Ballpark: low-single-digit mA average → order-of-a-week on a 500mAh pack;
   measure precisely once running, since MAX17048 % already flows to telemetry →
   battery tile on the fleet page + low-battery warning.
@@ -248,10 +286,20 @@ work was the SM policy + pairing flow + allowlist gating.
   (retry, don't record-as-sent) + reset the cache on the up==2 connect burst
   (re-sync after reconnect/dserv-restart). Verified across two reboot cycles:
   encrypted datapoint now tracks the link. GOTCHA found the hard way:
-  `cmd/bootsel` enters BOOTSEL on ANY write regardless of value -- `bootsel 0`
-  is NOT a no-op (dserv_cfg__cmd returns CFG_BOOTSEL without checking the value).
-- **Still open (minor):** remoteable `ble pair`/`ble forget` via cmd/ble/*
-  datapoints (console-only today); the peripheral-latency power tradeoff.
+  `cmd/bootsel` entered BOOTSEL on ANY write regardless of value -- `bootsel 0`
+  was NOT a no-op (dserv_cfg__cmd returned CFG_BOOTSEL without checking the
+  value). **FIXED 2026-07-18:** the on_frame CFG_BOOTSEL handler now requires a
+  truthy value (`set cmd/bootsel 0` / a stale re-broadcast prints an ignore
+  notice instead of stranding the box in BOOTSEL); the typed console `bootsel`
+  stays unconditional. reboot/save/factory are unchanged (reboot comes back;
+  bootsel needs a physical reflash, which is why only it got the guard).
+- **Remoteable pair/forget -- DONE 2026-07-18:** `extio/<rx>/cmd/ble/pair <secs>`
+  and `extio/<rx>/cmd/ble/forget` ride the existing `cmd/*` forward to the same
+  `box_ble_pair_window()` / `BOX_BLE_REQ_FORGET` paths as the console commands
+  (new CFG_BLE_PAIR/CFG_BLE_FORGET in the shared dispatch; handlers gated under
+  BOX_BLE). So a rig with no console can open a pairing window and bond/forget a
+  handheld entirely over dserv. `state/ble/{bonds,encrypted,pairing}` (Inc3)
+  already reports the result remotely.
 
 ## Firmware layout
 
@@ -625,25 +673,23 @@ reports the Δ = handheld_ts − reference_ts distribution.
   - Residual +0.37 ms = handheld DI-detect + reflex-stamp bias (h_recv is stamped
     a few instr after receipt, ~P/2) + do/di path asymmetry; trimmable but well
     inside spec, left as-is.
-- **PHASE COMPLETE. Remaining (separate stages):** bonding (bonded-address
-  allowlist replacing first-advertiser connect; the pipe is open until then);
-  and the power tradeoff — peripheral latency was pinned to 0 for clean echo, so
-  when idle-power optimization returns, keep latency 0 during active sync (or
-  probe densely then back off), since latency > 0 re-coarsens the RTT.
-- connect policy is first-advertiser-with-the-service-UUID (bench); the
-  bonding stage replaces it with a bonded-address allowlist. The pipe is
-  open/unencrypted until then.
+- **PHASE COMPLETE.** Follow-on stages since done: bonding (bonded-address
+  allowlist — see "Bonding"); and the power tradeoff — the sync-gated adaptive
+  peripheral latency this note called for SHIPPED 2026-07-18 (latency 0 during
+  sync bursts, raised when synced+idle; see "Adaptive peripheral latency" under
+  Power). UNTUNED pending Phase-2 battery numbers.
 
 Thing Plus header-pin notes (2026-07-17 bench): GP26 (A0) verified as a DI
 end-to-end; the hole silked "17" did NOT produce edges on GP17 (silk label vs
 GPIO mapping unverified — SparkFun publishes no pinout diagram). To map any
 hole empirically from the console: configure the safe set as inputs
-(`pin N mode in_pullup` for N in 8-12,14-22,26-28), ground the mystery hole,
-and the `di:` print (debug 1) names the real GPIO. NEVER configure 23/24/25/29
-(RM2 radio lines — touching them can kill the link), skip 6/7 (Qwiic/fuel I2C
-traffic = constant chatter) and 0/1 (UART fallback console); 13 is the
-peripheral-power regulator ENABLE — input+pullup is safe, driving it low is
-not.
+(`pin N mode in_pullup` for N in 8-12,15-22,26-28 — note 14 is now EXCLUDED, it
+drives the onboard WS2812 status LED and is reserved on thingplus-handheld
+builds), ground the mystery hole, and the `di:` print (debug 1) names the real
+GPIO. NEVER configure 23/24/25/29 (RM2 radio lines — touching them can kill the
+link), skip 6/7 (Qwiic/fuel I2C traffic = constant chatter) and 0/1 (UART
+fallback console); 13 is the peripheral-power regulator ENABLE — input+pullup
+is safe, driving it low is not (it also feeds the WS2812 + fuel rail).
 
 Board note (2026-07-17): the REAL handheld builds already —
 `sh build.sh thingplus-handheld` → dist/wizchip_dserv_config_thingplus-handheld.uf2.
@@ -653,8 +699,11 @@ radio (REG_ON 23 / DATA 24 / CLK 29). RP2350A (30 GPIO, PICO_NPINS matches),
 16MB flash (TLV/persist layout identical, roomier), fuel gauge on default
 I2C1 = Qwiic (GP6/7) compiled in → state/battery rides the pipe. Pins to
 AVOID for buttons on this board: 23/24/25/29 (radio), 6/7 (Qwiic/fuel), 0/1
-(UART fallback console), 2-5 (default SPI0 / microSD). Header-exposed pins in
-the teens (check the silk, e.g. GP16-18) are safe test buttons.
+(UART fallback console), 2-5 (default SPI0 / microSD), **14 (onboard WS2812
+status LED — reserved on thingplus-handheld builds; see "Status LED")**, and
+13 (peripheral-power regulator enable — input+pullup safe, driving low kills
+the LED+fuel rail). Header-exposed pins in the teens EXCEPT 14 (check the silk,
+e.g. GP16-18) are safe test buttons.
 
 Bench pair procedure (receiver + Thing Plus — or a second Pico 2 W — as the
 handheld; swap the uf2 name accordingly):
