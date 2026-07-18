@@ -164,6 +164,29 @@ namespace eval ess::registry {
         return [api_post $path $body {*}$args]
     }
     
+    proc api_delete {path args} {
+        variable config
+        
+        if {$config(url) eq ""} {
+            error "Registry URL not configured"
+        }
+        
+        set url "$config(url)/api/v1/ess$path"
+        set timeout $config(timeout)
+        
+        foreach {opt val} $args {
+            if {$opt eq "-timeout"} {
+                set timeout $val
+            }
+        }
+        
+        set response [https_delete $url -timeout $timeout]
+        if {$response eq ""} {
+            return {}
+        }
+        return [json_decode $response]
+    }
+    
     #=========================================================================
     # JSON Helpers (minimal implementation)
     #=========================================================================
