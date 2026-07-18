@@ -380,6 +380,38 @@ proc refresh_subjects {} {
 }
 refresh_subjects
 
+# Add a subject to the workgroup registry, then refresh the local list.
+# Distinct from ess::add_subject (local datapoint only).
+proc add_subject_to_registry {name} {
+    set wg [set ::ess::registry::config(workgroup)]
+    if {$wg eq ""} {
+        error "Registry workgroup not configured"
+    }
+    set name [string tolower [string trim $name]]
+    if {$name eq ""} {
+        error "Subject name required"
+    }
+    set body [dict create name $name active true]
+    ess::registry::api_post "/subjects?workgroup=$wg" $body
+    refresh_subjects
+    return $name
+}
+
+# Remove a subject from the workgroup registry, then refresh the local list.
+proc remove_subject_from_registry {name} {
+    set wg [set ::ess::registry::config(workgroup)]
+    if {$wg eq ""} {
+        error "Registry workgroup not configured"
+    }
+    set name [string tolower [string trim $name]]
+    if {$name eq ""} {
+        error "Subject name required"
+    }
+    ess::registry::api_delete "/subject/$wg/$name"
+    refresh_subjects
+    return $name
+}
+
 # set initial subject
 ess::set_subject human
 
