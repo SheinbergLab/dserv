@@ -95,7 +95,8 @@
 
 /* ---- core 1 -> core 0 one-shot requests (single word, phylink-style) ---- */
 enum { BOX_BLE_REQ_NONE = 0, BOX_BLE_REQ_STATUS, BOX_BLE_REQ_SCAN_ON, BOX_BLE_REQ_SCAN_OFF,
-       BOX_BLE_REQ_RETRY, BOX_BLE_REQ_PIPE_ON, BOX_BLE_REQ_PIPE_OFF, BOX_BLE_REQ_FORGET };
+       BOX_BLE_REQ_RETRY, BOX_BLE_REQ_PIPE_ON, BOX_BLE_REQ_PIPE_OFF, BOX_BLE_REQ_FORGET,
+       BOX_BLE_REQ_BONDS };
 static volatile uint8_t box_ble_req;
 static inline void box_ble_request(uint8_t r) { box_ble_req = r; }
 
@@ -132,7 +133,9 @@ static uint8_t  pipe_have_tx, pipe_have_rx;
 static gatt_client_notification_t   pipe_listener;
 static uint16_t pipe_mtu;
 static uint16_t pipe_conn_interval;    /* negotiated LL connection interval (1.25ms units) */
-static uint8_t  pipe_encrypted;        /* link encrypted (pairing/reencryption complete) */
+static volatile uint8_t pipe_encrypted;   /* link encrypted (core 0 sets; core 1 publishes) */
+static volatile uint8_t g_ble_bonds;      /* le_device_db_count() mirror -- btstack is core-0 only,
+                                           * so core 0 refreshes this word for core 1's telemetry */
 static uint32_t pipe_rx_frames, pipe_rx_badlen, pipe_rx_qdrop;    /* handheld -> us */
 
 /* ---- echo-sync probe (BLE.md "Time"): measure the handheld link's RTT + the
@@ -666,6 +669,9 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
         }
     }
 
+    if (box_ble_state == BOX_BLE_UP)              /* refresh the bond-count mirror for core-1 telemetry */
+        g_ble_bonds = (uint8_t) le_device_db_count();
+
     uint8_t r = box_ble_req;
     if (r == BOX_BLE_REQ_NONE) return;
     box_ble_req = BOX_BLE_REQ_NONE;
@@ -750,6 +756,16 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
         printf("ble: forgot %d bond%s -- disconnecting; won't reconnect until `ble pair <secs>`\n",
                n, n == 1 ? "" : "s");
         if (pipe_con != HCI_CON_HANDLE_INVALID) gap_disconnect(pipe_con);  /* drop the now-unbonded link */
+        break; }
+    case BOX_BLE_REQ_BONDS: {                  /* list the allowlist (btstack db, core 0) */
+        int max = le_device_db_max_count(), n = 0;
+        for (int i = 0; i < max; i++) {
+            int type; bd_addr_t a; sm_key_t irk;
+            le_device_db_info(i, &type, a, irk);
+            if (type != BD_ADDR_TYPE_UNKNOWN) printf("ble: bond[%d] %s\n", n++, bd_addr_to_str(a));
+        }
+        printf("ble: %d bond%s%s\n", n, n == 1 ? "" : "s",
+               pair_window_open() ? " (pairing window OPEN)" : "");
         break; }
     default: break;
     }

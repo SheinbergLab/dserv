@@ -236,9 +236,22 @@ work was the SM policy + pairing flow + allowlist gating.
   mismatched-SM-config window BREAKS the pipe (pairing fails); flash the pair
   together, and if the radio bootsel path is down, bootsel the handheld via its
   USB console directly.
-- **Inc3 (remaining polish, not blocking):** bond-count/encrypted as datapoints
-  (state/ble/*) for the fleet page; remoteable `ble pair` via a cmd/ble/pair
-  datapoint; `ble bonds` list.
+- **Inc3 (telemetry) — DONE + VERIFIED (fw bond3/bond3b):** the receiver
+  publishes `state/ble/{bonds,encrypted,pairing}` on change (bonds via a core-0
+  volatile mirror since le_device_db is core-0 only; pairing = window seconds
+  left) + a `ble bonds` console list. **Dropped-publish bug found + fixed:** the
+  on-change publish advanced its cache even when box_net_client_send dropped the
+  frame during the boot/reconnect tty race, sticking dserv at the stale value
+  (state/ble/encrypted read 0 while the link was encrypted). Same class as the
+  OTA dropped-single-send; on-change state can't self-heal like the ~3/s echo
+  telemetry. Fix: gate the publish + cache-advance on box_net_client_reading()
+  (retry, don't record-as-sent) + reset the cache on the up==2 connect burst
+  (re-sync after reconnect/dserv-restart). Verified across two reboot cycles:
+  encrypted datapoint now tracks the link. GOTCHA found the hard way:
+  `cmd/bootsel` enters BOOTSEL on ANY write regardless of value -- `bootsel 0`
+  is NOT a no-op (dserv_cfg__cmd returns CFG_BOOTSEL without checking the value).
+- **Still open (minor):** remoteable `ble pair`/`ble forget` via cmd/ble/*
+  datapoints (console-only today); the peripheral-latency power tradeoff.
 
 ## Firmware layout
 

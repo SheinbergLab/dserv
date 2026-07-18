@@ -137,6 +137,14 @@ static inline uint64_t event_stamp(uint64_t t_us) { return box_clock_stamp(&g_cl
  * box_clock_stamp returns 0. */
 static box_clock_t g_hh_clock;
 
+/* On-change cache for the state/ble/* telemetry (bonds/encrypted/pairing). File
+ * scope so the connect-burst path can reset it to -1: a state change that fires
+ * while the USB transport is mid-(re)connect gets its publish DROPPED by
+ * box_net_client_send, but the cache still records it as sent -> dserv keeps the
+ * stale value forever (the boot-reconnect enc-datapoint bug). Re-forcing a
+ * publish on the up==2 burst re-syncs over a transport that's actually up. */
+static int g_ble_tlm_lb = -1, g_ble_tlm_le = -1, g_ble_tlm_lp = -1;
+
 /* Rewrite a relayed handheld frame's timestamp at the radio boundary: raw
  * handheld time -> dserv time, translated exactly once (BLE.md "Time"). Two
  * affine hops -- hh->receiver via g_hh_clock (echo-sync), then receiver->dserv
@@ -1392,6 +1400,7 @@ static void cmd_exec(const char *line)
           return;
       } }
     if (!strcmp(line, "ble forget")) { box_ble_request(BOX_BLE_REQ_FORGET); return; }   /* clear bonds */
+    if (!strcmp(line, "ble bonds"))  { box_ble_request(BOX_BLE_REQ_BONDS);  return; }   /* list bonds */
 #endif
 #ifdef BOX_NET_DUAL
     if (!strcmp(line, "mode")) {               /* live status; `mode <x>` (with arg) sets policy */
@@ -1652,6 +1661,9 @@ static void rt_main(void)
             if (up == 2) {                     /* connect burst; USB may need the host tty first */
                 announce_hb = 0;
                 if (!announce_burst(0)) announce_pending = 1;  /* -> retried on the heartbeat until it lands */
+#ifdef BOX_BLE
+                g_ble_tlm_lb = g_ble_tlm_le = g_ble_tlm_lp = -1;   /* re-publish state/ble/* over the fresh link */
+#endif
             }
 #if defined(BOX_NET_DUAL)
             if (up == 2 && !box_net_is_usb()) reg_request(1, 0);  /* Eth: reg on connect; USB: delayed autoreg below */
@@ -1712,6 +1724,26 @@ static void rt_main(void)
                       dserv_msg_int(ef, en, 0, (int32_t) g_echo_rtt_us);  box_net_client_send(ef, DSERV_MSG_LEN);
                       dserv_state_name(&g_cfg, en, sizeof en, "echo/offset_us");
                       dserv_msg_int64(ef, en, 0, g_echo_off_us);          box_net_client_send(ef, DSERV_MSG_LEN);
+                  } }
+                /* bonding telemetry for the fleet page: publish on change. bonds
+                 * comes from the core-0 mirror (btstack is core-0 only); pairing
+                 * = seconds left in the `ble pair` window (0 = closed). */
+                { int nb = g_ble_bonds, ne = pipe_encrypted ? 1 : 0, np = pair_window_left_s();
+                  /* advance the cache ONLY when the transport can actually take the
+                   * publish (box_net_client_reading) -- else a change during a tty
+                   * race / reconnect would be recorded as sent while the frame
+                   * dropped, sticking dserv at the stale value. This on-change
+                   * state can't self-heal like the ~3/s echo telemetry can. */
+                  if ((nb != g_ble_tlm_lb || ne != g_ble_tlm_le || np != g_ble_tlm_lp)
+                      && box_net_client_reading()) {
+                      g_ble_tlm_lb = nb; g_ble_tlm_le = ne; g_ble_tlm_lp = np;
+                      char bn[64]; uint8_t bf[DSERV_MSG_LEN];
+                      dserv_state_name(&g_cfg, bn, sizeof bn, "ble/bonds");
+                      dserv_msg_int(bf, bn, 0, nb);  box_net_client_send(bf, DSERV_MSG_LEN);
+                      dserv_state_name(&g_cfg, bn, sizeof bn, "ble/encrypted");
+                      dserv_msg_int(bf, bn, 0, ne);  box_net_client_send(bf, DSERV_MSG_LEN);
+                      dserv_state_name(&g_cfg, bn, sizeof bn, "ble/pairing");
+                      dserv_msg_int(bf, bn, 0, np);  box_net_client_send(bf, DSERV_MSG_LEN);
                   } }
 #endif
                 sched_publish_fired();                 /* post state/timer/<n> for fired schedules */
