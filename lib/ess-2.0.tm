@@ -4456,6 +4456,12 @@ namespace eval ess {
     proc sound_set_volume { volume channel } {
 		send sound "soundVolume $volume $channel"
     }
+    # Master loudness (MIDI CC7, 0-127) on the standard feedback channels.
+    proc sound_set_master_volume { volume } {
+		foreach i {0 1 2 3 4 5 6} {
+			sound_set_volume $volume $i
+		}
+    }
     proc sound_init {} {
 		sound_reset
 		sound_set_voice 81 0 0
@@ -4465,7 +4471,7 @@ namespace eval ess {
 		sound_set_voice 21 0 4
 		sound_set_voice 8 0 5
 		sound_set_voice 113 100 6
-		foreach i "0 1 2 3 4 5 6" { sound_set_volume 127 $i }
+		sound_set_master_volume 127
     }
 }
 
