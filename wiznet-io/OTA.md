@@ -446,6 +446,33 @@ from **inside a blocking command** — a mid-command `dservGet` is stale even wi
 the datapoint ingestion while it blocks — would replace both the sync-`begin` dance
 and the event-driven resender with linear code and is worth building.
 
+**Host-side push bounding (2026-07-17, after the J-Link incident wedged dserv):**
+a push against a device that vanishes before/mid-blast must abort, never park.
+The incident shape: box dropped off USB (J-Link rescue-reset strand), the blast's
+per-chunk `write_all` EAGAIN guard (~400 ms, the normal PACING mechanism) ×4275
+chunks = ~28 min with the extio subprocess — and dserv's whole command port —
+wedged. Fixed in layers, all rig-tested (pre-vanished push + mid-blast bootsel):
+- `usbio.c`: `usbioSendFrame/usbioSendChunk` now raise TCL_ERROR on a HARD write
+  error (EIO/ENXIO — device detached); EAGAIN-exhaustion stays a short-count
+  return (it's indistinguishable from a slow drain; the caller decides).
+- `extioconf.tcl`: every 128-byte send is checked (`extio_ota_usb_write128`,
+  compatible with old short-count and new error modules); the blast aborts on
+  `!usbioAlive` or 3 consecutive failed chunks; a **progress-checked 10 s no-ack
+  deadline** (armed after the synchronous blast, re-armed per ack, verifies the
+  cursor actually stalled before killing) catches the SILENT shape; aborts
+  publish `state/ota/state=fail result=host_io` host-side (the box republishes
+  truth when it returns) and free the staged image.
+- **macOS zombie-fd findings (why the deadline is the real guard there):** writes
+  into a detached-but-open cu.usbmodem fd SUCCEED (kernel swallows, ~250 KB/s)
+  and poll() delivers NO POLLHUP until the driver instance is torn down at
+  RE-enumeration — so `usbioAlive` lags the vanish on macOS (it is prompt for
+  ttyACM on the Linux/Pi deployment hosts) and short-write aborts may never
+  trigger. The deadline bounds every shape: worst observed abort ≈ 25 s
+  (re-arm chain across queued pre-vanish acks), vs 28 min before. dserv command
+  port stayed 26–32 ms responsive through a mid-blast vanish in the rig test.
+Deploying the C half needs the rebuilt `dserv_usbio.dylib` + a dserv restart;
+the Tcl layer alone (hot-patchable) already bounds everything.
+
 ## Agent + release side
 
 **Status update 2026-07-12:** the agent-side *shelf* is now implemented
@@ -624,10 +651,35 @@ committed base; re-`--push` the release to refresh it.
 `picotool load <image>.uf2 --ignore-partitions` (writes 0x0, preserves persist).
 
 **Gotchas that cost real time (2026-07-14):** (a) `picotool load` WITHOUT `-p` lands
-in the *inactive* slot and never boots — always use `-p 0`/`-p 1` or `-u`. (b) The
-fresh PT only goes resident after `reboot -u` — skipping it makes the slot loads land
-against a stale table. (c) Slot images must be **signed/hashed + `copy_to_ram`**
-(the default `dual` build) — unsigned or XIP images don't slot-boot / can't `buy`.
+in the *inactive* slot and never boots on its own — use `-p 0`/`-p 1` to target a
+slot, or add **`-x` to flash-update-BOOT the inactive slot you just filled** (that
+is the docked TBYB-trial flow, proven on the Thing Plus 2026-07-17). NOTE the flag
+trap: `load -u` means *skip-identical-sectors*, NOT update-boot; `reboot -u` means
+BOOTSEL. (b) The fresh PT only goes resident after `reboot -u` — skipping it makes
+the slot loads land against a stale table. (c) Slot images must be **signed/hashed**
+(the default `dual` build is also `copy_to_ram`) — unsigned images don't slot-boot /
+can't `buy`. XIP images DO slot-boot (proven: thingplus-handheld, pico2wusb-class
+radio builds) — but radio (cyw43) XIP builds additionally need the
+**wiznet-io/patches/ slot-boot fixes** (build.sh auto-applies): the SDK's btstack
+TLV bank reads flash through the ATRANS-translated window and wedges
+`cyw43_arch_init` under a partition boot — see BLE.md "slot-boot radio wedge".
+(d) provision.sh: an explicit slot-A image now leaves slot B EMPTY (the old default
+loaded the DUAL tbyb image into whatever board you were provisioning). (e) Radio
+boards (pico2_w, Thing Plus 16MB) provision with `PT_JSON=$PWD/pt-pico2w.json`
+(1024K slots); the EVB pt.json 512K slots are too small for radio images.
+(f) **Nothing may write watchdog scratch[2]/[3] between `rom_reboot` and the reset
+firing** — the bootrom PARKS the reboot2 params (the FLASH_UPDATE base!) there
+(pico-bootrom-rp2350 `s_varm_api_reboot`), and `pico_ota_arm_update` blocks only
+the CALLING core; the other core keeps running through the ~1-2s arm window. The
+BLE breadcrumbs stamping scratch[2] silently corrupted the receiver's first native
+OTA arm (bootrom matched no partition → booted the OLD slot as `boot=update`, fw
+unchanged, no error anywhere). Crumbs moved to scratch[0]/[1]; free registers are
+ONLY [0]/[1] (SDK owns [4..7]). Full hazard note at `pico_ota_arm_update`.
+(g) TBYB semantics settled: buy-pending follows the IMAGE's EXE_TBYB flag; the
+FLASH_UPDATE reboot supplies only the slot preference. Pushing a non-TBYB base
+bin over OTA is legal and commits immediately (`boot=update`) — no trial window,
+so reserve it for images already proven elsewhere; the fleet path pushes the
+TBYB `bin` and gets the full trial → self-test → buy → rollback ladder.
 
 ## Adversarial bench checklist (before first fleet rollout)
 

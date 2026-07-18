@@ -1,0 +1,255 @@
+diff --git a/src/rp2_common/pico_btstack/btstack_flash_bank.c b/src/rp2_common/pico_btstack/btstack_flash_bank.c
+index 54111ff..ada2e47 100644
+--- a/src/rp2_common/pico_btstack/btstack_flash_bank.c
++++ b/src/rp2_common/pico_btstack/btstack_flash_bank.c
+@@ -10,6 +10,27 @@
+ #include "hardware/flash.h"
+ #include <string.h>
+ 
++/* ---- dserv extio DIAG+FIX (local patch; wiznet-io/BLE.md "slot-boot radio
++ * wedge" 2026-07-17). The TLV banks live at a PHYSICAL top-of-flash offset,
++ * but the reads below went through the ATRANS-TRANSLATED XIP window -- correct
++ * on a flat boot (identity mapping), garbage under an A/B partition boot
++ * (bootrom remaps the windows onto the booted slot). Garbage reads make both
++ * banks look invalid and btstack's format-verify churn never converges ->
++ * watchdog. Fix: address the banks via the untranslated physical alias, which
++ * is mapping-independent (same bytes on a flat boot). Same failure family as
++ * the pico_flash.h persist-aperture bug, one library deeper. */
++#ifdef XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE
++#define PICO_FLASH_BANK_XIP_READ_BASE XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE
++#else
++#define PICO_FLASH_BANK_XIP_READ_BASE XIP_BASE   /* RP2040: no ATRANS, no alias */
++#endif
++#ifdef BOX_BLE_BREADCRUMBS
++#include "hardware/structs/watchdog.h"
++#define BBC(x) (watchdog_hw->scratch[0] = (uint32_t)(x))   /* scratch[0]: [2]/[3] hold rom_reboot params! */
++#else
++#define BBC(x) ((void)0)
++#endif
++
+ // Check sizes
+ static_assert(PICO_FLASH_BANK_TOTAL_SIZE % (FLASH_SECTOR_SIZE * 2) == 0, "PICO_FLASH_BANK_TOTAL_SIZE invalid");
+ static_assert(PICO_FLASH_BANK_TOTAL_SIZE <= PICO_FLASH_SIZE_BYTES, "PICO_FLASH_BANK_TOTAL_SIZE too big");
+@@ -66,6 +87,7 @@ extern uint32_t pico_flash_bank_get_storage_offset_func(void);
+ static void pico_flash_bank_erase(void * context, int bank) {
+     (void)(context);
+     DEBUG_PRINT("erase: bank %d\n", bank);
++    BBC(0x74u + (uint32_t)bank);
+     mutation_operation_t mop = {
+             .op_is_erase = true,
+             .p0 = pico_flash_bank_get_storage_offset_func() + (PICO_FLASH_BANK_SIZE * bank),
+@@ -89,8 +111,9 @@ static void pico_flash_bank_read(void *context, int bank, uint32_t offset, uint8
+     assert((offset + size) <= PICO_FLASH_BANK_SIZE);
+     if ((offset + size) > PICO_FLASH_BANK_SIZE) return;
+ 
+-    // Flash is xip
+-    memcpy(buffer, (void *)(XIP_BASE + pico_flash_bank_get_storage_offset_func() + (PICO_FLASH_BANK_SIZE * bank) + offset), size);
++    // Flash is xip (read via the untranslated alias: the offset is PHYSICAL)
++    BBC(0x70u + (uint32_t)bank);
++    memcpy(buffer, (void *)(PICO_FLASH_BANK_XIP_READ_BASE + pico_flash_bank_get_storage_offset_func() + (PICO_FLASH_BANK_SIZE * bank) + offset), size);
+ }
+ 
+ static void pico_flash_bank_write(void * context, int bank, uint32_t offset, const uint8_t *data, uint32_t size) {
+@@ -131,14 +154,14 @@ static void pico_flash_bank_write(void * context, int bank, uint32_t offset, con
+         // Copy data we're not going to overwrite in the first page
+         if (page == first_page && offset > 0) {
+             memcpy(page_data,
+-                (void *)(XIP_BASE + bank_start_pos + (page * FLASH_PAGE_SIZE)),
++                (void *)(PICO_FLASH_BANK_XIP_READ_BASE + bank_start_pos + (page * FLASH_PAGE_SIZE)),
+                 offset);
+         }
+ 
+         // Copy the data we're not going to overwrite in the last page
+         if (page == last_page - 1 && (offset + size_left) < FLASH_PAGE_SIZE) {
+             memcpy(page_data + offset + size_left,
+-                (void *)(XIP_BASE + bank_start_pos + (page * FLASH_PAGE_SIZE) + offset + size_left),
++                (void *)(PICO_FLASH_BANK_XIP_READ_BASE + bank_start_pos + (page * FLASH_PAGE_SIZE) + offset + size_left),
+                 FLASH_PAGE_SIZE - offset - size_left);
+         }
+ 
+diff --git a/src/rp2_common/pico_cyw43_arch/cyw43_arch_poll.c b/src/rp2_common/pico_cyw43_arch/cyw43_arch_poll.c
+index e885985..31b4089 100644
+--- a/src/rp2_common/pico_cyw43_arch/cyw43_arch_poll.c
++++ b/src/rp2_common/pico_cyw43_arch/cyw43_arch_poll.c
+@@ -24,6 +24,14 @@
+ 
+ static async_context_poll_t cyw43_async_context_poll;
+ 
++/* dserv extio DIAG (local patch; wiznet-io/BLE.md "slot-boot radio wedge") */
++#ifdef BOX_BLE_BREADCRUMBS
++#include "hardware/structs/watchdog.h"
++#define BBC(x) (watchdog_hw->scratch[0] = (uint32_t)(x))   /* scratch[0]: [2]/[3] hold rom_reboot params! */
++#else
++#define BBC(x) ((void)0)
++#endif
++
+ async_context_t *cyw43_arch_init_default_async_context(void) {
+     if (async_context_poll_init_with_defaults(&cyw43_async_context_poll))
+         return &cyw43_async_context_poll.core;
+@@ -31,18 +39,22 @@ async_context_t *cyw43_arch_init_default_async_context(void) {
+ }
+ 
+ int cyw43_arch_init(void) {
++    BBC(0x08);
+     async_context_t *context = cyw43_arch_async_context();
+     if (!context) {
+         context = cyw43_arch_init_default_async_context();
+         if (!context) return PICO_ERROR_GENERIC;
+         cyw43_arch_set_async_context(context);
+     }
++    BBC(0x09);
+     bool ok = cyw43_driver_init(context);
++    BBC(0x0A);
+ #if CYW43_LWIP
+     ok &= lwip_nosys_init(context);
+ #endif
+ #if CYW43_ENABLE_BLUETOOTH
+     ok &= btstack_cyw43_init(context);
++    BBC(0x0B);
+ #endif
+     if (!ok) {
+         cyw43_arch_deinit();
+diff --git a/src/rp2_common/pico_cyw43_driver/btstack_cyw43.c b/src/rp2_common/pico_cyw43_driver/btstack_cyw43.c
+index dd15835..2dfbc0e 100644
+--- a/src/rp2_common/pico_cyw43_driver/btstack_cyw43.c
++++ b/src/rp2_common/pico_cyw43_driver/btstack_cyw43.c
+@@ -46,7 +46,16 @@ static void setup_tlv(void) {
+ #endif
+ }
+ 
++/* dserv extio DIAG (local patch; wiznet-io/BLE.md "slot-boot radio wedge") */
++#ifdef BOX_BLE_BREADCRUMBS
++#include "hardware/structs/watchdog.h"
++#define BBC(x) (watchdog_hw->scratch[0] = (uint32_t)(x))   /* scratch[0]: [2]/[3] hold rom_reboot params! */
++#else
++#define BBC(x) ((void)0)
++#endif
++
+ bool btstack_cyw43_init(async_context_t *context) {
++    BBC(0x14);
+     // Initialise bluetooth
+     btstack_memory_init();
+     btstack_run_loop_init(btstack_run_loop_async_context_get_instance(context));
+@@ -62,7 +71,9 @@ bool btstack_cyw43_init(async_context_t *context) {
+     hci_init(hci_transport_cyw43_instance(), NULL);
+ 
+     // setup TLV storage
++    BBC(0x15);
+     setup_tlv();
++    BBC(0x16);
+     return true;
+ }
+ 
+diff --git a/src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c b/src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c
+index 06d5bef..4c50204 100644
+--- a/src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c
++++ b/src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c
+@@ -22,6 +22,25 @@
+ 
+ #if CYW43_SPI_PIO
+ 
++/* ---- dserv extio DIAG+FIX (local patch; see wiznet-io/BLE.md "slot-boot radio
++ * wedge" 2026-07-17). BBC(): watchdog-scratch[0] breadcrumbs that survive a
++ * watchdog reset -- the box prints the last value at the next boot, so a hard
++ * wedge inside radio bring-up names its exact stage without a debugger.
++ * scratch[0] ONLY: the bootrom parks rom_reboot's p0/p1 in scratch[2]/[3]
++ * until the reset fires, and the SDK owns [4..7] -- crumbing [2] silently
++ * corrupted the OTA arm's FLASH_UPDATE base (found 2026-07-17). */
++#ifdef BOX_BLE_BREADCRUMBS
++#include "hardware/structs/watchdog.h"
++#define BBC(x) (watchdog_hw->scratch[0] = (uint32_t)(x))   /* scratch[0]: [2]/[3] hold rom_reboot params! */
++#else
++#define BBC(x) ((void)0)
++#endif
++
++/* (A TX-DMA source rebase for slot boots briefly lived here 2026-07-17 --
++ * removed same day after a TLV-fix-only slot boot brought the radio fully up:
++ * RP2350 DMA reads DO honor the ATRANS translation, so the linked-address
++ * firmware arrays DMA correctly from a booted slot. See BLE.md.) */
++
+ #define IRQ_SAMPLE_DELAY_NS 100
+ 
+ #if !CYW43_PIN_WL_DYNAMIC && PICO_PIO_USE_GPIO_BASE
+@@ -104,6 +123,7 @@ typedef struct {
+ static bus_data_t bus_data_instance;
+ 
+ int cyw43_spi_init(cyw43_int_t *self) {
++    BBC(0x50);
+     // Only does something if CYW43_LOGIC_DEBUG=1
+     logic_debug_init();
+ 
+@@ -230,7 +250,7 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
+     if ((tx == NULL) && (rx == NULL)) {
+         return CYW43_FAIL_FAST_CHECK(-CYW43_EINVAL);
+     }
+-
++    BBC(0x52);
+     bus_data_t *bus_data = (bus_data_t *)self->bus_data;
+     start_spi_comms(self);
+     if (rx != NULL) {
+@@ -277,7 +297,9 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
+         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
+         __compiler_memory_barrier();
+ 
++        BBC(0x53);
+         dma_channel_wait_for_finish_blocking(bus_data->dma_out);
++        BBC(0x54);
+         dma_channel_wait_for_finish_blocking(bus_data->dma_in);
+ 
+         __compiler_memory_barrier();
+@@ -309,8 +331,10 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
+         dma_channel_configure(bus_data->dma_out, &out_config, &bus_data->pio->txf[bus_data->pio_sm], tx, tx_length / 4, true);
+ 
+         pio_sm_set_enabled(bus_data->pio, bus_data->pio_sm, true);
++        BBC(0x55);
+         dma_channel_wait_for_finish_blocking(bus_data->dma_out);
+ 
++        BBC(0x56);
+         uint32_t fdebug_tx_stall = 1u << (PIO_FDEBUG_TXSTALL_LSB + bus_data->pio_sm);
+         bus_data->pio->fdebug = fdebug_tx_stall;
+         while (!(bus_data->pio->fdebug & fdebug_tx_stall)) {
+@@ -328,6 +352,7 @@ int cyw43_spi_transfer(cyw43_int_t *self, const uint8_t *tx, size_t tx_length, u
+     }
+     pio_sm_exec(bus_data->pio, bus_data->pio_sm, pio_encode_mov(pio_pins, pio_null)); // for next time we turn output on
+ 
++    BBC(0x57);
+     stop_spi_comms();
+     DUMP_SPI_TRANSACTIONS(
+             printf("RXed:");
+diff --git a/src/rp2_common/pico_cyw43_driver/cyw43_driver.c b/src/rp2_common/pico_cyw43_driver/cyw43_driver.c
+index 95e5da5..2a49463 100644
+--- a/src/rp2_common/pico_cyw43_driver/cyw43_driver.c
++++ b/src/rp2_common/pico_cyw43_driver/cyw43_driver.c
+@@ -114,7 +114,16 @@ static void cyw43_sleep_timeout_reached(async_context_t *context, __unused async
+     async_context_set_work_pending(context, &cyw43_poll_worker);
+ }
+ 
++/* dserv extio DIAG (local patch; wiznet-io/BLE.md "slot-boot radio wedge") */
++#ifdef BOX_BLE_BREADCRUMBS
++#include "hardware/structs/watchdog.h"
++#define BBC(x) (watchdog_hw->scratch[0] = (uint32_t)(x))   /* scratch[0]: [2]/[3] hold rom_reboot params! */
++#else
++#define BBC(x) ((void)0)
++#endif
++
+ bool cyw43_driver_init(async_context_t *context) {
++    BBC(0x10);
+ #if CYW43_USE_FIRMWARE_PARTITION
+     uint32_t buffer[(16 * 4) + 1] = {}; // maximum of 16 partitions, each with maximum of 4 words returned, plus 1
+     int ret = rom_get_partition_table_info(buffer, count_of(buffer), PT_INFO_PARTITION_LOCATION_AND_FLAGS | PT_INFO_PARTITION_ID);
+@@ -196,12 +205,15 @@ bool cyw43_driver_init(async_context_t *context) {
+     }
+ 
+ #endif
++    BBC(0x11);
+     cyw43_init(&cyw43_state);
++    BBC(0x12);
+     cyw43_async_context = context;
+     // we need the IRQ to be on the same core as the context, because we need to be able to enable/disable the IRQ
+     // from there later
+     async_context_execute_sync(context, cyw43_irq_init, NULL);
+     async_context_add_when_pending_worker(context, &cyw43_poll_worker);
++    BBC(0x1F);
+     return true;
+ }
+ 

@@ -1,0 +1,64 @@
+diff --git a/src/cyw43_ll.c b/src/cyw43_ll.c
+index dc58df1..1586f3d 100644
+--- a/src/cyw43_ll.c
++++ b/src/cyw43_ll.c
+@@ -38,6 +38,15 @@
+ #include <inttypes.h>
+ 
+ #include "cyw43_config.h"
++
++/* dserv extio DIAG (local patch; wiznet-io/BLE.md "slot-boot radio wedge"):
++ * watchdog-scratch[2] breadcrumbs, read out at the boot after a watchdog kill. */
++#ifdef BOX_BLE_BREADCRUMBS
++#include "hardware/structs/watchdog.h"
++#define BBC(x) (watchdog_hw->scratch[0] = (uint32_t)(x))   /* scratch[0]: [2]/[3] hold rom_reboot params! */
++#else
++#define BBC(x) ((void)0)
++#endif
+ #include "cyw43_country.h"
+ #include "cyw43_ll.h"
+ #include "cyw43_internal.h"
+@@ -432,6 +441,7 @@ static int cyw43_download_resource(cyw43_int_t *self, uint32_t addr, size_t len,
+ 
+     for (size_t offset = 0; offset < len; offset += block_size) {
+         CYW43_EVENT_POLL_HOOK;
++        BBC(0x40000000u | (uint32_t)offset);   /* fw-download progress crumb */
+ 
+         size_t sz = block_size;
+         if (offset + sz > len) {
+@@ -1424,6 +1434,7 @@ static void cyw43_write_iovar_n(cyw43_int_t *self, const char *var, size_t len,
+ int cyw43_ll_bus_init(cyw43_ll_t *self_in, const uint8_t *mac) {
+     cyw43_int_t *self = (void *)self_in;
+ 
++    BBC(0x30);
+     self->startup_t0 = cyw43_hal_ticks_us();
+ 
+     #if CYW43_USE_SPI
+@@ -1458,6 +1469,7 @@ int cyw43_ll_bus_init(cyw43_ll_t *self_in, const uint8_t *mac) {
+         CYW43_DEBUG("Failed to read test pattern\n");
+         break; // failed
+     chip_up:
++        BBC(0x33);
+         // Switch to 32bit mode
+         CYW43_VDEBUG("setting SPI_BUS_CONTROL 0x%x\n", val);
+ 
+@@ -1634,16 +1646,19 @@ alp_set:
+     cyw43_write_backplane(self, SOCSRAM_BANKX_PDA, 4, 0);
+ 
+     // Check that valid chipset firmware exists at the given source address.
++    BBC(0x3E);
+     int ret = cyw43_check_valid_chipset_firmware(self, CYW43_WIFI_FW_LEN, fw_data);
+     if (ret != 0) {
+         return ret;
+     }
+ 
+     // Download the main WiFi firmware blob to the 43xx device.
++    BBC(0x40);
+     ret = cyw43_download_resource(self, 0x00000000, CYW43_WRITE_BYTES_PAD(CYW43_WIFI_FW_LEN), fw_data);
+     if (ret != 0) {
+         return ret;
+     }
++    BBC(0x41);
+ 
+     // Download the NVRAM to the 43xx device.
+     size_t wifi_nvram_len = CYW43_WRITE_BYTES_PAD(sizeof(wifi_nvram_4343));

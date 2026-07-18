@@ -4,6 +4,9 @@
 #   sh build.sh              # dual (W6300-EVB: USB default / Ethernet via `mode eth`), DEFAULT
 #   sh build.sh w6300        # W6300 wired-only target
 #   sh build.sh pico2w       # Pico 2 W / WiFi target
+#   sh build.sh pico2wusb    # Pico 2 W: USB box + BLE central (the BLE.md receiver)
+#   sh build.sh handheld     # Pico 2 W: BLE-peripheral handheld / bench TX (BLE.md)
+#   sh build.sh thingplus-handheld   # THE handheld: Thing Plus RP2350 (RM2 + LiPo + fuel gauge)
 #   sh build.sh dual --push         # publish just this bench uf2 to the shelf (dev channel)
 #   sh build.sh dual --tbyb --push  # RELEASE bundle: publishes bin=TBYB trial (OTA pull) +
 #                                   #   uf2=matching NON-tbyb hashed base (bench flash / provision slot A).
@@ -49,7 +52,7 @@ done
 # image boots from an A/B partition slot via the bootrom's address translation
 # (Stage-1 experiment). Separate build dir + dist name so it never clobbers the
 # normal copy_to_ram artifact. See OTA.md "Stage 1".
-XIPSUF=""; XIPFLAG=""
+XIPSUF=""; XIPFLAG=""; DBGSUF=""
 if [ "$XIP" = 1 ]; then XIPSUF="_xip"; XIPFLAG="-DBOX_XIP=1"; fi
 # --tbyb: set PICO_CRT0_IMAGE_TYPE_TBYB in the IMAGE_DEF (PICOBIN_IMAGE_TYPE_EXE_TBYB
 # bit) so a FLASH_UPDATE boot of this image is buy-pending -> the box must
@@ -78,6 +81,22 @@ if [ ! -d "$WIZ/.git" ]; then
   echo ">> cloning WIZnet-PICO-C into $WIZ (one-time) ..."
   git clone --depth 1 --recurse-submodules --shallow-submodules \
     https://github.com/WIZnet-ioNIC/WIZnet-PICO-C.git "$WIZ"
+fi
+
+# 1b. Local pico-sdk patches (wiznet-io/patches/): slot-boot radio support. The
+# SDK's btstack TLV bank + cyw43 firmware-upload paths read flash through the
+# ATRANS-TRANSLATED XIP window, which is garbage under an A/B partition boot ->
+# cyw43_arch_init wedges -> watchdog (BLE.md "slot-boot radio wedge",
+# root-caused on the Thing Plus 2026-07-17). Grep-guarded so a fresh clone
+# self-heals and an already-patched tree is a no-op.
+SDK="$WIZ/libraries/pico-sdk"
+if ! grep -q PICO_FLASH_BANK_XIP_READ_BASE "$SDK/src/rp2_common/pico_btstack/btstack_flash_bank.c" 2>/dev/null; then
+  echo ">> applying patches/pico-sdk-slotboot-radio.patch"
+  patch -p1 -d "$SDK" < "$HERE/patches/pico-sdk-slotboot-radio.patch"
+fi
+if ! grep -q BOX_BLE_BREADCRUMBS "$SDK/lib/cyw43-driver/src/cyw43_ll.c" 2>/dev/null; then
+  echo ">> applying patches/cyw43-driver-slotboot-radio.patch"
+  patch -p1 -d "$SDK/lib/cyw43-driver" < "$HERE/patches/cyw43-driver-slotboot-radio.patch"
 fi
 
 # 2. drop our sources in as one flattened example
@@ -118,13 +137,29 @@ case "$TARGET" in
   usb)                                                # plain Pico 2, USB-CDC to a host dserv (modules/usbio)
     BOARD=pico2; VARIANT=usb; FLAGS="-DBOX_TARGET=usb -DPICO_BOARD=pico2"
     [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1" ;;   # box self-declares its forwards
+  pico2wusb)                                          # Pico 2 W: the usb box + BLE central (BLE.md receiver)
+    BOARD=pico2_w; VARIANT=usb; FLAGS="-DBOX_TARGET=pico2wusb -DPICO_BOARD=pico2_w"
+    [ -n "$USB_AUTOREG" ] && FLAGS="$FLAGS -DBOX_USB_FORWARD_REGISTER=1"
+    # J-Link hang builds (BLE.md): own build dir + dist name per variant -- the
+    # cmake cache is sticky, so shared dirs would leak debug defines around.
+    # BLE_DEBUG=1: watchdog off + bring-up forced at boot.
+    # BLE_DEBUG=2: watchdog off, bring-up only on typed `ble enable 1` (the crash context).
+    [ "$BLE_DEBUG" = 1 ]  && { DBGSUF="_bledbg";  FLAGS="$FLAGS -DBOX_BLE_HANG_FOR_DEBUG=1"; }
+    [ "$BLE_DEBUG" = 2 ]  && { DBGSUF="_bledbg2"; FLAGS="$FLAGS -DBOX_BLE_HANG_FOR_DEBUG=1 -DBOX_BLE_NO_FORCE=1"; } ;;
+  handheld)                                           # Pico 2 W handheld / bench TX: BLE transport (BLE.md)
+    BOARD=pico2_w; VARIANT=handheld; FLAGS="-DBOX_TARGET=handheld -DPICO_BOARD=pico2_w"
+    [ "$BLE_DEBUG" = 1 ] && { DBGSUF="_bledbg"; FLAGS="$FLAGS -DBOX_BLE_HANG_FOR_DEBUG=1"; } ;;
+  thingplus-handheld)                                 # THE handheld: Thing Plus RP2350 (RM2 radio + LiPo + fuel gauge)
+    BOARD=sparkfun_thingplus_rp2350; VARIANT=handheld
+    FLAGS="-DBOX_TARGET=handheld -DPICO_BOARD=$BOARD -DBOX_FUEL_MAX17048=1"
+    [ "$BLE_DEBUG" = 1 ] && { DBGSUF="_bledbg"; FLAGS="$FLAGS -DBOX_BLE_HANG_FOR_DEBUG=1"; } ;;
   dual)                                               # W6300-EVB: USB by default, Ethernet via `mode eth` (persisted)
     BOARD=pico2; VARIANT=dual; FLAGS="-DBOX_TARGET=dual -DPICO_BOARD=pico2 $EVB_FLASH" ;;
   *)
-    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | dual)" >&2; exit 1 ;;
+    echo "unknown target '$TARGET' (want: w6300 | pico2w | picoplus2w | thingplus | usb | pico2wusb | handheld | thingplus-handheld | dual)" >&2; exit 1 ;;
 esac
 # ADS1115 analog-in is always compiled in; activate at runtime with `ain enable 1`.
-BUILD="$WIZ/build_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
+BUILD="$WIZ/build_${TARGET}${DBGSUF}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
 mkdir -p "$BUILD"
 ( cd "$BUILD" && cmake .. -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DBOX_FW_VERSION="$FWVER" -DBOX_BUILD_TARGET="$TARGET" -DBOX_BOARD_ID="$BOARD" $XIPFLAG $TBYBFLAG $SIGNFLAG $HASHFLAG $FLAGS >/dev/null \
@@ -134,7 +169,7 @@ mkdir -p "$BUILD"
 #    The flat .bin is the OTA slot image (what the on-box updater pulls + writes
 #    raw into the inactive A/B slot) -- for a --tbyb --sign build it's the sealed
 #    try-before-you-buy trial image. The .uf2 is the bench-flash artifact.
-OUT="wizchip_dserv_config_${TARGET}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
+OUT="wizchip_dserv_config_${TARGET}${DBGSUF}${XIPSUF}${TBYBSUF}${SIGNSUF}${HASHSUF}"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.uf2" "$HERE/dist/$OUT.uf2"
 cp "$BUILD/examples/wiznet_io/wizchip_dserv_config.elf" "$HERE/dist/$OUT.elf"
 [ -f "$BUILD/examples/wiznet_io/wizchip_dserv_config.bin" ] && \

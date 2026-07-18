@@ -174,8 +174,13 @@ static inline int pico_ota_buy_pending(const pico_ota_slot_t *s)
  * rom_reboot(FLASH_UPDATE, base) and buys IMMEDIATELY -- no self-test, no
  * rollback. We instead GATE the buy behind a self-test so a wedged image
  * (never buys) is auto-reverted by the bootrom on the next reset (our Stage-3
- * watchdog forces that reset). TBYB here is driven by the FLASH_UPDATE reboot,
- * NOT an image flag (picotool seal has no --tbyb). */
+ * watchdog forces that reset).
+ *
+ * Who supplies what (settled empirically 2026-07-17 on the receiver): the
+ * FLASH_UPDATE reboot supplies the SLOT PREFERENCE; buy-pending follows the
+ * IMAGE's picobin EXE_TBYB flag (our --tbyb builds, PICO_CRT0_IMAGE_TYPE_TBYB).
+ * A non-TBYB image flash-update-boots straight to committed (boot=update, no
+ * trial); a TBYB image boots buy-pending (boot=trial) and must buy or revert. */
 
 /* We're on a TRIAL boot: booted via FLASH_UPDATE and a buy is still pending.
  * If we don't pico_ota_buy() before the next reset, the bootrom reverts. */
@@ -185,7 +190,16 @@ static inline int pico_ota_boot_is_trial(const boot_info_t *bi)
 
 /* Arm an update: reboot into the inactive slot as a flash-update (buy-pending)
  * boot. update_base = that slot's storage offset (pico_ota_slot_t.target_base).
- * NO_RETURN_ON_SUCCESS: does not return; the box reboots after delay_ms. */
+ * NO_RETURN_ON_SUCCESS: does not return; the box reboots after delay_ms.
+ *
+ * HAZARD (cost the receiver's first OTA arm, 2026-07-17): the bootrom PARKS
+ * p0/p1 in WATCHDOG SCRATCH[2]/[3] from this call until the reset actually
+ * fires (delay_ms later, stretched by any watchdog pet) -- see
+ * pico-bootrom-rp2350 varm_apis.c s_varm_api_reboot. This call blocks THIS
+ * core, but the OTHER core keeps running: NOTHING there may write
+ * scratch[2]/[3] in that window or the FLASH_UPDATE base is corrupted and the
+ * bootrom silently falls back to the old slot (boot=update, no trial). The
+ * BLE breadcrumbs did exactly that until they moved to scratch[0]/[1]. */
 static inline int pico_ota_arm_update(uint32_t update_base, uint32_t delay_ms)
 {
     return rom_reboot(REBOOT2_FLAG_REBOOT_TYPE_FLASH_UPDATE | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS,
