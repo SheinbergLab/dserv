@@ -1385,6 +1385,13 @@ static void cmd_exec(const char *line)
      * at every boot (box_ble_service one-shot). Mirrors the `ble enable` split. */
     if (!strcmp(line, "ble pipe 1")) box_ble_request(BOX_BLE_REQ_PIPE_ON);
     if (!strcmp(line, "ble pipe 0")) box_ble_request(BOX_BLE_REQ_PIPE_OFF);
+    { int secs;                                    /* `ble pair <secs>`: open a pairing window */
+      if (sscanf(line, "ble pair %d", &secs) == 1 && secs > 0) {
+          box_ble_pair_window((uint32_t) secs);    /* window var is core-safe (one volatile word) */
+          printf("ble: pairing window open %ds -- a NEW handheld will be adopted + bonded\n", secs);
+          return;
+      } }
+    if (!strcmp(line, "ble forget")) { box_ble_request(BOX_BLE_REQ_FORGET); return; }   /* clear bonds */
 #endif
 #ifdef BOX_NET_DUAL
     if (!strcmp(line, "mode")) {               /* live status; `mode <x>` (with arg) sets policy */

@@ -202,6 +202,44 @@ Honest expectations, to be replaced by Phase-1 measurements:
 - Handheld gets a name via the existing desc persist; it announces under that
   name (`extio/<desc>/...`), so two handhelds in one room are distinct boxes.
 
+### Bonding — DONE + VERIFIED 2026-07-18 (Inc1 + Inc2, fw bond1/bond2)
+
+The btstack infra was already configured (LE Secure Connections + micro-ecc,
+16-entry whitelist + le_device_db, TLV bond store via btstack_cyw43_init); the
+work was the SM policy + pairing flow + allowlist gating.
+
+- **Inc1 — pair + encrypt (both ends):** `sm_set_io_capabilities(NO_INPUT_NO_OUTPUT)`
+  + `sm_set_authentication_requirements(BONDING | SECURE_CONNECTION)`; an SM event
+  handler auto-confirms JUST_WORKS_REQUEST and logs PAIRING_COMPLETE /
+  REENCRYPTION. The central triggers it — `sm_request_pairing(pipe_con)` on
+  connect (first time bonds; thereafter btstack re-encrypts from the stored LTK).
+  VERIFIED: `bonds=1 enc=yes`; pipe + echo-sync survive encryption (sub-ms:
+  +0.59 ms median vs +0.37 ms unencrypted — the ~3 ms RTT-floor bump from the
+  MIC is absorbed by the min-RTT filter); **bond persists across reboot** (the
+  handheld reboots and *re-encrypts from the persisted bond*, not a fresh pair)
+  — which also clears any doubt that the ATRANS-patched TLV bank round-trips
+  bond WRITES, not just the reads we fixed for the slot-boot wedge.
+- **Inc2 — allowlist + window (receiver-only):** the adv-report handler connects
+  ONLY to `addr_is_bonded()` addresses (le_device_db compare; the handheld's
+  stable locally-administered address = its identity address, so no RPA/IRK
+  resolution) OR while a `ble pair <secs>` window is open. `ble forget` clears
+  the db (on core 0 via the request queue — never cross-core) + drops the link.
+  Status: `bonds=N (pairing window OPEN)`. VERIFIED all four paths on the one
+  pair: bonded auto-reconnect (no window, survives both reboots) · **rejection**
+  (`ble forget` → receiver refuses to reconnect, 0 relay = the isolation
+  guarantee) · **re-pair** (`ble pair 60` → adopts the advertiser as NEW, bonds,
+  relay resumes).
+- **Design choice (per this doc):** the window is receiver-only; the handheld
+  always accepts pairing (only the receiver initiates, only during its window).
+  A handheld-side gate (button-hold at boot) is deferrable — mild privacy
+  surface only. Flash note: a new-receiver + old-handheld (or vice-versa)
+  mismatched-SM-config window BREAKS the pipe (pairing fails); flash the pair
+  together, and if the radio bootsel path is down, bootsel the handheld via its
+  USB console directly.
+- **Inc3 (remaining polish, not blocking):** bond-count/encrypted as datapoints
+  (state/ble/*) for the fleet page; remoteable `ble pair` via a cmd/ble/pair
+  datapoint; `ble bonds` list.
+
 ## Firmware layout
 
 - `pico/box_ble_central.h` — receiver-side: scan/connect/bond, name table,

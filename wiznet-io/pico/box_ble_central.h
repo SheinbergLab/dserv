@@ -95,7 +95,7 @@
 
 /* ---- core 1 -> core 0 one-shot requests (single word, phylink-style) ---- */
 enum { BOX_BLE_REQ_NONE = 0, BOX_BLE_REQ_STATUS, BOX_BLE_REQ_SCAN_ON, BOX_BLE_REQ_SCAN_OFF,
-       BOX_BLE_REQ_RETRY, BOX_BLE_REQ_PIPE_ON, BOX_BLE_REQ_PIPE_OFF };
+       BOX_BLE_REQ_RETRY, BOX_BLE_REQ_PIPE_ON, BOX_BLE_REQ_PIPE_OFF, BOX_BLE_REQ_FORGET };
 static volatile uint8_t box_ble_req;
 static inline void box_ble_request(uint8_t r) { box_ble_req = r; }
 
@@ -132,6 +132,7 @@ static uint8_t  pipe_have_tx, pipe_have_rx;
 static gatt_client_notification_t   pipe_listener;
 static uint16_t pipe_mtu;
 static uint16_t pipe_conn_interval;    /* negotiated LL connection interval (1.25ms units) */
+static uint8_t  pipe_encrypted;        /* link encrypted (pairing/reencryption complete) */
 static uint32_t pipe_rx_frames, pipe_rx_badlen, pipe_rx_qdrop;    /* handheld -> us */
 
 /* ---- echo-sync probe (BLE.md "Time"): measure the handheld link's RTT + the
@@ -205,6 +206,31 @@ static uint32_t box_ble_t_bringup;
 
 static inline uint32_t box_ble__ms(void) { return to_ms_since_boot(get_absolute_time()); }
 
+/* ---- bonding allowlist + pairing window (BLE.md "Pairing / security"). Outside
+ * the window the receiver connects ONLY to bonded addresses; `ble pair <secs>`
+ * opens a window during which it also connects to + pairs a NEW advertiser, so
+ * multi-rig rooms don't cross-talk. The window deadline is set on core 1
+ * (cmd_exec) and read on core 0 (adv-report + status) -- one volatile word. */
+static volatile uint32_t pair_window_until_ms;
+static inline void box_ble_pair_window(uint32_t secs) { pair_window_until_ms = box_ble__ms() + secs * 1000u; }
+static inline int  pair_window_open(void) { return (int32_t)(pair_window_until_ms - box_ble__ms()) > 0; }
+static inline int  pair_window_left_s(void) { int32_t d = (int32_t)(pair_window_until_ms - box_ble__ms());
+                                              return d > 0 ? (d + 999) / 1000 : 0; }
+
+/* Is this advertiser one we've bonded? The handheld uses a stable
+ * (locally-administered static) address, so the stored identity address ==
+ * the adv address -- a direct compare, no IRK/RPA resolution needed. */
+static int addr_is_bonded(const uint8_t *addr)
+{
+    int max = le_device_db_max_count();
+    for (int i = 0; i < max; i++) {
+        int type; bd_addr_t a; sm_key_t irk;
+        le_device_db_info(i, &type, a, irk);
+        if (type != BD_ADDR_TYPE_UNKNOWN && memcmp(a, addr, 6) == 0) return 1;
+    }
+    return 0;
+}
+
 /* Make queued prints visible NOW and pet the watchdog: core 0 is both the log
  * drainer and the petter, and the stage about to run may stall past the run
  * window. Called only from core-0 mainline. */
@@ -256,6 +282,7 @@ static void pipe_teardown(const char *why)
     pipe_con = HCI_CON_HANDLE_INVALID;
     pipe_have_tx = pipe_have_rx = 0;
     pipe_tx_pending = 0;
+    pipe_encrypted = 0;
     printf("ble: pipe down (%s)%s\n", why, box_pipe_mode ? " -- rescanning" : "");
     if (box_pipe_mode) {                       /* auto-reconnect while `ble pipe 1` */
         box_pipe_state = PIPE_SCAN;
@@ -390,14 +417,19 @@ static void box_ble_hci_handler(uint8_t packet_type, uint16_t channel,
         const uint8_t *data = gap_event_advertising_report_get_data(packet);
         uint8_t dlen = gap_event_advertising_report_get_data_length(packet);
 
-        /* pipe hunt first: first advertiser carrying our service UUID wins
-         * (bench policy; the bonding stage matches bonded addresses instead) */
+        /* pipe hunt: an advertiser carrying our service UUID is a candidate, but
+         * we connect ONLY if it's already bonded (normal reconnect) or a pairing
+         * window is open (adopt a new one). Otherwise ignore it -- a handheld
+         * bonded to another rig in the same room must not be hijacked. */
         if (box_pipe_state == PIPE_SCAN && adv_has_pipe_service(data, dlen)) {
+            int bonded = addr_is_bonded(addr);
+            if (!bonded && !pair_window_open()) break;   /* not ours + not pairing -> skip */
             memcpy(pipe_addr, addr, 6);
             pipe_addr_type = (bd_addr_type_t) at;
             box_pipe_state = PIPE_CONNECT;
             if (!box_ble_scanning) gap_stop_scan();      /* inventory scan may keep running */
-            printf("ble: pipe device %s rssi=%d -- connecting\n", bd_addr_to_str(addr), rssi);
+            printf("ble: pipe device %s rssi=%d -- connecting (%s)\n", bd_addr_to_str(addr), rssi,
+                   bonded ? "bonded" : "NEW -- pairing window open");
             /* Fast, latency-0 link for echo-sync (BLE.md "Time"): btstack's
              * DEFAULT connection interval gave 56-236ms RTT (2026-07-18) -- far
              * too coarse, the offset noise swamped the ~1ms target. Pin 15ms
@@ -450,6 +482,8 @@ static void box_ble_hci_handler(uint8_t packet_type, uint16_t channel,
             printf("ble: pipe connected -- conn interval %u.%02u ms (latency %u)\n",
                    (pipe_conn_interval * 5) / 4, ((pipe_conn_interval * 5) % 4) * 25,
                    hci_subevent_le_connection_complete_get_conn_latency(packet));
+            sm_request_pairing(pipe_con);         /* bond+encrypt (Just Works); if already bonded,
+                                                   * btstack re-encrypts with stored keys instead */
             memset(&pipe_svc, 0, sizeof pipe_svc);
             pipe_have_tx = pipe_have_rx = 0;
             box_pipe_state = PIPE_DISCOVER;
@@ -472,6 +506,36 @@ static void box_ble_hci_handler(uint8_t packet_type, uint16_t channel,
  * is up -- which also guarantees the watchdog is armed, so the widen below is
  * a re-arm). Stage-announced: each stage's line is DRAINED to the console
  * before the stage runs, so a death names its stage. */
+/* ---- pairing / bonding (BLE.md "Pairing / security"). LE Secure Connections,
+ * Just Works (no display either end) -> auto-confirm. Bonds persist to btstack's
+ * le_device_db TLV flash bank (set up by btstack_cyw43_init), so a bonded pair
+ * re-encrypts on reconnect with no user step. Inc1: pair on every connect while
+ * the connect policy is still first-advertiser; Inc2 gates connect on the
+ * bonded-address allowlist + a `ble pair <secs>` window. */
+static btstack_packet_callback_registration_t box_ble_sm_cb;
+static void box_ble_sm_handler(uint8_t type, uint16_t ch, uint8_t *packet, uint16_t size)
+{
+    (void) ch; (void) size;
+    if (type != HCI_EVENT_PACKET) return;
+    switch (hci_event_packet_get_type(packet)) {
+    case SM_EVENT_JUST_WORKS_REQUEST:                 /* no display -> auto-accept */
+        sm_just_works_confirm(sm_event_just_works_request_get_handle(packet));
+        break;
+    case SM_EVENT_PAIRING_COMPLETE:
+        if (sm_event_pairing_complete_get_status(packet) == 0) pipe_encrypted = 1;
+        printf("ble: pairing %s (status=%u reason=%u) -- %d bond%s stored\n",
+               sm_event_pairing_complete_get_status(packet) == 0 ? "OK" : "FAILED",
+               sm_event_pairing_complete_get_status(packet),
+               sm_event_pairing_complete_get_reason(packet),
+               le_device_db_count(), le_device_db_count() == 1 ? "" : "s");
+        break;
+    case SM_EVENT_REENCRYPTION_COMPLETE:              /* bonded reconnect: keys reused, no pairing */
+        pipe_encrypted = 1;
+        printf("ble: link re-encrypted (bonded)\n");
+        break;
+    }
+}
+
 static void box_ble_init_once(void)
 {
     uint32_t t0 = box_ble_t_bringup = box_ble__ms(), t1;
@@ -512,7 +576,11 @@ static void box_ble_init_once(void)
     printf("ble: [2/4] btstack init (run loop + HCI + TLV store; may format a flash bank)...\n");
     btstack_cyw43_init(cyw43_arch_async_context());   /* memory + run loop + HCI transport + TLV */
     l2cap_init();
-    sm_init();                                /* pairing/bonding machinery (bonding stage) */
+    sm_init();                                /* pairing/bonding machinery */
+    sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);   /* Just Works */
+    sm_set_authentication_requirements(SM_AUTHREQ_BONDING | SM_AUTHREQ_SECURE_CONNECTION);
+    box_ble_sm_cb.callback = &box_ble_sm_handler;
+    sm_add_event_handler(&box_ble_sm_cb);
     gatt_client_init();                       /* the pipe's client side */
     box_ble_hci_cb.callback = &box_ble_hci_handler;
     hci_add_event_handler(&box_ble_hci_cb);
@@ -608,7 +676,10 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
             printf(" addr=%s scanning=%u seen=%u reports=%lu",
                    bd_addr_to_str(box_ble_local_addr), box_ble_scanning,
                    box_ble_seen_n, (unsigned long) box_ble_reports);
+            printf("\nble: bonds=%d%s", le_device_db_count(),
+                   pair_window_open() ? " (pairing window OPEN)" : "");
             if (box_pipe_state == PIPE_STREAM) {
+                printf(" enc=%s", pipe_encrypted ? "yes" : "NO");
                 printf("\nble: pipe %s mtu=%u relay(up=%lu updrop=%lu badlen=%lu down=%lu downdrop=%lu)",
                        bd_addr_to_str(pipe_addr), pipe_mtu,
                        (unsigned long) pipe_rx_frames, (unsigned long) pipe_rx_qdrop,
@@ -655,7 +726,8 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
         box_pipe_mode = 1;
         box_pipe_state = PIPE_SCAN;
         gap_start_scan();
-        printf("ble: pipe hunting (first advertiser with the extio service wins; `ble pipe 0` stops)\n");
+        printf("ble: pipe hunting (%d bonded; a NEW handheld needs `ble pair <secs>`; `ble pipe 0` stops)\n",
+               le_device_db_count());
         break;
     case BOX_BLE_REQ_PIPE_OFF:
         if (!box_pipe_mode && box_pipe_state == PIPE_IDLE) { printf("ble: pipe already off\n"); break; }
@@ -667,6 +739,18 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
             printf("ble: pipe off\n");
         }
         break;
+    case BOX_BLE_REQ_FORGET: {                 /* clear the bond allowlist (btstack TLV, core 0) */
+        int max = le_device_db_max_count(), n = 0;
+        for (int i = 0; i < max; i++) {
+            int type; bd_addr_t a; sm_key_t irk;
+            le_device_db_info(i, &type, a, irk);
+            if (type != BD_ADDR_TYPE_UNKNOWN) { le_device_db_remove(i); n++; }
+        }
+        pair_window_until_ms = 0;              /* also close any open window */
+        printf("ble: forgot %d bond%s -- disconnecting; won't reconnect until `ble pair <secs>`\n",
+               n, n == 1 ? "" : "s");
+        if (pipe_con != HCI_CON_HANDLE_INVALID) gap_disconnect(pipe_con);  /* drop the now-unbonded link */
+        break; }
     default: break;
     }
 }

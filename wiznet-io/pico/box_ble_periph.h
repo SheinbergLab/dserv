@@ -233,6 +233,30 @@ static void hh_packet_handler(uint8_t packet_type, uint16_t channel,
 /* One-time radio bring-up: same staged/parked/watchdog-widened shape as the
  * receiver (see box_ble_central.h for the whys, incl. the 2026-07-16/17
  * incident notes). */
+/* Pairing/bonding (BLE.md "Pairing / security"): the handheld is the peripheral,
+ * so it RESPONDS to the receiver-initiated Just Works pairing (no display ->
+ * auto-confirm) and stores the bond in its le_device_db TLV. Per BLE.md the
+ * pairing WINDOW lives on the receiver; the handheld accepts when asked. */
+static btstack_packet_callback_registration_t hh_sm_cb;
+static void hh_sm_handler(uint8_t type, uint16_t ch, uint8_t *packet, uint16_t size)
+{
+    (void) ch; (void) size;
+    if (type != HCI_EVENT_PACKET) return;
+    switch (hci_event_packet_get_type(packet)) {
+    case SM_EVENT_JUST_WORKS_REQUEST:
+        sm_just_works_confirm(sm_event_just_works_request_get_handle(packet));
+        break;
+    case SM_EVENT_PAIRING_COMPLETE:
+        printf("ble: paired with receiver (status=%u) -- %d bond%s stored\n",
+               sm_event_pairing_complete_get_status(packet),
+               le_device_db_count(), le_device_db_count() == 1 ? "" : "s");
+        break;
+    case SM_EVENT_REENCRYPTION_COMPLETE:
+        printf("ble: re-encrypted (bonded receiver)\n");
+        break;
+    }
+}
+
 static void box_ble_periph_init_once(const pico_config_t *cfg)
 {
     uint32_t t0 = box_ble_t_bringup = box_ble__ms(), t1;
@@ -287,6 +311,10 @@ static void box_ble_periph_init_once(const pico_config_t *cfg)
     btstack_cyw43_init(cyw43_arch_async_context());
     l2cap_init();
     sm_init();
+    sm_set_io_capabilities(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);   /* Just Works */
+    sm_set_authentication_requirements(SM_AUTHREQ_BONDING | SM_AUTHREQ_SECURE_CONNECTION);
+    hh_sm_cb.callback = &hh_sm_handler;
+    sm_add_event_handler(&hh_sm_cb);
     att_server_init(profile_data, hh_att_read, hh_att_write);
     hh_hci_cb.callback = &hh_packet_handler;
     hci_add_event_handler(&hh_hci_cb);
