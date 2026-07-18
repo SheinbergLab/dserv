@@ -241,7 +241,12 @@ proc extio_label_invalidate {dp data} {      ;# a relabel stales every map for t
 # after "armed" the box reboots into the trial (drops off dserv ~seconds, then
 # reconnects as the new -- or reverted -- image). Ethernet-only (box_net_get_binary
 # stubs to -1 over USB); USB gets a chunk-push path later.
-set ::extio_ota_slot_max [expr {512*1024}]   ;# A/B slot = 512KB (partition_table.json)
+# Host-side ADVISORY size gate only: the box enforces its REAL slot cap at
+# cmd/ota/begin (pico_ota_begin gets the PT's target_size and refuses oversize),
+# so this just catches absurd files before streaming. 1MB = the radio boards'
+# pt-pico2w.json slots; EVB boxes (512K slots) rely on the box-side check.
+# (Radio images crossed 500K at v16 -- the old 512K gate was days from biting.)
+set ::extio_ota_slot_max [expr {1024*1024}]
 # dserv-agent firmware shelf the shelf-OTA path pulls from. Default is the public
 # shelf; point it at a rig-local agent (e.g. http://localhost:8080) to OTA offline.
 if { ![info exists ::extio_fw_shelf_url] } { set ::extio_fw_shelf_url "https://dserv.net" }
