@@ -131,7 +131,27 @@ static gatt_client_characteristic_t pipe_tx_char, pipe_rx_char;   /* handheld's 
 static uint8_t  pipe_have_tx, pipe_have_rx;
 static gatt_client_notification_t   pipe_listener;
 static uint16_t pipe_mtu;
+static uint16_t pipe_conn_interval;    /* negotiated LL connection interval (1.25ms units) */
 static uint32_t pipe_rx_frames, pipe_rx_badlen, pipe_rx_qdrop;    /* handheld -> us */
+
+/* ---- echo-sync probe (BLE.md "Time"): measure the handheld link's RTT + the
+ * implied hh->receiver clock offset. Increment 1 only MEASURES (publishes
+ * telemetry); the min-RTT estimator that feeds g_hh_clock is Increment 2. The
+ * volatiles are written on core 0 (the sampler below) and read on core 1
+ * (rt_main publishes state/echo/*): benign staleness, box_ble_link pattern. */
+#define ECHO_INTERVAL_MS 300                            /* ~3 probes/s while streaming */
+static volatile uint32_t g_echo_rtt_us, g_echo_seq;     /* last RTT + a change counter */
+static volatile int64_t  g_echo_off_us;                 /* last implied hh->receiver offset */
+static uint32_t g_echo_min_us = 0xFFFFFFFFu;            /* running min RTT (the floor to watch) */
+static uint32_t echo_tx_n, echo_rx_n;                   /* requests sent / replies matched */
+
+/* Increment 2: raw samples cross to core 1's estimator via an SPSC queue (the
+ * g_ain_q pattern) so g_hh_clock is written AND read on core 1 only -- no torn
+ * multi-field struct across cores. The estimator (echo_estimator_service, in
+ * the .c) min-RTT-filters these and feeds box_clock_sync(&g_hh_clock, ...). */
+typedef struct { uint64_t r0; uint64_t h_recv; uint32_t rtt; } echo_sample_t;
+#define ECHO_Q_DEPTH 8
+static queue_t g_echo_q;
 static uint32_t pipe_tx_frames, pipe_tx_qdrop;                    /* us -> handheld */
 static uint8_t  pipe_tx_pending;                                  /* held frame awaiting a WNR slot */
 static uint8_t  pipe_tx_frame[DSERV_MSG_LEN];
@@ -157,6 +177,7 @@ static inline void box_ble_pipe_queues_init(void)
 {
     queue_init(&box_pipe_rxq, DSERV_MSG_LEN, BOX_PIPE_RXQ_DEPTH);
     queue_init(&box_pipe_txq, DSERV_MSG_LEN, BOX_PIPE_TXQ_DEPTH);
+    queue_init(&g_echo_q, sizeof(echo_sample_t), ECHO_Q_DEPTH);   /* echo-sync core0->core1 */
 }
 
 /* CORE 1: forward one host frame (a name that isn't ours -- CFG_NONE in
@@ -267,6 +288,21 @@ static void pipe_gatt_handler(uint8_t packet_type, uint16_t channel, uint8_t *pa
         uint16_t len = gatt_event_notification_get_value_length(packet);
         const uint8_t *v = gatt_event_notification_get_value(packet);
         if (len != DSERV_MSG_LEN) { pipe_rx_badlen++; break; }
+        if (v[0] == DSERV_ECHO_CHAR && v[1] == DSERV_ECHO_REPLY) {   /* echo reply: sample here, do NOT relay */
+            uint64_t r1 = time_us_64(), r0, h_recv;                  /* r1 stamped the instant it lands */
+            memcpy(&r0,     v + DSERV_ECHO_OFF_R0,    sizeof r0);
+            memcpy(&h_recv, v + DSERV_ECHO_OFF_HRECV, sizeof h_recv);
+            uint32_t rtt = (uint32_t)(r1 - r0);
+            int64_t  off = (int64_t)(r0 + rtt / 2) - (int64_t) h_recv;   /* hh->receiver: add to hh time */
+            g_echo_rtt_us = rtt; g_echo_off_us = off; echo_rx_n++; g_echo_seq++;
+            if (rtt < g_echo_min_us) g_echo_min_us = rtt;
+            echo_sample_t es = { r0, h_recv, rtt };    /* -> core 1 estimator (Increment 2) */
+            queue_try_add(&g_echo_q, &es);             /* drop if full: min-RTT tolerates gaps */
+            printf("echo: rtt=%luus off=%lldus (min=%luus rx=%lu/tx=%lu)\n",
+                   (unsigned long) rtt, (long long) off, (unsigned long) g_echo_min_us,
+                   (unsigned long) echo_rx_n, (unsigned long) echo_tx_n);
+            break;
+        }
         if (queue_try_add(&box_pipe_rxq, v)) pipe_rx_frames++;
         else pipe_rx_qdrop++;                  /* core 1 stalled; frame dropped (repeating data self-heals) */
         break; }
@@ -362,6 +398,19 @@ static void box_ble_hci_handler(uint8_t packet_type, uint16_t channel,
             box_pipe_state = PIPE_CONNECT;
             if (!box_ble_scanning) gap_stop_scan();      /* inventory scan may keep running */
             printf("ble: pipe device %s rssi=%d -- connecting\n", bd_addr_to_str(addr), rssi);
+            /* Fast, latency-0 link for echo-sync (BLE.md "Time"): btstack's
+             * DEFAULT connection interval gave 56-236ms RTT (2026-07-18) -- far
+             * too coarse, the offset noise swamped the ~1ms target. Pin 15ms
+             * interval + ZERO peripheral latency so the handheld listens every
+             * event and RTT quantization drops to one interval (min-RTT then
+             * gets a clean floor). Central dictates these; the peripheral just
+             * accepts. Units: scan/ce 0.625ms · interval 1.25ms · timeout 10ms.
+             * (Power-saving peripheral latency is a later, adaptive concern.) */
+            gap_set_connection_parameters(0x0030, 0x0030,   /* scan int/win while initiating (30/30 ms) */
+                                          0x000C, 0x000C,   /* conn interval 15 ms, pinned              */
+                                          0,                /* peripheral latency = 0 (listen always)   */
+                                          0x0190,           /* supervision timeout 4 s                  */
+                                          0x0000, 0x0000);  /* CE length: controller decides            */
             gap_connect(pipe_addr, pipe_addr_type);
             break;
         }
@@ -397,6 +446,10 @@ static void box_ble_hci_handler(uint8_t packet_type, uint16_t channel,
                 break;
             }
             pipe_con = hci_subevent_le_connection_complete_get_connection_handle(packet);
+            pipe_conn_interval = hci_subevent_le_connection_complete_get_conn_interval(packet);
+            printf("ble: pipe connected -- conn interval %u.%02u ms (latency %u)\n",
+                   (pipe_conn_interval * 5) / 4, ((pipe_conn_interval * 5) % 4) * 25,
+                   hci_subevent_le_connection_complete_get_conn_latency(packet));
             memset(&pipe_svc, 0, sizeof pipe_svc);
             pipe_have_tx = pipe_have_rx = 0;
             box_pipe_state = PIPE_DISCOVER;
@@ -499,6 +552,24 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
                 printf("ble: (bring-up poll took %lums -- BT fw upload)\n", (unsigned long) dp);
         }
         pipe_tx_pump();                     /* host frames queued by core 1 -> the handheld */
+
+        /* echo-sync probe: one REQ every ECHO_INTERVAL_MS while streaming. r0 is
+         * stamped RIGHT before the write (min send jitter) and echoed back, so
+         * the receiver keeps no per-request state -- the reply carries r0, and
+         * pipe_gatt_handler computes the RTT. Increment 1: measure only. */
+        if (box_pipe_state == PIPE_STREAM) {
+            static uint32_t last_echo_ms;
+            uint32_t nowm = box_ble__ms();
+            if (nowm - last_echo_ms >= ECHO_INTERVAL_MS) {
+                last_echo_ms = nowm;
+                uint8_t req[DSERV_MSG_LEN]; memset(req, 0, sizeof req);
+                req[0] = DSERV_ECHO_CHAR; req[1] = DSERV_ECHO_REQ;
+                uint64_t r0 = time_us_64(); memcpy(req + DSERV_ECHO_OFF_R0, &r0, sizeof r0);
+                if (gatt_client_write_value_of_characteristic_without_response(
+                        pipe_con, pipe_rx_char.value_handle, DSERV_MSG_LEN, req) == ERROR_CODE_SUCCESS)
+                    echo_tx_n++;               /* BUSY -> skip this round, next tick retries */
+            }
+        }
     }
 
     /* pipe_en (persist v16): auto-arm the relay ONCE per radio-up, so a saved
@@ -537,12 +608,19 @@ static inline void box_ble_service(const pico_config_t *cfg, int core1_ready, in
             printf(" addr=%s scanning=%u seen=%u reports=%lu",
                    bd_addr_to_str(box_ble_local_addr), box_ble_scanning,
                    box_ble_seen_n, (unsigned long) box_ble_reports);
-            if (box_pipe_state == PIPE_STREAM)
+            if (box_pipe_state == PIPE_STREAM) {
                 printf("\nble: pipe %s mtu=%u relay(up=%lu updrop=%lu badlen=%lu down=%lu downdrop=%lu)",
                        bd_addr_to_str(pipe_addr), pipe_mtu,
                        (unsigned long) pipe_rx_frames, (unsigned long) pipe_rx_qdrop,
                        (unsigned long) pipe_rx_badlen, (unsigned long) pipe_tx_frames,
                        (unsigned long) pipe_tx_qdrop);
+                printf("\nble: conn_int=%u.%02ums echo tx=%lu rx=%lu rtt=%luus min=%luus off=%lldus",
+                       (pipe_conn_interval * 5) / 4, ((pipe_conn_interval * 5) % 4) * 25,
+                       (unsigned long) echo_tx_n, (unsigned long) echo_rx_n,
+                       (unsigned long) g_echo_rtt_us,
+                       g_echo_min_us == 0xFFFFFFFFu ? 0UL : (unsigned long) g_echo_min_us,
+                       (long long) g_echo_off_us);
+            }
         }
         printf("\n");
         if (box_ble_state == BOX_BLE_FAIL)

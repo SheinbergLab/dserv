@@ -117,6 +117,85 @@ static uint8_t g_rxbuf[RXBUF_SIZE];
 static pico_config_t  g_cfg;
 static dserv_framer_t g_framer;
 static box_clock_t    g_clock;      /* box->dserv time offset, snapped at obs edges */
+
+/* Stamp a box-clock time for an event we're about to publish. Normal boxes map
+ * box->dserv time here (box_clock_stamp; 0 until synced -> dserv arrival-stamps).
+ * The BLE HANDHELD instead emits its RAW time_us_64 unmapped: the radio hop is a
+ * clock boundary it can't cross alone (no obs edge reaches it), so the RECEIVER
+ * rewrites hh->dserv when it relays the frame (pipe_rewrite_ts, echo-sync). One
+ * seam, so every publish_* below is transport-correct without per-site #ifdefs.
+ * See BLE.md "Time: stamp at source, one clock boundary, rewrite once". */
+#if defined(BOX_NET_BLE)
+static inline uint64_t event_stamp(uint64_t t_us) { return t_us; }              /* raw; receiver maps it */
+#else
+static inline uint64_t event_stamp(uint64_t t_us) { return box_clock_stamp(&g_clock, t_us); }
+#endif
+
+#ifdef BOX_BLE
+/* RECEIVER only: the handheld->receiver clock, learned by echo-sync (the radio
+ * boundary; box_ble_central.h feeds it). Unsynced until echo converges, so
+ * box_clock_stamp returns 0. */
+static box_clock_t g_hh_clock;
+
+/* Rewrite a relayed handheld frame's timestamp at the radio boundary: raw
+ * handheld time -> dserv time, translated exactly once (BLE.md "Time"). Two
+ * affine hops -- hh->receiver via g_hh_clock (echo-sync), then receiver->dserv
+ * via our own g_clock -- because the frame is forwarded WHOLE and never runs
+ * through our publish path, so neither mapping applies on its own. A ts of 0 is
+ * the handheld asking for arrival-stamp: left as-is. EITHER clock unsynced
+ * yields 0 => dserv arrival-stamps => exactly today's behavior, so this is a
+ * safe no-op until BOTH echo-sync and a receiver obs anchor are live. */
+static void pipe_rewrite_ts(uint8_t *frame)
+{
+    dserv_msg_t m;
+    if (dserv_msg_parse(frame, &m) != 0 || m.timestamp == 0) return;
+    uint64_t rx = box_clock_stamp(&g_hh_clock, m.timestamp);   /* hh -> receiver */
+    uint64_t ds = rx ? box_clock_stamp(&g_clock, rx) : 0;      /* receiver -> dserv */
+    dserv_msg_set_timestamp(frame, ds);
+}
+
+/* Echo-sync estimator (Increment 2, CORE 1). Drains raw echo samples from the
+ * core-0 sampler, keeps the LOWEST-RTT one per ECHO_BUCKET_MS window (min-RTT
+ * filter: the floor sample has the least conn-interval quantization, so its
+ * midpoint<->h_recv pair is the cleanest anchor -- ~200us on the rig), and feeds
+ * it to box_clock_sync(&g_hh_clock, ...) as a TRUSTED anchor -- offset snap +
+ * rate teach, the exact EMA discipline validated for box->dserv. g_hh_clock is
+ * then written AND read (pipe_rewrite_ts) on core 1 only: no cross-core struct
+ * tearing. A bucket whose best RTT is still far above the running floor (a
+ * congestion burst) is SKIPPED rather than snap the offset to a noisy value. */
+#define ECHO_BUCKET_MS       1000    /* one anchor/s -> spacing > box_clock's 0.5s pair-min */
+#define ECHO_FLOOR_MARGIN_US 8000    /* accept a bucket only within this of the running floor */
+static void echo_estimator_service(void)
+{
+    static uint32_t bucket_ms, floor_us = 0xFFFFFFFFu, best_rtt;
+    static uint8_t  have_best;
+    static uint64_t best_mid, best_hrecv;
+
+    echo_sample_t s;
+    while (queue_try_remove(&g_echo_q, &s)) {          /* keep the min-RTT sample this bucket */
+        uint64_t mid = s.r0 + s.rtt / 2;               /* receiver-time midpoint of the round trip */
+        if (!have_best || s.rtt < best_rtt) { have_best = 1; best_rtt = s.rtt; best_mid = mid; best_hrecv = s.h_recv; }
+    }
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (!bucket_ms) bucket_ms = now;
+    if (now - bucket_ms < ECHO_BUCKET_MS || !have_best) return;
+    bucket_ms = now;
+
+    if (best_rtt < floor_us) floor_us = best_rtt;      /* running floor */
+    if (best_rtt <= floor_us + ECHO_FLOOR_MARGIN_US)   /* clean enough -> trusted anchor */
+        box_clock_sync(&g_hh_clock, best_mid, best_hrecv, 1);
+    have_best = 0;
+
+    char nm[64]; uint8_t f[DSERV_MSG_LEN];             /* once/s sync health */
+    dserv_state_name(&g_cfg, nm, sizeof nm, "echo/synced");
+    dserv_msg_int(f, nm, 0, g_hh_clock.synced ? (g_hh_clock.rate_valid ? 2 : 1) : 0);
+    box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "echo/rate_ppb");
+    dserv_msg_int(f, nm, 0, g_hh_clock.rate_ppb);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+#endif
+
 static uint64_t g_obs_begin_us;     /* box-clock time of the last beginobs -> anchor for scheduled events */
 static int32_t g_wdt;
 
@@ -186,8 +265,9 @@ static void publish_di(const di_event_t *e)
     snprintf(leaf, sizeof leaf, "di/%u", e->pin);
     dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
     uint8_t lvl = (uint8_t) di_logical(&g_cfg, e->pin, e->level);   /* publish logical level */
-    /* box edge time mapped into dserv time (0 => dserv arrival-stamps pre-sync) */
-    dserv_msg_int(f, nm, box_clock_stamp(&g_clock, e->t_us), lvl);
+    /* edge time -> dserv (normal box) or raw handheld time (BLE, receiver maps it);
+     * 0 => dserv arrival-stamps pre-sync */
+    dserv_msg_int(f, nm, event_stamp(e->t_us), lvl);
     box_net_client_send(f, DSERV_MSG_LEN);
     DBG("di: pin%u=%u @%lluus\n", e->pin, lvl, (unsigned long long) e->t_us);
 }
@@ -204,7 +284,7 @@ static void publish_group(int g, uint8_t bits, uint64_t t_us)
     dserv_group_name(&g_cfg, g, gn, sizeof gn);
     snprintf(leaf, sizeof leaf, "group/%s", gn);
     dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-    dserv_msg_int(f, nm, t_us ? box_clock_stamp(&g_clock, t_us) : 0, bits);
+    dserv_msg_int(f, nm, t_us ? event_stamp(t_us) : 0, bits);
     box_net_client_send(f, DSERV_MSG_LEN);
     DBG("grp: %s=0x%x @%lluus\n", gn, bits, (unsigned long long) t_us);
 }
@@ -269,7 +349,7 @@ static void publish_ain(int ch, int16_t v, uint64_t t_us)  /* state/ain/<ch>, st
     char leaf[16], nm[64]; uint8_t f[DSERV_MSG_LEN];
     snprintf(leaf, sizeof leaf, "ain/%d", ch);
     dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-    dserv_msg_int(f, nm, box_clock_stamp(&g_clock, t_us), v);
+    dserv_msg_int(f, nm, event_stamp(t_us), v);
     box_net_client_send(f, DSERV_MSG_LEN);
 }
 
@@ -324,7 +404,7 @@ static void publish_timer(int tid, uint64_t fire_us)   /* state/timer/<tid>, sta
     char leaf[20], nm[64]; uint8_t f[DSERV_MSG_LEN];
     snprintf(leaf, sizeof leaf, "timer/%d", tid);
     dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-    dserv_msg_int(f, nm, box_clock_stamp(&g_clock, fire_us), 1);
+    dserv_msg_int(f, nm, event_stamp(fire_us), 1);
     box_net_client_send(f, DSERV_MSG_LEN);
 }
 
@@ -1217,7 +1297,7 @@ static void on_frame(const uint8_t *frame, void *ud)
         pico_gpio_exec(cfg, &cmd);
         uint64_t t_act = time_us_64();   /* pin has just moved -> its dserv time */
         if (cmd.op == GPIO_OP_SET)
-            publish_do(cmd.pin, (uint8_t) cmd.value, box_clock_stamp(&g_clock, t_act));  /* actual readback */
+            publish_do(cmd.pin, (uint8_t) cmd.value, event_stamp(t_act));  /* actual readback */
     }
     else if (r == CFG_PIN_MODE || r == CFG_OBS_PIN || r == CFG_SYNC_PIN) {
         pico_gpio_apply_config(cfg); groups_reset_all();
@@ -1607,9 +1687,25 @@ static void rt_main(void)
                 while (queue_try_remove(&g_ain_q, &s)) publish_ain(s.ch, s.val, s.t_us);
 #ifdef BOX_BLE
                 { uint8_t pf[DSERV_MSG_LEN];           /* handheld frames from the radio (core 0) ->
+                                                        * ts rewritten hh->dserv at the boundary, then
                                                         * straight up our own transport; the name
                                                         * inside each frame keeps the boxes distinct */
-                  while (box_ble_pipe_pop_rx(pf)) box_net_client_send(pf, DSERV_MSG_LEN); }
+                  while (box_ble_pipe_pop_rx(pf)) { pipe_rewrite_ts(pf); box_net_client_send(pf, DSERV_MSG_LEN); } }
+                echo_estimator_service();              /* min-RTT anchors -> g_hh_clock (feeds pipe_rewrite_ts) */
+                /* echo-sync probe telemetry (Increment 1, measure-only): core 0
+                 * samples RTT + implied offset into volatiles, we publish on
+                 * change so `dservctl listen extio/<rx>/state/echo/*` captures the
+                 * distribution. Read once each; a rare int64 tear is harmless for
+                 * verification (the console printf is the cross-check). */
+                { static uint32_t last_echo_seq;
+                  if (g_echo_seq != last_echo_seq) {
+                      last_echo_seq = g_echo_seq;
+                      char en[64]; uint8_t ef[DSERV_MSG_LEN];
+                      dserv_state_name(&g_cfg, en, sizeof en, "echo/rtt_us");
+                      dserv_msg_int(ef, en, 0, (int32_t) g_echo_rtt_us);  box_net_client_send(ef, DSERV_MSG_LEN);
+                      dserv_state_name(&g_cfg, en, sizeof en, "echo/offset_us");
+                      dserv_msg_int64(ef, en, 0, g_echo_off_us);          box_net_client_send(ef, DSERV_MSG_LEN);
+                  } }
 #endif
                 sched_publish_fired();                 /* post state/timer/<n> for fired schedules */
                 uint32_t now = to_ms_since_boot(get_absolute_time());

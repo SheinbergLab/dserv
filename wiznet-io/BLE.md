@@ -493,6 +493,92 @@ service UUID → connect → discover → subscribe → STREAM). Relay semantics
 - `ess/in_obs` is NOT yet forwarded (sync stage next), so handheld events
   carry timestamp 0 → dserv arrival-stamps them (receiver-relay arrival ≈
   ms-class). Fine for the bench; the echo-sync stage replaces this.
+
+## Echo-sync progress (2026-07-18, IN PROGRESS)
+
+Measurement-first (see "Time"). Ground-truth rig: receiver GP14 wired to
+handheld GP26, `host/echo_soak.sh` drives level-set edges (state/do = the
+near-truth local reference), `host/echo_analyze.py` pairs rising edges and
+reports the Δ = handheld_ts − reference_ts distribution.
+
+- **BASELINE (arrival-stamped, pre-sync): median +23.5 ms**, p10–p90 +8.9 to
+  +35.7 ms, radio floor (clean min) ~6–10 ms. Load-dependent (sustained drive
+  ~23 ms vs light ~12 ms). Caveat: the reference is itself arrival-stamped over
+  the same USB/receiver path, so its publish lag adds tens-of-ms jitter (occa­
+  sional negative Δ outliers = do/14 lag, not a handheld that's early) — trust
+  the median/percentiles, not min/max. Resolving sub-5 ms improvements will need
+  a tighter reference (sync the receiver's own g_clock via a bench TTL / obs
+  cycling so state/do is box_clock-stamped at actuation, not on arrival).
+- **INCREMENT 0 — raw source stamp + receiver rewrite scaffold: DONE + VERIFIED
+  (fw 0.48.0-inc0 committed on both boards).** Handheld now emits raw
+  `time_us_64` via the single `event_stamp()` seam (BOX_NET_BLE branch); the
+  receiver rewrites hh→receiver→dserv at the relay drain (`pipe_rewrite_ts`,
+  composing a new per-handheld `g_hh_clock` with its own `g_clock`;
+  `dserv_msg_set_timestamp` does the in-place ts surgery at offset 3+varlen).
+  `g_hh_clock` is unsynced → stamp returns 0 → arrival-stamp → transparent
+  no-op. Re-measured median +22.6 ms (== baseline). POSITIVE proof, not just
+  "didn't crash": 187/200 edges still pair within ±100 ms, which is only
+  possible if the raw ~50-Mµs handheld value is being correctly collapsed to 0
+  by the rewrite — the new paths are exercised and correct. Matched-pair flash
+  rule: handheld-raw and receiver-rewrite ship together (flash receiver first —
+  it handles an old handheld's ts=0 fine; a new handheld to an old receiver
+  would ship garbage).
+- **INCREMENT 1 — echo cmd/reply pair: DONE + VERIFIED (fw 0.48.0-inc1 /
+  -inc1b).** A marker-byte 'E' frame (dserv_ble.h) rides the SAME two GATT
+  characteristics as data but is handled entirely at the radio boundary (core 0
+  both ends, dispatched by frame[0]) — never the framer or the relay queues.
+  Receiver sends REQ stamped r0 (box_ble_central initiator, ~3/s while
+  streaming); handheld reflex-replies from the ATT-write callback (box_ble_periph),
+  stamping h_recv on receipt and jumping the data queue in CAN_SEND_NOW;
+  receiver stamps r1 on the notification, rtt = r1−r0, h_recv maps to the
+  midpoint r0+rtt/2. r0 is echoed so the receiver stays stateless. MEASURE-ONLY:
+  publishes state/echo/{rtt_us,offset_us}; nothing feeds g_hh_clock yet.
+  - **THE VERIFY-FIRST PAYOFF: default btstack connection params are unusable
+    for sync.** First measurement: RTT 56–236 ms, offset noise ±45 ms (> the
+    whole ~1 ms target). Cause: no connection parameters were ever requested —
+    `gap_connect` used btstack defaults (coarse interval). Fix (RECEIVER-ONLY,
+    the central dictates params): `gap_set_connection_parameters(...)` before
+    gap_connect — **15 ms interval pinned + ZERO peripheral latency** (handheld
+    listens every event; power-saving latency is a later adaptive concern), 4 s
+    supervision. Negotiated interval now logged on connect + in `ble` status.
+  - **AFTER THE FIX (rig, 15.00 ms confirmed):** RTT min 25.6 ms, p10–p90 within
+    **1.5 ms** (reflex is constant-latency — a full-interval smear would mean
+    variable latency); occasional tail to ~116 ms = missed conn events, which
+    min-RTT filtering is designed to reject. Offset drift **−25 ppm** (was −730
+    ppm of pure noise — a believable crystal offset, cf. the +27–43 ppm hw-sync
+    measured). **Min-RTT-filtered offset noise ≈ 200 µs** (RTT ≤ min+0.5 ms) —
+    sub-ms, the actual input quality the estimator will see.
+- **INCREMENT 2 — min-RTT estimator: DONE + VERIFIED (fw 0.48.0-inc2, receiver-
+  only). PHASE GOAL MET: +22.6 ms → +0.37 ms median, sub-ms across the whole
+  distribution.** Core-0 sampler pushes raw {r0,h_recv,rtt} to an SPSC queue;
+  core-1 `echo_estimator_service` keeps the lowest-RTT sample per 1 s bucket
+  (min-RTT filter) and feeds it to `box_clock_sync(&g_hh_clock, r0+rtt/2, h_recv,
+  trusted=1)`. g_hh_clock is written AND read (pipe_rewrite_ts) on core 1 only —
+  no cross-core struct tearing (the flagged risk; solved by the queue, not a
+  lock). Buckets whose best RTT is > floor+8 ms are skipped. New telemetry:
+  state/echo/{synced (0/1/2), rate_ppb}.
+  - **RIG RESULT (200 edges, echo-sync live):** di/26−do/14 delta median
+    **+0.37 ms**, p10–p90 **−0.15 to +0.80 ms**, stdev 0.33 ms, 200/200 paired
+    (vs baseline +22.6 ms / ±18.7 ms). ~60× better and inside the ~1 ms target.
+    synced=2 within ~1 s of pipe-up; rate settled around −1…−13 ppm (per-anchor
+    bounce is fine — offset snapped every 1 s bounds inter-anchor drift to ~25 µs,
+    so offset accuracy dominates, not rate).
+  - **MEASUREMENT NOTE (the "tighten the reference" step, finally needed):**
+    pipe_rewrite_ts composes g_hh_clock (echo) AND g_clock (receiver→dserv). On
+    the bench g_clock has no obs anchor, so it returns 0 and collapses BOTH di/26
+    and do/14 back to arrival-stamp — hiding the win. Fix for the bench: toggle
+    `ess/in_obs` (~1/s) during the run to keep g_clock fresh. Because the g_clock
+    hop is common to both di/26 and do/14, its offset noise CANCELS in the delta —
+    what's left is pure echo accuracy. Real rigs run ess, so g_clock is anchored
+    for free.
+  - Residual +0.37 ms = handheld DI-detect + reflex-stamp bias (h_recv is stamped
+    a few instr after receipt, ~P/2) + do/di path asymmetry; trimmable but well
+    inside spec, left as-is.
+- **PHASE COMPLETE. Remaining (separate stages):** bonding (bonded-address
+  allowlist replacing first-advertiser connect; the pipe is open until then);
+  and the power tradeoff — peripheral latency was pinned to 0 for clean echo, so
+  when idle-power optimization returns, keep latency 0 during active sync (or
+  probe densely then back off), since latency > 0 re-coarsens the RTT.
 - connect policy is first-advertiser-with-the-service-UUID (bench); the
   bonding stage replaces it with a bonded-address allowlist. The pipe is
   open/unencrypted until then.

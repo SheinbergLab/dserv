@@ -67,6 +67,9 @@ static hci_con_handle_t hh_con = HCI_CON_HANDLE_INVALID;
 static uint8_t  hh_subscribed, hh_mtu_ok, hh_can_send_pending;
 static uint16_t hh_mtu;
 static uint32_t hh_rx_drop, hh_notified;
+static volatile uint8_t hh_echo_pending;     /* an echo reply is built + waiting for a send slot */
+static uint8_t  hh_echo_reply[DSERV_MSG_LEN]; /* the reply frame (built in the ATT write callback) */
+static uint32_t hh_echo_n;                    /* echo replies sent (status) */
 static bd_addr_t hh_local_addr;
 static btstack_packet_callback_registration_t hh_hci_cb;
 static uint32_t box_ble_t_bringup;
@@ -135,7 +138,23 @@ static int hh_att_write(hci_con_handle_t ch, uint16_t att_handle, uint16_t mode,
     }
     if (att_handle == HH_RX_VALUE_HANDLE) {            /* a frame from the receiver */
         if (size == DSERV_MSG_LEN) {
-            if (!queue_try_add(&box_ble_rxq, buffer)) hh_rx_drop++;
+            if (buffer[0] == DSERV_ECHO_CHAR && buffer[1] == DSERV_ECHO_REQ) {
+                /* Echo reflex (echo-sync, BLE.md "Time"): stamp our clock at the
+                 * INSTANT the request lands -- a few instructions after receipt,
+                 * so the handheld-side latency is near-constant and cancels in
+                 * the receiver's min-RTT filter. Build the reply (r0 stays echoed
+                 * at [2..9]; add h_recv) and get it out on the next connection
+                 * event, jumping the data queue. Never touches core 1. */
+                uint64_t h_recv = time_us_64();
+                memcpy(hh_echo_reply, buffer, DSERV_MSG_LEN);
+                hh_echo_reply[1] = DSERV_ECHO_REPLY;
+                memcpy(hh_echo_reply + DSERV_ECHO_OFF_HRECV, &h_recv, sizeof h_recv);
+                hh_echo_pending = 1;
+                if (!hh_can_send_pending) {             /* one request suffices; CAN_SEND_NOW prioritizes echo */
+                    hh_can_send_pending = 1;
+                    att_server_request_can_send_now_event(hh_con);
+                }
+            } else if (!queue_try_add(&box_ble_rxq, buffer)) hh_rx_drop++;
         }
         return 0;
     }
@@ -185,6 +204,12 @@ static void hh_packet_handler(uint8_t packet_type, uint16_t channel,
 
     case ATT_EVENT_CAN_SEND_NOW: {
         hh_can_send_pending = 0;
+        if (hh_echo_pending) {                 /* echo reply is latency-critical: it jumps the data queue */
+            att_server_notify(hh_con, HH_TX_VALUE_HANDLE, hh_echo_reply, DSERV_MSG_LEN);
+            hh_echo_pending = 0; hh_echo_n++;
+            hh_pump_kick();                    /* data still queued? grab the next slot */
+            break;
+        }
         uint8_t f[DSERV_MSG_LEN];
         if (box_ble_link && queue_try_remove(&box_ble_txq, f)) {
             att_server_notify(hh_con, HH_TX_VALUE_HANDLE, f, DSERV_MSG_LEN);

@@ -115,6 +115,20 @@ static inline int dserv_msg_bytes(uint8_t *f, const char *n, uint64_t ts,
                                   const void *data, uint32_t len)
 { return dserv_msg_build(f, n, ts, DSERV_BYTE, data, len); }
 
+/* Overwrite the timestamp of an already-built frame IN PLACE. The ts field sits
+ * right after the variable-length name (offset 3 = 1('>')+2(varlen), then the
+ * name), so we read varlen to find it. Used by the BLE receiver to rewrite a
+ * relayed handheld frame's raw source time into dserv time at the radio
+ * boundary (echo-sync, BLE.md "Time") -- the frame is forwarded whole, never
+ * rebuilt, so this is the one seam that touches it. No-op on a malformed frame. */
+static inline void dserv_msg_set_timestamp(uint8_t *frame, uint64_t ts)
+{
+    if (frame[0] != DSERV_MSG_CHAR) return;
+    uint16_t varlen; memcpy(&varlen, frame + 1, sizeof varlen);
+    if ((uint32_t) varlen > DSERV_MSG_MAX_PAYLOAD) return;
+    memcpy(frame + 3 + varlen, &ts, sizeof ts);
+}
+
 /* ======================================================================== *
  *  RX / decode side  (zero-alloc; fields point into the caller's frame)
  * ======================================================================== */

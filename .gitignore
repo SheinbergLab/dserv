@@ -24,3 +24,7 @@ key.pem
 # docs.db is a build artifact: CMake builds it from db/docs.sql
 # (the committed source-of-truth) and installs it into the .deb.
 db/docs.db
+
+# python bytecode caches
+__pycache__/
+*.pyc
