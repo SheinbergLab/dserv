@@ -76,6 +76,9 @@
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 #include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
+/* `debug 1/0` hot-path log gate. Declared HERE (before the radio headers) so
+ * box_ble_central.h can gate its per-probe echo print on it too. */
+static volatile int g_log_verbose = 0;
 #ifdef BOX_BLE
 #include "box_ble_central.h"    /* BLE central (receiver): radio on CORE 0, poll mode, fail-soft */
 #endif
@@ -233,8 +236,8 @@ static uint32_t g_core1_stack[1024];   /* 4KB: cmd_exec's out[1024] is the deep 
 
 /* Hot-path telemetry (di:/dp:/sync:) is OFF by default. With the log ring a
  * print costs ~1us on the RT core, but it's still per-event chatter -- toggle
- * live from the console: `debug 1` / `debug 0` (default off, not persisted). */
-static volatile int g_log_verbose = 0;
+ * live from the console: `debug 1` / `debug 0` (default off, not persisted).
+ * (g_log_verbose itself is declared up by the radio-header includes.) */
 #define DBG(...) do { if (g_log_verbose) printf(__VA_ARGS__); } while (0)
 
 /* ---- STAGE 3: dual-core hardware watchdog ----

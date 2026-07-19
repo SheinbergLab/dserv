@@ -329,9 +329,13 @@ static void pipe_gatt_handler(uint8_t packet_type, uint16_t channel, uint8_t *pa
             if (rtt < g_echo_min_us) g_echo_min_us = rtt;
             echo_sample_t es = { r0, h_recv, rtt };    /* -> core 1 estimator (Increment 2) */
             queue_try_add(&g_echo_q, &es);             /* drop if full: min-RTT tolerates gaps */
-            printf("echo: rtt=%luus off=%lldus (min=%luus rx=%lu/tx=%lu)\n",
-                   (unsigned long) rtt, (long long) off, (unsigned long) g_echo_min_us,
-                   (unsigned long) echo_rx_n, (unsigned long) echo_tx_n);
+            /* ~3/s -- gated behind `debug 1` (the same rate would flood the console
+             * and starve extio-setup's serial Exec of its quiet window). The RTT/
+             * offset also flow to state/echo/* datapoints, so this is dev-only. */
+            if (g_log_verbose)
+                printf("echo: rtt=%luus off=%lldus (min=%luus rx=%lu/tx=%lu)\n",
+                       (unsigned long) rtt, (long long) off, (unsigned long) g_echo_min_us,
+                       (unsigned long) echo_rx_n, (unsigned long) echo_tx_n);
             break;
         }
         if (queue_try_add(&box_pipe_rxq, v)) pipe_rx_frames++;
