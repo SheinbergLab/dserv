@@ -600,7 +600,9 @@ proc extio_ota_push_shelf_docked {box {channel dev} {version ""}} {
 # Stream a local .bin to a docked handheld: begin+acks over radio, 'D' over USB.
 proc extio_ota_push_docked {box file sha size port} {
     if { [catch { open $port r+ } ch] } { error "extio_ota_push_docked: cannot open $port: $ch" }
-    fconfigure $ch -translation binary -encoding binary -blocking 1 -buffering none
+    # byte-transparent I/O: Tcl 9 removed "-encoding binary"; iso8859-1 maps 0..255
+    # 1:1, and -translation binary suppresses EOL/EOF munging.
+    fconfigure $ch -translation binary -encoding iso8859-1 -blocking 1 -buffering none
     set ::extio_ota_chan($box) $ch                    ;# extio_ota_usb_cleanup closes it
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
