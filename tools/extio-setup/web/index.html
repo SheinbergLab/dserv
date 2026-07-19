@@ -62,6 +62,23 @@
       </div>
     </div>
 
+    <div class="panel" id="blepanel" hidden>
+      <div class="panel-title">Handheld / BLE</div>
+      <div class="grid2">
+        <label>status</label><span id="bleStatus" class="mono muted">&mdash;</span>
+        <label>bonds</label><span id="bleBonds" class="mono muted">&mdash;</span>
+      </div>
+      <div class="row gap">
+        <button id="bleEnable" title="config/ble/enable 1 + config/ble/pipe 1">Enable relay</button>
+        <label class="inline">pair for <input id="blePairSecs" size="3" inputmode="numeric" value="60">s</label>
+        <button id="blePair" class="primary">Pair handheld</button>
+        <button id="bleForget" title="clear all bonded handhelds">Forget</button>
+      </div>
+      <div id="bleMsg" class="mono muted"></div>
+      <div class="hint">Enable the relay, then Pair and bring the handheld in range &mdash; the receiver
+        adopts &amp; bonds it. Use <b>Save to flash</b> to persist enable+pipe across reboots.</div>
+    </div>
+
     <div class="panel" id="editor" hidden>
       <div class="panel-title">GPIO <span id="pinno"></span> <span id="pinrole" class="hint"></span></div>
       <div class="grid2">

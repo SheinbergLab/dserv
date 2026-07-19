@@ -333,6 +333,71 @@ function renderBox() {
   $("groups").textContent = gs.length ? gs.join("  ") : "—";
 }
 
+/* ---- Handheld / BLE panel (dserv mode: pairing is a rig operation, and the
+ * state/ble/* telemetry only exists over dserv). Every action is a config/cmd
+ * datapoint; status comes from state/ble/{bonds,encrypted,pairing}. ---- */
+function renderBleFrom(st) {
+  const panel = $("blepanel");
+  // This panel is the receiver's (BLE CENTRAL) pairing control. A handheld is a
+  // peripheral -- it transports over the radio (transport=ble) and publishes no
+  // state/ble/* -- so never show pairing there. A radio-capable board on a wired
+  // transport (usb/eth) is a receiver, even before BLE has been enabled.
+  const has = Object.keys(st).some((k) => k.startsWith("ble/"));
+  const peripheral = String(st["transport"] || "") === "ble";
+  const radioBoard = /pico2_w|thingplus/.test(String(st["board"] || ""));
+  if (drv.id !== "dserv" || peripheral || (!has && !radioBoard)) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const bonds = st["ble/bonds"], enc = +st["ble/encrypted"], pairing = +st["ble/pairing"] || 0;
+  let status;
+  if (!has) status = "radio off — Enable relay to bring it up";
+  else if (pairing > 0) status = `pairing window open — ${pairing}s left`;
+  else if (enc === 1) status = "handheld bonded + encrypted";
+  else if (+bonds > 0) status = `${bonds} bond(s) — waiting for the handheld`;
+  else status = "radio up — no bond yet";
+  $("bleStatus").textContent = status;
+  $("bleBonds").textContent = has ? `${bonds ?? 0}${enc === 1 ? " · encrypted" : ""}` : "—";
+  const pairing0 = pairing === 0;
+  $("blePair").textContent = pairing0 ? "Pair handheld" : `Pairing… ${pairing}s`;
+  $("blePair").classList.toggle("primary", pairing0);
+  $("blePair").disabled = !pairing0;
+}
+
+async function refreshBle() {
+  if (drv.id !== "dserv" || !connected) { $("blepanel").hidden = true; return; }
+  try {
+    const j = await api("/api/dserv/state?box=" + encodeURIComponent(drv.box));
+    renderBleFrom(j.state || {});
+  } catch { /* transient; the poll retries */ }
+}
+
+async function bleSet(leaf, value, msg) {
+  try {
+    await drv.set(leaf, value);
+    if (msg) $("bleMsg").textContent = msg;
+  } catch (e) {
+    $("bleMsg").textContent = "err: " + e.message;
+  }
+}
+
+$("bleEnable").onclick = async () => {
+  await bleSet("config/ble/enable", 1);
+  await bleSet("config/ble/pipe", 1, "radio + relay enabled — Save to flash to persist");
+  setTimeout(refreshBle, 900);
+};
+$("blePair").onclick = async () => {
+  const secs = Math.max(1, Math.min(300, parseInt($("blePairSecs").value, 10) || 60));
+  await bleSet("cmd/ble/pair", secs, `pairing window open ${secs}s — bring the handheld in range`);
+  refreshBle();
+};
+$("bleForget").onclick = async () => {
+  if (!confirm("Forget all bonded handhelds? Each will need to be paired again.")) return;
+  await bleSet("cmd/ble/forget", 1, "bonds cleared");
+  setTimeout(refreshBle, 900);
+};
+// keep the panel (countdown / bonds / encrypted) live while it's visible
+setInterval(() => { if (!$("blepanel").hidden) refreshBle(); }, 1500);
+
 /* ---- pin editor ---- */
 function selectPin(n) {
   selPin = n;
@@ -745,6 +810,7 @@ async function reload(reselect = null) {
   cfg = await drv.read();
   renderPins();
   renderBox();
+  refreshBle(); // Handheld/BLE panel (dserv only; hides itself otherwise)
   if (reselect !== null) selectPin(reselect);
   loadShelf(); // refresh the "update available" compare against the box's fw
 }
@@ -760,7 +826,7 @@ function setConnected(on, label) {
   $("conhint").textContent = !on ? "connect a box to interact"
     : drv.hasConsole ? "" : "live events only (the CLI console needs the USB serial driver)";
   if (!on) {
-    $("editor").hidden = true; selPin = null; cfg = emptyCfg();
+    $("editor").hidden = true; $("blepanel").hidden = true; selPin = null; cfg = emptyCfg();
     liveDI.clear(); beats = 0; $("beat").textContent = "";
     setObsLive(false);
     SerialDriver.eventsVia = "local"; // next connect starts clean
