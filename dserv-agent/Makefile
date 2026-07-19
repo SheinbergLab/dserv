@@ -10,6 +10,7 @@ LDFLAGS=-ldflags "-X main.version=$(VERSION)"
 # without make; this keeps them fresh whenever the sources change.
 PROVISION_SRC=../wiznet-io/provision.sh
 PT_JSON_SRC=../wiznet-io/pt.json
+PT_PICO2W_SRC=../wiznet-io/pt-pico2w.json
 
 # Build targets
 .PHONY: all build clean install uninstall sync-provision
@@ -22,9 +23,12 @@ provision.sh: $(PROVISION_SRC)
 pt.json: $(PT_JSON_SRC)
 	cp $(PT_JSON_SRC) $@
 
-sync-provision: provision.sh pt.json
+pt-pico2w.json: $(PT_PICO2W_SRC)
+	cp $(PT_PICO2W_SRC) $@
 
-build: provision.sh pt.json
+sync-provision: provision.sh pt.json pt-pico2w.json
+
+build: provision.sh pt.json pt-pico2w.json
 	go build $(LDFLAGS) -o $(BINARY) .
 
 # Cross-compile for common targets

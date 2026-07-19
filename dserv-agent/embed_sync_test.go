@@ -22,6 +22,7 @@ func TestEmbeddedProvisionInSync(t *testing.T) {
 	}{
 		{"provision.sh", provisionScript, "../wiznet-io/provision.sh"},
 		{"pt.json", partitionSpec, "../wiznet-io/pt.json"},
+		{"pt-pico2w.json", partitionSpecPico2w, "../wiznet-io/pt-pico2w.json"},
 	}
 	for _, c := range cases {
 		src, err := os.ReadFile(c.src)

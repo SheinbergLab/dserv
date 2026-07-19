@@ -134,8 +134,13 @@ print(ver, img["file"], img["sha256"])
   echo ">> shelf: verified sha256 $SHA"
   SLOT_B=""                                            # slot B left empty; the first OTA fills it
 else
-  SLOT_A="${SLOT_A:-$DIST/wizchip_dserv_config_dual_signed.uf2}"
-  SLOT_B="${SLOT_B:-$DIST/wizchip_dserv_config_dual_tbyb_signed.uf2}"
+  # The dual-box dist defaults apply only when NO image was passed. An explicit
+  # slot-A path with no slot B means "leave B empty" -- defaulting B to the dual
+  # image here once loaded a W6300-EVB build into a Thing Plus's slot B.
+  if [ "$NPOS" = 0 ]; then
+    SLOT_A="$DIST/wizchip_dserv_config_dual_signed.uf2"
+    SLOT_B="$DIST/wizchip_dserv_config_dual_tbyb_signed.uf2"
+  fi
 fi
 
 [ -f "$SLOT_A" ] || die "slot-A image not found: $SLOT_A

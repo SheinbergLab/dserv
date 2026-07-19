@@ -33,9 +33,29 @@ var provisionScript string
 
 // pt.json is the RP2350 A/B partition spec provision.sh feeds to picotool. The
 // curl|bash flow has no script directory to read it from, so we ship it inline.
+// pt.json = 512K A/B slots (the W6300-EVB / plain Pico 2, ~2MB usable); a
+// pico2w-family radio board (4MB+ flash, ~500K images) needs the 1024K slots in
+// pt-pico2w.json. handleExtioSetup picks the right one from ?build.
 //
 //go:embed pt.json
 var partitionSpec string
+
+//go:embed pt-pico2w.json
+var partitionSpecPico2w string
+
+// extioPartitionSpec returns the A/B partition spec for a build target. Radio
+// boards (pico2w-family) carry big images on 4MB+ flash and provision with 1024K
+// slots; everything else uses the 512K EVB spec. A pico2wusb receiver or a
+// thingplus handheld provisioned with 512K slots would overflow -- its .bin is
+// already ~500K (crossed 500K at persist v16).
+func extioPartitionSpec(build string) string {
+	switch build {
+	case "pico2w", "picoplus2w", "pico2wusb", "thingplus", "thingplus-handheld", "handheld":
+		return partitionSpecPico2w
+	default:
+		return partitionSpec // dual, w6300, usb, or unknown -> 512K
+	}
+}
 
 // extioTokenOK allows only characters that can appear in a channel / build /
 // version token, so a query param can never break out of the shell preamble.
@@ -111,13 +131,26 @@ func (a *Agent) handleExtioSetup(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "__EXTIO_PT=$(mktemp) || { echo \"!! mktemp failed\" >&2; exit 1; }\n")
 	fmt.Fprintf(w, "mv \"$__EXTIO_PT\" \"$__EXTIO_PT.json\" || { echo \"!! could not name temp .json\" >&2; exit 1; }\n")
 	fmt.Fprintf(w, "__EXTIO_PT=\"$__EXTIO_PT.json\"\n")
+	// Pick the A/B slot size to match the target board (512K EVB vs 1024K radio),
+	// so a pico2w receiver / thingplus handheld doesn't get slots too small.
+	build := env["PROVISION_BUILD"]
+	if build == "" {
+		build = "dual" // provision.sh's own default
+	}
+	spec := extioPartitionSpec(build)
+
 	fmt.Fprintf(w, "cat > \"$__EXTIO_PT\" <<'EXTIO_PT_JSON'\n")
-	fmt.Fprint(w, partitionSpec)
+	fmt.Fprint(w, spec)
 	fmt.Fprintf(w, "\nEXTIO_PT_JSON\n")
 	fmt.Fprintf(w, "export PT_JSON=\"$__EXTIO_PT\"\n")
 	fmt.Fprintf(w, "export PROVISION_PT_CLEANUP=\"$__EXTIO_PT\"\n")
 
-	fmt.Fprintf(w, "echo \">> extio: provisioning from %s (channel=${PROVISION_CHANNEL:-dev} build=${PROVISION_BUILD:-dual})\" >&2\n", serverURL)
+	slots := "512K"
+	if spec == partitionSpecPico2w {
+		slots = "1024K"
+	}
+	fmt.Fprintf(w, "echo \">> extio: provisioning from %s (channel=${PROVISION_CHANNEL:-dev} build=%s, %s A/B slots)\" >&2\n",
+		serverURL, build, slots)
 
 	fmt.Fprint(w, provisionScript)
 }
