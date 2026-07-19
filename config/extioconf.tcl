@@ -304,7 +304,7 @@ proc extio_ota_push_usb {box file sha size} {
     set fp [open $file rb]; fconfigure $fp -translation binary
     set ::extio_ota_img($box)  [read $fp]; close $fp
     set ::extio_ota_size($box) $size
-    catch { after cancel $::extio_ota_timer($box) }
+    catch { dservAfterCancel $::extio_ota_timer($box) }
 
     catch { dservClear extio/$box/state/ota/ack }
     catch { dservClear extio/$box/state/ota/state }
@@ -363,8 +363,8 @@ proc extio_ota_usb_on_ack {dp data} {                  ;# box published a new co
     if { ![info exists ::extio_ota_size($box)] } return
     if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }   ;# all delivered
     extio_ota_usb_deadline $box                                                      ;# progress -> re-arm
-    catch { after cancel $::extio_ota_timer($box) }                                  ;# debounce: resend only
-    set ::extio_ota_timer($box) [after 400 [list extio_ota_usb_blast $box $data]]    ;# when stuck ~400ms
+    catch { dservAfterCancel $::extio_ota_timer($box) }                                  ;# debounce: resend only
+    set ::extio_ota_timer($box) [dservAfter 400 [list extio_ota_usb_blast $box $data]]    ;# when stuck ~400ms
 }
 
 # No-ack deadline: catches the SILENT death shape -- writes "succeed" into a
@@ -375,10 +375,10 @@ proc extio_ota_usb_on_ack {dp data} {                  ;# box published a new co
 # Progress-checked at fire time: a resend blast can outlive the timer, so an
 # expired deadline racing queued ack events must re-arm, not kill the push.
 proc extio_ota_usb_deadline {box} {
-    catch { after cancel $::extio_ota_dead($box) }
+    catch { dservAfterCancel $::extio_ota_dead($box) }
     set at -1
     catch { set at [dservGet extio/$box/state/ota/ack] }
-    set ::extio_ota_dead($box) [after 10000 [list extio_ota_usb_deadcheck $box $at]]
+    set ::extio_ota_dead($box) [dservAfter 10000 [list extio_ota_usb_deadcheck $box $at]]
 }
 
 proc extio_ota_usb_deadcheck {box armed_ack} {
@@ -401,8 +401,8 @@ proc extio_ota_usb_fail {box why} {
 }
 
 proc extio_ota_usb_cleanup {box} {                     ;# stop resending (delivered, or state -> armed/fail)
-    catch { after cancel $::extio_ota_timer($box) }
-    catch { after cancel $::extio_ota_dead($box) }
+    catch { dservAfterCancel $::extio_ota_timer($box) }
+    catch { dservAfterCancel $::extio_ota_dead($box) }
     catch { unset ::extio_ota_img($box) }
     catch { unset ::extio_ota_size($box) }
     catch { unset ::extio_ota_timer($box) }
@@ -642,15 +642,16 @@ proc extio_ota_docked_done {dp value} {                ;# dservWhen callback: lo
 # Datapoint trigger for a network client (extio-setup's dserv driver, which can
 # only %set extio/<box>/cmd/... -- no Tcl eval) to kick off a shelf OTA. Value =
 # "<channel> ?<version>?" (empty -> dev/latest). We DEFER the actual pull with
-# `after 0` so the triggering %set returns its rc immediately: extio_ota_push_shelf
+# `dservAfter 0` so the triggering %set returns its rc immediately: extio_ota_push_shelf
 # blocks a few seconds on the .bin fetch, and the client's command socket would
-# otherwise time out waiting for the reply.
+# otherwise time out waiting for the reply. (Plain Tcl `after 0` would never fire
+# -- dserv doesn't spin the Tcl event loop; dservAfter runs it on the process thread.)
 proc extio_ota_pull_trigger {dp data} {
     if { ![regexp {^extio/([^/]+)/cmd/ota/pull$} $dp -> box] } return
     set toks [split [string trim $data]]
     set channel [expr {[llength $toks] >= 1 && [lindex $toks 0] ne "" ? [lindex $toks 0] : "dev"}]
     set version [expr {[llength $toks] >= 2 ? [lindex $toks 1] : ""}]
-    after 0 [list extio_ota_pull_run $box $channel $version]
+    dservAfter 0 [list extio_ota_pull_run $box $channel $version]
 }
 
 proc extio_ota_pull_run {box channel version} {
