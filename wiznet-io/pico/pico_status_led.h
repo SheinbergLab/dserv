@@ -48,7 +48,7 @@ enum {
     STATUS_LED_BRINGUP,     /* radio coming up (dim white)                     */
     STATUS_LED_LOWBATT,     /* battery low (red, slow pulse)                   */
     STATUS_LED_OBS,         /* in an observation period (steady green -- follows the sync line) */
-    STATUS_LED_GOOD,        /* linked + encrypted + streaming (green blip)     */
+    STATUS_LED_GOOD,        /* linked + encrypted, idle (steady subtle blue -- calm, non-distracting) */
     STATUS_LED_CONNECTING,  /* central connected, pipe not yet up (amber)      */
     STATUS_LED_SEARCHING    /* advertising, no central (blue blip)             */
 };
@@ -76,11 +76,12 @@ static inline uint32_t status_scale(uint32_t grb)
 static inline uint32_t status_grb(uint8_t r, uint8_t g, uint8_t b)
 { return ((uint32_t) g << 16) | ((uint32_t) r << 8) | (uint32_t) b; }
 
-#define STATUS_C_RED    status_grb(48, 0, 0)
-#define STATUS_C_GREEN  status_grb(0, 48, 0)
-#define STATUS_C_BLUE   status_grb(0, 0, 64)
-#define STATUS_C_AMBER  status_grb(48, 18, 0)
-#define STATUS_C_WHITE  status_grb(20, 20, 20)
+#define STATUS_C_RED     status_grb(48, 0, 0)
+#define STATUS_C_GREEN   status_grb(0, 48, 0)
+#define STATUS_C_BLUE    status_grb(0, 0, 64)
+#define STATUS_C_BLUEDIM status_grb(0, 0, 28)   /* subtle steady blue: connected + idle */
+#define STATUS_C_AMBER   status_grb(48, 18, 0)
+#define STATUS_C_WHITE   status_grb(20, 20, 20)
 
 static PIO      status_pio;
 static uint     status_sm;
@@ -124,8 +125,8 @@ static inline uint32_t status_led_color(uint8_t state, uint32_t now)
     case STATUS_LED_FAIL:       c = (now % 300  < 150) ? STATUS_C_RED   : 0; break;   /* fast blink   */
     case STATUS_LED_BRINGUP:    c = STATUS_C_WHITE;                          break;   /* solid, brief */
     case STATUS_LED_LOWBATT:    c = (now % 2000 < 400) ? STATUS_C_RED   : 0; break;   /* slow pulse   */
-    case STATUS_LED_OBS:        c = STATUS_C_GREEN;                          break;   /* steady: obs on */
-    case STATUS_LED_GOOD:       c = (now % 3000 <  60) ? STATUS_C_GREEN : 0; break;   /* rare blip    */
+    case STATUS_LED_OBS:        c = STATUS_C_GREEN;                          break;   /* steady green: obs on */
+    case STATUS_LED_GOOD:       c = STATUS_C_BLUEDIM;                        break;   /* steady subtle blue: connected, idle */
     case STATUS_LED_CONNECTING: c = STATUS_C_AMBER;                          break;   /* solid        */
     case STATUS_LED_SEARCHING:  c = (now % 1500 <  80) ? STATUS_C_BLUE  : 0; break;   /* searching    */
     default:                    c = 0;                                       break;
