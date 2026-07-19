@@ -76,7 +76,14 @@ proc extio_find_data_port {} {
 
 # ---- forwarding (wired once; survives hot-swap re-opens since usbioSendFrame uses
 #      whatever fd is currently open) ----
-proc usbio_forward {dp data} { catch { usbioSendFrame $dp [dservTimestamp $dp] $data } }
+proc usbio_forward {dp data} {
+    # cmd/ota/pull is HOST-side (a network client asks us to pull from the shelf),
+    # not a box command -- route it to the trigger instead of forwarding to the box.
+    # (extio_forward_box wires cmd/* here per box, which would otherwise shadow the
+    # global extio/*/cmd/ota/pull dpointSetScript.)
+    if { [string match extio/*/cmd/ota/pull $dp] } { extio_ota_pull_trigger $dp $data; return }
+    catch { usbioSendFrame $dp [dservTimestamp $dp] $data }
+}
 ;# catch: a vanished device makes sends error (or short-write); forwards just drop --
 ;# same semantics as fd-not-open -- until extio_service's supervision reopens/clears.
 
