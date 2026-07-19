@@ -403,8 +403,6 @@ proc extio_ota_usb_fail {box why} {
 proc extio_ota_usb_cleanup {box} {                     ;# stop resending (delivered, or state -> armed/fail)
     catch { after cancel $::extio_ota_timer($box) }
     catch { after cancel $::extio_ota_dead($box) }
-    catch { close $::extio_ota_chan($box) }            ;# docked push: close the handheld's USB port (no-op otherwise)
-    catch { unset ::extio_ota_chan($box) }
     catch { unset ::extio_ota_img($box) }
     catch { unset ::extio_ota_size($box) }
     catch { unset ::extio_ota_timer($box) }
@@ -597,54 +595,48 @@ proc extio_ota_push_shelf_docked {box {channel dev} {version ""}} {
     return $r
 }
 
-# Stream a local .bin to a docked handheld: begin+acks over radio, 'D' over USB.
+# Stream a local .bin to a docked handheld: begin over the radio relay, then the
+# 'D' data stream over the handheld's own USB port. FULLY SYNCHRONOUS -- no event
+# timers (the extio interp has no `after`, and usbio injects acks on a thread a
+# blocking command can't observe): the blocking writes are paced by USB flow
+# control (the box NAKs while it flash-writes -> no host->box drops), and the
+# box's own sha256 verify is the correctness gate. A dservWhen reports the final
+# result reactively. After this returns the box verifies + arms the TBYB trial.
 proc extio_ota_push_docked {box file sha size port} {
     if { [catch { open $port r+ } ch] } { error "extio_ota_push_docked: cannot open $port: $ch" }
     # byte-transparent I/O: Tcl 9 removed "-encoding binary"; iso8859-1 maps 0..255
     # 1:1, and -translation binary suppresses EOL/EOF munging.
     fconfigure $ch -translation binary -encoding iso8859-1 -blocking 1 -buffering none
-    set ::extio_ota_chan($box) $ch                    ;# extio_ota_usb_cleanup closes it
-    set fp [open $file rb]; fconfigure $fp -translation binary
-    set ::extio_ota_img($box)  [read $fp]; close $fp
-    set ::extio_ota_size($box) $size
-    catch { after cancel $::extio_ota_timer($box) }
+    set fp [open $file rb]; set data [read $fp]; close $fp
+    foreach k {ack state result} { catch { dservClear extio/$box/state/ota/$k } }
 
-    catch { dservClear extio/$box/state/ota/ack }
-    catch { dservClear extio/$box/state/ota/state }
-    catch { dservClear extio/$box/state/ota/result }
-    dservAddMatch   extio/$box/state/ota/ack
-    dpointSetScript extio/$box/state/ota/ack extio_ota_docked_on_ack
+    # Observe the outcome reactively (dservWhen: non-blocking, no `after`, fires
+    # once when state/ota/result reaches a terminal value).
+    catch { dservWhenCancel $::extio_ota_when($box) }
+    set ::extio_ota_when($box) [dservWhen extio/$box/state/ota/result \
+        {in {committed fail buy_failed host_io bad_args}} extio_ota_docked_done]
 
-    # begin over the RADIO relay: cmd/ota/begin forwards to the receiver, which
-    # relays it to the handheld (one small frame -- fine over BLE).
-    dservSet extio/$box/cmd/ota/begin "$sha $size"
-    exec sleep 2                                       ;# box stages the slot (~0.1s) + radio latency
-    extio_ota_docked_blast $box 0
-    if { [info exists ::extio_ota_img($box)] } { extio_ota_usb_deadline $box }
-    return "ota docked $box: streaming $size B (sha $sha) over $port; acks via radio -- watch state/ota"
-}
+    # begin SYNCHRONOUSLY over the radio relay: usbioSendFrame -> receiver ->
+    # (CFG_NONE) relay -> handheld. A dservSet would defer to the event loop
+    # (i.e. until after this blocking command returns).
+    usbioSendFrame extio/$box/cmd/ota/begin 0 "$sha $size"
+    exec sleep 2                                       ;# box stages the inactive slot (~0.1s) + radio hop
 
-proc extio_ota_docked_blast {box from} {               ;# write 'D' frames [$from,EOF); blocking = backpressure
-    if { ![info exists ::extio_ota_img($box)] || ![info exists ::extio_ota_chan($box)] } return
-    set data $::extio_ota_img($box); set size $::extio_ota_size($box)
-    set chunk $::extio_ota_chunk; set ch $::extio_ota_chan($box)
-    for { set off $from } { $off < $size } { incr off $chunk } {
+    set chunk $::extio_ota_chunk
+    for { set off 0 } { $off < $size } { incr off $chunk } {
         set end [expr {min($off + $chunk, $size)}]
-        set payload [string range $data $off [expr {$end - 1}]]
-        if { [catch { puts -nonewline $ch [extio_ota_dframe $off $payload]; flush $ch } e] } {
-            extio_ota_usb_fail $box "docked write failed at $off/$size: $e"   ;# closes the channel too
-            return
-        }
+        puts -nonewline $ch [extio_ota_dframe $off [string range $data $off [expr {$end - 1}]]]
     }
+    flush $ch
+    exec sleep 1                                       ;# drain the tail before dropping DTR
+    close $ch
+    return "ota docked $box: streamed $size B (sha $sha) over $port -- box verifying + arming; watch state/ota"
 }
 
-proc extio_ota_docked_on_ack {dp data} {               ;# box's contiguous cursor advanced (over radio)
-    if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
-    if { ![info exists ::extio_ota_size($box)] } return
-    if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }
-    extio_ota_usb_deadline $box
-    catch { after cancel $::extio_ota_timer($box) }
-    set ::extio_ota_timer($box) [after 400 [list extio_ota_docked_blast $box $data]]
+proc extio_ota_docked_done {dp value} {                ;# dservWhen callback: log the terminal result
+    if { ![regexp {^extio/([^/]+)/state/ota/result$} $dp -> box] } return
+    catch { unset ::extio_ota_when($box) }
+    puts "extio ota\[$box\]: docked OTA result = $value"
 }
 
 # Datapoint trigger for a network client (extio-setup's dserv driver, which can
