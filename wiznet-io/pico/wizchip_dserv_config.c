@@ -28,9 +28,9 @@
  *
  * The cores share nothing but SPSC byte rings, three queues, and a couple of
  * volatile words. g_cfg is written ONLY by core 1 once it's launched; core 0
- * reads just ain_en/ain_rate/ain_gain (+ ble_en/pipe_en on BOX_BLE builds --
- * the radio also lives on core 0, box_ble_central.h) (benign staleness).
- *   core0 -> core1: console lines (g_cmd_q), AIN samples (g_ain_q)
+ * reads just mcp_en (+ ble_en/pipe_en on BOX_BLE builds -- the radio also lives
+ * on core 0, box_ble_central.h) (benign staleness).
+ *   core0 -> core1: console lines (g_cmd_q), MCP3204 scans (g_mcp_q)
  *   core1 -> core0: flash ops carrying a config snapshot (g_save_q), log rings
  *
  * Clock alignment: the box also subscribes to ess/in_obs. Each obs begin/end
@@ -72,7 +72,6 @@
 #ifdef BOX_FUEL_MAX17048
 #include "pico_fuel.h"          /* on-board fuel gauge: compiled per board  */
 #endif
-#include "pico_ain.h"           /* ADS1115 analog-in: always compiled, runtime-enabled (ain_en) */
 #include "pico_mcp3204.h"       /* MCP3204 SPI analog-in (joystick): always compiled, runtime-enabled (mcp_en) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
@@ -219,11 +218,9 @@ static uint64_t g_obs_begin_us;     /* box-clock time of the last beginobs -> an
 static int32_t g_wdt;
 
 /* ---- cross-core plumbing (queues made on core 0 before core 1 launches) ---- */
-typedef struct { uint64_t t_us; int16_t val; uint8_t ch; } ain_sample_t;
 typedef struct { uint64_t t_us; int16_t v[MCP3204_NCH]; } mcp_scan_t;   /* one packed 4-ch snapshot */
 typedef struct { uint8_t erase_only; pico_config_t cfg; } save_req_t;
 static queue_t g_cmd_q;             /* core0 console line -> core1 executes (owns cfg/pins) */
-static queue_t g_ain_q;             /* core0 I2C sample   -> core1 stamps + publishes      */
 static queue_t g_mcp_q;             /* core0 SPI 4-ch scan-> core1 stamps + publishes (packed) */
 static queue_t g_save_q;            /* core1 save/erase   -> core0 writes flash            */
 static volatile int g_core1_ready;
@@ -265,7 +262,7 @@ static uint32_t          g_ble_crumb;        /* last-run radio-path breadcrumb (
 
 /* ---- status snapshot for the core-0 OLED (single-writer: core 1) ----
  * Byte fields only, so cross-core reads are benign-stale, never torn --
- * the same contract as core 0's ain_en/rate/gain reads. */
+ * the same contract as core 0's mcp_en read. */
 typedef struct {
     uint8_t ip[4];
     uint8_t usb, sensing;       /* active transport / auto still watching   */
@@ -363,15 +360,6 @@ static void publish_heartbeat(void)
         dserv_msg_int(f, nm, 0, soc);                    box_net_client_send(f, DSERV_MSG_LEN);
     }
 #endif
-}
-
-static void publish_ain(int ch, int16_t v, uint64_t t_us)  /* state/ain/<ch>, stamped at acquisition */
-{
-    char leaf[16], nm[64]; uint8_t f[DSERV_MSG_LEN];
-    snprintf(leaf, sizeof leaf, "ain/%d", ch);
-    dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-    dserv_msg_int(f, nm, event_stamp(t_us), v);
-    box_net_client_send(f, DSERV_MSG_LEN);
 }
 
 /* MCP3204: all channels in ONE datapoint (state/ain/scan = int16[MCP3204_NCH]),
@@ -1767,8 +1755,6 @@ static void rt_main(void)
                     int gn = group_poll(&g_grp[g], &g_cfg, g, gnow, go);
                     for (int k = 0; k < gn; k++) publish_group(g, go[k].bits, go[k].t_us);
                 }
-                ain_sample_t s;                        /* acquired on core 0, stamped here */
-                while (queue_try_remove(&g_ain_q, &s)) publish_ain(s.ch, s.val, s.t_us);
                 mcp_scan_t ms;                         /* MCP3204 packed 4-ch snapshot */
                 while (queue_try_remove(&g_mcp_q, &ms)) publish_ain_scan(ms.v, ms.t_us);
 #ifdef BOX_BLE
@@ -1860,19 +1846,6 @@ static void console_service(void)
         line[len++] = (char) ch;                   /* printable only -> no stray control bytes in config */
         putchar(ch);
     }
-}
-
-static int16_t ain_last_pub[AIN_NCH];
-static void ain_service_core0(void)     /* ADS1115 I2C on core 0; publish-worthy samples -> queue */
-{
-    if (!g_cfg.ain_en) return;
-    int fresh = ain_service(&g_cfg);    /* non-blocking single-shot state machine (+failure trip) */
-    for (int ch = 0; ch < AIN_NCH; ch++)
-        if ((fresh & (1 << ch)) && abs(ain_get(ch) - ain_last_pub[ch]) > AIN_DEADBAND) {
-            ain_last_pub[ch] = ain_get(ch);
-            ain_sample_t s = { time_us_64(), ain_last_pub[ch], (uint8_t) ch };
-            queue_try_add(&g_ain_q, &s);           /* full -> drop; the next sample supersedes */
-        }
 }
 
 /* MCP3204 SPI ADC on core 0: fast-scan ALL channels every ~MCP_SAMPLE_MS and,
@@ -2116,7 +2089,6 @@ int main(void)
 #endif
 
     queue_init(&g_cmd_q,  CLI_LINE_MAX,         4);
-    queue_init(&g_ain_q,  sizeof(ain_sample_t), 16);
     queue_init(&g_mcp_q,  sizeof(mcp_scan_t),    8);   /* MCP3204 packed scans -> core1 */
     queue_init(&g_save_q, sizeof(save_req_t),   2);
 #ifdef BOX_BLE
@@ -2131,7 +2103,6 @@ int main(void)
 #ifdef BOX_STATUS_LED
     status_led_init();              /* onboard WS2812 (GP14): the handheld's only status UI */
 #endif
-    if (g_cfg.ain_en) ain_init();   /* I2C lives on THIS core (else the pins stay free) */
     if (g_cfg.mcp_en) {             /* MCP3204 SPI ADC: claim SPI0 pins BEFORE core 1's apply_config */
         pico_gpio_mcp_claim = 1;
         mcp3204_init();
@@ -2148,8 +2119,7 @@ int main(void)
     while (1) {
         box_console_drain();        /* log rings -> UART (+ CDC0 via core-1 ferry) */
         console_service();
-        ain_service_core0();
-        mcp_service_core0();        /* MCP3204 SPI joystick (rate-gated; publishes state/ain/<ch>) */
+        mcp_service_core0();        /* MCP3204 SPI joystick (rate-gated; publishes state/ain/scan) */
 #ifdef BOX_FUEL_MAX17048
         fuel_service();
 #endif

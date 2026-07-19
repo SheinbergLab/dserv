@@ -73,10 +73,13 @@ typedef struct {
                                          * empty => fall back to compile-time WIFI_SSID/PASSWORD */
     char     wifi_pass[64];
     uint8_t  wifi_pm;                   /* pico2w: 1 = WiFi power-save (battery), 0 = off (low latency) */
-    uint8_t  ain_rate;                  /* ADS1115 data rate: 0=default(128SPS), 1..8=8/16/32/64/128/250/475/860 */
-    uint8_t  ain_gain;                  /* ADS1115 PGA/FSR:   0=default(4.096V), 1..6=6.144/4.096/2.048/1.024/0.512/0.256 */
-    uint8_t  ain_en;                    /* 1 = activate ADS1115 analog-in (ADC must be wired); 0 = off (default),
-                                         * leaves the I2C pins free for GPIO. Applied at boot (save+reboot). */
+    /* v10 was the ADS1115 I2C analog-in (ain_rate/ain_gain/ain_en). REMOVED
+     * 2026-07-19 in favor of the MCP3204 SPI ADC (mcp_en); these 3 bytes are
+     * RETAINED AS RESERVED so the persist layout is byte-identical -- removing
+     * them would shift every later field and corrupt already-saved configs. */
+    uint8_t  _rsvd_ain_rate;
+    uint8_t  _rsvd_ain_gain;
+    uint8_t  _rsvd_ain_en;
     uint8_t  transport_mode;            /* DUAL boot policy when the GP28 strap is OPEN (strap to GND still
                                          * hard-forces Ethernet): XMODE_AUTO (0, default: boot USB, sense the
                                          * PHY link, upgrade to eth), XMODE_ETH, XMODE_USB. Safe to persist
@@ -125,9 +128,9 @@ typedef struct {
      * periodic sync burst. See wiznet-io/BLE.md "Power" + box_ble_central.h. */
     uint8_t  ble_latency;
 
-    /* v18: MCP3204 SPI analog-in (pico_mcp3204.h) -- a 2-axis analog joystick on
-     * SPI0. Alternative to the I2C ADS1115 (ain_en); enable one. Off by default,
-     * leaves the SPI0 pins free. Applied at boot (SPI init). */
+    /* v18: MCP3204 SPI analog-in (pico_mcp3204.h) -- a 4-channel scan (2-axis
+     * joystick on CH0/CH1) published as one packed state/ain/scan snapshot. Off
+     * by default, leaves the SPI0 pins free. Applied at boot (SPI init). */
     uint8_t  mcp_en;
 } pico_config_t;
 
@@ -156,9 +159,6 @@ typedef enum {
     CFG_WIFI_SSID,
     CFG_WIFI_PASS,
     CFG_WIFI_PM,
-    CFG_AIN_RATE,
-    CFG_AIN_GAIN,
-    CFG_AIN_EN,
     CFG_MCP_EN,
     CFG_OLED_EN,
     CFG_BLE_EN,
@@ -416,17 +416,6 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "wifi/pm") == 0) {
         c->wifi_pm = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_WIFI_PM;
     }
-    if (strcmp(k, "ain/rate") == 0) {
-        long v = dserv_msg_as_long(m); if (v < 0 || v > 8) return CFG_UNKNOWN;
-        c->ain_rate = (uint8_t) v; c->applied_count++; return CFG_AIN_RATE;
-    }
-    if (strcmp(k, "ain/gain") == 0) {
-        long v = dserv_msg_as_long(m); if (v < 0 || v > 6) return CFG_UNKNOWN;
-        c->ain_gain = (uint8_t) v; c->applied_count++; return CFG_AIN_GAIN;
-    }
-    if (strcmp(k, "ain/enable") == 0) {
-        c->ain_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_AIN_EN;
-    }
     if (strcmp(k, "mcp/enable") == 0) {    /* MCP3204 SPI analog-in (applied at boot) */
         c->mcp_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_MCP_EN;
     }
@@ -548,9 +537,6 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_WIFI_SSID:  return "wifi_ssid";
     case CFG_WIFI_PASS:  return "wifi_pass";
     case CFG_WIFI_PM:    return "wifi_pm";
-    case CFG_AIN_RATE:   return "ain_rate";
-    case CFG_AIN_GAIN:   return "ain_gain";
-    case CFG_AIN_EN:     return "ain_en";
     case CFG_MCP_EN:     return "mcp_en";
     case CFG_OLED_EN:    return "oled_en";
     case CFG_BLE_EN:     return "ble_en";

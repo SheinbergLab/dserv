@@ -50,13 +50,13 @@ static inline void pico_cli_show(const pico_config_t *c, char *out, int outsz)
     k += snprintf(out + k, outsz - k, "mode=%s ", dserv_xmode_str(c->transport_mode));
 #endif
     k += snprintf(out + k, outsz - k,
-        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u ain.en=%u ain.rate=%u ain.gain=%u mcp.en=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
+        "name=%s net.mode=%s net.ip=%u.%u.%u.%u dserv=%u.%u.%u.%u:%u obs.pin=%s sync.pin=%s wifi.ssid=%s wifi.pass=%s wifi.pm=%u mcp.en=%u oled.en=%u ble.en=%u pipe.en=%u applied=%u\r\n",
         dserv_cfg_name(c), dserv_netmode_str(c->net_mode),
         c->net_ip[0], c->net_ip[1], c->net_ip[2], c->net_ip[3],
         c->dserv_ip[0], c->dserv_ip[1], c->dserv_ip[2], c->dserv_ip[3],
         dserv_cfg_port(c), obs, syn,   /* effective port (default when unset), not raw 0 */
         c->wifi_ssid[0] ? c->wifi_ssid : "(build)", c->wifi_pass[0] ? "set" : "(build)",
-        c->wifi_pm, c->ain_en, c->ain_rate, c->ain_gain, c->mcp_en, c->oled_en, c->ble_en, c->pipe_en, c->applied_count);
+        c->wifi_pm, c->mcp_en, c->oled_en, c->ble_en, c->pipe_en, c->applied_count);
     if (c->desc[0] && k < outsz - 8)
         k += snprintf(out + k, outsz - k, "  desc=%s\r\n", c->desc);
     for (int i = 0; i < PICO_NPINS && k < outsz - 64; i++)
@@ -116,10 +116,7 @@ static inline void pico_cli_dump(const pico_config_t *c)
     if (c->wifi_ssid[0])                  printf("wifi ssid %s\r\n", c->wifi_ssid);
     if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
     if (c->wifi_pm)                       printf("wifi pm 1\r\n");
-    if (c->ain_en)                        printf("ain enable 1\r\n");
     if (c->mcp_en)                        printf("mcp enable 1\r\n");
-    if (c->ain_rate)                      printf("ain rate %u\r\n", c->ain_rate);
-    if (c->ain_gain)                      printf("ain gain %u\r\n", c->ain_gain);
     if (c->oled_en)                       printf("oled enable 1\r\n");
     if (c->ble_en)                        printf("ble enable 1\r\n");
     if (c->pipe_en)                       printf("ble pipe 1\r\n");
@@ -289,23 +286,9 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         snprintf(out, outsz, "OK wifi pm=%d (%s; save+reboot to apply)\r\n",
                  c->wifi_pm, c->wifi_pm ? "power-save/battery" : "off/low-latency"); return CLI_OK;
     }
-    if (sscanf(line, "ain rate %d", &v) == 1) {   /* ADS1115: 0=default(128SPS), 1..8=8..860 */
-        if (v < 0 || v > 8) { snprintf(out, outsz, "ERR ain rate 0-8 (0=128SPS)\r\n"); return CLI_ERR; }
-        c->ain_rate = (uint8_t) v; c->applied_count++;
-        snprintf(out, outsz, "OK ain rate=%d\r\n", v); return CLI_OK;   /* live on next sample */
-    }
-    if (sscanf(line, "ain gain %d", &v) == 1) {   /* 0=default(4.096V), 1..6=6.144..0.256 FSR */
-        if (v < 0 || v > 6) { snprintf(out, outsz, "ERR ain gain 0-6 (0=4.096V)\r\n"); return CLI_ERR; }
-        c->ain_gain = (uint8_t) v; c->applied_count++;
-        snprintf(out, outsz, "OK ain gain=%d\r\n", v); return CLI_OK;
-    }
     if (sscanf(line, "mcp enable %d", &v) == 1) { /* activate the MCP3204 SPI ADC (save+reboot to apply) */
         c->mcp_en = v ? 1 : 0; c->applied_count++;
         snprintf(out, outsz, "OK mcp enable=%d (claims SPI0 pins 2-5; save+reboot to apply)\r\n", c->mcp_en); return CLI_OK;
-    }
-    if (sscanf(line, "ain enable %d", &v) == 1) { /* activate the ADS1115 (save+reboot to apply) */
-        c->ain_en = v ? 1 : 0; c->applied_count++;
-        snprintf(out, outsz, "OK ain enable=%d (save+reboot to apply)\r\n", c->ain_en); return CLI_OK;
     }
     if (sscanf(line, "oled enable %d", &v) == 1) { /* SSD1306 SPI status display (see PINMAP.md) */
         c->oled_en = v ? 1 : 0; c->applied_count++;
@@ -369,7 +352,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
             "      sync pin N | sync off |\r\n"
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
             "      group G quiet 0|1 | group G off |\r\n"
-            "      ain enable 0|1 | ain rate 0-8 | ain gain 0-6 | mcp enable 0|1 | oled enable 0|1 |\r\n"
+            "      mcp enable 0|1 | oled enable 0|1 |\r\n"
             "      ble enable 0|1 | " PICO_CLI_HELP_BLE "\r\n"
             "      do N 0|1 | do N pulse US | wdt 0|1|test | save | factory | reboot | bootsel\r\n");
         return CLI_OK;

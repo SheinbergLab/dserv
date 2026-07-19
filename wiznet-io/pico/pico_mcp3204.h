@@ -1,21 +1,20 @@
 /*
- * pico_mcp3204.h -- MCP3204 12-bit SPI ADC: analog inputs for the box, chiefly a
- * 2-axis analog joystick on the BLE handheld. A passive SAR ADC (unlike the I2C
- * ADS1115 in pico_ain.h): each read is ONE short (~us) SPI transaction -- the
- * conversion happens during the clocking -- so there's no non-blocking state
- * machine to wait on a conversion. Battery-friendly: the MCP3204 self-powers-down
- * between conversions (~uA), so at a modest sample rate its average draw is
- * essentially the conversion energy (vs an always-on I2C coprocessor).
+ * pico_mcp3204.h -- MCP3204 12-bit SPI ADC: the box's analog input, chiefly a
+ * 2-axis analog joystick on the BLE handheld. A passive SAR ADC: each read is
+ * ONE short (~us) SPI transaction -- the conversion happens during the clocking
+ * -- so there's no non-blocking state machine to wait on a conversion. Battery-
+ * friendly: the MCP3204 self-powers-down between conversions (~uA), so at a
+ * modest sample rate its average draw is essentially the conversion energy (vs
+ * an always-on I2C coprocessor). (Replaced the ADS1115 I2C path, 2026-07-19.)
  *
  * Bus: SPI0 on the SDK default pins -- Thing Plus SCK=GP2 / TX(MOSI)=GP3 /
  * RX(MISO)=GP4 -- plus CS on GP5 (the default SPI0 CSn). These are the
  * "default SPI0 / microSD" pins (PINMAP): free on a handheld with no SD card.
  * Reserved from user pin-config in pico_gpio.h while mcp_en. SPI mode 0,0.
  *
- * Samples publish to state/ain/<ch> via the SAME queue/deadband/stamp path as the
- * ADS1115 (publish_ain), so downstream consumers (the ess joystick/analog API)
- * are ADC-agnostic. Wire the joystick pots to CH0 (X) and CH1 (Y). Enable one
- * analog source at a time (mcp_en OR ain_en); each is off by default.
+ * All channels are grabbed in one fast scan (mcp3204_scan) and published as a
+ * single packed state/ain/scan snapshot (int16[4], one timestamp) -- see
+ * mcp_service_core0 / publish_ain_scan. CH0 = joystick X, CH1 = Y; CH2/CH3 free.
  *
  * Always compiled; runtime-enabled via `mcp enable 1` (persisted) + a boot init.
  */
