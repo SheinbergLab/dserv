@@ -108,6 +108,9 @@ TclServer::TclServer(int argc, char **argv,
    
   // the process thread
   process_thread = std::thread(&process_requests, this);
+
+  // the dservAfter timer thread (one-shot deferred scripts)
+  after_thread = std::thread(&TclServer::after_loop, this);
 }
 
 TclServer::~TclServer()
@@ -115,6 +118,11 @@ TclServer::~TclServer()
   delete eventDispatcher;
 
   shutdown();
+
+  // stop the dservAfter timer thread
+  { std::lock_guard<std::mutex> lk(after_mutex); after_stop = true; }
+  after_cv.notify_all();
+  if (after_thread.joinable()) after_thread.join();
 
   if (websocket_port() >= 0)
     websocket_thread.detach();
@@ -2692,6 +2700,114 @@ static int Tcp_Probe_Cmd(ClientData clientData, Tcl_Interp *interp,
   return TCL_OK;
 }
 
+/* ----------------------------------------------------------------------------
+ * dservAfter: one-shot deferred scripts (the replacement for Tcl `after ms
+ * script`, which never fires here since we don't spin the Tcl event loop).
+ * The timer thread waits for the soonest entry and hands its script to the
+ * process thread via the request queue -- the same path a module/timer uses --
+ * so the script runs in normal process-thread context.
+ * -------------------------------------------------------------------------- */
+void TclServer::after_loop(void)
+{
+  std::unique_lock<std::mutex> lk(after_mutex);
+  while (!after_stop) {
+    if (after_entries.empty()) { after_cv.wait(lk); continue; }
+
+    // soonest-firing entry
+    auto soonest = after_entries.begin();
+    for (auto it = after_entries.begin(); it != after_entries.end(); ++it)
+      if (it->fire < soonest->fire) soonest = it;
+
+    auto now = std::chrono::steady_clock::now();
+    if (soonest->fire <= now) {
+      std::string script = soonest->script;
+      after_entries.erase(soonest);
+      lk.unlock();                         // run outside the lock
+      client_request_t req;
+      req.type = REQ_SCRIPT_NOREPLY;
+      req.script = script;
+      queue.push_back(req);                // -> process thread evaluates it
+      lk.lock();
+    } else {
+      after_cv.wait_until(lk, soonest->fire);   // wake when due (or on add/cancel)
+    }
+  }
+}
+
+static int dserv_after_command(ClientData data, Tcl_Interp *interp,
+                               int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) data;
+  if (objc != 3) {
+    Tcl_WrongNumArgs(interp, 1, objv, "ms script");
+    return TCL_ERROR;
+  }
+  int ms;
+  if (Tcl_GetIntFromObj(interp, objv[1], &ms) != TCL_OK) return TCL_ERROR;
+  if (ms < 0) ms = 0;
+
+  int id;
+  {
+    std::lock_guard<std::mutex> lk(tserv->after_mutex);
+    id = tserv->after_next_id++;
+    TclServer::AfterEntry e;
+    e.id     = id;
+    e.fire   = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    e.script = Tcl_GetString(objv[2]);
+    tserv->after_entries.push_back(std::move(e));
+  }
+  tserv->after_cv.notify_all();
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(id));
+  return TCL_OK;
+}
+
+static int dserv_after_cancel_command(ClientData data, Tcl_Interp *interp,
+                                      int objc, Tcl_Obj *const objv[])
+{
+  TclServer *tserv = (TclServer *) data;
+  if (objc != 2) {
+    Tcl_WrongNumArgs(interp, 1, objv, "id");
+    return TCL_ERROR;
+  }
+  int id;
+  if (Tcl_GetIntFromObj(interp, objv[1], &id) != TCL_OK) return TCL_ERROR;
+
+  int removed = 0;
+  {
+    std::lock_guard<std::mutex> lk(tserv->after_mutex);
+    for (auto it = tserv->after_entries.begin(); it != tserv->after_entries.end(); ++it)
+      if (it->id == id) { tserv->after_entries.erase(it); removed = 1; break; }
+  }
+  tserv->after_cv.notify_all();
+  Tcl_SetObjResult(interp, Tcl_NewIntObj(removed));
+  return TCL_OK;
+}
+
+/* Shadow Tcl's built-in `after`: its deferred forms schedule into the Tcl event
+ * loop, which dserv never spins, so they would silently never run.  Make that a
+ * loud error and steer callers to the working primitives.  The harmless forms
+ * still work: `after cancel`/`after info` are no-ops, and a bare `after <ms>`
+ * (no script) is a real blocking delay via Tcl_Sleep. */
+static int dserv_after_shim_command(ClientData data, Tcl_Interp *interp,
+                                    int objc, Tcl_Obj *const objv[])
+{
+  (void) data;
+  if (objc >= 2) {
+    std::string a1 = Tcl_GetString(objv[1]);
+    if (a1 == "cancel" || a1 == "info") return TCL_OK;   // nothing was scheduled
+    int ms;
+    if (objc == 2 && Tcl_GetIntFromObj(NULL, objv[1], &ms) == TCL_OK) {
+      if (ms > 0) Tcl_Sleep(ms);                          // bare `after ms` = blocking delay
+      return TCL_OK;
+    }
+  }
+  Tcl_AppendResult(interp,
+    "after: deferred callbacks are not serviced in dserv (no Tcl event loop). "
+    "Use `dservAfter ms script` (one-shot), dservWhen (reactive on a datapoint), "
+    "or the timer module (periodic).", NULL);
+  return TCL_ERROR;
+}
+
 static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
 {
   /* use the generic Dataserver commands for these */
@@ -2775,6 +2891,13 @@ static void add_tcl_commands(Tcl_Interp *interp, TclServer *tserv)
                dserv_when_command, tserv, NULL);
   Tcl_CreateObjCommand(interp, "dservWhenCancel",
                dserv_when_cancel_command, tserv, NULL);
+
+  Tcl_CreateObjCommand(interp, "dservAfter",
+               dserv_after_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "dservAfterCancel",
+               dserv_after_cancel_command, tserv, NULL);
+  Tcl_CreateObjCommand(interp, "after",            // shadow Tcl's inert built-in
+               dserv_after_shim_command, tserv, NULL);
 
   Tcl_CreateObjCommand(interp, "dservAddMatch",
                dserv_add_match_command, tserv, NULL);

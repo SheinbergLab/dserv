@@ -225,6 +225,24 @@ public:
   std::map<std::string, int> when_match_refs;
   int when_next_id = 1;
 
+  // dservAfter: one-shot deferred scripts. dserv does not spin the Tcl event
+  // loop, so standard `after ms script` never fires -- this is its replacement.
+  // A dedicated thread waits for the soonest entry and queues its script onto
+  // the process thread (REQ_SCRIPT_NOREPLY, exactly like a module/timer would),
+  // so the script runs in the normal process-thread context.
+  struct AfterEntry {
+    int id;
+    std::chrono::steady_clock::time_point fire;
+    std::string script;
+  };
+  std::vector<AfterEntry>  after_entries;
+  std::mutex               after_mutex;
+  std::condition_variable  after_cv;
+  std::thread              after_thread;
+  int                      after_next_id = 1;
+  bool                     after_stop = false;
+  void after_loop(void);
+
   // for special event scripts
   EventDispatcher* eventDispatcher;
    
