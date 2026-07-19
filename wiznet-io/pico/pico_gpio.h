@@ -41,6 +41,7 @@ extern alarm_pool_t *box_alarm_pool;
 #define OLED_PIN_RST  8      /* reset                             */
 #endif
 static uint8_t pico_gpio_oled_claim;   /* set at boot (main, core 0) iff cfg->oled_en */
+static uint8_t pico_gpio_mcp_claim;    /* set at boot (main, core 0) iff cfg->mcp_en (MCP3204 on SPI0) */
 
 /* Pins the box firmware must never drive/route:
  *  - W6300 wired build: the W6300 QSPI/INT/CS/RST block (GPIO15-22 on EVB-Pico2)
@@ -52,6 +53,11 @@ static inline int pico_gpio_reserved(int n)
 {
 #ifdef BOX_STATUS_LED
     if (n == PICO_DEFAULT_WS2812_PIN) return 1;    /* onboard WS2812 status LED (pico_status_led.h) */
+#endif
+#ifdef PICO_DEFAULT_SPI_SCK_PIN
+    if (pico_gpio_mcp_claim &&                      /* MCP3204 SPI0 (pico_mcp3204.h): SCK/TX/RX/CS */
+        (n == PICO_DEFAULT_SPI_SCK_PIN || n == PICO_DEFAULT_SPI_TX_PIN ||
+         n == PICO_DEFAULT_SPI_RX_PIN  || n == PICO_DEFAULT_SPI_CSN_PIN)) return 1;
 #endif
     if (pico_gpio_oled_claim &&
         (n == OLED_PIN_SCK || n == OLED_PIN_MOSI || n == OLED_PIN_CS ||

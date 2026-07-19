@@ -73,6 +73,7 @@
 #include "pico_fuel.h"          /* on-board fuel gauge: compiled per board  */
 #endif
 #include "pico_ain.h"           /* ADS1115 analog-in: always compiled, runtime-enabled (ain_en) */
+#include "pico_mcp3204.h"       /* MCP3204 SPI analog-in (joystick): always compiled, runtime-enabled (mcp_en) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 #include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
@@ -1859,6 +1860,30 @@ static void ain_service_core0(void)     /* ADS1115 I2C on core 0; publish-worthy
         }
 }
 
+/* MCP3204 SPI ADC on core 0: sample the joystick at ~MCP_SAMPLE_MS and push
+ * changed channels to the SAME state/ain/<ch> queue as the ADS1115. The read is
+ * a short blocking SPI transaction (~us), so no state machine -- just rate-gate
+ * it. Deadband suppresses idle jitter; stamped at acquisition (event_stamp maps
+ * it to the dserv timeline like any edge). */
+#define MCP_SAMPLE_MS 20                           /* ~50 Hz -- plenty for a thumbstick (BLE.md rate note) */
+static void mcp_service_core0(void)
+{
+    if (!g_cfg.mcp_en || !mcp_inited) return;
+    static uint32_t last_ms;
+    static int16_t  mcp_last_pub[MCP3204_NCH];
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (now - last_ms < MCP_SAMPLE_MS) return;
+    last_ms = now;
+    for (int ch = 0; ch < MCP3204_NCH; ch++) {
+        mcp_val[ch] = mcp3204_read(ch);
+        if (abs((int) mcp_val[ch] - mcp_last_pub[ch]) > MCP3204_DEADBAND) {
+            mcp_last_pub[ch] = (int16_t) mcp_val[ch];
+            ain_sample_t s = { time_us_64(), mcp_last_pub[ch], (uint8_t) ch };   /* -> publish_ain -> state/ain/<ch> */
+            queue_try_add(&g_ain_q, &s);
+        }
+    }
+}
+
 #ifdef BOX_FUEL_MAX17048
 static void fuel_service(void)          /* 1 Hz gauge read; heartbeat (core 1) publishes it */
 {
@@ -2090,6 +2115,10 @@ int main(void)
     status_led_init();              /* onboard WS2812 (GP14): the handheld's only status UI */
 #endif
     if (g_cfg.ain_en) ain_init();   /* I2C lives on THIS core (else the pins stay free) */
+    if (g_cfg.mcp_en) {             /* MCP3204 SPI ADC: claim SPI0 pins BEFORE core 1's apply_config */
+        pico_gpio_mcp_claim = 1;
+        mcp3204_init();
+    }
     if (g_cfg.oled_en) {            /* SPI display likewise; claim pins BEFORE core 1's  */
         pico_gpio_oled_claim = 1;   /* apply_config so user pin modes can't collide      */
         oled_init();
@@ -2103,6 +2132,7 @@ int main(void)
         box_console_drain();        /* log rings -> UART (+ CDC0 via core-1 ferry) */
         console_service();
         ain_service_core0();
+        mcp_service_core0();        /* MCP3204 SPI joystick (rate-gated; publishes state/ain/<ch>) */
 #ifdef BOX_FUEL_MAX17048
         fuel_service();
 #endif

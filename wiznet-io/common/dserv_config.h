@@ -124,6 +124,11 @@ typedef struct {
      * peripheral still wakes to TRANSMIT). The receiver drops back to 0 for a
      * periodic sync burst. See wiznet-io/BLE.md "Power" + box_ble_central.h. */
     uint8_t  ble_latency;
+
+    /* v18: MCP3204 SPI analog-in (pico_mcp3204.h) -- a 2-axis analog joystick on
+     * SPI0. Alternative to the I2C ADS1115 (ain_en); enable one. Off by default,
+     * leaves the SPI0 pins free. Applied at boot (SPI init). */
+    uint8_t  mcp_en;
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -154,6 +159,7 @@ typedef enum {
     CFG_AIN_RATE,
     CFG_AIN_GAIN,
     CFG_AIN_EN,
+    CFG_MCP_EN,
     CFG_OLED_EN,
     CFG_BLE_EN,
     CFG_PIPE_EN,
@@ -421,6 +427,9 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "ain/enable") == 0) {
         c->ain_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_AIN_EN;
     }
+    if (strcmp(k, "mcp/enable") == 0) {    /* MCP3204 SPI analog-in (applied at boot) */
+        c->mcp_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_MCP_EN;
+    }
     if (strcmp(k, "oled/enable") == 0) {
         c->oled_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_OLED_EN;
     }
@@ -542,6 +551,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_AIN_RATE:   return "ain_rate";
     case CFG_AIN_GAIN:   return "ain_gain";
     case CFG_AIN_EN:     return "ain_en";
+    case CFG_MCP_EN:     return "mcp_en";
     case CFG_OLED_EN:    return "oled_en";
     case CFG_BLE_EN:     return "ble_en";
     case CFG_PIPE_EN:    return "pipe_en";
