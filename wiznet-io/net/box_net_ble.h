@@ -38,6 +38,17 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Docked USB OTA (BLE.md / OTA.md "update when docked"): the handheld's radio is
+ * its transport, but its data CDC (CDC1 -- CDC0 is the box_console) is otherwise
+ * unused. When a host opens CDC1 while docked it can push a firmware OTA the same
+ * '(D)'-frame way the USB box does: rt_main reads CDC1 into on_frame, and
+ * box_net_client_send below mirrors OTA acks/state back out CDC1. tinyusb runs on
+ * core 1 here (box_net_poll == tud_task in rt_main), so this is all same-core. */
+#ifndef BOX_USB_CDC_DATA
+#define BOX_USB_CDC_DATA 1        /* CDC1 = binary data; CDC0 = console */
+#endif
+#define BOX_USB_OTA_DOCKED 1
+
 /* ---- the cross-core frame queues + link state (single-writer each) ----
  * Defined here (box_net.h includes us early) so box_ble_periph.h -- included
  * later in the TU -- sees them. Init on core 0 BEFORE core 1 launches. */
@@ -100,8 +111,18 @@ static inline int box_net_server_poll(uint16_t port, uint8_t *buf, int max)
 static inline int box_net_client_send(const uint8_t *buf, int len)
 {
     if (len != DSERV_MSG_LEN) return -1;
-    if (!box_ble_link) { box_ble_tx_nolink++; return -1; }
-    if (!queue_try_add(&box_ble_txq, buf)) { box_ble_tx_drop++; return -2; }
+    /* Docked USB OTA: mirror to CDC1 FIRST (before the radio-link gate), so a host
+     * pushing an OTA gets its acks/state even when the pipe is down (handheld
+     * docked, receiver off). Best-effort + non-blocking; tinyusb is on this core. */
+    int usb_sent = 0;
+    if (tud_cdc_n_connected(BOX_USB_CDC_DATA) &&
+        tud_cdc_n_write_available(BOX_USB_CDC_DATA) >= (uint32_t) len) {
+        tud_cdc_n_write(BOX_USB_CDC_DATA, buf, (uint32_t) len);
+        tud_cdc_n_write_flush(BOX_USB_CDC_DATA);
+        usb_sent = 1;
+    }
+    if (!box_ble_link) { if (usb_sent) return 0; box_ble_tx_nolink++; return -1; }
+    if (!queue_try_add(&box_ble_txq, buf)) { box_ble_tx_drop++; return usb_sent ? 0 : -2; }
     box_ble_tx_ok++;
     return 0;
 }

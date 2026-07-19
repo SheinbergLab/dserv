@@ -117,6 +117,10 @@ alarm_pool_t *box_alarm_pool;       /* core-1 alarm pool (pulse/sched/DHCP-tick 
 static uint8_t g_rxbuf[RXBUF_SIZE];
 static pico_config_t  g_cfg;
 static dserv_framer_t g_framer;
+#ifdef BOX_USB_OTA_DOCKED
+static uint8_t        g_usbrxbuf[RXBUF_SIZE];  /* docked handheld: CDC1 host-OTA bytes -> on_frame */
+static dserv_framer_t g_usb_framer;            /* its own framer (zero-init = reset) */
+#endif
 static box_clock_t    g_clock;      /* box->dserv time offset, snapped at obs edges */
 
 /* Stamp a box-clock time for an event we're about to publish. Normal boxes map
@@ -1055,10 +1059,12 @@ static void ota_service_core1(void)
  * verifies + arms -- same trial/buy/rollback machinery as eth. See OTA.md.
  *   'D' frame (128B): [0]='D' [1..4]=seq u32 [5..6]=len u16 [7..10]=crc32 u32
  *                     [11..127]=data (1..117 valid, rest zero) */
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_USB_OTA_DOCKED)
 /* Pure-USB build is always USB (box_net_is_usb() is a dual-only symbol); a dual
- * build decides at runtime by the strap-selected transport. */
-#if defined(BOX_NET_USB)
+ * build decides at runtime by the strap-selected transport. The docked handheld
+ * (BOX_USB_OTA_DOCKED) has no socket and radio 'D'-push is excluded, so any
+ * cmd/ota/begin it sees can only have arrived over CDC1 -> always the USB push. */
+#if defined(BOX_NET_USB) || defined(BOX_USB_OTA_DOCKED)
 #  define OTA_IS_USB() 1
 #else
 #  define OTA_IS_USB() box_net_is_usb()
@@ -1198,12 +1204,12 @@ static void ota_usb_service_core1(void)
         printf("ota(usb): stalled -- aborted at %u/%u\n", g_ota.received, g_ota_size);
     }
 }
-#endif /* BOX_NET_USB || BOX_NET_DUAL */
+#endif /* BOX_NET_USB || BOX_NET_DUAL || BOX_USB_OTA_DOCKED */
 
 /* ---- config/cmd in: dispatch one 128B datapoint frame ---- */
 static void on_frame(const uint8_t *frame, void *ud)
 {
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_USB_OTA_DOCKED)
     if (frame[0] == DSERV_OTA_CHAR) { ota_data_frame(frame); return; }   /* USB OTA data, not a datapoint */
 #endif
     uint64_t now_box = time_us_64();   /* receipt time, for the sync anchor */
@@ -1264,7 +1270,7 @@ static void on_frame(const uint8_t *frame, void *ud)
             if (dserv_msg_name_eq(&m, oname)) {
                 char val[96]; dserv_msg_copy_cstr(&m, val, sizeof val);
                 if (ota_begin_parse(val, g_ota_sha, &g_ota_size) == 0) {
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_USB_OTA_DOCKED)
                     if (OTA_IS_USB()) {              /* no socket to pull over -> host pushes 'D' frames */
                         g_ota_usb_begin_req = 1;     /* RT loop probes the slot + pico_ota_begin */
                         printf("ota: armed (%u bytes, USB push)\n", g_ota_size);
@@ -1657,6 +1663,17 @@ static void rt_main(void)
         if (n < 0)      dserv_framer_reset(&g_framer);
         else if (n > 0) dserv_framer_feed(&g_framer, g_rxbuf, (uint32_t) n, on_frame, &g_cfg);
 
+#ifdef BOX_USB_OTA_DOCKED
+        /* Docked USB-OTA ingest (handheld): when a host opens the data CDC (CDC1)
+         * it can push a firmware OTA the same '(D)'-frame way the USB box does.
+         * A SECOND framer feeds the SAME on_frame; tinyusb is on this core, so no
+         * cross-core hop. Idle cost = one tud_cdc_n_available() when undocked. */
+        if (tud_cdc_n_connected(BOX_USB_CDC_DATA) && tud_cdc_n_available(BOX_USB_CDC_DATA)) {
+            uint32_t un = tud_cdc_n_read(BOX_USB_CDC_DATA, g_usbrxbuf, RXBUF_SIZE);
+            if (un) dserv_framer_feed(&g_usb_framer, g_usbrxbuf, un, on_frame, &g_cfg);
+        }
+#endif
+
         char cline[CLI_LINE_MAX];  /* console lines assembled by core 0 */
         while (queue_try_remove(&g_cmd_q, cline)) cmd_exec(cline);
 
@@ -1707,7 +1724,7 @@ static void rt_main(void)
                 ota_service_core1();       /* run an armed OTA pull (blocks; gated !in_obs) */
                 ota_slot_service_core1();  /* run an on-demand bootrom PT/boot probe */
                 ota_arm_service_core1();   /* cmd/ota/arm -> flash-update reboot into inactive slot */
-#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL)
+#if defined(BOX_NET_USB) || defined(BOX_NET_DUAL) || defined(BOX_USB_OTA_DOCKED)
                 ota_usb_service_core1();   /* USB push: begin-setup + stall timeout (data arrives via on_frame) */
 #endif
                 di_event_t e;

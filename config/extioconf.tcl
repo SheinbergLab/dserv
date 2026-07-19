@@ -403,6 +403,8 @@ proc extio_ota_usb_fail {box why} {
 proc extio_ota_usb_cleanup {box} {                     ;# stop resending (delivered, or state -> armed/fail)
     catch { after cancel $::extio_ota_timer($box) }
     catch { after cancel $::extio_ota_dead($box) }
+    catch { close $::extio_ota_chan($box) }            ;# docked push: close the handheld's USB port (no-op otherwise)
+    catch { unset ::extio_ota_chan($box) }
     catch { unset ::extio_ota_img($box) }
     catch { unset ::extio_ota_size($box) }
     catch { unset ::extio_ota_timer($box) }
@@ -485,6 +487,162 @@ proc extio_ota_push_shelf {box {channel dev} {version ""}} {
     set r [extio_ota_push $box $tmp]
     catch { file delete $tmp }
     return $r
+}
+
+# ---- DOCKED handheld OTA (a BLE-transport box plugged in via USB) ------------
+# The handheld's transport IS the radio, so multiframe 'D' OTA is excluded over
+# it -- BUT its data CDC (CDC1, otherwise unused) carries an OTA when docked
+# (firmware BOX_USB_OTA_DOCKED). The split: cmd/ota/begin + state/ota/ack + all
+# state flow over the RADIO relay (already up, small frames), and ONLY the 'D'
+# data stream goes over the handheld's own USB port. So the ack-driven resend
+# machinery is reused verbatim (acks arrive as ordinary dserv datapoints); only
+# the chunk WRITER differs -- a Tcl channel to the handheld's port instead of
+# usbioSendChunk to the receiver's. One picotool flash bootstraps this; every
+# update after is docked-USB, no picotool.
+#
+#   dservctl extio "extio_ota_push_shelf_docked hh1"             ;# latest on dev
+#   dservctl extio "extio_ota_push_shelf_docked hh1 dev <ver>"
+
+# A docked handheld's USB DATA port, by its "dserv handheld" identity -- the
+# mirror of extio_find_data_port (which deliberately SKIPS that product so it
+# never grabs the handheld). Data CDC = the *3 tty (console = *1).
+proc extio_find_handheld_port {} {
+    if { $::tcl_platform(os) eq "Darwin" } {
+        if { ![catch { exec ioreg -r -c IOUSBHostDevice -l -w0 } out] } {
+            set product ""; set best ""
+            foreach line [split $out \n] {
+                if { [regexp {"USB Product Name" = "([^"]+)"} $line -> p] } {
+                    set product $p
+                } elseif { [regexp {"IODialinDevice" = "(/dev/tty\.usbmodem[^"]+)"} $line -> tty] } {
+                    if { $product eq "dserv handheld" && [string match {*3} $tty] } {
+                        set best [string map {tty. cu.} $tty]
+                    }
+                }
+            }
+            if { $best ne "" } { return $best }
+        }
+        return ""
+    }
+    foreach link [lsort [glob -nocomplain /dev/serial/by-id/*handheld*if02*]] {
+        if { ![catch { file readlink $link } tgt] } {
+            return [file normalize [file join [file dirname $link] $tgt]]
+        }
+    }
+    return ""
+}
+
+# Build one 128-byte 'D' OTA frame -- EXACTLY ota_data_frame() in the firmware:
+# [0]='D' [1..4]=seq(u32 LE = byte offset) [5..6]=len(u16 LE) [7..10]=crc32(u32
+# LE; pico_crc32 == IEEE == Tcl zlib crc32, verified) [11..]=payload, 0-padded.
+proc extio_ota_dframe {seq data} {
+    set len [string length $data]
+    set crc [zlib crc32 $data]
+    set f [binary format {a1 i s i} D $seq $len $crc]
+    append f $data
+    set pad [expr {128 - [string length $f]}]
+    if { $pad > 0 } { append f [binary format "x$pad"] }
+    return $f
+}
+
+# Fetch the shelf image (.bin) matching a box's build/board -> temp file path.
+# Self-contained (does not disturb the validated extio_ota_push_shelf path).
+proc extio_shelf_fetch_bin {box channel version} {
+    package require yajltcl
+    set base $::extio_fw_shelf_url
+    if { ![dservExists extio/$box/state/build] } {
+        error "extio_shelf_fetch_bin: box '$box' hasn't announced state/build (connected?)"
+    }
+    set bbuild [dservGet extio/$box/state/build]
+    set bboard [expr {[dservExists extio/$box/state/board] ? [dservGet extio/$box/state/board] : ""}]
+    set url "$base/api/firmware/extio/$channel"
+    if { [catch { https_get $url -timeout 15000 } json] } { error "shelf fetch failed ($url): $json" }
+    set d [::yajl::json2dict $json]
+    if { $version eq "" && [dict exists $d latest] } { set version [dict get $d latest] }
+    if { $version eq "" } { error "channel '$channel' has no version" }
+    set img ""
+    foreach v [dict get $d versions] {
+        if { ![dict exists $v version] || [dict get $v version] ne $version } continue
+        foreach im [dict get $v images] {
+            if { ![dict exists $im build] || [dict get $im build] ne $bbuild } continue
+            if { ![dict exists $im bin] || [dict get $im bin] eq "" } continue
+            set img $im; break
+        }
+    }
+    if { $img eq "" } { error "no OTA (.bin) image for build '$bbuild' in $channel/$version" }
+    if { $bboard ne "" && [dict exists $img board] && [dict get $img board] ne "" \
+         && [dict get $img board] ne $bboard } {
+        error "board mismatch -- box '$bboard' vs shelf '[dict get $img board]', refusing"
+    }
+    set binfile [dict get $img bin]
+    set binsha  [expr {[dict exists $img binSha256] ? [dict get $img binSha256] : ""}]
+    set tmp [file join /tmp "extio_ota_${box}_${version}.bin"]
+    set burl "$base/firmware/extio/$channel/$version/$binfile"
+    if { [catch { https_get $burl -outfile $tmp -timeout 60000 } n] } {
+        catch { file delete $tmp }; error "bin fetch failed ($burl): $n"
+    }
+    set got [sha256 -file $tmp]
+    if { $binsha ne "" && ![string equal -nocase $got $binsha] } {
+        catch { file delete $tmp }; error "sha mismatch -- shelf $binsha, downloaded $got"
+    }
+    puts "extio ota\[$box\]: pulled $channel/$version $binfile ([file size $tmp] B, sha $got) from shelf"
+    return $tmp
+}
+
+proc extio_ota_push_shelf_docked {box {channel dev} {version ""}} {
+    set port [extio_find_handheld_port]
+    if { $port eq "" } { error "extio_ota_push_shelf_docked: no docked handheld found (dserv handheld USB identity)" }
+    set tmp [extio_shelf_fetch_bin $box $channel $version]
+    set r [extio_ota_push_docked $box $tmp [sha256 -file $tmp] [file size $tmp] $port]
+    catch { file delete $tmp }
+    return $r
+}
+
+# Stream a local .bin to a docked handheld: begin+acks over radio, 'D' over USB.
+proc extio_ota_push_docked {box file sha size port} {
+    if { [catch { open $port r+ } ch] } { error "extio_ota_push_docked: cannot open $port: $ch" }
+    fconfigure $ch -translation binary -encoding binary -blocking 1 -buffering none
+    set ::extio_ota_chan($box) $ch                    ;# extio_ota_usb_cleanup closes it
+    set fp [open $file rb]; fconfigure $fp -translation binary
+    set ::extio_ota_img($box)  [read $fp]; close $fp
+    set ::extio_ota_size($box) $size
+    catch { after cancel $::extio_ota_timer($box) }
+
+    catch { dservClear extio/$box/state/ota/ack }
+    catch { dservClear extio/$box/state/ota/state }
+    catch { dservClear extio/$box/state/ota/result }
+    dservAddMatch   extio/$box/state/ota/ack
+    dpointSetScript extio/$box/state/ota/ack extio_ota_docked_on_ack
+
+    # begin over the RADIO relay: cmd/ota/begin forwards to the receiver, which
+    # relays it to the handheld (one small frame -- fine over BLE).
+    dservSet extio/$box/cmd/ota/begin "$sha $size"
+    exec sleep 2                                       ;# box stages the slot (~0.1s) + radio latency
+    extio_ota_docked_blast $box 0
+    if { [info exists ::extio_ota_img($box)] } { extio_ota_usb_deadline $box }
+    return "ota docked $box: streaming $size B (sha $sha) over $port; acks via radio -- watch state/ota"
+}
+
+proc extio_ota_docked_blast {box from} {               ;# write 'D' frames [$from,EOF); blocking = backpressure
+    if { ![info exists ::extio_ota_img($box)] || ![info exists ::extio_ota_chan($box)] } return
+    set data $::extio_ota_img($box); set size $::extio_ota_size($box)
+    set chunk $::extio_ota_chunk; set ch $::extio_ota_chan($box)
+    for { set off $from } { $off < $size } { incr off $chunk } {
+        set end [expr {min($off + $chunk, $size)}]
+        set payload [string range $data $off [expr {$end - 1}]]
+        if { [catch { puts -nonewline $ch [extio_ota_dframe $off $payload]; flush $ch } e] } {
+            extio_ota_usb_fail $box "docked write failed at $off/$size: $e"   ;# closes the channel too
+            return
+        }
+    }
+}
+
+proc extio_ota_docked_on_ack {dp data} {               ;# box's contiguous cursor advanced (over radio)
+    if { ![regexp {^extio/([^/]+)/state/ota/ack$} $dp -> box] } return
+    if { ![info exists ::extio_ota_size($box)] } return
+    if { $data >= $::extio_ota_size($box) } { extio_ota_usb_cleanup $box; return }
+    extio_ota_usb_deadline $box
+    catch { after cancel $::extio_ota_timer($box) }
+    set ::extio_ota_timer($box) [after 400 [list extio_ota_docked_blast $box $data]]
 }
 
 # Datapoint trigger for a network client (extio-setup's dserv driver, which can
