@@ -47,10 +47,29 @@ enum {
     STATUS_LED_FAIL,        /* radio init failed -- no transport (red, fast)   */
     STATUS_LED_BRINGUP,     /* radio coming up (dim white)                     */
     STATUS_LED_LOWBATT,     /* battery low (red, slow pulse)                   */
+    STATUS_LED_OBS,         /* in an observation period (steady green -- follows the sync line) */
     STATUS_LED_GOOD,        /* linked + encrypted + streaming (green blip)     */
     STATUS_LED_CONNECTING,  /* central connected, pipe not yet up (amber)      */
     STATUS_LED_SEARCHING    /* advertising, no central (blue blip)             */
 };
+
+/* Global brightness scale (0..255), applied to every AUTO color -- a WS2812 in
+ * the hand is bright, and green dominates perceptually. Default is deliberately
+ * dim; tune live with `led bright <n>`. The raw `led <r> <g> <b>` test color is
+ * NOT scaled (explicit values). Set on core 1, read on core 0 (benign stale). */
+#ifndef STATUS_LED_SCALE_DEFAULT
+#define STATUS_LED_SCALE_DEFAULT 48
+#endif
+static volatile uint8_t g_led_scale = STATUS_LED_SCALE_DEFAULT;
+
+static inline uint32_t status_scale(uint32_t grb)
+{
+    uint32_t s = g_led_scale;
+    uint32_t g = ((grb >> 16) & 0xff) * s / 255;
+    uint32_t r = ((grb >>  8) & 0xff) * s / 255;
+    uint32_t b = ( grb        & 0xff) * s / 255;
+    return (g << 16) | (r << 8) | b;
+}
 
 /* GRB pack (WS2812 wire order is g,r,b MSB-first); kept dim -- it's held in a
  * hand, and dim also protects the battery. */
@@ -95,18 +114,23 @@ static inline void status_led_init(void)
     status_put(0);                      /* start dark */
 }
 
-/* Map (logical state, phase in ms) -> color. Blips keep the duty cycle low. */
+/* Map (logical state, phase in ms) -> scaled color. Blips keep the duty cycle
+ * low; the global brightness scale is applied here so a `led bright` change
+ * re-renders on the next pass (the raw override path stays unscaled). */
 static inline uint32_t status_led_color(uint8_t state, uint32_t now)
 {
+    uint32_t c;
     switch (state) {
-    case STATUS_LED_FAIL:       return (now % 300  < 150) ? STATUS_C_RED   : 0;   /* fast blink   */
-    case STATUS_LED_BRINGUP:    return STATUS_C_WHITE;                            /* solid, brief */
-    case STATUS_LED_LOWBATT:    return (now % 2000 < 400) ? STATUS_C_RED   : 0;   /* slow pulse   */
-    case STATUS_LED_GOOD:       return (now % 3000 <  60) ? STATUS_C_GREEN : 0;   /* rare blip    */
-    case STATUS_LED_CONNECTING: return STATUS_C_AMBER;                            /* solid        */
-    case STATUS_LED_SEARCHING:  return (now % 1500 <  80) ? STATUS_C_BLUE  : 0;   /* searching    */
-    default:                    return 0;
+    case STATUS_LED_FAIL:       c = (now % 300  < 150) ? STATUS_C_RED   : 0; break;   /* fast blink   */
+    case STATUS_LED_BRINGUP:    c = STATUS_C_WHITE;                          break;   /* solid, brief */
+    case STATUS_LED_LOWBATT:    c = (now % 2000 < 400) ? STATUS_C_RED   : 0; break;   /* slow pulse   */
+    case STATUS_LED_OBS:        c = STATUS_C_GREEN;                          break;   /* steady: obs on */
+    case STATUS_LED_GOOD:       c = (now % 3000 <  60) ? STATUS_C_GREEN : 0; break;   /* rare blip    */
+    case STATUS_LED_CONNECTING: c = STATUS_C_AMBER;                          break;   /* solid        */
+    case STATUS_LED_SEARCHING:  c = (now % 1500 <  80) ? STATUS_C_BLUE  : 0; break;   /* searching    */
+    default:                    c = 0;                                       break;
     }
+    return status_scale(c);
 }
 
 /* Call every core-0 pass with the caller-computed logical state. Pushes only
@@ -121,12 +145,17 @@ static inline void status_led_service(uint8_t state)
     if (grb != status_last_grb) { status_last_grb = grb; status_put(grb); }
 }
 
-/* `led` CLI (bench): auto | off | r g b (raw, for bring-up checks). */
+/* `led` CLI (bench): auto | off | bright <n> | r g b (raw, for bring-up checks). */
 static inline void status_led_cli(const char *arg)
 {
-    int r, g, b;
+    int r, g, b, n;
     if      (!strcmp(arg, "auto") || !strcmp(arg, "1")) { status_override = 0; printf("led: auto\n"); }
     else if (!strcmp(arg, "off")  || !strcmp(arg, "0")) { status_override = 1; printf("led: forced off\n"); }
+    else if (sscanf(arg, "bright %d", &n) == 1) {
+        if (n < 0) n = 0;
+        if (n > 255) n = 255;
+        g_led_scale = (uint8_t) n; printf("led: brightness scale = %d/255\n", n);
+    }
     else if (sscanf(arg, "%d %d %d", &r, &g, &b) == 3) {
         status_override = 2; status_force_grb = status_grb((uint8_t) r, (uint8_t) g, (uint8_t) b);
         printf("led: forced rgb %d,%d,%d\n", r, g, b);

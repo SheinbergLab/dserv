@@ -1252,6 +1252,12 @@ static void on_frame(const uint8_t *frame, void *ud)
             (unsigned long long) m.timestamp,
             (unsigned long long) anchor_box, (long long) g_clock.offset_us,
             hw ? "hw" : "sw");
+#ifdef BOX_BLE
+        box_ble_pipe_forward(frame);   /* also relay obs edges to a bonded handheld: its on_frame sets
+                                        * g_in_obs (status LED "in a trial"), publishes its own state/in_obs.
+                                        * Radio-late is fine for an indicator; the handheld's g_clock is
+                                        * unused (it source-stamps raw), so no sync harm. */
+#endif
         return;
     }
 
@@ -2130,6 +2136,7 @@ int main(void)
 #ifdef BOX_FUEL_MAX17048
           else if (g_fuel_soc >= 0 && g_fuel_soc < 15)        st = STATUS_LED_LOWBATT;
 #endif
+          else if (box_ble_link && g_in_obs)                  st = STATUS_LED_OBS;   /* in a trial -> steady */
           else if (box_ble_link && hh_encrypted)              st = STATUS_LED_GOOD;
           else if (hh_connected())                            st = STATUS_LED_CONNECTING;
           else                                                st = STATUS_LED_SEARCHING;
