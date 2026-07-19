@@ -220,9 +220,11 @@ static int32_t g_wdt;
 
 /* ---- cross-core plumbing (queues made on core 0 before core 1 launches) ---- */
 typedef struct { uint64_t t_us; int16_t val; uint8_t ch; } ain_sample_t;
+typedef struct { uint64_t t_us; int16_t v[MCP3204_NCH]; } mcp_scan_t;   /* one packed 4-ch snapshot */
 typedef struct { uint8_t erase_only; pico_config_t cfg; } save_req_t;
 static queue_t g_cmd_q;             /* core0 console line -> core1 executes (owns cfg/pins) */
 static queue_t g_ain_q;             /* core0 I2C sample   -> core1 stamps + publishes      */
+static queue_t g_mcp_q;             /* core0 SPI 4-ch scan-> core1 stamps + publishes (packed) */
 static queue_t g_save_q;            /* core1 save/erase   -> core0 writes flash            */
 static volatile int g_core1_ready;
 #ifdef BOX_FUEL_MAX17048
@@ -369,6 +371,17 @@ static void publish_ain(int ch, int16_t v, uint64_t t_us)  /* state/ain/<ch>, st
     snprintf(leaf, sizeof leaf, "ain/%d", ch);
     dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
     dserv_msg_int(f, nm, event_stamp(t_us), v);
+    box_net_client_send(f, DSERV_MSG_LEN);
+}
+
+/* MCP3204: all channels in ONE datapoint (state/ain/scan = int16[MCP3204_NCH]),
+ * one shared timestamp -- the channels were sampled the same instant, so this is
+ * the atomic, frame-efficient form (vs one notification per channel). */
+static void publish_ain_scan(const int16_t v[MCP3204_NCH], uint64_t t_us)
+{
+    char nm[64]; uint8_t f[DSERV_MSG_LEN];
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ain/scan");
+    dserv_msg_build(f, nm, event_stamp(t_us), DSERV_SHORT, v, sizeof(int16_t) * MCP3204_NCH);
     box_net_client_send(f, DSERV_MSG_LEN);
 }
 
@@ -1756,6 +1769,8 @@ static void rt_main(void)
                 }
                 ain_sample_t s;                        /* acquired on core 0, stamped here */
                 while (queue_try_remove(&g_ain_q, &s)) publish_ain(s.ch, s.val, s.t_us);
+                mcp_scan_t ms;                         /* MCP3204 packed 4-ch snapshot */
+                while (queue_try_remove(&g_mcp_q, &ms)) publish_ain_scan(ms.v, ms.t_us);
 #ifdef BOX_BLE
                 { uint8_t pf[DSERV_MSG_LEN];           /* handheld frames from the radio (core 0) ->
                                                         * ts rewritten hh->dserv at the boundary, then
@@ -1860,28 +1875,29 @@ static void ain_service_core0(void)     /* ADS1115 I2C on core 0; publish-worthy
         }
 }
 
-/* MCP3204 SPI ADC on core 0: sample the joystick at ~MCP_SAMPLE_MS and push
- * changed channels to the SAME state/ain/<ch> queue as the ADS1115. The read is
- * a short blocking SPI transaction (~us), so no state machine -- just rate-gate
- * it. Deadband suppresses idle jitter; stamped at acquisition (event_stamp maps
- * it to the dserv timeline like any edge). */
+/* MCP3204 SPI ADC on core 0: fast-scan ALL channels every ~MCP_SAMPLE_MS and,
+ * when any moved past the deadband, hand ONE packed snapshot to core 1 (which
+ * owns the transport -- box_net_client_send touches CDC1/tinyusb, core-1-only).
+ * The scan is 4 short blocking SPI reads (~us); the extra channels ride free in
+ * the one message. Deadband keeps an idle/held stick silent (no BLE traffic);
+ * a moving stick streams at ~50 Hz, one frame per sample. */
 #define MCP_SAMPLE_MS 20                           /* ~50 Hz -- plenty for a thumbstick (BLE.md rate note) */
 static void mcp_service_core0(void)
 {
     if (!g_cfg.mcp_en || !mcp_inited) return;
     static uint32_t last_ms;
-    static int16_t  mcp_last_pub[MCP3204_NCH];
+    static int16_t  mcp_last[MCP3204_NCH];
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (now - last_ms < MCP_SAMPLE_MS) return;
     last_ms = now;
-    for (int ch = 0; ch < MCP3204_NCH; ch++) {
-        mcp_val[ch] = mcp3204_read(ch);
-        if (abs((int) mcp_val[ch] - mcp_last_pub[ch]) > MCP3204_DEADBAND) {
-            mcp_last_pub[ch] = (int16_t) mcp_val[ch];
-            ain_sample_t s = { time_us_64(), mcp_last_pub[ch], (uint8_t) ch };   /* -> publish_ain -> state/ain/<ch> */
-            queue_try_add(&g_ain_q, &s);
-        }
-    }
+    mcp3204_scan(mcp_val);
+    int moved = 0;
+    for (int ch = 0; ch < MCP3204_NCH; ch++)
+        if (abs((int) mcp_val[ch] - mcp_last[ch]) > MCP3204_DEADBAND) moved = 1;
+    if (!moved) return;
+    mcp_scan_t s = { time_us_64(), { 0 } };
+    for (int ch = 0; ch < MCP3204_NCH; ch++) s.v[ch] = mcp_last[ch] = (int16_t) mcp_val[ch];
+    queue_try_add(&g_mcp_q, &s);               /* full -> drop; the next snapshot supersedes */
 }
 
 #ifdef BOX_FUEL_MAX17048
@@ -2101,6 +2117,7 @@ int main(void)
 
     queue_init(&g_cmd_q,  CLI_LINE_MAX,         4);
     queue_init(&g_ain_q,  sizeof(ain_sample_t), 16);
+    queue_init(&g_mcp_q,  sizeof(mcp_scan_t),    8);   /* MCP3204 packed scans -> core1 */
     queue_init(&g_save_q, sizeof(save_req_t),   2);
 #ifdef BOX_BLE
     box_ble_pipe_queues_init();     /* relay frame queues, before core 1 launches */

@@ -37,8 +37,8 @@
 #define MCP3204_PIN_CS   PICO_DEFAULT_SPI_CSN_PIN   /* 5  */
 #endif
 #define MCP3204_BAUD     (1000 * 1000)   /* 1 MHz: safe at 3.3V (2.7V spec floor is ~1MHz) */
-#define MCP3204_NCH      2               /* CH0 = X, CH1 = Y                               */
-#define MCP3204_DEADBAND 8               /* 12-bit: publish only when a channel moves > this */
+#define MCP3204_NCH      4               /* all 4 channels grabbed in one fast scan (CH0=X, CH1=Y) */
+#define MCP3204_DEADBAND 8               /* 12-bit: publish the snapshot only when a channel moves > this */
 
 static uint16_t mcp_val[MCP3204_NCH];
 static uint8_t  mcp_inited;
@@ -69,6 +69,13 @@ static inline uint16_t mcp3204_read(int ch)
     spi_write_read_blocking(MCP3204_SPI, tx, rx, 3);
     gpio_put(MCP3204_PIN_CS, 1);
     return (uint16_t)(((rx[1] & 0x0F) << 8) | rx[2]);
+}
+
+/* Fast scan of all 4 channels into out[4] (~4 x us SPI reads). Cheap enough to
+ * always grab the full snapshot -- the extra channels ride free in the message. */
+static inline void mcp3204_scan(uint16_t out[MCP3204_NCH])
+{
+    for (int ch = 0; ch < MCP3204_NCH; ch++) out[ch] = mcp3204_read(ch);
 }
 
 static inline uint16_t mcp3204_get(int ch) { return (ch >= 0 && ch < MCP3204_NCH) ? mcp_val[ch] : 0; }
