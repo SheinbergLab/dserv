@@ -1,0 +1,46 @@
+name: Create Release
+
+# Single writer for the GitHub release object.
+#
+# The dserv Linux + macOS builds and the dgview build all fire on the same tag and
+# all used to race to `gh release create`. The subtle failure: two *concurrent*
+# creates for a tag that does not exist yet BOTH succeed -- GitHub does not enforce
+# one-release-per-tag on create -- so the race produced two release objects for the
+# same tag. That later broke publish_release.yml, whose `gh release edit --latest`
+# 422'd with "tag_name already exists" (it cannot edit one release's tag while a
+# second release claims the same tag), leaving the release stuck as a prerelease.
+#
+# Creating the release in exactly ONE place removes the race at the source. The
+# platform workflows no longer create anything -- they wait for this release to
+# exist (see their `create-release` gate job) and then upload their assets to it.
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize duplicate runs for the same tag (e.g. a manual re-run) so they can't
+  # race each other into a duplicate. This is same-workflow scope, so nothing
+  # downstream is skipped by a superseded pending run.
+  group: create-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Create the prerelease for this tag (idempotent single writer).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}   # no checkout here -> gh needs the repo explicitly
+        run: |
+          # Idempotent: a re-run (or a manually pre-created release) is a no-op.
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists -- nothing to create."
+            exit 0
+          fi
+          gh release create "${{ github.ref_name }}" \
+            --prerelease --generate-notes --title "${{ github.ref_name }}"
