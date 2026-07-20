@@ -3469,8 +3469,12 @@ namespace eval ess {
                 incr i
             }
         }
-        if { [dict size $map] != 4 } {
-            ess_warning "joystick: no manifest map for $dev/$glabel; assuming bits 0-3 = up,down,left,right" "joystick"
+        # Any non-empty label-derived map is trusted -- a 2-choice left/right pad
+        # (or a 3-way, or a full 4-way d-pad) each announce only the directions
+        # they wire, and joystick_nibble only reads the entries present. Fall back
+        # to positional bits 0-3 ONLY when no member pin carried a canon label.
+        if { [dict size $map] == 0 } {
+            ess_warning "joystick: no canon labels for $dev/$glabel; assuming bits 0-3 = up,down,left,right" "joystick"
             set map {up 0 down 1 left 2 right 3}
         }
         set joystick_maps($key) $map
@@ -3687,6 +3691,102 @@ namespace eval ess {
     }
 
     ########################################################################
+    # Label-keyed button GROUP source (button_init ... box {dev group label}).
+    #
+    # A box chord GROUP announces state/group/<g>/pins (ascending = bit order)
+    # and per-pin state/label/<n>; the group EVENT state/group/<g> is a bitmask.
+    # This binds a discrete button CHANNEL to the member carrying <label>, so
+    # "left"/"right" (or ANY label -- go/stop/yes/no...) find their physical pin
+    # from the manifest. Different boards wire different pins but announce the
+    # same labels, so the rig binding is identical everywhere -- the pin
+    # difference lives in each box's persisted labels, not in post-pins.
+    #
+    # Unlike the joystick path this does NOT canonicalize to directions: labels
+    # map verbatim to bits. Many channels may bind one group; a single shared
+    # dispatcher fans each group event to all of them (dpointSetScript is one
+    # script per datapoint, so per-channel scripts would clobber each other).
+    ########################################################################
+    variable button_group_chans ;# group-dp (pattern) -> {chan label chan label ...}
+    array set button_group_chans {}
+    variable button_group_maps  ;# concrete group-dp -> {label bitidx ...} (cached once labels land)
+    array set button_group_maps {}
+
+    # {label -> bit index} from a concrete group's announced pins + pin labels.
+    # An empty result is NOT cached, so a bind that races ahead of the box's
+    # manifest heals as soon as the labels are announced.
+    proc button_group_map {dpoint} {
+	variable button_group_maps
+	if {[info exists button_group_maps($dpoint)]} { return $button_group_maps($dpoint) }
+	set parts [split $dpoint /]                 ;# <io>/<dev>/state/group/<g>
+	set io [lindex $parts 0]; set dev [lindex $parts 1]; set g [lindex $parts end]
+	set map {}
+	set pinsdp $io/$dev/state/group/$g/pins
+	if {[dservExists $pinsdp]} {
+	    set i 0
+	    foreach p [split [joystick_denul [dservGet $pinsdp]] ,] {
+		set ldp $io/$dev/state/label/[string trim $p]
+		if {[dservExists $ldp]} {
+		    set lab [string trim [joystick_denul [dservGet $ldp]]]
+		    if {$lab ne ""} { dict set map $lab $i }
+		}
+		incr i
+	    }
+	}
+	if {[dict size $map] > 0} { set button_group_maps($dpoint) $map }
+	return $map
+    }
+
+    # one dispatcher on every bound group pattern -> fan to that pattern's channels
+    proc button_group_dispatch {dpoint data} {
+	variable button_group_chans
+	foreach pat [array names button_group_chans] {
+	    if {[string match $pat $dpoint]} { button_group_fan $pat $dpoint $data }
+	}
+    }
+
+    proc button_group_fan {pat dpoint data} {
+	variable buttons
+	variable button_group_chans
+	set map [button_group_map $dpoint]
+	set data [expr {int($data)}]
+	set changed 0
+	foreach {chan lab} $button_group_chans($pat) {
+	    set val 0
+	    if {[dict exists $map $lab] && (($data >> [dict get $map $lab]) & 1)} { set val 1 }
+	    if {![info exists buttons(state,$chan)] || $buttons(state,$chan) != $val} {
+		set buttons(state,$chan) $val
+		dservSet ess/button/$chan $val
+		set changed 1
+	    }
+	}
+	if {$changed} { do_update }
+    }
+
+    # button_init calls this for a `box {dev group label}` source.
+    proc button_group_bind {chan dev grp lab} {
+	variable buttons
+	variable io_class
+	variable button_group_chans
+	set gdp $io_class/$dev/state/group/$grp
+	set buttons(state,$chan) 0
+	dservSet ess/button/$chan 0
+	set buttons(grp,$chan) $gdp
+	set fresh [expr {![info exists button_group_chans($gdp)]}]
+	lappend button_group_chans($gdp) $chan $lab
+	if {$fresh} {
+	    if {[string first * $dev] >= 0} {
+		dservAddMatch $gdp                     ;# glob dev: any present box, hot-swap
+	    } else {
+		dservAddExactMatch $gdp
+	    }
+	    dpointSetScript $gdp ::ess::button_group_dispatch
+	}
+	foreach k [dservKeys] {                        ;# initial level from an already-present box
+	    if {[string match $gdp $k]} { button_group_fan $gdp $k [dservGet $k]; break }
+	}
+    }
+
+    ########################################################################
     # box_schedule_pulse / box_schedule_timer: offload a precisely-timed box
     # output/marker to fire <delay_ms> from NOW.
     #
@@ -3766,7 +3866,15 @@ namespace eval ess {
 		      {debounce_us 2500 pull PULL_UP active ACTIVE_LOW} \
 		      $args]
 
-	if {[dict exists $opts box]} {
+	if {[dict exists $opts box] && [llength [dict get $opts box]] >= 3} {
+	    # bind this channel to a labeled member of a box chord GROUP:
+	    #   box {dev group label}  ->  the group member whose manifest label is
+	    #   <label>, resolved per-board from state/group/<g>/pins + state/label/<n>.
+	    #   e.g. button_init 0 {} box {* response left}   (any box, hot-swap)
+	    lassign [dict get $opts box] dev grp lab
+	    button_group_bind $chan $dev $grp $lab
+
+	} elseif {[dict exists $opts box]} {
 	    # bind this channel to a remote I/O box DI line:
 	    #   <io_class>/<device>/state/di/<pin>   e.g. extio/office/state/di/14
 	    # The box publishes LOGICAL levels (configure the box pin `active_low`
@@ -3989,6 +4097,8 @@ namespace eval ess {
     ########################################################################
     proc button_deinit {} {
 	variable buttons
+	variable button_group_chans
+	variable button_group_maps
 	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
 	    if {[info exists buttons(pin,$i)]} {
 		dservRemoveMatch gpio/input/$buttons(pin,$i)
@@ -3998,6 +4108,9 @@ namespace eval ess {
 		dservRemoveMatch $buttons(box,$i)
 		unset buttons(box,$i)
 	    }
+	    if {[info exists buttons(grp,$i)]} {
+		unset buttons(grp,$i)
+	    }
 	    if {[info exists buttons(joy_source,$i)]} {
 		unset buttons(joy_source,$i)
 	    }
@@ -4006,6 +4119,13 @@ namespace eval ess {
 	    }
 	    dservSet ess/button/$i 0
 	}
+	# drop the shared group dispatchers (one per bound group pattern)
+	foreach gdp [array names button_group_chans] {
+	    catch { dpointSetScript $gdp {} }
+	    catch { dservRemoveMatch $gdp }
+	}
+	array unset button_group_chans; array set button_group_chans {}
+	array unset button_group_maps;  array set button_group_maps {}
 	set buttons(n_channels) 0
 	dservSet ess/buttons/channels {}
     }
