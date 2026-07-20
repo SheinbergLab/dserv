@@ -58,7 +58,12 @@ let obsLive = false; // box is currently in an observation (state/in_obs = 1)
 
 function emptyCfg() {
   return { name: "", desc: "", mode: "", obs: null, sync: null,
-    ain: false, oled: false, pins: {}, groups: {}, raw: [] };
+    ain: false, oled: false, pins: {}, groups: {}, raw: [],
+    // firmware identity: fw=running version, build=shelf image line
+    // (BOX_BUILD_TARGET), board=compat key (BOX_BOARD_ID), channel=update track.
+    // build/board/channel arrive over dserv (state/*) or serial (`show` trailer);
+    // absent on boxes predating the firmware change -> loadShelf falls back.
+    fw: "", build: "", board: "", channel: "" };
 }
 const pin = (n) => (cfg.pins[n] ??= { mode: "", pulse: 0, debounce: 0, actlow: false, label: "" });
 
@@ -123,6 +128,11 @@ const SerialDriver = {
         const txt = (s.lines || []).join(" ");
         if (!c.name) c.name = txt.match(/name=(\S+)/)?.[1] || "";
         c.fw = txt.match(/fw=(\S+)/)?.[1] || "";
+        // build/board/channel: present only on firmware with the extended `show`
+        // trailer; older boxes leave these "" and loadShelf falls back to dev.
+        c.build = txt.match(/build=(\S+)/)?.[1] || "";
+        c.board = txt.match(/board=(\S+)/)?.[1] || "";
+        c.channel = txt.match(/channel=(\S+)/)?.[1] || "";
         c.info = [txt.match(/transport=(\w+)/)?.[1], c.fw,
           c.mode && "mode " + c.mode].filter(Boolean).join(" · ");
         break;
@@ -267,6 +277,11 @@ function cfgFromState(box, st) {
   if (typeof st["obs_pin"] === "number" && st["obs_pin"] >= 0) c.obs = st["obs_pin"];
   if (typeof st["sync_pin"] === "number" && st["sync_pin"] >= 0) c.sync = st["sync_pin"];
   c.fw = st["fw"] || "";
+  // build/board announced today (state/build, state/board); channel added with
+  // the firmware channel-policy change -- absent -> loadShelf falls back to dev.
+  c.build = st["build"] || "";
+  c.board = st["board"] || "";
+  c.channel = st["channel"] || "";
   c.info = [st["fw"], st["transport"],
     st["ip"] && st["ip"] !== "0.0.0.0" ? st["ip"] : null,
     st["boot"] ? "boot " + st["boot"] : null].filter(Boolean).join(" · ");
@@ -554,13 +569,18 @@ $("flash").onclick = async () => {
 /* ---- firmware shelf (pull from dserv.net) ---- */
 // reload() calls loadShelf() on every config change, so cache the network
 // fetch briefly; the box-fw compare below is recomputed cheaply each time.
-let _shelf = { t: 0, st: null, j: null };
+// Cache is keyed by channel too -- a different box (or channel change) refetches.
+let _shelf = { t: 0, ch: null, st: null, j: null };
 async function loadShelf() {
   const wrap = $("shelfwrap"), msg = $("shelfmsg");
   try {
-    if (Date.now() - _shelf.t > 30000 || !_shelf.j) {
+    // The box tells us which channel to track (state/channel or `show`); default
+    // dev for boxes predating the firmware channel field.
+    const ch = cfg.channel || "dev";
+    if (Date.now() - _shelf.t > 30000 || !_shelf.j || _shelf.ch !== ch) {
       _shelf.st = await api("/api/status");
-      _shelf.j = _shelf.st.shelf ? await api("/api/shelf?channel=dev") : null;
+      _shelf.j = _shelf.st.shelf ? await api("/api/shelf?channel=" + encodeURIComponent(ch)) : null;
+      _shelf.ch = ch;
       _shelf.t = Date.now();
     }
     const st = _shelf.st, j = _shelf.j;
@@ -568,16 +588,41 @@ async function loadShelf() {
     const sel = $("shelffiles");
     sel.innerHTML = "";
     // Flatten versions × images, newest first (server already sorts versions).
-    const rows = [];
+    const allRows = [];
     for (const v of (j.versions || []))
       for (const img of (v.images || []))
-        rows.push({ version: v.version, file: img.file, build: img.build, dirty: v.dirty,
-                    ota: !!img.otaCapable, bin: img.bin || "" });
+        allRows.push({ version: v.version, file: img.file, build: img.build, board: img.board || "",
+                       dirty: v.dirty, ota: !!img.otaCapable, bin: img.bin || "" });
+
+    // Default view: only images for THIS box's build line (BOX_BUILD_TARGET), so
+    // the dropdown is "updates for what I'm running", not every board's image.
+    // "all" checkbox (or an unknown build, e.g. old fw / no box) drops the filter.
+    const boxBuild = cfg.build || "";
+    const showAll = $("shelfall").checked || !boxBuild;
+    const compatible = (r) => r.build === boxBuild &&
+      (!r.board || !cfg.board || r.board === cfg.board);
+    const rows = showAll ? allRows : allRows.filter(compatible);
+
+    // The box's update line: newest version among compatible images, regardless of
+    // the display filter -- the compare is always about the running build.
+    const lineRows = boxBuild ? allRows.filter(compatible) : allRows;
+    const lineLatest = lineRows.length ? lineRows[0].version : (j.latest || "");
+    const boxFw = cfg.fw || "";
+
+    // Recommend the newest displayed image that's an actual upgrade (and, over
+    // dserv, OTA-capable so the box can pull it). Falls back to newest displayed.
+    let recommended = null;
+    for (const r of rows) {
+      if (boxFw && cmpFw(r.version, boxFw) <= 0) continue;   // not an upgrade
+      if (drv.id === "dserv" && (!r.ota || !r.bin)) continue; // OTA needs a flat .bin
+      recommended = r; break;
+    }
     for (const r of rows) {
       const o = document.createElement("option");
-      o.value = JSON.stringify({ channel: "dev", version: r.version, file: r.file,
+      o.value = JSON.stringify({ channel: ch, version: r.version, file: r.file,
                                  build: r.build, ota: r.ota, bin: r.bin });
       o.textContent = `${r.build} · ${r.version}${r.dirty ? " (dirty)" : ""}${r.ota ? " · OTA" : ""}`;
+      if (recommended && r === recommended) o.selected = true;
       sel.append(o);
     }
     $("shelfflash").disabled = !rows.length;
@@ -585,25 +630,28 @@ async function loadShelf() {
     // it's a local download + BOOTSEL flash.
     $("shelfflash").textContent = drv.id === "dserv" ? "OTA…" : "Flash…";
     wrap.style.display = "";
-    // Host-side "update available": box fw vs the channel's latest version.
+    // Host-side "update available": box fw vs its line's latest on this channel.
     // Compare by VERSION (leading X.Y.Z + git-describe commit count), not raw
     // inequality -- else a box that's NEWER than the shelf (e.g. an image staged
     // straight to the slot, or a stale shelf) reads as "update available" and would
     // silently downgrade.
-    const boxFw = cfg.fw || "";
-    if (boxFw && j.latest) {
-      const cmp = cmpFw(j.latest, boxFw);   // >0 shelf newer, <0 box newer, 0 same
-      if (cmp > 0)      msg.textContent = `update available: dev/${j.latest} (box has ${boxFw})`;
-      else if (cmp < 0) msg.textContent = `box is NEWER than shelf: ${boxFw} (shelf latest dev/${j.latest})`;
-      else              msg.textContent = `box matches shelf dev/${j.latest}`;
+    const line = boxBuild ? `${ch}/${lineLatest} (${boxBuild})` : `${ch}/${lineLatest}`;
+    if (boxFw && lineLatest) {
+      const cmp = cmpFw(lineLatest, boxFw);   // >0 shelf newer, <0 box newer, 0 same
+      if (cmp > 0)      msg.textContent = `update available: ${line} — box has ${boxFw}`;
+      else if (cmp < 0) msg.textContent = `box is NEWER than shelf: ${boxFw} (shelf latest ${line})`;
+      else              msg.textContent = `box matches shelf ${line}`;
     } else {
-      msg.textContent = rows.length ? `${rows.length} image(s) on ${st.shelf}` : "shelf empty";
+      msg.textContent = rows.length ? `${rows.length} image(s) on ${st.shelf} (${ch})` : `no images for ${ch}`;
     }
   } catch (e) {
     wrap.style.display = "none";
     msg.textContent = "shelf: " + e.message;
   }
 }
+
+// Toggling "all" only changes the display filter -- re-render from cache, no refetch.
+$("shelfall").onchange = () => loadShelf().catch(() => {});
 
 $("shelfflash").onclick = async () => {
   const raw = $("shelffiles").value;
