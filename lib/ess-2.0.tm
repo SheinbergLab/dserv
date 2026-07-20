@@ -3690,6 +3690,14 @@ namespace eval ess {
     #                                button to different pins share ONE binding.
     #   {} joystick <bit>            a joystick direction bit (up=1 down=2 left=4 right=8)
     #
+    # Group-member label matching (box {dev grp label}) is, in priority order:
+    #   exact  -- <label> == a member's label            (fast path)
+    #   glob   -- <label> has * ? [  -> string match      (e.g. {* response *left})
+    #   token  -- <label> == any _/- delimited token of a member label, so a bind
+    #             for "left" also finds a pin labeled "btn_left" or "joy_left".
+    # Group scoping (buttons in one group, joystick dirs in another) keeps a token
+    # match unique; if two members still match, the first wins and a warning fires.
+    #
     # When an entry exists it WINS over whatever a protocol passes to button_init --
     # so a rig can point a channel at a box (or joystick) without editing any
     # protocol; the protocol still only declares/reads ess/button/<chan>. Persists
@@ -3732,6 +3740,8 @@ namespace eval ess {
     array set button_group_chans {}
     variable button_group_maps  ;# concrete group-dp -> {label bitidx ...} (cached once labels land)
     array set button_group_maps {}
+    variable button_group_warned ;# "<group-dp>,<label>" -> 1 : a miss/ambiguity already logged
+    array set button_group_warned {}
 
     # {label -> bit index} from a concrete group's announced pins + pin labels.
     # An empty result is NOT cached, so a bind that races ahead of the box's
@@ -3766,15 +3776,55 @@ namespace eval ess {
 	}
     }
 
+    # Resolve a requested label to a member bit within a group's {label -> bit}
+    # map. Priority: (1) EXACT label match (fast path, backward compatible);
+    # (2) GLOB if the request carries * ? [  -> string match the member labels;
+    # (3) TOKEN -- request equals any _/- delimited token of a member label, so
+    # "left" binds a pin labeled "btn_left" or "joy_left". Returns {bit nmatched};
+    # bit -1 / nmatched 0 when nothing matches. Group scoping (buttons vs joystick
+    # dirs in separate groups) usually makes a token match unique.
+    proc button_group_bit {map request} {
+	if {[dict exists $map $request]} { return [list [dict get $map $request] 1] }
+	set glob [regexp {[*?\[]} $request]
+	set hits {}
+	dict for {lab bit} $map {
+	    set m 0
+	    if {$glob} {
+		set m [string match $request $lab]
+	    } else {
+		foreach tok [split $lab "_-"] { if {$tok eq $request} { set m 1; break } }
+	    }
+	    if {$m} { lappend hits $bit }
+	}
+	if {![llength $hits]} { return {-1 0} }
+	return [list [lindex $hits 0] [llength $hits]]
+    }
+
     proc button_group_fan {pat dpoint data} {
 	variable buttons
 	variable button_group_chans
+	variable button_group_warned
 	set map [button_group_map $dpoint]
+	set haveMap [expr {[dict size $map] > 0}]
 	set data [expr {int($data)}]
 	set changed 0
 	foreach {chan lab} $button_group_chans($pat) {
-	    set val 0
-	    if {[dict exists $map $lab] && (($data >> [dict get $map $lab]) & 1)} { set val 1 }
+	    set bit -1
+	    if {$haveMap} {
+		lassign [button_group_bit $map $lab] bit nmatch
+		if {![info exists button_group_warned($dpoint,$lab)]} {
+		    set dev [lindex [split $dpoint /] 1]
+		    set g   [lindex [split $dpoint /] end]
+		    if {$bit < 0} {
+			set button_group_warned($dpoint,$lab) 1
+			ess_warning "button: group $g on $dev has no member matching label '$lab' (chan $chan)" "button"
+		    } elseif {$nmatch > 1} {
+			set button_group_warned($dpoint,$lab) 1
+			ess_warning "button: label '$lab' matches $nmatch members of group $g on $dev (chan $chan); using first" "button"
+		    }
+		}
+	    }
+	    set val [expr {($bit >= 0 && (($data >> $bit) & 1)) ? 1 : 0}]
 	    if {![info exists buttons(state,$chan)] || $buttons(state,$chan) != $val} {
 		set buttons(state,$chan) $val
 		dservSet ess/button/$chan $val
@@ -4121,6 +4171,7 @@ namespace eval ess {
 	variable buttons
 	variable button_group_chans
 	variable button_group_maps
+	variable button_group_warned
 	for {set i 0} {$i < $buttons(n_channels)} {incr i} {
 	    if {[info exists buttons(pin,$i)]} {
 		dservRemoveMatch gpio/input/$buttons(pin,$i)
@@ -4146,8 +4197,9 @@ namespace eval ess {
 	    catch { dpointSetScript $gdp {} }
 	    catch { dservRemoveMatch $gdp }
 	}
-	array unset button_group_chans; array set button_group_chans {}
-	array unset button_group_maps;  array set button_group_maps {}
+	array unset button_group_chans;  array set button_group_chans {}
+	array unset button_group_maps;   array set button_group_maps {}
+	array unset button_group_warned; array set button_group_warned {}
 	set buttons(n_channels) 0
 	dservSet ess/buttons/channels {}
     }

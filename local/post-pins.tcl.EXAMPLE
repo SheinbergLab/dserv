@@ -102,6 +102,12 @@ switch $board_type {
 #      #ess::button_bind 0 {} box {* response left}    ;# ess/button/0 = left
 #      #ess::button_bind 1 {} box {* response right}   ;# ess/button/1 = right
 #
+#    The <label> match is exact-first, then a token match: a bind for "left" also
+#    finds a pin labeled "btn_left" or "joy_left" (any _/- token), so you can name
+#    pins btn_left/btn_right on the box and still bind with plain left/right. An
+#    explicit glob works too -- box {* response *left}. Group scoping keeps it
+#    unambiguous (put buttons and joystick directions in separate groups).
+#
 # ---- C) a directional JOYSTICK / d-pad from a labeled group ----
 #
 # Label the group's members with canonical DIRECTIONS up/down/left/right (single
