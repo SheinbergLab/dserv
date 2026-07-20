@@ -43,6 +43,7 @@
 #define PICO_NGROUPS   4     /* DI chord groups (atomic bitmask publishing)   */
 #define PICO_LABEL_MAX 16    /* per-pin / per-group role labels               */
 #define PICO_DESC_MAX  40    /* free-form box description                     */
+#define PICO_CHANNEL_MAX 16  /* firmware update channel this box tracks       */
 
 /* dserv's client port when cfg->dserv_port is unset (0). One place, so the
  * dispatch code and the CLI's `show` agree on the effective value; see
@@ -132,6 +133,15 @@ typedef struct {
      * joystick on CH0/CH1) published as one packed state/ain/scan snapshot. Off
      * by default, leaves the SPI0 pins free. Applied at boot (SPI init). */
     uint8_t  mcp_en;
+
+    /* v19: firmware update channel this box TRACKS (extio-setup / OTA compare
+     * against <channel>/latest for this build line). A deployment policy, not a
+     * compile stamp -- the same image bytes can live in dev and stable, so it's
+     * persisted, set at provision time (provision.sh --channel) and settable live
+     * (`channel <name>`). Empty => "dev" (see dserv_cfg_channel); a box predating
+     * this field loads it zeroed and thus reads as dev. Announced as state/channel
+     * and in the `show` trailer so the host tool can key updates to it. */
+    char     channel[PICO_CHANNEL_MAX];
 } pico_config_t;
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
@@ -188,6 +198,10 @@ static inline const char *dserv_cfg_name(const pico_config_t *c)
 
 static inline uint16_t dserv_cfg_port(const pico_config_t *c)
 { return c->dserv_port ? c->dserv_port : DSERV_DEFAULT_PORT; }
+
+/* The update channel this box tracks; "" (factory/pre-v19) => "dev". */
+static inline const char *dserv_cfg_channel(const pico_config_t *c)
+{ return c->channel[0] ? c->channel : "dev"; }
 
 /* The box's datapoint prefix "<BOX_CLASS>/<name>" (e.g. extio/office). Returns len. */
 static inline int dserv_cfg_prefix(const pico_config_t *c, char *buf, int sz)

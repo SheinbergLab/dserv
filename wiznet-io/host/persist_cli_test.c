@@ -47,6 +47,17 @@ int main(void)
     printf("    > name io1          : %s", out);
     CHECK(act == CLI_OK && strcmp(c.name, "io1") == 0, "set device name");
 
+    CHECK(strcmp(dserv_cfg_channel(&c), "dev") == 0, "channel defaults to dev");
+    act = pico_cli_exec(&c, "channel stable", out, sizeof out, &cli_cmd);
+    printf("    > channel stable    : %s", out);
+    CHECK(act == CLI_OK && strcmp(c.channel, "stable") == 0, "set channel");
+    act = pico_cli_exec(&c, "channel dev", out, sizeof out, &cli_cmd);
+    printf("    > channel dev       : %s", out);
+    CHECK(act == CLI_OK && c.channel[0] == '\0' &&
+          strcmp(dserv_cfg_channel(&c), "dev") == 0, "channel dev resets to default (empty)");
+    act = pico_cli_exec(&c, "channel bad/name", out, sizeof out, &cli_cmd);
+    CHECK(act == CLI_ERR, "reject channel with '/'");
+
     act = pico_cli_exec(&c, "pin 5 mode out", out, sizeof out, &cli_cmd);
     printf("    > pin 5 mode out    : %s", out);
     CHECK(act == CLI_PIN && c.pin_mode[5] == 1, "pin mode out (-> CLI_PIN)");
@@ -109,12 +120,14 @@ int main(void)
     act = pico_cli_exec(&c, "sync off", out, sizeof out, &cli_cmd);
     CHECK(act == CLI_PIN && c.sync_en == 0, "sync off");
     pico_cli_exec(&c, "sync pin 3", out, sizeof out, &cli_cmd);   /* keep set for persist check */
+    pico_cli_exec(&c, "channel prod", out, sizeof out, &cli_cmd); /* keep set for persist check */
 
     /* persistence survives a CLI-configured struct */
     n = pico_persist_serialize(&c, blob, sizeof blob);
     pico_config_t d; memset(&d, 0, sizeof d);
     CHECK(pico_persist_deserialize(blob, n, &d) == 0 && d.dserv_port == 4620
           && strcmp(d.name, "io1") == 0, "cli config (incl name) persists");
+    CHECK(strcmp(d.channel, "prod") == 0, "v19 channel persists");
     CHECK(strcmp(d.desc, "training rig box") == 0 && d.group_pins[0] == 0xF0u
           && strcmp(d.group_label[0], "joystick") == 0 && d.group_settle_ms[0] == 25,
           "v13 fields persist");
@@ -148,6 +161,19 @@ int main(void)
     CHECK(e.group_pins[0] == 0xF0u && strcmp(e.group_label[0], "joystick") == 0,
           "v13 fields preserved");
     CHECK(e.sync_en == 0 && e.sync_pin == 0, "v14 fields default to off (from v13)");
+
+    /* ---- a v18 (pre-channel) blob loads with channel zeroed -> reads as dev ---- */
+    uint32_t v18_len = (uint32_t) offsetof(pico_config_t, channel);
+    uint8_t v18[PICO_PERSIST_BLOB_MAX]; p = v18;
+    memcpy(p, &magic, 4);                p += 4;
+    ver = 18;                            memcpy(p, &ver, 2);  p += 2;
+    blen = (uint16_t) v18_len;           memcpy(p, &blen, 2); p += 2;
+    memcpy(p, &c, v18_len);              p += v18_len;
+    crc = pico_crc32(v18, 8 + v18_len);  memcpy(p, &crc, 4);
+    memset(&e, 0xAA, sizeof e);
+    CHECK(pico_persist_deserialize(v18, 12 + v18_len, &e) == 0, "v18 blob accepted");
+    CHECK(e.channel[0] == 0 && strcmp(dserv_cfg_channel(&e), "dev") == 0,
+          "v19 channel defaults to dev (from v18)");
 
     printf(fails ? "\nFAILED (%d)\n" : "\nALL PASS\n", fails);
     return fails ? 1 : 0;

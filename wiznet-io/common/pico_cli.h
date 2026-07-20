@@ -103,6 +103,7 @@ static inline void pico_cli_dump(const pico_config_t *c)
         if (c->pin_label[i][0])  printf("label %d %s\r\n",        i, c->pin_label[i]);
     }
     if (c->desc[0])                       printf("desc %s\r\n", c->desc);
+    if (c->channel[0])                    printf("channel %s\r\n", c->channel);
     for (int g = 0; g < PICO_NGROUPS; g++)
         if (c->group_pins[g]) {
             char ps[96]; dserv_pins_str(c->group_pins[g], ps, sizeof ps);
@@ -166,6 +167,20 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         if (!dserv_name_valid(w)) { snprintf(out, outsz, "ERR name: printable, no '/'\r\n"); return CLI_ERR; }
         strncpy(c->name, w, sizeof c->name - 1); c->name[sizeof c->name - 1] = '\0';
         c->applied_count++; snprintf(out, outsz, "OK name=%s\r\n", c->name); return CLI_OK;
+    }
+    /* channel: the firmware update track the host tool compares against. Bare
+     * `channel` queries; `channel dev`/`off` resets to the default (stored empty
+     * -> reads as dev). Not part of the pin/group manifest, so CLI_OK -- it
+     * re-announces as state/channel at the next (re)connect. */
+    if (!strcmp(line, "channel")) {
+        snprintf(out, outsz, "OK channel=%s\r\n", dserv_cfg_channel(c)); return CLI_OK;
+    }
+    if (sscanf(line, "channel %15s", w) == 1) {
+        if (!strcmp(w, "off") || !strcmp(w, "dev")) c->channel[0] = '\0';
+        else if (!dserv_name_valid(w)) { snprintf(out, outsz, "ERR channel: printable, no '/'\r\n"); return CLI_ERR; }
+        else { strncpy(c->channel, w, sizeof c->channel - 1); c->channel[sizeof c->channel - 1] = '\0'; }
+        c->applied_count++;
+        snprintf(out, outsz, "OK channel=%s\r\n", dserv_cfg_channel(c)); return CLI_OK;
     }
     if (sscanf(line, "pin %d mode %23s", &n, w) == 2) {
         int m = dserv_mode_val(w);
@@ -344,7 +359,7 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
     if (!strcmp(line, "bootsel")) { snprintf(out, outsz, "entering USB BOOTSEL (then: picotool load <uf2>)...\r\n"); return CLI_BOOTSEL; }
     if (!strcmp(line, "help")) {
         snprintf(out, outsz,
-            "cmds: show | dump | name NAME | desc TEXT | " PICO_CLI_HELP_XTRA
+            "cmds: show | dump | name NAME | desc TEXT | channel NAME | " PICO_CLI_HELP_XTRA
             "net mode dhcp|static | net ip A.B.C.D |\r\n"
             "      wifi ssid SSID | wifi pass PASS | wifi pm 0|1 | dserv ip A.B.C.D | dserv port N |\r\n"
             "      pin N mode out|in|in_pullup|off | pin N pulse US | pin N debounce MS |\r\n"

@@ -538,6 +538,9 @@ static void publish_ident(void)
     dserv_state_name(&g_cfg, nm, sizeof nm, "board");   /* OTA compat filter */
     dserv_msg_string(f, nm, 0, BOX_BOARD_ID);
     box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "channel"); /* update track the host tool compares against */
+    dserv_msg_string(f, nm, 0, dserv_cfg_channel(&g_cfg));
+    box_net_client_send(f, DSERV_MSG_LEN);
     uint8_t ip[4]; box_net_local_ip(ip);           /* 0.0.0.0 over USB: transport says why */
     snprintf(s, sizeof s, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     dserv_state_name(&g_cfg, nm, sizeof nm, "ip");
@@ -1464,7 +1467,7 @@ static void cmd_exec(const char *line)
     char out[1024]; gpio_cmd_t cmd;   /* fits the full help (~419 B) + a many-pin `show`; 256 truncated both */
     cli_action_t act = pico_cli_exec(&g_cfg, line, out, sizeof out, &cmd);
     fputs(out, stdout);
-    if (!strcmp(line, "show")) {       /* live status trailer: transport / boot / uptime / fw */
+    if (!strcmp(line, "show")) {       /* live status trailer: transport / boot / uptime / fw + shelf keys */
         printf("  transport=%s%s boot=%s up=%lus fw=%s\n",
 #ifdef BOX_NET_DUAL
                box_net_is_usb() ? "usb" : "eth",
@@ -1473,6 +1476,11 @@ static void cmd_exec(const char *line)
                box_net_backend_name(), "",
 #endif
                g_boot_reason, (unsigned long)(time_us_64() / 1000000u), BOX_FW_VERSION);
+        /* shelf/OTA keys, same trio published as state/build|board|channel: the
+         * host tool (extio-setup) parses these to filter updates to this box's
+         * build line on its channel. */
+        printf("  build=%s board=%s channel=%s\n",
+               BOX_BUILD_TARGET, BOX_BOARD_ID, dserv_cfg_channel(&g_cfg));
 #ifdef BOX_BLE
         printf("  ble=%s%s pipe=%s\n", box_ble_state_str(),
                box_ble_scanning ? " (scanning)" : "", box_pipe_state_str());
