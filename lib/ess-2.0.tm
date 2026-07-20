@@ -3677,11 +3677,33 @@ namespace eval ess {
     variable io_class "extio"
 
     # Rig-level source override table (populated in local/post-pins.tcl). Maps a
-    # logical button channel -> its physical source, in exactly the form button_init
-    # takes after `chan` (a pin, or "{} box {dev pin}", or "{} joystick N"). When an
-    # entry exists it WINS over whatever a protocol passes to button_init -- so a rig
-    # can point a channel at a box (or joystick) without editing any protocol. The
-    # protocol still only declares/reads ess/button/<chan>. Persists across systems.
+    # logical button channel -> its physical source, in exactly the words that
+    # would follow `chan` in a button_init call -- passed VERBATIM (no extra
+    # braces). Valid source forms:
+    #
+    #   <pin>                        local GPIO line         (e.g. 24)
+    #   {} box {<dev> <pin>}         box DI line by pin      -> extio/<dev>/state/di/<pin>
+    #   {} box {<dev> <grp> <label>} box group member by LABEL: board-independent --
+    #                                the pin is resolved per-board from the box's
+    #                                announced manifest (state/group/<grp>/pins +
+    #                                state/label/<n>), so rigs that wire the same
+    #                                button to different pins share ONE binding.
+    #   {} joystick <bit>            a joystick direction bit (up=1 down=2 left=4 right=8)
+    #
+    # When an entry exists it WINS over whatever a protocol passes to button_init --
+    # so a rig can point a channel at a box (or joystick) without editing any
+    # protocol; the protocol still only declares/reads ess/button/<chan>. Persists
+    # across protocol/system loads.
+    #
+    #   button_bind 0 24                        ;# local GPIO pin 24
+    #   button_bind 0 {} box {office 14}        ;# extio/office/state/di/14
+    #   button_bind 0 {} box {* response left}  ;# whichever pin is labeled "left" in
+    #   button_bind 1 {} box {* response right} ;#   group "response" on ANY box (glob)
+    #
+    # BRACE LEVEL (common gotcha): the source words follow `chan` directly, exactly
+    # as in button_init -- do NOT wrap them in an extra {...}. `button_bind 0 {{} box
+    # {...}}` collapses them into one argument; button_init then reads that list as a
+    # bogus `pin` and gpioLineRequestInput errors "expected integer but got a list".
     variable button_bindings
     array set button_bindings {}
 

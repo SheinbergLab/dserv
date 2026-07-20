@@ -51,38 +51,69 @@ switch $board_type {
 #
 # --- external I/O box (extio) --------------------------------------------
 #
-# A remote WIZnet I/O box publishes its inputs as extio/<device>/state/di/<pin>
-# (already stamped on the dserv clock) and takes outputs as extio/<device>/cmd/*.
-# This is how a host with no local GPIO (or an extra rig position) gets buttons
-# and pulsed outputs over Ethernet.
+# A remote box (wired W6300, USB, or a BLE handheld relayed by a receiver)
+# publishes its inputs as extio/<device>/state/di/<pin> (already stamped on the
+# dserv clock) and takes outputs as extio/<device>/cmd/*. This is how a host
+# with no local GPIO -- or an extra rig position -- gets buttons, a joystick,
+# and pulsed outputs. Device examples below use "office" (a wired box) and "hh2"
+# (a BLE handheld); substitute your box's actual name.
 #
-# 1) Configure the DI pin ON THE BOX (USB CLI, or push as config datapoints).
-#    active_low makes it publish a LOGICAL level (pressed = 1), matching the
-#    local ACTIVE_LOW convention, so ess needs no inversion:
+# Configure box pins ON THE BOX (USB CLI, or push the same as config datapoints).
+# active_low makes a DI publish a LOGICAL level (pressed = 1), matching the local
+# ACTIVE_LOW convention, so ess needs no inversion:
 #
-#      # over the box USB CLI:
-#      #   pin 14 mode in_pullup   ;# button wired to GND
-#      #   pin 14 active_low 1     ;# pressed -> 1
-#      #   pin 14 debounce 25      ;# ms
-#      #   save
-#      # or push the same from dserv:
-#      #dservSet extio/office/config/pin/14/mode in_pullup
-#      #dservSet extio/office/config/pin/14/active_low 1
-#      #dservSet extio/office/config/pin/14/debounce_ms 25
-#      #dservSet extio/office/cmd/save 1
+#      # over the box USB CLI:            # or push from dserv (leaf == CLI arg):
+#      #   pin 14 mode in_pullup          #dservSet extio/office/config/pin/14/mode in_pullup
+#      #   pin 14 active_low 1            #dservSet extio/office/config/pin/14/active_low 1
+#      #   pin 14 debounce 25            #dservSet extio/office/config/pin/14/debounce_ms 25
+#      #   save                          #dservSet extio/office/cmd/save 1
 #
-# 2) Bind logical button channels to box lines here with button_bind. This
-#    OVERRIDES whatever a protocol later passes to button_init, so no protocol
-#    edits are needed -- the protocol still just reads ess/button/<chan>:
+# Bindings below use button_bind / joystick_bind: they OVERRIDE whatever a
+# protocol later passes to button_init / joystick_init, so no protocol edits are
+# needed -- the protocol still just reads ess/button/<chan> or calls joystick_dir.
+# (If NO protocol declares the channel, call ess::button_init / ess::joystick_init
+# with the same args here instead, to wire it standalone.)
+#
+# NOTE the brace level: the source words follow the channel VERBATIM, exactly as
+# in a button_init call -- do NOT add an extra {...} wrapper. Wrapping it
+# (button_bind 0 {{} box {...}}) collapses it to one arg and errors with
+# "expected integer but got a list".
+#
+# ---- A) one button on a box DI pin, bound by PIN NUMBER ----
 #
 #      #ess::button_bind 0 {} box {office 14}   ;# ess/button/0 <- extio/office/state/di/14
 #      #ess::button_bind 1 {} box {office 13}   ;# ess/button/1 <- extio/office/state/di/13
 #
-#    (button_bind takes the same form as button_init after the channel number;
-#     `{} box {dev pin}` for a box, a bare pin for local GPIO, `{} joystick N`
-#     for a joystick direction. Bindings persist across protocol/system loads.)
+# ---- B) buttons bound by LABEL (board-independent) -- RECOMMENDED ----
 #
-# 3) Box outputs are driven by setting cmd datapoints (level or box-timed pulse):
+# Rigs around the lab wire the SAME logical buttons to DIFFERENT pins. Instead of
+# a per-rig pin table, put each button in a chord GROUP on the box and LABEL its
+# members; ess resolves label -> pin from the box's announced manifest, so the
+# binding here is IDENTICAL on every rig. The pin difference lives in each box's
+# persisted labels, not here. Labels map verbatim -- any label works (left/right,
+# go/stop, yes/no...), not just directions.
+#
+#      # on the box, once (persisted). two buttons "left"/"right" in group "response":
+#      #   pin 26 mode in_pullup ; pin 26 active_low 1 ; label 26 left
+#      #   pin 27 mode in_pullup ; pin 27 active_low 1 ; label 27 right
+#      #   group 0 pins 26,27    ; group 0 label response ; save
+#      #
+#      # here (same on every rig; `*` follows whichever box is present, hot-swap):
+#      #ess::button_bind 0 {} box {* response left}    ;# ess/button/0 = left
+#      #ess::button_bind 1 {} box {* response right}   ;# ess/button/1 = right
+#
+# ---- C) a directional JOYSTICK / d-pad from a labeled group ----
+#
+# Label the group's members with canonical DIRECTIONS up/down/left/right (single
+# letters u/d/l/r ok); ess auto-derives the bit->direction map from the labels, so
+# joystick_dir / joystick_dir_name / joystick_response (latched response + RT) work
+# board-independently. A 2-way pad (just left/right) works too -- label only those.
+#
+#      # on the box: label 16 up ; label 17 down ; label 18 left ; label 19 right
+#      #             group 0 pins 16,17,18,19 ; group 0 label joystick ; save
+#      #ess::joystick_bind box {* joystick}   ;# then joystick_dir_name -> up/down/left/right
+#
+# ---- box outputs (level or box-timed pulse) ----
 #
 #      #dservSet extio/office/cmd/do/5 1               ;# drive pin 5 high
 #      #dservSet extio/office/cmd/do/5/pulse_us 5000   ;# 5 ms box-timed pulse
