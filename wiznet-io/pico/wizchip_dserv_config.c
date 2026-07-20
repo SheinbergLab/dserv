@@ -742,12 +742,21 @@ static void publish_manifest(void)
     dserv_msg_int(f, nm, 0, sync_input_enabled(&g_cfg) ? sync_input_pin(&g_cfg) : -1);
     box_net_client_send(f, DSERV_MSG_LEN);
 
+    /* Labels. A pin with a label or a mode publishes state/label/i. The mask
+     * tracks pins we published a NON-EMPTY label for, so when one is cleared
+     * (and the pin turned off) we re-publish it EMPTY once -- dropping the ghost
+     * instead of leaving the stale label retained in dserv (obs/sync-pin do the
+     * same with -1). Without this a "remove label" never reaches dserv consumers. */
+    static uint32_t label_pub_mask;
     for (int i = 0; i < PICO_NPINS; i++) {
-        if (!g_cfg.pin_label[i][0] && !g_cfg.pin_mode[i]) continue;
+        int has = g_cfg.pin_label[i][0] != 0;
+        if (!has && !g_cfg.pin_mode[i] && !((label_pub_mask >> i) & 1u)) continue;
         snprintf(leaf, sizeof leaf, "label/%d", i);
         dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
-        dserv_msg_string(f, nm, 0, g_cfg.pin_label[i]);
+        dserv_msg_string(f, nm, 0, g_cfg.pin_label[i]);   /* empty string = clear the ghost */
         box_net_client_send(f, DSERV_MSG_LEN);
+        if (has) label_pub_mask |= (1u << i);
+        else     label_pub_mask &= ~(1u << i);
     }
 
     for (int g = 0; g < PICO_NGROUPS; g++) {

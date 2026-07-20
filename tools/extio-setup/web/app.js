@@ -450,6 +450,10 @@ $("pinapply").onclick = async () => {
     if (!sent) { $("pinmsg").textContent = "no changes"; return; }
     $("pinmsg").textContent = "applied (unsaved until 'Save to flash')";
     await reload(n);
+    // Over dserv the box re-announces its pin state asynchronously (a round-trip
+    // the immediate reload above races), so schedule a catch-up read to pick up
+    // the settled pins/in + labels. Serial mode's dump is already authoritative.
+    if (drv.id === "dserv") scheduleReload(700);
   } catch (e) { $("pinmsg").textContent = e.message; }
 };
 
