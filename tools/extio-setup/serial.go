@@ -20,7 +20,13 @@ import (
 
 const (
 	extioVID = "2E8A"
-	extioPID = "100B"
+	extioPID = "100B" // extio USB box
+	// The BLE handheld enumerates as "dserv handheld" / 0x100C (a distinct PID so
+	// the rig's usbio/extioconf box-globs never grab its dead data CDC). Accept it
+	// here too so a DOCKED handheld can be configured over its USB console -- full
+	// config (pins, name, mcp, save/reboot); its live DI/DO events ride the radio,
+	// not this CDC, so the event stream just shows unavailable (handled).
+	handheldPID = "100C"
 )
 
 // BoxPort is one physical box: its console port plus the data sibling.
@@ -42,7 +48,8 @@ func listBoxPorts() ([]BoxPort, error) {
 		if !p.IsUSB {
 			continue
 		}
-		if !strings.EqualFold(p.VID, extioVID) || !strings.EqualFold(p.PID, extioPID) {
+		if !strings.EqualFold(p.VID, extioVID) ||
+			(!strings.EqualFold(p.PID, extioPID) && !strings.EqualFold(p.PID, handheldPID)) {
 			continue
 		}
 		bySerial[p.SerialNumber] = append(bySerial[p.SerialNumber], p.Name)
