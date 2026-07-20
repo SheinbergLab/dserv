@@ -7,34 +7,34 @@ on:
 
 jobs:
 
-  # Create the GitHub release once, up front, so the parallel upload jobs below
-  # only ever *update* an existing release. Without this, multiple matrix jobs
-  # race to create the same tag and all but one fail with 422 already_exists.
+  # Gate the upload jobs on the release existing. The release is created in exactly
+  # ONE place -- create_release.yml -- to avoid the concurrent-create race that used
+  # to produce duplicate releases for a single tag (see that file). This job used to
+  # create the release itself; now it only WAITS for the single writer, so the
+  # `needs: create-release` gate on every upload job below still means "release ready".
   create-release:
 
     runs-on: ubuntu-22.04
 
     permissions:
-      contents: write
+      contents: read
 
     steps:
-      # Guard-create: release_linux + release_macos + dgview all fire on the same
-      # tag and target the SAME release. ncipollo's check-then-create isn't atomic
-      # across concurrent workflows, so the losers 422'd on already_exists. Plain
-      # `gh release create ... || true` is idempotent -- whoever wins creates it,
-      # the rest no-op (same idiom as the dgview job). prerelease here;
-      # publish_release.yml flips it to latest after the uploads land.
-      - name: Create (or reuse) the GitHub release for the current tag.
+      - name: Wait for the release for this tag to exist.
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}     # no checkout in this job -> gh needs the repo explicitly
         run: |
-          # Create the release; tolerate ONLY a concurrent already-exists (verified by
-          # a lookup). Do NOT blanket `|| true` -- that silently hid a real failure and
-          # every upload then 404'd on a release that was never created.
-          gh release create "${{ github.ref_name }}" --prerelease --generate-notes --title "${{ github.ref_name }}" \
-            || gh release view "${{ github.ref_name }}" >/dev/null 2>&1 \
-            || { echo "::error::release create failed and release does not exist"; exit 1; }
+          for i in $(seq 1 60); do
+            if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+              echo "Release ${{ github.ref_name }} is present."
+              exit 0
+            fi
+            echo "Waiting for release ${{ github.ref_name }} to be created ($i/60)..."
+            sleep 5
+          done
+          echo "::error::Release ${{ github.ref_name }} did not appear within 5 minutes (create_release.yml failed?)."
+          exit 1
 
   release-dserv:
 
