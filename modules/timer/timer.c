@@ -28,6 +28,8 @@
 
 #ifdef __linux__
 #include <sys/timerfd.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <strings.h>
 #include <time.h>
 #endif
@@ -83,6 +85,10 @@ typedef struct timer_info_s
   char *dpoint_prefix;
 #ifdef __linux__
   int use_signal_fallback;  // Global flag for all timers (signal-based fallback)
+  int epoll_fd;             // one epoll instance multiplexing all 8 timerfds
+  int stop_fd;              // eventfd: signalled on teardown to wake+exit the thread
+  pthread_t epoll_thread;   // ONE worker thread for all timers (was one per timer)
+  int epoll_thread_started; // whether epoll_thread is joinable
 #endif
 } timer_info_t;
 
@@ -226,35 +232,49 @@ int test_timerfd_reliability() {
   return 1;  // timerfd seems to work
 }
 
-// Original timerfd worker thread (for native Linux)
-void* timerWorkerThread(void *arg) {
-  dserv_timer_t *t = (dserv_timer_t *) arg;
-  
-  uint64_t exp;
-  ssize_t s;
+// Single worker thread: epoll-multiplex ALL of this module's timerfds (was one
+// blocked-on-read() thread per timer -> 8 threads; now 1). Each timerfd is
+// registered in the epoll set once at init; arming/disarming happens via
+// timerfd_settime (dserv_timer_arm_ms / dserv_timer_reset) and never touches
+// the epoll set -- a disarmed timerfd simply never becomes readable. Reading a
+// fired timerfd returns and clears its expiration count, so level-triggered
+// epoll won't re-wake for it: no busy loop. Semantics per firing are identical
+// to the old per-timer thread (expired flag, notify, nrepeats auto-reset).
+//
+// Teardown: info->stop_fd (an eventfd) is also in the epoll set, registered with
+// data.ptr == info as a sentinel. timer_module_delete() writes to it, waking
+// this thread so it can exit cleanly and be joined (previously the per-timer
+// threads were never stopped -> leak + UAF if a timerfd fired into freed state).
+void* timerEpollThread(void *arg) {
+  timer_info_t *info = (timer_info_t *) arg;
+  struct epoll_event events[16];
 
   while (1) {
-    s = read(t->timer_fd, &exp, sizeof(uint64_t));
-    if (s == sizeof(uint64_t)) {
-      t->expired = true;
-      timer_notify_dserv(t);
-      
-      t->expirations++;
-      if (t->nrepeats > 0 && t->expirations >= t->nrepeats) {
-        dserv_timer_reset(t);
-      }
-    } else if (s == -1) {
-      if (errno == EINTR) {
-        continue;               // interrupted by a signal -> just retry the read
-      } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        usleep(1000);
-      } else {
+    int n = epoll_wait(info->epoll_fd, events, 16, -1);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      perror("timer epoll_wait");
+      break;
+    }
+    for (int k = 0; k < n; k++) {
+      if (events[k].data.ptr == info) return NULL;   // stop_fd: teardown
+      dserv_timer_t *t = (dserv_timer_t *) events[k].data.ptr;
+      if (!t) continue;
+      uint64_t exp;
+      ssize_t s = read(t->timer_fd, &exp, sizeof(uint64_t));
+      if (s == sizeof(uint64_t)) {
+        t->expired = true;
+        timer_notify_dserv(t);
+        t->expirations++;
+        if (t->nrepeats > 0 && t->expirations >= t->nrepeats) {
+          dserv_timer_reset(t);
+        }
+      } else if (s == -1 && errno != EAGAIN && errno != EWOULDBLOCK &&
+                 errno != EINTR) {
         perror("timerfd read error");
-        break;
       }
     }
   }
-  
   return NULL;
 }
 
@@ -306,8 +326,11 @@ int dserv_timer_init(dserv_timer_t *t, timer_info_t *info, int id)
       g_signal_timers[id] = t;
     t->is_armed = 0;
   } else {
-    // Initialize timerfd-based timer
-    t->timer_fd = timerfd_create(CLOCK_MONOTONIC, 0);
+    // Initialize timerfd-based timer. TFD_NONBLOCK so the epoll worker's read()
+    // can never block inside the callback path: level-triggered epoll only wakes
+    // us when readable, but if an expiration is cleared out from under us (e.g. a
+    // concurrent disarm) the read simply returns EAGAIN instead of blocking.
+    t->timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     if (t->timer_fd == -1) {
       return -1;
     }
@@ -571,6 +594,39 @@ static int timer_set_dpoint_prefix_command (ClientData data, Tcl_Interp *interp,
 }
 
 
+#ifdef __linux__
+/*
+ * Interp teardown hook (registered via Tcl_CallWhenDeleted). Stops the worker
+ * thread, releases per-timer OS resources, and frees the module state. Without
+ * this the epoll thread and its timerfds leaked on every subprocess teardown,
+ * and a timer firing during teardown could touch freed memory.
+ *
+ * Linux-only on purpose: the Apple path has no worker thread, and its dispatch
+ * blocks capture the per-timer pointers, so freeing here would be a UAF. Apple
+ * keeps its prior (process-lifetime) behavior, matching "dispatch path untouched".
+ */
+static void timer_module_delete (ClientData data, Tcl_Interp *interp)
+{
+  timer_info_t *info = (timer_info_t *) data;
+  if (!info) return;
+
+  if (!info->use_signal_fallback && info->epoll_thread_started) {
+    uint64_t one = 1;
+    (void) write(info->stop_fd, &one, sizeof(one));   // wake epoll_wait -> return
+    pthread_join(info->epoll_thread, NULL);
+  }
+  if (info->stop_fd > 0)  close(info->stop_fd);
+  if (info->epoll_fd > 0) close(info->epoll_fd);
+
+  for (int i = 0; i < info->ntimers; i++)
+    dserv_timer_destroy(&info->timers[i]);
+
+  if (info->timers)        free(info->timers);
+  if (info->dpoint_prefix) free(info->dpoint_prefix);
+  free(info);
+}
+#endif
+
 #ifdef WIN32
 EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
 #else
@@ -609,13 +665,48 @@ EXPORT(int,Dserv_timer_Init) (Tcl_Interp *interp)
   }
   
 #ifdef __linux__
-  // Create worker threads if using timerfd (not signal-based fallback)
+  // timerfd path: multiplex all timerfds on ONE epoll thread (was one thread
+  // per timer). Each timer's timerfd was created in dserv_timer_init above.
   if (!g_timerInfo->use_signal_fallback) {
-    pthread_t w;
-    for (int i = 0; i < ntimers; i++) {
-      pthread_create(&w, NULL, timerWorkerThread, &g_timerInfo->timers[i]);
+    g_timerInfo->epoll_fd = epoll_create1(0);
+    if (g_timerInfo->epoll_fd == -1) {
+      perror("timer epoll_create1");
+      return TCL_ERROR;
     }
-  } 
+    for (int i = 0; i < ntimers; i++) {
+      struct epoll_event ev;
+      ev.events = EPOLLIN;
+      ev.data.ptr = &g_timerInfo->timers[i];
+      if (epoll_ctl(g_timerInfo->epoll_fd, EPOLL_CTL_ADD,
+                    g_timerInfo->timers[i].timer_fd, &ev) == -1) {
+        perror("timer epoll_ctl ADD");
+        return TCL_ERROR;
+      }
+    }
+    // stop_fd wakes the worker on teardown; sentinel data.ptr == g_timerInfo.
+    g_timerInfo->stop_fd = eventfd(0, EFD_NONBLOCK);
+    if (g_timerInfo->stop_fd != -1) {
+      struct epoll_event ev;
+      ev.events = EPOLLIN;
+      ev.data.ptr = g_timerInfo;
+      epoll_ctl(g_timerInfo->epoll_fd, EPOLL_CTL_ADD, g_timerInfo->stop_fd, &ev);
+    }
+
+    // The worker only epoll_waits + read()s timerfds + enqueues datapoints (no
+    // Tcl eval), so it needs nothing like the default 8 MB stack. Under this
+    // process's mlockall() that stack is PINNED, so a small stack is a direct
+    // RAM saving (256 KB vs 8 MB pinned per module-load).
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 * 1024);
+    if (pthread_create(&g_timerInfo->epoll_thread, &attr,
+                       timerEpollThread, g_timerInfo) == 0) {
+      g_timerInfo->epoll_thread_started = 1;
+    }
+    pthread_attr_destroy(&attr);
+  }
+
+  Tcl_CallWhenDeleted(interp, timer_module_delete, (ClientData) g_timerInfo);
 #endif
 
   Tcl_CreateObjCommand(interp, "timerTick",
