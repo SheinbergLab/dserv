@@ -37,14 +37,16 @@ const api = async (path, body) => {
 };
 
 /* Board map: W6300-EVB-Pico2 (dual image) from wiznet-io/PINMAP.md.
- * "claimed" pins depend on live config (ain/oled) -- resolved in render.
- * TODO: replace with a reserved-mask announced by the firmware manifest. */
+ * "claimed" pins depend on live config (mcp/oled), reflected from the box's
+ * announced state/{mcp_en,oled_en} (dserv) or `show` output (serial). MCP3204
+ * and OLED share SPI0 SCK/MOSI (GP2/3), so when both are on the OLED note wins
+ * for those two -- pinRole checks oled first. */
 const NPINS = 29;
 const FIXED = { 0:"UART0 TX", 1:"UART0 RX", 15:"W6300", 16:"W6300", 17:"W6300",
   18:"W6300", 19:"W6300", 20:"W6300", 21:"W6300", 22:"W6300",
   23:"SMPS", 24:"VBUS", 28:"mode strap" };
 const OLED_PINS = { 2:"OLED CLK", 3:"OLED DATA", 6:"OLED CS", 7:"OLED DC", 8:"OLED RST" };
-const AIN_PINS = { 4:"I2C SDA", 5:"I2C SCL" };
+const MCP_PINS = { 2:"MCP SCK", 3:"MCP DIN", 4:"MCP DOUT", 5:"MCP CS" };
 
 let cfg = emptyCfg();
 let selPin = null;
@@ -58,7 +60,7 @@ let obsLive = false; // box is currently in an observation (state/in_obs = 1)
 
 function emptyCfg() {
   return { name: "", desc: "", mode: "", obs: null, sync: null,
-    ain: false, oled: false, pins: {}, groups: {}, raw: [],
+    mcp: false, oled: false, pins: {}, groups: {}, raw: [],
     // firmware identity: fw=running version, build=shelf image line
     // (BOX_BUILD_TARGET), board=compat key (BOX_BOARD_ID), channel=update track.
     // build/board/channel arrive over dserv (state/*) or serial (`show` trailer);
@@ -160,6 +162,7 @@ const SerialDriver = {
 
   async testPulse(n, us) { await execChecked(`do ${n} pulse ${us}`); },
   async setBoxField(field, v) { await execChecked(`${field} ${v}`); }, // name|desc
+  async setFeature(name, on) { await execChecked(`${name} enable ${on ? 1 : 0}`); }, // mcp/oled
   async save() { await execChecked("save"); },
   async reboot() { await execChecked("reboot"); },
 };
@@ -195,6 +198,8 @@ const DservDriver = {
     return api("/api/dserv/set", { key: `extio/${this.box}/${leaf}`, value: String(value) })
       .then(() => conLog(`> %set ${leaf} = ${value}`));
   },
+
+  async setFeature(name, on) { await this.set(`config/${name}/enable`, on ? 1 : 0); }, // mcp/oled
 
   async applyPin(n, want, p, wantObs, wantSync) {
     const sets = [];
@@ -253,7 +258,7 @@ function parseDump(lines) {
     else if ((m = s.match(/^group (\d+) quiet 1$/))) (c.groups[+m[1]] ??= {}).quiet = true;
     else if ((m = s.match(/^obs pin (\d+)$/))) c.obs = +m[1];
     else if ((m = s.match(/^sync pin (\d+)$/))) c.sync = +m[1];
-    else if (s === "ain enable 1") c.ain = true;
+    else if (s === "mcp enable 1") c.mcp = true;
     else if (s === "oled enable 1") c.oled = true;
   }
   return c;
@@ -276,6 +281,11 @@ function cfgFromState(box, st) {
   }
   if (typeof st["obs_pin"] === "number" && st["obs_pin"] >= 0) c.obs = st["obs_pin"];
   if (typeof st["sync_pin"] === "number" && st["sync_pin"] >= 0) c.sync = st["sync_pin"];
+  // analog/display feature flags (state/mcp_en, state/oled_en) -> claimed pins.
+  // Absent on boxes predating the manifest change -> stays false (pin map just
+  // won't shade them, same as before).
+  c.mcp = +st["mcp_en"] === 1;
+  c.oled = +st["oled_en"] === 1;
   c.fw = st["fw"] || "";
   // build/board announced today (state/build, state/board); channel added with
   // the firmware channel-policy change -- absent -> loadShelf falls back to dev.
@@ -292,7 +302,7 @@ function cfgFromState(box, st) {
 function pinRole(n) {
   if (n in FIXED) return { cls: "fixed", note: FIXED[n], locked: true };
   if (cfg.oled && n in OLED_PINS) return { cls: "claimed", note: OLED_PINS[n], locked: true };
-  if (cfg.ain && n in AIN_PINS) return { cls: "claimed", note: AIN_PINS[n], locked: true };
+  if (cfg.mcp && n in MCP_PINS) return { cls: "claimed", note: MCP_PINS[n], locked: true };
   const lbl = cfg.pins[n]?.label;
   if (n === cfg.obs) return { cls: "special", note: lbl ? lbl + " · obs" : "obs mirror", strong: !!lbl, locked: false };
   if (n === cfg.sync) return { cls: "special", note: lbl ? lbl + " · sync" : "sync input", strong: !!lbl, locked: false };
@@ -346,7 +356,34 @@ function renderBox() {
     return `${name}[${v.pins || ""}]${v.settle ? " settle=" + v.settle : ""}`;
   });
   $("groups").textContent = gs.length ? gs.join("  ") : "—";
+  renderMcp();
 }
+
+/* ---- Analog / MCP3204 panel: enable/disable the SPI ADC (claims GP2-5). Works
+ * in both drivers via drv.setFeature (serial: `mcp enable N`; dserv:
+ * config/mcp/enable). MCP is compiled into every image, so show when connected.
+ * Optimistic: shade the pins immediately; the "save + reboot" note sets the
+ * expectation that the claim only takes effect on the next boot. ---- */
+function renderMcp() {
+  $("mcppanel").hidden = !connected;
+  if (!connected) return;
+  $("mcpStatus").textContent = cfg.mcp ? "enabled — GP2-5 claimed" : "disabled";
+  $("mcpEnable").disabled = cfg.mcp;
+  $("mcpDisable").disabled = !cfg.mcp;
+}
+
+async function mcpSet(on) {
+  try {
+    await drv.setFeature("mcp", on);
+    cfg.mcp = on;                       // optimistic: reflect in panel + pin map now
+    $("mcpMsg").textContent = `${on ? "enabled" : "disabled"} — Save to flash + reboot to apply`;
+    renderMcp(); renderPins();
+  } catch (e) {
+    $("mcpMsg").textContent = "err: " + e.message;
+  }
+}
+$("mcpEnable").onclick = () => mcpSet(true);
+$("mcpDisable").onclick = () => mcpSet(false);
 
 /* ---- Handheld / BLE panel (dserv mode: pairing is a rig operation, and the
  * state/ble/* telemetry only exists over dserv). Every action is a config/cmd
@@ -878,7 +915,8 @@ function setConnected(on, label) {
   $("conhint").textContent = !on ? "connect a box to interact"
     : drv.hasConsole ? "" : "live events only (the CLI console needs the USB serial driver)";
   if (!on) {
-    $("editor").hidden = true; $("blepanel").hidden = true; selPin = null; cfg = emptyCfg();
+    $("editor").hidden = true; $("blepanel").hidden = true; $("mcppanel").hidden = true;
+    selPin = null; cfg = emptyCfg();
     liveDI.clear(); beats = 0; $("beat").textContent = "";
     setObsLive(false);
     SerialDriver.eventsVia = "local"; // next connect starts clean

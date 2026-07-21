@@ -62,6 +62,20 @@
       </div>
     </div>
 
+    <div class="panel" id="mcppanel" hidden>
+      <div class="panel-title">Analog &middot; MCP3204</div>
+      <div class="grid2">
+        <label>status</label><span id="mcpStatus" class="mono muted">&mdash;</span>
+      </div>
+      <div class="row gap">
+        <button id="mcpEnable" title="mcp enable 1">Enable</button>
+        <button id="mcpDisable" title="mcp enable 0">Disable</button>
+      </div>
+      <div id="mcpMsg" class="mono muted"></div>
+      <div class="hint">MCP3204 SPI ADC on <b>GP2&ndash;5</b> (CH0=X, CH1=Y). Claims those pins &mdash;
+        <b>Save to flash</b> + reboot to apply. Publishes <code>state/ain/scan</code> (int16&times;4).</div>
+    </div>
+
     <div class="panel" id="blepanel" hidden>
       <div class="panel-title">Handheld / BLE</div>
       <div class="grid2">
