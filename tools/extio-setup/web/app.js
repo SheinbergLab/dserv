@@ -615,7 +615,7 @@ function renderDiscovery(boxes, enabled) {
   list.innerHTML = "";
   for (const b of boxes) {
     const row = document.createElement("div");
-    row.className = "grow";
+    row.className = "grow" + (daBox === b.ip ? " sel" : "");
     const nm = document.createElement("span"); nm.className = "gname";
     const named = b.name && b.name !== "pico";
     nm.textContent = named ? b.name : "(unnamed)";
@@ -625,9 +625,43 @@ function renderDiscovery(boxes, enabled) {
     badge.className = "badge " + (b.configured ? "on" : "off");
     badge.textContent = b.configured ? "configured" : "unconfigured";
     row.append(nm, meta, badge);
+    row.onclick = () => openAssign(b);
     list.append(row);
   }
 }
+
+/* ---- adopt a discovered box: point it at a rig's dserv + save, pushed straight
+ * to the box's config server (:5010) via /api/discover/assign. ---- */
+let daBox = null;   // ip of the box the assign form is open for
+function openAssign(b) {
+  daBox = b.ip;
+  $("discoAssign").hidden = false;
+  $("daBox").textContent = `${b.name || "pico"} @ ${b.ip}`;
+  $("daMsg").textContent = "";
+  // sensible default: if the page was loaded from a rig by IP, target that host
+  if (!$("daIP").value) {
+    const h = location.hostname;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) $("daIP").value = h;
+  }
+  $("discoAssign")._box = b;
+  refreshDiscovery();   // highlight the selected row
+  $("daIP").focus();
+}
+function closeAssign() { daBox = null; $("discoAssign").hidden = true; refreshDiscovery(); }
+$("daCancel").onclick = closeAssign;
+$("daAssign").onclick = async () => {
+  const b = $("discoAssign")._box; if (!b) return;
+  const dservIP = $("daIP").value.trim();
+  const dservPort = +$("daPort").value || 4620;
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(dservIP)) { $("daMsg").textContent = "enter the rig's dserv IP"; return; }
+  $("daMsg").textContent = "assigning…";
+  try {
+    const j = await api("/api/discover/assign", { ip: b.ip, name: b.name || "pico", dservIP, dservPort });
+    $("daMsg").textContent = `assigned → ${j.assigned}. The box will connect & appear in dserv mode.`;
+    setTimeout(refreshDiscovery, 1500);   // beacon target flips to configured shortly
+  } catch (e) { $("daMsg").textContent = "err: " + e.message; }
+};
+
 setInterval(refreshDiscovery, 2500);
 refreshDiscovery();
 

@@ -79,6 +79,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/dserv/set", s.handleDservSet)
 	mux.HandleFunc("GET /api/dserv/probe", s.handleDservProbe)
 	mux.HandleFunc("GET /api/discover", s.handleDiscover)
+	mux.HandleFunc("POST /api/discover/assign", s.handleAssign)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

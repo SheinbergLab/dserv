@@ -56,8 +56,21 @@
       <div class="panel-title">Discovered on your network
         <span class="hint" id="discohint">listening&hellip;</span></div>
       <div id="discolist" class="glist"></div>
-      <div class="hint">Ethernet boxes broadcast a beacon on boot. An <b>unconfigured</b> box has a
-        DHCP lease but no dserv target yet &mdash; assigning it here is the next step.</div>
+      <div id="discoAssign" class="geditor" hidden>
+        <div class="grid2">
+          <label>box</label><span id="daBox" class="mono muted"></span>
+          <label>rig dserv IP</label><input id="daIP" size="15" placeholder="192.168.88.x">
+          <label>port</label><input id="daPort" size="6" value="4620">
+        </div>
+        <div class="row gap">
+          <button id="daAssign" class="primary">Assign &amp; save</button>
+          <button id="daCancel">Cancel</button>
+          <span id="daMsg" class="mono muted"></span>
+        </div>
+      </div>
+      <div class="hint">Ethernet boxes broadcast a beacon on boot. Click an <b>unconfigured</b> box
+        (DHCP lease, no dserv target yet) to point it at a rig and save &mdash; it then connects and
+        appears in dserv mode.</div>
     </div>
 
     <div class="panel" id="boxpanel">
