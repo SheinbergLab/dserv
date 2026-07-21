@@ -714,6 +714,8 @@ static void groups_reset_all(void)
  *                                   turned off drops out here even though its
  *                                   last di/do datapoint lingers retained in
  *                                   dserv (which would otherwise show a ghost).
+ *   state/mcp_en, state/oled_en     analog(MCP3204)/display feature flags, so a
+ *                                   UI shades the claimed SPI0 pins (GP2-5 / 6-8).
  * Consumers: extioconf decode, ess joystick bit-map, fleet page. */
 static void publish_manifest(void)
 {
@@ -744,6 +746,14 @@ static void publish_manifest(void)
     dserv_state_name(&g_cfg, nm, sizeof nm, "sync_pin");
     dserv_msg_int(f, nm, 0, sync_input_enabled(&g_cfg) ? sync_input_pin(&g_cfg) : -1);
     box_net_client_send(f, DSERV_MSG_LEN);
+
+    /* Feature flags: which claimed-pin sets are live, so a UI (extio-setup pin
+     * map) renders the reserved analog/display pins without hardcoding the pin
+     * budget. MCP3204 claims SPI0 GP2-5; OLED claims GP2/3/6/7/8 (see PINMAP). */
+    dserv_state_name(&g_cfg, nm, sizeof nm, "mcp_en");
+    dserv_msg_int(f, nm, 0, g_cfg.mcp_en ? 1 : 0);   box_net_client_send(f, DSERV_MSG_LEN);
+    dserv_state_name(&g_cfg, nm, sizeof nm, "oled_en");
+    dserv_msg_int(f, nm, 0, g_cfg.oled_en ? 1 : 0);  box_net_client_send(f, DSERV_MSG_LEN);
 
     /* Labels. A pin with a label or a mode publishes state/label/i. The mask
      * tracks pins we published a NON-EMPTY label for, so when one is cleared
