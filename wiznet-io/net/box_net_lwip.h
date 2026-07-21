@@ -190,6 +190,10 @@ static inline void box_net_local_ip(uint8_t out[4])
     out[0] = ip4_addr1(ip); out[1] = ip4_addr2(ip);
     out[2] = ip4_addr3(ip); out[3] = ip4_addr4(ip);
 }
+/* WiFi discovery beacon: not implemented yet (a lwIP UDP PCB broadcast would go
+ * here). No-op for now so the shared caller compiles across transports. */
+static inline void box_net_beacon(uint16_t port, const uint8_t *buf, int len)
+{ (void) port; (void) buf; (void) len; }
 
 /* Send one text command to dserv on a transient connection (best-effort;
  * needs validation on a real Pico 2 W). One command per connection. */

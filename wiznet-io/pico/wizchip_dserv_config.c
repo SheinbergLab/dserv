@@ -346,6 +346,29 @@ static void publish_sync(uint64_t dserv_us, uint64_t box_us, int64_t offset_us,
     }
 }
 
+/* UDP discovery beacon (Ethernet only): broadcast the box's identity to the LAN
+ * so extio-setup can FIND an unconfigured box -- one that has a DHCP lease but no
+ * dserv target yet -- and one-click assign it. Composed here (cfg + fw/board
+ * macros); box_net_beacon does the broadcast (no-op on USB, where local_ip is
+ * 0.0.0.0 so we early-out before even formatting). Fires from the core-1 loop
+ * BEFORE the dserv-target gate, so a brand-new box announces itself. */
+#define BOX_BEACON_PORT 5011   /* extio-setup listens for these UDP broadcasts */
+#define BEACON_MS       1500
+static void beacon_send(void)
+{
+    uint8_t ip[4]; box_net_local_ip(ip);
+    if (!(ip[0] || ip[1] || ip[2] || ip[3])) return;   /* USB, or no DHCP lease yet */
+    char body[256];
+    int n = snprintf(body, sizeof body,
+        "{\"t\":\"extio\",\"v\":1,\"name\":\"%s\",\"ip\":\"%u.%u.%u.%u\","
+        "\"fw\":\"%s\",\"board\":\"%s\",\"build\":\"%s\",\"target\":\"%u.%u.%u.%u:%u\"}",
+        dserv_cfg_name(&g_cfg), ip[0], ip[1], ip[2], ip[3],
+        BOX_FW_VERSION, BOX_BOARD_ID, BOX_BUILD_TARGET,
+        g_cfg.dserv_ip[0], g_cfg.dserv_ip[1], g_cfg.dserv_ip[2], g_cfg.dserv_ip[3],
+        dserv_cfg_port(&g_cfg));
+    if (n > 0) box_net_beacon(BOX_BEACON_PORT, (const uint8_t *) body, n);
+}
+
 static void publish_heartbeat(void)
 {
     char nm[64]; uint8_t f[DSERV_MSG_LEN];
@@ -1772,6 +1795,10 @@ static void rt_main(void)
         while (queue_try_remove(&g_cmd_q, cline)) cmd_exec(cline);
 
         reg_service();             /* advance any in-flight registration, one step per pass */
+
+        { static uint32_t beacon_at;   /* LAN discovery beacon (Ethernet); runs even w/o a target */
+          uint32_t bnow = to_ms_since_boot(get_absolute_time());
+          if (bnow - beacon_at >= BEACON_MS) { beacon_at = bnow; beacon_send(); } }
 
         /* state out (box -> dserv), once a target is configured */
         if (!have_dserv_target()) {

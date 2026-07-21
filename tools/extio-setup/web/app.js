@@ -599,6 +599,38 @@ $("gedApply").onclick = applyGroupEdit;
 $("gedOff").onclick = deleteGroupEdit;
 $("gedCancel").onclick = closeGroupEditor;
 
+/* ---- LAN discovery: list Ethernet boxes broadcasting their UDP beacon (the Go
+ * server collects them on :5011). Independent of connect state — this is how you
+ * FIND a fresh box before adopting it. Default-named boxes show "(unnamed)", so
+ * the IP + board/fw disambiguate. Polls every ~2.5s. ---- */
+async function refreshDiscovery() {
+  try { const j = await api("/api/discover"); renderDiscovery(j.boxes || [], j.enabled); }
+  catch { /* transient — the next tick retries */ }
+}
+function renderDiscovery(boxes, enabled) {
+  const hint = $("discohint"), list = $("discolist");
+  if (enabled === false) { hint.textContent = "off — UDP :5011 unavailable"; list.innerHTML = ""; return; }
+  boxes.sort((a, b) => String(a.ip).localeCompare(String(b.ip), undefined, { numeric: true }));
+  hint.textContent = boxes.length ? `${boxes.length} on the LAN` : "listening…";
+  list.innerHTML = "";
+  for (const b of boxes) {
+    const row = document.createElement("div");
+    row.className = "grow";
+    const nm = document.createElement("span"); nm.className = "gname";
+    const named = b.name && b.name !== "pico";
+    nm.textContent = named ? b.name : "(unnamed)";
+    const meta = document.createElement("span"); meta.className = "gmeta";
+    meta.textContent = `${b.ip} · ${b.board || "?"}/${b.build || "?"} · fw ${b.fw || "?"}`;
+    const badge = document.createElement("span");
+    badge.className = "badge " + (b.configured ? "on" : "off");
+    badge.textContent = b.configured ? "configured" : "unconfigured";
+    row.append(nm, meta, badge);
+    list.append(row);
+  }
+}
+setInterval(refreshDiscovery, 2500);
+refreshDiscovery();
+
 /* ---- Handheld / BLE panel (dserv mode: pairing is a rig operation, and the
  * state/ble/* telemetry only exists over dserv). Every action is a config/cmd
  * datapoint; status comes from state/ble/{bonds,encrypted,pairing}. ---- */

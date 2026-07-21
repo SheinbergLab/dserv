@@ -134,6 +134,8 @@ static inline int box_net_client_send(const uint8_t *buf, int len)
 
 /* No IP over USB (only used to advertise in %reg, which we don't do here). */
 static inline void box_net_local_ip(uint8_t out[4]) { out[0] = out[1] = out[2] = out[3] = 0; }
+static inline void box_net_beacon(uint16_t port, const uint8_t *buf, int len)
+{ (void) port; (void) buf; (void) len; }   /* USB box: no LAN to broadcast on */
 
 /* ---- self_register()'s %reg/%match text ----
  * Over USB there is no dserv socket to register with; the host module owns

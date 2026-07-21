@@ -62,6 +62,11 @@ typedef struct {
      * to -1 (Stage-0 pull is Ethernet-only -- see OTA.md). */
     int         (*get_binary)(const uint8_t dserv_ip[4], uint16_t port,
                               const char *key, box_net_bin_sink sink, void *ud);
+    /* Best-effort UDP broadcast of a discovery beacon to the LAN (255.255.255.255
+     * :port). Lets extio-setup FIND an unconfigured box before it has a dserv
+     * target. w6300 sends it; usb/lwip/ble stub to a no-op (no LAN to broadcast
+     * on). Caller composes the payload + rate-gates. See box_net_beacon. */
+    void        (*beacon)(uint16_t port, const uint8_t *buf, int len);
 } box_net_vtable_t;
 
 extern const box_net_vtable_t box_net_w6300_vt;

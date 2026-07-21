@@ -22,6 +22,7 @@ type server struct {
 	dataNote string
 	fwDir    string
 	shelfURL string // firmware shelf base (e.g. https://dserv.net); "" disables
+	disco    *discovery // LAN beacon listener (nil if the UDP port was unavailable)
 }
 
 // eventSource is the live-event side shared by both drivers: the serial data
@@ -33,7 +34,9 @@ type eventSource interface {
 }
 
 func newServer(fwDir, shelfURL string) *server {
-	return &server{fwDir: fwDir, shelfURL: strings.TrimRight(shelfURL, "/")}
+	s := &server{fwDir: fwDir, shelfURL: strings.TrimRight(shelfURL, "/")}
+	s.startDiscovery() // best effort; leaves s.disco nil if UDP :5011 is taken
+	return s
 }
 
 // shutdown closes all links cleanly (releases OS port claims; unregisters
@@ -75,6 +78,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dserv/state", s.handleDservState)
 	mux.HandleFunc("POST /api/dserv/set", s.handleDservSet)
 	mux.HandleFunc("GET /api/dserv/probe", s.handleDservProbe)
+	mux.HandleFunc("GET /api/discover", s.handleDiscover)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

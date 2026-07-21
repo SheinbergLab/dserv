@@ -128,6 +128,8 @@ static inline int box_net_client_send(const uint8_t *buf, int len)
 }
 
 static inline void box_net_local_ip(uint8_t out[4]) { out[0] = out[1] = out[2] = out[3] = 0; }
+static inline void box_net_beacon(uint16_t port, const uint8_t *buf, int len)
+{ (void) port; (void) buf; (void) len; }   /* BLE handheld: no LAN */
 
 /* No registration over the radio: the host module owns forwarding (USB v1
  * model); the receiver just relays name-addressed frames. */

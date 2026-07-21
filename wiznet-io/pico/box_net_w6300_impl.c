@@ -23,6 +23,7 @@ const box_net_vtable_t box_net_w6300_vt = {
     .send_command_start = box_net_send_command_start,
     .send_command_poll  = box_net_send_command_poll,
     .get_binary         = box_net_get_binary,   /* raw '<' pull -> flash (OTA) */
+    .beacon             = box_net_beacon,        /* UDP discovery broadcast */
 };
 
 /* (The 2026-07-05 boot-time cable auto-detect read PHYSR the instant the chip came

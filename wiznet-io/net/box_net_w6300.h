@@ -359,6 +359,25 @@ static inline int box_net_client_send(const uint8_t *buf, int len)
 static inline void box_net_local_ip(uint8_t out[4])
 { out[0]=bn_netinfo.ip[0]; out[1]=bn_netinfo.ip[1]; out[2]=bn_netinfo.ip[2]; out[3]=bn_netinfo.ip[3]; }
 
+/* Discovery beacon: best-effort UDP broadcast of `buf` to 255.255.255.255:port.
+ * A dedicated UDP socket (BOX_BEACON_SN), opened lazily on first call. Silently
+ * no-ops until DHCP hands out a lease (nothing to advertise yet). The caller
+ * (core 1) composes the payload + rate-gates, so this just does the transport. */
+#define BOX_BEACON_SN 7        /* free W6300 socket (0/3/4/5/6 in use) */
+static inline void box_net_beacon(uint16_t port, const uint8_t *buf, int len)
+{
+    if (!(bn_netinfo.ip[0] || bn_netinfo.ip[1] || bn_netinfo.ip[2] || bn_netinfo.ip[3]))
+        return;                                   /* no lease -> no IP to announce */
+    uint8_t status;
+    getsockopt(BOX_BEACON_SN, SO_STATUS, &status);
+    if (status != SOCK_UDP) {                     /* (re)open the UDP socket once */
+        socket(BOX_BEACON_SN, Sn_MR_UDP4, port, SOCK_IO_NONBLOCK);
+        return;                                   /* opened this tick; send next call */
+    }
+    uint8_t bcast[16] = { 255, 255, 255, 255 };
+    sendto(BOX_BEACON_SN, (uint8_t *) buf, len, bcast, port, 4);
+}
+
 /* Graceful transient-socket teardown: FIN and WAIT (bounded) for the close
  * handshake to finish before killing the socket. The old `disconnect(); close();`
  * aborted the handshake -- close() right after DISCON kills the socket before

@@ -37,6 +37,7 @@ static inline int  box_net_send_command(const uint8_t ip[4], uint16_t p, const c
 static inline int  box_net_send_command_start(const uint8_t ip[4], uint16_t p, const char *c) { return box_net_active->send_command_start(ip, p, c); }
 static inline int  box_net_send_command_poll(void)                         { return box_net_active->send_command_poll(); }
 static inline int  box_net_get_binary(const uint8_t ip[4], uint16_t p, const char *k, box_net_bin_sink s, void *ud) { return box_net_active->get_binary(ip, p, k, s, ud); }
+static inline void box_net_beacon(uint16_t p, const uint8_t *b, int l)      { box_net_active->beacon(p, b, l); }
 static inline const char *box_net_backend_name(void)                       { return box_net_active->name(); }
 static inline int  box_net_server_up(void)                                 { return box_net_active->server_up(); }
 static inline int  box_net_client_reading(void)                            { return box_net_active->client_reading(); }
