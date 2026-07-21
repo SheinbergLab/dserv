@@ -29,6 +29,7 @@
   <span id="status" class="badge off">no box</span>
   <span id="beat" class="hint" title="data-interface heartbeat"></span>
   <span id="obs" class="badge" title="box is in an observation (state/in_obs)"></span>
+  <span id="discoChip" class="badge chip-btn" title="boxes discovered on the LAN — click to show/hide" hidden></span>
   <span class="spacer"></span>
   <button id="refresh" disabled>Re-read</button>
   <button id="save" disabled>Save to flash</button>
@@ -59,6 +60,7 @@
       <div id="discoAssign" class="geditor" hidden>
         <div class="grid2">
           <label>box</label><span id="daBox" class="mono muted"></span>
+          <label>name</label><input id="daName" size="14" placeholder="rename (optional)">
           <label>rig dserv IP</label><input id="daIP" size="15" placeholder="192.168.88.x">
           <label>port</label><input id="daPort" size="6" value="4620">
         </div>

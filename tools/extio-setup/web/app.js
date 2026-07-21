@@ -607,24 +607,101 @@ async function refreshDiscovery() {
   try { const j = await api("/api/discover"); renderDiscovery(j.boxes || [], j.enabled); }
   catch { /* transient — the next tick retries */ }
 }
+let discoForceOpen = false;   // user expanded the panel (via the header chip)
+let discoBoxes = [];          // latest discovered boxes (for dserv-host prefill)
+let dhostTouched = false;     // user edited the dserv host -> stop auto-filling it
+
+// A configured box authoritatively reports where its dserv lives, so it's a
+// better default than "localhost". Pick the most-reported target host.
+function pickDservTarget() {
+  const counts = {};
+  for (const b of discoBoxes) {
+    if (b.configured && b.target && !b.target.startsWith("0.0.0.0")) {
+      const h = b.target.split(":")[0];
+      counts[h] = (counts[h] || 0) + 1;
+    }
+  }
+  let best = null, n = 0;
+  for (const [h, c] of Object.entries(counts)) if (c > n) { best = h; n = c; }
+  return best;
+}
+// Fill the dserv host field(s) from a discovered target, unless the user typed one.
+function prefillDservHost() {
+  if (dhostTouched) return;
+  const host = pickDservTarget();
+  if (!host) return;
+  for (const id of ["dhost", "viaDservHost"]) {
+    const el = $(id);
+    if (!el.value || el.value === "localhost") {
+      el.value = host;
+      el.title = "auto-filled from a discovered box's dserv target";
+    }
+  }
+}
+$("dhost").addEventListener("input", () => { dhostTouched = true; });
+$("viaDservHost").addEventListener("input", () => { dhostTouched = true; });
+
 function renderDiscovery(boxes, enabled) {
-  const hint = $("discohint"), list = $("discolist");
-  if (enabled === false) { hint.textContent = "off — UDP :5011 unavailable"; list.innerHTML = ""; return; }
+  const hint = $("discohint"), list = $("discolist"), panel = $("discopanel"), chip = $("discoChip");
+  if (enabled === false) {
+    chip.hidden = true; panel.hidden = true;
+    hint.textContent = "off — UDP :5011 unavailable"; list.innerHTML = "";
+    return;
+  }
   boxes.sort((a, b) => String(a.ip).localeCompare(String(b.ip), undefined, { numeric: true }));
+  discoBoxes = boxes;
+  prefillDservHost();   // keep the dserv-host default in sync with discovered targets
+  const unconfigured = boxes.filter((b) => !b.configured).length;
+  // Namespace collision: 2+ CONFIGURED boxes sharing name@dserv-target all write
+  // the same extio/<name>/* keys on that dserv -- scrambled data, doubled heartbeat.
+  const collKey = (b) => `${b.name || "pico"}@${String(b.target || "").split(":")[0]}`;
+  const collCount = {};
+  for (const b of boxes) if (b.configured) collCount[collKey(b)] = (collCount[collKey(b)] || 0) + 1;
+  const collides = (b) => b.configured && collCount[collKey(b)] > 1;
+  const anyCollision = boxes.some(collides);
+
+  // Header chip = compact status: reflects the LAN, highlighted when a box needs
+  // adopting, red when two boxes clash on a name. Frees the panel once idle.
+  chip.hidden = boxes.length === 0;
+  chip.textContent = `${boxes.length} on LAN${unconfigured ? ` · ${unconfigured} new` : ""}${anyCollision ? " · ⚠" : ""}`;
+  chip.className = "badge chip-btn " + (anyCollision ? "warn" : unconfigured ? "obson" : "off");
+
+  // Panel opens when there's something to adopt, a collision to surface, the user
+  // expanded it, or an assign is in progress; otherwise it collapses to the chip.
+  const assigning = !$("discoAssign").hidden;
+  const open = unconfigured > 0 || anyCollision || discoForceOpen || assigning;
+  panel.hidden = !open;
+  if (!open) return;
+
   hint.textContent = boxes.length ? `${boxes.length} on the LAN` : "listening…";
   list.innerHTML = "";
   for (const b of boxes) {
     const row = document.createElement("div");
     row.className = "grow" + (daBox === b.ip ? " sel" : "");
     const nm = document.createElement("span"); nm.className = "gname";
-    const named = b.name && b.name !== "pico";
-    nm.textContent = named ? b.name : "(unnamed)";
+    nm.textContent = b.name || "pico";
+    if ((b.name || "pico") === "pico") {   // "pico" is the firmware default => not yet named
+      const d = document.createElement("span"); d.className = "gmeta";
+      d.textContent = " (default)";
+      nm.append(d);
+    }
     const meta = document.createElement("span"); meta.className = "gmeta";
-    meta.textContent = `${b.ip} · ${b.board || "?"}/${b.build || "?"} · fw ${b.fw || "?"}`;
+    let m = `${b.ip} · ${b.board || "?"}/${b.build || "?"} · fw ${b.fw || "?"}`;
+    if (b.configured && b.target) m += ` · → ${b.target}`;   // show WHERE it points
+    meta.textContent = m;
     const badge = document.createElement("span");
     badge.className = "badge " + (b.configured ? "on" : "off");
     badge.textContent = b.configured ? "configured" : "unconfigured";
     row.append(nm, meta, badge);
+    if (collides(b)) {
+      const wb = document.createElement("span");
+      wb.className = "badge warn";
+      wb.textContent = "⚠ duplicate name";
+      wb.title = "another box shares this name on the same dserv — rename one to split the namespace";
+      row.append(wb);
+    }
+    row.title = collides(b) ? "duplicate name — click to rename this box"
+      : b.configured ? "click to re-point this box at a different dserv" : "click to assign a dserv target";
     row.onclick = () => openAssign(b);
     list.append(row);
   }
@@ -637,9 +714,16 @@ function openAssign(b) {
   daBox = b.ip;
   $("discoAssign").hidden = false;
   $("daBox").textContent = `${b.name || "pico"} @ ${b.ip}`;
+  $("daName").value = b.name && b.name !== "pico" ? b.name : "";   // blank = keep default; type to rename
   $("daMsg").textContent = "";
-  // sensible default: if the page was loaded from a rig by IP, target that host
-  if (!$("daIP").value) {
+  // Pre-fill the target: a configured box shows its CURRENT target so re-pointing
+  // a wrong one is obvious (just edit + Assign again); a fresh box defaults to the
+  // rig you're browsing from, if that was an IP.
+  const [th, tp] = String(b.target || "").split(":");
+  if (b.configured && th && th !== "0.0.0.0") {
+    $("daIP").value = th;
+    if (tp) $("daPort").value = tp;
+  } else if (!$("daIP").value) {
     const h = location.hostname;
     if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) $("daIP").value = h;
   }
@@ -654,12 +738,25 @@ $("daAssign").onclick = async () => {
   const dservIP = $("daIP").value.trim();
   const dservPort = +$("daPort").value || 4620;
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(dservIP)) { $("daMsg").textContent = "enter the rig's dserv IP"; return; }
+  const cur = b.name || "pico";
+  const newName = $("daName").value.trim();
+  if (newName && newName !== cur && !/^[A-Za-z0-9_.-]+$/.test(newName)) {
+    $("daMsg").textContent = "name: letters/digits/._- only"; return;
+  }
   $("daMsg").textContent = "assigning…";
   try {
-    const j = await api("/api/discover/assign", { ip: b.ip, name: b.name || "pico", dservIP, dservPort });
-    $("daMsg").textContent = `assigned → ${j.assigned}. The box will connect & appear in dserv mode.`;
-    setTimeout(refreshDiscovery, 1500);   // beacon target flips to configured shortly
+    const req = { ip: b.ip, name: cur, dservIP, dservPort };
+    if (newName && newName !== cur) req.newName = newName;
+    const j = await api("/api/discover/assign", req);
+    $("daMsg").textContent = `assigned → ${j.assigned}. Connecting & will appear in dserv mode.`;
+    setTimeout(closeAssign, 2500);   // show result, then collapse (box now beacons as configured)
   } catch (e) { $("daMsg").textContent = "err: " + e.message; }
+};
+
+$("discoChip").onclick = () => {   // expand/collapse the discovery panel from the status bar
+  discoForceOpen = $("discopanel").hidden;   // if hidden -> open it; if shown -> collapse
+  if (!discoForceOpen) closeAssign();        // collapsing also closes any open assign form
+  refreshDiscovery();
 };
 
 setInterval(refreshDiscovery, 2500);
@@ -1213,6 +1310,7 @@ function applyMode(m) {
   $("mode").value = m;
   $("serialctl").hidden = m !== "serial";
   $("dservctl").hidden = m !== "dserv";
+  if (m === "dserv") prefillDservHost();   // default the host to a discovered box's target
 }
 
 $("mode").onchange = async () => {

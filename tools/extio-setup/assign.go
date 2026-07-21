@@ -50,9 +50,36 @@ func intData(v int32) []byte {
 	return b
 }
 
-// assignTarget sends config/dserv/ip + config/dserv/port + cmd/save to boxIP:5010.
-func assignTarget(boxIP, name, dservIP string, dservPort int) error {
-	pfx := "extio/" + name
+// nameValid mirrors the firmware's dserv_name_valid (non-empty, printable, no '/').
+// Also rejects spaces so box names stay clean in datapoint paths.
+func nameValid(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x21 || r > 0x7e || r == '/' {
+			return false
+		}
+	}
+	return true
+}
+
+// assignTarget sends config/dserv/ip + port + cmd/save to boxIP:5010. If newName
+// is set (and differs), a config/name frame goes FIRST (addressed by the current
+// name), and the remaining frames address the box by its NEW name -- because the
+// rename applies live, so the box's datapoint namespace changes mid-batch.
+func assignTarget(boxIP, name, newName, dservIP string, dservPort int) error {
+	var frames [][]byte
+	eff := name // the name the target/save frames must be addressed to
+	if newName != "" && newName != name {
+		fn, err := buildFrame("extio/"+name+"/config/name", dsTypeStr, []byte(newName))
+		if err != nil {
+			return err
+		}
+		frames = append(frames, fn)
+		eff = newName
+	}
+	pfx := "extio/" + eff
 	f1, err := buildFrame(pfx+"/config/dserv/ip", dsTypeStr, []byte(dservIP))
 	if err != nil {
 		return err
@@ -65,15 +92,27 @@ func assignTarget(boxIP, name, dservIP string, dservPort int) error {
 	if err != nil {
 		return err
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(boxIP, strconv.Itoa(cfgSrvPort)), 3*time.Second)
+	frames = append(frames, f1, f2, f3)
+	// The box's config server is a single-connection listener that must cycle
+	// back to LISTEN after each close, so a connect can hit a brief re-listen
+	// gap and get a RST -- retry a few times before giving up.
+	addr := net.JoinHostPort(boxIP, strconv.Itoa(cfgSrvPort))
+	var conn net.Conn
+	for attempt := 0; attempt < 4; attempt++ {
+		if conn, err = net.DialTimeout("tcp", addr, 2*time.Second); err == nil {
+			break
+		}
+		time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
+	}
 	if err != nil {
-		return fmt.Errorf("connect %s:%d: %w (config server not listening?)", boxIP, cfgSrvPort, err)
+		return fmt.Errorf("connect %s:%d: %w (config server busy or not listening?)", boxIP, cfgSrvPort, err)
 	}
 	defer conn.Close()
 	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-	// In order: target then save. A small gap so the box applies each frame (it
-	// reads one 128B frame per loop pass) before the save snapshots the config.
-	for _, f := range [][]byte{f1, f2, f3} {
+	// In order: (rename,) target, save. A small gap so the box applies each frame
+	// (it reads one 128B frame per loop pass) before the next -- the rename must
+	// land before the frames addressed to the new name, and the save last.
+	for _, f := range frames {
 		if _, err := conn.Write(f); err != nil {
 			return fmt.Errorf("write to box: %w", err)
 		}
@@ -86,6 +125,7 @@ func (s *server) handleAssign(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IP        string `json:"ip"`
 		Name      string `json:"name"`
+		NewName   string `json:"newName"` // optional rename
 		DservIP   string `json:"dservIP"`
 		DservPort int    `json:"dservPort"`
 	}
@@ -100,7 +140,11 @@ func (s *server) handleAssign(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad IP")
 		return
 	}
-	if err := assignTarget(req.IP, req.Name, req.DservIP, req.DservPort); err != nil {
+	if req.NewName != "" && !nameValid(req.NewName) {
+		httpErr(w, 400, "bad name (printable, no '/' or spaces)")
+		return
+	}
+	if err := assignTarget(req.IP, req.Name, req.NewName, req.DservIP, req.DservPort); err != nil {
 		httpErr(w, 502, err.Error())
 		return
 	}

@@ -55,9 +55,11 @@ input, select {
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 
 .badge { font-size: 12px; padding: 2px 10px; border-radius: 10px; }
+.chip-btn { cursor: pointer; user-select: none; }
 .badge.off { background: var(--line); color: var(--muted); }
 .badge.on { background: var(--in); color: var(--in-ink); }
 .badge.obson { background: var(--special); color: var(--special-ink); font-weight: 600; }
+.badge.warn { background: var(--err); color: var(--bg); font-weight: 600; }
 
 main { display: flex; gap: 12px; padding: 12px 14px; flex: 1; overflow: auto; min-height: 0; }
 #left { flex: 0 0 300px; }
