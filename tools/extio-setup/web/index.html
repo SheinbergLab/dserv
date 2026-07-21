@@ -73,7 +73,43 @@
       </div>
       <div id="mcpMsg" class="mono muted"></div>
       <div class="hint">MCP3204 SPI ADC on <b>GP2&ndash;5</b> (CH0=X, CH1=Y). Claims those pins &mdash;
-        <b>Save to flash</b> + reboot to apply. Publishes <code>state/ain/scan</code> (int16&times;4).</div>
+        <b>Save to flash</b> + reboot to apply. Publishes analog groups as <code>state/ain/&lt;label&gt;</code>.</div>
+    </div>
+
+    <div class="panel" id="grouppanel" hidden>
+      <div class="panel-title">Groups <span class="hint">atomic multi-member datapoints</span></div>
+      <div class="ghead">Digital <span class="hint">&mdash; chord-settled DI bitmask</span></div>
+      <div id="dgroupList" class="glist"></div>
+      <div class="ghead" id="ainGroupHead">Analog <span class="hint">&mdash; MCP3204 channel set</span></div>
+      <div id="ainGroupList" class="glist"></div>
+
+      <div id="geditor" class="geditor" hidden>
+        <div class="panel-title" id="gedTitle"></div>
+        <div class="grid2">
+          <label id="gedMemLbl">members</label><span id="gedMembers" class="chips"></span>
+          <label>label</label><input id="gedLabel" size="12">
+          <label class="gdi">settle ms</label><input id="gedSettle" class="gdi" size="6" inputmode="numeric">
+          <label class="gdi">quiet</label>
+          <span class="gdi"><label class="inline"><input id="gedQuiet" type="checkbox"> suppress member di/N</label></span>
+          <label class="gain">mode</label>
+          <span id="gedModeBtns" class="gain">
+            <button data-gmode="onchange">on-change</button><button data-gmode="continuous">continuous</button>
+          </span>
+          <label class="gain">deadband</label><input id="gedDead" class="gain" size="6" inputmode="numeric">
+          <label class="gain">decimate</label><input id="gedDec" class="gain" size="6" inputmode="numeric">
+          <label class="gain">batch</label><input id="gedBatch" class="gain" size="6" inputmode="numeric">
+          <label class="gain">average</label>
+          <span class="gain"><label class="inline"><input id="gedAvg" type="checkbox"> boxcar mean</label></span>
+        </div>
+        <div class="row gap">
+          <button id="gedApply" class="primary">Apply</button>
+          <button id="gedOff">Delete</button>
+          <button id="gedCancel">Cancel</button>
+          <span id="gedMsg" class="mono muted"></span>
+        </div>
+      </div>
+      <div class="hint">Members published in ascending order; a host decodes columns from the announced
+        <code>channels</code>/<code>pins</code>. <b>Save to flash</b> to persist.</div>
     </div>
 
     <div class="panel" id="blepanel" hidden>

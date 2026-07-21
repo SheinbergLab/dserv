@@ -115,6 +115,24 @@ label.inline { color: var(--ink); font-size: 13px; display: inline-flex; align-i
 .row { display: flex; align-items: center; gap: 6px; }
 .row.gap { margin-top: 10px; }
 #modebtns button { margin-right: 4px; }
+#gedModeBtns button { margin-right: 4px; }
+label.inline { color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+
+/* Groups panel */
+.ghead { font-size: 12px; color: var(--muted); font-weight: 600; margin: 10px 0 4px; }
+.glist { display: flex; flex-direction: column; gap: 4px; }
+.grow { display: flex; align-items: baseline; gap: 8px; padding: 5px 9px; border: 1px solid var(--line);
+        border-radius: 6px; cursor: pointer; }
+.grow:hover { border-color: var(--accent); }
+.grow.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+.grow .gname { font-weight: 600; }
+.grow .gmeta { color: var(--muted); font-size: 12px; }
+.geditor { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips.hint { display: block; }
+.chips .mchip { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+                font-size: 12px; user-select: none; }
+.chips .mchip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
 #consolewrap {
   border-top: 1px solid var(--line); background: var(--panel);

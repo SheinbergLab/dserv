@@ -60,7 +60,7 @@ let obsLive = false; // box is currently in an observation (state/in_obs = 1)
 
 function emptyCfg() {
   return { name: "", desc: "", mode: "", obs: null, sync: null,
-    mcp: false, oled: false, pins: {}, groups: {}, raw: [],
+    mcp: false, oled: false, pins: {}, dgroups: {}, again: {}, raw: [],
     // firmware identity: fw=running version, build=shelf image line
     // (BOX_BUILD_TARGET), board=compat key (BOX_BOARD_ID), channel=update track.
     // build/board/channel arrive over dserv (state/*) or serial (`show` trailer);
@@ -163,6 +163,23 @@ const SerialDriver = {
   async testPulse(n, us) { await execChecked(`do ${n} pulse ${us}`); },
   async setBoxField(field, v) { await execChecked(`${field} ${v}`); }, // name|desc
   async setFeature(name, on) { await execChecked(`${name} enable ${on ? 1 : 0}`); }, // mcp/oled
+  async applyGroup(slot, g) {
+    if (!g.pins) { await execChecked(`group ${slot} off`); return; }
+    await execChecked(`group ${slot} pins ${g.pins}`);
+    await execChecked(`group ${slot} label ${g.label || "off"}`);
+    await execChecked(`group ${slot} settle ${g.settle || 0}`);
+    await execChecked(`group ${slot} quiet ${g.quiet ? 1 : 0}`);
+  },
+  async applyAinGroup(slot, g) {
+    if (!g.channels) { await execChecked(`ain group ${slot} off`); return; }
+    await execChecked(`ain group ${slot} channels ${g.channels}`);
+    await execChecked(`ain group ${slot} label ${g.label || "off"}`);
+    await execChecked(`ain group ${slot} mode ${g.mode || "onchange"}`);
+    await execChecked(`ain group ${slot} deadband ${g.deadband || 0}`);
+    await execChecked(`ain group ${slot} decimate ${g.decimate || 1}`);
+    await execChecked(`ain group ${slot} batch ${g.batch || 1}`);
+    await execChecked(`ain group ${slot} average ${g.average ? 1 : 0}`);
+  },
   async save() { await execChecked("save"); },
   async reboot() { await execChecked("reboot"); },
 };
@@ -200,6 +217,23 @@ const DservDriver = {
   },
 
   async setFeature(name, on) { await this.set(`config/${name}/enable`, on ? 1 : 0); }, // mcp/oled
+  async applyGroup(slot, g) {
+    if (!g.pins) { await this.set(`config/group/${slot}/pins`, "off"); return; }
+    await this.set(`config/group/${slot}/pins`, g.pins);
+    await this.set(`config/group/${slot}/label`, g.label || "off");
+    await this.set(`config/group/${slot}/settle_ms`, g.settle || 0);
+    await this.set(`config/group/${slot}/quiet`, g.quiet ? 1 : 0);
+  },
+  async applyAinGroup(slot, g) {
+    if (!g.channels) { await this.set(`config/ain/group/${slot}/off`, 1); return; }
+    await this.set(`config/ain/group/${slot}/channels`, g.channels);
+    await this.set(`config/ain/group/${slot}/label`, g.label || "off");
+    await this.set(`config/ain/group/${slot}/mode`, g.mode || "onchange");
+    await this.set(`config/ain/group/${slot}/deadband`, g.deadband || 0);
+    await this.set(`config/ain/group/${slot}/decimate`, g.decimate || 1);
+    await this.set(`config/ain/group/${slot}/batch`, g.batch || 1);
+    await this.set(`config/ain/group/${slot}/average`, g.average ? 1 : 0);
+  },
 
   async applyPin(n, want, p, wantObs, wantSync) {
     const sets = [];
@@ -252,10 +286,18 @@ function parseDump(lines) {
     else if ((m = s.match(/^pin (\d+) debounce (\d+)$/))) (c.pins[+m[1]] ??= {}).debounce = +m[2];
     else if ((m = s.match(/^pin (\d+) active_low 1$/))) (c.pins[+m[1]] ??= {}).actlow = true;
     else if ((m = s.match(/^label (\d+) (.+)$/))) (c.pins[+m[1]] ??= {}).label = m[2];
-    else if ((m = s.match(/^group (\d+) pins (\S+)$/))) (c.groups[+m[1]] ??= {}).pins = m[2];
-    else if ((m = s.match(/^group (\d+) label (\S+)$/))) (c.groups[+m[1]] ??= {}).label = m[2];
-    else if ((m = s.match(/^group (\d+) settle (\d+)$/))) (c.groups[+m[1]] ??= {}).settle = +m[2];
-    else if ((m = s.match(/^group (\d+) quiet 1$/))) (c.groups[+m[1]] ??= {}).quiet = true;
+    else if ((m = s.match(/^group (\d+) pins (\S+)$/))) (c.dgroups[+m[1]] ??= {}).pins = m[2];
+    else if ((m = s.match(/^group (\d+) label (\S+)$/))) (c.dgroups[+m[1]] ??= {}).label = m[2];
+    else if ((m = s.match(/^group (\d+) settle (\d+)$/))) (c.dgroups[+m[1]] ??= {}).settle = +m[2];
+    else if ((m = s.match(/^group (\d+) quiet 1$/))) (c.dgroups[+m[1]] ??= {}).quiet = true;
+    else if ((m = s.match(/^ain group (\d+) channels (\S+)$/))) (c.again[+m[1]] ??= {}).channels = m[2];
+    else if ((m = s.match(/^ain group (\d+) label (\S+)$/))) (c.again[+m[1]] ??= {}).label = m[2];
+    else if ((m = s.match(/^ain group (\d+) mode (\S+)$/))) (c.again[+m[1]] ??= {}).mode = m[2];
+    else if ((m = s.match(/^ain group (\d+) deadband (\d+)$/))) (c.again[+m[1]] ??= {}).deadband = +m[2];
+    else if ((m = s.match(/^ain group (\d+) decimate (\d+)$/))) (c.again[+m[1]] ??= {}).decimate = +m[2];
+    else if ((m = s.match(/^ain group (\d+) batch (\d+)$/))) (c.again[+m[1]] ??= {}).batch = +m[2];
+    else if ((m = s.match(/^ain group (\d+) average 1$/))) (c.again[+m[1]] ??= {}).average = true;
+    else if ((m = s.match(/^mcp rate (\d+)$/))) c.mcprate = +m[1];
     else if ((m = s.match(/^obs pin (\d+)$/))) c.obs = +m[1];
     else if ((m = s.match(/^sync pin (\d+)$/))) c.sync = +m[1];
     else if (s === "mcp enable 1") c.mcp = true;
@@ -273,12 +315,40 @@ function cfgFromState(box, st) {
     (c.pins[+p] ??= {}).mode = "in"; // in vs in_pullup not announced
   for (const p of String(st["pins/out"] ?? "").split(",").filter(Boolean))
     (c.pins[+p] ??= {}).mode = "out";
-  let m;
+  // Groups are announced by NAME (label, or g<idx>/a<idx> when unlabeled); the
+  // slot is announced separately as .../idx so we can map a labeled group back to
+  // `group <idx>` / `ain group <idx>` for editing. Collect by name, then re-key.
+  let m; const dgByName = {}, ainByName = {};
   for (const [k, v] of Object.entries(st)) {
     if ((m = k.match(/^label\/(\d+)$/)) && v) (c.pins[+m[1]] ??= {}).label = String(v);
-    else if ((m = k.match(/^group\/([^/]+)\/pins$/))) (c.groups[m[1]] ??= {}).pins = String(v);
-    else if ((m = k.match(/^group\/([^/]+)\/settle_ms$/))) (c.groups[m[1]] ??= {}).settle = +v;
+    else if ((m = k.match(/^group\/([^/]+)\/([a-z_]+)$/))) {
+      const g = (dgByName[m[1]] ??= { name: m[1] });
+      if (m[2] === "pins") g.pins = String(v);
+      else if (m[2] === "settle_ms") g.settle = +v;
+      else if (m[2] === "quiet") g.quiet = +v === 1;
+      else if (m[2] === "idx") g.idx = +v;
+    } else if ((m = k.match(/^ain\/([^/]+)\/([a-z_]+)$/))) {   // ain/rate has no 3rd seg -> skipped
+      const g = (ainByName[m[1]] ??= { name: m[1] });
+      if (m[2] === "channels") g.channels = String(v);
+      else if (m[2] === "mode") g.mode = String(v);
+      else if (m[2] === "decimate") g.decimate = +v;
+      else if (m[2] === "batch") g.batch = +v;
+      else if (m[2] === "deadband") g.deadband = +v;
+      else if (m[2] === "average") g.average = +v === 1;
+      else if (m[2] === "idx") g.idx = +v;
+    }
   }
+  c.mcprate = +st["ain/rate"] || 0;
+  const rekey = (byName, dst, pfx) => {
+    for (const g of Object.values(byName)) {
+      const auto = g.name.match(new RegExp("^" + pfx + "(\\d+)$"));  // g2 / a1 = unlabeled
+      const slot = Number.isInteger(g.idx) ? g.idx : (auto ? +auto[1] : null);
+      if (slot === null) continue;                    // older fw w/o idx + labeled -> not editable
+      dst[slot] = { ...g, label: auto ? "" : g.name };
+    }
+  };
+  rekey(dgByName, c.dgroups, "g");
+  rekey(ainByName, c.again, "a");
   if (typeof st["obs_pin"] === "number" && st["obs_pin"] >= 0) c.obs = st["obs_pin"];
   if (typeof st["sync_pin"] === "number" && st["sync_pin"] >= 0) c.sync = st["sync_pin"];
   // analog/display feature flags (state/mcp_en, state/oled_en) -> claimed pins.
@@ -350,13 +420,15 @@ function renderBox() {
   $("boxname").value = cfg.name;
   $("boxdesc").value = cfg.desc;
   $("boxinfo").textContent = cfg.info || (cfg.mode ? "mode " + cfg.mode : "—");
-  // groups: serial keys are indexes with a label field; dserv keys ARE the label
-  const gs = Object.entries(cfg.groups).map(([g, v]) => {
-    const name = v.label || (/^\d+$/.test(g) ? "g" + g : g);
-    return `${name}[${v.pins || ""}]${v.settle ? " settle=" + v.settle : ""}`;
-  });
+  // one-line summary (both group kinds); the Groups panel does the editing
+  const gs = [];
+  for (const [g, v] of Object.entries(cfg.dgroups))
+    gs.push(`${v.label || "g" + g}[${v.pins || ""}]`);
+  for (const [g, v] of Object.entries(cfg.again))
+    gs.push(`${v.label || "a" + g}{${v.channels || ""}}`);
   $("groups").textContent = gs.length ? gs.join("  ") : "—";
   renderMcp();
+  renderGroups();
 }
 
 /* ---- Analog / MCP3204 panel: enable/disable the SPI ADC (claims GP2-5). Works
@@ -384,6 +456,148 @@ async function mcpSet(on) {
 }
 $("mcpEnable").onclick = () => mcpSet(true);
 $("mcpDisable").onclick = () => mcpSet(false);
+
+/* ---- Groups panel: DI chord groups + analog (MCP3204) channel groups. Both are
+ * named member-sets published as ONE atomic datapoint; edited by SLOT (0..N-1),
+ * which we map from the manifest's announced idx (labeled groups lose the slot in
+ * their name). Shows when connected; the analog section is gated on mcp. A shared
+ * editor opens for a chosen (type, slot); .gdi/.gain fields toggle by type. ---- */
+const NDGROUPS = 4, NAGROUPS_UI = 4;
+let gedit = null;               // { type: 'di'|'ain', slot } or null
+let gedMembers = new Set();     // live member selection in the open editor
+
+const groupSummaryDI = (v) =>
+  `${v.pins || "—"}${v.settle ? " · settle " + v.settle : ""}${v.quiet ? " · quiet" : ""}`;
+function groupSummaryAin(v) {
+  const p = [v.mode || "onchange"];
+  if ((v.mode || "onchange") === "onchange") { if (v.deadband) p.push("db " + v.deadband); }
+  else { if (v.decimate > 1) p.push("dec " + v.decimate); if (v.batch > 1) p.push("batch " + v.batch);
+         if (v.average) p.push("avg"); }
+  return `ch ${v.channels || "—"} · ${p.join(" · ")}`;
+}
+
+function renderGroups() {
+  const panel = $("grouppanel");
+  if (!connected) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const dl = $("dgroupList"); dl.innerHTML = "";
+  for (let s = 0; s < NDGROUPS; s++) {
+    const v = cfg.dgroups[s];
+    dl.append(groupRow("di", s, v, v && (v.label || "g" + s), v && groupSummaryDI(v)));
+  }
+  const showAin = cfg.mcp;
+  $("ainGroupHead").hidden = !showAin;
+  $("ainGroupList").hidden = !showAin;
+  if (showAin) {
+    const al = $("ainGroupList"); al.innerHTML = "";
+    for (let s = 0; s < NAGROUPS_UI; s++) {
+      const v = cfg.again[s];
+      al.append(groupRow("ain", s, v, v && (v.label || "a" + s), v && groupSummaryAin(v)));
+    }
+  }
+}
+
+function groupRow(type, slot, v, name, summary) {
+  const row = document.createElement("div");
+  row.className = "grow" + (gedit && gedit.type === type && gedit.slot === slot ? " sel" : "");
+  const nm = document.createElement("span"); nm.className = "gname";
+  nm.textContent = v ? name : `slot ${slot}`;
+  const meta = document.createElement("span"); meta.className = "gmeta";
+  meta.textContent = v ? summary : "empty — click to add";
+  row.append(nm, meta);
+  row.onclick = () => openGroupEditor(type, slot);
+  return row;
+}
+
+function openGroupEditor(type, slot) {
+  gedit = { type, slot };
+  const v = (type === "di" ? cfg.dgroups : cfg.again)[slot] || {};
+  $("geditor").hidden = false;
+  $("gedTitle").textContent = `${type === "di" ? "Digital" : "Analog"} group ${slot}`;
+  $("gedMsg").textContent = "";
+  for (const el of document.querySelectorAll(".gdi"))  el.style.display = type === "di"  ? "" : "none";
+  for (const el of document.querySelectorAll(".gain")) el.style.display = type === "ain" ? "" : "none";
+  $("gedLabel").value = v.label || "";
+  if (type === "di") {
+    $("gedMemLbl").textContent = "pins";
+    $("gedSettle").value = v.settle || "";
+    $("gedQuiet").checked = !!v.quiet;
+    renderMemberChips("di", v.pins);
+  } else {
+    $("gedMemLbl").textContent = "channels";
+    setGmode(v.mode || "onchange");
+    $("gedDead").value = v.deadband ?? "";
+    $("gedDec").value = v.decimate || "";
+    $("gedBatch").value = v.batch || "";
+    $("gedAvg").checked = !!v.average;
+    renderMemberChips("ain", v.channels);
+  }
+  renderGroups();   // re-highlight the selected row
+}
+
+function renderMemberChips(type, csv) {
+  gedMembers = new Set(String(csv || "").split(",").filter(Boolean).map(Number));
+  const box = $("gedMembers"); box.innerHTML = "";
+  const items = type === "di"
+    ? Object.keys(cfg.pins).map(Number)
+        .filter((n) => { const md = cfg.pins[n]?.mode; return md === "in" || md === "in_pullup"; })
+        .sort((a, b) => a - b)
+    : [0, 1, 2, 3];
+  if (type === "di" && !items.length) {
+    box.className = "chips hint";
+    box.textContent = "no input pins — set some GPIO to input first";
+    return;
+  }
+  box.className = "chips";
+  for (const n of items) {
+    const c = document.createElement("span");
+    c.className = "mchip" + (gedMembers.has(n) ? " on" : "");
+    c.textContent = type === "di" ? (cfg.pins[n]?.label ? `${n}·${cfg.pins[n].label}` : `${n}`) : `ch${n}`;
+    c.onclick = () => { gedMembers.has(n) ? gedMembers.delete(n) : gedMembers.add(n); c.classList.toggle("on"); };
+    box.append(c);
+  }
+}
+
+function setGmode(mode) {
+  for (const b of $("gedModeBtns").children) b.classList.toggle("active", b.dataset.gmode === mode);
+}
+$("gedModeBtns").onclick = (e) => { if (e.target.dataset.gmode) setGmode(e.target.dataset.gmode); };
+
+function closeGroupEditor() { gedit = null; $("geditor").hidden = true; renderGroups(); }
+
+async function applyGroupEdit() {
+  if (!gedit) return;
+  const { type, slot } = gedit;
+  const members = [...gedMembers].sort((a, b) => a - b).join(",");
+  if (!members) { $("gedMsg").textContent = "pick at least one member (or Delete)"; return; }
+  try {
+    if (type === "di") {
+      await drv.applyGroup(slot, { pins: members, label: $("gedLabel").value.trim(),
+        settle: +$("gedSettle").value || 0, quiet: $("gedQuiet").checked });
+    } else {
+      const mode = [...$("gedModeBtns").children].find((b) => b.classList.contains("active"))?.dataset.gmode || "onchange";
+      await drv.applyAinGroup(slot, { channels: members, label: $("gedLabel").value.trim(), mode,
+        deadband: +$("gedDead").value || 0, decimate: +$("gedDec").value || 1,
+        batch: +$("gedBatch").value || 1, average: $("gedAvg").checked });
+    }
+    $("gedMsg").textContent = "applied — Save to flash to persist";
+    scheduleReload();
+  } catch (e) { $("gedMsg").textContent = "err: " + e.message; }
+}
+
+async function deleteGroupEdit() {
+  if (!gedit) return;
+  const { type, slot } = gedit;
+  try {
+    if (type === "di") await drv.applyGroup(slot, {});     // no pins -> off
+    else               await drv.applyAinGroup(slot, {});  // no channels -> off
+    closeGroupEditor(); scheduleReload();
+  } catch (e) { $("gedMsg").textContent = "err: " + e.message; }
+}
+
+$("gedApply").onclick = applyGroupEdit;
+$("gedOff").onclick = deleteGroupEdit;
+$("gedCancel").onclick = closeGroupEditor;
 
 /* ---- Handheld / BLE panel (dserv mode: pairing is a rig operation, and the
  * state/ble/* telemetry only exists over dserv). Every action is a config/cmd
@@ -916,6 +1130,7 @@ function setConnected(on, label) {
     : drv.hasConsole ? "" : "live events only (the CLI console needs the USB serial driver)";
   if (!on) {
     $("editor").hidden = true; $("blepanel").hidden = true; $("mcppanel").hidden = true;
+    $("grouppanel").hidden = true; $("geditor").hidden = true; gedit = null;
     selPin = null; cfg = emptyCfg();
     liveDI.clear(); beats = 0; $("beat").textContent = "";
     setObsLive(false);

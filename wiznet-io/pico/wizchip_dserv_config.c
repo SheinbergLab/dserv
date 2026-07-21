@@ -790,6 +790,14 @@ static void publish_manifest(void)
         snprintf(leaf, sizeof leaf, "%s/batch", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
         dserv_msg_int(f, nm, 0, g_cfg.ain_group_batch[ag] ? g_cfg.ain_group_batch[ag] : 1);
         box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "%s/deadband", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, g_cfg.ain_group_deadband[ag]);   box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "%s/average", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, (g_cfg.ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) ? 1 : 0);
+        box_net_client_send(f, DSERV_MSG_LEN);
+        /* slot index -> lets a UI map this labeled group back to `ain group <idx>` */
+        snprintf(leaf, sizeof leaf, "%s/idx", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, ag);   box_net_client_send(f, DSERV_MSG_LEN);
     }
 
     /* Labels. A pin with a label or a mode publishes state/label/i. The mask
@@ -821,6 +829,15 @@ static void publish_manifest(void)
         snprintf(leaf, sizeof leaf, "group/%s/settle_ms", gn);
         dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
         dserv_msg_int(f, nm, 0, g_cfg.group_settle_ms[g]);
+        box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "group/%s/quiet", gn);
+        dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, g_cfg.group_quiet[g]);
+        box_net_client_send(f, DSERV_MSG_LEN);
+        /* slot index -> lets a UI map this labeled group back to `group <idx>` */
+        snprintf(leaf, sizeof leaf, "group/%s/idx", gn);
+        dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, g);
         box_net_client_send(f, DSERV_MSG_LEN);
     }
 }
