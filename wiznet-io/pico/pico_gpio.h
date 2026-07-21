@@ -40,6 +40,25 @@ extern alarm_pool_t *box_alarm_pool;
 #define OLED_PIN_DC   7      /* data/command (display SA0 pin)    */
 #define OLED_PIN_RST  8      /* reset                             */
 #endif
+
+/* MCP3204 12-bit SPI ADC (analog joystick), runtime-enabled via `mcp enable 1`.
+ * Pinned to the SPI0 BANK-0 pins so the layout is valid on EVERY board: the SDK
+ * default SPI0 pins on PICO_BOARD=pico2 are GP16-19, which fall inside the W6300
+ * QSPI block (GPIO15-22) on the dual/w6300 EVB -- unusable there. GP2/3/4/5 are
+ * spi0-capable and free on the EVB (4/5 were the retired ADS1115 I2C pins), and
+ * match the Thing Plus handheld's native SPI0, so all boards share one layout.
+ * SCK/MOSI (2/3) coincide with the OLED's write-only bus -- both are serviced
+ * from core 0, so a display-equipped box just shares the bus (distinct CS: MCP
+ * on GP5, OLED on GP6). Defined here (not pico_mcp3204.h) so pico_gpio_reserved
+ * below can see them -- pico_gpio.h is included before pico_mcp3204.h. Reserved
+ * only while mcp_en (like the OLED claim). Overridable per board at build time. */
+#ifndef MCP3204_PIN_SCK
+#define MCP3204_PIN_SCK 2    /* SPI0 SCK  -> MCP CLK              */
+#define MCP3204_PIN_TX  3    /* SPI0 TX   -> MCP DIN  (MOSI)      */
+#define MCP3204_PIN_RX  4    /* SPI0 RX   <- MCP DOUT (MISO)      */
+#define MCP3204_PIN_CS  5    /* chip select (software-driven)    */
+#endif
+
 static uint8_t pico_gpio_oled_claim;   /* set at boot (main, core 0) iff cfg->oled_en */
 static uint8_t pico_gpio_mcp_claim;    /* set at boot (main, core 0) iff cfg->mcp_en (MCP3204 on SPI0) */
 
@@ -54,11 +73,9 @@ static inline int pico_gpio_reserved(int n)
 #ifdef BOX_STATUS_LED
     if (n == PICO_DEFAULT_WS2812_PIN) return 1;    /* onboard WS2812 status LED (pico_status_led.h) */
 #endif
-#ifdef PICO_DEFAULT_SPI_SCK_PIN
     if (pico_gpio_mcp_claim &&                      /* MCP3204 SPI0 (pico_mcp3204.h): SCK/TX/RX/CS */
-        (n == PICO_DEFAULT_SPI_SCK_PIN || n == PICO_DEFAULT_SPI_TX_PIN ||
-         n == PICO_DEFAULT_SPI_RX_PIN  || n == PICO_DEFAULT_SPI_CSN_PIN)) return 1;
-#endif
+        (n == MCP3204_PIN_SCK || n == MCP3204_PIN_TX ||
+         n == MCP3204_PIN_RX  || n == MCP3204_PIN_CS)) return 1;
     if (pico_gpio_oled_claim &&
         (n == OLED_PIN_SCK || n == OLED_PIN_MOSI || n == OLED_PIN_CS ||
          n == OLED_PIN_DC  || n == OLED_PIN_RST)) return 1;

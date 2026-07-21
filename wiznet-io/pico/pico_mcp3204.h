@@ -7,10 +7,12 @@
  * modest sample rate its average draw is essentially the conversion energy (vs
  * an always-on I2C coprocessor). (Replaced the ADS1115 I2C path, 2026-07-19.)
  *
- * Bus: SPI0 on the SDK default pins -- Thing Plus SCK=GP2 / TX(MOSI)=GP3 /
- * RX(MISO)=GP4 -- plus CS on GP5 (the default SPI0 CSn). These are the
- * "default SPI0 / microSD" pins (PINMAP): free on a handheld with no SD card.
- * Reserved from user pin-config in pico_gpio.h while mcp_en. SPI mode 0,0.
+ * Bus: SPI0 on the bank-0 pins -- SCK=GP2 / TX(MOSI/DIN)=GP3 / RX(MISO/DOUT)=GP4
+ * -- plus a software CS on GP5. Pinned to these (not the SDK board default SPI0,
+ * which is GP16-19 on PICO_BOARD=pico2 and collides with the W6300 QSPI block on
+ * the EVB) so one layout is valid on every board; GP2/3 coincide with the OLED's
+ * write-only bus (shared, distinct CS). Pin macros + rationale live in
+ * pico_gpio.h; reserved from user pin-config while mcp_en. SPI mode 0,0.
  *
  * All channels are grabbed in one fast scan (mcp3204_scan) and published as a
  * single packed state/ain/scan snapshot (int16[4], one timestamp) -- see
@@ -27,13 +29,25 @@
 #include "dserv_config.h"
 #include <stdio.h>
 
-/* Overridable per board. Defaults are the SDK's SPI0 pins + GP5 CS. */
+/* Pins come from pico_gpio.h (MCP3204_PIN_*, GP2/3/4/5) so pico_gpio_reserved()
+ * and this driver agree on ONE definition -- see the note there for why 2/3/4/5
+ * and not the SDK's board-default SPI0 pins (16-19 collide with the W6300 on the
+ * EVB). Fallbacks below cover a translation unit that includes this without
+ * pico_gpio.h; still overridable per board at build time. Bus = spi0. */
 #ifndef MCP3204_SPI
 #define MCP3204_SPI      spi0
-#define MCP3204_PIN_SCK  PICO_DEFAULT_SPI_SCK_PIN   /* 2  */
-#define MCP3204_PIN_TX   PICO_DEFAULT_SPI_TX_PIN    /* 3  (MOSI -> MCP DIN) */
-#define MCP3204_PIN_RX   PICO_DEFAULT_SPI_RX_PIN    /* 4  (MISO <- MCP DOUT) */
-#define MCP3204_PIN_CS   PICO_DEFAULT_SPI_CSN_PIN   /* 5  */
+#endif
+#ifndef MCP3204_PIN_SCK
+#define MCP3204_PIN_SCK  2
+#endif
+#ifndef MCP3204_PIN_TX
+#define MCP3204_PIN_TX   3   /* MOSI -> MCP DIN  */
+#endif
+#ifndef MCP3204_PIN_RX
+#define MCP3204_PIN_RX   4   /* MISO <- MCP DOUT */
+#endif
+#ifndef MCP3204_PIN_CS
+#define MCP3204_PIN_CS   5
 #endif
 #define MCP3204_BAUD     (1000 * 1000)   /* 1 MHz: safe at 3.3V (2.7V spec floor is ~1MHz) */
 #define MCP3204_NCH      4               /* all 4 channels grabbed in one fast scan (CH0=X, CH1=Y) */
