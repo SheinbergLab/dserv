@@ -30,7 +30,7 @@
  * volatile words. g_cfg is written ONLY by core 1 once it's launched; core 0
  * reads just mcp_en (+ ble_en/pipe_en on BOX_BLE builds -- the radio also lives
  * on core 0, box_ble_central.h) (benign staleness).
- *   core0 -> core1: console lines (g_cmd_q), MCP3204 scans (g_mcp_q)
+ *   core0 -> core1: console lines (g_cmd_q), MCP3204 analog blocks (g_ain_q)
  *   core1 -> core0: flash ops carrying a config snapshot (g_save_q), log rings
  *
  * Clock alignment: the box also subscribes to ess/in_obs. Each obs begin/end
@@ -73,6 +73,7 @@
 #include "pico_fuel.h"          /* on-board fuel gauge: compiled per board  */
 #endif
 #include "pico_mcp3204.h"       /* MCP3204 SPI analog-in (joystick): always compiled, runtime-enabled (mcp_en) */
+#include "pico_ain_group.h"     /* analog groups: channel-set sampling policy (on-change / continuous+batch) */
 #include "pico_oled.h"          /* SSD1306 status display: always compiled, runtime-enabled (oled_en) */
 #include "pico_ota.h"           /* Stage-0 OTA receiver: pull image -> scratch flash -> sha verify */
 #include "pico_ota_slot.h"      /* Stage-1 probe: bootrom A/B partition + boot-info (read-only) */
@@ -218,10 +219,9 @@ static uint64_t g_obs_begin_us;     /* box-clock time of the last beginobs -> an
 static int32_t g_wdt;
 
 /* ---- cross-core plumbing (queues made on core 0 before core 1 launches) ---- */
-typedef struct { uint64_t t_us; int16_t v[MCP3204_NCH]; } mcp_scan_t;   /* one packed 4-ch snapshot */
 typedef struct { uint8_t erase_only; pico_config_t cfg; } save_req_t;
 static queue_t g_cmd_q;             /* core0 console line -> core1 executes (owns cfg/pins) */
-static queue_t g_mcp_q;             /* core0 SPI 4-ch scan-> core1 stamps + publishes (packed) */
+static queue_t g_ain_q;             /* core0 analog-group blocks -> core1 builds frame + sends */
 static queue_t g_save_q;            /* core1 save/erase   -> core0 writes flash            */
 static volatile int g_core1_ready;
 #ifdef BOX_FUEL_MAX17048
@@ -295,6 +295,8 @@ static void publish_di(const di_event_t *e)
  * so downstream RT is the true movement onset while the value is the completed
  * chord. t_us == 0 => a (re)connect seed, arrival-stamped like publish_di_levels. */
 static group_rt_t g_grp[PICO_NGROUPS];
+static ain_group_rt_t g_ain_rt[PICO_NAGROUPS];   /* analog-group state (core 0: mcp_service_core0) */
+static volatile uint8_t g_ain_reset_req;         /* core1 on_frame CFG_AIN -> core0 resets g_ain_rt */
 
 static void publish_group(int g, uint8_t bits, uint64_t t_us)
 {
@@ -362,14 +364,18 @@ static void publish_heartbeat(void)
 #endif
 }
 
-/* MCP3204: all channels in ONE datapoint (state/ain/scan = int16[MCP3204_NCH]),
- * one shared timestamp -- the channels were sampled the same instant, so this is
- * the atomic, frame-efficient form (vs one notification per channel). */
-static void publish_ain_scan(const int16_t v[MCP3204_NCH], uint64_t t_us)
+/* Publish one analog-group block as state/ain/<label> (DSERV_BYTE: 12-byte self-
+ * describing header + scan-major int16 samples -- see pico_ain_group.h). The
+ * frame timestamp carries t0; a consumer reshapes from mask/nchan/count/interval
+ * alone. Skips (rare) if a long name + max batch won't fit the 128-byte frame. */
+static void publish_ain_block(const ain_block_t *b)
 {
-    char nm[64]; uint8_t f[DSERV_MSG_LEN];
-    dserv_state_name(&g_cfg, nm, sizeof nm, "ain/scan");
-    dserv_msg_build(f, nm, event_stamp(t_us), DSERV_SHORT, v, sizeof(int16_t) * MCP3204_NCH);
+    char leaf[24], nm[80]; uint8_t f[DSERV_MSG_LEN];
+    uint8_t payload[12 + AIN_BLOCK_MAX * 2];
+    dserv_ain_group_leaf(&g_cfg, b->gidx, leaf, sizeof leaf);
+    dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+    int plen = ain_block_payload(b, payload);
+    if (dserv_msg_build(f, nm, event_stamp(b->t0_us), DSERV_BYTE, payload, (uint32_t) plen) < 0) return;
     box_net_client_send(f, DSERV_MSG_LEN);
 }
 
@@ -700,6 +706,13 @@ static void groups_reset_all(void)
         group_reset(&g_grp[g], &g_cfg, g, logical);
 }
 
+/* Clear analog-group accumulators/batch rings (core 0). Called at boot and when
+ * an ain config change lands (via g_ain_reset_req, since g_ain_rt is core-0). */
+static void ain_groups_reset_all(void)
+{
+    for (int g = 0; g < PICO_NAGROUPS; g++) ain_group_reset(&g_ain_rt[g]);
+}
+
 /* ---- manifest: the box's self-description, announced at every (re)connect
  * (next to publish_ident) and re-announced on any live label/desc/group
  * change. Per-item datapoints (house style; each fits the 128-byte frame):
@@ -754,6 +767,30 @@ static void publish_manifest(void)
     dserv_msg_int(f, nm, 0, g_cfg.mcp_en ? 1 : 0);   box_net_client_send(f, DSERV_MSG_LEN);
     dserv_state_name(&g_cfg, nm, sizeof nm, "oled_en");
     dserv_msg_int(f, nm, 0, g_cfg.oled_en ? 1 : 0);  box_net_client_send(f, DSERV_MSG_LEN);
+
+    /* Analog groups: box base scan rate + per active group {channels,mode,
+     * decimate,batch}. `channels` is the authoritative column order (ascending),
+     * so a host decodes state/ain/<label> blocks from the announced string alone
+     * -- the analog twin of the DI-group manifest contract. */
+    dserv_state_name(&g_cfg, nm, sizeof nm, "ain/rate");
+    dserv_msg_int(f, nm, 0, dserv_cfg_mcp_rate(&g_cfg));   box_net_client_send(f, DSERV_MSG_LEN);
+    for (int ag = 0; ag < PICO_NAGROUPS; ag++) {
+        if (!g_cfg.ain_group_chans[ag]) continue;
+        char gl[24], chans[16];
+        dserv_ain_group_leaf(&g_cfg, ag, gl, sizeof gl);        /* "ain/<label>" */
+        dserv_pins_str(g_cfg.ain_group_chans[ag], chans, sizeof chans);
+        snprintf(leaf, sizeof leaf, "%s/channels", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_string(f, nm, 0, chans);   box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "%s/mode", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_string(f, nm, 0, g_cfg.ain_group_mode[ag] ? "continuous" : "onchange");
+        box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "%s/decimate", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, g_cfg.ain_group_decimate[ag] ? g_cfg.ain_group_decimate[ag] : 1);
+        box_net_client_send(f, DSERV_MSG_LEN);
+        snprintf(leaf, sizeof leaf, "%s/batch", gl); dserv_state_name(&g_cfg, nm, sizeof nm, leaf);
+        dserv_msg_int(f, nm, 0, g_cfg.ain_group_batch[ag] ? g_cfg.ain_group_batch[ag] : 1);
+        box_net_client_send(f, DSERV_MSG_LEN);
+    }
 
     /* Labels. A pin with a label or a mode publishes state/label/i. The mask
      * tracks pins we published a NON-EMPTY label for, so when one is cleared
@@ -1354,6 +1391,7 @@ static void on_frame(const uint8_t *frame, void *ud)
         publish_manifest();   /* active-pin set OR obs/sync pin changed -> re-announce */
     }
     else if (r == CFG_GROUP)     { groups_reset_all(); publish_manifest(); }
+    else if (r == CFG_AIN)       { g_ain_reset_req = 1; publish_manifest(); }  /* core0 clears g_ain_rt */
     else if (r == CFG_LABEL || r == CFG_DESC)          publish_manifest();
 #ifdef BOX_BLE
     else if (r == CFG_PIPE_EN)   /* ble/pipe datapoint: apply live (remote `ble pipe 1|0`
@@ -1515,6 +1553,7 @@ static void cmd_exec(const char *line)
     else if (act == CLI_BOOTSEL) box_reboot(1);
     else if (act == CLI_PIN)   { pico_gpio_apply_config(&g_cfg); groups_reset_all(); publish_manifest(); }
     else if (act == CLI_GROUP) { groups_reset_all(); publish_manifest(); }  /* label/group/desc changed */
+    else if (act == CLI_AIN)   { g_ain_reset_req = 1; publish_manifest(); }  /* analog group/rate changed */
 }
 
 static int have_dserv_target(void)
@@ -1782,8 +1821,8 @@ static void rt_main(void)
                     int gn = group_poll(&g_grp[g], &g_cfg, g, gnow, go);
                     for (int k = 0; k < gn; k++) publish_group(g, go[k].bits, go[k].t_us);
                 }
-                mcp_scan_t ms;                         /* MCP3204 packed 4-ch snapshot */
-                while (queue_try_remove(&g_mcp_q, &ms)) publish_ain_scan(ms.v, ms.t_us);
+                ain_block_t ab;                        /* MCP3204 analog-group blocks */
+                while (queue_try_remove(&g_ain_q, &ab)) publish_ain_block(&ab);
 #ifdef BOX_BLE
                 { uint8_t pf[DSERV_MSG_LEN];           /* handheld frames from the radio (core 0) ->
                                                         * ts rewritten hh->dserv at the boundary, then
@@ -1875,29 +1914,35 @@ static void console_service(void)
     }
 }
 
-/* MCP3204 SPI ADC on core 0: fast-scan ALL channels every ~MCP_SAMPLE_MS and,
- * when any moved past the deadband, hand ONE packed snapshot to core 1 (which
- * owns the transport -- box_net_client_send touches CDC1/tinyusb, core-1-only).
- * The scan is 4 short blocking SPI reads (~us); the extra channels ride free in
- * the one message. Deadband keeps an idle/held stick silent (no BLE traffic);
- * a moving stick streams at ~50 Hz, one frame per sample. */
-#define MCP_SAMPLE_MS 20                           /* ~50 Hz -- plenty for a thumbstick (BLE.md rate note) */
+/* MCP3204 SPI ADC on core 0: scan ALL channels at the box base rate (mcp_rate)
+ * and feed each analog group its policy machine (pico_ain_group.h). A group
+ * emits either an on-change deadband snapshot (joystick) or a decimated/batched
+ * block (continuous eye-feed); either way core 0 just enqueues the finished
+ * block and core 1 (which owns the transport) builds the frame + sends. The
+ * scan is 4 short blocking SPI reads (~us) on the NON-RT core, so it never
+ * perturbs core-1 timing; batching cuts the core-1 publish + dserv event rate.
+ * Config changes land on core 1 (on_frame); it flags g_ain_reset_req and we
+ * clear the accumulators here so a mid-batch policy change can't emit a
+ * malformed block. */
 static void mcp_service_core0(void)
 {
     if (!g_cfg.mcp_en || !mcp_inited) return;
-    static uint32_t last_ms;
-    static int16_t  mcp_last[MCP3204_NCH];
-    uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now - last_ms < MCP_SAMPLE_MS) return;
-    last_ms = now;
-    mcp3204_scan(mcp_val);
-    int moved = 0;
-    for (int ch = 0; ch < MCP3204_NCH; ch++)
-        if (abs((int) mcp_val[ch] - mcp_last[ch]) > MCP3204_DEADBAND) moved = 1;
-    if (!moved) return;
-    mcp_scan_t s = { time_us_64(), { 0 } };
-    for (int ch = 0; ch < MCP3204_NCH; ch++) s.v[ch] = mcp_last[ch] = (int16_t) mcp_val[ch];
-    queue_try_add(&g_mcp_q, &s);               /* full -> drop; the next snapshot supersedes */
+    if (g_ain_reset_req) { ain_groups_reset_all(); g_ain_reset_req = 0; }
+    static uint32_t last_us;
+    uint32_t base_period = 1000000u / (uint32_t) dserv_cfg_mcp_rate(&g_cfg);
+    uint32_t now = time_us_32();
+    if (now - last_us < base_period) return;
+    last_us = now;
+
+    mcp3204_scan(mcp_val);                          /* all 4 channels (~us each) */
+    int16_t scan[AIN_MAX_CH];
+    for (int ch = 0; ch < AIN_MAX_CH; ch++) scan[ch] = (int16_t) mcp_val[ch];
+    uint64_t t = time_us_64();
+
+    ain_block_t blk;
+    for (int g = 0; g < PICO_NAGROUPS; g++)
+        if (ain_group_feed(&g_ain_rt[g], &g_cfg, g, scan, t, base_period, &blk))
+            queue_try_add(&g_ain_q, &blk);          /* full -> drop; next block supersedes */
 }
 
 #ifdef BOX_FUEL_MAX17048
@@ -2090,6 +2135,7 @@ int main(void)
     memset(&g_cfg, 0, sizeof g_cfg);
     if (flash_store_load(&g_cfg) == 0) printf("config: loaded from flash (name=%s)\n", dserv_cfg_name(&g_cfg));
     else                               printf("config: none/invalid -> defaults\n");
+    dserv_cfg_ain_default(&g_cfg);   /* mcp on + no analog group -> synth the {0,1} joystick */
 
 #ifdef BOX_NET_DUAL
     /* Boot transport policy. The GP28 strap to GND hard-forces Ethernet (hardware
@@ -2116,7 +2162,7 @@ int main(void)
 #endif
 
     queue_init(&g_cmd_q,  CLI_LINE_MAX,         4);
-    queue_init(&g_mcp_q,  sizeof(mcp_scan_t),    8);   /* MCP3204 packed scans -> core1 */
+    queue_init(&g_ain_q,  sizeof(ain_block_t),   8);   /* MCP3204 analog-group blocks -> core1 */
     queue_init(&g_save_q, sizeof(save_req_t),   2);
 #ifdef BOX_BLE
     box_ble_pipe_queues_init();     /* relay frame queues, before core 1 launches */
@@ -2133,6 +2179,7 @@ int main(void)
     if (g_cfg.mcp_en) {             /* MCP3204 SPI ADC: claim SPI0 pins BEFORE core 1's apply_config */
         pico_gpio_mcp_claim = 1;
         mcp3204_init();
+        ain_groups_reset_all();     /* clear analog-group accumulators before the first scan */
     }
     if (g_cfg.oled_en) {            /* SPI display likewise; claim pins BEFORE core 1's  */
         pico_gpio_oled_claim = 1;   /* apply_config so user pin modes can't collide      */

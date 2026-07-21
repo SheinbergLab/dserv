@@ -41,6 +41,7 @@
 #define PICO_NPINS     30
 #define PICO_NAME_MAX  16
 #define PICO_NGROUPS   4     /* DI chord groups (atomic bitmask publishing)   */
+#define PICO_NAGROUPS  4     /* analog (MCP3204) groups: named channel sets   */
 #define PICO_LABEL_MAX 16    /* per-pin / per-group role labels               */
 #define PICO_DESC_MAX  40    /* free-form box description                     */
 #define PICO_CHANNEL_MAX 16  /* firmware update channel this box tracks       */
@@ -142,7 +143,29 @@ typedef struct {
      * this field loads it zeroed and thus reads as dev. Announced as state/channel
      * and in the `show` trailer so the host tool can key updates to it. */
     char     channel[PICO_CHANNEL_MAX];
+
+    /* v20: MCP3204 analog groups -- a named set of ADC channels published
+     * together with one sampling policy. The analog twin of DI chord groups
+     * (pico_group.h / pico_ain_group.h): the box knows channels/labels/policy,
+     * never device semantics (that stays host-side). A group is ACTIVE iff
+     * ain_group_chans[g] != 0. mcp_en stays the master switch (claims the SPI0
+     * pins + inits the ADC); with mcp_en and NO group defined, dserv_cfg_ain_
+     * default() synthesizes group 0 = {0,1} on-change "joystick" so the stick
+     * just works. mcp_rate is the box-wide base SCAN rate; a group publishes at
+     * base/decimate (0/1 = every scan), optionally boxcar-averaged (flags bit0).
+     * All fields additive at the struct tail => older saved configs stay valid
+     * (they load these zeroed => no groups => the default kicks in). */
+    uint16_t mcp_rate;                                 /* base scan rate Hz (0 -> 50) */
+    uint8_t  ain_group_chans[PICO_NAGROUPS];           /* channel mask, bit c = MCP ch c (0..3); 0 = unused */
+    char     ain_group_label[PICO_NAGROUPS][PICO_LABEL_MAX]; /* names state/ain/<label>; "" -> "a<idx>" */
+    uint8_t  ain_group_mode[PICO_NAGROUPS];            /* 0 = on-change (deadband), 1 = continuous */
+    uint16_t ain_group_deadband[PICO_NAGROUPS];        /* on-change: publish when a member moves > this (counts) */
+    uint8_t  ain_group_decimate[PICO_NAGROUPS];        /* publish every Nth base scan (0/1 = every) */
+    uint8_t  ain_group_batch[PICO_NAGROUPS];           /* continuous: scans per block (0/1 = per-scan) */
+    uint8_t  ain_group_flags[PICO_NAGROUPS];           /* bit0 = average (boxcar mean) instead of drop */
 } pico_config_t;
+
+#define AIN_GROUP_FLAG_AVG  0x01u   /* ain_group_flags: decimate window -> boxcar mean, not drop */
 
 /* pico_config_t.net_mode. Zeroed default (factory/blank config) => DHCP, so a
  * fresh box works out of the box on a router; a static net/ip is honored only in
@@ -177,6 +200,7 @@ typedef enum {
     CFG_DESC,
     CFG_LABEL,
     CFG_GROUP,
+    CFG_AIN,        /* mcp/rate or ain/group/<g>/... analog-group config */
     CFG_DSERV_IP,
     CFG_DSERV_PORT,
     CFG_GPIO,       /* a cmd/do output command parsed into *cmd */
@@ -206,6 +230,33 @@ static inline const char *dserv_cfg_channel(const pico_config_t *c)
 /* The box's datapoint prefix "<BOX_CLASS>/<name>" (e.g. extio/office). Returns len. */
 static inline int dserv_cfg_prefix(const pico_config_t *c, char *buf, int sz)
 { return snprintf(buf, sz, "%s/%s", BOX_CLASS, dserv_cfg_name(c)); }
+
+/* ---- analog (MCP3204) groups ---- */
+/* base scan rate: 0 => 50 Hz default. */
+static inline int dserv_cfg_mcp_rate(const pico_config_t *c)
+{ return c->mcp_rate ? c->mcp_rate : 50; }
+
+/* number of active analog groups (chans mask non-zero). */
+static inline int dserv_ain_active_count(const pico_config_t *c)
+{ int n = 0; for (int g = 0; g < PICO_NAGROUPS; g++) if (c->ain_group_chans[g]) n++; return n; }
+
+/* leaf name for group g: "ain/<label>", or "ain/a<g>" when unlabeled. */
+static inline void dserv_ain_group_leaf(const pico_config_t *c, int g, char *buf, int sz)
+{ if (c->ain_group_label[g][0]) snprintf(buf, sz, "ain/%s", c->ain_group_label[g]);
+  else                          snprintf(buf, sz, "ain/a%d", g); }
+
+/* If the ADC is enabled but no group is configured, synthesize group 0 as the
+ * 2-axis joystick ({0,1}, on-change, deadband 8) so the stick works out of the
+ * box. RAM-only default (a later `save` persists it, which is fine); a box that
+ * has ANY group defined is left untouched. Call once after config load. */
+static inline void dserv_cfg_ain_default(pico_config_t *c)
+{
+    if (!c->mcp_en || dserv_ain_active_count(c)) return;
+    c->ain_group_chans[0]    = 0x03;   /* ch0 = X, ch1 = Y */
+    c->ain_group_mode[0]     = 0;      /* on-change */
+    c->ain_group_deadband[0] = 8;
+    if (!c->ain_group_label[0][0]) snprintf(c->ain_group_label[0], PICO_LABEL_MAX, "joystick");
+}
 
 /* per-pin active-low (invert published DI level). */
 static inline int  di_active_low(const pico_config_t *c, int pin)
@@ -433,6 +484,58 @@ static inline cfg_result_t dserv_cfg__config(pico_config_t *c, const char *k,
     if (strcmp(k, "mcp/enable") == 0) {    /* MCP3204 SPI analog-in (applied at boot) */
         c->mcp_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_MCP_EN;
     }
+    if (strcmp(k, "mcp/rate") == 0) {      /* box-wide base SCAN rate Hz (groups decimate from it) */
+        long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 65535) v = 65535;
+        c->mcp_rate = (uint16_t) v; c->applied_count++; return CFG_AIN;
+    }
+    /* Analog groups: ain/group/<g>/{channels,label,mode,deadband,decimate,batch,average,off} */
+    { int ng = -1; int npos = -1;
+      if (sscanf(k, "ain/group/%d/%n", &ng, &npos) == 1 && npos > 0 &&
+          ng >= 0 && ng < PICO_NAGROUPS) {
+        const char *sub = k + npos;
+        if (strcmp(sub, "channels") == 0) {
+            char w[32]; dserv_msg_copy_cstr(m, w, sizeof w);
+            uint32_t mask;
+            if (dserv_parse_pins(w, &mask) < 0 || (mask & ~0x0Fu)) return CFG_UNKNOWN;  /* MCP3204: ch 0..3 */
+            c->ain_group_chans[ng] = (uint8_t) mask; c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "label") == 0) {
+            char w[PICO_LABEL_MAX]; dserv_msg_copy_cstr(m, w, sizeof w);
+            if (!strcmp(w, "off")) w[0] = '\0';
+            if (!dserv_label_valid(w)) return CFG_UNKNOWN;
+            snprintf(c->ain_group_label[ng], PICO_LABEL_MAX, "%s", w);
+            c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "mode") == 0) {
+            char w[16]; dserv_msg_copy_cstr(m, w, sizeof w);
+            if (!strcmp(w, "continuous")) c->ain_group_mode[ng] = 1;
+            else if (!strcmp(w, "onchange")) c->ain_group_mode[ng] = 0;
+            else c->ain_group_mode[ng] = dserv_msg_as_long(m) ? 1 : 0;
+            c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "deadband") == 0) {
+            long v = dserv_msg_as_long(m); if (v < 0) v = 0; if (v > 4095) v = 4095;
+            c->ain_group_deadband[ng] = (uint16_t) v; c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "decimate") == 0) {
+            long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 255) v = 255;
+            c->ain_group_decimate[ng] = (uint8_t) v; c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "batch") == 0) {
+            long v = dserv_msg_as_long(m); if (v < 1) v = 1; if (v > 255) v = 255;
+            c->ain_group_batch[ng] = (uint8_t) v; c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "average") == 0) {
+            if (dserv_msg_as_long(m)) c->ain_group_flags[ng] |= AIN_GROUP_FLAG_AVG;
+            else                      c->ain_group_flags[ng] &= (uint8_t) ~AIN_GROUP_FLAG_AVG;
+            c->applied_count++; return CFG_AIN;
+        }
+        if (strcmp(sub, "off") == 0) {
+            c->ain_group_chans[ng] = 0; c->ain_group_label[ng][0] = '\0';
+            c->applied_count++; return CFG_AIN;
+        }
+      }
+    }
     if (strcmp(k, "oled/enable") == 0) {
         c->oled_en = dserv_msg_as_long(m) ? 1 : 0; c->applied_count++; return CFG_OLED_EN;
     }
@@ -559,6 +662,7 @@ static inline const char *dserv_cfg_result_str(cfg_result_t r)
     case CFG_DESC:       return "desc";
     case CFG_LABEL:      return "label";
     case CFG_GROUP:      return "group";
+    case CFG_AIN:        return "ain";
     case CFG_DSERV_IP:   return "dserv_ip";
     case CFG_DSERV_PORT: return "dserv_port";
     case CFG_GPIO:       return "cmd_do";

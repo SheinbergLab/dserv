@@ -34,7 +34,7 @@
 
 /* CLI_GROUP = labels/groups/desc changed: caller refreshes the group runtime
  * and re-announces the manifest (no GPIO re-apply needed). */
-typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
+typedef enum { CLI_OK, CLI_ERR, CLI_PIN, CLI_GROUP, CLI_AIN, CLI_GPIO, CLI_SAVE, CLI_FACTORY, CLI_REBOOT, CLI_BOOTSEL } cli_action_t;
 
 /* mode word<->value shared with dserv_config.h: dserv_mode_val / dserv_mode_str */
 
@@ -118,6 +118,18 @@ static inline void pico_cli_dump(const pico_config_t *c)
     if (c->wifi_pass[0])                  printf("# wifi pass <re-enter manually; not dumped>\r\n");
     if (c->wifi_pm)                       printf("wifi pm 1\r\n");
     if (c->mcp_en)                        printf("mcp enable 1\r\n");
+    if (c->mcp_rate)                      printf("mcp rate %u\r\n", c->mcp_rate);
+    for (int ag = 0; ag < PICO_NAGROUPS; ag++)
+        if (c->ain_group_chans[ag]) {
+            char cs[16]; dserv_pins_str(c->ain_group_chans[ag], cs, sizeof cs);
+            printf("ain group %d channels %s\r\n", ag, cs);
+            if (c->ain_group_label[ag][0]) printf("ain group %d label %s\r\n",    ag, c->ain_group_label[ag]);
+            if (c->ain_group_mode[ag])     printf("ain group %d mode continuous\r\n", ag);
+            if (c->ain_group_deadband[ag]) printf("ain group %d deadband %u\r\n", ag, c->ain_group_deadband[ag]);
+            if (c->ain_group_decimate[ag]) printf("ain group %d decimate %u\r\n", ag, c->ain_group_decimate[ag]);
+            if (c->ain_group_batch[ag])    printf("ain group %d batch %u\r\n",    ag, c->ain_group_batch[ag]);
+            if (c->ain_group_flags[ag] & AIN_GROUP_FLAG_AVG) printf("ain group %d average 1\r\n", ag);
+        }
     if (c->oled_en)                       printf("oled enable 1\r\n");
     if (c->ble_en)                        printf("ble enable 1\r\n");
     if (c->pipe_en)                       printf("ble pipe 1\r\n");
@@ -247,6 +259,67 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
         c->group_pins[n] = 0; c->applied_count++;
         snprintf(out, outsz, "OK group%d off\r\n", n); return CLI_GROUP;
     }
+    /* ---- analog (MCP3204) groups: base scan rate + per-group channel-set policy ---- */
+    if (sscanf(line, "mcp rate %d", &v) == 1) {
+        if (v < 1 || v > 65535) { snprintf(out, outsz, "ERR mcp rate 1-65535 Hz\r\n"); return CLI_ERR; }
+        c->mcp_rate = (uint16_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK mcp rate=%dHz (base scan; save+reboot)\r\n", v); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d channels %23s", &n, w) == 2) {
+        uint32_t mask;
+        if (n < 0 || n >= PICO_NAGROUPS || dserv_parse_pins(w, &mask) < 0 || (mask & ~0x0Fu)) {
+            snprintf(out, outsz, "ERR ain channels: 'ain group G channels 0,1' (G 0-%d, ch 0-3)\r\n",
+                     PICO_NAGROUPS - 1);
+            return CLI_ERR;
+        }
+        c->ain_group_chans[n] = (uint8_t) mask; c->applied_count++;
+        snprintf(out, outsz, "OK ain group%d channels=%s\r\n", n, w); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d label %15s", &n, w) == 2) {
+        if (n < 0 || n >= PICO_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        if (!strcmp(w, "off")) w[0] = '\0';
+        if (!dserv_label_valid(w)) { snprintf(out, outsz, "ERR label: printable, no '/' or spaces\r\n"); return CLI_ERR; }
+        snprintf(c->ain_group_label[n], PICO_LABEL_MAX, "%s", w); c->applied_count++;
+        snprintf(out, outsz, "OK ain group%d label=%s\r\n", n,
+                 c->ain_group_label[n][0] ? c->ain_group_label[n] : "(none)");
+        return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d mode %15s", &n, w) == 2) {
+        if (n < 0 || n >= PICO_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        if (!strcmp(w, "continuous")) c->ain_group_mode[n] = 1;
+        else if (!strcmp(w, "onchange")) c->ain_group_mode[n] = 0;
+        else { snprintf(out, outsz, "ERR ain mode: onchange|continuous\r\n"); return CLI_ERR; }
+        c->applied_count++; snprintf(out, outsz, "OK ain group%d mode=%s\r\n", n, w); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d deadband %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NAGROUPS || v < 0 || v > 4095) {
+            snprintf(out, outsz, "ERR ain deadband 0-4095\r\n"); return CLI_ERR; }
+        c->ain_group_deadband[n] = (uint16_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain group%d deadband=%d\r\n", n, v); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d decimate %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NAGROUPS || v < 1 || v > 255) {
+            snprintf(out, outsz, "ERR ain decimate 1-255\r\n"); return CLI_ERR; }
+        c->ain_group_decimate[n] = (uint8_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain group%d decimate=%d\r\n", n, v); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d batch %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NAGROUPS || v < 1 || v > 255) {
+            snprintf(out, outsz, "ERR ain batch 1-255\r\n"); return CLI_ERR; }
+        c->ain_group_batch[n] = (uint8_t) v; c->applied_count++;
+        snprintf(out, outsz, "OK ain group%d batch=%d\r\n", n, v); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d average %d", &n, &v) == 2) {
+        if (n < 0 || n >= PICO_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        if (v) c->ain_group_flags[n] |= AIN_GROUP_FLAG_AVG;
+        else   c->ain_group_flags[n] &= (uint8_t) ~AIN_GROUP_FLAG_AVG;
+        c->applied_count++; snprintf(out, outsz, "OK ain group%d average=%d\r\n", n, v ? 1 : 0); return CLI_AIN;
+    }
+    if (sscanf(line, "ain group %d %15s", &n, w) == 2 && !strcmp(w, "off")) {
+        if (n < 0 || n >= PICO_NAGROUPS) { snprintf(out, outsz, "ERR bad group\r\n"); return CLI_ERR; }
+        c->ain_group_chans[n] = 0; c->ain_group_label[n][0] = '\0'; c->applied_count++;
+        snprintf(out, outsz, "OK ain group%d off\r\n", n); return CLI_AIN;
+    }
     /* desc: value is the rest of the line verbatim, so spaces survive. */
     if (!strncmp(line, "desc ", 5)) {
         if (!strcmp(line + 5, "off")) c->desc[0] = '\0';
@@ -367,7 +440,9 @@ static inline cli_action_t pico_cli_exec(pico_config_t *c, const char *line,
             "      sync pin N | sync off |\r\n"
             "      group G pins 2,3,4,5 | group G label NAME | group G settle MS |\r\n"
             "      group G quiet 0|1 | group G off |\r\n"
-            "      mcp enable 0|1 | oled enable 0|1 |\r\n"
+            "      mcp enable 0|1 | mcp rate HZ | oled enable 0|1 |\r\n"
+            "      ain group G channels 0,1 | ain group G label NAME | ain group G mode onchange|continuous |\r\n"
+            "      ain group G deadband N | ain group G decimate N | ain group G batch N | ain group G average 0|1 | ain group G off |\r\n"
             "      ble enable 0|1 | " PICO_CLI_HELP_BLE "\r\n"
             "      do N 0|1 | do N pulse US | wdt 0|1|test | save | factory | reboot | bootsel\r\n");
         return CLI_OK;
