@@ -227,12 +227,13 @@ class ProjectSelector {
             const projects = typeof data === 'string' ? JSON.parse(data) : data;
             this.state.projects = Array.isArray(projects) ? projects : [];
             this.renderProjectList();
-            
-            // If no project is active but we have projects, activate the first one
-            if (!this.state.activeProject && this.state.projects.length > 0) {
-                const firstProject = this.state.projects[0].name;
-                this.selectProject(firstProject);
-            }
+            // The active project is owned by the server (projects/active); this
+            // panel only MIRRORS it. Do NOT auto-activate a default here: on load
+            // this handler can run before the projects/active subscription has
+            // populated activeProject, so it raced and clobbered the server's
+            // restored project (project_activate the first one -> overwrote it).
+            // "Fresh rig, nothing selected" is now defaulted server-side in
+            // ess::configs::restore_active_project.
         } catch (e) {
             console.error('Failed to parse projects list:', e);
             this.state.projects = [];

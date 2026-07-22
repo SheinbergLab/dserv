@@ -462,7 +462,20 @@ namespace eval ess::configs {
         if {$saved ne "" && [project_exists $saved]} {
             set active_project $saved
         } else {
-            set active_project ""
+            # Nothing valid saved (fresh rig, or the saved project was deleted):
+            # default to the first project so the GUI lands somewhere sensible,
+            # and PERSIST it as the authoritative choice. This lives here (not in
+            # the GUI) so it can't race the projects/active subscription and
+            # clobber a real selection. "" only when there are no projects at all.
+            set active_project [configdb onecolumn {
+                SELECT name FROM projects ORDER BY name LIMIT 1
+            }]
+            if {$active_project ne ""} {
+                configdb eval {
+                    INSERT OR REPLACE INTO app_state (key, value)
+                    VALUES ('active_project', :active_project)
+                }
+            }
         }
         dservSet projects/active $active_project
         return $active_project
