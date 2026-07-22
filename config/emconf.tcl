@@ -7,6 +7,9 @@ package require yajltcl
 
 package require math::linearalgebra
 
+tcl::tm::add $dspath/lib
+package require extio   ;# decode extio state/ain blocks (analog eye source)
+
 # disable exit
 proc exit {args} { error "exit not available for this subprocess" }
 
@@ -233,18 +236,54 @@ namespace eval em {
     # Process virtual eye data (already in degrees)
     proc process_virtual { dpoint data } {
         lassign $data h_deg v_deg
-        
+
         # Virtual data is already in degrees, just pass through
         set eyevals [binary format ff $h_deg $v_deg]
         dservSetData eyetracking/position 0 2 $eyevals
 
 	# We don't have real "raw" values so just use actual
         dservSetData eyetracking/raw 0 2 $eyevals
-        
+
         # Also send to visualization
         dservSet ess/em_pos "$h_deg $v_deg"
     }
-    
+
+    # Process an extio MCP3204 analog eye source: an eye tracker's analog output
+    # digitized by the box (state/ain/<label>). The raw ADC counts ARE the raw
+    # eye position -- the same role P1-P4 sub-pixel difference plays for the
+    # camera -- so they run through the SAME calibration (set-center + scale, or
+    # biquadratic). Decoded via lib/extio-1.0.tm. CH0 -> h, CH1 -> v.
+    proc process_analog { dpoint data } {
+        variable settings
+        variable current_raw_h
+        variable current_raw_v
+
+        set xy [::extio::ain_latest $data]     ;# newest scan -> {X Y} counts
+        if { [llength $xy] < 2 } return
+        lassign $xy raw_h raw_v
+        set cur_t [now]
+        set current_raw_h $raw_h               ;# feeds set_current_as_center
+        set current_raw_v $raw_v
+
+        dict with settings {
+            if {$use_biquadratic} {
+                set h_deg [biquadratic_transform $raw_h $raw_v $bq_h_coeffs]
+                set v_deg [biquadratic_transform $raw_h $raw_v $bq_v_coeffs]
+            } else {
+                set h_deg [expr {$scale_h * ($raw_h - $raw_center_h)}]
+                set v_deg [expr {$scale_v * ($raw_v - $raw_center_v)}]
+                if {$invert_h} { set h_deg [expr {-$h_deg}] }
+                if {$invert_v} { set v_deg [expr {-$v_deg}] }
+            }
+        }
+
+        set eyevals [binary format ff $h_deg $v_deg]
+        dservSetData eyetracking/position $cur_t 2 $eyevals
+        set rawvals [binary format ff $raw_h $raw_v]
+        dservSetData eyetracking/raw $cur_t 2 $rawvals
+        dservSet ess/em_pos "$h_deg $v_deg"
+    }
+
     update_settings
 }
 
@@ -253,5 +292,14 @@ dpointSetScript    eyetracking/virtual em::process_virtual
 
 dservAddExactMatch eyetracking/results
 dpointSetScript    eyetracking/results em::process
+
+# extio MCP3204 analog eye source: an eye tracker's analog out digitized by the
+# box, published as state/ain/<label>. Glob dev follows whatever box is present.
+# Label your box's analog group "eye" (ain group N label eye), or set em_ain_dp.
+# NB: this writes eyetracking/position, same as the other sources -- run ONE eye
+# source at a time (last writer wins).
+set em_ain_dp extio/*/state/ain/eye
+dservAddMatch   $em_ain_dp
+dpointSetScript $em_ain_dp em::process_analog
 
 puts "Eye movement subprocessor started"
